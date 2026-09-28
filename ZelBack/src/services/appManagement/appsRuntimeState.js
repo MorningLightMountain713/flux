@@ -329,6 +329,25 @@ async function recordRestart(identifier, crashed = true) {
 }
 
 /**
+ * The reconciler's memory that it stopped this container itself: an operation
+ * hold, a controller verdict, the operator's stop, a lost grant, a data clear.
+ * A container stopped this way exits with the code its signal gives it, 143
+ * for a SIGTERM, which reads like a fault to anything that only sees the exit
+ * code. Durable, so the resume after a FluxOS restart mid-operation still knows.
+ * Set once the stop has been made; cleared by the start that resumes it.
+ *
+ * @param {string} identifier
+ * @param {boolean} stopped
+ */
+async function setStoppedByReconciler(identifier, stopped) {
+  try {
+    await setFields(identifier, { stoppedByReconciler: stopped === true });
+  } catch (err) {
+    log.error(`appsRuntimeState - failed to record a reconciler stop for ${identifier}: ${err.message}`);
+  }
+}
+
+/**
  * Marks that docker has accepted at least one start of this component on this
  * node. Durable. Distinguishes a first start (never seeds restartHistory, so the
  * ladder's immediate-retry rung stays reachable) from a restart of a container
@@ -765,6 +784,7 @@ module.exports = {
   requestRestart,
   recordRestartGeneration,
   setSuccessfullyStarted,
+  setStoppedByReconciler,
   restartWaitMs,
   setNetworkHealRemoval,
   isNetworkHealRemoval,

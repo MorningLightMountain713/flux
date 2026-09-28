@@ -267,6 +267,7 @@ describe('appReconciler tests', () => {
         isCondemned: sinon.stub().resolves(false),
         restartWaitMs: sinon.stub().resolves(0),
         recordRestart: sinon.stub().resolves(),
+        setStoppedByReconciler: sinon.stub().resolves(),
         recordExit: sinon.stub().resolves(),
         getState: sinon.stub().resolves(null),
         setEverStarted: sinon.stub().resolves(),
@@ -1227,6 +1228,96 @@ describe('appReconciler tests', () => {
       expect(stubs.appsRuntimeState.recordRestart.calledOnceWith('www_app')).to.be.true;
     });
 
+    // A container the reconciler stopped exits with its signal's code, 143 for a
+    // SIGTERM, which is the evidence a crash leaves. The resume must not read it:
+    // an operation hold given back three times in a row otherwise climbs the
+    // ladder to a rung that holds the app down for minutes.
+    describe('a stop the reconciler made', () => {
+      const exited143 = () => stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: false, Status: 'exited', ExitCode: 143 } });
+      const running = () => stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
+      const backoffs = (spy) => spy.getCalls().filter((c) => c.args[0] === 'reconciler:actuated' && c.args[1].action === 'backoff');
+
+      it('resumes at once, records no restart, and forgets the stop', async () => {
+        stubs.appsRuntimeState.getState.withArgs('www_app').resolves({
+          hasEverStarted: true, hasSuccessfullyStarted: true, stoppedByReconciler: true, restartHistory: [1, 2],
+        });
+        exited143();
+        stubs.appsRuntimeState.restartWaitMs.resolves(280_000);
+        const publishSpy = sinon.spy(fluxEventBus, 'publish');
+        await appReconciler.reconcile('www_app');
+        expect(stubs.dockerService.appDockerStart.calledOnceWith('www_app')).to.be.true;
+        expect(stubs.appsRuntimeState.recordRestart.called, 'a resume taught the ladder').to.be.false;
+        expect(stubs.appsRuntimeState.setStoppedByReconciler.calledOnceWith('www_app', false)).to.be.true;
+        expect(backoffs(publishSpy), 'a resume was paced').to.have.lengthOf(0);
+      });
+
+      it('reads the fault of a container that exited 143 on its own: paced while the ladder stands', async () => {
+        stubs.appsRuntimeState.getState.withArgs('www_app').resolves({ hasEverStarted: true, hasSuccessfullyStarted: true, restartHistory: [1, 2] });
+        exited143();
+        stubs.appsRuntimeState.restartWaitMs.resolves(280_000);
+        const publishSpy = sinon.spy(fluxEventBus, 'publish');
+        await appReconciler.reconcile('www_app');
+        expect(stubs.dockerService.appDockerStart.called).to.be.false;
+        expect(backoffs(publishSpy).map((c) => c.args[1].crashed), 'the exit was not read as a fault').to.deep.equal([true]);
+      });
+
+      it('reads the fault of a container that exited 143 on its own: recorded when it starts', async () => {
+        stubs.appsRuntimeState.getState.withArgs('www_app').resolves({ hasEverStarted: true, hasSuccessfullyStarted: true });
+        exited143();
+        await appReconciler.reconcile('www_app');
+        expect(stubs.dockerService.appDockerStart.calledOnceWith('www_app')).to.be.true;
+        expect(stubs.appsRuntimeState.recordRestart.calledOnceWith('www_app', true)).to.be.true;
+        expect(stubs.appsRuntimeState.setStoppedByReconciler.called).to.be.false;
+      });
+
+      it('records a resumed start that docker refused as an attempt, not a fault', async () => {
+        stubs.appsRuntimeState.getState.withArgs('www_app').resolves({ hasEverStarted: true, hasSuccessfullyStarted: true, stoppedByReconciler: true });
+        exited143();
+        // the container is still there: the refusal is docker's, not a removal mid-pass
+        stubs.dockerService.getDockerContainer.resolves({ id: 'c1' });
+        stubs.dockerService.appDockerStart.rejects(new Error('docker refused'));
+        await appReconciler.reconcile('www_app');
+        expect(stubs.appsRuntimeState.recordRestart.calledOnceWith('www_app', false)).to.be.true;
+      });
+
+      it('is remembered once the stop for an operation hold is made', async () => {
+        running();
+        await appReconciler.drive(['www_app'], 'stopped');
+        expect(stubs.dockerService.appDockerStop.calledOnceWith('www_app')).to.be.true;
+        const marked = stubs.appsRuntimeState.setStoppedByReconciler.withArgs('www_app', true);
+        expect(marked.calledOnce).to.be.true;
+        expect(marked.firstCall.calledAfter(stubs.dockerService.appDockerStop.firstCall), 'remembered before the stop was made').to.be.true;
+      });
+
+      it('is not remembered when the stop was deferred behind a start in flight', async () => {
+        running();
+        const held = new Error('a start is in flight');
+        held.code = 'ETRANSITIONHELD';
+        stubs.dockerService.appDockerStop.rejects(held);
+        stubs.appsRuntimeState.isOperatorStopped.resolves(true);
+        await appReconciler.reconcile('www_app');
+        expect(stubs.dockerService.appDockerStop.calledOnceWith('www_app')).to.be.true;
+        expect(stubs.appsRuntimeState.setStoppedByReconciler.called).to.be.false;
+      });
+
+      it('is forgotten when the container is found running with the mark still set', async () => {
+        running();
+        stubs.appsRuntimeState.getState.withArgs('www_app').resolves({ hasEverStarted: true, hasSuccessfullyStarted: true, stoppedByReconciler: true });
+        await appReconciler.reconcile('www_app');
+        expect(stubs.appsRuntimeState.setStoppedByReconciler.calledOnceWith('www_app', false)).to.be.true;
+        expect(stubs.dockerService.appDockerStop.called).to.be.false;
+        expect(stubs.dockerService.appDockerStart.called).to.be.false;
+      });
+
+      it('is remembered once the stop before a data clear is made', async () => {
+        running();
+        appReconciler.requestStopAndClearData('www_app', 'test');
+        await appReconciler.reconcile('www_app');
+        expect(stubs.dockerService.appDockerStop.calledWith('www_app')).to.be.true;
+        expect(stubs.appsRuntimeState.setStoppedByReconciler.calledWith('www_app', true)).to.be.true;
+      });
+    });
+
     it('treats a pre-marker-split proven doc as already-started (proven implies started)', async () => {
       // docs persisted before the hasEverStarted split carry only hasSuccessfullyStarted;
       // such a component must restart (recording into the ladder), not "first start".
@@ -1479,6 +1570,7 @@ describe('appReconciler tests', () => {
         // setControllerDesired enqueues its own reconcile; wait for it to land
         await new Promise((resolve) => { setTimeout(resolve, 50); });
         expect(stubs.dockerService.appDockerStop.calledWith('www_app')).to.be.true;
+        expect(stubs.appsRuntimeState.setStoppedByReconciler.calledWith('www_app', true), 'a stop under an unmounted volume is the reconciler\'s too').to.be.true;
         expect(stubs.dockerService.appDockerStart.called).to.be.false;
         expect(stubs.dockerOperations.appDeleteDataInMountPoint.called).to.be.false;
       } finally {
