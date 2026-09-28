@@ -93,6 +93,7 @@ describe('record-deaf master: the cells the re-roll seats carry the record to th
   let outpoints; // node index -> outpoint
   let ownerAuthFar;
   let walk;
+  let installAfters; // holder k -> the last event id before its install
 
   const key = () => `${name}/master`;
   const label = (i) => `node-${env.clients[i].num} (${env.clients[i].ip})`;
@@ -265,7 +266,7 @@ describe('record-deaf master: the cells the re-roll seats carry the record to th
 
     await pushImage(name, 'v1');
     const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
-    const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
+    installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, HOLDERS);
     await seedGlobalSpec(env, app, env.clients.map((_, i) => i).filter((i) => !HOLDERS.includes(i)));
     await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
@@ -285,7 +286,6 @@ describe('record-deaf master: the cells the re-roll seats carry the record to th
     this.timeout(1200000);
 
     // 1. A generation-0 quorum seats a master on the committee the suite dealt.
-    const startMarkers = env.clients.map((c) => c.getLastEventId());
     let first = null;
     await waitFor(async () => {
       first = await quorumVerdict(walk.granting.quorum);
@@ -294,7 +294,9 @@ describe('record-deaf master: the cells the re-roll seats carry the record to th
     expect(first.generation, 'the first world is generation 0').to.equal(0);
     const master = indexOf(first.grantee);
     expect(HOLDERS, `master ${first.grantee} maps to a holder`).to.include(master);
-    await env.clients[master].waitForEvent('quorumGrant:granted', (d) => d.key === key(), 60000, { afterId: startMarkers[master] });
+    // The grant follows the install the before() made, and can land before this
+    // test begins, so its marker is the install's, not this test's start.
+    await env.clients[master].waitForEvent('quorumGrant:granted', (d) => d.key === key(), 60000, { afterId: installAfters[HOLDERS.indexOf(master)] });
     const container = await getAppContainerId(env.clients[master].container, name, name);
     expect(container, 'the master has a container to keep').to.be.a('string');
     const standbys = HOLDERS.filter((i) => i !== master);
