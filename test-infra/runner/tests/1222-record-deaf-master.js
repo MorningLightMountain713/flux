@@ -58,6 +58,13 @@ const HOLDERS = [0, 1, 2];
 const NODES = 16;
 const COMMITTEE_SIZE = 9;
 const HELD_TTL_MS = 90000;
+// The master's location row must outlive its term, as it does in production:
+// the partition keeps its running announcements from the far side, where the
+// re-rolled cells judge its step-across against the row they last heard, and
+// a row that lapses first refuses the incumbent as not a holder of the app.
+// Production's ratio of the two, applied to this suite's term.
+const PRODUCTION = require('../../../ZelBack/config/default.js').fluxapps;
+const LOCATION_TTL_S = Math.ceil((PRODUCTION.locationTtlS * HELD_TTL_MS) / PRODUCTION.quorumGrantHeldTtlMs);
 const DRAIN_BLOCKS = 3;
 const RENEW_MS = 10000;
 
@@ -238,6 +245,7 @@ describe('record-deaf master: the cells the re-roll seats carry the record to th
           quorumGrantMastership: true,
           quorumGrantHeldCommitteeSize: COMMITTEE_SIZE,
           quorumGrantHeldTtlMs: HELD_TTL_MS,
+          locationTtlS: LOCATION_TTL_S,
           quorumGrantRenewIntervalMs: RENEW_MS,
           quorumGrantLockDelayMs: 15000,
           quorumGrantDemotionSlackMs: 5000,
