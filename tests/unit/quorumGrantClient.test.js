@@ -1110,6 +1110,28 @@ describe('quorumGrant grantClient', () => {
       expect(grantClient.oneshotQuorumFold([row('a:0')], 2).decided).to.equal(false);
     });
 
+    it('a promise with no accepted row reads free, and the next founding completes', async () => {
+      // a founding that prepared everywhere and never landed its accept leaves
+      // every cell promised above the probe's epoch and holding no row
+      refuseAccept = true;
+      const stranded = await grantClient.acquire(ORDINAL, { mode: 'oneshot', committee: founding() });
+      expect(stranded.granted).to.equal(false);
+      refuseAccept = false;
+      const verdict = await grantClient.probeOneshot(ORDINAL, founding());
+      expect(verdict).to.deep.equal({ decided: true, holder: null, epoch: 0 });
+      const outcome = await grantClient.acquire(ORDINAL, { mode: 'oneshot', committee: founding() });
+      expect(outcome.granted).to.equal(true);
+      expect((await grantClient.probeOneshot(ORDINAL, founding())).holder).to.equal(SELF);
+    });
+
+    it('a refusal carrying the cell\'s row is an answer; one carrying nothing is not', () => {
+      const promisedEmpty = { ok: false, code: 'superseded', promisedEpoch: 3, accepted: null };
+      const promisedHeld = { ok: false, code: 'superseded', promisedEpoch: 3, accepted: { epoch: 2, grantee: 'a:0', mode: 'oneshot' } };
+      expect(grantClient.oneshotQuorumFold([promisedEmpty, promisedEmpty], 2)).to.deep.equal({ decided: true, holder: null, epoch: 0 });
+      expect(grantClient.oneshotQuorumFold([promisedHeld, promisedHeld, promisedEmpty], 2).holder).to.equal('a:0');
+      expect(grantClient.oneshotQuorumFold([{ ok: false, code: 'unavailable' }, promisedEmpty], 2).decided).to.equal(false);
+    });
+
     it('a probe that cannot reach a quorum is undecided, never free', async () => {
       committeeHosts.slice(0, 6).forEach((host) => dark.add(host));
       const verdict = await grantClient.probeOneshot(ORDINAL, founding());
