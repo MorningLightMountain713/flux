@@ -1608,8 +1608,8 @@ describe('explorerService tests', () => {
         await expect(svc.processSoftFork('priceTx', 1_594_832, 4, PAYLOAD, false, authorityTx()))
           .to.eventually.be.rejectedWith(/chainHeight must be a non-negative integer/);
 
-        // A row the history refuses is a poison pill: rebuildPriceOracleState replays
-        // every stored row through the same add() at startup, unguarded.
+        // A row the history refuses is a poison pill: every rewind builds the history
+        // from the stored rows through the same add(), unguarded.
         expect(updateStub.called).to.equal(false);
       });
 

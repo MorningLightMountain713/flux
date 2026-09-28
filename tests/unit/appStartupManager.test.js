@@ -109,7 +109,6 @@ describe('appStartupManager tests', () => {
       '../appMessaging/nodeDownStore': nodeDownStoreStub,
       '../nodeConfirmationService': {
         isConfirmed: sinon.stub().returns(true),
-        waitForConfirmed: sinon.stub().resolves(),
       },
     });
   });
@@ -156,8 +155,7 @@ describe('appStartupManager tests', () => {
         '../utils/appUtilities': appUtilities,
         '../nodeConfirmationService': {
           isConfirmed: sinon.stub().returns(true),
-          waitForConfirmed: sinon.stub().resolves(),
-        },
+          },
       });
 
       await flaggedStartupManager.reconcileAppsOnBoot();
