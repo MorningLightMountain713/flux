@@ -51,6 +51,24 @@ let explorerReadyEmitted = false;
 let operationBlocked = false;
 let appsTransactions = [];
 let isSynced = false;
+
+// `explorerSynced` rises when the scan is within this many blocks of the daemon's
+// tip, and falls once it is more than EXPLORER_BEHIND_BEYOND behind: the gap
+// between them keeps a block or two of lag from flapping it.
+const EXPLORER_SYNCED_WITHIN = 2;
+const EXPLORER_BEHIND_BEYOND = 10;
+
+/**
+ * Publish `explorerSynced` from how far the scan is behind the daemon's tip.
+ * @param {number} scannedHeight
+ * @param {number} daemonHeight
+ */
+function publishExplorerSynced(scannedHeight, daemonHeight) {
+  const behind = daemonHeight - scannedHeight;
+  const handle = capabilities.claim('explorerSynced', 'explorerService');
+  if (behind <= EXPLORER_SYNCED_WITHIN) handle.raise(`scan at ${scannedHeight}, daemon at ${daemonHeight}`);
+  else if (behind > EXPLORER_BEHIND_BEYOND) handle.lower(`scan ${behind} blocks behind the daemon`);
+}
 let cachedDaemonVersion = null;
 
 // When the work below that is paced by the chain is due.
@@ -1488,6 +1506,7 @@ async function drainToTip() {
   let next = (await getScannedBlockHeightFromDb(database)) + 1;
 
   if (next > daemonHeight) {
+    publishExplorerSynced(next - 1, daemonHeight);
     // Reorgs normally arrive as an event naming the fork block. A daemon that does not
     // publish the topic still needs them found, so the chain-tips check remains for
     // exactly that case, on its own 100-block gate.
@@ -1517,6 +1536,7 @@ async function drainToTip() {
     if (!Number.isInteger(next) || next <= current) {
       throw new Error(`Block ${current} did not advance the scan (next: ${next})`);
     }
+    publishExplorerSynced(next - 1, daemonHeight);
   }
 }
 
@@ -1692,6 +1712,7 @@ async function initiateBlockProcessor(options = {}) {
 
     if (isInInitiationOfBP) return;
     isInInitiationOfBP = true;
+    capabilities.claim('chainStateConsistent', 'explorerService').lower('restore and rebuild started');
 
     const db = dbHelper.databaseConnection();
     const database = db.db(config.get('database.daemon.database'));
@@ -1743,6 +1764,7 @@ async function initiateBlockProcessor(options = {}) {
     }
 
     isInInitiationOfBP = false;
+    capabilities.claim('chainStateConsistent', 'explorerService').raise(`histories rebuilt, scan cursor at ${scannedBlockHeight}`);
 
     if (!explorerReadyEmitted) {
       explorerReadyEmitted = true;
@@ -2100,5 +2122,6 @@ module.exports = {
   isMessageAuthority,
 
   isExplorerSynced,
+  publishExplorerSynced,
   getAddressFusionCoinbase,
 };
