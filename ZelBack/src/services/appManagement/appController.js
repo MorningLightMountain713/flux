@@ -458,11 +458,13 @@ async function appRestart(req, res) {
     // user-initiated restart = "make it run now": clear the operator stop lock AND
     // bump the durable restart generation, so the reconciler restarts a running
     // container (or starts a stopped one) and honours its election/dependency gates.
-    // The pre-stop decider verdict is withdrawn for the same reason as appStart:
-    // deciders re-assert live verdicts within a pass, stale ones must not stand.
+    // A decider verdict is withdrawn only when the restart lifts an operator stop,
+    // for the same reason as appStart. A running component has no stale verdict, and
+    // its decider re-asserts only on a transition, so withdrawing its live verdict
+    // would hold it at awaitingController and the restart would never happen.
     const actuated = await driveOperatorCommand(ids, async (id) => {
+      if (await appsRuntimeState.isOperatorStopped(id)) appReconciler.clearControllerDesired(id);
       await appsRuntimeState.setOperatorStopped(id, false);
-      appReconciler.clearControllerDesired(id);
       await appsRuntimeState.requestRestart(id);
     }, { stopped: false, restartRequested: true });
 
