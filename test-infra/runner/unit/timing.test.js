@@ -14,11 +14,15 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import {
   confirmationOffsetBlocks, wireRttMs, deriveTiming, validateTiming,
 } from '../framework/timing.js';
 
-const CTX = { initialHeight: 2100000 };
+const { DEFAULT_INITIAL_HEIGHT } = createRequire(import.meta.url)('../framework/chain-start.cjs');
+
+// the height every suite starts at unless it asks for another
+const CTX = { initialHeight: DEFAULT_INITIAL_HEIGHT };
 
 describe('framework timing derivation', () => {
   describe('confirmationOffsetBlocks', () => {

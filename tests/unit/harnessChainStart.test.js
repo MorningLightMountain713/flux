@@ -144,6 +144,22 @@ describe('harness chain start', () => {
     });
   });
 
+  // The stub serves each listed node the fixture's last_confirmed_height, and a
+  // node whose daemon goes quiet counts its own blocks since that confirmation
+  // against confirmExpirationBlocks. A fixture confirmed further below the start
+  // than that window makes every node read as expired the moment its daemon is
+  // unreachable, so every suite that stalls the chain removes its apps.
+  it('the fixture confirms every node inside the harness expiry window below the start', () => {
+    const list = JSON.parse(fs.readFileSync(path.join(__dirname, '../../test-infra/fixtures/deterministic-list.json'), 'utf8'));
+    const window = requireShared().confirmation.confirmExpirationBlocks;
+    expect(list.length, 'the fixture lists no nodes').to.be.greaterThan(0);
+    expect(Number.isInteger(window) && window > 0, 'no confirmation window in the harness overlay').to.equal(true);
+    list.forEach((node) => {
+      const offset = DEFAULT_INITIAL_HEIGHT - node.last_confirmed_height;
+      expect(offset, `${node.txhash} is confirmed ${offset} blocks below the start`).to.be.within(1, window - 1);
+    });
+  });
+
   it('reaches the gates a name-based scan used to miss', () => {
     // Each of these is a live gate whose name contains none of block, height or
     // fork. They are all below the start today, so the assertion above is green
