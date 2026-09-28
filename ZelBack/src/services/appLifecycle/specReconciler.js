@@ -8,6 +8,7 @@ const { AsyncLock } = require('../utils/asyncLock');
 const appsRepository = require('../appDatabase/appsRepository');
 const registryManager = require('../appDatabase/registryManager');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
+const hwRequirements = require('../appRequirements/hwRequirements');
 const dockerService = require('../dockerService');
 const generalService = require('../generalService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
@@ -169,6 +170,22 @@ async function convergeApp(installed, registrySpec, ctx) {
     log.warn(`REMOVAL REASON: Named placement does not target this node - ${installed.name}`);
     await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true });
     return 'removed';
+  }
+  // A candidate set names the nodes the app may run on, for every version (a v7/v8
+  // `nodes` list converts to one). A node the current spec no longer names hands
+  // the app back and tells its peers; one that cannot establish its own identity
+  // leaves the app as it is rather than give up one the spec may name.
+  if (!named && registrySpec.placement.hasTargets()) {
+    const targeted = await hwRequirements.targetsNameThisNode(registrySpec);
+    if (targeted === null) {
+      log.warn(`specReconciler - cannot establish whether ${installed.name} names this node, left as it is`);
+      return 'skipped';
+    }
+    if (!targeted) {
+      log.warn(`REMOVAL REASON: Candidate set does not name this node - ${installed.name}`);
+      await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true });
+      return 'removed';
+    }
   }
 
   // Per-identity diff: shed exactly the identities this node holds but the spec

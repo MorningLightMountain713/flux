@@ -124,26 +124,48 @@ async function checkGeolocation(spec) {
 async function checkTargets(spec) {
   if (!spec.placement.hasTargets()) return true;
 
-  const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
-  if (!localSocketAddr) {
+  if (!await fluxNetworkHelper.getLocalSocketAddress()) {
     throw new Error('Unable to detect Flux IP address');
   }
-  if (spec.placement.matchesTarget({ ip: localSocketAddr, ipMatcher: socketAddressesMatch })) {
+  if (await targetsNameThisNode(spec)) return true;
+  throw new Error(`Application ${spec.name} is not allowed to run on this node. Aborting.`);
+}
+
+/**
+ * Whether a spec's targets name this node: true, false, or null when this node
+ * cannot establish the identity the answer turns on.
+ *
+ * A POSITIVE MATCH STANDS ON WHICHEVER IDENTIFIER MADE IT; A NEGATIVE ONE NEEDS
+ * EVERY FORM THE TARGETS USE. A target names a node by address, collateral
+ * outpoint or operator key, so an identifier this node cannot read removes its
+ * ability to recognise that whole form. Read as "not named", a node whose daemon
+ * is unreachable would give up an app its spec names.
+ *
+ * @param {object} spec - a hydrated spec (its placement is cleartext)
+ * @returns {Promise<boolean|null>}
+ */
+async function targetsNameThisNode(spec) {
+  const { placement } = spec;
+  if (!placement.hasTargets()) return true;
+
+  const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
+  if (localSocketAddr && placement.matchesTarget({ ip: localSocketAddr, ipMatcher: socketAddressesMatch })) {
     return true;
   }
 
   const myCollateral = await generalService.obtainNodeCollateralInformation().catch((error) => {
-    log.warn(`checkTargets - could not resolve node collateral, pins naming this node by collateral will not match: ${error.message}`);
+    log.warn(`targetsNameThisNode - could not resolve node collateral, targets naming this node by collateral will not match: ${error.message}`);
     return null;
   });
+  const outpoint = collateralOutpoint(myCollateral) ?? undefined;
   const operatorPubKey = await fluxNetworkHelper.getFluxNodePublicKey();
-  if (spec.placement.matchesTarget({
-    outpoint: collateralOutpoint(myCollateral) ?? undefined,
-    operator: typeof operatorPubKey === 'string' ? operatorPubKey : undefined,
-  })) {
-    return true;
-  }
-  throw new Error(`Application ${spec.name} is not allowed to run on this node. Aborting.`);
+  const operator = typeof operatorPubKey === 'string' ? operatorPubKey : undefined;
+  if (placement.matchesTarget({ outpoint, operator })) return true;
+
+  const unread = (placement.targetIps.length > 0 && !localSocketAddr)
+    || (placement.targetOutpoints.length > 0 && !outpoint)
+    || (placement.targetOperators.length > 0 && !operator);
+  return unread ? null : false;
 }
 
 // ── Resource checks ─────────────────────────────────────────────────
@@ -293,6 +315,7 @@ module.exports = {
   returnNodeSpecs,
   systemArchitecture,
   checkPlacement,
+  targetsNameThisNode,
   checkNodeResources,
   checkNodeResourcesReclaiming,
   checkCpuBurstHeadroom,

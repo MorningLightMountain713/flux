@@ -306,8 +306,13 @@ describe('a pinned app runs where its spec says', function () {
         label: 'a peer to hold a location for the node that will lose the app',
       });
 
-      // The pin now names someone else. redeployAPI reads the GLOBAL specification, so
-      // this is the spec the redeploy is judged against.
+      // Anchored before the spec changes: whichever reaches the node first - the spec
+      // reconciler adopting the change, or the redeploy below - hands the app back, and
+      // waitForEvent answers from the buffer, so without a mark an app:removed from this
+      // suite's earlier tests would satisfy it.
+      const mark = holder.getLastEventId();
+
+      // The pin now names someone else.
       const repinned = await buildSeedableUpdate(app, (spec) => {
         spec.nodes = [nodeOutpoint(PINNED_INDEX)];
       });
@@ -323,10 +328,6 @@ describe('a pinned app runs where its spec says', function () {
       // apicache for 30 seconds, and the wait above populated it with a list containing this
       // app. Asked again straight after the redeploy it answers from that cache, so the
       // assertion would be measuring the wait's own poll rather than the removal.
-      //
-      // Anchored, because waitForEvent answers from the buffer: without a mark it could be
-      // satisfied by an app:removed this suite's earlier tests produced.
-      const mark = holder.getLastEventId();
       const body = await holder.redeployApp(app.spec.name, auth.zelidauth);
 
       // The refusal the installer raises is what a teardown-first redeploy ends on, so
