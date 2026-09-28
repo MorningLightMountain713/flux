@@ -407,6 +407,9 @@ async function checkAndRequestApp(hash, i = 0) {
       return false;
     }
     const [{ event: confirmedEvent, record }] = storage.stored;
+    // A message whose spec this library cannot read is stored for the decider,
+    // which refuses it; there is nothing here to judge.
+    if (!confirmedEvent) return true;
     const { txid, height, valueSat } = confirmedEvent.serialize();
     const confirmedBlockTime = confirmedEvent.serialize().registeredAt ?? record.blockTime ?? null;
     // The message is durable now — clear the orphan TTL on its ingress
