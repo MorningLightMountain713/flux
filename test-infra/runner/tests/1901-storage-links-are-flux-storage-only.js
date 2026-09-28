@@ -26,7 +26,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { nodeKey } from '../framework/keys.js';
 import { buildAppSpec, registerApp, registerAndConfirm } from '../framework/app-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
-import { execInContainer } from '../framework/container.js';
+import { execInContainer, getAppContainerId } from '../framework/container.js';
 import { dbClient } from '../framework/db-client.js';
 import { REGISTRY_REPO_HOST, STORAGE_HOST } from '../framework/subnet-config.js';
 import { startTicker, advanceBlock } from '../framework/daemon-control.js';
@@ -78,10 +78,14 @@ async function bootAndPeer(env) {
   await startTicker();
 }
 
-async function containerEnv(container, component) {
+// The container is found by its labels, as the node finds it: its docker name
+// is minted, not spelled from the app's name.
+async function containerEnv(container, appName, componentName) {
+  const id = await getAppContainerId(container, appName, componentName);
+  if (!id) throw new Error(`no container of ${componentName} of ${appName} on this node`);
   const { stdout } = await execInContainer(
     container,
-    `docker inspect --format '{{json .Config.Env}}' flux${component}`,
+    `docker inspect --format '{{json .Config.Env}}' ${id}`,
   );
   return JSON.parse(stdout.trim());
 }
@@ -103,7 +107,6 @@ describe('1901 a storage link addresses Flux storage or nothing', function suite
 
   describe('a link that addresses Flux storage', () => {
     const appName = `e2estorok${Date.now()}`;
-    const component = `${appName}_${appName}`;
     const payloadName = `${appName}-env`;
     let node;
 
@@ -130,12 +133,12 @@ describe('1901 a storage link addresses Flux storage or nothing', function suite
     });
 
     it('starts the container with what storage answered', async () => {
-      const vars = await containerEnv(node.container, component);
+      const vars = await containerEnv(node.container, appName, appName);
       expect(vars, 'the fetched parameters never reached the container').to.include(MARK);
     });
 
     it('does not leave the link itself in the container', async () => {
-      const vars = await containerEnv(node.container, component);
+      const vars = await containerEnv(node.container, appName, appName);
       const links = vars.filter((v) => v.startsWith('F_S_ENV='));
       expect(links, 'the link is the address, not a value the app receives').to.deep.equal([]);
     });
