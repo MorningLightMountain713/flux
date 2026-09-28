@@ -245,6 +245,31 @@ describe('AppSyncOrchestrator', () => {
       expect(orchestrator.state).to.equal(STATES.INITIALIZING);
     });
 
+    it('starts syncing when the scan is first near the tip, from the scan height, with no block', async () => {
+      capabilities.setForTests('explorerSynced', false);
+      const orchestrator = makeOrchestrator({ getScannedHeight: async () => 2_600_000 });
+      orchestrator.start(defaultBootContext);
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.INITIALIZING);
+
+      capabilities.setForTests('explorerSynced', true);
+      await clock.tickAsync(0);
+
+      expect(orchestrator.state).to.equal(STATES.SYNCING);
+      expect(syncMissingHashesStub.firstCall.args[0]).to.deep.equal({ currentHeight: 2_600_000 });
+    });
+
+    it('stays INITIALIZING on blocks while the scan is not near the tip', async () => {
+      capabilities.setForTests('explorerSynced', false);
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+
+      blockEmitter.emit('blocksProcessed', 2_555_000);
+      await clock.tickAsync(0);
+
+      expect(orchestrator.state).to.equal(STATES.INITIALIZING);
+    });
+
     it('should transition to SYNCING on first blockReceived', async () => {
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
@@ -301,6 +326,7 @@ describe('AppSyncOrchestrator', () => {
 
   describe('peer threshold events', () => {
     it('should call getEligibleSyncPeers on peerThresholdReached', async () => {
+      capabilities.setForTests('explorerSynced', false);
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
       peerEmitter.emit('peerThresholdReached', 12);
@@ -320,6 +346,7 @@ describe('AppSyncOrchestrator', () => {
       // peerThresholdReached is edge-triggered and latched in FluxPeerManager:
       // if peers connected before start() subscribed, the edge never re-fires.
       // start() must read the level after subscribing — no edge is emitted here.
+      capabilities.setForTests('explorerSynced', false);
       const orchestrator = makeOrchestrator({ isAboveThreshold: () => true });
       orchestrator.start(defaultBootContext);
       await clock.tickAsync(0);
@@ -328,6 +355,7 @@ describe('AppSyncOrchestrator', () => {
     });
 
     it('should not start sync from the level when the threshold has not been reached', async () => {
+      capabilities.setForTests('explorerSynced', false);
       const orchestrator = makeOrchestrator({ isAboveThreshold: () => false });
       orchestrator.start(defaultBootContext);
       await clock.tickAsync(0);

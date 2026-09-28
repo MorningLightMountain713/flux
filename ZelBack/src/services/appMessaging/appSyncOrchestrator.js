@@ -212,6 +212,8 @@ class AppSyncOrchestrator {
   #hashSyncAttempts = 0;
   #hashSyncRetryTimer = null;
   #offMongoUp = null;
+  #offExplorerSynced = null;
+  #getScannedHeight = async () => 0;
   #nextHashRetryHeight = 0;
   #lastBlockHeight = 0;
   #fluxVersion = null;
@@ -236,6 +238,9 @@ class AppSyncOrchestrator {
     this.#catchUpRunningContent = options.catchUpRunningContent ?? (async () => {});
     this.#waitForNetworkState = options.networkStateReady ?? null;
     this.#fluxVersion = options.fluxVersion ?? null;
+    // The last block the chain scan has written: the height the first sync
+    // epoch starts from when no block has been processed since start.
+    this.#getScannedHeight = options.getScannedHeight ?? (async () => 0);
   }
 
   get state() {
@@ -372,6 +377,8 @@ class AppSyncOrchestrator {
     };
     this.#blockEmitter.on('blocksProcessed', this.#blockReceivedHandler);
     this.#offMongoUp = capabilities.onUp('mongoReachable', () => this.#retryHashSyncNow());
+    this.#offExplorerSynced = capabilities.onUp('explorerSynced', () => this.#onExplorerSynced());
+    if (capabilities.isUp('explorerSynced')) this.#onExplorerSynced();
 
     this.#hashesChangedHandler = () => this.#onHashesChanged();
     this.#blockEmitter.on('hashesChanged', this.#hashesChangedHandler);
@@ -943,19 +950,31 @@ class AppSyncOrchestrator {
     }
   }
 
+  // The first time the scan is near the daemon's tip starts the first sync
+  // epoch, from the scan's height when no block has arrived since start.
+  // Latched: the scan falling behind later does not return the machine to
+  // INITIALIZING.
+  #onExplorerSynced() {
+    if (this.#explorerSynced) return;
+    this.#explorerSynced = true;
+    this.#own(this.#startFirstEpoch());
+  }
+
+  async #startFirstEpoch() {
+    if (this.#lastBlockHeight === 0) {
+      const scanned = await this.#getScannedHeight();
+      if (this.#lastBlockHeight === 0) this.#lastBlockHeight = scanned;
+    }
+    log.info(`AppSyncOrchestrator - Explorer synced at block ${this.#lastBlockHeight}`);
+    if (this.#state === STATES.INITIALIZING) {
+      this.#own(this.#evaluate());
+      this.#own(this.#advanceSync());
+    }
+  }
+
   #onBlocksProcessed(blockHeight) {
     const count = this.#lastBlockHeight > 0 ? blockHeight - this.#lastBlockHeight : 1;
     this.#lastBlockHeight = blockHeight;
-    let advanced = false;
-    if (!this.#explorerSynced) {
-      this.#explorerSynced = true;
-      log.info(`AppSyncOrchestrator - Explorer synced at block ${blockHeight}`);
-      if (this.#state === STATES.INITIALIZING) {
-        this.#own(this.#evaluate());
-        this.#own(this.#advanceSync());
-        advanced = true;
-      }
-    }
     // The fallback is a bound on a sync attempt that is not finishing, so it is
     // time spent WITH peers: a block that arrives while the peer set is below
     // the floor counts for nothing, and a node that never reaches the floor
@@ -986,8 +1005,7 @@ class AppSyncOrchestrator {
       // this node cannot reach. Retrying per block bounds that stall to one block
       // instead of hours; the rounds themselves are cheap and idempotent, and a
       // step that has latched is skipped.
-      if (!advanced
-        && (this.#state === STATES.SYNCING || this.#state === STATES.RESYNCING)
+      if ((this.#state === STATES.SYNCING || this.#state === STATES.RESYNCING)
         && (!this.#hashSyncComplete || !this.#manifestSyncComplete)) {
         this.#own(this.#advanceSync());
       }
@@ -1278,8 +1296,7 @@ class AppSyncOrchestrator {
   }
 
   async #evaluateOnce() {
-    // INITIALIZING holds until the chain feed proves itself; the first block
-    // starts the first sync epoch.
+    // INITIALIZING holds until the scan is first near the daemon's tip.
     if (!this.#explorerSynced) return;
     if (this.#state === STATES.INITIALIZING) {
       this.#setState(STATES.SYNCING);
@@ -1545,6 +1562,8 @@ class AppSyncOrchestrator {
       this.#blockEmitter.removeListener('blocksProcessed', this.#blockReceivedHandler);
       if (this.#offMongoUp) this.#offMongoUp();
       this.#offMongoUp = null;
+      if (this.#offExplorerSynced) this.#offExplorerSynced();
+      this.#offExplorerSynced = null;
     }
     if (this.#hashesChangedHandler) {
       this.#blockEmitter.removeListener('hashesChanged', this.#hashesChangedHandler);

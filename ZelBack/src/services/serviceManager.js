@@ -10,6 +10,7 @@ const dbHelper = require('./dbHelper');
 const serviceHelper = require('./serviceHelper');
 const { dedupeByKey, ensureIndex, ensureIndexes } = dbHelper;
 const explorerService = require('./explorerService');
+const chainState = require('./chainState');
 const fluxCommunication = require('./fluxCommunication');
 const networkStateService = require('./networkStateService');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
@@ -466,10 +467,7 @@ async function startFluxFunctions() {
         await capabilities.whenUp('localDbPrepared');
         // Not awaited: it rewinds and builds the histories at once, then scans once
         // the daemon is synced. Safe to leave unhandled: initiateBlockProcessor does
-        // not reject. The orchestrator takes its first sync height from the first
-        // processed block, so it must be listening before one: the network owner
-        // starts it without I/O once daemonReachable is up, and the scan processes
-        // nothing before daemonSynced (which needs daemonReachable) and a daemon RPC.
+        // not reject.
         explorerService.initiateBlockProcessor({ deepRestore: true });
         log.info('Flux Block Processing Service started');
       }),
@@ -608,6 +606,7 @@ async function startFluxFunctions() {
           // register advanced (a silently-missed update) to what it should be serving.
           catchUpRunningContent: () => contentSlotService.applyBehindContentApps(),
           fluxVersion,
+          getScannedHeight: () => chainState.getScannedHeight(),
         });
         // Whether an arriving sync response is still wanted. THE ROUND ANSWERS IT.
         // Only the orchestrator knows what it asked of whom, and on which socket,
