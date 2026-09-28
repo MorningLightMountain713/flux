@@ -32,6 +32,7 @@ const { Privilege } = require('../../ZelBack/src/services/utils/privileges');
 const {
   loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const domain = require('./fixtures/appDomain');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. What stays stubbed is I/O and FluxOS policy: the daemon socket, mongo,
@@ -2009,6 +2010,25 @@ describe('appOperations tests', () => {
       expect(failure?.message).to.match(/Refused: nope is not a component of myapp/);
       sinon.assert.notCalled(pause);
       sinon.assert.notCalled(drive);
+    });
+
+    // The v1 API addresses a flat app's one component as 'null', and the archive
+    // backup wrote for it is named so.
+    it("restores a legacy app's one component addressed as 'null'", async () => {
+      const { inspect } = await restoreStubs('legacyapp', deploymentFor(await domain.v3Spec()));
+
+      const failure = await runRestore('legacyapp', [{ component: 'null', restore: true }], 'local');
+
+      expect(failure, `the restore must complete: ${failure?.message}`).to.equal(null);
+      expect(inspect.firstCall.args[0]).to.equal('/vol/null/backup/local/backup_null.tar.gz');
+    });
+
+    it("restores a component named 'null' as itself", async () => {
+      await restoreStubs('myapp', await oneComponentDeployment('myapp', 'null'));
+
+      const failure = await runRestore('myapp', [{ component: 'null', restore: true }], 'local');
+
+      expect(failure, `the restore must complete: ${failure?.message}`).to.equal(null);
     });
 
     it('refuses a restore on a node that is not the live copy of an active-standby component', async () => {

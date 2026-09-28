@@ -1489,7 +1489,11 @@ async function runRestoreTask(appname, restore, type, zelidauth, report, { force
     // false, so the flags decide; a name the app does not have is refused here,
     // before anything is held or stopped.
     const targets = restore.filter((item) => item.restore).map((item) => {
-      const comp = restoreDeployment.componentEntries().find(([name]) => name === item.component)?.[1];
+      const entries = restoreDeployment.componentEntries();
+      const wanted = deploymentProvider.componentNameFromRequest(
+        appname, item.component, entries.map(([name]) => name),
+      );
+      const comp = entries.find(([name]) => name === wanted)?.[1];
       if (!comp) {
         throw new Error(`Refused: ${item.component} is not a component of ${appname}`);
       }

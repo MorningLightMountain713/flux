@@ -11,6 +11,7 @@ const IOUtils = require('../../ZelBack/src/services/IOUtils');
 const deviceHelper = require('../../ZelBack/src/services/deviceHelper');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
+const domain = require('./fixtures/appDomain');
 
 describe('IOUtils getVolumeInfo tests', () => {
   // The layout differs between Arcane and a legacy node, and only rows under
@@ -36,12 +37,29 @@ describe('IOUtils getVolumeInfo tests', () => {
 
   let listStub;
 
+  // The installed records appsRepository returns: pre-mint apps, whose identity is
+  // their own name - a v9 app with two components, and a flat v3 app.
+  const installedApps = new Map();
+  before(async () => {
+    const { web } = domain.submission().components;
+    const myapp = await domain.v9Spec({
+      name: 'myapp',
+      components: {
+        web,
+        db: { ...web, name: 'db', ports: { tcp_81: { containerPort: 81, hostPort: 31_001, protocol: 'tcp' } } },
+      },
+    });
+    installedApps.set('myapp', await domain.instantiatedSpec({ event: await domain.confirmedEvent({ spec: myapp }) }));
+    const singleapp = await domain.v3Spec({ name: 'singleapp' });
+    installedApps.set('singleapp', await domain.instantiatedSpec({ event: await domain.legacyEvent({ spec: singleapp }) }));
+  });
+
   beforeEach(() => {
     listStub = sinon.stub(deviceHelper, 'listMountedFilesystems').resolves(filesystems);
     // Volume paths are now built FORWARD from the app's stored identity rather
     // than decoded back out of the mount table. These fixtures are pre-mint apps,
     // whose identity is their own name.
-    sinon.stub(appsRepository, 'getInstalledApp').callsFake(async (name) => ({ name, identity: null }));
+    sinon.stub(appsRepository, 'getInstalledApp').callsFake(async (name) => installedApps.get(name) ?? null);
     sinon.stub(appsRepository, 'listInstalledIdentities').resolves([null]);
   });
 
