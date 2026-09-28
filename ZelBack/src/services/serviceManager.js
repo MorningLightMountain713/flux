@@ -7,6 +7,7 @@ const config = require('config');
 const cacheManager = require('./utils/cacheManager').default;
 const log = require('../lib/log');
 const dbHelper = require('./dbHelper');
+const serviceHelper = require('./serviceHelper');
 const { untilSucceeds } = require('./utils/untilSucceeds');
 const explorerService = require('./explorerService');
 const fluxCommunication = require('./fluxCommunication');
@@ -161,13 +162,13 @@ async function prepareDatabaseSchema() {
   log.info('Preparing local database...');
   // Index builds: they run on the maintenance client.
   const db = dbHelper.maintenanceConnection() || dbHelper.databaseConnection();
-  const database = db.db(config.database.local.database);
+  const database = db.db(config.get('database.local.database'));
   // Logins survive a restart: every request re-verifies its signature and
   // re-checks its privilege against the node's current config, and each
   // session collection's TTL index expires its rows. A login row never holds
   // the session's signature (loginSignatures does, for a minute); one that
   // does loses it here.
-  await dbHelper.updateInDatabase(database, config.database.local.collections.loggedUsers, { signature: { $exists: true } }, { $unset: { signature: '' } });
+  await dbHelper.updateInDatabase(database, config.get('database.local.collections.loggedUsers'), { signature: { $exists: true } }, { $unset: { signature: '' } });
   // Named literally because they are no longer part of the schema: the payment
   // request and receipt collections outlived the endpoint that wrote them, and
   // a node's word was never the payment record - the chain is. Dropping is
@@ -178,16 +179,16 @@ async function prepareDatabaseSchema() {
         log.error(error);
       }
     })));
-  await dbHelper.ensureIndexes(database.collection(config.database.local.collections.loggedUsers), [
+  await dbHelper.ensureIndexes(database.collection(config.get('database.local.collections.loggedUsers')), [
     { key: { createdAt: 1 }, expireAfterSeconds: 14 * 24 * 60 * 60 },
   ]);
-  await dbHelper.ensureIndexes(database.collection(config.database.local.collections.activeLoginPhrases), [
+  await dbHelper.ensureIndexes(database.collection(config.get('database.local.collections.activeLoginPhrases')), [
     { key: { createdAt: 1 }, expireAfterSeconds: 900 },
   ]);
-  await dbHelper.ensureIndexes(database.collection(config.database.local.collections.activeSignatures), [
+  await dbHelper.ensureIndexes(database.collection(config.get('database.local.collections.activeSignatures')), [
     { key: { createdAt: 1 }, expireAfterSeconds: 900 },
   ]);
-  await dbHelper.ensureIndexes(database.collection(config.database.local.collections.loginSignatures), [
+  await dbHelper.ensureIndexes(database.collection(config.get('database.local.collections.loginSignatures')), [
     { key: { createdAt: 1 }, expireAfterSeconds: 60 },
     { key: { loginPhrase: 1 } },
   ]);
@@ -195,7 +196,7 @@ async function prepareDatabaseSchema() {
   // documents expire via lastSeen. The tamper service purges pre-schema
   // rows at startup, so the detectedAt pair only matters where old code
   // still writes; drop it once the fleet is past the incident schema.
-  await dbHelper.ensureIndexes(database.collection(config.database.local.collections.appTamperingEvents), [
+  await dbHelper.ensureIndexes(database.collection(config.get('database.local.collections.appTamperingEvents')), [
     { key: { detectedAt: 1 }, expireAfterSeconds: 30 * 24 * 60 * 60, name: 'detectedAt_ttl' }, // 30 days
     { key: { appName: 1, detectedAt: -1 }, name: 'appName_detectedAt' },
     { key: { lastSeen: 1 }, expireAfterSeconds: 30 * 24 * 60 * 60, name: 'lastSeen_ttl' }, // 30 days
@@ -228,8 +229,8 @@ async function prepareDatabaseSchema() {
   log.info('Local database prepared');
   log.info('Preparing temporary database...');
   // no need to drop temporary messages
-  const databaseTemp = db.db(config.database.appsglobal.database);
-  await dbHelper.ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appsTemporaryMessages), [
+  const databaseTemp = db.db(config.get('database.appsglobal.database'));
+  await dbHelper.ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appsTemporaryMessages')), [
     { key: { receivedAt: 1 }, expireAfterSeconds: tempMsgTtlS },
   ]);
   log.info('Temporary database prepared');
@@ -245,7 +246,7 @@ async function prepareDatabaseSchema() {
 
   // we have to create this index again here, as we need it to repair the db. As we were deleting this on every reboot (and it was only created when scannedHeight was 0)
   // Creating an index that already exists is a no-op
-  await dbHelper.ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appsMessages), [
+  await dbHelper.ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appsMessages')), [
     { key: { hash: 1 }, name: 'query for getting zelapp message based on hash', unique: true, recover: dbHelper.dedupeByKey },
     { key: { txid: 1 }, name: 'query for getting zelapp message based on txid' },
     { key: { height: 1 }, name: 'query for getting zelapp message based on height' },
@@ -255,14 +256,14 @@ async function prepareDatabaseSchema() {
     { key: { 'appSpecifications.version': 1 }, name: 'query for getting app message based on version' },
     { key: { 'appSpecifications.nodes': 1 }, name: 'query for getting app message based on nodes' },
   ]);
-  await dbHelper.ensureNewestAppMessageIndex(databaseTemp.collection(config.database.appsglobal.collections.appsMessages));
+  await dbHelper.ensureNewestAppMessageIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appsMessages')));
   // The running set is derived from the app state event log on read; the materialized
   // location collection it replaced is no longer written or read. Dropped rather than
   // left to its TTL so an upgraded node does not carry a dead collection - and its
   // per-minute TTL sweep - indefinitely. Named literally: the config key is gone, and
   // a drop of a collection that is not there is a no-op, so this self-retires.
   await databaseTemp.collection('zelappslocation').drop().catch(() => {});
-  await dbHelper.ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appStateEvents), [
+  await dbHelper.ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appStateEvents')), [
     { key: { expireAt: 1 }, expireAfterSeconds: 0 },
     { key: { ip: 1, type: 1, dedupKey: 1 }, unique: true, recover: dbHelper.dedupeByKey },
     { key: { broadcastedAt: 1 } },
@@ -283,7 +284,7 @@ async function prepareDatabaseSchema() {
   // compare-and-set guard storeManifest relies on), plus a PARTIAL TTL that
   // auto-reaps quarantined (unverified, confirmed:false) rows by their expireAt;
   // confirmed rows carry no expireAt and persist.
-  await dbHelper.ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appContentManifests), [
+  await dbHelper.ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appContentManifests')), [
     { key: { appName: 1 }, name: 'appName', unique: true },
     { key: { expireAt: 1 }, name: 'manifest_quarantine_ttl', expireAfterSeconds: 0, partialFilterExpression: { confirmed: false } },
   ]);
@@ -293,7 +294,7 @@ async function prepareDatabaseSchema() {
   // different ingress nodes coexist without collision or merge. The TTL reaps
   // attestations whose message never confirmed (those still carry expireAt);
   // confirmation unsets expireAt so real attributions persist.
-  await dbHelper.ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appsIngressAttestations), [
+  await dbHelper.ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appsIngressAttestations')), [
     { key: { hash: 1, node: 1 }, name: 'ingress attestation identity', unique: true },
     { key: { hash: 1 }, name: 'query ingress attestations by hash' },
     // Serves the reconcile bucket fetch and per-bucket digest recompute (confirmed members of a bucket) as an indexed lookup.
@@ -301,14 +302,14 @@ async function prepareDatabaseSchema() {
     { key: { expireAt: 1 }, name: 'ingress_attestation_orphan_ttl', expireAfterSeconds: 0 },
   ]);
   log.info('App ingress attestations collection prepared');
-  await dbHelper.ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appsInstallingErrorsLocations), [
+  await dbHelper.ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appsInstallingErrorsLocations')), [
     { key: { expireAt: 1 }, expireAfterSeconds: 0 },
     { key: { name: 1 }, name: 'query for getting flux app install errors location based on specs name' },
     { key: { name: 1, hash: 1 }, name: 'query for getting flux app install errors location based on specs name and hash' },
     { key: { name: 1, hash: 1, ip: 1 }, name: 'query for getting flux app install errors location based on specs name and hash and node ip' },
   ]);
   log.info('App installing errors locations prepared');
-  await dbHelper.ensureIndexes(databaseTemp.collection(config.database.appsglobal.collections.appsInstallingErrorsBroadcasts), [
+  await dbHelper.ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appsInstallingErrorsBroadcasts')), [
     { key: { expireAt: 1 }, expireAfterSeconds: 0 },
     { key: { broadcastedAt: 1 } },
     { key: { 'data.name': 1, 'data.hash': 1, 'data.ip': 1 }, unique: true, recover: dbHelper.dedupeByKey },
@@ -338,11 +339,88 @@ function startDependencyProbes() {
 }
 
 /**
- * To start FluxOS. A series of checks are performed on port and UPnP (Universal Plug and Play) support and mapping. Database connections are established. The other relevant functions required to start FluxOS services are called.
- *
- * Not unit-testable: every step acts on the machine, and a throw re-runs the
- * whole boot 15 s later with whatever is stubbed by then. Unit-test the steps
- * it calls; the integration harness covers the sequence.
+ * Run one owner's start, restarting it alone after a throw so the others are
+ * not started twice.
+ * @param {string} name for the log
+ * @param {() => Promise<void>} start
+ * @returns {Promise<void>}
+ */
+async function runOwner(name, start) {
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await start();
+      return;
+    } catch (error) {
+      log.error(`serviceManager - ${name} failed to start, retrying in 15s: ${error.message}`);
+      // eslint-disable-next-line no-await-in-loop
+      await serviceHelper.delay(15_000);
+    }
+  }
+}
+
+/**
+ * Wait for MongoDB and Docker, both at once, and keep `mongoReachable` and
+ * `dockerReachable` true to what they answer from then on.
+ */
+async function startDependencies() {
+  await Promise.all([
+    dbHelper.waitForMongo().then(async () => {
+      databaseHealthService.watch(dbHelper.databaseConnection(), 'main');
+      databaseHealthService.watch(dbHelper.maintenanceConnection(), 'maintenance');
+      // As soon as MongoDB answers: a below-floor node stays up holding a sticky
+      // DOS, so /flux/info names the version found and the version required.
+      fluxNetworkHelper.checkMongoDbVersionAllowed(await dbHelper.getMongoDbVersion());
+      capabilities.claim('mongoReachable', 'serviceManager').raise('MongoDB answered');
+    }),
+    dockerService.waitForDocker().then(async () => {
+      const dockerInfo = await dockerService.dockerInfo().catch(() => null);
+      // Where docker keeps its records, read while it answers, for a kill made
+      // while it does not.
+      if (dockerInfo?.DockerRootDir) appKill.usePaths({ dockerRoot: dockerInfo.DockerRootDir });
+      // As soon as Docker answers, before the container firewall is applied: a
+      // below-floor node stays up holding a sticky DOS, so /flux/info names the
+      // version found and the version required.
+      fluxNetworkHelper.checkDockerVersionAllowed(await dockerService.dockerVersion().then((version) => version.Version, () => null));
+      await fluxNetworkHelper.checkCgroupsAllowed(dockerInfo?.CgroupDriver ?? null);
+      capabilities.claim('dockerReachable', 'serviceManager').raise('Docker answered');
+    }),
+  ]);
+  startDependencyProbes();
+}
+
+/**
+ * Connect to the daemon and start following its chain. Raises
+ * `daemonReachable` through daemonStatus once the RPC answers.
+ */
+async function startDaemon() {
+  await daemonServiceUtils.buildFluxdClient();
+  await daemonStatus.waitForDaemonRpc();
+
+  // After buildFluxdClient, which parses flux.conf — capability detection reads it
+  // to decide which topics this daemon actually publishes. Consumers registered
+  // their interest at require time, so the socket opens with them already attached.
+  daemonSubscriptionService.start();
+  reorgSource.start();
+
+  // awaited so isDaemonSynced is populated before hash sync reads it. Takes the push
+  // path where the daemon offers it, and the old 30s poll where it does not.
+  await chainTipSource.start();
+
+  // App payments are placed in chain order from the daemon's address index.
+  if (!daemonStatus.isAddressIndex()) {
+    log.error('fluxd is running without addressindex=1. FluxOS needs the address index to order app messages. Set addressindex=1 in flux.conf and reindex the daemon, or reinstall the node. FluxOS is stopping.');
+    process.exit(1);
+  }
+}
+
+/**
+ * Brings FluxOS up. Every owner starts at once and waits only on the
+ * capabilities it needs, so nothing is held behind work it does not depend on:
+ * the daemon starts while the local database is prepared, and the apps start
+ * while the daemon syncs. An owner that throws is restarted on its own, which
+ * is why a repeat claim returns the owner's handle.
  */
 async function startFluxFunctions() {
   try {
@@ -357,6 +435,19 @@ async function startFluxFunctions() {
     // Before the dependencies are waited for: a stalled one is what this sees.
     // Awaited so a trip recorded in this boot holds the node before boot acts.
     await hostStallService.start();
+    // Before any work that a restart would cut short: a registration that
+    // needs its kill timeout raised restarts FluxOS, and this waits for it.
+    await fluxService.ensurePm2KillTimeout();
+    // Before anything runs the ufw helper: the copy root runs is installed once
+    // per start.
+    await ufwHelper.path();
+    // Before anything reads or changes the firewall: a node whose ufw defaults
+    // file is broken has no firewall until this repairs it.
+    await fluxNetworkHelper.ensureUfwDefaults().catch((error) => log.error(error));
+    // The node's own firewall rules, before any other code writes to the
+    // firewall and before any app starts.
+    await fluxNetworkHelper.adjustFirewall();
+    log.info('Firewalls checked');
     // Resolve the node-capability ("is-arcane") verdict up front, before any consumer
     // reads it. Awaited: on legacy the FLUX_ARCANE_NODE pre-gate returns instantly; on
     // Arcane the systemd contract guarantees fluxbenchd's RPC is up, so this settles in
@@ -372,678 +463,640 @@ async function startFluxFunctions() {
       enterpriseConfig.onOwnerMapChange(() => imageCacheMaintenance.cleanupDeauthorizedOwners()
         .catch((err) => log.error(`imageCache - de-auth cleanup error: ${err.message}`)));
     }
-    // Hard dependencies — nothing starts until these are confirmed.
-    await dbHelper.waitForMongo();
-    capabilities.claim('mongoReachable', 'serviceManager').raise('MongoDB answered');
-    databaseHealthService.watch(dbHelper.databaseConnection(), 'main');
-    databaseHealthService.watch(dbHelper.maintenanceConnection(), 'maintenance');
-    // As soon as MongoDB answers: a below-floor node stays up holding a sticky
-    // DOS, so /flux/info names the version found and the version required.
-    fluxNetworkHelper.checkMongoDbVersionAllowed(await dbHelper.getMongoDbVersion());
-    await dockerService.waitForDocker();
-    capabilities.claim('dockerReachable', 'serviceManager').raise('Docker answered');
-    startDependencyProbes();
-    const dockerInfo = await dockerService.dockerInfo().catch(() => null);
-    // Where docker keeps its records, read while it answers, for a kill made
-    // while it does not.
-    if (dockerInfo?.DockerRootDir) appKill.usePaths({ dockerRoot: dockerInfo.DockerRootDir });
-    // As soon as Docker answers, before the container firewall is applied: a
-    // below-floor node stays up holding a sticky DOS, so /flux/info names the
-    // version found and the version required.
-    fluxNetworkHelper.checkDockerVersionAllowed(await dockerService.dockerVersion().then((version) => version.Version, () => null));
-    await fluxNetworkHelper.checkCgroupsAllowed(dockerInfo?.CgroupDriver ?? null);
-    // Before any work that a restart would cut short: a registration that
-    // needs its kill timeout raised restarts FluxOS, and this waits for it.
-    await fluxService.ensurePm2KillTimeout();
-    // Before anything runs the ufw helper: the copy root runs is installed once
-    // per start.
-    await ufwHelper.path();
-    // Before anything reads or changes the firewall: a node whose ufw defaults
-    // file is broken has no firewall until this repairs it.
-    await fluxNetworkHelper.ensureUfwDefaults().catch((error) => log.error(error));
-    // The node's own firewall rules, before any other code writes to the
-    // firewall and before any app starts.
-    await fluxNetworkHelper.adjustFirewall();
-    log.info('Firewalls checked');
-    capabilities.claim('localDbPrepared', 'serviceManager').starting('running migrations and preparing collections');
 
-    // Node-local state migrations, before anything reads it. pgpService and the IP
-    // monitor both read what these adopt; pgpService guards itself (it reads the
-    // config file directly when the database holds no identity), so this is the
-    // tidy path rather than the only one.
-    await migrations.runBefore('localDbPrepared');
+    // Read once, from the local database, and shared: the boot reconcile and the
+    // orchestrator both decide by it.
+    const bootContextRead = capabilities.whenUp('localDbPrepared').then(() => AppSyncOrchestrator.readBootContext());
 
-    // Check and update CloudUI if needed (for legacy nodes without watchdog; Arcane
-    // delegates to the watchdog). Detached: a UI-asset download must never gate boot —
-    // nothing downstream reads it, and a slow/unreachable GitHub would stall the node.
-    log.info('Checking CloudUI installation...');
-    cloudUIUpdateService.checkAndUpdateCloudUI().catch((err) => log.error(`CloudUI update check failed: ${err.message}`));
-    // Gated on the declared UPnP setting, not on routerIP being populated: the
-    // installer records a router address on non-UPnP nodes too (the default gateway),
-    // so its presence never meant the operator wanted UPnP.
-    if (upnpService.isUPNP()) {
-      setInterval(() => {
-        // this is only used as a protection against node operators removing rules
-        // on legacy nodes.
-        upnpService.adjustFirewallForUPNP();
-      }, (60 * 60 * 1000) + 1000); // every 60m.
-      setTimeout(() => {
-        portManager.callOtherNodeToKeepUpnpPortsOpen();
-        setInterval(() => {
-          portManager.callOtherNodeToKeepUpnpPortsOpen();
-        }, 8 * 60 * 1000);
-      }, 1 * 60 * 1000);
-    }
-    await fluxNetworkHelper.addFluxNodeServiceIpToLoopback();
-    await fluxNetworkHelper.allowOnlyDockerNetworksToFluxNodeService();
-    await fluxNetworkHelper.allowDockerNetworksToFluxDnsd();
-    fluxNodeService.start();
-    log.info('Checking docker log for corruption...');
-    await dockerService.dockerLogsFix();
-    await systemService.mongodGpgKeyVeryfity();
-    await systemService.mongoDBConfig();
-    systemService.monitorSystem();
-    log.info('System service initiated');
-    fluxadmService.start();
-    log.info('Fluxadm access service initiated');
-    await untilSucceeds('Database schema preparation', prepareDatabaseSchema);
-    await appsRepository.backfillGlobalAppUuids().catch((error) => {
-      log.error(`Deriving instance identities failed: ${error.message}`);
-    });
-    // Rows written before the identifier index existed. The resolver lives here
-    // rather than in the repository because building a deployment needs the
-    // resolved spec, and the repository must not depend on what resolves it.
-    await appsRepository.backfillComponentIdentifiers(
-      componentIdentifierResolver.resolveComponentIdentifiers,
-    ).catch((error) => {
-      log.error(`Recording component identifiers failed: ${error.message}`);
-    });
-    // Who gives capacity back when paid work cannot otherwise fit. Registered
-    // rather than imported: admissionControl is depended on by every resource
-    // check, and it must not in turn depend on whichever feature happens to hold
-    // reclaimable reservations.
-    admissionControl.setReclaimer(playgroundService.reclaimFor);
-    // Replay any owed teardowns that survived a crash: re-condemn their components
-    // (synchronously, before the reconciler starts) then drain them in the background,
-    // so an interrupted removal always completes and a being-torn-down app is never
-    // restarted from reconcile cycle 0.
-    await appUninstaller.recoverOwedTeardowns();
-    capabilities.claim('localDbPrepared', 'serviceManager').raise('collections and indexes prepared');
-    const db = dbHelper.databaseConnection();
-
-    // The location table this node already holds, brought back as soon as the
-    // database is up. Detached and best-effort - every consumer degrades safely
-    // without it. On a node that has run before this is a single marker read
-    // against rows already in mongo, so the residential verdict and placement's
-    // fault domains hold their table within milliseconds of boot rather than
-    // behind the app-database rebuild, which neither depends on. Fetching a NEW
-    // baseline is the expensive half and stays in startDbDependentServices,
-    // where its two-million-row ingest cannot land on top of that rebuild.
-    ipLocationSync.restoreCachedTable().catch((err) => log.error(`ipLocationSync restore error: ${err.message}`));
-
-    // Check for apps with incorrect volume mounts (containing /flux/ path)
-    log.info('Checking for apps with incorrect volume mounts...');
-    // BOTH CONDITIONS, because neither implies the other. The delay is for the host
-    // settling - docker, mounts, crontab - and the gate is for the policy the hard
-    // redeploy it performs needs to pull an image again. This pass runs ONCE per
-    // boot and has nothing that retries it, so firing it into a closed gate loses
-    // the fix until the node next restarts.
-    setTimeout(() => {
-      capabilities.whenUp('policyCurrent').then(() => volumeValidationService.checkAndFixIncorrectVolumeMounts()).catch((error) => {
-        log.error(`Volume validation service error: ${error.message}`);
-      });
-    }, bootDelay(45 * 1000)); // Run after 45 seconds to allow system to stabilize
-
-    // Validate hardware requirements and remove non-compliant apps FIRST
-    log.info('Scheduling hardware validation check...');
-    setTimeout(() => {
-      hardwareValidationService.performBootTimeHardwareValidation().catch((error) => {
-        log.error(`Hardware validation service error: ${error.message}`);
-      });
-    }, bootDelay(50 * 1000)); // Run at 50 seconds - BEFORE boot reconciliation
-
-    // Migrate existing containers from 'unless-stopped'/'always' to 'no' restart policy.
-    // Non-destructive — doesn't stop containers, just prevents Docker from auto-starting
-    // them on future daemon restarts. FluxOS manages container startup once appRegistryConsistent is up.
-    dockerService.migrateContainerRestartPolicies();
-
-    // Start the reconcile workqueue (the single container actuator) and the
-    // Docker container event bridge that feeds it (die / start / health_status).
-    // The workqueue holds all triggers until bootReconcileDecided, then
-    // drains once daemon/DB are ready.
-    appReconciler.start().catch((error) => {
-      log.error(`App reconciler error: ${error.message}`);
-    });
-    containerEventBridge.start();
-
-    // Telemetry identity socket for flux-telemetryd (Arcane-only; self-skips
-    // elsewhere). The boot reconcile in appStartupManager repopulates routing.
-    telemetryIdentityService.start().catch((error) => {
-      log.error(`telemetry identity service failed to start: ${error.message}`);
-    });
-
-    // Read boot context early — determines startup behavior for container management.
-    const bootContext = await AppSyncOrchestrator.readBootContext();
-
-    // The rules that keep app containers off private networks and off each
-    // other's networks, applied before any app container starts. A failure is
-    // logged and apps still start. Rechecked so a removed chain returns; each
-    // network FluxOS creates or removes re-applies them as it goes.
-    await dockerService.applyContainerFirewall();
-    setInterval(() => dockerService.applyContainerFirewall(), 10 * 60 * 1000);
-
-    // App startup manager owns all boot-time container lifecycle decisions:
-    // Locations expired → remove all. Otherwise wait for daemon/DB, then reconcile.
-    appStartupManager.manageAppsOnBoot(bootContext).catch((error) => {
-      log.error(`App startup manager error: ${error.message}`);
-    });
-    // Not awaited: it waits for this node's address, and the announcer, the one
-    // reader of what it writes, waits for it.
-    placements.backfillPlacements();
-
-    // Above the daemon wait, because syncthing has nothing to do with the
-    // daemon: the sentinel talks to syncthing's own API and reads userconfig,
-    // and the webserver is already answering. Below it, a node whose fluxd is
-    // slow or dead never starts measuring syncthing at all, and a check nobody
-    // is making cannot report a fault - see syncthingService's health stamps.
-    syncthingService.startSyncthingSentinel();
-    log.info('Syncthing service started');
-
-    // Wait for daemon RPC — manageAppsOnBoot (above) is fire-and-forget and waits
-    // on daemonReachable internally with a 5-min timeout. It must be running
-    // before daemonReachable rises so its timeout/removal logic can trigger.
-    await daemonServiceUtils.buildFluxdClient();
-    await daemonStatus.waitForDaemonRpc();
-
-    // After buildFluxdClient, which parses flux.conf — capability detection reads it
-    // to decide which topics this daemon actually publishes. Consumers registered
-    // their interest at require time, so the socket opens with them already attached.
-    daemonSubscriptionService.start();
-    reorgSource.start();
-
-    // awaited so isDaemonSynced is populated before hash sync reads it. Takes the push
-    // path where the daemon offers it, and the old 30s poll where it does not.
-    await chainTipSource.start();
-
-    // App payments are placed in chain order from the daemon's address index: it
-    // positions the payments recorded before the scan recorded positions, and a
-    // node with no app history yet fetches its payments through it.
-    if (!daemonStatus.isAddressIndex()) {
-      log.error('fluxd is running without addressindex=1. FluxOS needs the address index to order app messages. Set addressindex=1 in flux.conf and reindex the daemon, or reinstall the node. FluxOS is stopping.');
-      process.exit(1);
-    }
-    await untilSucceeds('Payment position backfill', () => paymentPositions.backfillPaymentPositions());
-    // Before the hash sync reads the flags and the retry windows.
-    await untilSucceeds('App message flag repair', () => appMessageHashes.repairLostMessageFlags());
-    await untilSucceeds('App message retry windows', () => appMessageHashes.restartRetryWindows());
-
-    // Initialize app sync orchestrator and spawner
-    const orchestrator = new AppSyncOrchestrator({
-      blockEmitter: explorerService.getBlockEmitter(),
-      // remoteCapabilities travels with the peer: the orchestrator picks which
-      // signature form to send from it, and a projection without it reads as a
-      // peer that claims nothing - so every request goes out in the legacy form
-      // and every peer holding the sender to what it advertised refuses it.
-      getEligibleSyncPeers: () => peerManager.getEligibleSyncPeers()
-        .map((p) => ({
-          key: p.key,
-          connectionId: p.connectionId,
-          remoteCapabilities: p.remoteCapabilities,
-          send: (msg) => p.send(msg),
-        })),
-      // By key, unfiltered: the reconnect pull addresses a specific peer that
-      // may not be a sync candidate yet (no reported uptime at add() time).
-      getPeerByKey: (key) => {
-        const p = peerManager.get(key);
-        return p
-          ? {
-            key: p.key, connectionId: p.connectionId, remoteCapabilities: p.remoteCapabilities, send: (msg) => p.send(msg),
-          }
-          : null;
-      },
-      onPeerEvent: (event, cb) => peerManager.on(event, cb),
-      offPeerEvent: (event, cb) => peerManager.removeListener(event, cb),
-      isAboveThreshold: () => capabilities.isUp('peersAboveFloor'),
-      isEnterprise: () => enterpriseNetwork.getCachedEnterpriseIdentity(),
-      networkStateReady: () => networkStateService.waitStarted(),
-      // The steady-state manifest refresh's apply half: catch up any running container whose
-      // register advanced (a silently-missed update) to what it should be serving.
-      catchUpRunningContent: () => contentSlotService.applyBehindContentApps(),
-      fluxVersion,
-    });
-    // Whether an arriving sync response is still wanted. THE ROUND ANSWERS IT.
-    // Only the orchestrator knows what it asked of whom, and on which socket,
-    // and what has since ended that request - a completion, a refusal, an
-    // unverifiable chunk, a deadline, a close. The manager keeps a marks set in
-    // step with it for the socket-level fast path, but the definition of the
-    // question lives with the record, not with a copy of it.
-    //
-    // Per CONNECTION. A peer that reconnects keeps its ip:port while becoming a
-    // different connection, so nothing arriving on the new one answers a request
-    // written into the old one - asked by address, a stale view is counted as
-    // this round's completion.
-    peerManager.syncResponseWanted = (peerSocket) => orchestrator.isSyncResponseWanted(peerSocket);
-
-    // The other half of the peer-gated fallback. The orchestrator stops a node
-    // whose peer set keeps collapsing from ever reaching READY, which is silent;
-    // this says so, and puts a node that does it repeatedly out of service. Same
-    // two edges, read for a different purpose, so it subscribes for itself
-    // rather than being another of the orchestrator's jobs.
-    peerSetStabilityService.start({
-      onPeerEvent: (event, cb) => peerManager.on(event, cb),
-      offPeerEvent: (event, cb) => peerManager.removeListener(event, cb),
-      isAboveThreshold: () => capabilities.isUp('peersAboveFloor'),
-    });
-
-    // Whether this node's calls to other nodes reach them. Started beside the
-    // peer-set watch because it draws its observer from the same network state,
-    // and like it the check says why a node is out rather than leaving it silent.
-    outboundPathService.start();
-
-    // Network policy, started here rather than at the top of boot because it needs both of
-    // the things that only exist by now: mongo, to restore and re-verify the bundle this
-    // node last held, and peers, to ask for anything newer. Its old position could reach
-    // neither, which is why it could only ever fetch from github.
-    //
-    // Not awaited. Boot does not wait on policy and never did: the node comes up, serves its
-    // API and keeps its containers running regardless. What waits is acquisition, through
-    // `policyCurrent`, which is the one decision that must not be made on a guess.
-    policyStore.setPeerTransport({
-      // The peers worth asking. One that does not advertise the capability has no handler
-      // for the ask, so including it would buy a deadline's wait and an unrecognised-type
-      // warning in its log.
-      capableKeys: () => peerManager.getPolicyCapablePeers().map((peer) => peer.key),
-      // The only ask. A key that no longer resolves is a peer that left between connecting
-      // and being asked, which is not an error.
-      requestFrom: (key, seq, correlationId) => {
-        const peer = peerManager.get(key);
-        if (!peer) return Promise.resolve();
-        return fluxCommunicationMessagesSender.requestPolicyFromPeer(peer, seq, correlationId);
-      },
-      announce: (seq) => fluxCommunicationMessagesSender.announcePolicySeq(seq),
-      // The latched level: peerManager already defines "enough peers to gossip with" with
-      // hysteresis (appSyncPeerThreshold 12 up, appSyncDegradedThreshold 4 down). A late
-      // subscriber cannot see the edge it missed, which is what this accessor exists for -
-      // and reading the level rather than keeping an edge of our own is why nothing here
-      // needs re-arming when a peer set collapses and rebuilds.
-      aboveThreshold: () => capabilities.isUp('peersAboveFloor'),
-    });
-    // Discovery has not started yet - it is fifty lines below - so the peer set is empty at
-    // this point on every node, always. Nothing here asks peers or the source; both are
-    // driven by the two subscriptions that follow, which is what makes peers-first true at
-    // boot rather than only at the 24-hour tick. It is the whole difference between a node
-    // that boots while github is down getting policy from the neighbour beside it and
-    // getting none for a day.
-    //
-    // PER JOIN for the ASK. peerThresholdReached fires when the count first crosses
-    // appSyncPeerThreshold and then never again unless the set has since fallen below
-    // appSyncDegradedThreshold, so as a prompt to ask peers it is the wrong signal: a node
-    // asks once, its peers have nothing either, and when one of them later obtains a bundle
-    // nothing tells this node to ask again - its peer set never collapsed, so the edge never
-    // re-arms. Measured on a three-node fleet: node 1 asked at 08:16:09, node 0 adopted at
-    // 08:16:54, and node 1 held nothing thereafter. Every join re-arms the ask, and the join
-    // that crosses the threshold is one of them.
-    //
-    // The key is the whole point: notePeerAvailable asks THAT peer and never the source.
-    // A broadcast would have to be rationed, and a rationed ask cannot serve a node that is
-    // merely behind.
-    //
-    // The orchestrator next door draws the same distinction for its sync pool, and for the
-    // same reason: a latched edge says nothing about a pool that has changed since it fired.
-    peerManager.on('peerConnected', (key) => policyStore.notePeerAvailable(key));
-    // Both edges, because the store's decision is about the peer SET. A peer leaving takes
-    // its answer with it, and a node waiting on one that has gone waits out a deadline for an
-    // answer that cannot come.
-    peerManager.on('peerDisconnected', (key) => policyStore.notePeerGone(key));
-    // AND the threshold itself, which is written one line after the arrival that crosses it.
-    // Without this the crossing arrival decides while the level still reads false, and a set
-    // that stops exactly at the threshold has nothing left to re-trigger the decision.
-    peerManager.on('peerThresholdReached', () => policyStore.noteThresholdReached());
-    policyStore.start().catch((err) => log.error(`policyStore start error: ${err.message}`));
-    capabilities.onUp('nodeMessageCapable', () => orchestrator.onMessageCapabilityChange(true));
-    capabilities.onDown('nodeMessageCapable', () => orchestrator.onMessageCapabilityChange(false));
-    // A grantor referees from the records this orchestrator's sync delivers,
-    // so it refuses to referee until the orchestrator is READY — the live
-    // level, read per ask; fail-closed until this line runs.
-    grantorController.registerSyncReadyProvider(() => orchestrator.state === APP_SYNC_STATES.READY);
-    // A standing generation record ends the world a held term was granted
-    // in; the holder hears it from the store the moment the record lands.
-    messageStore.onGrantGenerationRecord(grantClient.noteGenerationRecord);
-    // The mesh's ordinals are write-once grants on the founding committee;
-    // the plane registers into the mesh's seam here, and until it does every
-    // ordinal answer is the closed one.
-    ordinalRegisterSeam.registerProvider(ordinalRegister.provider());
-    // A delisted holder resolves to nobody: the seats this cell records whose
-    // holders are not on the current list start their grace now (a reboot
-    // must not read a long-gone holder as present), and a node back on the
-    // list re-probes its own seats before trusting them — another node may
-    // have founded on them while it was off the list. The confirmation
-    // service's direct listener is the production hook; the bus is the
-    // harness's.
-    grantorController.seedDelistedHolders().catch((error) => log.warn(`delisted-holder sweep failed: ${error.message}`));
-    capabilities.onUp('nodeMessageCapable', () => meshOrdinals.noteReturnFromUnreachability());
-    peerNotification.initialize();
-    // Serve the flux-shutdownd drain socket (Arcane-only, best-effort).
-    drainServer.start();
-    appSpawner.initialize();
-    appInstaller.setOnInstallComplete(() => peerNotification.checkAndNotifyPeersOfRunningApps());
-    // a removed component's in-memory controller verdict dies with it - a
-    // reinstalled g:/r: app must await a fresh election, not inherit a stale one
-    appUninstaller.setOnComponentRemoved((id) => appReconciler.forgetDesiredState(id));
-    // an app the registry stops listing is removed here and its removal told to peers
-    localRemovalQueue.setRemover((appName) => appUninstaller.removeAppLocally(appName, null, true, false, true));
-    // the node's address moved, so every app that survived it has to come up on
-    // the new one - asked for durably here rather than driven from the network
-    // layer, which sits underneath the reconciler and cannot require it
-    fluxNetworkMonitor.setOnAddressChanged((apps, reason) => appReconciler.requestRestartOf(apps, reason));
-    // route the reconciler's graceful stop-but-keep through flux-shutdownd on Arcane;
-    // returns false off Arcane (or when the daemon is unavailable) so it stops locally
-    appReconciler.setRequestGracefulStop((id, reason) => appShutdownCoordinator.requestGracefulStop(id, reason));
-    // A committed spec fans out to both reactors: the spawner wakes when the
-    // spec is one this node must INSTALL (self-gated to contention-free pinned
-    // cases), and the spec reconciler converges an app this node already RUNS
-    // (adoption is staggered inside it, removal acts promptly). Everything else
-    // rides the per-block convergence pass.
-    registryManager.setOnSpecStored((specDoc) => {
-      appSpawner.notifySpecStored(specDoc);
-      specReconciler.notifySpecStored(specDoc);
-    });
-    log.info('App Spawner initialized');
-
-    fluxNetworkHelper.allowNodeToBindPrivilegedPorts();
-    log.info('Node allowed to bind privileged ports');
-    fluxCommunication.keepConnectionsAlive();
-    log.info('Connections polling prepared');
-    fluxNetworkHelper.initClockOffsetCache();
-    log.info('Clock offset cache initialized');
-    // Remove existing watchtower container (replaced by native image update service)
-    imageUpdateService.removeWatchtowerContainer();
-    // Start native image update service (delayed start)
-    // A check that lands before the policy gate opens refuses, and the next one is
-    // six hours away - so the app runs on the image it has for that long over a
-    // window measured in minutes. The interval is the fallback; the gate is when
-    // the first check is actually able to do its work.
-    setTimeout(() => {
-      capabilities.whenUp('policyCurrent').then(() => {
-        imageUpdateService.startImageUpdateService();
-        log.info('Native image update service started');
-      }).catch((error) => log.error(`Image update service start error: ${error.message}`));
-    }, bootDelay(10 * 60 * 1000)); // 10 minutes after startup
-    fluxNetworkMonitor.checkDeterministicNodesCollisions();
-    // STARTED ON THE POLICY, NOT ON BOOT. The blocklist this enforces is a document in the
-    // signed bundle, and the bundle is not resolved by the time this line runs. Started
-    // here, its first tick reads nothing - and reading nothing is correctly refused rather
-    // than taken for an empty list, because an unreadable blocklist releasing a node the
-    // network deliberately DOSed is the failure that contract was written for. What it
-    // costs is the interval: the next tick is twelve hours away and nothing brings it
-    // forward, so a node on the blocklist goes unenforced for twelve hours per restart.
-    capabilities.whenUp('policyCurrent')
-      .then(() => appTamperingBlocklistService.start())
-      .catch((err) => log.error(`appTamperingBlocklist start error: ${err.message}`));
-    // Not awaited, and started ahead of setNodeGeolocation below on purpose: the
-    // first tick reads geolocation from the db when there is one, and otherwise
-    // decides nothing and retries until the lookup this boot has landed.
-    //
-    // Injected the same way nodeStatusMonitor is, and for the same reason: the
-    // app list is read from a query service deep enough in the lifecycle graph
-    // that requiring it here would put geolocation and the network helper on
-    // that load path. Removing the app is not this service's job - the single
-    // give-up-an-app pass in appOperations does that.
-    residentialNodeDosService.start({
-      installedAppsFn: appQueryService.installedApps,
-    }).catch((err) => {
-      log.error(`residentialNodeDos start error: ${err.message}`);
-    });
-    uplinkService.start();
-    log.info('Flux checks operational');
-    fluxCommunication.initializeDiscovery();
-    await fluxnodeStatusSource.start();
-    daemonUsageReporter.start();
-    if (config.get('fluxapps.discoveryAutostart') !== false) {
-      fluxCommunication.startDiscovery();
-      log.info('Flux Discovery started');
-    }
-    // Mount every installed app's data volume (derived from the installed-apps
-    // DB) and drop the superseded legacy @reboot remount crontab entries
-    log.info('crontab and mounts cleanup...');
-    await crontabAndMountsCleanup.cleanupCrontabAndMounts().catch((error) => {
-      log.error(`Crontab and mounts cleanup service error: ${error.message}`);
-    });
-    // Perform container mount recovery - restart containers that started before their mounts were created
-    log.info('Container mount recovery check...');
-    await containerMountRecovery.performContainerMountRecovery().catch((error) => {
-      log.error(`Container mount recovery service error: ${error.message}`);
-    });
-    // A file operation's container is detached from the process that started
-    // it, so a FluxOS restart leaves one running with nobody waiting for its
-    // result, and its staging directory on the volume. The recovery below
-    // reclaims both, after the volumes above are mounted, since it reads them.
-    //
-    // The fetch starts early so the image is in hand before the first file
-    // operation arrives, rather than being pulled while an owner waits on a
-    // request. The recovery does not depend on it: that is a host rm over names
-    // readdir returned, and runs on a node that can reach nothing.
-    //
-    // Not awaited: the node takes the image at its own place in a window, so
-    // the fleet ends up holding it without every node fetching at the same
-    // moment. A node that cannot reach the registry takes it from one that did,
-    // which only works if they have it.
-    volumeExecutor.startImagePrefetch();
-
-    log.info('Reclaiming interrupted file operations...');
-    await fileOperationRecovery.recoverInterruptedFileOperations().catch((error) => {
-      log.error(`File operation recovery error: ${error.message}`);
-    });
-
-    // Awaited: generating an identity rewrites config/userconfig.js, and that
-    // write is not atomic - a reload landing inside it leaves the process with
-    // no userconfig.initial at all. A node that already has an identity returns
-    // from here immediately, so this costs the fleet nothing.
-    await pgpService.generateIdentity();
-    log.info('PGP service initiated');
-    // Ensure watchdog is installed and running on legacy OS (non-ArcaneOS) nodes
-    watchdogService.ensureWatchdogRunning().catch((error) => {
-      log.error(`Watchdog service error: ${error.message}`);
-    });
-    log.info('Watchdog service check initiated');
-    const explorerDatabase = db.db(config.get('database.daemon.database'));
-    await dbHelper.dropCollection(explorerDatabase, fluxTransactionCollection).catch((error) => {
-      if (error.message !== 'ns not found') {
-        log.error(error);
-      }
-    });
-    log.info('Mongodb zelnodetransactions dropped');
-
-    networkStateService.start(
-      { stateEmitter: explorerService.getBlockEmitter() },
-    );
-    cacheManager.logCacheSizesEvery(600_000);
-    fluxCommunication.logSocketsEvery(600_000);
-
-    // Uncomment for network interface debug traffic stats. Will move this
-    // to part of the 'debug' setting in a future pull (and auto fetch the interface)
-
-    // const throughput = new throughputLogger.ThroughputLogger(
-    //   (result) => console.log(result),
-    //   { intervalMs: 60_000, matchInterfaces: ['ens18'] },
-    // );
-
-    // await throughput.start();
-
-    setTimeout(async () => {
-      log.info('Rechecking firewall app rules');
-      await fluxNetworkHelper.purgeUFW();
-    }, bootDelay(30 * 1000));
-    setTimeout(() => {
-      appController.stopAllNonFluxRunningApps();
-      // Best effort during boot — the reconciler starts monitoring per app as it settles.
-      monitoringOrchestrator.startMonitoringOfApps(null).catch((error) => log.error(error));
-      portManager.restoreAppsPortsSupport();
-    }, bootDelay(1 * 60 * 1000));
-    // Resolve this node's enterprise identity once, up front. The key comes off disk and
-    // policy arrives on an event, so this settles at boot rather than on a timer; the
-    // interval is the fallback for a config that cannot be read at all. Once cached, hot
-    // paths (spawn loop) read it synchronously via getCachedEnterpriseIdentity() with no
-    // network call and no throws.
-    const identityReady = enterpriseNetwork.scheduleIdentityResolution();
-
-    // Image-cache boot bookkeeping needs the DB rebuilt (records live in
-    // localzelapps) and the identity resolved (cleanupDeauthorizedOwners reads
-    // the allowed-owner list, null until then). A separate block (not nested in
-    // startDbDependentServices) so this pure DB-record bookkeeping runs
-    // concurrently with — not behind — that function's heavy app work.
-    const runImageCacheBootMaintenance = async () => {
-      await capabilities.whenUp('appRegistryConsistent');
-      await identityReady;
-      await imageCacheMaintenance.runBootReconcile();
-    };
-    if (imageCacheEnabled) {
-      runImageCacheBootMaintenance().catch((err) => log.error(`imageCache - boot maintenance error: ${err.message}`));
-    }
-
-    // Services that read from zelappsinformation wait for the orchestrator
-    // to finish rebuilding it rather than guessing a setTimeout delay.
-    const startDbDependentServices = async () => {
-      await capabilities.whenUp('appRegistryConsistent');
-      log.info('DB ready - starting db-dependent services');
-      // Keep the iplocation table fresh. The cached copy is already back - restoreCachedTable ran with the schema prep above - so
-      // what starts here is the fetch loop, whose ingest is the half worth
-      // keeping clear of the rebuild that just finished. Detached; placement
-      // degrades to /16 arithmetic without a table.
-      ipLocationSync.startSync().catch((err) => log.error(`ipLocationSync start error: ${err.message}`));
-      // Warm the marketplace template cache (best-effort; cache-miss fetch covers any gaps).
-      marketplaceTemplateCache.bootstrapCache().catch((error) => log.error(error));
-      specReconciler.requestFullConvergence({ reason: 'boot' });
-      // Driven by the policy bundle from here: a pass when the gate opens and on every
-      // change while it is open. Nothing waits on it.
-      imageManager.startComplianceSweeps();
-      // Backstop the flux-shutdownd plan store against anything missed while
-      // fluxos was down (Arcane-only, best-effort).
-      appOperations.shutdownPlanResync().catch((error) => log.error(error));
-      // Detached, and started once this node knows which side of the enterprise split it
-      // is on: judged before that, every sweep would fail on the identity it cannot read.
-      // From there it follows the policy - a pass when the gate opens and on every change
-      // while it is open - since an owner granted or revoked after boot is not visible to
-      // a sweep that ran once.
-      identityReady.then(() => enterpriseNetwork.startOwnershipSweeps());
-      setInterval(() => {
-        portManager.restorePortsSupport();
-      }, portRestoreIntervalMs);
-      // Detached: one pass per start, once the boot gate has settled and in
-      // this node's own slot. Nothing waits on it.
-      portManager.removeStaleUpnpMappings();
-    };
-    startDbDependentServices();
-    log.info('Starting setting Node Geolocation');
-    geolocationService.setNodeGeolocation();
-    setTimeout(() => {
-      const zmqport = config.get('daemon.zmqport');
-      log.info(`Ensuring zmq is enabled for fluxd on port: ${zmqport}`);
-      try {
-        systemService.enableFluxdZmq(`tcp://127.0.0.1:${zmqport}`);
-      } catch (err) {
-        log.error(err);
-      }
-    }, bootDelay(20 * 60 * 1000));
-    // Deliberately not awaited — boot carries on while the chain scan starts.
-    // Safe to leave unhandled: initiateBlockProcessor does not reject.
-    explorerService.initiateBlockProcessor({ restoreDatabase: true, deepRestore: true });
-    log.info('Flux Block Processing Service started');
-    setTimeout(() => {
-      appInspector.checkApplicationsCpuUSage(globalState.appsMonitored, appQueryService.installedApps);
-      setInterval(() => {
-        appInspector.checkApplicationsCpuUSage(globalState.appsMonitored, appQueryService.installedApps);
-      }, cpuCheckIntervalMs);
-    }, bootDelay(cpuCheckIntervalMs));
-    setTimeout(() => {
-      // appsService.checkForNonAllowedAppsOnLocalNetwork();
-      availabilityChecker.checkMyAppsAvailability(
-        dosState,
-        portsNotWorking,
-        portManager.failedNodesTestPortsCache,
-      );
-    }, bootDelay(3 * 60 * 1000));
-    nodeSelfDefense.initialize();
-    // Start the syncthing/masterSlave deciders once boot container state has settled
-    // (the same AsyncGate the reconciler starts on), not after a fixed delay. Each
-    // decider self-gates per cycle on its own prerequisites (mounts, syncthing health,
-    // own-IP, FDM), so an early start is safe - it skips and retries until ready.
-    capabilities.whenUp('bootReconcileDecided').then(() => {
-      // The syncthing decider is declare-only: it writes desired run-state and
-      // data-state (via appReconciler) and enqueues; the reconciler is the sole
-      // actuator that stops, starts, and wipes - inside its per-key single-flight,
-      // so a start can never race a data wipe.
-      syncthingMonitor.syncthingApps(
-        globalState,
-        () => globalState,
-      ); // rechecks syncthing configuration each cycle
-      appOperations.startActiveStandbyCoordinator();
-      setTimeout(() => {
-        appInspector.monitorSharedDBApps();
-      }, 60 * 1000);
-    });
-    // Hash sync and spawner startup are now managed by the AppSyncOrchestrator (event-driven)
-    orchestrator.start(bootContext);
-    log.info('AppSyncOrchestrator started');
-    setInterval(async () => {
-      // The level-triggered backstop for everything the per-block pass is asked for.
-      await specReconciler.requestFullConvergence({ reason: 'backstop' });
-      // The compliance sweep removes pinned images out of band, so cache records are
-      // reconciled against docker on this interval.
-      if (imageCacheEnabled) {
-        await imageCacheMaintenance.reconcileOrphanedRecords()
-          .catch((err) => log.error(`imageCache - orphan reconcile error: ${err.message}`));
-      }
-    }, imageComplianceIntervalMs);
-    // Cold-image reaper (ALL nodes — deliberately NOT gated on imageCacheEnabled): reclaim
-    // unused tagged images. Delayed first run so docker has loaded its container objects, then
-    // daily. Also triggered at the end of every image update (imageUpdateService).
-    setTimeout(() => {
-      imageReaper.pruneUnusedImages().catch((err) => log.error(`imageReaper boot run error: ${err.message}`));
-      setInterval(() => {
-        imageReaper.pruneUnusedImages().catch((err) => log.error(`imageReaper error: ${err.message}`));
-      }, imageReaperIntervalMs);
-    }, bootDelay(10 * 60 * 1000));
-    appJanitor.start();
-    // The mesh sweep: membership, certificates (aged-replacement promotion
-    // rides it), the impersonation detector. Dormant on a node running no
-    // mesh app.
-    meshReconciler.start();
-    // The founder flip evaluator: tracks sustained committee rot per world
-    // and photographs the new basis at its grid height (8.5). Dormant on a
-    // fleet with standing committees.
-    foundingCommittee.startFlipEvaluator();
-    // Re-issue managed backend-TLS leaves before their 30-day life runs out
-    // (dormant on a node running no verify:required app).
-    backendTlsRenewal.start();
-    setTimeout(() => {
-      daemonHealthMonitor.checkDaemonHealthAndCleanup();
-      setInterval(() => {
-        daemonHealthMonitor.checkDaemonHealthAndCleanup();
-      }, bootDelay(15 * 60 * 1000));
-    }, bootDelay(5 * 60 * 1000));
-    // Gated for the same reason as the image updater: this pass redeploys on a
-    // storage violation, and one that runs before policy refuses and re-arms
-    // thirty minutes out. It re-arms itself from then on, so only the first run
-    // needs the gate.
-    setTimeout(() => {
-      capabilities.whenUp('policyCurrent').then(() => appInspector.enforceWritableLayerLimit(
-        appsStorageViolations,
-      )).catch((error) => log.error(`Storage space check error: ${error.message}`));
-    }, bootDelay(20 * 60 * 1000));
-    setInterval(() => {
-      backupRestoreService.cleanLocalBackup();
-    }, bootDelay(25 * 60 * 1000));
-    if (development) { // just on development branch
-      setInterval(async () => {
-        await fluxService.enterDevelopment().catch((error) => log.error(error));
-        if (development === true || development === 'true' || development === 1 || development === '1') { // in other cases pause git pull
-          setTimeout(async () => {
-            await fluxService.softUpdateFlux().catch((error) => log.error(error));
-          }, 15 * 1000);
+    await Promise.all([
+      runOwner('dependencies', startDependencies),
+      runOwner('daemon', startDaemon),
+      runOwner('host', async () => {
+        await capabilities.whenUp('dockerReachable');
+        // Check and update CloudUI if needed (for legacy nodes without watchdog; Arcane
+        // delegates to the watchdog). Detached: a UI-asset download must never gate boot —
+        // nothing downstream reads it, and a slow/unreachable GitHub would stall the node.
+        log.info('Checking CloudUI installation...');
+        cloudUIUpdateService.checkAndUpdateCloudUI().catch((err) => log.error(`CloudUI update check failed: ${err.message}`));
+        // Gated on the declared UPnP setting, not on routerIP being populated: the
+        // installer records a router address on non-UPnP nodes too (the default gateway),
+        // so its presence never meant the operator wanted UPnP.
+        if (upnpService.isUPNP()) {
+          setInterval(() => {
+            // this is only used as a protection against node operators removing rules
+            // on legacy nodes.
+            upnpService.adjustFirewallForUPNP();
+          }, (60 * 60 * 1000) + 1000); // every 60m.
+          setTimeout(() => {
+            portManager.callOtherNodeToKeepUpnpPortsOpen();
+            setInterval(() => {
+              portManager.callOtherNodeToKeepUpnpPortsOpen();
+            }, 8 * 60 * 1000);
+          }, 1 * 60 * 1000);
         }
-      }, 20 * 60 * 1000); // every 20 minutes
-    }
+        await fluxNetworkHelper.addFluxNodeServiceIpToLoopback();
+        await fluxNetworkHelper.allowOnlyDockerNetworksToFluxNodeService();
+        await fluxNetworkHelper.allowDockerNetworksToFluxDnsd();
+        fluxNodeService.start();
+        log.info('Checking docker log for corruption...');
+        await dockerService.dockerLogsFix();
+        systemService.monitorSystem();
+        log.info('System service initiated');
+        fluxadmService.start();
+        log.info('Fluxadm access service initiated');
+      }),
+      runOwner('local database', async () => {
+        await capabilities.whenUp('mongoReachable');
+        capabilities.claim('localDbPrepared', 'serviceManager').starting('running migrations and preparing collections');
+        // First, because on a legacy node a changed config restarts mongod, which
+        // nothing preparing the database may be in the middle of.
+        await systemService.mongodGpgKeyVeryfity();
+        await systemService.mongoDBConfig();
+        // Node-local state migrations, before anything reads it. pgpService and the IP
+        // monitor both read what these adopt; pgpService guards itself (it reads the
+        // config file directly when the database holds no identity), so this is the
+        // tidy path rather than the only one.
+        await migrations.runBefore('localDbPrepared');
+        await untilSucceeds('Database schema preparation', prepareDatabaseSchema);
+        await appsRepository.backfillGlobalAppUuids().catch((error) => {
+          log.error(`Deriving instance identities failed: ${error.message}`);
+        });
+        // Rows written before the identifier index existed. The resolver lives here
+        // rather than in the repository because building a deployment needs the
+        // resolved spec, and the repository must not depend on what resolves it.
+        await appsRepository.backfillComponentIdentifiers(
+          componentIdentifierResolver.resolveComponentIdentifiers,
+        ).catch((error) => {
+          log.error(`Recording component identifiers failed: ${error.message}`);
+        });
+        // Who gives capacity back when paid work cannot otherwise fit. Registered
+        // rather than imported: admissionControl is depended on by every resource
+        // check, and it must not in turn depend on whichever feature happens to hold
+        // reclaimable reservations.
+        admissionControl.setReclaimer(playgroundService.reclaimFor);
+        // Replay any owed teardowns that survived a crash: re-condemn their components
+        // (synchronously, before the reconciler starts) then drain them in the background,
+        // so an interrupted removal always completes and a being-torn-down app is never
+        // restarted from reconcile cycle 0.
+        await appUninstaller.recoverOwedTeardowns();
+        capabilities.claim('localDbPrepared', 'serviceManager').raise('collections and indexes prepared');
+      }),
+      runOwner('apps', async () => {
+        await capabilities.whenUp(['localDbPrepared', 'dockerReachable']);
+        // The location table this node already holds, brought back as soon as the
+        // database is up. Detached and best-effort - every consumer degrades safely
+        // without it. On a node that has run before this is a single marker read
+        // against rows already in mongo, so the residential verdict and placement's
+        // fault domains hold their table within milliseconds of boot rather than
+        // behind the app-database rebuild, which neither depends on. Fetching a NEW
+        // baseline is the expensive half and stays in startDbDependentServices,
+        // where its two-million-row ingest cannot land on top of that rebuild.
+        ipLocationSync.restoreCachedTable().catch((err) => log.error(`ipLocationSync restore error: ${err.message}`));
+
+        // Check for apps with incorrect volume mounts (containing /flux/ path)
+        log.info('Checking for apps with incorrect volume mounts...');
+        // BOTH CONDITIONS, because neither implies the other. The delay is for the host
+        // settling - docker, mounts, crontab - and the gate is for the policy the hard
+        // redeploy it performs needs to pull an image again. This pass runs ONCE per
+        // boot and has nothing that retries it, so firing it into a closed gate loses
+        // the fix until the node next restarts.
+        setTimeout(() => {
+          capabilities.whenUp('policyCurrent').then(() => volumeValidationService.checkAndFixIncorrectVolumeMounts()).catch((error) => {
+            log.error(`Volume validation service error: ${error.message}`);
+          });
+        }, bootDelay(45 * 1000)); // Run after 45 seconds to allow system to stabilize
+
+        // Validate hardware requirements and remove non-compliant apps FIRST
+        log.info('Scheduling hardware validation check...');
+        setTimeout(() => {
+          hardwareValidationService.performBootTimeHardwareValidation().catch((error) => {
+            log.error(`Hardware validation service error: ${error.message}`);
+          });
+        }, bootDelay(50 * 1000)); // Run at 50 seconds - BEFORE boot reconciliation
+
+        // Migrate existing containers from 'unless-stopped'/'always' to 'no' restart policy.
+        // Non-destructive — doesn't stop containers, just prevents Docker from auto-starting
+        // them on future daemon restarts. FluxOS manages container startup once appRegistryConsistent is up.
+        dockerService.migrateContainerRestartPolicies();
+
+        // Start the reconcile workqueue (the single container actuator) and the
+        // Docker container event bridge that feeds it (die / start / health_status).
+        // The workqueue holds all triggers until bootReconcileDecided, then
+        // drains once daemon/DB are ready.
+        appReconciler.start().catch((error) => {
+          log.error(`App reconciler error: ${error.message}`);
+        });
+        containerEventBridge.start();
+
+        // Telemetry identity socket for flux-telemetryd (Arcane-only; self-skips
+        // elsewhere). The boot reconcile in appStartupManager repopulates routing.
+        telemetryIdentityService.start().catch((error) => {
+          log.error(`telemetry identity service failed to start: ${error.message}`);
+        });
+
+        const bootContext = await bootContextRead;
+
+        // The rules that keep app containers off private networks and off each
+        // other's networks, applied before any app container starts. A failure is
+        // logged and apps still start. Rechecked so a removed chain returns; each
+        // network FluxOS creates or removes re-applies them as it goes.
+        await dockerService.applyContainerFirewall();
+        setInterval(() => dockerService.applyContainerFirewall(), 10 * 60 * 1000);
+
+        // App startup manager owns all boot-time container lifecycle decisions:
+        // Locations expired → remove all. Otherwise wait for daemon/DB, then reconcile.
+        appStartupManager.manageAppsOnBoot(bootContext).catch((error) => {
+          log.error(`App startup manager error: ${error.message}`);
+        });
+        // Not awaited: it waits for this node's address, and the announcer, the one
+        // reader of what it writes, waits for it.
+        placements.backfillPlacements();
+
+        // Above the daemon wait, because syncthing has nothing to do with the
+        // daemon: the sentinel talks to syncthing's own API and reads userconfig,
+        // and the webserver is already answering. Below it, a node whose fluxd is
+        // slow or dead never starts measuring syncthing at all, and a check nobody
+        // is making cannot report a fault - see syncthingService's health stamps.
+        syncthingService.startSyncthingSentinel();
+        log.info('Syncthing service started');
+        // Mount every installed app's data volume (derived from the installed-apps
+        // DB) and drop the superseded legacy @reboot remount crontab entries
+        log.info('crontab and mounts cleanup...');
+        await crontabAndMountsCleanup.cleanupCrontabAndMounts().catch((error) => {
+          log.error(`Crontab and mounts cleanup service error: ${error.message}`);
+        });
+        // Perform container mount recovery - restart containers that started before their mounts were created
+        log.info('Container mount recovery check...');
+        await containerMountRecovery.performContainerMountRecovery().catch((error) => {
+          log.error(`Container mount recovery service error: ${error.message}`);
+        });
+        // A file operation's container is detached from the process that started
+        // it, so a FluxOS restart leaves one running with nobody waiting for its
+        // result, and its staging directory on the volume. The recovery below
+        // reclaims both, after the volumes above are mounted, since it reads them.
+        //
+        // The fetch starts early so the image is in hand before the first file
+        // operation arrives, rather than being pulled while an owner waits on a
+        // request. The recovery does not depend on it: that is a host rm over names
+        // readdir returned, and runs on a node that can reach nothing.
+        //
+        // Not awaited: the node takes the image at its own place in a window, so
+        // the fleet ends up holding it without every node fetching at the same
+        // moment. A node that cannot reach the registry takes it from one that did,
+        // which only works if they have it.
+        volumeExecutor.startImagePrefetch();
+
+        log.info('Reclaiming interrupted file operations...');
+        await fileOperationRecovery.recoverInterruptedFileOperations().catch((error) => {
+          log.error(`File operation recovery error: ${error.message}`);
+        });
+      }),
+      runOwner('network', async () => {
+        await capabilities.whenUp(['localDbPrepared', 'daemonReachable']);
+        // Payments recorded before the scan recorded positions are positioned
+        // from the daemon's address index, and a node with no app history yet
+        // fetches its payments through it.
+        await untilSucceeds('Payment position backfill', () => paymentPositions.backfillPaymentPositions());
+        // Before the hash sync reads the flags and the retry windows.
+        await untilSucceeds('App message flag repair', () => appMessageHashes.repairLostMessageFlags());
+        await untilSucceeds('App message retry windows', () => appMessageHashes.restartRetryWindows());
+        // Initialize app sync orchestrator and spawner
+        const orchestrator = new AppSyncOrchestrator({
+          blockEmitter: explorerService.getBlockEmitter(),
+          // remoteCapabilities travels with the peer: the orchestrator picks which
+          // signature form to send from it, and a projection without it reads as a
+          // peer that claims nothing - so every request goes out in the legacy form
+          // and every peer holding the sender to what it advertised refuses it.
+          getEligibleSyncPeers: () => peerManager.getEligibleSyncPeers()
+            .map((p) => ({
+              key: p.key,
+              connectionId: p.connectionId,
+              remoteCapabilities: p.remoteCapabilities,
+              send: (msg) => p.send(msg),
+            })),
+          // By key, unfiltered: the reconnect pull addresses a specific peer that
+          // may not be a sync candidate yet (no reported uptime at add() time).
+          getPeerByKey: (key) => {
+            const p = peerManager.get(key);
+            return p
+              ? {
+                key: p.key, connectionId: p.connectionId, remoteCapabilities: p.remoteCapabilities, send: (msg) => p.send(msg),
+              }
+              : null;
+          },
+          onPeerEvent: (event, cb) => peerManager.on(event, cb),
+          offPeerEvent: (event, cb) => peerManager.removeListener(event, cb),
+          isAboveThreshold: () => capabilities.isUp('peersAboveFloor'),
+          isEnterprise: () => enterpriseNetwork.getCachedEnterpriseIdentity(),
+          networkStateReady: () => networkStateService.waitStarted(),
+          // The steady-state manifest refresh's apply half: catch up any running container whose
+          // register advanced (a silently-missed update) to what it should be serving.
+          catchUpRunningContent: () => contentSlotService.applyBehindContentApps(),
+          fluxVersion,
+        });
+        // Whether an arriving sync response is still wanted. THE ROUND ANSWERS IT.
+        // Only the orchestrator knows what it asked of whom, and on which socket,
+        // and what has since ended that request - a completion, a refusal, an
+        // unverifiable chunk, a deadline, a close. The manager keeps a marks set in
+        // step with it for the socket-level fast path, but the definition of the
+        // question lives with the record, not with a copy of it.
+        //
+        // Per CONNECTION. A peer that reconnects keeps its ip:port while becoming a
+        // different connection, so nothing arriving on the new one answers a request
+        // written into the old one - asked by address, a stale view is counted as
+        // this round's completion.
+        peerManager.syncResponseWanted = (peerSocket) => orchestrator.isSyncResponseWanted(peerSocket);
+
+        // The other half of the peer-gated fallback. The orchestrator stops a node
+        // whose peer set keeps collapsing from ever reaching READY, which is silent;
+        // this says so, and puts a node that does it repeatedly out of service. Same
+        // two edges, read for a different purpose, so it subscribes for itself
+        // rather than being another of the orchestrator's jobs.
+        peerSetStabilityService.start({
+          onPeerEvent: (event, cb) => peerManager.on(event, cb),
+          offPeerEvent: (event, cb) => peerManager.removeListener(event, cb),
+          isAboveThreshold: () => capabilities.isUp('peersAboveFloor'),
+        });
+
+        // Whether this node's calls to other nodes reach them. Started beside the
+        // peer-set watch because it draws its observer from the same network state,
+        // and like it the check says why a node is out rather than leaving it silent.
+        outboundPathService.start();
+
+        // Network policy, started here rather than at the top of boot because it needs both of
+        // the things that only exist by now: mongo, to restore and re-verify the bundle this
+        // node last held, and peers, to ask for anything newer. Its old position could reach
+        // neither, which is why it could only ever fetch from github.
+        //
+        // Not awaited. Boot does not wait on policy and never did: the node comes up, serves its
+        // API and keeps its containers running regardless. What waits is acquisition, through
+        // `policyCurrent`, which is the one decision that must not be made on a guess.
+        policyStore.setPeerTransport({
+          // The peers worth asking. One that does not advertise the capability has no handler
+          // for the ask, so including it would buy a deadline's wait and an unrecognised-type
+          // warning in its log.
+          capableKeys: () => peerManager.getPolicyCapablePeers().map((peer) => peer.key),
+          // The only ask. A key that no longer resolves is a peer that left between connecting
+          // and being asked, which is not an error.
+          requestFrom: (key, seq, correlationId) => {
+            const peer = peerManager.get(key);
+            if (!peer) return Promise.resolve();
+            return fluxCommunicationMessagesSender.requestPolicyFromPeer(peer, seq, correlationId);
+          },
+          announce: (seq) => fluxCommunicationMessagesSender.announcePolicySeq(seq),
+          // The latched level: peerManager already defines "enough peers to gossip with" with
+          // hysteresis (appSyncPeerThreshold 12 up, appSyncDegradedThreshold 4 down). A late
+          // subscriber cannot see the edge it missed, which is what this accessor exists for -
+          // and reading the level rather than keeping an edge of our own is why nothing here
+          // needs re-arming when a peer set collapses and rebuilds.
+          aboveThreshold: () => capabilities.isUp('peersAboveFloor'),
+        });
+        // Discovery has not started yet - it is fifty lines below - so the peer set is empty at
+        // this point on every node, always. Nothing here asks peers or the source; both are
+        // driven by the two subscriptions that follow, which is what makes peers-first true at
+        // boot rather than only at the 24-hour tick. It is the whole difference between a node
+        // that boots while github is down getting policy from the neighbour beside it and
+        // getting none for a day.
+        //
+        // PER JOIN for the ASK. peerThresholdReached fires when the count first crosses
+        // appSyncPeerThreshold and then never again unless the set has since fallen below
+        // appSyncDegradedThreshold, so as a prompt to ask peers it is the wrong signal: a node
+        // asks once, its peers have nothing either, and when one of them later obtains a bundle
+        // nothing tells this node to ask again - its peer set never collapsed, so the edge never
+        // re-arms. Measured on a three-node fleet: node 1 asked at 08:16:09, node 0 adopted at
+        // 08:16:54, and node 1 held nothing thereafter. Every join re-arms the ask, and the join
+        // that crosses the threshold is one of them.
+        //
+        // The key is the whole point: notePeerAvailable asks THAT peer and never the source.
+        // A broadcast would have to be rationed, and a rationed ask cannot serve a node that is
+        // merely behind.
+        //
+        // The orchestrator next door draws the same distinction for its sync pool, and for the
+        // same reason: a latched edge says nothing about a pool that has changed since it fired.
+        peerManager.on('peerConnected', (key) => policyStore.notePeerAvailable(key));
+        // Both edges, because the store's decision is about the peer SET. A peer leaving takes
+        // its answer with it, and a node waiting on one that has gone waits out a deadline for an
+        // answer that cannot come.
+        peerManager.on('peerDisconnected', (key) => policyStore.notePeerGone(key));
+        // AND the threshold itself, which is written one line after the arrival that crosses it.
+        // Without this the crossing arrival decides while the level still reads false, and a set
+        // that stops exactly at the threshold has nothing left to re-trigger the decision.
+        peerManager.on('peerThresholdReached', () => policyStore.noteThresholdReached());
+        policyStore.start().catch((err) => log.error(`policyStore start error: ${err.message}`));
+        capabilities.onUp('nodeMessageCapable', () => orchestrator.onMessageCapabilityChange(true));
+        capabilities.onDown('nodeMessageCapable', () => orchestrator.onMessageCapabilityChange(false));
+        // A grantor referees from the records this orchestrator's sync delivers,
+        // so it refuses to referee until the orchestrator is READY — the live
+        // level, read per ask; fail-closed until this line runs.
+        grantorController.registerSyncReadyProvider(() => orchestrator.state === APP_SYNC_STATES.READY);
+        // A standing generation record ends the world a held term was granted
+        // in; the holder hears it from the store the moment the record lands.
+        messageStore.onGrantGenerationRecord(grantClient.noteGenerationRecord);
+        // The mesh's ordinals are write-once grants on the founding committee;
+        // the plane registers into the mesh's seam here, and until it does every
+        // ordinal answer is the closed one.
+        ordinalRegisterSeam.registerProvider(ordinalRegister.provider());
+        // A delisted holder resolves to nobody: the seats this cell records whose
+        // holders are not on the current list start their grace now (a reboot
+        // must not read a long-gone holder as present), and a node back on the
+        // list re-probes its own seats before trusting them — another node may
+        // have founded on them while it was off the list. The confirmation
+        // service's direct listener is the production hook; the bus is the
+        // harness's.
+        grantorController.seedDelistedHolders().catch((error) => log.warn(`delisted-holder sweep failed: ${error.message}`));
+        capabilities.onUp('nodeMessageCapable', () => meshOrdinals.noteReturnFromUnreachability());
+        peerNotification.initialize();
+        // Serve the flux-shutdownd drain socket (Arcane-only, best-effort).
+        drainServer.start();
+        appSpawner.initialize();
+        appInstaller.setOnInstallComplete(() => peerNotification.checkAndNotifyPeersOfRunningApps());
+        // a removed component's in-memory controller verdict dies with it - a
+        // reinstalled g:/r: app must await a fresh election, not inherit a stale one
+        appUninstaller.setOnComponentRemoved((id) => appReconciler.forgetDesiredState(id));
+        // an app the registry stops listing is removed here and its removal told to peers
+        localRemovalQueue.setRemover((appName) => appUninstaller.removeAppLocally(appName, null, true, false, true));
+        // the node's address moved, so every app that survived it has to come up on
+        // the new one - asked for durably here rather than driven from the network
+        // layer, which sits underneath the reconciler and cannot require it
+        fluxNetworkMonitor.setOnAddressChanged((apps, reason) => appReconciler.requestRestartOf(apps, reason));
+        // route the reconciler's graceful stop-but-keep through flux-shutdownd on Arcane;
+        // returns false off Arcane (or when the daemon is unavailable) so it stops locally
+        appReconciler.setRequestGracefulStop((id, reason) => appShutdownCoordinator.requestGracefulStop(id, reason));
+        // A committed spec fans out to both reactors: the spawner wakes when the
+        // spec is one this node must INSTALL (self-gated to contention-free pinned
+        // cases), and the spec reconciler converges an app this node already RUNS
+        // (adoption is staggered inside it, removal acts promptly). Everything else
+        // rides the per-block convergence pass.
+        registryManager.setOnSpecStored((specDoc) => {
+          appSpawner.notifySpecStored(specDoc);
+          specReconciler.notifySpecStored(specDoc);
+        });
+        log.info('App Spawner initialized');
+
+        fluxNetworkHelper.allowNodeToBindPrivilegedPorts();
+        log.info('Node allowed to bind privileged ports');
+        fluxCommunication.keepConnectionsAlive();
+        log.info('Connections polling prepared');
+        fluxNetworkHelper.initClockOffsetCache();
+        log.info('Clock offset cache initialized');
+        // Remove existing watchtower container (replaced by native image update service)
+        imageUpdateService.removeWatchtowerContainer();
+        // Start native image update service (delayed start)
+        // A check that lands before the policy gate opens refuses, and the next one is
+        // six hours away - so the app runs on the image it has for that long over a
+        // window measured in minutes. The interval is the fallback; the gate is when
+        // the first check is actually able to do its work.
+        setTimeout(() => {
+          capabilities.whenUp('policyCurrent').then(() => {
+            imageUpdateService.startImageUpdateService();
+            log.info('Native image update service started');
+          }).catch((error) => log.error(`Image update service start error: ${error.message}`));
+        }, bootDelay(10 * 60 * 1000)); // 10 minutes after startup
+        fluxNetworkMonitor.checkDeterministicNodesCollisions();
+        // STARTED ON THE POLICY, NOT ON BOOT. The blocklist this enforces is a document in the
+        // signed bundle, and the bundle is not resolved by the time this line runs. Started
+        // here, its first tick reads nothing - and reading nothing is correctly refused rather
+        // than taken for an empty list, because an unreadable blocklist releasing a node the
+        // network deliberately DOSed is the failure that contract was written for. What it
+        // costs is the interval: the next tick is twelve hours away and nothing brings it
+        // forward, so a node on the blocklist goes unenforced for twelve hours per restart.
+        capabilities.whenUp('policyCurrent')
+          .then(() => appTamperingBlocklistService.start())
+          .catch((err) => log.error(`appTamperingBlocklist start error: ${err.message}`));
+        // Not awaited, and started ahead of setNodeGeolocation below on purpose: the
+        // first tick reads geolocation from the db when there is one, and otherwise
+        // decides nothing and retries until the lookup this boot has landed.
+        //
+        // Injected the same way nodeStatusMonitor is, and for the same reason: the
+        // app list is read from a query service deep enough in the lifecycle graph
+        // that requiring it here would put geolocation and the network helper on
+        // that load path. Removing the app is not this service's job - the single
+        // give-up-an-app pass in appOperations does that.
+        residentialNodeDosService.start({
+          installedAppsFn: appQueryService.installedApps,
+        }).catch((err) => {
+          log.error(`residentialNodeDos start error: ${err.message}`);
+        });
+        uplinkService.start();
+        log.info('Flux checks operational');
+        fluxCommunication.initializeDiscovery();
+        await fluxnodeStatusSource.start();
+        daemonUsageReporter.start();
+        if (config.get('fluxapps.discoveryAutostart') !== false) {
+          fluxCommunication.startDiscovery();
+          log.info('Flux Discovery started');
+        }
+        // Awaited: generating an identity rewrites config/userconfig.js, and that
+        // write is not atomic - a reload landing inside it leaves the process with
+        // no userconfig.initial at all. A node that already has an identity returns
+        // from here immediately, so this costs the fleet nothing.
+        await pgpService.generateIdentity();
+        log.info('PGP service initiated');
+        // Ensure watchdog is installed and running on legacy OS (non-ArcaneOS) nodes
+        watchdogService.ensureWatchdogRunning().catch((error) => {
+          log.error(`Watchdog service error: ${error.message}`);
+        });
+        log.info('Watchdog service check initiated');
+        const explorerDatabase = dbHelper.databaseConnection().db(config.get('database.daemon.database'));
+        await dbHelper.dropCollection(explorerDatabase, fluxTransactionCollection).catch((error) => {
+          if (error.message !== 'ns not found') {
+            log.error(error);
+          }
+        });
+        log.info('Mongodb zelnodetransactions dropped');
+
+        networkStateService.start(
+          { stateEmitter: explorerService.getBlockEmitter() },
+        );
+        cacheManager.logCacheSizesEvery(600_000);
+        fluxCommunication.logSocketsEvery(600_000);
+
+        // Uncomment for network interface debug traffic stats. Will move this
+        // to part of the 'debug' setting in a future pull (and auto fetch the interface)
+
+        // const throughput = new throughputLogger.ThroughputLogger(
+        //   (result) => console.log(result),
+        //   { intervalMs: 60_000, matchInterfaces: ['ens18'] },
+        // );
+
+        // await throughput.start();
+
+        setTimeout(async () => {
+          log.info('Rechecking firewall app rules');
+          await fluxNetworkHelper.purgeUFW();
+        }, bootDelay(30 * 1000));
+        setTimeout(() => {
+          appController.stopAllNonFluxRunningApps();
+          // Best effort during boot — the reconciler starts monitoring per app as it settles.
+          monitoringOrchestrator.startMonitoringOfApps(null).catch((error) => log.error(error));
+          portManager.restoreAppsPortsSupport();
+        }, bootDelay(1 * 60 * 1000));
+        // Resolve this node's enterprise identity once, up front. The key comes off disk and
+        // policy arrives on an event, so this settles at boot rather than on a timer; the
+        // interval is the fallback for a config that cannot be read at all. Once cached, hot
+        // paths (spawn loop) read it synchronously via getCachedEnterpriseIdentity() with no
+        // network call and no throws.
+        const identityReady = enterpriseNetwork.scheduleIdentityResolution();
+
+        // Image-cache boot bookkeeping needs the DB rebuilt (records live in
+        // localzelapps) and the identity resolved (cleanupDeauthorizedOwners reads
+        // the allowed-owner list, null until then). A separate block (not nested in
+        // startDbDependentServices) so this pure DB-record bookkeeping runs
+        // concurrently with — not behind — that function's heavy app work.
+        const runImageCacheBootMaintenance = async () => {
+          await capabilities.whenUp('appRegistryConsistent');
+          await identityReady;
+          await imageCacheMaintenance.runBootReconcile();
+        };
+        if (imageCacheEnabled) {
+          runImageCacheBootMaintenance().catch((err) => log.error(`imageCache - boot maintenance error: ${err.message}`));
+        }
+
+        // Services that read from zelappsinformation wait for the orchestrator
+        // to finish rebuilding it rather than guessing a setTimeout delay.
+        const startDbDependentServices = async () => {
+          await capabilities.whenUp('appRegistryConsistent');
+          log.info('DB ready - starting db-dependent services');
+          // Keep the iplocation table fresh. The cached copy is already back - restoreCachedTable ran with the schema prep above - so
+          // what starts here is the fetch loop, whose ingest is the half worth
+          // keeping clear of the rebuild that just finished. Detached; placement
+          // degrades to /16 arithmetic without a table.
+          ipLocationSync.startSync().catch((err) => log.error(`ipLocationSync start error: ${err.message}`));
+          // Warm the marketplace template cache (best-effort; cache-miss fetch covers any gaps).
+          marketplaceTemplateCache.bootstrapCache().catch((error) => log.error(error));
+          specReconciler.requestFullConvergence({ reason: 'boot' });
+          // Driven by the policy bundle from here: a pass when the gate opens and on every
+          // change while it is open. Nothing waits on it.
+          imageManager.startComplianceSweeps();
+          // Backstop the flux-shutdownd plan store against anything missed while
+          // fluxos was down (Arcane-only, best-effort).
+          appOperations.shutdownPlanResync().catch((error) => log.error(error));
+          // Detached, and started once this node knows which side of the enterprise split it
+          // is on: judged before that, every sweep would fail on the identity it cannot read.
+          // From there it follows the policy - a pass when the gate opens and on every change
+          // while it is open - since an owner granted or revoked after boot is not visible to
+          // a sweep that ran once.
+          identityReady.then(() => enterpriseNetwork.startOwnershipSweeps());
+          setInterval(() => {
+            portManager.restorePortsSupport();
+          }, portRestoreIntervalMs);
+          // Detached: one pass per start, once the boot gate has settled and in
+          // this node's own slot. Nothing waits on it.
+          portManager.removeStaleUpnpMappings();
+        };
+        startDbDependentServices();
+        log.info('Starting setting Node Geolocation');
+        geolocationService.setNodeGeolocation();
+        setTimeout(() => {
+          const zmqport = config.get('daemon.zmqport');
+          log.info(`Ensuring zmq is enabled for fluxd on port: ${zmqport}`);
+          try {
+            systemService.enableFluxdZmq(`tcp://127.0.0.1:${zmqport}`);
+          } catch (err) {
+            log.error(err);
+          }
+        }, bootDelay(20 * 60 * 1000));
+        // Deliberately not awaited — boot carries on while the chain scan starts.
+        // Safe to leave unhandled: initiateBlockProcessor does not reject.
+        explorerService.initiateBlockProcessor({ restoreDatabase: true, deepRestore: true });
+        log.info('Flux Block Processing Service started');
+        setTimeout(() => {
+          appInspector.checkApplicationsCpuUSage(globalState.appsMonitored, appQueryService.installedApps);
+          setInterval(() => {
+            appInspector.checkApplicationsCpuUSage(globalState.appsMonitored, appQueryService.installedApps);
+          }, cpuCheckIntervalMs);
+        }, bootDelay(cpuCheckIntervalMs));
+        setTimeout(() => {
+          // appsService.checkForNonAllowedAppsOnLocalNetwork();
+          availabilityChecker.checkMyAppsAvailability(
+            dosState,
+            portsNotWorking,
+            portManager.failedNodesTestPortsCache,
+          );
+        }, bootDelay(3 * 60 * 1000));
+        nodeSelfDefense.initialize();
+        // Start the syncthing/masterSlave deciders once boot container state has settled
+        // (the same AsyncGate the reconciler starts on), not after a fixed delay. Each
+        // decider self-gates per cycle on its own prerequisites (mounts, syncthing health,
+        // own-IP, FDM), so an early start is safe - it skips and retries until ready.
+        capabilities.whenUp('bootReconcileDecided').then(() => {
+          // The syncthing decider is declare-only: it writes desired run-state and
+          // data-state (via appReconciler) and enqueues; the reconciler is the sole
+          // actuator that stops, starts, and wipes - inside its per-key single-flight,
+          // so a start can never race a data wipe.
+          syncthingMonitor.syncthingApps(
+            globalState,
+            () => globalState,
+          ); // rechecks syncthing configuration each cycle
+          appOperations.startActiveStandbyCoordinator();
+          setTimeout(() => {
+            appInspector.monitorSharedDBApps();
+          }, 60 * 1000);
+        });
+        // Hash sync and spawner startup are now managed by the AppSyncOrchestrator (event-driven)
+        orchestrator.start(await bootContextRead);
+        log.info('AppSyncOrchestrator started');
+        setInterval(async () => {
+          // The level-triggered backstop for everything the per-block pass is asked for.
+          await specReconciler.requestFullConvergence({ reason: 'backstop' });
+          // The compliance sweep removes pinned images out of band, so cache records are
+          // reconciled against docker on this interval.
+          if (imageCacheEnabled) {
+            await imageCacheMaintenance.reconcileOrphanedRecords()
+              .catch((err) => log.error(`imageCache - orphan reconcile error: ${err.message}`));
+          }
+        }, imageComplianceIntervalMs);
+        // Cold-image reaper (ALL nodes — deliberately NOT gated on imageCacheEnabled): reclaim
+        // unused tagged images. Delayed first run so docker has loaded its container objects, then
+        // daily. Also triggered at the end of every image update (imageUpdateService).
+        setTimeout(() => {
+          imageReaper.pruneUnusedImages().catch((err) => log.error(`imageReaper boot run error: ${err.message}`));
+          setInterval(() => {
+            imageReaper.pruneUnusedImages().catch((err) => log.error(`imageReaper error: ${err.message}`));
+          }, imageReaperIntervalMs);
+        }, bootDelay(10 * 60 * 1000));
+        appJanitor.start();
+        // The mesh sweep: membership, certificates (aged-replacement promotion
+        // rides it), the impersonation detector. Dormant on a node running no
+        // mesh app.
+        meshReconciler.start();
+        // The founder flip evaluator: tracks sustained committee rot per world
+        // and photographs the new basis at its grid height (8.5). Dormant on a
+        // fleet with standing committees.
+        foundingCommittee.startFlipEvaluator();
+        // Re-issue managed backend-TLS leaves before their 30-day life runs out
+        // (dormant on a node running no verify:required app).
+        backendTlsRenewal.start();
+        setTimeout(() => {
+          daemonHealthMonitor.checkDaemonHealthAndCleanup();
+          setInterval(() => {
+            daemonHealthMonitor.checkDaemonHealthAndCleanup();
+          }, bootDelay(15 * 60 * 1000));
+        }, bootDelay(5 * 60 * 1000));
+        // Gated for the same reason as the image updater: this pass redeploys on a
+        // storage violation, and one that runs before policy refuses and re-arms
+        // thirty minutes out. It re-arms itself from then on, so only the first run
+        // needs the gate.
+        setTimeout(() => {
+          capabilities.whenUp('policyCurrent').then(() => appInspector.enforceWritableLayerLimit(
+            appsStorageViolations,
+          )).catch((error) => log.error(`Storage space check error: ${error.message}`));
+        }, bootDelay(20 * 60 * 1000));
+        setInterval(() => {
+          backupRestoreService.cleanLocalBackup();
+        }, bootDelay(25 * 60 * 1000));
+        if (development) { // just on development branch
+          setInterval(async () => {
+            await fluxService.enterDevelopment().catch((error) => log.error(error));
+            if (development === true || development === 'true' || development === 1 || development === '1') { // in other cases pause git pull
+              setTimeout(async () => {
+                await fluxService.softUpdateFlux().catch((error) => log.error(error));
+              }, 15 * 1000);
+            }
+          }, 20 * 60 * 1000); // every 20 minutes
+        }
+      }),
+    ]);
   } catch (e) {
     log.error(e);
     setTimeout(() => {
