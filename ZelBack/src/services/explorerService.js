@@ -7,6 +7,7 @@ const secp256k1 = require('secp256k1');
 const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
 const chainState = require('./chainState');
+const { compareChainOrder } = require('./utils/chainOrder');
 const migrations = require('./migrations');
 const { appPaymentPositions } = require('./appPaymentPositions');
 const daemonSubscriptionService = require('./daemonService/daemonSubscriptionService');
@@ -1135,7 +1136,7 @@ async function bootstrapAppHashes(currentDaemonHeight) {
   }
 
   // Each hash's first payment in chain order; a later payment of it is not recorded.
-  records.sort((a, b) => a.height - b.height || a.txIndex - b.txIndex);
+  records.sort(compareChainOrder);
   const seen = new Set();
   const firstPayments = records.filter((record) => !seen.has(record.hash) && seen.add(record.hash));
 
