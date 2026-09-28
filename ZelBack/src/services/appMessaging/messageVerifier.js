@@ -9,7 +9,6 @@ const generalService = require('../generalService');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const serviceHelper = require('../serviceHelper');
 const daemonStatus = require('../daemonService/daemonStatus');
-const daemonServiceBlockchainRpcs = require('../daemonService/daemonServiceBlockchainRpcs');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const { deserializeSpec } = require('../utils/specCutover');
 const { regimeFor } = require('../pricing/pricingRegime');
@@ -17,6 +16,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const { insertAppSpecifications, updateAppSpecifications } = require('../appDatabase/registryManager');
 const { mintAppUuid, identityFromUuid } = require('../utils/appIdentity');
 const appEventVerifier = require('./appEventVerifier');
+const confirmedMessageStore = require('./confirmedMessageStore');
 const {
   globalAppsMessages,
   globalAppsTempMessages,
@@ -271,61 +271,6 @@ function getDaemonHeight() {
 }
 
 /**
- * Timestamp of the block at a given height. Fallback for v9 confirmations
- * driven by an appshashes row that predates the stored blockTime field.
- * @param {number} height - Block height
- * @returns {Promise<number|null>} Block time in seconds, or null if unavailable
- */
-async function lookupBlockTime(height) {
-  const blockInfo = await daemonServiceBlockchainRpcs.getBlock({ hashheight: String(height), verbosity: 1 });
-  if (blockInfo.status === 'success' && Number.isFinite(blockInfo.data.time)) {
-    return blockInfo.data.time;
-  }
-  return null;
-}
-
-async function constructConfirmedEvent(tempMessage, txid, height, valueSat, blockTime) {
-  const { AppEventLegacy, ConfirmedAppEvent } = await getSpecBackend();
-  const specs = tempMessage.appSpecifications;
-
-  if (tempMessage.version === 2) {
-    // registeredAt anchors v9's time-based expiry (registeredAt + ttl); a
-    // coerced 0/NaN stores an app every liveness query reads as long-dead.
-    const registeredAt = serviceHelper.ensureNumber(blockTime);
-    if (!Number.isFinite(registeredAt) || registeredAt <= 0) {
-      throw new Error(`constructConfirmedEvent - no confirming block time for ${tempMessage.hash} at height ${height}`);
-    }
-    return ConfirmedAppEvent.deserialize({
-      type: tempMessage.type,
-      version: tempMessage.version,
-      appSpecifications: specs,
-      contentHash: tempMessage.contentHash,
-      hash: tempMessage.hash,
-      timestamp: tempMessage.timestamp,
-      extend: tempMessage.extend ?? false,
-      signature: tempMessage.signature,
-      txid: serviceHelper.ensureString(txid),
-      height: serviceHelper.ensureNumber(height),
-      valueSat: serviceHelper.ensureNumber(valueSat),
-      registeredAt,
-      arcaneAttestation: tempMessage.arcaneAttestation || null,
-    });
-  }
-
-  return AppEventLegacy.deserialize({
-    type: tempMessage.type,
-    version: tempMessage.version,
-    appSpecifications: specs,
-    hash: tempMessage.hash,
-    timestamp: tempMessage.timestamp,
-    signature: tempMessage.signature,
-    txid: serviceHelper.ensureString(txid),
-    height: serviceHelper.ensureNumber(height),
-    valueSat: serviceHelper.ensureNumber(valueSat),
-  });
-}
-
-/**
  * Consensus registration fee in satoshis, from the spec's pricing regime.
  * @param {object} spec - resolved spec
  * @param {number} height - confirming block height
@@ -414,21 +359,15 @@ async function handleExpiredApp(name) {
 // ── Core promotion function ─────────────────────────────────────────
 
 /**
- * Promote a temp message to permanent when the chain confirms it.
- * Called by explorerService when it encounters an OP_RETURN with an app hash.
+ * Stores a gossiped message when this node's scan has recorded its payment, then
+ * judges it. The chain facts are the payment record's, read by the store.
  *
  * @param {string} hash - Message hash
- * @param {string} txid - Confirming transaction ID
- * @param {number} height - Block height
- * @param {number} valueSat - Satoshis paid in the transaction
- * @param {number} blockTime - Unix timestamp of the confirming block
  * @param {number} i - Retry counter (internal)
- * @returns {Promise<boolean>}
+ * @returns {Promise<boolean>} whether the message is stored
  */
-async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null, i = 0) {
+async function checkAndRequestApp(hash, i = 0) {
   try {
-    if (height < config.get('fluxapps.epochstart')) return false;
-
     const existing = await appsRepository.getPermanentMessage(hash);
     if (existing) {
       await appHashHasMessage(hash);
@@ -440,7 +379,7 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
       if (i < 2) {
         await requestAppMessage(hash);
         await serviceHelper.delay(60 * 1000);
-        return checkAndRequestApp(hash, txid, height, valueSat, blockTime, i + 1);
+        return checkAndRequestApp(hash, i + 1);
       }
       return false;
     }
@@ -451,46 +390,41 @@ async function checkAndRequestApp(hash, txid, height, valueSat, blockTime = null
       return false;
     }
 
-    // Construct the confirmed event from temp message + chain data.
-    // This deserializes the spec into its class instance (v1-v9).
-    // v2 events need the confirming block's timestamp (v9 registeredAt); an
-    // appshashes row written before blockTime was stored lacks it — recover it
-    // from the daemon, or leave the hash unresolved for a later retry.
-    let confirmedBlockTime = blockTime;
-    if (confirmedBlockTime == null && tempMessage.version === 2) {
-      confirmedBlockTime = await lookupBlockTime(height);
-      if (confirmedBlockTime === null) {
-        log.error(`checkAndRequestApp - could not resolve block time for ${hash} at height ${height}`);
-        return false;
-      }
+    const storage = await confirmedMessageStore.storeConfirmedMessages([tempMessage]);
+    if (storage.alreadyStored.length) return true;
+    if (!storage.stored.length) {
+      const why = storage.unpaid.length ? 'this node has no payment record for it' : storage.refused[0].reason;
+      log.error(`checkAndRequestApp - ${hash} not stored: ${why}`);
+      return false;
     }
-    const confirmedEvent = await constructConfirmedEvent(tempMessage, txid, height, valueSat, confirmedBlockTime);
-
-    // Re-verify an update against the app's active row at promotion time.
-    // Prevents a race: two updates verified against the same state while
-    // temporary, where the first changes the owner before the second promotes.
-    // The row is the only authority here — the name's message history spans
-    // every app that has ever held the name, so an expired app's owner would
-    // still authorize an update to whoever holds the name now.
-    let currentState = null;
-    if (confirmedEvent.isUpdate) {
-      currentState = await appsRepository.getGlobalAppInfo(specifications.name);
-      await appEventVerifier.authorize({
-        appEvent: confirmedEvent,
-        previousState: currentState,
-        daemonHeight: getDaemonHeight(),
-        // The chain has confirmed this message; the re-check here is about
-        // which owner authorizes it, not about how it is spelled.
-        allowLegacyEncoding: true,
-      });
-    }
-
-    // Store the permanent message
-    await appsRepository.storePermanentMessage(confirmedEvent.serialize());
+    const [{ event: confirmedEvent, record }] = storage.stored;
+    const { txid, height, valueSat } = confirmedEvent.serialize();
+    const confirmedBlockTime = confirmedEvent.serialize().registeredAt ?? record.blockTime ?? null;
     // The message is durable now — clear the orphan TTL on its ingress
     // attestations so their attribution persists alongside the permanent record.
     await appsRepository.confirmIngressAttestations(hash);
-    await appHashHasMessage(hash);
+
+    // Judged against the app's active row. The row is the only authority here —
+    // the name's message history spans every app that has ever held the name, so
+    // an expired app's owner would still authorize an update to whoever holds
+    // the name now. A refused update stays stored and never reaches the registry.
+    let currentState = null;
+    if (confirmedEvent.isUpdate) {
+      currentState = await appsRepository.getGlobalAppInfo(specifications.name);
+      try {
+        await appEventVerifier.authorize({
+          appEvent: confirmedEvent,
+          previousState: currentState,
+          daemonHeight: getDaemonHeight(),
+          // The chain has confirmed this message; the check here is about which
+          // owner authorizes it, not about how it is spelled.
+          allowLegacyEncoding: true,
+        });
+      } catch (error) {
+        log.warn(`App ${hash} update refused: ${error.message}`);
+        return true;
+      }
+    }
 
     // Project to InstantiatedSpec — the domain type for live app state
     const { InstantiatedSpec } = await getSpecBackend();
@@ -640,7 +574,7 @@ async function checkAndRequestMultipleApps(apps, i = 1) {
     // eslint-disable-next-line no-restricted-syntax
     for (const app of apps) {
       // eslint-disable-next-line no-await-in-loop
-      const messageReceived = await checkAndRequestApp(app.hash, app.txid, app.height, app.value, app.blockTime ?? null, 2);
+      const messageReceived = await checkAndRequestApp(app.hash, 2);
       if (messageReceived) {
         appsToRemove.push(app);
       }

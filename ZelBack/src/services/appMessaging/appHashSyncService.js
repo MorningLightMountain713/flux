@@ -9,6 +9,8 @@ const verificationHelper = require('../verificationHelper');
 const serviceHelper = require('../serviceHelper');
 const messageVerifier = require('./messageVerifier');
 const appEventVerifier = require('./appEventVerifier');
+const confirmedMessageStore = require('./confirmedMessageStore');
+const { compareChainOrder } = require('../utils/chainOrder');
 const { deserializeSpec } = require('../utils/specCutover');
 const { getSpecBackend, assertVersionActivated } = require('../utils/specLibs');
 const daemonStatus = require('../daemonService/daemonStatus');
@@ -23,7 +25,6 @@ const { appSyncEvents, EVENTS } = require('../utils/appSyncEvents');
 const { HASH_EXPIRY_BLOCKS, HASH_RETRY_BACKOFF } = require('../utils/appConstants');
 const log = require('../../lib/log');
 const fluxEventBus = require('../utils/fluxEventBus');
-const capabilities = require('../utils/capabilities');
 const { isBefore, messagesThatCount } = require('../utils/appMessageChain');
 const { invalidMessages } = require('../invalidMessages');
 const { Privilege, authOf } = require('../utils/privileges');
@@ -247,25 +248,6 @@ async function bulkFetchStreamAndProcess(peerIp, peerPort, missing, onProgress) 
 }
 
 /**
- * A peer's message with this node's chain facts for it: the txid, block height and payment its
- * own scan recorded for the hash. The peer's copy carries its own values for these, which are
- * never taken: they place the message on chain, and so decide which message is in force and when
- * its app expires.
- * @param {object} message as the peer sent it
- * @param {{txid: string, height: number, value: number}} record this node's payment record
- * @returns {object}
- */
-function withOwnChainRecord(message, record) {
-  if (message.txid !== record.txid || message.height !== record.height || message.valueSat !== record.value) {
-    log.warn(`processMessages - ${message.hash}: peer sent txid ${message.txid} height ${message.height} valueSat ${message.valueSat}, `
-      + `this node recorded txid ${record.txid} height ${record.height} value ${record.value}; storing this node's`);
-  }
-  return {
-    ...message, txid: record.txid, height: record.height, valueSat: record.value,
-  };
-}
-
-/**
  * Verifies and stores messages streamed from a peer.
  * @param {object[]} messages as the peer sent them
  * @param {Map<string, {txid: string, height: number, value: number}>} records this node's
@@ -280,12 +262,10 @@ async function processMessages(messages, records, onProgress) {
   let skipped = 0;
   let failed = 0;
 
-  const placed = messages
-    .filter((message) => records.has(message.hash))
-    .map((message) => withOwnChainRecord(message, records.get(message.hash)));
-  // (height, timestamp): the order findPrevMessage searches, and the one a same-block pair confirmed in
-  placed.sort((a, b) => (a.height - b.height) || ((a.timestamp || 0) - (b.timestamp || 0)));
-  const filtered = placed.filter((app) => app.valueSat !== null);
+  // Chunks in the peer's height order, so a registration usually lands in a chunk
+  // no later than its updates; within a chunk, this node's chain order decides.
+  messages.sort((a, b) => a.height - b.height);
+  const filtered = messages.filter((app) => app.valueSat !== null);
 
   const syncStatus = daemonStatus.isDaemonSynced();
   const daemonHeight = syncStatus.data.height || 0;
@@ -294,35 +274,17 @@ async function processMessages(messages, records, onProgress) {
   for (let offset = 0; offset < filtered.length; offset += CHUNK_SIZE) {
     const chunk = filtered.slice(offset, offset + CHUNK_SIZE);
 
-    // 1. Batch existence check
-    const chunkHashes = chunk.map((m) => m.hash);
-    const existingDocs = await dbHelper.findInDatabase(
-      appsGlobalDb, globalAppsMessages, { hash: { $in: chunkHashes } }, { projection: { _id: 0, hash: 1 } },
-    );
-    const existingSet = new Set(existingDocs.map((d) => d.hash));
+    // This node's own payment record for each message: its chain facts are the
+    // ones a message is judged and stored with, never the peer's copy.
+    const records = await confirmedMessageStore.paymentRecords(chunk.map((m) => m.hash));
+    const paid = chunk
+      .filter((m) => records.has(m.hash))
+      .sort((a, b) => compareChainOrder(records.get(a.hash), records.get(b.hash)));
+    skipped += chunk.length - paid.length;
 
-    // 2. Batch mark existing hashes as message:true, the stored message following this node's
-    // payment record
-    if (existingSet.size > 0) {
-      await messageVerifier.alignStoredMessagesWithPayments([...existingSet].map((hash) => ({ hash, ...records.get(hash) })));
-      const hashOps = [...existingSet].map((hash) => ({
-        updateOne: { filter: { hash }, update: { $set: { message: true, messageNotFound: false } } },
-      }));
-      await daemonDb.collection(appsHashesCollection).bulkWrite(hashOps, { ordered: false })
-        .catch((err) => log.error(`processMessages hashMark: ${err.message}`));
-      skipped += existingSet.size;
-    }
-
-    const newMessages = chunk.filter((m) => !existingSet.has(m.hash));
-    if (newMessages.length === 0) {
-      log.info(`syncMissingHashes - ${processed} processed, ${skipped} skipped, ${failed} failed of ${filtered.length}`);
-      if (onProgress) onProgress({ processed, skipped, total: filtered.length });
-      continue;
-    }
-
-    // 3. Pre-load previous app specs from DB for update messages in this chunk
+    // Pre-load previous app specs from DB for update messages in this chunk
     const updateNames = new Set();
-    for (const msg of newMessages) {
+    for (const msg of paid) {
       if (msg.type === 'fluxappupdate' || msg.type === 'zelappupdate') {
         const specs = msg.appSpecifications;
         if (specs) updateNames.add(specs.name);
@@ -348,36 +310,27 @@ async function processMessages(messages, records, onProgress) {
     // the message before it among those that count, from this node's payment records.
     const paymentFacts = await dbHelper.appPaymentFacts(
       daemonDb,
-      [...[...prevMessagesMap.values()].flat(), ...newMessages].map((message) => message.hash),
+      [...[...prevMessagesMap.values()].flat(), ...paid].map((message) => message.hash),
     );
     const countedBefore = (list) => messagesThatCount(
       list.filter((message) => !paymentFacts.notOnChain.has(message.hash)),
       paymentFacts.positions,
     );
 
-    // 4. Verify each message and collect for batch insert
-    const permInserts = [];
-    let hashMarkOps = [];
-
-    for (const appMessage of newMessages) {
+    // Judged before it is stored, against the name's history below it, until
+    // the decider judges stored messages.
+    const admitted = [];
+    for (const appMessage of paid) {
       try {
         const specifications = appMessage.appSpecifications;
         if (!specifications) continue;
 
-        const height = serviceHelper.ensureNumber(appMessage.height);
         const messageTimestamp = serviceHelper.ensureNumber(appMessage.timestamp);
         const isRegistration = appMessage.type === 'fluxappregister' || appMessage.type === 'zelappregister';
-
-        // The typed event (ConfirmedAppEvent v2 / AppEventLegacy v1) round-trips
-        // its own permanent-message shape; a hand-built object here drops the
-        // v2-only fields (contentHash, registeredAt, extend, arcaneAttestation).
-        //
-        // Built first, and its spec used below: deserializing this message parses
-        // and validates the spec, so a separate deserializeSpec beforehand was a
-        // second full pass over the same document.
-        const appEvent = await appEventVerifier.deserializeMessage(appMessage);
+        const appEvent = await confirmedMessageStore.confirmedEvent(appMessage, records.get(appMessage.hash));
         const permMsg = appEvent.serialize();
         const wireSpec = appEvent.spec;
+        const { height } = permMsg;
 
         // Outside the decrypt below, whose failures are logged and passed over:
         // the activation gate needs only the version a sealed spec states in the
@@ -432,56 +385,22 @@ async function processMessages(messages, records, onProgress) {
           allowLegacyEncoding: true,
         });
 
-        // Verified — add to batch and update map for subsequent messages
-        permInserts.push(permMsg);
+        admitted.push(appMessage);
         if (!prevMessagesMap.has(wireSpec.name)) prevMessagesMap.set(wireSpec.name, []);
         // kept sorted, as findPrevMessage searches it: a gap filled late lands mid-list, not at its end
         const prevList = prevMessagesMap.get(wireSpec.name);
         const at = prevList.indexOf(findPrevMessage(prevList, height, messageTimestamp)) + 1;
         prevList.splice(at, 0, permMsg);
-
-        hashMarkOps.push({
-          updateOne: { filter: { hash: appMessage.hash }, update: { $set: { message: true, messageNotFound: false } } },
-        });
       } catch (error) {
         failed += 1;
         if (failed <= 10) log.warn(`processMessages verify failed: ${appMessage.hash} - ${error.message}`);
       }
     }
 
-    // 5. Batch insert permanent messages (ordered so insertedCount is deterministic on failure)
-    let inserted = 0;
-    if (permInserts.length > 0) {
-      inserted = permInserts.length;
-      await appsGlobalDb.collection(globalAppsMessages).insertMany(permInserts, { ordered: true })
-        .catch((err) => {
-          inserted = err.result?.insertedCount ?? 0;
-          hashMarkOps = hashMarkOps.slice(0, inserted);
-          log.error(`processMessages insertMany: ${inserted}/${permInserts.length} inserted — ${err.message}`);
-        });
-      processed += inserted;
-    }
-
-    // The registry rows of the apps whose messages were stored, before their hashes are
-    // marked. A registry not built yet is built in full from every stored message before
-    // the node is ready (appRegistryConsistent), so only a built one is kept current here. Rows not
-    // written leave the hashes unmarked, and the next retry finds the messages stored and
-    // writes the rows (alignStoredMessagesWithPayments).
-    if (inserted > 0 && capabilities.isUp('appRegistryConsistent')) {
-      const apps = [...new Set(permInserts.slice(0, inserted).map((message) => message.appSpecifications.name))];
-      try {
-        await messageVerifier.storeGoverningAppSpecifications(apps);
-      } catch (err) {
-        log.error(`processMessages registry rows: ${err.message}`);
-        hashMarkOps = [];
-      }
-    }
-
-    // 6. Batch mark hashes
-    if (hashMarkOps.length > 0) {
-      await daemonDb.collection(appsHashesCollection).bulkWrite(hashMarkOps, { ordered: false })
-        .catch((err) => log.error(`processMessages hashMark: ${err.message}`));
-    }
+    const storage = await confirmedMessageStore.storeConfirmedMessages(admitted);
+    processed += storage.stored.length;
+    skipped += storage.alreadyStored.length;
+    failed += storage.refused.length + storage.unpaid.length;
 
     log.info(`syncMissingHashes - ${processed} processed, ${skipped} skipped, ${failed} failed of ${filtered.length}`);
     if (onProgress) onProgress({ processed, skipped, total: filtered.length });
@@ -691,7 +610,7 @@ async function syncMissingHashes(options = {}) {
       // eslint-disable-next-line no-restricted-syntax
       for (const record of chunk.filter((r) => heldHashes.has(r.hash))) {
         // eslint-disable-next-line no-await-in-loop
-        if (await messageVerifier.checkAndRequestApp(record.hash, record.txid, record.height, record.value, record.blockTime ?? null, 2)) poolResolved += 1;
+        if (await messageVerifier.checkAndRequestApp(record.hash, 2)) poolResolved += 1;
       }
     }
     if (localResolved > 0 || poolResolved > 0) {

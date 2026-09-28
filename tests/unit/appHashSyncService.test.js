@@ -106,8 +106,27 @@ describe('appHashSyncService tests', () => {
     };
   }
 
+  // The store, doubled: every hash is paid, in the order given; an event is
+  // built by the suite's deserializer; storing writes through the collection
+  // the suite reads. Its own rules are confirmedMessageStore.test.js's.
+  function makeStoreDouble(verifier, collection) {
+    return {
+      paymentRecords: sinon.stub().callsFake(async (hashes) => new Map(hashes.map((hash, txIndex) => [hash, {
+        hash, txid: `tx-${hash}`, height: 1, txIndex, value: 1e8,
+      }]))),
+      confirmedEvent: sinon.stub().callsFake((contents) => verifier().deserializeMessage(contents)),
+      storeConfirmedMessages: sinon.stub().callsFake(async (admitted) => {
+        if (admitted.length) await collection().insertMany(admitted);
+        return {
+          stored: admitted.map((contents) => ({ event: contents })), alreadyStored: [], unpaid: [], refused: [],
+        };
+      }),
+    };
+  }
+
   function buildProxyquireStubs(overrides = {}) {
     return {
+      './confirmedMessageStore': makeStoreDouble(() => appEventVerifierStub, () => collectionStub),
       '../dbHelper': dbHelperStub,
       '../messageHelper': messageHelperStub,
       '../serviceHelper': serviceHelperStub,
@@ -424,50 +443,6 @@ describe('appHashSyncService tests', () => {
       // 4 new messages inserted via insertMany from bulk fetch
       expect(collectionStub.insertMany.calledOnce).to.be.true;
       expect(collectionStub.insertMany.firstCall.args[0].length).to.equal(4);
-    });
-
-    it('should only mark hashes for successfully inserted messages on partial insertMany failure', async () => {
-      const manyMissing = Array(600).fill(null).map((_, i) => ({
-        hash: `hash${i}`, txid: `tx${i}`, height: 1000 + i, value: 100, message: false,
-      }));
-
-      const bulkFetchResult = await Promise.all(Array(5).fill(null).map((_, i) => legacyMessage({
-        type: 'fluxappregister', hash: `hash${i}`, txid: `tx${i}`, height: 1000 + i, name: `app${i}`,
-      })));
-
-      let getMissingCalls = 0;
-      dbHelperStub.findInDatabase.callsFake((db, col, query) => {
-        if (col === config.database.daemon.collections.appsHashes) {
-          getMissingCalls += 1;
-          if (getMissingCalls === 1) return Promise.resolve(manyMissing);
-          return Promise.resolve([]);
-        }
-        if (col === config.database.appsglobal.collections.appsMessages && query && query.hash && query.hash.$in) {
-          return Promise.resolve([]);
-        }
-        return Promise.resolve([]);
-      });
-      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
-
-      serviceHelperStub.axiosGet.callsFake((url) => {
-        if (url.includes('permanentmessages')) return Promise.resolve(makeStreamResponse(bulkFetchResult));
-        return Promise.resolve({ data: { status: 'success', data: true } });
-      });
-
-      const insertError = new Error('write concern timeout');
-      insertError.result = { insertedCount: 2 };
-      collectionStub.insertMany.rejects(insertError);
-
-      await appHashSyncService.syncMissingHashes();
-
-      expect(logStub.error.calledWith(sinon.match('2/5 inserted'))).to.be.true;
-      const bulkWriteCalls = collectionStub.bulkWrite.args.filter(
-        (args) => args[0].some((op) => op.updateOne?.update?.$set?.message === true),
-      );
-      if (bulkWriteCalls.length > 0) {
-        const hashMarkOps = bulkWriteCalls[bulkWriteCalls.length - 1][0];
-        expect(hashMarkOps.length).to.equal(2);
-      }
     });
 
     it('should send requests to 3 different peers per round', async () => {
@@ -835,6 +810,7 @@ describe('appHashSyncService tests', () => {
         '../fluxCommunicationUtils': { deterministicFluxList: sinon.stub().resolves([]) },
         '../fluxCommunication': { openEphemeralConnection: sinon.stub().resolves(null) },
         '../fluxNetworkHelper': { getLocalSocketAddress: sinon.stub().resolves('10.0.0.99:16127') },
+        './confirmedMessageStore': makeStoreDouble(() => localAppEventVerifierStub, () => localCollectionStub),
       });
     });
 
