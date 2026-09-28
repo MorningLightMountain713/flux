@@ -8,6 +8,7 @@ const { serialiseAndSignFluxBroadcast } = require('./utils/fluxBroadcastHelper')
 const networkStateService = require('./networkStateService');
 const nodeConfirmationService = require('./nodeConfirmationService');
 const nodeDownStore = require('./appMessaging/nodeDownStore');
+const messageStore = require('./appMessaging/messageStore');
 const { RECORD_STATE } = nodeDownStore;
 const { RingReconciler } = require('./utils/ringReconciler');
 const { NodeDownJuror, DROP_REASON } = require('./utils/nodeDownJuror');
@@ -358,14 +359,46 @@ async function settleStoredCertificate(certificate, source, stored) {
 }
 
 /**
+ * This node's alive record: the refutation of every certificate about it
+ * stamped at or before now, sent whether or not the node runs an app. It
+ * touches no app row, so placement is unaffected by it. Stored here too, so
+ * this node serves it over sync like any other record it holds.
+ */
+async function announceAlive(trigger) {
+  const outpoint = myOutpoint();
+  const ip = await fluxNetworkHelper.getLocalSocketAddress();
+  if (!transport || !outpoint || !ip) {
+    log.warn(`nodeDownService: alive record (${trigger}) not sent: this node cannot name itself`);
+    return;
+  }
+  const message = {
+    type: 'fluxnodealive', version: 1, ip, broadcastedAt: Date.now(),
+  };
+  const signed = await transport.broadcastMessageToAll(message);
+  const envelope = signed
+    ? {
+      version: signed.version, timestamp: signed.timestamp, pubKey: signed.pubKey, signature: signed.signature,
+    }
+    : null;
+  const separator = outpoint.lastIndexOf(':');
+  await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.NODEALIVE, {
+    message,
+    envelope,
+    announcer: { txhash: outpoint.slice(0, separator), outidx: outpoint.slice(separator + 1) },
+  });
+  fluxEventBus.publish('nodedown:aliveAnnounced', { trigger, broadcastedAt: message.broadcastedAt });
+}
+
+/**
  * The return rule, run after the store is current: the node asks its own
  * derived rows whether they still place it. Placed: keep every app and
- * announce — the announcement is the refutation, riding the existing
- * stagger. Not placed: every app is removed inside the check and nothing is
- * said. A check that throws announces, as before: nothing here may be the
- * reason an app is deleted.
+ * announce them. Not placed: every app is removed inside the check and no
+ * app is announced. A check that throws announces, as before: nothing here
+ * may be the reason an app is deleted. On a return or a certificate the node
+ * also sends its alive record either way, which refutes the certificates
+ * about it; a lockout holds the stand-down open, so it sends none.
  *
- * @param {string} trigger 'return' | 'certificate'
+ * @param {string} trigger 'return' | 'certificate' | 'lockout'
  */
 async function applyPlacementThenAnnounce(trigger) {
   // eslint-disable-next-line global-require
@@ -383,6 +416,9 @@ async function applyPlacementThenAnnounce(trigger) {
   if (placed) {
     log.info(`nodeDownService: placement check (${trigger}): the rows still place this node, announcing`);
     peerNotification.checkAndNotifyPeersOfRunningApps();
+  }
+  if (trigger !== 'lockout') {
+    await announceAlive(trigger).catch((error) => log.warn(`nodeDownService: alive record (${trigger}) failed: ${error.message}`));
   }
 }
 

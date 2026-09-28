@@ -566,6 +566,22 @@ describe('fluxCommunicationUtils tests', () => {
     });
   });
 
+  describe('a node\'s alive record names the node at its own address', () => {
+    afterEach(() => sinon.restore());
+
+    it('resolves the announcer by address though its key serves other nodes too', async () => {
+      const node = { ip: '192.168.1.100:16127', txhash: 'tx', outidx: 1, pubkey: 'pk' };
+      sinon.stub(networkStateService, 'getFluxnodesByPubkey').resolves(new Map([['a', {}], ['b', {}]]));
+      sinon.stub(networkStateService, 'getFluxnodeBySocketAddress').withArgs(node.ip).resolves(node);
+
+      const { announcer } = await fluxCommunicationUtils.resolveBroadcastAnnouncer(
+        { type: 'fluxnodealive', ip: node.ip }, 'pk',
+      );
+
+      expect(announcer).to.equal(node);
+    });
+  });
+
   describe('verifyFluxBroadcast fluxappremoved tests', () => {
     const privKey = '5JTeg79dTLzzHXoJPALMWuoGDM8QmLj4n5f6MeFjx8dzsirvjAh';
     const pubKey = '0474eb4690689bb408139249eda7f361b7881c4254ccbe303d3b4d58c2b48897d0f070b44944941998551f9ea0e1befd96f13adf171c07c885e62d0c2af56d3dab';

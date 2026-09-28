@@ -245,6 +245,35 @@ describe('nodeDownStore', () => {
       expect(refutation.broadcastedAt).to.equal(at); // tie goes to the announcement
     });
 
+    it('an alive record refutes like an announcement, for a node that runs no app', async () => {
+      const at = Date.now() - 60_000;
+      await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4']), broadcastedAt: at },
+      });
+      expect(await store.standingCertificateFor(S), 'standing before the alive record').to.not.equal(null);
+      await collection.insertOne({
+        type: 'nodealive', outpoint: S, ip: '10.9.0.20:16127', dedupKey: `nodealive:${S}`, broadcastedAt: new Date(at), expireAt: new Date(Date.now() + 60_000), data: {},
+      });
+      expect(await store.standingCertificateFor(S)).to.equal(null);
+      expect((await store.refutationFor(S)).broadcastedAt).to.equal(at);
+    });
+
+    it('an alive record is the return a new death needs', async () => {
+      const at = Date.now() - 120_000;
+      await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4'], { death: 1 }), broadcastedAt: at },
+      });
+      world.height = 1005;
+      const next = () => store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j2', 'j3', 'j4', 'j5'], { height: 1005, death: 2 }), broadcastedAt: at + 60_000 },
+      });
+      expect((await next()).reason, 'no return yet').to.equal('already_standing');
+      await collection.insertOne({
+        type: 'nodealive', outpoint: S, ip: '10.9.0.20:16127', dedupKey: `nodealive:${S}`, broadcastedAt: new Date(at + 10_000), expireAt: new Date(Date.now() + 60_000), data: {},
+      });
+      expect((await next()).accepted).to.equal(true);
+    });
+
     it('a new death after a refutation stores a new row and stands again', async () => {
       const at = Date.now() - 120_000;
       await store.handleNodeDownEvent({

@@ -28,6 +28,7 @@ const {
   appsHashesCollection,
 } = require('../utils/appConstants');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../utils/appSyncEvents');
+const { RECORD_LIFETIME_MS } = require('../utils/nodeDownCertificates');
 
 const {
   GOSSIP_VALIDITY_MS,
@@ -44,6 +45,7 @@ const APP_STATE_EVENT_TYPES = Object.freeze({
   MASTERLEASE: 'masterlease',
   GRANTGENERATION: 'grantgeneration',
   NODEDOWN: 'nodedown',
+  NODEALIVE: 'nodealive',
 });
 
 /**
@@ -806,6 +808,40 @@ async function handleIPChangedEvent({ message, envelope }) {
 }
 
 /**
+ * A node's own statement that it is alive: the refutation of any node-down
+ * certificate about it stamped at or before it, whether or not the node runs
+ * an app. One row per node, newest wins, kept as long as a certificate it can
+ * refute stands. Keyed on the announcer's outpoint, so an unresolved announcer
+ * refutes nobody.
+ */
+async function handleNodeAliveEvent({ message, envelope, announcer }) {
+  const outpoint = outpointOf(announcer);
+  if (!message || !message.ip || !outpoint) return { isNewer: false };
+  if (!broadcastedAtUsable(message.broadcastedAt, RECORD_LIFETIME_MS)) return { isNewer: false };
+  try {
+    const db = dbHelper.databaseConnection();
+    const database = db.db(config.get('database.appsglobal.database'));
+    const dedupKey = `nodealive:${outpoint}`;
+    const prior = await dbHelper.findOneAndUpdateInDatabase(
+      database, globalAppStateEvents,
+      { type: APP_STATE_EVENT_TYPES.NODEALIVE, dedupKey },
+      buildConditionalUpsert(message.broadcastedAt, {
+        ip: message.ip, outpoint, type: APP_STATE_EVENT_TYPES.NODEALIVE, dedupKey,
+        broadcastedAt: new Date(message.broadcastedAt),
+        expireAt: new Date(message.broadcastedAt + RECORD_LIFETIME_MS),
+        data: message, envelope: envelope ?? null,
+      }, { alwaysSetFields: { receivedAt: new Date() } }),
+      { upsert: true, returnDocument: 'before', projection: { _id: 0, broadcastedAt: 1 } },
+    );
+    const priorAt = prior && prior.broadcastedAt ? new Date(prior.broadcastedAt).getTime() : 0;
+    return { isNewer: message.broadcastedAt > priorAt };
+  } catch (err) {
+    log.error(`storeAppStateEvent(nodealive): ${err.message}`);
+    return { isNewer: false };
+  }
+}
+
+/**
  * Newer-wins on ORDINAL FIELDS, most significant first, with the broadcast
  * time only breaking full ties. The record's authority is its ordinals — a
  * masterlease's (generation, epoch), a generation record's generation — so
@@ -1154,6 +1190,7 @@ function storeAppStateEvent(type, payload) {
     case APP_STATE_EVENT_TYPES.IPCHANGED: return handleIPChangedEvent(payload);
     case APP_STATE_EVENT_TYPES.MASTERLEASE: return handleMasterleaseEvent(payload);
     case APP_STATE_EVENT_TYPES.GRANTGENERATION: return handleGrantGenerationEvent(payload);
+    case APP_STATE_EVENT_TYPES.NODEALIVE: return handleNodeAliveEvent(payload);
     default: log.error(`storeAppStateEvent: unknown type ${type}`); return undefined;
   }
 }

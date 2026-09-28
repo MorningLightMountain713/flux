@@ -25,6 +25,7 @@ function makeHarness() {
     noteReturn: sinon.stub(),
     noteMeshReturn: sinon.stub(),
     enforcePlacement: sinon.stub().resolves({ placed: true, removed: [] }),
+    storeState: sinon.stub().resolves({ isNewer: true }),
     signMessage: sinon.stub().returns('sig-me'),
     verifyMessage: sinon.stub().returns(true),
     certificatesFor: sinon.stub().resolves([]),
@@ -62,6 +63,10 @@ function makeHarness() {
       releaseAnnouncements: stubs.release,
     },
     './appLifecycle/appStartupManager': { enforceNodePlacement: stubs.enforcePlacement },
+    './appMessaging/messageStore': {
+      APP_STATE_EVENT_TYPES: { NODEALIVE: 'nodealive' },
+      storeAppStateEvent: stubs.storeState,
+    },
     './quorumGrant/grantorController': { noteReturnFromUnreachability: stubs.noteReturn },
     './appMesh/meshOrdinals': { noteReturnFromUnreachability: stubs.noteMeshReturn },
     './fluxNetworkHelper': {
@@ -94,6 +99,10 @@ function makeHarness() {
     service, transport, stubs, networkStateServiceStub, world,
   };
 }
+
+// The alive records this node sent: each broadcast of its own type.
+const aliveSent = (transport) => transport.broadcastMessageToAll.getCalls()
+  .map((c) => c.args[0]).filter((m) => m.type === 'fluxnodealive');
 
 const DUTY_IP = '10.0.0.2:16127';
 const DUTY_OUTPOINT = 'x:0';
@@ -527,6 +536,7 @@ describe('nodeDownService', () => {
       sinon.assert.calledOnceWithExactly(stubs.enforcePlacement, 'lockout');
       expect(stubs.release.callCount).to.equal(1);
       expect(stubs.announce.callCount, 'a locked-out node announces nothing').to.equal(0);
+      expect(aliveSent(transport), 'a lockout holds the stand-down open: no alive record').to.deep.equal([]);
 
       // the lockout answered the return's question: a pull completing later runs no second check
       appSyncEvents.emit(EVENTS.RECONNECT_SYNC_COMPLETE, '1.2.3.4:16127');
@@ -939,7 +949,7 @@ describe('nodeDownService', () => {
     service.stop();
   });
 
-  it('a node whose rows no longer place it releases the hold on return and announces nothing', async () => {
+  it('a node whose rows no longer place it releases the hold on return, announces no app, and sends its alive record', async () => {
     const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
     const { service, transport, stubs } = makeHarness();
     stubs.enforcePlacement.resolves({ placed: false, removed: ['app1'] });
@@ -956,6 +966,11 @@ describe('nodeDownService', () => {
     await tick();
     expect(stubs.release.callCount).to.equal(1);
     expect(stubs.announce.callCount).to.equal(0);
+    const alive = aliveSent(transport);
+    expect(alive.map((m) => m.ip), 'the node refutes whatever it holds').to.deep.equal([MY_IP]);
+    sinon.assert.calledOnceWithMatch(stubs.storeState, 'nodealive', {
+      message: alive[0], announcer: { txhash: 'me', outidx: '0' },
+    });
     service.stop();
   });
 

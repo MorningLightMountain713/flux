@@ -339,6 +339,8 @@ export function nodeClient(nodeNum) {
         'nodedown:refused',
         // a record this node read standing now reads refuted
         'nodedown:refuted',
+        // this node sent its alive record, the refutation any node can send
+        'nodedown:aliveAnnounced',
         'nodedown:verdict',
         'nodedown:lockedOut',
         'nodedown:inboundRefused',

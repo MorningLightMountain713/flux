@@ -36,9 +36,8 @@ const { normalizeSocketAddress } = require('../utils/socketAddressUtils');
 // first hop.
 //
 // Record semantics throughout: a row STANDS while it is unexpired and no
-// apprunning announcement from the subject carries broadcastedAt >= the
-// row's (the pipeline's own $gte rule — in production the refutation IS the
-// apprunning announcement, already signed and already stored). An arriving
+// announcement from the subject - its apprunning or its nodealive record -
+// carries broadcastedAt >= the row's (the pipeline's own $gte rule). An arriving
 // certificate is a duplicate only while a standing row exists; a refuted or
 // lapsed row means a new incident and a new row. No window, no timer.
 
@@ -178,6 +177,10 @@ async function certificatesFor(subject) {
     }));
 }
 
+// A subject's own announcements, each a return: its running apps, and its
+// alive record, which a node sends whether or not it runs an app.
+const ANNOUNCEMENT_TYPES = [APP_STATE_EVENT_TYPES.APPRUNNING, APP_STATE_EVENT_TYPES.NODEALIVE];
+
 // Subjects this node last read with a standing record, so the read that first
 // finds one refuted publishes the edge. A refutation is derived at read time,
 // never written, so a read is the only place it can be seen to happen.
@@ -202,7 +205,7 @@ async function latestRecordFor(subject) {
   ));
 
   const refutation = await eventsCollection().findOne({
-    type: APP_STATE_EVENT_TYPES.APPRUNNING,
+    type: { $in: ANNOUNCEMENT_TYPES },
     outpoint: subject,
     broadcastedAt: { $gte: new Date(row.broadcastedAt) },
   });
@@ -281,7 +284,7 @@ async function handleNodeDownEvent({ message, envelope = null }) {
       return { accepted: false, rebroadcast: false, reason: 'same_death' };
     }
     const latestAnnounce = await eventsCollection().findOne(
-      { type: APP_STATE_EVENT_TYPES.APPRUNNING, outpoint: certificate.subject },
+      { type: { $in: ANNOUNCEMENT_TYPES }, outpoint: certificate.subject },
       { sort: { broadcastedAt: -1 }, projection: { broadcastedAt: 1 } },
     );
     const announcedAt = latestAnnounce ? new Date(latestAnnounce.broadcastedAt).getTime() : null;

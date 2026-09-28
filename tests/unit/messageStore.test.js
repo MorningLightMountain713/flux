@@ -1607,6 +1607,36 @@ describe('messageStore tests', () => {
       dbHelperStub.databaseConnection.returns(mockDb);
     });
 
+    describe('a node\'s alive record', () => {
+      const alive = (broadcastedAt, announcer) => ({
+        message: { type: 'fluxnodealive', version: 1, ip: '1.2.3.4:16127', broadcastedAt },
+        envelope: { version: 1, timestamp: broadcastedAt, pubKey: 'pk', signature: 'sig' },
+        announcer,
+      });
+
+      it('is one row per node, keyed on the announcer\'s outpoint, newest wins', async () => {
+        dbHelperStub.findOneAndUpdateInDatabase.resolves(null);
+        const now = Date.now();
+        const result = await messageStore.storeAppStateEvent(
+          messageStore.APP_STATE_EVENT_TYPES.NODEALIVE, alive(now, { txhash: 'tx', outidx: 1 }),
+        );
+        expect(result).to.deep.equal({ isNewer: true });
+        const [, , filter, update] = dbHelperStub.findOneAndUpdateInDatabase.firstCall.args;
+        expect(filter).to.deep.equal({ type: 'nodealive', dedupKey: 'nodealive:tx:1' });
+        const written = JSON.stringify(update);
+        expect(written).to.include('"outpoint":');
+        expect(written).to.include('"tx:1"');
+      });
+
+      it('refutes nobody when its announcer is unresolved', async () => {
+        const result = await messageStore.storeAppStateEvent(
+          messageStore.APP_STATE_EVENT_TYPES.NODEALIVE, alive(Date.now(), null),
+        );
+        expect(result).to.deep.equal({ isNewer: false });
+        expect(dbHelperStub.findOneAndUpdateInDatabase.called).to.equal(false);
+      });
+    });
+
     // What damps the gossip: an announcement that advances nothing is not passed on,
     // so it dies here instead of circulating. Derived from the stored broadcast
     // timestamp, NOT from whether the write modified anything - receivedAt is written

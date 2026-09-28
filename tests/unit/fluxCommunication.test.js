@@ -23,6 +23,7 @@ const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
 const { peerManager } = require('../../ZelBack/src/services/utils/peerState');
 const nodeDownService = require('../../ZelBack/src/services/nodeDownService');
+const verifyPool = require('../../ZelBack/src/services/utils/verifyPool');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
 const { PEER_SOURCE, CLOSE_CODES } = require('../../ZelBack/src/services/utils/FluxPeerSocket');
 const rateLimit = require('../../ZelBack/src/services/utils/rateLimit');
@@ -1828,6 +1829,36 @@ describe('fluxCommunication tests', () => {
       expect(completed).to.deep.equal([['apprunning', peerKey]]);
     });
 
+    it('a signed alive record in the stream is stored as the node\'s alive record', async () => {
+      sinon.stub(peerManager, 'isSyncResponseWanted').returns(true);
+      const node = { txhash: 'tx', outidx: 1 };
+      sinon.stub(fluxCommunicationUtils, 'resolveBroadcastAnnouncer')
+        .resolves({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: node });
+      sinon.stub(verifyPool, 'verify').resolves([true]);
+      const stateStore = sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: true });
+      sinon.stub(messageStore, 'storeBatchAppRunningEvents').resolves({ stored: 0 });
+      const alive = {
+        type: 'nodealive',
+        ip: '1.2.3.4:16127',
+        data: { type: 'fluxnodealive', version: 1, ip: '1.2.3.4:16127', broadcastedAt: 1_700_000_000_000 },
+        envelope: {
+          version: 1, pubKey: 'pk', timestamp: 1_700_000_000_000, signature: 'sig',
+        },
+      };
+
+      // The handler directly, as its siblings do: syncResponseDispatcher is
+      // null until the peer manager is wired at boot.
+      await fluxCommunication.handleAppRunningSyncResponse(
+        { data: { type: 'fluxapprunningsync', done: true, messages: [alive] } },
+        { key: '10.20.30.43:16127' },
+      );
+
+      sinon.assert.calledOnce(stateStore);
+      expect(stateStore.firstCall.args[0]).to.equal('nodealive');
+      expect(stateStore.firstCall.args[1].message).to.deep.equal(alive.data);
+      expect(stateStore.firstCall.args[1].announcer).to.equal(node);
+    });
+
     it('an event without an envelope that is not a certificate is dropped: nothing unsigned reaches the store', async () => {
       // The certificate is the only self-proving row. Every other event must
       // carry the envelope of the node that produced it, or it is not stored —
@@ -2009,7 +2040,7 @@ describe('the dispatcher hands each type to the handler the route table declares
   });
 
   // The announcer is resolved once, by the signature check, and the event log records it.
-  ['fluxapprunning', 'fluxmasterlease'].forEach((type) => {
+  ['fluxapprunning', 'fluxmasterlease', 'fluxnodealive'].forEach((type) => {
     it(`hands ${type} the announcer its signature check resolved`, async () => {
       const store = sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: false });
       sinon.stub(messageStore, 'releaseInstallingClaims').resolves({ released: 0 });
@@ -2180,6 +2211,7 @@ describe('a relayed broadcast is handed to the peer that asks for it', () => {
     }, fluxCommunication.handleAppRemovedMessage],
     ['fluxgrantgeneration', () => sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: true }), fluxCommunication.handleGrantGenerationMessage],
     ['fluxmasterlease', () => sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: true }), fluxCommunication.handleMasterleaseMessage],
+    ['fluxnodealive', () => sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: true }), fluxCommunication.handleNodeAliveMessage],
     ['fluxnodedown', () => sinon.stub(nodeDownService, 'onCertificateBroadcast').resolves({ rebroadcast: true }), fluxCommunication.handleNodeDownMessage],
   ];
 

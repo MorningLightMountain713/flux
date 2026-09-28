@@ -311,7 +311,8 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
     // a unit of meaning, and an event's effect must not depend on which slice it
     // landed in.
     for (const event of [...nodeDowns, ...stateEvents]) {
-      if (event.type === 'appremoved' || event.type === 'ipchanged' || event.type === 'masterlease' || event.type === 'grantgeneration') {
+      if (event.type === 'appremoved' || event.type === 'ipchanged' || event.type === 'masterlease' || event.type === 'grantgeneration'
+        || event.type === 'nodealive') {
         await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope, announcer: announcerOf.get(event) ?? null });
       } else if (event.type === 'nodedown') {
         await nodeDownService.onCertificateSyncEvent(event);
@@ -726,6 +727,31 @@ async function handleMasterleaseMessage(message, fromIP, port, announcer) {
 }
 
 /**
+ * A node's alive record arriving off the wire: stored against the node whose
+ * key signed it, relayed when it is news here.
+ * @param {object} message Signed broadcast whose data is the alive record.
+ * @param {string} fromIP Sender's node ip.
+ * @param {string} port Sender's node api port.
+ * @param {object|null} announcer Resolved list entry for the announcing node.
+ */
+async function handleNodeAliveMessage(message, fromIP, port, announcer) {
+  try {
+    const timestampOK = fluxCommunicationUtils.verifyTimestampInFluxBroadcast(message, Date.now(), 240_000);
+    if (!timestampOK) return;
+    const envelope = {
+      version: message.version, timestamp: message.timestamp, pubKey: message.pubKey, signature: message.signature,
+    };
+    const { isNewer } = await messageStore.storeAppStateEvent(
+      messageStore.APP_STATE_EVENT_TYPES.NODEALIVE,
+      { message: message.data, envelope, announcer },
+    );
+    if (isNewer) announceToPeers(message, `${fromIP}:${port}`);
+  } catch (error) {
+    log.error(error);
+  }
+}
+
+/**
  * A node-down certificate arriving off the wire: store on independent
  * verification, relay only what was accepted — a forgery dies at this hop.
  * @param {object} message Signed broadcast whose data carries the certificate.
@@ -1096,6 +1122,7 @@ register('fluxappinstallingerror', (msg, peer) => handleAppInstallingErrorMessag
 register('fluxlimitcounterrecord', (msg) => limitCounter.acceptRecord(msg.data), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxmasterlease', (msg, peer, announcer) => handleMasterleaseMessage(msg, peer.ip, peer.port, announcer), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxnodedown', (msg, peer) => handleNodeDownMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
+register('fluxnodealive', (msg, peer, announcer) => handleNodeAliveMessage(msg, peer.ip, peer.port, announcer), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxgrantgeneration', (msg, peer) => handleGrantGenerationMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxappcontentmanifest', (msg) => contentSlotService.handleIncomingManifest(msg), ROUTE.GOSSIP, INTENT.ANNOUNCE);
 register('fluxappingress', (msg, peer) => handleIngressAttestation(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
@@ -2074,6 +2101,7 @@ module.exports = {
   handleAppInstallingErrorMessage,
   handleGrantGenerationMessage,
   handleMasterleaseMessage,
+  handleNodeAliveMessage,
   handleNodeDownMessage,
   handleTempSyncResponse,
   handleAppRunningSyncResponse,
