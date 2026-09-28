@@ -229,6 +229,34 @@ describe('appInspector tests', () => {
       clock = null;
     });
 
+    it('a removal landing during the tick\'s inspect ends the tick quietly', async () => {
+      dockerServiceStub.dockerContainerStats = sinon.stub().resolves(reading({}));
+      dockerServiceStub.dockerContainerInspect.callsFake(async () => {
+        appInspector.stopAppMonitoring('myapp', true);
+        return { State: { Running: true, Paused: false }, HostConfig: { NanoCpus: 2e9 } };
+      });
+      clock = sinon.useFakeTimers();
+      appInspector.startAppMonitoring('myapp');
+      await clock.tickAsync(60_000);
+      expect(logStub.error.called, 'nothing to report: the app left').to.equal(false);
+      expect(dockerServiceStub.dockerContainerStats.called).to.equal(false);
+      expect(globalStateStub.appsMonitored.myapp).to.equal(undefined);
+    });
+
+    it('a restart landing during the tick\'s stats read keeps the old tick\'s sample out of the new series', async () => {
+      dockerServiceStub.dockerContainerInspect.resolves({ State: { Running: true, Paused: false }, HostConfig: { NanoCpus: 2e9 } });
+      dockerServiceStub.dockerContainerStats = sinon.stub().callsFake(async () => {
+        appInspector.startAppMonitoring('myapp');
+        return reading({});
+      });
+      clock = sinon.useFakeTimers();
+      appInspector.startAppMonitoring('myapp');
+      await clock.tickAsync(60_000);
+      expect(logStub.error.called).to.equal(false);
+      expect(globalStateStub.appsMonitored.myapp.statsStore).to.deep.equal([]);
+      appInspector.stopAppMonitoring('myapp', true);
+    });
+
     // setInterval does not default a missing delay - it coerces to NaN and treats
     // anything below 1 as ONE MILLISECOND. So a config without this key does not
     // stop the sampler, it runs it about a thousand times a second, asking docker

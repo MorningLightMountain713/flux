@@ -599,10 +599,15 @@ function startAppMonitoring(appName) {
   }
   appsMonitored[appName].oneMinuteInterval = setInterval(async () => {
     try {
-      if (!appsMonitored[appName]) {
+      // The tick holds the entry it started with: a stop or a restart can land
+      // during any await below, and a tick that outlives its entry drops its
+      // sample rather than writing into a deleted or replaced one.
+      const entry = appsMonitored[appName];
+      if (!entry) {
         log.error(`Monitoring of ${appName} already stopped`);
         return;
       }
+      const superseded = () => appsMonitored[appName] !== entry || !entry.oneMinuteInterval;
       // Inspected, not listed. getDockerContainer resolves the listing entry and
       // then returns a dockerode HANDLE built from its id - an object carrying
       // modem, id and defaultOptions and nothing else - so reading `.State` off
@@ -619,20 +624,21 @@ function startAppMonitoring(appName) {
       // a container that is created, exited or dead reports no usage; sampling it
       // fills the store with empty readings and gives the throttler nothing to
       // read. Paused counts as not running, exactly as the reconciler reads it.
-      if (!inspect.State?.Running || inspect.State.Paused) {
+      if (!inspect.State?.Running || inspect.State.Paused || superseded()) {
         return;
       }
-      appsMonitored[appName].run += 1;
+      entry.run += 1;
       const statsNow = await dockerService.dockerContainerStats(appName);
       statsNow.disk_stats = await getContainerStorage(appName);
+      if (superseded()) return;
       // the allocation only moves when the throttler moves it, so it is read on
       // the same cadence as before and carried onto the samples in between
-      if (appsMonitored[appName].run % 3 === 1) {
+      if (entry.run % 3 === 1) {
         // the inspect above answers this too - the run-state check costs one
         // already, so re-reading it here would be a second call for a fact in hand
-        appsMonitored[appName].nanoCpus = inspect?.HostConfig?.NanoCpus ?? null;
+        entry.nanoCpus = inspect?.HostConfig?.NanoCpus ?? null;
       }
-      statsNow.nanoCpus = appsMonitored[appName].nanoCpus;
+      statsNow.nanoCpus = entry.nanoCpus;
 
       // A PARTIAL disk reading is a floor, not a total: some mount could not be
       // sized, so the figure is lower than the truth by an unknown amount.
@@ -651,8 +657,8 @@ function startAppMonitoring(appName) {
       // The live path is unaffected and stays honest: /apps/appstats takes a fresh
       // reading rather than serving this store, so a caller asking what the usage
       // is RIGHT NOW still gets status 'partial' and can act on it.
-      const lastKnownDisk = appsMonitored[appName].statsStore.length
-        ? appsMonitored[appName].statsStore[appsMonitored[appName].statsStore.length - 1].disk
+      const lastKnownDisk = entry.statsStore.length
+        ? entry.statsStore[entry.statsStore.length - 1].disk
         : null;
       // Any reading the sizing step did not stand behind, not just a partial one.
       // Its catch returns { used: 0, status: 'error' } - a dockerd blip mid-tick
@@ -669,12 +675,12 @@ function startAppMonitoring(appName) {
       }
 
       const elapsed = monotonicMs();
-      appsMonitored[appName].statsStore.push({
+      entry.statsStore.push({
         timestamp: Date.now(),
         elapsed,
         ...extractSample(statsNow),
       });
-      appsMonitored[appName].statsStore = appsMonitored[appName].statsStore.filter(
+      entry.statsStore = entry.statsStore.filter(
         (stat) => elapsed - stat.elapsed <= 7 * 24 * 60 * 60 * 1000,
       );
     } catch (error) {
