@@ -73,7 +73,7 @@ describe('capabilities tests', () => {
 
     it('takes every dependent down with a prerequisite, through the chain', () => {
       capabilities.claim('mongoReachable', 'serviceManager').raise('up');
-      const chain = capabilities.claim('chainStateConsistent', 'explorerService');
+      const chain = capabilities.claim('chainStateConsistent', 'chainState');
       const synced = capabilities.claim('explorerSynced', 'explorerService');
       const messages = capabilities.claim('appMessagesSynced', 'appSyncOrchestrator');
       const registry = capabilities.claim('appRegistryConsistent', 'appSyncOrchestrator');

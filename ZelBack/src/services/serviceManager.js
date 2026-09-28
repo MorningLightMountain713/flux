@@ -462,6 +462,17 @@ async function startFluxFunctions() {
         await appsMaintenance.repairNanInAppsMessagesDb();
         capabilities.claim('localDbPrepared', 'serviceManager').raise('collections and indexes prepared');
       }),
+      runOwner('chain state', async () => {
+        await capabilities.whenUp('localDbPrepared');
+        // Not awaited: it rewinds and builds the histories at once, then scans once
+        // the daemon is synced. Safe to leave unhandled: initiateBlockProcessor does
+        // not reject. The orchestrator takes its first sync height from the first
+        // processed block, so it must be listening before one: the network owner
+        // starts it without I/O once daemonReachable is up, and the scan processes
+        // nothing before daemonSynced (which needs daemonReachable) and a daemon RPC.
+        explorerService.initiateBlockProcessor({ deepRestore: true });
+        log.info('Flux Block Processing Service started');
+      }),
       runOwner('apps', async () => {
         await capabilities.whenUp(['localDbPrepared', 'dockerReachable']);
         // The location table this node already holds, brought back as soon as the
@@ -893,10 +904,6 @@ async function startFluxFunctions() {
             log.error(err);
           }
         }, bootDelay(20 * 60 * 1000));
-        // Deliberately not awaited — boot carries on while the chain scan starts.
-        // Safe to leave unhandled: initiateBlockProcessor does not reject.
-        explorerService.initiateBlockProcessor({ restoreDatabase: true, deepRestore: true });
-        log.info('Flux Block Processing Service started');
         setTimeout(() => {
           appInspector.checkApplicationsCpuUSage(globalState.appsMonitored, appQueryService.installedApps);
           setInterval(() => {

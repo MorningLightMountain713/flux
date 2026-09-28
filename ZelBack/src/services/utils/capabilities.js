@@ -48,7 +48,7 @@ const DEFINITIONS = Object.freeze([
   { name: 'peersAboveFloor', owner: 'FluxPeerManager', needs: [] },
   { name: 'policyVerified', owner: 'policyStore', needs: [] },
   { name: 'policyCurrent', owner: 'policyStore', needs: ['policyVerified'] },
-  { name: 'chainStateConsistent', owner: 'explorerService', needs: [] },
+  { name: 'chainStateConsistent', owner: 'chainState', needs: [] },
   { name: 'explorerSynced', owner: 'explorerService', needs: ['chainStateConsistent'] },
   { name: 'appMessagesSynced', owner: 'appSyncOrchestrator', needs: ['mongoReachable'] },
   { name: 'appRegistryConsistent', owner: 'appSyncOrchestrator', needs: ['explorerSynced', 'appMessagesSynced'] },

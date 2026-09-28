@@ -6,7 +6,7 @@ const secp256k1 = require('secp256k1');
 
 const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
-const chainRollback = require('./chainRollback');
+const chainState = require('./chainState');
 const daemonSubscriptionService = require('./daemonService/daemonSubscriptionService');
 const reorgSource = require('./daemonService/reorgSource');
 const dbHelper = require('./dbHelper');
@@ -46,8 +46,10 @@ const policyGroupMessagesCollection = config.get('database.chainparams.collectio
 let isInInitiationOfBP = false;
 let zelAppSpecsMigrationDone = false;
 let explorerReadyEmitted = false;
-let operationBlocked = false;
 let appsTransactions = [];
+// The last block the scan has written, in this process. The durable cursor moves
+// only every `cursorBatchSize()` blocks while catching up, so it can be behind.
+let scanPosition = 0;
 let isSynced = false;
 
 // `explorerSynced` rises when the scan is within this many blocks of the daemon's
@@ -245,23 +247,20 @@ async function storeToCollection(collectionName, doc) {
  * written and the history without it — the node priced against state the database
  * disagreed with, and only a restart resolved it.
  *
- * The history is derived state: initiateBlockProcessor replays every stored row
- * through the same `add()` (rebuildPriceOracleState / rebuildPolicyGroupState) before
- * the scan resumes. So the row is what is durable, and `add()` is what decides whether
- * that row is usable. That fixes the order — apply in memory FIRST, persist only if
- * the apply succeeded.
+ * The history is derived state: every rewind builds it from the stored rows through
+ * the same `add()` (chainState) before the scan resumes. So the row is what is
+ * durable, and `add()` is what decides whether that row is usable. That fixes the
+ * order — apply in memory FIRST, persist only if the apply succeeded.
  *
  * Resolved that way round rather than "write, then delete the row if add() throws"
  * because a row `add()` rejects is a poison pill: the rebuild calls `add()` unguarded,
  * so one such row makes every subsequent startup throw, on every node that stored it.
- * Never writing it is the only outcome that leaves the node able to boot. A surgical
- * roll-back is not on offer either — the histories expose only `removeAtHeight()`,
- * which drops every entry at or above a height, including ones already durable.
+ * Never writing it is the only outcome that leaves the node able to boot.
  *
  * The residual direction — the apply succeeds, the write fails — leaves the history
- * holding an entry the database lacks. That cannot outlive the process, because the
- * next rebuild reads the database, and the throw propagates rather than being
- * swallowed here.
+ * holding an entry the database lacks. The throw propagates rather than being
+ * swallowed here, and the scan's error recovery rewinds, which builds the history
+ * from the database again.
  *
  * @param {string} collectionName Chainparams collection to upsert into.
  * @param {{txid: string, vout: number, height: number, txIndex: number, message: object}} doc
@@ -1192,13 +1191,6 @@ async function waitForDaemonSync() {
   await capabilities.whenUp('daemonSynced');
 }
 
-async function getScannedBlockHeightFromDb(database) {
-  const query = { generalScannedHeight: { $gte: 0 } };
-  const projection = { projection: { _id: 0, generalScannedHeight: 1 } };
-  const current = await dbHelper.findOneInDatabase(database, scannedHeightCollection, query, projection);
-  return current?.generalScannedHeight ?? 0;
-}
-
 /**
  * Rolls the scan back when the daemon reports a reorg.
  *
@@ -1212,18 +1204,15 @@ async function getScannedBlockHeightFromDb(database) {
  * @returns {Promise<void>} Resolves once any rollback has completed.
  */
 async function handleChainReorg(reorg) {
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.get('database.daemon.database'));
-  const scannedBlockHeight = await getScannedBlockHeightFromDb(database);
-
-  if (scannedBlockHeight <= reorg.fork.height) {
-    log.info(`Explorer - reorg at ${reorg.fork.height} is above our scan (${scannedBlockHeight}), nothing to roll back`);
-    return;
-  }
-
-  log.warn(`Explorer - rolling back from ${scannedBlockHeight} to fork at ${reorg.fork.height}`);
-  await chainRollback.rollbackTo(reorg.fork.height);
-  lastchainTipCheck = reorg.fork.height;
+  const forkHeight = reorg.fork.height;
+  const rewoundTo = await chainState.rewind(`reorg, fork at ${forkHeight}`, ({ cursor }) => {
+    if (Math.max(cursor, scanPosition) <= forkHeight) {
+      log.info(`Explorer - reorg at ${forkHeight} is above our scan (${Math.max(cursor, scanPosition)}), nothing to roll back`);
+      return null;
+    }
+    return forkHeight;
+  });
+  if (rewoundTo !== null) lastchainTipCheck = rewoundTo;
 }
 
 async function checkAndHandleReorgs(database, scannedBlockHeight) {
@@ -1271,9 +1260,7 @@ async function checkAndHandleReorgs(database, scannedBlockHeight) {
   if (rescanDepth > 0) {
     rescanDepth += 2;
     log.warn(`Potential chain reorganisation spotted at height ${reorgBlockHeight}. Rescanning last ${rescanDepth} blocks...`);
-    height = Math.max(reorgBlockHeight - rescanDepth, 0);
-    await chainRollback.rollbackTo(height);
-    log.info('Database restored OK');
+    height = await chainState.rewind('chain tips', Math.max(reorgBlockHeight - rescanDepth, 0));
   }
   lastchainTipCheck = scannedBlockHeight;
   return height;
@@ -1338,13 +1325,16 @@ async function drainToTip() {
   const daemonHeight = Math.max(syncStatus.data.height, pushedTip);
   const db = dbHelper.databaseConnection();
   const database = db.db(config.get('database.daemon.database'));
+  // A rewind between this read and a block moves the cursor under the drain; the
+  // block sees the count change and the drain starts again from the new cursor.
+  const rewindsAtRead = chainState.rewindCount();
 
   // Read once. The durable cursor only moves every `cursorBatchSize()` blocks while
   // catching up, so re-reading it each time would ask the same question forever — the
   // drain would never see progress and never terminate. Advancement comes from the
   // height the previous block returned, which is also what the batching is safe
   // against: the cursor lagging is expected, standing still is not.
-  let next = (await getScannedBlockHeightFromDb(database)) + 1;
+  let next = (await chainState.getScannedHeight(database)) + 1;
 
   if (next > daemonHeight) {
     publishExplorerSynced(next - 1, daemonHeight);
@@ -1363,13 +1353,26 @@ async function drainToTip() {
   while (!scanStopped && next <= daemonHeight) {
     const current = next;
 
-    scanBlockInFlight = true;
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      next = await processOneBlock(current, isInsightExplorer, { atTip: current >= daemonHeight });
-    } finally {
-      scanBlockInFlight = false;
+    // eslint-disable-next-line no-await-in-loop
+    const advanced = await chainState.exclusive(async () => {
+      if (chainState.rewindCount() !== rewindsAtRead) return null;
+      if (!capabilities.isUp('chainStateConsistent')) {
+        throw new Error('Chain state is not consistent: a rewind did not complete');
+      }
+      scanBlockInFlight = true;
+      try {
+        const following = await processOneBlock(current, isInsightExplorer, { atTip: current >= daemonHeight });
+        if (Number.isInteger(following)) scanPosition = following - 1;
+        return following;
+      } finally {
+        scanBlockInFlight = false;
+      }
+    });
+    if (advanced === null) {
+      scanRequestPending = true;
+      return;
     }
+    next = advanced;
 
     // A block that does not move the scan forward would be an infinite drain. Nothing
     // should be able to produce it, which is exactly why it is worth refusing rather
@@ -1499,41 +1502,36 @@ function onNewBlock(height) {
 }
 
 /**
+ * The rewind target of a restore: the cursor, or with `deepRestore` the
+ * configured number of blocks below it.
+ * @param {boolean} deepRestore
+ * @returns {({cursor}: {cursor: number}) => number}
+ */
+function restoreTarget(deepRestore) {
+  const deepRestoreBlocks = config.get('fluxapps.explorerDeepRestoreBlocks');
+  return ({ cursor }) => (deepRestore && deepRestoreBlocks > 0 ? Math.max(cursor - deepRestoreBlocks, 0) : cursor);
+}
+
+/**
  * Rewinds after a block failed, so the retry starts from a consistent point.
  *
  * Only repairs; it neither retries nor schedules. The caller backs off and asks again,
- * which is what stops a failure from becoming a busy loop. The 15-minute uncancellable
- * retry this replaces could fire long after the scan had been restarted by another
- * route, and start a second one.
+ * which is what stops a failure from becoming a busy loop. A local rewind: it does not
+ * wait for the daemon.
  *
  * @param {boolean} deepRestore Whether to rewind further than the last block.
- * @returns {Promise<void>} Resolves once the rollback has been applied.
+ * @returns {Promise<void>} Resolves once the rewind has completed.
  */
 async function recoverFromError(deepRestore) {
-  await waitForDaemonSync();
-
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.get('database.daemon.database'));
-  const scannedBlockHeight = await getScannedBlockHeightFromDb(database);
-
-  if (scannedBlockHeight === 0) return;
-
-  const deepRestoreBlocks = config.get('fluxapps.explorerDeepRestoreBlocks');
-
-  if (deepRestore && deepRestoreBlocks > 0) {
-    log.info('Deep restoring of database...');
-    await chainRollback.rollbackTo(Math.max(scannedBlockHeight - deepRestoreBlocks, 0));
-  } else {
-    log.info('Restoring database...');
-    await chainRollback.restoreDatabaseToBlockheightState(scannedBlockHeight);
-  }
-
-  log.info('Database restored OK');
+  await chainState.rewind(deepRestore ? 'deep restore after error' : 'restore after error', restoreTarget(deepRestore));
 }
 
-// do a deepRestore of 100 blocks if daemon if enouncters an error (mostly flux daemon was down) or if its initial start of flux
-// use reindexGlobalApps with caution!!!
 /**
+ * Starts the block processor: rewinds chain state to the cursor (with
+ * `deepRestore`, some blocks below it; with `height`, to that height), then
+ * waits for the daemon and starts the scan. The rewind is local and does not
+ * wait for the daemon; only the scan does.
+ *
  * Does NOT reject. Every caller starts it fire-and-forget — boot, and the
  * /explorer/restart, /explorer/reindex and /explorer/rescan routes — so a
  * rejection escaping would be an unhandled rejection, and with no
@@ -1541,17 +1539,19 @@ async function recoverFromError(deepRestore) {
  * awaitable is inside the try, and the catch's own recovery is wrapped, so
  * there is no path out. Callers therefore need no `.catch()`; if you ever add
  * an `await` above the try, that stops being true for all four of them at once.
+ *
+ * @param {{deepRestore?: boolean, height?: number, rescanGlobalApps?: boolean}} [options]
+ *   `rescanGlobalApps` also deletes the stored app messages and registry rows
+ *   above the height, and at height 0 drops the app collections.
+ * @returns {Promise<void>}
  */
 async function initiateBlockProcessor(options = {}) {
-  const { restoreDatabase = false, deepRestore = false, rescanGlobalApps = false } = options;
+  const { deepRestore = false, height = null, rescanGlobalApps = false } = options;
+
+  if (isInInitiationOfBP) return;
+  isInInitiationOfBP = true;
 
   try {
-    await waitForDaemonSync();
-
-    if (isInInitiationOfBP) return;
-    isInInitiationOfBP = true;
-    capabilities.claim('chainStateConsistent', 'explorerService').lower('restore and rebuild started');
-
     const db = dbHelper.databaseConnection();
     const database = db.db(config.get('database.daemon.database'));
 
@@ -1568,19 +1568,9 @@ async function initiateBlockProcessor(options = {}) {
         log.error(`zelAppSpecifications migration failed: ${error.message}`);
       }
     }
-    // Rebuild in-memory chain-message state from persisted messages before the
-    // scan resumes adding to it (otherwise the incremental history.add() calls in
-    // processSoftFork are no-ops and nothing reads the chain-derived state).
-    await entitlementsState.rebuildPolicyGroupState();
-    await priceOracleState.rebuildPriceOracleState();
-
-    let scannedBlockHeight = await getScannedBlockHeightFromDb(database);
-
-    const daemonBlockCount = await daemonServiceBlockchainRpcs.getBlockCount();
-    if (daemonBlockCount.status !== 'success') {
-      throw new Error(daemonBlockCount.data.message || daemonBlockCount.data);
-    }
-    const daemonHeight = daemonBlockCount.data;
+    const scannedBlockHeight = height === null
+      ? await chainState.rewind(deepRestore ? 'deep restore at start' : 'restore at start', restoreTarget(deepRestore), { rescanGlobalApps })
+      : await chainState.rewind(height === 0 ? 'reindex' : `rescan from ${height}`, height, { rescanGlobalApps });
 
     if (scannedBlockHeight === 0) {
       log.info('Preparing daemon collections');
@@ -1656,54 +1646,41 @@ async function initiateBlockProcessor(options = {}) {
       log.info('Preparation done');
     }
 
-    if (daemonHeight > scannedBlockHeight) {
-      if (scannedBlockHeight !== 0 && restoreDatabase) {
-        const deepRestoreBlocks = config.get('fluxapps.explorerDeepRestoreBlocks');
-        if (deepRestore && deepRestoreBlocks > 0) {
-          log.info('Deep restoring of database...');
-          scannedBlockHeight = Math.max(scannedBlockHeight - deepRestoreBlocks, 0);
-          await chainRollback.rollbackTo(scannedBlockHeight, { rescanGlobalApps });
-          log.info('Database restored OK');
-        } else if (!deepRestore) {
-          log.info('Restoring database...');
-          await chainRollback.restoreDatabaseToBlockheightState(scannedBlockHeight, rescanGlobalApps);
-          log.info('Database restored OK');
-        }
-      }
-    }
-
-    isInInitiationOfBP = false;
-    capabilities.claim('chainStateConsistent', 'explorerService').raise(`histories rebuilt, scan cursor at ${scannedBlockHeight}`);
-
     if (!explorerReadyEmitted) {
       explorerReadyEmitted = true;
       fluxEventBus.publish('explorer:ready', { height: scannedBlockHeight });
     }
 
+    await waitForDaemonSync();
+
+    const daemonBlockCount = await daemonServiceBlockchainRpcs.getBlockCount();
+    if (daemonBlockCount.status !== 'success') {
+      throw new Error(daemonBlockCount.data.message || daemonBlockCount.data);
+    }
+    const daemonHeight = daemonBlockCount.data;
     const isInsightExplorer = daemonStatus.isInsightExplorer();
 
     if (daemonHeight <= scannedBlockHeight) {
       if (lastchainTipCheck === 0) {
         lastchainTipCheck = scannedBlockHeight - 1;
       }
-      await startScanning();
-      return;
-    }
-
-    if (scannedBlockHeight === 0 && isInsightExplorer) {
-      try {
-        log.info('Bootstrap: Using address-index fast path');
-        await bootstrapAppHashes(daemonHeight);
-        log.info('Bootstrap complete, entering steady-state block processing');
-      } catch (error) {
-        log.error('Bootstrap failed, falling back to block-by-block scan');
-        log.error(error);
-        await chainRollback.setScannedHeight(database, config.get('fluxapps.epochstart') - 1);
-      }
+    } else if (scannedBlockHeight === 0 && isInsightExplorer) {
+      await chainState.exclusive(async () => {
+        try {
+          log.info('Bootstrap: Using address-index fast path');
+          await bootstrapAppHashes(daemonHeight);
+          log.info('Bootstrap complete, entering steady-state block processing');
+        } catch (error) {
+          log.error('Bootstrap failed, falling back to block-by-block scan');
+          log.error(error);
+          await chainState.setScannedHeight(database, config.get('fluxapps.epochstart') - 1);
+        }
+      });
     } else if (isInsightExplorer && scannedBlockHeight < config.get('fluxapps.epochstart') - 1) {
-      await chainRollback.setScannedHeight(database, config.get('fluxapps.epochstart') - 1);
+      await chainState.exclusive(() => chainState.setScannedHeight(database, config.get('fluxapps.epochstart') - 1));
     }
 
+    isInInitiationOfBP = false;
     // The loop reads the cursor itself, so everything above only has to leave the
     // cursor where scanning should resume from.
     await startScanning();
@@ -1714,10 +1691,10 @@ async function initiateBlockProcessor(options = {}) {
     // this function as a fire-and-forget promise — boot, and the /explorer/restart,
     // /explorer/reindex and /explorer/rescan routes — so a rejection escaping here is
     // an unhandled rejection, and with no process-level handler installed that ends
-    // the fluxos process. recoverFromError reaches the daemon and the database, and
-    // startScanning reaches the daemon, so both can fail exactly when this handler is
-    // running: the path that runs *because* something already went wrong is the one
-    // that cannot be allowed to throw.
+    // the fluxos process. recoverFromError reaches the database, and startScanning
+    // reaches the daemon, so both can fail exactly when this handler is running: the
+    // path that runs *because* something already went wrong is the one that cannot
+    // be allowed to throw.
     try {
       await recoverFromError(true);
       await startScanning();
@@ -1757,48 +1734,31 @@ async function restartBlockProcessing() {
   // Deliberately not awaited — the caller is an HTTP handler that answers as soon as
   // the restart is under way. Not awaited still means handled: a bare floating promise
   // turns any escape into an unhandled rejection, which takes the process down.
-  initiateBlockProcessor({ restoreDatabase: true });
+  initiateBlockProcessor();
 }
 
 /**
- * Drops the scan cursor so the next start rebuilds from the beginning.
+ * Rewinds chain state to height 0, so the scan rebuilds it from the beginning.
  * @param {{rescanGlobalApps?: boolean}} options
  * @returns {Promise<void>} Resolves once the reindex has been started.
  */
 async function reindexExplorer(options = {}) {
   await stopBlockProcessing();
 
-  if (operationBlocked) throw new Error('Operation blocked');
-  operationBlocked = true;
-
-  try {
-    const dbopen = dbHelper.databaseConnection();
-    const database = dbopen.db(config.get('database.daemon.database'));
-
-    await dbHelper.dropCollection(database, scannedHeightCollection).catch((error) => {
-      if (error.message !== 'ns not found') throw error;
-    });
-  } finally {
-    operationBlocked = false;
-  }
-
   // Not awaited: this returns to the caller while the scan runs. Safe to leave
   // unhandled because initiateBlockProcessor does not reject — see its docstring.
-  initiateBlockProcessor({
-    restoreDatabase: true,
-    rescanGlobalApps: options.rescanGlobalApps === true,
-  });
+  initiateBlockProcessor({ height: 0, rescanGlobalApps: options.rescanGlobalApps === true });
 }
 
 /**
- * Rewinds the scan cursor to a height and restarts from there.
+ * Rewinds chain state to a height and restarts the scan from there.
  * @param {{blockheight: number, rescanGlobalApps?: boolean}} options
  * @returns {Promise<number>} The height rescanning will resume from.
  */
 async function rescanExplorer(options = {}) {
   const blockheight = serviceHelper.ensureNumber(options.blockheight);
 
-  if (!Number.isFinite(blockheight)) throw new Error('No blockheight provided');
+  if (!Number.isInteger(blockheight)) throw new Error('No blockheight provided');
   if (blockheight < 0) throw new Error('BlockHeight lower than 0');
 
   const dbopen = dbHelper.databaseConnection();
@@ -1814,21 +1774,9 @@ async function rescanExplorer(options = {}) {
 
   await stopBlockProcessing();
 
-  if (operationBlocked) throw new Error('Operation blocked');
-  operationBlocked = true;
-
-  try {
-    await chainRollback.setScannedHeight(database, blockheight);
-  } finally {
-    operationBlocked = false;
-  }
-
   // Not awaited: this returns to the caller while the scan runs. Safe to leave
   // unhandled because initiateBlockProcessor does not reject — see its docstring.
-  initiateBlockProcessor({
-    restoreDatabase: true,
-    rescanGlobalApps: options.rescanGlobalApps === true,
-  });
+  initiateBlockProcessor({ height: blockheight, rescanGlobalApps: options.rescanGlobalApps === true });
 
   return blockheight;
 }
@@ -1945,6 +1893,14 @@ function setIsInInitiationOfBP(value) {
 function setZelAppSpecsMigrationDone(value) {
   zelAppSpecsMigrationDone = value;
 }
+
+// A rewind invalidates what the scan holds for blocks above its height: the buffered
+// payment records, its position, and whether it is near the daemon's tip.
+chainState.onRewind((height) => {
+  appsTransactions = [];
+  scanPosition = height;
+  capabilities.claim('explorerSynced', 'explorerService').lower(`chain state rewound to ${height}`);
+});
 
 // Registered at require time so the subscription service opens its socket with these
 // already attached. A topic the daemon does not publish simply never delivers, and the

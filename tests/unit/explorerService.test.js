@@ -6,7 +6,7 @@ const registryManager = require('../../ZelBack/src/services/appDatabase/registry
 const daemonSubscriptionService = require('../../ZelBack/src/services/daemonService/daemonSubscriptionService');
 const proxyquire = require('proxyquire');
 const explorerService = require('../../ZelBack/src/services/explorerService');
-const chainRollback = require('../../ZelBack/src/services/chainRollback');
+const chainState = require('../../ZelBack/src/services/chainState');
 const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const specReconciler = require('../../ZelBack/src/services/appLifecycle/specReconciler');
@@ -631,7 +631,7 @@ describe('explorerService tests', () => {
     it('should return right away if isInInitiationOfBP is true', async () => {
       explorerService.setIsInInitiationOfBP(true);
 
-      const result = await explorerService.initiateBlockProcessor({ restoreDatabase: true, deepRestore: true });
+      const result = await explorerService.initiateBlockProcessor({ deepRestore: true });
 
       expect(result).to.be.undefined;
       sinon.assert.notCalled(findInDatabaseStub);
@@ -655,6 +655,7 @@ describe('explorerService tests', () => {
     });
 
     it('should run the block processor, all params false', async () => {
+      sinon.stub(dbHelper, 'removeDocumentsFromCollection').resolves(true);
       findInDatabaseStub.returns({ generalScannedHeight: 0 });
       dropCollectionStub.resolves(true);
       sinon.stub(dbHelper, 'findInDatabase').resolves([]);
@@ -682,6 +683,7 @@ describe('explorerService tests', () => {
     });
 
     it('should fall back to block-by-block scan when bootstrap fails', async () => {
+      sinon.stub(dbHelper, 'removeDocumentsFromCollection').resolves(true);
       findInDatabaseStub.returns({ generalScannedHeight: 0 });
       dropCollectionStub.resolves(true);
       sinon.stub(dbHelper, 'findInDatabase').resolves([]);
@@ -703,7 +705,7 @@ describe('explorerService tests', () => {
       expect(explorerService.scanning()).to.equal(true);
     });
 
-    it('should run the block processor, restoreDatabase set to true, height > 0', async () => {
+    it('should rewind to the cursor and scan, height > 0', async () => {
       sinon.stub(dbHelper, 'removeDocumentsFromCollection').resolves(true);
       sinon.stub(dbHelper, 'updateInDatabase').resolves(true);
       sinon.stub(dbHelper, 'findInDatabase').resolves([]);
@@ -720,20 +722,50 @@ describe('explorerService tests', () => {
       });
       sinon.stub(daemonStatus, 'isInsightExplorer').returns(true);
 
-      await explorerService.initiateBlockProcessor({ restoreDatabase: true });
+      await explorerService.initiateBlockProcessor();
       await serviceHelper.delay(200);
 
       sinon.assert.notCalled(logErrorSpy);
-      // initiateBlockProcessor now leaves the cursor where scanning should resume and
-      // enables scanning; which block gets written next is the drain's business.
       expect(explorerService.scanning()).to.equal(true);
-      sinon.assert.calledWithMatch(logInfoSpy, 'Restoring database...');
-      sinon.assert.calledWithMatch(logInfoSpy, 'Rescan completed');
-      sinon.assert.calledWithMatch(logInfoSpy, 'Rescan completed');
-      sinon.assert.calledWithMatch(logInfoSpy, 'Database restored OK');
+      sinon.assert.calledWithMatch(logInfoSpy, 'Chain state - rewinding from 1000 to 1000: restore at start');
+      expect(capabilities.isUp('chainStateConsistent')).to.equal(true);
     });
 
-    it('should run the block processor, deepRestore, restoreDatabase set to true, height > 0', async () => {
+    it('builds chain state before the daemon is synced, and scans only once it is', async () => {
+      capabilities.setForTests('daemonSynced', false);
+      sinon.stub(dbHelper, 'removeDocumentsFromCollection').resolves(true);
+      sinon.stub(dbHelper, 'findInDatabase').resolves([]);
+      sinon.stub(dbHelper, 'countInDatabase').resolves(1);
+      findInDatabaseStub.returns({ generalScannedHeight: 1000 });
+      const dbFake = sinon.fake.returns({ collection: sinon.fake.returns({ indexes: sinon.fake.resolves([]) }) });
+      sinon.stub(dbHelper, 'databaseConnection').returns({ db: dbFake });
+      getBlockCountStub.returns({ status: 'success', data: 1000 });
+      sinon.stub(daemonStatus, 'isInsightExplorer').returns(false);
+
+      const started = explorerService.initiateBlockProcessor();
+      await serviceHelper.delay(100);
+
+      expect(capabilities.isUp('chainStateConsistent')).to.equal(true);
+      sinon.assert.notCalled(getBlockCountStub);
+      expect(explorerService.scanning()).to.equal(false);
+
+      capabilities.setForTests('daemonSynced', true);
+      await started;
+      expect(explorerService.scanning()).to.equal(true);
+    });
+
+    it('leaves chain state alone when an initiation is already running', async () => {
+      capabilities.setForTests('chainStateConsistent', true);
+      const moves = [];
+      capabilities.onTransition('chainStateConsistent', (record) => moves.push(record.to));
+      explorerService.setIsInInitiationOfBP(true);
+
+      await explorerService.initiateBlockProcessor({ deepRestore: true });
+
+      expect(moves).to.deep.equal([]);
+    });
+
+    it('should rewind below the cursor with deepRestore and scan, height > 0', async () => {
       sinon.stub(dbHelper, 'removeDocumentsFromCollection').resolves(true);
       sinon.stub(dbHelper, 'updateInDatabase').resolves(true);
       sinon.stub(dbHelper, 'findInDatabase').resolves([]);
@@ -750,17 +782,13 @@ describe('explorerService tests', () => {
       });
       sinon.stub(daemonStatus, 'isInsightExplorer').returns(true);
 
-      await explorerService.initiateBlockProcessor({ restoreDatabase: true, deepRestore: true });
+      await explorerService.initiateBlockProcessor({ deepRestore: true });
       await serviceHelper.delay(200);
 
       sinon.assert.notCalled(logErrorSpy);
-      // initiateBlockProcessor now leaves the cursor where scanning should resume and
-      // enables scanning; which block gets written next is the drain's business.
       expect(explorerService.scanning()).to.equal(true);
-      sinon.assert.calledWithMatch(logInfoSpy, 'Deep restoring of database...');
-      sinon.assert.calledWithMatch(logInfoSpy, 'Rescan completed');
-      sinon.assert.calledWithMatch(logInfoSpy, 'Rescan completed');
-      sinon.assert.calledWithMatch(logInfoSpy, 'Database restored OK');
+      const deepRestoreBlocks = config.get('fluxapps.explorerDeepRestoreBlocks');
+      sinon.assert.calledWithMatch(logInfoSpy, `Chain state - rewinding from 1000 to ${1000 - deepRestoreBlocks}: deep restore at start`);
     });
 
     it('should run the block processor, reindexOrRescanGlobalApps set to true, height == 0', async () => {
@@ -1603,6 +1631,180 @@ describe('explorerService tests', () => {
     });
   });
 
+  describe('the scan and every rewind share one lock', () => {
+    let cursor;
+    let fetched;
+    let onFetch;
+    let removeStub;
+    let insertStub;
+    let blockAt;
+
+    beforeEach(() => {
+      capabilities.setForTests('chainStateConsistent', true);
+      cursor = 1000;
+      fetched = [];
+      onFetch = null;
+      blockAt = (height) => ({ height, tx: [] });
+      const db = { collection: () => ({}) };
+      sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => db });
+      sinon.stub(dbHelper, 'findOneInDatabase').callsFake(async (_db, collection) => (
+        collection === 'scannedheight' ? { generalScannedHeight: cursor } : null));
+      sinon.stub(dbHelper, 'updateOneInDatabase').callsFake(async (_db, _collection, _query, update) => {
+        if (update.$set && 'generalScannedHeight' in update.$set) cursor = update.$set.generalScannedHeight;
+      });
+      removeStub = sinon.stub(dbHelper, 'removeDocumentsFromCollection').resolves();
+      sinon.stub(dbHelper, 'findInDatabase').resolves([]);
+      insertStub = sinon.stub(dbHelper, 'insertManyToDatabase').resolves();
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 1005 } });
+      sinon.stub(daemonStatus, 'isInsightExplorer').returns(false);
+      sinon.stub(daemonSubscriptionService, 'isTopicAvailable').returns(true);
+      sinon.stub(daemonServiceBlockchainRpcs, 'getBlock').callsFake(async ({ hashheight }) => {
+        fetched.push(hashheight);
+        if (onFetch) onFetch(hashheight);
+        return { status: 'success', data: blockAt(hashheight) };
+      });
+    });
+
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    it('starts the drain again from the rewound cursor when a rewind lands between blocks', async () => {
+      let rewound = null;
+      onFetch = (height) => {
+        if (height === 1002 && !rewound) rewound = chainState.rewind('test', 1000);
+      };
+
+      await explorerService.startScanning();
+      await rewound;
+
+      expect(fetched).to.deep.equal([1001, 1002, 1001, 1002, 1003, 1004, 1005]);
+    });
+
+    it('drops the payment records it buffered for blocks a rewind takes away', async () => {
+      const PAYMENT_HEIGHT = 983_001;
+      cursor = PAYMENT_HEIGHT - 1;
+      daemonStatus.isDaemonSynced.returns({ data: { synced: true, height: PAYMENT_HEIGHT + 3 } });
+      blockAt = (height) => ({
+        height,
+        time: 1_700_000_000,
+        tx: height !== PAYMENT_HEIGHT ? [] : [{
+          version: 3,
+          txid: 'payment',
+          vin: [],
+          vout: [{
+            n: 0,
+            scriptPubKey: {
+              addresses: ['t1LUs6quf7TB2zVZmexqPQdnqmrFMGZGjV6'],
+              asm: 'OP_RETURN 5468697320737472696e672069732065786163746c792036342063686172616374657273206c6f6e672e20496e636c7564696e67207468697320737472696e67',
+            },
+            valueSat: 20_000_000,
+          }],
+        }],
+      });
+      let rewound = null;
+      onFetch = (height) => {
+        if (height === PAYMENT_HEIGHT + 1 && !rewound) rewound = chainState.rewind('test', PAYMENT_HEIGHT - 1);
+      };
+
+      await explorerService.startScanning();
+      await rewound;
+
+      const inserted = insertStub.getCalls().flatMap((call) => call.args[2]);
+      expect(inserted.map((record) => record.txid)).to.deep.equal(['payment']);
+    });
+
+    it('writes no block while chain state is down, and its recovery rewinds', async () => {
+      capabilities.claim('chainStateConsistent', 'chainState').lower('test: a rewind that threw');
+      const errorSpy = sinon.spy(log, 'error');
+
+      await explorerService.startScanning();
+
+      expect(fetched).to.deep.equal([]);
+      expect(errorSpy.calledWithMatch(sinon.match.has('message', sinon.match(/Chain state is not consistent/)))).to.equal(true);
+      expect(capabilities.isUp('chainStateConsistent')).to.equal(true);
+    });
+
+    it('rolls back a reorg below the blocks the scan has written, though the cursor is below the fork', async () => {
+      onFetch = (height) => {
+        if (height === 1002) explorerService.stopScanning();
+      };
+      await explorerService.startScanning();
+      expect(cursor, 'blocks before the tip leave the cursor where it was').to.equal(1000);
+
+      await explorerService.handleChainReorg({ fork: { height: 1001 }, depth: 1 });
+
+      sinon.assert.calledWithMatch(removeStub, sinon.match.object, 'zelappshashes', { height: { $gt: 1000 } });
+    });
+
+    it('leaves the chain alone for a reorg above every block the scan has written', async () => {
+      onFetch = (height) => {
+        if (height === 1002) explorerService.stopScanning();
+      };
+      await explorerService.startScanning();
+
+      await explorerService.handleChainReorg({ fork: { height: 1002 }, depth: 1 });
+
+      sinon.assert.notCalled(removeStub);
+    });
+
+    it('forgets the blocks a rewind took away when judging the next reorg', async () => {
+      onFetch = (height) => {
+        if (height === 1002) explorerService.stopScanning();
+      };
+      await explorerService.startScanning();
+      await chainState.rewind('test', 1000);
+      removeStub.resetHistory();
+
+      await explorerService.handleChainReorg({ fork: { height: 1001 }, depth: 1 });
+
+      sinon.assert.notCalled(removeStub);
+    });
+
+    it('lowers explorerSynced on a rewind, whatever the scan last published', async () => {
+      explorerService.publishExplorerSynced(1005, 1005);
+      expect(capabilities.isUp('explorerSynced')).to.equal(true);
+
+      await chainState.rewind('test', 900);
+
+      expect(capabilities.isUp('chainStateConsistent')).to.equal(true);
+      expect(capabilities.isUp('explorerSynced')).to.equal(false);
+    });
+  });
+
+  describe('reindex and rescan rewind through the start path', () => {
+    let rewindStub;
+
+    beforeEach(() => {
+      rewindStub = sinon.stub(chainState, 'rewind').resolves(0);
+      sinon.stub(dbHelper, 'countInDatabase').resolves(1);
+      sinon.stub(daemonServiceBlockchainRpcs, 'getBlockCount').returns({ status: 'error', data: { message: 'test: stop here' } });
+      explorerService.setZelAppSpecsMigrationDone(true);
+    });
+
+    afterEach(() => {
+      explorerService.setIsInInitiationOfBP(false);
+      explorerService.setZelAppSpecsMigrationDone(false);
+      sinon.restore();
+    });
+
+    it('reindex rewinds to height 0', async () => {
+      await explorerService.reindexExplorer({ rescanGlobalApps: true });
+      await serviceHelper.delay(50);
+
+      sinon.assert.calledWith(rewindStub.firstCall, 'reindex', 0, { rescanGlobalApps: true });
+    });
+
+    it('rescan rewinds to the height asked for', async () => {
+      sinon.stub(dbHelper, 'findOneInDatabase').resolves({ generalScannedHeight: 2000 });
+
+      await explorerService.rescanExplorer({ blockheight: 1500 });
+      await serviceHelper.delay(50);
+
+      sinon.assert.calledWith(rewindStub.firstCall, 'rescan from 1500', 1500, { rescanGlobalApps: false });
+    });
+  });
+
   describe('initiateBlockProcessor never rejects', () => {
     beforeEach(async () => {
       sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true } });
@@ -1630,7 +1832,9 @@ describe('explorerService tests', () => {
         status: 'error', data: { message: 'daemon is down' },
       });
       // ...and so does the recovery it triggers.
-      sinon.stub(chainRollback, 'rollbackTo').rejects(new Error('rollback hit a dead database'));
+      const rewind = sinon.stub(chainState, 'rewind');
+      rewind.onFirstCall().resolves(700_000);
+      rewind.rejects(new Error('rewind hit a dead database'));
 
       await expect(explorerService.initiateBlockProcessor({})).to.eventually.be.fulfilled;
 

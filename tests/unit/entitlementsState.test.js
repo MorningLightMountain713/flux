@@ -130,7 +130,7 @@ describe('entitlementsState', () => {
     });
 
     it('passes a spec that uses no gated feature, with no grants on chain', async () => {
-      await entitlementsState.rebuildPolicyGroupState();
+      entitlementsState.installPolicyGroupState(await entitlementsState.buildPolicyGroupState());
       await entitlementsState.assertSpecEntitled(ungatedSpec, OWNER, effectiveHeight, false);
       sinon.assert.calledOnce(checkSpy);
       expect(checkSpy.firstCall.returnValue.allowed).to.equal(true);
@@ -142,7 +142,7 @@ describe('entitlementsState', () => {
     // something else.
     it('hands the real check the spec\'s own canonical body', async () => {
       docs = [definitionDoc({ features: { mesh: true } })];
-      await entitlementsState.rebuildPolicyGroupState();
+      entitlementsState.installPolicyGroupState(await entitlementsState.buildPolicyGroupState());
 
       await entitlementsState.assertSpecEntitled(gatedSpec, OWNER, effectiveHeight, false);
 
@@ -157,7 +157,7 @@ describe('entitlementsState', () => {
     });
 
     it('throws FEATURE_NOT_ENTITLED when a gated feature has no grant', async () => {
-      await entitlementsState.rebuildPolicyGroupState();
+      entitlementsState.installPolicyGroupState(await entitlementsState.buildPolicyGroupState());
       try {
         await entitlementsState.assertSpecEntitled(gatedSpec, OWNER, effectiveHeight, false);
         expect.fail('should have thrown');
@@ -169,7 +169,7 @@ describe('entitlementsState', () => {
 
     it('passes once the default group\'s on-chain definition grants the feature', async () => {
       docs = [definitionDoc({ features: { mesh: true } })];
-      await entitlementsState.rebuildPolicyGroupState();
+      entitlementsState.installPolicyGroupState(await entitlementsState.buildPolicyGroupState());
 
       await entitlementsState.assertSpecEntitled(gatedSpec, OWNER, effectiveHeight, false);
       expect(checkSpy.firstCall.returnValue.allowed).to.equal(true);
@@ -181,7 +181,7 @@ describe('entitlementsState', () => {
     // only in a recorded call.
     it('does not apply a grant before its soft-fork effective depth', async () => {
       docs = [definitionDoc({ features: { mesh: true } })];
-      await entitlementsState.rebuildPolicyGroupState();
+      entitlementsState.installPolicyGroupState(await entitlementsState.buildPolicyGroupState());
 
       await expect(entitlementsState.assertSpecEntitled(gatedSpec, OWNER, effectiveHeight - 1, false))
         .to.be.rejectedWith(/mesh/);
@@ -189,7 +189,7 @@ describe('entitlementsState', () => {
     });
 
     it('resolves entitlements at the supplied height', async () => {
-      await entitlementsState.rebuildPolicyGroupState();
+      entitlementsState.installPolicyGroupState(await entitlementsState.buildPolicyGroupState());
       await entitlementsState.assertSpecEntitled(ungatedSpec, OWNER, 4242, false);
       expect(checkSpy.firstCall.args[2]).to.equal(4242);
     });
@@ -202,7 +202,7 @@ describe('entitlementsState', () => {
         definitionDoc({ groupId: MEMBER_GROUP, features: { mesh: true } }),
         membershipDoc({ owner: OWNER }),
       ];
-      await entitlementsState.rebuildPolicyGroupState();
+      entitlementsState.installPolicyGroupState(await entitlementsState.buildPolicyGroupState());
 
       await entitlementsState.assertSpecEntitled(gatedSpec, OWNER, effectiveHeight, false);
       expect(checkSpy.firstCall.returnValue.allowed).to.equal(true);
@@ -213,14 +213,14 @@ describe('entitlementsState', () => {
         definitionDoc({ groupId: MEMBER_GROUP, features: { mesh: true } }),
         membershipDoc({ owner: OWNER }),
       ];
-      await entitlementsState.rebuildPolicyGroupState();
+      entitlementsState.installPolicyGroupState(await entitlementsState.buildPolicyGroupState());
 
       await expect(entitlementsState.assertSpecEntitled(gatedSpec, OTHER_OWNER, effectiveHeight, false))
         .to.be.rejectedWith(/mesh/);
     });
 
     it('passes an Ethereum owner whose spec uses no gated feature', async () => {
-      await entitlementsState.rebuildPolicyGroupState();
+      entitlementsState.installPolicyGroupState(await entitlementsState.buildPolicyGroupState());
       await entitlementsState.assertSpecEntitled(ungatedSpec, ETH_OWNER, effectiveHeight, false);
       expect(checkSpy.firstCall.returnValue.allowed).to.equal(true);
     });
@@ -230,27 +230,27 @@ describe('entitlementsState', () => {
         definitionDoc({ groupId: MEMBER_GROUP, features: { mesh: true } }),
         membershipDoc({ owner: ETH_OWNER }),
       ];
-      await entitlementsState.rebuildPolicyGroupState();
+      entitlementsState.installPolicyGroupState(await entitlementsState.buildPolicyGroupState());
 
       await entitlementsState.assertSpecEntitled(gatedSpec, ETH_OWNER, effectiveHeight, false);
       expect(checkSpy.firstCall.returnValue.allowed).to.equal(true);
     });
 
     it('throws when the owner address cannot be decoded to a fluxid', async () => {
-      await entitlementsState.rebuildPolicyGroupState();
+      entitlementsState.installPolicyGroupState(await entitlementsState.buildPolicyGroupState());
       await expect(entitlementsState.assertSpecEntitled(gatedSpec, 'not-an-address', 100, false))
         .to.be.rejectedWith(/not a valid fluxid/);
     });
   });
 
-  describe('rebuildPolicyGroupState', () => {
+  describe('buildPolicyGroupState', () => {
     it('replays persisted messages in chain order and restores fluxid bytes', async () => {
       docs = [
         membershipDoc({ height: 20 }),
         definitionDoc({ height: 10, features: { mesh: true } }),
       ];
 
-      await entitlementsState.rebuildPolicyGroupState();
+      entitlementsState.installPolicyGroupState(await entitlementsState.buildPolicyGroupState());
 
       expect(addSpy.getCalls().map((call) => call.args[1])).to.eql([10, 20]);
       // PolicyGroupHistory hexes these bytes to key the membership — the shape
@@ -270,7 +270,7 @@ describe('entitlementsState', () => {
         definitionDoc({ height: 10, txIndex: 2, features: { telemetry: true } }),
       ];
 
-      await entitlementsState.rebuildPolicyGroupState();
+      entitlementsState.installPolicyGroupState(await entitlementsState.buildPolicyGroupState());
 
       expect(addSpy.getCalls().map((call) => call.args[2])).to.eql([2, 9]);
     });
@@ -280,7 +280,7 @@ describe('entitlementsState', () => {
       const earlier = definitionDoc({ height: 10, txIndex: 4, vout: 1, features: { telemetry: true } });
       docs = [later, earlier];
 
-      await entitlementsState.rebuildPolicyGroupState();
+      entitlementsState.installPolicyGroupState(await entitlementsState.buildPolicyGroupState());
 
       expect(addSpy.getCalls().map((call) => call.args[0])).to.eql([earlier.message, later.message]);
     });
@@ -289,7 +289,7 @@ describe('entitlementsState', () => {
       docs = [definitionDoc({ height: 10, features: { mesh: true } })];
       delete docs[0].txIndex;
 
-      await expect(entitlementsState.rebuildPolicyGroupState())
+      await expect(entitlementsState.buildPolicyGroupState())
         .to.eventually.be.rejectedWith(/carries no txIndex/);
     });
 
@@ -299,7 +299,7 @@ describe('entitlementsState', () => {
         membershipDoc({ height: 20 }),
       ];
 
-      await entitlementsState.rebuildPolicyGroupState();
+      entitlementsState.installPolicyGroupState(await entitlementsState.buildPolicyGroupState());
 
       const history = entitlementsState.getPolicyGroupHistory();
       expect(history).to.be.instanceOf(flux.PolicyGroupHistory);
@@ -310,21 +310,24 @@ describe('entitlementsState', () => {
     });
   });
 
-  describe('removeAtHeight', () => {
-    it('rolls the granting message back out of the history', async () => {
+  describe('installPolicyGroupState', () => {
+    it('leaves the live state alone until the built one is installed', async () => {
       docs = [definitionDoc({ features: { mesh: true } })];
-      await entitlementsState.rebuildPolicyGroupState();
+      entitlementsState.installPolicyGroupState(await entitlementsState.buildPolicyGroupState());
+      const live = entitlementsState.getPolicyGroupHistory();
+
+      docs = [];
+      const built = await entitlementsState.buildPolicyGroupState();
+
+      expect(entitlementsState.getPolicyGroupHistory()).to.equal(live);
       await entitlementsState.assertSpecEntitled(gatedSpec, OWNER, effectiveHeight, false);
 
-      entitlementsState.removeAtHeight(GRANT_HEIGHT);
+      entitlementsState.installPolicyGroupState(built);
 
-      expect(entitlementsState.getPolicyGroupHistory().definitionCount).to.equal(0);
+      expect(entitlementsState.getPolicyGroupHistory()).to.equal(built.policyGroupHistory);
+      expect(entitlementsState.getFeatureEntitlements()).to.equal(built.featureEntitlements);
       await expect(entitlementsState.assertSpecEntitled(gatedSpec, OWNER, effectiveHeight, false))
         .to.be.rejectedWith(/mesh/);
-    });
-
-    it('is a no-op when the state has not been built', () => {
-      expect(() => entitlementsState.removeAtHeight(500)).to.not.throw();
     });
   });
 });

@@ -28,7 +28,14 @@ function fixBinaryFields(doc, fields) {
   }
 }
 
-async function rebuildPriceOracleState() {
+/**
+ * Price, rate, modifier and oracle-key histories built from the stored rows,
+ * beside the live ones. The live state is untouched until
+ * `installPriceOracleState` swaps these in.
+ * @returns {Promise<{priceMessageHistory: object, rateMessageHistory: object,
+ *   priceModifierHistory: object, oracleKeyHistory: object}>}
+ */
+async function buildPriceOracleState() {
   const {
     PriceMessageHistory,
     RateMessageHistory,
@@ -36,10 +43,12 @@ async function rebuildPriceOracleState() {
     OracleKeyHistory,
   } = await getSpecPolicy();
 
-  priceMessageHistory = new PriceMessageHistory();
-  rateMessageHistory = new RateMessageHistory();
-  priceModifierHistory = new PriceModifierHistory();
-  oracleKeyHistory = new OracleKeyHistory();
+  const built = {
+    priceMessageHistory: new PriceMessageHistory(),
+    rateMessageHistory: new RateMessageHistory(),
+    priceModifierHistory: new PriceModifierHistory(),
+    oracleKeyHistory: new OracleKeyHistory(),
+  };
 
   const db = dbHelper.databaseConnection();
   const database = db.db(config.get('database.chainparams.database'));
@@ -55,7 +64,7 @@ async function rebuildPriceOracleState() {
   inChainOrder(oracleKeyDocs, 'oracleKeyMessages');
   for (const doc of oracleKeyDocs) {
     fixBinaryFields(doc, ['pubkey']);
-    oracleKeyHistory.add(doc.message, doc.height, doc.txIndex);
+    built.oracleKeyHistory.add(doc.message, doc.height, doc.txIndex);
   }
 
   const priceDocs = await dbHelper.findInDatabase(
@@ -64,7 +73,7 @@ async function rebuildPriceOracleState() {
   );
   inChainOrder(priceDocs, 'priceMessages');
   for (const doc of priceDocs) {
-    priceMessageHistory.add(doc.message, doc.height, doc.txIndex);
+    built.priceMessageHistory.add(doc.message, doc.height, doc.txIndex);
   }
 
   const rateDocs = await dbHelper.findInDatabase(
@@ -73,7 +82,7 @@ async function rebuildPriceOracleState() {
   );
   inChainOrder(rateDocs, 'rateMessages');
   for (const doc of rateDocs) {
-    rateMessageHistory.add(doc.message, doc.height, doc.txIndex);
+    built.rateMessageHistory.add(doc.message, doc.height, doc.txIndex);
   }
 
   const modifierDocs = await dbHelper.findInDatabase(
@@ -82,17 +91,23 @@ async function rebuildPriceOracleState() {
   );
   inChainOrder(modifierDocs, 'priceModifierMessages');
   for (const doc of modifierDocs) {
-    priceModifierHistory.add(doc.message, doc.height, doc.txIndex);
+    built.priceModifierHistory.add(doc.message, doc.height, doc.txIndex);
   }
 
-  log.info(`Price oracle state rebuilt: ${priceDocs.length} price, ${rateDocs.length} rate, ${modifierDocs.length} modifier, ${oracleKeyDocs.length} oracle-key`);
+  log.info(`Price oracle state built: ${priceDocs.length} price, ${rateDocs.length} rate, ${modifierDocs.length} modifier, ${oracleKeyDocs.length} oracle-key`);
+  return built;
 }
 
-function removeAtHeight(height) {
-  if (priceMessageHistory) priceMessageHistory.removeAtHeight(height);
-  if (rateMessageHistory) rateMessageHistory.removeAtHeight(height);
-  if (priceModifierHistory) priceModifierHistory.removeAtHeight(height);
-  if (oracleKeyHistory) oracleKeyHistory.removeAtHeight(height);
+/**
+ * Make built histories the live ones. Synchronous, so no reader sees part of
+ * the set.
+ * @param {{priceMessageHistory: object, rateMessageHistory: object,
+ *   priceModifierHistory: object, oracleKeyHistory: object}} built
+ */
+function installPriceOracleState(built) {
+  ({
+    priceMessageHistory, rateMessageHistory, priceModifierHistory, oracleKeyHistory,
+  } = built);
 }
 
 function getPriceMessageHistory() { return priceMessageHistory; }
@@ -101,8 +116,8 @@ function getPriceModifierHistory() { return priceModifierHistory; }
 function getOracleKeyHistory() { return oracleKeyHistory; }
 
 module.exports = {
-  rebuildPriceOracleState,
-  removeAtHeight,
+  buildPriceOracleState,
+  installPriceOracleState,
   getPriceMessageHistory,
   getRateMessageHistory,
   getPriceModifierHistory,
