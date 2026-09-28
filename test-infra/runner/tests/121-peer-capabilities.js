@@ -175,14 +175,17 @@ describe('Peer capabilities', function () {
       const anchors = REAL_NODES.map((i) => env.clients[i].getLastEventId());
 
       // The drop has to land before it is healed, or nothing is ever lost and
-      // no reconnect is ever pulled. Not swallowed: a partition that did not
-      // take means this case proved nothing.
+      // no reconnect is ever pulled. The loss is the event a fleet node
+      // publishes when the socket goes, in either direction, anchored so a
+      // loss from the boot's peer churn cannot answer for it. Not swallowed: a
+      // partition that did not take means this case proved nothing.
       await partition(env, [dropped]);
-      await waitFor(
-        async () => !(await env.clients[0].getPeers()).data
-          .some((peer) => String(peer).includes(droppedIp)),
-        { timeout: 120000, label: `node 0 lost ${droppedIp}` },
-      );
+      await Promise.any(REAL_NODES.filter((i) => i !== dropped).map((i, n) => env.clients[i].waitForEvent(
+        'peers:removed',
+        (data) => data.ip === droppedIp,
+        120000,
+        { afterId: anchors[REAL_NODES.indexOf(i)] },
+      )));
       await healPartition(env, [dropped]);
 
       // Held to a pull aimed at a FLEET node: a pull at a stub proves nothing
