@@ -62,6 +62,13 @@ describe('dbHelper tests', () => {
     });
   });
 
+  describe('pingMongo tests', () => {
+    it('answers true on the open connection', async () => {
+      await dbHelper.initiateDB();
+      expect(await dbHelper.pingMongo()).to.equal(true);
+    });
+  });
+
   describe('getMongoDbVersion tests', () => {
     it('should return null when no connection is established', async () => {
       await dbHelper.closeDbConnection();

@@ -114,6 +114,8 @@ const development = userconfig.initial.development || false;
 const fluxTransactionCollection = config.get('database.daemon.collections.fluxTransactions');
 
 const bootDelayMultiplier = config.get('fluxapps.bootDelayMultiplier');
+let dependencyProbe = null;
+
 function bootDelay(ms) { return Math.round(ms * bootDelayMultiplier); }
 
 const portRestoreIntervalMs = config.get('fluxapps.portRestoreIntervalMs');
@@ -139,6 +141,23 @@ const appsStorageViolations = [];
 /**
  * To start FluxOS. A series of checks are performed on port and UPnP (Universal Plug and Play) support and mapping. Database connections are established. The other relevant functions required to start FluxOS services are called.
  */
+/**
+ * Keep `mongoReachable` and `dockerReachable` true to what the services answer.
+ * Neither announces going away, so each is pinged on an interval: the one poll
+ * the capability registry has.
+ */
+function startDependencyProbes() {
+  if (dependencyProbe) return;
+  const mongo = capabilities.claim('mongoReachable', 'serviceManager');
+  const docker = capabilities.claim('dockerReachable', 'serviceManager');
+  dependencyProbe = setInterval(async () => {
+    const [mongoUp, dockerUp] = await Promise.all([dbHelper.pingMongo(), dockerService.pingDocker()]);
+    if (mongoUp) mongo.raise('MongoDB answered'); else mongo.lower('MongoDB did not answer a ping');
+    if (dockerUp) docker.raise('Docker answered'); else docker.lower('Docker did not answer a ping');
+  }, config.get('system.dependencyProbeMs'));
+  dependencyProbe.unref?.();
+}
+
 async function startFluxFunctions() {
   try {
     if (!config.get('server.allowedPorts').includes(+apiPort)) {
@@ -166,7 +185,11 @@ async function startFluxFunctions() {
     }
     // Hard dependencies — nothing starts until these are confirmed.
     await dbHelper.waitForMongo();
+    capabilities.claim('mongoReachable', 'serviceManager').raise('MongoDB answered');
     await dockerService.waitForDocker();
+    capabilities.claim('dockerReachable', 'serviceManager').raise('Docker answered');
+    startDependencyProbes();
+    capabilities.claim('localDbPrepared', 'serviceManager').starting('running migrations and preparing collections');
 
     // Node-local state migrations, before anything reads it. pgpService and the IP
     // monitor both read what these adopt; pgpService guards itself (it reads the
@@ -373,6 +396,7 @@ async function startFluxFunctions() {
     // This fixes an issue where the appsMessage db has NaN for valueSat. Once db is repaired on all nodes,
     // we can remove this.
     await appsMaintenance.repairNanInAppsMessagesDb();
+    capabilities.claim('localDbPrepared', 'serviceManager').raise('collections and indexes prepared');
 
     // The location table this node already holds, brought back as soon as the
     // database is up. Detached and best-effort - every consumer degrades safely

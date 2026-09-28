@@ -65,6 +65,22 @@ async function initiateDB() {
 }
 
 /**
+ * Whether the server answers a ping on the open connection. False when no
+ * connection is open or the ping fails.
+ * @returns {Promise<boolean>}
+ */
+async function pingMongo() {
+  const connection = databaseConnection();
+  if (!connection) return false;
+  try {
+    await connection.db('admin').command({ ping: 1 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Returns the connected MongoDB server version, fetching and caching it on
  * first use. The driver handshake only exposes the wire-protocol version, so
  * the human-readable version is read once via a buildInfo command and reused.
@@ -575,6 +591,7 @@ async function collectionStats(database, collection) {
 // appDatabase/appsMaintenance.js
 
 module.exports = {
+  pingMongo,
   aggregateInDatabase,
   bulkWriteInDatabase,
   closeDbConnection,
