@@ -297,13 +297,13 @@ async function computeRegistrationFee(spec, height) {
  * @returns {Promise<bigint|null>}
  */
 async function computeUpdateFee(spec, prevSpec, height, prevHeight, prevRegisteredAt, nowBlockTime) {
-  const messages = await appsRepository.listAppMessagesByName(spec.name);
   return pricingRegime.updateFee(spec, prevSpec, {
     height,
     prevHeight,
     prevRegisteredAt,
     nowBlockTime,
-    recentEvents: messages.filter((message) => message.height < height),
+    recentEvents: async () => (await appsRepository.listAppMessagesByName(spec.name))
+      .filter((message) => message.height < height),
   });
 }
 

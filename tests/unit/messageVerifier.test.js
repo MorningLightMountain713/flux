@@ -804,7 +804,7 @@ describe('messageVerifier tests', () => {
 
           sinon.assert.calledOnce(v9Regime.updateFee);
           const { recentEvents } = v9Regime.updateFee.firstCall.args[2];
-          expect(recentEvents.map((message) => message.hash)).to.deep.equal(['earlier']);
+          expect((await recentEvents()).map((message) => message.hash)).to.deep.equal(['earlier']);
         });
 
         // Priced against itself, a spec matches itself on every rule the
