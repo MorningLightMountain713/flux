@@ -337,6 +337,8 @@ export function nodeClient(nodeNum) {
         'nodedown:assembled',
         'nodedown:stored',
         'nodedown:refused',
+        // a record this node read standing now reads refuted
+        'nodedown:refuted',
         'nodedown:verdict',
         'nodedown:lockedOut',
         'nodedown:inboundRefused',

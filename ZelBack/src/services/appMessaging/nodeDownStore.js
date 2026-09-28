@@ -4,6 +4,7 @@ const config = require('config');
 
 const dbHelper = require('../dbHelper');
 const log = require('../../lib/log');
+const fluxEventBus = require('../utils/fluxEventBus');
 const networkStateService = require('../networkStateService');
 const verificationHelper = require('../verificationHelper');
 const downCertificates = require('../quorumGrant/downCertificates');
@@ -177,6 +178,12 @@ async function certificatesFor(subject) {
     }));
 }
 
+// Subjects this node last read with a standing record, so the read that first
+// finds one refuted publishes the edge. A refutation is derived at read time,
+// never written, so a read is the only place it can be seen to happen.
+// Tracked only while the event stream is on.
+const readStanding = new Set();
+
 /**
  * The subject's freshest unexpired nodedown row and the announcement that
  * refuted it, if any.
@@ -186,7 +193,10 @@ async function certificatesFor(subject) {
  */
 async function latestRecordFor(subject) {
   const live = await liveRowsFor(subject);
-  if (!live.length) return null;
+  if (!live.length) {
+    readStanding.delete(subject);
+    return null;
+  }
   const row = live.reduce((newest, candidate) => (
     new Date(candidate.broadcastedAt) > new Date(newest.broadcastedAt) ? candidate : newest
   ));
@@ -196,7 +206,18 @@ async function latestRecordFor(subject) {
     outpoint: subject,
     broadcastedAt: { $gte: new Date(row.broadcastedAt) },
   });
+  noteRefutationEdge(subject, Boolean(refutation));
   return { row, refutation: refutation || null };
+}
+
+function noteRefutationEdge(subject, refuted) {
+  if (!fluxEventBus.enabled) return;
+  if (!refuted) {
+    readStanding.add(subject);
+    return;
+  }
+  if (!readStanding.delete(subject)) return;
+  fluxEventBus.publish('nodedown:refuted', { subject });
 }
 
 /**
