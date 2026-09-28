@@ -1378,8 +1378,7 @@ describe('fluxService tests', () => {
       sinon.restore();
     });
 
-    it('serves the owner union once the map is loaded', () => {
-      sinon.stub(enterpriseConfig, 'isOwnerMapLoaded').returns(true);
+    it('serves the owner union once the policy is known', () => {
       sinon.stub(enterpriseConfig, 'getEnterpriseAppOwners').returns(['ownerA', 'ownerB']);
       const res = generateResponse();
 
@@ -1390,21 +1389,21 @@ describe('fluxService tests', () => {
     });
 
     // An empty union is byte-identical to a network with no enterprise nodes, so a caller
-    // cannot tell "not loaded yet" from "nobody is authorized" — it has to be told.
-    it('answers 503 rather than an empty union while the map is not loaded', () => {
-      sinon.stub(enterpriseConfig, 'isOwnerMapLoaded').returns(false);
-      const owners = sinon.stub(enterpriseConfig, 'getEnterpriseAppOwners');
+    // cannot tell "unknown" from "nobody is authorized" — it has to be told.
+    it('answers 503 rather than an empty union while the policy is unknown', () => {
+      sinon.stub(enterpriseConfig, 'getEnterpriseAppOwners').returns(null);
       const res = generateResponse();
 
       fluxService.getEnterpriseAppOwners(undefined, res);
 
       sinon.assert.calledOnceWithExactly(res.status, 503);
-      sinon.assert.notCalled(owners);
-      expect(res.json.firstCall.args[0].status).to.equal('error');
+      const body = res.json.firstCall.args[0];
+      expect(body.status).to.equal('error');
+      expect(body.data.message).to.equal('Network policy not yet obtained');
     });
 
-    it('reports not-loaded to a programmatic caller too, rather than throwing', () => {
-      sinon.stub(enterpriseConfig, 'isOwnerMapLoaded').returns(false);
+    it('reports an unknown policy to a programmatic caller too, rather than throwing', () => {
+      sinon.stub(enterpriseConfig, 'getEnterpriseAppOwners').returns(null);
 
       const result = fluxService.getEnterpriseAppOwners();
 

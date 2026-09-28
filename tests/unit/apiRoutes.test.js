@@ -135,17 +135,15 @@ describe('loading express', () => {
   // mechanism, so it holds whichever layer refuses the 503. Only the real server exercises
   // it; the throwaway express apps elsewhere in this tier never mount apicache.
   it('http /flux/enterpriseappowners serves 503 before load and is not poisoned by it', async () => {
-    const loaded = sinon.stub(enterpriseConfig, 'isOwnerMapLoaded').returns(false);
-    const owners = sinon.stub(enterpriseConfig, 'getEnterpriseAppOwners').returns(['ownerA', 'ownerB']);
+    const owners = sinon.stub(enterpriseConfig, 'getEnterpriseAppOwners').returns(null);
     try {
       await request(serverHttp).get('/flux/enterpriseappowners').expect(503);
 
-      loaded.returns(true);
+      owners.returns(['ownerA', 'ownerB']);
 
       const res = await request(serverHttp).get('/flux/enterpriseappowners').expect(200);
       expect(JSON.parse(res.text).data).to.deep.equal(['ownerA', 'ownerB']);
     } finally {
-      loaded.restore();
       owners.restore();
     }
   });

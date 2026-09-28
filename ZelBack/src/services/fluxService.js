@@ -954,28 +954,21 @@ function getAPIPort(req, res) {
 /**
  * To show the list of enterprise app owners the network authorizes.
  *
- * Answers 503 while the owner map has not been loaded — the window between the API
- * accepting traffic and the boot sequence reaching policyStore. Serving the empty union
- * then would be a lie a caller cannot detect: it is byte-identical to a network with no
- * enterprise nodes, and the route caches success for an hour, so one poll landing in that
- * window would publish it long after the node had the real map. routeGuards' cache admits
- * status 200 and nothing else, so the 503 is never stored and the next poll re-asks.
+ * An unknown policy is reported as an error, never as an empty list: callers use this to
+ * decide who may pick priority nodes, and "nobody is eligible" is a different answer from
+ * "this node cannot say". The policy is unknown before the boot sequence reaches
+ * policyStore and whenever the adopted bundle's owner map is malformed. Answered 503: the
+ * route caches success for an hour, and routeGuards' cache admits status 200 and nothing
+ * else, so the refusal is never stored and the next poll re-asks.
  * @param {import('express').Request} req
  * @param {import('express').Response} res
  * @returns {object} Message.
  */
 function getEnterpriseAppOwners(req, res) {
-  if (!enterpriseConfig.isOwnerMapLoaded()) {
-    const errMessage = messageHelper.createErrorMessage('Enterprise owner map is not loaded yet', 'NotReady', 503);
-    return res ? res.status(503).json(errMessage) : errMessage;
-  }
   const enterpriseAppOwners = enterpriseConfig.getEnterpriseAppOwners();
-  // An unknown policy is reported as an error, not as an empty list. Callers use this to
-  // decide who may pick priority nodes, and "nobody is eligible" is a different answer
-  // from "this node cannot say yet".
   if (enterpriseAppOwners === null) {
-    const errorResponse = messageHelper.createErrorMessage('Network policy not yet obtained');
-    return res ? res.json(errorResponse) : errorResponse;
+    const errMessage = messageHelper.createErrorMessage('Network policy not yet obtained', 'NotReady', 503);
+    return res ? res.status(503).json(errMessage) : errMessage;
   }
   const message = messageHelper.createDataMessage(enterpriseAppOwners);
   return res ? res.json(message) : message;
