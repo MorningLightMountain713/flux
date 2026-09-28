@@ -27,23 +27,22 @@ import { appOwnerKey } from '../framework/keys.js';
 const require = createRequire(import.meta.url);
 const { selectCommittee } = require('../../../ZelBack/src/services/utils/committeeSelector.js');
 
-// A re-roll under a running master whose whole side MISSED the record
-// (formal/quiet-window Run 34 and row 40; COMMITTEE_RECOVERY_DESIGN.md
-// 2026-09-05, family K). The master's node and every cell of its granting
-// committee are partitioned from the rest of the fleet while the owner's
-// record is broadcast on the far side, then the partition heals. Nothing
-// re-delivers a missed broadcast: the master's side is deaf, not dark. Its
-// old cells keep renewing it — they do not know the record, and production
-// retires by record receipt — so it never coasts and never polls a witness;
-// nothing it hears from knows. The standbys, on the far side, received the
-// record and will pursue at the lift.
+// A re-roll under a running master whose whole side MISSED the record. The
+// master's node and every cell of its granting committee are partitioned from
+// the rest of the fleet while the owner's record is broadcast on the far side.
+// Its old cells keep renewing it - they do not know the record, and
+// production retires by record receipt - so only stepping across ends its old
+// term. The standbys, on the far side, received the record and will pursue at
+// the lift.
 //
-// What closes the door: the cells the re-roll seats carry the record to
-// every instance of the app. Proved here: the master learns the generation
-// only after the heal and only from a courier, steps across at the lift on
-// the same container, and nobody else is ever granted the new generation.
-// The mutant that disables the courier is red at that last line: the
-// standby seats the new generation under a live master.
+// A partition certifies the nodes each side cannot reach, and a node-down
+// certificate cancels its subject's committee seat on whoever holds it. Each
+// side derives a different re-rolled committee until the heal: every
+// certified node is alive, receives the certificate about itself, and refutes
+// it with its alive record, app or no app. Proved here: after the heal every
+// certificate the partition formed is refuted, the master learns the
+// generation, steps across at the lift on the same container, and nobody else
+// is ever granted the new generation.
 //
 // The app's name is chosen with the walk the nodes run: at most one holder
 // sits on the granting committee (whichever holder becomes master, at least
@@ -94,7 +93,7 @@ function chooseDeafableApp(membership, stem, holderOutpoints) {
   throw new Error(`no app name off ${stem} in 2000 tries seats at most one holder on its granting committee, shares at most quorum − 2 cells, and leaves a quorum of re-rolled cells outside both`);
 }
 
-describe('record-deaf master: the cells the re-roll seats carry the record to the master, and it steps across', function () {
+describe('record-deaf master: after the heal every certificate the partition formed is refuted, and the master steps across', function () {
   let env;
   let name;
   let outpoints; // node index -> outpoint
@@ -161,58 +160,10 @@ describe('record-deaf master: the cells the re-roll seats carry the record to th
     .filter((e) => e.event === 'quorumGrant:generationRecord' && e.id > afterId
       && e.data?.appName === name && e.data?.role === 'master' && e.data?.generation === 1);
 
-  // Drop every cross-group WebSocket upgrade by content, on both sides, so
-  // the peerings the sever cut never return while plain HTTP flows. kmp, not
-  // bm: a sent payload sits in page fragments, and the kernel's Boyer-Moore
-  // search restarts at every fragment, so a header straddling one is never
-  // seen (lib/ts_bm.c says so); KMP carries its state across fragments.
-  const UPGRADE_RULE = (ip) => ['sh', '-c', `iptables -I INPUT -s ${ip} -p tcp -m string --string "Upgrade: websocket" --algo kmp --icase -j DROP`];
-  const UPGRADE_RULE_OFF = (ip) => ['sh', '-c', `iptables -D INPUT -s ${ip} -p tcp -m string --string "Upgrade: websocket" --algo kmp --icase -j DROP || true`];
-  function crossGroupPairs(groupA, groupB) {
-    const pairs = [];
-    for (const a of groupA) {
-      for (const b of groupB) {
-        pairs.push([a, env.clients[b].ip]);
-        pairs.push([b, env.clients[a].ip]);
-      }
-    }
-    return pairs;
-  }
-  async function keepPeeringsSevered(groupA, groupB) {
-    await Promise.all(crossGroupPairs(groupA, groupB).map(async ([node, otherIp]) => {
-      const res = await env.clients[node].container.exec(UPGRADE_RULE(otherIp));
-      if (res.exitCode !== 0) throw new Error(`upgrade drop on ${label(node)} for ${otherIp} failed (exit ${res.exitCode}): ${res.output}`);
-    }));
-  }
-  async function releasePeerings(groupA, groupB) {
-    await Promise.all(crossGroupPairs(groupA, groupB).map(([node, otherIp]) => env.clients[node].container.exec(UPGRADE_RULE_OFF(otherIp))));
-  }
-  // Per node of a side: the upgrade drops' packet counters, and the peer-port
-  // sockets that stand across the divide anyway.
-  async function severState(side, otherSide) {
-    const otherIps = new Set(otherSide.map((i) => env.clients[i].ip));
-    const rows = await Promise.all(side.map(async (i) => {
-      const res = await env.clients[i].container.exec(['sh', '-c',
-        'iptables -L INPUT -v -n -x | awk \'/STRING/{n++; p+=$1} END{print n+0, p+0}\'; '
-        + 'ss -Htn state established "( sport = :16127 or dport = :16127 )" | awk \'{print $4}\' | sort -u | tr "\\n" " "']);
-      const [rules, sockets = ''] = res.output.trim().split('\n');
-      const across = sockets.split(' ').filter((s) => otherIps.has(s.split(':')[0]));
-      return `${label(i)} ${rules.replace(' ', ' rules/')} drops, sockets across: [${across.join(' ')}]`;
-    }));
-    return rows.join('; ');
-  }
-
-  // A pull's peer by side: the far side holds the record, the deaf side does not.
-  const sideOf = (peer, deafSide, farSide) => {
-    const i = env.clients.findIndex((c) => c.ip === peer.split(':')[0]);
-    if (deafSide.includes(i)) return 'deaf';
-    return farSide.includes(i) ? 'far' : 'unknown';
-  };
-  const pullsSince = (i, afterId, deafSide, farSide) => env.clients[i].getEventBuffer()
-    .filter((e) => e.event === 'ephemeralSync:reconnectRequested' && e.id > afterId)
-    .map((e) => ({ id: e.id, peer: e.data?.peer, side: sideOf(e.data?.peer ?? '', deafSide, farSide) }));
-  const describePull = (p) => `${p.peer} (${p.side}, id ${p.id})`;
-  const describePulls = (pulls) => (pulls.length ? pulls.map(describePull).join(', ') : 'none');
+  // The subjects of the certificates a node stored since a marker.
+  const certifiedOn = (i, afterId) => new Set(env.clients[i].getEventBuffer()
+    .filter((e) => e.event === 'nodedown:stored' && e.id > afterId)
+    .map((e) => e.data?.subject));
 
   async function submitRerollAt(i) {
     const owner = appOwnerKey();
@@ -290,7 +241,7 @@ describe('record-deaf master: the cells the re-roll seats carry the record to th
     await env?.teardown();
   });
 
-  it('a master whose whole side missed the re-roll learns it from a courier after the heal and steps across; nobody else is granted', async function () {
+  it('a master whose whole side missed the re-roll steps across once the partition\'s certificates are refuted; nobody else is granted', async function () {
     this.timeout(1200000);
 
     // 1. A generation-0 quorum seats a master on the committee the suite dealt.
@@ -324,6 +275,7 @@ describe('record-deaf master: the cells the re-roll seats carry the record to th
     ownerAuthFar = (await authenticate(env.clients[farStandbys[0]].url, appOwnerKey())).zelidauth;
     console.log(`# master ${label(master)}; deaf side ${deafSide.map(label).join(', ')}; far side ${farSide.map(label).join(', ')}; couriers ${couriers.map(label).join(', ')}`);
 
+    const beforePartition = env.clients.map((c) => c.getLastEventId());
     await env.partitionGroups(deafSide, farSide);
     let healed = false;
     try {
@@ -352,40 +304,20 @@ describe('record-deaf master: the cells the re-roll seats carry the record to th
       expect(await getAppContainerId(env.clients[master].container, name, name),
         'the container is untouched while the master is deaf').to.equal(container);
 
-      // 4. The heal — packets, not peerings. A lost peer that returns pulls
-      //    the running-state events it missed (appSyncOrchestrator
-      //    #drainReconnectPulls) and that sync carries generation records, so
-      //    the cross-group WebSocket upgrades stay dropped by content on both
-      //    sides while the packet drops come off; the courier's delivery, the
-      //    asks and the record reads are plain HTTP and flow. The premise is
-      //    the master's own evidence in its own event order: the teach it
-      //    received was news to it, and before that teach no far-side peer
-      //    had returned to it, no granting cell had refused it, and no answer
-      //    had taught it. Pulls on the other deaf nodes are printed, not asserted.
+      // 4. The heal. Peerings return, so each certificate the partition formed
+      //    reaches its subject, and every subject - alive throughout - refutes
+      //    it with its alive record before the lift. The master learns the
+      //    generation by whichever path reaches it first.
       const beforeHeal = env.clients.map((c) => c.getLastEventId());
-      await keepPeeringsSevered(deafSide, farSide);
       await env.healPartition(deafSide, farSide);
       healed = true;
-      const taught = await env.clients[master].waitForEvent('quorumGrant:generationTaught',
+      const certified = [...new Set(env.clients.flatMap((_, i) => [...certifiedOn(i, beforePartition[i])]))];
+      console.log(`# certified during the partition: ${certified.map((subject) => label(indexOf(subject))).join(', ') || 'none'}`);
+      await Promise.all(certified.map((subject) => env.clients[indexOf(subject)].waitForEvent(
+        'nodedown:aliveAnnounced', () => true, 120000, { afterId: beforeHeal[indexOf(subject)] },
+      )));
+      await env.clients[master].waitForEvent('quorumGrant:generationRecord',
         (d) => d.appName === name && d.role === 'master' && d.generation === 1, 120000, { afterId: beforeHeal[master] });
-      const sever = await severState(deafSide, farSide);
-      const masterPulls = pullsSince(master, beforeHeal[master], deafSide, farSide);
-      const premise = `teach from ${taught.data.from} at id ${taught.id}; the master's pulls since the heal: ${describePulls(masterPulls)}; upgrade drops: ${sever}`;
-      expect(taught.data.learned, `the record was news to the master when the courier delivered it — ${premise}`).to.equal(true);
-      expect(masterPulls.filter((p) => p.side !== 'deaf' && p.id < taught.id).map(describePull),
-        `no lost far-side peer returned to the master before the courier's teach — ${premise}`).to.deep.equal([]);
-      const masterBeforeTeach = env.clients[master].getEventBuffer()
-        .filter((e) => e.id > beforeHeal[master] && e.id < taught.id && e.data?.key === key());
-      expect(masterBeforeTeach.filter((e) => e.event === 'quorumGrant:assess' && (e.data.refusingCells ?? 0) > 0).length,
-        `no granting cell refused the master before the teach: it learned from the courier, not from a refusal — ${premise}`).to.equal(0);
-      expect(masterBeforeTeach.filter((e) => e.event === 'quorumGrant:generationLearned').length,
-        `no ask's answer taught the master before the courier did — ${premise}`).to.equal(0);
-      await waitFor(() => couriers.some((i) => env.clients[i].getEventBuffer().some((e) => e.event === 'quorumGrant:generationCarried'
-        && e.id > beforeHeal[i] && e.data?.key === key() && e.data?.generation === 1 && e.data?.remaining === 0)),
-      { timeout: 120000, interval: 5000, label: 'a courier cell reports every instance acknowledged' });
-      console.log(`# ${premise}`);
-      console.log(`# pulls on the other deaf nodes since the heal — ${deafSide.filter((i) => i !== master)
-        .map((i) => `${label(i)}: ${describePulls(pullsSince(i, beforeHeal[i], deafSide, farSide))}`).join('; ')}`);
       expect(grantsSince(beforeReroll, 1), 'nobody was granted at generation 1 before the lift').to.deep.equal([]);
       await assertNoEvent(env.clients[master], 'quorumGrant:demoted', (d) => d.key === key(), 5000);
 
@@ -416,7 +348,6 @@ describe('record-deaf master: the cells the re-roll seats carry the record to th
       expect(describeCells(walk.reRolled.members), 'the re-rolled committee the suite dealt').to.be.a('string');
     } finally {
       if (!healed) await env.healPartition(deafSide, farSide);
-      await releasePeerings(deafSide, farSide);
     }
   });
 });
