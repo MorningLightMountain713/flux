@@ -600,7 +600,7 @@ async function insertAndRequestAppHashes(apps, database) {
       // eslint-disable-next-line no-restricted-syntax
       for (const app of apps) {
         // eslint-disable-next-line no-await-in-loop
-        const messageReceived = await messageVerifier.checkAndRequestApp(app.hash, app.txid, app.height, app.value, app.blockTime ?? null, 2);
+        const messageReceived = await messageVerifier.checkAndRequestApp(app.hash, 2);
         if (messageReceived) {
           appsToRemove.push(app);
         } else {

@@ -240,8 +240,36 @@ async function tempMessage(overrides = {}) {
   };
 }
 
+// A signature of the right length for a v2 hash, which reads the signature as
+// 65 bytes. It signs nothing: a stored message's hash covers the signature, but
+// storing never checks who signed.
+const FIXTURE_SIGNATURE = Buffer.alloc(65, 7).toString('base64');
+
+/**
+ * A temp message whose hash is the hash of its own contents, as every message
+ * a mined payment names is.
+ * @param {object} [overrides] as tempMessage; a `hash` given is replaced
+ * @returns {Promise<object>}
+ */
+async function paidTempMessage(overrides = {}) {
+  const { spec, ...rest } = overrides;
+  const version = rest.version ?? 2;
+  const built = spec ?? (version >= 2 ? await v9Spec() : await v8Spec());
+  const message = await tempMessage({ signature: FIXTURE_SIGNATURE, ...rest, spec: built });
+  const { computeMessageHash, computeMessageHashV2 } = await load();
+  message.hash = version >= 2
+    ? computeMessageHashV2(
+      message.type, version, message.contentHash, message.timestamp, message.extend ?? false, message.signature,
+    )
+    : computeMessageHash(
+      message.type, version, (built.allSerializations?.() ?? [built.toCanonical()])[0], message.timestamp, message.signature,
+    );
+  return message;
+}
+
 module.exports = {
   OWNER,
+  paidTempMessage,
   submission,
   submissionV8,
   v9Spec,

@@ -9,6 +9,8 @@ const verificationHelper = require('../verificationHelper');
 const serviceHelper = require('../serviceHelper');
 const messageVerifier = require('./messageVerifier');
 const appEventVerifier = require('./appEventVerifier');
+const confirmedMessageStore = require('./confirmedMessageStore');
+const { compareChainOrder } = require('../utils/chainOrder');
 const { deserializeSpec } = require('../utils/specCutover');
 const { getSpecBackend, assertVersionActivated } = require('../utils/specLibs');
 const daemonStatus = require('../daemonService/daemonStatus');
@@ -229,11 +231,12 @@ async function bulkFetchStreamAndProcess(peerIp, peerPort, missingSet, onProgres
 async function processMessages(messages, onProgress) {
   const db = dbHelper.databaseConnection();
   const appsGlobalDb = db.db(config.get('database.appsglobal.database'));
-  const daemonDb = db.db(config.get('database.daemon.database'));
   let processed = 0;
   let skipped = 0;
   let failed = 0;
 
+  // Chunks in the peer's height order, so a registration usually lands in a chunk
+  // no later than its updates; within a chunk, this node's chain order decides.
   messages.sort((a, b) => a.height - b.height);
   const filtered = messages.filter((app) => app.valueSat !== null);
 
@@ -244,33 +247,17 @@ async function processMessages(messages, onProgress) {
   for (let offset = 0; offset < filtered.length; offset += CHUNK_SIZE) {
     const chunk = filtered.slice(offset, offset + CHUNK_SIZE);
 
-    // 1. Batch existence check
-    const chunkHashes = chunk.map((m) => m.hash);
-    const existingDocs = await dbHelper.findInDatabase(
-      appsGlobalDb, globalAppsMessages, { hash: { $in: chunkHashes } }, { projection: { _id: 0, hash: 1 } },
-    );
-    const existingSet = new Set(existingDocs.map((d) => d.hash));
+    // This node's own payment record for each message: its chain facts are the
+    // ones a message is judged and stored with, never the peer's copy.
+    const records = await confirmedMessageStore.paymentRecords(chunk.map((m) => m.hash));
+    const paid = chunk
+      .filter((m) => records.has(m.hash))
+      .sort((a, b) => compareChainOrder(records.get(a.hash), records.get(b.hash)));
+    skipped += chunk.length - paid.length;
 
-    // 2. Batch mark existing hashes as message:true
-    if (existingSet.size > 0) {
-      const hashOps = [...existingSet].map((hash) => ({
-        updateOne: { filter: { hash }, update: { $set: { message: true, messageNotFound: false } } },
-      }));
-      await daemonDb.collection(appsHashesCollection).bulkWrite(hashOps, { ordered: false })
-        .catch((err) => log.error(`processMessages hashMark: ${err.message}`));
-      skipped += existingSet.size;
-    }
-
-    const newMessages = chunk.filter((m) => !existingSet.has(m.hash));
-    if (newMessages.length === 0) {
-      log.info(`syncMissingHashes - ${processed} processed, ${skipped} skipped, ${failed} failed of ${filtered.length}`);
-      if (onProgress) onProgress({ processed, skipped, total: filtered.length });
-      continue;
-    }
-
-    // 3. Pre-load previous app specs from DB for update messages in this chunk
+    // Pre-load previous app specs from DB for update messages in this chunk
     const updateNames = new Set();
-    for (const msg of newMessages) {
+    for (const msg of paid) {
       if (msg.type === 'fluxappupdate' || msg.type === 'zelappupdate') {
         const specs = msg.appSpecifications;
         if (specs) updateNames.add(specs.name);
@@ -291,28 +278,19 @@ async function processMessages(messages, onProgress) {
       }
     }
 
-    // 4. Verify each message and collect for batch insert
-    const permInserts = [];
-    let hashMarkOps = [];
-
-    for (const appMessage of newMessages) {
+    // Judged before it is stored, against the name's history below it, until
+    // the decider judges stored messages.
+    const admitted = [];
+    for (const appMessage of paid) {
       try {
         const specifications = appMessage.appSpecifications;
         if (!specifications) continue;
 
-        const height = serviceHelper.ensureNumber(appMessage.height);
         const isRegistration = appMessage.type === 'fluxappregister' || appMessage.type === 'zelappregister';
-
-        // The typed event (ConfirmedAppEvent v2 / AppEventLegacy v1) round-trips
-        // its own permanent-message shape; a hand-built object here drops the
-        // v2-only fields (contentHash, registeredAt, extend, arcaneAttestation).
-        //
-        // Built first, and its spec used below: deserializing this message parses
-        // and validates the spec, so a separate deserializeSpec beforehand was a
-        // second full pass over the same document.
-        const appEvent = await appEventVerifier.deserializeMessage(appMessage);
+        const appEvent = await confirmedMessageStore.confirmedEvent(appMessage, records.get(appMessage.hash));
         const permMsg = appEvent.serialize();
         const wireSpec = appEvent.spec;
+        const { height } = permMsg;
 
         // Outside the decrypt below, whose failures are logged and passed over:
         // the activation gate needs only the version a sealed spec states in the
@@ -367,37 +345,19 @@ async function processMessages(messages, onProgress) {
           allowLegacyEncoding: true,
         });
 
-        // Verified — add to batch and update map for subsequent messages
-        permInserts.push(permMsg);
+        admitted.push(appMessage);
         if (!prevMessagesMap.has(wireSpec.name)) prevMessagesMap.set(wireSpec.name, []);
         prevMessagesMap.get(wireSpec.name).push(permMsg);
-
-        hashMarkOps.push({
-          updateOne: { filter: { hash: appMessage.hash }, update: { $set: { message: true, messageNotFound: false } } },
-        });
       } catch (error) {
         failed += 1;
         if (failed <= 10) log.warn(`processMessages verify failed: ${appMessage.hash} - ${error.message}`);
       }
     }
 
-    // 5. Batch insert permanent messages (ordered so insertedCount is deterministic on failure)
-    if (permInserts.length > 0) {
-      let inserted = permInserts.length;
-      await appsGlobalDb.collection(globalAppsMessages).insertMany(permInserts, { ordered: true })
-        .catch((err) => {
-          inserted = err.result?.insertedCount ?? 0;
-          hashMarkOps = hashMarkOps.slice(0, inserted);
-          log.error(`processMessages insertMany: ${inserted}/${permInserts.length} inserted — ${err.message}`);
-        });
-      processed += inserted;
-    }
-
-    // 6. Batch mark hashes
-    if (hashMarkOps.length > 0) {
-      await daemonDb.collection(appsHashesCollection).bulkWrite(hashMarkOps, { ordered: false })
-        .catch((err) => log.error(`processMessages hashMark: ${err.message}`));
-    }
+    const storage = await confirmedMessageStore.storeConfirmedMessages(admitted);
+    processed += storage.stored.length;
+    skipped += storage.alreadyStored.length;
+    failed += storage.refused.length + storage.unpaid.length;
 
     log.info(`syncMissingHashes - ${processed} processed, ${skipped} skipped, ${failed} failed of ${filtered.length}`);
     if (onProgress) onProgress({ processed, skipped, total: filtered.length });

@@ -75,7 +75,7 @@ const SYNC_EVENTS_PER_SLICE = 250;
 function schedulePromotion(promotion) {
   if (!promotion) return;
   setImmediate(() => {
-    messageVerifier.checkAndRequestApp(promotion.hash, promotion.txid, promotion.height, promotion.value, promotion.blockTime ?? null, 2)
+    messageVerifier.checkAndRequestApp(promotion.hash, 2)
       .catch((err) => log.error(`Immediate promotion failed for ${promotion.hash}: ${err.message}`));
   });
 }
