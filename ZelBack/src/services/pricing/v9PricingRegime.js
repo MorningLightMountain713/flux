@@ -72,76 +72,78 @@ function getFiatMarkupBp() {
 }
 
 /**
- * Price a v9 update for display, mirroring updateFee so the displayed figure
- * equals the consensus fee. The previous spec is priced at its own
- * registration-height rates for the unused-time credit, as it stands: a sealed
- * spec is never decrypted to price it. The one unavoidable
- * difference from consensus: "now" is the current wall clock, since the update
- * is not yet in a block and the confirming block time is unknown at preview
- * time.
+ * An update priced against its predecessor: the one computation consensus
+ * (`updateFee`) and the quote (`onChainDisplayUpdatePrice`) both make, so the
+ * two cannot drift.
+ *
+ * The predecessor's term is read through the spec's own accessors and its cost
+ * arrives from its own regime (`prevTermCost`, see pricingRegime.termCost), so a
+ * predecessor of any version is credited the unused share of what it cost.
+ *
+ * @param {object} spec - resolved new v9 spec
+ * @param {object} prevSpec - resolved previous spec, of any version
+ * @param {{height: number, prevState: {height: number, registeredAt: ?number},
+ *   at: {tipBlockTime: number, currentHeight: number}, asOf: number,
+ *   recentEvents: object[], prevTermCost: object}} ctx
+ * @returns {Promise<object>} priceUpdate's result
+ */
+async function priceAgainstPredecessor(spec, prevSpec, {
+  height, prevState, at, asOf, recentEvents, prevTermCost,
+}) {
+  const modifierHistory = priceOracleState.getPriceModifierHistory();
+  const modParams = modifierHistory ? modifierHistory.resolveAt(height) : null;
+  const updateDiscountBp = (modParams && modParams.updateDiscountBp) || 0;
+
+  const engine = await buildPricingEngine(height);
+  return engine.priceUpdate(prevSpec, spec, {
+    height,
+    duration: spec.ttl || 0,
+    asOf,
+    recentEvents,
+    ...prevTermCost,
+    remainingSeconds: prevSpec.remainingSeconds(prevState, at),
+    oldTtl: prevSpec.termSeconds(prevState),
+    updateDiscountBp,
+    // priceUpdate prices the new spec internally, so this is the new spec's bit.
+    isEncrypted: spec.isEncrypted,
+  });
+}
+
+/**
+ * On-chain display price for an update to an existing app.
+ *
+ * Priced exactly as consensus prices it (`priceAgainstPredecessor`), at the
+ * current height and now: the update is not yet in a block and the confirming
+ * block time is unknown at preview time.
  *
  * @param {object} spec - resolved new v9 spec
  * @param {object} existing - InstantiatedSpec of the prior registration
  * @param {number} daemonHeight - current chain height
+ * @param {(spec: object, height: number) => Promise<object>} termCost - the
+ *   predecessor's term cost, from its own regime
  * @returns {Promise<number>} price in FLUX (decimal)
  */
-async function onChainDisplayUpdatePrice(spec, existing, daemonHeight) {
-  const prevSpec = existing.spec;
-  const prevHeight = existing.height;
-
-  const oldEngine = await buildPricingEngine(prevHeight);
-  const oldBreakdown = await oldEngine.price(prevSpec, {
-    height: prevHeight,
-    duration: prevSpec.ttl || 0,
-    isEncrypted: existing.isEncrypted,
-  });
-  const oldScaledPriceMicrodollars = oldBreakdown.preFloorMicrodollars;
-
-  // Everything the pricer meters for the old spec, off the breakdown just priced
-  // at the old rates (with the old encryption bit). Mirrors updateFee so display
-  // == consensus on the free-update check, including the cleartext->encrypted
-  // case. Quantities rather than feature names: the rule refuses an increase in
-  // anything charged for, including more units of a feature already switched on.
-  const { meteredQuantities } = await getSpecPolicy();
-  const oldMetered = meteredQuantities(oldBreakdown);
-
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  const remainingSeconds = Math.max(0, (existing.registeredAt + (prevSpec.ttl || 0)) - nowSeconds);
-
-  const modifierHistory = priceOracleState.getPriceModifierHistory();
-  const modParams = modifierHistory ? modifierHistory.resolveAt(daemonHeight) : null;
-  const updateDiscountBp = (modParams && modParams.updateDiscountBp) || 0;
-
+async function onChainDisplayUpdatePrice(spec, existing, daemonHeight, termCost) {
   // The app's register + update history. The free-update rule rate-limits on
   // it (5 in 24h, 8 in 48h, 10 in 120h); passing an empty list would silently
   // disable that cap and quote free for an owner consensus is about to charge.
   // A quote has no confirming block yet, so its windows end at the moment it
   // is asked.
   const recentEvents = await appsRepository.listAppMessagesByName(spec.name);
-
-  const engine = await buildPricingEngine(daemonHeight);
-  const result = await engine.priceUpdate(prevSpec, spec, {
+  const result = await priceAgainstPredecessor(spec, existing.spec, {
     height: daemonHeight,
-    duration: spec.ttl || 0,
+    prevState: { height: existing.height, registeredAt: existing.registeredAt },
+    at: { tipBlockTime: Math.floor(Date.now() / 1000), currentHeight: daemonHeight },
     asOf: Date.now(),
     recentEvents,
-    oldScaledPriceMicrodollars,
-    oldMetered,
-    remainingSeconds,
-    oldTtl: prevSpec.ttl || 0,
-    updateDiscountBp,
-    // priceUpdate prices the new spec internally, so this is the new spec's bit.
-    isEncrypted: spec.isEncrypted,
+    prevTermCost: await termCost(existing.spec, existing.height),
   });
   // REFUSED is a third outcome, and it carries a reason rather than a figure: the
   // update is free-shaped but the allowance is spent, so there is nothing to quote
-  // (updateFee declines it outright for the same reason). Reaching for .total here
-  // produced undefined / 1e8 = NaN, which serialises to a null price a caller cannot
-  // tell from a real one. Thrown rather than returned, because this function already
-  // reports 'no price, and here is why' by throwing — an unsynced daemon and an
-  // invalid spec both do — and a second way of saying it is how the two callers of
-  // one engine drifted apart in the first place. The name lets a UI branch without
-  // matching on English; the message is the engine's own reason.
+  // (updateFee declines it outright for the same reason). Thrown rather than
+  // returned, because this function already reports 'no price, and here is why'
+  // by throwing — an unsynced daemon and an invalid spec both do. The name lets a
+  // UI branch without matching on English; the message is the engine's own reason.
   if (result && result.refused) {
     const refusal = new Error(result.reason || 'update refused');
     refusal.name = 'UpdateRefused';
@@ -157,9 +159,11 @@ async function onChainDisplayUpdatePrice(spec, existing, daemonHeight) {
  * price is what the customer pays, so a missing rate must fail loudly.
  *
  * @param {object} spec - resolved v9 spec
+ * @param {{termCost: (spec: object, height: number) => Promise<object>}} pricing -
+ *   what a predecessor's term cost, from its own regime (pricingRegime.termCost)
  * @returns {Promise<number>} Price in FLUX (decimal)
  */
-async function onChainDisplayPrice(spec) {
+async function onChainDisplayPrice(spec, { termCost }) {
   if (!isOnChainPricingActive()) {
     throw new Error('On-chain pricing is not yet active (no PriceMessage in force).');
   }
@@ -176,7 +180,7 @@ async function onChainDisplayPrice(spec) {
   // price().
   const existing = await appsRepository.getGlobalAppInfo(spec.name);
   if (existing) {
-    return onChainDisplayUpdatePrice(spec, existing, daemonHeight);
+    return onChainDisplayUpdatePrice(spec, existing, daemonHeight, termCost);
   }
 
   const engine = await buildPricingEngine(daemonHeight);
@@ -198,10 +202,12 @@ async function onChainDisplayPrice(spec) {
  * returns 0 when the update is free.
  *
  * @param {object} spec - resolved v9 spec
+ * @param {object} _appSpecification - the raw submitted document (read by the legacy regime only)
+ * @param {{termCost: (spec: object, height: number) => Promise<object>}} pricing
  * @returns {Promise<{usd: number|null, flux: number, fluxDiscount: number, fiatMarkupBp: number}>}
  */
-async function fiatAndFluxDisplayPrice(spec) {
-  const fluxPrice = await onChainDisplayPrice(spec);
+async function fiatAndFluxDisplayPrice(spec, _appSpecification, pricing) {
+  const fluxPrice = await onChainDisplayPrice(spec, pricing);
   const fluxUsdRate = getOracleFluxUsdRate();
   const fiatMarkupBp = getFiatMarkupBp();
   const { fiatPrice } = await getSpecPolicy();
@@ -255,89 +261,58 @@ async function supersededMessage(name, confirming) {
 }
 
 /**
- * The app's permanent messages confirmed below a height. The update being
- * priced is stored before it is priced, so a cutoff at its own height would
- * hand the rate limit the update itself; it cannot precede its confirming
- * height.
+ * What a v9 term cost: the spec priced at the rates in force at `height`, for
+ * its whole term, before the minimum-price floor, with every quantity the
+ * pricer meters for it. An update credits the unused share of it.
  *
- * @param {string} name - App name
- * @param {number} height - the update's confirming height
- * @returns {Promise<object[]>}
+ * @param {object} spec - resolved v9 spec
+ * @param {number} height - the height the term was bought at
+ * @returns {Promise<{oldScaledPriceMicrodollars: number, oldMetered: Map<string, number>}>}
  */
-async function messagesConfirmedBefore(name, height) {
-  const messages = await appsRepository.listAppMessagesByName(name);
-  return messages.filter((message) => message.height < height);
+async function termCost(spec, height) {
+  const engine = await buildPricingEngine(height);
+  const breakdown = await engine.price(spec, {
+    height,
+    duration: spec.termSeconds({ height }),
+    isEncrypted: spec.isEncrypted,
+  });
+  const { meteredQuantities } = await getSpecPolicy();
+  return {
+    oldScaledPriceMicrodollars: breakdown.preFloorMicrodollars,
+    oldMetered: meteredQuantities(breakdown),
+  };
 }
 
 /**
  * Consensus update fee in satoshis. Returns 0n when priceUpdate rules the
- * update free.
+ * update free, and null when it refuses it: free-shaped with the free-update
+ * allowance spent, so there is no payable figure — pricing it would let the
+ * mandatory floor payment apply an update that buys nothing, with a term
+ * restart the owner never asked for.
+ *
+ * The free-update rate limit counts `recentEvents`, the app's events the chain
+ * had accepted when this update confirmed, windowed by the confirming block's
+ * time: every node counts the same events against the same window, however
+ * late it reads the block.
  *
  * @param {object} spec - resolved new v9 spec
- * @param {object} prevSpec - resolved previous spec
- * @param {number} height - confirming block height
- * @param {number} prevHeight - height the previous spec registered at
- * @param {number} prevRegisteredAt - unix seconds the previous spec registered at
- * @param {number} nowBlockTime - unix seconds of the confirming block
- * @returns {Promise<bigint>}
+ * @param {object} prevSpec - resolved previous spec, of any version
+ * @param {{height: number, prevHeight: number, prevRegisteredAt: ?number,
+ *   nowBlockTime: number, recentEvents: object[], prevTermCost: object}} ctx -
+ *   `prevTermCost` from the predecessor's own regime (pricingRegime.termCost)
+ * @returns {Promise<bigint|null>}
  */
-async function updateFee(spec, prevSpec, height, prevHeight, prevRegisteredAt, nowBlockTime) {
-  const engine = await buildPricingEngine(height);
-
-  // Price the previous spec at its OWN registration-height rates, scaled to
-  // its ttl: the basis for the unused-time credit refunds what was paid, at
-  // the rates in force then. The pre-floor figure (preFloorMicrodollars) is
-  // used so the credit is never itself raised to minPrice.
-  const oldEngine = await buildPricingEngine(prevHeight);
-  const oldBreakdown = await oldEngine.price(prevSpec, {
-    height: prevHeight,
-    duration: prevSpec.ttl || 0,
-    isEncrypted: prevSpec.isEncrypted,
-  });
-  const oldScaledPriceMicrodollars = oldBreakdown.preFloorMicrodollars;
-
-  // Everything the pricer meters for the old spec, off the breakdown just priced
-  // at the old rates (with the old spec's encryption bit). priceUpdate derives
-  // the new spec's from its own breakdown; the free-update rule compares the
-  // two, so anything charged for going up blocks the update — a feature newly
-  // switched on, including encryption, and more units of one already on.
-  const { meteredQuantities } = await getSpecPolicy();
-  const oldMetered = meteredQuantities(oldBreakdown);
-
-  // Unused wall-clock seconds left on the prior registration.
-  const remainingSeconds = Math.max(0, (prevRegisteredAt + (prevSpec.ttl || 0)) - nowBlockTime);
-
-  // Flat update discount (0x04 tag 9) resolved at the current height; absent => 0.
-  const modifierHistory = priceOracleState.getPriceModifierHistory();
-  const modParams = modifierHistory ? modifierHistory.resolveAt(height) : null;
-  const updateDiscountBp = (modParams && modParams.updateDiscountBp) || 0;
-
-  // The app's history as the chain had it when this message confirmed. The
-  // free-update rate limit (5 in 24h, 8 in 48h, 10 in 120h) counts the update
-  // events among them, so the list and the clock both come from the block:
-  // every node counts the same events against the same window, however late
-  // it reads the block. With an empty list the cap never fires and free
-  // updates are unbounded — every one of which the whole network must relay,
-  // verify and store permanently.
-  const recentEvents = await messagesConfirmedBefore(spec.name, height);
-
-  const result = await engine.priceUpdate(prevSpec, spec, {
+async function updateFee(spec, prevSpec, {
+  height, prevHeight, prevRegisteredAt, nowBlockTime, recentEvents, prevTermCost,
+}) {
+  const result = await priceAgainstPredecessor(spec, prevSpec, {
     height,
-    duration: spec.ttl || 0,
+    prevState: { height: prevHeight, registeredAt: prevRegisteredAt },
+    at: { tipBlockTime: nowBlockTime, currentHeight: height },
     asOf: nowBlockTime * 1000,
     recentEvents,
-    oldScaledPriceMicrodollars,
-    oldMetered,
-    remainingSeconds,
-    oldTtl: prevSpec.ttl || 0,
-    updateDiscountBp,
-    // priceUpdate prices the new spec internally, so this is the new spec's bit.
-    isEncrypted: spec.isEncrypted,
+    prevTermCost,
   });
-  // null = REFUSED: free-shaped but the allowance is spent. There is no
-  // payable figure - pricing it would let the mandatory floor payment apply
-  // an update that buys nothing, with a term restart the owner never asked
-  // for. The caller declines the update outright.
   if (result && result.refused) return null;
   return (result && result.free) ? 0n : BigInt(result.total);
 }
@@ -347,6 +322,7 @@ module.exports = {
   fiatAndFluxDisplayPrice,
   registrationFee,
   supersededMessage,
+  termCost,
   updateFee,
   isOnChainPricingActive,
 };

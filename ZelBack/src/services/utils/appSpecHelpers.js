@@ -4,7 +4,7 @@ const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const daemonStatus = require('../daemonService/daemonStatus');
 const { resolveSpec } = require('./specCutover');
-const { regimeFor } = require('../pricing/pricingRegime');
+const pricingRegime = require('../pricing/pricingRegime');
 const log = require('../../lib/log');
 
 /**
@@ -19,7 +19,7 @@ const log = require('../../lib/log');
  */
 async function getAppFluxOnChainPrice(appSpecification) {
   const spec = await resolveSpec(appSpecification);
-  return (await regimeFor(spec)).onChainDisplayPrice(spec);
+  return pricingRegime.onChainDisplayPrice(spec);
 }
 
 /**
@@ -45,7 +45,7 @@ async function getAppFiatAndFluxPrice(appSpecification) {
   }
   const spec = await resolveSpec(appSpecification);
 
-  return (await regimeFor(spec)).fiatAndFluxDisplayPrice(spec, appSpecification);
+  return pricingRegime.fiatAndFluxDisplayPrice(spec, appSpecification);
 }
 
 /**

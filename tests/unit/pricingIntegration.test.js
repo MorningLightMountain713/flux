@@ -4,6 +4,7 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 
 const { expect } = require('chai');
 const sinon = require('sinon');
+const proxyquire = require('proxyquire');
 
 const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
 
@@ -470,6 +471,101 @@ describe('pricing integration — chain messages through PricingEngine', () => {
   //
   // These price the same growth both ways. The contrast is the point: what the
   // fee is computed against decides whether there is a fee at all.
+  describe('a v8 app updated to v9 is credited the unused share of its legacy term', () => {
+    const CHAIN_HEIGHT = 3_000_000;
+
+    function v9Spec() {
+      return FluxAppSpecV9.fromSubmission({
+        version: 9,
+        name: 'upgradeapp',
+        description: 'fixture',
+        owner: '1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm',
+        instances: 3,
+        ttl: 2_592_000,
+        contacts: { email: ['test@example.com'] },
+        components: {
+          web: {
+            name: 'web',
+            image: 'nginx:latest',
+            cpu: 4,
+            memory: 8000,
+            swapGb: 2,
+            rootFsGb: 2,
+            persistentStorage: { sizeGb: 100, mounts: { '/data': { source: 'data', destination: '/data' } } },
+            ports: { tcp_80: { containerPort: 80, hostPort: 31_000, protocol: 'tcp' } },
+          },
+        },
+      });
+    }
+
+    async function v8Spec() {
+      const { deserializeSpec } = await import('@runonflux/flux-spec-backend');
+      return deserializeSpec({
+        version: 8,
+        name: 'upgradeapp',
+        description: 'fixture',
+        owner: '1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm',
+        instances: 3,
+        contacts: [],
+        geolocation: [],
+        expire: 88_000,
+        nodes: [],
+        staticip: false,
+        compose: [{
+          name: 'web',
+          description: 'web',
+          repotag: 'nginx:latest',
+          ports: [31_000],
+          domains: [''],
+          environmentParameters: [],
+          commands: [],
+          containerPorts: [80],
+          containerData: '/data',
+          cpu: 4,
+          ram: 8000,
+          hdd: 100,
+          tiered: false,
+          secrets: '',
+          repoauth: '',
+        }],
+      });
+    }
+
+    async function feeWithPredecessorAt(prevHeight) {
+      const h = buildTestHistories({ chainHeight: CHAIN_HEIGHT });
+      stubHistories(h);
+      // The chain's legacy card (height 0, before any chain-params message).
+      const card = {
+        height: 0, cpu: 0.3, ram: 0.05, hdd: 0.01, port: 2, scope: 6, staticip: 3, minPrice: 0.01,
+      };
+      const legacyPricingRegime = proxyquire('../../ZelBack/src/services/pricing/legacyPricingRegime', {
+        '../utils/chainUtilities': { getChainParamsPriceUpdates: async () => [card] },
+      });
+      const pricingRegime = proxyquire('../../ZelBack/src/services/pricing/pricingRegime', {
+        './legacyPricingRegime': legacyPricingRegime,
+      });
+      return pricingRegime.updateFee(v9Spec(), await v8Spec(), {
+        height: h.queryHeight,
+        prevHeight,
+        prevRegisteredAt: null,
+        nowBlockTime: 1_750_000_000,
+        recentEvents: [],
+      });
+    }
+
+    it('charges less while the v8 term has time left than once it is spent', async () => {
+      const h = buildTestHistories({ chainHeight: CHAIN_HEIGHT });
+      const spent = await feeWithPredecessorAt(h.queryHeight - 100_000);
+      sinon.restore();
+      const halfLeft = await feeWithPredecessorAt(h.queryHeight - 44_000);
+
+      expect(spent).to.be.a('bigint');
+      expect(halfLeft).to.be.a('bigint');
+      expect(halfLeft > 0n, 'an upgrade is never free').to.equal(true);
+      expect(halfLeft < spent, 'unused v8 time must reduce the fee').to.equal(true);
+    });
+  });
+
   describe('an update priced against itself cannot be charged', () => {
     function baseSpec(overrides = {}) {
       return FluxAppSpecV9.fromSubmission({

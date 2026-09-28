@@ -190,7 +190,7 @@ describe('the early-update credit, over every update on chain', function corpus(
       const credited = loadRecording(asked);
 
       const withCredit = Number(await credited.onChainDisplayPrice(APP));
-      const feeWithCredit = Number(await regime.updateFee(APP, APP, UPDATE_HEIGHT, PREV_HEIGHT));
+      const feeWithCredit = Number(await regime.updateFee(APP, APP, { height: UPDATE_HEIGHT, prevHeight: PREV_HEIGHT }));
 
       // The same app with no prior registration: the price before any credit.
       const noPrevious = proxyquire('../../ZelBack/src/services/pricing/legacyPricingRegime', {
