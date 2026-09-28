@@ -9,7 +9,7 @@ import {
   bootAndPeer, seedSpawnerApp, waitForInstanceCount,
   installingClaimIpsByNode, installingErrorsByNode,
 } from '../framework/reconciler-suite.js';
-import { waitFor, waitForCandidacy, waitForSpawnerBlocked } from '../framework/wait.js';
+import { waitFor, waitForAppInstalled, waitForSpawnerBlocked } from '../framework/wait.js';
 import { authenticate } from '../auth.js';
 import { fluxTeamKey } from '../framework/keys.js';
 import { sleepUnlessInfraDead } from '../framework/infra-death.js';
@@ -297,22 +297,18 @@ describe('spawner withdraws an installing claim without reporting a failure', fu
       const rival = env.stubPeerClients.get(STUB_INDEX);
       await rival.withdrawApp(appName);
 
-      // What standing aside must not cost is the node's place in the draw. The
-      // spawner publishes that directly: a verdict FLIPPING from excluded to
-      // candidate. afterAlreadyHeldOrTried is the filter that would hold a
-      // stood-down node out, so surviving it is the property, and the event
-      // fires whether or not this node goes on to win.
+      // What standing aside must not cost is the node's place in the draw, and
+      // with every other contender frozen the draw has one possible winner: a
+      // node that stood down, installing. Its candidacy never flipped - standing
+      // aside leaves it in the candidate list, coverage is judged at the claim -
+      // so the install is the verdict, anchored so only one placed after the
+      // withdrawal counts.
       const backIn = await Promise.any(stoodDown.map((ip) => {
         const { index, afterId } = baselines.get(ip);
-        return waitForCandidacy(
-          env.clients[index],
-          (d) => d.name === appName && d.candidate === true,
-          240000,
-          { afterId },
-        ).then(() => ip);
+        return waitForAppInstalled(env.clients[index], appName, 240000, { afterId }).then(() => ip);
       }));
 
-      expect(backIn, 'no node that stood down became a candidate again').to.be.a('string');
+      expect(backIn, 'no node that stood down took the freed slot').to.be.a('string');
     } finally {
       for (const { client, ip } of frozen) {
         // eslint-disable-next-line no-await-in-loop
