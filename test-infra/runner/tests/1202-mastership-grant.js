@@ -1,6 +1,7 @@
 // fleet: 10
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
+import { createRequire } from 'node:module';
 import { createTestEnv } from '../framework/test-env.js';
 import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
 import { bootAndPeer, installOnNodes, seedSyncScopedData } from '../framework/reconciler-suite.js';
@@ -38,6 +39,13 @@ import { waitFor, waitForAppInstalled, waitForReconcileActuated } from '../frame
 // slack 5s below the lock-delay, no holder-age floor.
 
 const HOLDERS = [0, 1, 2];
+const HELD_TTL_MS = 90000;
+// A silenced holder's location row must outlive its silence, as it does in
+// production: a row that lapses first makes the returning node remove its own
+// app. Production's ratio of the two, applied to this suite's term.
+const require = createRequire(import.meta.url);
+const PRODUCTION = require('../../../ZelBack/config/default.js').fluxapps;
+const LOCATION_TTL_S = Math.ceil((PRODUCTION.locationTtlS * HELD_TTL_MS) / PRODUCTION.quorumGrantHeldTtlMs);
 
 describe('the mastership grant on a multi-node fleet', function () {
   let env;
@@ -110,7 +118,8 @@ describe('the mastership grant on a multi-node fleet', function () {
           // master the next round would have renewed. Squeezing the ask
           // timeout instead starves healthy-load tails into the same
           // spurious demotions - so the term carries the compression.
-          quorumGrantHeldTtlMs: 90000,
+          quorumGrantHeldTtlMs: HELD_TTL_MS,
+          locationTtlS: LOCATION_TTL_S,
           quorumGrantRenewIntervalMs: 10000,
           quorumGrantLockDelayMs: 15000,
           quorumGrantDemotionSlackMs: 5000,
