@@ -85,10 +85,11 @@ describe('volumeSession tests', () => {
       );
     });
 
-    it('uses the bare app name for the flat single-component form', async () => {
+    // volumeService resolves the flat form's 'null' against the app's components.
+    it('passes the requested component name through to the lookup', async () => {
       await volumeSession.resolveVolumeMount('myapp', 'null');
       sinon.assert.calledOnceWithExactly(
-        volumeServiceStub.listComponentVolumeMounts, 'myapp', 'myapp',
+        volumeServiceStub.listComponentVolumeMounts, 'myapp', 'null',
       );
     });
 

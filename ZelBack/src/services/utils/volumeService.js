@@ -9,6 +9,7 @@ const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const log = require('../../lib/log');
 const { getSpecBackend } = require('./specLibs');
 const appsRepository = require('../appDatabase/appsRepository');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 const {
   appsFolder, appVolumesPath, legacyAppVolumesPath, APP_VOLUME_MOUNT_OPTIONS,
 } = require('./appConstants');
@@ -330,10 +331,9 @@ async function listComponentVolumeMounts(appName, componentName) {
   const installed = await appsRepository.getInstalledApp(appName);
   if (!installed) return [];
 
-  // 'null' is the v1-3 flat form's address: an app with no compose array is
-  // its own single component, and every caller that speaks the v1 API names
-  // that component so.
-  const component = componentName === 'null' ? appName : componentName;
+  const component = deploymentProvider.componentNameFromRequest(
+    appName, componentName, Object.keys(installed.spec.components),
+  );
 
   // Null identity is an app installed before identities were stored: its
   // artifacts are named from the app name, which is exactly what fromSpec falls

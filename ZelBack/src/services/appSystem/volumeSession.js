@@ -123,7 +123,7 @@ async function resolveVolumeMount(appname, component, replica = null) {
   // request can only ever name a filesystem already mounted as an app volume,
   // and the worst a hostile appname achieves is matching nothing.
   const volumes = await volumeService.listComponentVolumeMounts(
-    appname, component === 'null' ? appname : component,
+    appname, component,
   );
   const volume = selectVolumeByReplica(volumes, replica, appname);
 

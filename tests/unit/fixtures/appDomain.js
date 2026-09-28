@@ -114,6 +114,33 @@ async function encryptedV8Spec(overrides = {}) {
   });
 }
 
+/**
+ * The real FluxAppSpecV3: no compose array, its one component's fields flat on
+ * the spec, and that component named after the app.
+ */
+async function v3Spec(overrides = {}) {
+  const { deserializeSpec } = await load();
+  return deserializeSpec({
+    version: 3,
+    name: 'legacyapp',
+    description: 'fixture',
+    owner: OWNER,
+    repotag: 'nginx:latest',
+    ports: ['31000'],
+    containerPorts: ['80'],
+    domains: [''],
+    enviromentParameters: [],
+    commands: [],
+    containerData: '/data',
+    cpu: 1,
+    ram: 1000,
+    hdd: 10,
+    tiered: false,
+    instances: 3,
+    ...overrides,
+  });
+}
+
 /** The real AppEventLegacy, for temp messages below version 2. */
 async function legacyEvent(overrides = {}) {
   const { AppEventLegacy } = await load();
@@ -219,6 +246,7 @@ module.exports = {
   submissionV8,
   v9Spec,
   v8Spec,
+  v3Spec,
   encryptedV8Spec,
   confirmedEvent,
   legacyEvent,

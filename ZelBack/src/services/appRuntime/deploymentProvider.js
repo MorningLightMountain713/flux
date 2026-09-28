@@ -314,6 +314,21 @@ function appNameFromRequest(appname) {
 }
 
 /**
+ * The component a REQUEST names. A v1-3 app has no compose array: it is its own
+ * single component, which its spec names after the app, and every caller that
+ * speaks the v1 API addresses that component as the literal 'null'. 'null' is
+ * also a valid component name, so a component that carries it answers to it.
+ *
+ * @param {string} appname the app's name
+ * @param {string} component the request's component name
+ * @param {string[]} componentNames the names of the app's components
+ * @returns {string} the component's name
+ */
+function componentNameFromRequest(appname, component, componentNames) {
+  return component === 'null' && !componentNames.includes('null') ? appname : component;
+}
+
+/**
  * The container identifiers a request names on this node, and the app they
  * belong to.
  *
@@ -389,6 +404,7 @@ async function resolveRequestContainer(appname, opts = {}) {
 
 module.exports = {
   appNameFromRequest,
+  componentNameFromRequest,
   resolveRequestTargets,
   resolveRequestContainer,
   listInstalledDeployments,
