@@ -614,6 +614,13 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     await waitFor(async () => (await runningComponents(env, TARGET)).includes('fluxprimaryapp_primaryapp'),
       { timeout: 300000, label: 'the elected primary is running the g: component' });
 
+    // And the component has to be RUNNING here before the drain starts: the gate asks
+    // the election question only of a node running the g: component, so a pass that
+    // reaches a node the election has not yet started answers SYNCED_ELSEWHERE and
+    // hands the app back, which is correct and tests nothing.
+    await waitFor(async () => (await runningComponents(env, TARGET)).includes('fluxprimaryapp_primaryapp'),
+      { timeout: 300000, label: 'the elected primary is running the g: component' });
+
     await setSystemSecure(subnet.nodeIp(TARGET), false);
     await waitFor(async () => (await dbClient(TARGET).residentialMarker()) !== null,
       { timeout: 120000, label: 'the settling window starts' });
