@@ -192,23 +192,6 @@ describe('globalState tests', () => {
     });
   });
 
-  describe('waitForBootContainerStateSettled', () => {
-    it('should resolve immediately when bootContainerStateSettled is already true', async () => {
-      globalState.bootContainerStateSettled = true;
-      await globalState.waitForBootContainerStateSettled();
-    });
-
-    it('should wait until bootContainerStateSettled is set to true', async () => {
-      let resolved = false;
-      const promise = globalState.waitForBootContainerStateSettled().then(() => { resolved = true; });
-      await new Promise((r) => setImmediate(r));
-      expect(resolved).to.equal(false);
-      globalState.bootContainerStateSettled = true;
-      await promise;
-      expect(resolved).to.equal(true);
-    });
-  });
-
   describe('in-flight install abort registry (cancel-vs-install)', () => {
     it('installingApps is a Map', () => {
       expect(globalState.installingApps).to.be.instanceOf(Map);

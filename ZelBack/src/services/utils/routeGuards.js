@@ -70,7 +70,7 @@ function serviceUnavailable(res, message, retryAfterSeconds) {
  * @returns {*} next(), or a 503 carrying a Retry-After
  */
 function requireBootSettled(req, res, next) {
-  if (globalState.bootContainerStateSettled) return next();
+  if (capabilities.isUp('bootReconcileDecided')) return next();
   return serviceUnavailable(res, 'Node is still reconciling its applications after boot', BOOT_RETRY_AFTER_SECONDS);
 }
 

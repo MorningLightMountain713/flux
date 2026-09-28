@@ -30,6 +30,7 @@ const telemetrySinkCache = require('../telemetrySinkCache');
 const telemetryConfigService = require('../telemetryConfigService');
 const telemetryIdentityService = require('../telemetryIdentityService');
 const globalState = require('../utils/globalState');
+const capabilities = require('../utils/capabilities');
 const fluxEventBus = require('../utils/fluxEventBus');
 const nodeConfirmationService = require('../nodeConfirmationService');
 const { localAppsInformation, NODE_DOWN_GRACE_MS } = require('../utils/appConstants');
@@ -467,6 +468,7 @@ async function tidyPlacementsOnBoot() {
 }
 
 async function manageAppsOnBoot(bootContext) {
+  capabilities.claim('bootReconcileDecided', 'appStartupManager').starting('deciding what this node keeps');
   try {
     await tidyPlacementsOnBoot();
     // ahead of every container start, so no slice in use can be empty here
@@ -551,7 +553,7 @@ async function manageAppsOnBoot(bootContext) {
     await openInstalledAppPorts();
     await reconcileAppsOnBoot();
   } finally {
-    globalState.bootContainerStateSettled = true;
+    capabilities.claim('bootReconcileDecided', 'appStartupManager').raise('boot reconcile has decided what this node keeps');
     fluxEventBus.publish('boot:settled', {});
     log.info('appStartupManager - Boot container state settled');
   }

@@ -8,7 +8,6 @@ const { AsyncLock } = require('./asyncLock');
 
 let shutdownInProgress = false;
 const daemonReadyGate = new AsyncGate();
-const bootContainerStateSettledGate = new AsyncGate();
 const dbReadyGate = new AsyncGate();
 let appStateAuthoritative = false;
 let appSyncState = 'INITIALIZING';
@@ -239,9 +238,6 @@ module.exports = {
   set daemonReady(value) { if (value) daemonReadyGate.open(); else daemonReadyGate.close(); },
   waitForDaemonReady() { return daemonReadyGate.wait(); },
 
-  get bootContainerStateSettled() { return bootContainerStateSettledGate.ready; },
-  set bootContainerStateSettled(value) { if (value) bootContainerStateSettledGate.open(); else bootContainerStateSettledGate.close(); },
-  waitForBootContainerStateSettled() { return bootContainerStateSettledGate.wait(); },
 
   get dbReady() { return dbReadyGate.ready; },
   set dbReady(value) { if (value) dbReadyGate.open(); else dbReadyGate.close(); },

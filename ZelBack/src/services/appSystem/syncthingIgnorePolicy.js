@@ -160,7 +160,7 @@ function outOfScopePaths(root, ignoreLines = []) {
  * RATHER THAN ONE INTERVAL. A volume built by an earlier release carries that release's
  * lines, so a name this one adds is unignored until the converge below runs - and the
  * file API, which is what can put something under such a name, opens on
- * bootContainerStateSettled. So does the monitor that calls this: serviceManager starts
+ * bootReconcileDecided. So does the monitor that calls this: serviceManager starts
  * them from the same gate. The exposure is therefore however long the first pass takes
  * to reach this folder, not the interval between passes, and it does not recur.
  *

@@ -4,7 +4,7 @@ const log = require('../../lib/log');
 const dockerService = require('../dockerService');
 const dockerEventStream = require('../utils/dockerEventStream');
 const { getSpecBackend } = require('../utils/specLibs');
-const globalState = require('../utils/globalState');
+const capabilities = require('../utils/capabilities');
 const operationRegistry = require('../utils/operationRegistry');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const appReconciler = require('./appReconciler');
@@ -195,7 +195,7 @@ async function handleContainerEvent(event) {
 // saw every death: reconcile every component from actual state to catch the
 // containers orphaned while it was down.
 function onReconnect() {
-  if (!globalState.bootContainerStateSettled) return undefined;
+  if (!capabilities.isUp('bootReconcileDecided')) return undefined;
   log.info('containerEventBridge - stream reconnected, reconciling all components');
   return appReconciler.enqueueAll('reconnect');
 }

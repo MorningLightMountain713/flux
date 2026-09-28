@@ -1,7 +1,7 @@
 'use strict';
 
 const log = require('../../lib/log');
-const globalState = require('../utils/globalState');
+const capabilities = require('../utils/capabilities');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { AsyncGate } = require('../utils/asyncGate');
 
@@ -174,7 +174,7 @@ function runReconcile(identifier) {
  * ready. Callers holding an app name use appReconciler.enqueueApp instead.
  */
 function enqueueComponent(identifier) {
-  if (!globalState.bootContainerStateSettled) {
+  if (!capabilities.isUp('bootReconcileDecided')) {
     bootPending.add(identifier);
     return null;
   }

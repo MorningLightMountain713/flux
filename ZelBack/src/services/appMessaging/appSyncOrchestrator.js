@@ -10,6 +10,7 @@ const ingressAttestationSyncService = require('./ingressAttestationSyncService')
 const peerNotification = require('./peerNotification');
 const registryManager = require('../appDatabase/registryManager');
 const globalState = require('../utils/globalState');
+const capabilities = require('../utils/capabilities');
 const peerCodec = require('../utils/peerCodec');
 const { PeerRequests } = require('../utils/peerRequests');
 const { nodeSigner } = require('../utils/nodeSigner');
@@ -1424,7 +1425,7 @@ class AppSyncOrchestrator {
     if (this.#broadcastStarted) return;
     this.#broadcastStarted = true;
     log.info('AppSyncOrchestrator - App running broadcast started');
-    await globalState.waitForBootContainerStateSettled();
+    await capabilities.whenUp('bootReconcileDecided');
     // startBroadcasting, not one bare broadcast: it sets peerNotification's
     // `broadcasting` flag, which is what arms the recurring cycle and what the
     // message-capability-regained handler checks before re-triggering.

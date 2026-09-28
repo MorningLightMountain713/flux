@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { capabilityStub } = require('./fixtures/capabilityStub');
 // The real registry singleton — the reconciler's hasOperationLease reads it, and
 // proxyquire (un-stubbed dep) gives the reconciler this same instance.
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
@@ -241,10 +242,9 @@ describe('appReconciler tests', () => {
         getAppDockerNameIdentifier: (id) => `/flux${id}`,
         getBaseAppName: (id) => (id.startsWith('flux') ? id.slice(4) : id),
       },
+      capabilities: capabilityStub({ bootReconcileDecided: true }),
       globalState: {
         appsMonitored: {},
-        bootContainerStateSettled: true,
-        waitForBootContainerStateSettled: () => Promise.resolve(),
         getAppShutdownPipelineState: sinon.stub().returns(null),
         // FluxOS's own removals. recreateMissing reads it to decide whether a
         // vanished container is worth a tampering event; empty means "nothing
@@ -329,6 +329,7 @@ describe('appReconciler tests', () => {
     const reconcilerQueue = proxyquire('../../ZelBack/src/services/appMonitoring/reconcilerQueue', {
       '../../lib/log': stubs.log,
       '../utils/globalState': stubs.globalState,
+      '../utils/capabilities': stubs.capabilities,
     });
 
     appReconciler = proxyquire('../../ZelBack/src/services/appMonitoring/appReconciler', {
@@ -336,6 +337,7 @@ describe('appReconciler tests', () => {
       '../../lib/log': stubs.log,
       '../dockerService': stubs.dockerService,
       '../utils/globalState': stubs.globalState,
+      '../utils/capabilities': stubs.capabilities,
       '../appManagement/appInspector': stubs.appInspector,
       '../appDatabase/appsRepository': stubs.appsRepository,
       '../appRuntime/deploymentProvider': stubs.deploymentProvider,
@@ -1973,9 +1975,9 @@ describe('appReconciler tests', () => {
     it('starts a g: component once a controller sets it running', async () => {
       await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
       // set desired without triggering the workqueue (boot gate closed -> enqueue held)
-      stubs.globalState.bootContainerStateSettled = false;
+      stubs.capabilities.set('bootReconcileDecided', false);
       appReconciler.setControllerDesired('db_app', 'running', 'test');
-      stubs.globalState.bootContainerStateSettled = true;
+      stubs.capabilities.set('bootReconcileDecided', true);
       await appReconciler.reconcile('db_app');
       expect(stubs.dockerService.appDockerStart.calledOnceWith('db_app')).to.be.true;
     });
@@ -1987,9 +1989,9 @@ describe('appReconciler tests', () => {
     // actuation time - starting onto a folder mid-wipe corrupts the fresh sync.
     it('aborts the start when the controller verdict flips to stopped mid-reconcile', async () => {
       await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
-      stubs.globalState.bootContainerStateSettled = false;
+      stubs.capabilities.set('bootReconcileDecided', false);
       appReconciler.setControllerDesired('db_app', 'running', 'test');
-      stubs.globalState.bootContainerStateSettled = true;
+      stubs.capabilities.set('bootReconcileDecided', true);
       // decider stop+wipe lands during the mount-path await
       stubs.appVolumeService.ensureMountSourcesExist.callsFake(async () => {
         appReconciler.setControllerDesired('db_app', 'stopped', 'decider stop+wipe');
@@ -2000,9 +2002,9 @@ describe('appReconciler tests', () => {
 
     it('aborts the start when the controller verdict is cleared mid-reconcile (uninstall seam)', async () => {
       await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
-      stubs.globalState.bootContainerStateSettled = false;
+      stubs.capabilities.set('bootReconcileDecided', false);
       appReconciler.setControllerDesired('db_app', 'running', 'test');
-      stubs.globalState.bootContainerStateSettled = true;
+      stubs.capabilities.set('bootReconcileDecided', true);
       stubs.appVolumeService.ensureMountSourcesExist.callsFake(async () => {
         appReconciler.clearControllerDesired('db_app');
       });
@@ -2015,9 +2017,9 @@ describe('appReconciler tests', () => {
       // wires it to clearControllerDesired: a reinstalled g: component must await a
       // fresh election rather than inherit the pre-uninstall verdict
       await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
-      stubs.globalState.bootContainerStateSettled = false;
+      stubs.capabilities.set('bootReconcileDecided', false);
       appReconciler.setControllerDesired('db_app', 'running', 'test');
-      stubs.globalState.bootContainerStateSettled = true;
+      stubs.capabilities.set('bootReconcileDecided', true);
       appReconciler.clearControllerDesired('db_app');
       await appReconciler.reconcile('db_app');
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
@@ -2029,9 +2031,9 @@ describe('appReconciler tests', () => {
     it('stops a running g: component a controller has set stopped (masterSlave standby)', async () => {
       await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      stubs.globalState.bootContainerStateSettled = false;
+      stubs.capabilities.set('bootReconcileDecided', false);
       appReconciler.setControllerDesired('db_app', 'stopped', 'masterSlave standby');
-      stubs.globalState.bootContainerStateSettled = true;
+      stubs.capabilities.set('bootReconcileDecided', true);
       await appReconciler.reconcile('db_app');
       expect(stubs.dockerService.appDockerStop.calledOnceWith('db_app')).to.be.true;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
@@ -2086,9 +2088,9 @@ describe('appReconciler tests', () => {
       // which for a component genuinely named `fluxdb` filed the verdict under
       // `db_app` — another component's key.
       await installApp(await v9App('app', { fluxdb: ACTIVE_STANDBY }));
-      stubs.globalState.bootContainerStateSettled = false;
+      stubs.capabilities.set('bootReconcileDecided', false);
       appReconciler.setControllerDesired('fluxdb_app', 'running', 'syncthing synced');
-      stubs.globalState.bootContainerStateSettled = true;
+      stubs.capabilities.set('bootReconcileDecided', true);
       await appReconciler.reconcile('fluxdb_app');
       expect(stubs.dockerService.appDockerStart.calledOnceWith('fluxdb_app')).to.be.true;
     });
@@ -2283,9 +2285,9 @@ describe('appReconciler tests', () => {
     // on-disk wipe path, which is a docker-namespaced directory.
     it('wipes local appdata (prefixed path) and does not start, on a clear request', async () => {
       await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
-      stubs.globalState.bootContainerStateSettled = false;
+      stubs.capabilities.set('bootReconcileDecided', false);
       appReconciler.requestStopAndClearData('db_app', 'syncthing first-run');
-      stubs.globalState.bootContainerStateSettled = true;
+      stubs.capabilities.set('bootReconcileDecided', true);
       await appReconciler.reconcile('db_app');
       expect(stubs.dockerOperations.appDeleteDataInMountPoint.calledOnceWith('fluxdb_app')).to.be.true;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
@@ -2296,10 +2298,10 @@ describe('appReconciler tests', () => {
     // so a start can never race the wipe.
     it('never starts while a clear is pending, even if the controller says running', async () => {
       await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
-      stubs.globalState.bootContainerStateSettled = false;
+      stubs.capabilities.set('bootReconcileDecided', false);
       appReconciler.requestStopAndClearData('db_app', 'syncthing first-run');
       appReconciler.setControllerDesired('fluxdb_app', 'running', 'contrived contradiction');
-      stubs.globalState.bootContainerStateSettled = true;
+      stubs.capabilities.set('bootReconcileDecided', true);
       await appReconciler.reconcile('db_app');
       expect(stubs.dockerOperations.appDeleteDataInMountPoint.called).to.be.true;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
@@ -2308,9 +2310,9 @@ describe('appReconciler tests', () => {
     it('stops a running container before wiping (no rm -rf under a live container)', async () => {
       await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
       stubs.dockerService.dockerContainerInspect.resolves({ State: { Running: true, Status: 'running', ExitCode: 0 } });
-      stubs.globalState.bootContainerStateSettled = false;
+      stubs.capabilities.set('bootReconcileDecided', false);
       appReconciler.requestStopAndClearData('db_app', 'syncthing reset');
-      stubs.globalState.bootContainerStateSettled = true;
+      stubs.capabilities.set('bootReconcileDecided', true);
       await appReconciler.reconcile('db_app');
       expect(stubs.dockerService.appDockerStop.calledWith('db_app')).to.be.true;
       sinon.assert.callOrder(stubs.dockerService.appDockerStop, stubs.dockerOperations.appDeleteDataInMountPoint);
@@ -2318,12 +2320,12 @@ describe('appReconciler tests', () => {
 
     it('is one-shot: wipes first, then the next reconcile starts once the verdict is running', async () => {
       await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
-      stubs.globalState.bootContainerStateSettled = false;
+      stubs.capabilities.set('bootReconcileDecided', false);
       appReconciler.requestStopAndClearData('db_app', 'syncthing first-run');
       // sync layer has already confirmed a source and elected running; the pending
       // clear must still win the first pass
       appReconciler.setControllerDesired('db_app', 'running', 'syncthing synced');
-      stubs.globalState.bootContainerStateSettled = true;
+      stubs.capabilities.set('bootReconcileDecided', true);
 
       await appReconciler.reconcile('db_app'); // clear wins -> wipes, no start
       expect(stubs.dockerOperations.appDeleteDataInMountPoint.calledOnce).to.be.true;
@@ -2335,10 +2337,10 @@ describe('appReconciler tests', () => {
     });
 
     it('keys the clear per-component (clearing one app does not wipe another)', async () => {
-      stubs.globalState.bootContainerStateSettled = false;
+      stubs.capabilities.set('bootReconcileDecided', false);
       appReconciler.requestStopAndClearData('db_app', 'reset db');
       appReconciler.setControllerDesired('web_other', 'running', 'synced');
-      stubs.globalState.bootContainerStateSettled = true;
+      stubs.capabilities.set('bootReconcileDecided', true);
       await installApp(await v9App('other', { web: SYNC_FIRST }));
       await appReconciler.reconcile('web_other');
       expect(stubs.dockerOperations.appDeleteDataInMountPoint.called).to.be.false;
@@ -2352,9 +2354,9 @@ describe('appReconciler tests', () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
       await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
       stubs.dockerOperations.appDeleteDataInMountPoint.rejects(new Error('mount busy'));
-      stubs.globalState.bootContainerStateSettled = false;
+      stubs.capabilities.set('bootReconcileDecided', false);
       appReconciler.requestStopAndClearData('db_app', 'syncthing first-run');
-      stubs.globalState.bootContainerStateSettled = true;
+      stubs.capabilities.set('bootReconcileDecided', true);
 
       await appReconciler.reconcile('db_app'); // must not throw
 
@@ -2371,10 +2373,10 @@ describe('appReconciler tests', () => {
     it('keeps the clear pending on a failed wipe — never starts on un-wiped data', async () => {
       await installApp(await v9App('app', { db: ACTIVE_STANDBY }));
       stubs.dockerOperations.appDeleteDataInMountPoint.rejects(new Error('mount busy'));
-      stubs.globalState.bootContainerStateSettled = false;
+      stubs.capabilities.set('bootReconcileDecided', false);
       appReconciler.requestStopAndClearData('db_app', 'syncthing first-run');
       appReconciler.setControllerDesired('fluxdb_app', 'running', 'contrived contradiction');
-      stubs.globalState.bootContainerStateSettled = true;
+      stubs.capabilities.set('bootReconcileDecided', true);
 
       await appReconciler.reconcile('db_app'); // first attempt: wipe throws, caught
 
@@ -2658,9 +2660,7 @@ describe('appReconciler tests', () => {
     };
 
     it('opens only after every boot-held reconcile completes one pass', async () => {
-      stubs.globalState.bootContainerStateSettled = false;
-      let openBootGate;
-      stubs.globalState.waitForBootContainerStateSettled = () => new Promise((resolve) => { openBootGate = resolve; });
+      stubs.capabilities.set('bootReconcileDecided', false);
       let finishInspect;
       stubs.dockerService.dockerContainerInspect = sinon.stub().callsFake(() => new Promise((resolve) => {
         finishInspect = () => resolve({ State: { Running: false, Status: 'exited', ExitCode: 1 } });
@@ -2671,8 +2671,7 @@ describe('appReconciler tests', () => {
       let drainSettled = false;
       appReconciler.waitForBootDrainSettled().then(() => { drainSettled = true; });
 
-      stubs.globalState.bootContainerStateSettled = true;
-      openBootGate();
+      stubs.capabilities.set('bootReconcileDecided', true);
       await startPromise;
       await flush();
       expect(drainSettled, 'gate must hold while a boot reconcile is still in flight').to.be.false;
@@ -2685,9 +2684,7 @@ describe('appReconciler tests', () => {
     it('opens after the cap even if a boot reconcile wedges', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
       try {
-        stubs.globalState.bootContainerStateSettled = false;
-        let openBootGate;
-        stubs.globalState.waitForBootContainerStateSettled = () => new Promise((resolve) => { openBootGate = resolve; });
+        stubs.capabilities.set('bootReconcileDecided', false);
         stubs.dockerService.dockerContainerInspect = sinon.stub().callsFake(() => new Promise(() => {})); // wedged forever
 
         appReconciler.enqueueComponent('www_app');
@@ -2695,8 +2692,7 @@ describe('appReconciler tests', () => {
         let drainSettled = false;
         appReconciler.waitForBootDrainSettled().then(() => { drainSettled = true; });
 
-        stubs.globalState.bootContainerStateSettled = true;
-        openBootGate();
+        stubs.capabilities.set('bootReconcileDecided', true);
         await startPromise;
         await flush();
         expect(drainSettled).to.be.false;
@@ -2721,9 +2717,7 @@ describe('appReconciler tests', () => {
     });
 
     it('holds enqueues until boot settles, then drains them on start()', async () => {
-      let openGate;
-      stubs.globalState.bootContainerStateSettled = false;
-      stubs.globalState.waitForBootContainerStateSettled = () => new Promise((res) => { openGate = res; });
+      stubs.capabilities.set('bootReconcileDecided', false);
 
       appReconciler.enqueueComponent('www_app');
       // enqueue is synchronous while the gate is closed, so this is a real assertion
@@ -2732,8 +2726,7 @@ describe('appReconciler tests', () => {
       const done = deferred();
       stubs.appInspector.startAppMonitoring = sinon.stub().callsFake(() => done.resolve());
       const startPromise = appReconciler.start();
-      stubs.globalState.bootContainerStateSettled = true;
-      openGate();
+      stubs.capabilities.set('bootReconcileDecided', true);
       await startPromise;
       await done.promise; // the drained reconcile actually completed
       expect(stubs.dockerService.dockerContainerInspect.called).to.be.true;
