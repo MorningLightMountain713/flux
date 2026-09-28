@@ -290,16 +290,17 @@ async function termCost(spec, height) {
  * mandatory floor payment apply an update that buys nothing, with a term
  * restart the owner never asked for.
  *
- * The free-update rate limit counts `recentEvents`, the app's events the chain
- * had accepted when this update confirmed, windowed by the confirming block's
- * time: every node counts the same events against the same window, however
- * late it reads the block.
+ * The free-update rate limit counts what `recentEvents()` answers: the app's
+ * applied updates before this one, stamped with their confirming blocks' times,
+ * windowed by this update's: every node counts the same events against the
+ * same window, however late it reads the block.
  *
  * @param {object} spec - resolved new v9 spec
  * @param {object} prevSpec - resolved previous spec, of any version
  * @param {{height: number, prevHeight: number, prevRegisteredAt: ?number,
- *   nowBlockTime: number, recentEvents: object[], prevTermCost: object}} ctx -
- *   `prevTermCost` from the predecessor's own regime (pricingRegime.termCost)
+ *   nowBlockTime: number, recentEvents: () => Promise<object[]>,
+ *   prevTermCost: object}} ctx - `prevTermCost` from the predecessor's own
+ *   regime (pricingRegime.termCost)
  * @returns {Promise<bigint|null>}
  */
 async function updateFee(spec, prevSpec, {
@@ -310,7 +311,7 @@ async function updateFee(spec, prevSpec, {
     prevState: { height: prevHeight, registeredAt: prevRegisteredAt },
     at: { tipBlockTime: nowBlockTime, currentHeight: height },
     asOf: nowBlockTime * 1000,
-    recentEvents,
+    recentEvents: await recentEvents(),
     prevTermCost,
   });
   if (result && result.refused) return null;

@@ -167,7 +167,7 @@ describe('pricingRegime', () => {
         prevHeight: HEIGHT - 5,
         prevRegisteredAt: BLOCK_TIME - 3600,
         nowBlockTime: BLOCK_TIME,
-        recentEvents: events,
+        recentEvents: async () => events,
         prevTermCost: { oldTermPriceFluxSats: 42 },
       });
       return { ctx: priceUpdate.firstCall.args[2], prevSpec };
@@ -178,7 +178,7 @@ describe('pricingRegime', () => {
       expect(ctx.asOf).to.equal(BLOCK_TIME * 1000);
     });
 
-    it('hands the rule the events it is given', async () => {
+    it('hands the rule the events its caller answers', async () => {
       const { ctx } = await contextHandedToTheRule();
       expect(ctx.recentEvents).to.equal(events);
     });

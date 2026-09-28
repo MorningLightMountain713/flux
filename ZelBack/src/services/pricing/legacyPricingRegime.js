@@ -290,7 +290,8 @@ async function termCost(spec, height) {
 /**
  * Consensus update fee in satoshis, crediting the unused prior subscription.
  * Legacy prices both terms itself from the heights, so the rest of the shared
- * context (block times, events, the predecessor's term cost) is not read.
+ * context (block times, the free-update events, the predecessor's term cost)
+ * is not read.
  *
  * @param {object} spec - resolved new v1-v8 spec
  * @param {object} prevSpec - resolved previous spec

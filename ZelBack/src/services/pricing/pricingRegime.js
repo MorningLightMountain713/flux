@@ -90,7 +90,7 @@ const pricing = Object.freeze({ termCost });
  * @param {object} spec - resolved new spec
  * @param {object} prevSpec - resolved previous spec
  * @param {{height: number, prevHeight: number, prevRegisteredAt: ?number,
- *   nowBlockTime: number, recentEvents: object[]}} ctx
+ *   nowBlockTime: number, recentEvents: () => Promise<object[]>}} ctx
  * @returns {Promise<bigint|null>}
  */
 async function updateFee(spec, prevSpec, ctx) {

@@ -549,7 +549,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
         prevHeight,
         prevRegisteredAt: null,
         nowBlockTime: 1_750_000_000,
-        recentEvents: [],
+        recentEvents: async () => [],
       });
     }
 
