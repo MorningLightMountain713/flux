@@ -10,6 +10,7 @@ const { expect } = chai;
 const { FluxPeerSocket, CLOSE_CODES, PEER_SOURCE } = require('../../ZelBack/src/services/utils/FluxPeerSocket');
 const { FluxPeerManager, peerManager } = require('../../ZelBack/src/services/utils/FluxPeerManager');
 const peerCodec = require('../../ZelBack/src/services/utils/peerCodec');
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const rateLimit = require('../../ZelBack/src/services/utils/rateLimit');
 // Loaded for its side effect: the route table the socket reads is declared as the
 // transport loads, as it is on a running node before any connection opens.
@@ -938,6 +939,21 @@ describe('FluxPeerManager tests', () => {
     // oscillating inside the band would reset its budget continuously and could
     // never reach readiness at all - which is the failure the hysteresis exists
     // to prevent and which no test here would have caught.
+    it('holds peersAboveFloor up across the hysteresis band, and down only below it', () => {
+      capabilities.resetForTests();
+      for (let i = 1; i <= 12; i += 1) {
+        manager.add(createMockWs(`10.0.0.${i}`, '16127'), `10.0.0.${i}`, '16127', { source: PEER_SOURCE.RANDOM });
+      }
+      expect(capabilities.isUp('peersAboveFloor')).to.equal(true);
+      for (let i = 12; i >= 5; i -= 1) {
+        manager.remove(`10.0.0.${i}:16127`, 1006);
+      }
+      expect(capabilities.isUp('peersAboveFloor'), 'four peers is inside the band').to.equal(true);
+      manager.remove('10.0.0.4:16127', 1006);
+      expect(capabilities.isUp('peersAboveFloor')).to.equal(false);
+      capabilities.resetForTests();
+    });
+
     it('emits neither edge while the count moves inside the hysteresis band', () => {
       const up = [];
       const down = [];
