@@ -3,6 +3,7 @@
 process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 
 const { expect } = require('chai');
+const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const secp256k1 = require('secp256k1');
 const bs58check = require('bs58check').default;
@@ -294,6 +295,55 @@ describe('nodeDownStore', () => {
       expect(third.accepted).to.equal(true);
       expect(third.superseded).to.equal(false);
       expect((await store.lockoutFor(S)).count).to.equal(3);
+    });
+
+    describe('the refuted edge on the event stream', () => {
+      const withBus = (enabled) => {
+        const bus = { enabled, publish: sinon.spy() };
+        const busStore = proxyquire('../../ZelBack/src/services/appMessaging/nodeDownStore', {
+          '../networkStateService': {
+            nodeDownTopology: () => world.topology,
+            chainHeight: () => world.height,
+            networkState: () => world.nodes,
+          },
+          '../utils/fluxEventBus': bus,
+        });
+        return { bus, busStore };
+      };
+      const refutedFor = (bus) => bus.publish.getCalls()
+        .filter((c) => c.args[0] === 'nodedown:refuted').map((c) => c.args[1].subject);
+      const certify = (at) => store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4']), broadcastedAt: at },
+      });
+      const announce = (at) => collection.insertOne({
+        type: 'apprunning', outpoint: S, ip: '10.9.0.20:16127', dedupKey: 'v2', broadcastedAt: new Date(at), expireAt: new Date(Date.now() + 60_000), data: {},
+      });
+
+      it('publishes once when a record this node read standing reads refuted', async () => {
+        const { bus, busStore } = withBus(true);
+        const at = Date.now() - 60_000;
+        await certify(at);
+        expect(await busStore.standingCertificateFor(S)).to.not.equal(null);
+        expect(refutedFor(bus), 'nothing while it stands').to.deep.equal([]);
+
+        await announce(at);
+        expect(await busStore.standingCertificateFor(S)).to.equal(null);
+        await busStore.refutationFor(S);
+        expect(refutedFor(bus)).to.deep.equal([S]);
+      });
+
+      it('publishes nothing for a record it never read standing, or with the stream off', async () => {
+        const unseen = withBus(true);
+        const off = withBus(false);
+        const at = Date.now() - 60_000;
+        await certify(at);
+        await off.busStore.standingCertificateFor(S);
+        await announce(at);
+        expect(await unseen.busStore.refutationFor(S), 'the record is refuted').to.not.equal(null);
+        await off.busStore.refutationFor(S);
+        expect(refutedFor(unseen.bus)).to.deep.equal([]);
+        expect(refutedFor(off.bus)).to.deep.equal([]);
+      });
     });
 
     it('verifyRefutation is the $gte rule exactly', () => {
