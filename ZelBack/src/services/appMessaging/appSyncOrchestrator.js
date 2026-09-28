@@ -83,8 +83,11 @@ function freshSyncCompletions() {
 const FIRST_RESPONSE_MS = Math.max(1, Math.floor(SYNC_TIMEOUT_MS / 12));
 const STALL_MS = Math.max(1, Math.floor(SYNC_TIMEOUT_MS / 4));
 const MIN_UPTIME_SECONDS = config.get('fluxapps.appSyncMinPeerUptime');
-const HASH_SYNC_MAX_RETRIES = config.get('fluxapps.hashSyncMaxRetries');
-const HASH_SYNC_RETRY_MS = config.get('fluxapps.hashSyncRetryMs');
+// A failed hash-sync pass is retried after this long, doubling each time up to
+// the cap, and never given up: whatever made it fail has no event to announce
+// it is fixed, apart from MongoDB coming back, which retries at once.
+const HASH_SYNC_RETRY_MIN_MS = config.get('fluxapps.hashSyncRetryMinMs');
+const HASH_SYNC_RETRY_MAX_MS = config.get('fluxapps.hashSyncRetryMaxMs');
 const FALLBACK_RECHECK_BLOCKS = config.get('fluxapps.hashSyncFallbackRecheckBlocks');
 // Steady-state manifest anti-entropy: how often a READY node re-checks its content register
 // against a few peers, and how many it samples. Bounds how long a node that silently missed
@@ -208,6 +211,7 @@ class AppSyncOrchestrator {
   #pendingReconnectPulls = new Map();
   #hashSyncAttempts = 0;
   #hashSyncRetryTimer = null;
+  #offMongoUp = null;
   #nextHashRetryHeight = 0;
   #lastBlockHeight = 0;
   #fluxVersion = null;
@@ -367,6 +371,7 @@ class AppSyncOrchestrator {
       this.#onBlocksProcessed(blockHeight);
     };
     this.#blockEmitter.on('blocksProcessed', this.#blockReceivedHandler);
+    this.#offMongoUp = capabilities.onUp('mongoReachable', () => this.#retryHashSyncNow());
 
     this.#hashesChangedHandler = () => this.#onHashesChanged();
     this.#blockEmitter.on('hashesChanged', this.#hashesChangedHandler);
@@ -905,10 +910,11 @@ class AppSyncOrchestrator {
 
   #enterDegraded() {
     this.#setState(STATES.DEGRADED);
+    // The resync repeats the hash sync and the rebuild. appMessagesSynced and
+    // appRegistryConsistent stay as they are: a peer dip changes neither the chain
+    // nor the stored messages the list is derived from.
     this.#hashSyncComplete = false;
-    capabilities.claim('appMessagesSynced', 'appSyncOrchestrator').lower('degraded: hash sync starts over');
     this.#dbRebuilt = false;
-    capabilities.claim('appRegistryConsistent', 'appSyncOrchestrator').lower('degraded: registry rebuilt after the next hash sync');
     this.#resetSyncState();
     log.warn('AppSyncOrchestrator - Degraded, pausing spawner');
   }
@@ -1042,7 +1048,8 @@ class AppSyncOrchestrator {
       return;
     }
     log.info('AppSyncOrchestrator - Sync started');
-    if (!this.#hashSyncComplete) {
+    // A pass waiting out its backoff is not run again on the block.
+    if (!this.#hashSyncComplete && !this.#hashSyncRetryTimer) {
       await this.#checkVersionUpgrade();
       await this.#runHashSync();
     }
@@ -1074,6 +1081,19 @@ class AppSyncOrchestrator {
     }
   }
 
+  /**
+   * Run a hash-sync pass now if none has completed: MongoDB, the one known cause
+   * of a failed pass, is back.
+   */
+  #retryHashSyncNow() {
+    if (this.#hashSyncComplete || !this.#started) return;
+    if (this.#hashSyncRetryTimer) {
+      clearTimeout(this.#hashSyncRetryTimer);
+      this.#hashSyncRetryTimer = null;
+    }
+    this.#own(this.#runHashSync().then(() => this.#evaluate()));
+  }
+
   async #runHashSync() {
     if (this.#syncInProgress) return;
     this.#syncInProgress = true;
@@ -1092,18 +1112,15 @@ class AppSyncOrchestrator {
       await this.#rebuildDb();
       fluxEventBus.publish('hashSync:complete', { attempt: this.#hashSyncAttempts, missing: result.missing });
     } catch (error) {
-      log.error(`AppSyncOrchestrator - Hash sync failed (attempt ${this.#hashSyncAttempts}/${HASH_SYNC_MAX_RETRIES}): ${error.message}`);
-      const willRetry = this.#hashSyncAttempts < HASH_SYNC_MAX_RETRIES;
-      fluxEventBus.publish('hashSync:failed', { attempt: this.#hashSyncAttempts, maxRetries: HASH_SYNC_MAX_RETRIES, willRetry, error: error.message });
-      if (willRetry) {
-        log.info(`AppSyncOrchestrator - Scheduling hash sync retry in ${HASH_SYNC_RETRY_MS / 1000}s`);
-        this.#hashSyncRetryTimer = setTimeout(() => {
-          this.#hashSyncRetryTimer = null;
-          this.#own(this.#runHashSync().then(() => this.#evaluate()));
-        }, HASH_SYNC_RETRY_MS);
-      } else {
-        log.warn('AppSyncOrchestrator - Hash sync retries exhausted, falling back to block timer');
-      }
+      const retryInMs = Math.min(HASH_SYNC_RETRY_MAX_MS, HASH_SYNC_RETRY_MIN_MS * (2 ** (this.#hashSyncAttempts - 1)));
+      log.error(`AppSyncOrchestrator - Hash sync failed (attempt ${this.#hashSyncAttempts}), retrying in ${retryInMs / 1000}s: ${error.message}`);
+      capabilities.claim('appMessagesSynced', 'appSyncOrchestrator').lower(`hash sync failed: ${error.message}`);
+      fluxEventBus.publish('hashSync:failed', { attempt: this.#hashSyncAttempts, retryInMs, error: error.message });
+      if (this.#hashSyncRetryTimer) clearTimeout(this.#hashSyncRetryTimer);
+      this.#hashSyncRetryTimer = setTimeout(() => {
+        this.#hashSyncRetryTimer = null;
+        this.#own(this.#runHashSync().then(() => this.#evaluate()));
+      }, retryInMs);
     } finally {
       this.#syncInProgress = false;
     }
@@ -1526,6 +1543,8 @@ class AppSyncOrchestrator {
     }
     if (this.#blockReceivedHandler) {
       this.#blockEmitter.removeListener('blocksProcessed', this.#blockReceivedHandler);
+      if (this.#offMongoUp) this.#offMongoUp();
+      this.#offMongoUp = null;
     }
     if (this.#hashesChangedHandler) {
       this.#blockEmitter.removeListener('hashesChanged', this.#hashesChangedHandler);
