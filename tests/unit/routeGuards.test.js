@@ -15,6 +15,7 @@ const {
   asyncRoute, rejectQueryParameters, requireBootSettled, requirePolicyReady,
 } = require('../../ZelBack/src/services/utils/routeGuards');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 
 describe('routeGuards', () => {
   describe('rejectQueryParameters', () => {
@@ -176,13 +177,8 @@ describe('routeGuards', () => {
     let server;
     let handlerCalls;
 
-    // Derived from the store rather than written directly, and process-global like
-    // the boot gate, so it is restored either way.
-    let policyBefore;
-
     beforeEach(() => {
-      policyBefore = globalState.policyReady;
-      globalState.policyReady = false;
+      capabilities.resetForTests();
       handlerCalls = 0;
       app = express();
       app.get('/apps/redeploy/:appname', requirePolicyReady, (req, res) => {
@@ -192,7 +188,7 @@ describe('routeGuards', () => {
     });
 
     afterEach(() => {
-      globalState.policyReady = policyBefore;
+      capabilities.resetForTests();
       if (server) { server.close(); server = null; }
     });
 
@@ -235,7 +231,7 @@ describe('routeGuards', () => {
     });
 
     it('answers once the node holds policy it may act on', async () => {
-      globalState.policyReady = true;
+      capabilities.setForTests('policyCurrent', true);
       const res = await get('/apps/redeploy/myapp');
       expect(res.status).to.equal(200);
       expect(handlerCalls).to.equal(1);

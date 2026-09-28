@@ -24,6 +24,7 @@ const { checkPlacement, capacityShortfall } = hwRequirements;
 const { isImageBlocked } = require('../appSecurity/imageManager');
 const operationRegistry = require('../utils/operationRegistry');
 const globalState = require('../utils/globalState');
+const capabilities = require('../utils/capabilities');
 const pendingTeardownStore = require('./pendingTeardownStore');
 const admissionControl = require('../utils/admissionControl');
 const cpuBurstHelper = require('../utils/cpuBurstHelper');
@@ -182,7 +183,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
     // and a container installed on that assumption is running before anything else
     // notices. Deferred rather than failed: the policy arrives on its own, and nothing
     // below it - the capacity reclaim included - runs for an install that cannot proceed.
-    if (!globalState.policyReady) {
+    if (!capabilities.isUp('policyCurrent')) {
       const reason = `Cannot verify ${appName} for installation: network policy not yet obtained`;
       if (onStatus) onStatus(messageHelper.createErrorMessage(reason));
       return { status: InstallStatus.DEFERRED, reason };

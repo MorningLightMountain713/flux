@@ -1,5 +1,6 @@
 'use strict';
 
+const capabilities = require('../utils/capabilities');
 const config = require('config');
 const serviceHelper = require('../serviceHelper');
 const messageHelper = require('../messageHelper');
@@ -390,7 +391,8 @@ function owedAfterRemoval(outcome) {
  * @param {Function} deps.uninstall Removes an application, answering {status} with an
  *   appUninstaller UninstallStatus value
  * @param {Function} [deps.blocklist] The typed blocklist, or null when it cannot be read
- * @param {object} [deps.policy] Carries policyReady and waitForPolicyReady
+ * @param {object} [deps.policy] Whether the node may act on policy (`policyCurrent`):
+ *   policyReady, and waitForPolicyReady resolving when it may
  * @param {object} [deps.bundle] Carries onBundleChanged
  * @param {object} [deps.knobs] Read once: the sweeper's timings do not change under it
  * @param {object} [deps.timers] set and clear, for a test that owns time
@@ -404,7 +406,10 @@ function createComplianceSweeper({
   uninstall,
   blocklist = getBlocklist,
   // eslint-disable-next-line global-require
-  policy = require('../utils/globalState'),
+  policy = {
+    get policyReady() { return capabilities.isUp('policyCurrent'); },
+    waitForPolicyReady: () => capabilities.whenUp('policyCurrent'),
+  },
   bundle = policyStore,
   knobs = {
     complianceSweepStaggerMs: config.get('fluxapps.complianceSweepStaggerMs'),

@@ -6,7 +6,7 @@ const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
 const { PeerRequests } = require('./utils/peerRequests');
 const { newCorrelationId } = require('./utils/messageIntent');
-const globalState = require('./utils/globalState');
+const capabilities = require('./utils/capabilities');
 const policyArtifactRepository = require('./appDatabase/policyArtifactRepository');
 const fluxEventBus = require('./utils/fluxEventBus');
 const { verifyBundle, MAX_BUNDLE_BYTES } = require('./utils/policySignature');
@@ -211,18 +211,24 @@ function getArtifact(name) {
 }
 
 /**
- * Open the acquisition gate when, and only when, BOTH facts hold.
+ * Publish the two facts the node acts on policy by: a verified bundle is held
+ * (`policyVerified`), and no reachable peer holds a newer one (`policyCurrent`).
+ * They arrive in either order: a restored node holds one and waits for the
+ * other, a cold node confirmed by an empty peer set has the other and waits for
+ * one. `policyCurrent` needs `policyVerified`, so a reader of `policyCurrent`
+ * sees both.
  *
- * Holding a bundle and having established that nobody is ahead of it are independent, and
- * they arrive in either order: a restored node holds one and waits for the other, a cold
- * node confirmed by an empty peer set has the other and waits for one. The gate is derived
- * from the pair rather than written by whichever arrives second, because a latch on one of
- * them records the CONJUNCTION in a variable that only tracks one term - and then the term
- * it does not track can never open it. Recomputing costs nothing and cannot be ordered
- * wrongly.
+ * What waits on it is anything that would JUDGE an app - whether it may be
+ * hosted, run or pulled here - and anything that would destroy one it then has
+ * to rebuild: an unread policy and an empty one give every lookup the same
+ * answer, and one off disk is whatever this node last had. Serving the API,
+ * keeping containers running and removing an app outright do not wait.
  */
 function refreshGate() {
-  globalState.policyReady = Boolean(confirmed && current);
+  const verified = capabilities.claim('policyVerified', 'policyStore');
+  const upToDate = capabilities.claim('policyCurrent', 'policyStore');
+  if (current) verified.raise('verified bundle held'); else verified.lower('no bundle held');
+  if (confirmed) upToDate.raise('no reachable peer is ahead'); else upToDate.lower('not confirmed against peers');
 }
 
 /**
@@ -872,7 +878,7 @@ function notePeerSeq(seq, peerKey, correlationId) {
  * Restore, refresh, then keep refreshing. Safe to call twice.
  *
  * Boot is not blocked on this: a node that cannot resolve a bundle carries on, serves its API
- * and keeps its containers running. What waits is acquisition, through globalState.policyReady
+ * and keeps its containers running. What waits is acquisition, through `policyCurrent`
  * -- the one decision that must never be made on a guess.
  */
 async function start() {

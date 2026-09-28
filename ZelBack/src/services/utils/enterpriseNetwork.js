@@ -7,7 +7,7 @@ const appConstants = require('./appConstants');
 const enterpriseConfig = require('./enterpriseConfig');
 const signatureVerifier = require('../signatureVerifier');
 const policyStore = require('../policyStore');
-const globalState = require('./globalState');
+const capabilities = require('./capabilities');
 const log = require('../../lib/log');
 
 // This node's own fluxnode pubkey, cached once resolved. The pubkey never
@@ -229,7 +229,7 @@ async function cleanupOwnershipViolations() {
   // Holding a bundle is not that: one off disk is whatever this node last had, and a map
   // that has since granted an owner reads here as that owner's apps being violations. This
   // is the only destructive path in the module, so it takes the gate acquisition takes.
-  if (!globalState.policyReady) {
+  if (!capabilities.isUp('policyCurrent')) {
     log.warn('enterpriseNetwork: network policy not confirmed, skipping ownership cleanup');
     return;
   }
@@ -312,10 +312,10 @@ function startOwnershipSweeps() {
   const unsubscribe = policyStore.onBundleChanged(() => {
     // A bundle this node may not act on yet changes nothing it may do. The gate opening
     // carries its own trigger.
-    if (!globalState.policyReady) return;
+    if (!capabilities.isUp('policyCurrent')) return;
     requestOwnershipSweep();
   });
-  globalState.waitForPolicyReady().then(() => requestOwnershipSweep());
+  capabilities.whenUp('policyCurrent').then(() => requestOwnershipSweep());
   return unsubscribe;
 }
 

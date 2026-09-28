@@ -30,6 +30,7 @@ const signatureVerifier = require('../signatureVerifier');
 const contentSlotService = require('../appLifecycle/contentSlotService');
 const fluxDriveClient = require('../utils/fluxDriveClient');
 const globalState = require('../utils/globalState');
+const capabilities = require('../utils/capabilities');
 const { peerManager } = require('../utils/peerState');
 const { Privilege, authOf } = require('../utils/privileges');
 
@@ -317,7 +318,7 @@ async function resolveSubmission(appSpecification, {
   // needs told so it can retry or ask a node that is ready. Every submission reaching
   // here is live - a replay is judged where it is stored - and the spawner and the
   // installer hold to the same gate.
-  if (!globalState.policyReady) {
+  if (!capabilities.isUp('policyCurrent')) {
     throw new Error('Cannot verify application images: network policy not yet obtained.');
   }
   await assertPlacementPrivileges(spec);

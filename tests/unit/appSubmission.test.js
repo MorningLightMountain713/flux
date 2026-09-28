@@ -136,15 +136,14 @@ describe('appSubmission tests', () => {
   // A node past its acquisition window, which every case below assumes; the gate itself
   // is exercised in its own block.
   // eslint-disable-next-line global-require
-  const globalState = require('../../ZelBack/src/services/utils/globalState');
-  let policyBefore;
+  const capabilities = require('../../ZelBack/src/services/utils/capabilities');
   beforeEach(() => {
-    policyBefore = globalState.policyReady;
-    globalState.policyReady = true;
+    capabilities.resetForTests();
+    capabilities.setForTests('policyCurrent', true);
   });
 
   afterEach(() => {
-    globalState.policyReady = policyBefore;
+    capabilities.resetForTests();
     sinon.restore();
   });
 
@@ -165,7 +164,7 @@ describe('appSubmission tests', () => {
     };
 
     it('is refused, and no image is judged', async () => {
-      globalState.policyReady = false;
+      capabilities.setForTests('policyCurrent', false);
       let refused = null;
       await submit().catch((error) => { refused = error; });
 

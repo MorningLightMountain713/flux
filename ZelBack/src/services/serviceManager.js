@@ -53,6 +53,7 @@ const appStartupManager = require('./appLifecycle/appStartupManager');
 const contentSlotService = require('./appLifecycle/contentSlotService');
 const hardwareValidationService = require('./appLifecycle/hardwareValidationService');
 const globalState = require('./utils/globalState');
+const capabilities = require('./utils/capabilities');
 const nodeCapabilities = require('./utils/nodeCapabilities');
 const { peerManager } = require('./utils/peerState');
 const enterpriseNetwork = require('./utils/enterpriseNetwork');
@@ -391,7 +392,7 @@ async function startFluxFunctions() {
     // boot and has nothing that retries it, so firing it into a closed gate loses
     // the fix until the node next restarts.
     setTimeout(() => {
-      globalState.waitForPolicyReady().then(() => volumeValidationService.checkAndFixIncorrectVolumeMounts()).catch((error) => {
+      capabilities.whenUp('policyCurrent').then(() => volumeValidationService.checkAndFixIncorrectVolumeMounts()).catch((error) => {
         log.error(`Volume validation service error: ${error.message}`);
       });
     }, bootDelay(45 * 1000)); // Run after 45 seconds to allow system to stabilize
@@ -523,7 +524,7 @@ async function startFluxFunctions() {
     //
     // Not awaited. Boot does not wait on policy and never did: the node comes up, serves its
     // API and keeps its containers running regardless. What waits is acquisition, through
-    // globalState.policyReady, which is the one decision that must not be made on a guess.
+    // `policyCurrent`, which is the one decision that must not be made on a guess.
     policyStore.setPeerTransport({
       // The peers worth asking. One that does not advertise the capability has no handler
       // for the ask, so including it would buy a deadline's wait and an unrecognised-type
@@ -641,7 +642,7 @@ async function startFluxFunctions() {
     // window measured in minutes. The interval is the fallback; the gate is when
     // the first check is actually able to do its work.
     setTimeout(() => {
-      globalState.waitForPolicyReady().then(() => {
+      capabilities.whenUp('policyCurrent').then(() => {
         imageUpdateService.startImageUpdateService();
         log.info('Native image update service started');
       }).catch((error) => log.error(`Image update service start error: ${error.message}`));
@@ -654,7 +655,7 @@ async function startFluxFunctions() {
     // network deliberately DOSed is the failure that contract was written for. What it
     // costs is the interval: the next tick is twelve hours away and nothing brings it
     // forward, so a node on the blocklist goes unenforced for twelve hours per restart.
-    globalState.waitForPolicyReady()
+    capabilities.whenUp('policyCurrent')
       .then(() => appTamperingBlocklistService.start({ blockEmitter: explorerService.getBlockEmitter() }))
       .catch((err) => log.error(`appTamperingBlocklist start error: ${err.message}`));
     // Not awaited, and started ahead of setNodeGeolocation below on purpose: the
@@ -902,7 +903,7 @@ async function startFluxFunctions() {
     // thirty minutes out. It re-arms itself from then on, so only the first run
     // needs the gate.
     setTimeout(() => {
-      globalState.waitForPolicyReady().then(() => appInspector.enforceWritableLayerLimit(
+      capabilities.whenUp('policyCurrent').then(() => appInspector.enforceWritableLayerLimit(
         appsStorageViolations,
       )).catch((error) => log.error(`Storage space check error: ${error.message}`));
     }, bootDelay(20 * 60 * 1000));

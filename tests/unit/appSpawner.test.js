@@ -90,8 +90,6 @@ describe('appSpawner tests', () => {
   function createGlobalStateStub() {
     return {
       dbReady: true,
-      // The network policy has been obtained; a test of the gate overrides it.
-      policyReady: true,
       fluxNodeWasNotConfirmedOnLastCheck: false,
       fluxNodeWasAlreadyConfirmed: true,
       spawnerPaused: false,
@@ -187,6 +185,8 @@ describe('appSpawner tests', () => {
     if (opts.globalStateOverrides) {
       Object.assign(globalStateStub, opts.globalStateOverrides);
     }
+    // The network policy has been obtained; a test of the gate overrides it.
+    const capabilityState = { policyCurrent: true, ...(opts.capabilityOverrides || {}) };
 
     logStub = { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() };
     // The real DeploymentSpec behind a spy: it is the same pure library, and the
@@ -339,6 +339,7 @@ describe('appSpawner tests', () => {
       '../appRequirements/hwRequirements': hwRequirementsStub,
       '../appNetwork/portManager': portManagerStub,
       '../utils/globalState': globalStateStub,
+      '../utils/capabilities': { isUp: (name) => capabilityState[name] === true },
       '../geolocationService': {
         isStaticIP: sinon.stub().returns(opts.nodeHasStaticIp ?? false),
         isDataCenter: sinon.stub().returns(false),
@@ -499,7 +500,7 @@ describe('appSpawner tests', () => {
   describe('policy gate', () => {
     it('installs nothing while the policy gate is shut', async () => {
       const candidate = await makeCandidate();
-      buildModule({ candidates: [candidate], globalStateOverrides: { policyReady: false } });
+      buildModule({ candidates: [candidate], capabilityOverrides: { policyCurrent: false } });
 
       const delay = await appSpawner.trySpawningGlobalApplication().catch(() => {});
 

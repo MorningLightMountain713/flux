@@ -68,6 +68,7 @@ const { getSpecBackend } = require('../utils/specLibs');
 const { ensureProvidersRegistered } = require('../utils/specCutover');
 const { appsFolder, INSTALLING_RENEWAL_MS } = require('../utils/appConstants');
 const globalState = require('../utils/globalState');
+const capabilities = require('../utils/capabilities');
 const operationRegistry = require('../utils/operationRegistry');
 
 // The node-wide app operations the spawner gives way to - the same set
@@ -297,7 +298,7 @@ async function trySpawningGlobalApplication() {
   // from "I do not know yet", and the two demand opposite behaviour: the first may take
   // any app going, the second must take none. Guessing the first is how an enterprise node
   // fills with apps it must not host and has them removed from under it minutes later.
-  if (!globalState.policyReady) {
+  if (!capabilities.isUp('policyCurrent')) {
     log.info('Network policy not yet obtained. Global applications will not be installed');
     fluxEventBus.publish('spawner:blocked', { reason: 'policy_not_ready' });
     return installDelay;

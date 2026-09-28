@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { asConfig } = require('./fixtures/config');
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 
 const MODULE_PATH = '../../ZelBack/src/services/policyStore';
 const PKCS8_ED25519_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
@@ -36,7 +37,9 @@ function bundle(seq, documents = { blockedrepositories: ['a/b'] }, privateKey = 
 function load(overrides = {}) {
   const log = { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() };
   const eventBus = { publish: sinon.stub(), count: sinon.stub() };
-  const state = { policyReady: false };
+  capabilities.resetForTests();
+  // What the node may act on policy by: a verified bundle held, and no reachable peer ahead.
+  const state = { get policyReady() { return capabilities.isUp('policyCurrent'); } };
   const repo = overrides.repo || {
     readBundle: sinon.stub().resolves(null),
     writeBundle: sinon.stub().resolves(true),
@@ -77,7 +80,7 @@ function load(overrides = {}) {
     }),
     '../lib/log': log,
     './serviceHelper': serviceHelper,
-    './utils/globalState': state,
+    './utils/capabilities': capabilities,
     './utils/fluxEventBus': eventBus,
     './appDatabase/policyArtifactRepository': repo,
     // The tick's phase is derived from this node's collateral, read from the daemon.
