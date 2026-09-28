@@ -82,11 +82,11 @@ describe('chainState', () => {
       expect(events.slice(-3)).to.deep.equal(['install groups', 'install prices', 'capability up']);
     });
 
-    it('deletes app payment records, legacy rows and every v9 soft-fork row above the height', async () => {
+    it('deletes app payment records, their decisions, legacy rows and every v9 soft-fork row above the height', async () => {
       await chainState.rewind('test', 900);
 
       const query = { height: { $gt: 900 } };
-      for (const collection of ['zelappshashes', 'chainmessages', ...V9_SOFT_FORK_COLLECTIONS]) {
+      for (const collection of ['zelappshashes', 'appdecisions', 'chainmessages', ...V9_SOFT_FORK_COLLECTIONS]) {
         sinon.assert.calledWithMatch(removeStub, sinon.match.object, collection, query);
       }
       sinon.assert.neverCalledWithMatch(removeStub, sinon.match.object, 'zelappsmessages');

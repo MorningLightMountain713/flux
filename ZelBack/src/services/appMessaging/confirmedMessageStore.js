@@ -27,6 +27,32 @@ const globalAppsMessages = config.get('database.appsglobal.collections.appsMessa
 
 const DUPLICATE_KEY = 11_000;
 
+const storedListeners = [];
+
+/**
+ * Registers `fn(hashes)`, called after every store call that resolves hashes,
+ * newly stored or already held: what is stored is decided afterwards, never by
+ * the route that stored it.
+ * @param {(hashes: string[]) => void} fn
+ * @returns {() => void} unsubscribe
+ */
+function onStored(fn) {
+  storedListeners.push(fn);
+  return () => {
+    const index = storedListeners.indexOf(fn);
+    if (index !== -1) storedListeners.splice(index, 1);
+  };
+}
+
+/**
+ * Tells the listeners hashes are held: for a route that meets a message it has
+ * already stored.
+ * @param {string[]} hashes
+ */
+function notifyStored(hashes) {
+  if (hashes.length) storedListeners.forEach((fn) => fn(hashes));
+}
+
 /**
  * The confirming block's time, for a payment record made before the scan kept it.
  * @param {number} height
@@ -189,6 +215,7 @@ async function storeConfirmedMessages(candidates) {
       updateOne: { filter: { hash }, update: { $set: { message: true, messageNotFound: false } } },
     })));
   }
+  notifyStored(resolved);
   if (result.refused.length) {
     log.warn(`confirmedMessageStore - ${result.refused.length} message(s) not stored: ${result.refused.slice(0, 5).map((r) => `${r.hash} (${r.reason})`).join(', ')}`);
   }
@@ -196,5 +223,5 @@ async function storeConfirmedMessages(candidates) {
 }
 
 module.exports = {
-  storeConfirmedMessages, confirmedEvent, paymentRecords, lookupBlockTime,
+  storeConfirmedMessages, confirmedEvent, paymentRecords, lookupBlockTime, onStored, notifyStored,
 };

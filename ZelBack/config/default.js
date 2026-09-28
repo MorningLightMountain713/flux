@@ -88,6 +88,7 @@ module.exports = {
       database: `${dbPrefix}globalzelapps`,
       collections: {
         appsMessages: 'zelappsmessages', // storage for all flux apps messages done on flux network
+        appDecisions: 'appdecisions', // one decision per paid app message: applied, or refused with its reason
         appsInformation: 'zelappsinformation', // stores actual state of flux app configuration info - initial state and its overwrites with update messages
         appsTemporaryMessages: 'zelappstemporarymessages', // storages for all flux apps messages that are not yet confirmed on the flux network
         appsInstallingLocations: 'appsinstallinglocations', // stores install location of flux apps as documents containing name, ip, obtainedAt
