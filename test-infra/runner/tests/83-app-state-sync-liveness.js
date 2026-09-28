@@ -290,6 +290,14 @@ describe('a state sync at the production requirement completes on three distinct
       deferredNodes: 1,
       syncedNodes: ANSWERERS,
       tickerAutostart: false,
+      // The decliner stays unable to answer for the whole describe: it needs more
+      // completions than the fleet can give, so its own sync never completes and it
+      // never becomes authoritative. Left at the fleet's requirement, it syncs from
+      // the answerers, and whether it still declines when the node under test asks
+      // depends on which of the two finished booting first.
+      nodeConfigOverrides: {
+        [DECLINER]: { fluxapps: { appSyncMinCompletions: 99 } },
+      },
       configOverrides: {
         fluxapps: {
           appSyncMinCompletions: 3,
