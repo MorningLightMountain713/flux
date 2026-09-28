@@ -3,6 +3,7 @@
 /* eslint-disable no-underscore-dangle */
 const sinon = require('sinon');
 const objectHash = require('object-hash');
+const messageVerifier = require('../../ZelBack/src/services/appMessaging/messageVerifier');
 const WebSocket = require('ws');
 const { expect } = require('chai');
 const log = require('../../ZelBack/src/lib/log');
@@ -185,6 +186,34 @@ describe('fluxCommunication tests', () => {
 
     afterEach(() => {
       sinon.restore();
+    });
+
+    describe('a late message for a paid hash', () => {
+      const data = { type: 'fluxappregister', version: 1, hash: 'latehash' };
+      const message = { data };
+
+      beforeEach(() => {
+        sinon.stub(messageStore, 'storeAppTemporaryMessage').resolves({ rebroadcast: false, promotion: { hash: 'latehash' } });
+        sinon.stub(messageVerifier, 'checkAndRequestApp').resolves(true);
+      });
+
+      it('is relayed when this node fetched it after a peer announced it', async () => {
+        const asked = { remoteCapabilities: new Set(), send: sinon.stub() };
+        await fluxCommunication.handleCheckMessageHashPresent(objectHash(data), asked);
+        sinon.assert.calledOnce(asked.send);
+
+        await fluxCommunication.handleAppMessages(message, '127.0.0.5', '16127');
+
+        sinon.assert.calledOnceWithExactly(announceSpy, objectHash(data), '127.0.0.5:16127');
+      });
+
+      it('is not relayed when it answers this node\'s own request for the hash', async () => {
+        const answer = { data: { type: 'fluxappregister', version: 1, hash: 'requestedhash' } };
+
+        await fluxCommunication.handleAppMessages(answer, '127.0.0.6', '16127');
+
+        sinon.assert.notCalled(announceSpy);
+      });
     });
 
     it('should announce a valid app message to peers', async () => {

@@ -4,6 +4,7 @@
 const config = require('config');
 const hash = require('object-hash');
 const WebSocket = require('ws');
+const { TTLCache } = require('@isaacs/ttlcache');
 const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
 const messageStore = require('./appMessaging/messageStore');
@@ -13,6 +14,7 @@ const ingressAttestationService = require('./appMessaging/ingressAttestationServ
 const ingressAttestationSyncService = require('./appMessaging/ingressAttestationSyncService');
 const verificationHelper = require('./verificationHelper');
 const fluxCommunicationMessagesSender = require('./fluxCommunicationMessagesSender');
+const fluxBroadcastHelper = require('./utils/fluxBroadcastHelper');
 const policyStore = require('./policyStore');
 const fluxCommunicationUtils = require('./fluxCommunicationUtils');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
@@ -34,6 +36,13 @@ const {
 } = require('./utils/messageRoutes');
 
 const { announcementSeen, announcementStore, wsPeerCache } = cacheManager;
+
+// Messages this node asked for after a peer announced them, by message hash. A
+// late message for a paid hash is relayed only when it arrived this way or by
+// the delivery route, never when it answers this node's own request for the
+// hash: a node catching up asks for hundreds its peers already hold. Kept as
+// long as a relaying envelope is valid.
+const fetchedAfterAnnouncement = new TTLCache({ max: 10_000, ttl: 5 * 60 * 1000 });
 
 /* const LRUTest = {
   max: 25000000, // 25M
@@ -81,6 +90,19 @@ function schedulePromotion(promotion) {
 }
 
 /**
+ * Announces an app message this node signs for its peers, as the relay of a
+ * message delivered to it directly. A peer that lacks it fetches it after the
+ * announcement, and relays it in turn.
+ * @param {object} data The app message.
+ * @returns {Promise<void>}
+ */
+async function announceAppMessage(data) {
+  const signed = await fluxBroadcastHelper.serialiseAndSignFluxBroadcast(data);
+  if (!signed) throw new Error('announceAppMessage - the broadcast could not be signed');
+  announceToPeers(JSON.parse(signed));
+}
+
+/**
  * To handle temporary app messages.
  * @param {object} message Message.
  * @param {string} fromIP Sender's IP address.
@@ -99,7 +121,8 @@ async function handleAppMessages(message, fromIP, port) {
       return;
     }
     schedulePromotion(storeResult.promotion);
-    if (storeResult.rebroadcast) {
+    const lateAndAnnounced = Boolean(storeResult.promotion) && fetchedAfterAnnouncement.has(hash(message.data));
+    if (storeResult.rebroadcast || lateAndAnnounced) {
       fluxEventBus.publish('network:appmessage', { hash: message.data.hash, type: message.data.type, name: message.data.appSpecifications?.name });
       announceToPeers(message, `${fromIP}:${port}`);
     }
@@ -492,6 +515,7 @@ async function handleCheckMessageHashPresent(messageHash, peerSocket) {
     // message, and it has plenty it never announced - anything the database already
     // held when it arrived. Asking the store would re-request those.
     if (!announcementSeen.has(messageHash)) {
+      fetchedAfterAnnouncement.set(messageHash, true);
       // Ask on the socket the announce arrived on. The announcer can be a
       // transient (ephemeral) connection that is never in the peer map, and
       // a map lookup by ip:port silently asks nobody.
@@ -2085,6 +2109,9 @@ function logSocketsEvery(intervalMs) {
 }
 
 module.exports = {
+  announceAppMessage,
+  // exported for tests
+  handleCheckMessageHashPresent,
   connectedPeers,
   removePeer,
   removeIncomingPeer,
