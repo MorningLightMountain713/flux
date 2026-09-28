@@ -7,6 +7,8 @@ const secp256k1 = require('secp256k1');
 const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
 const chainState = require('./chainState');
+const migrations = require('./migrations');
+const { appPaymentPositions } = require('./appPaymentPositions');
 const daemonSubscriptionService = require('./daemonService/daemonSubscriptionService');
 const reorgSource = require('./daemonService/reorgSource');
 const dbHelper = require('./dbHelper');
@@ -532,7 +534,7 @@ async function processInsight(blockDataVerbose, database) {
         // MAY contain App transaction. Store it.
         if (isFluxAppMessageValue >= (priceSpecifications.minPrice * 1e8) && message.length === 64 && blockDataVerbose.height >= config.get('fluxapps.epochstart')) { // min of X flux had to be paid for us bothering checking
           const appTxRecord = {
-            txid: tx.txid, height: blockDataVerbose.height, hash: message, value: isFluxAppMessageValue, message: false, // message is boolean saying if we already have it stored as permanent message
+            txid: tx.txid, height: blockDataVerbose.height, txIndex, hash: message, value: isFluxAppMessageValue, message: false, // message is boolean saying if we already have it stored as permanent message
             blockTime: blockDataVerbose.time, // confirming block timestamp — v9 registeredAt
             syncAttempts: 0, nextRetryHeight: blockDataVerbose.height, retryFromHeight: blockDataVerbose.height,
           };
@@ -1051,10 +1053,18 @@ async function bootstrapSoftForks(currentDaemonHeight) {
   );
 }
 
-function processBootstrapTx(tx, priceSpecs, seenHashes, hashBatch) {
-  if (tx.version >= 5 || tx.version <= 0) return;
+/**
+ * The payment record a fast-path transaction makes, or null when it pays no
+ * app hash at or above the minimum price.
+ * @param {object} tx Verbose transaction.
+ * @param {object[]} priceSpecs
+ * @param {number} txIndex The transaction's position in its block.
+ * @returns {object|null}
+ */
+function processBootstrapTx(tx, priceSpecs, txIndex) {
+  if (tx.version >= 5 || tx.version <= 0) return null;
   const { height } = tx;
-  if (!height) return;
+  if (!height) return null;
 
   let message = '';
   let appValue = 0;
@@ -1071,50 +1081,32 @@ function processBootstrapTx(tx, priceSpecs, seenHashes, hashBatch) {
     }
   }
 
-  if (appValue > 0) {
-    const priceSpec = getPriceSpecForHeight(priceSpecs, height);
-    if (appValue >= (priceSpec.minPrice * 1e8) && message.length === 64
-      && height >= config.get('fluxapps.epochstart') && !seenHashes.has(message)) {
-      seenHashes.add(message);
-      hashBatch.push({
-        txid: tx.txid, height, hash: message, value: appValue,
-        blockTime: tx.blocktime ?? null, // verbose getrawtransaction field — v9 registeredAt
-        message: false, syncAttempts: 0, nextRetryHeight: height, retryFromHeight: height,
-      });
-    }
-  }
-
+  if (appValue <= 0) return null;
+  const priceSpec = getPriceSpecForHeight(priceSpecs, height);
+  if (appValue < (priceSpec.minPrice * 1e8) || message.length !== 64 || height < config.get('fluxapps.epochstart')) return null;
+  return {
+    txid: tx.txid, height, txIndex, hash: message, value: appValue,
+    blockTime: tx.blocktime ?? null, // verbose getrawtransaction field — v9 registeredAt
+    message: false, syncAttempts: 0, nextRetryHeight: height, retryFromHeight: height,
+  };
 }
 
+/**
+ * Records every app payment from `epochstart` to a height without scanning
+ * blocks: each hash's first payment by chain order `(height, txIndex)`.
+ * @param {number} currentDaemonHeight
+ */
 async function bootstrapAppHashes(currentDaemonHeight) {
-  // Every payment-collection address (the dev receiver is only in the array on dev builds).
-  const appAddresses = config.get('fluxapps.appPaymentAddresses').map((entry) => entry.address);
-
-  log.info(`Bootstrap: Fetching txids for ${appAddresses.length} app addresses from height ${config.get('fluxapps.epochstart')} to ${currentDaemonHeight}`);
-
-  const txidResult = await daemonServiceUtils.executeCall('getaddresstxids', [{
-    addresses: appAddresses,
-    start: config.get('fluxapps.epochstart'),
-    end: currentDaemonHeight,
-  }]);
-  if (txidResult.status !== 'success') {
-    throw new Error(`getaddresstxids failed: ${txidResult.data.message || txidResult.data}`);
-  }
-
-  const allTxids = [...new Set(txidResult.data)];
+  log.info(`Bootstrap: Fetching app payments from height ${config.get('fluxapps.epochstart')} to ${currentDaemonHeight}`);
+  const positions = await appPaymentPositions(config.get('fluxapps.epochstart'), currentDaemonHeight);
+  const allTxids = [...positions.keys()];
   log.info(`Bootstrap: ${allTxids.length} unique txids to process`);
 
   await bootstrapSoftForks(currentDaemonHeight);
   const priceSpecs = await chainUtilities.getChainParamsPriceUpdates();
 
-  const seenHashes = new Set();
-  let hashBatch = [];
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.get('database.daemon.database'));
-
   const BATCH_SIZE = 500;
-  const INSERT_THRESHOLD = 5000;
-  let totalHashes = 0;
+  const records = [];
 
   for (let i = 0; i < allTxids.length; i += BATCH_SIZE) {
     const batch = allTxids.slice(i, i + BATCH_SIZE);
@@ -1131,29 +1123,35 @@ async function bootstrapAppHashes(currentDaemonHeight) {
         log.warn(`Bootstrap: failed to fetch tx: ${response.error.message || JSON.stringify(response.error)}`);
         continue;
       }
-      processBootstrapTx(response.result, priceSpecs, seenHashes, hashBatch);
-    }
-
-    if (hashBatch.length >= INSERT_THRESHOLD || i + BATCH_SIZE >= allTxids.length) {
-      if (hashBatch.length > 0) {
-        // eslint-disable-next-line no-await-in-loop
-        await insertTransactions(hashBatch, database);
-        totalHashes += hashBatch.length;
-        hashBatch = [];
-      }
+      const tx = response.result;
+      const record = processBootstrapTx(tx, priceSpecs, positions.get(tx.txid).txIndex);
+      if (record) records.push(record);
     }
 
     const processed = Math.min(i + BATCH_SIZE, allTxids.length);
     if (processed % 5000 < BATCH_SIZE || processed === allTxids.length) {
-      log.info(`Bootstrap: ${processed}/${allTxids.length} txids processed, ${totalHashes + hashBatch.length} hashes`);
+      log.info(`Bootstrap: ${processed}/${allTxids.length} txids processed, ${records.length} payments`);
     }
+  }
+
+  // Each hash's first payment in chain order; a later payment of it is not recorded.
+  records.sort((a, b) => a.height - b.height || a.txIndex - b.txIndex);
+  const seen = new Set();
+  const firstPayments = records.filter((record) => !seen.has(record.hash) && seen.add(record.hash));
+
+  const db = dbHelper.databaseConnection();
+  const database = db.db(config.get('database.daemon.database'));
+  const INSERT_BATCH = 5000;
+  for (let i = 0; i < firstPayments.length; i += INSERT_BATCH) {
+    // eslint-disable-next-line no-await-in-loop
+    await insertTransactions(firstPayments.slice(i, i + INSERT_BATCH), database);
   }
 
   const query = { generalScannedHeight: { $gte: 0 } };
   const update = { $set: { generalScannedHeight: currentDaemonHeight } };
   await dbHelper.updateOneInDatabase(database, scannedHeightCollection, query, update, { upsert: true });
 
-  log.info(`Bootstrap complete: ${totalHashes} app hashes, scanned to height ${currentDaemonHeight}`);
+  log.info(`Bootstrap complete: ${firstPayments.length} app hashes, scanned to height ${currentDaemonHeight}`);
 }
 
 // The scan reads blocks from a synced daemon, and at the tip stores app messages
@@ -1654,6 +1652,8 @@ async function initiateBlockProcessor(options = {}) {
     } else if (isInsightExplorer && scannedBlockHeight < config.get('fluxapps.epochstart') - 1) {
       await chainState.exclusive(() => chainState.setScannedHeight(database, config.get('fluxapps.epochstart') - 1));
     }
+
+    await migrations.runBefore('explorerSynced');
 
     isInInitiationOfBP = false;
     // The loop reads the cursor itself, so everything above only has to leave the

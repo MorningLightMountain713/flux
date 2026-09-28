@@ -859,6 +859,7 @@ describe('explorerService tests', () => {
 
   describe('processBootstrapTx tests', () => {
     const config = require('config');
+    const priceSpecs = [{ height: -1, minPrice: 0.01 }];
 
     function makeTx(overrides = {}) {
       return {
@@ -878,42 +879,26 @@ describe('explorerService tests', () => {
       };
     }
 
-    it('should extract valid app hash', () => {
-      const priceSpecs = [{ height: -1, minPrice: 0.01 }];
-      const seenHashes = new Set();
-      const hashBatch = [];
-      explorerService.processBootstrapTx(makeTx(), priceSpecs, seenHashes, hashBatch);
-      expect(hashBatch).to.have.length(1);
-      expect(hashBatch[0].txid).to.equal('abc123');
-      expect(hashBatch[0].hash).to.have.length(64);
-      expect(hashBatch[0].message).to.equal(false);
+    it('makes a payment record with the transaction position and block time', () => {
+      const record = explorerService.processBootstrapTx(makeTx(), priceSpecs, 7);
+      expect(record.txid).to.equal('abc123');
+      expect(record.txIndex).to.equal(7);
+      expect(record.hash).to.have.length(64);
+      expect(record.message).to.equal(false);
       // the confirming block's timestamp rides the row — it becomes v9 registeredAt
-      expect(hashBatch[0].blockTime).to.equal(1_750_000_000);
+      expect(record.blockTime).to.equal(1_750_000_000);
     });
 
-    it('should skip tx with version >= 5', () => {
-      const hashBatch = [];
-      explorerService.processBootstrapTx(makeTx({ version: 5 }), [{ height: -1, minPrice: 0.01 }], new Set(), hashBatch);
-      expect(hashBatch).to.have.length(0);
+    it('makes no record for a tx with version >= 5', () => {
+      expect(explorerService.processBootstrapTx(makeTx({ version: 5 }), priceSpecs, 0)).to.equal(null);
     });
 
-    it('should skip tx below minPrice', () => {
-      const hashBatch = [];
-      explorerService.processBootstrapTx(makeTx({ vout: [{ valueSat: 100, scriptPubKey: { addresses: [config.fluxapps.appPaymentAddresses[0].address], asm: longAsm } }] }), [{ height: -1, minPrice: 1 }], new Set(), hashBatch);
-      expect(hashBatch).to.have.length(0);
+    it('makes no record for a payment below minPrice', () => {
+      const tx = makeTx({ vout: [{ valueSat: 100, scriptPubKey: { addresses: [config.fluxapps.appPaymentAddresses[0].address], asm: longAsm } }] });
+      expect(explorerService.processBootstrapTx(tx, [{ height: -1, minPrice: 1 }], 0)).to.equal(null);
     });
 
-    it('should deduplicate by hash', () => {
-      const priceSpecs = [{ height: -1, minPrice: 0.01 }];
-      const seenHashes = new Set();
-      const hashBatch = [];
-      explorerService.processBootstrapTx(makeTx(), priceSpecs, seenHashes, hashBatch);
-      explorerService.processBootstrapTx(makeTx({ txid: 'def456' }), priceSpecs, seenHashes, hashBatch);
-      expect(hashBatch).to.have.length(1);
-    });
-
-    it('should not collect soft forks (handled by bootstrapSoftForks pre-pass)', () => {
-      const hashBatch = [];
+    it('makes no record for a soft fork (handled by bootstrapSoftForks pre-pass)', () => {
       const tx = makeTx({
         vin: [{ address: config.fluxapps.appPaymentAddresses[1].address }],
         vout: [{
@@ -924,12 +909,10 @@ describe('explorerService tests', () => {
           },
         }],
       });
-      explorerService.processBootstrapTx(tx, [{ height: -1, minPrice: 0.01 }], new Set(), hashBatch);
-      expect(hashBatch).to.have.length(0);
+      expect(explorerService.processBootstrapTx(tx, priceSpecs, 0)).to.equal(null);
     });
 
-    it('should not count multisig payment before enforcement height', () => {
-      const hashBatch = [];
+    it('does not count a multisig payment before enforcement height', () => {
       const tx = makeTx({
         height: 1_200_000,
         vout: [{
@@ -940,13 +923,13 @@ describe('explorerService tests', () => {
           },
         }],
       });
-      explorerService.processBootstrapTx(tx, [{ height: -1, minPrice: 0.01 }], new Set(), hashBatch);
-      expect(hashBatch).to.have.length(0);
+      expect(explorerService.processBootstrapTx(tx, priceSpecs, 0)).to.equal(null);
     });
   });
 
   describe('bootstrapAppHashes tests', () => {
     const config = require('config');
+    const PAY = config.fluxapps.appPaymentAddresses[0].address;
     let executeCallStub;
     let executeBatchCallStub;
     let insertManyStub;
@@ -968,6 +951,22 @@ describe('explorerService tests', () => {
       };
     }
 
+    // The address index answers the payment addresses with `deltas`, and every
+    // other address set (the soft-fork signers) with nothing.
+    function addressIndex(deltas) {
+      const paymentAddresses = config.fluxapps.appPaymentAddresses.map((entry) => entry.address);
+      executeCallStub.callsFake(async (method, [{ addresses }]) => {
+        if (method === 'getaddressdeltas' && addresses.every((address) => paymentAddresses.includes(address))) {
+          return { status: 'success', data: deltas };
+        }
+        return { status: 'success', data: [] };
+      });
+    }
+    const delta = (txid, height, blockindex, satoshis = 500_000_000) => ({
+      txid, height, blockindex, satoshis, address: PAY,
+    });
+    const answer = (...txs) => ({ status: 'success', data: txs.map((tx, id) => ({ id, result: tx, error: null })) });
+
     beforeEach(async () => {
       await dbHelper.initiateDB();
       dbHelper.databaseConnection();
@@ -981,95 +980,91 @@ describe('explorerService tests', () => {
       sinon.restore();
     });
 
-    it('should extract hashes and update scannedHeight', async () => {
-      executeCallStub.resolves({ status: 'success', data: ['tx1', 'tx2'] });
-      executeBatchCallStub.resolves({
-        status: 'success',
-        data: [
-          { id: 0, result: makeRpcTx('tx1', 700_000, config.fluxapps.appPaymentAddresses[0].address, 500_000_000, hashHex1), error: null },
-          { id: 1, result: makeRpcTx('tx2', 700_001, config.fluxapps.appPaymentAddresses[0].address, 500_000_000, hashHex2), error: null },
-        ],
-      });
+    it('records each payment with its position and moves the cursor', async () => {
+      addressIndex([delta('tx1', 700_000, 3), delta('tx2', 700_001, 1)]);
+      executeBatchCallStub.resolves(answer(makeRpcTx('tx1', 700_000, PAY, 500_000_000, hashHex1), makeRpcTx('tx2', 700_001, PAY, 500_000_000, hashHex2)));
 
       await explorerService.bootstrapAppHashes(2_579_000);
 
       sinon.assert.calledOnce(insertManyStub);
       const inserted = insertManyStub.getCall(0).args[2];
-      expect(inserted).to.have.length(2);
-      expect(inserted[0].hash).to.have.length(64);
+      expect(inserted.map((record) => [record.txid, record.txIndex])).to.deep.equal([['tx1', 3], ['tx2', 1]]);
 
-      sinon.assert.called(updateOneStub);
       const updateCall = updateOneStub.getCalls().find((c) => c.args[1] === config.database.daemon.collections.scannedHeight);
       expect(updateCall.args[3].$set.generalScannedHeight).to.equal(2_579_000);
     });
 
-    it('should throw on getaddresstxids failure', async () => {
-      executeCallStub.resolves({ status: 'error', data: { message: 'RPC failed' } });
-      await expect(explorerService.bootstrapAppHashes(2_579_000)).to.be.rejectedWith('getaddresstxids failed');
+    it('keeps the first payment of a hash paid twice in one block, whatever order the daemon answers in', async () => {
+      addressIndex([delta('later', 700_000, 9), delta('earlier', 700_000, 2)]);
+      executeBatchCallStub.resolves(answer(makeRpcTx('later', 700_000, PAY, 500_000_000, hashHex1), makeRpcTx('earlier', 700_000, PAY, 500_000_000, hashHex1)));
+
+      await explorerService.bootstrapAppHashes(2_579_000);
+
+      const inserted = insertManyStub.getCall(0).args[2];
+      expect(inserted.map((record) => record.txid)).to.deep.equal(['earlier']);
     });
 
-    it('should throw on batch getrawtransaction failure', async () => {
-      executeCallStub.resolves({ status: 'success', data: ['tx1'] });
+    it('does not fetch a transaction that only spends from a payment address', async () => {
+      addressIndex([delta('pay', 700_000, 0), delta('spend', 700_002, 0, -500_000_000)]);
+      executeBatchCallStub.resolves(answer(makeRpcTx('pay', 700_000, PAY, 500_000_000)));
+
+      await explorerService.bootstrapAppHashes(2_579_000);
+      expect(executeBatchCallStub.getCall(0).args[0].map((call) => call.params[0])).to.deep.equal(['pay']);
+    });
+
+    it('throws when the address index fails', async () => {
+      executeCallStub.resolves({ status: 'error', data: { message: 'RPC failed' } });
+      await expect(explorerService.bootstrapAppHashes(2_579_000)).to.be.rejectedWith('getaddressdeltas failed');
+    });
+
+    it('throws when the address index gives no position', async () => {
+      addressIndex([{ txid: 'tx1', height: 700_000, satoshis: 500_000_000, address: PAY }]);
+      await expect(explorerService.bootstrapAppHashes(2_579_000)).to.be.rejectedWith('no blockindex for tx1');
+    });
+
+    it('throws on batch getrawtransaction failure', async () => {
+      addressIndex([delta('tx1', 700_000, 0)]);
       executeBatchCallStub.resolves({ status: 'error', data: { message: 'Batch failed' } });
       await expect(explorerService.bootstrapAppHashes(2_579_000)).to.be.rejectedWith('Batch getrawtransaction failed');
     });
 
-    it('should tolerate individual tx errors in batch', async () => {
-      executeCallStub.resolves({ status: 'success', data: ['tx1', 'tx2'] });
+    it('tolerates individual tx errors in batch', async () => {
+      addressIndex([delta('tx1', 700_000, 0), delta('tx2', 700_001, 0)]);
       executeBatchCallStub.resolves({
         status: 'success',
         data: [
-          { id: 0, result: makeRpcTx('tx1', 700_000, config.fluxapps.appPaymentAddresses[0].address, 500_000_000), error: null },
+          { id: 0, result: makeRpcTx('tx1', 700_000, PAY, 500_000_000), error: null },
           { id: 1, result: null, error: { code: -5, message: 'Not found' } },
         ],
       });
 
       await explorerService.bootstrapAppHashes(2_579_000);
-      const inserted = insertManyStub.getCall(0).args[2];
-      expect(inserted).to.have.length(1);
+      expect(insertManyStub.getCall(0).args[2]).to.have.length(1);
     });
 
-    it('should deduplicate txids from address overlap', async () => {
-      executeCallStub.resolves({ status: 'success', data: ['tx1', 'tx1', 'tx2'] });
-      executeBatchCallStub.resolves({
+    it('fetches a transaction once when several of its outputs pay', async () => {
+      addressIndex([delta('tx1', 700_000, 0), delta('tx1', 700_000, 0), delta('tx2', 700_001, 0)]);
+      executeBatchCallStub.resolves(answer(makeRpcTx('tx1', 700_000, PAY, 500_000_000), makeRpcTx('tx2', 700_001, PAY, 500_000_000, hashHex2)));
+
+      await explorerService.bootstrapAppHashes(2_579_000);
+      expect(executeBatchCallStub.getCall(0).args[0]).to.have.length(2);
+    });
+
+    it('inserts in chunks', async () => {
+      const count = 6000;
+      addressIndex(Array.from({ length: count }, (_, i) => delta(`tx${i}`, 700_000 + i, 0)));
+      executeBatchCallStub.callsFake(async (calls) => ({
         status: 'success',
-        data: [
-          { id: 0, result: makeRpcTx('tx1', 700_000, config.fluxapps.appPaymentAddresses[0].address, 500_000_000), error: null },
-          { id: 1, result: makeRpcTx('tx2', 700_001, config.fluxapps.appPaymentAddresses[0].address, 500_000_000), error: null },
-        ],
-      });
+        data: calls.map(({ params: [txid] }, id) => ({
+          id,
+          result: makeRpcTx(txid, 700_000 + Number(txid.slice(2)), PAY, 500_000_000, Buffer.from(`hash${txid.padStart(60, '0')}`).toString('hex')),
+          error: null,
+        })),
+      }));
 
       await explorerService.bootstrapAppHashes(2_579_000);
-      const batchCalls = executeBatchCallStub.getCall(0).args[0];
-      expect(batchCalls).to.have.length(2);
-    });
-
-    it('should insert in chunks when exceeding threshold', async () => {
-      const txids = Array.from({ length: 6000 }, (_, i) => `tx${i}`);
-      executeCallStub.resolves({ status: 'success', data: txids });
-
-      const batchResponses = [];
-      for (let i = 0; i < 6000; i += 500) {
-        const batch = [];
-        for (let j = 0; j < 500 && i + j < 6000; j++) {
-          const hexHash = Buffer.from(`hash${String(i + j).padStart(60, '0')}`).toString('hex');
-          batch.push({
-            id: j,
-            result: {
-              txid: `tx${i + j}`, version: 1, height: 700_000 + i + j,
-              vin: [{ address: 't1Sender' }],
-              vout: [{ valueSat: 500_000_000, scriptPubKey: { addresses: [config.fluxapps.appPaymentAddresses[0].address], asm: `OP_RETURN ${hexHash}` } }],
-            },
-            error: null,
-          });
-        }
-        batchResponses.push({ status: 'success', data: batch });
-      }
-      let callIdx = 0;
-      executeBatchCallStub.callsFake(() => batchResponses[callIdx++]);
-
-      await explorerService.bootstrapAppHashes(2_579_000);
-      expect(insertManyStub.callCount).to.be.greaterThan(1);
+      expect(insertManyStub.callCount).to.equal(2);
+      expect(insertManyStub.getCalls().reduce((sum, call) => sum + call.args[2].length, 0)).to.equal(count);
     });
   });
 
@@ -1759,13 +1754,13 @@ describe('explorerService tests', () => {
       blockAt = (height) => ({
         height,
         time: 1_700_000_000,
-        tx: height === PAYMENT_HEIGHT ? [paymentTx('first'), paymentTx('second')] : [paymentTx('third')],
+        tx: height === PAYMENT_HEIGHT ? [paymentTx('coinbase', 0), paymentTx('first'), paymentTx('second')] : [paymentTx('third')],
       });
 
       await explorerService.startScanning();
 
       const inserted = insertStub.getCalls().flatMap((call) => call.args[2]);
-      expect(inserted.map((record) => record.txid)).to.deep.equal(['first']);
+      expect(inserted.map((record) => [record.txid, record.txIndex])).to.deep.equal([['first', 1]]);
     });
 
     it('fails the block, rather than dropping the payment, when the record lookup fails', async () => {

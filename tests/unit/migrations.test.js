@@ -15,12 +15,14 @@ describe('migrations tests', () => {
       nodeIdentityMigration: { migrateNodeIdentity: sinon.stub().resolves({ migrated: [] }) },
       containerLabelBackfill: { backfillContainerLabels: sinon.stub().resolves({ covered: true }) },
       retiredSchema: { dropRetiredSchema: sinon.stub().resolves({ collections: [], indexes: [] }) },
+      paymentPositions: { backfillPaymentPositions: sinon.stub().resolves({ positioned: 0, unresolved: 0 }) },
     };
     migrations = proxyquire('../../ZelBack/src/services/migrations', {
       '../../lib/log': stubs.log,
       '../appDatabase/nodeIdentityMigration': stubs.nodeIdentityMigration,
       '../appLifecycle/containerLabelBackfill': stubs.containerLabelBackfill,
       './retiredSchema': stubs.retiredSchema,
+      './paymentPositions': stubs.paymentPositions,
     });
   });
 
@@ -59,6 +61,12 @@ describe('migrations tests', () => {
 
       expect(stubs.containerLabelBackfill.backfillContainerLabels.calledOnce).to.be.true;
       expect(stubs.nodeIdentityMigration.migrateNodeIdentity.called).to.be.false;
+    });
+
+    it('backfills payment positions before the scan first reaches the tip', async () => {
+      const results = await migrations.runBefore('explorerSynced');
+
+      expect(results).to.deep.equal([{ id: 'payment-positions', ok: true }]);
     });
 
     it('does nothing for a capability no migration finishes before', async () => {
@@ -101,6 +109,9 @@ describe('migrations tests', () => {
         './retiredSchema': {
           dropRetiredSchema: async () => { order.push('second'); },
         },
+        './paymentPositions': {
+          backfillPaymentPositions: async () => { order.push('fourth'); },
+        },
       });
       rebuilt.migrations.forEach((migration) => {
         // eslint-disable-next-line no-param-reassign
@@ -109,8 +120,8 @@ describe('migrations tests', () => {
 
       const results = await rebuilt.runBefore('localDbPrepared');
 
-      expect(order).to.deep.equal(['first', 'second', 'third']);
-      expect(results.map((r) => r.ok)).to.deep.equal([false, true, true]);
+      expect(order).to.deep.equal(['first', 'second', 'fourth', 'third']);
+      expect(results.map((r) => r.ok)).to.deep.equal([false, true, true, true]);
     });
   });
 });

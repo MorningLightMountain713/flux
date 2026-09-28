@@ -4,6 +4,7 @@ const log = require('../../lib/log');
 const nodeIdentityMigration = require('../appDatabase/nodeIdentityMigration');
 const containerLabelBackfill = require('../appLifecycle/containerLabelBackfill');
 const retiredSchema = require('./retiredSchema');
+const paymentPositions = require('./paymentPositions');
 
 // One-off work that brings a node up to date with a change FluxOS has already
 // made. Each migration names the capability it must finish before: that
@@ -44,6 +45,14 @@ const migrations = [
     before: 'localDbPrepared',
     description: 'drop collections and expiry indexes no version reads',
     run: () => retiredSchema.dropRetiredSchema(),
+  },
+  {
+    id: 'payment-positions',
+    // Needs the daemon's address index, so it runs once the daemon is synced and
+    // before the scan first reaches the tip.
+    before: 'explorerSynced',
+    description: 'record the block position of app payments recorded without one',
+    run: () => paymentPositions.backfillPaymentPositions(),
   },
   {
     id: 'container-labels',
