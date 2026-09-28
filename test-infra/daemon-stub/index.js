@@ -56,8 +56,8 @@ function blockTimeOf(height) {
   if (!blockTimes.has(height)) blockTimes.set(height, Math.floor(Date.now() / 1000));
   return blockTimes.get(height);
 }
-// Serial behind the wallet addresses, so every getnewaddress differs from the last.
-let walletAddressSerial = 0;
+// Serial behind the node keys, so every createzelnodekey differs from the last.
+let nodeKeySerial = 0;
 
 const nodeStatusOverrides = new Map();
 const rpcFailures = new Map();
@@ -537,16 +537,12 @@ const rpcHandlers = {
     return { hex: 'stub-confirmation-tx-hex' };
   },
 
-  // Wallet calls that act as well as answer: each one must yield an address the
-  // wallet has not handed out before, so a caller given the same address twice has
-  // been served a cached answer rather than a second call.
-  getnewaddress: () => {
-    walletAddressSerial += 1;
-    return `t1stubnew${String(walletAddressSerial).padStart(26, '0')}`;
-  },
-  getrawchangeaddress: () => {
-    walletAddressSerial += 1;
-    return `t1stubchg${String(walletAddressSerial).padStart(26, '0')}`;
+  // A call that acts as well as answers: each one yields a key the daemon has not
+  // handed out before, so a caller given the same key twice has been served a cached
+  // answer rather than a second call.
+  createzelnodekey: () => {
+    nodeKeySerial += 1;
+    return `5stubnodekey${String(nodeKeySerial).padStart(39, '0')}`;
   },
 
   getaddressbalance: () => ({ balance: 0, received: 0 }),

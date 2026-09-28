@@ -74,8 +74,9 @@ async function buildFluxdClient() {
  * To execute a remote procedure call (RPC).
  *
  * The daemon is asked, never remembered. Nothing it answers is safe to reuse: the
- * wallet and fluxnode calls act as well as answer, so a repeated `sendToAddress`
- * served from a cache hands back the earlier txid and never sends; and the read calls
+ * fluxnode and transaction calls act as well as answer, so a repeated
+ * `sendrawtransaction` served from a cache hands back the earlier txid and never
+ * broadcasts; and the read calls
  * describe live chain state, which is exactly the thing that has moved by the time a
  * second caller asks. Even a block is only fixed in its serialized form — the verbose
  * answer carries `confirmations`, which grows every block and reads -1 once the block
