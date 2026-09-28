@@ -3,6 +3,7 @@
 const log = require('../../lib/log');
 const nodeIdentityMigration = require('../appDatabase/nodeIdentityMigration');
 const containerLabelBackfill = require('../appLifecycle/containerLabelBackfill');
+const retiredSchema = require('./retiredSchema');
 
 // One-off work that brings a node up to date with a change FluxOS has already
 // made. Each migration names the capability it must finish before: that
@@ -35,6 +36,14 @@ const migrations = [
     before: 'localDbPrepared',
     description: 'adopt node runtime state that older versions kept in config/userconfig.js',
     run: () => nodeIdentityMigration.migrateNodeIdentity(),
+  },
+  {
+    id: 'retired-schema',
+    // Before the preparation asserts the current indexes, one of which shares a
+    // name with a retired expiry index.
+    before: 'localDbPrepared',
+    description: 'drop collections and expiry indexes no version reads',
+    run: () => retiredSchema.dropRetiredSchema(),
   },
   {
     id: 'container-labels',

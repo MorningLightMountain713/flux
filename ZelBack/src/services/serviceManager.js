@@ -299,31 +299,6 @@ async function startFluxFunctions() {
         log.info('Preparing local database...');
         const db = dbHelper.databaseConnection();
         const database = db.db(config.get('database.local.database'));
-        await dbHelper.dropCollection(database, config.get('database.local.collections.loggedUsers')).catch((error) => { // drop currently logged users
-          if (error.message !== 'ns not found') {
-            log.error(error);
-          }
-        });
-        await dbHelper.dropCollection(database, config.get('database.local.collections.activeLoginPhrases')).catch((error) => {
-          if (error.message !== 'ns not found') {
-            log.error(error);
-          }
-        });
-        await dbHelper.dropCollection(database, config.get('database.local.collections.activeSignatures')).catch((error) => {
-          if (error.message !== 'ns not found') {
-            log.error(error);
-          }
-        });
-        // Named literally because they are no longer part of the schema: the payment
-        // request and receipt collections outlived the endpoint that wrote them, and
-        // a node's word was never the payment record - the chain is. Dropping is
-        // idempotent, so this costs one 'ns not found' per boot once they are gone.
-        await Promise.all(['activepaymentrequests', 'completedpayments'].map((orphan) => dbHelper
-          .dropCollection(database, orphan).catch((error) => {
-            if (error.message !== 'ns not found') {
-              log.error(error);
-            }
-          })));
         await ensureIndexes(database.collection(config.get('database.local.collections.loggedUsers')), [
           { key: { createdAt: 1 }, expireAfterSeconds: 14 * 24 * 60 * 60 },
         ]);
@@ -410,12 +385,6 @@ async function startFluxFunctions() {
           { key: { 'appSpecifications.version': 1 }, name: 'query for getting app message based on version' },
           { key: { 'appSpecifications.nodes': 1 }, name: 'query for getting app message based on nodes' },
         ]);
-        // The running set is derived from the app state event log on read; the materialized
-        // location collection it replaced is no longer written or read. Dropped rather than
-        // left to its TTL so an upgraded node does not carry a dead collection - and its
-        // per-minute TTL sweep - indefinitely. Named literally: the config key is gone, and
-        // a drop of a collection that is not there is a no-op, so this self-retires.
-        await databaseTemp.collection('zelappslocation').drop().catch(() => {});
         await ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appStateEvents')), [
           { key: { expireAt: 1 }, expireAfterSeconds: 0 },
           { key: { ip: 1, type: 1, dedupKey: 1 }, unique: true, recover: dedupeByKey },
@@ -424,8 +393,6 @@ async function startFluxFunctions() {
         ]);
         log.info('App state events collection prepared');
         await registryManager.prepareInstallingClaimsCollections();
-        await databaseTemp.collection(config.get('database.appsglobal.collections.appsInstallingErrorsLocations')).dropIndex('cachedAt_1').catch(() => {});
-        await databaseTemp.collection(config.get('database.appsglobal.collections.appsInstallingErrorsLocations')).dropIndex('broadcastedAt_1').catch(() => {});
         await ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appsInstallingErrorsLocations')), [
           { key: { expireAt: 1 }, expireAfterSeconds: 0 },
           { key: { name: 1 }, name: 'query for getting flux app install errors location based on specs name' },
@@ -433,7 +400,6 @@ async function startFluxFunctions() {
           { key: { name: 1, hash: 1, ip: 1 }, name: 'query for getting flux app install errors location based on specs name and hash and node ip' },
         ]);
         log.info('App installing errors locations prepared');
-        await databaseTemp.collection(config.get('database.appsglobal.collections.appsInstallingErrorsBroadcasts')).dropIndex('broadcastedAt_1').catch(() => {});
         await ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appsInstallingErrorsBroadcasts')), [
           { key: { expireAt: 1 }, expireAfterSeconds: 0 },
           { key: { broadcastedAt: 1 } },
