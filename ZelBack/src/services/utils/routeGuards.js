@@ -6,6 +6,7 @@ const apicache = require('apicache');
 
 const messageHelper = require('../messageHelper');
 const globalState = require('./globalState');
+const capabilities = require('./capabilities');
 
 // What a caller turned away during boot is told to wait. The boot chain is
 // bounded by its own daemon and sync timeouts rather than by this number, so it
@@ -97,7 +98,7 @@ function requireBootSettled(req, res, next) {
  * @returns {*} next(), or a 503 carrying a Retry-After
  */
 function requirePolicyReady(req, res, next) {
-  if (globalState.policyReady) return next();
+  if (capabilities.isUp('policyCurrent')) return next();
   return serviceUnavailable(res, 'Node has not yet obtained the network policy', POLICY_RETRY_AFTER_SECONDS);
 }
 

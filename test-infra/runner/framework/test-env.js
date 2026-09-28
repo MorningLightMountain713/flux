@@ -2047,7 +2047,7 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
       // baseUrl is the plain documents and the iplocation artifact; signedBaseUrl is the
       // bundle, and the only policy a current node reads. A fleet pointed at neither has no
       // policy at all - which is not a policy suite failing but every app suite failing,
-      // because acquisition waits on globalState.policyReady and it never opens.
+      // because acquisition waits on the policyCurrent capability and it never comes up.
       policy: {
         baseUrl: `http://${EXTERNAL_STUB_IP}:3000`,
         signedBaseUrl: `http://${EXTERNAL_STUB_IP}:3000`,

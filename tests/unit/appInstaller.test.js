@@ -411,8 +411,9 @@ describe('appInstaller tests', () => {
         './pendingTeardownStore': { teardownOwedFor },
         './componentProvisioner': { installComponent },
         '../utils/globalState': {
-          installingApps: new Map(), installAborted: sinon.stub().returns(installAborted), abortInstall, runningAppsCache: new Set(), isArcane: sinon.stub().returns(false), policyReady,
+          installingApps: new Map(), installAborted: sinon.stub().returns(installAborted), abortInstall, runningAppsCache: new Set(), isArcane: sinon.stub().returns(false),
         },
+        '../utils/capabilities': { isUp: (name) => name === 'policyCurrent' && policyReady },
         // appNetworkLinker.reconnectLinkedApps runs on the success path (the call kept during
         // the rebase); without this stub the install throws before reaching the broadcast.
         './appNetworkLinker': {

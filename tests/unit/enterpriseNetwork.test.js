@@ -12,7 +12,7 @@ const bundleListeners = [];
 const MODULE_PATH = '../../ZelBack/src/services/utils/enterpriseNetwork';
 
 /**
- * The acquisition gate as globalState presents it, with a handle to open it.
+ * `policyCurrent` as the capability registry presents it, with a handle to raise it.
  *
  * Both of the sweep's triggers hang off this: it reads the flag before acting, and it hangs
  * a first run on the wait resolving.
@@ -21,12 +21,12 @@ const MODULE_PATH = '../../ZelBack/src/services/utils/enterpriseNetwork';
 function gateState(ready = true) {
   let openIt;
   const opened = new Promise((resolve) => { openIt = resolve; });
-  const state = {
-    policyReady: ready,
-    waitForPolicyReady: () => (state.policyReady ? Promise.resolve() : opened),
-    open() { state.policyReady = true; openIt(); },
+  let up = ready;
+  return {
+    isUp: () => up,
+    whenUp: () => (up ? Promise.resolve() : opened),
+    open() { up = true; openIt(); },
   };
-  return state;
 }
 
 // Lets every queued continuation run, so a detached sweep has finished by the time a test
@@ -88,7 +88,7 @@ function loadModule(overrides = {}) {
         };
       },
     },
-    './globalState': overrides.globalState || gateState(true),
+    './capabilities': overrides.capabilities || gateState(true),
     '../appLifecycle/appUninstaller': overrides.appUninstaller || {
       uninstallApplication: sinon.stub().resolves(),
     },
@@ -679,7 +679,7 @@ describe('enterpriseNetwork', () => {
       const uninstallApplication = sinon.stub().resolves();
       const { module: m, log } = loadModule({
         enterpriseConfig: unknownPolicy,
-        globalState: gateState(false),
+        capabilities: gateState(false),
         dbHelper: {
           databaseConnection: sinon.stub().returns({ db: sinon.stub().returns({}) }),
           findInDatabase: sinon.stub().resolves([
@@ -714,7 +714,7 @@ describe('enterpriseNetwork', () => {
       // node last had. isPolicyKnown answers true throughout.
       const uninstallApplication = sinon.stub().resolves();
       const { module: m, log } = loadModule({
-        globalState: gateState(false),
+        capabilities: gateState(false),
         dbHelper: offenderDb(),
         appUninstaller: { uninstallApplication },
       });
@@ -728,7 +728,7 @@ describe('enterpriseNetwork', () => {
     it('does not sweep while the gate is shut', async () => {
       const uninstallApplication = sinon.stub().resolves();
       const { module: m } = loadModule({
-        globalState: gateState(false),
+        capabilities: gateState(false),
         dbHelper: offenderDb(),
         appUninstaller: { uninstallApplication },
       });
@@ -745,7 +745,7 @@ describe('enterpriseNetwork', () => {
       const gate = gateState(false);
       const uninstallApplication = sinon.stub().resolves();
       const { module: m } = loadModule({
-        globalState: gate, dbHelper: offenderDb(), appUninstaller: { uninstallApplication },
+        capabilities: gate, dbHelper: offenderDb(), appUninstaller: { uninstallApplication },
       });
 
       m.startOwnershipSweeps();
@@ -760,7 +760,7 @@ describe('enterpriseNetwork', () => {
     it('sweeps again when the bundle changes', async () => {
       const uninstallApplication = sinon.stub().resolves();
       const { module: m } = loadModule({
-        globalState: gateState(true), dbHelper: offenderDb(), appUninstaller: { uninstallApplication },
+        capabilities: gateState(true), dbHelper: offenderDb(), appUninstaller: { uninstallApplication },
       });
 
       m.startOwnershipSweeps();
@@ -776,7 +776,7 @@ describe('enterpriseNetwork', () => {
       const uninstallApplication = sinon.stub().resolves();
       const db = offenderDb();
       const { module: m, log } = loadModule({
-        globalState: gateState(false), dbHelper: db, appUninstaller: { uninstallApplication },
+        capabilities: gateState(false), dbHelper: db, appUninstaller: { uninstallApplication },
       });
 
       m.startOwnershipSweeps();
@@ -831,7 +831,7 @@ describe('enterpriseNetwork', () => {
         .onSecondCall()
         .resolves();
       const { module: m, log } = loadModule({
-        globalState: gateState(true), dbHelper: offenderDb(), appUninstaller: { uninstallApplication },
+        capabilities: gateState(true), dbHelper: offenderDb(), appUninstaller: { uninstallApplication },
       });
 
       m.startOwnershipSweeps();
@@ -847,7 +847,7 @@ describe('enterpriseNetwork', () => {
     it('stops sweeping once the subscription is ended', async () => {
       const uninstallApplication = sinon.stub().resolves();
       const { module: m } = loadModule({
-        globalState: gateState(true), dbHelper: offenderDb(), appUninstaller: { uninstallApplication },
+        capabilities: gateState(true), dbHelper: offenderDb(), appUninstaller: { uninstallApplication },
       });
 
       const stop = m.startOwnershipSweeps();

@@ -274,6 +274,24 @@ function transitions() {
   return history.map((record) => ({ ...record }));
 }
 
+/**
+ * Raise or lower capabilities as their owners would. Raising one raises its
+ * prerequisites too, so it is up; lowering one lowers only it. Unit tests only.
+ * @param {string|string[]} nameOrNames
+ * @param {boolean} up
+ */
+function setForTests(nameOrNames, up) {
+  const raiseWithNeeds = (name) => {
+    const { needs, owner } = entryOf(name).definition;
+    needs.forEach(raiseWithNeeds);
+    claim(name, owner).raise('test');
+  };
+  for (const name of namesOf(nameOrNames)) {
+    if (up) raiseWithNeeds(name);
+    else claim(name, entryOf(name).definition.owner).lower('test');
+  }
+}
+
 /** Every capability down and unclaimed, with no listeners. Unit tests only. */
 function resetForTests() {
   emitter.removeAllListeners();
@@ -293,5 +311,6 @@ module.exports = {
   onFirstUp,
   snapshot,
   transitions,
+  setForTests,
   resetForTests,
 };

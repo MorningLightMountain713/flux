@@ -457,7 +457,7 @@ const state = {
   // bundled under one signature with a sequence number. It is what a node actually reads --
   // nothing fetches the plain documents any more - so it is published from the moment the
   // stub starts. A fleet whose stub served no bundle would have no policy at all, and a node
-  // with no policy installs nothing: globalState.policyReady is shut and the spawner returns
+  // with no policy installs nothing: policyCurrent is down and the spawner returns
   // before it considers a single app. That is not a policy suite failing, it is EVERY app
   // suite failing, so the default here has to be a good bundle.
   policySeq: 1,
