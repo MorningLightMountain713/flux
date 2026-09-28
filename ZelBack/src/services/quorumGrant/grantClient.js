@@ -1667,12 +1667,17 @@ class Holder {
  * adopting a returned holder from the one cell its vacate had not reached
  * ("ask, never count", the rule relearn applies to terms).
  *
+ * A cell answers when its reply carries its row, refusals included: the probe
+ * rides epoch 1, so every cell promised above it answers `superseded` with
+ * its row attached, `accepted: null` when nothing was ever accepted there. A
+ * reply with no row attached is not an answer.
+ *
  * @param {Array<object>} replies
  * @param {number} quorum
  * @returns {{decided: boolean, holder: string|null, epoch: number}}
  */
 function oneshotQuorumFold(replies, quorum) {
-  const answered = replies.filter((reply) => reply && (reply.ok === true || reply.accepted));
+  const answered = replies.filter((reply) => reply && (reply.ok === true || reply.accepted !== undefined));
   const counts = new Map();
   let epoch = 0;
   answered.forEach((reply) => {
