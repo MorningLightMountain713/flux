@@ -159,6 +159,93 @@ describe('routesV2 - the /v2 surface', () => {
     });
   });
 
+  describe('POST /apps/messages', () => {
+    let app;
+    let deliverMessage;
+    let firstNotUp;
+
+    beforeEach(() => {
+      deliverMessage = sinon.stub().resolves({ outcome: 'stored' });
+      firstNotUp = sinon.stub().returns(null);
+      const router = proxyquire('../../ZelBack/src/routesV2', {
+        './lib/log': {
+          info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(), debug: sinon.stub(),
+        },
+        './services/appMessaging/messageDelivery': { deliverMessage },
+        './services/utils/capabilities': { firstNotUp },
+      });
+      app = express();
+      app.use('/v2', router);
+    });
+
+    afterEach(() => sinon.restore());
+
+    const body = { hash: 'paidhash', type: 'fluxappregister', version: 1 };
+
+    it('answers 201 for a message it stored', async () => {
+      const res = await supertest(app).post('/v2/apps/messages').send(body);
+
+      expect(res.status).to.equal(201);
+      expect(res.body.data).to.deep.equal({ hash: 'paidhash' });
+      sinon.assert.calledOnceWithExactly(deliverMessage, body);
+    });
+
+    it('answers 200 for a message it already holds', async () => {
+      deliverMessage.resolves({ outcome: 'held' });
+
+      const res = await supertest(app).post('/v2/apps/messages').send(body);
+
+      expect(res.status).to.equal(200);
+      expect(res.body.data).to.deep.equal({ hash: 'paidhash', held: true });
+    });
+
+    it('answers 404 for a hash it has recorded no payment for', async () => {
+      deliverMessage.resolves({ outcome: 'unpaid' });
+
+      const res = await supertest(app).post('/v2/apps/messages').send(body);
+
+      expect(res.status).to.equal(404);
+      expect(res.body.error.code).to.equal('NOT_FOUND');
+    });
+
+    it('answers 422 with the reason for contents that fail a check', async () => {
+      deliverMessage.resolves({ outcome: 'refused', reason: 'contents do not hash to the paid hash' });
+
+      const res = await supertest(app).post('/v2/apps/messages').send(body);
+
+      expect(res.status).to.equal(422);
+      expect(res.body.error.message).to.equal('contents do not hash to the paid hash');
+    });
+
+    it('answers 503 naming what is not up, and delivers nothing', async () => {
+      firstNotUp.returns('chainStateConsistent');
+
+      const res = await supertest(app).post('/v2/apps/messages').send(body);
+
+      expect(res.status).to.equal(503);
+      expect(res.body.error.message).to.equal('chainStateConsistent is not up');
+      sinon.assert.notCalled(deliverMessage);
+    });
+
+    it('takes a body as large as the largest encrypted spec a message can carry', async () => {
+      const res = await supertest(app).post('/v2/apps/messages')
+        .set('Content-Type', 'application/json')
+        .send(JSON.stringify({ ...body, appSpecifications: { payload: 'x'.repeat(2_797_227) } }));
+
+      expect(res.status).to.equal(201);
+    });
+
+    it('refuses a body over 3 MiB before reading it as a message', async () => {
+      const res = await supertest(app).post('/v2/apps/messages')
+        .set('Content-Type', 'application/json')
+        .send(JSON.stringify({ ...body, pad: 'x'.repeat(3 * 1024 * 1024) }));
+
+      expect(res.status).to.equal(422);
+      expect(res.body.error.message).to.equal('request body too large');
+      sinon.assert.notCalled(deliverMessage);
+    });
+  });
+
   describe('the surface', () => {
     let app;
     let verifyPrivilege;
