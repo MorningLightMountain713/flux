@@ -27,94 +27,96 @@ async function bootToReady(env) {
   await stopTicker();
 }
 
-async function bootToSyncing(env) {
-  await Promise.all(env.clients.map((c) => waitForDaemonReady(c)));
-  await Promise.all(env.clients.map((c) => waitForNodeStatus(c, (d) => d.confirmed === true, 30000)));
-  await waitForExplorerReady(env.clients[0]);
-  await waitForOrchestratorStarted(env.clients[0]);
+// A failed hash-sync pass is retried after HASH_SYNC_RETRY_MIN_MS, doubling each
+// time up to HASH_SYNC_RETRY_MAX_MS, without end.
+const HASH_SYNC_RETRY_MIN_MS = 2000;
+const HASH_SYNC_RETRY_MAX_MS = 8000;
+const RETRY_CONFIG = {
+  fluxapps: { hashSyncRetryMinMs: HASH_SYNC_RETRY_MIN_MS, hashSyncRetryMaxMs: HASH_SYNC_RETRY_MAX_MS },
+};
+
+// Boots every node but the last, then starts the last with every read of its
+// payment records failing, so its first hash-sync pass fails: a node syncs its
+// hashes as soon as its scan first catches up, so the fault has to be in place
+// before it boots.
+async function bootWithFailingLastNode(env) {
+  const started = env.clients.filter(Boolean);
+  await Promise.all(started.map((c) => waitForDaemonReady(c)));
+  await Promise.all(started.map((c) => waitForNodeStatus(c, (d) => d.confirmed === true, 30000)));
   await env.startDiscovery();
-  await waitForPeerThreshold(env.clients[0], 120000);
+  const last = env.lastNodeIndex;
+  await dbClient(last + 1).failpointFind('zelappshashes', { always: true });
+  await env.startNode(last);
+  const client = env.clients[last];
+  await waitForDaemonReady(client);
+  return client;
 }
 
 describe('Hash sync: retry on failure', function () {
   let env;
+  let client;
 
   before(async function () {
     this.timeout(300000);
-    env = await createTestEnv({ hookCtx: this, nodes: 5, tickerAutostart: false });
-    await bootToSyncing(env);
-
-    // Inject failpoint before first block triggers hash sync.
-    // times: 1 — first syncMissingHashes query fails, retry succeeds.
-    const db = dbClient(1);
-    await db.failpointFind('zelappshashes', { times: 1 });
-
-    await advanceBlock();
-    await waitForBlockProcessed(env.clients[0], () => true, 20000);
+    env = await createTestEnv({
+      hookCtx: this, nodes: 5, deferredNodes: 1, tickerAutostart: false, configOverrides: RETRY_CONFIG,
+    });
+    client = await bootWithFailingLastNode(env);
   });
 
   after(async function () {
     this.timeout(30000);
-    const db = dbClient(1);
-    await db.failpointClear();
+    await dbClient(env.lastNodeIndex + 1).failpointClear();
     await env?.teardown();
   });
 
-  it('should fail initial hash sync and schedule a retry', async function () {
-    this.timeout(30000);
-    const event = await env.clients[0].waitForEvent(
-      'hashSync:failed',
-      (d) => d.attempt === 1 && d.willRetry === true,
-      20000,
-    );
-    expect(event.data.willRetry).to.equal(true);
+  it('retries a failed pass after the minimum wait, doubling it each time', async function () {
+    this.timeout(60000);
+    const first = await client.waitForEvent('hashSync:failed', (d) => d.attempt === 1, 30000);
+    expect(first.data.retryInMs).to.equal(HASH_SYNC_RETRY_MIN_MS);
+    const second = await client.waitForEvent('hashSync:failed', (d) => d.attempt === 2, 30000, { afterId: first.id });
+    expect(second.data.retryInMs).to.equal(2 * HASH_SYNC_RETRY_MIN_MS);
   });
 
-  it('should succeed on retry', async function () {
-    this.timeout(30000);
-    const event = await env.clients[0].waitForEvent('hashSync:complete', () => true, 20000);
-    expect(event.data.attempt).to.equal(2);
+  it('never gives up, and caps the wait', async function () {
+    this.timeout(90000);
+    const fourth = await client.waitForEvent('hashSync:failed', (d) => d.attempt === 4, 60000);
+    expect(fourth.data.retryInMs).to.equal(HASH_SYNC_RETRY_MAX_MS);
+  });
+
+  it('completes once the node can read its records again', async function () {
+    this.timeout(60000);
+    const mark = client.getLastEventId();
+    await dbClient(env.lastNodeIndex + 1).failpointClear();
+    const done = await client.waitForEvent('hashSync:complete', () => true, 40000, { afterId: mark });
+    expect(done.data.attempt).to.be.above(4);
   });
 });
 
-describe('Hash sync: retry exhaustion', function () {
+describe('Hash sync: a node whose hash sync keeps failing', function () {
   let env;
+  let client;
 
   before(async function () {
     this.timeout(300000);
-    env = await createTestEnv({ hookCtx: this, nodes: 5, tickerAutostart: false });
-    await bootToSyncing(env);
-
-    // times: 2 — both attempts fail (hashSyncMaxRetries: 2 in test config)
-    const db = dbClient(1);
-    await db.failpointFind('zelappshashes', { times: 2 });
-
-    await advanceBlock();
-    await waitForBlockProcessed(env.clients[0], () => true, 20000);
+    env = await createTestEnv({
+      hookCtx: this, nodes: 5, deferredNodes: 1, tickerAutostart: false, configOverrides: RETRY_CONFIG,
+    });
+    client = await bootWithFailingLastNode(env);
+    await client.waitForEvent('hashSync:failed', (d) => d.attempt === 1, 30000);
   });
 
   after(async function () {
     this.timeout(30000);
-    const db = dbClient(1);
-    await db.failpointClear();
+    await dbClient(env.lastNodeIndex + 1).failpointClear();
     await env?.teardown();
   });
 
-  it('should exhaust retries', async function () {
-    this.timeout(60000);
-    const event = await env.clients[0].waitForEvent(
-      'hashSync:failed',
-      (d) => d.willRetry === false,
-      50000,
-    );
-    expect(event.data.attempt).to.equal(2);
-  });
-
-  it('should still reach READY via block fallback', async function () {
+  it('still reaches READY via block fallback', async function () {
     this.timeout(300000);
     // Block threshold is 250 (125 min * 2 blocks/min). Advance past it.
     await advanceBlocks(260);
-    await waitForOrchestratorState(env.clients[0], 'READY', 120000);
+    await waitForOrchestratorState(client, 'READY', 120000);
   });
 });
 
@@ -123,7 +125,9 @@ describe('Hash sync: retry timer cancelled during DEGRADED', function () {
 
   before(async function () {
     this.timeout(300000);
-    env = await createTestEnv({ hookCtx: this, nodes: 5, tickerAutostart: false });
+    env = await createTestEnv({
+      hookCtx: this, nodes: 5, tickerAutostart: false, configOverrides: RETRY_CONFIG,
+    });
     await bootToReady(env);
   });
 
@@ -154,8 +158,8 @@ describe('Hash sync: retry timer cancelled during DEGRADED', function () {
     // own ending lines afterwards, and only a retry begins another.
     const countAtDegraded = env.nodeLogCount(0, 'syncMissingHashes - Found');
 
-    // Wait longer than hashSyncRetryMs (10s in test config)
-    await new Promise((r) => { setTimeout(r, 15000); });
+    // Longer than the largest retry wait
+    await new Promise((r) => { setTimeout(r, HASH_SYNC_RETRY_MAX_MS + 5000); });
 
     const countAfterWait = env.nodeLogCount(0, 'syncMissingHashes - Found');
     expect(countAfterWait).to.equal(countAtDegraded,
@@ -168,56 +172,47 @@ describe('Hash sync: attempts reset after degrade/recover', function () {
 
   before(async function () {
     this.timeout(300000);
-    env = await createTestEnv({ hookCtx: this, nodes: 5, tickerAutostart: false });
-    await bootToSyncing(env);
+    env = await createTestEnv({
+      hookCtx: this, nodes: 5, deferredNodes: 1, tickerAutostart: false, configOverrides: RETRY_CONFIG,
+    });
+    const client = await bootWithFailingLastNode(env);
 
-    // Exhaust retries on initial sync (times: 2, maxRetries: 2)
-    const db = dbClient(1);
-    await db.failpointFind('zelappshashes', { times: 2 });
-
-    await advanceBlock();
-    await waitForBlockProcessed(env.clients[0], () => true, 20000);
-
-    // Wait for retries to exhaust
-    await env.clients[0].waitForEvent(
-      'hashSync:failed',
-      (d) => d.willRetry === false,
-      50000,
-    );
-
-    // Clear failpoint so recovery sync succeeds
-    await db.failpointClear();
+    // Two failed passes, so the node carries attempts into the degrade below
+    await client.waitForEvent('hashSync:failed', (d) => d.attempt === 2, 30000);
+    await dbClient(env.lastNodeIndex + 1).failpointClear();
+    await client.waitForEvent('hashSync:complete', () => true, 30000);
 
     // Block threshold is 250 (125 min * 2 blocks/min). Advance past it.
     await advanceBlocks(260);
-    await waitForOrchestratorState(env.clients[0], 'READY', 120000);
+    await waitForOrchestratorState(client, 'READY', 120000);
   });
 
   after(async function () {
     this.timeout(30000);
-    const db = dbClient(1);
-    await db.failpointClear();
+    await dbClient(env.lastNodeIndex + 1).failpointClear();
     await env?.teardown();
   });
 
   it('should run hash sync successfully after degrade/recover cycle', async function () {
     this.timeout(120000);
-    const mark = env.clients[0].getLastEventId();
+    const last = env.lastNodeIndex;
+    const client = env.clients[last];
+    const mark = client.getLastEventId();
 
-    // Degrade: disconnect all peers
-    for (let i = 1; i < env.clients.length; i++) {
+    // Degrade: disconnect all its peers
+    for (let i = 0; i < last; i++) {
       // eslint-disable-next-line no-await-in-loop
       await env.disconnectNode(i);
     }
-    await waitForOrchestratorState(env.clients[0], 'DEGRADED', 30000);
+    await waitForOrchestratorState(client, 'DEGRADED', 30000);
 
     // Reconnect peers → RESYNCING → hash sync runs with reset counter
-    for (let i = 1; i < env.clients.length; i++) {
+    for (let i = 0; i < last; i++) {
       // eslint-disable-next-line no-await-in-loop
       await env.reconnectNode(i);
     }
 
-    const event = await env.clients[0].waitForEvent('hashSync:complete', () => true, 60000, { afterId: mark });
+    const event = await client.waitForEvent('hashSync:complete', () => true, 60000, { afterId: mark });
     expect(event.data.attempt).to.equal(1);
   });
 
@@ -231,42 +226,40 @@ describe('Hash sync: attempts reset after degrade/recover', function () {
     // degrade zeroes the block counter, so recovery needs a WHOLE fresh budget rather than
     // one more block, and nothing here is advancing blocks. Waiting for a state change from
     // RESYNCING is waiting for something the state machine will not do.
+    const last = env.lastNodeIndex;
+    const client = env.clients[last];
     await advanceBlocks(260);
-    await waitForOrchestratorState(env.clients[0], 'READY', 120000);
+    await waitForOrchestratorState(client, 'READY', 120000);
 
-    const mark = env.clients[0].getLastEventId();
-    const db = dbClient(1);
+    const mark = client.getLastEventId();
+    const db = dbClient(last + 1);
 
     // Degrade again
-    for (let i = 1; i < env.clients.length; i++) {
+    for (let i = 0; i < last; i++) {
       // eslint-disable-next-line no-await-in-loop
       await env.disconnectNode(i);
     }
-    await waitForOrchestratorState(env.clients[0], 'DEGRADED', 30000, { afterId: mark });
+    await waitForOrchestratorState(client, 'DEGRADED', 30000, { afterId: mark });
 
     // Inject failpoint after DEGRADED — node is quiet (no blocks processing,
     // no explorer queries) so the failpoint won't be consumed before hash sync.
     await db.failpointFind('zelappshashes', { times: 1 });
 
     // Reconnect
-    for (let i = 1; i < env.clients.length; i++) {
+    for (let i = 0; i < last; i++) {
       // eslint-disable-next-line no-await-in-loop
       await env.reconnectNode(i);
     }
 
-    // Without the fix: attempts still at 2 from before, +1 = 3 >= 2, no retry.
-    // With the fix: attempts reset to 0, +1 = 1 < 2, retry IS scheduled.
-    const failEvent = await env.clients[0].waitForEvent(
-      'hashSync:failed',
-      (d) => d.willRetry === true,
-      50000,
-      { afterId: mark },
-    );
+    // The degrade reset the attempts, so this failure is the first again and
+    // waits the minimum before its retry.
+    const failEvent = await client.waitForEvent('hashSync:failed', () => true, 50000, { afterId: mark });
     expect(failEvent.data.attempt).to.equal(1);
+    expect(failEvent.data.retryInMs).to.equal(HASH_SYNC_RETRY_MIN_MS);
 
     await db.failpointClear();
 
-    const completeEvent = await env.clients[0].waitForEvent('hashSync:complete', () => true, 30000, { afterId: failEvent.id });
+    const completeEvent = await client.waitForEvent('hashSync:complete', () => true, 30000, { afterId: failEvent.id });
     expect(completeEvent.data.attempt).to.equal(2);
   });
 });
