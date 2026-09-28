@@ -2,6 +2,7 @@
 
 const os = require('os');
 const nodeConfirmationService = require('../nodeConfirmationService');
+const capabilities = require('../utils/capabilities');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const geolocationService = require('../geolocationService');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
@@ -146,7 +147,7 @@ async function stopBroadcasting() {
 }
 
 function initialize() {
-  nodeConfirmationService.onMessageCapabilityChange((capable) => {
+  capabilities.onUpChange('nodeMessageCapable', (capable) => {
     if (capable && broadcasting) {
       log.info('peerNotification - Message capability regained, triggering immediate broadcast');
       checkAndNotifyPeersOfRunningApps();

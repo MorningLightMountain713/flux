@@ -23,6 +23,7 @@ const limitCounter = require('./utils/limitCounter');
 const cacheManager = require('./utils/cacheManager').default;
 const networkStateService = require('./networkStateService');
 const nodeConfirmationService = require('./nodeConfirmationService');
+const capabilities = require('./utils/capabilities');
 const {
   extractIp, extractPort, normalizeSocketAddress, parseSocketAddress, socketAddressesMatch,
 } = require('./utils/socketAddressUtils');
@@ -2155,7 +2156,7 @@ function initializeDiscovery() {
   // The connection caps are sized from the fleet; read live, so they follow
   // the list rather than a copy taken on some schedule.
   peerManager.setFleetSizeSource(() => networkStateService.nodeCount());
-  nodeConfirmationService.onConfirmationChange((confirmed) => {
+  capabilities.onUpChange('nodeConfirmed', (confirmed) => {
     if (!confirmed) {
       log.info('Confirmation lost, disconnecting all peers');
       peerManager.disconnectAll();

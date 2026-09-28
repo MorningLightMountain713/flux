@@ -28,8 +28,10 @@ describe('nodeSelfDefense', () => {
       config: asConfig({ fluxapps: { nodeMonitorRemovalDelayMs: 0 } }),
       '../serviceHelper': { delay: sinon.stub().resolves() },
       '../nodeDosState': { onNodeDos: (cb) => { listeners.dos = cb; } },
+      '../utils/capabilities': {
+        onUpChange: (name, cb) => { if (name === 'nodeConfirmed') listeners.confirmation = cb; },
+      },
       '../nodeConfirmationService': {
-        onConfirmationChange: (cb) => { listeners.confirmation = cb; },
         onDaemonStale: (cb) => { listeners.stale = cb; },
         canSendMessages: sinon.stub().returns(false),
       },

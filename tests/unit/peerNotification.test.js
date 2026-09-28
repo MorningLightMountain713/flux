@@ -105,7 +105,6 @@ describe('peerNotification tests', () => {
     },
     '../nodeConfirmationService': {
       canSendMessages: sinon.stub().returns(true),
-      onMessageCapabilityChange: sinon.stub(),
     },
     '../utils/globalState': {
       runningAppsCache: new Set(),

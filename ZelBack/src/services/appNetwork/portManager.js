@@ -21,6 +21,7 @@ const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const { Privilege, authOf } = require('../utils/privileges');
 const fluxCaching = require('../utils/cacheManager');
 const globalState = require('../utils/globalState');
+const capabilities = require('../utils/capabilities');
 const fluxEventBus = require('../utils/fluxEventBus');
 const policyStore = require('../policyStore');
 const { nodeSigner } = require('../utils/nodeSigner');
@@ -269,7 +270,7 @@ async function restoreAppsPortsSupport() {
  */
 async function removeStaleUpnpMappings() {
   try {
-    await globalState.waitForBootContainerStateSettled();
+    await capabilities.whenUp('bootReconcileDecided');
     await serviceHelper.delay(upnpService.msUntilCleanupSlot(listeningApiPort));
     if (!upnpService.isUPNP() || globalState.shutdownInProgress) return;
     const removed = await upnpService.removeStaleMappings(async () => {
