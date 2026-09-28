@@ -6,6 +6,8 @@ const log = require('./lib/log');
 const { Privilege, authOf } = require('./services/utils/privileges');
 const verificationHelper = require('./services/verificationHelper');
 const operationsController = require('./services/appManagement/operationsController');
+const messageDelivery = require('./services/appMessaging/messageDelivery');
+const capabilities = require('./services/utils/capabilities');
 
 /**
  * The /v2 HTTP surface.
@@ -36,6 +38,13 @@ const operationsController = require('./services/appManagement/operationsControl
  */
 
 const router = express.Router();
+
+/**
+ * Wrap an async handler so a rejection becomes an answer rather than an
+ * unhandled rejection and a connection that never closes. Express 4 does not
+ * await a handler's promise; express 5 does, and this is correct under both.
+ */
+const route = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 
 const BODY_LIMIT = '25mb';
 
@@ -100,6 +109,29 @@ function envelope(req, res, next) {
 // reaches the error handler with no res.fail on it and can only be a bare 500.
 router.use(envelope);
 
+// Room for the largest app message a node can hold: an encrypted v9 spec's wire
+// envelope (SpecConstraintsV9.maxEncryptedSpecBytes, 2,797,227 bytes) plus the
+// message's own fields (hashes, signature, attestation), which the remaining
+// 348,501 bytes of 3 MiB exceed many times over. Mounted before this surface's
+// general parser so that one never reads a larger body here.
+const DELIVERY_BODY_LIMIT = 3 * 1024 * 1024;
+const DELIVERY_NEEDS = ['localDbPrepared', 'chainStateConsistent'];
+
+/**
+ * POST /v2/apps/messages - the contents of a paid app message this node is
+ * missing. Unauthenticated: only contents whose hash this node's scan recorded a
+ * payment for, and that pass every storage check, are stored.
+ */
+router.post('/apps/messages', express.json({ limit: DELIVERY_BODY_LIMIT }), route(async (req, res) => {
+  const down = capabilities.firstNotUp(DELIVERY_NEEDS);
+  if (down) return res.fail('UNAVAILABLE', `${down} is not up`);
+  const { outcome, reason } = await messageDelivery.deliverMessage(req.body);
+  if (outcome === 'stored') return res.created({ hash: req.body.hash });
+  if (outcome === 'held') return res.ok({ hash: req.body.hash, held: true });
+  if (outcome === 'unpaid') return res.fail('NOT_FOUND', 'this node has recorded no payment for this hash');
+  return res.fail('UNPROCESSABLE', reason);
+}));
+
 // This surface owns its body parsing. The global gate in lib/bodyParser.js
 // exempts /v2 precisely so that this is the only parser that runs here, which
 // is what keeps a raw-stream route from fighting a parser that already drained
@@ -162,12 +194,6 @@ function requireAppTier(privilege, appNameOf) {
   );
 }
 
-/**
- * Wrap an async handler so a rejection becomes an answer rather than an
- * unhandled rejection and a connection that never closes. Express 4 does not
- * await a handler's promise; express 5 does, and this is correct under both.
- */
-const route = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 
 /**
  * THE status resource every long-running v2 operation points at.
