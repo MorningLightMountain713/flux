@@ -217,7 +217,11 @@ module.exports = {
     // they carry that factor of six. The row a certificate negates must
     // outlive the grace: locationTtlS above stays well past nodeDownGraceS.
     nodeDownGraceS: 70,
-    restartGraceS: 20,
+    // Not compressed: a juror honours a RESTARTING close for as long as a
+    // FluxOS restart takes, and a restart is a boot, an absolute duration the
+    // block cadence does not scale. Under a gate's load the close-to-accepting
+    // span has been 45 s; the grace must exceed it, and production's value does.
+    restartGraceS: 120,
     offListGraceS: 20,
     // NOT compressed, and not compressible by a ratio. What this must outlive is
     // an install, and the harness does not compress installs - they are real
