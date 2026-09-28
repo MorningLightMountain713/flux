@@ -79,6 +79,36 @@ describe('mount forms on a replicated volume, and the directory a spec keeps loc
   const nodes = [0, 1];
   let clearedAt;
 
+  // Every declared mount on a node's volume, each as the kind its form names. Read on a
+  // node that has started the component since its clean-install clear: the clear wipes
+  // the app's entries at the volume root, mount sources included, and the start
+  // recreates them. A form that silently created the wrong kind would still pass a
+  // "the path exists" check and then fail inside the container, where no suite is looking.
+  async function expectMountKinds(k) {
+    const client = env.clients[nodes[k]];
+    await waitForReconcileActuated(client, identifier, START_ACTIONS, 300000, { afterId: clearedAt[k] });
+    expect(await pathKind(client, `${dir}/appdata`), `node ${nodes[k]} primary mount`).to.equal('dir');
+    expect(await pathKind(client, `${dir}/logs`), `node ${nodes[k]} m: mount`).to.equal('dir');
+    expect(await pathKind(client, `${dir}/cache`), `node ${nodes[k]} ml: mount`).to.equal('dir');
+    expect(await pathKind(client, `${dir}/server.json`), `node ${nodes[k]} f: mount`).to.equal('file');
+  }
+
+  // The node holding the folder sendreceive: the one the cold start seeded.
+  async function seederIndex() {
+    const folderId = `flux${appName}_${appName}`;
+    let seeder = null;
+    await waitFor(async () => {
+      const modes = await Promise.all(nodes.map(async (i) => {
+        const folders = await getFolders(env.clients[i]).catch(() => []);
+        return folders.find((folder) => folder.id === folderId)?.type;
+      }));
+      const seeding = modes.flatMap((mode, k) => (mode === 'sendreceive' ? [k] : []));
+      seeder = seeding.length === 1 ? seeding[0] : null;
+      return seeder !== null;
+    }, { timeout: 240000, interval: 5000, label: 'exactly one node seeds the cold start' });
+    return seeder;
+  }
+
   before(async function () {
     this.timeout(600000);
     // Three nodes for the same reason suite 89 needs three: the discovery mesh is a
@@ -121,21 +151,11 @@ describe('mount forms on a replicated volume, and the directory a spec keeps loc
   });
 
   it('creates every declared mount on the volume, each as the kind its form names', async function () {
-    this.timeout(420000);
-    // A form that silently created the wrong kind would still pass a "the path
-    // exists" check and then fail inside the container, where no suite is looking.
-    //
-    // Read once the node has started the component: the clean-install clear wipes the
-    // app's entries at the volume root, mount sources included, and the start
-    // recreates them. The follower starts only once the cold start is seeded.
-    await Promise.all(nodes.map(async (i, k) => {
-      const client = env.clients[i];
-      await waitForReconcileActuated(client, identifier, START_ACTIONS, 360000, { afterId: clearedAt[k] });
-      expect(await pathKind(client, `${dir}/appdata`), `node ${i} primary mount`).to.equal('dir');
-      expect(await pathKind(client, `${dir}/logs`), `node ${i} m: mount`).to.equal('dir');
-      expect(await pathKind(client, `${dir}/cache`), `node ${i} ml: mount`).to.equal('dir');
-      expect(await pathKind(client, `${dir}/server.json`), `node ${i} f: mount`).to.equal('file');
-    }));
+    this.timeout(600000);
+    // On the node that seeded, which starts once it holds the folder sendreceive. The
+    // follower starts only once the seed holds data - an empty source is not a synced
+    // one - so its mounts are read after the replication test below has written some.
+    await expectMountKinds(await seederIndex());
   });
 
   it('excludes only the directory the spec declared local, and keeps the FluxOS lines leading', async function () {
@@ -309,7 +329,7 @@ describe('mount forms on a replicated volume, and the directory a spec keeps loc
   // syncthing's own internal names are .stfolder, .stignore and .stversions - so
   // nothing but a FluxOS ignore line keeps it off every other holder.
   it('replicates an m: directory, and neither an ml: one nor the filesystem\'s own', async function () {
-    this.timeout(420000);
+    this.timeout(720000);
     const folderId = `flux${appName}_${appName}`;
 
     // WHICH node writes is read, never assumed. The cold-start election above is not
@@ -352,5 +372,8 @@ describe('mount forms on a replicated volume, and the directory a spec keeps loc
       await pathKind(b, `${dir}/lost+found/recovered`),
       'what fsck recovered on one node must not reach the peer - the canary above proves replication was running',
     ).to.equal('');
+
+    // The follower starts once the seed holds data, and makes its mounts as it does.
+    await expectMountKinds(from === 0 ? 1 : 0);
   });
 });
