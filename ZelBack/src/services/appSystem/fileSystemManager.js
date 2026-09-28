@@ -53,7 +53,6 @@
 // file replace. A merge is not atomic (it is a sequence of renames), which is the
 // trade for overlaying rather than replacing an occupied directory.
 const config = require('config');
-const archiver = require('archiver');
 const { PassThrough } = require('stream');
 const path = require('path');
 const { formidable } = require('formidable');
@@ -332,7 +331,10 @@ async function downloadAppsFolder(req, res) {
         throw new Error('Folder is not accessible');
       }
       const folderName = path.basename(folderpath);
-      const zip = archiver('zip');
+      // Loaded on first use: only a folder download needs it, and it is one of the
+      // heaviest modules a cold start would otherwise read.
+      // eslint-disable-next-line global-require
+      const zip = require('archiver')('zip');
       // The download name is set through content-disposition, which encodes it,
       // so a name the application chose reaches the header as ASCII. Interpolated
       // into the header directly it throws on any byte the header grammar
