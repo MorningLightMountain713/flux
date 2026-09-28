@@ -8,12 +8,7 @@ const messageHelper = require('../messageHelper');
 const verificationHelper = require('../verificationHelper');
 const serviceHelper = require('../serviceHelper');
 const messageVerifier = require('./messageVerifier');
-const appEventVerifier = require('./appEventVerifier');
 const confirmedMessageStore = require('./confirmedMessageStore');
-const { compareChainOrder } = require('../utils/chainOrder');
-const { deserializeSpec } = require('../utils/specCutover');
-const { getSpecBackend, assertVersionActivated } = require('../utils/specLibs');
-const daemonStatus = require('../daemonService/daemonStatus');
 const { serialiseAndSignFluxBroadcast } = require('../utils/fluxBroadcastHelper');
 const { peerManager } = require('../utils/peerState');
 const fluxCommunicationUtils = require('../fluxCommunicationUtils');
@@ -25,7 +20,6 @@ const { appSyncEvents, EVENTS } = require('../utils/appSyncEvents');
 const { HASH_EXPIRY_BLOCKS, HASH_RETRY_BACKOFF } = require('../utils/appConstants');
 const log = require('../../lib/log');
 const fluxEventBus = require('../utils/fluxEventBus');
-const { isBefore, messagesThatCount } = require('../utils/appMessageChain');
 const { invalidMessages } = require('../invalidMessages');
 const { Privilege, authOf } = require('../utils/privileges');
 
@@ -41,21 +35,6 @@ const PEERS_PER_ROUND = config.get('fluxapps.hashSyncPeersPerRound');
 const EPHEMERAL_PEERS_COUNT = config.get('fluxapps.hashSyncEphemeralPeers');
 
 let syncRunning = false;
-
-// The message right before one in the log, in (height, timestamp) order - the order
-// getPreviousAppSpecifications and appMessageChain use, so a registration and an update paid in
-// one block are in the same order for a bulk-synced node as for a live one. messages is sorted by
-// (height, timestamp).
-function findPrevMessage(messages, height, timestamp = -Infinity) {
-  let lo = 0;
-  let hi = messages.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >>> 1;
-    if (isBefore(messages[mid], height, timestamp)) lo = mid + 1;
-    else hi = mid;
-  }
-  return lo > 0 ? messages[lo - 1] : null;
-}
 
 async function getMissingHashes(options = {}) {
   const { force = false, currentHeight = 0 } = options;
@@ -214,7 +193,7 @@ async function bulkFetchStreamAndProcess(peerIp, peerPort, missing, onProgress) 
 
       const currentBatch = batch.splice(0, BULK_FETCH_BATCH_SIZE);
       // eslint-disable-next-line no-await-in-loop
-      const stats = await processMessages(currentBatch, missing, onProgress);
+      const stats = await processMessages(currentBatch, onProgress);
       totalProcessed += stats.processed;
       totalSkipped += stats.skipped;
       for (const msg of currentBatch) missing.delete(msg.hash);
@@ -230,7 +209,7 @@ async function bulkFetchStreamAndProcess(peerIp, peerPort, missing, onProgress) 
     }
 
     if (batch.length > 0) {
-      const stats = await processMessages(batch, missing, onProgress);
+      const stats = await processMessages(batch, onProgress);
       totalProcessed += stats.processed;
       totalSkipped += stats.skipped;
       for (const msg of batch) missing.delete(msg.hash);
@@ -248,164 +227,32 @@ async function bulkFetchStreamAndProcess(peerIp, peerPort, missing, onProgress) 
 }
 
 /**
- * Verifies and stores messages streamed from a peer.
- * @param {object[]} messages as the peer sent them
- * @param {Map<string, {txid: string, height: number, value: number}>} records this node's
- *   payment record of each hash, keyed by hash
- * @param {Function} [onProgress]
+ * Stores what a peer sent, through the one store: a message is stored only with
+ * this node's payment record for it, so one this node has not seen paid is
+ * skipped. The decider judges what is stored.
+ *
+ * @param {object[]} messages
+ * @param {(progress: {processed: number, skipped: number, total: number}) => void} [onProgress]
+ * @returns {Promise<{processed: number, skipped: number, total: number}>}
  */
-async function processMessages(messages, records, onProgress) {
-  const db = dbHelper.databaseConnection();
-  const appsGlobalDb = db.db(config.get('database.appsglobal.database'));
-  const daemonDb = db.db(config.get('database.daemon.database'));
+async function processMessages(messages, onProgress) {
   let processed = 0;
   let skipped = 0;
   let failed = 0;
 
-  // Chunks in the peer's height order, so a registration usually lands in a chunk
-  // no later than its updates; within a chunk, this node's chain order decides.
-  messages.sort((a, b) => a.height - b.height);
-  const filtered = messages.filter((app) => app.valueSat !== null);
-
-  const syncStatus = daemonStatus.isDaemonSynced();
-  const daemonHeight = syncStatus.data.height || 0;
-
   const CHUNK_SIZE = 2000;
-  for (let offset = 0; offset < filtered.length; offset += CHUNK_SIZE) {
-    const chunk = filtered.slice(offset, offset + CHUNK_SIZE);
-
-    // This node's own payment record for each message: its chain facts are the
-    // ones a message is judged and stored with, never the peer's copy.
-    const records = await confirmedMessageStore.paymentRecords(chunk.map((m) => m.hash));
-    const paid = chunk
-      .filter((m) => records.has(m.hash))
-      .sort((a, b) => compareChainOrder(records.get(a.hash), records.get(b.hash)));
-    skipped += chunk.length - paid.length;
-
-    // Pre-load previous app specs from DB for update messages in this chunk
-    const updateNames = new Set();
-    for (const msg of paid) {
-      if (msg.type === 'fluxappupdate' || msg.type === 'zelappupdate') {
-        const specs = msg.appSpecifications;
-        if (specs) updateNames.add(specs.name);
-      }
-    }
-    const prevMessagesMap = new Map();
-    if (updateNames.size > 0) {
-      const prevDocs = await appsGlobalDb.collection(globalAppsMessages)
-        .find({ 'appSpecifications.name': { $in: [...updateNames] } })
-        .project({ _id: 0 })
-        // a same-block tie in the order getPreviousAppSpecifications and appMessageChain use
-        .sort({ height: 1, timestamp: 1 })
-        .toArray();
-      for (const doc of prevDocs) {
-        const name = doc.appSpecifications?.name;
-        if (!name) continue;
-        if (!prevMessagesMap.has(name)) prevMessagesMap.set(name, []);
-        prevMessagesMap.get(name).push(doc);
-      }
-    }
-
-    // Who holds a name is decided by the chain (appMessageChain): an update is verified against
-    // the message before it among those that count, from this node's payment records.
-    const paymentFacts = await dbHelper.appPaymentFacts(
-      daemonDb,
-      [...[...prevMessagesMap.values()].flat(), ...paid].map((message) => message.hash),
-    );
-    const countedBefore = (list) => messagesThatCount(
-      list.filter((message) => !paymentFacts.notOnChain.has(message.hash)),
-      paymentFacts.positions,
-    );
-
-    // Judged before it is stored, against the name's history below it, until
-    // the decider judges stored messages.
-    const admitted = [];
-    for (const appMessage of paid) {
-      try {
-        const specifications = appMessage.appSpecifications;
-        if (!specifications) continue;
-
-        const messageTimestamp = serviceHelper.ensureNumber(appMessage.timestamp);
-        const isRegistration = appMessage.type === 'fluxappregister' || appMessage.type === 'zelappregister';
-        const appEvent = await confirmedMessageStore.confirmedEvent(appMessage, records.get(appMessage.hash));
-        const permMsg = appEvent.serialize();
-        const wireSpec = appEvent.spec;
-        const { height } = permMsg;
-
-        // Outside the decrypt below, whose failures are logged and passed over:
-        // the activation gate needs only the version a sealed spec states in the
-        // clear, so it holds on every node.
-        assertVersionActivated(wireSpec.version, height);
-
-        // A confirmed message is kept either way: only an Arcane node can run
-        // this check, so its verdict cannot decide what the network stores.
-        if (wireSpec.isEncrypted) {
-          let decrypted = null;
-          try {
-            decrypted = await wireSpec.decrypt(await wireSpec.createProvider());
-          } catch (err) {
-            log.warn(`processMessages enterprise decrypt skipped for ${wireSpec.name}: ${err.message}`);
-          }
-          if (decrypted) {
-            try {
-              // Through the wrapper: a decrypted spec has no wire form, so no
-              // plaintext blob is produced to hand a validator. Same rules.
-              decrypted.validateContents({ purpose: 'gossip' });
-            } catch (err) {
-              log.warn(`processMessages ${wireSpec.name} (${appMessage.hash}) stored, but its decrypted content fails validation on this node: ${err.message}`);
-            }
-          }
-        }
-
-        let previousState = null;
-        if (!isRegistration) {
-          const prevMessagesList = prevMessagesMap.get(wireSpec.name);
-          const prevMsg = prevMessagesList ? findPrevMessage(countedBefore(prevMessagesList), height, messageTimestamp) : null;
-          if (!prevMsg) {
-            failed += 1;
-            continue;
-          }
-          const prevSpecBlob = prevMsg.appSpecifications;
-          const { InstantiatedSpec } = await getSpecBackend();
-          previousState = InstantiatedSpec.fromEvent({
-            spec: await deserializeSpec(prevSpecBlob),
-            hash: prevMsg.hash,
-            height: serviceHelper.ensureNumber(prevMsg.height),
-            contentHash: prevMsg.contentHash ?? null,
-          });
-        }
-
-        await appEventVerifier.authorize({
-          appEvent,
-          previousState,
-          daemonHeight,
-          // Every message here is already on chain: this is the replay door,
-          // and a signature spelling the ingress rule refuses is not a reason
-          // to refuse to sync it.
-          allowLegacyEncoding: true,
-        });
-
-        admitted.push(appMessage);
-        if (!prevMessagesMap.has(wireSpec.name)) prevMessagesMap.set(wireSpec.name, []);
-        // kept sorted, as findPrevMessage searches it: a gap filled late lands mid-list, not at its end
-        const prevList = prevMessagesMap.get(wireSpec.name);
-        const at = prevList.indexOf(findPrevMessage(prevList, height, messageTimestamp)) + 1;
-        prevList.splice(at, 0, permMsg);
-      } catch (error) {
-        failed += 1;
-        if (failed <= 10) log.warn(`processMessages verify failed: ${appMessage.hash} - ${error.message}`);
-      }
-    }
-
-    const storage = await confirmedMessageStore.storeConfirmedMessages(admitted);
+  for (let offset = 0; offset < messages.length; offset += CHUNK_SIZE) {
+    const chunk = messages.slice(offset, offset + CHUNK_SIZE);
+    // eslint-disable-next-line no-await-in-loop
+    const storage = await confirmedMessageStore.storeConfirmedMessages(chunk);
     processed += storage.stored.length;
-    skipped += storage.alreadyStored.length;
-    failed += storage.refused.length + storage.unpaid.length;
+    skipped += storage.alreadyStored.length + storage.unpaid.length;
+    failed += storage.refused.length;
 
-    log.info(`syncMissingHashes - ${processed} processed, ${skipped} skipped, ${failed} failed of ${filtered.length}`);
-    if (onProgress) onProgress({ processed, skipped, total: filtered.length });
+    log.info(`syncMissingHashes - ${processed} processed, ${skipped} skipped, ${failed} failed of ${messages.length}`);
+    if (onProgress) onProgress({ processed, skipped, total: messages.length });
   }
-  return { processed, skipped, total: filtered.length };
+  return { processed, skipped, total: messages.length };
 }
 
 /**
@@ -792,7 +639,6 @@ async function resetHashSyncForUpgrade(currentHeight) {
 }
 
 module.exports = {
-  findPrevMessage,
   syncMissingHashes,
   getMissingHashes,
   resetHashSyncForUpgrade,

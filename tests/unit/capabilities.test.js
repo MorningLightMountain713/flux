@@ -76,7 +76,7 @@ describe('capabilities tests', () => {
       const chain = capabilities.claim('chainStateConsistent', 'chainState');
       const synced = capabilities.claim('explorerSynced', 'explorerService');
       const messages = capabilities.claim('appMessagesSynced', 'appSyncOrchestrator');
-      const registry = capabilities.claim('appRegistryConsistent', 'appSyncOrchestrator');
+      const registry = capabilities.claim('appRegistryConsistent', 'appRegistry');
       [chain, synced, messages, registry].forEach((h) => h.raise('up'));
       expect(capabilities.isUp('appRegistryConsistent')).to.equal(true);
 

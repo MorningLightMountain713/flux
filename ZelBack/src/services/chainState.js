@@ -111,8 +111,9 @@ async function setScannedHeight(database, height) {
 /**
  * Deletes every chain-derived row above a height: app payment records, the
  * decisions of the messages they paid for, legacy and v9 soft-fork rows. The
- * app messages and the registry are not chain data and are never deleted
- * here. Whole-collection deletes: they run on the maintenance client.
+ * app messages are not chain data and are never deleted here; the registry
+ * follows the decisions at the next full pass. Whole-collection deletes: they
+ * run on the maintenance client.
  * @param {number} height
  */
 async function deleteAbove(height) {

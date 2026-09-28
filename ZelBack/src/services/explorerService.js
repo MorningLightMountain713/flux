@@ -1892,14 +1892,13 @@ async function restartBlockProcessingApi(req, res) {
 /**
  * Refuse the apps flag of an explorer reindex or rescan. The explorer reset
  * covers chain data only: the app messages come from the network, not the chain,
- * and the registry has its own rebuild, which keeps the live registry until the
- * new one is complete.
+ * and the registry follows the decisions on the stored messages (appRegistry).
  * @param {import('express').Response} res
  * @returns {*} the sent response
  */
 function refuseAppsFlag(res) {
   const errMessage = messageHelper.createErrorMessage(
-    'The explorer reset covers chain data only. Rebuild the app registry with /apps/reindexglobalappsinformation.',
+    'The explorer reset covers chain data only. The app registry follows the stored app messages, and needs no rebuild.',
     'BadRequest',
     400,
   );

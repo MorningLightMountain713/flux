@@ -307,52 +307,24 @@ describe('appsRepository', () => {
   });
 
   describe('writes', () => {
-    it('upsertGlobalAppInfo uses replaceOne with upsert', async () => {
+    it('replaceGlobalAppRow replaces the row the name holds in any letter case, or inserts one', async () => {
       dbHelperStub.replaceOneInDatabase.resolves({ matchedCount: 1 });
-      await appsRepository.upsertGlobalAppInfo({ name: 'app', version: 7, hash: 'h', height: 1 });
+      const row = {
+        name: 'MyApp', version: 9, hash: 'h', height: 1, uuid: 'f'.repeat(64), identity: 'ffffffffffff',
+      };
+      await appsRepository.replaceGlobalAppRow(row);
       const [, , query, doc, options] = dbHelperStub.replaceOneInDatabase.firstCall.args;
-      expect(query).to.deep.equal({ name: 'app' });
-      expect(doc.name).to.equal('app');
+      expect('myapp').to.match(query.name);
+      expect('MYAPP').to.match(query.name);
+      expect('myapp2').to.not.match(query.name);
+      expect(doc).to.deep.equal(row);
       expect(options).to.deep.equal({ upsert: true });
     });
 
-    // Both are minted once, from the transaction that carried the registration.
-    // Every later write here is a REPLACE and an update carries neither, so
-    // without the carry-forward the app's next deployment would be named from
-    // something other than what its containers and volume already carry.
-    it('upsertGlobalAppInfo carries a stored uuid and identity through an update', async () => {
-      dbHelperStub.findOneInDatabase.resolves({ uuid: 'u'.repeat(64), identity: 'abc123def456' });
-      dbHelperStub.replaceOneInDatabase.resolves({ matchedCount: 1 });
-
-      await appsRepository.upsertGlobalAppInfo({ name: 'app', version: 7, hash: 'h2', height: 2 });
-
-      const doc = dbHelperStub.replaceOneInDatabase.firstCall.args[3];
-      expect(doc.uuid, 'an update must not clear the instance identity').to.equal('u'.repeat(64));
-      expect(doc.identity, 'nor what the containers are named from').to.equal('abc123def456');
-    });
-
-    // A registration states its own, and it must win - this is the one write
-    // that is allowed to set them.
-    it('upsertGlobalAppInfo lets an incoming registration state its own identity', async () => {
-      dbHelperStub.findOneInDatabase.resolves(null);
-      dbHelperStub.replaceOneInDatabase.resolves({ matchedCount: 0 });
-
-      await appsRepository.upsertGlobalAppInfo({
-        name: 'app', version: 9, hash: 'h', height: 1, uuid: 'f'.repeat(64), identity: 'ffffffffffff',
-      });
-
-      const doc = dbHelperStub.replaceOneInDatabase.firstCall.args[3];
-      expect(doc.uuid).to.equal('f'.repeat(64));
-      expect(doc.identity).to.equal('ffffffffffff');
-    });
-
-    it('upsertGlobalAppInfo rejects specs without name', async () => {
-      try {
-        await appsRepository.upsertGlobalAppInfo({ version: 7 });
-        expect.fail('should throw');
-      } catch (err) {
-        expect(err.message).to.match(/name required/);
-      }
+    it('replaceGlobalAppRow refuses a row without a name', async () => {
+      let thrown = null;
+      try { await appsRepository.replaceGlobalAppRow({ version: 7 }); } catch (error) { thrown = error; }
+      expect(thrown.message).to.match(/name required/);
     });
 
     it('removeGlobalAppInfo issues case-insensitive delete', async () => {
@@ -382,36 +354,6 @@ describe('appsRepository', () => {
       expect(dbHelperStub.bulkWriteInDatabase.firstCall.args[2]).to.deep.equal([]);
     });
 
-    // upsertIfNewer is the one write that takes a spec OBJECT rather than a
-    // document, and dbHelper is stubbed here — so nothing in this suite reads the
-    // row back. hydrate will, on the next boot, which makes "the real deserializer
-    // accepts what we wrote" the assertion that stands in for it.
-    it('upsertIfNewer stores a form hydrate can read back', async () => {
-      const instantiated = await instantiatedSpec(
-        await v9Spec({ name: 'newerapp' }), { hash: 'h2', height: 200 },
-      );
-      dbHelperStub.findOneInDatabase.resolves({ height: 100 });
-      dbHelperStub.replaceOneInDatabase.resolves({ matchedCount: 1 });
-
-      expect(await appsRepository.upsertIfNewer(instantiated)).to.be.true;
-
-      const doc = dbHelperStub.replaceOneInDatabase.firstCall.args[3];
-      const rehydrated = flux.InstantiatedSpec.deserialize(doc);
-      expect(rehydrated.name).to.equal('newerapp');
-      expect(rehydrated.hash).to.equal('h2');
-      expect(rehydrated.height).to.equal(200);
-      expect(rehydrated.spec).to.be.instanceOf(flux.FluxAppSpecV9);
-    });
-
-    it('upsertIfNewer refuses a spec no newer than the stored height', async () => {
-      const instantiated = await instantiatedSpec(
-        await v9Spec({ name: 'newerapp' }), { hash: 'h2', height: 100 },
-      );
-      dbHelperStub.findOneInDatabase.resolves({ height: 100 });
-
-      expect(await appsRepository.upsertIfNewer(instantiated)).to.be.false;
-      sinon.assert.notCalled(dbHelperStub.replaceOneInDatabase);
-    });
   });
 
   describe('list accessors', () => {

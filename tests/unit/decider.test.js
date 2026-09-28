@@ -298,6 +298,23 @@ describe('decider', function () {
     expect(await verdict('r')).to.equal('applied');
   });
 
+  it('runs a full pass each time the scan catches up, once started', async () => {
+    const decider = loadDecider();
+    decider.start();
+    await decider.idle();
+
+    await store({ hash: 'r', height: 100 });
+    capabilities.setForTests('explorerSynced', true);
+    await decider.idle();
+    expect(await verdict('r')).to.equal('applied');
+
+    await store({ hash: 's', name: 'Other', height: 110 });
+    capabilities.setForTests('explorerSynced', false);
+    capabilities.setForTests('explorerSynced', true);
+    await decider.idle();
+    expect(await verdict('s')).to.equal('applied');
+  });
+
   it('is woken by what the store routes resolve, once started', async () => {
     await store({ hash: 'r', height: 100 });
     const decider = loadDecider();

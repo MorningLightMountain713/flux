@@ -1337,86 +1337,6 @@ describe('registryManager tests', () => {
   // These write and read the real globalAppsInformation rows, so the docs are
   // real stored forms: what a confirmed spec actually leaves in mongo, produced
   // by InstantiatedSpec.serialize rather than assembled by hand.
-  describe('updateAppSpecifications tests', () => {
-    // These assert on what a FIRST registration leaves behind, so the collection
-    // has to start empty: mongo outlives the run, and a row left at the higher
-    // height by the previous one makes both writes no-ops.
-    beforeEach(async () => {
-      try {
-        await database.collection(config.database.appsglobal.collections.appsInformation).drop();
-      } catch (err) {
-        // Collection doesn't exist
-      }
-    });
-
-    /** The stored document for an app at a given chain position. */
-    async function storedDoc(spec, { hash, height }) {
-      const doc = (await instantiatedSpec(spec, { hash, height })).serialize();
-      if (spec.version < 9) delete doc.registeredAt;
-      return doc;
-    }
-
-    /** The stored row, without mongo's own key. */
-    async function readBack(name) {
-      const row = await dbHelper.findOneInDatabase(
-        database, config.database.appsglobal.collections.appsInformation, { name },
-      );
-      if (!row) return row;
-      // eslint-disable-next-line no-unused-vars
-      const { _id, ...doc } = row;
-      return doc;
-    }
-
-    it('should update app specifications', async () => {
-      const spec = await v9Spec({ name: 'updatetestapp' });
-      await registryManager.insertAppSpecifications(await storedDoc(spec, { hash: 'oldhash', height: 100 }));
-
-      await registryManager.updateAppSpecifications(await storedDoc(spec, { hash: 'newhash', height: 200 }));
-
-      const result = await readBack('updatetestapp');
-      expect(result.name).to.equal('updatetestapp');
-      expect(result.height).to.equal(200);
-      expect(result.hash).to.equal('newhash');
-      // and the row is still one the real deserializer will accept on next boot
-      expect(flux.InstantiatedSpec.deserialize(result).height).to.equal(200);
-    });
-
-    it('should not update if height is lower than existing', async () => {
-      const spec = await v9Spec({ name: 'heighttestapp' });
-      await registryManager.insertAppSpecifications(await storedDoc(spec, { hash: 'hash1', height: 300 }));
-
-      await registryManager.updateAppSpecifications(await storedDoc(spec, { hash: 'hash2', height: 200 }));
-
-      const result = await readBack('heighttestapp');
-      expect(result.height).to.equal(300);
-      expect(result.hash).to.equal('hash1');
-    });
-
-    it('should not accumulate ghost fields when spec version changes', async () => {
-      // A real version change, v8 -> v9: the two shapes share almost no field
-      // names, so every v8-only key is a candidate ghost. The literals this
-      // replaced invented a v3 and a v4 blob; the real classes make the same
-      // point with the transition the network is actually about to make.
-      const legacy = await v8Spec({ name: 'ghostfieldapp' });
-      await registryManager.insertAppSpecifications(await storedDoc(legacy, { hash: 'hash1', height: 100 }));
-      const seeded = await readBack('ghostfieldapp');
-      expect(seeded.compose, 'the legacy row really did carry the v8 shape').to.be.an('array');
-
-      const modern = await v9Spec({ name: 'ghostfieldapp' });
-      await registryManager.updateAppSpecifications(await storedDoc(modern, { hash: 'hash2', height: 200 }));
-
-      const result = await readBack('ghostfieldapp');
-      expect(result.version).to.equal(9);
-      expect(result.components).to.exist;
-      // Ghost v8 fields must NOT survive the replace — a v9 row carrying `compose`
-      // or `expire` would be rejected outright by the v9 deserializer.
-      for (const ghost of ['compose', 'expire', 'geolocation', 'nodes', 'staticip']) {
-        expect(result[ghost], `${ghost} is a v8-only field and must not survive`).to.be.undefined;
-      }
-      expect(() => flux.InstantiatedSpec.deserialize(result)).to.not.throw();
-    });
-  });
-
   describe('getRunningApps tests', () => {
     it('should return running apps from global locations', async () => {
       const result = await registryManager.getRunningApps();
@@ -1936,7 +1856,7 @@ describe('registryManager tests', () => {
     }
 
     /**
-     * `upsertGlobalAppInfo` is stubbed here — it is the mongo write — so nothing
+     * `replaceGlobalAppRow` is stubbed here — it is the mongo write — so nothing
      * in this suite reads the row back. What the real one does with the document
      * is key it by `name` and store it verbatim; what reads it back is hydrate,
      * on the next boot, through InstantiatedSpec.deserialize. So assert the
@@ -1951,15 +1871,14 @@ describe('registryManager tests', () => {
       return rehydrated;
     }
 
-    it('fires the hook with the stored spec after a permanent store', async () => {
-      const upsert = sinon.stub(appsRepository, 'upsertGlobalAppInfo').resolves();
+    it('fires the hook with the stored spec after a row is written', async () => {
+      const upsert = sinon.stub(appsRepository, 'replaceGlobalAppRow').resolves();
       const hook = sinon.stub();
       registryManager.setOnSpecStored(hook);
 
       const spec = await storedDoc('hookapp', { hash: 'h1', height: 100 });
-      const res = await registryManager.storeAppSpecificationInPermanentStorage(spec);
+      await registryManager.storeGlobalSpec(spec);
 
-      expect(res.status).to.equal('success');
       sinon.assert.calledOnce(upsert);
       sinon.assert.calledWith(upsert, spec);
       sinon.assert.calledOnce(hook);
@@ -1975,59 +1894,19 @@ describe('registryManager tests', () => {
       expect(woken.height).to.equal(100);
     });
 
-    it('insert routes through the registry (not raw dbHelper) and fires the hook', async () => {
-      sinon.stub(appsRepository, 'getGlobalAppHeight').resolves(null);
-      const upsert = sinon.stub(appsRepository, 'upsertGlobalAppInfo').resolves();
-      const replaceOne = sinon.stub(dbHelper, 'replaceOneInDatabase').resolves();
-      sinon.stub(dbHelper, 'removeDocumentsFromCollection').resolves();
-      const hook = sinon.stub();
-      registryManager.setOnSpecStored(hook);
-
-      const spec = await storedDoc('routeapp', { hash: 'h2', height: 10 });
-      await registryManager.insertAppSpecifications(spec);
-
-      sinon.assert.calledOnce(upsert); // went through the registry
-      sinon.assert.calledWith(upsert, spec);
-      sinon.assert.notCalled(replaceOne); // did NOT hand-roll the dbHelper spec write
-      sinon.assert.calledOnce(hook);
-      sinon.assert.calledWith(hook, spec);
-      assertStorable(upsert.firstCall.args[0], 'routeapp');
-    });
-
-    it('update routes through the registry with upsert:false and fires the hook', async () => {
-      sinon.stub(appsRepository, 'getGlobalAppHeight').resolves(50); // exists, older than the update
-      const upsert = sinon.stub(appsRepository, 'upsertGlobalAppInfo').resolves();
-      const replaceOne = sinon.stub(dbHelper, 'replaceOneInDatabase').resolves();
-      sinon.stub(dbHelper, 'removeDocumentsFromCollection').resolves();
-      const hook = sinon.stub();
-      registryManager.setOnSpecStored(hook);
-
-      const spec = await storedDoc('updroute', { hash: 'h3', height: 100 });
-      await registryManager.updateAppSpecifications(spec);
-
-      sinon.assert.calledWith(upsert, spec, { upsert: false });
-      sinon.assert.notCalled(replaceOne);
-      sinon.assert.calledOnce(hook);
-      assertStorable(upsert.firstCall.args[0], 'updroute');
-    });
-
     it('a throwing hook does not break the store', async () => {
-      sinon.stub(appsRepository, 'upsertGlobalAppInfo').resolves();
+      const upsert = sinon.stub(appsRepository, 'replaceGlobalAppRow').resolves();
       registryManager.setOnSpecStored(() => { throw new Error('hook boom'); });
 
-      const res = await registryManager.storeAppSpecificationInPermanentStorage(
-        await storedDoc('safeapp', { hash: 'h', height: 1 }),
-      );
-      expect(res.status).to.equal('success'); // store succeeded despite the throwing hook
+      await registryManager.storeGlobalSpec(await storedDoc('safeapp', { hash: 'h', height: 1 }));
+      sinon.assert.calledOnce(upsert); // stored despite the throwing hook
     });
 
     it('does not fire when no hook is registered', async () => {
       registryManager.setOnSpecStored(null);
-      const upsert = sinon.stub(appsRepository, 'upsertGlobalAppInfo').resolves();
+      const upsert = sinon.stub(appsRepository, 'replaceGlobalAppRow').resolves();
 
-      await registryManager.storeAppSpecificationInPermanentStorage(
-        await storedDoc('nohook', { hash: 'h', height: 1 }),
-      );
+      await registryManager.storeGlobalSpec(await storedDoc('nohook', { hash: 'h', height: 1 }));
 
       sinon.assert.calledOnce(upsert); // store still happened, just no hook
     });
@@ -2040,7 +1919,7 @@ describe('registryManager tests', () => {
       const sealed = await sealedV9Spec({ name: 'meshapp' });
       const stored = await registryHolds(sealed, { hash: 'hm', height: 2_500_000 });
       const doc = stored.serialize();
-      sinon.stub(appsRepository, 'upsertGlobalAppInfo').resolves();
+      sinon.stub(appsRepository, 'replaceGlobalAppRow').resolves();
       // The resolver decrypts through the benchmark channel, so it stays
       // stubbed — and it hands back what the real one hands back for a sealed
       // app: a DecryptedCanonicalSpec, never a raw serializable spec.
@@ -2048,7 +1927,7 @@ describe('registryManager tests', () => {
       const resolve = sinon.stub(specCutover, 'resolveInstantiatedSpec').resolves(view);
       const applyComponentView = sinon.stub(foundingCommittee, 'applyComponentView').resolves();
 
-      await registryManager.storeAppSpecificationInPermanentStorage(doc);
+      await registryManager.storeGlobalSpec(doc);
 
       // Stubbing the resolver hides whether the entry we hand it is usable. The
       // real one branches on `isEncrypted`, then calls `createProvider()` on the

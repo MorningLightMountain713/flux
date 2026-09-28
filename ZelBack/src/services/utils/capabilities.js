@@ -51,7 +51,7 @@ const DEFINITIONS = Object.freeze([
   { name: 'chainStateConsistent', owner: 'chainState', needs: [] },
   { name: 'explorerSynced', owner: 'explorerService', needs: ['chainStateConsistent'] },
   { name: 'appMessagesSynced', owner: 'appSyncOrchestrator', needs: ['mongoReachable'] },
-  { name: 'appRegistryConsistent', owner: 'appSyncOrchestrator', needs: ['explorerSynced', 'appMessagesSynced'] },
+  { name: 'appRegistryConsistent', owner: 'appRegistry', needs: ['explorerSynced', 'appMessagesSynced'] },
   { name: 'appStateSynced', owner: 'appSyncOrchestrator', needs: [] },
   { name: 'bootReconcileDecided', owner: 'appStartupManager', needs: ['mongoReachable', 'dockerReachable'] },
   { name: 'bootReconcilePassed', owner: 'reconcilerQueue', needs: [] },

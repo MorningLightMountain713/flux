@@ -30,7 +30,6 @@ describe('AppSyncOrchestrator', () => {
   let logStub;
   let syncMissingHashesStub;
   let getMissingHashesStub;
-  let reindexStub;
   let globalStateStub;
   let checkAndNotifyStub;
   let startBroadcastingStub;
@@ -148,7 +147,6 @@ describe('AppSyncOrchestrator', () => {
     logStub = { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() };
     syncMissingHashesStub = sinon.stub().resolves({ resolved: 0, missing: 0, unreachable: 0, nextRetryHeight: null });
     getMissingHashesStub = sinon.stub().resolves([]);
-    reindexStub = sinon.stub().resolves();
     // The real module. appRegistryConsistent stays down - the assertions below are
     // about the orchestrator raising it - with the explorer synced and the boot
     // reconcile decided, so a test does not sit on a capability nothing here raises.
@@ -194,9 +192,6 @@ describe('AppSyncOrchestrator', () => {
         checkAndNotifyPeersOfRunningApps: checkAndNotifyStub,
         startBroadcasting: startBroadcastingStub,
         stopBroadcasting: sinon.stub().resolves(),
-      },
-      '../appDatabase/registryManager': {
-        reindexGlobalAppsInformation: reindexStub,
       },
       '../utils/globalState': globalStateStub,
       '../utils/peerCodec': {
@@ -297,32 +292,16 @@ describe('AppSyncOrchestrator', () => {
       expect(syncMissingHashesStub.calledOnce).to.be.true;
     });
 
-    it('should call reindexGlobalAppsInformation after sync', async () => {
+    it('leaves appRegistryConsistent to the registry owner after a hash sync', async () => {
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
 
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
-      expect(reindexStub.calledOnce).to.be.true;
+      expect(syncMissingHashesStub.calledOnce).to.be.true;
+      expect(capabilities.isUp('appRegistryConsistent')).to.be.false;
     });
 
-    it('should raise appRegistryConsistent after sync', async () => {
-      const orchestrator = makeOrchestrator();
-      orchestrator.start(defaultBootContext);
-
-      blockEmitter.emit('blocksProcessed', 2_555_000);
-      await clock.tickAsync(0);
-      expect(capabilities.isUp('appRegistryConsistent')).to.be.true;
-    });
-
-    it('should log DB ready after reindex', async () => {
-      const orchestrator = makeOrchestrator();
-      orchestrator.start(defaultBootContext);
-
-      blockEmitter.emit('blocksProcessed', 2_555_000);
-      await clock.tickAsync(0);
-      expect(logStub.info.calledWith('AppSyncOrchestrator - DB ready')).to.be.true;
-    });
   });
 
   describe('peer threshold events', () => {
@@ -3035,104 +3014,9 @@ describe('AppSyncOrchestrator', () => {
       }
       await clock.tickAsync(0);
 
-      // Block timer should have triggered DB rebuild and readiness
       expect(orchestrator.state).to.equal(STATES.READY);
-      expect(reindexStub.called).to.be.true;
     });
 
-    it('should not get stuck when DB rebuild fails', async () => {
-      reindexStub.rejects(new Error('reindex failed'));
-
-      const orchestrator = makeOrchestrator();
-      orchestrator.start(defaultBootContext);
-      peersUp();
-
-      blockEmitter.emit('blocksProcessed', 2_555_000);
-      await clock.tickAsync(0);
-
-      // Hash sync succeeded but DB rebuild failed
-      expect(syncMissingHashesStub.calledOnce).to.be.true;
-
-      // Block timer should still allow readiness (will retry DB rebuild)
-      for (let i = 1; i <= 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
-      }
-      await clock.tickAsync(0);
-      // the burst arrives inside one hash retry, which the build waits out
-      blockEmitter.emit('blocksProcessed', 2_555_261);
-      await clock.tickAsync(0);
-
-      // The block timer fallback tries rebuildDb again
-      expect(reindexStub.callCount).to.be.greaterThan(1);
-    });
-
-    // A hash sync storing messages while the registry is unbuilt leaves their rows
-    // to the build, which would miss any stored after it read the log.
-    it('never runs the fallback\'s DB rebuild beside a hash sync', async () => {
-      reindexStub.onFirstCall().rejects(new Error('reindex failed'));
-      let finishRetry;
-      const orchestrator = makeOrchestrator();
-      orchestrator.start(defaultBootContext);
-      peersUp();
-      blockEmitter.emit('blocksProcessed', 2_555_000);
-      await clock.tickAsync(0);
-      syncMissingHashesStub.callsFake(() => new Promise((resolve) => { finishRetry = resolve; }));
-
-      for (let i = 1; i <= 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
-      }
-      await clock.tickAsync(0);
-      expect(finishRetry, 'no hash retry was under way, so nothing below was tested').to.be.a('function');
-      expect(reindexStub.callCount, 'the DB rebuild ran beside a hash sync').to.equal(1);
-
-      finishRetry({ resolved: 0, missing: 0, unreachable: 0, nextRetryHeight: null });
-      await clock.tickAsync(0);
-      blockEmitter.emit('blocksProcessed', 2_555_261);
-      await clock.tickAsync(0);
-      expect(reindexStub.callCount, 'the DB rebuild was not run once the hash sync ended').to.equal(2);
-    });
-  });
-
-  // An operator asks for a check of every missing app message. It is queued, and
-  // runs once nothing else holds the node.
-  describe('a requested hash check', () => {
-    it('runs at once when nothing holds the node', async () => {
-      const orchestrator = makeOrchestrator();
-      orchestrator.start(defaultBootContext);
-      peersUp();
-      blockEmitter.emit('blocksProcessed', 2_555_000);
-      await clock.tickAsync(0);
-      syncMissingHashesStub.resetHistory();
-
-      appSyncEvents.emit(EVENTS.HASH_CHECK_REQUESTED);
-      await clock.tickAsync(0);
-
-      sinon.assert.calledOnce(syncMissingHashesStub);
-      expect(syncMissingHashesStub.firstCall.args[0].force).to.equal(true);
-    });
-
-    it('waits for a hash sync under way, then runs on a later block', async () => {
-      let finishSync;
-      syncMissingHashesStub.callsFake(() => new Promise((resolve) => { finishSync = resolve; }));
-      const orchestrator = makeOrchestrator();
-      orchestrator.start(defaultBootContext);
-      peersUp();
-      blockEmitter.emit('blocksProcessed', 2_555_000);
-      await clock.tickAsync(0);
-      expect(finishSync, 'no hash sync was under way, so nothing below was tested').to.be.a('function');
-
-      appSyncEvents.emit(EVENTS.HASH_CHECK_REQUESTED);
-      await clock.tickAsync(0);
-      expect(syncMissingHashesStub.getCalls().filter((c) => c.args[0].force), 'the check ran beside a hash sync').to.have.length(0);
-
-      syncMissingHashesStub.resolves({ resolved: 0, missing: 0, unreachable: 0, nextRetryHeight: 9_999_999 });
-      finishSync({ resolved: 0, missing: 0, unreachable: 0, nextRetryHeight: 9_999_999 });
-      await clock.tickAsync(0);
-      blockEmitter.emit('blocksProcessed', 2_555_001);
-      await clock.tickAsync(0);
-
-      expect(syncMissingHashesStub.getCalls().filter((c) => c.args[0].force), 'the queued check never ran').to.have.length(1);
-    });
   });
 
   describe('appRegistryConsistent on fallback paths', () => {
@@ -3158,44 +3042,6 @@ describe('AppSyncOrchestrator', () => {
       expect(capabilities.isUp('appRegistryConsistent')).to.be.false;
     });
 
-    it('should raise appRegistryConsistent when too few sync peers and block timer fires', async () => {
-      getEligibleSyncPeersStub = sinon.stub().returns([]);
-
-      const orchestrator = makeOrchestrator();
-      orchestrator.start(defaultBootContext);
-      peersUp();
-
-      blockEmitter.emit('blocksProcessed', 2_555_000);
-      await clock.tickAsync(0);
-
-      for (let i = 1; i <= 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
-      }
-      await clock.tickAsync(0);
-
-      expect(orchestrator.state).to.equal(STATES.READY);
-      expect(capabilities.isUp('appRegistryConsistent')).to.be.true;
-    });
-
-    it('should leave appRegistryConsistent down when rebuildDb throws on fallback path', async () => {
-      syncMissingHashesStub.rejects(new Error('failed'));
-      reindexStub.rejects(new Error('reindex failed'));
-
-      const orchestrator = makeOrchestrator();
-      orchestrator.start(defaultBootContext);
-      peersUp();
-
-      blockEmitter.emit('blocksProcessed', 2_555_000);
-      await clock.tickAsync(0);
-
-      for (let i = 1; i <= 260; i += 1) {
-        blockEmitter.emit('blocksProcessed', 2_555_000 + i);
-      }
-      await clock.tickAsync(0);
-
-      expect(capabilities.isUp('appRegistryConsistent')).to.be.false;
-      expect(orchestrator.state).to.not.equal(STATES.READY);
-    });
   });
 
   describe('hash retry scheduling', () => {
@@ -3220,29 +3066,6 @@ describe('AppSyncOrchestrator', () => {
       blockEmitter.emit('blocksProcessed', 2_555_200);
       await clock.tickAsync(0);
       expect(syncMissingHashesStub.calledTwice).to.be.true;
-    });
-
-    // A retry's messages reach the registry as they are stored (appHashSyncService), so
-    // the registry is rebuilt in full only on the way to ready.
-    it('does not rebuild globalAppsInformation after a retry, whatever it resolved', async () => {
-      syncMissingHashesStub.onFirstCall().resolves({ resolved: 0, missing: 2, unreachable: 0, nextRetryHeight: 2_555_200 });
-      syncMissingHashesStub.onSecondCall().resolves({ resolved: 0, missing: 2, unreachable: 0, nextRetryHeight: 2_555_300 });
-      syncMissingHashesStub.onThirdCall().resolves({ resolved: 2, missing: 0, unreachable: 0, nextRetryHeight: null });
-
-      const orchestrator = makeOrchestrator();
-      orchestrator.start(defaultBootContext);
-
-      blockEmitter.emit('blocksProcessed', 2_555_000);
-      await clock.tickAsync(0);
-      const afterInitialSync = reindexStub.callCount;
-
-      blockEmitter.emit('blocksProcessed', 2_555_200);
-      await clock.tickAsync(0);
-      blockEmitter.emit('blocksProcessed', 2_555_300);
-      await clock.tickAsync(0);
-
-      expect(syncMissingHashesStub.calledThrice, 'the retry that resolved messages never ran').to.equal(true);
-      expect(reindexStub.callCount).to.equal(afterInitialSync);
     });
 
     it('should use fallback interval when no hashes are backed off', async () => {

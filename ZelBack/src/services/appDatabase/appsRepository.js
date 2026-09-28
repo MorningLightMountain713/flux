@@ -8,7 +8,6 @@ const fluxEventBus = require('../utils/fluxEventBus');
 const setReconciler = require('../appMessaging/setReconciler');
 const MongoStorageProvider = require('../providers/MongoStorageProvider');
 const { expireHeightExpr } = require('./appsMaintenance');
-const { mintAppUuid } = require('../utils/appIdentity');
 const {
   globalAppsInformation,
   localAppsInformation,
@@ -211,27 +210,14 @@ async function listGlobalAppNodes() {
   return docs.map((doc) => ({ name: doc.name, nodes: doc.nodes || [] }));
 }
 
-async function upsertGlobalAppInfo(specDoc, { upsert = true } = {}) {
-  if (!specDoc || !specDoc.name) {
-    throw new Error('appsRepository.upsertGlobalAppInfo: specDoc.name required');
-  }
-  // `uuid` and `identity` are minted ONCE, from the transaction that carried the
-  // registration. Every later write here is a REPLACE, and an update arrives in a
-  // different transaction carrying neither — so without this it would clear both,
-  // and the app's next deployment would be named from something other than what
-  // its containers, volume and syncthing folder already carry.
-  const existing = await dbHelper.findOneInDatabase(
-    globalDb(), globalAppsInformation,
-    { name: specDoc.name },
-    { projection: { _id: 0, uuid: 1, identity: 1 } },
-  );
-  const doc = { ...specDoc };
-  if (doc.uuid == null && existing?.uuid != null) doc.uuid = existing.uuid;
-  if (doc.identity == null && existing?.identity != null) doc.identity = existing.identity;
-  return dbHelper.replaceOneInDatabase(
-    globalDb(), globalAppsInformation,
-    { name: specDoc.name }, doc, { upsert },
-  );
+/**
+ * Writes a name's registry row, replacing the row the name holds in any letter
+ * case. Only the registry owner (appRegistry) writes rows.
+ * @param {object} row - a serialized InstantiatedSpec
+ */
+async function replaceGlobalAppRow(row) {
+  if (!row || !row.name) throw new Error('appsRepository.replaceGlobalAppRow: row.name required');
+  return dbHelper.replaceOneInDatabase(globalDb(), globalAppsInformation, { name: nameRegex(row.name) }, row, { upsert: true });
 }
 
 async function removeGlobalAppInfo(name) {
@@ -585,69 +571,6 @@ async function backfillComponentIdentifiers(identifiersFor) {
   if (backfilled > 0) {
     log.info(`appsRepository - component identifiers recorded for ${backfilled} installed row(s)`);
   }
-  return { backfilled, unresolved };
-}
-
-/**
- * Give every global app row the instance identity it was always entitled to.
- *
- * An app registered before identities existed has one available retroactively:
- * its uuid is a pure function of its name and the txid of the transaction that
- * registered it, both of which are on chain and unchanged. So this is a read of
- * history, not an assignment — every node computes the same values from the same
- * messages, and a node that runs this twice gets the same answer.
- *
- * It deliberately does NOT set `identity`. The uuid records WHICH app this is;
- * `identity` decides what its containers, volume directory and syncthing folder
- * are NAMED. Those artifacts already exist under the app's name, and writing a
- * uuid-derived identity onto an existing row would rename them out from under a
- * running app. Only a registration arriving from here on states one.
- *
- * Idempotent by construction rather than by a marker: it only ever looks at rows
- * that have no uuid, so an interrupted pass simply resumes.
- */
-async function backfillGlobalAppUuids() {
-  const rows = await dbHelper.findInDatabase(
-    globalDb(), globalAppsInformation,
-    { uuid: { $exists: false } },
-    { projection: { _id: 0, name: 1 } },
-  );
-  if (rows.length === 0) return { backfilled: 0, unresolved: 0 };
-
-  let backfilled = 0;
-  let unresolved = 0;
-  for (const row of rows) {
-    // The FIRST registration of this name. A name can have been held by several
-    // apps over time, and it is the one that minted the CURRENT holder we want -
-    // so this takes the most recent registration, not the oldest message.
-    // eslint-disable-next-line no-await-in-loop
-    const registration = await dbHelper.findOneInDatabase(
-      globalDb(), globalAppsMessages,
-      { 'appSpecifications.name': nameRegex(row.name), type: { $in: ['fluxappregister', 'zelappregister'] } },
-      { projection: { _id: 0, txid: 1, height: 1 }, sort: { height: -1 } },
-    );
-    if (!registration || !registration.txid) {
-      // Its registration message was never obtained by this node. Nothing to
-      // derive from, and inventing one would give this node a different answer
-      // from every other - leave it, and a later pass picks it up if the message
-      // arrives.
-      unresolved += 1;
-      // eslint-disable-next-line no-continue
-      continue;
-    }
-    // eslint-disable-next-line no-await-in-loop
-    await dbHelper.updateOneInDatabase(
-      globalDb(), globalAppsInformation,
-      { name: row.name },
-      { $set: { uuid: mintAppUuid(row.name, registration.txid) } },
-      {},
-    );
-    backfilled += 1;
-  }
-  if (unresolved > 0) {
-    log.warn(`appsRepository - ${unresolved} app(s) have no registration message here, so no instance identity could be derived for them yet`);
-  }
-  log.info(`appsRepository - instance identity derived for ${backfilled} app(s)`);
   return { backfilled, unresolved };
 }
 
@@ -1280,20 +1203,7 @@ async function getPermanentMessageBeforeHeight(name, height) {
   );
 }
 
-// ── Upsert-if-newer + Installing Errors ────────────────────────────
-
-async function upsertIfNewer(instantiated) {
-  const existingHeight = await getGlobalAppHeight(instantiated.name);
-  if (existingHeight !== null && existingHeight >= instantiated.height) return false;
-  await upsertGlobalAppInfo(instantiated.serialize());
-  return true;
-}
-
-async function clearInstallingErrors(name) {
-  await dbHelper.removeDocumentsFromCollection(
-    globalDb(), globalAppsInstallingErrorsLocations, { name },
-  );
-}
+// ── Installing Errors ──────────────────────────────────────────────
 
 /**
  * Adopt a peer's installing-error location records wholesale, keyed by the
@@ -1747,12 +1657,11 @@ module.exports = {
   listConfirmedContentManifestBroadcasts,
   reapOrphanedContentManifests,
   listGlobalAppNodes,
-  upsertGlobalAppInfo,
   removeGlobalAppInfo,
+  replaceGlobalAppRow,
   removeAppInstallingErrorRecords,
   // installed apps
   prepareInstalledAppsCollection,
-  backfillGlobalAppUuids,
   backfillComponentIdentifiers,
   componentIdentifierCoverage,
   listComponentIdentifiers,
@@ -1792,8 +1701,6 @@ module.exports = {
   listIngressAttestationDigests,
   listIngressAttestationsForBuckets,
   // upsert + errors
-  upsertIfNewer,
-  clearInstallingErrors,
   upsertAppInstallingErrorLocations,
   // the running set, derived from the app state event log
   appLocationFromEvents,

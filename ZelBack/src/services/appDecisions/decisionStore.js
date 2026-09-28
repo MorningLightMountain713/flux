@@ -3,6 +3,7 @@
 const config = require('config');
 
 const dbHelper = require('../dbHelper');
+const { compareChainOrder } = require('../utils/chainOrder');
 
 /**
  * The stored decisions: one row per decided app message, applied or refused
@@ -53,6 +54,33 @@ async function decidedHashes(ruleVersion) {
 }
 
 /**
+ * Each name's latest applied decision in chain order: the message its registry
+ * row stands on.
+ * @param {string[]} [names] - lower-cased; every name when omitted
+ * @returns {Promise<Map<string, object>>} by name
+ */
+async function latestApplied(names) {
+  const query = { decision: 'applied' };
+  if (names) query.name = { $in: names };
+  const rows = await collection().find(query, { projection: { _id: 0 } }).toArray();
+  const latest = new Map();
+  for (const row of rows) {
+    const held = latest.get(row.name);
+    if (!held || compareChainOrder(held, row) < 0) latest.set(row.name, row);
+  }
+  return latest;
+}
+
+/**
+ * Every applied decision for a name.
+ * @param {string} name - lower-cased
+ * @returns {Promise<object[]>}
+ */
+async function appliedFor(name) {
+  return collection().find({ name, decision: 'applied' }, { projection: { _id: 0 } }).toArray();
+}
+
+/**
  * Removes decisions, leaving their messages undecided.
  * @param {string[]} hashes
  */
@@ -82,9 +110,11 @@ async function deleteAbove(height) {
 }
 
 module.exports = {
+  appliedFor,
   decidedHashes,
   decisionsFor,
   deleteAbove,
+  latestApplied,
   prepareCollection,
   undecide,
   write,
