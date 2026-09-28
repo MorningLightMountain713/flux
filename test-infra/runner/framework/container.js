@@ -383,8 +383,10 @@ export async function resumeDockerd(container, { readyTimeoutMs = 40000, interva
  * crash - the process vanishes without a word and its jurors certify it - which is a
  * different scenario, not a restart; name it when that is what a test means.
  */
+// onDown runs once, when FluxOS is first seen down: after the signal's own close has
+// gone out and before the respawned process can read anything.
 export async function restartFluxos(container, {
-  apiPort = 16127, readyTimeoutMs = 120000, interval = 500, signal = 'TERM',
+  apiPort = 16127, readyTimeoutMs = 120000, interval = 500, signal = 'TERM', onDown = null,
 } = {}) {
   // signal only the node child; never PID 1
   await execInContainer(container, `kill -${signal} "$(cat /tmp/fluxos.pid 2>/dev/null)" 2>/dev/null || true`);
@@ -397,7 +399,11 @@ export async function restartFluxos(container, {
     // eslint-disable-next-line no-await-in-loop
     const r = await execInContainer(container, probe);
     const up = r.exitCode === 0;
-    if (!up) sawDown = true;
+    if (!up && !sawDown) {
+      sawDown = true;
+      // eslint-disable-next-line no-await-in-loop
+      if (onDown) await onDown();
+    }
     if (sawDown && up) return;
     // eslint-disable-next-line no-await-in-loop
     await sleepUnlessInfraDead(interval);

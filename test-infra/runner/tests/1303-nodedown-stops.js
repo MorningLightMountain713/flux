@@ -1,6 +1,8 @@
 // fleet: 16
 import { readFileSync } from 'node:fs';
-import { describe, it, before, after } from 'mocha';
+import {
+  describe, it, before, after, afterEach,
+} from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
@@ -330,8 +332,9 @@ describe('node-down: the map of stops end to end', function () {
     const before = (await rowsOnWitness()).length;
 
     // the machine "reboots": SHUTTING_DOWN on every held connection, then the
-    // watchdog respawns FluxOS into a daemon that never confirms it
-    await setNodeStatus(subjectIp(), 'STARTED');
+    // watchdog respawns FluxOS into a daemon that never confirms it. The status
+    // turns unconfirmed once FluxOS is down: set before the close, the subject's
+    // own confirmation poll can drop every peer first, unannounced.
     await markMachineShutdown(subjectContainer());
     const droppedAt = Date.now();
     // The lever sends the TERM and waits for the process to go down and come
@@ -340,7 +343,7 @@ describe('node-down: the map of stops end to end', function () {
     // old process, still serving through the handler's hundred-millisecond
     // grace, and the unmark that followed removed the marker before the
     // handler read it: the subject announced RESTARTING on a staged shutdown.
-    await restartSubjectFluxos({ code: 'shutdown' });
+    await restartSubjectFluxos({ code: 'shutdown', onDown: () => setNodeStatus(subjectIp(), 'STARTED') });
     await unmarkMachineShutdown(subjectContainer());
 
     // inside the grace: no certificate, the row stands
