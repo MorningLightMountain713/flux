@@ -81,7 +81,7 @@ describe('appStartupManager tests', () => {
     sinon.stub(globalStateStub, 'waitForDbReady').resolves();
     // What the boot reconcile needs before its decision counts as up.
     capabilities.resetForTests();
-    capabilities.setForTests(['mongoReachable', 'dockerReachable', 'daemonReachable'], true);
+    capabilities.setForTests(['mongoReachable', 'dockerReachable', 'daemonReachable', 'confirmationStatusKnown'], true);
 
     appQueryServiceStub = {
       installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
@@ -109,7 +109,6 @@ describe('appStartupManager tests', () => {
       '../nodeConfirmationService': {
         isConfirmed: sinon.stub().returns(true),
         waitForConfirmed: sinon.stub().resolves(),
-        waitForConfirmationStatus: sinon.stub().resolves(),
       },
     });
   });
@@ -157,7 +156,6 @@ describe('appStartupManager tests', () => {
         '../nodeConfirmationService': {
           isConfirmed: sinon.stub().returns(true),
           waitForConfirmed: sinon.stub().resolves(),
-          waitForConfirmationStatus: sinon.stub().resolves(),
         },
       });
 

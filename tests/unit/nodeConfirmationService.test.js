@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const generalService = require('../../ZelBack/src/services/generalService');
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 
 describe('nodeConfirmationService', () => {
   let service;
@@ -31,6 +32,9 @@ describe('nodeConfirmationService', () => {
     isDaemonSyncedStub = sinon.stub().returns({ data: { height: 0, synced: false } });
     logStub = { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() };
     publishStub = sinon.stub();
+    // The node list is in hand unless a test says otherwise.
+    capabilities.resetForTests();
+    capabilities.setForTests('nodeListPopulated', true);
 
     service = proxyquire('../../ZelBack/src/services/nodeConfirmationService', {
       './daemonService/daemonServiceFluxnodeRpcs': { getFluxNodeStatus: getFluxNodeStatusStub },
@@ -42,6 +46,7 @@ describe('nodeConfirmationService', () => {
       },
       './networkStateService': { getFluxnodeBySocketAddress: getFluxnodeBySocketAddressStub },
       './utils/fluxEventBus': { publish: publishStub },
+      './utils/capabilities': capabilities,
       '../lib/log': logStub,
     });
   });
@@ -49,6 +54,7 @@ describe('nodeConfirmationService', () => {
   afterEach(() => {
     clock.restore();
     sinon.restore();
+    capabilities.resetForTests();
   });
 
   function setupConfirmed() {
@@ -165,10 +171,10 @@ describe('nodeConfirmationService', () => {
     });
   });
 
-  describe('onMessageCapabilityChange', () => {
+  describe('nodeMessageCapable', () => {
     it('should fire callback on false→true transition', async () => {
       const callback = sinon.spy();
-      service.onMessageCapabilityChange(callback);
+      capabilities.onUpChange('nodeMessageCapable', callback);
 
       setupConfirmed();
       await service.start();
@@ -179,7 +185,7 @@ describe('nodeConfirmationService', () => {
 
     it('should fire callback on true→false transition', async () => {
       const callback = sinon.spy();
-      service.onMessageCapabilityChange(callback);
+      capabilities.onUpChange('nodeMessageCapable', callback);
 
       setupConfirmed();
       await service.start();
@@ -195,7 +201,7 @@ describe('nodeConfirmationService', () => {
 
     it('should not fire callback when state unchanged', async () => {
       const callback = sinon.spy();
-      service.onMessageCapabilityChange(callback);
+      capabilities.onUpChange('nodeMessageCapable', callback);
 
       setupNotConfirmed();
       await service.start();
@@ -206,7 +212,7 @@ describe('nodeConfirmationService', () => {
 
     it('should not fire when confirmed changes but canSendMessages stays false', async () => {
       const callback = sinon.spy();
-      service.onMessageCapabilityChange(callback);
+      capabilities.onUpChange('nodeMessageCapable', callback);
 
       setupNotConfirmed();
       await service.start();
@@ -219,7 +225,7 @@ describe('nodeConfirmationService', () => {
 
     it('should fire when IP appears in deterministic list after delay', async () => {
       const callback = sinon.spy();
-      service.onMessageCapabilityChange(callback);
+      capabilities.onUpChange('nodeMessageCapable', callback);
 
       setupConfirmedButIpMissing();
       await service.start();
@@ -273,10 +279,30 @@ describe('nodeConfirmationService', () => {
     });
   });
 
-  describe('onConfirmationChange', () => {
+  describe('the node list arriving', () => {
+    it('asks again at once rather than on the next poll', async () => {
+      capabilities.setForTests('nodeListPopulated', false);
+      setupConfirmed();
+      getFluxnodeBySocketAddressStub.resolves(null);
+      await service.start();
+      expect(capabilities.isUp('nodeMessageCapable')).to.equal(false);
+
+      getFluxnodeBySocketAddressStub.resolves({ pubkey: '04abcdef1234567890' });
+      capabilities.setForTests('nodeListPopulated', true);
+      for (let i = 0; i < 5; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await Promise.resolve();
+      }
+
+      expect(getFluxNodeStatusStub.callCount, 'no poll ran in between').to.equal(1);
+      expect(capabilities.isUp('nodeMessageCapable')).to.equal(true);
+    });
+  });
+
+  describe('nodeConfirmed', () => {
     it('should fire on false→true transition', async () => {
       const callback = sinon.spy();
-      service.onConfirmationChange(callback);
+      capabilities.onUpChange('nodeConfirmed', callback);
 
       setupConfirmed();
       await service.start();
@@ -287,7 +313,7 @@ describe('nodeConfirmationService', () => {
 
     it('should fire on true→false transition', async () => {
       const callback = sinon.spy();
-      service.onConfirmationChange(callback);
+      capabilities.onUpChange('nodeConfirmed', callback);
 
       setupConfirmed();
       await service.start();
@@ -301,7 +327,7 @@ describe('nodeConfirmationService', () => {
 
     it('should not fire when RPC is unreachable', async () => {
       const callback = sinon.spy();
-      service.onConfirmationChange(callback);
+      capabilities.onUpChange('nodeConfirmed', callback);
 
       setupConfirmed();
       await service.start();
@@ -315,7 +341,7 @@ describe('nodeConfirmationService', () => {
 
     it('should not fire when daemon returns error status', async () => {
       const callback = sinon.spy();
-      service.onConfirmationChange(callback);
+      capabilities.onUpChange('nodeConfirmed', callback);
 
       setupConfirmed();
       await service.start();
@@ -330,8 +356,8 @@ describe('nodeConfirmationService', () => {
     it('should fire independently from message capability', async () => {
       const confirmCb = sinon.spy();
       const messageCb = sinon.spy();
-      service.onConfirmationChange(confirmCb);
-      service.onMessageCapabilityChange(messageCb);
+      capabilities.onUpChange('nodeConfirmed', confirmCb);
+      capabilities.onUpChange('nodeMessageCapable', messageCb);
 
       setupConfirmedButIpMissing();
       await service.start();
@@ -342,13 +368,13 @@ describe('nodeConfirmationService', () => {
     });
   });
 
-  describe('waitForConfirmed', () => {
+  describe('whenUp nodeConfirmed', () => {
     it('should resolve immediately when already confirmed', async () => {
       setupConfirmed();
       await service.start();
 
       let resolved = false;
-      service.waitForConfirmed().then(() => { resolved = true; });
+      capabilities.whenUp('nodeConfirmed').then(() => { resolved = true; });
       await Promise.resolve();
       expect(resolved).to.be.true;
     });
@@ -358,7 +384,7 @@ describe('nodeConfirmationService', () => {
       await service.start();
 
       let resolved = false;
-      service.waitForConfirmed().then(() => { resolved = true; });
+      capabilities.whenUp('nodeConfirmed').then(() => { resolved = true; });
       await Promise.resolve();
       expect(resolved).to.be.false;
 
@@ -373,8 +399,8 @@ describe('nodeConfirmationService', () => {
 
       let resolved1 = false;
       let resolved2 = false;
-      service.waitForConfirmed().then(() => { resolved1 = true; });
-      service.waitForConfirmed().then(() => { resolved2 = true; });
+      capabilities.whenUp('nodeConfirmed').then(() => { resolved1 = true; });
+      capabilities.whenUp('nodeConfirmed').then(() => { resolved2 = true; });
       await Promise.resolve();
       expect(resolved1).to.be.false;
       expect(resolved2).to.be.false;
@@ -486,7 +512,7 @@ describe('nodeConfirmationService', () => {
     // once the chain is more than 640 blocks past that.
     it('should lose confirmation once the chain passes the expiration height', async () => {
       const confirmCb = sinon.spy();
-      service.onConfirmationChange(confirmCb);
+      capabilities.onUpChange('nodeConfirmed', confirmCb);
 
       setupConfirmed();
       isDaemonSyncedStub.returns({ data: { height: 1200, synced: true } });
@@ -614,7 +640,7 @@ describe('nodeConfirmationService', () => {
 
     it('should lose confirmation when the pushed status is no longer CONFIRMED', async () => {
       const confirmCb = sinon.spy();
-      service.onConfirmationChange(confirmCb);
+      capabilities.onUpChange('nodeConfirmed', confirmCb);
 
       setupConfirmed();
       await service.start();

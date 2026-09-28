@@ -18,6 +18,7 @@ const config = require('config');
 const serviceHelper = require('../serviceHelper');
 const nodeDosState = require('../nodeDosState');
 const nodeConfirmationService = require('../nodeConfirmationService');
+const capabilities = require('../utils/capabilities');
 const log = require('../../lib/log');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 const appQueryService = require('../appQuery/appQueryService');
@@ -92,7 +93,7 @@ function sweep(reason) {
 }
 
 function initialize() {
-  nodeConfirmationService.onConfirmationChange((confirmed) => {
+  capabilities.onUpChange('nodeConfirmed', (confirmed) => {
     if (confirmed) return undefined;
     log.info('nodeSelfDefense - confirmation lost, removing every app');
     return sweep('node lost confirmation');

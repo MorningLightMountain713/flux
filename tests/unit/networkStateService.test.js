@@ -7,6 +7,7 @@ const { EventEmitter } = require('node:events');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
 const daemonServiceFluxnodeRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceFluxnodeRpcs');
 const nodeListSource = require('../../ZelBack/src/services/nodeListSource');
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 
 describe('networkStateService tests', () => {
   let fluxnodeRpcStub;
@@ -190,6 +191,18 @@ describe('networkStateService tests', () => {
     await networkStateService.stop();
 
     expect(networkStateService.isReady(), 'still ready after stop').to.be.false;
+  });
+
+  it('raises nodeListPopulated when the list is indexed and lowers it on stop', async () => {
+    capabilities.resetForTests();
+    fluxnodeRpcStub.resolves(defaultNetworkState);
+
+    await networkStateService.start({ stateEmitter: new EventEmitter() });
+    expect(capabilities.isUp('nodeListPopulated')).to.equal(true);
+
+    await networkStateService.stop();
+    expect(capabilities.isUp('nodeListPopulated')).to.equal(false);
+    capabilities.resetForTests();
   });
 
   it('should run an onReady callback when the node list arrives', async () => {

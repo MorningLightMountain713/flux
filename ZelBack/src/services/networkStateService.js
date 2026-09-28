@@ -1,6 +1,7 @@
 'use strict';
 
 const daemonServiceFluxnodeRpcs = require('./daemonService/daemonServiceFluxnodeRpcs');
+const capabilities = require('./utils/capabilities');
 const nodeListSource = require('./nodeListSource');
 const networkStateManager = require('./utils/networkStateManager');
 const fluxEventBus = require('./utils/fluxEventBus');
@@ -135,7 +136,10 @@ async function start(options = {}) {
   // The manager emits this from applySnapshot and from fetchNetworkState alike,
   // so every way of populating the list announces itself here and a new one
   // cannot forget to: populating IS the announcement.
-  stateManager.once('populated', () => resolveStarted());
+  stateManager.once('populated', () => {
+    resolveStarted();
+    capabilities.claim('nodeListPopulated', 'networkStateService').raise('node list populated');
+  });
 
   const usingDeltas = await nodeListSource.start({ stateManager, listFetcher: fetcher });
 
@@ -156,6 +160,7 @@ async function stop() {
   nodeListSource.stop();
   await stateManager.stop();
   stateManager = null;
+  capabilities.claim('nodeListPopulated', 'networkStateService').lower('stopped');
   started = new Promise((resolve) => { resolveStarted = resolve; });
 }
 

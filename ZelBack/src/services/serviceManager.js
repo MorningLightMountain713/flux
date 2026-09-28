@@ -86,7 +86,6 @@ const cloudUIUpdateService = require('./cloudUIUpdateService');
 const appTamperingBlocklistService = require('./appTamperingBlocklistService');
 const residentialNodeDosService = require('./residentialNodeDosService');
 const peerSetStabilityService = require('./peerSetStabilityService');
-const nodeConfirmationService = require('./nodeConfirmationService');
 const appTamperingDetectionService = require('./appTamperingDetectionService');
 const appsRuntimeState = require('./appManagement/appsRuntimeState');
 const imageCacheStore = require('./appLifecycle/imageCacheStore');
@@ -600,7 +599,7 @@ async function startFluxFunctions() {
     // that stops exactly at the threshold has nothing left to re-trigger the decision.
     peerManager.on('peerThresholdReached', () => policyStore.noteThresholdReached());
     policyStore.start().catch((err) => log.error(`policyStore start error: ${err.message}`));
-    nodeConfirmationService.onMessageCapabilityChange((capable) => orchestrator.onMessageCapabilityChange(capable));
+    capabilities.onUpChange('nodeMessageCapable', (capable) => orchestrator.onMessageCapabilityChange(capable));
     // A grantor referees from the records this orchestrator's sync delivers,
     // so it refuses to referee until the orchestrator is READY — the live
     // level, read per ask; fail-closed until this line runs.
@@ -620,7 +619,7 @@ async function startFluxFunctions() {
     // service's direct listener is the production hook; the bus is the
     // harness's.
     grantorController.seedDelistedHolders().catch((error) => log.warn(`delisted-holder sweep failed: ${error.message}`));
-    nodeConfirmationService.onMessageCapabilityChange((capable) => {
+    capabilities.onUpChange('nodeMessageCapable', (capable) => {
       if (capable) meshOrdinals.noteReturnFromUnreachability();
     });
     peerNotification.initialize();

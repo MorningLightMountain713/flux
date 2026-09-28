@@ -360,7 +360,7 @@ async function manageAppsOnBoot(bootContext) {
       throw error;
     }
 
-    await nodeConfirmationService.waitForConfirmationStatus();
+    await capabilities.whenUp('confirmationStatusKnown');
     if (!nodeConfirmationService.isConfirmed()) {
       log.info('appStartupManager - Node not confirmed, removing all apps');
       await removeAllApps('Node not confirmed');

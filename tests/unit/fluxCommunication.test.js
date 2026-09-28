@@ -17,6 +17,7 @@ const verificationHelper = require('../../ZelBack/src/services/verificationHelpe
 const fluxCommunicationUtils = require('../../ZelBack/src/services/fluxCommunicationUtils');
 const daemonServiceMiscRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceMiscRpcs');
 const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirmationService');
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
 const generalService = require('../../ZelBack/src/services/generalService');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
@@ -86,7 +87,7 @@ describe('fluxCommunication tests', () => {
     let disconnectAll;
 
     beforeEach(() => {
-      onConfirmationChange = sinon.stub(nodeConfirmationService, 'onConfirmationChange');
+      onConfirmationChange = sinon.stub(capabilities, 'onUpChange');
       onReady = sinon.stub(networkStateService, 'onReady');
       allowConnections = sinon.stub(peerManager, 'allowConnections');
       disconnectAll = sinon.stub(peerManager, 'disconnectAll');
@@ -102,9 +103,9 @@ describe('fluxCommunication tests', () => {
     function confirmationHandler() {
       fluxCommunication.initializeDiscovery();
 
-      expect(onConfirmationChange.calledOnce).to.equal(true);
+      expect(onConfirmationChange.calledOnceWith('nodeConfirmed')).to.equal(true);
 
-      return onConfirmationChange.firstCall.args[0];
+      return onConfirmationChange.firstCall.args[1];
     }
 
     it('does not accept peers on confirmation alone', () => {
@@ -1556,7 +1557,7 @@ describe('fluxCommunication tests', () => {
     });
 
     it('gives the peer manager the fleet size from the network state', () => {
-      sinon.stub(nodeConfirmationService, 'onConfirmationChange');
+      sinon.stub(capabilities, 'onUpChange');
       sinon.stub(networkStateService, 'nodeCount').returns(1234);
 
       fluxCommunication.initializeDiscovery();

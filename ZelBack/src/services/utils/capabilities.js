@@ -241,6 +241,20 @@ function onTransition(name, fn) {
 }
 
 /**
+ * Call `fn(up)` whenever whether a capability is up changes: once as it comes
+ * up, once as it stops being up. A move between `down` and `coming-up` is not a
+ * change to a reader asking whether it may act.
+ * @returns {() => void} unsubscribe
+ */
+function onUpChange(name, fn) {
+  return onTransition(name, (record) => {
+    const wasUp = record.from === STATE.UP;
+    const isNowUp = record.to === STATE.UP;
+    if (wasUp !== isNowUp) fn(isNowUp);
+  });
+}
+
+/**
  * Call `fn()` the first time a capability comes up in this process: at once if
  * it already has. For work that runs at a named point in boot and never again.
  */
@@ -308,6 +322,7 @@ module.exports = {
   firstNotUp,
   whenUp,
   onTransition,
+  onUpChange,
   onFirstUp,
   snapshot,
   transitions,

@@ -6,7 +6,7 @@ const daemonServiceMiscRpcs = require('./daemonService/daemonServiceMiscRpcs');
 const daemonSubscriptionService = require('./daemonService/daemonSubscriptionService');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const networkStateService = require('./networkStateService');
-const { AsyncGate } = require('./utils/asyncGate');
+const capabilities = require('./utils/capabilities');
 const fluxEventBus = require('./utils/fluxEventBus');
 const log = require('../lib/log');
 
@@ -33,11 +33,28 @@ function elapsedSinceStatusMs() {
   return Number(process.hrtime.bigint() - lastStatusObservedAt) / 1_000_000;
 }
 
-const confirmedGate = new AsyncGate();
-const confirmationStatusGate = new AsyncGate();
-const confirmationListeners = [];
 const daemonStaleListeners = [];
-const messageCapabilityListeners = [];
+
+/**
+ * Publish `nodeConfirmed` from the daemon's verdict.
+ * @param {boolean} confirmed
+ * @param {string} reason
+ */
+function publishConfirmed(confirmed, reason) {
+  const handle = capabilities.claim('nodeConfirmed', 'nodeConfirmationService');
+  if (confirmed) handle.raise(reason); else handle.lower(reason);
+}
+
+/**
+ * Publish `nodeMessageCapable`: the network's node list carries this node at its
+ * own address and key, so other nodes will hear what it broadcasts.
+ * @param {boolean} capable
+ * @param {string} reason
+ */
+function publishMessageCapable(capable, reason) {
+  const handle = capabilities.claim('nodeMessageCapable', 'nodeConfirmationService');
+  if (capable) handle.raise(reason); else handle.lower(reason);
+}
 
 function isConfirmed() {
   return daemonConfirmed;
@@ -97,24 +114,8 @@ function isDaemonStale() {
   return daemonStale;
 }
 
-function waitForConfirmed() {
-  return confirmedGate.wait();
-}
-
-function waitForConfirmationStatus() {
-  return confirmationStatusGate.wait();
-}
-
-function onConfirmationChange(callback) {
-  confirmationListeners.push(callback);
-}
-
 function onDaemonStale(callback) {
   daemonStaleListeners.push(callback);
-}
-
-function onMessageCapabilityChange(callback) {
-  messageCapabilityListeners.push(callback);
 }
 
 /**
@@ -203,39 +204,27 @@ async function reconcile(previous, statusObserved) {
 
     if (daemonConfirmed && hasConfirmationExpired(elapsed)) {
       daemonConfirmed = false;
-      confirmedGate.close();
       log.warn('nodeConfirmationService - Confirmation expired on chain while the daemon was unreachable');
+      publishConfirmed(false, 'confirmation expired on chain while the daemon was unreachable');
       fluxEventBus.publish('confirmation:changed', { confirmed: false });
-      for (const cb of confirmationListeners) {
-        try { cb(false); } catch (e) { log.error(e); }
-      }
     }
   }
 
   if (statusObserved) {
-    if (daemonConfirmed) {
-      confirmedGate.open();
-    } else {
-      confirmedGate.close();
-    }
+    publishConfirmed(daemonConfirmed, daemonConfirmed ? 'daemon reports this node confirmed' : 'daemon reports this node not confirmed');
     if (prevDaemonConfirmed !== daemonConfirmed) {
       const direction = daemonConfirmed ? 'gained' : 'lost';
       log.info(`nodeConfirmationService - Confirmation ${direction}`);
       fluxEventBus.publish('confirmation:changed', { confirmed: daemonConfirmed });
-      for (const cb of confirmationListeners) {
-        try { cb(daemonConfirmed); } catch (e) { log.error(e); }
-      }
     }
   }
 
   if (!daemonConfirmed) {
     messageCapable = false;
+    publishMessageCapable(false, 'node not confirmed by the daemon');
     if (prevMessageCapable !== messageCapable) {
       log.info('nodeConfirmationService - Node not confirmed by daemon, message capability lost');
       fluxEventBus.publish('messageCapability:changed', { capable: messageCapable });
-      for (const cb of messageCapabilityListeners) {
-        try { cb(false); } catch (e) { log.error(e); }
-      }
     }
     return;
   }
@@ -267,14 +256,14 @@ async function reconcile(previous, statusObserved) {
   }
 
   messageCapable = newMessageCapable;
+  publishMessageCapable(messageCapable, messageCapable
+    ? 'the node list carries this node at its own address and key'
+    : 'the node list does not carry this node at its own address and key');
 
   if (prevMessageCapable !== messageCapable) {
     const direction = messageCapable ? 'gained' : 'lost';
     log.info(`nodeConfirmationService - Message capability ${direction} (confirmed=${daemonConfirmed}, messageCapable=${messageCapable})`);
     fluxEventBus.publish('messageCapability:changed', { capable: messageCapable });
-    for (const cb of messageCapabilityListeners) {
-      try { cb(messageCapable); } catch (e) { log.error(e); }
-    }
   }
 }
 
@@ -368,8 +357,14 @@ async function start(options = {}) {
   started = true;
   pushDriven = options.push === true;
 
+  // Whether this node can be heard depends on the node list as much as on the
+  // daemon: when the list arrives, ask again rather than wait for the next poll.
+  capabilities.onUpChange('nodeListPopulated', (up) => {
+    if (up) reevaluate().catch((error) => log.error(error));
+  });
+
   await poll();
-  confirmationStatusGate.open();
+  capabilities.claim('confirmationStatusKnown', 'nodeConfirmationService').raise('first confirmation status read');
   if (!pushDriven) scheduleNext();
 
   log.info(`nodeConfirmationService - Started ${pushDriven ? 'on fluxnodestatus' : 'polling'} (confirmed=${daemonConfirmed}, messageCapable=${messageCapable})`);
@@ -409,11 +404,7 @@ module.exports = {
   isDaemonReachable,
   isDaemonStale,
   canSendMessages,
-  waitForConfirmed,
-  waitForConfirmationStatus,
-  onConfirmationChange,
   onDaemonStale,
-  onMessageCapabilityChange,
   applyPushedStatus,
   poll,
   reevaluate,

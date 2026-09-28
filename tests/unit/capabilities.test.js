@@ -158,6 +158,19 @@ describe('capabilities tests', () => {
       expect(seen).to.deep.equal([STATE.COMING_UP, STATE.UP]);
     });
 
+    it('reports to onUpChange only when whether it is up changes', () => {
+      const mongo = capabilities.claim('mongoReachable', 'serviceManager');
+      const localDb = capabilities.claim('localDbPrepared', 'serviceManager');
+      const seen = [];
+      capabilities.onUpChange('localDbPrepared', (up) => seen.push(up));
+      localDb.starting('preparing');
+      localDb.raise('prepared');
+      mongo.raise('up');
+      mongo.lower('down');
+      localDb.lower('owner lowered');
+      expect(seen).to.deep.equal([true, false]);
+    });
+
     it('records a transition with what it waited on', () => {
       capabilities.claim('localDbPrepared', 'serviceManager').raise('prepared');
       const record = capabilities.transitions().find((t) => t.name === 'localDbPrepared');
