@@ -148,6 +148,17 @@ describe('fluxCommunication tests', () => {
       expect(allowConnections.called).to.equal(false);
     });
 
+    it('waits for the list when the node is already confirmed as discovery starts', () => {
+      sinon.stub(capabilities, 'isUp').callsFake((name) => name === 'nodeConfirmed');
+      sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
+
+      fluxCommunication.initializeDiscovery();
+      expect(onReady.calledOnce).to.equal(true);
+      onReady.firstCall.args[0]();
+
+      expect(allowConnections.calledOnce).to.equal(true);
+    });
+
     it('disconnects every peer when confirmation is lost, without consulting the list', () => {
       const confirmed = confirmationHandler();
 

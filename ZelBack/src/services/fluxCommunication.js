@@ -1879,7 +1879,7 @@ function initializeDiscovery() {
     log.info('Confirmation lost, disconnecting all peers');
     peerManager.disconnectAll();
   });
-  capabilities.onUp('nodeConfirmed', () => {
+  const openWhenListReady = () => {
     // Confirmed is not the same as ready to peer. Every message an inbound peer
     // sends is checked against the node list, so a peer that arrives before the
     // list does is refused however legitimate it is - there is nothing to
@@ -1897,7 +1897,9 @@ function initializeDiscovery() {
 
       peerManager.allowConnections();
     });
-  });
+  };
+  capabilities.onUp('nodeConfirmed', openWhenListReady);
+  if (capabilities.isUp('nodeConfirmed')) openWhenListReady();
 }
 
 /**
