@@ -155,7 +155,7 @@ describe('appStartupManager tests', () => {
         '../utils/appUtilities': appUtilities,
         '../nodeConfirmationService': {
           isConfirmed: sinon.stub().returns(true),
-          },
+        },
       });
 
       await flaggedStartupManager.reconcileAppsOnBoot();
