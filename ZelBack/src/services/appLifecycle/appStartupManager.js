@@ -397,7 +397,7 @@ async function manageAppsOnBoot(bootContext) {
     // FluxOS keeps every container on RestartPolicy 'no', so after a host reboot
     // nothing is running until the reconcile below starts it. Never allowed to stop
     // that reconcile - a node that cannot migrate must still start its apps.
-    await migrations.runMigrations(migrations.HOOKS.APPS_STARTING);
+    await migrations.runBefore('bootReconcileDecided');
 
     log.info('appStartupManager - Daemon, DB, and node confirmed, reconciling apps');
     await reconcileAppsOnBoot();

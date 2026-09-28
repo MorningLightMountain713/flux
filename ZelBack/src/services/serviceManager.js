@@ -194,7 +194,7 @@ async function startFluxFunctions() {
     // monitor both read what these adopt; pgpService guards itself (it reads the
     // config file directly when the database holds no identity), so this is the
     // tidy path rather than the only one.
-    await migrations.runMigrations(migrations.HOOKS.DEPENDENCIES_READY);
+    await migrations.runBefore('localDbPrepared');
 
     // Check and update CloudUI if needed (for legacy nodes without watchdog; Arcane
     // delegates to the watchdog). Detached: a UI-asset download must never gate boot —
