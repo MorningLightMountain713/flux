@@ -67,21 +67,27 @@ const REPLAY_WINDOW_MS = 5000;
 // record pull, where the testcontainers handle may not exist at all: a node
 // whose startContainer threw (the boot-timeout class) is precisely the one
 // whose logs matter, and the CLI reaches it by network + address.
-function dockerCli(args, timeoutMs = 15000) {
+function dockerCli(args, timeoutMs = 15000, maxBuffer = 8 * 1024 * 1024) {
   return new Promise((resolve) => {
-    execFile('docker', args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile('docker', args, { timeout: timeoutMs, maxBuffer }, (err, stdout, stderr) => {
       resolve({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' });
     });
   });
 }
 
+// A node's whole record, never a tail: the journal directory is the node's own, so
+// it holds exactly this node's entries since its container was created, and a
+// failing test's cause is as often minutes before the failure as at it.
+const RECORD_PULL_TIMEOUT_MS = 60000;
+const RECORD_PULL_MAX_BUFFER = 128 * 1024 * 1024;
+
 // Read a node's journal from the host copy of it (see the journal mount in the node
 // builder). Non-interactive sudo only: a prompt would hang a teardown, and a host
 // without it should report that rather than stall.
-function hostJournalRead(dir, timeoutMs = 20000) {
+function hostJournalRead(dir, timeoutMs = RECORD_PULL_TIMEOUT_MS) {
   return new Promise((resolve) => {
-    const args = ['-n', 'journalctl', '-D', dir, '--no-pager', '-n', '1500'];
-    execFile('sudo', args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+    const args = ['-n', 'journalctl', '-D', dir, '--no-pager'];
+    execFile('sudo', args, { timeout: timeoutMs, maxBuffer: RECORD_PULL_MAX_BUFFER }, (err, stdout, stderr) => {
       resolve({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' });
     });
   });
@@ -642,8 +648,8 @@ function makeEnvShell(networkName) {
           || (Number.isInteger(nodeNum) ? subnet.nodeIp(nodeNum) : '');
         if (!ip) return;
         const pull = await dockerCli(['exec', id, 'bash', '-c',
-          'echo "=== journalctl (tail 1500)"; journalctl --no-pager -n 1500 2>/dev/null; '
-          + 'echo "=== /flux/fluxos.log (tail 400)"; tail -n 400 /flux/fluxos.log 2>/dev/null; true'], 20000);
+          'echo "=== journalctl"; journalctl --no-pager 2>/dev/null; '
+          + 'echo "=== /flux/fluxos.log"; cat /flux/fluxos.log 2>/dev/null; true'], RECORD_PULL_TIMEOUT_MS, RECORD_PULL_MAX_BUFFER);
         // The output is the point, whatever the script's last command exited: on a
         // plain-mode node journalctl does not exist and the file log may not either,
         // and a non-zero tail must not condemn a full journal.
@@ -657,7 +663,7 @@ function makeEnvShell(networkName) {
         if (!text && journalDir && existsSync(journalDir)) {
           const host = await hostJournalRead(journalDir);
           text = host.stdout?.trim()
-            ? `=== journalctl (host journal ${journalDir}, tail 1500)\n${host.stdout}`
+            ? `=== journalctl (host journal ${journalDir})\n${host.stdout}`
             : `record pull failed: ${pull.stderr || 'exec error'}; host journal ${journalDir} unreadable: ${host.stderr || 'no output'}`;
         }
         nodeRecords.set(ip, text || `record pull failed: ${pull.stderr || 'exec error'}`);
