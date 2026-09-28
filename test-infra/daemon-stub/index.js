@@ -1512,6 +1512,9 @@ control.post('/reorg', (req, res) => {
   // with it — otherwise a later, deeper reorg would leave a discarded chain's hashes
   // answering for heights the new one now owns.
   while (chainEras.length > 1 && chainEras[chainEras.length - 1].firstHeight > fork) chainEras.pop();
+  // The same for blocks a test added: one above the fork was mined on the chain
+  // being abandoned, and the new chain's block at that height carries none of it.
+  pendingBlocks = pendingBlocks.filter((block) => Number(block.height) <= fork);
   nextForkSalt += 1;
   chainEras.push({ firstHeight: fork + 1, salt: nextForkSalt });
   abandonedTips.unshift({ height: oldTip.height, hash: oldTip.hash, forkHeight: fork });
