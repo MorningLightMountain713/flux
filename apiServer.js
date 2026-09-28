@@ -44,6 +44,7 @@ const log = require('./ZelBack/src/lib/log');
 const serviceHelper = require('./ZelBack/src/services/serviceHelper');
 const upnpService = require('./ZelBack/src/services/upnpService');
 const dnsLookup = require('./ZelBack/src/services/utils/dnsLookup');
+const capabilities = require('./ZelBack/src/services/utils/capabilities');
 const nodeDosState = require('./ZelBack/src/services/nodeDosState');
 const requestHistoryStore = require('./ZelBack/src/services/utils/requestHistory');
 const globalState = require('./ZelBack/src/services/utils/globalState');
@@ -172,6 +173,8 @@ async function logErrorAndExit(msg, options = {}) {
 async function loadUpnpIfRequired() {
   try {
     if (!upnpService.isUPNP()) return;
+    const mapped = capabilities.claim('upnpMapped', 'upnpService');
+    mapped.starting(`mapping port ${apiPort} on the router`);
 
     const verifyUpnp = await upnpService.verifyUPNPsupport(apiPort);
     const setupUpnp = verifyUpnp ? await upnpService.setupUPNP(apiPort) : false;
@@ -179,6 +182,7 @@ async function loadUpnpIfRequired() {
     if (verifyUpnp !== true) {
       const message = `UPnP is enabled for this node but the router did not answer on port ${apiPort}`;
       log.error(message);
+      mapped.lower(message);
       nodeDosState.addDosState(11);
       nodeDosState.setDosMessage(message);
       return;
@@ -186,11 +190,13 @@ async function loadUpnpIfRequired() {
     if (setupUpnp !== true) {
       const message = `UPnP is enabled for this node but mapping port ${apiPort} failed`;
       log.error(message);
+      mapped.lower(message);
       nodeDosState.addDosState(11);
       nodeDosState.setDosMessage(message);
       return;
     }
     nodeDosState.setDosMessage(null);
+    mapped.raise(`port ${apiPort} mapped on the router`);
   } catch (error) {
     log.error(error);
   }
@@ -220,7 +226,9 @@ async function initiate() {
 
   dnsLookup.install();
 
-  await loadUpnpIfRequired();
+  // Beside the API, not in front of it: listening needs no mapping, and only
+  // other nodes reaching this one from outside waits on `upnpMapped`.
+  loadUpnpIfRequired();
 
   const appRoot = process.cwd();
   // ToDo: move this to async
@@ -260,6 +268,7 @@ async function initiate() {
   // Ready means the API answers. Mongo, Docker and fluxd come up behind this,
   // each with its own unit. Not awaited: nothing below depends on it.
   systemdNotify.notifyReady();
+  capabilities.claim('apiListening', 'apiServer').raise(`listening on ${apiPort} and ${apiPortHttps}`);
 
   setAxiosDefaults([httpServer.socketIo, httpsServer.socketIo]);
 
