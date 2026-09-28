@@ -49,6 +49,71 @@ describe('upnpService tests', () => {
   // that transitively required this module), which is exactly where an override
   // applied beside the import would be silently skipped - a node with a configured
   // gateway would quietly fall back to SSDP discovery.
+  describe('adjustFirewallForUPNP', () => {
+    const ROUTER = '172.16.32.1';
+    let scoped;
+    let routerBefore;
+    let ufwCalls;
+
+    // The rules as `ufw show added` lists them on a node that already has them.
+    const listed = (rules) => ['Added user rules (see \'ufw status\' for running firewall):', ...rules.map((r) => `ufw ${r}`)].join('\n');
+    const allRules = [
+      'allow out to 239.255.255.250 port 1900 proto udp',
+      `allow from ${ROUTER} port 1900 proto udp`,
+      `allow out to ${ROUTER} proto tcp`,
+      `allow from ${ROUTER} proto udp`,
+      `allow to ${ROUTER} port 16127 proto tcp`,
+      `allow out to ${ROUTER} port 16127 proto tcp`,
+      `allow to ${ROUTER} port 16127 proto udp`,
+      `allow out to ${ROUTER} port 16127 proto udp`,
+    ];
+
+    function answer(added) {
+      serviceHelper.runCommand.restore();
+      ufwCalls = [];
+      sinon.stub(serviceHelper, 'runCommand').callsFake(async (cmd, { params }) => {
+        ufwCalls.push(params.join(' '));
+        if (params[0] === 'status') return { error: null, stdout: 'Status: active', stderr: '' };
+        if (params[0] === 'show') return { error: null, stdout: listed(added), stderr: '' };
+        return { error: null, stdout: '', stderr: '' };
+      });
+    }
+
+    beforeEach(() => {
+      routerBefore = globalThis.userconfig.initial.routerIP;
+      globalThis.userconfig.initial.routerIP = ROUTER;
+      scoped = proxyquire('../../ZelBack/src/services/upnpService', {
+        config: asConfig({ apiport: '5550', server: { allowedPorts: [16_127] } }),
+      });
+    });
+
+    afterEach(() => {
+      globalThis.userconfig.initial.routerIP = routerBefore;
+      sinon.restore();
+    });
+
+    it('changes nothing when every rule is already in place', async () => {
+      answer(allRules);
+      await scoped.adjustFirewallForUPNP();
+      expect(ufwCalls).to.deep.equal(['status', 'show added']);
+    });
+
+    it('inserts only the rules that are missing', async () => {
+      answer(allRules.slice(2));
+      await scoped.adjustFirewallForUPNP();
+      expect(ufwCalls.filter((c) => c.startsWith('insert'))).to.deep.equal([
+        'insert 1 allow out to 239.255.255.250 port 1900 proto udp',
+        `insert 1 allow from ${ROUTER} port 1900 proto udp`,
+      ]);
+    });
+
+    it('deletes the private-network deny only when it is there', async () => {
+      answer([...allRules, 'deny out to 172.16.0.0/12']);
+      await scoped.adjustFirewallForUPNP();
+      expect(ufwCalls).to.include('delete deny out to 172.16.0.0/12');
+    });
+  });
+
   describe('configured gateway override', () => {
     afterEach(() => {
       sinon.restore();

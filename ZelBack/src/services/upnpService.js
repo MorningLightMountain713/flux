@@ -94,59 +94,80 @@ async function isFirewallActive() {
 /**
  * To adjust a firewall to allow comms between host and router.
  */
+/**
+ * The private network a router address sits in, as ufw names it.
+ * @param {string} routerIP
+ * @returns {string}
+ */
+function routerNetwork(routerIP) {
+  const [a, b] = routerIP.split('.');
+  const base = `${a}.${b}.0.0`;
+  const prefixes = {
+    '10.0.0.0': '/8', '172.16.0.0': '/12', '192.168.0.0': '/16', '100.64.0.0': '/10', '198.18.0.0': '/15', '169.254.0.0': '/16',
+  };
+  return base + (prefixes[base] || '');
+}
+
+/**
+ * The rules a UPnP node needs, each in the canonical form `ufw show added`
+ * lists it, so that a rule already in place compares equal as text.
+ * @param {string} routerIP
+ * @returns {string[]}
+ */
+function upnpFirewallRules(routerIP) {
+  const rules = [
+    'allow out to 239.255.255.250 port 1900 proto udp',
+    `allow from ${routerIP} port 1900 proto udp`,
+    `allow out to ${routerIP} proto tcp`,
+    `allow from ${routerIP} proto udp`,
+  ];
+  for (const port of config.get('server.allowedPorts')) {
+    rules.push(
+      `allow to ${routerIP} port ${port} proto tcp`,
+      `allow out to ${routerIP} port ${port} proto tcp`,
+      `allow to ${routerIP} port ${port} proto udp`,
+      `allow out to ${routerIP} port ${port} proto udp`,
+    );
+  }
+  return rules;
+}
+
+/**
+ * Bring the firewall in line with what a UPnP node needs: read the rules once,
+ * insert only those missing, and delete the private-network deny only if it is
+ * there. ufw keeps its rules across reboots, so on an ordinary boot nothing
+ * changes.
+ */
 async function adjustFirewallForUPNP() {
   try {
     let { routerIP } = userconfig.initial;
     routerIP = serviceHelper.ensureString(routerIP);
-    if (routerIP) {
-      const firewallActive = await isFirewallActive();
-      if (firewallActive) {
-        // Arguments are passed as a list rather than interpolated into a shell string:
-        // routerIP comes from the node config, so building a command line out of it put
-        // an operator-supplied value through a shell.
-        const ufw = (params) => serviceHelper.runCommand('ufw', { runAsRoot: true, params });
-
-        // standard rules for upnp
-        await ufw(['insert', '1', 'allow', 'out', 'from', 'any', 'to', '239.255.255.250', 'port', '1900', 'proto', 'udp']);
-        await ufw(['insert', '1', 'allow', 'from', routerIP, 'port', '1900', 'to', 'any', 'proto', 'udp']);
-        await ufw(['insert', '1', 'allow', 'out', 'from', 'any', 'to', routerIP, 'proto', 'tcp']);
-        await ufw(['insert', '1', 'allow', 'from', routerIP, 'to', 'any', 'proto', 'udp']);
-
-        const fluxCommunicationPorts = config.get('server.allowedPorts');
-        // eslint-disable-next-line no-restricted-syntax
-        for (const port of fluxCommunicationPorts) {
-          // create rule for hone nodes ws connections
-          // eslint-disable-next-line no-await-in-loop
-          await ufw(['insert', '1', 'allow', 'in', 'proto', 'tcp', 'from', 'any', 'to', routerIP, 'port', `${port}`]);
-          // eslint-disable-next-line no-await-in-loop
-          await ufw(['insert', '1', 'allow', 'out', 'proto', 'tcp', 'to', routerIP, 'port', `${port}`]);
-          // eslint-disable-next-line no-await-in-loop
-          await ufw(['insert', '1', 'allow', 'in', 'proto', 'udp', 'from', 'any', 'to', routerIP, 'port', `${port}`]);
-          // eslint-disable-next-line no-await-in-loop
-          await ufw(['insert', '1', 'allow', 'out', 'proto', 'udp', 'to', routerIP, 'port', `${port}`]);
-          log.info(`Firewall adjusted for UPNP local connections on port ${port}`);
-        }
-        // delete and recreate deny rule at end
-        let routerIpNetwork = `${routerIP.split('.')[0]}.${routerIP.split('.')[1]}.0.0`;
-        if (routerIpNetwork === '10.0.0.0') {
-          routerIpNetwork += '/8';
-        } else if (routerIpNetwork === '172.16.0.0') {
-          routerIpNetwork += '/12';
-        } else if (routerIpNetwork === '192.168.0.0') {
-          routerIpNetwork += '/16';
-        } else if (routerIpNetwork === '100.64.0.0') {
-          routerIpNetwork += '/10';
-        } else if (routerIpNetwork === '198.18.0.0') {
-          routerIpNetwork += '/15';
-        } else if (routerIpNetwork === '169.254.0.0') {
-          routerIpNetwork += '/16';
-        }
-        await ufw(['delete', 'deny', 'out', 'from', 'any', 'to', routerIpNetwork]);
-        log.info('Firewall adjusted for UPNP');
-      } else {
-        log.info('RouterIP is set but firewall is not active. Adjusting not applied for UPNP');
-      }
+    if (!routerIP) return;
+    const firewallActive = await isFirewallActive();
+    if (!firewallActive) {
+      log.info('RouterIP is set but firewall is not active. Adjusting not applied for UPNP');
+      return;
     }
+    // Arguments are passed as a list rather than interpolated into a shell string:
+    // routerIP comes from the node config, so building a command line out of it put
+    // an operator-supplied value through a shell.
+    const ufw = (params) => serviceHelper.runCommand('ufw', { runAsRoot: true, params });
+
+    const { stdout } = await ufw(['show', 'added']);
+    const present = new Set(String(stdout || '').split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('ufw '))
+      .map((line) => line.slice(4)));
+
+    const missing = upnpFirewallRules(routerIP).filter((rule) => !present.has(rule));
+    // eslint-disable-next-line no-restricted-syntax
+    for (const rule of missing) {
+      // eslint-disable-next-line no-await-in-loop
+      await ufw(['insert', '1', ...rule.split(' ')]);
+    }
+    const deny = `deny out to ${routerNetwork(routerIP)}`;
+    if (present.has(deny)) await ufw(['delete', ...deny.split(' ')]);
+    log.info(`Firewall adjusted for UPNP: ${missing.length} rule(s) added${present.has(deny) ? ', private-network deny removed' : ''}`);
   } catch (error) {
     log.error(error);
   }
