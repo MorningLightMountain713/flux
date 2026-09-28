@@ -41,6 +41,27 @@ describe('explorerService tests', () => {
   });
   after(() => capabilities.resetForTests());
 
+  describe('explorerSynced', () => {
+    it('rises within two blocks of the tip and falls only beyond ten', () => {
+      capabilities.setForTests('chainStateConsistent', true);
+      explorerService.publishExplorerSynced(98, 100);
+      expect(capabilities.isUp('explorerSynced')).to.equal(true);
+      explorerService.publishExplorerSynced(90, 100);
+      expect(capabilities.isUp('explorerSynced'), 'ten behind is inside the band').to.equal(true);
+      explorerService.publishExplorerSynced(89, 100);
+      expect(capabilities.isUp('explorerSynced')).to.equal(false);
+      explorerService.publishExplorerSynced(95, 100);
+      expect(capabilities.isUp('explorerSynced'), 'five behind does not bring it back').to.equal(false);
+    });
+
+    it('falls with chain state', () => {
+      capabilities.setForTests('chainStateConsistent', true);
+      explorerService.publishExplorerSynced(100, 100);
+      capabilities.setForTests('chainStateConsistent', false);
+      expect(capabilities.isUp('explorerSynced')).to.equal(false);
+    });
+  });
+
   before(requireMongo);
 
   // initiateBlockProcessor ends by starting the scan loop. Stop it between tests so a
