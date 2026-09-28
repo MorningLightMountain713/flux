@@ -601,6 +601,20 @@ describe('quorumGrant grantorController', () => {
       expect(grantRegister.probe.calledOnce).to.equal(true);
     });
 
+    it('release skips the holder check — it gives back only the asker\'s own term — and renew does not', async () => {
+      // a removal broadcasts its appremoved before its teardown releases, so
+      // the releaser's row is already gone at every cell that heard it
+      registryManager.appLocation.resolves([]);
+      const released = fakeRes();
+      await grantorController.release(fakeReq(signedAsk('release')), released);
+      expect(released.statusCode).to.equal(200);
+      expect(grantRegister.release.calledOnce).to.equal(true);
+      const renewed = fakeRes();
+      await grantorController.renew(fakeReq(signedAsk('renew')), renewed);
+      expect(renewed.statusCode).to.equal(403);
+      expect(grantRegister.renew.called).to.equal(false);
+    });
+
     it('a young holder may not CHALLENGE an existing held record', async () => {
       grantRegister.read.resolves({ accepted: { epoch: 2, grantee: 'x:1', mode: 'held' } });
       registryManager.appLocation.resolves([
