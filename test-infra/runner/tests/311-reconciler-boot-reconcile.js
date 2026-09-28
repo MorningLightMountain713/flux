@@ -74,7 +74,9 @@ describe('reconciler restarts app containers on FluxOS boot', function () {
     let restarted;
     let afterId;
     try {
-      await env.restartNode(idx);
+      // The node is held below fitness by the failing RPC, so the restart waits
+      // for its API to answer, not for the login phrase fitness issues.
+      await env.restartNode(idx, { ready: 'serving' });
       restarted = env.clients[idx];
       // Read while the gate is provably shut, so the wait at the end cannot be
       // satisfied by the boot:settled this node published on its previous boot -

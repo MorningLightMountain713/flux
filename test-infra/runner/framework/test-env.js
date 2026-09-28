@@ -967,6 +967,13 @@ function nodeReadyWaitStrategy(nodeIp) {
   return new HttpPollWaitStrategy(`http://${nodeIp}:16127/id/loginphrase`, { validate });
 }
 
+// The node answers at all. A login phrase is issued only by a node fit to serve
+// the network, so a test whose premise holds the node below fitness - a daemon
+// RPC that fails through the boot - waits on this instead.
+function nodeServingWaitStrategy(nodeIp) {
+  return new HttpPollWaitStrategy(`http://${nodeIp}:16127/flux/version`);
+}
+
 // `syncthing` selects what each node talks to. 'stub' (the default) is the
 // shared control-plane stub: it serves every node, moves no files, and is what
 // the gate runs on. 'binary' gives each node its own real daemon from the image
@@ -2156,14 +2163,21 @@ async function _buildEnv(
     // teardown (moby/daemon/container/health.go CloseMonitorChannel), which a
     // health-coupled wait strategy would mistake for a dead container. This is
     // the same serve-auth readiness the initial fleet build uses.
-    async restartNode(index, { timeout = 15000 } = {}) {
+    // `ready` names what the restart waits for: 'fit' (the default), a node that
+    // issues a login phrase, which it does only once it can serve the network;
+    // 'serving', a node whose API answers, for a test whose premise keeps the
+    // node below fitness through the boot.
+    async restartNode(index, { timeout = 15000, ready = 'fit' } = {}) {
+      if (!['fit', 'serving'].includes(ready)) throw new Error(`restartNode: ready must be 'fit' or 'serving', not ${JSON.stringify(ready)}`);
       if (clients[index]) clients[index].disconnectEventStream();
       const { container, logCollector } = fluxNodes[index];
       // Taken before the container goes down: everything the restarted node writes from
       // here on is what the re-attached stream has to carry.
       const sinceSeconds = Math.floor(Date.now() / 1000);
       const saved = container.waitStrategy;
-      container.waitStrategy = nodeReadyWaitStrategy(fluxNodes[index].ip);
+      container.waitStrategy = ready === 'serving'
+        ? nodeServingWaitStrategy(fluxNodes[index].ip)
+        : nodeReadyWaitStrategy(fluxNodes[index].ip);
       // The build-time log consumer dies with the stopped process and never
       // re-attaches, so a restart's second boot is captured by re-attaching the
       // SAME collector through the container's own logs API (demuxed by the
