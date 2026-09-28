@@ -127,6 +127,8 @@ const development = userconfig.initial.development || false;
 const fluxTransactionCollection = config.get('database.daemon.collections.fluxTransactions');
 
 const bootDelayMultiplier = config.get('fluxapps.bootDelayMultiplier');
+let dependencyProbe = null;
+
 function bootDelay(ms) { return Math.round(ms * bootDelayMultiplier); }
 
 const portRestoreIntervalMs = config.get('fluxapps.portRestoreIntervalMs');
@@ -320,6 +322,23 @@ async function prepareDatabaseSchema() {
 }
 
 /**
+ * Keep `mongoReachable` and `dockerReachable` true to what the services answer.
+ * Neither announces going away, so each is pinged on an interval: the one poll
+ * the capability registry has.
+ */
+function startDependencyProbes() {
+  if (dependencyProbe) return;
+  const mongo = capabilities.claim('mongoReachable', 'serviceManager');
+  const docker = capabilities.claim('dockerReachable', 'serviceManager');
+  dependencyProbe = setInterval(async () => {
+    const [mongoUp, dockerUp] = await Promise.all([dbHelper.pingMongo(), dockerService.pingDocker()]);
+    if (mongoUp) mongo.raise('MongoDB answered'); else mongo.lower('MongoDB did not answer a ping');
+    if (dockerUp) docker.raise('Docker answered'); else docker.lower('Docker did not answer a ping');
+  }, config.get('system.dependencyProbeMs'));
+  dependencyProbe.unref?.();
+}
+
+/**
  * To start FluxOS. A series of checks are performed on port and UPnP (Universal Plug and Play) support and mapping. Database connections are established. The other relevant functions required to start FluxOS services are called.
  *
  * Not unit-testable: every step acts on the machine, and a throw re-runs the
@@ -356,12 +375,15 @@ async function startFluxFunctions() {
     }
     // Hard dependencies — nothing starts until these are confirmed.
     await dbHelper.waitForMongo();
+    capabilities.claim('mongoReachable', 'serviceManager').raise('MongoDB answered');
     databaseHealthService.watch(dbHelper.databaseConnection(), 'main');
     databaseHealthService.watch(dbHelper.maintenanceConnection(), 'maintenance');
     // As soon as MongoDB answers: a below-floor node stays up holding a sticky
     // DOS, so /flux/info names the version found and the version required.
     fluxNetworkHelper.checkMongoDbVersionAllowed(await dbHelper.getMongoDbVersion());
     await dockerService.waitForDocker();
+    capabilities.claim('dockerReachable', 'serviceManager').raise('Docker answered');
+    startDependencyProbes();
     const dockerInfo = await dockerService.dockerInfo().catch(() => null);
     // Where docker keeps its records, read while it answers, for a kill made
     // while it does not.
@@ -384,6 +406,7 @@ async function startFluxFunctions() {
     // firewall and before any app starts.
     await fluxNetworkHelper.adjustFirewall();
     log.info('Firewalls checked');
+    capabilities.claim('localDbPrepared', 'serviceManager').starting('running migrations and preparing collections');
 
     // Node-local state migrations, before anything reads it. pgpService and the IP
     // monitor both read what these adopt; pgpService guards itself (it reads the
@@ -446,6 +469,7 @@ async function startFluxFunctions() {
     // so an interrupted removal always completes and a being-torn-down app is never
     // restarted from reconcile cycle 0.
     await appUninstaller.recoverOwedTeardowns();
+    capabilities.claim('localDbPrepared', 'serviceManager').raise('collections and indexes prepared');
     const db = dbHelper.databaseConnection();
 
     // The location table this node already holds, brought back as soon as the

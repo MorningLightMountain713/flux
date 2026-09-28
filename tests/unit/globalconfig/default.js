@@ -41,6 +41,8 @@ const harnessOverrides = {
     heartbeatIntervalMs: 30_000,
     bootSyncTimeoutMs: 300_000,
     bootDaemonTimeoutMs: 300_000,
+    // How often Mongo and Docker are pinged; neither announces going away.
+    dependencyProbeMs: 30_000,
   },
   peers: {
     wsPingIntervalMs: 15_000,

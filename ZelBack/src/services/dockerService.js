@@ -2824,6 +2824,19 @@ async function waitForDocker() {
   }
 }
 
+/**
+ * Whether the Docker daemon answers a ping.
+ * @returns {Promise<boolean>}
+ */
+async function pingDocker() {
+  try {
+    await docker.ping();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function migrateContainerRestartPolicies() {
   try {
     const containers = await dockerListContainers(true);
@@ -2949,4 +2962,5 @@ module.exports = {
   dockerNetworkState,
   dockerNetworkId,
   waitForDocker,
+  pingDocker,
 };
