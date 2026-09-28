@@ -6,6 +6,9 @@ import bs58check from 'bs58check';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+
+const { DEFAULT_INITIAL_HEIGHT } = createRequire(import.meta.url)('../runner/framework/chain-start.cjs');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const keysDir = join(__dirname, 'keys');
@@ -92,7 +95,8 @@ const deterministicList = nodes.map((n) => ({
   network: '',
   added_height: 2090000,
   confirmed_height: 2090500,
-  last_confirmed_height: 2099990,
+  // inside the harness confirmation window below the chain start
+  last_confirmed_height: DEFAULT_INITIAL_HEIGHT - 10,
   last_paid_height: 2099900,
   tier: n.tier,
   payment_address: n.zelid,
