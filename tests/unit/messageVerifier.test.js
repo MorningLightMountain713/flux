@@ -46,6 +46,7 @@ function makeBaseStubs(overrides = {}) {
     fiatAndFluxDisplayPrice: sinon.stub().resolves({ usd: 1, flux: 1, fluxDiscount: 0 }),
     registrationFee: sinon.stub().resolves(100_000_000n),
     supersededMessage: sinon.stub().resolves(null),
+    termCost: sinon.stub().resolves({ oldScaledPriceMicrodollars: 0, oldMetered: new Map() }),
     updateFee: sinon.stub().resolves(100_000_000n),
   });
   // chainFloor, the model a v8 spec declares
@@ -785,6 +786,27 @@ describe('messageVerifier tests', () => {
           expect(confirming.timestamp).to.be.a('number');
         });
 
+        // The update is stored before it is priced, so a cutoff at its own height
+        // would count the update itself against its own free-update allowance.
+        it('counts only the messages confirmed below the update, never the update itself', async () => {
+          const { stubs, v9Regime } = await pricedUpdate();
+          stubs['../appDatabase/appsRepository'].listAppMessagesByName = sinon.stub().resolves([
+            { hash: 'earlier', height: 1_999_995, type: 'fluxappupdate' },
+            { hash: 'updHash', height: 2_000_000, type: 'fluxappupdate' },
+            { hash: 'later', height: 2_000_001, type: 'fluxappupdate' },
+          ]);
+          const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+          Object.assign(stubs['./confirmedMessageStore'].chain, {
+            txid: 'txid', height: 2_000_000, value: 200_000_000, blockTime: BLOCK_TIME,
+          });
+          await mv.checkAndRequestApp('updHash', 2);
+
+          sinon.assert.calledOnce(v9Regime.updateFee);
+          const { recentEvents } = v9Regime.updateFee.firstCall.args[2];
+          expect(recentEvents.map((message) => message.hash)).to.deep.equal(['earlier']);
+        });
+
         // Priced against itself, a spec matches itself on every rule the
         // free-update policy tests, so the update costs nothing. The fee must
         // see the superseded message's spec and its height, never this one's.
@@ -798,7 +820,7 @@ describe('messageVerifier tests', () => {
           await mv.checkAndRequestApp('updHash', 2);
 
           sinon.assert.calledOnce(v9Regime.updateFee);
-          const [thisSpec, prevSpec, height, prevHeight, prevRegisteredAt] = v9Regime.updateFee.firstCall.args;
+          const [thisSpec, prevSpec, { height, prevHeight, prevRegisteredAt }] = v9Regime.updateFee.firstCall.args;
           // the resolved predecessor, not the message being promoted - they are
           // the same app and differ only on instances, so that is the tell
           expect(prevSpec.instances).to.equal(5);

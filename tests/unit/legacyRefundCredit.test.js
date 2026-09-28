@@ -134,7 +134,7 @@ describe('the early-update credit', () => {
     const feeFor = async (registeredHeight, expire, atHeight) => {
       const regime = loadRegime();
       const fee = await regime.updateFee(
-        specOf(expire), specOf(expire), atHeight, registeredHeight,
+        specOf(expire), specOf(expire), { height: atHeight, prevHeight: registeredHeight },
       );
       return Number(fee) / 1e8;
     };
@@ -157,7 +157,7 @@ describe('the early-update credit', () => {
       const registered = FORK - 20_000;
       const regime = loadRegime();
       const fee = async (atHeight) => Number(
-        await regime.updateFee(specOf(40_000), specOf(40_000), atHeight, registered),
+        await regime.updateFee(specOf(40_000), specOf(40_000), { height: atHeight, prevHeight: registered }),
       ) / 1e8;
 
       const credited = await fee(FORK + 40_000);

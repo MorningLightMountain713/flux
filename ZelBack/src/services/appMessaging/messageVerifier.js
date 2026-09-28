@@ -11,7 +11,7 @@ const serviceHelper = require('../serviceHelper');
 const daemonStatus = require('../daemonService/daemonStatus');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const { deserializeSpec } = require('../utils/specCutover');
-const { regimeFor } = require('../pricing/pricingRegime');
+const pricingRegime = require('../pricing/pricingRegime');
 const appsRepository = require('../appDatabase/appsRepository');
 const { insertAppSpecifications, updateAppSpecifications } = require('../appDatabase/registryManager');
 const { mintAppUuid, identityFromUuid } = require('../utils/appIdentity');
@@ -277,26 +277,34 @@ function getDaemonHeight() {
  * @returns {Promise<bigint>}
  */
 async function computeRegistrationFee(spec, height) {
-  return (await regimeFor(spec)).registrationFee(spec, height);
+  return (await pricingRegime.regimeFor(spec)).registrationFee(spec, height);
 }
 
 /**
- * Consensus update fee in satoshis, from the spec's pricing regime. The regime
- * is chosen by the incoming spec, so an update priced under v9 rules is one
- * that arrived as a v9 spec.
+ * Consensus update fee in satoshis, from the update's pricing regime with the
+ * predecessor's term cost from its own (pricingRegime.updateFee).
+ *
+ * The free-update rate limit counts the app's messages confirmed below the
+ * update's height: the update is stored before it is priced, so a cutoff at its
+ * own height would count the update itself.
  *
  * @param {object} spec - resolved new spec
  * @param {object} prevSpec - resolved previous spec
  * @param {number} height - confirming block height
  * @param {number} prevHeight - height the previous spec registered at
- * @param {number} prevRegisteredAt - unix seconds the previous spec registered at
+ * @param {number} prevRegisteredAt - unix seconds the previous term started
  * @param {number} nowBlockTime - unix seconds of the confirming block
- * @returns {Promise<bigint>}
+ * @returns {Promise<bigint|null>}
  */
 async function computeUpdateFee(spec, prevSpec, height, prevHeight, prevRegisteredAt, nowBlockTime) {
-  return (await regimeFor(spec)).updateFee(
-    spec, prevSpec, height, prevHeight, prevRegisteredAt, nowBlockTime,
-  );
+  const messages = await appsRepository.listAppMessagesByName(spec.name);
+  return pricingRegime.updateFee(spec, prevSpec, {
+    height,
+    prevHeight,
+    prevRegisteredAt,
+    nowBlockTime,
+    recentEvents: messages.filter((message) => message.height < height),
+  });
 }
 
 /**
@@ -485,7 +493,7 @@ async function checkAndRequestApp(hash, i = 0) {
         // Each regime resolves it its own way — this message is already stored
         // above, and whether that matters is a property of the economics, not of
         // this function.
-        const regime = await regimeFor(spec);
+        const regime = await pricingRegime.regimeFor(spec);
         const prevMessage = await regime.supersededMessage(spec.name, {
           height, timestamp: tempMessage.timestamp,
         });

@@ -59,8 +59,8 @@ describe('pricingRegime', () => {
       }
     });
 
-    it('exposes the same five operations on both regimes', () => {
-      const ops = ['onChainDisplayPrice', 'fiatAndFluxDisplayPrice', 'registrationFee', 'supersededMessage', 'updateFee'];
+    it('exposes the same six operations on both regimes', () => {
+      const ops = ['onChainDisplayPrice', 'fiatAndFluxDisplayPrice', 'registrationFee', 'supersededMessage', 'termCost', 'updateFee'];
       for (const op of ops) {
         expect(legacyPricingRegime[op], `legacy.${op}`).to.be.a('function');
         expect(v9PricingRegime[op], `v9.${op}`).to.be.a('function');
@@ -144,45 +144,80 @@ describe('pricingRegime', () => {
   // block's time, and only the messages confirmed below its height. A node's
   // own clock would give every node its own window, and a replaying node an
   // empty one; a cutoff at the confirming height would count the update itself.
-  describe('v9 updateFee counts the free-update allowance from the confirming block', () => {
+  describe('v9 updateFee prices against its predecessor as of the confirming block', () => {
     const HEIGHT = 2_000_000;
     const BLOCK_TIME = 1_750_000_000;
-    const history = [
-      { hash: 'earlier', height: HEIGHT - 5, timestamp: BLOCK_TIME * 1000 - 3_600_000, type: 'fluxappupdate' },
-      { hash: 'this', height: HEIGHT, timestamp: BLOCK_TIME * 1000 - 60_000, type: 'fluxappupdate' },
-      { hash: 'later', height: HEIGHT + 1, timestamp: BLOCK_TIME * 1000 + 60_000, type: 'fluxappupdate' },
-    ];
+    const events = [{ hash: 'earlier', height: HEIGHT - 5, type: 'fluxappupdate' }];
     const spec = { name: 'myapp', ttl: 2_592_000, isEncrypted: false };
 
     function loadV9() {
       const priceUpdate = sinon.stub().resolves({ free: true });
-      const engine = {
-        price: sinon.stub().resolves({ preFloorMicrodollars: 0 }),
-        priceUpdate,
-      };
       const v9 = proxyquire('../../ZelBack/src/services/pricing/v9PricingRegime', {
-        '../appDatabase/appsRepository': { listAppMessagesByName: sinon.stub().resolves(history) },
-        './buildPricingEngine': { buildPricingEngine: sinon.stub().resolves(engine) },
+        './buildPricingEngine': { buildPricingEngine: sinon.stub().resolves({ priceUpdate }) },
         './priceOracleState': { getPriceModifierHistory: () => null },
-        '../utils/specLibs': { getSpecPolicy: sinon.stub().resolves({ meteredQuantities: () => new Map() }) },
       });
       return { v9, priceUpdate };
     }
 
     async function contextHandedToTheRule() {
       const { v9, priceUpdate } = loadV9();
-      await v9.updateFee(spec, spec, HEIGHT, HEIGHT - 5, BLOCK_TIME - 3600, BLOCK_TIME);
-      return priceUpdate.firstCall.args[2];
+      const prevSpec = { termSeconds: sinon.stub().returns(7000), remainingSeconds: sinon.stub().returns(3000) };
+      await v9.updateFee(spec, prevSpec, {
+        height: HEIGHT,
+        prevHeight: HEIGHT - 5,
+        prevRegisteredAt: BLOCK_TIME - 3600,
+        nowBlockTime: BLOCK_TIME,
+        recentEvents: events,
+        prevTermCost: { oldTermPriceFluxSats: 42 },
+      });
+      return { ctx: priceUpdate.firstCall.args[2], prevSpec };
     }
 
     it('hands the rule the block time, not the clock of the node reading it', async () => {
-      const ctx = await contextHandedToTheRule();
+      const { ctx } = await contextHandedToTheRule();
       expect(ctx.asOf).to.equal(BLOCK_TIME * 1000);
     });
 
-    it('counts only the messages confirmed below the update, never the update itself', async () => {
-      const ctx = await contextHandedToTheRule();
-      expect(ctx.recentEvents.map((message) => message.hash)).to.deep.equal(['earlier']);
+    it('hands the rule the events it is given', async () => {
+      const { ctx } = await contextHandedToTheRule();
+      expect(ctx.recentEvents).to.equal(events);
+    });
+
+    it('reads the predecessor\'s term through its accessors, at the confirming block', async () => {
+      const { ctx, prevSpec } = await contextHandedToTheRule();
+      const prevState = { height: HEIGHT - 5, registeredAt: BLOCK_TIME - 3600 };
+      expect(ctx.oldTtl).to.equal(7000);
+      expect(ctx.remainingSeconds).to.equal(3000);
+      sinon.assert.calledWithExactly(prevSpec.termSeconds, prevState);
+      sinon.assert.calledWithExactly(prevSpec.remainingSeconds, prevState, { tipBlockTime: BLOCK_TIME, currentHeight: HEIGHT });
+    });
+
+    it('credits the term cost its predecessor\'s regime gave, in that regime\'s unit', async () => {
+      const { ctx } = await contextHandedToTheRule();
+      expect(ctx.oldTermPriceFluxSats).to.equal(42);
+      expect(ctx).to.not.have.property('oldScaledPriceMicrodollars');
+    });
+  });
+
+  describe('updateFee asks the predecessor\'s regime what its term cost', () => {
+    it('hands the update\'s regime the cost the predecessor\'s regime answered', async () => {
+      const cost = { oldTermPriceFluxSats: 123 };
+      const legacy = { termCost: sinon.stub().resolves(cost), updateFee: sinon.stub() };
+      const v9 = { termCost: sinon.stub(), updateFee: sinon.stub().resolves(5n) };
+      const regime = proxyquire('../../ZelBack/src/services/pricing/pricingRegime', {
+        './legacyPricingRegime': legacy,
+        './v9PricingRegime': v9,
+      });
+      const { PricingModel } = await import('@runonflux/flux-spec');
+      const prevSpec = { pricingModel: PricingModel.CHAIN_FLOOR };
+      const spec = { pricingModel: PricingModel.UNIFIED };
+
+      const fee = await regime.updateFee(spec, prevSpec, { height: 10, prevHeight: 4 });
+
+      expect(fee).to.equal(5n);
+      sinon.assert.calledOnceWithExactly(legacy.termCost, prevSpec, 4);
+      sinon.assert.notCalled(v9.termCost);
+      sinon.assert.calledOnceWithExactly(v9.updateFee, spec, prevSpec, { height: 10, prevHeight: 4, prevTermCost: cost });
     });
   });
 

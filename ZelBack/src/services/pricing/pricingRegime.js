@@ -36,17 +36,24 @@ async function regimeRegistry() {
 /**
  * The regime that prices a spec.
  *
- * Every regime answers the same five questions — two for display, three for
- * consensus — so a caller states the question and never the generation:
+ * Every regime answers the same questions for its own model, and never for
+ * another's — so a caller states the question and never the generation:
  *
- *   onChainDisplayPrice(spec)                  -> FLUX for display
- *   fiatAndFluxDisplayPrice(spec, rawDoc)      -> { usd, flux, fluxDiscount }
+ *   onChainDisplayPrice(spec, pricing)         -> FLUX for display
+ *   fiatAndFluxDisplayPrice(spec, rawDoc, pricing) -> { usd, flux, fluxDiscount }
  *   registrationFee(spec, height)              -> bigint sats
  *   supersededMessage(name, confirming)        -> the permanent message an
  *                                              update replaces, resolved by
  *                                              each regime's own rule
- *   updateFee(spec, prevSpec, height, prevHeight, prevRegisteredAt, nowBlockTime)
- *                                              -> bigint sats
+ *   termCost(spec, height)                     -> what a term bought at that
+ *                                              height cost, in the regime's
+ *                                              own unit
+ *   updateFee(spec, prevSpec, ctx)             -> bigint sats (null: refused)
+ *
+ * An update's predecessor can be of another model (a v8 app updated to v9), so
+ * the predecessor's cost is asked of the predecessor's own regime and handed to
+ * the update's: the composing functions below, which are how every caller
+ * prices an update or a quote.
  *
  * A spec declaring a model with no implementation throws rather than falling
  * back: pricing an app under economics it was not issued under is worse than
@@ -63,4 +70,57 @@ async function regimeFor(spec) {
   return regime;
 }
 
-module.exports = { regimeFor };
+/**
+ * What a term of `spec` bought at `height` cost, from the spec's own regime.
+ * @param {object} spec
+ * @param {number} height
+ * @returns {Promise<object>} the regime's cost fields, for priceUpdate's context
+ */
+async function termCost(spec, height) {
+  return (await regimeFor(spec)).termCost(spec, height);
+}
+
+/** What every regime's display functions read of the others. */
+const pricing = Object.freeze({ termCost });
+
+/**
+ * The consensus fee for an update, from the update's regime, with the
+ * predecessor's term cost from the predecessor's.
+ *
+ * @param {object} spec - resolved new spec
+ * @param {object} prevSpec - resolved previous spec
+ * @param {{height: number, prevHeight: number, prevRegisteredAt: ?number,
+ *   nowBlockTime: number, recentEvents: object[]}} ctx
+ * @returns {Promise<bigint|null>}
+ */
+async function updateFee(spec, prevSpec, ctx) {
+  const prevTermCost = await termCost(prevSpec, ctx.prevHeight);
+  return (await regimeFor(spec)).updateFee(spec, prevSpec, { ...ctx, prevTermCost });
+}
+
+/**
+ * The on-chain price of a spec for display, from its regime.
+ * @param {object} spec
+ * @returns {Promise<number|string>}
+ */
+async function onChainDisplayPrice(spec) {
+  return (await regimeFor(spec)).onChainDisplayPrice(spec, pricing);
+}
+
+/**
+ * The USD and FLUX quote for a spec, from its regime.
+ * @param {object} spec
+ * @param {object} appSpecification - the raw submitted document
+ * @returns {Promise<object>}
+ */
+async function fiatAndFluxDisplayPrice(spec, appSpecification) {
+  return (await regimeFor(spec)).fiatAndFluxDisplayPrice(spec, appSpecification, pricing);
+}
+
+module.exports = {
+  fiatAndFluxDisplayPrice,
+  onChainDisplayPrice,
+  regimeFor,
+  termCost,
+  updateFee,
+};

@@ -275,17 +275,30 @@ async function supersededMessage(name, confirming) {
 }
 
 /**
+ * What a v1-v8 term cost, in FLUX at the card in force at `height`. A v9
+ * update credits the unused share of it.
+ *
+ * @param {object} spec - resolved v1-v8 spec
+ * @param {number} height - the height the term was bought at
+ * @returns {Promise<{oldTermPriceFluxSats: number}>}
+ */
+async function termCost(spec, height) {
+  const engine = await engineFor();
+  return { oldTermPriceFluxSats: Math.round(engine.termPrice(spec, height) * 1e8) };
+}
+
+/**
  * Consensus update fee in satoshis, crediting the unused prior subscription.
- * prevRegisteredAt and nowBlockTime are part of the shared regime interface and
- * unused here: legacy credits unused time from the heights alone.
+ * Legacy prices both terms itself from the heights, so the rest of the shared
+ * context (block times, events, the predecessor's term cost) is not read.
  *
  * @param {object} spec - resolved new v1-v8 spec
  * @param {object} prevSpec - resolved previous spec
- * @param {number} height - confirming block height
- * @param {number} prevHeight - height the previous spec registered at
+ * @param {{height: number, prevHeight: number}} ctx - the confirming height and
+ *   the height the previous spec registered at
  * @returns {Promise<bigint>}
  */
-async function updateFee(spec, prevSpec, height, prevHeight) {
+async function updateFee(spec, prevSpec, { height, prevHeight }) {
   const engine = await engineFor();
   return engine.updateFee(spec, prevSpec, height, prevHeight);
 }
@@ -295,6 +308,7 @@ module.exports = {
   fiatAndFluxDisplayPrice,
   registrationFee,
   supersededMessage,
+  termCost,
   updateFee,
   checkLegacyFreeUpdate,
 };
