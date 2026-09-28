@@ -3,7 +3,7 @@ import { describe, it, before, after } from 'mocha';
 import { createTestEnv } from './test-env.js';
 import { dbClient } from './db-client.js';
 import { pushTestApp } from './registry-helper.js';
-import { buildSeedableApp } from './seed-helper.js';
+import { buildSeedableApp, syncedContainerData } from './seed-helper.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from './subnet-config.js';
 import { advanceBlock, driveUntil, startTicker, setSystemSecure } from './daemon-control.js';
 import {
@@ -106,7 +106,9 @@ export async function bootToReady(env) {
  * second app on the same fleet cannot collide with the first - see
  * buildSeedableApp, which assigns one where the spec is built.
  */
-export async function seedApp(env, appName, { instances = 3, containerData = '/tmp' } = {}) {
+// syncMode names a synced component (activeStandby, syncFirst or sync); without one
+// the component keeps its data unsynced.
+export async function seedApp(env, appName, { instances = 3, syncMode = null } = {}) {
   // A CONTAINER THAT HONOURS docker stop. These suites time one holder's
   // departure against another holder's next give-up pass, so what the app does
   // with SIGTERM is part of the arithmetic: /bin/pause installs no handler and
@@ -128,7 +130,7 @@ export async function seedApp(env, appName, { instances = 3, containerData = '/t
       environmentParameters: [],
       commands: [],
       containerPorts: [80],
-      containerData,
+      containerData: syncMode ? syncedContainerData(syncMode) : '/tmp',
       cpu: 0.1,
       ram: 100,
       hdd: 1,

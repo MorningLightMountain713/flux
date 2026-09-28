@@ -324,7 +324,7 @@ describe('Residential node evacuation', function () {
     // worldapp mounts s:, so its volume IS the product - the shape of the ten
     // Palworld and Minecraft worlds on the real fleet, which sit at exactly two
     // instances. Nothing reports holding a copy of it.
-    await seedApp(env, 'worldapp', { instances: 5, containerData: 's:/appdata' });
+    await seedApp(env, 'worldapp', { instances: 5, syncMode: 'sync' });
 
     // A synced folder has to be DECLARED before the app can run. The stub's
     // default for a folder nobody has spoken about is "no evidence", and a

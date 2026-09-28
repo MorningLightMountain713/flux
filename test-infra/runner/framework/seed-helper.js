@@ -179,6 +179,18 @@ export async function buildSeedableApp(opts) {
 const CONTAINER_DATA_FLAG = { activeStandby: 'g', syncFirst: 'r', sync: 's' };
 
 /**
+ * The containerData a v8 component carries for a synced mount in this sync mode.
+ * @param {string} syncMode activeStandby, syncFirst or sync
+ * @param {string} [path] the container path the mount binds to
+ * @returns {string}
+ */
+export function syncedContainerData(syncMode, path = '/appdata') {
+  const mode = CONTAINER_DATA_FLAG[syncMode];
+  if (!mode) throw new Error(`syncedContainerData: unknown syncMode '${syncMode}'`);
+  return `${mode}:${path}`;
+}
+
+/**
  * The same app, one specification later.
  *
  * An owner changing a running app is most of what owners do, and until this
