@@ -9,6 +9,7 @@ const { FluxPeerSocket, CLOSE_CODES, PEER_SOURCE, DIRECTION, FLUX_VERSION } = re
 const { DEFAULT_API_PORT } = require('./socketAddressUtils');
 const peerCodec = require('./peerCodec');
 const fluxEventBus = require('./fluxEventBus');
+const capabilities = require('./capabilities');
 
 const UNSTABLE_DISCONNECT_THRESHOLD = 5;
 const UNSTABLE_WINDOW_MS = 2 * 60 * 60 * 1000; // 2 hours
@@ -365,6 +366,7 @@ class FluxPeerManager extends EventEmitter {
     this.emit('peerConnected', peer.key, peer.connectionId);
     if (!this.#aboveThreshold && this.#peers.size >= this.#syncPeerThreshold) {
       this.#aboveThreshold = true;
+      capabilities.claim('peersAboveFloor', 'FluxPeerManager').raise(`${this.#peers.size} peers, threshold ${this.#syncPeerThreshold}`);
       this.emit('peerThresholdReached', this.#peers.size);
       fluxEventBus.publish('peers:thresholdReached', { count: this.#peers.size, threshold: this.#syncPeerThreshold });
     }
@@ -437,6 +439,7 @@ class FluxPeerManager extends EventEmitter {
     fluxEventBus.publish('peers:removed', { ip: peer.ip, port: peer.port, direction: peer.direction, closeCode: closeCode || null, outbound: this.#outboundKeys.size, inbound: this.#inboundKeys.size, total: this.#peers.size });
     if (this.#aboveThreshold && this.#peers.size < this.#syncDegradedThreshold) {
       this.#aboveThreshold = false;
+      capabilities.claim('peersAboveFloor', 'FluxPeerManager').lower(`${this.#peers.size} peers, below ${this.#syncDegradedThreshold}`);
       // WHY it fell, not only that it did. Every listener needs the edge - the
       // orchestrator's readiness budget has to reset whatever emptied the set -
       // but a listener judging the node's stability must not count a teardown
