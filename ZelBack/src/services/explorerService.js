@@ -572,11 +572,15 @@ async function processInsight(blockDataVerbose, database) {
             blockTime: blockDataVerbose.time, // confirming block timestamp — v9 registeredAt
             syncAttempts: 0, nextRetryHeight: blockDataVerbose.height,
           };
-          // A hash is paid once: a payment this node already holds stands.
+          // A hash's payment is its first in chain order: a later payment of a
+          // hash already recorded, or already buffered from an earlier block or
+          // an earlier transaction of this one, is not recorded. A record whose
+          // transaction the chain does not hold is no payment (standingAppPayment).
           // eslint-disable-next-line no-await-in-loop
-          const standing = await standingAppPayment(database, message);
-          if (standing) {
-            log.error(`Hash ${message} already exists. Not adding at height ${blockDataVerbose.height}`);
+          const recorded = appsTransactions.some((record) => record.hash === message)
+            || await standingAppPayment(database, message);
+          if (recorded) {
+            log.info(`Explorer - hash ${message} is paid again at ${blockDataVerbose.height} by ${tx.txid}; its first payment stands`);
           } else {
             appsTransactions.push(appTxRecord);
           }
@@ -604,10 +608,11 @@ async function processInsight(blockDataVerbose, database) {
 }
 
 /**
- * Records the app payments of the blocks processed since the last write. A payment that could
- * not be recorded rejects, so the block processor reprocesses its block instead of moving its
- * scanned height past it: a payment with no record is never resolved, and the app message it
- * paid for never reaches this node.
+ * Writes the buffered payment records. Each hash appears once, as its first
+ * payment (processInsight), so a duplicate key means the collection already
+ * holds a record above the cursor. A payment that could not be recorded
+ * rejects, and the scan's error recovery rewinds: a payment with no record is
+ * never resolved, and the app message it paid for never reaches this node.
  * @param {object[]} transactions
  * @param {object} database
  * @returns {Promise<void>}
@@ -615,33 +620,8 @@ async function processInsight(blockDataVerbose, database) {
 async function insertTransactions(transactions, database) {
   if (transactions.length > 0) {
     log.info(`Explorer - insertTransactions - Inserting ${transactions.length} transactions to apps hashes collection`);
-    let unrecorded = null;
-    try {
-      const options = {
-        ordered: false,
-      };
-      await dbHelper.insertManyToDatabase(database, appsHashesCollection, transactions, options);
-    } catch (error) {
-      log.error(`Explorer- insertTransactions - Inserting ${transactions.length} - transactions error - ${error}`);
-      // eslint-disable-next-line no-restricted-syntax
-      for (const transaction of transactions) {
-        try {
-          const query = { hash: transaction.hash, height: transaction.height };
-          const update = { $set: transaction };
-          const options = {
-            upsert: true,
-          };
-          // eslint-disable-next-line no-await-in-loop
-          await dbHelper.updateOneInDatabase(database, appsHashesCollection, query, update, options);
-        } catch (errorTx) {
-          log.error(`Explorer - insertTransactions - Inserting ${transaction.hash} - transaction error - ${errorTx}`);
-          unrecorded = unrecorded ?? errorTx;
-        }
-      }
-    }
-    // Reprocessing the block collects its payments again.
+    await dbHelper.insertManyToDatabase(database, appsHashesCollection, transactions, { ordered: false });
     appsTransactions = [];
-    if (unrecorded) throw unrecorded;
   }
 }
 
