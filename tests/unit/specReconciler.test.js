@@ -6,7 +6,7 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const { expect } = require('chai');
 const sinon = require('sinon');
 const {
-  loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
+  loadSpecLibrary, V9_SUBMISSION, v8Spec, v9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 const specReconciler = require('../../ZelBack/src/services/appLifecycle/specReconciler');
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
@@ -221,19 +221,21 @@ describe('specReconciler tests', () => {
       expect(uninstallStub.called).to.equal(false);
     });
 
-    it('never expires a forever app (height 0)', async () => {
+    it('removes an installed app the registry does not list, however long its own copy has left', async () => {
+      setup({ installed: [await specWith({}, { name: 'unlisted', expired: false })] });
+      await specReconciler.requestFullConvergence({ reason: 'test' });
+      expect(uninstallStub.calledOnceWith('unlisted', sinon.match({ background: true }))).to.equal(true);
+    });
+
+    // Only a v1-v8 name can carry capitals; v9 names are lower case.
+    it('finds an installed v1-v8 app\'s row whatever the letter case of either name', async () => {
+      const state = { hash: 'h', height: 990_000 };
       setup({
-        installed: [await specWith({}, { name: 'forever', expired: true })],
-        globalRows: [await specWith({}, { name: 'forever', height: 0, expired: true })],
+        installed: [await instantiatedSpec(await v8Spec({ name: 'MyApp' }), state)],
+        globalRows: [await instantiatedSpec(await v8Spec({ name: 'myapp' }), state)],
       });
       await specReconciler.requestFullConvergence({ reason: 'test' });
       expect(uninstallStub.called).to.equal(false);
-    });
-
-    it('falls back to the local row when the app has no global registration', async () => {
-      setup({ installed: [await specWith({}, { name: 'manual', expired: true })] });
-      await specReconciler.requestFullConvergence({ reason: 'test' });
-      expect(uninstallStub.calledOnceWith('manual', sinon.match({ background: true }))).to.equal(true);
     });
   });
 
