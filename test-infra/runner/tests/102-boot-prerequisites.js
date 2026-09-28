@@ -15,15 +15,14 @@ describe('Boot: prerequisites', function () {
     this.timeout(120000);
     env = await createTestEnv({ hookCtx: this, nodes: 1, tickerAutostart: false, discoveryAutostart: true });
     await waitForDaemonReady(env.clients[0]);
-    // 'Daemon Sync status' is logged in the same instant the daemon:polled
-    // event fires, so anchor on the LINE too: the log stream is FIFO, which
-    // makes every instant log assert below (all written earlier in boot)
-    // race-free against the docker log pipeline.
-    await waitFor(
-      () => env.nodeHasLog(0, 'Daemon Sync status'),
-      { timeout: 10000, interval: 250, label: 'daemon sync status log line' },
-    );
   });
+
+  // Boot starts every owner at once, so these lines arrive in no fixed order
+  // relative to the daemon's: each check waits for its own line.
+  const logged = (line) => waitFor(
+    () => env.nodeHasLog(0, line),
+    { timeout: 60000, interval: 250, label: `'${line}' log line` },
+  );
 
   after(async function () {
     this.timeout(30000);
@@ -38,21 +37,21 @@ describe('Boot: prerequisites', function () {
   });
 
   it('should prepare local database collections', async function () {
-    expect(env.nodeHasLog(0, 'Local database prepared')).to.equal(true);
+    await logged('Local database prepared');
   });
 
   it('should prepare temporary database', async function () {
-    expect(env.nodeHasLog(0, 'Temporary database prepared')).to.equal(true);
+    await logged('Temporary database prepared');
   });
 
   it('should prepare global app collections', async function () {
     // Where an app runs is derived from this event log; there is no materialized
     // locations collection to prepare.
-    expect(env.nodeHasLog(0, 'App state events collection prepared')).to.equal(true);
+    await logged('App state events collection prepared');
   });
 
   it('should wait for daemon RPC before proceeding', async function () {
-    expect(env.nodeHasLog(0, 'Daemon Sync status')).to.equal(true);
+    await logged('Daemon Sync status');
   });
 
   it('should report daemon as synced', async function () {
@@ -69,15 +68,15 @@ describe('Boot: prerequisites', function () {
   });
 
   it('should start Docker daemon inside container', async function () {
-    expect(env.nodeHasLog(0, 'dockerd is ready')).to.equal(true);
+    await logged('dockerd is ready');
   });
 
   it('should initialize app spawner', async function () {
-    expect(env.nodeHasLog(0, 'App Spawner initialized')).to.equal(true);
+    await logged('App Spawner initialized');
   });
 
   it('should start Flux Discovery', async function () {
-    expect(env.nodeHasLog(0, 'Flux Discovery started')).to.equal(true);
+    await logged('Flux Discovery started');
   });
 
   it('should not log any config-related errors', async function () {
