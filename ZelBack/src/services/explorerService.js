@@ -536,32 +536,16 @@ async function processInsight(blockDataVerbose, database) {
             blockTime: blockDataVerbose.time, // confirming block timestamp — v9 registeredAt
             syncAttempts: 0, nextRetryHeight: blockDataVerbose.height, retryFromHeight: blockDataVerbose.height,
           };
-          // Unique hash - If we already have a hash of this app in our database, do not insert it!
-          try {
-            // 5501c7dd6516c3fc2e68dee8d4fdd20d92f57f8cfcdc7b4fcbad46499e43ed6f
-            const querySearch = {
-              hash: message,
-            };
-            const projectionSearch = {
-              projection: {
-                _id: 0,
-                txid: 1,
-                hash: 1,
-                height: 1,
-                value: 1,
-                message: 1,
-              },
-            };
-            // eslint-disable-next-line no-await-in-loop
-            const result = await dbHelper.findOneInDatabase(database, appsHashesCollection, querySearch, projectionSearch); // this search can be later removed if nodes rescan apps and reconstruct the index for unique
-            if (!result) {
-              appsTransactions.push(appTxRecord);
-            } else {
-              throw new Error(`Found an existing hash app ${serviceHelper.ensureString(result)}`);
-            }
-          } catch (error) {
-            log.error(`Hash ${message} already exists. Not adding at height ${blockDataVerbose.height}`);
-            log.error(error);
+          // A hash's payment is its first in chain order: a later payment of a
+          // hash already recorded, or already buffered from an earlier block or
+          // an earlier transaction of this one, is not recorded.
+          // eslint-disable-next-line no-await-in-loop
+          const recorded = appsTransactions.some((record) => record.hash === message)
+            || await dbHelper.findOneInDatabase(database, appsHashesCollection, { hash: message }, { projection: { _id: 0, hash: 1 } });
+          if (recorded) {
+            log.info(`Explorer - hash ${message} is paid again at ${blockDataVerbose.height} by ${tx.txid}; its first payment stands`);
+          } else {
+            appsTransactions.push(appTxRecord);
           }
         }
       }
@@ -583,31 +567,18 @@ async function processInsight(blockDataVerbose, database) {
   }
 }
 
+/**
+ * Writes the buffered payment records. Each hash appears once, as its first
+ * payment (processInsight), so a duplicate key means the collection already
+ * holds a record above the cursor: the insert throws, and the scan's error
+ * recovery rewinds.
+ * @param {object[]} transactions
+ * @param {object} database
+ */
 async function insertTransactions(transactions, database) {
   if (transactions.length > 0) {
     log.info(`Explorer - insertTransactions - Inserting ${transactions.length} transactions to apps hashes collection`);
-    try {
-      const options = {
-        ordered: false,
-      };
-      await dbHelper.insertManyToDatabase(database, appsHashesCollection, transactions, options);
-    } catch (error) {
-      log.error(`Explorer- insertTransactions - Inserting ${transactions.length} - transactions error - ${error}`);
-      // eslint-disable-next-line no-restricted-syntax
-      for (const transaction of transactions) {
-        try {
-          const query = { hash: transaction.hash, height: transaction.height };
-          const update = { $set: transaction };
-          const options = {
-            upsert: true,
-          };
-          // eslint-disable-next-line no-await-in-loop
-          await dbHelper.updateOneInDatabase(database, appsHashesCollection, query, update, options);
-        } catch (errorTx) {
-          log.error(`Explorer - insertTransactions - Inserting ${transaction.hash} - transaction error - ${errorTx}`);
-        }
-      }
-    }
+    await dbHelper.insertManyToDatabase(database, appsHashesCollection, transactions, { ordered: false });
     appsTransactions = [];
   }
 }

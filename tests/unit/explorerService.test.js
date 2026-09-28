@@ -1736,6 +1736,55 @@ describe('explorerService tests', () => {
       expect(inserted.map((record) => record.txid)).to.deep.equal(['payment']);
     });
 
+    function paymentTx(txid, valueSat = 20_000_000) {
+      return {
+        version: 3,
+        txid,
+        vin: [],
+        vout: [{
+          n: 0,
+          scriptPubKey: {
+            addresses: ['t1LUs6quf7TB2zVZmexqPQdnqmrFMGZGjV6'],
+            asm: 'OP_RETURN 5468697320737472696e672069732065786163746c792036342063686172616374657273206c6f6e672e20496e636c7564696e67207468697320737472696e67',
+          },
+          valueSat,
+        }],
+      };
+    }
+
+    it('records a hash paid twice as its first payment only, in one block and across blocks', async () => {
+      const PAYMENT_HEIGHT = 983_001;
+      cursor = PAYMENT_HEIGHT - 1;
+      daemonStatus.isDaemonSynced.returns({ data: { synced: true, height: PAYMENT_HEIGHT + 1 } });
+      blockAt = (height) => ({
+        height,
+        time: 1_700_000_000,
+        tx: height === PAYMENT_HEIGHT ? [paymentTx('first'), paymentTx('second')] : [paymentTx('third')],
+      });
+
+      await explorerService.startScanning();
+
+      const inserted = insertStub.getCalls().flatMap((call) => call.args[2]);
+      expect(inserted.map((record) => record.txid)).to.deep.equal(['first']);
+    });
+
+    it('fails the block, rather than dropping the payment, when the record lookup fails', async () => {
+      const PAYMENT_HEIGHT = 983_001;
+      cursor = PAYMENT_HEIGHT - 1;
+      daemonStatus.isDaemonSynced.returns({ data: { synced: true, height: PAYMENT_HEIGHT } });
+      blockAt = (height) => ({ height, time: 1_700_000_000, tx: [paymentTx('only')] });
+      dbHelper.findOneInDatabase.callsFake(async (_db, collection) => {
+        if (collection === 'scannedheight') return { generalScannedHeight: cursor };
+        throw new Error('test: mongo read failed');
+      });
+      const errorSpy = sinon.spy(log, 'error');
+
+      await explorerService.startScanning();
+
+      expect(insertStub.called).to.equal(false);
+      expect(errorSpy.calledWithMatch(sinon.match.has('message', 'test: mongo read failed'))).to.equal(true);
+    });
+
     it('writes no block while chain state is down, and its recovery rewinds', async () => {
       capabilities.claim('chainStateConsistent', 'chainState').lower('test: a rewind that threw');
       const errorSpy = sinon.spy(log, 'error');

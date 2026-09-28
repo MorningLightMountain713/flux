@@ -437,7 +437,8 @@ describe('dbHelper tests', () => {
 
       const query = { name: 'App5' };
 
-      await dbHelper.insertManyToDatabase(database, collection, documentsToInsert, options);
+      await expect(dbHelper.insertManyToDatabase(database, collection, documentsToInsert, options))
+        .to.be.rejectedWith(/duplicate key/);
       const findInDatabaseResult = await dbHelper.findInDatabase(database, collection, query);
 
       // eslint-disable-next-line no-underscore-dangle
@@ -476,14 +477,15 @@ describe('dbHelper tests', () => {
 
       const query = { name: 'App5' };
 
-      await dbHelper.insertManyToDatabase(database, collection, documentsToInsert, options);
+      await expect(dbHelper.insertManyToDatabase(database, collection, documentsToInsert, options))
+        .to.be.rejectedWith(/duplicate key/);
       const findInDatabaseResult = await dbHelper.findInDatabase(database, collection, query);
 
       // eslint-disable-next-line no-underscore-dangle
       expect(findInDatabaseResult).to.eql(expectedResult);
     });
 
-    it('should return undefined if there are duplicate keys', async () => {
+    it('rejects when a key is duplicated', async () => {
       const documentsToInsert = [{
         _id: new ObjectId('4f99562a09aef92cd1afbe93'),
         name: 'App5',
@@ -496,7 +498,8 @@ describe('dbHelper tests', () => {
         owner: '1SZe3AUYQC4aT5Y0LhgEcH2nLLsoKNSi6e',
       }];
 
-      expect(await dbHelper.insertManyToDatabase(database, collection, documentsToInsert)).to.be.undefined;
+      await expect(dbHelper.insertManyToDatabase(database, collection, documentsToInsert))
+        .to.be.rejectedWith(/duplicate key/);
     });
   });
 

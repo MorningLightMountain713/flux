@@ -327,10 +327,10 @@ describe('ipLocationStore tests', () => {
       expect(store.status()).to.eql(previous);
     });
 
-    it('treats a short insert as a failed batch', async () => {
-      dbHelperStub.insertManyToDatabase = sinon.stub().resolves({ insertedCount: 3 });
+    it('fails the ingest when a batch is rejected', async () => {
+      dbHelperStub.insertManyToDatabase = sinon.stub().rejects(new Error('E11000 duplicate key error'));
 
-      await expect(store.setArtifact(fixtureArtifact())).to.be.rejectedWith('batch inserted 3 of 4 rows');
+      await expect(store.setArtifact(fixtureArtifact())).to.be.rejectedWith('duplicate key');
       expect(database.renameCollection.called).to.equal(false);
     });
 

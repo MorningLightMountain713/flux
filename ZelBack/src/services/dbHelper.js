@@ -298,11 +298,7 @@ async function insertOneToDatabase(database, collection, value) {
  * @returns object
  */
 async function insertManyToDatabase(database, collection, values, options = {}) {
-  const result = await database.collection(collection).insertMany(values, options).catch((error) => {
-    if (!(error.message && error.message.includes('duplicate key'))) {
-      throw error;
-    }
-  });
+  const result = await database.collection(collection).insertMany(values, options);
   return result;
 }
 

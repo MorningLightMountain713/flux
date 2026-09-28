@@ -418,14 +418,7 @@ async function fillStagingCollection(buf, parsed, database) {
       if (failure) throw failure;
       if (inFlight.size >= MAX_BATCHES_IN_FLIGHT) await Promise.race(inFlight);
       if (failure) throw failure;
-      // dbHelper.insertManyToDatabase reports a duplicate key as success; the
-      // count check turns it back into the ingest failure it is.
-      track(dbHelper.insertManyToDatabase(database, ipRangesNextCollection, docs, { ordered: false })
-        .then((result) => {
-          if (result?.insertedCount !== docs.length) {
-            throw new Error(`batch inserted ${result?.insertedCount ?? 0} of ${docs.length} rows`);
-          }
-        }));
+      track(dbHelper.insertManyToDatabase(database, ipRangesNextCollection, docs, { ordered: false }));
     });
   } finally {
     // no write outlives this call, so a rejected ingest is finished writing by
