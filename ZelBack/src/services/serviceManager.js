@@ -414,6 +414,8 @@ async function startDaemon() {
     log.error('fluxd is running without addressindex=1. FluxOS needs the address index to order app messages. Set addressindex=1 in flux.conf and reindex the daemon, or reinstall the node. FluxOS is stopping.');
     process.exit(1);
   }
+  // Confirmation is the daemon's verdict on this node and needs nothing else.
+  await fluxnodeStatusSource.start();
 }
 
 /**
@@ -795,6 +797,7 @@ async function startFluxFunctions() {
         policyStore.start().catch((err) => log.error(`policyStore start error: ${err.message}`));
         capabilities.onUp('nodeMessageCapable', () => orchestrator.onMessageCapabilityChange(true));
         capabilities.onDown('nodeMessageCapable', () => orchestrator.onMessageCapabilityChange(false));
+        if (capabilities.isUp('nodeMessageCapable')) orchestrator.onMessageCapabilityChange(true);
         // A grantor referees from the records this orchestrator's sync delivers,
         // so it refuses to referee until the orchestrator is READY — the live
         // level, read per ask; fail-closed until this line runs.
@@ -815,6 +818,7 @@ async function startFluxFunctions() {
         // harness's.
         grantorController.seedDelistedHolders().catch((error) => log.warn(`delisted-holder sweep failed: ${error.message}`));
         capabilities.onUp('nodeMessageCapable', () => meshOrdinals.noteReturnFromUnreachability());
+        if (capabilities.isUp('nodeMessageCapable')) meshOrdinals.noteReturnFromUnreachability();
         peerNotification.initialize();
         // Serve the flux-shutdownd drain socket (Arcane-only, best-effort).
         drainServer.start();
@@ -890,7 +894,6 @@ async function startFluxFunctions() {
         uplinkService.start();
         log.info('Flux checks operational');
         fluxCommunication.initializeDiscovery();
-        await fluxnodeStatusSource.start();
         daemonUsageReporter.start();
         if (config.get('fluxapps.discoveryAutostart') !== false) {
           fluxCommunication.startDiscovery();
