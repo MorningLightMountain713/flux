@@ -82,9 +82,10 @@ const activePrimaryByIdentifier = new Map();
 // clears a node to hand back an app it may still be the writer for. Absence of a
 // recent record is "the election cannot say", not "no primary".
 const primaryElectionCheckedAt = new Map();
-// How long an election record is worth reading. Three coordinator cycles: one
-// missed pass must not turn every verdict into "cannot say".
-const PRIMARY_ELECTION_STALE_MS = 3 * 60 * 1000;
+// How long an election record is worth reading: ten election cycles, so one missed
+// pass does not turn every verdict into "cannot say", and the window follows the
+// cycle wherever it is set.
+const PRIMARY_ELECTION_STALE_MS = config.get('fluxapps.masterSlaveIntervalMs') * 10;
 const scheduledPrimaryStart = new Map();
 // Components already announced as operator-stopped. A reporting latch only - nothing
 // reads it to make a decision - so that the exclusion is stated once on entry (and again
