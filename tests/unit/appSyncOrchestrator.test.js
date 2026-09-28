@@ -2707,7 +2707,45 @@ describe('AppSyncOrchestrator', () => {
 
       expect(syncMissingHashesStub.calledOnce).to.be.true;
       expect(orchestrator.state).to.equal(STATES.SYNCING);
-      expect(logStub.error.calledWith(sinon.match(/Hash sync failed.*attempt 1\/3/))).to.be.true;
+      expect(logStub.error.calledWith(sinon.match(/Hash sync failed \(attempt 1\), retrying in 30s/))).to.be.true;
+    });
+
+    it('backs off from 30 seconds, doubling to a ten-minute cap, and never gives up', async () => {
+      syncMissingHashesStub.rejects(new Error('broken'));
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
+      await clock.tickAsync(0);
+
+      const waits = [30, 60, 120, 240, 480, 600, 600];
+      for (const seconds of waits) {
+        const before = syncMissingHashesStub.callCount;
+        // eslint-disable-next-line no-await-in-loop
+        await clock.tickAsync(seconds * 1000 - 1);
+        expect(syncMissingHashesStub.callCount, `retried before ${seconds}s`).to.equal(before);
+        // eslint-disable-next-line no-await-in-loop
+        await clock.tickAsync(1);
+        expect(syncMissingHashesStub.callCount, `not retried at ${seconds}s`).to.equal(before + 1);
+      }
+      expect(capabilities.isUp('appMessagesSynced')).to.equal(false);
+    });
+
+    it('retries at once when MongoDB comes back', async () => {
+      capabilities.setForTests('mongoReachable', true);
+      syncMissingHashesStub.onFirstCall().rejects(new Error('mongo gone'));
+      syncMissingHashesStub.onSecondCall().resolves({ resolved: 1, missing: 0, unreachable: 0 });
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
+      await clock.tickAsync(0);
+      expect(syncMissingHashesStub.calledOnce).to.be.true;
+
+      capabilities.setForTests('mongoReachable', false);
+      capabilities.setForTests('mongoReachable', true);
+      await clock.tickAsync(0);
+
+      expect(syncMissingHashesStub.calledTwice, 'waited out the backoff instead').to.be.true;
+      expect(capabilities.isUp('appMessagesSynced')).to.equal(true);
     });
 
     it('should fall back to block timer when hash sync retries exhausted', async () => {

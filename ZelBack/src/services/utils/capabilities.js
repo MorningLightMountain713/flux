@@ -50,7 +50,7 @@ const DEFINITIONS = Object.freeze([
   { name: 'policyCurrent', owner: 'policyStore', needs: ['policyVerified'] },
   { name: 'chainStateConsistent', owner: 'explorerService', needs: [] },
   { name: 'explorerSynced', owner: 'explorerService', needs: ['chainStateConsistent'] },
-  { name: 'appMessagesSynced', owner: 'appSyncOrchestrator', needs: [] },
+  { name: 'appMessagesSynced', owner: 'appSyncOrchestrator', needs: ['mongoReachable'] },
   { name: 'appRegistryConsistent', owner: 'appSyncOrchestrator', needs: ['explorerSynced', 'appMessagesSynced'] },
   { name: 'appStateSynced', owner: 'appSyncOrchestrator', needs: [] },
   { name: 'bootReconcileDecided', owner: 'appStartupManager', needs: ['mongoReachable', 'dockerReachable'] },
