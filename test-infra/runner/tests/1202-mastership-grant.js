@@ -40,12 +40,14 @@ import { waitFor, waitForAppInstalled, waitForReconcileActuated } from '../frame
 
 const HOLDERS = [0, 1, 2];
 const HELD_TTL_MS = 90000;
-// A silenced holder's location row must outlive its silence, as it does in
-// production: a row that lapses first makes the returning node remove its own
-// app. Production's ratio of the two, applied to this suite's term.
+// A silenced holder's rows must keep placing it through its silence, as they
+// do in production: the silence certifies it down, and a row that lapses or a
+// grace that ends first makes the returning node remove its own app.
+// Production's ratios to the term, applied to this suite's term.
 const require = createRequire(import.meta.url);
 const PRODUCTION = require('../../../ZelBack/config/default.js').fluxapps;
 const LOCATION_TTL_S = Math.ceil((PRODUCTION.locationTtlS * HELD_TTL_MS) / PRODUCTION.quorumGrantHeldTtlMs);
+const NODE_DOWN_GRACE_S = Math.ceil((PRODUCTION.nodeDownGraceS * HELD_TTL_MS) / PRODUCTION.quorumGrantHeldTtlMs);
 
 describe('the mastership grant on a multi-node fleet', function () {
   let env;
@@ -120,6 +122,7 @@ describe('the mastership grant on a multi-node fleet', function () {
           // spurious demotions - so the term carries the compression.
           quorumGrantHeldTtlMs: HELD_TTL_MS,
           locationTtlS: LOCATION_TTL_S,
+          nodeDownGraceS: NODE_DOWN_GRACE_S,
           quorumGrantRenewIntervalMs: 10000,
           quorumGrantLockDelayMs: 15000,
           quorumGrantDemotionSlackMs: 5000,
