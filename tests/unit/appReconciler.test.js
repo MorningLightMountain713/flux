@@ -2647,19 +2647,16 @@ describe('appReconciler tests', () => {
     });
   });
 
-  // The boot-drain gate: the first apprunning broadcast must not race the boot
-  // reconciles (a too-early snapshot misses apps whose rows then expire on the
-  // sigterm TTL). waitForBootDrainSettled() resolves once every boot-held
-  // component has completed ONE reconcile pass (started, backoff-deferred,
-  // awaiting-controller, or failed loudly) - NOT "all containers running" - and
-  // is capped so a wedged reconcile cannot suppress network presence forever.
-  describe('boot drain gate', () => {
+  // bootReconcilePassed: every boot-held component has completed ONE reconcile
+  // pass (started, backoff-deferred, awaiting-controller, or failed loudly) -
+  // NOT "all containers running". The deadline for a wedged pass is the reader's.
+  describe('bootReconcilePassed', () => {
     const flush = async () => {
       await new Promise((resolve) => { setImmediate(resolve); });
       await new Promise((resolve) => { setImmediate(resolve); });
     };
 
-    it('opens only after every boot-held reconcile completes one pass', async () => {
+    it('rises only after every boot-held reconcile completes one pass', async () => {
       stubs.capabilities.set('bootReconcileDecided', false);
       let finishInspect;
       stubs.dockerService.dockerContainerInspect = sinon.stub().callsFake(() => new Promise((resolve) => {
@@ -2668,41 +2665,16 @@ describe('appReconciler tests', () => {
 
       appReconciler.enqueueComponent('www_app'); // held in bootPending
       const startPromise = appReconciler.start();
-      let drainSettled = false;
-      appReconciler.waitForBootDrainSettled().then(() => { drainSettled = true; });
 
       stubs.capabilities.set('bootReconcileDecided', true);
       await startPromise;
       await flush();
-      expect(drainSettled, 'gate must hold while a boot reconcile is still in flight').to.be.false;
+      expect(stubs.capabilities.isUp('bootReconcilePassed'), 'up while a boot reconcile is still in flight').to.be.false;
+      expect(appReconciler.bootDrainingIds()).to.deep.equal(['www_app']);
 
       finishInspect(); // the held reconcile completes its pass (start path runs on stubs)
       await flush();
-      expect(drainSettled, 'gate opens once the drained reconciles complete one pass').to.be.true;
-    });
-
-    it('opens after the cap even if a boot reconcile wedges', async () => {
-      const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
-      try {
-        stubs.capabilities.set('bootReconcileDecided', false);
-        stubs.dockerService.dockerContainerInspect = sinon.stub().callsFake(() => new Promise(() => {})); // wedged forever
-
-        appReconciler.enqueueComponent('www_app');
-        const startPromise = appReconciler.start();
-        let drainSettled = false;
-        appReconciler.waitForBootDrainSettled().then(() => { drainSettled = true; });
-
-        stubs.capabilities.set('bootReconcileDecided', true);
-        await startPromise;
-        await flush();
-        expect(drainSettled).to.be.false;
-
-        clock.tick(2 * 60 * 1000 + 1); // the cap (~2min) fires
-        await flush();
-        expect(drainSettled, 'the cap must open the gate despite a wedged reconcile').to.be.true;
-      } finally {
-        clock.restore();
-      }
+      expect(stubs.capabilities.isUp('bootReconcilePassed'), 'up once the drained reconciles complete one pass').to.be.true;
     });
   });
 

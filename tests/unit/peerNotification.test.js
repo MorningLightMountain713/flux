@@ -5,6 +5,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { AsyncLock } = require('../../ZelBack/src/services/utils/asyncLock');
 const { asConfig } = require('./fixtures/config');
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const {
   loadSpecLibrary, v9Spec, sealedV8Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
@@ -90,7 +91,7 @@ describe('peerNotification tests', () => {
     },
     '../appMonitoring/appReconciler': {
       enqueueAll: enqueueAllStub,
-      waitForBootDrainSettled: sinon.stub().resolves(),
+      bootDrainingIds: sinon.stub().returns(['www_wedged']),
     },
     '../appDatabase/appsRepository': {
       listInstalledApps: listInstalledAppsStub,
@@ -140,6 +141,9 @@ describe('peerNotification tests', () => {
   };
 
   beforeEach(async () => {
+    // The reconciler's first pass over the apps held at boot is done.
+    capabilities.resetForTests();
+    capabilities.setForTests('bootReconcilePassed', true);
     logStub = {
       error: sinon.stub(),
       info: sinon.stub(),
@@ -224,6 +228,20 @@ describe('peerNotification tests', () => {
 
     // An empty v2 announcement reads to peers as "this node holds nothing" and releases
     // every seat it reserved, so a cycle with nothing to claim sends nothing.
+    it('announces after its deadline when the boot reconcile pass has not finished', async () => {
+      capabilities.setForTests('bootReconcilePassed', false);
+      const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+      try {
+        const cycle = peerNotification.checkAndNotifyPeersOfRunningApps();
+        await clock.tickAsync(2 * 60 * 1000 + 1);
+        await cycle;
+      } finally {
+        clock.restore();
+      }
+      expect(broadcastAllStub.called, 'a wedged pass withheld the announcement').to.equal(true);
+      expect(logStub.warn.calledWithMatch(/still in flight: www_wedged/)).to.equal(true);
+    });
+
     it('announces nothing when every installed app is departing', async () => {
       listInstalledAppsStub.resolves([await installedRow(await v9Spec({ name: 'app1' }))]);
       departingApps.enter('app1');

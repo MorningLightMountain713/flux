@@ -146,6 +146,29 @@ async function stopBroadcasting() {
   await cycleLock.waitReady();
 }
 
+// How long the first announcement waits for the reconciler's first pass over the
+// apps held at boot before it goes out anyway.
+const BOOT_RECONCILE_PASS_DEADLINE_MS = 2 * 60 * 1000;
+
+/**
+ * Resolves when `bootReconcilePassed` is up, or at the deadline.
+ * @returns {Promise<void>}
+ */
+async function waitForBootReconcilePass() {
+  if (capabilities.isUp('bootReconcilePassed')) return;
+  let timer;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => resolve('deadline'), BOOT_RECONCILE_PASS_DEADLINE_MS);
+    timer.unref?.();
+  });
+  const outcome = await Promise.race([capabilities.whenUp('bootReconcilePassed'), deadline]);
+  clearTimeout(timer);
+  if (outcome === 'deadline') {
+    const draining = appReconciler.bootDrainingIds();
+    log.warn(`peerNotification - announcing before the boot reconcile pass finished, ${draining.length} still in flight: ${draining.join(', ')}`);
+  }
+}
+
 function initialize() {
   capabilities.onUp('nodeMessageCapable', () => {
     if (broadcasting) {
@@ -179,11 +202,11 @@ async function checkAndNotifyPeersOfRunningApps() {
     if (announcementsHeld) return; // said once, at the hold
 
     // The snapshot waits for the reconciler's first pass over the apps held at
-    // boot: a pass that cannot recreate a container uninstalls the app, and a
-    // claim made before it would have to be taken back by a broadcast that is
-    // best-effort. Resolves immediately in steady state; capped reconciler-side,
-    // so a wedged reconcile cannot block the node's network presence.
-    await appReconciler.waitForBootDrainSettled();
+    // boot (`bootReconcilePassed`): a pass that cannot recreate a container
+    // uninstalls the app, and a claim made before it would have to be taken back
+    // by a broadcast that is best-effort. Resolves immediately in steady state.
+    // Capped here, so a wedged reconcile cannot block the node's network presence.
+    await waitForBootReconcilePass();
 
     const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
     if (!localSocketAddr) {
