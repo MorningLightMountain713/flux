@@ -24,10 +24,10 @@ import { dbClient } from '../framework/db-client.js';
 // when peers return.
 //
 // Two independent levers set it up: setNodeStatus EXPIRED makes the daemon reachable-but-
-// unconfirmed (message capability drops, but the app is NOT removed — daemon-stale removal only
-// fires on an UNREACHABLE daemon), and disconnectNode drops the peers so the node degrades
-// (resetting the manifest latch). Widened confirmation windows keep the app alive through the
-// partition; appSyncPeerThreshold 3 + degrade floor 1 so isolating one node degrades only it;
+// unconfirmed (message capability drops, and the node removes its apps), and disconnectNode
+// drops the peers so the node degrades (resetting the manifest latch). The manifest register
+// is network-wide, so the node reconciles it whether or not it still holds the app.
+// appSyncPeerThreshold 3 + degrade floor 1 so isolating one node degrades only it;
 // minOutgoing/minIncoming lowered to the 5-node mesh's submission gate. SSE can't cross the
 // partition, so the degrade gate reads the node's own docker log; behavioural asserts use the
 // shared appcontentmanifests rows + the node's own bus once recovered.
@@ -38,6 +38,11 @@ async function waitForSpecEverywhere(env, name, timeout = 150000) {
     return rows.every((r) => r && r.status === 'success' && r.data && r.data.name === name);
   }, { timeout, interval: 3000, label: `global spec for ${name} on all nodes` });
 }
+
+// The node under test. It must not be one of the fleet's synced nodes: a synced node's
+// readiness backstop is zero blocks, so its recovery is READY at once and never waits on
+// the manifest reconcile this suite exists to prove.
+const SUBJECT = 4;
 
 describe('content manifest recovery through a message-capability round-trip', function () {
   let env;
@@ -50,6 +55,7 @@ describe('content manifest recovery through a message-capability round-trip', fu
       nodes: 5,
       tickerAutostart: false,
       arcane: true,
+      syncedNodes: [0, 1, 2],
       configOverrides: {
         confirmation: { daemonStaleMs: 300000 },
         // 5-node fleet: READY at 3 peers, a degrade floor of 1 so isolating ONE node degrades
@@ -102,7 +108,7 @@ describe('content manifest recovery through a message-capability round-trip', fu
       { timeout: 120000, interval: 2000, label: 'fleet at v2' },
     );
 
-    const N = 4;
+    const N = SUBJECT;
     const node = env.clients[N];
     // One pre-disturbance cursor scopes every later wait past the boot transitions the
     // reconnect will replay (waitForEvent scans the buffer, and reconnect replays history —
