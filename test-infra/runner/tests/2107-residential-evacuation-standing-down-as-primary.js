@@ -74,23 +74,23 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     // peer is already running.
     await electMaster('primaryapp', subnet.nodeIp(TARGET));
 
-    await seedApp(env, 'primaryapp', { instances: 5, containerData: 'g:/appdata' });
+    await seedApp(env, 'primaryapp', { instances: 5, syncMode: 'activeStandby' });
     await setSynced({ folder: 'fluxprimaryapp_primaryapp' });
     await setPeerHasData({ folder: 'fluxprimaryapp_primaryapp' });
     await advanceBlocks(3);
     await waitFor(async () => (await locationsOf(env, 'primaryapp')).length >= 5,
       { timeout: 300000, label: 'primaryapp reaches its instance count across the fleet' });
-    // Only the node running the g: component is the writer, so only it can be
+    // Only the node running the activeStandby component is the writer, so only it can be
     // asked to stand down.
     await waitFor(async () => (await runningComponents(env, TARGET)).includes('fluxprimaryapp_primaryapp'),
-      { timeout: 300000, label: 'the elected primary is running the g: component' });
+      { timeout: 300000, label: 'the elected primary is running the activeStandby component' });
 
     // And the component has to be RUNNING here before the drain starts: the gate asks
-    // the election question only of a node running the g: component, so a pass that
+    // the election question only of a node running the activeStandby component, so a pass that
     // reaches a node the election has not yet started answers SYNCED_ELSEWHERE and
     // hands the app back, which is correct and tests nothing.
     await waitFor(async () => (await runningComponents(env, TARGET)).includes('fluxprimaryapp_primaryapp'),
-      { timeout: 300000, label: 'the elected primary is running the g: component' });
+      { timeout: 300000, label: 'the elected primary is running the activeStandby component' });
 
     await setSystemSecure(subnet.nodeIp(TARGET), false);
     await waitFor(async () => (await dbClient(TARGET).residentialMarker()) !== null,
@@ -150,9 +150,9 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     // The intent above, carried out. Both are worth having: the reconciler can
     // record a desired state it never applies.
     await waitFor(async () => !(await runningComponents(env, TARGET)).includes('fluxprimaryapp_primaryapp'),
-      { timeout: 180000, label: 'the g: component is stopped on the standing-down node' });
+      { timeout: 180000, label: 'the activeStandby component is stopped on the standing-down node' });
 
-    // And it must STAY stopped. appReconciler takes a g: component's desired
+    // And it must STAY stopped. appReconciler takes an activeStandby component's desired
     // state from controllerDesired, so a stand-down that stops the container
     // without telling the controller is undone on the next sweep.
     await advanceBlocks(3);
@@ -194,7 +194,7 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     expect(locations.length).to.be.greaterThan(0);
   });
 
-  it('will not hand back a g: app it is running while no FDM can name the primary', async function () {
+  it('will not hand back an activeStandby app it is running while no FDM can name the primary', async function () {
     this.timeout(900000);
 
     // The other half of the same question, and the one that used to answer
@@ -217,7 +217,7 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     // going STALE, not one that never existed.
     await electMaster('lockedapp', subnet.nodeIp(TARGET));
 
-    await seedApp(env, 'lockedapp', { instances: 5, containerData: 'g:/appdata' });
+    await seedApp(env, 'lockedapp', { instances: 5, syncMode: 'activeStandby' });
     await setSynced({ folder: 'fluxlockedapp_lockedapp' });
     await setPeerHasData({ folder: 'fluxlockedapp_lockedapp' });
     await advanceBlocks(3);
@@ -230,13 +230,13 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     // refused at the peer loop never gets far enough to refuse on the election.
 
     // The component has to be RUNNING here before FDM goes down. The gate
-    // asks the election question only of a node running the g: component - a
+    // asks the election question only of a node running the activeStandby component - a
     // node not running it cannot be the writer - so without this the pass
     // answers SYNCED_ELSEWHERE and hands the app back, which is correct and
     // tests nothing. masterSlaveApps only starts the component because FDM
     // named this node, so taking FDM down first means it never starts at all.
     await waitFor(async () => (await runningComponents(env, TARGET)).includes('fluxlockedapp_lockedapp'),
-      { timeout: 300000, label: 'the elected primary is running the g: component' });
+      { timeout: 300000, label: 'the elected primary is running the activeStandby component' });
 
     // The stub closes its listening socket, not an empty ips array. An empty
     // array is FDM ANSWERING that nobody is primary; this is nobody answering,
