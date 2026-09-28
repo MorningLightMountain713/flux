@@ -35,10 +35,12 @@ function cap(instances) {
 }
 
 /**
- * The joiner's scan: probe ordinals upward from 0 and found the first free
- * one. An ordinal the register already names this node for is this node's
- * (a grant is durable). A found can still lose to a concurrent founder — the
- * register decides once — and the scan moves on. An undecided probe or a
+ * The joiner's scan: probe every ordinal, then found the lowest free one. An
+ * ordinal the register already names this node for is this node's (a grant
+ * is durable, and a restart or a recreate is not a leave), so every ordinal
+ * is probed before any is taken and a free one below it is never a second
+ * name for the same node. A found can still lose to a concurrent founder —
+ * the register decides once — and the scan moves on. An undecided probe or a
  * waiting register is a wait: nothing is assumed free.
  *
  * @param {string} appName
@@ -50,19 +52,23 @@ async function claimOrdinal(appName, instances) {
   const space = cap(instances);
   if (space === 0) return { state: CLAIM.STANDBY, ordinal: null };
   const me = await ownOutpoint();
+  const holders = [];
   for (let ordinal = 0; ordinal < space; ordinal += 1) {
     // eslint-disable-next-line no-await-in-loop
     const probe = await seam.probeOrdinal(appName, ordinal);
     if (!probe.decided) return { state: CLAIM.WAIT, reason: 'undecided' };
     if (probe.holder === me) return { state: CLAIM.GRANTED, ordinal };
-    if (probe.holder !== null) {
+    holders.push(probe.holder);
+  }
+  for (let ordinal = 0; ordinal < space; ordinal += 1) {
+    if (holders[ordinal] !== null) {
       // A held ordinal whose holder the network has certified down and no
       // longer places is reclaimed here, by the node that needs the name, on
       // its own pass: the register judges the vacate at the derivation's
       // placement-dead edge (NODE_DOWN_SCENARIOS.md R9), so nothing here
       // counts a grace or reads a certificate. A refusal is a held ordinal.
       // eslint-disable-next-line no-await-in-loop
-      const gone = await seam.vacateOrdinal(appName, ordinal, probe.holder);
+      const gone = await seam.vacateOrdinal(appName, ordinal, holders[ordinal]);
       if (!gone.vacated) continue; // eslint-disable-line no-continue
     }
     // eslint-disable-next-line no-await-in-loop
