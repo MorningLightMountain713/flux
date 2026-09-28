@@ -304,7 +304,16 @@ async function updateFee(spec, prevSpec, { height, prevHeight }) {
   return engine.updateFee(spec, prevSpec, height, prevHeight);
 }
 
+/**
+ * v1-v8 specs use no feature a policy group gates, so every owner is entitled.
+ * @returns {Promise<null>}
+ */
+async function entitlementRefusal() {
+  return null;
+}
+
 module.exports = {
+  entitlementRefusal,
   onChainDisplayPrice,
   fiatAndFluxDisplayPrice,
   registrationFee,

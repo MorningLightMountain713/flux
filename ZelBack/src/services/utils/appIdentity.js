@@ -55,6 +55,23 @@ function identityFromUuid(uuid) {
 }
 
 /**
+ * The identity a registration's app is known by on every node: its containers,
+ * volumes and folders are named from it.
+ *
+ * A v9 registration's derives from its uuid, so a name registered again after
+ * expiry starts clean. A v1-v8 registration's is its name: an 8.19 node running
+ * the same app names its syncthing folder from the name, and every node running
+ * it must share that folder.
+ *
+ * @param {{version: number, name: string}} spec - the registration's spec
+ * @param {string} uuid - the registration's uuid (mintAppUuid)
+ * @returns {string}
+ */
+function registrationIdentity(spec, uuid) {
+  return spec.version >= 9 ? identityFromUuid(uuid) : spec.name;
+}
+
+/**
  * Whether an app's name carries a marketplace creation timestamp.
  *
  * A v1-v8 spec has no marketplace field, so the timestamp the marketplace
@@ -80,5 +97,6 @@ module.exports = {
   mintAppUuid,
   identityFromUuid,
   isMarketplaceApp,
+  registrationIdentity,
   IDENTITY_HEX_CHARS,
 };

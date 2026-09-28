@@ -74,6 +74,38 @@ function resolveTeamSupportAddresses(daemonHeight) {
 }
 
 /**
+ * The addresses that may sign an expire-only update on an owner's behalf at a
+ * height: the latest `usersToExtend` entry in force there, which replaces the
+ * ones before it.
+ *
+ * @param {number} height
+ * @returns {string[]}
+ */
+function renewalSignersAt(height) {
+  const inForce = config.get('fluxapps.usersToExtend').filter((entry) => entry.height <= height);
+  if (inForce.length === 0) return [];
+  return inForce.reduce((latest, entry) => (entry.height >= latest.height ? entry : latest)).addresses;
+}
+
+/**
+ * The addresses besides the app's owner that may sign an update at a height:
+ * the signer a mined owner-change race names for this message, and the support
+ * team for a marketplace app.
+ *
+ * @param {object} appEvent
+ * @param {number} height
+ * @returns {string[]}
+ */
+function updateSignersAt(appEvent, height) {
+  const signers = [];
+  const raceSigner = ownerChangeRaceSigner(appEvent.hash);
+  if (raceSigner) signers.push(raceSigner);
+  const teamSupport = resolveTeamSupportAddresses(height);
+  if (teamSupport.length > 0 && isMarketplaceApp(appEvent.spec.name)) signers.push(...teamSupport);
+  return signers;
+}
+
+/**
  * Authorize an app event against the party entitled to make it.
  *
  * Who that is — the owner a registration names, the owner an update's app
@@ -100,25 +132,13 @@ async function authorize({
     }
   }
 
-  const updateSigners = [];
-  if (appEvent.isUpdate) {
-    const raceSigner = ownerChangeRaceSigner(appEvent.hash);
-    if (raceSigner) {
-      updateSigners.push(raceSigner);
-    }
-    const teamSupport = resolveTeamSupportAddresses(daemonHeight);
-    if (teamSupport.length > 0 && isMarketplaceApp(appEvent.spec.name)) {
-      updateSigners.push(...teamSupport);
-    }
-  }
-
   const { authorizeAppEvent } = await getSpecBackend();
   const result = await authorizeAppEvent(appEvent, {
     verifyFn: verifierFor(allowLegacyEncoding),
     previousState,
     extraSigners,
-    updateSigners,
-    renewalSigners: appEvent.isUpdate ? config.get('fluxapps.usersToExtend') : [],
+    updateSigners: appEvent.isUpdate ? updateSignersAt(appEvent, daemonHeight) : [],
+    renewalSigners: appEvent.isUpdate ? renewalSignersAt(daemonHeight) : [],
   });
   if (result.valid) return { valid: true, signer: result.signer };
 
@@ -212,6 +232,8 @@ module.exports = {
   requestAttestation,
   verifyAttestation,
   computeOutboundHash,
+  renewalSignersAt,
+  updateSignersAt,
   _internal: {
     resolveTeamSupportAddresses,
     verifyFn,

@@ -295,7 +295,13 @@ const harnessOverrides = {
       height: 1_851_659, // height from which address is valid
       address: '16iJqiVbHptCx87q6XQwNpKdgEZnFtKcyP',
     }],
-    usersToExtend: ['1MCBJn6qsy3YRY2YasdYMYdJcdhy1ev8Rd'], // addresses that can extend applications on behalf of app owners (expire-only updates) addresses cannot be deleted over time, just adding new ones
+    // Addresses that may sign an expire-only update on behalf of an app's owner,
+    // by the height from which each list is in force. A later entry replaces
+    // the one before it, as teamSupportAddress's do.
+    usersToExtend: [{
+      height: 0,
+      addresses: ['1MCBJn6qsy3YRY2YasdYMYdJcdhy1ev8Rd'],
+    }],
     restartAlwaysOwners: ['16mzUh6byiQr7rnYQxKraDbeBPsEHYpSTW'], // app owners whose containers should have restart policy 'always' instead of 'unless-stopped'
     appSpecsEnforcementHeights: {
       1: 0, // blockheight v1 is deprecated. Not possible to use api to update to its specs

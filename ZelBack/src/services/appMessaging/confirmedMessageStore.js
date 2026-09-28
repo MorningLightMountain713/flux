@@ -195,4 +195,6 @@ async function storeConfirmedMessages(candidates) {
   return result;
 }
 
-module.exports = { storeConfirmedMessages, confirmedEvent, paymentRecords };
+module.exports = {
+  storeConfirmedMessages, confirmedEvent, paymentRecords, lookupBlockTime,
+};

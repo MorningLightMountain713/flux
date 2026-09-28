@@ -8,6 +8,8 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { load } = require('@runonflux/flux-spec-cjs');
 
+const legacyRegime = require('../../ZelBack/src/services/pricing/legacyPricingRegime');
+
 let PricingModel;
 before(async () => {
   ({ PricingModel } = await load());
@@ -59,8 +61,8 @@ describe('pricingRegime', () => {
       }
     });
 
-    it('exposes the same six operations on both regimes', () => {
-      const ops = ['onChainDisplayPrice', 'fiatAndFluxDisplayPrice', 'registrationFee', 'supersededMessage', 'termCost', 'updateFee'];
+    it('exposes the same seven operations on both regimes', () => {
+      const ops = ['onChainDisplayPrice', 'fiatAndFluxDisplayPrice', 'registrationFee', 'supersededMessage', 'termCost', 'updateFee', 'entitlementRefusal'];
       for (const op of ops) {
         expect(legacyPricingRegime[op], `legacy.${op}`).to.be.a('function');
         expect(v9PricingRegime[op], `v9.${op}`).to.be.a('function');
@@ -197,6 +199,50 @@ describe('pricingRegime', () => {
       expect(ctx.oldTermPriceFluxSats).to.equal(42);
       expect(ctx).to.not.have.property('oldScaledPriceMicrodollars');
     });
+  });
+
+  describe('v9 entitlementRefusal', () => {
+    const OWNER = '1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm';
+
+    function loadWith(entitlements) {
+      return proxyquire('../../ZelBack/src/services/pricing/v9PricingRegime', {
+        '../entitlementsState': { getFeatureEntitlements: () => entitlements },
+      });
+    }
+
+    it('answers the check for the spec owner, at the height, with the spec encryption', async () => {
+      const check = sinon.stub().returns({ allowed: false, reason: 'fluxid not entitled to use: mesh' });
+      const spec = { owner: OWNER, isEncrypted: true };
+      const reason = await loadWith({ check }).entitlementRefusal(spec, 1234);
+      expect(reason).to.equal('fluxid not entitled to use: mesh');
+      const [fluxid, checked, height, isEncrypted] = check.firstCall.args;
+      expect(fluxid).to.be.instanceOf(Uint8Array);
+      expect(checked).to.equal(spec);
+      expect(height).to.equal(1234);
+      expect(isEncrypted).to.equal(true);
+    });
+
+    it('answers null for an owner entitled to what the spec uses', async () => {
+      const check = sinon.stub().returns({ allowed: true });
+      expect(await loadWith({ check }).entitlementRefusal({ owner: OWNER, isEncrypted: false }, 1)).to.equal(null);
+    });
+
+    it('refuses an owner no policy group can name', async () => {
+      const check = sinon.stub().returns({ allowed: true });
+      const reason = await loadWith({ check }).entitlementRefusal({ owner: 'not-an-address', isEncrypted: false }, 1);
+      expect(reason).to.match(/not a fluxid/);
+      sinon.assert.notCalled(check);
+    });
+
+    it('cannot answer before the policy-group history is built', async () => {
+      let thrown = null;
+      try { await loadWith(null).entitlementRefusal({ owner: OWNER, isEncrypted: false }, 1); } catch (error) { thrown = error; }
+      expect(thrown).to.be.an('error');
+    });
+  });
+
+  it('legacy owners are entitled to everything a v1-v8 spec can use', async () => {
+    expect(await legacyRegime.entitlementRefusal({ owner: 'x' }, 1)).to.equal(null);
   });
 
   describe('updateFee asks the predecessor\'s regime what its term cost', () => {
