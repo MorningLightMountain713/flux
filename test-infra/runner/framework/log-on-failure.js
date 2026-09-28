@@ -154,7 +154,18 @@ async function dump(label, envs) {
 // Root hook plugin (.mocharc.json `require`): every suite file gets failure
 // dumps automatically — no per-suite registration.
 export const mochaHooks = {
+  beforeEach() {
+    this.currentTest.startedAtMs = Date.now();
+  },
+
   async afterEach() {
+    // One line per test in the TAP, whatever its outcome: when it started and how
+    // long it ran. The gap between one test's end and the next one's start is the
+    // hooks and fleet boots between them.
+    const test = this.currentTest;
+    const started = test.startedAtMs ?? Date.now();
+    console.log(`# timing ${new Date(started).toISOString()} ${Date.now() - started}ms ${test.state} ${test.fullTitle()}`);
+
     if (!ALWAYS && this.currentTest.state !== 'failed') return;
     const envs = envsFor(this.currentTest.parent);
     // The containers are still alive here - the one moment their journals
