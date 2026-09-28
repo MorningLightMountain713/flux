@@ -964,10 +964,6 @@ async function getTempMessageByName(name) {
   );
 }
 
-async function storePermanentMessage(doc) {
-  await dbHelper.insertOneToDatabase(globalDb(), globalAppsMessages, doc);
-}
-
 // ── Ingress attestations ───────────────────────────────────────────
 // One node-signed record per (hash, node): where a register/update entered the
 // network. Keyed uniquely so records from different ingress nodes never collide.
@@ -1142,65 +1138,6 @@ async function listIngressAttestationsByApp(name) {
     attestations: await listIngressAttestations(message.hash),
   })));
   return groups.filter((group) => group.attestations.length > 0);
-}
-
-/**
- * The newest permanent message for a name, cut off at a timestamp.
- *
- * v1-v8 update pricing only. The cutoff is the message's own timestamp and the
- * message is already stored when this runs, so it selects that same message —
- * which is what makes a legacy update's fee its minPrice floor. That is the
- * network's settled behaviour and is reproduced deliberately; see the update
- * branch of checkAndRequestApp. Do not reach for this anywhere else.
- */
-async function getPreviousPermanentMessage(name, beforeTimestamp) {
-  const projection = { projection: { _id: 0 } };
-  const docs = await dbHelper.findInDatabase(
-    globalDb(), globalAppsMessages, { 'appSpecifications.name': name }, projection,
-  );
-  let latest = null;
-  for (const doc of docs) {
-    if (doc.timestamp > beforeTimestamp) continue;
-    if (!latest || doc.height > latest.height
-      || (doc.height === latest.height && doc.timestamp > latest.timestamp)) {
-      latest = doc;
-    }
-  }
-  return latest;
-}
-
-/**
- * The newest permanent message for a name: what the chain last settled for the app,
- * expired or not.
- * @param {string} name - App name
- * @returns {Promise<object|null>}
- */
-async function getLatestPermanentMessage(name) {
-  return dbHelper.findOneInDatabase(
-    globalDb(), globalAppsMessages,
-    { 'appSpecifications.name': name },
-    { projection: { _id: 0 }, sort: { height: -1, timestamp: -1 } },
-  );
-}
-
-/**
- * The permanent message an app held immediately before a block height — the
- * state a message confirmed at that height supersedes.
- *
- * The cutoff is the height, which the chain fixes: it excludes the confirming
- * message itself however its timestamp is written, and a backdated message
- * cannot reach behind a later one.
- *
- * @param {string} name - App name
- * @param {number} height - Confirming height of the message being judged
- * @returns {Promise<object|null>}
- */
-async function getPermanentMessageBeforeHeight(name, height) {
-  return dbHelper.findOneInDatabase(
-    globalDb(), globalAppsMessages,
-    { 'appSpecifications.name': name, height: { $lt: height } },
-    { projection: { _id: 0 }, sort: { height: -1, timestamp: -1 } },
-  );
 }
 
 // ── Installing Errors ──────────────────────────────────────────────
@@ -1688,11 +1625,7 @@ module.exports = {
   getPermanentMessage,
   getTempMessage,
   getTempMessageByName,
-  storePermanentMessage,
   listAppMessagesByName,
-  getPreviousPermanentMessage,
-  getPermanentMessageBeforeHeight,
-  getLatestPermanentMessage,
   // ingress attestations
   storeIngressAttestation,
   confirmIngressAttestations,

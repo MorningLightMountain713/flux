@@ -64,6 +64,7 @@ describe('appSubmission tests', () => {
       '../appPlacement/placementFeasibility': stubs.placementFeasibility,
       '../daemonService/daemonStatus': stubs.daemonStatus,
       '../appDatabase/appsRepository': stubs.appsRepository,
+      '../appDecisions/appHistory': stubs.appHistory,
       '../utils/enterpriseNetwork': stubs.enterpriseNetwork,
       '../appMessaging/messageVerifier': {},
       '../appMessaging/appEventVerifier': {},
@@ -115,8 +116,8 @@ describe('appSubmission tests', () => {
       daemonStatus: { isDaemonSynced: sinon.stub().returns({ data: { synced: true, height: 100 } }) },
       appsRepository: {
         getGlobalAppInfo: sinon.stub().resolves(null),
-        getLatestPermanentMessage: sinon.stub().resolves(null),
       },
+      appHistory: { latestApplied: sinon.stub().resolves(null) },
       enterpriseNetwork: { isEnterpriseAppOwner: sinon.stub().returns(true) },
     };
     // resolveSubmission parses via the strict backend deserializer; the default
@@ -279,19 +280,19 @@ describe('appSubmission tests', () => {
       expect(error.message).to.include('network policy not yet obtained');
     });
 
-    // The carry-forward reads what the chain last settled for the name, through the same
+    // The carry-forward reads what the chain last applied for the name, through the same
     // deserializer the submission path uses, so an expired app can still be renewed.
-    it('reads the grant from the newest permanent message for the name', async () => {
+    it('reads the grant from the latest applied message for the name', async () => {
       appSubmission = load();
       const stored = { stored: 'the settled message' };
-      stubs.appsRepository.getLatestPermanentMessage.resolves({ appSpecifications: stored });
+      stubs.appHistory.latestApplied.resolves({ message: { appSpecifications: stored }, decision: {} });
       stubs.parseSpec.withArgs(stored).resolves(await datacenterSpec());
       const spec = await datacenterSpec();
 
       const error = await refusal(appSubmission.assertPlacementPrivileges(spec, { enterprise: INELIGIBLE }));
 
       expect(error, 'the settled grant was not found').to.equal(null);
-      sinon.assert.calledOnceWithExactly(stubs.appsRepository.getLatestPermanentMessage, spec.name);
+      sinon.assert.calledOnceWithExactly(stubs.appHistory.latestApplied, spec.name);
     });
 
     it('asks nothing of a submission that requests no privilege', async () => {

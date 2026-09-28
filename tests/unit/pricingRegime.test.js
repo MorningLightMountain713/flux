@@ -61,8 +61,8 @@ describe('pricingRegime', () => {
       }
     });
 
-    it('exposes the same seven operations on both regimes', () => {
-      const ops = ['onChainDisplayPrice', 'fiatAndFluxDisplayPrice', 'registrationFee', 'supersededMessage', 'termCost', 'updateFee', 'entitlementRefusal'];
+    it('exposes the same six operations on both regimes', () => {
+      const ops = ['onChainDisplayPrice', 'fiatAndFluxDisplayPrice', 'registrationFee', 'termCost', 'updateFee', 'entitlementRefusal'];
       for (const op of ops) {
         expect(legacyPricingRegime[op], `legacy.${op}`).to.be.a('function');
         expect(v9PricingRegime[op], `v9.${op}`).to.be.a('function');
@@ -70,82 +70,6 @@ describe('pricingRegime', () => {
     });
   });
 
-  // What an update is priced against. Each regime answers for its own
-  // economics; the promotion path asks and never chooses.
-  describe('supersededMessage', () => {
-    const CONFIRMING = { height: 2_000_000, timestamp: 1_750_000_000_000 };
-
-    function loadRegimes() {
-      const appsRepositoryStub = {
-        getPreviousPermanentMessage: sinon.stub().resolves({ hash: 'byTimestamp' }),
-        getPermanentMessageBeforeHeight: sinon.stub().resolves({ hash: 'byHeight' }),
-        listAppMessagesByName: sinon.stub().resolves([]),
-      };
-      const P = '../../ZelBack/src/services/pricing';
-      return {
-        appsRepositoryStub,
-        legacy: proxyquire(`${P}/legacyPricingRegime`, {
-          '../appDatabase/appsRepository': appsRepositoryStub,
-        }),
-        v9: proxyquire(`${P}/v9PricingRegime`, {
-          '../appDatabase/appsRepository': appsRepositoryStub,
-        }),
-      };
-    }
-
-    // The update is already stored as a permanent message by the time this is
-    // asked. A height cutoff is the only one that excludes it: the message
-    // cannot precede its own height, however its timestamp is written.
-    it('v9 resolves by confirming height, which cannot select the update itself', async () => {
-      const { v9, appsRepositoryStub } = loadRegimes();
-
-      const result = await v9.supersededMessage('myapp', CONFIRMING);
-
-      expect(result.hash).to.equal('byHeight');
-      sinon.assert.calledOnceWithExactly(
-        appsRepositoryStub.getPermanentMessageBeforeHeight, 'myapp', CONFIRMING.height,
-      );
-      sinon.assert.notCalled(appsRepositoryStub.getPreviousPermanentMessage);
-    });
-
-    it('v9 never uses the message timestamp, which its sender writes', async () => {
-      const { v9, appsRepositoryStub } = loadRegimes();
-
-      await v9.supersededMessage('myapp', { height: 2_000_000, timestamp: 1 });
-
-      const [, cutoff] = appsRepositoryStub.getPermanentMessageBeforeHeight.firstCall.args;
-      expect(cutoff).to.equal(2_000_000);
-    });
-
-    // Legacy is bug-compatible on purpose: its resolution selects the update
-    // itself, which floors every legacy update at minPrice. That is what the
-    // network has enforced since height 1004000, and a node resolving it any
-    // other way would reject updates every other node accepts.
-    it('legacy keeps the timestamp resolution the network has always used', async () => {
-      const { legacy, appsRepositoryStub } = loadRegimes();
-
-      const result = await legacy.supersededMessage('myapp', CONFIRMING);
-
-      expect(result.hash).to.equal('byTimestamp');
-      sinon.assert.calledOnceWithExactly(
-        appsRepositoryStub.getPreviousPermanentMessage, 'myapp', CONFIRMING.timestamp,
-      );
-      sinon.assert.notCalled(appsRepositoryStub.getPermanentMessageBeforeHeight);
-    });
-
-    it('reports nothing to supersede rather than inventing a predecessor', async () => {
-      const { v9, appsRepositoryStub } = loadRegimes();
-      appsRepositoryStub.getPermanentMessageBeforeHeight.resolves(null);
-
-      expect(await v9.supersededMessage('myapp', CONFIRMING)).to.be.null;
-    });
-  });
-
-  // The free-update rate limit is decided inside priceUpdate from the history
-  // and the clock the regime hands it. Both come from the chain: the confirming
-  // block's time, and only the messages confirmed below its height. A node's
-  // own clock would give every node its own window, and a replaying node an
-  // empty one; a cutoff at the confirming height would count the update itself.
   describe('v9 updateFee prices against its predecessor as of the confirming block', () => {
     const HEIGHT = 2_000_000;
     const BLOCK_TIME = 1_750_000_000;

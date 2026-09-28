@@ -5,6 +5,7 @@ const axios = require('axios');
 const dbHelper = require('../dbHelper');
 const daemonStatus = require('../daemonService/daemonStatus');
 const appsRepository = require('../appDatabase/appsRepository');
+const appHistory = require('../appDecisions/appHistory');
 const { resolveSpec, resolveInstantiatedSpec } = require('../utils/specCutover');
 const { getSpec } = require('../utils/specLibs');
 const { getChainParamsPriceUpdates } = require('../utils/chainUtilities');
@@ -191,15 +192,16 @@ async function engineFor({ quote = false, name = null } = {}) {
 async function checkLegacyFreeUpdate(spec, daemonHeight) {
   const { checkLegacyFreeUpdate: rule } = await getSpec();
   const instantiated = await appsRepository.getGlobalAppInfo(spec.name);
-  const messages = instantiated ? await appsRepository.listAppMessagesByName(spec.name) : [];
+  // Only applied updates count against the allowance: a refused one never happened.
+  const applied = instantiated ? await appHistory.appliedMessages(spec.name) : [];
 
   const { free, reason } = rule({
     oldSpec: instantiated ? await resolveInstantiatedSpec(instantiated) : null,
     newSpec: spec,
     expiresAtHeight: instantiated && instantiated.expiresAtHeight,
-    recentEvents: messages
-      .filter((m) => m.type === 'fluxappupdate' || m.type === 'zelappupdate')
-      .map((m) => m.height),
+    recentEvents: applied
+      .filter(({ decision }) => decision.type === 'update')
+      .map(({ decision }) => decision.height),
     height: daemonHeight,
   });
   // Every outcome says why: an operator reading "NOT FREE" with nothing else
@@ -252,29 +254,6 @@ async function registrationFee(spec, height) {
 }
 
 /**
- * The permanent message a v1-v8 update supersedes, resolved as this network has
- * always resolved it: newest message at or before the update's own timestamp.
- *
- * The update is already stored when this is asked, and its own record satisfies
- * that cutoff at the greatest height, so the answer is the update itself. Every
- * term of updateFee then cancels — same spec, same height, zero height
- * difference, full unused-time credit — and the fee is the minPrice floor.
- *
- * That IS the legacy rule: the chain floor and the display price are two
- * numbers on purpose, and the floor is what the network has enforced for every
- * legacy update since height 1004000. It is reproduced exactly rather than
- * corrected, because a node demanding the prorated figure would reject updates
- * every other node accepts, and no node can reprice history.
- *
- * @param {string} name - App name
- * @param {{height: number, timestamp: number}} confirming
- * @returns {Promise<object|null>}
- */
-async function supersededMessage(name, confirming) {
-  return appsRepository.getPreviousPermanentMessage(name, confirming.timestamp);
-}
-
-/**
  * What a v1-v8 term cost, in FLUX at the card in force at `height`. A v9
  * update credits the unused share of it.
  *
@@ -317,7 +296,6 @@ module.exports = {
   onChainDisplayPrice,
   fiatAndFluxDisplayPrice,
   registrationFee,
-  supersededMessage,
   termCost,
   updateFee,
   checkLegacyFreeUpdate,

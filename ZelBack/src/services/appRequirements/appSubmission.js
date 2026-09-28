@@ -22,6 +22,7 @@ const { ensureProvidersRegistered, resolveInstantiatedSpec } = require('../utils
 const transportHelper = require('../utils/transportHelper');
 const appsRepository = require('../appDatabase/appsRepository');
 const { verifyAppNameAndOwner } = require('../utils/appIdentity');
+const appHistory = require('../appDecisions/appHistory');
 const entitlementsState = require('../entitlementsState');
 const marketplaceTemplateCache = require('../marketplace/marketplaceTemplateCache');
 const contentBlobService = require('../appLifecycle/contentBlobService');
@@ -135,15 +136,16 @@ async function assertMatchesMarketplaceTemplate(spec) {
  * @returns {Promise<{ spec: object, isEncrypted: boolean, broadcastBlob: object }>}
  */
 /**
- * The specification the chain last settled for this app's name, or null. Read from
- * the permanent messages rather than the live registry, so an app that has expired can
+ * The specification the chain last applied for this app's name, or null. Read from
+ * the applied history rather than the live registry, so an app that has expired can
  * still be renewed on what it held.
  * @param {object} spec - the submitted specification
  * @returns {Promise<object|null>}
  */
 async function previousSettledSpec(spec) {
-  const message = await appsRepository.getLatestPermanentMessage(spec.name);
-  if (!message || !message.appSpecifications) return null;
+  const latest = await appHistory.latestApplied(spec.name);
+  if (!latest) return null;
+  const { message } = latest;
   const { deserializeSpec } = await getSpecBackend();
   return deserializeSpec(message.appSpecifications);
 }

@@ -10,6 +10,7 @@ const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const appsRepository = require('../appDatabase/appsRepository');
 const appConstants = require('../utils/appConstants');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
+const appHistory = require('../appDecisions/appHistory');
 const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const { Privilege, authOf } = require('../utils/privileges');
@@ -565,27 +566,12 @@ async function getApplicationOriginalOwner(req, res) {
     if (!appname) {
       throw new Error('No Application Name specified');
     }
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.get('database.appsglobal.database'));
-    const projection = {
-      projection: {
-        _id: 0,
-      },
-    };
-    log.info(`Searching register permanent messages for ${appname}`);
-    const appsQuery = {
-      'appSpecifications.name': appname,
-      type: 'fluxappregister',
-    };
-    const permanentAppMessage = await dbHelper.findInDatabase(database, globalAppsMessages, appsQuery, projection);
-    const lastAppRegistration = permanentAppMessage[permanentAppMessage.length - 1];
-    // An app nobody has registered is an ordinary answer, not a fault. Reading through the
-    // empty result threw "Cannot read properties of undefined", which reached the caller as
-    // the error message and said nothing about the app it was asked for.
-    if (!lastAppRegistration) {
+    const registration = await appHistory.latestApplied(appname, { type: 'registration' });
+    // An app nobody has registered is an ordinary answer, not a fault.
+    if (!registration) {
       throw new Error(`No registration message found for ${appname}`);
     }
-    const ownerResponse = messageHelper.createDataMessage(lastAppRegistration.appSpecifications.owner);
+    const ownerResponse = messageHelper.createDataMessage(registration.message.appSpecifications.owner);
     res.json(ownerResponse);
   } catch (error) {
     log.error(error);

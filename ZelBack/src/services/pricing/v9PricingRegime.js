@@ -2,6 +2,7 @@
 
 const daemonStatus = require('../daemonService/daemonStatus');
 const appsRepository = require('../appDatabase/appsRepository');
+const appHistory = require('../appDecisions/appHistory');
 const { getSpecPolicy } = require('../utils/specLibs');
 const { buildPricingEngine } = require('./buildPricingEngine');
 const priceOracleState = require('./priceOracleState');
@@ -130,7 +131,7 @@ async function onChainDisplayUpdatePrice(spec, existing, daemonHeight, termCost)
   // disable that cap and quote free for an owner consensus is about to charge.
   // A quote has no confirming block yet, so its windows end at the moment it
   // is asked.
-  const recentEvents = await appsRepository.listAppMessagesByName(spec.name);
+  const recentEvents = await appHistory.appliedUpdateEvents(spec.name);
   const result = await priceAgainstPredecessor(spec, existing.spec, {
     height: daemonHeight,
     prevState: { height: existing.height, registeredAt: existing.registeredAt },
@@ -242,26 +243,6 @@ async function registrationFee(spec, height) {
 }
 
 /**
- * The permanent message a v9 update supersedes, resolved by confirming height.
- *
- * The height is the only cutoff that works here. The update is already stored
- * when this is asked, so a cutoff admitting its own height returns the update
- * itself — and a spec priced against itself passes every rule in the free-update
- * policy (same ttl, same instances, same placement, same components, same
- * resources, same features), so the update costs nothing. Height also fixes the
- * cutoff on chain rather than on a timestamp the sender writes, so a backdated
- * update cannot reach behind a message that supersedes it.
- *
- * @param {string} name - App name
- * @param {{height: number, timestamp: number}} confirming - the update's
- *   confirming height and message timestamp
- * @returns {Promise<object|null>}
- */
-async function supersededMessage(name, confirming) {
-  return appsRepository.getPermanentMessageBeforeHeight(name, confirming.height);
-}
-
-/**
  * What a v9 term cost: the spec priced at the rates in force at `height`, for
  * its whole term, before the minimum-price floor, with every quantity the
  * pricer meters for it. An update credits the unused share of it.
@@ -349,7 +330,6 @@ module.exports = {
   onChainDisplayPrice,
   fiatAndFluxDisplayPrice,
   registrationFee,
-  supersededMessage,
   termCost,
   updateFee,
   isOnChainPricingActive,
