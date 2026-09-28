@@ -262,6 +262,76 @@ describe('verifyPool tests', () => {
 // The real worker replies once per batch, in order, with a length-matched
 // array - so against it the failure modes below are unreachable. They are what
 // happens when that stops being true, which nothing in the worker enforces.
+describe('verifyPool signer recovery', function () {
+  this.timeout(REAL_WORK_MS);
+
+  const crypto = require('crypto');
+  const bitcoinMessage = require('bitcoinjs-message');
+  const secp256k1 = require('secp256k1');
+  const { load } = require('@runonflux/flux-spec-cjs');
+  const { pubKeyToAddr } = require('../../ZelBack/src/services/utils/fluxCryptoUtils');
+
+  function keyPair(compressed) {
+    let privateKey;
+    do { privateKey = crypto.randomBytes(32); } while (!secp256k1.privateKeyVerify(privateKey));
+    const publicKey = Buffer.from(secp256k1.publicKeyCreate(privateKey, compressed)).toString('hex');
+    return { privateKey, compressed, address: pubKeyToAddr(publicKey, '00') };
+  }
+
+  function signed(message, key) {
+    return bitcoinMessage.sign(message, key.privateKey, key.compressed).toString('base64');
+  }
+
+  before(() => verifyPool.start(1));
+  after(() => verifyPool.stop());
+
+  it('recovers the address that signed, for a compressed and an uncompressed key', async () => {
+    const compressed = keyPair(true);
+    const uncompressed = keyPair(false);
+    const results = await verifyPool.recover([
+      { payloads: ['fluxappregister1{}1'], signature: signed('fluxappregister1{}1', compressed) },
+      { payloads: ['fluxappupdate1{}2'], signature: signed('fluxappupdate1{}2', uncompressed) },
+    ]);
+    expect(results).to.deep.equal([[compressed.address], [uncompressed.address]]);
+  });
+
+  it('recovers over every payload, so the signed one is among the answers', async () => {
+    const key = keyPair(true);
+    const [addresses] = await verifyPool.recover([
+      { payloads: ['another field order', 'the signed order'], signature: signed('the signed order', key) },
+    ]);
+    expect(addresses).to.have.length(2);
+    expect(addresses).to.include(key.address);
+  });
+
+  it('answers no address for a signature that recovers to none', async () => {
+    expect(await verifyPool.recover([{ payloads: ['m'], signature: 'not a signature' }])).to.deep.equal([[]]);
+  });
+
+  it('answers as the library curve does, item for item', async () => {
+    const { recoverSigners } = await load();
+    const items = [];
+    for (let i = 0; i < 40; i += 1) {
+      const key = keyPair(i % 2 === 0);
+      const payload = `fluxappupdate1{"i":${i}}${i}`;
+      items.push({ payloads: [payload, `${payload}x`], signature: signed(payload, key) });
+    }
+    items.push({ payloads: ['m'], signature: 'not a signature' });
+
+    const native = await verifyPool.recover(items);
+    const library = [];
+    for (const { payloads, signature } of items) {
+      const found = new Set();
+      for (const payload of payloads) {
+        // eslint-disable-next-line no-await-in-loop
+        for (const address of await recoverSigners(payload, signature, { allowLegacyEncoding: true })) found.add(address);
+      }
+      library.push([...found]);
+    }
+    expect(native).to.deep.equal(library);
+  });
+});
+
 describe('verifyPool worker protocol', () => {
   const ITEM = { messageToVerify: 'm', pubKey: 'p', signature: 's' };
 
@@ -349,6 +419,49 @@ describe('verifyPool worker protocol', () => {
     expect(await result).to.deep.equal([false, false]);
 
     pool.stop();
+  });
+
+  it('rejects a recover batch its worker could not compute, rather than answering no signer', async () => {
+    const { pool, workers } = makePool();
+    pool.start(1);
+
+    const result = pool.recover([{ payloads: ['m'], signature: 's' }]);
+    const [w] = workers;
+    expect(w.posted[0].op).to.equal('recover');
+    w.emit('message', { id: w.posted[0].id, error: 'library did not load' });
+
+    let thrown = null;
+    try { await result; } catch (error) { thrown = error; }
+    expect(thrown).to.be.an('error');
+    expect(thrown.message).to.match(/library did not load/);
+
+    pool.stop();
+  });
+
+  it('answers a verify batch its worker could not compute as unverified', async () => {
+    const { pool, workers } = makePool();
+    pool.start(1);
+
+    const result = pool.verify([ITEM, ITEM]);
+    const [w] = workers;
+    expect(w.posted[0].op).to.equal('verify');
+    w.emit('message', { id: w.posted[0].id, error: 'boom' });
+
+    expect(await result).to.deep.equal([false, false]);
+
+    pool.stop();
+  });
+
+  it('rejects a recover batch that is still outstanding when the pool stops', async () => {
+    const { pool } = makePool();
+    pool.start(1);
+
+    const result = pool.recover([{ payloads: ['m'], signature: 's' }]);
+    pool.stop();
+
+    let thrown = null;
+    try { await result; } catch (error) { thrown = error; }
+    expect(thrown).to.be.an('error');
   });
 
   it('resubmits an outstanding batch when its worker exits CLEANLY', async () => {

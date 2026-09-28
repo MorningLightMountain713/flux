@@ -24,8 +24,8 @@ const IDLE_REAP_MS = 60_000;
 
 // A chunk that keeps killing its worker is abandoned rather than retried for
 // ever, and a worker that never answers must not hold its slot for ever. Both
-// failures resolve the batch as unverified: a signature we could not check is
-// one we do not trust, so the messages are dropped rather than accepted.
+// failures abandon the batch (abandonJob): a verify batch reads as unverified, a
+// recover batch rejects.
 const MAX_JOB_ATTEMPTS = 3;
 const JOB_TIMEOUT_MS = 60_000;
 
@@ -54,7 +54,18 @@ function busyCount() {
   return slots.filter((slot) => slot.job).length;
 }
 
+/**
+ * Give up on a job. A verify batch is answered as unverified: a signature we
+ * could not check is one we do not trust. A recover batch is rejected: who
+ * signed a message is a question with an answer, and a caller must not read
+ * "could not compute" as "signed by no one".
+ */
 function abandonJob(job, reason) {
+  if (job.op === 'recover') {
+    log.error(`Recover job abandoned after ${job.attempts} attempt(s) - ${reason}`);
+    job.reject(new Error(`signer recovery failed: ${reason}`));
+    return;
+  }
   log.error(`Verify job abandoned after ${job.attempts} attempt(s) - ${reason}; `
     + `${job.chunk.length} signature(s) treated as unverified`);
   job.resolve(new Array(job.chunk.length).fill(false));
@@ -104,7 +115,7 @@ function dispatch() {
       job.attempts += 1;
 
       try {
-        slot.worker.postMessage({ id: job.id, items: job.chunk });
+        slot.worker.postMessage({ id: job.id, op: job.op, items: job.chunk });
       } catch (error) {
         // The handover never happened, so the slot is still free - claiming it
         // before posting would retire the slot for the life of the process.
@@ -201,7 +212,9 @@ function createSlot() {
     // as unverified rather than rejected, which is this pool's rule everywhere
     // else - a caller drops the batch it could not check instead of losing the
     // sync response the rest of it arrived in.
-    if (!Array.isArray(reply.results) || reply.results.length !== job.chunk.length) {
+    if (typeof reply.error === 'string') {
+      abandonJob(job, `worker could not compute the batch: ${reply.error}`);
+    } else if (!Array.isArray(reply.results) || reply.results.length !== job.chunk.length) {
       abandonJob(job, `worker returned ${Array.isArray(reply.results) ? reply.results.length : 'no'} `
         + `results for a batch of ${job.chunk.length}`);
     } else {
@@ -276,11 +289,12 @@ function stats() {
 }
 
 /**
- * Verify a batch of signatures off the main thread.
- * @param {Array<{messageToVerify: string, pubKey: string, signature: string}>} items Items to verify.
- * @returns {Promise<Array<boolean>>} One result per item, in the order given.
+ * Run one operation over a batch in the workers, in chunks.
+ * @param {'verify'|'recover'} op
+ * @param {Array<object>} items
+ * @returns {Promise<Array>} one result per item, in the order given
  */
-async function verify(items) {
+async function run(op, items) {
   if (!items.length) return [];
 
   const jobs = [];
@@ -288,9 +302,9 @@ async function verify(items) {
     const chunk = items.slice(offset, offset + CHUNK_SIZE);
     nextBatchId += 1;
     const job = {
-      id: nextBatchId, chunk, attempts: 0, resolve: null,
+      id: nextBatchId, op, chunk, attempts: 0, resolve: null, reject: null,
     };
-    job.promise = new Promise((resolve) => { job.resolve = resolve; });
+    job.promise = new Promise((resolve, reject) => { job.resolve = resolve; job.reject = reject; });
     jobs.push(job);
   }
 
@@ -307,6 +321,29 @@ async function verify(items) {
   return results;
 }
 
+/**
+ * Verify a batch of signatures off the main thread.
+ * @param {Array<{messageToVerify: string, pubKey: string, signature: string}>} items Items to verify.
+ * @returns {Promise<Array<boolean>>} One result per item, in the order given.
+ */
+async function verify(items) {
+  return run('verify', items);
+}
+
+/**
+ * Every address each item's signature recovers to, over each of its payloads,
+ * off the main thread, on the native curve. For messages the chain carries: a
+ * signature is judged on who signed it, not on how it is spelled.
+ *
+ * @param {Array<{payloads: string[], signature: string}>} items - an app event's
+ *   `signaturePayloads()` and `signature`
+ * @returns {Promise<string[][]>} one address list per item, in the order given;
+ *   rejects when a batch cannot be computed
+ */
+async function recover(items) {
+  return run('recover', items);
+}
+
 module.exports = {
-  start, stop, verify, stats,
+  start, stop, verify, recover, stats,
 };
