@@ -493,10 +493,12 @@ describe('appController tests', () => {
     let enqueueComponent;
     let setOperatorStopped;
     let requestRestart;
+    let isOperatorStopped;
     beforeEach(() => {
       enqueueComponent = stubApplyIntent();
       setOperatorStopped = sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
       requestRestart = sinon.stub(appsRuntimeState, 'requestRestart').resolves();
+      isOperatorStopped = sinon.stub(appsRuntimeState, 'isOperatorStopped').resolves(false);
     });
 
     it('clears the lock, bumps the restart generation and enqueues (no direct docker restart)', async () => {
@@ -518,6 +520,7 @@ describe('appController tests', () => {
 
     it('withdraws a decider verdict recorded before the stop, so the decider rules again', async () => {
       verificationHelperStub.resolves(true);
+      isOperatorStopped.resolves(true);
       const clearControllerDesired = sinon.stub(appReconciler, 'clearControllerDesired');
       registryHolds(await flatApp('TestApp'));
 
@@ -528,6 +531,21 @@ describe('appController tests', () => {
       expect(res.json.firstCall.args[0].status).to.equal('success');
       sinon.assert.calledOnceWithExactly(clearControllerDesired, 'TestApp');
       sinon.assert.callOrder(clearControllerDesired, enqueueComponent);
+    });
+
+    // Its decider re-asserts only on a transition, so a live verdict withdrawn here
+    // would hold the component at awaitingController and the restart would never land.
+    it('keeps the decider verdict of a running component it bounces', async () => {
+      verificationHelperStub.resolves(true);
+      const clearControllerDesired = sinon.stub(appReconciler, 'clearControllerDesired');
+      registryHolds(await flatApp('TestApp'));
+
+      const req = { params: { appname: 'TestApp' }, query: {} };
+      const res = { json: sinon.fake((param) => param) };
+      await appController.appRestart(req, res);
+
+      sinon.assert.notCalled(clearControllerDesired);
+      sinon.assert.calledOnceWithExactly(requestRestart, 'TestApp');
     });
 
     it('restarts every component of a composed app through the reconciler', async () => {
