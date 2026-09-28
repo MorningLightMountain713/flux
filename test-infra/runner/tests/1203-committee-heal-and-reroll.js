@@ -320,6 +320,12 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       if (settled) hosts = now;
       return settled;
     }, { timeout: 600000, interval: 15000, label: `the app settles at ${HOLDERS.length} hosts` });
+    // The trim may shed the master's own copy, and that removal releases the
+    // term: the re-roll tests start once a settled host holds it.
+    await waitFor(async () => {
+      const verdict = await quorumVerdict();
+      return verdict !== null && hosts.some((i) => outpoints[i] === verdict.grantee);
+    }, { timeout: 300000, interval: 10000, label: 'a settled host holds the grant' });
   });
 
   async function submitReroll(generation) {
