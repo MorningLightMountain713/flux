@@ -580,7 +580,7 @@ async function masterIntent(identifier, comp) {
       grantee = `${self.txhash}:${self.txindex}`;
     } else {
       const record = await messageStore.getMasterleaseRecord(comp.appName, ROLE);
-      if (record?.data?.verified === true) grantee = record.data.grantee ?? null;
+      if (record?.verified === true) grantee = record.data?.grantee ?? null;
     }
     if (!grantee) return { ip: null, fdmOk: true };
     const membership = networkStateService.membershipAt(networkStateService.membershipFingerprint()) ?? [];

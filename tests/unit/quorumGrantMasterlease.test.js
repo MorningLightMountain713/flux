@@ -276,8 +276,20 @@ describe('quorumGrant masterlease', () => {
       expect(JSON.stringify(branches[0])).to.contain('$data.generation');
       expect(JSON.stringify(branches[0])).to.not.contain('$data.epoch');
       expect(JSON.stringify(branches[0])).to.contain('3');
-      expect(JSON.stringify(branches[1])).to.contain('$data.proofRank');
+      expect(JSON.stringify(branches[1])).to.contain('$proofRank');
       expect(JSON.stringify(branches[2])).to.contain('7');
+    });
+
+    // A peer re-verifies the envelope's signature over `data` when this row is
+    // served to it in a sync, so `data` must be the signed payload exactly.
+    it('stores the record as it was signed, with the proof verdict beside it', async () => {
+      const committee = committeeAt(0);
+      const message = baseMessage({ acceptances: acceptancesFrom(committee.members, committee.quorum) });
+      const signed = JSON.parse(JSON.stringify(message));
+      await messageStore.storeAppStateEvent('masterlease', { message, envelope: null, announcer: messageStore.LOCAL_ANNOUNCER });
+      expect(updates).to.have.length(1);
+      expect(updates[0].update[0].$set.data.$cond[1]).to.deep.equal(signed);
+      expect(updates[0].update[0].$set.verified.$cond[1]).to.equal(true);
     });
 
     it('a record without a generation compares as generation zero, never as brand new', async () => {
@@ -294,7 +306,11 @@ describe('quorumGrant masterlease', () => {
     // that fails, and stores a record whose membership this node cannot
     // rebuild as UNVERIFIED, ranked below any verified one.
     describe('the proof a held record carries', () => {
-      const stored = () => updates.map((u) => u.update[0].$set.data.$cond[1]);
+      // the node's verdict on the proof, stored on the row beside the record
+      const stored = () => updates.map((u) => ({
+        proofRank: u.update[0].$set.proofRank.$cond[1],
+        verified: u.update[0].$set.verified.$cond[1],
+      }));
 
       it('stores a held record a quorum of the granting committee signed, marked verified, ranked above an unverified one', async () => {
         const committee = committeeAt(0);
@@ -307,8 +323,8 @@ describe('quorumGrant masterlease', () => {
         expect(stored()[0].verified).to.equal(true);
         const branches = updates[0].update[0].$set.data.$cond[0].$or;
         expect(JSON.stringify(branches[0])).to.contain('$data.generation');
-        expect(JSON.stringify(branches[1]), 'the proof rank sits right after generation').to.contain('$data.proofRank');
-        expect(JSON.stringify(branches[1]), 'a verified record ranks 1').to.contain('"$gt":[1,{"$ifNull":["$data.proofRank",0]}]');
+        expect(JSON.stringify(branches[1]), 'the proof rank sits right after generation').to.contain('$proofRank');
+        expect(JSON.stringify(branches[1]), 'a verified record ranks 1').to.contain('"$gt":[1,{"$ifNull":["$proofRank",0]}]');
         expect(JSON.stringify(branches[1])).to.not.contain('$data.epoch');
         expect(JSON.stringify(branches[2])).to.contain('$data.epoch');
         // the comparator's field is a number in the stored data: the database
@@ -391,7 +407,7 @@ describe('quorumGrant masterlease', () => {
         expect(updates).to.have.length(1);
         expect(stored()[0].verified).to.equal(false);
         const branches = updates[0].update[0].$set.data.$cond[0].$or;
-        expect(JSON.stringify(branches[1]), 'an unverified record ranks 0: it never replaces a verified one').to.contain('"$gt":[0,{"$ifNull":["$data.proofRank",0]}]');
+        expect(JSON.stringify(branches[1]), 'an unverified record ranks 0: it never replaces a verified one').to.contain('"$gt":[0,{"$ifNull":["$proofRank",0]}]');
         expect(stored()[0].proofRank).to.equal(0);
       });
 
@@ -490,7 +506,7 @@ describe('quorumGrant masterlease', () => {
         announcer: messageStore.LOCAL_ANNOUNCER,
       });
       expect(updates).to.have.length(1);
-      expect(updates[0].update[0].$set.data.$cond[1].verified).to.equal(true);
+      expect(updates[0].update[0].$set.verified.$cond[1]).to.equal(true);
 
       // a quorum that leans on the seat the chain removed is one short
       updates.splice(0);

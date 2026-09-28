@@ -912,7 +912,7 @@ describe('quorumGrant mastershipGrantGate', () => {
       networkStateService.membershipAt.returns([
         { txhash: '9'.repeat(64), outidx: 0, pubkey: 'owner-9', ip: '10.9.0.9:16127' },
       ]);
-      messageStore.getMasterleaseRecord.resolves({ data: { grantee: `${'9'.repeat(64)}:0`, verified: true } });
+      messageStore.getMasterleaseRecord.resolves({ data: { grantee: `${'9'.repeat(64)}:0` }, verified: true });
       const intent = await mastershipGrantGate.masterIntent(IDENTIFIER, activeStandbyComp());
       expect(intent).to.deep.equal({ ip: '10.9.0.9:16127', fdmOk: true });
     });
@@ -921,7 +921,7 @@ describe('quorumGrant mastershipGrantGate', () => {
       networkStateService.membershipAt.returns([
         { txhash: '9'.repeat(64), outidx: 0, pubkey: 'owner-9', ip: '10.9.0.9:16127' },
       ]);
-      messageStore.getMasterleaseRecord.resolves({ data: { grantee: `${'9'.repeat(64)}:0`, verified: false } });
+      messageStore.getMasterleaseRecord.resolves({ data: { grantee: `${'9'.repeat(64)}:0` }, verified: false });
       const intent = await mastershipGrantGate.masterIntent(IDENTIFIER, activeStandbyComp());
       expect(intent).to.deep.equal({ ip: null, fdmOk: true });
     });
@@ -940,7 +940,7 @@ describe('quorumGrant mastershipGrantGate', () => {
 
     it('a verified grantee no longer on the list resolves to no primary, not a stale address', async () => {
       networkStateService.membershipAt.returns([]);
-      messageStore.getMasterleaseRecord.resolves({ data: { grantee: `${'9'.repeat(64)}:0`, verified: true } });
+      messageStore.getMasterleaseRecord.resolves({ data: { grantee: `${'9'.repeat(64)}:0` }, verified: true });
       const intent = await mastershipGrantGate.masterIntent(IDENTIFIER, activeStandbyComp());
       expect(intent).to.deep.equal({ ip: null, fdmOk: true });
     });

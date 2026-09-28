@@ -816,12 +816,14 @@ async function handleIPChangedEvent({ message, envelope }) {
  * ABSENT stored value counts as, so a field added later compares against
  * old rows as the value they implicitly carried.
  *
- * @param {Array<{field: string, value: number, absent: number}>} ordinals
+ * @param {Array<{field: string, value: number, absent: number, path?: string}>} ordinals
+ *   each compared against the stored `data.<field>`, or against `path` on the
+ *   row itself for an ordinal the node derives rather than one the record carries
  */
 function buildOrdinalConditionalUpsert(ordinals, broadcastedAt, conditionalFields, options = {}) {
   const alwaysSetFields = options.alwaysSetFields ?? {};
   const incomingDate = new Date(broadcastedAt);
-  const stored = ordinals.map(({ field, absent }) => ({ $ifNull: [`$data.${field}`, absent] }));
+  const stored = ordinals.map(({ field, absent, path }) => ({ $ifNull: [`$${path ?? `data.${field}`}`, absent] }));
   const equalThrough = (count) => ordinals
     .slice(0, count)
     .map(({ value }, i) => ({ $eq: [value, stored[i]] }));
@@ -938,13 +940,16 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
     // released row or a founding record carries no term to prove and ranks
     // as verified, so a release still supersedes the term it ends. The
     // comparator's field is the numeric proofRank — the database orders a
-    // number against a boolean by type, never by value.
+    // number against a boolean by type, never by value. Both it and the
+    // verdict sit on the row beside `data`, never inside it: `data` is the
+    // signed payload exactly, which is what a peer re-verifies when this row
+    // is served to it in a sync.
     const proofRank = proving && !verified ? 0 : 1;
     await database.collection(globalAppStateEvents).updateOne(
       { type: APP_STATE_EVENT_TYPES.MASTERLEASE, dedupKey },
       buildOrdinalConditionalUpsert([
         { field: 'generation', value: message.generation ?? 0, absent: 0 },
-        { field: 'proofRank', value: proofRank, absent: 0 },
+        { field: 'proofRank', path: 'proofRank', value: proofRank, absent: 0 },
         { field: 'epoch', value: message.epoch, absent: -1 },
       ], message.broadcastedAt, {
         ip: message.ip,
@@ -953,7 +958,9 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
         dedupKey,
         broadcastedAt: new Date(message.broadcastedAt),
         envelope: envelope ?? null,
-        data: { ...message, proofRank, ...(proving ? { verified } : {}) },
+        data: message,
+        proofRank,
+        verified: proving ? verified : null,
         // In alwaysSetFields, never a conditional field: a conditional slot
         // keeps the stored value on a losing touch, so a row carrying a Date
         // here would keep being reaped by the collection's TTL index until a
