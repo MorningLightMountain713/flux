@@ -124,7 +124,7 @@ describe('appEventVerifier', () => {
 
     configStub = {
       fluxapps: {
-        usersToExtend: ['extender1'],
+        usersToExtend: [{ height: 0, addresses: ['extender1'] }],
       },
     };
 
@@ -223,6 +223,19 @@ describe('appEventVerifier', () => {
       // A fork replaces its predecessor, so past its height only the list signs.
       expect(resolveTeamSupportAddresses(1_500_000)).to.deep.equal(['teamA']);
       expect(resolveTeamSupportAddresses(2_500_000)).to.deep.equal(['teamB', 'teamC']);
+    });
+  });
+
+  describe('renewalSignersAt', () => {
+    it('answers the list in force at a height, each entry replacing the one before', () => {
+      configStub.fluxapps.usersToExtend = [
+        { height: 500, addresses: ['later'] },
+        { height: 100, addresses: ['earlier'] },
+      ];
+      expect(appEventVerifier.renewalSignersAt(99)).to.deep.equal([]);
+      expect(appEventVerifier.renewalSignersAt(100)).to.deep.equal(['earlier']);
+      expect(appEventVerifier.renewalSignersAt(499)).to.deep.equal(['earlier']);
+      expect(appEventVerifier.renewalSignersAt(500)).to.deep.equal(['later']);
     });
   });
 

@@ -49,6 +49,8 @@ async function regimeRegistry() {
  *                                              height cost, in the regime's
  *                                              own unit
  *   updateFee(spec, prevSpec, ctx)             -> bigint sats (null: refused)
+ *   entitlementRefusal(spec, height)           -> why the owner may not use the
+ *                                              spec's features, or null
  *
  * An update's predecessor can be of another model (a v8 app updated to v9), so
  * the predecessor's cost is asked of the predecessor's own regime and handed to

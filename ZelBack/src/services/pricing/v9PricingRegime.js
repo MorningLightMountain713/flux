@@ -5,6 +5,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const { getSpecPolicy } = require('../utils/specLibs');
 const { buildPricingEngine } = require('./buildPricingEngine');
 const priceOracleState = require('./priceOracleState');
+const entitlementsState = require('../entitlementsState');
 
 /**
  * The v9 pricing regime — one number.
@@ -318,7 +319,33 @@ async function updateFee(spec, prevSpec, {
   return (result && result.free) ? 0n : BigInt(result.total);
 }
 
+/**
+ * Why a spec's owner is not entitled, at `height`, to the features the spec
+ * uses, or null when it is. A sealed spec is judged on the feature summary it
+ * carries in the clear, so every node answers alike.
+ *
+ * @param {object} spec - resolved v9 spec, readable or sealed
+ * @param {number} height
+ * @returns {Promise<string|null>}
+ * @throws {Error} while the policy-group history is not built: the question
+ *   has an answer this node cannot give yet
+ */
+async function entitlementRefusal(spec, height) {
+  const entitlements = entitlementsState.getFeatureEntitlements();
+  if (!entitlements) throw new Error('feature entitlements are not built');
+  const { PolicyGroupMessage } = await getSpecPolicy();
+  let fluxid;
+  try {
+    fluxid = PolicyGroupMessage.encodeFluxid(spec.owner).bytes;
+  } catch {
+    return `owner '${spec.owner}' is not a fluxid a policy group can name`;
+  }
+  const result = entitlements.check(fluxid, spec, height, spec.isEncrypted);
+  return result.allowed ? null : result.reason;
+}
+
 module.exports = {
+  entitlementRefusal,
   onChainDisplayPrice,
   fiatAndFluxDisplayPrice,
   registrationFee,
