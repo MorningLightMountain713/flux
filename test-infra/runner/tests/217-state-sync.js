@@ -316,6 +316,20 @@ describe('State sync: failed sync peer is replaced', function () {
   const POISONED_DB = 4; // dbClient index of source node 3
   const JOINER = 4;
   const LATECOMER = 5;
+  const joinerIp = () => `${subnet.base}.${10 + JOINER}`;
+  let latecomer;
+
+  // The latecomer is up before the joiner exists, and unreachable from it: both
+  // directions are dropped on the latecomer's side, so the joiner's discovery
+  // cannot dial it and it cannot dial the joiner. The test lifts the drop once
+  // the deficit stands, which is what makes "a peer that connects while the
+  // deficit stands" a fact the test produces rather than a boot it races.
+  const dropJoiner = (action) => Promise.all([
+    ['INPUT', '-s'], ['OUTPUT', '-d'],
+  ].map(async ([chain, flag]) => {
+    const res = await latecomer.container.exec(['sh', '-c', `iptables ${action} ${chain} ${flag} ${joinerIp()} -j DROP`]);
+    if (res.exitCode !== 0) throw new Error(`iptables ${action} ${chain} on the latecomer failed (exit ${res.exitCode}): ${res.output}`);
+  }));
 
   before(async function () {
     this.timeout(600000);
@@ -324,10 +338,7 @@ describe('State sync: failed sync peer is replaced', function () {
       deferredNodes: 2,
       tickerAutostart: false,
       nodeConfigOverrides: {
-        // The deficit must still stand when the latecomer has booted and been
-        // dialled: a spent budget asks nobody, and behind the gate's boot lock
-        // the boot takes minutes. The fleet's 30 s budget is the sources'.
-        4: { fluxapps: { appSyncMinCompletions: 4, appSyncPeerThreshold: 4, syncTimeoutMs: 300_000 } },
+        4: { fluxapps: { appSyncMinCompletions: 4, appSyncPeerThreshold: 4 } },
       },
     });
 
@@ -387,6 +398,11 @@ describe('State sync: failed sync peer is replaced', function () {
     }, { timeout: 60000, interval: 2000, label: `${c.ip} derives the seeded location` })));
     await waitForOrchestratorState(clients[0], 'READY', 120000);
 
+    latecomer = await env.startNode(LATECOMER);
+    await waitForDaemonReady(latecomer);
+    await waitForNodeStatus(latecomer, (d) => d.confirmed === true, 30000);
+    await dropJoiner('-I');
+
     // Poison one source: ALL its appstateevents reads fail until cleared, so
     // it delivers appinstalling and apperrors but never the apprunning done
     // marker and misses the per-peer deadline. alwaysOn rather than a count
@@ -428,20 +444,15 @@ describe('State sync: failed sync peer is replaced', function () {
     expect(failed.data.peer).to.equal(poisonedKey);
     await dbClient(POISONED_DB).failpointClear();
 
-    // No fresh peer exists at failure time; the replacement is asked when one
-    // connects
-    const latecomerKey = `${subnet.base}.15:16127`;
-    const fresh = await env.startNode(LATECOMER);
-    await waitForDaemonReady(fresh);
-    await waitForNodeStatus(fresh, (d) => d.confirmed === true, 30000);
+    // No fresh peer is connected at failure time; the replacement is asked
+    // when one connects. The latecomer has been up since the before(), out of
+    // reach: lifting the drop and dialling it is the arrival.
+    const latecomerKey = `${subnet.base}.${10 + LATECOMER}:16127`;
+    await dropJoiner('-D');
 
     // Organic discovery between the two late joiners is too slow to assert
     // on; connect them explicitly so the test measures replacement behavior,
     // not discovery cadence
-    // A manual dial is made once, and the latecomer refuses the upgrade (503)
-    // until its peer manager accepts connections, which its node status does
-    // not say; message capability follows that gate, so it is the mark to dial on.
-    await fresh.waitForEvent('messageCapability:changed', (d) => d.capable === true, 120000);
     const auth = await authenticate(client.url, fluxTeamKey());
     await client.getAuthed(`/flux/addpeer/${latecomerKey}`, auth.zelidauth);
     await client.waitForEvent('peers:added', (d) => d.ip === `${subnet.base}.15`, 60000);
