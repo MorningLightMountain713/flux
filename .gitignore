@@ -390,6 +390,8 @@ test-infra/test-app/test-app.sha256
 test-infra/otlp-receiver/otlp-receiver
 # compiled tls-echo fixture binary (built via test-infra/tls-echo/build.sh)
 test-infra/tls-echo/tls-echo
+# static busybox for the content-inspection fixture (built via test-infra/busybox-fixture/build.sh)
+test-infra/busybox-fixture/busybox
 # flux-telemetryd built for the harness (test-infra/flux-telemetryd/build.sh; pin declares the commit)
 test-infra/flux-telemetryd/dist/
 # flux-shutdownd built for the harness (test-infra/flux-shutdownd/build.sh; pin declares the commit)
