@@ -528,12 +528,22 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
   // has to stand here as well.
   await placementFeasibility.checkPlacementFeasibility(spec, 'registerAppGlobalyApi');
 
+  const messageHASH = await appEventVerifier.computeOutboundHash({
+    type: messageType,
+    envelopeVersion: typeVersion,
+    specBlob: broadcastBlob,
+    contentHash,
+    timestamp,
+    extend,
+    signature,
+  });
+
   // Content rides as ONE HPKE-sealed envelope — never plaintext in transit. Open it
   // toward this node's per-app transport key and upload synchronously so it is
   // durably stored before the spec is gossiped.
   if (contentCtx) {
     await uploadSealedContent(spec, contentCtx.content, contentCtx.ownerSigs, {
-      ref: contentHash, timestamp,
+      ref: contentHash, timestamp, registrationHash: messageHASH,
     });
   }
 
@@ -550,16 +560,6 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
     appEvent: signedEvent,
     daemonHeight,
     verifyHash: false,
-  });
-
-  const messageHASH = await appEventVerifier.computeOutboundHash({
-    type: messageType,
-    envelopeVersion: typeVersion,
-    specBlob: broadcastBlob,
-    contentHash,
-    timestamp,
-    extend,
-    signature,
   });
 
   // v9 only (envelope version 2). v8 enterprise messages are envelope
@@ -658,11 +658,15 @@ async function parseMultipartSubmission(req) {
  * @param {object} spec - resolved submission spec (name, owner, contentRef mounts)
  * @param {object} content - the sealed TransportEnvelope JSON
  * @param {Map} ownerSigs - per-blob owner signatures
- * @param {object} bind - { ref, timestamp, priorSpec? } — transport AAD + the
- *   decrypted spec this update supersedes (absent on register)
+ * @param {object} bind - { ref, timestamp, registrationHash, priorSpec? } — transport
+ *   AAD, the hash of the registration message (which names the app it makes, and so
+ *   the identity its first manifest is signed for), and the decrypted spec this
+ *   update supersedes (absent on register)
  * @returns {Promise<{ payload: object, blobs: Map<string, Buffer> }>}
  */
-async function uploadSealedContent(spec, content, ownerSigs, { ref, timestamp, priorSpec }) {
+async function uploadSealedContent(spec, content, ownerSigs, {
+  ref, timestamp, registrationHash, priorSpec,
+}) {
   const opened = await transportHelper.openContentEnvelope(content, {
     appName: spec.name, owner: spec.owner, ref, timestamp,
   });
@@ -681,11 +685,13 @@ async function uploadSealedContent(spec, content, ownerSigs, { ref, timestamp, p
   // slots with no content for the install-hold to find. A slot app always forces an
   // encrypted spec (flux-spec validation), so the gossiped slots payload is sealed.
   if (payload.manifest) {
+    const { appUuid, registrationIdentity } = await getSpec();
+    const identity = registrationIdentity(spec, appUuid(spec.name, registrationHash));
     const slotHashes = new Set(Object.values(payload.manifest.slots || {}).map((s) => s.hash));
     const slotBlobs = new Map([...blobs].filter(([h]) => slotHashes.has(h)));
     const gossipManifest = await contentSlotService.processManifestSubmission(
       {
-        manifest: payload.manifest, spec, owner: spec.owner, encrypted: true, blobs: slotBlobs, ownerSigs,
+        manifest: payload.manifest, spec, owner: spec.owner, encrypted: true, identity, blobs: slotBlobs, ownerSigs,
       },
       { uploader: fluxDriveClient },
     );

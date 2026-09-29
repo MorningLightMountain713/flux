@@ -412,7 +412,7 @@ async function startFluxFunctions() {
         // compare-and-set guard storeManifest relies on), plus a PARTIAL TTL that
         // auto-reaps quarantined (unverified, confirmed:false) rows by their expireAt;
         // confirmed rows carry no expireAt and persist.
-        await ensureIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appContentManifests')), { appName: 1 }, { name: 'appName', unique: true });
+        await ensureIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appContentManifests')), { identity: 1 }, { name: 'identity', unique: true });
         await ensureIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appContentManifests')), { expireAt: 1 }, { expireAfterSeconds: 0, partialFilterExpression: { confirmed: false }, name: 'manifest_quarantine_ttl' });
         log.info('App content manifests collection prepared');
 

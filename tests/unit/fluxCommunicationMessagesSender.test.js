@@ -2337,24 +2337,24 @@ describe('fluxCommunicationMessagesSender tests', () => {
 
     afterEach(() => sinon.restore());
 
-    it('respondWithManifestIndex reads the confirmed (appName, version) vector', async () => {
+    it('respondWithManifestIndex reads the confirmed (identity, version) vector', async () => {
       const listStub = sinon.stub(appsRepository, 'listConfirmedContentManifestVersions')
-        .resolves([{ appName: 'a', version: 2 }]);
+        .resolves([{ identity: 'a', version: 2 }]);
       await fluxCommunicationMessagesSender.respondWithManifestIndex(peer());
       sinon.assert.calledOnce(listStub);
     });
 
     it('respondWithContentManifests queries only the requested apps (the two-step fetch)', async () => {
       const listStub = sinon.stub(appsRepository, 'listConfirmedContentManifestBroadcasts')
-        .resolves([{ version: 1, data: { manifest: { appName: 'b' } } }]);
-      const msgObj = { data: { type: 'fluxappcontentmanifestrequest', appNames: ['b'] } };
+        .resolves([{ version: 1, data: { manifest: { identity: 'b' } } }]);
+      const msgObj = { data: { type: 'fluxappcontentmanifestrequest', identities: ['b'] } };
       await fluxCommunicationMessagesSender.respondWithContentManifests(msgObj, peer());
       sinon.assert.calledOnceWithExactly(listStub, ['b']);
     });
 
     it('respondWithContentManifests does not query the registry for an empty ask', async () => {
       const listStub = sinon.stub(appsRepository, 'listConfirmedContentManifestBroadcasts').resolves([]);
-      await fluxCommunicationMessagesSender.respondWithContentManifests({ data: { appNames: [] } }, peer());
+      await fluxCommunicationMessagesSender.respondWithContentManifests({ data: { identities: [] } }, peer());
       sinon.assert.notCalled(listStub);
     });
   });

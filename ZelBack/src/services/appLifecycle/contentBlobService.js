@@ -266,12 +266,15 @@ async function decryptAndVerifyBlob(blob, deps) {
  * retries later). Peers are tried in the order given; the caller shuffles for
  * herd-safety.
  *
- * @param {object} req - { appName, fluxID, contentHash, peers }
+ * @param {object} req - { appName, identity, fluxID, contentHash, peers } - the
+ *   identity keys this node's store
  * @param {object} deps - { benchmark?, fluxDrive?, peerFetch, maxPeerAttempts?, store? }
  * @returns {Promise<Buffer>} verified plaintext
  */
 async function resolveBlob(req, deps) {
-  const { appName, fluxID, contentHash, peers = [] } = req;
+  const {
+    appName, identity, fluxID, contentHash, peers = [],
+  } = req;
   const {
     benchmark = benchmarkService, fluxDrive = fluxDriveClient, peerFetch, maxPeerAttempts = 3,
     store = contentStore,
@@ -281,14 +284,14 @@ async function resolveBlob(req, deps) {
     ? decryptAndVerifyBlob({ appName, fluxID, contentHash, framed }, { benchmark }).catch(() => null)
     : null);
 
-  const stored = await store.get(appName, contentHash);
+  const stored = await store.get(identity, contentHash);
   if (stored) {
     const plain = await verify(stored);
     if (plain) {
       fluxEventBus.publish('content:blobResolved', { appName, hash: contentHash, source: 'store' });
       return plain;
     }
-    await store.remove(appName, contentHash);
+    await store.remove(identity, contentHash);
   }
 
   const locator = await deriveLocator(benchmark, { appName, fluxID, contentHash });
@@ -297,7 +300,7 @@ async function resolveBlob(req, deps) {
     const framed = await peerFetch(peer, appName, locator).catch(() => null);
     const plain = await verify(framed);
     if (plain) {
-      await store.put(appName, contentHash, framed);
+      await store.put(identity, contentHash, framed);
       fluxEventBus.publish('content:blobResolved', { appName, hash: contentHash, source: 'peer' });
       return plain;
     }
@@ -309,7 +312,7 @@ async function resolveBlob(req, deps) {
   const framed = await fluxDrive.fetchBlobByLocator(locator, { maxBytes: await maxFramedBlobBytes() }).catch(() => null);
   const plain = await verify(framed);
   if (plain) {
-    await store.put(appName, contentHash, framed);
+    await store.put(identity, contentHash, framed);
     fluxEventBus.publish('content:blobResolved', { appName, hash: contentHash, source: 'fluxdrive' });
     return plain;
   }
@@ -339,7 +342,9 @@ async function provisionContentBlobs(deployment, ctx, deps) {
       let plaintext;
       try {
         plaintext = await resolve(
-          { appName, fluxID, contentHash: hash, peers },
+          {
+            appName, identity: deployment.identity, fluxID, contentHash: hash, peers,
+          },
           { benchmark, fluxDrive, peerFetch },
         );
       } catch (error) {
@@ -363,18 +368,21 @@ async function provisionContentBlobs(deployment, ctx, deps) {
  * stores them as it resolves them). Returns null when nothing matches; the
  * requester falls through to FluxDrive.
  *
- * @param {object} req - { appName, fluxID, locator }
+ * @param {object} req - { appName, identity, fluxID, locator } - the identity of
+ *   the app installed here, which keys its store
  * @param {object} deps - { benchmark?, store? }
  * @returns {Promise<Buffer|null>}
  */
 async function serveBlob(req, deps) {
-  const { appName, fluxID, locator } = req;
+  const {
+    appName, identity, fluxID, locator,
+  } = req;
   const { benchmark = benchmarkService, store = contentStore } = deps || {};
 
-  for (const hash of await store.list(appName)) {
+  for (const hash of await store.list(identity)) {
     const derived = await deriveLocator(benchmark, { appName, fluxID, contentHash: hash });
     if (derived !== locator) continue;
-    const framed = await store.get(appName, hash);
+    const framed = await store.get(identity, hash);
     if (!framed) return null;
     fluxEventBus.publish('content:blobServed', { appName, locator });
     return framed;

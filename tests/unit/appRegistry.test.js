@@ -78,6 +78,7 @@ describe('appRegistry', () => {
         replaceGlobalAppRow: sinon.stub().resolves(),
         removeGlobalAppInfo: sinon.stub().resolves(),
         removeAppInstallingErrorRecords: sinon.stub().resolves(),
+        removeContentManifests: sinon.stub().resolves(),
       },
       './registryManager': { storeGlobalSpec: sinon.stub().resolves() },
       '../appLifecycle/contentSlotService': { promoteQuarantinedManifest: sinon.stub().resolves() },
@@ -238,6 +239,9 @@ describe('appRegistry', () => {
         name: 'MyApp', hash: 'r', height: 990_000, uuid: 'uuid-r', identity: 'MyApp',
       });
       sinon.assert.calledWithMatch(stubs['../utils/fluxEventBus'].publish, 'app:specStored', { name: 'MyApp', hash: 'r' });
+      // A content manifest held for this app's identity is promoted now that its row exists.
+      await new Promise((resolve) => { setImmediate(resolve); });
+      sinon.assert.calledOnceWithExactly(stubs['../appLifecycle/contentSlotService'].promoteQuarantinedManifest, 'MyApp');
       sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeAppInstallingErrorRecords, 'MyApp');
       // Updates held ahead of the registration are judged now that it exists.
       sinon.assert.calledOnceWithExactly(stubs['../appMessaging/messageStore'].processPendingUpdates, 'MyApp');
@@ -302,7 +306,7 @@ describe('appRegistry', () => {
     });
   });
 
-  describe('the founding record follows the row', () => {
+  describe('the founding record and content manifests follow the row', () => {
     it('is forgotten when the app leaves the list', async () => {
       await listed([{ name: 'deadapp', spec: await v9Spec({ name: 'deadapp' }), fields: { termStart: NOW - 30 * 86_400, identity: 'aaaaaaaaaaaa' } }]);
       stubs['../appMesh/foundingCommittee'].forget.resetHistory();
@@ -310,6 +314,7 @@ describe('appRegistry', () => {
       await registry.blockScanned({ height: SCANNED_HEIGHT + 1, time: NOW + 1 });
 
       sinon.assert.calledOnceWithExactly(stubs['../appMesh/foundingCommittee'].forget, 'aaaaaaaaaaaa');
+      sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeContentManifests, 'aaaaaaaaaaaa');
     });
 
     it('is forgotten when another app takes the name', async () => {
@@ -320,7 +325,19 @@ describe('appRegistry', () => {
       await registry.applyDecided('myapp', [decision('new', { identity: 'bbbbbbbbbbbb', height: 990_000 })]);
 
       sinon.assert.calledOnceWithExactly(stubs['../appMesh/foundingCommittee'].forget, 'aaaaaaaaaaaa');
+      sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeContentManifests, 'aaaaaaaaaaaa');
       sinon.assert.notCalled(stubs['../appMesh/foundingCommittee'].retract);
+    });
+
+    it('promotes a content manifest held for the app by its identity, not its name', async () => {
+      const spec = await v9Spec({ name: 'myapp' });
+      messages = [message('r', spec)];
+      const identity = `b${'d'.repeat(52)}`;
+
+      await registry.applyDecided('myapp', [decision('r', { identity })]);
+      await new Promise((resolve) => { setImmediate(resolve); });
+
+      sinon.assert.calledOnceWithExactly(stubs['../appLifecycle/contentSlotService'].promoteQuarantinedManifest, identity);
     });
 
     it('is wound back when the app goes back to an earlier spec, and left alone when it moves forward', async () => {

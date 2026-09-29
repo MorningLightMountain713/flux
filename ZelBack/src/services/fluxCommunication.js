@@ -428,7 +428,7 @@ function announceToPeers(message, excludeKey) {
   peerManager.broadcastHash(messageHash, excludeKey);
 }
 
-// A peer's index of (appName, version) for every confirmed manifest — step 1 of the
+// A peer's index of (identity, version) for every confirmed manifest — step 1 of the
 // two-step reconcile. Accepted only from a peer we asked this round (the reconcile
 // service owns the round, as the orchestrator's isSyncResponseWanted owns the boot-sync one).
 async function handleContentManifestIndexResponse(message, peerKey) {

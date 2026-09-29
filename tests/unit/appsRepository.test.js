@@ -556,15 +556,15 @@ describe('appsRepository', () => {
     });
 
     it('upsert: a confirmed store advances a higher version OR promotes a same-version quarantined row', async () => {
-      const row = { appName: 'app', version: 2, data: { d: 1 } };
+      const row = { identity: 'app', version: 2, data: { d: 1 } };
       const ok = await appsRepository.upsertContentManifest(row, { confirmed: true, clearEnvelope: true });
       expect(ok).to.equal(true);
       const [, collection, filter, update, opts] = dbHelperStub.updateOneInDatabase.firstCall.args;
       expect(collection).to.equal('zelappcontentmanifests');
-      expect(filter).to.deep.equal({ appName: 'app', $or: [{ version: { $lt: 2 } }, { version: 2, confirmed: false }] });
+      expect(filter).to.deep.equal({ identity: 'app', $or: [{ version: { $lt: 2 } }, { version: 2, confirmed: false }] });
       // NO upsert: the guard refuses via its own read, never via the index.
       expect(opts).to.equal(undefined);
-      expect(update.$set).to.include({ appName: 'app', version: 2, confirmed: true });
+      expect(update.$set).to.include({ identity: 'app', version: 2, confirmed: true });
       expect(update.$set.data).to.deep.equal({ d: 1 });
       expect(update.$set.receivedAt).to.be.instanceOf(Date);
       expect(update.$unset).to.deep.equal({ expireAt: '', envelope: '' }); // catch-up clears both
@@ -573,10 +573,10 @@ describe('appsRepository', () => {
     it('upsert: a quarantine store holds a strictly-newer version and carries the TTL', async () => {
       const expireAt = new Date(123_456);
       await appsRepository.upsertContentManifest(
-        { appName: 'app', version: 3, data: {} }, { confirmed: false, expireAt, clearEnvelope: true },
+        { identity: 'app', version: 3, data: {} }, { confirmed: false, expireAt, clearEnvelope: true },
       );
       const [, , filter, update] = dbHelperStub.updateOneInDatabase.firstCall.args;
-      expect(filter).to.deep.equal({ appName: 'app', version: { $lt: 3 } });
+      expect(filter).to.deep.equal({ identity: 'app', version: { $lt: 3 } });
       expect(update.$set.confirmed).to.equal(false);
       expect(update.$set.expireAt).to.equal(expireAt);
       expect(update.$unset).to.deep.equal({ envelope: '' });
@@ -585,7 +585,7 @@ describe('appsRepository', () => {
     it('upsert: a broadcast store keeps its envelope (clears only the TTL)', async () => {
       const envelope = { version: 1, timestamp: 7, pubKey: 'pk', signature: 'sig' };
       await appsRepository.upsertContentManifest(
-        { appName: 'app', version: 2, data: { d: 1 }, envelope }, { confirmed: true, clearEnvelope: false },
+        { identity: 'app', version: 2, data: { d: 1 }, envelope }, { confirmed: true, clearEnvelope: false },
       );
       const [, , , update] = dbHelperStub.updateOneInDatabase.firstCall.args;
       expect(update.$set.envelope).to.deep.equal(envelope);
@@ -596,60 +596,67 @@ describe('appsRepository', () => {
       const err = new Error('E11000 duplicate key');
       err.code = 11_000;
       dbHelperStub.updateOneInDatabase.rejects(err);
-      const ok = await appsRepository.upsertContentManifest({ appName: 'app', version: 2, data: {} });
+      const ok = await appsRepository.upsertContentManifest({ identity: 'app', version: 2, data: {} });
       expect(ok).to.equal(false);
     });
 
-    it('getContentManifest reads one row by appName', async () => {
-      dbHelperStub.findOneInDatabase.resolves({ appName: 'app', version: 4 });
+    it('getContentManifest reads one row by the app identity', async () => {
+      dbHelperStub.findOneInDatabase.resolves({ identity: 'app', version: 4 });
       const out = await appsRepository.getContentManifest('app');
       expect(out.version).to.equal(4);
       const [, collection, query] = dbHelperStub.findOneInDatabase.firstCall.args;
       expect(collection).to.equal('zelappcontentmanifests');
-      expect(query).to.deep.equal({ appName: 'app' });
+      expect(query).to.deep.equal({ identity: 'app' });
     });
 
     it('setContentManifestApplied advances appliedVersion monotonically, never upserting', async () => {
       await appsRepository.setContentManifestApplied('app', 5);
       const [, collection, filter, update, opts] = dbHelperStub.updateOneInDatabase.firstCall.args;
       expect(collection).to.equal('zelappcontentmanifests');
-      expect(filter).to.deep.equal({ appName: 'app', $or: [{ appliedVersion: { $exists: false } }, { appliedVersion: { $lt: 5 } }] });
+      expect(filter).to.deep.equal({ identity: 'app', $or: [{ appliedVersion: { $exists: false } }, { appliedVersion: { $lt: 5 } }] });
       expect(update).to.deep.equal({ $set: { appliedVersion: 5 } });
       expect(opts).to.equal(undefined); // the row must already exist — you can't apply what you never stored
+    });
+
+    it('removeContentManifests deletes every row of an app identity', async () => {
+      await appsRepository.removeContentManifests('app');
+      const [, collection, query] = dbHelperStub.removeDocumentsFromCollection.firstCall.args;
+      expect(collection).to.equal('zelappcontentmanifests');
+      expect(query).to.deep.equal({ identity: 'app' });
     });
 
     it('deleteQuarantinedContentManifest removes only the confirmed:false row', async () => {
       await appsRepository.deleteQuarantinedContentManifest('app');
       const [, collection, query] = dbHelperStub.removeDocumentsFromCollection.firstCall.args;
       expect(collection).to.equal('zelappcontentmanifests');
-      expect(query).to.deep.equal({ appName: 'app', confirmed: false });
+      expect(query).to.deep.equal({ identity: 'app', confirmed: false });
     });
 
-    it('listConfirmedContentManifestVersions returns the (appName, version) vector of confirmed rows', async () => {
-      dbHelperStub.findInDatabase.resolves([{ appName: 'a', version: 2 }, { appName: 'b', version: 5 }]);
+    it('listConfirmedContentManifestVersions returns the (identity, version) vector of confirmed rows', async () => {
+      dbHelperStub.findInDatabase.resolves([{ identity: 'a', version: 2 }, { identity: 'b', version: 5 }]);
       const out = await appsRepository.listConfirmedContentManifestVersions();
-      expect(out).to.deep.equal([{ appName: 'a', version: 2 }, { appName: 'b', version: 5 }]);
+      expect(out).to.deep.equal([{ identity: 'a', version: 2 }, { identity: 'b', version: 5 }]);
       const [, , query, options] = dbHelperStub.findInDatabase.firstCall.args;
       expect(query).to.deep.equal({ confirmed: true, envelope: { $exists: true } });
-      expect(options.projection).to.deep.equal({ _id: 0, appName: 1, version: 1 });
+      expect(options.projection).to.deep.equal({ _id: 0, identity: 1, version: 1 });
     });
 
     it('listContentManifestVersions returns every held row, quarantined included', async () => {
-      dbHelperStub.findInDatabase.resolves([{ appName: 'a', version: 2 }, { appName: 'q', version: 1 }]);
+      dbHelperStub.findInDatabase.resolves([{ identity: 'a', version: 2 }, { identity: 'q', version: 1 }]);
       const out = await appsRepository.listContentManifestVersions();
-      expect(out).to.deep.equal([{ appName: 'a', version: 2 }, { appName: 'q', version: 1 }]);
+      expect(out).to.deep.equal([{ identity: 'a', version: 2 }, { identity: 'q', version: 1 }]);
       const [, , query, options] = dbHelperStub.findInDatabase.firstCall.args;
       expect(query).to.deep.equal({});
-      expect(options.projection).to.deep.equal({ _id: 0, appName: 1, version: 1 });
+      expect(options.projection).to.deep.equal({ _id: 0, identity: 1, version: 1 });
     });
 
-    it('listConfirmedContentManifestBroadcasts rebuilds {...envelope, data}, optionally scoped to appNames', async () => {
+    it('listConfirmedContentManifestBroadcasts rebuilds {...envelope, data}, optionally scoped to identities', async () => {
       const env = { version: 1, timestamp: 7, pubKey: 'pk', signature: 'sig' };
       dbHelperStub.findInDatabase.resolves([{ envelope: env, data: { m: 1 } }]);
       const out = await appsRepository.listConfirmedContentManifestBroadcasts(['a']);
       expect(out).to.deep.equal([{ ...env, data: { m: 1 } }]);
       const [, , query] = dbHelperStub.findInDatabase.firstCall.args;
-      expect(query).to.deep.equal({ confirmed: true, envelope: { $exists: true }, appName: { $in: ['a'] } });
+      expect(query).to.deep.equal({ confirmed: true, envelope: { $exists: true }, identity: { $in: ['a'] } });
     });
 
     describe('listIngressAttestationsByApp', () => {
@@ -768,7 +775,7 @@ describe('appsRepository', () => {
     it('reapOrphanedContentManifests deletes confirmed manifests whose app left the global set, aged past the grace', async () => {
       const distinctStub = sinon.stub().resolves(['live', 'dead']);
       mockDb.db.returns({ collection: sinon.stub().returns({ distinct: distinctStub }) });
-      dbHelperStub.findInDatabase.resolves([{ name: 'live' }]); // listExistingGlobalAppNames -> only 'live' survives
+      dbHelperStub.findInDatabase.resolves([{ identity: 'live' }]); // only 'live' is listed
       dbHelperStub.removeDocumentsFromCollection.resolves({ deletedCount: 1 });
 
       const before = Date.now();
@@ -777,8 +784,8 @@ describe('appsRepository', () => {
       expect(reaped).to.equal(1);
 
       // Both the candidate scan and the delete carry the receivedAt cutoff (now - grace):
-      // a manifest stored inside the register window is never a reap candidate, and a
-      // name re-registered fresh between scan and delete survives the delete.
+      // a manifest stored inside the register window is never a reap candidate, and one
+      // stored fresh between scan and delete survives the delete.
       const graceMs = 7_200_000; // the configStub's contentManifestReapGraceMs
       const [, scanQuery] = distinctStub.firstCall.args;
       expect(scanQuery.confirmed).to.equal(true);
@@ -786,7 +793,11 @@ describe('appsRepository', () => {
       expect(scanQuery.receivedAt.$lte.getTime()).to.be.closeTo(before - graceMs, 5000);
       const [, collection, query] = dbHelperStub.removeDocumentsFromCollection.firstCall.args;
       expect(collection).to.equal('zelappcontentmanifests');
-      expect(query.appName).to.deep.equal({ $in: ['dead'] });
+      expect(query.identity).to.deep.equal({ $in: ['dead'] });
+      // Liveness is whether a registry row carries the identity.
+      const [, listedCollection, listedQuery] = dbHelperStub.findInDatabase.firstCall.args;
+      expect(listedCollection).to.equal('zelappsinformation');
+      expect(listedQuery).to.deep.equal({ identity: { $in: ['live', 'dead'] } });
       expect(query.confirmed).to.equal(true);
       expect(query.receivedAt.$lte.getTime()).to.be.closeTo(before - graceMs, 5000);
     });
@@ -794,13 +805,13 @@ describe('appsRepository', () => {
     it('reapOrphanedContentManifests is a no-op when every manifest app is still live', async () => {
       const distinctStub = sinon.stub().resolves(['live']);
       mockDb.db.returns({ collection: sinon.stub().returns({ distinct: distinctStub }) });
-      dbHelperStub.findInDatabase.resolves([{ name: 'live' }]);
+      dbHelperStub.findInDatabase.resolves([{ identity: 'live' }]);
       const { reaped } = await appsRepository.reapOrphanedContentManifests();
       expect(reaped).to.equal(0);
       sinon.assert.notCalled(dbHelperStub.removeDocumentsFromCollection);
     });
 
-    it('reapOrphanedContentManifests reports zero when the age-gated delete matched nothing (re-registered mid-sweep)', async () => {
+    it('reapOrphanedContentManifests reports zero when the age-gated delete matched nothing (stored again mid-sweep)', async () => {
       const distinctStub = sinon.stub().resolves(['dead']);
       mockDb.db.returns({ collection: sinon.stub().returns({ distinct: distinctStub }) });
       dbHelperStub.findInDatabase.resolves([]); // no live apps -> 'dead' is an orphan
@@ -820,10 +831,10 @@ describe('appsRepository', () => {
     // did - a freshly-prepared collection turned refusals into regressions.
     it('refuses an older manifest without leaning on the unique index', async () => {
       dbHelperStub.updateOneInDatabase.resolves({ acknowledged: true, matchedCount: 0 });
-      dbHelperStub.findOneInDatabase.resolves({ appName: 'app', version: 3, confirmed: true });
+      dbHelperStub.findOneInDatabase.resolves({ identity: 'app', version: 3, confirmed: true });
       dbHelperStub.insertOneToDatabase = sinon.stub();
       const stored = await appsRepository.upsertContentManifest(
-        { appName: 'app', version: 1, data: {} }, { confirmed: true },
+        { identity: 'app', version: 1, data: {} }, { confirmed: true },
       );
       expect(stored).to.equal(false);
       sinon.assert.notCalled(dbHelperStub.insertOneToDatabase);
@@ -834,7 +845,7 @@ describe('appsRepository', () => {
       dbHelperStub.findOneInDatabase.resolves(null);
       dbHelperStub.insertOneToDatabase = sinon.stub().resolves({});
       const stored = await appsRepository.upsertContentManifest(
-        { appName: 'app', version: 1, data: {} }, { confirmed: true },
+        { identity: 'app', version: 1, data: {} }, { confirmed: true },
       );
       expect(stored).to.equal(true);
       sinon.assert.calledOnce(dbHelperStub.insertOneToDatabase);

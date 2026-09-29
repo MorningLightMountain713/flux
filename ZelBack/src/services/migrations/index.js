@@ -43,7 +43,7 @@ const migrations = [
     // Before the preparation asserts the current indexes, one of which shares a
     // name with a retired expiry index.
     before: 'localDbPrepared',
-    description: 'drop collections and expiry indexes no version reads',
+    description: 'drop collections and indexes no version reads',
     run: () => retiredSchema.dropRetiredSchema(),
   },
   {

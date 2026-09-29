@@ -634,7 +634,7 @@ async function respondWithAppInstallingErrorsMessages(peer, sinceTimestamp = 0) 
 }
 
 /**
- * Step 1 of the two-step manifest reconcile: serve this node's (appName, version) index
+ * Step 1 of the two-step manifest reconcile: serve this node's (identity, version) index
  * of every confirmed manifest — cheap (no bodies), so a requester can fan out to several
  * peers, union the indexes, and pull only the bodies it's missing/stale on.
  */
@@ -649,18 +649,18 @@ async function respondWithManifestIndex(peer) {
 
 /**
  * Step 2 of the two-step manifest reconcile: serve the re-servable signed broadcasts for
- * the specific apps a peer asked for (`msgObj.data.appNames`). Only rows carrying a node
+ * the specific apps a peer asked for (`msgObj.data.identities`). Only rows carrying a node
  * `envelope` are servable — re-served as { ...envelope, data } so the requester verifies
  * with batchVerifyBroadcasts on top of the manifest's intrinsic owner signature.
  */
 async function respondWithContentManifests(msgObj, peer) {
   try {
-    const appNames = msgObj && msgObj.data && msgObj.data.appNames;
-    if (!Array.isArray(appNames) || appNames.length === 0 || appNames.length > 5000) {
+    const identities = msgObj && msgObj.data && msgObj.data.identities;
+    if (!Array.isArray(identities) || identities.length === 0 || identities.length > 5000) {
       await sendSignedMessage({ type: 'fluxappcontentmanifestsync', messages: [], done: true }, peer, { awaitDrain: true });
       return;
     }
-    const broadcasts = await appsRepository.listConfirmedContentManifestBroadcasts(appNames);
+    const broadcasts = await appsRepository.listConfirmedContentManifestBroadcasts(identities);
 
     const batchSize = 2000;
     if (broadcasts.length === 0) {

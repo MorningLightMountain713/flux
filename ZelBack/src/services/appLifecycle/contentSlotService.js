@@ -78,7 +78,8 @@ async function canonicalManifest(manifest) {
  * monotonicity (the caller compares to the stored version).
  *
  * @param {object} manifest - plaintext manifest
- * @param {object} ctx - { owner, spec }
+ * @param {object} ctx - { owner, spec, identity } - the app the registry lists
+ *   under the manifest's name, and that app's identity
  * @param {object} deps - { verify? }
  */
 /**
@@ -127,6 +128,11 @@ async function verifyManifest(manifest, ctx, deps = {}) {
 
   if (manifest.appName !== (spec.name || spec.appName)) {
     throw new Error('contentSlot: manifest appName does not match the spec');
+  }
+  // A name can be registered again once its app expires; the owner signs which
+  // registration the manifest is for.
+  if (manifest.identity !== ctx.identity) {
+    throw new Error('contentSlot: manifest is for another registration of this app name');
   }
 
   const signed = await canonicalManifest(manifest);
@@ -196,19 +202,19 @@ async function openManifestSlots(manifest, ctx, deps = {}) {
  * FluxDrive under the identical locator. A carried-over hash is presence-checked
  * instead of re-uploaded, so rotating one slot attaches one file.
  *
- * @param {object} input - { manifest, spec, owner, encrypted, blobs, ownerSigs }
+ * @param {object} input - { manifest, spec, owner, encrypted, identity, blobs, ownerSigs }
  * @param {object} deps - { getLatest?, refresh?, uploader, benchmark?, now?, verify?, provider? }
  * @returns {Promise<object>} the gossip-form manifest
  */
 async function processManifestSubmission(input, deps) {
   const {
-    manifest, spec, owner, encrypted, blobs, ownerSigs,
+    manifest, spec, owner, encrypted, identity, blobs, ownerSigs,
   } = input;
   const {
     getLatest = getLatestManifest, refresh = refreshLatestManifest, uploader, benchmark, now, verify, provider,
   } = deps;
 
-  await verifyManifest(manifest, { owner, spec }, { verify });
+  await verifyManifest(manifest, { owner, spec, identity }, { verify });
 
   // Strict successor: the submission door is the only stage that can be strict —
   // gossip / boot-sync / the FluxDrive backstop must tolerate gaps (a receiver's
@@ -216,14 +222,16 @@ async function processManifestSubmission(input, deps) {
   // requiring exactly current + 1 here keeps the network-wide sequence gapless and
   // bounds a leaked owner key to advancing the never-resetting counter one step per
   // signed update instead of burning the version space.
-  let prior = await getLatest(manifest.appName);
+  let prior = await getLatest(identity);
   let expected = prior ? prior.version + 1 : 1;
   if (manifest.version > expected) {
     // Ahead of this node's view, which may just be stale (gossip lag, restart):
     // catch up once, then re-derive. A version BELOW expected is hopeless either
     // way — the floor only rises — so a stale resubmit costs no network round-trip.
-    await refresh(manifest.appName, { owner, encrypted, spec }, { verify, provider });
-    prior = await getLatest(manifest.appName);
+    await refresh(manifest.appName, {
+      owner, encrypted, spec, identity,
+    }, { verify, provider });
+    prior = await getLatest(identity);
     expected = prior ? prior.version + 1 : 1;
   }
   if (manifest.version !== expected) {
@@ -278,9 +286,9 @@ async function processManifestSubmission(input, deps) {
 }
 
 /**
- * Persist the latest gossip-form manifest for an app — one doc per app, advanced
- * only by a strictly higher version. The conditional filter plus the unique appName
- * index make this an atomic latest-wins guard (a slower, lower-version writer loses
+ * Persist the latest gossip-form manifest for an app — one doc per app identity,
+ * advanced only by a strictly higher version. The conditional filter plus the unique
+ * identity index make this an atomic latest-wins guard (a slower, lower-version writer loses
  * the race on the unique index). Returns true if stored.
  *
  * The row stores the SIGNED payload verbatim (`data`) plus the signature wrapper
@@ -292,7 +300,7 @@ async function processManifestSubmission(input, deps) {
  * intrinsic owner signature. A catch-up body (no broadcast) gets a bare `data` wrapper
  * and no `envelope`: it serves install/apply locally but can't be re-served over
  * boot-sync (a node that does hold the envelope serves it instead). The manifest body
- * is always at `row.data.manifest`. `appName`/`version` are denormalized index/floor
+ * is always at `row.data.manifest`. `identity`/`version` are denormalized index/floor
  * scalars, not a copy of the body.
  *
  * @param {object} manifest - gossip-form manifest
@@ -301,9 +309,9 @@ async function processManifestSubmission(input, deps) {
  */
 async function storeManifest(manifest, opts = {}) {
   const confirmed = opts.confirmed !== false; // default true (verified store); explicit false = quarantine
-  const { appName, version } = manifest;
+  const { appName, identity, version } = manifest;
   const data = opts.broadcast ? opts.broadcast.data : { type: MANIFEST_GOSSIP_TYPE, appName, manifest };
-  const row = { appName, version, data };
+  const row = { identity, version, data };
   if (opts.broadcast) {
     const b = opts.broadcast;
     row.envelope = {
@@ -322,7 +330,9 @@ async function storeManifest(manifest, opts = {}) {
   });
   // The event states what the register now holds - a refused write changed
   // nothing and announces nothing.
-  if (result) fluxEventBus.publish('content:manifestStored', { appName, version, confirmed });
+  if (result) fluxEventBus.publish('content:manifestStored', {
+    appName, identity, version, confirmed,
+  });
   return result;
 }
 
@@ -330,11 +340,11 @@ async function storeManifest(manifest, opts = {}) {
  * The stored gossip-form manifest for an app, or null. Carries the top-level
  * `version` (the monotonic floor) alongside the manifest body.
  *
- * @param {string} appName
+ * @param {string} identity - the app's identity
  * @returns {Promise<{version: number, manifest: object}|null>}
  */
-async function getLatestManifest(appName) {
-  return appsRepository.getContentManifest(appName);
+async function getLatestManifest(identity) {
+  return appsRepository.getContentManifest(identity);
 }
 
 /**
@@ -373,25 +383,25 @@ async function receiveManifest(msgObj, deps = {}) {
   } = deps;
 
   const gossipManifest = msgObj && msgObj.data && msgObj.data.manifest;
-  if (!gossipManifest || !gossipManifest.appName || gossipManifest.version == null) return;
-  const { appName } = gossipManifest;
+  if (!gossipManifest || !gossipManifest.appName || !gossipManifest.identity || gossipManifest.version == null) return;
+  const { appName, identity } = gossipManifest;
 
   // Dedup: a strictly-older version is stale; a same-version is a duplicate UNLESS
   // the row we hold is still quarantined (then this receipt — now that the spec may
   // be local — can promote it). Versions are immutable + monotonic, never resetting.
-  const prior = await getLatestManifest(appName);
+  const prior = await getLatestManifest(identity);
   if (prior && gossipManifest.version < prior.version) {
     fluxEventBus.publish('content:manifestDropped', { appName, reason: 'stale_version' });
     return;
   }
   if (prior && gossipManifest.version === prior.version && prior.confirmed !== false) return;
 
-  // Manifest-before-spec: we can't owner-verify without the spec, so QUARANTINE
-  // (confirmed:false + TTL) instead of dropping — it is promoted when the spec lands
-  // (a later receipt here, the spec-confirm hook, or install catch-up). The TTL reaps
-  // it if the spec never arrives.
+  // Manifest-before-spec: we can't owner-verify until the registry lists the app it
+  // names, so QUARANTINE (confirmed:false + TTL) instead of dropping — it is promoted
+  // when that app's row lands (a later receipt here, the spec-confirm hook, or install
+  // catch-up). The TTL reaps it if the row never arrives.
   const info = await getApp(appName);
-  if (!info) {
+  if (!info || info.identity !== identity) {
     if (prior && gossipManifest.version <= prior.version) return; // already hold this version (quarantined)
     // Quarantine (confirmed:false) is observable via content:manifestStored, not a drop.
     await storeManifest(gossipManifest, { confirmed: false, broadcast: msgObj });
@@ -402,7 +412,7 @@ async function receiveManifest(msgObj, deps = {}) {
   let plaintext;
   try {
     plaintext = await openManifestSlots(gossipManifest, { owner, encrypted }, { provider });
-    await verifyManifest(plaintext, { owner, spec }, { verify });
+    await verifyManifest(plaintext, { owner, spec, identity }, { verify });
   } catch (error) {
     // Corrupt or forged gossip — log and drop. Never throws: this runs fire-and-forget
     // off the gossip dispatcher (the submission path throws to the submitter instead).
@@ -469,19 +479,19 @@ async function storeBatchContentManifests(broadcasts, deps = {}) {
   let stored = 0;
   for (const broadcast of broadcasts || []) {
     const manifest = broadcast && broadcast.data && broadcast.data.manifest;
-    if (!manifest || !manifest.appName || manifest.version == null) continue;
-    const { appName } = manifest;
+    if (!manifest || !manifest.appName || !manifest.identity || manifest.version == null) continue;
+    const { appName, identity } = manifest;
 
     // eslint-disable-next-line no-await-in-loop
-    const prior = await getLatest(appName);
+    const prior = await getLatest(identity);
     if (prior && manifest.version < prior.version) continue; // stale
     if (prior && manifest.version === prior.version && prior.confirmed !== false) continue; // already confirmed
 
     // eslint-disable-next-line no-await-in-loop
     const info = await getApp(appName);
-    if (!info) {
-      // Spec not local yet — quarantine (promoted when the spec confirms), unless we
-      // already hold this version quarantined.
+    if (!info || info.identity !== identity) {
+      // The app it names not listed yet — quarantine (promoted when its row lands),
+      // unless we already hold this version quarantined.
       if (prior && manifest.version <= prior.version) continue;
       // eslint-disable-next-line no-await-in-loop
       const okQ = await store(manifest, { confirmed: false, broadcast });
@@ -493,7 +503,7 @@ async function storeBatchContentManifests(broadcasts, deps = {}) {
       // eslint-disable-next-line no-await-in-loop
       const plaintext = await openManifestSlots(manifest, { owner, encrypted }, { provider });
       // eslint-disable-next-line no-await-in-loop
-      await verifyManifest(plaintext, { owner, spec }, { verify });
+      await verifyManifest(plaintext, { owner, spec, identity }, { verify });
     } catch (error) {
       log.warn(`contentSlot: dropping invalid synced manifest for ${appName} - ${error.message ?? error}`);
       continue;
@@ -507,8 +517,8 @@ async function storeBatchContentManifests(broadcasts, deps = {}) {
 
 /** Delete a quarantined (confirmed:false) manifest row — used when it fails
  *  verification, so a real manifest at the same version isn't blocked by the floor. */
-async function dropQuarantinedManifest(appName) {
-  return appsRepository.deleteQuarantinedContentManifest(appName);
+async function dropQuarantinedManifest(identity) {
+  return appsRepository.deleteQuarantinedContentManifest(identity);
 }
 
 /**
@@ -521,36 +531,36 @@ async function dropQuarantinedManifest(appName) {
  * A no-op when there is nothing quarantined or the spec is still absent. Returns true
  * if promoted. Safe to call fire-and-forget on the confirm path.
  *
- * @param {string} appName
+ * @param {string} identity - the identity of the app whose row just landed
  * @param {object} deps
  * @returns {Promise<boolean>}
  */
-async function promoteQuarantinedManifest(appName, deps = {}) {
+async function promoteQuarantinedManifest(identity, deps = {}) {
   const {
-    getApp = appsRepository.getGlobalAppInfo,
+    getApp = appsRepository.getGlobalAppInfoByIdentity,
     getLatest = getLatestManifest,
     store = storeManifest,
     drop = dropQuarantinedManifest,
     verify, provider,
   } = deps;
-  const stored = await getLatest(appName);
+  const stored = await getLatest(identity);
   if (!stored || !stored.data || stored.confirmed !== false) return false; // nothing quarantined
-  const info = await getApp(appName);
-  if (!info) return false; // spec still not available — stays quarantined (or TTL-reaped)
+  const info = await getApp(identity);
+  if (!info) return false; // the app not listed yet — stays quarantined (or TTL-reaped)
   const { owner, isEncrypted: encrypted, spec } = info;
   const heldManifest = stored.data.manifest;
   try {
     const plaintext = await openManifestSlots(heldManifest, { owner, encrypted }, { provider });
-    await verifyManifest(plaintext, { owner, spec }, { verify });
+    await verifyManifest(plaintext, { owner, spec, identity }, { verify });
   } catch (error) {
-    await drop(appName);
+    await drop(identity);
     return false;
   }
   // Preserve the node-signed broadcast captured at quarantine (rebuilt from the stored
   // envelope + verbatim data) so the promoted row stays boot-sync-servable.
   const broadcast = stored.envelope ? { ...stored.envelope, data: stored.data } : undefined;
   const promoted = await store(heldManifest, { confirmed: true, broadcast });
-  if (promoted) fluxEventBus.publish('content:manifestPromoted', { appName });
+  if (promoted) fluxEventBus.publish('content:manifestPromoted', { appName: info.name, identity });
   return promoted;
 }
 
@@ -593,12 +603,14 @@ async function fetchManifestFromPeer(peer, appName, deps = {}) {
  *
  * @param {string} appName
  * @param {string[]} peers - candidate peers (running the app)
- * @param {object} ctx - { owner, encrypted, spec }
+ * @param {object} ctx - { owner, encrypted, spec, identity }
  * @param {object} deps - { maxPeers?, fetch?, verify?, provider? }
  * @returns {Promise<{gossip: object, plaintext: object}|null>}
  */
 async function fetchManifestFromPeers(appName, peers, ctx, deps = {}) {
-  const { owner, encrypted, spec } = ctx;
+  const {
+    owner, encrypted, spec, identity,
+  } = ctx;
   const {
     maxPeers = 3, fetch = fetchManifestFromPeer, verify, provider,
   } = deps;
@@ -613,7 +625,7 @@ async function fetchManifestFromPeers(appName, peers, ctx, deps = {}) {
       // eslint-disable-next-line no-await-in-loop
       const plaintext = await openManifestSlots(gossip, { owner, encrypted }, { provider });
       // eslint-disable-next-line no-await-in-loop
-      await verifyManifest(plaintext, { owner, spec }, { verify });
+      await verifyManifest(plaintext, { owner, spec, identity }, { verify });
       best = { gossip, plaintext };
     } catch (error) {
       log.warn(`contentSlot: rejected manifest from ${peer} for ${appName} - ${error.message ?? error}`);
@@ -632,12 +644,14 @@ async function fetchManifestFromPeers(appName, peers, ctx, deps = {}) {
  * survives — the refresh is an accuracy aid, never a new failure mode.
  *
  * @param {string} appName
- * @param {object} ctx - { owner, encrypted, spec }
+ * @param {object} ctx - { owner, encrypted, spec, identity }
  * @param {object} [deps] - { getLatest?, getPeers?, fetchPeers?, fetchFromDrive?, store?, verify?, provider? }
  * @returns {Promise<void>}
  */
 async function refreshLatestManifest(appName, ctx, deps = {}) {
-  const { owner, encrypted, spec } = ctx;
+  const {
+    owner, encrypted, spec, identity,
+  } = ctx;
   const {
     getLatest = getLatestManifest,
     getPeers = listAppPeers,
@@ -647,10 +661,12 @@ async function refreshLatestManifest(appName, ctx, deps = {}) {
     verify, provider,
   } = deps;
   try {
-    const stored = await getLatest(appName);
+    const stored = await getLatest(identity);
     const floor = stored ? stored.version : 0;
     const peers = await getPeers(appName);
-    const fetched = await fetchPeers(appName, peers, { owner, encrypted, spec }, { verify, provider });
+    const fetched = await fetchPeers(appName, peers, {
+      owner, encrypted, spec, identity,
+    }, { verify, provider });
     if (fetched && fetched.gossip.version > floor) {
       await store(fetched.gossip);
       return;
@@ -658,7 +674,7 @@ async function refreshLatestManifest(appName, ctx, deps = {}) {
     const fromDrive = await fetchFromDrive(appName);
     if (fromDrive && fromDrive.manifest && Number(fromDrive.version) > floor) {
       const opened = await openManifestSlots(fromDrive.manifest, { owner, encrypted }, { provider });
-      await verifyManifest(opened, { owner, spec }, { verify });
+      await verifyManifest(opened, { owner, spec, identity }, { verify });
       await store(fromDrive.manifest);
     }
   } catch (error) {
@@ -668,7 +684,7 @@ async function refreshLatestManifest(appName, ctx, deps = {}) {
 
 /**
  * GET /apps/contentmanifest/:appname — serve this node's latest stored (gossip-form)
- * manifest so a fresh/catching-up node can provision a slot app it can't yet see via
+ * manifest of the app the registry lists under the name, so a fresh/catching-up node can provision a slot app it can't yet see via
  * gossip. The slots payload stays sealed (the fetcher, an arcane node running the
  * app, unseals + verifies); a node without a manifest returns 404.
  */
@@ -679,7 +695,8 @@ async function getContentManifestApi(req, res) {
       res.json(messageHelper.createErrorMessage('appname is required'));
       return;
     }
-    const stored = await getLatestManifest(appname);
+    const app = await appsRepository.getGlobalAppInfo(appname);
+    const stored = app ? await getLatestManifest(app.identity) : null;
     // Serve only a CONFIRMED manifest — never a quarantined (unverified) one, so a
     // catching-up peer can't adopt a manifest this node hasn't verified yet.
     if (!stored || !stored.data || stored.confirmed === false) {
@@ -744,7 +761,9 @@ async function stageAndApplySlots(deployment, manifest, ctx, deps = {}) {
       if (!entry || !entry.hash) throw new Error(`contentSlot: manifest has no hash for declared slot "${mount.slot}"`);
       // eslint-disable-next-line no-await-in-loop
       const bytes = await resolve(
-        { appName, fluxID: owner, contentHash: entry.hash, peers },
+        {
+          appName, identity: deployment.identity, fluxID: owner, contentHash: entry.hash, peers,
+        },
         { benchmark, fluxDrive, peerFetch },
       );
       staged.push({ comp, mount, bytes });
@@ -772,7 +791,8 @@ async function stageAndApplySlots(deployment, manifest, ctx, deps = {}) {
   return staged;
 }
 
-// Per-app latch: the highest manifest version this process has applied. A version
+// Per-app latch, by the installed app's identity: the highest manifest version
+// this process has applied. A version
 // is applied at most once per node — the submitter's own POST apply and a peer's
 // rebroadcast echo of that same manifest otherwise BOTH apply it (broadcast is
 // deliberately before the local store, so the echo can win the dedup race), firing
@@ -802,20 +822,21 @@ async function applyManifest(deployment, manifest, ctx, deps = {}) {
 
   // Claim the version up front so a concurrent duplicate skips; roll back on a
   // failed apply so the version stays retryable.
-  const prevApplied = lastAppliedVersion.get(ctx.appName);
+  const { identity } = deployment;
+  const prevApplied = lastAppliedVersion.get(identity);
   if (prevApplied != null && manifest.version <= prevApplied) {
     fluxEventBus.publish('content:slotApplySkipped', { appName: ctx.appName, version: manifest.version, reason: 'already_applied' });
     return;
   }
-  lastAppliedVersion.set(ctx.appName, manifest.version);
+  lastAppliedVersion.set(identity, manifest.version);
 
   let staged;
   try {
     staged = await stageAndApplySlots(deployment, manifest, ctx, deps);
   } catch (error) {
-    if (lastAppliedVersion.get(ctx.appName) === manifest.version) {
-      if (prevApplied != null) lastAppliedVersion.set(ctx.appName, prevApplied);
-      else lastAppliedVersion.delete(ctx.appName);
+    if (lastAppliedVersion.get(identity) === manifest.version) {
+      if (prevApplied != null) lastAppliedVersion.set(identity, prevApplied);
+      else lastAppliedVersion.delete(identity);
     }
     throw error;
   }
@@ -848,7 +869,7 @@ async function applyManifest(deployment, manifest, ctx, deps = {}) {
   // reaction — so a crash mid-apply leaves the version un-advanced and the next check
   // retries once, never a loop. Best-effort: the content is already live regardless.
   try {
-    await recordApplied(ctx.appName, manifest.version);
+    await recordApplied(identity, manifest.version);
   } catch (error) {
     log.warn(`contentSlot: failed to record applied version ${manifest.version} for ${ctx.appName} - ${error.message ?? error}`);
   }
@@ -865,7 +886,7 @@ async function applyManifest(deployment, manifest, ctx, deps = {}) {
     for (const entry of Object.values(manifest.slots || {})) {
       if (entry && entry.hash) keep.add(entry.hash);
     }
-    await (deps.store ?? contentStore).retainOnly(ctx.appName, keep);
+    await (deps.store ?? contentStore).retainOnly(identity, keep);
   } catch (error) {
     log.warn(`contentSlot: artifact-store reap failed for ${ctx.appName} - ${error.message ?? error}`);
   }
@@ -1056,16 +1077,16 @@ async function applyStoredIfBehind(appName, deps = {}) {
     provider,
   } = deps;
 
-  const stored = await getStored(appName);
-  if (!stored || !stored.data || stored.confirmed === false) return false; // nothing verified to apply
-  if (stored.version <= (stored.appliedVersion ?? 0)) return false; // already delivered
-
   const deployment = await getDeployment(appName);
   if (!deployment || !deployment.componentEntries().some(([, comp]) => comp.hasContentSlots())) return false;
+
+  const stored = await getStored(deployment.identity);
+  if (!stored || !stored.data || stored.confirmed === false) return false; // nothing verified to apply
+  if (stored.version <= (stored.appliedVersion ?? 0)) return false; // already delivered
   if (!(await componentsRunning(deployment, deps))) return false; // stopped — the start path provisions it
 
   const info = await getApp(appName);
-  if (!info) return false;
+  if (!info || info.identity !== deployment.identity) return false; // the install is not the listed app
   const { owner, isEncrypted: encrypted, spec } = info;
   const plaintext = await openManifestSlots(stored.data.manifest, { owner, encrypted }, { provider });
   await schedule(plaintext, spec, deps);
@@ -1141,7 +1162,7 @@ async function reconcileBootContent(appName, deps = {}) {
   // The don't-apply-early decision is on the CLEARTEXT rollout and needs no verification,
   // so read it from the stored manifest regardless of `confirmed` — otherwise a still-
   // quarantined future-dated row would slip through to provision and be applied early.
-  const stored = await getLatest(appName);
+  const stored = await getLatest(deployment.identity);
   const manifest = stored && stored.data ? stored.data.manifest : null;
   const rollout = manifest && manifest.rollout;
   const deferred = rollout
@@ -1156,7 +1177,7 @@ async function reconcileBootContent(appName, deps = {}) {
     // was stopped (machine reboot) or survived (FluxOS process restart).
     if (stored.confirmed === false) return;
     const info = await getApp(appName);
-    if (!info) return;
+    if (!info || info.identity !== deployment.identity) return;
     const { owner, isEncrypted: encrypted, spec } = info;
     const plaintext = await openManifestSlots(manifest, { owner, encrypted }, { provider });
     await schedule(plaintext, spec, deps);
@@ -1229,7 +1250,12 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
 
   const info = await getApp(appName);
   if (!info) throw new Error(`contentSlot: cannot provision ${appName} - app info not found`);
-  const { owner, isEncrypted: encrypted, spec } = info;
+  if (info.identity !== deployment.identity) {
+    throw new Error(`contentSlot: cannot provision ${appName} - the registry lists another registration of the name`);
+  }
+  const {
+    owner, isEncrypted: encrypted, spec, identity,
+  } = info;
 
   const peers = ctx.peers || (await getPeers(appName));
 
@@ -1237,7 +1263,7 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
   // running peer (the gossip may not have reached a fresh node yet). No peer with a
   // valid manifest ⇒ throw, so the install holds rather than serving empty slots.
   let plaintext;
-  const stored = await getLatest(appName);
+  const stored = await getLatest(identity);
   const storedManifest = stored && stored.data ? stored.data.manifest : null;
   if (storedManifest && stored.confirmed !== false) {
     // Already verified (confirmed) — use directly.
@@ -1248,7 +1274,7 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
     // corrupt manifest fails verification and falls through to catch-up below.
     try {
       plaintext = await openManifestSlots(storedManifest, { owner, encrypted }, { provider });
-      await verifyManifest(plaintext, { owner, spec }, { verify });
+      await verifyManifest(plaintext, { owner, spec, identity }, { verify });
       const broadcast = stored.envelope ? { ...stored.envelope, data: stored.data } : undefined;
       await store(storedManifest, { confirmed: true, broadcast });
     } catch (error) {
@@ -1256,7 +1282,9 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
     }
   }
   if (!plaintext) {
-    const fetched = await fetchPeers(appName, peers, { owner, encrypted, spec }, { verify, provider });
+    const fetched = await fetchPeers(appName, peers, {
+      owner, encrypted, spec, identity,
+    }, { verify, provider });
     if (fetched) {
       await store(fetched.gossip);
       ({ plaintext } = fetched);
@@ -1272,7 +1300,7 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
         const fromDrive = await fetchFromDrive(appName);
         if (fromDrive && fromDrive.manifest) {
           const opened = await openManifestSlots(fromDrive.manifest, { owner, encrypted }, { provider });
-          await verifyManifest(opened, { owner, spec }, { verify });
+          await verifyManifest(opened, { owner, spec, identity }, { verify });
           await store(fromDrive.manifest);
           plaintext = opened;
         }
@@ -1292,7 +1320,7 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
   // starts and must not fire an onUpdate reaction. Best-effort, like applyManifest's
   // own record: a miss only costs one spurious reaction, never lost content.
   try {
-    await recordApplied(appName, plaintext.version);
+    await recordApplied(identity, plaintext.version);
   } catch (error) {
     log.warn(`contentSlot: failed to record provisioned version ${plaintext.version} for ${appName} - ${error.message ?? error}`);
   }
@@ -1433,7 +1461,9 @@ async function submitContentUpdate(body, deps = {}) {
 
   const info = await getApp(appName);
   if (!info) throw new Error(`contentSlot: unknown app ${appName}`);
-  const { owner, isEncrypted: encrypted, spec } = info;
+  const {
+    owner, isEncrypted: encrypted, spec, identity,
+  } = info;
 
   // Transport-open the sealed payload (content never travels unencrypted). The
   // cleartext meta drove the AAD, so binding it to the recovered manifest below
@@ -1454,7 +1484,9 @@ async function submitContentUpdate(body, deps = {}) {
   const ownerSigs = new Map(Object.entries(ownerSigsObj || {}));
 
   const gossipManifest = await processSubmission(
-    { manifest, spec, owner, encrypted, blobs, ownerSigs },
+    {
+      manifest, spec, owner, encrypted, identity, blobs, ownerSigs,
+    },
     { uploader, benchmark, now, verify, provider },
   );
 

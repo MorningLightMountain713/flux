@@ -2035,7 +2035,9 @@ async function contentBlobServeApi(req, res) {
         return;
       }
       const framed = await contentBlobService.serveBlob(
-        { appName, fluxID: installed.owner, locator },
+        {
+          appName, identity: installed.identity, fluxID: installed.owner, locator,
+        },
       );
       if (!framed) {
         res.status(404).end();

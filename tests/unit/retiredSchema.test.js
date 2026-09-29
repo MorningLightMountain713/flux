@@ -9,6 +9,7 @@ const retiredSchema = require('../../ZelBack/src/services/migrations/retiredSche
 
 const ERRORS_LOCATIONS = config.get('database.appsglobal.collections.appsInstallingErrorsLocations');
 const ERRORS_BROADCASTS = config.get('database.appsglobal.collections.appsInstallingErrorsBroadcasts');
+const CONTENT_MANIFESTS = config.get('database.appsglobal.collections.appContentManifests');
 
 describe('retiredSchema', () => {
   let collectionsPresent;
@@ -69,5 +70,13 @@ describe('retiredSchema', () => {
     await retiredSchema.dropRetiredSchema();
 
     expect(droppedIndexes).to.deep.equal([`${ERRORS_LOCATIONS}.broadcastedAt_1`]);
+  });
+
+  it('drops the content manifests\' index by app name, and keeps the one by identity', async () => {
+    indexesOf[CONTENT_MANIFESTS] = [{ name: 'appName', key: { appName: 1 }, unique: true }, { name: 'identity', key: { identity: 1 }, unique: true }];
+
+    await retiredSchema.dropRetiredSchema();
+
+    expect(droppedIndexes).to.deep.equal([`${CONTENT_MANIFESTS}.appName`]);
   });
 });
