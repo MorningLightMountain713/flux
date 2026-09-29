@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const telemetrySinkCache = require('../../ZelBack/src/services/telemetrySinkCache');
 // Real registry singleton - un-stubbed in proxyquire, so the uninstaller and the test share it.
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 const { asConfig } = require('./fixtures/config');
@@ -756,6 +757,56 @@ describe('appUninstaller tests', () => {
         null, { networkName: 'fluxDockerNetwork_myapp' },
       )).to.equal(true);
       expect(dockerServiceStub.removeFluxAppDockerNetwork.called).to.equal(false);
+    });
+
+    describe('what a replica teardown leaves for a sibling', () => {
+      const replicaDoc = () => ({
+        ...doc(), key: 'myapp_s2', replica: 's2', identity: 'bident',
+      });
+      let deleteSink;
+      beforeEach(() => {
+        fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'complete' });
+        deleteSink = sinon.spy(telemetrySinkCache, 'deleteSink');
+      });
+      afterEach(() => deleteSink.restore());
+
+      it('keeps the app\'s network, telemetry sink and content store while a sibling replica stays', async () => {
+        appsRepositoryStub.countInstalledIdentities.resolves(1);
+
+        await appUninstaller.runTeardown(replicaDoc()).catch(() => {});
+
+        sinon.assert.notCalled(dockerServiceStub.forceRemoveFluxAppDockerNetwork);
+        sinon.assert.notCalled(deleteSink);
+        sinon.assert.notCalled(contentStoreStub.removeApp);
+      });
+
+      it('removes them with the last replica', async () => {
+        appsRepositoryStub.countInstalledIdentities.resolves(0);
+
+        await appUninstaller.runTeardown(replicaDoc()).catch(() => {});
+
+        sinon.assert.calledWith(dockerServiceStub.forceRemoveFluxAppDockerNetwork, null, { networkName: 'fluxDockerNetwork_myapp' });
+        sinon.assert.calledWith(deleteSink, 'myapp');
+        sinon.assert.calledOnceWithExactly(contentStoreStub.removeApp, 'bident');
+      });
+
+      it('keeps them when the store cannot say whether a sibling stays', async () => {
+        appsRepositoryStub.countInstalledIdentities.rejects(new Error('mongo down'));
+
+        await appUninstaller.runTeardown(replicaDoc()).catch(() => {});
+
+        sinon.assert.notCalled(dockerServiceStub.forceRemoveFluxAppDockerNetwork);
+        sinon.assert.notCalled(contentStoreStub.removeApp);
+      });
+
+      it('removes them on a whole-app teardown without asking the store', async () => {
+        appsRepositoryStub.countInstalledIdentities.resolves(1);
+
+        await appUninstaller.runTeardown({ ...doc(), identity: 'bident' }).catch(() => {});
+
+        sinon.assert.calledWith(dockerServiceStub.forceRemoveFluxAppDockerNetwork, null, { networkName: 'fluxDockerNetwork_myapp' });
+        sinon.assert.calledOnceWithExactly(contentStoreStub.removeApp, 'bident');
+      });
     });
 
     it('refuses a second concurrent teardown of the same app (single-flight)', async () => {

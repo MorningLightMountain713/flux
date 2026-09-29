@@ -1272,6 +1272,17 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
   // lock. Only the lock's own resources (ufw / UPnP / image store / network)
   // run under it — the swap-pool reconcile runs after release.
   status(`Removing ${name} container(s) and host state...`);
+  // The app's network, telemetry sink and content store are shared by every
+  // replica of the app here, so they go only when this teardown takes the app
+  // off the node: a whole-app teardown, or the last replica leaving. Read from
+  // the store at teardown time (the prelude has already deleted this identity's
+  // row); a store that cannot answer keeps them, and the janitor sweep removes a
+  // network no installed app owns.
+  const appLeavesNode = replica == null || await appsRepository.countInstalledIdentities(name)
+    .then((count) => count === 0, (e) => {
+      log.warn(`teardown ${name}: cannot count installed replicas, keeping the app's shared state: ${e.message}`);
+      return false;
+    });
   // A component whose container is still present after the remove blocks clearing the owed
   // record: destroying its volume under a live container would corrupt it, so the core skips
   // the cleanup and we leave the teardown for boot recovery (which re-checks the container is gone).
@@ -1307,7 +1318,9 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
     // consumers that linked to this app, and a plain removal fails on them ("active
     // endpoints"). A linked consumer stops desiring this departed network on its next
     // reconcile, so disconnecting it here is safe regardless of the teardown mode.
-    await dockerService.forceRemoveFluxAppDockerNetwork(null, { networkName }).catch((e) => log.error(`network removal ${networkName}: ${e.message}`));
+    if (appLeavesNode) {
+      await dockerService.forceRemoveFluxAppDockerNetwork(null, { networkName }).catch((e) => log.error(`network removal ${networkName}: ${e.message}`));
+    }
     // Mesh teardown: units, namespace, transport port, material. Keyed on the
     // registration identity and a no-op for apps with no mesh material; mesh
     // forbids co-location, so any removal of a mesh identity is the app
@@ -1325,9 +1338,11 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
   await appSwapPoolService.reconcile().catch((e) => log.warn(`swap pool reconcile: ${e.message}`));
 
   // App-level, non-host cleanup.
-  telemetrySinkCache.deleteSink(name);
-  if (!telemetrySinkCache.hasAnyTelemetryApps()) {
-    await telemetryConfigService.remove().catch((e) => log.warn(`telemetry config remove: ${e.message}`));
+  if (appLeavesNode) {
+    telemetrySinkCache.deleteSink(name);
+    if (!telemetrySinkCache.hasAnyTelemetryApps()) {
+      await telemetryConfigService.remove().catch((e) => log.warn(`telemetry config remove: ${e.message}`));
+    }
   }
   // Scoped to the identity this teardown owns: plans key owner:app[:replica],
   // so an untagged delete would look for a loose plan this app never had and
@@ -1336,7 +1351,7 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
   // Drop the app's content-artifact store (the peer-served declared blobs). A
   // re-driven teardown just re-runs the no-op; a re-install refills it as
   // provisioning resolves the blobs.
-  if (identity) await contentStore.removeApp(identity).catch((e) => log.warn(`content store removal ${name}: ${e.message}`));
+  if (identity && appLeavesNode) await contentStore.removeApp(identity).catch((e) => log.warn(`content store removal ${name}: ${e.message}`));
 
   // FINISH — drop every component's runtime state (incl. the condemned stamp), then
   // clear the durable record, but ONLY when every stamp dropped: a surviving stamp
