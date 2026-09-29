@@ -17,6 +17,7 @@ const {
   sealedV8Spec,
   instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const realDockerService = require('../../ZelBack/src/services/dockerService');
 
 // Mirrors appUninstaller.UninstallStatus (proxyquire.noCallThru stubs the real module out).
 const UninstallStatus = Object.freeze({
@@ -368,8 +369,6 @@ describe('appReconciler tests', () => {
   // stubs must map to real exports; the helpers redefined inline (getAppIdentifier
   // etc.) are covered too since they exist on the real module.
   it('dockerService stub mirrors the real module surface (no phantom methods)', () => {
-    // eslint-disable-next-line global-require
-    const realDockerService = require('../../ZelBack/src/services/dockerService');
     const phantom = Object.keys(stubs.dockerService)
       .filter((key) => typeof realDockerService[key] !== 'function');
     expect(phantom, `stubbed dockerService methods missing from the real module: ${phantom.join(', ')}`).to.deep.equal([]);

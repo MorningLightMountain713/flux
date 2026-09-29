@@ -171,6 +171,8 @@ const livenessMock = {
 // against, so a component that cannot answer for them has to fail here.
 // eslint-disable-next-line global-require
 const { ignoreLinesFor: derivedIgnoreLines } = require('../../ZelBack/src/services/appSystem/syncthingIgnorePolicy');
+const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
+const globalStateModule = require('../../ZelBack/src/services/utils/globalState');
 
 const tamperingMock = { recordEvent: sinon.stub().resolves() };
 
@@ -434,8 +436,6 @@ describe('syncthingMonitor tests', () => {
     // This file stubs through proxyquire and has no sinon.restore, so the bus
     // stub is taken and given back here rather than leaking into the next test.
     describe('the pass says it ran', () => {
-      // eslint-disable-next-line global-require
-      const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
       let publish;
 
       beforeEach(() => {
@@ -475,8 +475,6 @@ describe('syncthingMonitor tests', () => {
       // /apps/promotedfolders answered ready:false forever, and every folder
       // with at least one peer was blocked from promotion fleet-wide.
       it('publishes which folders this node holds writable', async () => {
-        // eslint-disable-next-line global-require
-        const globalStateModule = require('../../ZelBack/src/services/utils/globalState');
         globalStateModule.promotedFolderIds = null;
         deploymentProviderMock.listInstalledDeployments.resolves([]);
         syncthingServiceMock.getConfigFolders.resolves([
@@ -499,8 +497,6 @@ describe('syncthingMonitor tests', () => {
       // which has had this coverage all along; this tree gained the behaviour
       // when the envelope-shaped reads were corrected and gained no test with it.
       it('publishes the folders it read even though the device read threw', async () => {
-        // eslint-disable-next-line global-require
-        const globalStateModule = require('../../ZelBack/src/services/utils/globalState');
         globalStateModule.promotedFolderIds = null;
         deploymentProviderMock.listInstalledDeployments.resolves([]);
         syncthingServiceMock.getConfigFolders.resolves([
@@ -520,8 +516,6 @@ describe('syncthingMonitor tests', () => {
       // nothing to publish, and the last good answer must stand rather than be
       // replaced by a claim that this node holds nothing writable.
       it('leaves the last good answer standing when the folder read itself threw', async () => {
-        // eslint-disable-next-line global-require
-        const globalStateModule = require('../../ZelBack/src/services/utils/globalState');
         globalStateModule.promotedFolderIds = new Set(['fluxweb_writable']);
         deploymentProviderMock.listInstalledDeployments.resolves([]);
         syncthingServiceMock.getConfigFolders.rejects(new Error('simulated unreadable folder configuration'));
@@ -744,8 +738,6 @@ describe('syncthingMonitor tests', () => {
       // Set only from a validated read, so a failed one leaves the last good
       // answer standing rather than momentarily claiming this node holds nothing.
       it('leaves the last good answer standing when syncthing does not answer', async () => {
-        // eslint-disable-next-line global-require
-        const globalStateModule = require('../../ZelBack/src/services/utils/globalState');
         globalStateModule.promotedFolderIds = new Set(['fluxweb_previous']);
         syncthingServiceMock.getConfigFolders.resolves(undefined);
 
@@ -1218,8 +1210,6 @@ describe('syncthingMonitor tests', () => {
     // What a folder holds that the cluster's index does not is a receive-only
     // question, and a promotion answers it: everything this node holds is published.
     it('drops the published holdings of a folder it promotes, once the write lands', async () => {
-      // eslint-disable-next-line global-require
-      const globalStateModule = require('../../ZelBack/src/services/utils/globalState');
       const saved = globalStateModule.folderHoldings;
       const claim = { bytes: 5_821_604_997, newestModified: 200 };
       globalStateModule.folderHoldings = new Map([[syncFolderId, claim], ['fluxother_app', claim]]);
@@ -1533,8 +1523,6 @@ describe('syncthingMonitor tests', () => {
       // refused write leaves all of it describing a configuration syncthing does
       // not hold, so the pass ends and the level loop reassembles next pass.
       it('ends the pass rather than acting on a configuration syncthing refused', async () => {
-        // eslint-disable-next-line global-require
-        const globalStateModule = require('../../ZelBack/src/services/utils/globalState');
         globalStateModule.promotedFolderIds = null;
         deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
         syncthingServiceMock.getConfigFolders.resolves([]);
@@ -1562,8 +1550,6 @@ describe('syncthingMonitor tests', () => {
       // The other half, which is what keeps the assertion above from being true
       // of a pass that simply never wrote anything.
       it('publishes it when the write lands', async () => {
-        // eslint-disable-next-line global-require
-        const globalStateModule = require('../../ZelBack/src/services/utils/globalState');
         globalStateModule.promotedFolderIds = null;
         deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
         syncthingServiceMock.getConfigFolders.resolves([]);

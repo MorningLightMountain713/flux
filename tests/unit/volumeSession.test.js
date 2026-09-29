@@ -7,6 +7,7 @@ const { Privilege, authOf } = require('../../ZelBack/src/services/utils/privileg
 const os = require('node:os');
 const nodePath = require('node:path');
 const realFs = require('node:fs/promises');
+const pathSecurity = require('../../ZelBack/src/services/utils/pathSecurity');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -24,7 +25,6 @@ describe('volumeSession tests', () => {
 
   // The real pathSecurity, not a stub: these cases exist to prove the guards
   // refuse, and a stubbed sanitizePath would let every one of them pass.
-  const pathSecurity = require('../../ZelBack/src/services/utils/pathSecurity');
 
   const mountRow = (target, availableBytes = 1e9) => ({
     source: '/dev/loop3', target, fstype: 'ext4', sizeBytes: 2e9, usedBytes: 1e9, availableBytes, usePercent: 50,

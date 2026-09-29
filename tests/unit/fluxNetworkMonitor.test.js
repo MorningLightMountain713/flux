@@ -20,6 +20,10 @@ const nodeIdentityRepository = require('../../ZelBack/src/services/appDatabase/n
 const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
 const { requireMongo } = require('./dbTestHelper');
+const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/fluxCommunicationMessagesSender');
+const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
+const log = require('../../ZelBack/src/lib/log');
+const { peerManager } = require('../../ZelBack/src/services/utils/FluxPeerManager');
 
 chai.use(chaiAsPromised);
 
@@ -216,7 +220,6 @@ describe('fluxNetworkMonitor tests', () => {
       // RPC to the daemon port.
       sinon.stub(daemonServiceFluxnodeRpcs, 'createConfirmationTransaction').returns(true);
       // The broadcast waits for a peer to hear it; a unit test holds none.
-      const { peerManager } = require('../../ZelBack/src/services/utils/FluxPeerManager');
       sinon.stub(peerManager, 'waitForPeers').resolves(false);
     });
 
@@ -237,10 +240,6 @@ describe('fluxNetworkMonitor tests', () => {
       let warn;
 
       beforeEach(() => {
-        const { peerManager } = require('../../ZelBack/src/services/utils/FluxPeerManager');
-        const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/fluxCommunicationMessagesSender');
-        const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
-        const log = require('../../ZelBack/src/lib/log');
         sinon.stub(appQueryService, 'installedApps').resolves({ status: 'success', data: [{ name: 'appx', version: 6 }] });
         sinon.stub(registryManager, 'appLocation').resolves([]);
         sinon.stub(fluxNetworkHelper, 'getCachedLocalSocketAddress').returns('127.0.0.1:16127');
@@ -331,7 +330,6 @@ describe('fluxNetworkMonitor tests', () => {
       // Stub the fluxnode confirmation transaction
       sinon.stub(daemonServiceFluxnodeRpcs, 'createConfirmationTransaction').resolves({ status: 'success' });
       // The broadcast waits for a peer to hear it; these tests are about the apps.
-      const { peerManager } = require('../../ZelBack/src/services/utils/FluxPeerManager');
       sinon.stub(peerManager, 'waitForPeers').resolves(true);
 
       // Stub serviceHelper.delay

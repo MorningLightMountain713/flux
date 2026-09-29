@@ -29,6 +29,9 @@ const verifyPool = require('../../ZelBack/src/services/utils/verifyPool');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
 const { PEER_SOURCE, CLOSE_CODES } = require('../../ZelBack/src/services/utils/FluxPeerSocket');
 const rateLimit = require('../../ZelBack/src/services/utils/rateLimit');
+const contentManifestSyncService = require('../../ZelBack/src/services/appMessaging/contentManifestSyncService');
+const ingressAttestationSyncService = require('../../ZelBack/src/services/appMessaging/ingressAttestationSyncService');
+const policyStore = require('../../ZelBack/src/services/policyStore');
 
 let localWsServer;
 let localWsUrl;
@@ -2030,8 +2033,6 @@ describe('fluxnodedownverdict wire contract', () => {
 });
 
 describe('the dispatcher hands each type to the handler the route table declares', () => {
-  // eslint-disable-next-line global-require
-  const policyStore = require('../../ZelBack/src/services/policyStore');
   const makeSocket = () => ({
     ip: '49.49.49.49',
     port: '16127',
@@ -2113,12 +2114,10 @@ describe('the dispatcher hands each type to the handler the route table declares
   // The reconcile services key a round by the peer they asked, so the answer has to
   // arrive under that peer's key.
   [
-    ['fluxappcontentmanifestindex', { index: ['a'] }, 'contentManifestSyncService', 'depositIndex', ['a']],
-    ['fluxappingressindex', { digests: ['d'] }, 'ingressAttestationSyncService', 'depositDigests', ['d']],
-  ].forEach(([type, body, serviceName, method, deposited]) => {
+    ['fluxappcontentmanifestindex', { index: ['a'] }, contentManifestSyncService, 'depositIndex', ['a']],
+    ['fluxappingressindex', { digests: ['d'] }, ingressAttestationSyncService, 'depositDigests', ['d']],
+  ].forEach(([type, body, service, method, deposited]) => {
     it(`deposits a ${type} answer under the key of the peer that sent it`, async () => {
-      // eslint-disable-next-line global-require, import/no-dynamic-require
-      const service = require(`../../ZelBack/src/services/appMessaging/${serviceName}`);
       sinon.stub(service, 'isPeerInActiveRound').returns(true);
       const deposit = sinon.stub(service, method);
       const socket = makeSocket();
@@ -2289,8 +2288,6 @@ describe('a relayed broadcast is handed to the peer that asks for it', () => {
 describe('the flood filter cannot be talked out of deduplicating', () => {
   // eslint-disable-next-line global-require
   const { default: cacheManager } = require('../../ZelBack/src/services/utils/cacheManager');
-  // eslint-disable-next-line global-require
-  const policyStore = require('../../ZelBack/src/services/policyStore');
 
   // The dispatcher is not exported - the transport installs it on the peer manager as
   // it loads, which is the same object production calls.

@@ -6,6 +6,12 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { EventEmitter } = require('node:events');
+const config = require('config');
+const log = require('../../ZelBack/src/lib/log');
+const { NodeDownJuror } = require('../../ZelBack/src/services/utils/nodeDownJuror');
+const { NODE_DOWN_GRACE_MS, RESTART_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
+const { CLOSE_CODES } = require('../../ZelBack/src/services/utils/FluxPeerSocket');
+const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
 
 const tick = () => new Promise((resolve) => { setImmediate(() => setImmediate(resolve)); });
 
@@ -198,7 +204,6 @@ describe('nodeDownService', () => {
   it('runs its housekeeping on its own interval', async () => {
     const clock = sinon.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
     const { service, transport, networkStateServiceStub } = makeHarness();
-    const config = require('config');
     const localAddressReads = () => require('../../ZelBack/src/services/fluxNetworkHelper');
     service.start(transport);
     await tick();
@@ -216,7 +221,6 @@ describe('nodeDownService', () => {
   });
 
   it('a verdict message without a verdict is dropped and said once per sender, again only after a well-formed one', async () => {
-    const log = require('../../ZelBack/src/lib/log');
     const warn = sinon.stub(log, 'warn');
     const said = () => warn.args.map(([line]) => line).filter((line) => line.includes('carries no verdict')).length;
     const { service, transport } = makeHarness();
@@ -528,7 +532,6 @@ describe('nodeDownService', () => {
     });
 
     it('a certificate about this node that locks it out runs the removal though a return is pending: a locked-out node\'s return sync never completes', async () => {
-      const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
       const { service, transport, stubs } = makeHarness();
       let peersDown = false;
       transport.peerManager.allPeersDown = () => peersDown;
@@ -821,7 +824,6 @@ describe('nodeDownService', () => {
   });
 
   it('returning from total unreachability re-fetches grant records at once, and announces only after the resync says the rows still place it', async () => {
-    const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
     const { service, transport, stubs } = makeHarness();
     let peersDown = false;
     transport.peerManager.allPeersDown = () => peersDown;
@@ -868,7 +870,6 @@ describe('nodeDownService', () => {
     // apps the network has replaced. On the fleet the subject announced every
     // thirty seconds through a seven-minute partition and again a second
     // after the heal, and never removed its app.
-    const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
     const { service, transport, stubs } = makeHarness();
     let peersDown = false;
     transport.peerManager.allPeersDown = () => peersDown;
@@ -899,7 +900,6 @@ describe('nodeDownService', () => {
     // before it says anything; on the fleet every juror's redial to a
     // listed-but-unconfirmed subject was a four-millisecond hold that
     // retired the deferral, and the grace-end look never came.
-    const { NodeDownJuror } = require('../../ZelBack/src/services/utils/nodeDownJuror');
     const noteHeld = sinon.spy(NodeDownJuror.prototype, 'noteHeld');
     try {
       const harness = makeHarness();
@@ -925,7 +925,6 @@ describe('nodeDownService', () => {
     // check ran on the first, found the rows still placing the node, released
     // the hold and announced, and that announce refuted D's certificate on
     // every survivor. On the fleet the subject never removed its app.
-    const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
     const { service, transport, stubs } = makeHarness();
     let peersDown = false;
     transport.peerManager.allPeersDown = () => peersDown;
@@ -967,7 +966,6 @@ describe('nodeDownService', () => {
   });
 
   it('a node whose rows no longer place it releases the hold on return, announces no app, and sends its alive record', async () => {
-    const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
     const { service, transport, stubs } = makeHarness();
     stubs.enforcePlacement.resolves({ placed: false, removed: ['app1'] });
     let peersDown = false;
@@ -992,7 +990,6 @@ describe('nodeDownService', () => {
   });
 
   it('a node whose rows no longer place it removes on return and announces nothing', async () => {
-    const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
     const { service, transport, stubs } = makeHarness();
     stubs.enforcePlacement.resolves({ placed: false, removed: ['app1'] });
     let peersDown = false;
@@ -1012,7 +1009,6 @@ describe('nodeDownService', () => {
   });
 
   it('stop forgets a return still waiting for its resync', async () => {
-    const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
     const { service, transport, stubs } = makeHarness();
     let peersDown = false;
     transport.peerManager.allPeersDown = () => peersDown;
@@ -1034,8 +1030,6 @@ describe('nodeDownService', () => {
 describe('nodeDownService — the drop carries its reason, and the probe is an exchange', () => {
   const DUTY_PORT = '16127';
   const DUTY_HOST = '10.0.0.2';
-  const { NODE_DOWN_GRACE_MS, RESTART_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
-  const { CLOSE_CODES } = require('../../ZelBack/src/services/utils/FluxPeerSocket');
 
   function drop(transport, closeCode) {
     transport.peerManager.emit('peer:removed', {

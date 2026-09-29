@@ -15,6 +15,13 @@ const { Privilege, authOf } = require('../../ZelBack/src/services/utils/privileg
 // because nothing listens there, which is an unstubbed dependency that got
 // lucky rather than a passing test.
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
+const realFs = require('fs');
+const http = require('http');
+const stream = require('stream');
+const os = require('os');
+const fs = require('fs');
+const nodePath = require('path');
+const EventEmitter = require('events');
 
 describe('fileSystemManager tests', () => {
   const MOUNT = '/test/apps/folder/fluxcomp_myapp';
@@ -1028,8 +1035,6 @@ describe('fileSystemManager tests', () => {
 
     const linkOutOfVolume = () => {
       const enoent = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-      // eslint-disable-next-line global-require
-      const realFs = require('fs');
       sinon.stub(realFs.promises, 'lstat').callsFake(async (target) => {
         if (target === missing) throw enoent;
         return { isSymbolicLink: () => target === parent };
@@ -1054,11 +1059,6 @@ describe('fileSystemManager tests', () => {
   });
 
   describe('downloadAppsFolder streams safely', () => {
-    const http = require('http');
-    const stream = require('stream');
-    const os = require('os');
-    const fs = require('fs');
-    const nodePath = require('path');
 
     let tmpBase;
     afterEach(() => {
@@ -1128,7 +1128,6 @@ describe('fileSystemManager tests', () => {
     });
 
     it('handles an archiver error instead of letting it reach the process', async () => {
-      const EventEmitter = require('events');
       const zip = new EventEmitter();
       zip.pipe = sinon.stub();
       zip.directory = sinon.stub();
@@ -1156,7 +1155,6 @@ describe('fileSystemManager tests', () => {
 
     // A fake archiver that records what directory() was asked to add, so the
     // reserved-name filter can be inspected without unzipping.
-    const EventEmitter = require('events');
     const capturingZip = () => {
       const z = new EventEmitter();
       z.calls = [];

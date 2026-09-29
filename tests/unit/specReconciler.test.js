@@ -23,6 +23,7 @@ const imageManager = require('../../ZelBack/src/services/appSecurity/imageManage
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const dockerService = require('../../ZelBack/src/services/dockerService');
 const appGiveUp = require('../../ZelBack/src/services/appLifecycle/appGiveUp');
+const appEvacuationSafety = require('../../ZelBack/src/services/appLifecycle/appEvacuationSafety');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. Every installed/registry row below is a real InstantiatedSpec over a
@@ -403,8 +404,6 @@ describe('specReconciler tests', () => {
     // second is appEvacuationSafety, which used to be asked by nothing at all.
     let safetyStub;
     beforeEach(() => {
-      // eslint-disable-next-line global-require
-      const appEvacuationSafety = require('../../ZelBack/src/services/appLifecycle/appEvacuationSafety');
       safetyStub = sinon.stub(appEvacuationSafety, 'canSafelyRemoveApp')
         .resolves({ safe: true, code: 'STATELESS', reason: 'stateless app, 1 other host(s) hold it' });
     });

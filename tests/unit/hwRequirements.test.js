@@ -7,6 +7,7 @@ const { asConfig } = require('./fixtures/config');
 const {
   loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION, v8Spec, v9Spec, instantiatedSpec,
 } = require('./fixtures/fluxSpec');
+const admissionControl = require('../../ZelBack/src/services/utils/admissionControl');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. hwRequirements is the module a hand-written Placement hurt most: it
@@ -614,7 +615,6 @@ describe('hwRequirements', () => {
   // reading without it answers a different question from "does this fit": it
   // answers "is a playground session the only reason it does not".
   describe('reclaimable capacity', () => {
-    const admissionControl = require('../../ZelBack/src/services/utils/admissionControl');
 
     afterEach(() => {
       admissionControl.clear();
@@ -655,7 +655,6 @@ describe('hwRequirements', () => {
   // A redeploy and an update both remove containers BEFORE checking capacity, so
   // a throw there leaves a paid app destroyed rather than merely not started.
   describe('checkNodeResourcesReclaiming', () => {
-    const admissionControl = require('../../ZelBack/src/services/utils/admissionControl');
 
     // The smallest app the schema admits on every axis but CPU, so the node's
     // core count is unambiguously the only thing under test: memory 100 MB is

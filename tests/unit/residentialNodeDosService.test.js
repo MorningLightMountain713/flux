@@ -11,6 +11,7 @@ const { StickyDosOwner } = require('../../ZelBack/src/services/nodeDosState');
 
 
 const { CLASSIFICATION } = require('../../ZelBack/src/services/utils/networkClassifier');
+const unitCopy = require('config').fluxapps;
 
 describe('residentialNodeDosService tests', () => {
   const OWNER = StickyDosOwner.RESIDENTIAL_DOS;
@@ -1042,7 +1043,6 @@ describe('residentialNodeDosService tests', () => {
       // Every other test in this file reads the copy, so a copy that has
       // drifted would silently measure a different model from the fleet's.
       const production = productionConfig().fluxapps;
-      const unitCopy = require('config').fluxapps;
 
       expect(unitCopy.removeFluxAppsPeriod).to.equal(production.removeFluxAppsPeriod);
       expect(unitCopy.residentialQueueBaseMs).to.equal(production.residentialQueueBaseMs);

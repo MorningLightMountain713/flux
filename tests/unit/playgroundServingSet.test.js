@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { asConfig } = require('./fixtures/config');
+const shipped = require('../../ZelBack/config/default').fluxapps.playgroundServingSetAddressAxis;
 
 const CONFIG = {
   fluxapps: {
@@ -181,8 +182,6 @@ describe('playgroundServingSet', () => {
     });
 
     it('is on for a node running what config ships', () => {
-      // eslint-disable-next-line global-require
-      const shipped = require('../../ZelBack/config/default').fluxapps.playgroundServingSetAddressAxis;
       expect(load().addressAxisEnabled(), 'the shipped value no longer matches this assertion')
         .to.equal(shipped === true);
     });

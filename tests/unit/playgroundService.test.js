@@ -88,6 +88,7 @@ const KEEPS_STORAGE = { ...SUBMISSION, components: V9_SUBMISSION.components };
 // it, so stubbing it would hide the thing several of these tests are about.
 const sessionRegistry = require('../../ZelBack/src/services/appPlayground/playgroundSessionRegistry');
 const { asConfig } = require('./fixtures/config');
+const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
 
 describe('playgroundService', () => {
   let stubs;
@@ -705,7 +706,6 @@ describe('playgroundService', () => {
   // the node asks for the capacity back rather than refusing the paid app — a
   // refusal benches its hash in the spawner's error cache for seven days.
   describe('reclaiming capacity for paid work', () => {
-    const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
 
     it('ends a live session and gives its capacity back', async () => {
       const handle = await service.submitSession(SUBMISSION, caller);
@@ -805,7 +805,6 @@ describe('playgroundService', () => {
     // where a caller who waited for Cancelled is refused by the very session
     // they cancelled (gate 1001 t7+, the whole cascade).
     it('stays Running until the teardown has finished, then settles', async () => {
-      const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
       service = load();
       stubs.runSession.rejects(Object.assign(new Error('The session was cancelled.'), { kind: 'cancelled' }));
       let releaseTeardown;

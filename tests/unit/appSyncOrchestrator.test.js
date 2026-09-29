@@ -7,6 +7,9 @@ const { EventEmitter } = require('events');
 const proxyquire = require('proxyquire').noCallThru();
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const { asConfig } = require('./fixtures/config');
+const appSyncEventsModule = require('../../ZelBack/src/services/utils/appSyncEvents');
+const realConfig = require('config');
+const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 
 describe('AppSyncOrchestrator', () => {
   // Whether the sync responder answers peers about app state: its own sync
@@ -174,7 +177,6 @@ describe('AppSyncOrchestrator', () => {
       peers: peers.length, indexesReceived: peers.length, fetched: 0,
     }));
 
-    const appSyncEventsModule = require('../../ZelBack/src/services/utils/appSyncEvents');
     ({ appSyncEvents, EVENTS } = appSyncEventsModule);
     appSyncEvents.removeAllListeners();
 
@@ -215,7 +217,6 @@ describe('AppSyncOrchestrator', () => {
     };
 
     loadWithConfig = (fluxappsOverrides) => {
-      const realConfig = require('config');
       return proxyquire('../../ZelBack/src/services/appMessaging/appSyncOrchestrator', {
         ...proxyquireMap,
         config: asConfig({
@@ -473,8 +474,6 @@ describe('AppSyncOrchestrator', () => {
     // The pool is published as the number of requests open, because nothing outside
     // can add it up: a decline frees a slot without an event of its own.
     it('publishes how many requests are open each time it asks', async () => {
-      // eslint-disable-next-line global-require
-      const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
       const publish = sinon.spy(fluxEventBus, 'publish');
       const peers = makeEligiblePeers(4);
       getEligibleSyncPeersStub = sinon.stub().returns(peers);

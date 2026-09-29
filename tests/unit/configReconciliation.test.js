@@ -7,6 +7,7 @@ const path = require('node:path');
 
 const reconciliation = require('../../ZelBack/configReconciliation');
 const production = require('../../ZelBack/config/default');
+const nodeDownCertificates = require('../../ZelBack/src/services/utils/nodeDownCertificates');
 
 describe('config reconciliation at boot', () => {
   // A sweep that silently read nothing looks exactly like one that found no
@@ -138,7 +139,6 @@ describe('config reconciliation at boot', () => {
 });
 
 describe('release config relations at boot', () => {
-  const nodeDownCertificates = require('../../ZelBack/src/services/utils/nodeDownCertificates');
 
   // The window a running node has to take its lease in before the plane starts
   // governing. Denominated in blocks, spent in milliseconds, so the two sides

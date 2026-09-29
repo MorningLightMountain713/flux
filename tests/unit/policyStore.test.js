@@ -4,6 +4,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { asConfig } = require('./fixtures/config');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
+const shipped = require('../../ZelBack/config/default');
 
 const MODULE_PATH = '../../ZelBack/src/services/policyStore';
 const PKCS8_ED25519_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
@@ -182,8 +183,6 @@ describe('policyStore', () => {
     // node's refresh against the published source in a loop.
     ['refreshIntervalMs', 'fetchTimeoutMs', 'peerWindowMs', 'backstopRetryIntervalMs'].forEach((key) => {
       it(`gives policy.${key} as a positive number`, () => {
-        // eslint-disable-next-line global-require
-        const shipped = require('../../ZelBack/config/default');
         expect(shipped.policy[key]).to.be.a('number').above(0);
       });
     });

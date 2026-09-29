@@ -30,6 +30,8 @@ function stubAppliedHistory(messages) {
 const {
   loadSpecLibrary, V8_SUBMISSION, v1Spec, v8Spec, v9Spec, sealedV9Spec, instantiatedSpec,
 } = require('./fixtures/fluxSpec');
+const legacyPricingRegime = require('../../ZelBack/src/services/pricing/legacyPricingRegime');
+const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
 
 // The spec library is real here — see tests/unit/fixtures/fluxSpec.js for why.
 // Every spec, component, placement and registration below is a real class
@@ -568,7 +570,6 @@ describe('appSpecHelpers tests', () => {
   });
 
   describe('getAppFiatAndFluxPrice — v9 fiat markup (basis points)', () => {
-    const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
     let appSpecHelpers;
     let markupSpec;
 
@@ -653,7 +654,6 @@ describe('appSpecHelpers tests', () => {
   // the spec's OWN pricingModel — chainFloor for a real v8, unified for a real
   // v9 — rather than by a fixture that declared one.
   describe('pricing regimes — legacy quotes locally, v9 quotes what consensus charges', () => {
-    const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
 
     const priceFields = {
       cpuRate: 150_000, memoryRate: 50_000, storageRate: 20_000,
@@ -950,7 +950,6 @@ describe('appSpecHelpers tests', () => {
     });
 
     it('should export checkLegacyFreeUpdate from the legacy regime', () => {
-      const legacyPricingRegime = require('../../ZelBack/src/services/pricing/legacyPricingRegime');
       expect(legacyPricingRegime.checkLegacyFreeUpdate).to.be.a('function');
     });
   });

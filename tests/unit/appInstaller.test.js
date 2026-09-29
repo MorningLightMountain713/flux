@@ -9,6 +9,8 @@ const { asConfig } = require('./fixtures/config');
 const {
   loadSpecLibrary, v9Spec, sealedV9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const { InstallStatus } = require('../../ZelBack/src/services/appLifecycle/installStatus');
+const admissionControl = require('../../ZelBack/src/services/utils/admissionControl');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. The installer receives an InstantiatedSpec and works through a
@@ -571,8 +573,6 @@ describe('appInstaller tests', () => {
       });
 
       it('publishes the values of the enum a harness can load on its own', () => {
-        // eslint-disable-next-line global-require
-        const { InstallStatus } = require('../../ZelBack/src/services/appLifecycle/installStatus');
         expect(appInstaller.InstallStatus).to.equal(InstallStatus);
       });
     });
@@ -801,7 +801,6 @@ describe('appInstaller tests', () => {
       // threw, the installer returned FAILED, and the spawner benched the app's
       // hash for SEVEN DAYS. A fifteen-minute session cost a paid app a week.
       describe('capacity held by reclaimable work', () => {
-        const admissionControl = require('../../ZelBack/src/services/utils/admissionControl');
 
         afterEach(() => {
           admissionControl.setReclaimer(null);

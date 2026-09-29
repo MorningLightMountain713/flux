@@ -7,6 +7,7 @@ const sinon = require('sinon');
 
 const { RingReconciler } = require('../../ZelBack/src/services/utils/ringReconciler');
 const { FlapLadder, DIAL_PLAN, FLAP_WINDOW_BLOCKS } = require('../../ZelBack/src/services/utils/flapLadder');
+const log = require('../../ZelBack/src/lib/log');
 
 const tick = () => new Promise((resolve) => { setImmediate(() => setImmediate(resolve)); });
 
@@ -343,7 +344,6 @@ describe('ringReconciler', () => {
     expect(world.dials.length).to.equal(dialsAfterStart);
   });
   it('a node the network holds out dials nobody and asks nobody, says so once, and dials again the pass after the lockout lifts', async () => {
-    const log = require('../../ZelBack/src/lib/log');
     const warn = sinon.stub(log, 'warn');
     const info = sinon.stub(log, 'info');
     try {

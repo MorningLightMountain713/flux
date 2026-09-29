@@ -23,6 +23,7 @@ const {
 // Ed25519 stand-in and are NOT verified here; FluxOS's secp256k1 seam is
 // injected and exercised by the matrix below.
 const fixture = require('./fixtures/rings-fixture.json');
+const { standingRowsHold, PLACEMENT_FREEZE_ROWS, LOCKOUT_ROWS } = require('../../ZelBack/src/services/utils/nodeDownCertificates');
 
 describe('nodeDownCertificates canonical form (fixture: rings-fixture.json)', () => {
   it('encodes every signed verdict vector byte-for-byte', () => {
@@ -289,7 +290,6 @@ describe('nodeDownCertificates assembly mirrors verification', () => {
 });
 
 describe('nodeDownCertificates — the two rungs counted from the standing rows (R6)', () => {
-  const { standingRowsHold, PLACEMENT_FREEZE_ROWS, LOCKOUT_ROWS } = require('../../ZelBack/src/services/utils/nodeDownCertificates');
   const now = 1_700_000_000_000;
   const hour = 60 * 60 * 1000;
 
@@ -324,7 +324,6 @@ describe('nodeDownCertificates — the two rungs counted from the standing rows 
 });
 
 describe('nodeDownCertificates — the drop the verdict answers, and the certificate\'s since (P1)', () => {
-  const { assemble, verifyCertificate, verdictPayload } = require('../../ZelBack/src/services/utils/nodeDownCertificates');
   const base = {
     subject: 'sub:0', juror: 'w1', judgement: JUDGEMENT.UNREACHABLE, height: 100, fingerprint: 'fpA',
   };

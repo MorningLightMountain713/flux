@@ -16,6 +16,7 @@ const rateLimit = require('../../ZelBack/src/services/utils/rateLimit');
 // transport loads, as it is on a running node before any connection opens.
 require('../../ZelBack/src/services/fluxCommunication');
 const { NetworkHealthMonitor } = require('../../ZelBack/src/services/utils/NetworkHealthMonitor');
+const log = require('../../ZelBack/src/lib/log');
 
 /**
  * Creates a mock WebSocket object suitable for FluxPeerSocket tests.
@@ -1992,7 +1993,6 @@ describe('FluxPeerManager tests', () => {
     });
 
     it('says once per subject what the door handed over, and re-arms once the subject is admitted', async () => {
-      const log = require('../../ZelBack/src/lib/log');
       const info = sinon.stub(log, 'info');
       try {
         manager.numberOfFluxNodes = 10_000;

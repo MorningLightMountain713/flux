@@ -8,6 +8,7 @@ const nodeHttp = require('node:http');
 const nodeHttps = require('node:https');
 
 const proxyquire = require('proxyquire');
+const { peerManager } = require('../../ZelBack/src/services/utils/peerState');
 
 const useStub = sinon.stub();
 const noop = () => { };
@@ -87,7 +88,6 @@ describe('FluxServer tests', () => {
   // the server never asks. Driven through the real socketHandlers and the real
   // peer manager, so it is the wiring under test and not a stub of it.
   it('refuses a peer upgrade through the real admission rule while the node is not accepting connections', () => {
-    const { peerManager } = require('../../ZelBack/src/services/utils/peerState');
     const wasAccepting = peerManager.acceptingConnections;
     peerManager.acceptingConnections = false;
 
@@ -111,7 +111,6 @@ describe('FluxServer tests', () => {
   });
 
   it('admits a peer upgrade once the node is accepting connections', () => {
-    const { peerManager } = require('../../ZelBack/src/services/utils/peerState');
     const wasAccepting = peerManager.acceptingConnections;
     peerManager.acceptingConnections = true;
 

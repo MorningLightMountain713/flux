@@ -8,6 +8,9 @@ const verificationHelper = require('../../ZelBack/src/services/verificationHelpe
 const imageVerifier = require('../../ZelBack/src/services/utils/imageVerifier');
 const registryCredentialHelper = require('../../ZelBack/src/services/utils/registryCredentialHelper');
 const policyStore = require('../../ZelBack/src/services/policyStore');
+const axios = require('axios');
+const fluxCaching = require('../../ZelBack/src/services/utils/cacheManager').default;
+const { FluxCacheManager } = require('../../ZelBack/src/services/utils/cacheManager');
 describe('imageManager tests', () => {
   let imageManager;
 
@@ -19,8 +22,6 @@ describe('imageManager tests', () => {
     imageManager = require('../../ZelBack/src/services/appSecurity/imageManager');
 
     // Clear the dockerHubVerificationCache before each test
-    // eslint-disable-next-line global-require
-    const fluxCaching = require('../../ZelBack/src/services/utils/cacheManager').default;
     if (fluxCaching.dockerHubVerificationCache) {
       fluxCaching.dockerHubVerificationCache.clear();
     }
@@ -77,8 +78,6 @@ describe('imageManager tests', () => {
       expect(result.decompressedSizeClearanceBytes).to.equal(11_859_934_592);
 
       // and the cached entry carries them, so a cache hit gates identically
-      // eslint-disable-next-line global-require
-      const fluxCaching = require('../../ZelBack/src/services/utils/cacheManager').default;
       const cached = fluxCaching.dockerHubVerificationCache.get('test/app:latest:any:noauth');
       expect(cached.result.decompressedSizeBytes).to.equal(7_564_967_296);
       expect(cached.result.decompressedSizeClearanceBytes).to.equal(11_859_934_592);
@@ -140,8 +139,6 @@ describe('imageManager tests', () => {
       await imageManager.verifyRepository('test/app:latest');
 
       // Check that cache was set
-      // eslint-disable-next-line global-require
-      const fluxCaching = require('../../ZelBack/src/services/utils/cacheManager').default;
       const cacheKey = 'test/app:latest:any:noauth';
       const cached = fluxCaching.dockerHubVerificationCache.get(cacheKey);
 
@@ -189,8 +186,6 @@ describe('imageManager tests', () => {
       }
 
       // Check that failure was cached
-      // eslint-disable-next-line global-require
-      const fluxCaching = require('../../ZelBack/src/services/utils/cacheManager').default;
       const cacheKey = 'test/app:latest:any:noauth';
       const cached = fluxCaching.dockerHubVerificationCache.get(cacheKey);
 
@@ -246,8 +241,6 @@ describe('imageManager tests', () => {
       // Both should have been verified (different cache keys)
       sinon.assert.calledTwice(ImageVerifierStub);
 
-      // eslint-disable-next-line global-require
-      const fluxCaching = require('../../ZelBack/src/services/utils/cacheManager').default;
       const amd64Key = 'test/app:latest:amd64:noauth';
       const arm64Key = 'test/app:latest:arm64:noauth';
 
@@ -276,8 +269,6 @@ describe('imageManager tests', () => {
 
       // The error should be logged with "1 hour" in the message
       // We can't directly test TTL without waiting, but we test classification logic
-      // eslint-disable-next-line global-require
-      const { FluxCacheManager } = require('../../ZelBack/src/services/utils/cacheManager');
       expect(FluxCacheManager.oneHour).to.equal(3_600_000); // 1 hour in ms
     });
 
@@ -300,8 +291,6 @@ describe('imageManager tests', () => {
         // Expected
       }
 
-      // eslint-disable-next-line global-require
-      const { FluxCacheManager } = require('../../ZelBack/src/services/utils/cacheManager');
       expect(2 * FluxCacheManager.oneHour).to.equal(7_200_000); // 2 hours in ms
     });
 
@@ -324,8 +313,6 @@ describe('imageManager tests', () => {
         // Expected
       }
 
-      // eslint-disable-next-line global-require
-      const { FluxCacheManager } = require('../../ZelBack/src/services/utils/cacheManager');
       expect(7 * FluxCacheManager.oneDay).to.equal(604_800_000); // 7 days in ms
     });
   });
@@ -353,8 +340,6 @@ describe('imageManager tests', () => {
         .withArgs('blockedrepositories')
         .returns(['blocked/repo', 'blocked-org', 'blockedowner']);
 
-      // eslint-disable-next-line global-require
-      const axios = require('axios');
       sinon.stub(axios, 'get').resolves({
         data: {
           status: 'success',
