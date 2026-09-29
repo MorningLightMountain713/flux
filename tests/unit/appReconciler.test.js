@@ -280,9 +280,6 @@ describe('appReconciler tests', () => {
         networkHealWaitMs: sinon.stub().resolves(0),
         clearNetworkHeal: sinon.stub().resolves(),
       },
-      appQueryService: {
-        installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
-      },
       containerHealthMonitor: { recreateMissingContainers: sinon.stub().resolves() },
       appDockerNetwork: { ensureAppNetworkPresent: sinon.stub().resolves('net') },
       appNetworkLinker: {
@@ -344,7 +341,6 @@ describe('appReconciler tests', () => {
       '../appLifecycle/appVolumeService': stubs.appVolumeService,
       '../utils/volumeService': stubs.volumeService,
       '../appManagement/appsRuntimeState': stubs.appsRuntimeState,
-      '../appQuery/appQueryService': stubs.appQueryService,
       './containerHealthMonitor': stubs.containerHealthMonitor,
       '../appNetwork/appDockerNetwork': stubs.appDockerNetwork,
       '../appLifecycle/appNetworkLinker': stubs.appNetworkLinker,
@@ -2522,11 +2518,21 @@ describe('appReconciler tests', () => {
       }
     };
 
+    it('sweeps nothing and logs when the installed apps cannot be read', async () => {
+      stubs.appsRepository.listInstalledApps.rejects(new Error('mongo down'));
+      const swept = sinon.stub(fluxEventBus, 'publish');
+
+      await appReconciler.enqueueAll('test');
+      await flush();
+
+      expect(stubs.dockerService.appDockerStart.called).to.equal(false);
+      expect(swept.calledWith('reconciler:swept')).to.equal(false);
+      sinon.assert.calledWithMatch(stubs.log.error, /cannot read the installed apps for the test sweep: mongo down/);
+    });
+
     it('enqueues an app by name and reconciles every component it expands to', async () => {
       await installSealedV8App('entapp', { c1: {}, c2: {} });
-      // installedApps answers with SERIALIZED rows (appQueryService maps serialize()
-      // over the hydrated specs), so the sweep walks the real wire form.
-      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [localInst.serialize()] });
+      stubs.appsRepository.listInstalledApps.resolves([localInst]);
 
       const started = [];
       stubs.dockerService.appDockerStart.callsFake(async (id) => { started.push(id); });
@@ -2540,7 +2546,7 @@ describe('appReconciler tests', () => {
 
     it('defers an app whose spec cannot be resolved (decrypt fails) - never acts on ciphertext', async () => {
       await installSealedV8App('entapp', { c1: {} });
-      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [localInst.serialize()] });
+      stubs.appsRepository.listInstalledApps.resolves([localInst]);
       // benchd unavailable: building the deployment for the still-encrypted spec throws
       stubs.deploymentProvider.buildDeployment.rejects(new Error('benchd unavailable'));
 
@@ -2557,9 +2563,7 @@ describe('appReconciler tests', () => {
       const plainApp = await instantiatedSpec(await v9App('plain', { www: {} }));
       const plainDeployment = flux.DeploymentSpec.fromSpec(plainApp.spec, appsFolder, { replica: null });
       // the failing app FIRST: a sweep that died on it would never reach plain
-      stubs.appQueryService.installedApps.resolves({
-        status: 'success', data: [sealedApp.serialize(), plainApp.serialize()],
-      });
+      stubs.appsRepository.listInstalledApps.resolves([sealedApp, plainApp]);
       const byName = { entapp: sealedApp, plain: plainApp };
       stubs.appsRepository.getInstalledAppByIdentity.callsFake(async (n) => byName[n] ?? null);
       stubs.appsRepository.getInstalledApp.callsFake(async (n) => byName[n] ?? null);
@@ -2581,7 +2585,7 @@ describe('appReconciler tests', () => {
     // from, which stops resembling the app's name once identities are minted.
     it('resolves the app from the recorded identifiers, without taking the name apart', async () => {
       await installApp(await v9App('minted', { www: {} }));
-      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [localInst.serialize()] });
+      stubs.appsRepository.listInstalledApps.resolves([localInst]);
       stubs.appsRepository.getInstalledAppByComponentIdentifier.resolves(localInst);
 
       await appReconciler.enqueueAll('test');
@@ -2601,7 +2605,7 @@ describe('appReconciler tests', () => {
       // A real v1 spec — the flat form whose single synthesized component IS the app,
       // so its container identifier is the bare name with no component segment.
       await installApp(await v1Spec({ name: 'legacy' }));
-      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [localInst.serialize()] });
+      stubs.appsRepository.listInstalledApps.resolves([localInst]);
 
       const started = [];
       stubs.dockerService.appDockerStart.callsFake(async (id) => { started.push(id); });
@@ -2620,7 +2624,7 @@ describe('appReconciler tests', () => {
     it('sweeps an app whose identity was MINTED, not borrowed from its name', async () => {
       await installApp(await v9App('minted', { www: {} }), { identity: '933b4b9a0af3' });
       const row = localInst;
-      stubs.appQueryService.installedApps.resolves({ status: 'success', data: [localInst.serialize()] });
+      stubs.appsRepository.listInstalledApps.resolves([localInst]);
       // What the row actually records for an app installed today.
       stubs.appsRepository.listComponentIdentifiers.callsFake(
         async (name) => (name === 'minted' ? ['www_933b4b9a0af3'] : []),

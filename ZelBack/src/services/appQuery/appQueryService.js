@@ -19,6 +19,7 @@ const log = require('../../lib/log');
 const globalState = require('../utils/globalState');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const fluxCommunicationUtils = require('../fluxCommunicationUtils');
+const appReconciler = require('../appMonitoring/appReconciler');
 
 // Database collections
 const globalAppsMessages = config.get('database.appsglobal.collections.appsMessages');
@@ -230,8 +231,6 @@ async function heldComponents(req, res) {
       .map((container) => (container.Names?.[0] || '').replace(/^\//, ''))
       .filter((name) => name.slice(0, 3) === 'zel' || name.slice(0, 4) === 'flux');
 
-    // eslint-disable-next-line global-require
-    const appReconciler = require('../appMonitoring/appReconciler');
     const committed = appReconciler.committedIdentifiers()
       .map((identifier) => dockerService.getAppIdentifier(identifier));
 

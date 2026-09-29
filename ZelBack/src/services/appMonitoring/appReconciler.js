@@ -13,7 +13,6 @@ const operationRegistry = require('../utils/operationRegistry');
 const specLibs = require('../utils/specLibs');
 const appInspector = require('../appManagement/appInspector');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
-const appQueryService = require('../appQuery/appQueryService');
 const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appNetworkLinker = require('../appLifecycle/appNetworkLinker');
@@ -2259,10 +2258,15 @@ async function enqueueApp(name) {
  * out to its own components by enqueueApp.
  */
 async function enqueueAll(reason = 'resync') {
-  const res = await appQueryService.installedApps();
-  if (!res || res.status !== 'success') return;
+  let installed;
+  try {
+    installed = await appsRepository.listInstalledApps();
+  } catch (error) {
+    log.error(`appReconciler - cannot read the installed apps for the ${reason} sweep: ${error.message}`);
+    return;
+  }
   let count = 0;
-  for (const app of res.data) {
+  for (const app of installed) {
     // eslint-disable-next-line no-await-in-loop
     await enqueueApp(app.name);
     count += 1;
