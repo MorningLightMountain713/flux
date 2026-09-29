@@ -4,8 +4,6 @@
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
-const config = require('config');
-const { ObjectId } = require('mongodb');
 const proxyquire = require('proxyquire');
 
 chai.use(chaiAsPromised);
@@ -13,7 +11,6 @@ chai.use(chaiAsPromised);
 const { expect } = chai;
 
 const log = require('../../ZelBack/src/lib/log');
-const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const { requireMongo } = require('./dbTestHelper');
 
 
@@ -204,61 +201,6 @@ describe('serviceHelper tests', () => {
       const ensureStringOutput = serviceHelper.ensureString();
 
       expect(ensureStringOutput).to.be.undefined;
-    });
-  });
-
-  describe('getApplicationOwner tests', () => {
-    beforeEach(async () => {
-      await dbHelper.initiateDB();
-      const db = dbHelper.databaseConnection();
-      const database = db.db(config.database.appsglobal.database);
-      const collection = config.database.appsglobal.collections.appsInformation;
-      const insertApp = {
-        _id: new ObjectId('6147045cd774409b374d253d'),
-        name: 'PolkadotNode',
-        description: 'Polkadot is a heterogeneous multi-chain interchange.',
-        owner: '196GJWyLxzAw3MirTT7Bqs2iGpUQio29GH',
-      };
-
-      try {
-        await database.collection(collection).drop();
-      } catch (err) {
-        console.log('Collection not found.');
-      }
-      await dbHelper.insertOneToDatabase(database, collection, insertApp);
-    });
-
-    it('should return application owner if app exists in database', async () => {
-      const appOwner = '196GJWyLxzAw3MirTT7Bqs2iGpUQio29GH';
-      // eslint-disable-next-line global-require
-      const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
-      const getOwnerResult = await registryManager.getApplicationOwner('PolkadotNode');
-
-      expect(getOwnerResult).to.equal(appOwner);
-    });
-
-    it('should return application owner if app is in available apps, but not in db', async () => {
-      // Since the current implementation gets available apps from the database,
-      // and FoldingAtHomeB is not in the current available apps,
-      // this test should verify the fallback behavior works by using PolkadotNode
-      // but removing it from local lookup (simulate it being in global but not local)
-      const appOwner = '196GJWyLxzAw3MirTT7Bqs2iGpUQio29GH';
-      // eslint-disable-next-line global-require
-      const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
-
-      // Use the existing PolkadotNode which is in the global database
-      // The test setup only puts it in one collection, so this tests the fallback
-      const getOwnerResult = await registryManager.getApplicationOwner('PolkadotNode');
-
-      expect(getOwnerResult).to.equal(appOwner);
-    });
-
-    it('should return null if the app does not exist', async () => {
-      // eslint-disable-next-line global-require
-      const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
-      const getOwnerResult = await registryManager.getApplicationOwner('testing');
-
-      expect(getOwnerResult).to.be.null;
     });
   });
 

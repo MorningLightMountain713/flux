@@ -11,7 +11,7 @@ const signatureVerifier = require('./signatureVerifier');
 const serviceHelper = require('./serviceHelper');
 const dbHelper = require('./dbHelper');
 const configManager = require('./utils/configManager');
-// Removed registryManager to avoid circular dependency - will use dynamic require where needed
+const appsRepository = require('./appDatabase/appsRepository');
 
 /**
  * The Flux ID this node's operator administers it with, or null when the node
@@ -244,10 +244,7 @@ async function verifyAppOwnerSession(zelidauth, appName) {
   if (!zelidauth || !appName) return false;
   const auth = serviceHelper.ensureObject(zelidauth);
   if (!auth.zelid || !auth.signature || !auth.loginPhrase) return false;
-  // Use dynamic require to avoid circular dependency
-  // eslint-disable-next-line global-require
-  const registryManager = require('./appDatabase/registryManager');
-  const ownerFluxID = await registryManager.getApplicationOwner(appName);
+  const ownerFluxID = await appsRepository.getApplicationOwner(appName);
   if (auth.zelid !== ownerFluxID) return false;
 
   const db = dbHelper.databaseConnection();
@@ -313,10 +310,7 @@ async function verifyAppOwnerOrFluxTeamSession(zelidauth, appName) {
   if (!zelidauth || !appName) return false;
   const auth = serviceHelper.ensureObject(zelidauth);
   if (!auth.zelid || !auth.signature || !auth.loginPhrase) return false;
-  // Use dynamic require to avoid circular dependency
-  // eslint-disable-next-line global-require
-  const registryManager = require('./appDatabase/registryManager');
-  const ownerFluxID = await registryManager.getApplicationOwner(appName);
+  const ownerFluxID = await appsRepository.getApplicationOwner(appName);
   if (auth.zelid !== ownerFluxID && auth.zelid !== config.get('fluxTeamFluxID') && !isFluxSupportTeamZelid(auth.zelid)) return false;
 
   const db = dbHelper.databaseConnection();

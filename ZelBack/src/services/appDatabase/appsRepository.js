@@ -152,6 +152,21 @@ async function getGlobalAppOwner(name) {
 }
 
 /**
+ * The owner of an app by name: the registry row's, else that of an app this node
+ * has installed under the name (case-insensitive). Null when neither holds it.
+ * @param {string} name
+ * @returns {Promise<string|null>}
+ */
+async function getApplicationOwner(name) {
+  const owner = await getGlobalAppOwner(name);
+  if (owner) return owner;
+  // eslint-disable-next-line no-use-before-define
+  const installed = await listInstalledApps();
+  const app = installed.find((spec) => spec.name.toLowerCase() === name.toLowerCase());
+  return app ? app.owner : null;
+}
+
+/**
  * The registry row of the app with an identity, or null when the list holds no
  * such app. Exact match: an identity is minted, never typed.
  * @param {string} identity
@@ -1633,6 +1648,7 @@ module.exports = {
   findUnderProvisionedApps,
   // global specs
   getGlobalAppInfo,
+  getApplicationOwner,
   getGlobalAppOwner,
   getGlobalAppInfoByIdentity,
   getGlobalAppOwnerByIdentity,
