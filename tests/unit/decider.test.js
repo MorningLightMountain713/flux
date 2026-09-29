@@ -328,18 +328,70 @@ describe('decider', function () {
     expect(await verdict('r')).to.equal('applied');
   });
 
-  it('answers every applied message of an app by its identity, whatever name it was applied under', async () => {
+  it('answers the app with an identity: its name and its latest applied message\'s uuid', async () => {
     await decisionStore.write([
-      { hash: 'r', name: 'myapp', decision: 'applied', identity: 'ab12cd34ef56', height: 1 },
-      { hash: 'u', name: 'myapp', decision: 'applied', identity: 'ab12cd34ef56', height: 2 },
-      { hash: 'x', name: 'myapp', decision: 'refused', identity: null, height: 3 },
-      { hash: 'r2', name: 'myapp', decision: 'applied', identity: 'cd34ef56ab12', height: 4 },
+      {
+        hash: 'r', name: 'myapp', decision: 'applied', identity: 'MyApp', uuid: 'first', height: 1, txIndex: 0,
+      },
+      {
+        hash: 'r2', name: 'myapp', decision: 'applied', identity: 'MyApp', uuid: 'second', height: 4, txIndex: 0,
+      },
+      {
+        hash: 'u2', name: 'myapp', decision: 'applied', identity: 'MyApp', uuid: 'second', height: 4, txIndex: 1,
+      },
+      {
+        hash: 'x', name: 'myapp', decision: 'refused', identity: null, uuid: null, height: 5, txIndex: 0,
+      },
     ]);
 
-    const { name, hashes } = await decisionStore.appliedHashesOf('ab12cd34ef56');
+    expect(await decisionStore.appOf('MyApp')).to.deep.equal({ name: 'myapp', uuid: 'second' });
+    expect(await decisionStore.appOf('nothing')).to.equal(null);
+  });
 
-    expect(name).to.equal('myapp');
-    expect(hashes.sort()).to.deep.equal(['r', 'u']);
-    expect(await decisionStore.appliedHashesOf('ffffffffffff')).to.deep.equal({ name: null, hashes: [] });
+  it('answers the applied messages of every app of a name but one', async () => {
+    await decisionStore.write([
+      {
+        hash: 'r', name: 'myapp', decision: 'applied', uuid: 'first', height: 1, txIndex: 0,
+      },
+      {
+        hash: 'u', name: 'myapp', decision: 'applied', uuid: 'first', height: 2, txIndex: 0,
+      },
+      {
+        hash: 'r2', name: 'myapp', decision: 'applied', uuid: 'second', height: 4, txIndex: 0,
+      },
+      {
+        hash: 'x', name: 'myapp', decision: 'refused', uuid: null, height: 5, txIndex: 0,
+      },
+    ]);
+
+    expect((await decisionStore.otherAppsHashes('myapp', 'second')).sort()).to.deep.equal(['r', 'u']);
+    expect(await decisionStore.otherAppsHashes('myapp', 'first')).to.deep.equal(['r2']);
+  });
+
+  it('answers the applied messages of the earlier apps of each name, in chain order not storage order', async () => {
+    await decisionStore.write([
+      {
+        hash: 'r2', name: 'myapp', decision: 'applied', uuid: 'second', height: 4, txIndex: 1,
+      },
+      {
+        hash: 'r', name: 'myapp', decision: 'applied', uuid: 'first', height: 1, txIndex: 0,
+      },
+      {
+        hash: 'u', name: 'myapp', decision: 'applied', uuid: 'first', height: 4, txIndex: 0,
+      },
+      {
+        hash: 'o', name: 'other', decision: 'applied', uuid: 'only', height: 2, txIndex: 0,
+      },
+      {
+        hash: 'o2', name: 'other', decision: 'applied', uuid: 'only', height: 3, txIndex: 0,
+      },
+      {
+        hash: 'x', name: 'other', decision: 'refused', uuid: null, height: 6, txIndex: 0,
+      },
+    ]);
+
+    expect((await decisionStore.earlierAppsHashes()).sort()).to.deep.equal(['r', 'u']);
+    expect((await decisionStore.earlierAppsHashes(['myapp'])).sort()).to.deep.equal(['r', 'u']);
+    expect(await decisionStore.earlierAppsHashes(['other'])).to.deep.equal([]);
   });
 });
