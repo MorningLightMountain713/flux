@@ -441,9 +441,17 @@ export function dbClient(nodeNum) {
       return globalDb.collection('appcontentmanifests').countDocuments({});
     },
 
+    // The manifest row of the app the registry lists under a name, by its identity.
     async getContentManifest(appName) {
+      const identity = await this.identityOf(appName);
+      if (!identity) return null;
       const globalDb = await db('appsGlobal');
-      return globalDb.collection('appcontentmanifests').findOne({ appName }, { projection: { _id: 0 } });
+      return globalDb.collection('appcontentmanifests').findOne({ identity }, { projection: { _id: 0 } });
+    },
+
+    async getContentManifestByIdentity(identity) {
+      const globalDb = await db('appsGlobal');
+      return globalDb.collection('appcontentmanifests').findOne({ identity }, { projection: { _id: 0 } });
     },
 
     // Seed an appcontentmanifests row directly, mirroring contentSlotService.storeManifest's
@@ -455,7 +463,7 @@ export function dbClient(nodeNum) {
     }) {
       const globalDb = await db('appsGlobal');
       const row = {
-        appName,
+        identity: manifest.identity ?? await this.identityOf(appName),
         version,
         confirmed,
         receivedAt: new Date(),

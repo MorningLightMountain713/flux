@@ -18,6 +18,16 @@ export async function fetchTransportPubKey(nodeUrl, appName, owner) {
   return body.data.publicKey;
 }
 
+// The identity of the app a node's registry lists under a name: what a content
+// update's manifest is signed for.
+async function listedIdentity(nodeUrl, name) {
+  const res = await fetch(`${nodeUrl}/apps/globalappsspecifications?appname=${encodeURIComponent(name)}`);
+  const body = await res.json();
+  const row = body.status === 'success' && Array.isArray(body.data) ? body.data[0] : null;
+  if (!row || !row.identity) throw new Error(`no listed app ${name} with an identity: ${JSON.stringify(body)}`);
+  return row.identity;
+}
+
 /**
  * Deploy a v9 content app via the real submission path.
  *
@@ -74,7 +84,9 @@ export async function deployContentApp(nodeUrl, opts) {
   let manifestPutSig;
   let reconcileSig;
   if (contentSlots.length) {
-    manifest = await tk.buildOwnerSignedManifest({ appName: name, version: 1, slots: slotMap, ownerKey, timestamp });
+    manifest = await tk.buildOwnerSignedManifest({
+      appName: name, identity: tk.registrationIdentity(specField, name), version: 1, slots: slotMap, ownerKey, timestamp,
+    });
     manifestPutSig = await tk.manifestPutSig({ appName: name, version: 1, timestamp, ownerKey });
     reconcileSig = await tk.reconcileSig({ appName: name, source: 'slot', version: 1, ownerKey });
   }
@@ -227,7 +239,7 @@ export async function pushContentUpdate(nodeUrl, opts) {
 
   const transportPubB64 = await fetchTransportPubKey(nodeUrl, name, owner);
   const manifest = await tk.buildOwnerSignedManifest({
-    appName: name, version, slots: slotMap, ownerKey, timestamp, rollout: opts.rollout,
+    appName: name, identity: await listedIdentity(nodeUrl, name), version, slots: slotMap, ownerKey, timestamp, rollout: opts.rollout,
   });
   const locatorFor = (h) => benchCrypto.locatorFor({ appName: name, fluxID: owner, contentHash: h });
   const ownerSigs = await tk.buildOwnerSigs({
@@ -272,7 +284,7 @@ export async function injectForgedManifestGossip(stub, opts) {
   const slotMap = {};
   for (const s of opts.slots || []) slotMap[s.name] = { hash: tk.blobHash(s.bytes) };
   const manifest = await tk.buildOwnerSignedManifest({
-    appName: opts.appName, version: opts.version, slots: slotMap, ownerKey: forgerKey,
+    appName: opts.appName, identity: opts.identity, version: opts.version, slots: slotMap, ownerKey: forgerKey,
   });
   return stub.broadcast({ type: 'fluxappcontentmanifest', appName: opts.appName, manifest });
 }

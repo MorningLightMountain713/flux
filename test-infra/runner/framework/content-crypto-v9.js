@@ -10,7 +10,9 @@ import {
 import {
   TransportEnvelope, buildTransportAad, buildContentTransportAad, buildSignaturePayloadV2,
   FluxAppSpecV9, canonicalContentManifest, TRANSPORT_ALGORITHM, TRANSPORT_INFO, TRANSPORT_EXPORT_LABEL,
+  appUuid, appIdentityFromUuid,
 } from '@runonflux/flux-spec';
+import { computeMessageHashV2 } from '@runonflux/flux-spec-backend';
 import { signBtcMessage } from '../auth.js';
 
 const enc = new TextEncoder();
@@ -158,6 +160,16 @@ export async function buildSignedRegistration({
   return { specField, contentHash, timestamp };
 }
 
+// The identity of the app a signed registration makes: the library's uuid of the
+// name and the registration message's hash — what the owner signs its first
+// content manifest for, before the registration is paid.
+export function registrationIdentity(specField, name) {
+  const hash = computeMessageHashV2(
+    specField.type, specField.version, specField.contentHash, specField.timestamp, specField.extend, specField.signature,
+  );
+  return appIdentityFromUuid(appUuid(name, hash));
+}
+
 // Per-blob owner signatures: the dual-sig owner half over sha256(locator:appName:timestamp),
 // keyed by the blob's plaintext contentHash. `locatorFor(hash)` derives the locator the
 // node/FluxDrive key on (fleet-deterministic, from the benchmark channel).
@@ -195,10 +207,11 @@ export async function buildContentEnvelope({
 export async function buildOwnerSignedManifest({
   // rollout is mandatory on a manifest (contentManifest.js requires a strategy);
   // immediate is the simplest valid value, overridden by the rollout-strategy tests
-  appName, version, slots, ownerKey, timestamp = Date.now(), rollout = { strategy: 'immediate' },
+  appName, identity, version, slots, ownerKey, timestamp = Date.now(), rollout = { strategy: 'immediate' },
 }) {
   const manifest = {
     appName,
+    identity,
     version,
     slots,
     timestamp,
