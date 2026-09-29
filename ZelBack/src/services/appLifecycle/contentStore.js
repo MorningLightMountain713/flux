@@ -6,7 +6,8 @@ const appConstants = require('../utils/appConstants');
 const log = require('../../lib/log');
 
 // Node-owned store of an app's declared content blobs: one framed-ciphertext
-// file per content hash, under <contentStorePath>/<appName>/<sha256hex>. This
+// file per content hash, under <contentStorePath>/<identity>/<sha256hex>, by the
+// app's identity so a later app registered under the name starts empty. This
 // is the artifact copy — the app's live mount is its mutable working copy and
 // is never trusted as a source of the declared bytes. Peer-serving reads the
 // store verbatim; provisioning fills it as blobs are fetched and verified. The
@@ -17,19 +18,19 @@ const log = require('../../lib/log');
 // before any filesystem call so a crafted name can never traverse the store.
 
 const HASH_PATTERN = /^sha256:([a-f0-9]{64})$/;
-// Matches the app-name superset (legacy alphanumeric + v8 hyphens) with no
-// path metacharacters possible.
+// Matches every app identity (a v1-v8 app's name, a v9 app's base32 identity)
+// with no path metacharacters possible.
 const APP_DIR_PATTERN = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
 
-function appDir(appName) {
-  if (!APP_DIR_PATTERN.test(appName)) throw new Error(`contentStore: invalid app name "${appName}"`);
-  return path.join(appConstants.contentStorePath, appName);
+function appDir(identity) {
+  if (!APP_DIR_PATTERN.test(identity)) throw new Error(`contentStore: invalid app identity "${identity}"`);
+  return path.join(appConstants.contentStorePath, identity);
 }
 
-function blobPath(appName, contentHash) {
+function blobPath(identity, contentHash) {
   const match = HASH_PATTERN.exec(contentHash);
   if (!match) throw new Error(`contentStore: invalid content hash "${contentHash}"`);
-  return path.join(appDir(appName), match[1]);
+  return path.join(appDir(identity), match[1]);
 }
 
 /**
@@ -38,13 +39,13 @@ function blobPath(appName, contentHash) {
  * so a write failure must never fail the install/apply that produced the
  * bytes. Written via temp + rename so a crash never leaves a torn file.
  *
- * @param {string} appName
+ * @param {string} identity
  * @param {string} contentHash - "sha256:<64hex>" of the plaintext
  * @param {Buffer} framed - verified nonce||ciphertext||tag
  * @returns {Promise<boolean>} true when stored
  */
-async function put(appName, contentHash, framed) {
-  const target = blobPath(appName, contentHash);
+async function put(identity, contentHash, framed) {
+  const target = blobPath(identity, contentHash);
   try {
     await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
     const tmp = `${target}.tmp`;
@@ -52,7 +53,7 @@ async function put(appName, contentHash, framed) {
     await fs.rename(tmp, target);
     return true;
   } catch (error) {
-    log.warn(`contentStore: could not store ${contentHash} for ${appName} - ${error.message ?? error}`);
+    log.warn(`contentStore: could not store ${contentHash} for ${identity} - ${error.message ?? error}`);
     return false;
   }
 }
@@ -61,12 +62,12 @@ async function put(appName, contentHash, framed) {
  * Read a stored framed ciphertext. Null when absent (or unreadable — the
  * caller falls through to peers/FluxDrive either way).
  *
- * @param {string} appName
+ * @param {string} identity
  * @param {string} contentHash
  * @returns {Promise<Buffer|null>}
  */
-async function get(appName, contentHash) {
-  const target = blobPath(appName, contentHash);
+async function get(identity, contentHash) {
+  const target = blobPath(identity, contentHash);
   try {
     return await fs.readFile(target);
   } catch {
@@ -78,11 +79,11 @@ async function get(appName, contentHash) {
  * Content hashes stored for an app ("sha256:<hex>" form). Empty when the app
  * has no store directory.
  *
- * @param {string} appName
+ * @param {string} identity
  * @returns {Promise<string[]>}
  */
-async function list(appName) {
-  const dir = appDir(appName);
+async function list(identity) {
+  const dir = appDir(identity);
   try {
     const names = await fs.readdir(dir);
     return names.filter((n) => /^[a-f0-9]{64}$/.test(n)).map((n) => `sha256:${n}`);
@@ -94,20 +95,20 @@ async function list(appName) {
 /**
  * Drop one stored blob (no-op when absent).
  *
- * @param {string} appName
+ * @param {string} identity
  * @param {string} contentHash
  */
-async function remove(appName, contentHash) {
-  await fs.rm(blobPath(appName, contentHash), { force: true });
+async function remove(identity, contentHash) {
+  await fs.rm(blobPath(identity, contentHash), { force: true });
 }
 
 /**
  * Drop an app's whole store directory — the uninstall reap.
  *
- * @param {string} appName
+ * @param {string} identity
  */
-async function removeApp(appName) {
-  await fs.rm(appDir(appName), { recursive: true, force: true });
+async function removeApp(identity) {
+  await fs.rm(appDir(identity), { recursive: true, force: true });
 }
 
 /**
@@ -115,15 +116,15 @@ async function removeApp(appName) {
  * (spec contentRef hashes + the current manifest's slot hashes), delete the
  * rest. Superseded slot versions age out here on the next apply.
  *
- * @param {string} appName
+ * @param {string} identity
  * @param {Iterable<string>} keepHashes - "sha256:<hex>" values to retain
  */
-async function retainOnly(appName, keepHashes) {
+async function retainOnly(identity, keepHashes) {
   const keep = new Set(keepHashes);
-  const stored = await list(appName);
+  const stored = await list(identity);
   for (const hash of stored) {
     // eslint-disable-next-line no-await-in-loop
-    if (!keep.has(hash)) await remove(appName, hash);
+    if (!keep.has(hash)) await remove(identity, hash);
   }
 }
 

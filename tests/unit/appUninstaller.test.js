@@ -27,6 +27,7 @@ describe('appUninstaller tests', () => {
   let pendingTeardownStoreStub;
   let mastershipGrantGateStub;
   let meshOrdinalsStub;
+  let contentStoreStub;
 
   beforeEach(() => {
     configStub = {
@@ -142,6 +143,7 @@ describe('appUninstaller tests', () => {
       onComponentTeardown: sinon.stub().resolves(),
     };
     meshOrdinalsStub = { releaseOrdinal: sinon.stub().resolves() };
+    contentStoreStub = { removeApp: sinon.stub().resolves() };
 
     runCommandStub = sinon.stub().resolves({ error: null, stdout: '', stderr: '' });
     volumeServiceStub = {
@@ -210,6 +212,7 @@ describe('appUninstaller tests', () => {
       '../utils/fluxShutdowndClient': fluxShutdowndClientStub,
       './mastershipGrantGate': mastershipGrantGateStub,
       '../appMesh/meshOrdinals': meshOrdinalsStub,
+      './contentStore': contentStoreStub,
       '../appMesh/meshReconciler': { removeAppMesh: sinon.stub().resolves() },
       '../appDecisions/appHistory': { latestApplied: sinon.stub().resolves(null) },
     });
@@ -387,8 +390,9 @@ describe('appUninstaller tests', () => {
       sinon.assert.calledOnceWithExactly(
         mastershipGrantGateStub.onComponentTeardown, 'web_myapp', 'ab12cd34ef56',
       );
-      // The app's ordinal goes back under its identity too.
+      // The app's ordinal goes back under its identity, and its content store goes with it.
       sinon.assert.calledOnceWithExactly(meshOrdinalsStub.releaseOrdinal, 'ab12cd34ef56');
+      sinon.assert.calledOnceWithExactly(contentStoreStub.removeApp, 'ab12cd34ef56');
     });
   });
 

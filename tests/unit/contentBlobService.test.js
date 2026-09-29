@@ -19,6 +19,8 @@ const now = () => NOW_MS;
 const freshTs = String(NOW_MS);
 
 const APP = V9_SUBMISSION.name;
+// The installed app's identity, which keys this node's artifact store.
+const IDENTITY = `b${'a'.repeat(52)}`;
 const OWNER = V9_SUBMISSION.owner;
 const APPS_FOLDER = '/dat/var/lib/fluxos/flux-apps';
 
@@ -408,23 +410,23 @@ describe('contentBlobService', () => {
       const store = memStore();
       const out = await resolveBlob(
         {
-          appName: APP, fluxID: OWNER, contentHash, peers: ['p1', 'p2'],
+          appName: APP, identity: IDENTITY, fluxID: OWNER, contentHash, peers: ['p1', 'p2'],
         },
         {
           benchmark: makeBenchmark(), peerFetch: async () => framed, fluxDrive: noFluxDrive, store,
         },
       );
       expect(out.equals(bytes)).to.equal(true);
-      expect(store.puts).to.deep.equal([{ app: APP, hash: contentHash }]);
-      expect(store.map.get(`${APP}/${contentHash}`).equals(framed)).to.equal(true);
+      expect(store.puts).to.deep.equal([{ app: IDENTITY, hash: contentHash }]);
+      expect(store.map.get(`${IDENTITY}/${contentHash}`).equals(framed)).to.equal(true);
     });
 
     it('resolves from the artifact store without touching the network', async () => {
-      const store = memStore({ [`${APP}/${contentHash}`]: validFramed() });
+      const store = memStore({ [`${IDENTITY}/${contentHash}`]: validFramed() });
       const peerFetch = async () => { throw new Error('network must not be touched'); };
       const out = await resolveBlob(
         {
-          appName: APP, fluxID: OWNER, contentHash, peers: ['p1'],
+          appName: APP, identity: IDENTITY, fluxID: OWNER, contentHash, peers: ['p1'],
         },
         {
           benchmark: makeBenchmark(), peerFetch, fluxDrive: { fetchBlobByLocator: peerFetch }, store,
@@ -435,19 +437,19 @@ describe('contentBlobService', () => {
     });
 
     it('drops a corrupt store entry and re-fetches from a peer', async () => {
-      const store = memStore({ [`${APP}/${contentHash}`]: Buffer.alloc(40, 7) });
+      const store = memStore({ [`${IDENTITY}/${contentHash}`]: Buffer.alloc(40, 7) });
       const framed = validFramed();
       const out = await resolveBlob(
         {
-          appName: APP, fluxID: OWNER, contentHash, peers: ['p1'],
+          appName: APP, identity: IDENTITY, fluxID: OWNER, contentHash, peers: ['p1'],
         },
         {
           benchmark: makeBenchmark(), peerFetch: async () => framed, fluxDrive: noFluxDrive, store,
         },
       );
       expect(out.equals(bytes)).to.equal(true);
-      expect(store.removes).to.deep.equal([{ app: APP, hash: contentHash }]);
-      expect(store.map.get(`${APP}/${contentHash}`).equals(framed)).to.equal(true);
+      expect(store.removes).to.deep.equal([{ app: IDENTITY, hash: contentHash }]);
+      expect(store.map.get(`${IDENTITY}/${contentHash}`).equals(framed)).to.equal(true);
     });
 
     it('falls through a failing peer to the next', async () => {
@@ -456,7 +458,7 @@ describe('contentBlobService', () => {
       const peerFetch = async () => { n += 1; if (n === 1) throw new Error('peer down'); return framed; };
       const out = await resolveBlob(
         {
-          appName: APP, fluxID: OWNER, contentHash, peers: ['p1', 'p2'],
+          appName: APP, identity: IDENTITY, fluxID: OWNER, contentHash, peers: ['p1', 'p2'],
         },
         {
           benchmark: makeBenchmark(), peerFetch, fluxDrive: noFluxDrive, store: memStore(),
@@ -471,20 +473,20 @@ describe('contentBlobService', () => {
       const store = memStore();
       const out = await resolveBlob(
         {
-          appName: APP, fluxID: OWNER, contentHash, peers: ['p1'],
+          appName: APP, identity: IDENTITY, fluxID: OWNER, contentHash, peers: ['p1'],
         },
         {
           benchmark: makeBenchmark(), peerFetch: async () => Buffer.alloc(40, 7), fluxDrive, store,
         },
       );
       expect(out.equals(bytes)).to.equal(true);
-      expect(store.puts).to.deep.equal([{ app: APP, hash: contentHash }]);
+      expect(store.puts).to.deep.equal([{ app: IDENTITY, hash: contentHash }]);
     });
 
     it('throws when no source yields verified content', async () => {
       await expectReject(resolveBlob(
         {
-          appName: APP, fluxID: OWNER, contentHash, peers: ['p1'],
+          appName: APP, identity: IDENTITY, fluxID: OWNER, contentHash, peers: ['p1'],
         },
         {
           benchmark: makeBenchmark(), peerFetch: async () => null, fluxDrive: noFluxDrive, store: memStore(),
@@ -515,7 +517,7 @@ describe('contentBlobService', () => {
           db: component('db', [], { hostPort: 31_001, containerPort: 5432 }),
         },
       });
-      deployment = flux.DeploymentSpec.fromSpec(decrypted, APPS_FOLDER, { replica: null });
+      deployment = flux.DeploymentSpec.fromSpec(decrypted, APPS_FOLDER, { replica: null, identity: IDENTITY });
       mounts = deployment.componentEntries().flatMap(([, comp]) => comp.contentBlobMounts());
     });
 
@@ -542,7 +544,7 @@ describe('contentBlobService', () => {
       // AND the AEAD AAD on contentHash, and reads appName/fluxID/peers — so assert
       // the handed request actually carries them.
       expect(resolved.map((r) => r.contentHash)).to.deep.equal(mounts.map((m) => m.hash));
-      expect(resolved[0]).to.include({ appName: APP, fluxID: OWNER });
+      expect(resolved[0]).to.include({ appName: APP, identity: IDENTITY, fluxID: OWNER });
       expect(resolved[0].peers).to.deep.equal(['p1']);
     });
 
@@ -588,9 +590,10 @@ describe('contentBlobService', () => {
     const storedFramed = aeadEncrypt(KEY, bytes, Buffer.from(contentHash));
 
     it('serves the stored artifact ciphertext verbatim for a matching locator', async () => {
-      const store = memStore({ [`${APP}/${contentHash}`]: storedFramed });
+      const store = memStore({ [`${IDENTITY}/${contentHash}`]: storedFramed });
       const framed = await serveBlob(
-        { appName: APP, fluxID: OWNER, locator: 'a'.repeat(64) },
+        {
+          appName: APP, identity: IDENTITY, fluxID: OWNER, locator: 'a'.repeat(64) },
         { benchmark: makeBenchmark(), store },
       );
       expect(framed.equals(storedFramed)).to.equal(true); // verbatim — never re-read or re-encrypted
@@ -601,9 +604,10 @@ describe('contentBlobService', () => {
     });
 
     it('returns null when no stored artifact matches the locator', async () => {
-      const store = memStore({ [`${APP}/${contentHash}`]: storedFramed });
+      const store = memStore({ [`${IDENTITY}/${contentHash}`]: storedFramed });
       const framed = await serveBlob(
-        { appName: APP, fluxID: OWNER, locator: 'b'.repeat(64) },
+        {
+          appName: APP, identity: IDENTITY, fluxID: OWNER, locator: 'b'.repeat(64) },
         { benchmark: makeBenchmark(), store },
       );
       expect(framed).to.equal(null);
@@ -611,7 +615,8 @@ describe('contentBlobService', () => {
 
     it('returns null when the app has no stored artifacts', async () => {
       const framed = await serveBlob(
-        { appName: APP, fluxID: OWNER, locator: 'a'.repeat(64) },
+        {
+          appName: APP, identity: IDENTITY, fluxID: OWNER, locator: 'a'.repeat(64) },
         { benchmark: makeBenchmark(), store: memStore() },
       );
       expect(framed).to.equal(null);

@@ -140,20 +140,30 @@ async function liveRow(name) {
 async function writeWithEffects(row) {
   await registryManager.storeGlobalSpec(row);
   fluxEventBus.publish('app:specStored', { name: row.name, hash: row.hash });
-  setImmediate(() => contentSlotService.promoteQuarantinedManifest(row.name)
+  setImmediate(() => contentSlotService.promoteQuarantinedManifest(row.identity)
     .catch((e) => log.warn(`contentSlot: promote-on-confirm for ${row.name} failed - ${e.message ?? e}`)));
   await appsRepository.removeAppInstallingErrorRecords(row.name);
 }
 
 /**
- * Removes a name's row, deletes the app's founding record, and tells the
+ * Deletes what an app keeps beyond its row: its founding record and its content
+ * manifests.
+ * @param {string} identity
+ */
+async function forgetApp(identity) {
+  await foundingCommittee.forget(identity);
+  await appsRepository.removeContentManifests(identity);
+}
+
+/**
+ * Removes a name's row, deletes what the app keeps beyond it, and tells the
  * `onRemoved` listeners.
  * @param {{name: string, identity: string}} row - the row leaving
  */
 async function removeRow({ name, identity }) {
   await appsRepository.removeGlobalAppInfo(name);
   await appsRepository.removeAppInstallingErrorRecords(name);
-  await foundingCommittee.forget(identity);
+  await forgetApp(identity);
   listed.delete(name.toLowerCase());
   removedListeners.forEach((fn) => setImmediate(() => {
     Promise.resolve(fn(name)).catch((error) => log.error(`appRegistry - a removal listener failed for ${name}: ${error.message}`));
@@ -178,7 +188,7 @@ async function settle(name, instance) {
   if (!live || live.hash !== row.hash || live.name !== row.name) {
     // Another app under the name keeps nothing of this one; the same app gone
     // back to an earlier spec keeps only what that spec founded.
-    if (live && live.identity !== row.identity) await foundingCommittee.forget(live.identity);
+    if (live && live.identity !== row.identity) await forgetApp(live.identity);
     else if (live && row.height < live.height) await foundingCommittee.retract(row.identity, row.height);
     await writeWithEffects(row);
     outcome = live ? 'changed' : 'added';

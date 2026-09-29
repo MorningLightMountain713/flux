@@ -11,7 +11,7 @@ const fluxEventBus = require('../utils/fluxEventBus');
 // via a two-step in-band exchange (the permanent-message discipline: request only the
 // missing, never re-pull everything), peer-sourced since the manifest has no on-chain
 // anchor:
-//   1. INDEX  — ask peers for their (appName, version) vector (cheap, no bodies),
+//   1. INDEX  — ask peers for their (identity, version) vector (cheap, no bodies),
 //               union it, and compute which apps are missing/stale locally.
 //   2. FETCH  — pull only those bodies, one peer at a time, re-checking the gap after
 //               each so every body is fetched once from the first peer that has it
@@ -47,7 +47,7 @@ function isPeerInActiveRound(peerKey) {
   return !!activeRound && activeRound.peerKeys.has(peerKey);
 }
 
-/** Record a peer's (appName, version) index for the live round; resolve the wait once
+/** Record a peer's (identity, version) index for the live round; resolve the wait once
  *  every asked peer has answered (one index per peer; a late/dup is ignored). */
 function depositIndex(peerKey, index) {
   if (!activeRound || !activeRound.peerKeys.has(peerKey)) return;
@@ -74,9 +74,9 @@ function unionTarget(indexes) {
   const target = new Map();
   for (const index of indexes.values()) {
     for (const entry of index) {
-      if (!entry || !entry.appName || entry.version == null) continue;
-      const current = target.get(entry.appName);
-      if (current == null || entry.version > current) target.set(entry.appName, entry.version);
+      if (!entry || !entry.identity || entry.version == null) continue;
+      const current = target.get(entry.identity);
+      if (current == null || entry.version > current) target.set(entry.identity, entry.version);
     }
   }
   return target;
@@ -85,9 +85,9 @@ function unionTarget(indexes) {
 /** Apps the local register is missing or stale on, given the union target. */
 function computeNeeded(target, local) {
   const needed = [];
-  for (const [appName, version] of target) {
-    const have = local.get(appName);
-    if (have == null || version > have) needed.push(appName);
+  for (const [identity, version] of target) {
+    const have = local.get(identity);
+    if (have == null || version > have) needed.push(identity);
   }
   return needed;
 }
@@ -153,7 +153,7 @@ async function runReconcile(peers, deps = {}) {
     const indexesReceived = activeRound.indexes.size;
     const target = unionTarget(activeRound.indexes);
     const localList = await getLocalVersions();
-    const local = new Map(localList.map((row) => [row.appName, row.version]));
+    const local = new Map(localList.map((row) => [row.identity, row.version]));
     let remaining = computeNeeded(target, local);
     const neededCount = remaining.length;
 
@@ -173,7 +173,7 @@ async function runReconcile(peers, deps = {}) {
       const live = resolvePeer(peer.key, peer);
       if (!live) continue;
       // eslint-disable-next-line no-await-in-loop
-      const fetchReq = await sign({ type: FETCH_REQUEST, version: 1, appNames: remaining, timestamp: now() });
+      const fetchReq = await sign({ type: FETCH_REQUEST, version: 1, identities: remaining, timestamp: now() });
       // Armed BEFORE the send: the answer can land before the sending call has even
       // returned, and a waiter registered afterwards would miss it and then wait out the
       // full settle for a peer that had already finished.
@@ -186,10 +186,10 @@ async function runReconcile(peers, deps = {}) {
       await Promise.race([peerDone, delay(fetchSettleMs)]);
       activeRound.fetchWaiters.delete(peer.key);
       // eslint-disable-next-line no-await-in-loop
-      const after = new Map((await getLocalVersions()).map((row) => [row.appName, row.version]));
-      remaining = remaining.filter((appName) => {
-        const have = after.get(appName);
-        return have == null || target.get(appName) > have;
+      const after = new Map((await getLocalVersions()).map((row) => [row.identity, row.version]));
+      remaining = remaining.filter((identity) => {
+        const have = after.get(identity);
+        return have == null || target.get(identity) > have;
       });
     }
 

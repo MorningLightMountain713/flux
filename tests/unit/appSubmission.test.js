@@ -970,6 +970,32 @@ describe('appSubmission tests', () => {
       expect([...out.blobs.keys()]).to.have.members([HA, HSLOT]);
     });
 
+    it('verifies a bundled first manifest against the identity the registration makes', async () => {
+      const contentSlotService = {
+        processManifestSubmission: sinon.stub().resolves({ sealed: true }),
+        storeManifest: sinon.stub().resolves(true),
+        backstopManifest: sinon.stub().resolves(false),
+        reconcileSlots: sinon.stub().resolves(false),
+      };
+      appSubmission = load({
+        '../appLifecycle/contentSlotService': contentSlotService,
+        '../fluxCommunicationMessagesSender': { broadcastMessageToAll: sinon.stub().resolves({}) },
+      });
+      const firstManifest = { appName: 'myapp', version: 1, slots: { s: { hash: HSLOT } } };
+      stubs.transportHelper.openContentEnvelope.resolves(Buffer.from(JSON.stringify({
+        blobs: { [HSLOT]: Buffer.from('slot-bytes').toString('base64') }, manifest: firstManifest,
+      })));
+      stubs.contentBlobService.specContentHashes.returns(new Set());
+
+      const registrationHash = 'f'.repeat(64);
+      const v9 = { name: 'myapp', owner: '1id', version: 9 };
+      await appSubmission.uploadSealedContent(v9, envelope, new Map(), { ref: 'HASH123', timestamp: 1, registrationHash });
+
+      const [input] = contentSlotService.processManifestSubmission.firstCall.args;
+      expect(input.identity, 'the identity the decider will give the registration').to.equal(flux.appIdentityFromUuid(flux.appUuid('myapp', registrationHash)));
+      expect(input.manifest).to.deep.equal(firstManifest);
+    });
+
     it('forwards the superseded spec on update so unchanged content is carried over', async () => {
       appSubmission = load();
       stubs.transportHelper.openContentEnvelope.resolves(Buffer.from(JSON.stringify({ blobs: {} })));
