@@ -315,21 +315,33 @@ describe('appDockerNetwork tests', () => {
         net('fluxDockerNetwork_stoppedapp', { 'io.runonflux.app-network': 'stoppedapp' }),
       ]);
 
-      const result = await appDockerNetwork.removeUnownedAppNetworks(new Set(['stoppedapp']));
+      const result = await appDockerNetwork.removeUnownedAppNetworks(new Set(['fluxDockerNetwork_stoppedapp']));
 
       expect(dockerServiceStub.forceRemoveFluxAppDockerNetwork.called).to.be.false;
       expect(result.removed).to.deep.equal([]);
     });
 
-    it('removes the network of an app that is not installed', async () => {
+    it('removes the network of an app that is not installed, by the name docker listed', async () => {
       dockerServiceStub.getFluxDockerNetworks.resolves([
-        net('fluxDockerNetwork_goneapp', { 'io.runonflux.app-network': 'goneapp' }),
+        net('fluxDockerNetwork_bcccccccccccccccccccccccccccccccccccccccccccccccccccc', { 'io.runonflux.app-network': 'goneapp' }),
       ]);
 
-      const result = await appDockerNetwork.removeUnownedAppNetworks(new Set(['liveapp']));
+      const result = await appDockerNetwork.removeUnownedAppNetworks(new Set(['fluxDockerNetwork_liveapp']));
 
-      sinon.assert.calledOnceWithExactly(dockerServiceStub.forceRemoveFluxAppDockerNetwork, 'goneapp');
-      expect(result.removed).to.deep.equal(['goneapp']);
+      sinon.assert.calledOnceWithExactly(dockerServiceStub.forceRemoveFluxAppDockerNetwork, 'goneapp', { networkName: 'fluxDockerNetwork_bcccccccccccccccccccccccccccccccccccccccccccccccccccc' });
+      expect(result.removed).to.deep.equal(['fluxDockerNetwork_bcccccccccccccccccccccccccccccccccccccccccccccccccccc']);
+    });
+
+    it('removes the network an earlier app of the name left, keeping the installed app\'s', async () => {
+      dockerServiceStub.getFluxDockerNetworks.resolves([
+        net('fluxDockerNetwork_bcccccccccccccccccccccccccccccccccccccccccccccccccccc', { 'io.runonflux.app-network': 'myshop' }),
+        net('fluxDockerNetwork_beeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', { 'io.runonflux.app-network': 'myshop' }),
+      ]);
+
+      const result = await appDockerNetwork.removeUnownedAppNetworks(new Set(['fluxDockerNetwork_bcccccccccccccccccccccccccccccccccccccccccccccccccccc']));
+
+      sinon.assert.calledOnceWithExactly(dockerServiceStub.forceRemoveFluxAppDockerNetwork, 'myshop', { networkName: 'fluxDockerNetwork_beeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' });
+      expect(result.removed).to.deep.equal(['fluxDockerNetwork_beeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee']);
     });
 
     it('reaps a pre-label network by name when its app is gone', async () => {
@@ -337,8 +349,8 @@ describe('appDockerNetwork tests', () => {
 
       const result = await appDockerNetwork.removeUnownedAppNetworks(new Set());
 
-      sinon.assert.calledOnceWithExactly(dockerServiceStub.forceRemoveFluxAppDockerNetwork, 'legacygone');
-      expect(result.removed).to.deep.equal(['legacygone']);
+      sinon.assert.calledOnceWithExactly(dockerServiceStub.forceRemoveFluxAppDockerNetwork, 'legacygone', { networkName: 'fluxDockerNetwork_legacygone' });
+      expect(result.removed).to.deep.equal(['fluxDockerNetwork_legacygone']);
     });
 
     it('leaves an unattributable network alone and counts it', async () => {
@@ -370,7 +382,7 @@ describe('appDockerNetwork tests', () => {
       const result = await appDockerNetwork.removeUnownedAppNetworks(new Set());
 
       expect(dockerServiceStub.forceRemoveFluxAppDockerNetwork.calledTwice).to.be.true;
-      expect(result.removed).to.deep.equal(['first', 'second']);
+      expect(result.removed).to.deep.equal(['fluxDockerNetwork_first', 'fluxDockerNetwork_second']);
     });
   });
 });

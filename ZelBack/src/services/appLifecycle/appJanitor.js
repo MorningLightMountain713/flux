@@ -7,7 +7,7 @@ const operationRegistry = require('../utils/operationRegistry');
 const fluxEventBus = require('../utils/fluxEventBus');
 const dockerService = require('../dockerService');
 const appsRepository = require('../appDatabase/appsRepository');
-const { getSpecBackend } = require('../utils/specLibs');
+const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const appQueryService = require('../appQuery/appQueryService');
 const appDockerNetwork = require('../appNetwork/appDockerNetwork');
 const playgroundRunner = require('../appPlayground/playgroundRunner');
@@ -150,9 +150,12 @@ async function dockerDebrisSweep() {
   // ownership label, so this sweep cannot see them and needs no exception for
   // them. playgroundRunner's own sweep collects the ones a restart or a failed
   // teardown left.
-  const protectedNames = new Set(installedAppsRes.data.map((app) => app.name));
+  const { appNetworkNameFor } = await getSpec();
+  const ownedNetworks = new Set(installedAppsRes.data.map(
+    (app) => appNetworkNameFor({ identity: app.identity ?? null, appName: app.name }),
+  ));
 
-  const { removed, unidentified } = await appDockerNetwork.removeUnownedAppNetworks(protectedNames);
+  const { removed, unidentified } = await appDockerNetwork.removeUnownedAppNetworks(ownedNetworks);
 
   if (unidentified > 0) {
     log.info(`appJanitor - debris sweep left ${unidentified} unattributable network(s) in place`);

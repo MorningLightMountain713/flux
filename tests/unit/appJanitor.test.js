@@ -52,8 +52,8 @@ describe('appJanitor tests', () => {
    * {state},{clock} pair the inner spec wants - the adaptation the sweep
    * depends on and a literal cannot have.
    */
-  async function v9Row(name, { registeredAt = LONG_EXPIRED_AT, height = 2_500_000 } = {}) {
-    return instantiatedSpec(await v9Spec({ name }), { registeredAt, height });
+  async function v9Row(name, { registeredAt = LONG_EXPIRED_AT, height = 2_500_000, identity = null } = {}) {
+    return instantiatedSpec(await v9Spec({ name }), { registeredAt, height, identity });
   }
 
   /**
@@ -63,8 +63,8 @@ describe('appJanitor tests', () => {
    * docker containers against `row.name`, so what serialize() actually emits
    * is the thing under test, not a literal that agrees by construction.
    */
-  async function installedRow(name) {
-    return (await v9Row(name, { registeredAt: Math.floor(Date.now() / 1000) })).serialize();
+  async function installedRow(name, { identity = null } = {}) {
+    return (await v9Row(name, { registeredAt: Math.floor(Date.now() / 1000), identity })).serialize();
   }
 
   const container = (name, labels = null) => ({
@@ -254,20 +254,20 @@ describe('appJanitor tests', () => {
       expect(result.skipped).to.equal(undefined);
       sinon.assert.calledOnce(appDockerNetworkStub.removeUnownedAppNetworks);
       // and the stopped app's own network is not up for collection
-      const [installedAppNames] = appDockerNetworkStub.removeUnownedAppNetworks.firstCall.args;
-      expect(installedAppNames.has('stoppedapp')).to.be.true;
+      const [ownedNetworks] = appDockerNetworkStub.removeUnownedAppNetworks.firstCall.args;
+      expect(ownedNetworks.has('fluxDockerNetwork_stoppedapp')).to.be.true;
     });
 
-    it('hands the installed set to the network reap, so ownership is what decides', async () => {
+    it('hands the installed apps\' network names, built from their identities, to the network reap', async () => {
       appQueryServiceStub.installedApps.resolves({
-        status: 'success', data: [await installedRow('liveapp'), await installedRow('stoppedapp')],
+        status: 'success', data: [await installedRow('liveapp', { identity: 'bcccccccccccccccccccccccccccccccccccccccccccccccccccc' }), await installedRow('stoppedapp')],
       });
-      appDockerNetworkStub.removeUnownedAppNetworks.resolves({ removed: ['goneapp'], unidentified: 0 });
+      appDockerNetworkStub.removeUnownedAppNetworks.resolves({ removed: ['fluxDockerNetwork_goneapp'], unidentified: 0 });
 
       const result = await appJanitor.sweepDockerDebris();
 
-      const [installedAppNames] = appDockerNetworkStub.removeUnownedAppNetworks.firstCall.args;
-      expect([...installedAppNames].sort()).to.deep.equal(['liveapp', 'stoppedapp']);
+      const [ownedNetworks] = appDockerNetworkStub.removeUnownedAppNetworks.firstCall.args;
+      expect([...ownedNetworks].sort()).to.deep.equal(['fluxDockerNetwork_bcccccccccccccccccccccccccccccccccccccccccccccccccccc', 'fluxDockerNetwork_stoppedapp']);
       expect(result.networksRemoved).to.equal(1);
     });
 
@@ -281,8 +281,8 @@ describe('appJanitor tests', () => {
 
       await appJanitor.sweepDockerDebris();
 
-      const [protectedNames] = appDockerNetworkStub.removeUnownedAppNetworks.firstCall.args;
-      expect([...protectedNames]).to.deep.equal(['liveapp']);
+      const [ownedNetworks] = appDockerNetworkStub.removeUnownedAppNetworks.firstCall.args;
+      expect([...ownedNetworks]).to.deep.equal(['fluxDockerNetwork_liveapp']);
     });
   });
 
