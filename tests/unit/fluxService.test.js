@@ -42,6 +42,7 @@ const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const logLib = require('../../ZelBack/src/lib/log');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
 const enterpriseConfig = require('../../ZelBack/src/services/utils/enterpriseConfig');
+const policyStore = require('../../ZelBack/src/services/policyStore');
 const packageJson = require('../../package.json');
 const log = require('../../ZelBack/src/lib/log');
 const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
@@ -1455,8 +1456,9 @@ describe('fluxService tests', () => {
 
     // An empty union is byte-identical to a network with no enterprise nodes, so a caller
     // cannot tell "unknown" from "nobody is authorized" — it has to be told.
-    it('answers 503 rather than an empty union while the policy is unknown', () => {
+    it('answers 503 rather than an empty union while no policy is held', () => {
       sinon.stub(enterpriseConfig, 'getEnterpriseAppOwners').returns(null);
+      sinon.stub(policyStore, 'getRawBundle').returns(null);
       const res = generateResponse();
 
       fluxService.getEnterpriseAppOwners(undefined, res);
@@ -1465,6 +1467,19 @@ describe('fluxService tests', () => {
       const body = res.json.firstCall.args[0];
       expect(body.status).to.equal('error');
       expect(body.data.message).to.equal('Network policy not yet obtained');
+    });
+
+    it('answers 503 naming the owner map when the held policy carries no valid one', () => {
+      sinon.stub(enterpriseConfig, 'getEnterpriseAppOwners').returns(null);
+      sinon.stub(policyStore, 'getRawBundle').returns(Buffer.from('{}'));
+      const res = generateResponse();
+
+      fluxService.getEnterpriseAppOwners(undefined, res);
+
+      sinon.assert.calledOnceWithExactly(res.status, 503);
+      const body = res.json.firstCall.args[0];
+      expect(body.status).to.equal('error');
+      expect(body.data.message).to.equal('Network policy carries no valid enterprise node map');
     });
 
     it('reports an unknown policy to a programmatic caller too, rather than throwing', () => {
