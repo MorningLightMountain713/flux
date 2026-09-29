@@ -129,9 +129,8 @@ describe('routesV2 - the /v2 surface', () => {
     // The error code enum IS the contract, so it cannot say something the
     // surface cannot answer.
     it('documents exactly the error codes the surface can answer', () => {
-      const routerModule = require('../../ZelBack/src/routesV2');
       const documented = spec.components.schemas.Error.properties.error.properties.code.enum;
-      expect([...documented].sort()).to.deep.equal(Object.keys(routerModule.CODE_TO_STATUS).sort());
+      expect([...documented].sort()).to.deep.equal(Object.keys(routesV2.CODE_TO_STATUS).sort());
     });
 
     it('is served under the /v2 prefix, so a documented path is not doubled', () => {
@@ -388,10 +387,9 @@ describe('routesV2 - the /v2 surface', () => {
   });
 
   describe('the error code is the contract', () => {
-    const routerModule = require('../../ZelBack/src/routesV2');
 
     it('maps every code to a status in its own class', () => {
-      const map = routerModule.CODE_TO_STATUS;
+      const map = routesV2.CODE_TO_STATUS;
       expect(map.NOT_FOUND).to.equal(404);
       expect(map.UNAUTHORIZED).to.equal(401);
       expect(map.CONFLICT).to.equal(409);
@@ -402,7 +400,7 @@ describe('routesV2 - the /v2 surface', () => {
     });
 
     it('is frozen, so a caller cannot add a code to it', () => {
-      expect(Object.isFrozen(routerModule.CODE_TO_STATUS)).to.be.true;
+      expect(Object.isFrozen(routesV2.CODE_TO_STATUS)).to.be.true;
     });
   });
 });

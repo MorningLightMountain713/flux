@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const proxyquire = require('proxyquire').noCallThru();
 const { load } = require('@runonflux/flux-spec-cjs');
+const config = require('config');
 
 
 // Every update message the chain has ever carried, projected to the three
@@ -98,7 +99,7 @@ describe('the early-update credit, over every update on chain', function corpus(
   // seconds. Asserted as a population rather than a count, so the test does not
   // have to be repinned when the corpus grows.
   it('credits the fork-crossing rows, which is where the block arithmetic failed', () => {
-    const FORK = require('config').get('fluxapps.daemonPONFork');
+    const FORK = config.get('fluxapps.daemonPONFork');
     const crossing = rows.filter((r) => r.prevHeight < FORK && r.updateHeight >= FORK);
     expect(crossing.length, 'the corpus should contain fork-crossing updates').to.be.above(0);
 
@@ -116,7 +117,7 @@ describe('the early-update credit, over every update on chain', function corpus(
   // real, with the credit's two inputs recorded: if any site grows its own
   // arithmetic again, the arguments stop matching.
   describe('the three sites that price an update read one credit', () => {
-    const FORK = require('config').get('fluxapps.daemonPONFork');
+    const FORK = config.get('fluxapps.daemonPONFork');
     const PREV_HEIGHT = FORK - 20_000;
     const UPDATE_HEIGHT = FORK + 40_000;
     const EXPIRE = 40_000;

@@ -3,6 +3,8 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { Readable, PassThrough } = require('node:stream');
 const { asConfig } = require('./fixtures/config');
+const pathSecurity = require('../../ZelBack/src/services/utils/pathSecurity');
+const volumeSession = require('../../ZelBack/src/services/appSystem/volumeSession');
 
 // Receiving an upload, driven through a REAL multipart body and a real parser.
 //
@@ -110,7 +112,7 @@ describe('fileSystemManager upload tests', () => {
       '../../lib/log': { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() },
       // The REAL one. Rejecting a filename that would leave its folder is the
       // behaviour under test, and a stub would decide the answer.
-      '../utils/pathSecurity': require('../../ZelBack/src/services/utils/pathSecurity'),
+      '../utils/pathSecurity': pathSecurity,
       './volumeSession': { openVolume: sinon.stub().resolves(sessionStub), SPACE_HEADROOM: 1.05 },
       './volumeExecutor': executorStub,
       '../utils/fileTransfer': { sendFile: sinon.stub().resolves() },
@@ -260,8 +262,8 @@ describe('fileSystemManager upload tests', () => {
       },
       '../IOUtils': { getVolumeInfo: sinon.stub() },
       '../../lib/log': { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() },
-      '../utils/pathSecurity': require('../../ZelBack/src/services/utils/pathSecurity'),
-      './volumeSession': require('../../ZelBack/src/services/appSystem/volumeSession'),
+      '../utils/pathSecurity': pathSecurity,
+      './volumeSession': volumeSession,
       './volumeExecutor': executorStub,
       '../utils/fileTransfer': { sendFile: sinon.stub().resolves() },
       archiver: sinon.stub(),

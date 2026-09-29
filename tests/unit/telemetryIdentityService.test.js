@@ -3,6 +3,9 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const nodeNet = require('node:net');
+const nodeFs = require('node:fs');
+const nodePath = require('node:path');
 
 describe('telemetryIdentityService tests', () => {
   let service;
@@ -40,9 +43,9 @@ describe('telemetryIdentityService tests', () => {
 
     runCommandStub = sinon.stub().resolves({ error: null, stdout: '', stderr: '' });
     service = proxyquire('../../ZelBack/src/services/telemetryIdentityService', {
-      'node:net': require('node:net'),
-      'node:fs': require('node:fs'),
-      'node:path': require('node:path'),
+      'node:net': nodeNet,
+      'node:fs': nodeFs,
+      'node:path': nodePath,
       '../lib/log': logStub,
       './dockerService': dockerServiceStub,
       './serviceHelper': { runCommand: runCommandStub },

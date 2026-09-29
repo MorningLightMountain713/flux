@@ -48,6 +48,8 @@ const { resolveInstantiatedSpec } = require('../../ZelBack/src/services/utils/sp
 const volumeService = require('../../ZelBack/src/services/utils/volumeService');
 const IOUtils = require('../../ZelBack/src/services/IOUtils');
 const syncthingMonitorHelpers = require('../../ZelBack/src/services/appMonitoring/syncthingMonitorHelpers');
+const proxyquireStrict = require('proxyquire').noCallThru();
+const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. What stays stubbed is I/O and FluxOS policy: the daemon socket, mongo,
@@ -184,12 +186,8 @@ describe('appOperations tests', () => {
   describe('redeployComponentAPI tests', () => {
     let req;
     let res;
-    let verificationHelper;
 
     beforeEach(() => {
-      // eslint-disable-next-line global-require
-      verificationHelper = require('../../ZelBack/src/services/verificationHelper');
-
       req = {
         params: {},
         query: {},
@@ -835,12 +833,8 @@ describe('appOperations tests', () => {
     let serviceHelperStub;
     let logStub;
     let fsStub;
-    let proxyquire;
 
     beforeEach(() => {
-      // eslint-disable-next-line global-require
-      proxyquire = require('proxyquire').noCallThru();
-
       serviceHelperStub = {
         runCommand: sinon.stub().resolves({ error: null }),
       };
@@ -895,7 +889,7 @@ describe('appOperations tests', () => {
     }];
 
     function loadModule() {
-      return proxyquire('../../ZelBack/src/services/appLifecycle/appVolumeService', {
+      return proxyquireStrict('../../ZelBack/src/services/appLifecycle/appVolumeService', {
         '../serviceHelper': serviceHelperStub,
         '../../lib/log': logStub,
         'node:fs/promises': fsStub,
@@ -1233,7 +1227,6 @@ describe('appOperations tests', () => {
       // can't be sinon-stubbed on the module object; proxyquire (callThru) overrides just that
       // one dependency while every other dep (delay, axiosGet, getLocalSocketAddress, docker,
       // deploymentProvider) is object-accessed and so is controlled by the sinon stubs below.
-      const proxyquire = require('proxyquire');
       // The active-standby component is currently running on THIS node.
       const listRunningContainers = sinon.stub().resolves([{ Names: [`/flux${identifier}`] }]);
       const appOps = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
@@ -1271,7 +1264,6 @@ describe('appOperations tests', () => {
       // IP-granular ipsMatch must still recognise this node as the primary, so it must NOT stop
       // its own running container. (Port-sensitive matching would wrongly stop it.)
       const identifier = 'n8n_n8napp';
-      const proxyquire = require('proxyquire');
       const listRunningContainers = sinon.stub().resolves([{ Names: [`/flux${identifier}`] }]);
       const appOps = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
         '../appQuery/appQueryService': { ...appQueryService, listRunningContainers },
@@ -1484,17 +1476,12 @@ describe('appOperations tests', () => {
   });
 
   describe('shutdownPlanResync tests', () => {
-    let proxyquire;
 
     // Real spec hashes: 64 hex characters, the form the registry and the daemon's
     // stored plans both carry.
     const HASH_OLD = 'a'.repeat(64);
     const HASH_NEW = 'b'.repeat(64);
     const OWNER = V9_SUBMISSION.owner;
-
-    beforeEach(() => {
-      proxyquire = require('proxyquire');
-    });
 
     /** A real InstantiatedSpec — what listInstalledApps hydrates each row into. */
     async function installedRow(name, hash) {
@@ -2080,8 +2067,6 @@ describe('appOperations tests', () => {
 
   describe('appendBackupTask validation', () => {
     it('refuses a backup that is not a list of components, in those words', async () => {
-      // eslint-disable-next-line global-require
-      const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
       const req = { body: { appname: 'myapp', backup: 'web' }, headers: {} };
       const res = { json: sinon.stub(), status: sinon.stub().returnsThis(), setHeader: sinon.stub() };
@@ -2109,8 +2094,6 @@ describe('appOperations tests', () => {
       return false;
     });
     beforeEach(() => { reported = []; });
-    // eslint-disable-next-line global-require
-    const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 
     /**
      * What the completeness gate reads. A backup is refused unless this instance

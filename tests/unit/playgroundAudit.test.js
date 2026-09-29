@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { asConfig } = require('./fixtures/config');
+const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 
 describe('playgroundAudit tests', () => {
   let dbHelperStub;
@@ -50,7 +51,7 @@ describe('playgroundAudit tests', () => {
   // other. Real library, real keys.
   describe('build', () => {
     it('seals the identifying half as a playground record, which does not open as an ingress note', async () => {
-      const backend = await import('@runonflux/flux-spec-backend');
+      const backend = await specLibs.getSpecBackend();
       const { publicKey, privateKey } = backend.generateSealKeypair();
       const audit = proxyquire('../../ZelBack/src/services/appPlayground/playgroundAudit', {
         config: asConfig({ fluxapps: { playgroundAuditRetentionMs: 1 } }),

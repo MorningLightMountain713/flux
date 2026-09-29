@@ -7,12 +7,13 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire');
 
 const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
+const specLibs = require('../../ZelBack/src/services/utils/specLibs');
+const { buildPricingEngine } = require('../../ZelBack/src/services/pricing/buildPricingEngine');
 
 describe('pricing integration — chain messages through PricingEngine', () => {
   let PriceMessage, RateMessage, PriceModifierMessage, dispatch;
   let PriceMessageHistory, RateMessageHistory, PriceModifierHistory;
   let SOFT_FORK_EFFECTIVE_DEPTH;
-  let buildPricingEngine;
   let convertMicrodollarsToSats;
   let meteredQuantities;
   let FluxAppSpecV9;
@@ -24,9 +25,8 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       SOFT_FORK_EFFECTIVE_DEPTH,
       convertMicrodollarsToSats,
       meteredQuantities,
-    } = await import('@runonflux/flux-spec-policy'));
-    ({ FluxAppSpecV9 } = await import('@runonflux/flux-spec'));
-    ({ buildPricingEngine } = require('../../ZelBack/src/services/pricing/buildPricingEngine'));
+      FluxAppSpecV9,
+    } = await specLibs.getSpecPolicy());
   });
 
   afterEach(() => {

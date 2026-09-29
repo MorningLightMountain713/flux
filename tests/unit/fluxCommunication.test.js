@@ -8,7 +8,7 @@ const WebSocket = require('ws');
 const { expect } = require('chai');
 const log = require('../../ZelBack/src/lib/log');
 const { Privilege, authOf } = require('../../ZelBack/src/services/utils/privileges');
-const { FluxTTLCache } = require('../../ZelBack/src/services/utils/cacheManager');
+const { FluxTTLCache, default: cacheManager } = require('../../ZelBack/src/services/utils/cacheManager');
 const fluxCommunication = require('../../ZelBack/src/services/fluxCommunication');
 const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/fluxCommunicationMessagesSender');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
@@ -2286,8 +2286,6 @@ describe('a relayed broadcast is handed to the peer that asks for it', () => {
 });
 
 describe('the flood filter cannot be talked out of deduplicating', () => {
-  // eslint-disable-next-line global-require
-  const { default: cacheManager } = require('../../ZelBack/src/services/utils/cacheManager');
 
   // The dispatcher is not exported - the transport installs it on the peer manager as
   // it loads, which is the same object production calls.

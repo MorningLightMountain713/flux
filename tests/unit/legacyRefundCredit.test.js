@@ -6,6 +6,7 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const { expect } = require('chai');
 const config = require('config');
 const { load } = require('@runonflux/flux-spec-cjs');
+const proxyquire = require('proxyquire').noCallThru();
 
 // The credit an early update gets back for time it has not used. It scales a
 // price quoted per MONTH, so it must be a fraction of TIME: a fraction of
@@ -104,7 +105,6 @@ describe('the early-update credit', () => {
   // The arithmetic above is the rule; this is the node applying it. Without
   // this, reverting the source leaves every test above green.
   describe('updateFee, which is what the node charges', () => {
-    const proxyquire = require('proxyquire').noCallThru();
 
     // One rate card, priced off storage alone, so the monthly figure is a
     // known constant and the fee moves only with the credit. A near-zero

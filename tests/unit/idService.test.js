@@ -19,6 +19,7 @@ const generalService = require('../../ZelBack/src/services/generalService');
 const dockerService = require('../../ZelBack/src/services/dockerService');
 const nodeDosState = require('../../ZelBack/src/services/nodeDosState');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
+const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 
 const adminConfig = {
   fluxTeamFluxID: '1zasdfg',
@@ -66,7 +67,7 @@ describe('idService tests', () => {
   // Warm it here so a test measuring a response is not also measuring a
   // one-time module load.
   before(async () => {
-    await require('../../ZelBack/src/services/utils/specLibs').getSpecBackend();
+    await specLibs.getSpecBackend();
   });
 
   describe('confirmNodeTierHardware tests', () => {

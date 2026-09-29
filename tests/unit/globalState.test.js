@@ -1,28 +1,15 @@
 'use strict';
 
 const { expect } = require('chai');
-
-// Every module that requires globalState binds the instance it was handed at
-// load, and mocha loads every test file before it runs any test. So swapping the
-// cache entry for a fresh instance leaves this file talking to an object nothing
-// else in the process holds - and a later file that requires globalState reads
-// THAT one while the code it is testing still writes to the original. The entry
-// is therefore put back after every test.
-const globalStatePath = require.resolve('../../ZelBack/src/services/utils/globalState');
-require('../../ZelBack/src/services/utils/globalState');
-const liveGlobalStateEntry = require.cache[globalStatePath];
+const proxyquire = require('proxyquire');
 
 describe('globalState tests', () => {
   let globalState;
 
+  // A fresh instance per test. proxyquire puts the shared instance back in the
+  // require cache, so every other module keeps the one it was handed at load.
   beforeEach(() => {
-    // Clear the module cache to get a fresh instance for each test
-    delete require.cache[globalStatePath];
-    globalState = require('../../ZelBack/src/services/utils/globalState');
-  });
-
-  afterEach(() => {
-    require.cache[globalStatePath] = liveGlobalStateEntry;
+    globalState = proxyquire('../../ZelBack/src/services/utils/globalState', {});
   });
 
   // A forced removal skips the single-removal guard, so two broadcast removals of one

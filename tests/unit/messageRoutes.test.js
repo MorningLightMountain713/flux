@@ -1,4 +1,5 @@
 const { expect } = require('chai');
+const proxyquire = require('proxyquire');
 
 const ROUTES_PATH = '../../ZelBack/src/services/utils/messageRoutes';
 
@@ -9,13 +10,8 @@ const {
 } = require(ROUTES_PATH);
 const { INTENT } = require('../../ZelBack/src/services/utils/messageIntent');
 
-const freshTable = () => {
-  delete require.cache[require.resolve(ROUTES_PATH)];
-  // eslint-disable-next-line global-require
-  const table = require(ROUTES_PATH);
-  delete require.cache[require.resolve(ROUTES_PATH)];
-  return table;
-};
+// A copy of the table with nothing registered: proxyquire loads the module afresh.
+const freshTable = () => proxyquire(ROUTES_PATH, {});
 
 // Questions one peer puts to another: each asker is answered, so none is filtered on content.
 const ASK_TYPES = [

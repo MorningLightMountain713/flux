@@ -5,6 +5,7 @@ const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const domain = require('./fixtures/appDomain');
+const { APP_VOLUME_MOUNT_OPTIONS } = require('../../ZelBack/src/services/utils/appConstants');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -82,7 +83,7 @@ describe('volumeService tests', () => {
         appsFolder: APPS_FOLDER,
         appVolumesPath: APP_VOLUMES,
         legacyAppVolumesPath: LEGACY_APP_VOLUMES,
-        APP_VOLUME_MOUNT_OPTIONS: require('../../ZelBack/src/services/utils/appConstants').APP_VOLUME_MOUNT_OPTIONS,
+        APP_VOLUME_MOUNT_OPTIONS: APP_VOLUME_MOUNT_OPTIONS,
       },
       '../../lib/log': logStub,
       '../deviceHelper': deviceHelperStub,

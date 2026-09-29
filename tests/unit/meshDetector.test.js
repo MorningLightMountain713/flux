@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire');
+const meshDetector = require('../../ZelBack/src/services/appMesh/meshDetector');
 
 // classifyPeers is judged as a pure function over hostmap fixtures; the
 // orchestration around it is driven through stubbed meshSsh/meshRefuseSet.
@@ -31,12 +32,6 @@ describe('meshDetector', () => {
   });
 
   describe('classifyPeers', () => {
-    let meshDetector;
-
-    beforeEach(() => {
-      meshDetector = require('../../ZelBack/src/services/appMesh/meshDetector'); // eslint-disable-line global-require
-    });
-
     it('accepts a member claiming exactly its derived identity', () => {
       const { cheats, foreign } = meshDetector.classifyPeers([
         tunnel('fp-a', ['fd00::a'], ['fd00::a:0:0/96']),

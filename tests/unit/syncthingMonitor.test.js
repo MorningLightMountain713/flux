@@ -169,7 +169,6 @@ const livenessMock = {
 
 // The lines are the real derivation: they are what the phantom guard reads the disk
 // against, so a component that cannot answer for them has to fail here.
-// eslint-disable-next-line global-require
 const { ignoreLinesFor: derivedIgnoreLines } = require('../../ZelBack/src/services/appSystem/syncthingIgnorePolicy');
 const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 const globalStateModule = require('../../ZelBack/src/services/utils/globalState');

@@ -11,6 +11,8 @@ const generalService = require('../../ZelBack/src/services/generalService');
 const dockerService = require('../../ZelBack/src/services/dockerService');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
+const proxyquire = require('proxyquire').noCallThru();
+const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -24,7 +26,7 @@ const OUTPOINT_TXID = 'a'.repeat(64);
 // those named replicas. resolveLocalReplicas reads placement.mode() (cleartext)
 // then assignment.replicasFor() (the sealed replica names).
 async function specWithPlacement(targets) {
-  const { Placement, Assignment } = await import('@runonflux/flux-spec');
+  const { Placement, Assignment } = await specLibs.getSpec();
   const placementBlob = { targetIps: [], targetOutpoints: [], targetOperators: [] };
   const assignmentBlob = { targetIps: {}, targetOutpoints: {} };
   let pinned = false;
@@ -229,7 +231,7 @@ describe('deploymentProvider tests', () => {
     let provider;
 
     async function specFixture() {
-      const { FluxAppSpecV9 } = await import('@runonflux/flux-spec');
+      const { FluxAppSpecV9 } = await specLibs.getSpec();
       return FluxAppSpecV9.fromSubmission({
         version: 9,
         name: 'myapp',
@@ -257,8 +259,6 @@ describe('deploymentProvider tests', () => {
       const resolved = await specFixture();
       // resolveInstantiatedSpec is destructured at module load, so it is replaced
       // here rather than stubbed on the module object
-      // eslint-disable-next-line global-require
-      const proxyquire = require('proxyquire').noCallThru();
       provider = proxyquire('../../ZelBack/src/services/appRuntime/deploymentProvider', {
         '../utils/specCutover': { resolveInstantiatedSpec: async () => resolved },
       });

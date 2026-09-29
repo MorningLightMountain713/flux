@@ -2,6 +2,7 @@
 
 const { expect } = require('chai');
 const sinon = require('sinon');
+const proxyquire = require('proxyquire');
 const { EventEmitter } = require('events');
 const messageHelper = require('../../ZelBack/src/services/messageHelper');
 const { Privilege, authOf } = require('../../ZelBack/src/services/utils/privileges');
@@ -21,9 +22,7 @@ describe('cryptographicKeys tests', () => {
 
   // Helper to reload module after environment change
   const reloadModule = () => {
-    delete require.cache[require.resolve('../../ZelBack/src/services/appMessaging/cryptographicKeys')];
-    // eslint-disable-next-line global-require
-    cryptographicKeys = require('../../ZelBack/src/services/appMessaging/cryptographicKeys');
+    cryptographicKeys = proxyquire('../../ZelBack/src/services/appMessaging/cryptographicKeys', {});
   };
 
   // Helper to call getPublicKey and wait for response

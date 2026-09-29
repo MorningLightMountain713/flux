@@ -20,6 +20,7 @@ const { PEER_SOURCE } = require('../../ZelBack/src/services/utils/FluxPeerSocket
 const globalState = require('../../ZelBack/src/services/utils/globalState');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const { getSpec } = require('../../ZelBack/src/services/utils/specLibs');
+const policyStore = require('../../ZelBack/src/services/policyStore');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -358,7 +359,6 @@ describe('fluxCommunicationMessagesSender tests', () => {
   describe('policy messages', () => {
     const KEY = '0474eb4690689bb408139249eda7f361b7881c4254ccbe303d3b4d58c2b48897d0f070b44944941998551f9ea0e1befd96f13adf171c07c885e62d0c2af56d3dab';
     const PRIV = 'KxA2iy4aVuVKXsK8pBnJGM9vNm4z6PLNRTzsPuSFBw6vWL5StbqD';
-    let policyStore;
 
     function makePeer() {
       return { send: sinon.stub().returns('okay') };
@@ -371,8 +371,6 @@ describe('fluxCommunicationMessagesSender tests', () => {
     beforeEach(() => {
       sinon.stub(fluxNetworkHelper, 'getFluxNodePublicKey').returns(KEY);
       sinon.stub(fluxNetworkHelper, 'getFluxNodePrivateKey').returns(PRIV);
-      // eslint-disable-next-line global-require
-      policyStore = require('../../ZelBack/src/services/policyStore');
     });
 
     afterEach(() => {

@@ -32,6 +32,7 @@ const {
 } = require('./fixtures/fluxSpec');
 const legacyPricingRegime = require('../../ZelBack/src/services/pricing/legacyPricingRegime');
 const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
+const appSpecHelpers = require('../../ZelBack/src/services/utils/appSpecHelpers');
 
 // The spec library is real here — see tests/unit/fixtures/fluxSpec.js for why.
 // Every spec, component, placement and registration below is a real class
@@ -559,7 +560,6 @@ describe('appSpecHelpers tests', () => {
         data: { synced: false },
       });
 
-      const appSpecHelpers = require('../../ZelBack/src/services/utils/appSpecHelpers');
       try {
         await appSpecHelpers.getAppFluxOnChainPrice(appSpec);
         expect.fail('Should have thrown error');
@@ -930,22 +930,18 @@ describe('appSpecHelpers tests', () => {
 
   describe('module exports tests', () => {
     it('should export getAppFiatAndFluxPrice', () => {
-      const appSpecHelpers = require('../../ZelBack/src/services/utils/appSpecHelpers');
       expect(appSpecHelpers.getAppFiatAndFluxPrice).to.be.a('function');
     });
 
     it('should export getAppFiatAndFluxPriceApi', () => {
-      const appSpecHelpers = require('../../ZelBack/src/services/utils/appSpecHelpers');
       expect(appSpecHelpers.getAppFiatAndFluxPriceApi).to.be.a('function');
     });
 
     it('should export getAppPriceApi', () => {
-      const appSpecHelpers = require('../../ZelBack/src/services/utils/appSpecHelpers');
       expect(appSpecHelpers.getAppPriceApi).to.be.a('function');
     });
 
     it('should export getAppFluxOnChainPrice', () => {
-      const appSpecHelpers = require('../../ZelBack/src/services/utils/appSpecHelpers');
       expect(appSpecHelpers.getAppFluxOnChainPrice).to.be.a('function');
     });
 

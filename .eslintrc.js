@@ -100,8 +100,8 @@ module.exports = {
     {
       // A module requires what it uses at the top of its file; lib/moduleLoader is
       // the one place code loads later. tests/unit/moduleGraph.test.js holds the
-      // same rule and the absence of import cycles.
-      files: ['apiServer.js', 'ZelBack/src/**/*.js'],
+      // same rule for the shipped source and the absence of import cycles.
+      files: ['apiServer.js', 'ZelBack/src/**/*.js', 'tests/unit/**/*.js'],
       rules: {
         'global-require': 'error',
       },

@@ -3,12 +3,12 @@
 const chai = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
 
 const { expect } = chai;
 
 describe('operationsController tests', () => {
   let verifyPrivilegeStub;
-  let jobRegistry;
   let getLocalSocketAddressStub;
 
   function build(opts = {}) {
@@ -18,11 +18,6 @@ describe('operationsController tests', () => {
     getLocalSocketAddressStub = sinon.stub().resolves(
       'address' in opts ? opts.address : '185.209.30.228:16127',
     );
-    // The registry is the real one: the contract under test is how an operation
-    // is presented, and stubbing it out would test the stub.
-    // eslint-disable-next-line global-require
-    jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
-
     return proxyquire('../../ZelBack/src/services/appManagement/operationsController', {
       '../verificationHelper': { verifyPrivilege: verifyPrivilegeStub },
       '../fluxNetworkHelper': { getLocalSocketAddress: getLocalSocketAddressStub },
@@ -48,7 +43,7 @@ describe('operationsController tests', () => {
 
   afterEach(() => {
     sinon.restore();
-    if (jobRegistry) jobRegistry.reset();
+    jobRegistry.reset();
   });
 
   describe('accepting work', () => {

@@ -22,6 +22,8 @@ const os = require('os');
 const fs = require('fs');
 const nodePath = require('path');
 const EventEmitter = require('events');
+const pathSecurity = require('../../ZelBack/src/services/utils/pathSecurity');
+const archiver = require('archiver');
 
 describe('fileSystemManager tests', () => {
   const MOUNT = '/test/apps/folder/fluxcomp_myapp';
@@ -1025,7 +1027,7 @@ describe('fileSystemManager tests', () => {
       '../serviceHelper': serviceHelperStub,
       './volumeTarget': { resolveVolumeTarget: sinon.stub().resolves({ mount: MOUNT }) },
       '../../lib/log': { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() },
-      '../utils/pathSecurity': require('../../ZelBack/src/services/utils/pathSecurity'),
+      '../utils/pathSecurity': pathSecurity,
       './volumeSession': volumeSessionStub,
       './volumeExecutor': executorStub,
       '../utils/jobRegistry': jobRegistry,
@@ -1112,7 +1114,7 @@ describe('fileSystemManager tests', () => {
       fs.writeFileSync(nodePath.join(realDir, 'a.txt'), 'hello');
 
       const subject = subjectWith({
-        archiver: require('archiver'),
+        archiver,
         stream,
         '../utils/pathSecurity': { sanitizePath: () => realDir, verifyRealPathOfExistingPath: sinon.stub().callsFake(async (target) => target) },
       });

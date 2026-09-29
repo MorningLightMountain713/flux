@@ -6,6 +6,7 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const crypto = require('node:crypto');
 const { expect } = require('chai');
 const benchCrypto = require('../../test-infra/daemon-stub/benchCrypto');
+const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 
 const APP_NAME = 'transportattestapp';
 const FLUX_ID = '1KPKzy7iSSDpiLJ9DUiTHhwUwvsBFTGmLo';
@@ -43,7 +44,7 @@ describe('transport pubkey attestation — the stub produces what flux-spec veri
   let verifyTransportPubkeyAttestation;
 
   before(async () => {
-    ({ verifyTransportPubkeyAttestation } = await import('@runonflux/flux-spec'));
+    ({ verifyTransportPubkeyAttestation } = await specLibs.getSpec());
   });
 
   it('verifies an attestation the benchmark daemon stub just signed', async () => {

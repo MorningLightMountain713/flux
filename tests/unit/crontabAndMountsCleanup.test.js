@@ -11,6 +11,7 @@ const {
   loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION, v1Spec, v9Spec, sealedV8Spec,
   instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const { classifyVolumeFault } = require('../../ZelBack/src/services/appTamperingDetectionService');
 
 // The spec library is real here, not stubbed - see tests/unit/fixtures/fluxSpec.js
 // for why. Every installed row is a real InstantiatedSpec and every deployment a
@@ -65,7 +66,7 @@ const volumeServiceMock = {
 const appTamperingDetectionServiceMock = {
   recordEvent: sinon.stub(),
   // The map is data; the real classifier answers it.
-  classifyVolumeFault: require('../../ZelBack/src/services/appTamperingDetectionService').classifyVolumeFault,
+  classifyVolumeFault,
 };
 
 // Load module with mocked dependencies

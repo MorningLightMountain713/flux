@@ -25,6 +25,7 @@ const { requireMongo } = require('./dbTestHelper');
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
+const fluxSpecCjs = require('@runonflux/flux-spec-cjs');
 
 // 320-char OP_RETURN payload, hoisted so the call site stays inside max-len.
 // A standard P2PKH output's script, as the daemon reports it. Every payment output
@@ -1342,7 +1343,7 @@ describe('explorerService tests', () => {
     ];
 
     before(async () => {
-      policy = await require('@runonflux/flux-spec-cjs').load();
+      policy = await fluxSpecCjs.load();
     });
 
     beforeEach(async () => {

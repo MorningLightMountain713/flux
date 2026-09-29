@@ -6,6 +6,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const domain = require('./fixtures/appDomain');
 const { asConfig } = require('./fixtures/config');
+const fluxSpecCjs = require('@runonflux/flux-spec-cjs');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -21,7 +22,7 @@ describe('appEventVerifier', () => {
   let realBackend;
 
   before(async () => {
-    realBackend = await require('@runonflux/flux-spec-cjs').load();
+    realBackend = await fluxSpecCjs.load();
   });
 
   // Minimal AppEvent class double — just enough surface for authorize() to

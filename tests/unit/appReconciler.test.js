@@ -18,6 +18,7 @@ const {
   instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 const realDockerService = require('../../ZelBack/src/services/dockerService');
+const { classifyVolumeFault } = require('../../ZelBack/src/services/appTamperingDetectionService');
 
 // Mirrors appUninstaller.UninstallStatus (proxyquire.noCallThru stubs the real module out).
 const UninstallStatus = Object.freeze({
@@ -303,8 +304,7 @@ describe('appReconciler tests', () => {
       appTamperingDetectionService: {
         recordEvent: sinon.stub().resolves(),
         isNetworkMissingError: () => false,
-        // eslint-disable-next-line global-require
-        classifyVolumeFault: require('../../ZelBack/src/services/appTamperingDetectionService').classifyVolumeFault,
+        classifyVolumeFault,
       },
       dockerOperations: { appDeleteDataInMountPoint: sinon.stub().resolves() },
       serviceHelper: { delay: sinon.stub().resolves() },

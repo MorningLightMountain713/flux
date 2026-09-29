@@ -1,4 +1,3 @@
-const path = require('node:path');
 
 const { expect } = require('chai');
 const sinon = require('sinon');
@@ -11,14 +10,14 @@ const requireHttps = require('../../ZelBack/src/middlewares/requireHttps');
 const appInspector = require('../../ZelBack/src/services/appManagement/appInspector');
 const appController = require('../../ZelBack/src/services/appManagement/appController');
 const monitoringOrchestrator = require('../../ZelBack/src/services/appMonitoring/monitoringOrchestrator');
+const moduleLoader = require('../../ZelBack/src/lib/moduleLoader');
 
 // Every module a route names, loaded once: the names are data, so the modules are
 // found by name. Loading a module runs none of its handlers.
 const handlerModules = new Map();
 // eslint-disable-next-line no-restricted-syntax
 for (const modulePath of new Set(routeTable.map((route) => route.handler.split('#')[0]))) {
-  // eslint-disable-next-line global-require, import/no-dynamic-require
-  handlerModules.set(modulePath, require(path.join(SERVICES_DIR, modulePath)));
+  handlerModules.set(modulePath, moduleLoader.load(modulePath, SERVICES_DIR));
 }
 
 // Nothing else builds the routing table, so a route wired to the wrong handler, or a
