@@ -8,6 +8,8 @@ const { extractIp } = require('./utils/socketAddressUtils');
 const serviceHelper = require('./serviceHelper');
 const dbHelper = require('./dbHelper');
 const networkClassifier = require('./utils/networkClassifier');
+const ipLocationStore = require('./appPlacement/ipLocationStore');
+const benchmarkService = require('./benchmarkService');
 
 const { geolocation: geolocationCollection } = config.get('database.local.collections');
 
@@ -177,11 +179,6 @@ async function resolvePtr(ip) {
  * @returns {Promise<{consulted: boolean, classification: string|null}>}
  */
 async function publishedClassification(ip) {
-  // Lazily required, like the benchmark service below: the location store
-  // pulls in the database layer, and geolocation is read on paths that must
-  // not depend on it being up.
-  // eslint-disable-next-line global-require
-  const ipLocationStore = require('./appPlacement/ipLocationStore');
   if (!ipLocationStore.status().ready) {
     return { consulted: false, classification: null };
   }
@@ -205,8 +202,6 @@ async function publishedClassification(ip) {
  */
 async function benchLinkSpeeds() {
   try {
-    // eslint-disable-next-line global-require
-    const benchmarkService = require('./benchmarkService');
     const response = await benchmarkService.getBenchmarks();
     if (!response || response.status !== 'success' || !response.data) {
       return { uploadSpeed: 0, downloadSpeed: 0 };
@@ -613,11 +608,6 @@ async function getPlacementLocation() {
   const localIp = localSocketAddr ? extractIp(localSocketAddr) : null;
   let hit = null;
   if (localIp) {
-    // Lazily required for the reason publishedClassification gives above: the
-    // location store pulls in the database layer, and geolocation is read on
-    // paths that must not depend on it being up.
-    // eslint-disable-next-line global-require
-    const ipLocationStore = require('./appPlacement/ipLocationStore');
     if (ipLocationStore.status().ready) {
       try {
         hit = await ipLocationStore.lookup(localIp);

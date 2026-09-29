@@ -7,6 +7,7 @@ const serviceHelper = require('./serviceHelper');
 const dockerService = require('./dockerService');
 const appsRepository = require('./appDatabase/appsRepository');
 const { getSpecBackend } = require('./utils/specLibs');
+const appOperations = require('./appLifecycle/appOperations');
 
 const crontabLoad = util.promisify(systemcrontab.load);
 
@@ -214,9 +215,7 @@ async function rebuildApp(appName) {
   try {
     log.info(`Attempting to rebuild app ${appName} due to incorrect volume mount`);
 
-    // eslint-disable-next-line global-require
-    const { redeployApplication } = require('./appLifecycle/appOperations');
-    await redeployApplication(appName, { createVolumes: true });
+    await appOperations.redeployApplication(appName, { createVolumes: true });
 
     log.info(`Successfully redeployed app ${appName} with correct volume paths`);
     return true;

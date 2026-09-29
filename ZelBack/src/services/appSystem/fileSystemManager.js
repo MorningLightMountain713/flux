@@ -69,6 +69,7 @@ const executor = require('./volumeExecutor');
 const jobRegistry = require('../utils/jobRegistry');
 const operationsController = require('../appManagement/operationsController');
 const { Privilege, authOf } = require('../utils/privileges');
+const archiver = require('archiver');
 
 /**
  * Reclaim an upload's operation slot if the request stops sending bytes at the
@@ -331,10 +332,7 @@ async function downloadAppsFolder(req, res) {
         throw new Error('Folder is not accessible');
       }
       const folderName = path.basename(folderpath);
-      // Loaded on first use: only a folder download needs it, and it is one of the
-      // heaviest modules a cold start would otherwise read.
-      // eslint-disable-next-line global-require
-      const zip = require('archiver')('zip');
+      const zip = archiver('zip');
       // The download name is set through content-disposition, which encodes it,
       // so a name the application chose reaches the header as ASCII. Interpolated
       // into the header directly it throws on any byte the header grammar

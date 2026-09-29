@@ -20,6 +20,7 @@ const { normalizeSocketAddress, extractIp } = require('./utils/socketAddressUtil
 const fluxEventBus = require('./utils/fluxEventBus');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('./utils/appSyncEvents');
 const log = require('../lib/log');
+const grantorController = require('./quorumGrant/grantorController');
 
 // The node-down assembly: binds the reconciler (who to hold) and the juror
 // (who to accuse) to the running node. Transport is injected at start by
@@ -584,8 +585,7 @@ async function onPeerAdded({ ip, port } = {}) {
   // its published records before answering, and the announce doubles as the
   // certificate refutation should one have formed while we were dark.
   try {
-    // eslint-disable-next-line global-require
-    require('./quorumGrant/grantorController').noteReturnFromUnreachability();
+    grantorController.noteReturnFromUnreachability();
   } catch (error) {
     log.warn(`nodeDownService: return notice failed: ${error.message}`);
   }

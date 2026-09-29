@@ -14,6 +14,7 @@ const globalCommand = require('./globalCommand');
 const mastershipGrantGate = require('../appLifecycle/mastershipGrantGate');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { getSpecBackend } = require('../utils/specLibs');
+const verificationHelper = require('../verificationHelper');
 
 /**
  * Apply an operator run-state command to the target components THROUGH the
@@ -174,10 +175,6 @@ async function appStart(req, res) {
 
     const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
-    // eslint-disable-next-line global-require
-    // Use dynamic require to avoid circular dependency
-    // eslint-disable-next-line global-require
-    const verificationHelper = require('../verificationHelper');
     const authorized = await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: mainAppName });
     if (!authorized) {
       const errMessage = messageHelper.errUnauthorizedMessage();
@@ -262,9 +259,6 @@ async function appStop(req, res) {
 
     const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
-    // Use dynamic require to avoid circular dependency
-    // eslint-disable-next-line global-require
-    const verificationHelper = require('../verificationHelper');
     const authorized = await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: mainAppName });
     if (!authorized) {
       const errMessage = messageHelper.errUnauthorizedMessage();
@@ -374,8 +368,6 @@ async function appYieldApi(req, res) {
 
     const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
-    // eslint-disable-next-line global-require
-    const verificationHelper = require('../verificationHelper');
     const authorized = await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: mainAppName });
     if (!authorized) {
       const errMessage = messageHelper.errUnauthorizedMessage();
@@ -427,9 +419,6 @@ async function appRestart(req, res) {
 
     const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
-    // Use dynamic require to avoid circular dependency
-    // eslint-disable-next-line global-require
-    const verificationHelper = require('../verificationHelper');
     const authorized = await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: mainAppName });
     if (!authorized) {
       const errMessage = messageHelper.errUnauthorizedMessage();
@@ -506,9 +495,6 @@ async function appKill(req, res) {
 
     const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
-    // Use dynamic require to avoid circular dependency
-    // eslint-disable-next-line global-require
-    const verificationHelper = require('../verificationHelper');
     const authorized = await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: mainAppName });
     if (!authorized) {
       const errMessage = messageHelper.errUnauthorizedMessage();
@@ -589,9 +575,6 @@ async function deprecatedPauseResponse(req, res) {
         throw new Error('Invalid Flux App name specified');
       }
       const mainAppName = deploymentProvider.appNameFromRequest(appname);
-      // Use dynamic require to avoid circular dependency
-      // eslint-disable-next-line global-require
-      const verificationHelper = require('../verificationHelper');
       const authorized = await verificationHelper.verifyPrivilege(
         Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: mainAppName },
       );
@@ -705,8 +688,6 @@ async function stopAllNonFluxRunningApps() {
 
 async function createFluxNetworkAPI(req, res) {
   try {
-    // eslint-disable-next-line global-require
-    const verificationHelper = require('../verificationHelper');
     const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req));
     if (!authorized) {
       const errMessage = messageHelper.errUnauthorizedMessage();

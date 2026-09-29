@@ -9,7 +9,7 @@ const imageVerifier = require('../utils/imageVerifier');
 const verificationHelper = require('../verificationHelper');
 const log = require('../../lib/log');
 const { supportedArchitectures } = require('../utils/appConstants');
-const fluxCaching = require('../utils/cacheManager').default;
+const { default: fluxCaching, FluxCacheManager } = require('../utils/cacheManager');
 const policyStore = require('../policyStore');
 const { Privilege, authOf } = require('../utils/privileges');
 
@@ -27,9 +27,6 @@ function registryTransientBackoffMs() {
 }
 
 function classifyVerificationError(error, errorMeta) {
-  // eslint-disable-next-line global-require
-  const { FluxCacheManager } = require('../utils/cacheManager');
-
   // The class rides the thrown error itself and SURVIVES the verifier's error
   // reset - throwIfError wipes errorMeta before any catch can read it, so meta
   // is usually absent here and only refines the pacing when it is present.

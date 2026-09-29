@@ -8,6 +8,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const fluxEventBus = require('../utils/fluxEventBus');
 const ingressEncryptionKey = require('../utils/ingressEncryptionKey');
 const ingressCapture = require('../utils/ingressCapture');
+const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 
 // Wire message type for the standalone ingress-attestation gossip.
 const INGRESS_ATTESTATION_TYPE = 'fluxappingress';
@@ -92,9 +93,6 @@ async function emit(hash, req) {
 
     await persist(record);
 
-    // Lazy require: fluxCommunicationMessagesSender forms a load-time cycle.
-    // eslint-disable-next-line global-require
-    const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
     await fluxCommunicationMessagesSender.broadcastIngressAttestation(record);
   } catch (err) {
     log.error(`ingressAttestation emit failed for ${hash}: ${err.message}`);

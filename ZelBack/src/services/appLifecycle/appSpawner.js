@@ -1334,9 +1334,7 @@ async function trySpawningGlobalApplication() {
           withdrawn: true,
         };
         await messageStore.storeAppInstallingMessage(withdrawal);
-        // eslint-disable-next-line global-require
-        const fluxCommMessagesSenderLib = require('../fluxCommunicationMessagesSender');
-        await fluxCommMessagesSenderLib.broadcastMessageToAll(withdrawal);
+        await fluxCommunicationMessagesSender.broadcastMessageToAll(withdrawal);
       } catch (error) {
         // best effort - the installing TTL remains the backstop
         log.warn(`trySpawningGlobalApplication - could not retract installing claim for ${appToRun}: ${error.message}`);

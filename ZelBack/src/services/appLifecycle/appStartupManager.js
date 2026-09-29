@@ -29,6 +29,7 @@ const fluxEventBus = require('../utils/fluxEventBus');
 const nodeConfirmationService = require('../nodeConfirmationService');
 const { NODE_DOWN_GRACE_MS } = require('../utils/appConstants');
 const { parseContainerName } = require('../utils/appUtilities');
+const nodeDownStore = require('../appMessaging/nodeDownStore');
 
 const SYNC_TIMEOUT_MS = config.get('system.bootSyncTimeoutMs');
 
@@ -141,8 +142,6 @@ async function enforceNodePlacement(trigger) {
   let rows;
   let lockout;
   try {
-    // eslint-disable-next-line global-require
-    const nodeDownStore = require('../appMessaging/nodeDownStore');
     [rows, lockout] = await Promise.all([
       appsRepository.appLocationFromEvents({ ip: localSocketAddr }),
       nodeDownStore.lockoutForAddress(localSocketAddr),

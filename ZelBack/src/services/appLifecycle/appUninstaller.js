@@ -95,8 +95,6 @@ async function stopSyncthingAndCleanup(monitoredName, appId) {
 
     // The folder and its data are going, so the cache entry must go with them:
     // a stale mark would make the next install of this name read as already-synced
-    // eslint-disable-next-line no-shadow, global-require
-    const globalState = require('../utils/globalState');
     const { receiveOnlySyncthingAppsCache } = globalState;
     if (receiveOnlySyncthingAppsCache && receiveOnlySyncthingAppsCache.has(appId)) {
       receiveOnlySyncthingAppsCache.delete(appId);
