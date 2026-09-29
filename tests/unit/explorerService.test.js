@@ -10,7 +10,6 @@ const chainState = require('../../ZelBack/src/services/chainState');
 const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const specReconciler = require('../../ZelBack/src/services/appLifecycle/specReconciler');
-const appJanitor = require('../../ZelBack/src/services/appLifecycle/appJanitor');
 const portManager = require('../../ZelBack/src/services/appNetwork/portManager');
 const daemonServiceBlockchainRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceBlockchainRpcs');
 const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
@@ -286,7 +285,7 @@ describe('explorerService tests', () => {
     let dbStubUpdate;
     let dbStubCollectionStats;
     let logInfoSpy;
-    let sweepRegistryExpiryStub;
+    let blockScannedStub;
     let reconcileInstalledAppsStub;
     let restorePortsSupportStub;
     let daemonServiceBlockchainRpcsStub;
@@ -301,7 +300,7 @@ describe('explorerService tests', () => {
       sinon.stub(dbHelper, 'insertManyToDatabase');
       dbStubUpdate = sinon.stub(dbHelper, 'updateOneInDatabase');
       dbStubCollectionStats = sinon.stub(dbHelper, 'collectionStats');
-      sweepRegistryExpiryStub = sinon.stub(appJanitor, 'sweepRegistryExpiry');
+      blockScannedStub = sinon.stub(chainState, 'blockScanned').resolves();
       reconcileInstalledAppsStub = sinon.stub(specReconciler, 'requestFullConvergence');
       restorePortsSupportStub = sinon.stub(portManager, 'restorePortsSupport');
       await dbHelper.initiateDB();
@@ -321,7 +320,6 @@ describe('explorerService tests', () => {
       const blockHeight = 695_000;
       const isInsightExplorer = true;
       dbStubUpdate.returns(true);
-      sweepRegistryExpiryStub.returns(true);
       // prevent infinite func loop while testing
       dbStubCollectionStats.returns({
         size: 10_000,
@@ -360,13 +358,14 @@ describe('explorerService tests', () => {
             },
           ],
           height: 695_000,
+          time: 1_700_000_000,
           confirmations: 1,
         },
       });
 
       await explorerService.processOneBlock(blockHeight, isInsightExplorer, { atTip: true });
 
-      sinon.assert.calledOnce(sweepRegistryExpiryStub);
+      sinon.assert.calledOnceWithExactly(blockScannedStub, { height: 695_000, time: 1_700_000_000 });
       sinon.assert.notCalled(restorePortsSupportStub);
       sinon.assert.calledOnceWithMatch(
         dbStubUpdate,
@@ -428,7 +427,7 @@ describe('explorerService tests', () => {
 
       await explorerService.processOneBlock(blockHeight, isInsightExplorer, { atTip: true });
 
-      sinon.assert.notCalled(sweepRegistryExpiryStub);
+      sinon.assert.calledOnceWithMatch(blockScannedStub, { height: 900_009 });
       sinon.assert.notCalled(restorePortsSupportStub);
       sinon.assert.calledOnceWithMatch(
         dbStubUpdate,
@@ -438,6 +437,24 @@ describe('explorerService tests', () => {
         { $set: { generalScannedHeight: 900_009 } },
         { upsert: true },
       );
+    });
+
+    // Catching up, the cursor is written every explorerCursorBatchSize blocks
+    // (500 here), and each write names the block the registry's clock moves to.
+    it('reports a block the scan catches up past only when it writes the cursor', async () => {
+      dbStubCollectionStats.returns({ size: 10_000, count: 15, avgObjSize: 1111 });
+      daemonStatusStub.returns({ data: { synced: false } });
+      const block = (height) => ({
+        status: 'success', data: { tx: [], height, time: 1_700_000_000, confirmations: 10 },
+      });
+
+      daemonServiceBlockchainRpcsStub.returns(block(900_499));
+      await explorerService.processOneBlock(900_499, true, { atTip: false });
+      sinon.assert.notCalled(blockScannedStub);
+
+      daemonServiceBlockchainRpcsStub.returns(block(900_500));
+      await explorerService.processOneBlock(900_500, true, { atTip: false });
+      sinon.assert.calledOnceWithExactly(blockScannedStub, { height: 900_500, time: 1_700_000_000 });
     });
 
     it('should update db if all parameters are passed correctly, height == 900025', async () => {
@@ -489,7 +506,7 @@ describe('explorerService tests', () => {
 
       await explorerService.processOneBlock(blockHeight, isInsightExplorer, { atTip: true });
 
-      sinon.assert.notCalled(sweepRegistryExpiryStub);
+      sinon.assert.calledOnceWithMatch(blockScannedStub, { height: 900_025 });
       sinon.assert.calledOnceWithMatch(
         dbStubUpdate,
         sinon.match.object,
@@ -521,7 +538,7 @@ describe('explorerService tests', () => {
       sinon.stub(dbHelper, 'insertManyToDatabase');
       sinon.stub(dbHelper, 'updateOneInDatabase').returns(true);
       sinon.stub(dbHelper, 'collectionStats').returns({ size: 10_000, count: 15, avgObjSize: 1111 });
-      sinon.stub(appJanitor, 'sweepRegistryExpiry').returns(true);
+      sinon.stub(chainState, 'blockScanned').resolves();
       sinon.stub(specReconciler, 'requestFullConvergence');
       sinon.stub(portManager, 'restorePortsSupport');
       await dbHelper.initiateDB();
@@ -589,7 +606,7 @@ describe('explorerService tests', () => {
         count: 15,
         avgObjSize: 1111,
       });
-      sinon.stub(appJanitor, 'sweepRegistryExpiry').returns(true);
+      sinon.stub(chainState, 'blockScanned').resolves();
       sinon.stub(specReconciler, 'requestFullConvergence').resolves();
       sinon.stub(daemonServiceBlockchainRpcs, 'getBlock').returns({
         status: 'success',

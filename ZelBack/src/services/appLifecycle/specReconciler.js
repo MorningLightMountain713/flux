@@ -32,11 +32,16 @@ const syncthingFolderStateMachine = require('../appMonitoring/syncthingFolderSta
 // a REQUEST for convergence; the decision ladder below is the one body that
 // decides, ordered by severity:
 //
-//   1. expired                  -> removal (graceful, backgrounded)
+//   1. not listed, or listed    -> removal (graceful, backgrounded)
+//      for another app
 //   2. named, not targeted      -> removal (the declarative diff)
 //   3. loose, surplus instance  -> removal (rank by runningSince)
 //   4. spec hash differs        -> ADOPTION, scheduled with a stagger
 //   5. nothing                  -> converged
+//
+// Whether an app is alive is the registry's answer, not this module's: it drops
+// an app at the block its term ends, and its removal listener asks for that
+// app's convergence at once.
 //
 // What the network's POLICY refuses is not this question: the compliance
 // sweeper (imageManager) judges the node against the blocklist, driven by the
@@ -164,7 +169,7 @@ async function fireAdoption(appName) {
  * 'adoption-scheduled' | 'converged' | 'skipped').
  * @param {object} installed - hydrated installed spec
  * @param {object} registrySpec - hydrated desired spec, or null
- * @param {object} ctx - { localSocketAddr, nowSeconds, explorerHeight }
+ * @param {object} ctx - { localSocketAddr }
  */
 async function convergeApp(installed, registrySpec, ctx) {
   // The registry lists every app this node may run while it is alive, and this
@@ -180,13 +185,6 @@ async function convergeApp(installed, registrySpec, ctx) {
   }
   if (!await isInstalledApp(installed, registrySpec)) {
     log.warn(`REMOVAL REASON: the app registry lists another app under this name - ${installed.name} (specReconciler)`);
-    await appUninstaller.uninstallApplication(installed.name, {
-      forceKill: false, skipGuard: true, broadcastRemoval: true, background: true,
-    });
-    return 'removed';
-  }
-  if (registrySpec.isExpired(ctx.nowSeconds, ctx.explorerHeight)) {
-    log.warn(`REMOVAL REASON: App expired - ${installed.name} reached expiration date (specReconciler)`);
     await appUninstaller.uninstallApplication(installed.name, {
       forceKill: false, skipGuard: true, broadcastRemoval: true, background: true,
     });
@@ -377,11 +375,7 @@ async function requestFullConvergence({ reason } = {}) {
       filter: { name: { $in: installedApps.map((app) => new RegExp(`^${app.name}$`, 'i')) } },
     });
     const globalByName = new Map(globalRows.map((spec) => [spec.name.toLowerCase(), spec]));
-    const ctx = {
-      localSocketAddr,
-      nowSeconds: Math.floor(Date.now() / 1000),
-      explorerHeight: await registryManager.getScannedHeight(),
-    };
+    const ctx = { localSocketAddr };
     const outcomes = { removed: 0, 'adoption-scheduled': 0, converged: 0, skipped: 0 };
     for (const installed of installedApps) {
       try {
@@ -417,11 +411,7 @@ async function requestAppConvergence(appName, { reason, delayMs = 0 } = {}) {
     const installed = await appsRepository.getInstalledApp(appName);
     if (!installed) return;
     const registrySpec = await appsRepository.getGlobalAppInfo(appName);
-    const ctx = {
-      localSocketAddr: await fluxNetworkHelper.getLocalSocketAddress(),
-      nowSeconds: Math.floor(Date.now() / 1000),
-      explorerHeight: await registryManager.getScannedHeight(),
-    };
+    const ctx = { localSocketAddr: await fluxNetworkHelper.getLocalSocketAddress() };
     const outcome = await convergeApp(installed, registrySpec, ctx);
     if (outcome !== 'converged') log.info(`specReconciler(${reason}): ${appName} -> ${outcome}`);
   } catch (error) {

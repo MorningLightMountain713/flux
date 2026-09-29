@@ -228,4 +228,44 @@ describe('chainState', () => {
       expect(events.indexOf('block')).to.be.above(events.indexOf('capability up'));
     });
   });
+
+  describe('blockScanned', () => {
+    it('tells every listener the block, in the order they registered', async () => {
+      const heard = [];
+      const unsubscribe = [
+        chainState.onBlockScanned(async (block) => heard.push(['first', block])),
+        chainState.onBlockScanned(async (block) => heard.push(['second', block])),
+      ];
+
+      await chainState.blockScanned({ height: 1001, time: 1_700_000_000 });
+      unsubscribe.forEach((fn) => fn());
+
+      expect(heard).to.deep.equal([
+        ['first', { height: 1001, time: 1_700_000_000 }],
+        ['second', { height: 1001, time: 1_700_000_000 }],
+      ]);
+    });
+
+    it('never fails the block when a listener throws, and still tells the rest', async () => {
+      const later = sinon.stub().resolves();
+      const unsubscribe = [
+        chainState.onBlockScanned(async () => { throw new Error('boom'); }),
+        chainState.onBlockScanned(later),
+      ];
+
+      await chainState.blockScanned({ height: 1001, time: 1 });
+      unsubscribe.forEach((fn) => fn());
+
+      sinon.assert.calledOnce(later);
+    });
+
+    it('stops telling a listener that unsubscribed', async () => {
+      const listener = sinon.stub().resolves();
+      chainState.onBlockScanned(listener)();
+
+      await chainState.blockScanned({ height: 1001, time: 1 });
+
+      sinon.assert.notCalled(listener);
+    });
+  });
 });

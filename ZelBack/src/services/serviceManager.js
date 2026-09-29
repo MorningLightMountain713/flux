@@ -717,6 +717,8 @@ async function startFluxFunctions() {
           appSpawner.notifySpecStored(specDoc);
           specReconciler.notifySpecStored(specDoc);
         });
+        // An app leaving the list is removed from this node at once.
+        appRegistry.onRemoved((name) => specReconciler.requestAppConvergence(name, { reason: 'left the registry' }));
         log.info('App Spawner initialized');
 
         fluxNetworkHelper.adjustFirewall();

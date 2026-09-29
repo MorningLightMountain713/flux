@@ -38,6 +38,7 @@ const softForkCollections = [
 let lockTail = Promise.resolve();
 let rewinds = 0;
 const rewindListeners = [];
+const scannedListeners = [];
 
 function daemonDatabase() {
   return dbHelper.databaseConnection().db(config.get('database.daemon.database'));
@@ -80,6 +81,38 @@ function onRewind(fn) {
     const index = rewindListeners.indexOf(fn);
     if (index !== -1) rewindListeners.splice(index, 1);
   };
+}
+
+/**
+ * Registers `fn({height, time})`, called under the lock each time the scan
+ * moves the durable cursor forward, with the block the cursor now names and
+ * that block's time.
+ * @param {(block: {height: number, time: number}) => Promise<void>} fn
+ * @returns {() => void} unsubscribe
+ */
+function onBlockScanned(fn) {
+  scannedListeners.push(fn);
+  return () => {
+    const index = scannedListeners.indexOf(fn);
+    if (index !== -1) scannedListeners.splice(index, 1);
+  };
+}
+
+/**
+ * Tells the `onBlockScanned` listeners the cursor moved to a block. The scan
+ * calls it holding the lock. A listener's failure is logged and never fails the
+ * block.
+ * @param {{height: number, time: number}} block
+ */
+async function blockScanned(block) {
+  for (const fn of scannedListeners) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await fn(block);
+    } catch (error) {
+      log.error(`Chain state - a block-scanned listener failed at ${block.height}: ${error.message}`);
+    }
+  }
 }
 
 /**
@@ -195,8 +228,10 @@ function rewind(reason, target, options = {}) {
 }
 
 module.exports = {
+  blockScanned,
   exclusive,
   getScannedHeight,
+  onBlockScanned,
   onRewind,
   rewind,
   rewindCount,
