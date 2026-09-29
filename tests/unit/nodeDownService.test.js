@@ -204,7 +204,6 @@ describe('nodeDownService', () => {
   it('runs its housekeeping on its own interval', async () => {
     const clock = sinon.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
     const { service, transport, networkStateServiceStub } = makeHarness();
-    const localAddressReads = () => require('../../ZelBack/src/services/fluxNetworkHelper');
     service.start(transport);
     await tick();
     try {
@@ -216,7 +215,6 @@ describe('nodeDownService', () => {
     } finally {
       service.stop();
       clock.restore();
-      void localAddressReads;
     }
   });
 

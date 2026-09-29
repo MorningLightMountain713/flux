@@ -9,6 +9,7 @@ const pgpService = require('../../ZelBack/src/services/pgpService');
 const workerRunner = require('../../ZelBack/src/services/utils/workerRunner');
 const generalService = require('../../ZelBack/src/services/generalService');
 const nodeIdentityRepository = require('../../ZelBack/src/services/appDatabase/nodeIdentityRepository');
+const userconfig = require('../../config/userconfig');
 
 describe('pgpService tests', () => {
   let originalUserconfig;
@@ -18,8 +19,7 @@ describe('pgpService tests', () => {
   // answers other suites got from their own config.
   before(() => {
     originalUserconfig = globalThis.userconfig;
-    // eslint-disable-next-line global-require
-    globalThis.userconfig = require('../../config/userconfig');
+    globalThis.userconfig = userconfig;
   });
 
   after(() => {

@@ -8,6 +8,7 @@ const {
   loadSpecLibrary, v1Spec, v8Spec, v9Spec, sealedV8Spec, sealedV9Spec,
   instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const setReconciler = require('../../ZelBack/src/services/appMessaging/setReconciler');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. This is the repository layer, so what the tests hand it are real STORED
@@ -768,7 +769,6 @@ describe('appsRepository', () => {
       });
 
       it('a store recomputes only its own bucket, counting every row held', async () => {
-        const setReconciler = require('../../ZelBack/src/services/appMessaging/setReconciler'); // eslint-disable-line global-require
         dbHelperStub.insertOneToDatabase = sinon.stub().resolves({ insertedId: 'x' });
         dbHelperStub.findInDatabase.resolves([{ hash: 'h2', node: 'n2' }]); // the bucket's members
 

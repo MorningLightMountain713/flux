@@ -6,7 +6,10 @@ const { expect } = require('chai');
 
 const { MembershipHistory } = require('../../ZelBack/src/services/utils/membershipHistory');
 const { NodeDownTopology } = require('../../ZelBack/src/services/utils/nodeDownTopology');
-const { NodeDownJuror } = require('../../ZelBack/src/services/utils/nodeDownJuror');
+const {
+  NodeDownJuror, SHUTDOWN_COURTESY, RESTART_COURTESY, COURTESY_WINDOW_BLOCKS,
+} = require('../../ZelBack/src/services/utils/nodeDownJuror');
+const { NODE_DOWN_GRACE_MS, RESTART_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
 const { JUDGEMENT, verdictPayload } = require('../../ZelBack/src/services/utils/nodeDownCertificates');
 
 const T0 = 1_700_000_000_000;
@@ -258,7 +261,6 @@ describe('nodeDownJuror', () => {
 
 describe('nodeDownJuror — the drop carries its reason (R2), and a re-held duty is evidence', () => {
   const SUBJECT_ADDRESS = '10.0.0.20:16127';
-  const { NODE_DOWN_GRACE_MS, RESTART_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
 
   it('the graces default to production\'s: 420 s for a shutdown, 120 s for a restart', () => {
     expect(NODE_DOWN_GRACE_MS).to.equal(420 * 1000);
@@ -428,7 +430,6 @@ describe('nodeDownJuror — the verdict names which death this is (formal/death-
 });
 
 describe('nodeDownJuror — the verdict names the drop it answers (P1)', () => {
-  const { NODE_DOWN_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
 
   it('an unannounced drop\'s verdict carries the drop time and reason unannounced', async () => {
     const world = makeWorld();
@@ -472,10 +473,6 @@ describe('nodeDownJuror — the verdict names the drop it answers (P1)', () => {
 
 describe('nodeDownJuror — the courtesy: a clean stop is honoured only so many times per window (R7)', () => {
   const SUBJECT_ADDRESS = '10.0.0.20:16127';
-  const {
-    SHUTDOWN_COURTESY, RESTART_COURTESY, COURTESY_WINDOW_BLOCKS,
-  } = require('../../ZelBack/src/services/utils/nodeDownJuror');
-  const { NODE_DOWN_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
 
   it('the limits are code constants: four shutdowns and twelve restarts per 720 blocks', () => {
     expect(SHUTDOWN_COURTESY).to.equal(4);

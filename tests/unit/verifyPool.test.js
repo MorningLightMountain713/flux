@@ -16,6 +16,7 @@ const bitcoinMessage = require('bitcoinjs-message');
 const secp256k1 = require('secp256k1');
 const { load } = require('@runonflux/flux-spec-cjs');
 const { pubKeyToAddr } = require('../../ZelBack/src/services/utils/fluxCryptoUtils');
+const path = require('path');
 
 const TEST_PUBKEY = '0474eb4690689bb408139249eda7f361b7881c4254ccbe303d3b4d58c2b48897d0f070b44944941998551f9ea0e1befd96f13adf171c07c885e62d0c2af56d3dab';
 const TEST_PRIVKEY = '5JTeg79dTLzzHXoJPALMWuoGDM8QmLj4n5f6MeFjx8dzsirvjAh';
@@ -222,7 +223,7 @@ describe('verifyPool tests', () => {
   });
 
   describe('failure handling', () => {
-    const crashingWorker = require('path').join(__dirname, 'fixtures', 'workers', 'crashingVerifyWorker.js');
+    const crashingWorker = path.join(__dirname, 'fixtures', 'workers', 'crashingVerifyWorker.js');
 
     afterEach(() => {
       verifyPool.stop();

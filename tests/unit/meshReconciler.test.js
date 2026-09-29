@@ -29,6 +29,7 @@ const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
 const {
   loadSpecLibrary, V9_SUBMISSION, v9Spec, v8Spec, instantiatedSpec,
 } = require('./fixtures/fluxSpec');
+const meshIdentityDrift = require('../../ZelBack/src/services/appMesh/meshIdentityDrift');
 
 const APP_UUID = '5db6f53acbbd9b38e949307e96601e573bd6437ddec08707e76a33f771b358ea';
 const IDENTITY = 'ab12cd34ef56';
@@ -286,7 +287,7 @@ describe('meshReconciler', () => {
     await realFsp.rm(tmpRoot, { recursive: true, force: true });
     sinon.restore();
     // The pass writes the real (dependency-free) drift registry singleton.
-    require('../../ZelBack/src/services/appMesh/meshIdentityDrift').reset();
+    meshIdentityDrift.reset();
   });
 
   describe('hostingOutpointsFor', () => {

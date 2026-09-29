@@ -2,6 +2,8 @@ const { expect } = require('chai');
 const fs = require('fs');
 const path = require('path');
 const { DEFAULT_INITIAL_HEIGHT } = require('../../test-infra/runner/framework/chain-start.cjs');
+const productionConfig = require('../../ZelBack/config/default');
+const unitTestConfig = require('./globalconfig/default');
 
 // The harness chain has to start ABOVE every block-height gate in the production
 // config, or every suite silently runs on the wrong side of a fork. The validator
@@ -43,12 +45,12 @@ const requireShared = () => {
 // below every start, so "found nothing" has to be a failure, not a pass.
 const CONFIGS = {
   production: {
-    config: require(path.join(__dirname, '../../ZelBack/config/default.js')),
+    config: productionConfig,
     sentinel: 'fluxapps.minimumInstancesV8Block',
     atLeast: 10,
   },
   'the unit-test copy': {
-    config: require(path.join(__dirname, 'globalconfig/default.js')),
+    config: unitTestConfig,
     sentinel: 'fluxapps.minimumInstancesV8Block',
     atLeast: 10,
   },

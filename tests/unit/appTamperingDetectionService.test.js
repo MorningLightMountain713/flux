@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { asConfig } = require('./fixtures/config');
+const fs = require('fs');
 
 describe('appTamperingDetectionService tests', () => {
   let service;
@@ -513,7 +514,7 @@ describe('appTamperingDetectionService tests', () => {
     // callers never meet one this does not classify. A new reason added to the
     // mounter without a mapping is caught here, not in production.
     it('names every mount fault reason the mounter can return', () => {
-      const src = require('fs').readFileSync('ZelBack/src/services/utils/volumeService.js', 'utf8');
+      const src = fs.readFileSync('ZelBack/src/services/utils/volumeService.js', 'utf8');
       const reasons = new Set();
       const re = /reason: (?:`([a-z_]+)|'([a-z_]+)')/g;
       let m = re.exec(src);

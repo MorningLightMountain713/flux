@@ -14,6 +14,7 @@ const operationRegistry = require('../../ZelBack/src/services/utils/operationReg
 const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
+const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -175,8 +176,7 @@ describe('dockerService tests', () => {
     let schema;
 
     before(async () => {
-      // eslint-disable-next-line global-require
-      const { LABEL_KEYS, readLabel } = await require('../../ZelBack/src/services/utils/specLibs').getSpecBackend();
+      const { LABEL_KEYS, readLabel } = await specLibs.getSpecBackend();
       schema = { LABEL_KEYS, readLabel };
     });
 

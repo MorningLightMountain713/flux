@@ -3,7 +3,11 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { Readable, PassThrough, Writable } = require('node:stream');
 const pathSecurity = require('../../ZelBack/src/services/utils/pathSecurity');
+const os = require('node:os');
+const nodePath = require('node:path');
+const realFs = require('node:fs/promises');
 const { asConfig } = require('./fixtures/config');
+const volumeSession = require('../../ZelBack/src/services/appSystem/volumeSession');
 
 // Receiving an upload, driven through a REAL multipart body and a real parser.
 //
@@ -245,9 +249,6 @@ describe('fileSystemManager upload tests', () => {
   // The real session on a real disk, on a standby: what decides is where the
   // upload folder POINTS, and only a disk has links to point anywhere.
   describe('on a copy that follows another node', () => {
-    const os = require('node:os');
-    const nodePath = require('node:path');
-    const realFs = require('node:fs/promises');
     let tmpRoot;
     let mount;
 
@@ -429,8 +430,8 @@ describe('fileSystemManager upload tests', () => {
       },
       '../IOUtils': { getVolumeInfo: sinon.stub() },
       '../../lib/log': { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() },
-      '../utils/pathSecurity': require('../../ZelBack/src/services/utils/pathSecurity'),
-      './volumeSession': require('../../ZelBack/src/services/appSystem/volumeSession'),
+      '../utils/pathSecurity': pathSecurity,
+      './volumeSession': volumeSession,
       './volumeExecutor': executorStub,
       '../utils/fileTransfer': { sendFile: sinon.stub().resolves() },
       archiver: sinon.stub(),

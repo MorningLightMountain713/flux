@@ -11,15 +11,16 @@ const policyStore = require('../../ZelBack/src/services/policyStore');
 const axios = require('axios');
 const fluxCaching = require('../../ZelBack/src/services/utils/cacheManager').default;
 const { FluxCacheManager } = require('../../ZelBack/src/services/utils/cacheManager');
+const proxyquire = require('proxyquire');
+const imageManager = require('../../ZelBack/src/services/appSecurity/imageManager');
+
 describe('imageManager tests', () => {
   let imageManager;
 
   beforeEach(() => {
-    // Clear module cache to reset internal state/caches
-    delete require.cache[require.resolve('../../ZelBack/src/services/appSecurity/imageManager')];
-    // Reload module with fresh state
-    // eslint-disable-next-line global-require
-    imageManager = require('../../ZelBack/src/services/appSecurity/imageManager');
+    // A fresh copy per test: the module keeps its own caches. Its dependencies are
+    // the shared ones, so the sinon stubs below reach it.
+    imageManager = proxyquire('../../ZelBack/src/services/appSecurity/imageManager', {});
 
     // Clear the dockerHubVerificationCache before each test
     if (fluxCaching.dockerHubVerificationCache) {
@@ -661,8 +662,6 @@ describe('imageManager tests', () => {
 });
 
 describe('classifyVerificationError transient TTLs', () => {
-  // eslint-disable-next-line global-require
-  const imageManager = require('../../ZelBack/src/services/appSecurity/imageManager');
 
   it('paces transient classes in minutes - the cache must not outlive the outage', () => {
     const err = new Error('x');
@@ -679,8 +678,6 @@ describe('classifyVerificationError transient TTLs', () => {
 });
 
 describe('classifyVerificationError class-first routing (the meta-reset gap)', () => {
-  // eslint-disable-next-line global-require
-  const imageManager = require('../../ZelBack/src/services/appSecurity/imageManager');
 
   it('routes on the error class with NO errorMeta - throwIfError resets meta before any catch reads it', () => {
     const err = Object.assign(new Error('Connection Error ECONNABORTED: x not available'), { registryErrorClass: 'transient' });
@@ -706,8 +703,6 @@ describe('classifyVerificationError class-first routing (the meta-reset gap)', (
 // of the dependencies, and firing a timer returns the pass it started - so a case waits
 // for the work rather than for a number of turns of the event loop.
 describe('imageManager compliance sweeper', () => {
-  // eslint-disable-next-line global-require
-  const imageManager = require('../../ZelBack/src/services/appSecurity/imageManager');
 
   const KNOBS = {
     complianceSweepStaggerMs: 100,

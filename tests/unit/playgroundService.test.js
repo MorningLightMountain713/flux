@@ -194,7 +194,7 @@ describe('playgroundService', () => {
       '../utils/admissionControl': {
         withLock: stubs.withLock, reserve: stubs.reserve, release: stubs.release,
       },
-      '../utils/jobRegistry': require('../../ZelBack/src/services/utils/jobRegistry'),
+      '../utils/jobRegistry': jobRegistry,
       '../appManagement/operationsController': {
         accepted: (res, handle, extra) => res.status(202).json({ ...handle, ...extra }),
       },
@@ -484,7 +484,7 @@ describe('playgroundService', () => {
           burstHeadroomShortfall: stubs.burstShortfall,
         },
         '../utils/admissionControl': { withLock: stubs.withLock, reserve: stubs.reserve, release: stubs.release },
-        '../utils/jobRegistry': require('../../ZelBack/src/services/utils/jobRegistry'),
+        '../utils/jobRegistry': jobRegistry,
         '../appManagement/operationsController': { accepted: (res, h) => h },
         '../utils/specLibs': {
           validateSubmissionSpec: stubs.validateSpec,
