@@ -5,9 +5,8 @@ const express = require('express');
 const log = require('./lib/log');
 const { Privilege, authOf } = require('./services/utils/privileges');
 const verificationHelper = require('./services/verificationHelper');
-const operationsController = require('./services/appManagement/operationsController');
-const messageDelivery = require('./services/appMessaging/messageDelivery');
-const capabilities = require('./services/utils/capabilities');
+const routeTable = require('./routeTableV2');
+const { registerRoutes } = require('./routeBuilder');
 
 /**
  * The /v2 HTTP surface.
@@ -38,13 +37,6 @@ const capabilities = require('./services/utils/capabilities');
  */
 
 const router = express.Router();
-
-/**
- * Wrap an async handler so a rejection becomes an answer rather than an
- * unhandled rejection and a connection that never closes. Express 4 does not
- * await a handler's promise; express 5 does, and this is correct under both.
- */
-const route = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 
 const BODY_LIMIT = '25mb';
 
@@ -115,28 +107,24 @@ router.use(envelope);
 // 348,501 bytes of 3 MiB exceed many times over. Mounted before this surface's
 // general parser so that one never reads a larger body here.
 const DELIVERY_BODY_LIMIT = 3 * 1024 * 1024;
-const DELIVERY_NEEDS = ['localDbPrepared', 'chainStateConsistent'];
 
-/**
- * POST /v2/apps/messages - the contents of a paid app message this node is
- * missing. Unauthenticated: only contents whose hash this node's scan recorded a
- * payment for, and that pass every storage check, are stored.
- */
-router.post('/apps/messages', express.json({ limit: DELIVERY_BODY_LIMIT }), route(async (req, res) => {
-  const down = capabilities.firstNotUp(DELIVERY_NEEDS);
-  if (down) return res.fail('UNAVAILABLE', `${down} is not up`);
-  const { outcome, reason } = await messageDelivery.deliverMessage(req.body);
-  if (outcome === 'stored') return res.created({ hash: req.body.hash });
-  if (outcome === 'held') return res.ok({ hash: req.body.hash, held: true });
-  if (outcome === 'unpaid') return res.fail('NOT_FOUND', 'this node has recorded no payment for this hash');
-  return res.fail('UNPROCESSABLE', reason);
-}));
+// A v2 route refused because a capability it reads is down, in the v2 envelope.
+const surface = {
+  refuse: (res, { message }) => res.fail('UNAVAILABLE', message),
+  guards: {
+    deliveryBody: express.json({ limit: DELIVERY_BODY_LIMIT }),
+  },
+};
+
+registerRoutes(router, routeTable.filter((route) => route.ownsBody), surface);
 
 // This surface owns its body parsing. The global gate in lib/bodyParser.js
 // exempts /v2 precisely so that this is the only parser that runs here, which
 // is what keeps a raw-stream route from fighting a parser that already drained
 // it. A route needing raw bytes mounts express.raw() on its own sub-router.
 router.use(express.json({ limit: BODY_LIMIT }));
+
+registerRoutes(router, routeTable.filter((route) => !route.ownsBody), surface);
 
 /**
  * Answer a privilege verdict, or explain why there is not one.
@@ -194,37 +182,6 @@ function requireAppTier(privilege, appNameOf) {
   );
 }
 
-
-/**
- * THE status resource every long-running v2 operation points at.
- *
- * Reads the operation through the same pure function v1's
- * /apps/operations/:jobId reads it through, and formats it in this envelope.
- * Neither surface owns the operation; both are skins.
- *
- * A running operation is 200 with a non-terminal state. Completion is read from
- * the body, never inferred from the status code - a failed operation is still
- * a successful poll.
- */
-router.get('/operations/:id', route(async (req, res) => {
-  const sinceRaw = req.query.since;
-  const since = sinceRaw === undefined ? null : Number(sinceRaw);
-  if (since !== null && !Number.isFinite(since)) {
-    return res.fail('BAD_REQUEST', 'since must be a number');
-  }
-
-  const view = await operationsController.readOperation({
-    jobId: req.params.id,
-    callerId: await operationsController.callerFluxId(req),
-    sinceSeq: since,
-  });
-
-  // Unknown, expired and not-yours are ONE answer: a caller must not be able to
-  // learn from a 403 that someone else has an operation running.
-  if (!view) return res.fail('NOT_FOUND', 'operation not found');
-
-  return res.ok(view);
-}));
 
 // A terminating 404, so an unmatched /v2 path is answered HERE rather than
 // falling through to the frozen v1 routes. Without it a typo in a v2 path could
