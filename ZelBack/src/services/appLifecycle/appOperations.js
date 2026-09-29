@@ -73,6 +73,10 @@ const globalState = require('../utils/globalState');
 const contentBlobService = require('./contentBlobService');
 const operationRegistry = require('../utils/operationRegistry');
 const { Privilege, authOf } = require('../utils/privileges');
+const syncthingService = require('../syncthingService');
+const IOUtils = require('../IOUtils');
+const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
+const { peerManager } = require('../utils/peerState');
 
 // Active-standby app tracking
 const activePrimaryByIdentifier = new Map();
@@ -739,8 +743,6 @@ function messageReporter(res) {
  */
 async function changeSyncthingFolderType(folderId, folderType) {
   try {
-    // eslint-disable-next-line global-require
-    const syncthingService = require('../syncthingService');
 
     log.debug(`Changing syncthing folder ${folderId} to ${folderType} mode`);
 
@@ -1284,8 +1286,6 @@ async function runBackupTask(appname, backup, force, report) {
     report('Stopping application...\n');
     await stopApplication(appname, report);
     await serviceHelper.delay(5 * 1000);
-    // eslint-disable-next-line global-require
-    const IOUtils = require('../IOUtils');
     // eslint-disable-next-line no-restricted-syntax
     for (const component of backup) {
       if (component.backup) {
@@ -1559,8 +1559,6 @@ async function runRestoreTask(appname, restore, type, zelidauth, report, { force
     await stopApplication(appname, report);
     stopped = true;
     await serviceHelper.delay(5 * 1000);
-    // eslint-disable-next-line global-require
-    const IOUtils = require('../IOUtils');
 
     // The volumes each target replaces, each with the archive it reads.
     // eslint-disable-next-line no-restricted-syntax
@@ -1880,10 +1878,6 @@ async function updateAppGlobaly(params) {
     arcaneAttestation,
   };
 
-  // fluxCommunicationMessagesSender stays a lazy require: it forms a load-time
-  // cycle back to this module (via dockerService -> ... -> appInspector).
-  // eslint-disable-next-line global-require
-  const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
   await fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage);
   await serviceHelper.delay(1200);
   await messageVerifier.requestAppMessage(messageHASH);
@@ -1923,8 +1917,6 @@ async function submitAppUpdate(req, res, processedBody, contentCtx) {
     res.json(messageHelper.errUnauthorizedMessage());
     return;
   }
-  // eslint-disable-next-line global-require
-  const { peerManager } = require('../utils/peerState');
   // Direction-agnostic on purpose — see the registration gate: duty pairs
   // are reciprocal and the outbound label is a dial-race outcome, so what
   // safety needs is enough distinct peers HELD, whoever dialed.
@@ -2590,8 +2582,6 @@ async function coordinateActiveStandbyApps() {
     }
 
     try {
-      // eslint-disable-next-line global-require
-      const syncthingService = require('../syncthingService');
       const syncthingHealth = await syncthingService.getHealth();
       if (syncthingHealth?.status !== 'OK') {
         log.warn('activeStandby: Syncthing is not available or not healthy, skipping this cycle');
@@ -2789,8 +2779,6 @@ async function coordinateActiveStandbyApps() {
                 // This handles the case where folder is synced but cache was cleared/lost
                 if (!isReady) {
                   try {
-                    // eslint-disable-next-line global-require
-                    const syncthingService = require('../syncthingService');
                     // eslint-disable-next-line no-await-in-loop
                     const allSyncthingFolders = await syncthingService.getConfigFolders();
                     if (Array.isArray(allSyncthingFolders)) {
@@ -3023,8 +3011,6 @@ async function coordinateActiveStandbyApps() {
                 // Fallback: If not in cache or not ready, check if syncthing folder is already in sendreceive mode
                 if (!isReady) {
                   try {
-                    // eslint-disable-next-line global-require
-                    const syncthingService = require('../syncthingService');
                     // eslint-disable-next-line no-await-in-loop
                     const allSyncthingFolders = await syncthingService.getConfigFolders();
                     if (Array.isArray(allSyncthingFolders)) {
@@ -3106,9 +3092,6 @@ function startActiveStandbyCoordinator() {
  */
 async function getPeerAppsInstallingErrorMessages() {
   try {
-    // Import peerManager dynamically to avoid circular dependency
-    // eslint-disable-next-line global-require
-    const { peerManager } = require('../utils/peerState');
 
     if (peerManager.getNumberOfPeers() === 0) {
       log.info('getPeerAppsInstallingErrorMessages - No peers held');

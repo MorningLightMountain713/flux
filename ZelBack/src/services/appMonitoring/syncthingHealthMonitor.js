@@ -17,6 +17,7 @@ const {
   HEALTH_NUDGE_THRESHOLD_MS,
   HEALTH_WARNING_THRESHOLD_MS,
 } = require('./syncthingMonitorConstants');
+const fs = require('node:fs');
 
 /**
  * Health status for a folder
@@ -150,8 +151,6 @@ async function monitorFolderHealth(params) {
       if (isMounted === false) {
         // Check if folder exists but not mounted (unmounted loop device)
         try {
-          // eslint-disable-next-line no-await-in-loop
-          const fs = require('node:fs');
           // eslint-disable-next-line no-await-in-loop
           const stats = await fs.promises.stat(folderPath);
           if (stats.isDirectory()) {

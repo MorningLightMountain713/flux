@@ -2,6 +2,7 @@
 
 const path = require('node:path');
 const fs = require('node:fs');
+const config = require('config');
 
 const USER_CONFIG_PATH = path.join(__dirname, '../../../../config/userconfig.js');
 
@@ -77,8 +78,6 @@ class ConfigManager {
     if (!initial || typeof initial !== 'object') return 'config has no initial section';
     if (typeof initial.zelid !== 'string' || !initial.zelid) return 'initial.zelid is missing';
 
-    // eslint-disable-next-line global-require
-    const config = require('config');
     if (initial.apiport !== undefined && initial.apiport !== ''
       && !config.get('server.allowedPorts').includes(Number(initial.apiport))) {
       return `initial.apiport ${initial.apiport} is not an allowed port`;

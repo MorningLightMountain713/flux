@@ -1,6 +1,7 @@
 'use strict';
 
 const priceOracleState = require('./priceOracleState');
+const specLibs = require('../utils/specLibs');
 
 class FluxosDiscounter {
   async discounts(spec, _partial, ctx) {
@@ -24,7 +25,7 @@ class FluxosDiscounter {
   }
 
   async checkFreeUpdate(oldSpec, newSpec, ctx) {
-    const { checkFreeUpdate } = await require('../utils/specLibs').getSpecPolicy();
+    const { checkFreeUpdate } = await specLibs.getSpecPolicy();
     const result = checkFreeUpdate({
       oldSpec,
       newSpec,

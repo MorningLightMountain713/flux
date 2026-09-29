@@ -36,6 +36,7 @@ const nodeConfirmationService = require('../nodeConfirmationService');
 const { localAppsInformation, NODE_DOWN_GRACE_MS } = require('../utils/appConstants');
 const { parseContainerName } = require('../utils/appUtilities');
 const { untilSucceeds, BOOT_STEP_RETRY_MS } = require('../utils/untilSucceeds');
+const nodeDownStore = require('../appMessaging/nodeDownStore');
 
 const SYNC_TIMEOUT_MS = config.get('system.bootSyncTimeoutMs');
 
@@ -152,8 +153,6 @@ async function openInstalledAppPorts() {
  * @throws {Error} When the rows cannot be read.
  */
 async function readPlacement(localSocketAddr) {
-  // eslint-disable-next-line global-require
-  const nodeDownStore = require('../appMessaging/nodeDownStore');
   const [rows, lockout] = await Promise.all([
     appsRepository.appLocationFromEvents({ ip: localSocketAddr }),
     nodeDownStore.lockoutForAddress(localSocketAddr),

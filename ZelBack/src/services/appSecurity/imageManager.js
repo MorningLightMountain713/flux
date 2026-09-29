@@ -9,7 +9,7 @@ const imageVerifier = require('../utils/imageVerifier');
 const verificationHelper = require('../verificationHelper');
 const log = require('../../lib/log');
 const { supportedArchitectures } = require('../utils/appConstants');
-const fluxCaching = require('../utils/cacheManager').default;
+const { default: fluxCaching, FluxCacheManager } = require('../utils/cacheManager');
 const policyStore = require('../policyStore');
 const { Privilege, authOf } = require('../utils/privileges');
 
@@ -28,8 +28,6 @@ function registryTransientBackoffMs() {
  * @returns {{ttlMs: number, reason: string}}
  */
 function classifyVerificationError(error) {
-  // eslint-disable-next-line global-require
-  const { FluxCacheManager } = require('../utils/cacheManager');
 
   const { errorMeta } = error;
 

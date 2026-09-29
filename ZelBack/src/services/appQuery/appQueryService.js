@@ -22,6 +22,9 @@ const syncthingService = require('../syncthingService');
 const operationRegistry = require('../utils/operationRegistry');
 const { getSpecBackend } = require('../utils/specLibs');
 const log = require('../../lib/log');
+const globalState = require('../utils/globalState');
+const fluxNetworkHelper = require('../fluxNetworkHelper');
+const fluxCommunicationUtils = require('../fluxCommunicationUtils');
 
 // Database collections
 const globalAppsMessages = config.get('database.appsglobal.collections.appsMessages');
@@ -467,8 +470,6 @@ async function heldComponentsAnswer(req, res) {
  */
 async function promotedFolders(req, res) {
   try {
-    // eslint-disable-next-line global-require
-    const globalState = require('../utils/globalState');
     const ids = globalState.promotedFolderIds;
     const response = messageHelper.createDataMessage({
       ready: ids !== null,
@@ -664,13 +665,6 @@ async function getAppsMessagesCount(req, res) {
 async function callerIsFluxnode(body) {
   if (!body || !body.pubKey || !body.signature || !body.target) return false;
 
-  // Required here rather than at the top: fluxNetworkHelper reaches back into the
-  // application services, and this module is on that path.
-  // eslint-disable-next-line global-require
-  const fluxNetworkHelper = require('../fluxNetworkHelper');
-  // eslint-disable-next-line global-require
-  const fluxCommunicationUtils = require('../fluxCommunicationUtils');
-
   // BOUNDED BOTH WAYS, because only one of them is a freshness question.
   // verifyTimestampInFluxBroadcast asks whether a request is too OLD, which is what
   // makes one captured off the wire stop working. It says nothing about a request
@@ -737,8 +731,6 @@ async function callerIsFluxnode(body) {
  */
 async function promotedFolderHoldings(req, res) {
   try {
-    // eslint-disable-next-line global-require
-    const globalState = require('../utils/globalState');
     const ids = globalState.promotedFolderIds;
     const body = serviceHelper.ensureObject(req?.body) || {};
 

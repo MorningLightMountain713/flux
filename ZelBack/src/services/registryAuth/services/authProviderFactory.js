@@ -12,6 +12,17 @@ const log = require('../../../lib/log');
 const { default: fluxCaching } = require('../../utils/cacheManager');
 const { RegistryAuthProvider } = require('../providers/base/registryAuthProvider');
 const { BasicAuthProvider } = require('../providers/basicAuthProvider');
+const { AwsEcrAuthProvider } = require('../providers/awsEcrAuthProvider');
+const { GoogleGarAuthProvider } = require('../providers/googleGarAuthProvider');
+const { AzureAcrAuthProvider } = require('../providers/azureAcrAuthProvider');
+
+// Every provider this node ships, by the name a registry config selects it with.
+const BUILT_IN_PROVIDERS = [
+  ['basic', BasicAuthProvider],
+  ['aws-ecr', AwsEcrAuthProvider],
+  ['google-gar', GoogleGarAuthProvider],
+  ['azure-acr', AzureAcrAuthProvider],
+];
 
 class AuthProviderFactory {
   // Registry of available provider classes
@@ -318,35 +329,7 @@ class AuthProviderFactory {
     this.providers.clear();
     fluxCaching.registryProviderCache.clear();
 
-    // Re-register built-in providers
-    this.registerProvider('basic', BasicAuthProvider);
-
-    // Register AWS ECR provider if available
-    try {
-      // eslint-disable-next-line global-require
-      const { AwsEcrAuthProvider } = require('../providers/awsEcrAuthProvider');
-      this.registerProvider('aws-ecr', AwsEcrAuthProvider);
-    } catch (error) {
-      // AWS SDK not available, skip registration
-    }
-
-    // Register Google GAR provider if available
-    try {
-      // eslint-disable-next-line global-require
-      const { GoogleGarAuthProvider } = require('../providers/googleGarAuthProvider');
-      this.registerProvider('google-gar', GoogleGarAuthProvider);
-    } catch (error) {
-      // Google Auth Library not available, skip registration
-    }
-
-    // Register Azure ACR provider if available
-    try {
-      // eslint-disable-next-line global-require
-      const { AzureAcrAuthProvider } = require('../providers/azureAcrAuthProvider');
-      this.registerProvider('azure-acr', AzureAcrAuthProvider);
-    } catch (error) {
-      // Azure Identity library not available, skip registration
-    }
+    BUILT_IN_PROVIDERS.forEach(([name, provider]) => this.registerProvider(name, provider));
   }
 
   /**
@@ -412,37 +395,6 @@ class AuthProviderFactory {
   }
 }
 
-// Register built-in providers
-AuthProviderFactory.registerProvider('basic', BasicAuthProvider);
-
-// Register AWS ECR provider if AWS SDK is available
-try {
-  // eslint-disable-next-line global-require
-  const { AwsEcrAuthProvider } = require('../providers/awsEcrAuthProvider');
-  AuthProviderFactory.registerProvider('aws-ecr', AwsEcrAuthProvider);
-} catch (error) {
-  // AWS SDK not available, skip registration
-  log.debug('AWS ECR provider not available: AWS SDK not installed');
-}
-
-// Register Google GAR provider if Google Auth Library is available
-try {
-  // eslint-disable-next-line global-require
-  const { GoogleGarAuthProvider } = require('../providers/googleGarAuthProvider');
-  AuthProviderFactory.registerProvider('google-gar', GoogleGarAuthProvider);
-} catch (error) {
-  // Google Auth Library not available, skip registration
-  log.debug('Google GAR provider not available: google-auth-library not installed');
-}
-
-// Register Azure ACR provider if Azure Identity library is available
-try {
-  // eslint-disable-next-line global-require
-  const { AzureAcrAuthProvider } = require('../providers/azureAcrAuthProvider');
-  AuthProviderFactory.registerProvider('azure-acr', AzureAcrAuthProvider);
-} catch (error) {
-  // Azure Identity library not available, skip registration
-  log.debug('Azure ACR provider not available: @azure/identity not installed');
-}
+BUILT_IN_PROVIDERS.forEach(([name, provider]) => AuthProviderFactory.registerProvider(name, provider));
 
 module.exports = { AuthProviderFactory };

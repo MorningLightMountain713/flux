@@ -25,6 +25,7 @@ const capabilities = require('../utils/capabilities');
 const fluxEventBus = require('../utils/fluxEventBus');
 const policyStore = require('../policyStore');
 const { nodeSigner } = require('../utils/nodeSigner');
+const appUninstaller = require('../appLifecycle/appUninstaller');
 
 // Global cache for failed nodes
 const failedNodesTestPortsCache = new Map();
@@ -238,9 +239,6 @@ async function restoreAppsPortsSupport() {
 
         log.warn(`REMOVAL REASON: UPNP port mapping failure - ${application.name} failed to map port ${failedPort} via UPNP for ${tracker.cycles} consecutive cycles over ${Math.round(sustainedMs / 60_000)}m (portManager)`);
         upnpMapFailures.delete(application.name);
-        // Import locally to avoid circular dependency
-        // eslint-disable-next-line global-require
-        const appUninstaller = require('../appLifecycle/appUninstaller');
         // eslint-disable-next-line no-await-in-loop
         await appUninstaller.uninstallApplication(application.name, { forceKill: true, skipGuard: true, broadcastRemoval: true }).catch((error) => log.error(error));
         // eslint-disable-next-line no-await-in-loop

@@ -36,6 +36,8 @@ const { getSpecPolicy } = require('./utils/specLibs');
 const priceOracleState = require('./pricing/priceOracleState');
 const entitlementsState = require('./entitlementsState');
 const { pubKeyToAddr } = require('./utils/fluxCryptoUtils');
+const appQueryService = require('./appQuery/appQueryService');
+const appOperations = require('./appLifecycle/appOperations');
 
 const appsHashesCollection = config.get('database.daemon.collections.appsHashes');
 const scannedHeightCollection = config.get('database.daemon.collections.scannedHeight');
@@ -802,12 +804,6 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
           // already evacuating, and hands back at most one app per pass. Never
           // throws: a give-up that cannot decide must not stall the block loop.
           try {
-            // Lazily required: both sit downstream of this module in the load
-            // graph, and requiring them at the top would close the cycle.
-            // eslint-disable-next-line global-require
-            const appQueryService = require('./appQuery/appQueryService');
-            // eslint-disable-next-line global-require
-            const appOperations = require('./appLifecycle/appOperations');
             await appGiveUp.checkAndGiveUpAnApp({
               installedAppsFn: appQueryService.installedApps,
               isElectedPrimary: appOperations.isElectedPrimary,

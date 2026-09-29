@@ -62,6 +62,12 @@ const { Privilege, authOf } = require('./utils/privileges');
 const fluxEventBus = require('./utils/fluxEventBus');
 
 const globalState = require('./utils/globalState');
+const residentialNodeDosService = require('./residentialNodeDosService');
+const appInspector = require('./appManagement/appInspector');
+const resourceQueryService = require('./appQuery/resourceQueryService');
+const appQueryService = require('./appQuery/appQueryService');
+const containerLabelBackfill = require('./appLifecycle/containerLabelBackfill');
+const registryManager = require('./appDatabase/registryManager');
 
 /**
  * What an endpoint that updates FluxOS's own code answers on this node type, or
@@ -1750,11 +1756,7 @@ async function getFluxInfo(req, res) {
     // simply not been given work - and that stage is the whole settling window,
     // the only part of this where an operator can still put the node right and
     // lose nothing.
-    //
-    // Lazily required: this service is loaded by half the tree and the enforcer
-    // reaches back into fluxNetworkHelper, which reaches here.
-    // eslint-disable-next-line global-require
-    info.flux.dosStaging = require('./residentialNodeDosService').getDosStaging();
+    info.flux.dosStaging = residentialNodeDosService.getDosStaging();
     info.flux.upnp = upnpService.isUPNP();
     info.flux.maxNumberOfIpChanges = fluxNetworkMonitor.getMaxNumberOfIpChanges();
     const zelidRes = await getFluxZelID();
@@ -1772,8 +1774,6 @@ async function getFluxInfo(req, res) {
     }
     info.flux.timezone = timeResult.data;
     info.flux.dos = nodeDosState.getDosData();
-    // eslint-disable-next-line global-require
-    const appInspector = require('./appManagement/appInspector');
     const dosAppsResult = await appInspector.getAppsDOSState();
     if (dosAppsResult.status === 'error') {
       throw dosAppsResult.data;
@@ -1817,15 +1817,11 @@ async function getFluxInfo(req, res) {
     }
     info.benchmark.bench = benchmarkBenchRes.data;
 
-    // eslint-disable-next-line global-require
-    const resourceQueryService = require('./appQuery/resourceQueryService');
     const apppsFluxUsage = await resourceQueryService.fluxUsage();
     if (apppsFluxUsage.status === 'error') {
       throw apppsFluxUsage.data;
     }
     info.apps.fluxusage = apppsFluxUsage.data;
-    // eslint-disable-next-line global-require
-    const appQueryService = require('./appQuery/appQueryService');
     const appsRunning = await appQueryService.listRunningApps();
     if (appsRunning.status === 'error') {
       throw appsRunning.data;
@@ -1845,8 +1841,6 @@ async function getFluxInfo(req, res) {
     // deleted once the whole fleet reports covered, so the figure is published
     // rather than only logged. Best-effort: a docker read failure must not fail
     // the whole info payload.
-    // eslint-disable-next-line global-require
-    const containerLabelBackfill = require('./appLifecycle/containerLabelBackfill');
     info.apps.containerLabels = await containerLabelBackfill.labelCoverage().catch((error) => {
       log.warn(`getFluxInfo - container label coverage unavailable: ${error.message}`);
       return null;
@@ -1859,8 +1853,6 @@ async function getFluxInfo(req, res) {
         log.warn(`getFluxInfo - component identifier coverage unavailable: ${error.message}`);
         return null;
       });
-    // eslint-disable-next-line global-require
-    const registryManager = require('./appDatabase/registryManager');
     const appHashes = await registryManager.getAppHashes();
     if (appHashes.status === 'error') {
       throw appHashes.data;
