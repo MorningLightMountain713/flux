@@ -14,6 +14,7 @@ const log = require('../lib/log');
 const { extractIp } = require('./utils/socketAddressUtils');
 const { storageLinkOf } = require('./utils/fluxStorage');
 const { getSpec, getSpecBackend } = require('./utils/specLibs');
+const { appNetworkOwner } = require('./utils/appNetworkOwner');
 const { obtainPayloadFromStorage } = require('./utils/fluxStorageRefs');
 const cpuBurstHelper = require('./utils/cpuBurstHelper');
 const LogFrameDecoder = require('./utils/logFrameDecoder');
@@ -2734,13 +2735,15 @@ async function getAppNameByContainerIp(ip) {
   });
 
   const fluxNetworkData = await Promise.all(networkPromises);
+  const { LABEL_KEYS } = await getSpecBackend();
 
   let appName = null;
   // eslint-disable-next-line no-restricted-syntax
   for (const fluxNetwork of fluxNetworkData) {
     const subnet = fluxNetwork.IPAM.Config[0].Subnet;
     if (serviceHelper.ipInSubnet(ip, subnet)) {
-      appName = fluxNetwork.Name.split('_')[1];
+      // The network is named from the app's identity; the app's name is its label.
+      appName = appNetworkOwner(fluxNetwork, LABEL_KEYS);
       break;
     }
   }
