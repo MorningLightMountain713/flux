@@ -38,42 +38,27 @@ function requiredInstances(spec) {
  * The components of an app that keep synced state, with the syncthing folder id
  * each one owns. Folder ids ARE app identifiers.
  *
- * Asked of the spec CLASS, never of a stored document. This read
- * `spec.version >= 4 && Array.isArray(spec.compose)` and each component's
- * `containerData` - the v8 spelling, which a v9 spec does not carry. It did not
- * fail on one: it returned an EMPTY list, and an empty list here means
- * "stateless", which is answered `safe: true` before the only-host check is ever
- * reached. Every v9 app was therefore judged to have no data worth keeping.
+ * Read from the deployment this node runs: its components carry the identifiers
+ * the library built from the app's identity and replica, which is what the
+ * election keys, what the container is named and what the folder is. An
+ * identifier built from the app name would name another app for every app
+ * registered under v9.
  *
- * The class answers for both versions - FluxAppSpecV8's component parses its own
- * containerData into persistentStorage.sync, so `hasSyncthing()` resolves `g:`
- * and `sync.mode` alike.
- *
- * @param {object} spec A spec class (FluxAppSpecV8/V9 or an InstantiatedSpec's
- *   `.spec`), NOT a stored document.
+ * @param {object} deployment The DeploymentSpec installed on this node.
  * @returns {Array<{name: string, syncMode: string, identifier: string, folderId: string}>}
  */
-function syncedComponents(spec) {
-  const components = Object.values(spec.components || {});
-  return components.reduce((acc, component) => {
-    if (!component.hasSyncthing || !component.hasSyncthing()) return acc;
+function syncedComponents(deployment) {
+  return deployment.componentEntries().reduce((acc, [name, component]) => {
+    if (!component.hasSyncthing()) return acc;
     // The election only distinguishes activeStandby ('g:'); the other modes are
     // synced but hold no writer. Kept as the same vocabulary the caller's
     // `syncMode === 'g'` test already uses.
     const syncMode = component.hasActiveStandbySyncthing() ? 'g' : 'sync';
-    // The v1-3 flat form IS its single component, so its identifier is the bare
-    // app name; v4 and up (v9 included) join component and app. Read from the
-    // spec's VERSION, which is a format fact, rather than from the presence of a
-    // `compose` array, which is a v8 spelling a v9 spec does not carry.
-    const identifier = spec.version >= 4 ? `${component.name}_${spec.name}` : spec.name;
     acc.push({
-      name: component.name,
+      name,
       syncMode,
-      // The key masterSlaveApps elects on, and the name the container carries
-      // once the prefix is stripped - so a caller can ask whether THIS node is
-      // running the component without reconstructing either.
-      identifier,
-      folderId: dockerService.getAppIdentifier(identifier),
+      identifier: component.identifier,
+      folderId: dockerService.getAppIdentifier(component.identifier),
     });
     return acc;
   }, []);
@@ -109,10 +94,13 @@ function otherHostCount(locations, localSocketAddr) {
  *   database, a docker daemon or a syncthing process.
  * @param {Function} deps.appLocation Instance locations for an app name.
  * @param {Function} deps.getApplicationGlobalSpecifications Global spec for an app name.
+ * @param {Function} deps.getInstalledDeployment The DeploymentSpec this node runs
+ *   for an app name, or null. Required.
  * @param {Function} deps.findSyncedPeer Connected peer that holds a folder, or null.
- * @param {Function} deps.isElectedPrimary Three-state: true if this node is the
- *   elected `g:` primary, false if another node provably is, null if the
- *   election cannot say. Required - null and false are not interchangeable here.
+ * @param {Function} deps.isElectedPrimary `(appName, identifiers)`, three-state:
+ *   true if this node is the elected `g:` primary of one of those component
+ *   identifiers, false if another node provably is, null if the election cannot
+ *   say. Required - null and false are not interchangeable here.
  * @param {Function} deps.isComponentRunningLocally Whether a component
  *   identifier is running on this node right now. Required.
  * @returns {Promise<{safe: boolean, code: string, reason: string}>} `code` is
@@ -124,6 +112,7 @@ async function canSafelyRemoveApp(appName, deps) {
   const {
     appLocation,
     getApplicationGlobalSpecifications,
+    getInstalledDeployment,
     findSyncedPeer,
     isElectedPrimary,
     isComponentRunningLocally,
@@ -136,8 +125,9 @@ async function canSafelyRemoveApp(appName, deps) {
     // refused. A caller that cannot answer must not be told the removal is
     // safe, so the omission throws and the catch below turns it into a refusal
     // that says so.
-    if (typeof isElectedPrimary !== 'function' || typeof isComponentRunningLocally !== 'function') {
-      throw new Error('isElectedPrimary and isComponentRunningLocally are required');
+    if (typeof isElectedPrimary !== 'function' || typeof isComponentRunningLocally !== 'function'
+      || typeof getInstalledDeployment !== 'function') {
+      throw new Error('isElectedPrimary, isComponentRunningLocally and getInstalledDeployment are required');
     }
     if (operationRegistry.listByType('backup').includes(appName)) {
       return { safe: false, code: 'BACKUP_IN_PROGRESS', reason: 'backup in progress' };
@@ -178,7 +168,13 @@ async function canSafelyRemoveApp(appName, deps) {
       };
     }
 
-    const synced = syncedComponents(spec);
+    const deployment = await getInstalledDeployment(appName);
+    if (!deployment) {
+      // Which components keep state, and under which identifiers, is read from
+      // what this node runs. Without it nothing below can be asked.
+      return { safe: false, code: 'NO_DEPLOYMENT', reason: 'no installed deployment of the app on this node' };
+    }
+    const synced = syncedComponents(deployment);
     const otherHosts = otherHostCount(locations, localSocketAddr);
 
     if (!synced.length) {
@@ -228,7 +224,7 @@ async function canSafelyRemoveApp(appName, deps) {
       .filter((_component, index) => runningHere[index])
       .map((component) => component.identifier);
     if (runningIdentifiers.length) {
-      const primary = await isElectedPrimary(appName);
+      const primary = await isElectedPrimary(appName, gComponents.map((component) => component.identifier));
       if (primary === null) {
         // Not "there is no primary" - "nobody can tell me who it is". This node
         // is running the writer, so the likeliest reading is that it is the one

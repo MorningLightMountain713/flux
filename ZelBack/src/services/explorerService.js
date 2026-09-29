@@ -698,9 +698,7 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
             const appOperations = require('./appLifecycle/appOperations');
             await appGiveUp.checkAndGiveUpAnApp({
               installedAppsFn: appQueryService.installedApps,
-              isElectedPrimary: async (name) => appOperations.isElectedPrimaryHere(
-                name, await fluxNetworkhelper.getLocalSocketAddress(),
-              ),
+              isElectedPrimary: appOperations.isElectedPrimary,
             });
           } catch (error) {
             log.error(`give-up pass error: ${error.message}`);

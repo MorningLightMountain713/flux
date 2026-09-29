@@ -8,10 +8,12 @@ const {
 } = require('./fixtures/fluxSpec');
 
 describe('appEvacuationSafety tests', () => {
+  let flux;
+
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
     this.timeout(30_000);
-    await loadSpecLibrary();
+    flux = await loadSpecLibrary();
   });
 
   let appEvacuationSafety;
@@ -79,6 +81,12 @@ describe('appEvacuationSafety tests', () => {
     deps = {
       appLocation: sinon.stub(),
       getApplicationGlobalSpecifications: sinon.stub(),
+      // What this node runs: a real deployment of the spec the test set, named
+      // from the app name unless a test gives it an identity.
+      getInstalledDeployment: sinon.stub().callsFake(async (name) => {
+        const spec = await deps.getApplicationGlobalSpecifications(name);
+        return spec ? flux.DeploymentSpec.fromSpec(spec, '/apps/', { replica: null }) : null;
+      }),
       findSyncedPeer: sinon.stub().resolves({ deviceID: 'PEER1', globalBytes: 1024 }),
       // Both required. The default case is this node running the g: component
       // with the election able to name another node as primary, so the checks
@@ -346,12 +354,11 @@ describe('appEvacuationSafety tests', () => {
     it('never asks the election about an app with no g: component', async () => {
       // `s:` and `r:` components are stateful but have no primary at all, so
       // demanding an election verdict for them would stall their trim for good.
-      deps.getApplicationGlobalSpecifications.resolves({
+      deps.getApplicationGlobalSpecifications.resolves(await v8Spec({
         name: 'shared1',
-        version: 8,
-        compose: [{ name: 'db', containerData: 's:/data' }],
+        compose: [{ ...V8_SUBMISSION.compose[0], name: 'db', containerData: 's:/data' }],
         instances: 2,
-      });
+      }));
       deps.isElectedPrimary = sinon.stub().resolves(null);
 
       const result = await appEvacuationSafety.canSafelyRemoveApp('shared1', deps);
@@ -371,6 +378,17 @@ describe('appEvacuationSafety tests', () => {
       compose: [{ name: 'db', containerData: 's:/data' }],
       instances: 2,
     };
+
+    it('refuses when a caller omits the installed deployment', async () => {
+      deps.getApplicationGlobalSpecifications.resolves(sharedOnlySpec);
+      delete deps.getInstalledDeployment;
+
+      const result = await appEvacuationSafety.canSafelyRemoveApp('shared1', deps);
+
+      expect(result.safe).to.equal(false);
+      expect(result.code).to.equal('CHECK_FAILED');
+      expect(result.reason).to.contain('getInstalledDeployment');
+    });
 
     it('refuses, loudly, when a caller omits the election check altogether', async () => {
       // It used to default to `async () => false` - the one unavailable input
@@ -421,12 +439,14 @@ describe('appEvacuationSafety tests', () => {
   });
 
   describe('syncedComponents', () => {
-    it('reads the sync mode through the mount parser, not a substring', () => {
+    const deploymentOf = (spec, identity = null) => flux.DeploymentSpec.fromSpec(spec, '/apps/', { replica: null, identity });
+
+    it('reads the sync mode through the mount parser, not a substring', async () => {
       // `/dogs/data` contains "g:" nowhere but a naive check on the letter would
       // still trip; the canonical parser is what keeps this honest.
-      const components = appEvacuationSafety.syncedComponents({
-        name: 'app', version: 8, compose: [{ name: 'c', containerData: '/dogs/data' }],
-      });
+      const components = appEvacuationSafety.syncedComponents(deploymentOf(await v8Spec({
+        name: 'app', compose: [{ ...V8_SUBMISSION.compose[0], name: 'c', containerData: '/dogs/data' }],
+      })));
 
       expect(components).to.be.empty;
     });
@@ -440,7 +460,7 @@ describe('appEvacuationSafety tests', () => {
       const spec = await statefulSpecV9();
       expect(spec.compose, 'a v9 spec has no compose at all').to.equal(undefined);
 
-      const components = appEvacuationSafety.syncedComponents(spec);
+      const components = appEvacuationSafety.syncedComponents(deploymentOf(spec));
 
       expect(components).to.have.lengthOf(1);
       expect(components[0].folderId).to.equal('fluxserver_palworld1');
@@ -471,11 +491,50 @@ describe('appEvacuationSafety tests', () => {
     });
 
     it('names the folder id each synced component owns', async () => {
-      const components = appEvacuationSafety.syncedComponents(await statefulSpec());
+      const components = appEvacuationSafety.syncedComponents(deploymentOf(await statefulSpec()));
 
       expect(components).to.have.lengthOf(1);
       expect(components[0].folderId).to.equal('fluxserver_palworld1');
       expect(components[0].syncMode).to.equal('g');
+    });
+
+    it('names each folder by the identifier the deployment carries, its identity and not its name', async () => {
+      const components = appEvacuationSafety.syncedComponents(deploymentOf(await statefulSpecV9(), 'bident'));
+
+      expect(components.map((c) => [c.identifier, c.folderId])).to.deep.equal([['server_bident', 'fluxserver_bident']]);
+    });
+  });
+
+  describe('an app whose identity is not its name', () => {
+    const IDENTITY = 'bcccccccccccccccccccccccccccccccccccccccccccccccccccc';
+
+    beforeEach(async () => {
+      const spec = await statefulSpecV9({ instances: 2 });
+      deps.getApplicationGlobalSpecifications.resolves(spec);
+      deps.getInstalledDeployment = sinon.stub().resolves(flux.DeploymentSpec.fromSpec(spec, '/apps/', { replica: null, identity: IDENTITY }));
+      deps.appLocation.resolves(locations(LOCAL, '5.6.7.8:16127'));
+    });
+
+    it('asks about the folder, the container and the election by the identifiers the deployment carries', async () => {
+      deps.isElectedPrimary = sinon.stub().resolves(true);
+
+      const result = await appEvacuationSafety.canSafelyRemoveApp('palworld1', deps);
+
+      sinon.assert.calledWith(deps.findSyncedPeer, `fluxserver_${IDENTITY}`);
+      sinon.assert.calledWith(deps.isComponentRunningLocally, `server_${IDENTITY}`);
+      sinon.assert.calledWith(deps.isElectedPrimary, 'palworld1', [`server_${IDENTITY}`]);
+      expect(result.code).to.equal('STAND_DOWN_REQUIRED');
+      expect(result.standDown).to.deep.equal([`server_${IDENTITY}`]);
+    });
+
+    it('refuses when this node holds no deployment of the app', async () => {
+      deps.getInstalledDeployment = sinon.stub().resolves(null);
+
+      const result = await appEvacuationSafety.canSafelyRemoveApp('palworld1', deps);
+
+      expect(result.safe).to.equal(false);
+      expect(result.code).to.equal('NO_DEPLOYMENT');
+      sinon.assert.notCalled(deps.findSyncedPeer);
     });
   });
 });

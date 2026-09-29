@@ -32,6 +32,7 @@ const appUninstaller = require('./appUninstaller');
 const appReconciler = require('../appMonitoring/appReconciler');
 const dockerService = require('../dockerService');
 const syncthingFolderStateMachine = require('../appMonitoring/syncthingFolderStateMachine');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 const { compareInstanceSeniority } = require('../utils/instanceOrdering');
 const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 
@@ -186,14 +187,15 @@ async function isComponentRunningLocally(identifier) {
  * The identifier of an app's `g:` component, or null when it has none. The one
  * component that runs on a single node at a time and writes to the volume.
  *
- * Asked of the spec class through appEvacuationSafety, which already derives
- * exactly this and answers for v8 and v9 alike.
+ * Read from the deployment this node runs, through appEvacuationSafety, so the
+ * identifier is the one the container and the election carry.
  *
- * @param {object} spec a spec class
+ * @param {?object} deployment the DeploymentSpec installed on this node
  * @returns {string|null}
  */
-function writerIdentifier(spec) {
-  const g = appEvacuationSafety.syncedComponents(spec).find((c) => c.syncMode === 'g');
+function writerIdentifier(deployment) {
+  if (!deployment) return null;
+  const g = appEvacuationSafety.syncedComponents(deployment).find((c) => c.syncMode === 'g');
   return g ? g.identifier : null;
 }
 
@@ -207,7 +209,8 @@ function writerIdentifier(spec) {
  * Called by specReconciler, which owns the trim as a rung of its convergence.
  * The rule is development's; the cadence and the place are v9's.
  *
- * @param {{name: string, spec: object, instances: number}} app
+ * @param {{name: string, deployment: ?object, instances: number}} app the
+ *   deployment this node runs for it
  * @param {object[]} locations instance locations for the app
  * @param {string} localSocketAddr
  * @param {{runningLocally: Function, liveness: object}} deps
@@ -224,7 +227,7 @@ async function surplusVerdict(app, locations, localSocketAddr, deps) {
   // shared ordering so every node names the same surplus.
   const ordered = [...locations].sort((a, b) => compareInstanceSeniority(b, a));
   const index = ordered.findIndex((x) => socketAddressesMatch(x.ip, localSocketAddr));
-  const writer = writerIdentifier(app.spec);
+  const writer = writerIdentifier(app.deployment);
   const detail = `running on ${locations.length} instances (max: ${minInstances}) and this node is the newest`;
 
   // "THE NEWEST STANDS ASIDE" IS A STAND-IN FOR "THE LEAST VALUABLE COPY STANDS
@@ -395,10 +398,9 @@ async function checkAndGiveUpAnApp(deps = {}) {
       appLocation: registryManager.appLocation,
       getApplicationGlobalSpecifications: async (name) => {
         const row = await appsRepository.getGlobalAppInfo(name);
-        // The CLASS, not the stored document: syncedComponents reads a v9 spec
-        // through it, and a document answers the v8 spelling only.
         return row ? row.spec : null;
       },
+      getInstalledDeployment: deploymentProvider.getInstalledDeployment,
       findSyncedPeer: syncthingFolderStateMachine.findSyncedPeer,
       isElectedPrimary,
       isComponentRunningLocally: runningLocally,

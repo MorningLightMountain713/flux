@@ -2381,27 +2381,42 @@ async function shutdownPlanResync() {
  *   null   the election cannot say. NOT "there is no primary": a caller that
  *          treats it as false hands an app back from under a writer.
  *
- * Read from the coordinator's own record, and only while that record is recent
- * enough to mean anything.
+ * Read from the coordinator's own record of each of the app's g: component
+ * identifiers, and only while that record is recent enough to mean anything.
  *
- * @param {string} appName
+ * @param {string[]} identifiers the app's g: component identifiers, as its
+ *   deployment names them
  * @param {string} localSocketAddr
  * @param {number} [now]
+ * @param {{primaries: Map<string, string>, checkedAt: Map<string, number>}} [records]
+ *   the election records; this module's own
  * @returns {boolean|null}
  */
-function isElectedPrimaryHere(appName, localSocketAddr, now = Date.now()) {
+function isElectedPrimaryHere(identifiers, localSocketAddr, now = Date.now(), records = {
+  primaries: activePrimaryByIdentifier, checkedAt: primaryElectionCheckedAt,
+}) {
   let namesAPrimary = false;
-  for (const [identifier, checkedAt] of primaryElectionCheckedAt) {
-    // The g: component of this app, whatever it is called: `<component>_<app>`
-    // above v4, the bare app name below it.
-    if (identifier !== appName && !identifier.endsWith(`_${appName}`)) continue;
-    if (now - checkedAt > PRIMARY_ELECTION_STALE_MS) continue;
-    const masterIp = activePrimaryByIdentifier.get(identifier);
+  for (const identifier of identifiers) {
+    const checkedAt = records.checkedAt.get(identifier);
+    if (checkedAt === undefined || now - checkedAt > PRIMARY_ELECTION_STALE_MS) continue;
+    const masterIp = records.primaries.get(identifier);
     if (!masterIp) continue;
     namesAPrimary = true;
     if (ipsMatch(masterIp, localSocketAddr)) return true;
   }
   return namesAPrimary ? false : null;
+}
+
+/**
+ * Whether THIS node is the elected g: primary of an app's g: components, as
+ * appEvacuationSafety asks it: isElectedPrimaryHere at this node's address.
+ *
+ * @param {string} _appName
+ * @param {string[]} identifiers the app's g: component identifiers
+ * @returns {Promise<boolean|null>}
+ */
+async function isElectedPrimary(_appName, identifiers) {
+  return isElectedPrimaryHere(identifiers, await fluxNetworkHelper.getLocalSocketAddress());
 }
 
 /**
@@ -3179,6 +3194,7 @@ module.exports = {
   // election: the loop reaches it only through the grant, FDM and index gates.
   peerComponentState,
   anyPeerHoldsComponent,
+  isElectedPrimary,
   isElectedPrimaryHere,
   PeerComponent,
 };

@@ -1994,6 +1994,36 @@ describe('appOperations tests', () => {
     });
   });
 
+  describe('isElectedPrimaryHere', () => {
+    const NOW = 1_800_000_000_000;
+    const LOCAL = '10.0.0.1:16127';
+    const records = (entries) => ({
+      primaries: new Map(entries.map(([identifier, ip]) => [identifier, ip])),
+      checkedAt: new Map(entries.map(([identifier, , at = NOW]) => [identifier, at])),
+    });
+
+    it('answers by the identifiers it is given, whatever the app is named', () => {
+      const held = records([['web_bcccccccccccccccccccccccccccccccccccccccccccccccccccc', '10.0.0.1:16127'], ['web_other', '10.0.0.9:16127']]);
+
+      expect(appOperations.isElectedPrimaryHere(['web_bcccccccccccccccccccccccccccccccccccccccccccccccccccc'], LOCAL, NOW, held)).to.equal(true);
+      expect(appOperations.isElectedPrimaryHere(['web_other'], LOCAL, NOW, held)).to.equal(false);
+    });
+
+    it('matches a replica\'s identifier exactly', () => {
+      const held = records([['web_bcccccccccccccccccccccccccccccccccccccccccccccccccccc_s1', '10.0.0.1:16127']]);
+
+      expect(appOperations.isElectedPrimaryHere(['web_bcccccccccccccccccccccccccccccccccccccccccccccccccccc_s1'], LOCAL, NOW, held)).to.equal(true);
+      expect(appOperations.isElectedPrimaryHere(['web_bcccccccccccccccccccccccccccccccccccccccccccccccccccc'], LOCAL, NOW, held)).to.equal(null);
+    });
+
+    it('cannot say when no record of the identifiers is recent', () => {
+      const held = records([['web_bcccccccccccccccccccccccccccccccccccccccccccccccccccc', '10.0.0.1:16127', NOW - 60 * 60 * 1000]]);
+
+      expect(appOperations.isElectedPrimaryHere(['web_bcccccccccccccccccccccccccccccccccccccccccccccccccccc'], LOCAL, NOW, held)).to.equal(null);
+      expect(appOperations.isElectedPrimaryHere([], LOCAL, NOW, held)).to.equal(null);
+    });
+  });
+
   describe('runRestoreTask rules', () => {
     // eslint-disable-next-line global-require
     const volumeService = require('../../ZelBack/src/services/utils/volumeService');
