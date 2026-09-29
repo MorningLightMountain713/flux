@@ -1,12 +1,25 @@
+const path = require('node:path');
+
 const { expect } = require('chai');
 const sinon = require('sinon');
 const routes = require('../../ZelBack/src/routes');
+const routeTable = require('../../ZelBack/src/routeTableV1');
+const { SERVICES_DIR } = require('../../ZelBack/src/routeBuilder');
 const alwaysRespond = require('../../ZelBack/src/middlewares/alwaysRespond');
 const isLocal = require('../../ZelBack/src/middlewares/isLocal');
 const requireHttps = require('../../ZelBack/src/middlewares/requireHttps');
 const appInspector = require('../../ZelBack/src/services/appManagement/appInspector');
 const appController = require('../../ZelBack/src/services/appManagement/appController');
 const monitoringOrchestrator = require('../../ZelBack/src/services/appMonitoring/monitoringOrchestrator');
+
+// Every module a route names, loaded once: the names are data, so the modules are
+// found by name. Loading a module runs none of its handlers.
+const handlerModules = new Map();
+// eslint-disable-next-line no-restricted-syntax
+for (const modulePath of new Set(routeTable.map((route) => route.handler.split('#')[0]))) {
+  // eslint-disable-next-line global-require, import/no-dynamic-require
+  handlerModules.set(modulePath, require(path.join(SERVICES_DIR, modulePath)));
+}
 
 // Nothing else builds the routing table, so a route wired to the wrong handler, or a
 // middleware that was never mounted, reaches production unopposed. Build it against a
@@ -54,52 +67,22 @@ describe('routes tests', () => {
     expect(bad.map((r) => r.path)).to.deep.equal([]);
   });
 
-  // The assertion above cannot fail. Every route is wrapped in
-  // `(req, res) => { service.fn(req, res); }`, so the handler is ALWAYS a
-  // function - even when `service.fn` does not exist. Three endpoints shipped
-  // wired to names their service no longer exported and nothing here noticed;
-  // they answered 500 on the first request a user made.
-  //
-  // Resolved statically rather than by calling the handlers: invoking ~200
-  // production handlers to find out whether they exist is not a test, it is an
-  // outage. This reads routes.js, maps each `const x = require(...)`, and checks
-  // that every `x.fn(` the file names is actually exported.
+  // The assertion above cannot fail: the builder wraps every route in a handler
+  // that loads its module on the first call, so the handler is ALWAYS a function
+  // - even when the function it names does not exist, which answers 500 on the
+  // first request a user makes. Resolved without calling the handlers: invoking
+  // ~400 production handlers to find out whether they exist is an outage.
   it('should wire every route to a function its service actually exports', () => {
-    const fs = require('fs');
-    const path = require('path');
-    const routesPath = path.join(__dirname, '../../ZelBack/src/routes.js');
-    const src = fs.readFileSync(routesPath, 'utf8');
+    expect(handlerModules.size, 'no handler modules read - the scan is broken').to.be.greaterThan(20);
 
-    // simple `const name = require('./path')` only - destructured requires bind
-    // bare identifiers and are covered by the callable-handler check above
-    const modules = {};
-    const requireRe = /^const\s+([A-Za-z_$][\w$]*)\s*=\s*require\('([^']+)'\);$/gm;
-    let m = requireRe.exec(src);
-    while (m) {
-      const [, name, rel] = m;
-      if (rel.startsWith('.')) {
-        // eslint-disable-next-line global-require, import/no-dynamic-require
-        modules[name] = require(path.resolve(path.dirname(routesPath), rel));
-      }
-      m = requireRe.exec(src);
-    }
-    expect(Object.keys(modules).length, 'no service requires parsed - the scan is broken').to.be.greaterThan(20);
+    const missing = routeTable
+      .filter((route) => {
+        const [modulePath, fn] = route.handler.split('#');
+        return typeof handlerModules.get(modulePath)[fn] !== 'function';
+      })
+      .map((route) => `${route.method} ${route.path} -> ${route.handler}`);
 
-    const missing = [];
-    const callRe = /\b([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\s*\(/g;
-    let c = callRe.exec(src);
-    while (c) {
-      const [, obj, fn] = c;
-      if (modules[obj] && typeof modules[obj][fn] !== 'function') {
-        missing.push(`${obj}.${fn}`);
-      }
-      c = callRe.exec(src);
-    }
-
-    expect(
-      [...new Set(missing)],
-      'routes.js names service functions that do not exist - these endpoints answer 500 on the first request',
-    ).to.deep.equal([]);
+    expect(missing, 'these routes name functions their module does not export').to.deep.equal([]);
   });
 
   describe('handler wiring', () => {

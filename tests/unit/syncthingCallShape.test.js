@@ -29,7 +29,8 @@ const espree = require('espree');
 
 const ROOT = nodePath.join(__dirname, '../..');
 const SERVICE = 'ZelBack/src/services/syncthingService.js';
-const ROUTES = 'ZelBack/src/routes.js';
+// The router: the route table names each handler as data.
+const ROUTES = 'ZelBack/src/routeTableV1.js';
 
 const parse = (src) => espree.parse(src, {
   ecmaVersion: 2022, sourceType: 'script', loc: true, range: true,
@@ -85,8 +86,19 @@ function namesAbsent(fnBody) {
 }
 
 function externalCalls() {
-  const calls = [];
+  // The route table names its handlers as data, `syncthingService#fn`: each is a
+  // call site the router makes with the request and response.
+  const routeSrc = fs.readFileSync(nodePath.join(ROOT, ROUTES), 'utf8');
+  const calls = [...routeSrc.matchAll(/handler: 'syncthingService#(\w+)'/g)].map((m) => ({
+    name: m[1],
+    where: `${ROUTES}:${routeSrc.slice(0, m.index).split('\n').length}`,
+    rel: ROUTES,
+    how: 'route',
+    reads: [],
+    testsAbsence: false,
+  }));
   for (const rel of sourceFiles()) {
+    if (rel === ROUTES) continue;
     if (rel === SERVICE) continue;
     const src = fs.readFileSync(nodePath.join(ROOT, rel), 'utf8');
     if (!src.includes('syncthingService')) continue;

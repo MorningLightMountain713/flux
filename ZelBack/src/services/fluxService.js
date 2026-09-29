@@ -957,9 +957,11 @@ function getAPIPort(req, res) {
  * An unknown policy is reported as an error, never as an empty list: callers use this to
  * decide who may pick priority nodes, and "nobody is eligible" is a different answer from
  * "this node cannot say". The policy is unknown before the boot sequence reaches
- * policyStore and whenever the adopted bundle's owner map is malformed. Answered 503: the
- * route caches success for an hour, and routeGuards' cache admits status 200 and nothing
- * else, so the refusal is never stored and the next poll re-asks.
+ * policyStore and whenever the adopted bundle's owner map is malformed; the route reads
+ * policyVerified, so its gate answers the first, and this the second and a programmatic
+ * caller. Answered 503: the route caches success for an hour, and routeGuards' cache
+ * admits status 200 and nothing else, so the refusal is never stored and the next poll
+ * re-asks.
  * @param {import('express').Request} req
  * @param {import('express').Response} res
  * @returns {object} Message.

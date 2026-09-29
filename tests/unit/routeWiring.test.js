@@ -21,10 +21,14 @@ const request = require('supertest');
 const apicache = require('apicache');
 
 const registerRoutes = require('../../ZelBack/src/routes');
+const routeTable = require('../../ZelBack/src/routeTableV1');
+const routesV2 = require('../../ZelBack/src/routesV2');
+const { chainFor } = require('../../ZelBack/src/routeBuilder');
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const daemonServiceFluxnodeRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceFluxnodeRpcs');
 const { FluxRpc } = require('../../ZelBack/src/services/utils/fluxRpc');
 const {
-  asyncRoute, cache, rejectQueryParameters, requireBootSettled,
+  asyncRoute, cache, rejectQueryParameters,
 } = require('../../ZelBack/src/services/utils/routeGuards');
 
 /**
@@ -64,82 +68,27 @@ const walk = (node, visit, state) => {
   }
 };
 
-/** Local name -> module path, from routes.js's own requires. */
-const requiredModules = (ast) => {
-  const found = new Map();
-  walk(ast, (node) => {
-    if (node.type === 'VariableDeclarator' && node.id.type === 'Identifier'
-        && node.init && node.init.type === 'CallExpression'
-        && node.init.callee.name === 'require'
-        && typeof node.init.arguments[0]?.value === 'string') {
-      found.set(node.id.name, node.init.arguments[0].value);
-    }
-    return null;
-  });
-  return found;
-};
-
-const METHODS = new Set(['get', 'post', 'put', 'delete', 'ws', 'use']);
-
 /**
- * Every registration routes.js makes, read from its own source.
- *
- * The recorded table above answers neither of the two questions this is read
- * for. By the time express holds a chain entry it is a closure, so the module
- * function behind it is gone; and the wrapper asyncRoute returns is a
- * three-argument middleware indistinguishable from any other.
- * @returns {Array<{method: string, path: string, cached: boolean, wrapped: boolean, handlers: Array<{module: string, fn: string}>}>}
+ * Every route of the v1 table, with the service module and function its handler
+ * names. The recorded table answers neither question this is read for: by the
+ * time express holds a chain entry it is a closure, so the module function
+ * behind it is gone.
+ * @returns {Array<{method: string, path: string, cached: boolean, handlers: Array<{module: string, fn: string}>}>}
  */
 function recordRegistrations() {
-  const ast = parse(fs.readFileSync(path.join(SRC_DIR, 'routes.js'), 'utf8'));
-  const modules = requiredModules(ast);
-  const registrations = [];
-
-  walk(ast, (node) => {
-    if (node.type !== 'CallExpression' || node.callee.type !== 'MemberExpression') return null;
-    if (node.callee.object.name !== 'app' || !METHODS.has(node.callee.property.name)) return null;
-    if (typeof node.arguments[0]?.value !== 'string' || node.arguments.length < 2) return null;
-
-    const chain = node.arguments.slice(1);
-    // Whatever is registered last is the handler; everything ahead of it is
-    // middleware express runs first.
-    const handler = chain[chain.length - 1];
-    const handlers = [];
-    chain.forEach((arg) => walk(arg, (inner) => {
-      if (inner.type === 'MemberExpression' && inner.object.type === 'Identifier'
-          && modules.has(inner.object.name) && inner.property.type === 'Identifier') {
-        handlers.push({ module: modules.get(inner.object.name), fn: inner.property.name });
-      }
-      return null;
-    }));
-
-    // app.use(path, router) MOUNTS a sub-surface; it is not a route with a
-    // handler. Its own routes are that router's, and are guarded where they
-    // live - /v2's in routesV2.test.js. Recorded rather than skipped so the
-    // assertions below can prove each one really is a mount of a module this
-    // test can name, and the exemption cannot hide a route.
-    const mounts = node.callee.property.name === 'use'
-      && chain.length === 1
-      && chain[0].type === 'Identifier'
-      && modules.has(chain[0].name)
-      ? modules.get(chain[0].name)
-      : null;
-
-    registrations.push({
-      method: node.callee.property.name,
-      path: node.arguments[0].value,
-      mounts,
-      cached: chain.some((arg) => arg.type === 'CallExpression' && arg.callee.name === 'cache'),
-      wrapped: handler.type === 'CallExpression' && handler.callee.type === 'Identifier'
-        && handler.callee.name === 'asyncRoute',
-      handlers,
-    });
-    return null;
+  return routeTable.map((route) => {
+    const [modulePath, fn] = route.handler.split('#');
+    return {
+      method: route.method,
+      path: route.path,
+      cached: Boolean(route.cache),
+      handlers: [{ module: `./services/${modulePath}`, fn }],
+    };
   });
-
-  return registrations;
 }
 
+/** The table entry for a route, or undefined. */
+const entryOf = (method, routePath) => routeTable.find((route) => route.method === method && route.path === routePath);
 
 describe('route wiring', () => {
   let table;
@@ -227,11 +176,9 @@ describe('route wiring', () => {
   });
 
   describe('endpoints held until boot settles', () => {
-    // The boot gate is worth exactly what it is wired to, and the file-operation
-    // endpoints were the half it missed: ten legacy commands carried
-    // requireBootSettled while eight endpoints that also create a container - the
-    // four object operations, the upload, and create/rename/remove - ran
-    // unguarded, which is what left boot recovery able to race a live operation.
+    // Every endpoint that creates or destroys a container waits for boot to
+    // settle - the app-control commands, the four object operations, the upload
+    // and create/rename/remove - so boot recovery never races a live operation.
     const bootGated = [
       { method: 'get', path: '/apps/appstart/:appname?/:global?' },
       { method: 'get', path: '/apps/appstop/:appname?/:global?' },
@@ -257,7 +204,8 @@ describe('route wiring', () => {
       it(`${method.toUpperCase()} ${path} is held until boot settles`, () => {
         const route = table.find((entry) => entry.path === path && entry.method === method);
         expect(route, `${path} is not registered as a ${method.toUpperCase()}`).to.not.equal(undefined);
-        expect(route.chain).to.include(requireBootSettled);
+        expect(entryOf(method, path).needs).to.include('bootReconcileDecided');
+        expect(route.chain.map((fn) => fn.name)).to.include('capabilityGateMiddleware');
       });
     });
 
@@ -270,7 +218,8 @@ describe('route wiring', () => {
       const route = table.find((entry) => entry.path === '/apps/testappinstall/:appname?' && entry.method === 'get');
 
       expect(route, 'testappinstall is not registered as a GET').to.not.equal(undefined);
-      expect(route.chain).to.not.include(requireBootSettled);
+      expect(entryOf('get', '/apps/testappinstall/:appname?').needs).to.equal(undefined);
+      expect(route.chain.map((fn) => fn.name)).to.not.include('capabilityGateMiddleware');
     });
   });
   // Every route hands its failures to express, which answers 500 - so a failure
@@ -417,7 +366,6 @@ describe('route wiring', () => {
     // silently exempt from the assertion that matters.
     it('resolves every route to exactly one handler', () => {
       const unresolved = registrations
-        .filter((route) => !route.mounts)
         .filter((route) => route.handlers.length !== 1)
         .map((route) => `${route.method} ${route.path} (${route.handlers.length} handlers)`);
 
@@ -426,7 +374,6 @@ describe('route wiring', () => {
 
     it('reads every module a route hands off to', () => {
       const unreadable = [...new Set(registrations
-        .filter((route) => !route.mounts)
         .filter((route) => route.handlers.length === 1)
         .map((route) => route.handlers[0].module)
         .filter((modulePath) => checkersIn(modulePath) === null))];
@@ -456,48 +403,114 @@ describe('route wiring', () => {
   });
 
   // A handler that rejects without express hearing about it is not a 500 - it
-  // is an unhandled rejection, apiServer's handler, and process.exit. asyncRoute
-  // is the wrapper that makes it a 500, and until this nothing said routes.js
-  // used it: two registrations reverted to the bare arrow left every other
-  // assertion in this file green, which is the blindness the header describes.
-  //
-  // Read from the source, because the wrapper asyncRoute returns cannot be told
-  // apart from any other middleware once express holds it.
+  // is an unhandled rejection, apiServer's handler, and process.exit. The builder
+  // wraps every handler it registers in asyncRoute (routeBuilder.test.js answers
+  // a rejection with 500), so what has to be true here is that every route is
+  // registered through the builder, as its table entry says.
   describe('routes whose handler fails', () => {
-    let registrations;
+    let registered;
 
     before(() => {
-      registrations = recordRegistrations();
+      registered = recordRouteTable().filter((route) => route.method !== 'use');
     });
 
     it('are read from a route file that registered something, so an empty read cannot pass', () => {
-      expect(registrations.length).to.be.greaterThan(300);
+      expect(registered.length).to.be.greaterThan(300);
     });
 
-    it('answer the caller, rather than taking the node down with them', () => {
-      const dropped = registrations
-        .filter((route) => !route.mounts)
-        .filter((route) => !route.wrapped)
+    it('are every one registered through the builder, as its table entry says', () => {
+      expect(registered.map((route) => `${route.method} ${route.path}`))
+        .to.deep.equal(routeTable.map((route) => `${route.method} ${route.path}`));
+      const differing = registered
+        .filter((route, i) => JSON.stringify(route.chain.map((fn) => fn.name))
+          !== JSON.stringify(chainFor(routeTable[i], { refuse: () => {} }).map((fn) => fn.name)))
         .map((route) => `${route.method} ${route.path}`);
 
-      expect(dropped, 'these discard the promise their handler returns').to.deep.equal([]);
+      expect(differing).to.deep.equal([]);
     });
 
-    // The exemption above is only honest while a mount really is one. A router
-    // owns its own error handling - asyncRoute wraps a handler, not a surface -
-    // so what has to be true is that each mount names a module, and that the
-    // one mount this file makes is the v2 surface.
-    it('mounts only routers, and /v2 is one of them', () => {
-      const mounted = registrations.filter((route) => route.mounts);
-      expect(mounted.length, 'a mount was expected; if none is registered the exemption is dead code').to.be.greaterThan(0);
-      mounted.forEach((route) => {
-        expect(route.method, `${route.path} is exempted as a mount but registered with ${route.method}`).to.equal('use');
-      });
-      const v2 = mounted.find((route) => route.path === '/v2');
-      expect(v2, 'the v2 surface is not mounted').to.not.equal(undefined);
-      expect(v2.mounts).to.match(/routesV2/);
+    // A router owns its own error handling - asyncRoute wraps a handler, not a
+    // surface - so the one mount routes.js makes is the v2 router.
+    it('mounts the v2 router, and nothing else', () => {
+      const mounted = recordRouteTable().filter((route) => route.method === 'use');
+
+      expect(mounted.map((route) => route.path)).to.deep.equal(['/v2']);
+      expect(mounted[0].chain).to.deep.equal([routesV2]);
     });
   });
+
+  // Every route declares the capabilities it reads, or why it reads none, and
+  // one gate answers for all of them. A route declaring nothing fails here.
+  describe('what every route declares', () => {
+    const known = new Set(capabilities.DEFINITIONS.map((definition) => definition.name));
+
+    it('declares the capabilities it reads, or why it reads none, and never both', () => {
+      const undeclared = routeTable
+        .filter((route) => {
+          const needs = Array.isArray(route.needs) && route.needs.length > 0;
+          const none = typeof route.none === 'string' && route.none.length > 0;
+          return needs === none;
+        })
+        .map((route) => `${route.method} ${route.path}`);
+
+      expect(undeclared).to.deep.equal([]);
+    });
+
+    it('names only capabilities the registry defines', () => {
+      const unknown = routeTable
+        .flatMap((route) => (route.needs || []).map((name) => ({ route, name })))
+        .filter(({ name }) => !known.has(name))
+        .map(({ route, name }) => `${route.method} ${route.path}: ${name}`);
+
+      expect(unknown).to.deep.equal([]);
+    });
+
+    it('registers each method and path once', () => {
+      const keys = routeTable.map((route) => `${route.method} ${route.path}`);
+
+      expect(keys.filter((key, i) => keys.indexOf(key) !== i)).to.deep.equal([]);
+    });
+
+    const declared = {
+      'get /apps/globalappsspecifications/:hash?/:owner?/:appname?': ['appRegistryConsistent'],
+      'get /apps/appspecifications/:appname/:decrypt?': ['appRegistryConsistent'],
+      'get /apps/appcomponentnames/:appname?': ['appRegistryConsistent'],
+      'get /apps/appowner/:appname?': ['appRegistryConsistent'],
+      'get /apps/location/:appname?': ['appStateSynced'],
+      'get /apps/locations': ['appStateSynced'],
+      'get /apps/installinglocation/:appname?': ['appStateSynced'],
+      'get /apps/installinglocations': ['appStateSynced'],
+      'get /apps/installingerrorslocation/:appname?': ['appStateSynced'],
+      'get /apps/installingerrorslocations': ['appStateSynced'],
+      'get /explorer/transactions/:address?': ['explorerSynced'],
+      'post /apps/calculateprice': ['appRegistryConsistent', 'explorerSynced', 'chainStateConsistent'],
+      'post /apps/calculatefiatandfluxprice': ['appRegistryConsistent', 'explorerSynced', 'chainStateConsistent'],
+      'post /apps/appregister': ['appRegistryConsistent', 'explorerSynced', 'chainStateConsistent'],
+      'post /apps/appupdate': ['appRegistryConsistent', 'explorerSynced', 'chainStateConsistent'],
+      'get /daemon/getinfo': ['daemonReachable'],
+      'get /apps/installapplocally/:appname?': ['bootReconcileDecided', 'policyVerified', 'policyCurrent'],
+      'get /flux/enterpriseappowners': ['policyVerified'],
+      'post /apps/promotedfolders': ['nodeListPopulated'],
+    };
+
+    Object.entries(declared).forEach(([key, needs]) => {
+      it(`${key} reads ${needs.join(', ')}`, () => {
+        const [method, routePath] = key.split(' ');
+        expect(entryOf(method, routePath), `${key} is not in the table`).to.not.equal(undefined);
+        expect(entryOf(method, routePath).needs).to.deep.equal(needs);
+      });
+    });
+
+    it('declares every daemon RPC proxy as reading the daemon', () => {
+      const undeclared = routeTable
+        .filter((route) => route.handler.startsWith('daemonService/'))
+        .filter((route) => !(route.needs || []).includes('daemonReachable'))
+        .map((route) => `${route.method} ${route.path}`);
+
+      expect(undeclared).to.deep.equal([]);
+    });
+  });
+
   // The daemon RPCs a node publishes, as a whole list rather than a set of
   // absences. FluxOS used to proxy every wallet RPC fluxd has - key export and
   // import, spending, signing, the shielded pool - and a fluxnode has no wallet

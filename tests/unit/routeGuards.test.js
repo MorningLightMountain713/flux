@@ -12,9 +12,8 @@ const request = require('supertest');
 const apicache = require('apicache');
 
 const {
-  asyncRoute, rejectQueryParameters, requireBootSettled, requirePolicyReady,
+  asyncRoute, rejectQueryParameters,
 } = require('../../ZelBack/src/services/utils/routeGuards');
-const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 
 describe('routeGuards', () => {
   describe('rejectQueryParameters', () => {
@@ -107,127 +106,6 @@ describe('routeGuards', () => {
       // whole contents would make this test hostage to anything else cached
       const mine = apicache.getIndex().all.filter((key) => key.includes('/answer'));
       expect(mine).to.have.lengthOf(1);
-    });
-  });
-
-  describe('requireBootSettled', () => {
-    let app;
-    let server;
-    let handlerCalls;
-
-    beforeEach(() => {
-      capabilities.resetForTests();
-      handlerCalls = 0;
-      app = express();
-      app.get('/apps/appstart/:appname', requireBootSettled, (req, res) => {
-        handlerCalls += 1;
-        res.json({ status: 'success', data: 'started' });
-      });
-    });
-
-    afterEach(() => {
-      capabilities.resetForTests();
-      if (server) { server.close(); server = null; }
-    });
-
-    const get = (path) => {
-      if (!server) server = app.listen(0);
-      return request(server).get(path);
-    };
-
-    it('refuses while boot reconciliation has not decided which apps this node keeps', async () => {
-      const res = await get('/apps/appstart/myapp');
-      expect(res.status).to.equal(503);
-      expect(res.body.status).to.equal('error');
-      expect(res.body.data.message).to.equal('Node is still reconciling its applications after boot');
-    });
-
-    // A 503 with no Retry-After tells a caller to come back without saying when,
-    // and a dashboard's answer to that is to poll as fast as it can.
-    it('says when to come back', async () => {
-      const res = await get('/apps/appstart/myapp');
-      expect(res.headers['retry-after']).to.equal('15');
-    });
-
-    // The defect this exists for: an app created before the boot decision has no
-    // location record to be kept by, so reconciliation removes it as one that
-    // moved. A refusal the handler runs behind is not a refusal.
-    it('never lets a refused call reach the handler', async () => {
-      await get('/apps/appstart/myapp');
-      await get('/apps/appstart/other');
-      expect(handlerCalls).to.equal(0);
-    });
-
-    it('answers once the node has settled', async () => {
-      capabilities.setForTests('bootReconcileDecided', true);
-      const res = await get('/apps/appstart/myapp');
-      expect(res.status).to.equal(200);
-      expect(handlerCalls).to.equal(1);
-    });
-  });
-  describe('requirePolicyReady', () => {
-    let app;
-    let server;
-    let handlerCalls;
-
-    beforeEach(() => {
-      capabilities.resetForTests();
-      handlerCalls = 0;
-      app = express();
-      app.get('/apps/redeploy/:appname', requirePolicyReady, (req, res) => {
-        handlerCalls += 1;
-        res.json({ status: 'success', data: 'redeployed' });
-      });
-    });
-
-    afterEach(() => {
-      capabilities.resetForTests();
-      if (server) { server.close(); server = null; }
-    });
-
-    const get = (path) => {
-      if (!server) server = app.listen(0);
-      return request(server).get(path);
-    };
-
-    it('refuses while this node has not obtained the network policy', async () => {
-      const res = await get('/apps/redeploy/myapp');
-      expect(res.status).to.equal(503);
-      expect(res.body.status).to.equal('error');
-      expect(res.body.data.message).to.equal('Node has not yet obtained the network policy');
-    });
-
-    it('says when to come back', async () => {
-      const res = await get('/apps/redeploy/myapp');
-      expect(res.headers['retry-after']).to.equal('30');
-    });
-
-    // THE DEFECT THIS EXISTS FOR. A redeploy uninstalls before it installs, and the
-    // install is what needs the policy, so a refusal the handler runs behind costs
-    // the app: only a successful install writes the local row back.
-    it('never lets a refused call reach the handler', async () => {
-      await get('/apps/redeploy/myapp');
-      await get('/apps/redeploy/other');
-      expect(handlerCalls).to.equal(0);
-    });
-
-    // Named apart from the boot refusal because the remedies differ: boot settles on
-    // its own, policy may need another node. A caller that cannot tell them apart is
-    // what this gate exists to answer.
-    it('names the policy rather than boot', async () => {
-      const res = await get('/apps/redeploy/myapp');
-      // Anchored on the message SAYING something first: "does not mention boot" is
-      // also true of a refusal that never happened, and would pass against a gate
-      // that let the call straight through.
-      expect(res.body.data.message).to.match(/policy/i);
-      expect(res.body.data.message).to.not.match(/boot/i);
-    });
-
-    it('answers once the node holds policy it may act on', async () => {
-      capabilities.setForTests('policyCurrent', true);
-      const res = await get('/apps/redeploy/myapp');
-      expect(res.status).to.equal(200);
-      expect(handlerCalls).to.equal(1);
     });
   });
 
