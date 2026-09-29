@@ -7,7 +7,7 @@ const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const resourceQueryService = require('../../ZelBack/src/services/appQuery/resourceQueryService');
 const messageHelper = require('../../ZelBack/src/services/messageHelper');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
-const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
+const nodeSpecs = require('../../ZelBack/src/services/appRequirements/nodeSpecs');
 const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
 const admissionControl = require('../../ZelBack/src/services/utils/admissionControl');
 const { requireMongo } = require('./dbTestHelper');
@@ -116,7 +116,7 @@ describe('resourceQueryService tests', () => {
           { name: 'App2' },
         ],
       });
-      sinon.stub(hwRequirements, 'getNodeSpecs').resolves({
+      sinon.stub(nodeSpecs, 'getNodeSpecs').resolves({
         cpuCores: 8,
         ram: 16_000,
         ssdStorage: 500,
@@ -139,7 +139,7 @@ describe('resourceQueryService tests', () => {
         status: 'success',
         data: [],
       });
-      sinon.stub(hwRequirements, 'getNodeSpecs').resolves({
+      sinon.stub(nodeSpecs, 'getNodeSpecs').resolves({
         cpuCores: 8,
         ram: 16_000,
         ssdStorage: 500,
@@ -177,7 +177,7 @@ describe('resourceQueryService tests', () => {
       sinon.stub(appQueryService, 'listRunningApps').resolves({
         status: 'error',
       });
-      sinon.stub(hwRequirements, 'getNodeSpecs').resolves({
+      sinon.stub(nodeSpecs, 'getNodeSpecs').resolves({
         cpuCores: 8,
         ram: 16_000,
         ssdStorage: 500,
