@@ -5,7 +5,7 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --production
 
-COPY index.js benchCrypto.js zmqEncoders.js ./
+COPY index.js benchCrypto.js benchCertificates.js zmqEncoders.js ./
 
 EXPOSE 16123 16124 16224 18232
 
