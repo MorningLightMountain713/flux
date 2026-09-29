@@ -47,6 +47,7 @@ const syncthingService = require('./syncthingService');
 const dockerService = require('./dockerService');
 const upnpService = require('./upnpService');
 const enterpriseConfig = require('./utils/enterpriseConfig');
+const policyStore = require('./policyStore');
 
 // for streamChain endpoint
 const zlib = require('node:zlib');
@@ -956,12 +957,11 @@ function getAPIPort(req, res) {
  *
  * An unknown policy is reported as an error, never as an empty list: callers use this to
  * decide who may pick priority nodes, and "nobody is eligible" is a different answer from
- * "this node cannot say". The policy is unknown before the boot sequence reaches
- * policyStore and whenever the adopted bundle's owner map is malformed; the route reads
- * policyVerified, so its gate answers the first, and this the second and a programmatic
- * caller. Answered 503: the route caches success for an hour, and routeGuards' cache
- * admits status 200 and nothing else, so the refusal is never stored and the next poll
- * re-asks.
+ * "this node cannot say". The owners are unknown while no verified bundle is held, and
+ * while the held bundle carries no valid enterprisenodes document; each is answered with
+ * its own message. Answered 503: the route caches success for an hour, and routeGuards'
+ * cache admits status 200 and nothing else, so the refusal is never stored and the next
+ * poll re-asks.
  * @param {import('express').Request} req
  * @param {import('express').Response} res
  * @returns {object} Message.
@@ -969,7 +969,10 @@ function getAPIPort(req, res) {
 function getEnterpriseAppOwners(req, res) {
   const enterpriseAppOwners = enterpriseConfig.getEnterpriseAppOwners();
   if (enterpriseAppOwners === null) {
-    const errMessage = messageHelper.createErrorMessage('Network policy not yet obtained', 'NotReady', 503);
+    const reason = policyStore.getRawBundle() === null
+      ? 'Network policy not yet obtained'
+      : 'Network policy carries no valid enterprise node map';
+    const errMessage = messageHelper.createErrorMessage(reason, 'NotReady', 503);
     return res ? res.status(503).json(errMessage) : errMessage;
   }
   const message = messageHelper.createDataMessage(enterpriseAppOwners);
