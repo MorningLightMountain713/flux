@@ -121,6 +121,7 @@ const marketplaceTemplateCache = require('./marketplace/marketplaceTemplateCache
 const telemetryIdentityService = require('./telemetryIdentityService');
 const { version: fluxVersion } = require('../../../package.json');
 const clockDrift = require('./clockDrift');
+const appEnforcement = require('./appManagement/appEnforcement');
 // const throughputLogger = require('./utils/throughputLogger');
 
 // Initialize globalState caches with cacheManager
@@ -1038,7 +1039,7 @@ async function startFluxFunctions() {
           ); // rechecks syncthing configuration each cycle
           appOperations.startActiveStandbyCoordinator();
           setTimeout(() => {
-            appInspector.monitorSharedDBApps();
+            appEnforcement.monitorSharedDBApps();
           }, 60 * 1000);
         });
         // Hash sync and spawner startup are now managed by the AppSyncOrchestrator (event-driven)
@@ -1086,7 +1087,7 @@ async function startFluxFunctions() {
         // thirty minutes out. It re-arms itself from then on, so only the first run
         // needs the gate.
         setTimeout(() => {
-          capabilities.whenUp('policyCurrent').then(() => appInspector.enforceWritableLayerLimit(
+          capabilities.whenUp('policyCurrent').then(() => appEnforcement.enforceWritableLayerLimit(
             appsStorageViolations,
           )).catch((error) => log.error(`Storage space check error: ${error.message}`));
         }, bootDelay(20 * 60 * 1000));
