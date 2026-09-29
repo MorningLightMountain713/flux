@@ -58,6 +58,7 @@ const { NAK_REASON, buildSyncSignatureMessage, encodeHashRequest } = require('./
 const { networkHealthMonitor } = require('./utils/NetworkHealthMonitor');
 const verifyPool = require('./utils/verifyPool');
 const { Privilege, authOf } = require('./utils/privileges');
+const clockDrift = require('./clockDrift');
 
 // Upper bound of the random delay before each reconciler dial. Reciprocal
 // duties make simultaneous crossing dials the common case; the jitter breaks
@@ -1617,7 +1618,7 @@ async function initiateAndHandleConnection(connection, source = PEER_SOURCE.RAND
         'X-Flux-Uptime': String(Math.floor(process.uptime())),
       },
     };
-    const offsetMs = fluxNetworkHelper.getLocalClockOffsetMs();
+    const offsetMs = clockDrift.getLocalClockOffsetMs();
     if (offsetMs !== null) {
       options.headers['X-Flux-Clock-Offset'] = String(offsetMs);
     }
@@ -1677,7 +1678,7 @@ function openEphemeralConnection(connection) {
           'X-Flux-Ephemeral': '1',
         },
       };
-      const offsetMs = fluxNetworkHelper.getLocalClockOffsetMs();
+      const offsetMs = clockDrift.getLocalClockOffsetMs();
       if (offsetMs !== null) {
         options.headers['X-Flux-Clock-Offset'] = String(offsetMs);
       }

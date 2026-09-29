@@ -108,6 +108,7 @@ const appsMaintenance = require('./appDatabase/appsMaintenance');
 const marketplaceTemplateCache = require('./marketplace/marketplaceTemplateCache');
 const telemetryIdentityService = require('./telemetryIdentityService');
 const { version: fluxVersion } = require('../../../package.json');
+const clockDrift = require('./clockDrift');
 // const throughputLogger = require('./utils/throughputLogger');
 
 // Initialize globalState caches with cacheManager
@@ -727,7 +728,7 @@ async function startFluxFunctions() {
         log.info('Node allowed to bind privileged ports');
         fluxCommunication.keepConnectionsAlive();
         log.info('Connections polling prepared');
-        fluxNetworkHelper.initClockOffsetCache();
+        clockDrift.initClockOffsetCache();
         log.info('Clock offset cache initialized');
         // Remove existing watchtower container (replaced by native image update service)
         imageUpdateService.removeWatchtowerContainer();

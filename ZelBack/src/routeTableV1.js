@@ -447,7 +447,7 @@ module.exports = [
   { method: 'get', path: '/flux/checkcommunication', none: NONE.PROCESS, handler: 'fluxNetworkHelper#isCommunicationEstablished' },
   { method: 'get', path: '/flux/uptime', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxNetworkHelper#fluxUptime' },
   { method: 'get', path: '/flux/systemuptime', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxNetworkHelper#fluxSystemUptime' },
-  { method: 'get', path: '/flux/clockdrift', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxNetworkHelper#clockDrift' },
+  { method: 'get', path: '/flux/clockdrift', none: NONE.PROCESS, cache: '30 seconds', handler: 'clockDrift#clockDrift' },
   { method: 'get', path: '/flux/backendfolder', guards: ['isLocal'], none: NONE.PROCESS, handler: 'fluxService#fluxBackendFolder' },
   { method: 'get', path: '/flux/mapport/:port?', none: NONE.PROXY, handler: 'upnpService#mapPortApi' },
   { method: 'get', path: '/flux/unmapport/:port?', none: NONE.PROXY, handler: 'upnpService#removeMapPortApi' },

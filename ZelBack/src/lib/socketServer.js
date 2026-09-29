@@ -68,7 +68,7 @@ class FluxWebsocketServer {
       headers.push(`X-Flux-Capabilities: ${FLUX_CAPABILITIES.join(',')}`);
       headers.push(`X-Flux-Version: ${load('services/utils/FluxPeerSocket').FLUX_VERSION}`);
       headers.push(`X-Flux-Uptime: ${Math.floor(process.uptime())}`);
-      const offsetMs = load('services/fluxNetworkHelper').getLocalClockOffsetMs();
+      const offsetMs = load('services/clockDrift').getLocalClockOffsetMs();
       if (offsetMs !== null) {
         headers.push(`X-Flux-Clock-Offset: ${offsetMs}`);
       }

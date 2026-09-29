@@ -975,41 +975,6 @@ class NetworkStateManager extends EventEmitter {
   }
 }
 
-async function main() {
-  // eslint-disable-next-line global-require
-  const daemonServiceFluxnodeRpcs = require('../daemonService/daemonServiceFluxnodeRpcs');
-
-  const fetcher = async (filter = null) => {
-    const options = { params: { filter }, query: { filter: null } };
-
-    const res = await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList(options);
-
-    if (res.status === 'success') {
-      return res.data;
-    }
-    console.log('fetcher says no');
-    return [];
-  };
-
-  const network = new NetworkStateManager(fetcher, { intervalMs: 120_000, zmqEndpoint: 'tcp://127.0.0.1:28332' });
-  network.on('updated', () => {
-    console.log('received updated event');
-  });
-  network.on('populated', async () => {
-    console.log('received populated event');
-    console.log('Search result populated:', await network.search('212.71.244.159:16137', 'socketAddress'));
-  });
-  network.start();
-  setInterval(async () => {
-    // await network.search('212.71.244.159:16137', 'socketAddress');
-    console.log('Search pubkey:', await network.search('045ae66321cfc172086d79252323b6cd4b83460e580e88f220582affda8a83b3ec68078ad80f7e465c42c3ef9bc01b912b3663e2ba09057bc43fbedf0afa9f3864', 'pubkey'));
-  }, 5000);
-}
-
-if (require.main === module) {
-  main();
-}
-
 /**
  * The network prefix of a socketAddress ('ip:port' or 'ip') at the given bit
  * length, in whole octets (16 -> first two octets, 24 -> three, 32 -> full IP).

@@ -3,6 +3,7 @@
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const { isFluxStorageUrl, storageLinkOf } = require('./fluxStorage');
+const fluxBroadcastHelper = require('./fluxBroadcastHelper');
 
 // A single Flux Storage payload is an array of short strings ("KEY=value" for
 // env, individual argv items for cmd). Match the install-time limits.
@@ -35,14 +36,10 @@ async function obtainPayloadFromStorage(url, appName) {
   try {
     // Signed request: timestamp-bound basic auth so even unsecured storages can
     // verify the caller against the deterministic node list.
-    // fluxCommunicationMessagesSender forms a load-time cycle with the app
-    // services, so require it lazily.
-    // eslint-disable-next-line global-require
-    const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
     const version = 1;
     const timestamp = Date.now();
     const message = version + url + timestamp;
-    const signature = await fluxCommunicationMessagesSender.getFluxMessageSignature(message);
+    const signature = await fluxBroadcastHelper.getFluxMessageSignature(message);
     const axiosConfig = {
       headers: {
         'flux-message': message,
