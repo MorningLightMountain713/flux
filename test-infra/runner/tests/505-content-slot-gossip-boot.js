@@ -220,6 +220,7 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
 
     const res = await injectForgedManifestGossip(stub, {
       appName,
+      identity: await dbClients[targets[0]].identityOf(appName),
       version: 99,
       slots: [{ name: slotName, bytes: Buffer.from('forged slot bytes') }],
     });

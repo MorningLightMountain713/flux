@@ -6,7 +6,7 @@ import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { deployContentApp, pushContentUpdate } from '../framework/content-helper.js';
 import { getFluxDriveState, resetFluxDrive } from '../framework/fluxdrive-control.js';
 import { pushImage } from '../framework/registry-helper.js';
-import { queueAppTx, advanceBlocks, getState, stopTicker } from '../framework/daemon-control.js';
+import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitForAppSpecStored } from '../framework/wait.js';
 import { dbClient, closeDb } from '../framework/db-client.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
@@ -222,8 +222,8 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-win
     expect((await dbc.getContentManifest(appName)).version).to.equal(3);
   });
 
-  it('the periodic reaper drops the confirmed manifest once the app leaves globalappsspecifications', async function () {
-    this.timeout(180000);
+  it('the periodic reaper drops a confirmed manifest whose app identity no registry row carries', async function () {
+    this.timeout(300000);
     const node = env.clients[0];
 
     // Precondition: the confirmed v3 manifest is present and the app is in the live set.
@@ -231,50 +231,21 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-win
     expect(before, 'confirmed manifest present before removal').to.exist;
     expect(before.version).to.equal(3);
     expect(before.confirmed).to.equal(true);
+    const { identity } = before;
 
-    // Remove the app from the global set — the only condition the reaper keys on (a
-    // confirmed manifest whose app is no longer in globalappsspecifications). This is
-    // the durable equivalent of appremove/expiry: appremove only uninstalls locally and
-    // expiry needs registeredAt+ttl<now (min ttl is 1 day), so neither removes the
-    // global spec row inside a test — a direct delete is the deterministic lever.
+    // Delete the registry row behind the registry's back: the registry deletes an app's
+    // manifests itself when a row leaves, so a row gone any other way is what leaves an
+    // orphan for the reaper — a confirmed manifest whose identity no row carries.
     await dbc.deleteGlobalAppSpec(appName);
-
     const afterId = node.getLastEventId();
 
-    // The reaper runs inside the janitor's registry-expiry sweep on the synced block loop, every
-    // 2*speedMultiplier blocks (speedMultiplier=4 above the PON fork → every 8 blocks)
-    // — but ONLY on a block processed AT the tip (confirmations < 2). With the ticker
-    // mining +1 every 5s the explorer (polling ~10s) processes two blocks per cycle:
-    // the first is always conf=2 and the at-tip one is always odd-height, so an
-    // even (% 8) boundary NEVER evaluates as synced — the cadence is phase-locked out.
-    // Deterministic shape: stop the ticker, park the tip one short of a boundary, let
-    // the explorer swallow the backlog, then single-step the boundary block so IT is
-    // the at-tip synced block. Repeat until a boundary lands past the 30s reap grace.
-    await stopTicker();
-    const deadline = Date.now() + 150000;
-    let reaped;
-    for (;;) {
-      const { currentHeight } = await getState();
-      const toPreBoundary = (8 - ((currentHeight + 1) % 8)) % 8;
-      if (toPreBoundary > 0) await advanceBlocks(toPreBoundary);
-      await new Promise((r) => setTimeout(r, 12000)); // one explorer poll: catch up to boundary-1
-      await advanceBlocks(1); // the boundary block processes at-tip -> sweep evaluates
-      try {
-        reaped = await node.waitForEvent(
-          'content:manifestReaped',
-          (d) => d.count >= 1,
-          15000,
-          { afterId },
-        );
-        break;
-      } catch (err) {
-        if (Date.now() > deadline) throw err;
-      }
-    }
+    // The janitor sweeps orphaned manifests every orphanSweepIntervalMs (120 s in the
+    // harness), past the 30 s reap grace this suite configures.
+    const reaped = await node.waitForEvent('content:manifestReaped', (d) => d.count >= 1, 240000, { afterId });
     expect(reaped.data.count).to.be.at.least(1);
 
-    // The confirmed manifest row for the dead app is gone.
-    const after = await dbc.getContentManifest(appName);
+    // The confirmed manifest row for the orphaned identity is gone.
+    const after = await dbc.getContentManifestByIdentity(identity);
     expect(after, 'manifest row reaped').to.not.exist;
   });
 });
