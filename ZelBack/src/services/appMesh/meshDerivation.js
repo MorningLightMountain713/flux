@@ -17,8 +17,9 @@ const crypto = require('crypto');
 //          | sha256("flux-mesh-node" ‖ appUuid ‖ outpoint)[0..6] (48)  → node block
 //          | component slot, big-endian (32)
 //
-// appUuid is the app's registration identity — mintAppUuid's sha256(name‖txid)
-// hex, read off the app row, fed here as the 64-hex string it is stored as. A
+// appUuid is the app's registration uuid — flux-spec's appUuid, SHA-256 over
+// the name and the registration message's hash — read off the app row, fed
+// here as the 64-hex string it is stored as. A
 // name is a lease: the same string re-registered later is a DIFFERENT app, and
 // keying the overlay on the uuid means the two registrations never derive the
 // same addresses, so a stale member of the previous holder can never look

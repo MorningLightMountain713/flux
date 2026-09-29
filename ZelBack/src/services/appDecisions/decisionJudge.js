@@ -6,7 +6,6 @@ const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const pricingRegime = require('../pricing/pricingRegime');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const { lookupBlockTime } = require('../appMessaging/confirmedMessageStore');
-const { mintAppUuid, registrationIdentity } = require('../utils/appIdentity');
 
 /**
  * The chain-state answers the decision rule asks for, from this node's own
@@ -17,7 +16,9 @@ const { mintAppUuid, registrationIdentity } = require('../utils/appIdentity');
  * @returns {Promise<object>} the judge decisionRule.decideName reads
  */
 async function createJudge() {
-  const { UpdatePolicy, ValidationError } = await getSpec();
+  const {
+    UpdatePolicy, ValidationError, appUuid, registrationIdentity,
+  } = await getSpec();
   const { authorizeAppEvent, verifierFromRecovered } = await getSpecBackend();
   const blockTimes = new Map();
 
@@ -56,7 +57,8 @@ async function createJudge() {
       UpdatePolicy.assertCompatible(prevSpec, spec);
     },
 
-    mintUuid: mintAppUuid,
+    /** The uuid of the app a registration makes, from its name and message hash. */
+    mintUuid: appUuid,
 
     identityFor: registrationIdentity,
 

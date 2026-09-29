@@ -6,7 +6,7 @@ const signatureVerifier = require('../signatureVerifier');
 const benchmarkService = require('../benchmarkService');
 const { ARCANE_APP_ATTESTATION_PUBKEY, verifyAttestationSignature } = require('../utils/arcaneAttestation');
 const { getChainTeamSupportAddressUpdates } = require('../utils/chainUtilities');
-const { isMarketplaceApp } = require('../utils/appIdentity');
+const { isMarketplaceApp } = require('../utils/marketplaceApps');
 const { ownerChangeRaceSigner } = require('./ownerChangeRaces');
 
 async function deserializeMessage(message) {

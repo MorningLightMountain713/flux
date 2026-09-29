@@ -107,7 +107,7 @@ export async function unblockPeerAccess(container, peerIps, apiPort) {
 // it is, and (for a named placement) its replica. Those labels are the identity of
 // record — the same ones the shutdown daemon groups by — and they are the ONLY way a
 // suite can find a container from an app name: container names are built from the
-// app's minted identity (sha256(name‖txid) truncated), which carries no trace of the
+// app's minted identity (derived from its registration uuid), which carries no trace of the
 // name and cannot be derived from anything a suite holds.
 const LABEL_APP = 'io.runonflux.app';
 const LABEL_COMPONENT = 'io.runonflux.component';
