@@ -21,6 +21,7 @@ const fluxEventBus = require('./utils/fluxEventBus');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('./utils/appSyncEvents');
 const log = require('../lib/log');
 const grantorController = require('./quorumGrant/grantorController');
+const peerNotification = require('./appMessaging/peerNotification');
 
 // The node-down assembly: binds the reconciler (who to hold) and the juror
 // (who to accuse) to the running node. Transport is injected at start by
@@ -28,6 +29,8 @@ const grantorController = require('./quorumGrant/grantorController');
 // until start() is called, so requiring this module changes nothing.
 
 let transport = null;
+// Set once at boot by setPlacementCheck.
+let placementCheck = null;
 let reconciler = null;
 let juror = null;
 // The mild tier's counters: this node's own, never stored or sent, gone with
@@ -391,6 +394,18 @@ async function announceAlive(trigger) {
 }
 
 /**
+ * Hand this service the check that decides, from this node's derived rows,
+ * whether they still place it, removing every app when they do not. Wired at
+ * boot, before any peer connects: a certificate about this node can arrive by
+ * sync before start().
+ *
+ * @param {function(string): Promise<{placed: boolean}>} check
+ */
+function setPlacementCheck(check) {
+  placementCheck = check;
+}
+
+/**
  * The return rule, run after the store is current: the node asks its own
  * derived rows whether they still place it. Placed: keep every app and
  * announce them. Not placed: every app is removed inside the check and no
@@ -402,13 +417,10 @@ async function announceAlive(trigger) {
  * @param {string} trigger 'return' | 'certificate' | 'lockout'
  */
 async function applyPlacementThenAnnounce(trigger) {
-  // eslint-disable-next-line global-require
-  const appStartupManager = require('./appLifecycle/appStartupManager');
-  // eslint-disable-next-line global-require
-  const peerNotification = require('./appMessaging/peerNotification');
   let placed = true;
   try {
-    ({ placed } = await appStartupManager.enforceNodePlacement(trigger));
+    if (!placementCheck) throw new Error('no placement check is wired');
+    ({ placed } = await placementCheck(trigger));
   } catch (error) {
     log.warn(`nodeDownService: placement check (${trigger}) failed, announcing: ${error.message}`);
   }
@@ -513,8 +525,7 @@ function onPeerRemoved({ ip, port, closeCode }) {
   reconciler.schedule('peer-removed');
   if (transport.peerManager.allPeersDown()) {
     wasUnreachable = true;
-    // eslint-disable-next-line global-require
-    require('./appMessaging/peerNotification').holdAnnouncements('every peer is gone; the return check answers before the next announce');
+    peerNotification.holdAnnouncements('every peer is gone; the return check answers before the next announce');
   }
 
   // Only an unexpected loss raises suspicion or counts as a flap — a
@@ -780,8 +791,7 @@ function stop() {
   if (transport && answerHandler) transport.peerManager.off('peer:answered', answerHandler);
   if (returnSyncHandler) {
     clearReturnSync();
-    // eslint-disable-next-line global-require
-    require('./appMessaging/peerNotification').releaseAnnouncements();
+    peerNotification.releaseAnnouncements();
   }
   if (transport) transport.peerManager.setInboundGate(null);
   dropHandler = null;
@@ -815,6 +825,7 @@ async function sweep() {
 }
 
 module.exports = {
+  setPlacementCheck,
   start,
   stop,
   sweep,
