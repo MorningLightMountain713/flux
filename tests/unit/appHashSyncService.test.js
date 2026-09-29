@@ -9,6 +9,8 @@ const { Privilege, authOf } = require('../../ZelBack/src/services/utils/privileg
 const {
   loadSpecLibrary, v8Spec,
 } = require('./fixtures/fluxSpec');
+const { HASH_RETRY_BACKOFF } = require('../../ZelBack/src/services/utils/appConstants');
+const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. What stays stubbed is I/O and FluxOS policy: mongo, the peer
@@ -669,7 +671,6 @@ describe('appHashSyncService tests', () => {
     });
 
     it('should clamp backoff index to last value for high attempt counts', () => {
-      const { HASH_RETRY_BACKOFF } = require('../../ZelBack/src/services/utils/appConstants');
       const lastBackoff = HASH_RETRY_BACKOFF[HASH_RETRY_BACKOFF.length - 1];
       // Attempt 20 should clamp to last backoff value
       const idx = Math.min(20, HASH_RETRY_BACKOFF.length - 1);
@@ -863,7 +864,6 @@ describe('appHashSyncService tests', () => {
     });
 
     it('should keep waiting while hash responses arrive via event bus', async () => {
-      const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
       const clock = sinon.useFakeTimers();
       serviceHelperStub.delay = (ms) => { clock.tick(ms); return Promise.resolve(); };
 

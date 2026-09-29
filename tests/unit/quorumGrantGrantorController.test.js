@@ -22,6 +22,7 @@ const grantorController = require('../../ZelBack/src/services/quorumGrant/granto
 const signedEnvelope = require('../../ZelBack/src/services/quorumGrant/signedEnvelope');
 const rosterOverlay = require('../../ZelBack/src/services/quorumGrant/rosterOverlay');
 const { selectCommittee } = require('../../ZelBack/src/services/utils/committeeSelector');
+const delistedHolders = require('../../ZelBack/src/services/quorumGrant/delistedHolders');
 
 // The controller's job is the gauntlet: identity, signature, committee
 // membership, holdership. The register behind it is stubbed — its rules have
@@ -376,7 +377,6 @@ describe('quorumGrant grantorController', () => {
     });
 
     it('a delisted holder resolves to nobody at seat rows only: the ordinal ask carries the delisted-holder read, the founder and held asks do not', async () => {
-      const delistedHolders = require('../../ZelBack/src/services/quorumGrant/delistedHolders');
       await grantorController.probe(fakeReq(signedAsk('probe', { mode: 'oneshot', key: ORDINAL_KEY })), fakeRes());
       expect(grantRegister.probe.calledOnce).to.equal(true);
       const [, , seatContext] = grantRegister.probe.firstCall.args;

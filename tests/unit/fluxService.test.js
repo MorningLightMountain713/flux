@@ -47,6 +47,7 @@ const packageJson = require('../../package.json');
 const log = require('../../ZelBack/src/lib/log');
 const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 const { testUserconfig } = require('../fixtures/userconfig');
+const residentialNodeDosService = require('../../ZelBack/src/services/residentialNodeDosService');
 
 // The same userconfig tests/init.js put on globalThis. Built from the shared
 // fixture rather than restated here: fluxService reads globalThis, so a private
@@ -2081,8 +2082,6 @@ describe('fluxService tests', () => {
       // indistinguishable from one that has simply not been given work. This
       // field is the only thing that says otherwise, and HOLD is the stage where
       // the operator can still put the node right and lose nothing.
-      // eslint-disable-next-line global-require
-      const residentialNodeDosService = require('../../ZelBack/src/services/residentialNodeDosService');
       sinon.stub(residentialNodeDosService, 'getDosStaging').returns('HOLD');
       daemonServiceControlRpcsStub.returns({ status: 'success', data: 'info data' });
       daemonServiceFluxnodeRpcsStub.returns({ status: 'success', data: 'status data' });

@@ -10,6 +10,7 @@ const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper'
 const generalService = require('../../ZelBack/src/services/generalService');
 const dockerService = require('../../ZelBack/src/services/dockerService');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
+const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -120,7 +121,6 @@ describe('deploymentProvider tests', () => {
       // must not read and deserialize the same collection a second time — it
       // runs on every admission decision and every spawn cycle. Nothing about
       // the ANSWER changes, so only the read itself can be asserted.
-      const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
       const listed = sinon.stub(appsRepository, 'listInstalledApps').resolves([]);
 
       const deployments = await deploymentProvider.listInstalledDeployments([]);

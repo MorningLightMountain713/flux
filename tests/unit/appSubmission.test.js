@@ -12,6 +12,7 @@ const {
 } = require('./fixtures/fluxSpec');
 const { FluxPeerManager, PEER_SOURCE } = require('../../ZelBack/src/services/utils/FluxPeerManager');
 const { asConfig } = require('./fixtures/config');
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. What stays stubbed is I/O and FluxOS policy.
@@ -136,8 +137,6 @@ describe('appSubmission tests', () => {
 
   // A node past its acquisition window, which every case below assumes; the gate itself
   // is exercised in its own block.
-  // eslint-disable-next-line global-require
-  const capabilities = require('../../ZelBack/src/services/utils/capabilities');
   beforeEach(() => {
     capabilities.resetForTests();
     capabilities.setForTests('policyCurrent', true);

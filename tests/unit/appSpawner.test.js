@@ -16,6 +16,7 @@ const {
 // the spawner actually applies in production.
 const hwRequirementsActual = require('../../ZelBack/src/services/appRequirements/hwRequirements');
 const { asConfig } = require('./fixtures/config');
+const { appSyncEvents } = require('../../ZelBack/src/services/utils/appSyncEvents');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. Every candidate the spawner screens, targets, decrypts and installs is a
@@ -1907,7 +1908,6 @@ describe('appSpawner tests', () => {
   });
 
   describe('notifySpecStored - spec-stored wake gate', () => {
-    const { appSyncEvents } = require('../../ZelBack/src/services/utils/appSyncEvents');
 
     afterEach(() => {
       appSyncEvents.removeAllListeners();
@@ -2083,7 +2083,6 @@ describe('appSpawner tests', () => {
   });
 
   describe('spawn loop wake latch (mid-cycle wake)', () => {
-    const { appSyncEvents } = require('../../ZelBack/src/services/utils/appSyncEvents');
 
     afterEach(() => {
       appSyncEvents.removeAllListeners();

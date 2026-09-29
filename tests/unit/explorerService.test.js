@@ -23,6 +23,7 @@ const { requireMongo } = require('./dbTestHelper');
 
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
+const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
 
 // 320-char OP_RETURN payload, hoisted so the call site stays inside max-len.
 // A standard P2PKH output's script, as the daemon reports it. Every payment output
@@ -1236,7 +1237,6 @@ describe('explorerService tests', () => {
   // the registration gate, so it refuses registrations a node running at the time
   // accepted.
   describe('bootstrapSoftForks — the oracle addresses phase 1 discovers', () => {
-    const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
     const authority = config.fluxapps.messageAuthorityAddress;
 
     // Independent literals, not derived by the code under test: this pubkey names
@@ -1453,7 +1453,6 @@ describe('explorerService tests', () => {
   });
 
   describe('soft-fork message authority', () => {
-    const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
     afterEach(() => sinon.restore());
 
     // A real mainnet oracle RateMessage scriptSig: a P2PKH spend (72-byte signature
@@ -1522,7 +1521,6 @@ describe('explorerService tests', () => {
   });
 
   describe('processSoftFork failure handling', () => {
-    const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
 
     // Same real mainnet P2PKH scriptSig the authority tests use: SIGHASH_ALL, so the
     // input commits to the OP_RETURN and isMessageAuthority accepts the transaction.
@@ -1889,8 +1887,6 @@ describe('explorerService tests', () => {
       // pre-block tip and returns without scanning — and nothing re-arms in
       // push mode. The message itself carries the freshest fact; the
       // subscriber records it before asking for the scan.
-      // eslint-disable-next-line global-require
-      const proxyquire = require('proxyquire');
       const captured = new Map();
       const fresh = proxyquire('../../ZelBack/src/services/explorerService', {
         './daemonService/daemonSubscriptionService': {

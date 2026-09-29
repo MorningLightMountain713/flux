@@ -12,6 +12,9 @@ const deviceHelper = require('../../ZelBack/src/services/deviceHelper');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
 const domain = require('./fixtures/appDomain');
+const fs = require('fs').promises;
+const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
+const log = require('../../ZelBack/src/lib/log');
 
 describe('IOUtils getVolumeInfo tests', () => {
   // The layout differs between Arcane and a legacy node, and only rows under
@@ -135,9 +138,6 @@ describe('IOUtils getVolumeInfo tests', () => {
 });
 
 describe('IOUtils archive and removal tests', () => {
-  const fs = require('fs').promises;
-  const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
-  const log = require('../../ZelBack/src/lib/log');
 
   let runCommandStub;
   let mkdirStub;

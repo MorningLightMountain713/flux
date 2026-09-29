@@ -19,6 +19,7 @@ const {
   RECORD_LIFETIME_MS,
 } = require('../../ZelBack/src/services/utils/nodeDownCertificates');
 const { globalAppStateEvents } = require('../../ZelBack/src/services/utils/appConstants');
+const { NODE_DOWN_GRACE_MS, CLOCK_SKEW_ALLOWANCE_MS } = require('../../ZelBack/src/services/utils/appConstants');
 
 const T0 = 1_700_000_000_000;
 const S = 's'.repeat(64).slice(0, 64).concat(':0'); // distinctive test subject
@@ -679,7 +680,6 @@ describe('nodeDownStore', () => {
 });
 
 describe('nodeDownStore — the record carries since and reason (R4)', () => {
-  const { NODE_DOWN_GRACE_MS, CLOCK_SKEW_ALLOWANCE_MS } = require('../../ZelBack/src/services/utils/appConstants');
   let world;
   let store;
   let collection;

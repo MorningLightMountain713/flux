@@ -11,6 +11,11 @@ const verificationHelper = require('../../ZelBack/src/services/verificationHelpe
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const verifyPool = require('../../ZelBack/src/services/utils/verifyPool');
 const { asConfig } = require('./fixtures/config');
+const crypto = require('crypto');
+const bitcoinMessage = require('bitcoinjs-message');
+const secp256k1 = require('secp256k1');
+const { load } = require('@runonflux/flux-spec-cjs');
+const { pubKeyToAddr } = require('../../ZelBack/src/services/utils/fluxCryptoUtils');
 
 const TEST_PUBKEY = '0474eb4690689bb408139249eda7f361b7881c4254ccbe303d3b4d58c2b48897d0f070b44944941998551f9ea0e1befd96f13adf171c07c885e62d0c2af56d3dab';
 const TEST_PRIVKEY = '5JTeg79dTLzzHXoJPALMWuoGDM8QmLj4n5f6MeFjx8dzsirvjAh';
@@ -265,11 +270,6 @@ describe('verifyPool tests', () => {
 describe('verifyPool signer recovery', function () {
   this.timeout(REAL_WORK_MS);
 
-  const crypto = require('crypto');
-  const bitcoinMessage = require('bitcoinjs-message');
-  const secp256k1 = require('secp256k1');
-  const { load } = require('@runonflux/flux-spec-cjs');
-  const { pubKeyToAddr } = require('../../ZelBack/src/services/utils/fluxCryptoUtils');
 
   function keyPair(compressed) {
     let privateKey;

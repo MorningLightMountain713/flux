@@ -9,6 +9,7 @@ const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const {
   loadSpecLibrary, v9Spec, sealedV8Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const { departingApps } = require('../../ZelBack/src/services/utils/globalState');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. What this module actually handles is the row appsRepository hydrates
@@ -36,8 +37,6 @@ const APP_UUID = '5db6f53acbbd9b38e949307e96601e573bd6437ddec08707e76a33f771b358
 
 describe('peerNotification tests', () => {
   // The real marks: a removal enters them in appUninstaller and this module reads them.
-  // eslint-disable-next-line global-require
-  const { departingApps } = require('../../ZelBack/src/services/utils/globalState');
   let peerNotification;
   let logStub;
   let enqueueAllStub;

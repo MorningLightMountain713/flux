@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const realDockerService = require('../../ZelBack/src/services/dockerService');
 
 // Ported from development's ensureAppDockerNetwork suite (PR #1769), which lived in
 // appInstaller.test.js before the function moved to appNetwork/appDockerNetwork.js.
@@ -36,8 +37,6 @@ describe('appDockerNetwork tests', () => {
   let removeAccessStub;
 
   it('calls only dockerService functions the real module exports', () => {
-    // eslint-disable-next-line global-require
-    const realDockerService = require('../../ZelBack/src/services/dockerService');
     DOCKER_SERVICE_API_USED.forEach((fn) => {
       expect(realDockerService[fn], `dockerService.${fn} is stubbed here but not exported`).to.be.a('function');
     });

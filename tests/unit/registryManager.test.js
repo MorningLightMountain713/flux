@@ -25,6 +25,8 @@ const {
   loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION,
   v8Spec, v9Spec, sealedV8Spec, sealedV9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const { NODE_DOWN_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
+const { departures, OFF_LIST_GRACE_MS } = require('../../ZelBack/src/services/appDatabase/offListDepartures');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. This module owns the registry and the app-spec view API, so what it is
@@ -1776,7 +1778,6 @@ describe('registryManager tests', () => {
     });
 
     it('a certified node keeps its rows until since + the grace, then loses them; an announcement at or after the certificate restores them', async () => {
-      const { NODE_DOWN_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
       await database.collection(eventsCollection).insertMany([
         // inside the grace: the drop was 60 s ago, certified 50 s ago
         makeV2Event('1.2.3.4', [{ name: 'AppA', hash: 'h1' }], now - 10 * 60 * 1000),
@@ -1797,7 +1798,6 @@ describe('registryManager tests', () => {
     });
 
     it('a certified node\'s rows expire at since + the grace while the certificate stands newer than the announcement', async () => {
-      const { NODE_DOWN_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
       const announcedAt = now - 60_000;
       const since = now - 30_000;
       await database.collection(eventsCollection).insertMany([
@@ -1811,7 +1811,6 @@ describe('registryManager tests', () => {
     });
 
     it('rows of an address gone from the node list past the off-list grace are negated on every read; inside the grace they stand; back on the list they return', async () => {
-      const { departures, OFF_LIST_GRACE_MS } = require('../../ZelBack/src/services/appDatabase/offListDepartures');
       departures.resetForTests();
       const listed = Array.from({ length: 20 }, (_, i) => `10.7.0.${i + 1}:16127`);
       await database.collection(eventsCollection).insertMany([
@@ -1842,7 +1841,6 @@ describe('registryManager tests', () => {
     });
 
     it('the boot sweep: a row address the current list does not carry starts its grace from the sweep, and nothing is negated before it', async () => {
-      const { departures, OFF_LIST_GRACE_MS } = require('../../ZelBack/src/services/appDatabase/offListDepartures');
       departures.resetForTests();
       const listed = Array.from({ length: 20 }, (_, i) => `10.7.0.${i + 1}:16127`);
       await database.collection(eventsCollection).insertMany([

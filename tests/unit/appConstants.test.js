@@ -9,6 +9,8 @@ const { expect } = require('chai');
 const path = require('path');
 const { resolvedPath } = require('../../ZelBack/src/services/utils/appConstants');
 const { asConfig } = require('./fixtures/config');
+const proxyquire = require('proxyquire');
+const real = require('config');
 
 describe('appConstants tests', () => {
   let originalFluxOSPath;
@@ -118,9 +120,6 @@ describe('appConstants tests', () => {
     // against the numbers the fleet and the harness actually run rather than
     // against one of them.
     const derive = (locationTtlS) => {
-      // eslint-disable-next-line global-require
-      const proxyquire = require('proxyquire');
-      const real = require('config');
 
       return proxyquire('../../ZelBack/src/services/utils/appConstants', {
         config: asConfig({ ...real, fluxapps: { ...real.fluxapps, locationTtlS } }),

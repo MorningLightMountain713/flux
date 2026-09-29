@@ -9,6 +9,7 @@ const nodeCrypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const { Readable, Writable } = require('node:stream');
 const { asConfig } = require('./fixtures/config');
+const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -1599,7 +1600,6 @@ describe('volumeExecutor tests', () => {
     };
 
     it('re-opens the caller\'s job under its original id', async () => {
-      const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
       jobRegistry.reset();
       containerStub.wait.returns(new Promise(() => {}));
 
@@ -1611,7 +1611,6 @@ describe('volumeExecutor tests', () => {
     });
 
     it('settles the job on the container it adopted exiting', async () => {
-      const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
       jobRegistry.reset();
       containerStub.wait.resolves({ StatusCode: 0 });
 
@@ -1622,7 +1621,6 @@ describe('volumeExecutor tests', () => {
     });
 
     it('fails the job when the adopted container exits non-zero', async () => {
-      const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
       jobRegistry.reset();
       containerStub.wait.resolves({ StatusCode: 2 });
 
@@ -1633,7 +1631,6 @@ describe('volumeExecutor tests', () => {
     });
 
     it('reclaims the staging root once the adopted container settles', async () => {
-      const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
       jobRegistry.reset();
       containerStub.wait.resolves({ StatusCode: 0 });
 
@@ -1704,7 +1701,6 @@ describe('volumeExecutor tests', () => {
       // A refusal that only says "busy" leaves a client retrying blindly. What
       // it is waiting for is knowable, watchable and cancellable, so the
       // refusal carries it.
-      const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
       let releaseFirst;
       containerStub.wait.returns(new Promise((resolve) => { releaseFirst = resolve; }));
 
@@ -1732,7 +1728,6 @@ describe('volumeExecutor tests', () => {
       // offered where one is real. A copy that has moved a known fraction in a
       // known time can answer; anything else gets the default rather than an
       // invented number.
-      const jobRegistry = require('../../ZelBack/src/services/utils/jobRegistry');
       let releaseFirst;
       containerStub.wait.returns(new Promise((resolve) => { releaseFirst = resolve; }));
 
@@ -2549,7 +2544,6 @@ describe('volumeExecutor tests', () => {
   });
 
   describe('run - an upload streamed into the container', () => {
-    const { Readable, Writable } = require('node:stream');
 
     let socket;
     let exit;

@@ -8,6 +8,7 @@ chai.use(chaiAsPromised);
 const { expect } = chai;
 
 const { AsyncLock } = require('../../ZelBack/src/services/utils/asyncLock');
+const log = require('../../ZelBack/src/lib/log');
 
 describe('asyncLock tests', () => {
   afterEach(() => {
@@ -138,8 +139,6 @@ describe('asyncLock tests', () => {
 
     it('should attribute a leak to the holder that leaked it, not to whoever released next', async () => {
       const clock = sinon.useFakeTimers();
-      // eslint-disable-next-line global-require
-      const log = require('../../ZelBack/src/lib/log');
       const errorStub = sinon.stub(log, 'error');
 
       const asyncLock = new AsyncLock(2, { maxHoldMs: 1000 });
@@ -245,8 +244,6 @@ describe('asyncLock tests', () => {
   describe('max-hold watchdog', () => {
     it('should force-release a slot held past the limit and log the leak', async () => {
       const clock = sinon.useFakeTimers();
-      // eslint-disable-next-line global-require
-      const log = require('../../ZelBack/src/lib/log');
       const errorStub = sinon.stub(log, 'error');
 
       const asyncLock = new AsyncLock(1, { maxHoldMs: 1000 });
@@ -264,8 +261,6 @@ describe('asyncLock tests', () => {
 
     it('should hand the reclaimed slot to a waiter', async () => {
       const clock = sinon.useFakeTimers();
-      // eslint-disable-next-line global-require
-      const log = require('../../ZelBack/src/lib/log');
       sinon.stub(log, 'error');
 
       const asyncLock = new AsyncLock(1, { maxHoldMs: 1000 });
@@ -283,8 +278,6 @@ describe('asyncLock tests', () => {
 
     it('should make the real holder\'s later release a no-op after a force-release', async () => {
       const clock = sinon.useFakeTimers();
-      // eslint-disable-next-line global-require
-      const log = require('../../ZelBack/src/lib/log');
       sinon.stub(log, 'error');
 
       const asyncLock = new AsyncLock(1, { maxHoldMs: 1000 });
@@ -302,8 +295,6 @@ describe('asyncLock tests', () => {
 
     it('should not fire for a holder that releases in time', async () => {
       const clock = sinon.useFakeTimers();
-      // eslint-disable-next-line global-require
-      const log = require('../../ZelBack/src/lib/log');
       const errorStub = sinon.stub(log, 'error');
 
       const asyncLock = new AsyncLock(1, { maxHoldMs: 1000 });
@@ -318,8 +309,6 @@ describe('asyncLock tests', () => {
 
     it('should be disabled by maxHoldMs 0', async () => {
       const clock = sinon.useFakeTimers();
-      // eslint-disable-next-line global-require
-      const log = require('../../ZelBack/src/lib/log');
       const errorStub = sinon.stub(log, 'error');
 
       const asyncLock = new AsyncLock(1, { maxHoldMs: 0 });

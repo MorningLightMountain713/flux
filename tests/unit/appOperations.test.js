@@ -35,6 +35,19 @@ const {
   loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 const domain = require('./fixtures/appDomain');
+const relationshipResolver = require('../../ZelBack/src/services/appLifecycle/relationshipResolver');
+const shutdownPlan = require('../../ZelBack/src/services/appLifecycle/shutdownPlan');
+const componentProvisioner2 = require('../../ZelBack/src/services/appLifecycle/componentProvisioner');
+const appGiveUp = require('../../ZelBack/src/services/appLifecycle/appGiveUp');
+const pendingTeardownStore = require('../../ZelBack/src/services/appLifecycle/pendingTeardownStore');
+const globalCommand = require('../../ZelBack/src/services/appManagement/globalCommand');
+const syncthingFolderStateMachine = require('../../ZelBack/src/services/appMonitoring/syncthingFolderStateMachine');
+const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
+const fluxShutdowndClient = require('../../ZelBack/src/services/utils/fluxShutdowndClient');
+const { resolveInstantiatedSpec } = require('../../ZelBack/src/services/utils/specCutover');
+const volumeService = require('../../ZelBack/src/services/utils/volumeService');
+const IOUtils = require('../../ZelBack/src/services/IOUtils');
+const syncthingMonitorHelpers = require('../../ZelBack/src/services/appMonitoring/syncthingMonitorHelpers');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. What stays stubbed is I/O and FluxOS policy: the daemon socket, mongo,
@@ -307,8 +320,6 @@ describe('appOperations tests', () => {
     it('streams every progress line as a success envelope, and the last one says it finished', async () => {
       req.params.appname = 'myapp';
       req.params.component = 'frontend';
-      // eslint-disable-next-line global-require
-      const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
       const deployment = await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' });
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
@@ -449,8 +460,6 @@ describe('appOperations tests', () => {
     // changes. Both the teardown and the reinstall must leave the app's ufw/UPnP rules
     // in place (skipPorts) — no firewall flap, no UPnP re-map churn.
     it('leaves ufw/UPnP untouched: teardown and reinstall both run with skipPorts', async () => {
-      // eslint-disable-next-line global-require
-      const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
       // A real component with no shutdown/preStop/drain: requiresDaemonShutdown()
       // is false and shutdownBudgetSeconds() is docker's own 10s window.
       const deployment = await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' });
@@ -485,10 +494,6 @@ describe('appOperations tests', () => {
     });
 
     it('routes a graceful component redeploy through flux-shutdownd, component-scoped', async () => {
-      // eslint-disable-next-line global-require
-      const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
-      // eslint-disable-next-line global-require
-      const fluxShutdowndClient = require('../../ZelBack/src/services/utils/fluxShutdowndClient');
       // A declared graceful contract on the real class: shutdown.gracefulTimeout is
       // what makes requiresDaemonShutdown() true and sets the budget.
       const deployment = await oneComponentDeployment('myapp', 'frontend', {
@@ -521,10 +526,6 @@ describe('appOperations tests', () => {
   });
 
   describe('redeployApplication pre-teardown dependency check', () => {
-    // eslint-disable-next-line global-require
-    const relationshipResolver = require('../../ZelBack/src/services/appLifecycle/relationshipResolver');
-    // eslint-disable-next-line global-require
-    const { resolveInstantiatedSpec } = require('../../ZelBack/src/services/utils/specCutover');
 
     beforeEach(() => {
       operationRegistry.clear();
@@ -599,10 +600,6 @@ describe('appOperations tests', () => {
     });
 
     it('routes the identity stop through flux-shutdownd before teardown (reason: redeploy)', async () => {
-      // eslint-disable-next-line global-require
-      const fluxShutdowndClient = require('../../ZelBack/src/services/utils/fluxShutdowndClient');
-      // eslint-disable-next-line global-require
-      const shutdownPlan = require('../../ZelBack/src/services/appLifecycle/shutdownPlan');
       const deployment = await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' });
       const deployComp = deployment.getComponent('frontend');
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
@@ -748,10 +745,6 @@ describe('appOperations tests', () => {
      * every call went unnoticed.
      */
     async function runRedeploy({ createVolumes }) {
-      // eslint-disable-next-line global-require
-      const componentProvisioner2 = require('../../ZelBack/src/services/appLifecycle/componentProvisioner');
-      // eslint-disable-next-line global-require
-      const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
       const deployment = await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' });
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
@@ -1222,7 +1215,6 @@ describe('appOperations tests', () => {
       deploymentProviderStub.resolves([await gDeployment(appName, `web_${appName}`)]);
       operationRegistry.acquire(appName, 'backup', 'test');
 
-      const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
       const axiosGetStub = sinon.stub(serviceHelper, 'axiosGet');
 
       await appOperations.coordinateActiveStandbyApps();
@@ -1242,7 +1234,6 @@ describe('appOperations tests', () => {
       // one dependency while every other dep (delay, axiosGet, getLocalSocketAddress, docker,
       // deploymentProvider) is object-accessed and so is controlled by the sinon stubs below.
       const proxyquire = require('proxyquire');
-      const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
       // The active-standby component is currently running on THIS node.
       const listRunningContainers = sinon.stub().resolves([{ Names: [`/flux${identifier}`] }]);
       const appOps = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
@@ -1254,16 +1245,12 @@ describe('appOperations tests', () => {
       expect(mixed.getComponent('n8n').identifier).to.equal(identifier);
       deploymentProviderStub.resolves([mixed]);
 
-      const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
       // FDM reports the primary lives on a DIFFERENT node -> this node is a standby.
       sinon.stub(serviceHelper, 'axiosGet').resolves({ data: { status: 'success', data: { ips: ['203.0.113.99'] } } });
 
-      const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.5:16137');
 
-      const dockerService = require('../../ZelBack/src/services/dockerService');
       sinon.stub(dockerService, 'getAppIdentifier').returns('appid');
-      const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
       const setDesiredStub = sinon.stub(appReconciler, 'setControllerDesired');
       const count = sinon.stub(fluxEventBus, 'count');
 
@@ -1285,7 +1272,6 @@ describe('appOperations tests', () => {
       // its own running container. (Port-sensitive matching would wrongly stop it.)
       const identifier = 'n8n_n8napp';
       const proxyquire = require('proxyquire');
-      const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
       const listRunningContainers = sinon.stub().resolves([{ Names: [`/flux${identifier}`] }]);
       const appOps = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
         '../appQuery/appQueryService': { ...appQueryService, listRunningContainers },
@@ -1293,15 +1279,12 @@ describe('appOperations tests', () => {
 
       deploymentProviderStub.resolves([await gDeployment('n8napp', identifier)]);
 
-      const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
       // FDM names THIS node as primary, returned as a bare IP (production format).
       sinon.stub(serviceHelper, 'axiosGet').resolves({ data: { status: 'success', data: { ips: ['192.168.1.5'] } } });
 
-      const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
       // Same IP but a non-default (UPnP) port — ipsMatch ignores the port.
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.5:16137');
 
-      const dockerService = require('../../ZelBack/src/services/dockerService');
       sinon.stub(dockerService, 'getAppIdentifier').returns('appid');
       const appDockerStopStub = sinon.stub(dockerService, 'appDockerStop').resolves();
 
@@ -1346,7 +1329,6 @@ describe('appOperations tests', () => {
       // otherwise see the component not running here and start it again.
       const identifier = 'stood_appc';
       deploymentProviderStub.resolves([await gDeployment('appc', identifier)]);
-      const appGiveUp = require('../../ZelBack/src/services/appLifecycle/appGiveUp');
       sinon.stub(appGiveUp, 'isStandingDown').callsFake((id) => id === identifier);
 
       sinon.stub(dockerService, 'getAppIdentifier').returns(`flux${identifier}`);
@@ -1502,8 +1484,6 @@ describe('appOperations tests', () => {
   });
 
   describe('shutdownPlanResync tests', () => {
-    // eslint-disable-next-line global-require
-    const { resolveInstantiatedSpec } = require('../../ZelBack/src/services/utils/specCutover');
     let proxyquire;
 
     // Real spec hashes: 64 hex characters, the form the registry and the daemon's
@@ -1708,8 +1688,6 @@ describe('appOperations tests', () => {
     // A spec-change reconcile must move only the ufw/UPnP rules that changed: close the
     // dropped ports (old−new), open the added ports (new−old), leave the kept ports'
     // mappings in place. The per-component teardown/reinstall run with skipPorts.
-    // eslint-disable-next-line global-require
-    const { resolveInstantiatedSpec } = require('../../ZelBack/src/services/utils/specCutover');
 
     /**
      * A real DeploymentSpec for a one-component app, parameterised on exactly the
@@ -1739,10 +1717,6 @@ describe('appOperations tests', () => {
     let teardownOwedForStub;
 
     function setup({ teardownOwed = false } = {}) {
-      // eslint-disable-next-line global-require
-      const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
-      // eslint-disable-next-line global-require
-      const pendingTeardownStore = require('../../ZelBack/src/services/appLifecycle/pendingTeardownStore');
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
       sinon.stub(appsRepository, 'upsertInstalledApp').resolves();
@@ -1798,8 +1772,6 @@ describe('appOperations tests', () => {
     });
 
     it('routes a graceful component teardown through flux-shutdownd, component-scoped', async () => {
-      // eslint-disable-next-line global-require
-      const fluxShutdowndClient = require('../../ZelBack/src/services/utils/fluxShutdowndClient');
       setup();
       const beginAppStop = sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
       // Same volume size, changed component -> keepVolume, and a declared shutdown
@@ -1824,8 +1796,6 @@ describe('appOperations tests', () => {
     });
 
     it('a component with no declared contract keeps the local stop', async () => {
-      // eslint-disable-next-line global-require
-      const fluxShutdowndClient = require('../../ZelBack/src/services/utils/fluxShutdowndClient');
       setup();
       const beginAppStop = sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
       const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
@@ -1897,14 +1867,6 @@ describe('appOperations tests', () => {
   });
 
   describe('runRestoreTask rules', () => {
-    // eslint-disable-next-line global-require
-    const volumeService = require('../../ZelBack/src/services/utils/volumeService');
-    // eslint-disable-next-line global-require
-    const IOUtils = require('../../ZelBack/src/services/IOUtils');
-    // eslint-disable-next-line global-require
-    const syncthingMonitorHelpers = require('../../ZelBack/src/services/appMonitoring/syncthingMonitorHelpers');
-    // eslint-disable-next-line global-require
-    const globalCommand = require('../../ZelBack/src/services/appManagement/globalCommand');
 
     let reported;
     beforeEach(() => { reported = []; });
@@ -2083,10 +2045,6 @@ describe('appOperations tests', () => {
   });
 
   describe('runRestoreTask hold on a failed clear', () => {
-    // eslint-disable-next-line global-require
-    const volumeService = require('../../ZelBack/src/services/utils/volumeService');
-    // eslint-disable-next-line global-require
-    const IOUtils = require('../../ZelBack/src/services/IOUtils');
 
     // A clear that fails leaves the directory neither copy: the component is
     // held stopped rather than started on it, and the caller is told why.
@@ -2153,14 +2111,6 @@ describe('appOperations tests', () => {
     beforeEach(() => { reported = []; });
     // eslint-disable-next-line global-require
     const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
-    // eslint-disable-next-line global-require
-    const IOUtils = require('../../ZelBack/src/services/IOUtils');
-    // eslint-disable-next-line global-require
-    const volumeService = require('../../ZelBack/src/services/utils/volumeService');
-    // eslint-disable-next-line global-require
-    const syncthingMonitorHelpers = require('../../ZelBack/src/services/appMonitoring/syncthingMonitorHelpers');
-    // eslint-disable-next-line global-require
-    const syncthingFolderStateMachine = require('../../ZelBack/src/services/appMonitoring/syncthingFolderStateMachine');
 
     /**
      * What the completeness gate reads. A backup is refused unless this instance

@@ -9,6 +9,12 @@ const proxyquire = require('proxyquire').noCallThru();
 const { load } = require('@runonflux/flux-spec-cjs');
 
 const legacyRegime = require('../../ZelBack/src/services/pricing/legacyPricingRegime');
+const { regimeFor } = require('../../ZelBack/src/services/pricing/pricingRegime');
+const legacyPricingRegime = require('../../ZelBack/src/services/pricing/legacyPricingRegime');
+const v9PricingRegime = require('../../ZelBack/src/services/pricing/v9PricingRegime');
+const cacheManager = require('../../ZelBack/src/services/utils/cacheManager').default;
+const { v8Spec } = require('./fixtures/fluxSpec');
+const config = require('config');
 
 let PricingModel;
 before(async () => {
@@ -24,9 +30,6 @@ describe('pricingRegime', () => {
   // pricing path reads a spec version; a spec states its model and this
   // resolves it.
   describe('regimeFor — a declared pricing model resolves to its implementation', () => {
-    const { regimeFor } = require('../../ZelBack/src/services/pricing/pricingRegime');
-    const legacyPricingRegime = require('../../ZelBack/src/services/pricing/legacyPricingRegime');
-    const v9PricingRegime = require('../../ZelBack/src/services/pricing/v9PricingRegime');
 
     it('resolves the chain-floor model to the legacy regime', async () => {
       const regime = await regimeFor({ pricingModel: PricingModel.CHAIN_FLOOR });
@@ -200,9 +203,6 @@ describe('pricingRegime', () => {
     const HEIGHT = 1_800_000;
     const CACHE_KEY = 'list';
 
-    const cacheManager = require('../../ZelBack/src/services/utils/cacheManager').default;
-    const { v8Spec } = require('./fixtures/fluxSpec');
-    const config = require('config');
 
     let spec;
     let ordinarySpec;

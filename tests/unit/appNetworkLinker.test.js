@@ -4,6 +4,7 @@ const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { withHostMutationLock } = require('../../ZelBack/src/services/utils/hostMutationLock');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -138,8 +139,6 @@ describe('appNetworkLinker tests', () => {
   });
 
   describe('attach serialization under the host mutation lock', () => {
-    // eslint-disable-next-line global-require
-    const { withHostMutationLock } = require('../../ZelBack/src/services/utils/hostMutationLock');
 
     it('queues a cross-app attach behind a held teardown lock instead of racing it', async () => {
       let releaseTeardown;

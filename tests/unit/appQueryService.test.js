@@ -9,6 +9,9 @@ const { asConfig } = require('./fixtures/config');
 const {
   loadSpecLibrary, V8_SUBMISSION, v8Spec, v9Spec, sealedV9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
+const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
+const globalState = require('../../ZelBack/src/services/utils/globalState');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js.
 // This is the query layer over stored app state, so what appsRepository hands back
@@ -553,10 +556,6 @@ describe('appQueryService tests', () => {
     // What a peer mid-election is told this node owns. Answering short here is not
     // a stale reading - it is a second container started on a volume this node is
     // already writing, which corrupts it.
-    // eslint-disable-next-line global-require
-    const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
-    // eslint-disable-next-line global-require
-    const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
 
     // The three sources, each independently switchable, because the point of every
     // case below is which one carried the answer.
@@ -639,8 +638,6 @@ describe('appQueryService tests', () => {
   });
 
   describe('promotedFolders', () => {
-    // eslint-disable-next-line global-require
-    const globalState = require('../../ZelBack/src/services/utils/globalState');
 
     afterEach(() => {
       globalState.promotedFolderIds = new Set();

@@ -25,6 +25,7 @@ const { requireMongo } = require('./dbTestHelper');
 const {
   loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION, v1Spec, v8Spec, v9Spec, instantiatedSpec,
 } = require('./fixtures/fluxSpec');
+const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 
 // The spec library is REAL here, and so is the whole resolution chain beneath
 // these handlers — see tests/unit/fixtures/fluxSpec.js for why. Every handler
@@ -171,8 +172,6 @@ describe('appController tests', () => {
     });
 
     // Setup common stubs
-    // eslint-disable-next-line global-require
-    const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
     verificationHelperStub = sinon.stub(verificationHelper, 'verifyPrivilege');
 
     // This node's identity, as a PINNED placement matches it against. Unstubbed

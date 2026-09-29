@@ -8,6 +8,7 @@ const networkStateService = require('../../ZelBack/src/services/networkStateServ
 const daemonServiceFluxnodeRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceFluxnodeRpcs');
 const nodeListSource = require('../../ZelBack/src/services/nodeListSource');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
+const { departures } = require('../../ZelBack/src/services/appDatabase/offListDepartures');
 
 describe('networkStateService tests', () => {
   let fluxnodeRpcStub;
@@ -81,7 +82,6 @@ describe('networkStateService tests', () => {
   });
 
   it('every list refresh feeds the off-list register with the listed addresses', async () => {
-    const { departures } = require('../../ZelBack/src/services/appDatabase/offListDepartures');
     const noteList = sinon.spy(departures, 'noteList');
     const blockEmitter = new EventEmitter();
     fluxnodeRpcStub.resolves(defaultNetworkState);

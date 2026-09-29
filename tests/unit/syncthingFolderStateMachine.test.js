@@ -2443,8 +2443,6 @@ describe('syncthingFolderStateMachine tests', () => {
   });
 
   describe('mount-safety observation logging', () => {
-    // eslint-disable-next-line global-require
-    const log = require('../../ZelBack/src/lib/log');
     let sandbox;
 
     beforeEach(() => {
@@ -2512,8 +2510,6 @@ describe('syncthingFolderStateMachine tests', () => {
   });
 
   describe('ensureContainerRunning', () => {
-    // eslint-disable-next-line global-require
-    const log = require('../../ZelBack/src/lib/log');
     it('requests a start for a stopped syncFirst container', async () => {
       dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: false } });
       await stateMachine.ensureContainerRunning('test-app', 'bare-app', true);

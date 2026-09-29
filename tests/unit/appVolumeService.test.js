@@ -11,6 +11,8 @@ const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
 const { asConfig } = require('./fixtures/config');
 const { loadSpecLibrary } = require('./fixtures/fluxSpec');
+const { ignoreLinesFor } = require('../../ZelBack/src/services/appSystem/syncthingIgnorePolicy');
+const globalState = require('../../ZelBack/src/services/utils/globalState');
 
 describe('appVolumeService.writeStignore', () => {
   let tmp;
@@ -50,8 +52,6 @@ describe('appVolumeService.writeStignore', () => {
     // by its managed dir.
     expect(content).to.equal(`${platform}\n/.flux-op-*\n/seed\n/io.runonflux/conf\n/var/data\ncache\n`);
     // One derivation: the file seeds exactly what the monitor converges through the API.
-    // eslint-disable-next-line global-require
-    const { ignoreLinesFor } = require('../../ZelBack/src/services/appSystem/syncthingIgnorePolicy');
     expect(content).to.equal(`${(await ignoreLinesFor(deployComp)).join('\n')}\n`);
   });
 
@@ -266,8 +266,6 @@ describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', 
   // Peers rank a seed on what each node says it holds, so a claim about the volume
   // being replaced describes data that is about to be gone.
   describe('the published holdings claim', () => {
-    // eslint-disable-next-line global-require
-    const globalState = require('../../ZelBack/src/services/utils/globalState');
     const claim = { bytes: 5_000_000, newestModified: 1000 };
     let saved;
     beforeEach(() => {

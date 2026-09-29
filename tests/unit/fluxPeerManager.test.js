@@ -2218,7 +2218,6 @@ describe('FluxPeerManager tests', () => {
     });
 
     it('says once per subject what the door handed over, and re-arms once the subject is admitted', async () => {
-      const log = require('../../ZelBack/src/lib/log');
       const info = sinon.stub(log, 'info');
       try {
         manager.numberOfFluxNodes = 10_000;

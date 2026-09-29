@@ -6,6 +6,7 @@ const { resetGlobalState } = require('./fixtures/globalState');
 const proxyquire = require('proxyquire').noCallThru();
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const { asConfig } = require('./fixtures/config');
+const realConfig = require('config');
 
 describe('appStartupManager tests', () => {
   let appStartupManager;
@@ -137,8 +138,6 @@ describe('appStartupManager tests', () => {
 
     it('flag on: boot reaps orphaned followers after recovery', async () => {
       // Rebuild the module against a config whose lifecycle toggle is on.
-      // eslint-disable-next-line global-require
-      const realConfig = require('config');
       const flaggedStartupManager = proxyquire('../../ZelBack/src/services/appLifecycle/appStartupManager', {
         config: asConfig({ ...realConfig, fluxapps: { ...realConfig.fluxapps, manageCollectorLifecycle: true } }),
         '../../lib/log': logStub,
