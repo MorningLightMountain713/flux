@@ -22,6 +22,7 @@ const decisionStore = require('../../ZelBack/src/services/appDecisions/decisionS
 const imageManager = require('../../ZelBack/src/services/appSecurity/imageManager');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const dockerService = require('../../ZelBack/src/services/dockerService');
+const appGiveUp = require('../../ZelBack/src/services/appLifecycle/appGiveUp');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. Every installed/registry row below is a real InstantiatedSpec over a
@@ -421,6 +422,29 @@ describe('specReconciler tests', () => {
       ]);
       await specReconciler.requestFullConvergence({ reason: 'test' });
       expect(uninstallStub.calledOnceWith('myapp', sinon.match({ broadcastRemoval: true }))).to.equal(true);
+    });
+
+    it('hands the trim and the safety gate this node\'s deployment, and the gate the election', async () => {
+      const deployment = { componentEntries: () => [] };
+      const built = sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
+      const verdict = sinon.spy(appGiveUp, 'surplusVerdict');
+      setup({
+        installed: [await specWith(looseBlob, { instances: 1 })],
+        globalRows: [await specWith(looseBlob, { instances: 1 })],
+      });
+      appLocationStub.resolves([
+        { ip: '9.9.9.9:16127', runningSince: 1 },
+        { ip: LOCAL_IP, runningSince: 9 },
+      ]);
+
+      await specReconciler.requestFullConvergence({ reason: 'test' });
+
+      expect(verdict.firstCall.args[0].deployment).to.equal(deployment);
+      expect(built.firstCall.args[0].name).to.equal('myapp');
+      expect(built.firstCall.args[1]).to.deep.equal({ replica: null });
+      const deps = safetyStub.firstCall.args[1];
+      expect(deps.getInstalledDeployment).to.equal(deploymentProvider.getInstalledDeployment);
+      expect(deps.isElectedPrimary).to.equal(appOperations.isElectedPrimary);
     });
 
     // The gate appEvacuationSafety's own header says surplus removal should have

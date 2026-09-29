@@ -274,8 +274,10 @@ async function convergeApp(installed, registrySpec, ctx) {
     // anywhere in the order. Both questions are asked now, and the second gate
     // is the predicate appEvacuationSafety was written to be.
     const liveness = peerFolderLiveness.createPeerFolderLiveness();
+    // A deployment that cannot be built names no writer; the safety gate then refuses.
+    const deployment = await deploymentProvider.buildDeployment(installed, { replica: null }).catch(() => null);
     const verdict = await appGiveUp.surplusVerdict(
-      { name: installed.name, spec: installed.spec, instances: installed.spec.instances },
+      { name: installed.name, deployment, instances: installed.spec.instances },
       runningAppList, ctx.localSocketAddr,
       { runningLocally: appGiveUp.isComponentRunningLocally, liveness },
     );
@@ -294,14 +296,13 @@ async function convergeApp(installed, registrySpec, ctx) {
     if (verdict.giveUp) {
       const safety = await appEvacuationSafety.canSafelyRemoveApp(installed.name, {
         appLocation: registryManager.appLocation,
-        // The CLASS, not the stored document: syncedComponents reads a v9 spec
-        // through it, and a document answers the v8 spelling only.
         getApplicationGlobalSpecifications: async (name) => {
           const row = await appsRepository.getGlobalAppInfo(name);
           return row ? row.spec : null;
         },
+        getInstalledDeployment: deploymentProvider.getInstalledDeployment,
         findSyncedPeer: syncthingFolderStateMachine.findSyncedPeer,
-        isElectedPrimary: async (name) => appOperations.isElectedPrimaryHere(name, ctx.localSocketAddr),
+        isElectedPrimary: appOperations.isElectedPrimary,
         isComponentRunningLocally: appGiveUp.isComponentRunningLocally,
       });
       fluxEventBus.publish('giveUp:safety', {

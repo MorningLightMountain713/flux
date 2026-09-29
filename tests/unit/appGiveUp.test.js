@@ -15,7 +15,9 @@ const appEvacuationSafety = require('../../ZelBack/src/services/appLifecycle/app
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
 const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
 const appGiveUp = require('../../ZelBack/src/services/appLifecycle/appGiveUp');
+const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const domain = require('./fixtures/appDomain');
+const { loadSpecLibrary, v9Spec, V9_SUBMISSION } = require('./fixtures/fluxSpec');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -78,6 +80,16 @@ describe('appGiveUp - handing an app back', () => {
     expect(result.gaveUp).to.equal('appone');
     sinon.assert.calledOnce(uninstall);
     sinon.assert.calledOnceWithExactly(noteEvacuated, 'appone');
+  });
+
+  it('hands the safety gate this node\'s deployment and the election it was given', async () => {
+    const given = deps();
+
+    await appGiveUp.checkAndGiveUpAnApp(given);
+
+    const safetyDeps = safety.firstCall.args[1];
+    expect(safetyDeps.getInstalledDeployment).to.equal(deploymentProvider.getInstalledDeployment);
+    expect(safetyDeps.isElectedPrimary).to.equal(given.isElectedPrimary);
   });
 
   it('paces a departure against the app\'s own instance count', async () => {
@@ -306,7 +318,7 @@ describe('appGiveUp - handing an app back', () => {
     const OLDEST = '9.9.9.9:16127';
     // Junior end first: the newest instance stands aside.
     const twoCopies = [{ ip: OLDEST, runningSince: 1 }, { ip: NEWEST, runningSince: 9 }];
-    const app = { name: 'gapp', spec: {}, instances: 1 };
+    const app = { name: 'gapp', deployment: {}, instances: 1 };
 
     const withWriter = (identifier) => sinon.stub(appEvacuationSafety, 'syncedComponents')
       .returns(identifier ? [{ name: 'web', syncMode: 'g', identifier, folderId: `flux${identifier}` }] : []);
@@ -318,6 +330,32 @@ describe('appGiveUp - handing an app back', () => {
       );
       expect(verdict.giveUp).to.equal(false);
       expect(verdict.code).to.equal(null);
+    });
+
+    it('asks whether it runs the writer by the identifier its deployment carries', async function realDeployment() {
+      this.timeout(30_000);
+      const flux = await loadSpecLibrary();
+      const spec = await v9Spec({
+        name: 'gapp',
+        components: {
+          server: {
+            ...V9_SUBMISSION.components.web,
+            name: 'server',
+            persistentStorage: {
+              sizeGb: 5,
+              mounts: { '/data': { source: 'data', destination: '/data' } },
+              sync: { mode: 'activeStandby' },
+            },
+          },
+        },
+      });
+      const deployment = flux.DeploymentSpec.fromSpec(spec, '/apps/', { replica: null, identity: 'bident' });
+      const runningLocally = sinon.stub().resolves(true);
+
+      const verdict = await appGiveUp.surplusVerdict({ name: 'gapp', deployment, instances: 1 }, twoCopies, NEWEST, { runningLocally });
+
+      sinon.assert.calledOnceWithExactly(runningLocally, 'server_bident');
+      expect(verdict.code).to.equal('NEWEST_HOLDS_WRITER');
     });
 
     it('the newest copy stands aside when it is not the writer', async () => {
