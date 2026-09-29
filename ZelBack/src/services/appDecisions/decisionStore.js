@@ -82,18 +82,77 @@ async function appliedFor(name) {
 }
 
 /**
- * Every applied message of the app with an identity, whatever name it was
- * applied under: only an applied decision carries an identity.
+ * The app with an identity: the name it was applied under and the uuid of its
+ * latest applied message. A v1-v8 app's identity is its name, which every
+ * registration of the name shares, so the latest registration's app answers.
+ * Only an applied decision carries an identity.
  * @param {string} identity
- * @returns {Promise<{name: ?string, hashes: string[]}>} the lower-cased name
- *   they were applied for, null with no applied message
+ * @returns {Promise<?{name: string, uuid: string}>} the lower-cased name; null
+ *   with no applied message
  */
-async function appliedHashesOf(identity) {
+async function appOf(identity) {
   const rows = await collection().find(
     { identity },
-    { projection: { _id: 0, hash: 1, name: 1 } },
+    {
+      projection: {
+        _id: 0, name: 1, uuid: 1, height: 1, txIndex: 1, vout: 1,
+      },
+    },
   ).toArray();
-  return { name: rows[0]?.name ?? null, hashes: rows.map((row) => row.hash) };
+  if (rows.length === 0) return null;
+  const latest = rows.reduce((held, row) => (compareChainOrder(held, row) < 0 ? row : held));
+  return { name: latest.name, uuid: latest.uuid };
+}
+
+/**
+ * The applied messages of a name that belong to another app than `uuid`.
+ * @param {string} name - lower-cased
+ * @param {string} uuid
+ * @returns {Promise<string[]>} hashes
+ */
+async function otherAppsHashes(name, uuid) {
+  const rows = await collection().find(
+    { name, decision: 'applied', uuid: { $ne: uuid } },
+    { projection: { _id: 0, hash: 1 } },
+  ).toArray();
+  return rows.map((row) => row.hash);
+}
+
+/**
+ * The applied messages of earlier apps of each name: every applied message
+ * whose app is not the app of the name's latest applied message. A name
+ * registered again after expiry is another app.
+ * @param {string[]} [names] - lower-cased; every name when omitted
+ * @returns {Promise<string[]>} hashes
+ */
+async function earlierAppsHashes(names) {
+  const match = { decision: 'applied' };
+  if (names) match.name = { $in: names };
+  const reused = await collection().aggregate([
+    { $match: match },
+    { $group: { _id: '$name', uuids: { $addToSet: '$uuid' } } },
+    { $match: { 'uuids.1': { $exists: true } } },
+  ]).toArray();
+  if (reused.length === 0) return [];
+  const rows = await collection().find(
+    { decision: 'applied', name: { $in: reused.map((group) => group._id) } },
+    {
+      projection: {
+        _id: 0, name: 1, hash: 1, uuid: 1, height: 1, txIndex: 1, vout: 1,
+      },
+    },
+  ).toArray();
+  const byName = new Map();
+  for (const row of rows) {
+    if (!byName.has(row.name)) byName.set(row.name, []);
+    byName.get(row.name).push(row);
+  }
+  const hashes = [];
+  for (const applied of byName.values()) {
+    const { uuid } = applied.reduce((held, row) => (compareChainOrder(held, row) < 0 ? row : held));
+    for (const row of applied) if (row.uuid !== uuid) hashes.push(row.hash);
+  }
+  return hashes;
 }
 
 /**
@@ -126,12 +185,14 @@ async function deleteAbove(height) {
 }
 
 module.exports = {
+  appOf,
   appliedFor,
-  appliedHashesOf,
   decidedHashes,
   decisionsFor,
   deleteAbove,
+  earlierAppsHashes,
   latestApplied,
+  otherAppsHashes,
   prepareCollection,
   undecide,
   write,

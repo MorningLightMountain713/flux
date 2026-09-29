@@ -24,6 +24,7 @@ const {
   NODE_DOWN_GRACE_MS,
 } = require('../utils/appConstants');
 const { departures } = require('./offListDepartures');
+const decisionStore = require('../appDecisions/decisionStore');
 
 // One-row-per-app content-slot manifest register (latest-wins). Not in appConstants
 // because only the content-manifest plane touches it.
@@ -1203,6 +1204,9 @@ async function upsertAppInstallingErrorLocations(records) {
  * @param {object} opts
  * @param {Date} opts.now
  * @param {string|null} opts.appname
+ * @param {Array<string>} opts.excludeHashes specs that belong to another app than the
+ *   one asked about (an earlier app registered under the same name); a node running
+ *   one does not run this app.
  * @param {string|null} opts.ip
  * @param {Array<string>} opts.supersededIps addresses whose announcement the node has
  *   already replaced from a new address; excluded outright so they cannot yield a row.
@@ -1215,7 +1219,7 @@ async function upsertAppInstallingErrorLocations(records) {
  *   announces after it is back counts.
  */
 function buildAppLocationPipeline({
-  now, appname = null, hashes = null, ip = null, host = null, supersededIps = [], offListIps = [], offListReturned = [],
+  now, appname = null, excludeHashes = [], ip = null, host = null, supersededIps = [], offListIps = [], offListReturned = [],
 }) {
   const escapedName = appname ? appname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : null;
   const nameMatch = escapedName ? new RegExp(`^${escapedName}$`, 'i') : null;
@@ -1319,7 +1323,7 @@ function buildAppLocationPipeline({
     { $unwind: '$_v2Filtered' },
     { $unwind: '$_v2Filtered.apps' },
     ...(nameMatch ? [{ $match: { '_v2Filtered.apps.name': nameMatch } }] : []),
-    ...(hashes ? [{ $match: { '_v2Filtered.apps.hash': { $in: hashes } } }] : []),
+    ...(excludeHashes.length ? [{ $match: { '_v2Filtered.apps.hash': { $nin: excludeHashes } } }] : []),
     // An app the node has since reported removed is gone even though its announcement
     // still names it. Compared against the unwound fields so this stays a shared rule
     // rather than something each tail has to re-apply after projecting.
@@ -1459,10 +1463,26 @@ async function sweepOffListRows() {
   return addresses.length;
 }
 
+/**
+ * Where apps run: the running rows the location events derive.
+ *
+ * Asked where an app runs (by name, or for every app), a node running a spec of
+ * an earlier app registered under the same name is not counted: that is another
+ * app. Asked what one node or host announces (`ip`, `host`), every row it
+ * announces is answered, since a node reads its own claims to clean them up.
+ *
+ * @param {{appname?: string, ip?: string, host?: string, excludeHashes?: string[]}} [options]
+ *   `excludeHashes` names the other apps' specs outright (appLocationOf)
+ * @returns {Promise<Array>} location rows
+ */
 async function appLocationFromEvents(options = {}) {
   const {
-    appname = null, hashes = null, ip = null, host = null,
+    appname = null, ip = null, host = null,
   } = options;
+  let { excludeHashes } = options;
+  if (!excludeHashes) {
+    excludeHashes = ip || host ? [] : await decisionStore.earlierAppsHashes(appname ? [appname.toLowerCase()] : undefined);
+  }
   const dbopen = dbHelper.databaseConnection();
   const database = dbopen.db(config.get('database.appsglobal.database'));
   const collection = database.collection(globalAppStateEvents);
@@ -1472,7 +1492,7 @@ async function appLocationFromEvents(options = {}) {
   const { absent: offListIps, returned: offListReturned } = departures.denySet(now.getTime());
   const rows = await collection.aggregate([
     ...buildAppLocationPipeline({
-      now, appname, hashes, ip, host, supersededIps, offListIps, offListReturned,
+      now, appname, excludeHashes, ip, host, supersededIps, offListIps, offListReturned,
     }),
     ...RUNNING_ROW_TAIL,
   ]).toArray();
@@ -1488,7 +1508,8 @@ async function appLocationFromEvents(options = {}) {
  * can never disagree about what counts as running — stopping before the row payload
  * it does not need. A replica announced as draining or stopping still counts: it IS
  * running, and the spawner should not replace a node that has merely said it is going
- * away. Address moves need only the supersede exclusion here, not the re-addressing:
+ * away. A node running an earlier app registered under the same name is not a replica
+ * of this one. Address moves need only the supersede exclusion here, not the re-addressing:
  * moving a row to a different address does not change how many there are.
  *
  * @returns {Promise<Map<string, number>>}
@@ -1499,10 +1520,14 @@ async function countRunningByApp() {
   const collection = database.collection(globalAppStateEvents);
   const now = new Date();
 
-  const { supersededIps } = await resolveAddressMoves(collection, now);
+  const [{ supersededIps }, excludeHashes] = await Promise.all([
+    resolveAddressMoves(collection, now), decisionStore.earlierAppsHashes(),
+  ]);
   const { absent: offListIps, returned: offListReturned } = departures.denySet(now.getTime());
   const counts = await collection.aggregate([
-    ...buildAppLocationPipeline({ now, supersededIps, offListIps, offListReturned }),
+    ...buildAppLocationPipeline({
+      now, excludeHashes, supersededIps, offListIps, offListReturned,
+    }),
     ...RUNNING_COUNT_TAIL,
   ]).toArray();
   return new Map(counts.map((row) => [String(row._id).toLowerCase(), row.count]));

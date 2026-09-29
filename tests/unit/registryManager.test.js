@@ -19,7 +19,6 @@ const transportCryptoProvider = require('../../ZelBack/src/services/providers/Fl
 const legacyTransportProvider = require('../../ZelBack/src/services/providers/FluxOSLegacyTransportProvider');
 const specCutover = require('../../ZelBack/src/services/utils/specCutover');
 const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCommittee');
-const decisionStore = require('../../ZelBack/src/services/appDecisions/decisionStore');
 const { RUNNING_EXPIRY_MS } = require('../../ZelBack/src/services/utils/appConstants');
 const { requireMongo } = require('./dbTestHelper');
 const {
@@ -1446,6 +1445,7 @@ describe('registryManager tests', () => {
 
   describe('appLocationFromEvents tests', () => {
     const eventsCollection = config.database.appsglobal.collections.appStateEvents;
+    const decisionsCollection = config.database.appsglobal.collections.appDecisions;
     const now = Date.now();
 
     beforeEach(async () => {
@@ -1454,6 +1454,7 @@ describe('registryManager tests', () => {
       } catch (err) {
         // Collection doesn't exist
       }
+      await database.collection(decisionsCollection).deleteMany({});
     });
 
     function makeV2Event(ip, apps, broadcastedAt, opts = {}) {
@@ -1681,29 +1682,73 @@ describe('registryManager tests', () => {
       expect(result.map((r) => r.replica).sort()).to.deep.equal(['r0', 'r1']);
     });
 
-    it('scoped to an app\'s specs, counts a node on any of them and none on another app of the name', async () => {
+    // AppA was registered at 100 (app "first") and again at 900 after it expired
+    // (app "second"); 1.1.1.1 runs the second app, 2.2.2.2 still announces the
+    // first, 3.3.3.3 runs a spec this node has not decided yet.
+    async function seedReusedName() {
+      await database.collection(decisionsCollection).insertMany([
+        {
+          hash: 'earlier', name: 'appa', decision: 'applied', uuid: 'first', identity: 'bfirst', height: 100, txIndex: 0,
+        },
+        {
+          hash: 'current', name: 'appa', decision: 'applied', uuid: 'second', identity: 'bsecond', height: 900, txIndex: 0,
+        },
+        {
+          hash: 'refused', name: 'appa', decision: 'refused', uuid: null, identity: null, height: 950, txIndex: 0,
+        },
+      ]);
       await database.collection(eventsCollection).insertMany([
         makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'current' }], now),
         makeV2Event('2.2.2.2', [{ name: 'AppA', hash: 'earlier' }], now),
-        makeV2Event('3.3.3.3', [{ name: 'AppA', hash: 'another-app' }], now),
+        makeV2Event('3.3.3.3', [{ name: 'AppA', hash: 'undecided' }], now),
       ]);
+    }
 
-      const result = await appsRepository.appLocationFromEvents({ appname: 'AppA', hashes: ['earlier', 'current'] });
+    it('a node running an earlier app of the name is no location of the app; a spec not yet decided is', async () => {
+      await seedReusedName();
 
-      expect(result.map((r) => r.ip).sort()).to.deep.equal(['1.1.1.1', '2.2.2.2']);
+      const byName = await appsRepository.appLocationFromEvents({ appname: 'AppA' });
+      const everyApp = await appsRepository.appLocationFromEvents();
+      const counts = await appsRepository.countRunningByApp();
+
+      expect(byName.map((r) => r.ip).sort()).to.deep.equal(['1.1.1.1', '3.3.3.3']);
+      expect(everyApp.map((r) => r.ip).sort()).to.deep.equal(['1.1.1.1', '3.3.3.3']);
+      expect(counts.get('appa')).to.equal(2);
+      expect((await registryManager.appLocation('appa')).map((r) => r.ip).sort()).to.deep.equal(['1.1.1.1', '3.3.3.3']);
     });
 
-    it('where an app runs is where its applied specs run, by its identity', async () => {
-      await database.collection(eventsCollection).insertMany([
-        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'current' }], now),
-        makeV2Event('3.3.3.3', [{ name: 'AppA', hash: 'another-app' }], now),
-      ]);
-      const appliedHashesOf = sinon.stub(decisionStore, 'appliedHashesOf').callsFake(async (identity) => (identity === 'ab12cd34ef56'
-        ? { name: 'appa', hashes: ['current'] } : { name: null, hashes: [] }));
+    it('what one node announces is answered whole, an earlier app of a name included', async () => {
+      await seedReusedName();
 
-      expect((await registryManager.appLocationOf('ab12cd34ef56')).map((r) => r.ip)).to.deep.equal(['1.1.1.1']);
-      expect(await registryManager.appLocationOf('ffffffffffff')).to.deep.equal([]);
-      sinon.assert.calledWith(appliedHashesOf, 'ab12cd34ef56');
+      const own = await appsRepository.appLocationFromEvents({ appname: 'AppA', ip: '2.2.2.2' });
+
+      expect(own.map((r) => r.hash)).to.deep.equal(['earlier']);
+    });
+
+    it('where an app runs, by its identity: every node on its name but those on another app of the name', async () => {
+      await seedReusedName();
+
+      expect((await registryManager.appLocationOf('bsecond')).map((r) => r.ip).sort()).to.deep.equal(['1.1.1.1', '3.3.3.3']);
+      expect((await registryManager.appLocationOf('bfirst')).map((r) => r.ip).sort()).to.deep.equal(['2.2.2.2', '3.3.3.3']);
+      expect(await registryManager.appLocationOf('bnone')).to.deep.equal([]);
+    });
+
+    it('a name with one app excludes nothing', async () => {
+      await database.collection(decisionsCollection).insertMany([
+        {
+          hash: 'r', name: 'appa', decision: 'applied', uuid: 'only', identity: 'AppA', height: 100, txIndex: 0,
+        },
+        {
+          hash: 'u', name: 'appa', decision: 'applied', uuid: 'only', identity: 'AppA', height: 200, txIndex: 0,
+        },
+      ]);
+      await database.collection(eventsCollection).insertMany([
+        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'r' }], now),
+        makeV2Event('2.2.2.2', [{ name: 'AppA', hash: 'u' }], now),
+      ]);
+
+      expect((await registryManager.appLocationOf('AppA')).map((r) => r.ip).sort()).to.deep.equal(['1.1.1.1', '2.2.2.2']);
+      expect((await appsRepository.countRunningByApp()).get('appa')).to.equal(2);
     });
 
     it('an untagged install reports a null replica and active state', async () => {

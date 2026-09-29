@@ -141,7 +141,8 @@ async function getAppHashes(_req, res) {
  * app a node quietly stopped between announcements kept a row until its TTL swept it,
  * and the network went on believing the app was there for up to the running TTL. The
  * derivation has no such gap: it reads each node's latest announcement, and an app
- * absent from that announcement is absent, immediately.
+ * absent from that announcement is absent, immediately. A node running a spec of an
+ * earlier app registered under the same name is not a location of the app.
  *
  * @param {string} [appname] - optional app name filter
  * @returns {Promise<Array>} location rows
@@ -151,16 +152,18 @@ async function appLocation(appname) {
 }
 
 /**
- * Where the app with an identity runs: the nodes whose announced spec is one of
- * that app's applied specs, whichever of them each node runs. A node still
- * running an earlier app registered under the same name is not one of them.
+ * Where the app with an identity runs: every node announcing its name, except a
+ * node running a spec of another app registered under the name. A spec this
+ * node has not decided yet still counts, so a node that has just applied an
+ * update is counted everywhere at once.
  * @param {string} identity
  * @returns {Promise<Array>} location rows
  */
 async function appLocationOf(identity) {
-  const { name, hashes } = await decisionStore.appliedHashesOf(identity);
-  if (!name) return [];
-  return appsRepository.appLocationFromEvents({ appname: name, hashes });
+  const app = await decisionStore.appOf(identity);
+  if (!app) return [];
+  const excludeHashes = await decisionStore.otherAppsHashes(app.name, app.uuid);
+  return appsRepository.appLocationFromEvents({ appname: app.name, excludeHashes });
 }
 
 /**
