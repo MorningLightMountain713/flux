@@ -172,10 +172,15 @@ function appNetworkOwner(network, labelKeys) {
  * healthy app whose container is momentarily down (crash loop, restart,
  * standby), so a prune keyed on that reaps live apps' networks.
  *
- * @param {Set<string>} installedAppNames - apps with an installed row on this node
- * @returns {Promise<{removed: string[], unidentified: number}>} what went and what was left
+ * A network is owned when its name is an installed app's network name, which
+ * the library builds from the app's identity: a network left by an earlier app
+ * registered under the same name is not the installed app's, and goes.
+ *
+ * @param {Set<string>} ownedNetworks - the network names of the apps installed on this node
+ * @returns {Promise<{removed: string[], unidentified: number}>} the network names
+ *   removed, and how many app networks could not be attributed and were left
  */
-async function removeUnownedAppNetworks(installedAppNames) {
+async function removeUnownedAppNetworks(ownedNetworks) {
   const networks = await dockerService.getFluxDockerNetworks();
   const { LABEL_KEYS } = await getSpecBackend();
   const removed = [];
@@ -192,12 +197,12 @@ async function removeUnownedAppNetworks(installedAppNames) {
       continue;
     }
     // eslint-disable-next-line no-continue
-    if (installedAppNames.has(owner)) continue;
-    log.info(`appDockerNetwork - removing the network of ${owner}: no installed app owns it`);
+    if (ownedNetworks.has(network.Name)) continue;
+    log.info(`appDockerNetwork - removing ${network.Name} of ${owner}: no installed app owns it`);
     // eslint-disable-next-line no-await-in-loop
-    await dockerService.forceRemoveFluxAppDockerNetwork(owner)
-      .catch((error) => log.error(`appDockerNetwork - failed to remove the network of ${owner}: ${error.message}`));
-    removed.push(owner);
+    await dockerService.forceRemoveFluxAppDockerNetwork(owner, { networkName: network.Name })
+      .catch((error) => log.error(`appDockerNetwork - failed to remove ${network.Name}: ${error.message}`));
+    removed.push(network.Name);
   }
 
   return { removed, unidentified };
