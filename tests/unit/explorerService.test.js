@@ -10,6 +10,9 @@ const chainState = require('../../ZelBack/src/services/chainState');
 const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const specReconciler = require('../../ZelBack/src/services/appLifecycle/specReconciler');
+const appGiveUp = require('../../ZelBack/src/services/appLifecycle/appGiveUp');
+const appOperations = require('../../ZelBack/src/services/appLifecycle/appOperations');
+const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
 const portManager = require('../../ZelBack/src/services/appNetwork/portManager');
 const daemonServiceBlockchainRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceBlockchainRpcs');
 const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
@@ -376,6 +379,29 @@ describe('explorerService tests', () => {
         { upsert: true },
       );
       sinon.assert.calledWith(logInfoSpy, 'Processing Explorer Block Height: 695000');
+    });
+
+    it('hands the give-up pass the installed apps and the elected-primary check at a removal-period tip block', async () => {
+      // 695,002 is a multiple of removeFluxAppsPeriod (11) below the PON fork, and of
+      // neither the hash-rebuild nor the benchmark period.
+      const blockHeight = 695_002;
+      const giveUpStub = sinon.stub(appGiveUp, 'checkAndGiveUpAnApp').resolves();
+      dbStubUpdate.returns(true);
+      dbStubCollectionStats.returns({ size: 10_000, count: 15, avgObjSize: 1111 });
+      daemonStatusStub.returns({ data: { synced: true } });
+      daemonServiceBlockchainRpcsStub.returns({
+        status: 'success',
+        data: {
+          tx: [], height: blockHeight, time: 1_700_000_000, confirmations: 1,
+        },
+      });
+
+      await explorerService.processOneBlock(blockHeight, true, { atTip: true });
+
+      sinon.assert.calledOnce(giveUpStub);
+      const [deps] = giveUpStub.firstCall.args;
+      expect(deps.installedAppsFn).to.equal(appQueryService.installedApps);
+      expect(deps.isElectedPrimary).to.equal(appOperations.isElectedPrimary);
     });
 
     it('should update db if all parameters are passed correctly, height == 900009', async () => {
