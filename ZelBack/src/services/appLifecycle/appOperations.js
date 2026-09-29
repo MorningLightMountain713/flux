@@ -34,7 +34,7 @@ const appDataEntries = require('../utils/appDataEntries');
 const ingressAttestationService = require('../appMessaging/ingressAttestationService');
 const registryManager = require('../appDatabase/registryManager');
 const https = require('https');
-const { getSpec, getSpecBackend, assertUpdateInvariants } = require('../utils/specLibs');
+const { getSpec, assertUpdateInvariants } = require('../utils/specLibs');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const placementFeasibility = require('../appPlacement/placementFeasibility');
 const messageVerifier = require('../appMessaging/messageVerifier');
@@ -1645,15 +1645,9 @@ async function runRestoreTask(appname, restore, type, zelidauth, report, { force
           throw new Error(`Error: Failed to restore ${volume.forWhich} from its archive, ${tarStatus.error}`);
         }
         if (target.synced) {
-          // Minted by the encoder with this identity's replica, never
-          // assembled by hand — that is what drops the replica segment and
-          // addresses a sibling. (Co-located replicas cannot use sync, so
-          // the replica is null here today; the encoder keeps it right if
-          // that ever changes.)
-          // eslint-disable-next-line no-await-in-loop
-          const { DeploymentSpec } = await getSpecBackend();
-          const identifier = DeploymentSpec.containerIdentifierFor(target.name, appname, volume.replica);
-          const appId = dockerService.getAppIdentifier(identifier);
+          // The volume's own identifier, resolved from the installed app's
+          // identity and replica: the folder this restore unpacked into.
+          const appId = dockerService.getAppIdentifier(volume.identifier);
           // eslint-disable-next-line no-await-in-loop
           await appCaches.setSyncedMark(appCaches.receiveOnlySyncthingAppsCache, appId, {
             restarted: true,

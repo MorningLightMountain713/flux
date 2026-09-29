@@ -18,6 +18,7 @@ const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const appDataEntries = require('../../ZelBack/src/services/utils/appDataEntries');
+const appCaches = require('../../ZelBack/src/services/utils/appCaches');
 const contentBlobService = require('../../ZelBack/src/services/appLifecycle/contentBlobService');
 const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
 const dockerService = require('../../ZelBack/src/services/dockerService');
@@ -2113,6 +2114,20 @@ describe('appOperations tests', () => {
       expect(failure, `the restore must complete: ${failure?.message}`).to.equal(null);
       const held = pause.getCalls().filter((call) => call.args[1] === true).map((call) => call.args[0]);
       expect(held).to.deep.equal(['web_bkapp']);
+    });
+
+    it('marks the restored synced folder by the volume\'s identifier, the app\'s identity and replica', async () => {
+      await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'syncFirst' }));
+      volumeService.listComponentVolumeMounts.callsFake(async (app, comp) => [
+        { replica: 's1', mount: `/vol/${comp}`, identifier: `${comp}_bident_s1` },
+      ]);
+      const setSyncedMark = sinon.stub(appCaches, 'setSyncedMark').resolves();
+
+      const failure = await runRestore('bkapp', [{ component: 'web', restore: true }], 'local');
+
+      expect(failure, `the restore must complete: ${failure?.message}`).to.equal(null);
+      const marked = setSyncedMark.getCalls().filter((call) => call.args[2]?.restarted === true).map((call) => call.args[1]);
+      expect(marked).to.deep.equal(['fluxweb_bident_s1']);
     });
 
     it('restarts the peers of a component every instance runs, and never redeploys them', async () => {
