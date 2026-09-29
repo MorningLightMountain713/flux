@@ -2,8 +2,8 @@
 
 // The /v2 surface, and the routing rule that keeps it portable.
 //
-// Express 5 compatibility is asserted STATICALLY over the source, because the
-// failure it guards is silent: express 5's optional-group form `/x{/:id}`
+// Express 5 compatibility is asserted STATICALLY over the route table, because
+// the failure it guards is silent: express 5's optional-group form `/x{/:id}`
 // registers on express 4 WITHOUT THROWING and then matches nothing. A dead
 // route looks exactly like a working one until a caller gets a 404, and the
 // route table still lists it. So the rule is checked where it can be seen - in
@@ -18,39 +18,22 @@ const chaiAsPromised = require('chai-as-promised');
 const express = require('express');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
-const espree = require('espree');
 const supertest = require('supertest');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
 
-const ROOT = nodePath.join(__dirname, '../..');
-const SOURCE = 'ZelBack/src/routesV2.js';
+const routeTable = require('../../ZelBack/src/routeTableV2');
+const routesV2 = require('../../ZelBack/src/routesV2');
+const messageDelivery = require('../../ZelBack/src/services/appMessaging/messageDelivery');
+const operationsController = require('../../ZelBack/src/services/appManagement/operationsController');
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 
+const ROOT = nodePath.join(__dirname, '../..');
+
+/** Every route of the v2 table, as the router registers it. */
 function v2Paths() {
-  const src = fs.readFileSync(nodePath.join(ROOT, SOURCE), 'utf8');
-  const ast = espree.parse(src, { ecmaVersion: 2022, sourceType: 'script', loc: true });
-  const paths = [];
-  const walk = (node) => {
-    if (!node || typeof node.type !== 'string') return;
-    if (node.type === 'CallExpression'
-      && node.callee.type === 'MemberExpression'
-      && node.callee.object.type === 'Identifier' && node.callee.object.name === 'router'
-      && ['get', 'post', 'put', 'patch', 'delete', 'all'].includes(node.callee.property.name)
-      && node.arguments.length
-      && node.arguments[0].type === 'Literal'
-      && typeof node.arguments[0].value === 'string') {
-      paths.push({ method: node.callee.property.name, path: node.arguments[0].value, line: node.loc.start.line });
-    }
-    for (const key of Object.keys(node)) {
-      if (key === 'loc' || key === 'range') continue;
-      const value = node[key];
-      if (Array.isArray(value)) value.forEach(walk);
-      else if (value && typeof value.type === 'string') walk(value);
-    }
-  };
-  walk(ast);
-  return paths;
+  return routeTable.map((route) => ({ method: route.method, path: route.path }));
 }
 
 describe('routesV2 - the /v2 surface', () => {
@@ -66,7 +49,7 @@ describe('routesV2 - the /v2 surface', () => {
     // `/x/:id?` is express 4 only - express 5's parser rejects it outright.
     it('declares no optional path parameter', () => {
       const offenders = paths.filter((p) => /:[A-Za-z0-9_]+\?/.test(p.path))
-        .map((p) => `${SOURCE}:${p.line} ${p.method.toUpperCase()} ${p.path}`);
+        .map((p) => `${p.method.toUpperCase()} ${p.path}`);
       expect(offenders, 'express 5 rejects `:param?`; take the operand from the query or the body').to.deep.equal([]);
     });
 
@@ -74,14 +57,14 @@ describe('routesV2 - the /v2 surface', () => {
     // nothing, which is why this is the rule that matters most here.
     it('declares no optional group', () => {
       const offenders = paths.filter((p) => p.path.includes('{') || p.path.includes('}'))
-        .map((p) => `${SOURCE}:${p.line} ${p.method.toUpperCase()} ${p.path}`);
+        .map((p) => `${p.method.toUpperCase()} ${p.path}`);
       expect(offenders, 'an express 5 optional group silently matches NOTHING on express 4').to.deep.equal([]);
     });
 
     // Express 5 requires a named wildcard.
     it('declares no bare wildcard and no inline regex', () => {
       const offenders = paths.filter((p) => /\*(?![A-Za-z])/.test(p.path) || /\(/.test(p.path))
-        .map((p) => `${SOURCE}:${p.line} ${p.method.toUpperCase()} ${p.path}`);
+        .map((p) => `${p.method.toUpperCase()} ${p.path}`);
       expect(offenders, 'express 5 needs `/*name`, and drops inline regex params').to.deep.equal([]);
     });
 
@@ -94,14 +77,14 @@ describe('routesV2 - the /v2 surface', () => {
       const VERBS = /^(stop|start|restart|pause|unpause|resume|redeploy|rebuild|install|uninstall|remove|update|cancel|exec|backup|restore|reindex|rescan|enable|disable|create|delete|kill|reboot)$/i;
       const offenders = paths
         .filter((p) => VERBS.test(p.path.split('/').filter(Boolean).pop() || ''))
-        .map((p) => `${SOURCE}:${p.line} ${p.method.toUpperCase()} ${p.path}`);
+        .map((p) => `${p.method.toUpperCase()} ${p.path}`);
       expect(offenders, 'a state is PUT to /state; anything else is POSTed to /operations').to.deep.equal([]);
     });
 
     // The same rule from the other side: /actions/ was the shape this replaced.
     it('declares no /actions/ segment', () => {
       const offenders = paths.filter((p) => p.path.split('/').includes('actions'))
-        .map((p) => `${SOURCE}:${p.line} ${p.method.toUpperCase()} ${p.path}`);
+        .map((p) => `${p.method.toUpperCase()} ${p.path}`);
       expect(offenders, 'v2 has no custom verbs - see design §4a-bis').to.deep.equal([]);
     });
 
@@ -162,23 +145,19 @@ describe('routesV2 - the /v2 surface', () => {
   describe('POST /apps/messages', () => {
     let app;
     let deliverMessage;
-    let firstNotUp;
 
     beforeEach(() => {
-      deliverMessage = sinon.stub().resolves({ outcome: 'stored' });
-      firstNotUp = sinon.stub().returns(null);
-      const router = proxyquire('../../ZelBack/src/routesV2', {
-        './lib/log': {
-          info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(), debug: sinon.stub(),
-        },
-        './services/appMessaging/messageDelivery': { deliverMessage },
-        './services/utils/capabilities': { firstNotUp },
-      });
+      deliverMessage = sinon.stub(messageDelivery, 'deliverMessage').resolves({ outcome: 'stored' });
+      capabilities.resetForTests();
+      capabilities.setForTests(['localDbPrepared', 'chainStateConsistent'], true);
       app = express();
-      app.use('/v2', router);
+      app.use('/v2', routesV2);
     });
 
-    afterEach(() => sinon.restore());
+    afterEach(() => {
+      sinon.restore();
+      capabilities.resetForTests();
+    });
 
     const body = { hash: 'paidhash', type: 'fluxappregister', version: 1 };
 
@@ -218,12 +197,14 @@ describe('routesV2 - the /v2 surface', () => {
     });
 
     it('answers 503 naming what is not up, and delivers nothing', async () => {
-      firstNotUp.returns('chainStateConsistent');
+      capabilities.setForTests('chainStateConsistent', false);
 
       const res = await supertest(app).post('/v2/apps/messages').send(body);
 
       expect(res.status).to.equal(503);
-      expect(res.body.error.message).to.equal('chainStateConsistent is not up');
+      expect(res.body.error.code).to.equal('UNAVAILABLE');
+      expect(res.body.error.message).to.equal('Node is rebuilding its chain state (chainStateConsistent is not up)');
+      expect(res.headers['retry-after']).to.equal('15');
       sinon.assert.notCalled(deliverMessage);
     });
 
@@ -248,25 +229,15 @@ describe('routesV2 - the /v2 surface', () => {
 
   describe('the surface', () => {
     let app;
-    let verifyPrivilege;
     let readOperation;
     let callerFluxId;
 
     beforeEach(() => {
-      verifyPrivilege = sinon.stub().resolves(true);
-      readOperation = sinon.stub().resolves(null);
-      callerFluxId = sinon.stub().resolves(null);
-
-      const router = proxyquire('../../ZelBack/src/routesV2', {
-        './lib/log': {
-          info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(), debug: sinon.stub(),
-        },
-        './services/verificationHelper': { verifyPrivilege },
-        './services/appManagement/operationsController': { readOperation, callerFluxId },
-      });
+      readOperation = sinon.stub(operationsController, 'readOperation').resolves(null);
+      callerFluxId = sinon.stub(operationsController, 'callerFluxId').resolves(null);
 
       app = express();
-      app.use('/v2', router);
+      app.use('/v2', routesV2);
       // A v1 route BELOW the mount, so a /v2 path that fell through would be
       // visible as this answering instead of the surface's own 404.
       app.get('/v2/operations/leaked', (req, res) => res.json({ v1: true }));
@@ -359,7 +330,6 @@ describe('routesV2 - the /v2 surface', () => {
           info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(), debug: sinon.stub(),
         },
         './services/verificationHelper': { verifyPrivilege },
-        './services/appManagement/operationsController': { readOperation: sinon.stub(), callerFluxId: sinon.stub() },
       });
 
       const probe = express.Router();

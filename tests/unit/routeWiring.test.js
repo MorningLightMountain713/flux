@@ -22,6 +22,7 @@ const apicache = require('apicache');
 
 const registerRoutes = require('../../ZelBack/src/routes');
 const routeTable = require('../../ZelBack/src/routeTableV1');
+const routeTableV2 = require('../../ZelBack/src/routeTableV2');
 const routesV2 = require('../../ZelBack/src/routesV2');
 const { chainFor } = require('../../ZelBack/src/routeBuilder');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
@@ -443,9 +444,11 @@ describe('route wiring', () => {
   // one gate answers for all of them. A route declaring nothing fails here.
   describe('what every route declares', () => {
     const known = new Set(capabilities.DEFINITIONS.map((definition) => definition.name));
+    // v1 and v2 alike
+    const everyRoute = [...routeTable, ...routeTableV2.map((route) => ({ ...route, path: `/v2${route.path}` }))];
 
     it('declares the capabilities it reads, or why it reads none, and never both', () => {
-      const undeclared = routeTable
+      const undeclared = everyRoute
         .filter((route) => {
           const needs = Array.isArray(route.needs) && route.needs.length > 0;
           const none = typeof route.none === 'string' && route.none.length > 0;
@@ -457,7 +460,7 @@ describe('route wiring', () => {
     });
 
     it('names only capabilities the registry defines', () => {
-      const unknown = routeTable
+      const unknown = everyRoute
         .flatMap((route) => (route.needs || []).map((name) => ({ route, name })))
         .filter(({ name }) => !known.has(name))
         .map(({ route, name }) => `${route.method} ${route.path}: ${name}`);
@@ -466,7 +469,7 @@ describe('route wiring', () => {
     });
 
     it('registers each method and path once', () => {
-      const keys = routeTable.map((route) => `${route.method} ${route.path}`);
+      const keys = everyRoute.map((route) => `${route.method} ${route.path}`);
 
       expect(keys.filter((key, i) => keys.indexOf(key) !== i)).to.deep.equal([]);
     });

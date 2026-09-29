@@ -99,13 +99,14 @@ function handlerFor(ref, baseDir = SERVICES_DIR) {
 /**
  * The middleware chain a route registers, in order.
  * @param {object} route a route table entry
- * @param {{refuse: Function, baseDir?: string}} surface the surface's refusal,
- *   and where its handler modules live
+ * @param {{refuse: Function, baseDir?: string, guards?: object}} surface the
+ *   surface's refusal, where its handler modules live, and the guards it adds to
+ *   the shared ones
  * @returns {Function[]}
  */
-function chainFor(route, { refuse, baseDir }) {
+function chainFor(route, { refuse, baseDir, guards = {} }) {
   const chain = (route.guards || []).map((name) => {
-    const guard = GUARDS[name];
+    const guard = guards[name] || GUARDS[name];
     if (!guard) throw new Error(`route ${route.method.toUpperCase()} ${route.path} names unknown guard ${name}`);
     return guard;
   });
