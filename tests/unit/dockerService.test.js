@@ -504,6 +504,37 @@ describe('dockerService tests', () => {
     });
   });
 
+  describe('getAppNameByContainerIp tests', () => {
+    const networks = {
+      fluxDockerNetwork_bident: {
+        Name: 'fluxDockerNetwork_bident',
+        Labels: { 'io.runonflux.app-network': 'myshop' },
+        IPAM: { Config: [{ Subnet: '172.23.5.0/24' }] },
+      },
+      fluxDockerNetwork_legacyapp: {
+        Name: 'fluxDockerNetwork_legacyapp',
+        IPAM: { Config: [{ Subnet: '172.23.6.0/24' }] },
+      },
+    };
+
+    beforeEach(() => {
+      sinon.stub(Dockerode.prototype, 'listNetworks').resolves(Object.values(networks).map(({ Name }) => ({ Name })));
+      sinon.stub(Dockerode.prototype, 'getNetwork').callsFake((name) => ({ inspect: async () => networks[name] }));
+    });
+
+    it('answers the app name its network is labelled with, not the identity it is named from', async () => {
+      expect(await dockerService.getAppNameByContainerIp('172.23.5.7')).to.equal('myshop');
+    });
+
+    it('answers a pre-label network by its name', async () => {
+      expect(await dockerService.getAppNameByContainerIp('172.23.6.7')).to.equal('legacyapp');
+    });
+
+    it('answers null for an address in no app network', async () => {
+      expect(await dockerService.getAppNameByContainerIp('10.9.9.9')).to.equal(null);
+    });
+  });
+
   describe('getFreeFluxAppNetworkOctet tests', () => {
     const net = (subnet) => ({ Name: 'fluxDockerNetwork_x', IPAM: { Config: [{ Subnet: subnet }] } });
 

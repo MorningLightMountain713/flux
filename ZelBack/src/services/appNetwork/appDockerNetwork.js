@@ -5,6 +5,7 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 const serviceHelper = require('../serviceHelper');
 const log = require('../../lib/log');
 const { getSpecBackend } = require('../utils/specLibs');
+const { appNetworkOwner } = require('../utils/appNetworkOwner');
 
 // Ownership of the per-app docker network (fluxDockerNetwork_<app>) and the
 // 172.23.x.0/24 subnet it sits on. Every caller that creates, repairs or reaps
@@ -17,11 +18,6 @@ const { getSpecBackend } = require('../utils/specLibs');
 // janitor sweep as its backstop). Because the janitor only removes networks
 // whose owner is NOT installed and the reconciler only creates them for apps
 // that ARE, the two can never fight over the same network.
-
-// The per-app network name prefix. The ownership label stamped at creation is
-// read from the shared schema at call time (flux-spec loads asynchronously, so
-// there is nothing to bind to at require time).
-const APP_NETWORK_PREFIX = 'fluxDockerNetwork_';
 
 // The node-wide flux network (no app suffix) — not an app network, never reaped.
 const NODE_NETWORK_NAME = 'fluxDockerNetwork';
@@ -140,30 +136,6 @@ async function ensureAppNetworkPresent(appName, networkName = null) {
 }
 
 /**
- * Resolve which app a docker network belongs to.
- *
- * Labels are the ownership authority, but they only exist on networks created
- * since the label shipped: an estate upgraded onto this code carries none until
- * each network is recreated. The name convention identifies those. A network we
- * can identify by NEITHER is not ours to reason about, so this returns null and
- * the caller leaves it alone — absence of a label is not evidence of absence of
- * an owner, and on a removal path that distinction is the whole safety story.
- *
- * @param {object} network - docker network list entry (Name, Labels)
- * @param {object} labelKeys - the label schema, resolved by the caller
- * @returns {string|null} owning app name, or null when unidentifiable
- */
-function appNetworkOwner(network, labelKeys) {
-  const labelled = network.Labels && network.Labels[labelKeys.APP_NETWORK];
-  if (labelled) return labelled;
-  const name = network.Name || '';
-  if (name.startsWith(APP_NETWORK_PREFIX)) {
-    return name.slice(APP_NETWORK_PREFIX.length) || null;
-  }
-  return null;
-}
-
-/**
  * Remove the app networks on this node that no installed app owns: what an
  * interrupted uninstall left behind, or what a restored node came back with.
  *
@@ -211,7 +183,6 @@ async function removeUnownedAppNetworks(ownedNetworks) {
 module.exports = {
   ensureAppDockerNetwork,
   ensureAppNetworkPresent,
-  appNetworkOwner,
   removeUnownedAppNetworks,
   appsThatMightBeUsingOldGatewayIpAssignment,
   legacyPinnedOctets,
