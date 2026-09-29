@@ -1,10 +1,13 @@
-const express = require('express');
-const fs = require('fs');
-const path = require('path');
-const zmq = require('zeromq');
-const benchCrypto = require('./benchCrypto');
-const benchCertificates = require('./benchCertificates');
-const zmqEncoders = require('./zmqEncoders');
+import express from 'express';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import * as zmq from 'zeromq';
+import * as benchCrypto from './benchCrypto.js';
+import * as benchCertificates from './benchCertificates.js';
+import * as zmqEncoders from './zmqEncoders.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 app.use(express.json());

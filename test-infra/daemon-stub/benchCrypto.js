@@ -1,4 +1,7 @@
-const crypto = require('node:crypto');
+import crypto from 'node:crypto';
+import {
+  CipherSuite, DhkemX25519HkdfSha256, HkdfSha256, Aes256Gcm,
+} from '@hpke/core';
 
 // Deterministic crypto backend for the harness benchmark channel. In production
 // the benchmark channel proxies to a private backend that HKDF-derives every key
@@ -141,9 +144,6 @@ function signBlobUpload(fields) {
 let hpkeCache;
 async function getHpke() {
   if (hpkeCache) return hpkeCache;
-  const {
-    CipherSuite, DhkemX25519HkdfSha256, HkdfSha256, Aes256Gcm,
-  } = await import('@hpke/core');
   const kem = new DhkemX25519HkdfSha256();
   const suite = new CipherSuite({ kem, kdf: new HkdfSha256(), aead: new Aes256Gcm() });
   hpkeCache = { suite, kem };
@@ -221,7 +221,15 @@ async function transportDecap({ appName, fluxID, encapsulatedKey }) {
   return { key: Buffer.from(key).toString('base64') };
 }
 
-module.exports = {
+export const signAttestation = (message) => signEd25519(attestationKey.privateKey, Buffer.from(message));
+export const signMeshAttestation = (message) => signEd25519(meshAttestationKey.privateKey, Buffer.from(MESH_VOUCHER_DOMAIN + message));
+export const signAppAttestation = (message) => signEd25519(appAttestationKey.privateKey, Buffer.from(APP_ATTEST_DOMAIN + message));
+export const attestationPubkeyB64 = attestationKey.rawPubB64;
+export const blobUploadPubkeyB64 = blobUploadKey.rawPubB64;
+export const meshAttestationPubkeyB64 = meshAttestationKey.rawPubB64;
+export const appAttestationPubkeyB64 = appAttestationKey.rawPubB64;
+
+export {
   locatorFor,
   contentKeyFor,
   appEncrypt,
@@ -229,13 +237,6 @@ module.exports = {
   transportPublicKey,
   transportDecap,
   signBlobUpload,
-  signAttestation: (message) => signEd25519(attestationKey.privateKey, Buffer.from(message)),
-  signMeshAttestation: (message) => signEd25519(meshAttestationKey.privateKey, Buffer.from(MESH_VOUCHER_DOMAIN + message)),
-  attestationPubkeyB64: attestationKey.rawPubB64,
-  blobUploadPubkeyB64: blobUploadKey.rawPubB64,
-  signAppAttestation: (message) => signEd25519(appAttestationKey.privateKey, Buffer.from(APP_ATTEST_DOMAIN + message)),
-  meshAttestationPubkeyB64: meshAttestationKey.rawPubB64,
-  appAttestationPubkeyB64: appAttestationKey.rawPubB64,
   TRANSPORT_INFO,
   TRANSPORT_EXPORT_LABEL,
   TEST_SEED,
