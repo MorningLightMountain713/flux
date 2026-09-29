@@ -2,6 +2,7 @@
 
 const path = require('node:path');
 
+const { load } = require('./lib/moduleLoader');
 const capabilities = require('./services/utils/capabilities');
 const globalState = require('./services/utils/globalState');
 const { asyncRoute, cache, rejectQueryParameters } = require('./services/utils/routeGuards');
@@ -95,13 +96,8 @@ function capabilityGate(needs, refuse) {
  */
 function handlerFor(ref, baseDir = SERVICES_DIR) {
   const [modulePath, fn] = ref.split('#');
-  let loaded = null;
   return function routeHandler(req, res) {
-    if (!loaded) {
-      // eslint-disable-next-line global-require, import/no-dynamic-require
-      loaded = require(path.join(baseDir, modulePath));
-    }
-    return loaded[fn](req, res);
+    return load(modulePath, baseDir)[fn](req, res);
   };
 }
 

@@ -1,11 +1,10 @@
 'use strict';
 
-const debugHandler = require('./debugHandler');
-const dockerTerminalHandler = require('./dockerTerminalHandler');
-const appLogsHandler = require('./appLogsHandler');
+const { lazyFunction } = require('../moduleLoader');
 
+// Each namespace's connection handler, loaded on its first connection.
 module.exports = {
-  debug: debugHandler,
-  terminal: dockerTerminalHandler,
-  applogs: appLogsHandler,
+  debug: lazyFunction('lib/socketIoHandlers/debugHandler'),
+  terminal: lazyFunction('lib/socketIoHandlers/dockerTerminalHandler'),
+  applogs: lazyFunction('lib/socketIoHandlers/appLogsHandler'),
 };

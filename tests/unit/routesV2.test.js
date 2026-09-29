@@ -17,7 +17,6 @@ const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 const express = require('express');
 const sinon = require('sinon');
-const proxyquire = require('proxyquire').noCallThru();
 const supertest = require('supertest');
 
 chai.use(chaiAsPromised);
@@ -28,6 +27,7 @@ const routesV2 = require('../../ZelBack/src/routesV2');
 const messageDelivery = require('../../ZelBack/src/services/appMessaging/messageDelivery');
 const operationsController = require('../../ZelBack/src/services/appManagement/operationsController');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
+const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 
 const ROOT = nodePath.join(__dirname, '../..');
 
@@ -324,13 +324,8 @@ describe('routesV2 - the /v2 surface', () => {
     let app;
 
     beforeEach(() => {
-      verifyPrivilege = sinon.stub();
-      routerModule = proxyquire('../../ZelBack/src/routesV2', {
-        './lib/log': {
-          info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(), debug: sinon.stub(),
-        },
-        './services/verificationHelper': { verifyPrivilege },
-      });
+      verifyPrivilege = sinon.stub(verificationHelper, 'verifyPrivilege');
+      routerModule = routesV2;
 
       const probe = express.Router();
       probe.use(routerModule.envelope);
