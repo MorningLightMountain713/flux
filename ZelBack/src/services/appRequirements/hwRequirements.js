@@ -1,6 +1,5 @@
 'use strict';
 
-const os = require('os');
 const config = require('config');
 const generalService = require('../generalService');
 const geolocationService = require('../geolocationService');
@@ -11,47 +10,8 @@ const { collateralOutpoint } = require('../utils/nodePinning');
 const enterpriseNetwork = require('../utils/enterpriseNetwork');
 const admissionControl = require('../utils/admissionControl');
 const log = require('../../lib/log');
-
-// Node specifications (shared state)
-const nodeSpecs = {
-  cpuCores: 0,
-  ram: 0,
-  ssdStorage: 0,
-};
-
-async function getNodeSpecs() {
-  try {
-    if (nodeSpecs.cpuCores === 0) {
-      nodeSpecs.cpuCores = os.cpus().length;
-    }
-    if (nodeSpecs.ram === 0) {
-      nodeSpecs.ram = os.totalmem() / 1024 / 1024;
-    }
-    if (nodeSpecs.ssdStorage === 0) {
-      const benchmarkResponse = await benchmarkService.getBenchmarks();
-      if (benchmarkResponse.status === 'success') {
-        const benchmarkResponseData = benchmarkResponse.data;
-        log.info(`Gathered ssdstorage ${benchmarkResponseData.ssd}`);
-        nodeSpecs.ssdStorage = benchmarkResponseData.ssd;
-      } else {
-        throw new Error('Error getting ssdstorage from benchmarks');
-      }
-    }
-  } catch (error) {
-    log.error(error);
-  }
-  return nodeSpecs;
-}
-
-function setNodeSpecs(cores, ram, ssdStorage) {
-  nodeSpecs.cpuCores = cores;
-  nodeSpecs.ram = ram;
-  nodeSpecs.ssdStorage = ssdStorage;
-}
-
-function returnNodeSpecs() {
-  return nodeSpecs;
-}
+const nodeSpecs = require('./nodeSpecs');
+const resourceQueryService = require('../appQuery/resourceQueryService');
 
 async function systemArchitecture() {
   const benchmarkBenchRes = await benchmarkService.getBenchmarks();
@@ -172,12 +132,6 @@ async function targetsNameThisNode(spec) {
 // Accept a DeploymentSpec. Use deployment.resourceTotals() for resource
 // totals instead of reading legacy .compose fields.
 
-async function appsResources() {
-  // eslint-disable-next-line global-require
-  const resourceQueryService = require('../appQuery/resourceQueryService');
-  return resourceQueryService.appsResources();
-}
-
 /**
  * What this node currently has free, measured once.
  *
@@ -196,11 +150,11 @@ async function appsResources() {
  * @returns {Promise<Object>} the node's free capacity
  */
 async function nodeCapacity(options = {}) {
-  const resourcesLocked = await appsResources();
+  const resourcesLocked = await resourceQueryService.appsResources();
   if (resourcesLocked.status !== 'success') {
     throw new Error('Unable to obtain locked system resources by Flux Apps. Aborting.');
   }
-  const specs = await getNodeSpecs();
+  const specs = await nodeSpecs.getNodeSpecs();
 
   const totalSpaceOnNode = specs.ssdStorage;
   const useableSpaceOnNode = totalSpaceOnNode * 0.95
@@ -310,9 +264,6 @@ async function checkNodeResourcesReclaiming(deployment) {
 }
 
 module.exports = {
-  getNodeSpecs,
-  setNodeSpecs,
-  returnNodeSpecs,
   systemArchitecture,
   checkPlacement,
   targetsNameThisNode,
@@ -322,5 +273,4 @@ module.exports = {
   nodeCapacity,
   capacityShortfall,
   burstHeadroomShortfall,
-  appsResources,
 };

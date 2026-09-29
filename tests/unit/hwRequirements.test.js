@@ -173,6 +173,9 @@ function buildHw(opts = {}) {
       getFluxNodePublicKey: sinon.stub().resolves(operatorPubKey),
     },
     '../utils/enterpriseNetwork': enterpriseNetworkStub,
+    './nodeSpecs': {
+      getNodeSpecs: sinon.stub().resolves({ cpuCores: cpucores, ram, ssdStorage: ssd }),
+    },
     '../appQuery/resourceQueryService': {
       appsResources: sinon.stub().resolves({
         status: resourcesStatus,
@@ -180,10 +183,6 @@ function buildHw(opts = {}) {
       }),
     },
     '../../lib/log': { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() },
-    os: {
-      cpus: sinon.stub().returns(new Array(cpucores)),
-      totalmem: sinon.stub().returns(ram * 1024 * 1024),
-    },
     config: asConfig({
       fluxSpecifics: {
         cpu: { cumulus: 2, nimbus: 4, stratus: 8 },
@@ -752,7 +751,6 @@ describe('hwRequirements', () => {
       expect(hw.checkNodeResourcesReclaiming).to.be.a('function');
       expect(hw.checkCpuBurstHeadroom).to.be.a('function');
       expect(hw.systemArchitecture).to.be.a('function');
-      expect(hw.getNodeSpecs).to.be.a('function');
       expect(hw.nodeCapacity).to.be.a('function');
       expect(hw.capacityShortfall).to.be.a('function');
       expect(hw.burstHeadroomShortfall).to.be.a('function');

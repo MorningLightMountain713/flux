@@ -20,7 +20,7 @@ const {
 // answer it was there to check.
 //
 // What stays stubbed is I/O and node policy: mongo (appsRepository), the
-// hardware probe (hwRequirements), the deployment provider (two daemon RPCs and
+// hardware probe (nodeSpecs), the deployment provider (two daemon RPCs and
 // the docker socket), the uninstaller, and the delay between removals.
 
 // One fixed apps folder for every DeploymentSpec here.
@@ -33,7 +33,7 @@ describe('hardwareValidationService tests', () => {
   let logStub;
   let configStub;
   let appsRepositoryStub;
-  let hwRequirementsStub;
+  let nodeSpecsStub;
   let appUninstallerStub;
   let serviceHelperStub;
   let deploymentProviderStub;
@@ -104,7 +104,7 @@ describe('hardwareValidationService tests', () => {
   /** The node every test measures against: 4 cores, 8GB, 100GB. Net of the
    *  locked reserves below that is 3 CPU, 6192MB and 85GB usable. */
   function fourCoreNode() {
-    hwRequirementsStub.getNodeSpecs.resolves({ cpuCores: 4, ram: 8192, ssdStorage: 100 });
+    nodeSpecsStub.getNodeSpecs.resolves({ cpuCores: 4, ram: 8192, ssdStorage: 100 });
   }
 
   beforeEach(() => {
@@ -128,7 +128,7 @@ describe('hardwareValidationService tests', () => {
       listInstalledApps: sinon.stub().resolves([]),
     };
 
-    hwRequirementsStub = {
+    nodeSpecsStub = {
       getNodeSpecs: sinon.stub(),
     };
 
@@ -150,7 +150,7 @@ describe('hardwareValidationService tests', () => {
     hardwareValidationService = proxyquire('../../ZelBack/src/services/appLifecycle/hardwareValidationService', {
       '../../lib/log': logStub,
       config: asConfig(configStub),
-      '../appRequirements/hwRequirements': hwRequirementsStub,
+      '../appRequirements/nodeSpecs': nodeSpecsStub,
       './appUninstaller': appUninstallerStub,
       '../serviceHelper': serviceHelperStub,
       '../appRuntime/deploymentProvider': deploymentProviderStub,
@@ -380,7 +380,7 @@ describe('hardwareValidationService tests', () => {
     });
 
     it('should return empty array if storage is 0', async () => {
-      hwRequirementsStub.getNodeSpecs.resolves({ cpuCores: 4, ram: 8192, ssdStorage: 0 });
+      nodeSpecsStub.getNodeSpecs.resolves({ cpuCores: 4, ram: 8192, ssdStorage: 0 });
       const rows = await installAll([{ name: 'app1', height: 1000, sizing: FITS }]);
 
       const result = await hardwareValidationService.validateAppsCumulatively(rows);

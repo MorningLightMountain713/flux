@@ -3,13 +3,13 @@
 // Resource Query Service - Query functions for app and node resource usage
 const messageHelper = require('../messageHelper');
 const appsRepository = require('../appDatabase/appsRepository');
-const hwRequirements = require('../appRequirements/hwRequirements');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const admissionControl = require('../utils/admissionControl');
 const log = require('../../lib/log');
 
 // Import appQueryService to avoid circular dependency (will be cleaned up later)
 const appQueryService = require('./appQueryService');
+const nodeSpecs = require('../appRequirements/nodeSpecs');
 
 /**
  * Get application usage statistics
@@ -24,13 +24,13 @@ async function fluxUsage(req, res) {
     const totalRunning = runningApps.data ? runningApps.data.length : 0;
 
     // Ensure node specs are loaded before accessing them
-    const nodeSpecs = await hwRequirements.getNodeSpecs();
+    const specs = await nodeSpecs.getNodeSpecs();
 
     const usage = {
       totalApps,
       runningApps: totalRunning,
       stoppedApps: totalApps - totalRunning,
-      nodeSpecs,
+      nodeSpecs: specs,
     };
 
     const dataResponse = messageHelper.createDataMessage(usage);

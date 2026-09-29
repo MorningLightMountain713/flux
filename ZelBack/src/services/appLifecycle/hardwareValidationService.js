@@ -14,11 +14,11 @@
 
 const log = require('../../lib/log');
 const config = require('config');
-const hwRequirements = require('../appRequirements/hwRequirements');
 const appUninstaller = require('./appUninstaller');
 const serviceHelper = require('../serviceHelper');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appsRepository = require('../appDatabase/appsRepository');
+const nodeSpecs = require('../appRequirements/nodeSpecs');
 
 const REMOVAL_DELAY = 5000; // 5 seconds between removals
 
@@ -84,16 +84,16 @@ async function validateAppsCumulatively(installedApps) {
   const appsToRemove = [];
 
   try {
-    const nodeSpecs = await hwRequirements.getNodeSpecs();
+    const specs = await nodeSpecs.getNodeSpecs();
 
     // Calculate available resources
-    const totalCpuOnNode = nodeSpecs.cpuCores * 10;
+    const totalCpuOnNode = specs.cpuCores * 10;
     const useableCpuOnNode = totalCpuOnNode - config.get('lockedSystemResources.cpu');
 
-    const totalRamOnNode = nodeSpecs.ram;
+    const totalRamOnNode = specs.ram;
     const useableRamOnNode = totalRamOnNode - config.get('lockedSystemResources.ram');
 
-    const totalSpaceOnNode = nodeSpecs.ssdStorage;
+    const totalSpaceOnNode = specs.ssdStorage;
     if (totalSpaceOnNode === 0) {
       log.error('hardwareValidationService - No storage detected, cannot validate apps');
       return appsToRemove;
