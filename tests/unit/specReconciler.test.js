@@ -18,6 +18,7 @@ const generalService = require('../../ZelBack/src/services/generalService');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
+const decisionStore = require('../../ZelBack/src/services/appDecisions/decisionStore');
 const imageManager = require('../../ZelBack/src/services/appSecurity/imageManager');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const dockerService = require('../../ZelBack/src/services/dockerService');
@@ -34,6 +35,8 @@ describe('specReconciler tests', () => {
   const OTHER_TARGET = '9.9.9.9';
   const THIRD_TARGET = '8.8.8.8';
   const OUTPOINT_TXID = 'a'.repeat(64);
+  // The app instance every fixture row belongs to unless a test says otherwise.
+  const APP_UUID = 'c'.repeat(64);
 
   // Expiry is the REAL v9 rule — registeredAt + ttl < tipBlockTime — never a
   // stubbed predicate. V9_SUBMISSION's ttl is 30 days, so a row registered here
@@ -91,7 +94,7 @@ describe('specReconciler tests', () => {
    */
   async function specWith(targetsBlob, {
     name = 'myapp', height = 2_550_000, expired = false, instances = 1,
-    cpu, preStop = false, hash,
+    cpu, preStop = false, hash, uuid = APP_UUID,
   } = {}) {
     const placement = { targetIps: [], targetOutpoints: [], targetOperators: [] };
     const assignment = { targetIps: {}, targetOutpoints: {} };
@@ -137,6 +140,7 @@ describe('specReconciler tests', () => {
       hash: hash ?? spec.contentHash(),
       height,
       registeredAt: expired ? LONG_EXPIRED_AT : Math.floor(Date.now() / 1000),
+      uuid,
     });
   }
 
@@ -145,7 +149,10 @@ describe('specReconciler tests', () => {
   let sweepStub;
   let appLocationStub;
 
+  let decisionsForStub;
+
   function setup({ installed = [], globalRows = [], synced = true, registryConsistent = true } = {}) {
+    decisionsForStub = sinon.stub(decisionStore, 'decisionsFor').resolves(new Map());
     sinon.stub(serviceHelper, 'delay').resolves();
     sinon.stub(generalService, 'checkSynced').resolves(synced);
     sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: OUTPOINT_TXID, txindex: 0 });
@@ -229,13 +236,52 @@ describe('specReconciler tests', () => {
 
     // Only a v1-v8 name can carry capitals; v9 names are lower case.
     it('finds an installed v1-v8 app\'s row whatever the letter case of either name', async () => {
-      const state = { hash: 'h', height: 990_000 };
+      const state = { hash: 'h', height: 990_000, uuid: APP_UUID };
       setup({
         installed: [await instantiatedSpec(await v8Spec({ name: 'MyApp' }), state)],
         globalRows: [await instantiatedSpec(await v8Spec({ name: 'myapp' }), state)],
       });
       await specReconciler.requestFullConvergence({ reason: 'test' });
       expect(uninstallStub.called).to.equal(false);
+    });
+  });
+
+  describe('the app an install belongs to', () => {
+    const OTHER_UUID = 'd'.repeat(64);
+
+    it('removes an install whose name the registry now lists for another app', async () => {
+      setup({
+        installed: [await specWith({}, { name: 'leased' })],
+        globalRows: [await specWith({}, { name: 'leased', uuid: OTHER_UUID })],
+      });
+      await specReconciler.requestFullConvergence({ reason: 'test' });
+      expect(uninstallStub.calledOnceWith('leased', sinon.match({ background: true, broadcastRemoval: true }))).to.equal(true);
+      expect(reconcileAppStub.called, 'another app\'s spec is never adopted').to.equal(false);
+    });
+
+    it('keeps an install that recorded no uuid when its spec\'s decision names the row\'s app', async () => {
+      const installed = await specWith({}, { name: 'released', uuid: null });
+      setup({ installed: [installed], globalRows: [await specWith({}, { name: 'released' })] });
+      decisionsForStub.resolves(new Map([[installed.hash, { hash: installed.hash, decision: 'applied', uuid: APP_UUID }]]));
+      await specReconciler.requestFullConvergence({ reason: 'test' });
+      expect(decisionsForStub.calledOnceWith([installed.hash])).to.equal(true);
+      expect(uninstallStub.called).to.equal(false);
+    });
+
+    it('removes an install that recorded no uuid when its spec\'s decision names another app', async () => {
+      const installed = await specWith({}, { name: 'released', uuid: null });
+      setup({ installed: [installed], globalRows: [await specWith({}, { name: 'released' })] });
+      decisionsForStub.resolves(new Map([[installed.hash, { hash: installed.hash, decision: 'applied', uuid: OTHER_UUID }]]));
+      await specReconciler.requestFullConvergence({ reason: 'test' });
+      expect(uninstallStub.calledOnceWith('released')).to.equal(true);
+    });
+
+    it('removes an install that recorded no uuid when its spec was refused', async () => {
+      const installed = await specWith({}, { name: 'released', uuid: null });
+      setup({ installed: [installed], globalRows: [await specWith({}, { name: 'released' })] });
+      decisionsForStub.resolves(new Map([[installed.hash, { hash: installed.hash, decision: 'refused', reason: 'underpaid', uuid: null }]]));
+      await specReconciler.requestFullConvergence({ reason: 'test' });
+      expect(uninstallStub.calledOnceWith('released')).to.equal(true);
     });
   });
 
@@ -598,6 +644,24 @@ describe('specReconciler tests', () => {
       // and really did re-check, rather than never having been scheduled at all.
       expect(getInstalled.callCount, 'the timer fired and re-read the installed row').to.equal(2);
       expect(reconcileAppStub.called, 'hashes converged before the timer fired').to.equal(false);
+    });
+
+    it('re-checks at fire time and never adopts another app registered under the name meanwhile', async () => {
+      const loose = { targetIps: { [LOCAL_TARGET]: null } };
+      const installedRow = await specWith(loose, { cpu: 0.5 });
+      const update = await specWith(loose, { cpu: 1 });
+      const reregistered = await specWith(loose, { cpu: 1.5, uuid: 'd'.repeat(64) });
+      setup({ installed: [installedRow] });
+      const getInstalled = sinon.stub(appsRepository, 'getInstalledApp').resolves(installedRow);
+      const getGlobal = sinon.stub(appsRepository, 'getGlobalAppInfo');
+      getGlobal.onFirstCall().resolves(update);
+      getGlobal.resolves(reregistered);
+      clock = sinon.useFakeTimers();
+
+      await specReconciler.requestAppConvergence('myapp', { reason: 'test' });
+      await clock.tickAsync(300_000);
+      expect(getInstalled.callCount, 'the timer fired and re-read the rows').to.equal(2);
+      expect(reconcileAppStub.called).to.equal(false);
     });
   });
 

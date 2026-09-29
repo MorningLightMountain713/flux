@@ -6,6 +6,7 @@ const serviceHelper = require('../serviceHelper');
 const log = require('../../lib/log');
 const { AsyncLock } = require('../utils/asyncLock');
 const appsRepository = require('../appDatabase/appsRepository');
+const decisionStore = require('../appDecisions/decisionStore');
 const registryManager = require('../appDatabase/registryManager');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const hwRequirements = require('../appRequirements/hwRequirements');
@@ -124,11 +125,36 @@ function scheduleAdoption(appName, registryHash, delayMs) {
   pendingAdoptions.set(appName, { timer, hash: registryHash });
 }
 
+/**
+ * The app instance an install belongs to: the uuid it was installed with, or,
+ * for an install that recorded none, the uuid the decision for the spec it runs
+ * carries (none for a refused message). Null when neither says.
+ * @param {object} installed - hydrated installed spec
+ * @returns {Promise<?string>}
+ */
+async function installedUuid(installed) {
+  if (installed.uuid) return installed.uuid;
+  const decision = (await decisionStore.decisionsFor([installed.hash])).get(installed.hash);
+  return decision?.uuid ?? null;
+}
+
+/**
+ * Whether a registry row is the app an install belongs to. A name is a lease:
+ * once it expires anyone can register it again, and that row names another app.
+ * @param {object} installed - hydrated installed spec
+ * @param {object} registrySpec - hydrated registry row
+ * @returns {Promise<boolean>}
+ */
+async function isInstalledApp(installed, registrySpec) {
+  return await installedUuid(installed) === registrySpec.uuid;
+}
+
 async function fireAdoption(appName) {
   const installed = await appsRepository.getInstalledApp(appName);
   if (!installed) return;
   const registrySpec = await appsRepository.getGlobalAppInfo(appName);
   if (!registrySpec || registrySpec.hash === installed.hash) return;
+  if (!await isInstalledApp(installed, registrySpec)) return;
   await appOperations.reconcileApp(installed, registrySpec);
   imageManager.requestComplianceSweep(new Set([appName]));
 }
@@ -147,6 +173,13 @@ async function convergeApp(installed, registrySpec, ctx) {
   // expiry decides nothing.
   if (!registrySpec) {
     log.warn(`REMOVAL REASON: not in the app registry - ${installed.name} (specReconciler)`);
+    await appUninstaller.uninstallApplication(installed.name, {
+      forceKill: false, skipGuard: true, broadcastRemoval: true, background: true,
+    });
+    return 'removed';
+  }
+  if (!await isInstalledApp(installed, registrySpec)) {
+    log.warn(`REMOVAL REASON: the app registry lists another app under this name - ${installed.name} (specReconciler)`);
     await appUninstaller.uninstallApplication(installed.name, {
       forceKill: false, skipGuard: true, broadcastRemoval: true, background: true,
     });
