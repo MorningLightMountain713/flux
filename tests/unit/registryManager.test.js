@@ -86,7 +86,7 @@ describe('registryManager tests', () => {
     return stored;
   }
 
-  describe('getApplicationOwner tests', () => {
+  describe('appsRepository.getApplicationOwner tests', () => {
     beforeEach(async () => {
       const collection = config.database.appsglobal.collections.appsInformation;
       const insertApp = {
@@ -106,20 +106,20 @@ describe('registryManager tests', () => {
 
     it('should return application owner if app exists in database', async () => {
       const appOwner = '196GJWyLxzAw3MirTT7Bqs2iGpUQio29GH';
-      const getOwnerResult = await registryManager.getApplicationOwner('TestApp');
+      const getOwnerResult = await appsRepository.getApplicationOwner('TestApp');
 
       expect(getOwnerResult).to.equal(appOwner);
     });
 
     it('should return null if the app does not exist', async () => {
-      const getOwnerResult = await registryManager.getApplicationOwner('NonExistentApp');
+      const getOwnerResult = await appsRepository.getApplicationOwner('NonExistentApp');
 
       expect(getOwnerResult).to.be.null;
     });
 
     it('should be case insensitive', async () => {
       const appOwner = '196GJWyLxzAw3MirTT7Bqs2iGpUQio29GH';
-      const getOwnerResult = await registryManager.getApplicationOwner('testapp');
+      const getOwnerResult = await appsRepository.getApplicationOwner('testapp');
 
       expect(getOwnerResult).to.equal(appOwner);
     });

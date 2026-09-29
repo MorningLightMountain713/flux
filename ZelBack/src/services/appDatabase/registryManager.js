@@ -484,25 +484,6 @@ function updateApplicationSpecificationAPI(_req, res) {
 }
 
 /**
- * To return the owner of a FluxOS application.
- * @param {string} appName Name of app.
- * @returns {string|null} Owner.
- */
-async function getApplicationOwner(appName) {
-  const owner = await appsRepository.getGlobalAppOwner(appName);
-  if (owner) {
-    return owner;
-  }
-  // eslint-disable-next-line no-use-before-define
-  const allApps = await availableApps();
-  const appInfo = allApps.find((app) => app.name.toLowerCase() === appName.toLowerCase());
-  if (appInfo) {
-    return appInfo.owner;
-  }
-  return null;
-}
-
-/**
  * Get all app locations via API
  * @param {object} _req - Request object (unused)
  * @param {import('express').Response} res
@@ -980,7 +961,7 @@ async function getApplicationOwnerAPI(req, res) {
     if (!appname) {
       throw new Error('No Application Name specified');
     }
-    const owner = await getApplicationOwner(appname);
+    const owner = await appsRepository.getApplicationOwner(appname);
     if (!owner) {
       throw new Error('Application not found');
     }
@@ -1324,7 +1305,6 @@ module.exports = {
   convertApplicationSpecification,
   appConvertApi,
   getApplicationComponentNamesAPI,
-  getApplicationOwner,
   getApplicationOwnerAPI,
   getGlobalAppsSpecifications,
   availableApps,

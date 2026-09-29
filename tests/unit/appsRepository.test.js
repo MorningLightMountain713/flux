@@ -258,6 +258,27 @@ describe('appsRepository', () => {
     });
   });
 
+  describe('getApplicationOwner', () => {
+    it('answers the registry row\'s owner without reading the installed list', async () => {
+      dbHelperStub.findOneInDatabase.resolves({ owner: 'ownerX' });
+      expect(await appsRepository.getApplicationOwner('app')).to.equal('ownerX');
+      sinon.assert.notCalled(dbHelperStub.findInDatabase);
+    });
+
+    it('falls back to an app this node has installed under the name, ignoring case', async () => {
+      dbHelperStub.findOneInDatabase.resolves(null);
+      const installed = await legacyDoc(await v8Spec({ name: 'LocalOnly' }), { hash: 'hl', height: 100 });
+      dbHelperStub.findInDatabase.resolves([installed]);
+      expect(await appsRepository.getApplicationOwner('localonly')).to.equal(installed.owner);
+    });
+
+    it('answers null when neither the registry nor this node holds the name', async () => {
+      dbHelperStub.findOneInDatabase.resolves(null);
+      dbHelperStub.findInDatabase.resolves([]);
+      expect(await appsRepository.getApplicationOwner('nothing')).to.equal(null);
+    });
+  });
+
   describe('lean scalar accessors skip hydration', () => {
     it('getGlobalAppOwner returns just the owner via an owner projection', async () => {
       dbHelperStub.findOneInDatabase.resolves({ owner: 'ownerX' });
