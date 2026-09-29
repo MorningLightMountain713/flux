@@ -648,4 +648,5 @@ module.exports = [
   // Cadence, read rather than streamed - see the rule at the top of
   // fluxEventBus.js. 404s in production, like the stream above.
   { method: 'get', path: '/flux/testcounters', none: NONE.PROCESS, handler: 'utils/fluxEventBus#countersHandler' },
+  { method: 'post', path: '/flux/testcheckpoints', none: NONE.PROCESS, handler: 'utils/fluxEventBus#checkpointsHandler' },
 ];
