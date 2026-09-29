@@ -2,11 +2,10 @@
 
 const config = require('config');
 const axios = require('axios');
-const dbHelper = require('../dbHelper');
 const daemonStatus = require('../daemonService/daemonStatus');
 const appsRepository = require('../appDatabase/appsRepository');
 const appHistory = require('../appDecisions/appHistory');
-const { resolveSpec, resolveInstantiatedSpec } = require('../utils/specCutover');
+const { resolveInstantiatedSpec } = require('../utils/specCutover');
 const { getSpec } = require('../utils/specLibs');
 const { getChainParamsPriceUpdates } = require('../utils/chainUtilities');
 const { isMarketplaceApp } = require('../utils/marketplaceApps');
@@ -19,16 +18,15 @@ const log = require('../../lib/log');
  * The on-chain fee these specs must pay is a near-zero floor, so what an owner
  * is actually charged is the display price (with the marketplace premium).
  * "What the screen says" and "what the chain demands" are genuinely different
- * figures. Contrast v9PricingRegime, where the on-chain price was raised to
- * equal the display price and there is only one figure.
+ * figures, and the first is never below the second. Contrast v9PricingRegime,
+ * where the on-chain price was raised to equal the display price and there is
+ * only one figure.
  *
  * Nothing here computes a price. The arithmetic is flux-spec's
  * LegacyPricingEngine, built with the rates and market data this file fetches
- * and handed the stored registration per call. What stays is the fetching, and
+ * and handed the listed app's predecessor per call. What stays is the fetching, and
  * the shapes the rest of FluxOS expects back.
  */
-
-const globalAppsInformation = config.get('database.appsglobal.collections.appsInformation');
 
 const myShortCache = cacheManager.fluxRatesCache;
 const myLongCache = cacheManager.appPriceBlockedRepoCache;
@@ -154,15 +152,15 @@ async function fluxUsdRate() {
   return rate;
 }
 
-/** The app's stored registration, resolved. Null when never registered. */
-async function storedRegistration(name) {
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.get('database.appsglobal.database'));
-  const doc = await dbHelper.findOneInDatabase(
-    database, globalAppsInformation, { name }, { projection: { _id: 0 } },
-  );
-  if (!doc) return null;
-  return { spec: await resolveSpec(doc), height: doc.height };
+/**
+ * The listed app's spec and the height of the message it stands on: the
+ * predecessor the decider prices an update against. Null when no app is listed
+ * under the name.
+ */
+async function listedPredecessor(name) {
+  const row = await appsRepository.getGlobalAppInfo(name);
+  if (!row) return null;
+  return { spec: await resolveInstantiatedSpec(row), height: row.height };
 }
 
 /** The engine, built with whatever this call needs fetched. */
@@ -221,13 +219,16 @@ async function checkLegacyFreeUpdate(spec, daemonHeight) {
 async function onChainDisplayPrice(spec) {
   const height = syncedHeight();
   const engine = await engineFor();
-  const previous = await storedRegistration(spec.name);
+  const previous = await listedPredecessor(spec.name);
   return engine.chainFloorPrice(spec, { height, previous });
 }
 
 /**
- * USD + FLUX quote for display — the figure an owner actually pays, waived
- * entirely when the update is free.
+ * USD + FLUX quote for display — the figure an owner actually pays. The engine
+ * quotes it free only when the free-update rule allows it and the chain charges
+ * the update only the minimum, and never below what the chain charges. The
+ * predecessor is the listed app's row: the message the decider prices the
+ * update against.
  *
  * @param {object} spec - resolved v1-v8 spec
  * @param {object} appSpecification - the raw submitted document, for priceUSD:
@@ -236,10 +237,12 @@ async function onChainDisplayPrice(spec) {
  */
 async function fiatAndFluxDisplayPrice(spec, appSpecification) {
   const height = syncedHeight();
-  if (await checkLegacyFreeUpdate(spec, height)) return { usd: 0, flux: 0, fluxDiscount: 0 };
-
+  const previous = await listedPredecessor(spec.name);
+  if (await checkLegacyFreeUpdate(spec, height)
+    && (await engineFor()).chargesOnlyMinimum(spec, { height, previous })) {
+    return { usd: 0, flux: 0, fluxDiscount: 0 };
+  }
   const engine = await engineFor({ quote: true, name: spec.name });
-  const previous = await storedRegistration(spec.name);
   return engine.quote(spec, { height, previous, priceUSD: appSpecification.priceUSD });
 }
 

@@ -12,6 +12,7 @@ const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepos
 const specCutover = require('../../ZelBack/src/services/utils/specCutover');
 const pricingRegime = require('../../ZelBack/src/services/pricing/pricingRegime');
 const appHistory = require('../../ZelBack/src/services/appDecisions/appHistory');
+const cacheManager = require('../../ZelBack/src/services/utils/cacheManager').default;
 
 /**
  * The applied history of the app holding the name, as the pricers read it,
@@ -88,9 +89,9 @@ async function registered(spec, height, registeredAt) {
 // a different request path. Wiring them explicitly keeps every other module a
 // singleton — proxyquire's @global reloads the whole tree, which silently gives
 // the code under test its own daemonStatus that no stub can reach.
-function buildAppSpecHelpers(cutover) {
+function buildAppSpecHelpers(cutover, legacyStubs = {}) {
   const P = '../../ZelBack/src/services';
-  const legacy = proxyquire(`${P}/pricing/legacyPricingRegime`, { '../utils/specCutover': cutover });
+  const legacy = proxyquire(`${P}/pricing/legacyPricingRegime`, { '../utils/specCutover': cutover, ...legacyStubs });
   const v9 = proxyquire(`${P}/pricing/v9PricingRegime`, { '../utils/specCutover': cutover });
   const regime = proxyquire(`${P}/pricing/pricingRegime`, {
     './legacyPricingRegime': legacy,
@@ -835,10 +836,15 @@ describe('appSpecHelpers tests', () => {
         compose: [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }],
       });
 
+      // The chain charges this update only the minimum: the whole previous
+      // term is unused, bought at the height it is priced at.
+      const chainRates = [{
+        height: 0, cpu: 0.03, ram: 0.0006, hdd: 0.0015, port: 2, scope: 4, staticip: 3, minPrice: 0.01,
+      }];
       const helpers = buildAppSpecHelpers({
         resolveSpec: sinon.stub().resolves(legacyApp),
         resolveInstantiatedSpec: sinon.stub().callsFake(async (inst) => inst.spec),
-      });
+      }, { '../utils/chainUtilities': { getChainParamsPriceUpdates: async () => chainRates } });
       sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: daemonHeight } });
       sinon.stub(appsRepository, 'getGlobalAppInfo')
         .resolves(await registered(prev, daemonHeight + 44_000 - legacyApp.expire));
@@ -849,6 +855,76 @@ describe('appSpecHelpers tests', () => {
       // rule never ran.
       const result = await helpers.getAppFiatAndFluxPrice(legacyApp);
       expect(result).to.deep.equal({ usd: 0, flux: 0, fluxDiscount: 0 });
+    });
+
+    it('v1-v8: an update the free rule refuses is quoted, though the chain charges it only the minimum', async () => {
+      const daemonHeight = 100_000;
+      const compose = [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }];
+      const legacyApp = await legacySpec({ name: 'legacyapp', compose });
+      const prev = await legacySpec({ name: 'legacyapp', compose });
+      const card = {
+        cpu: 0.03, ram: 0.0006, hdd: 0.0015, port: 2, scope: 4, staticip: 3, minPrice: 0.01,
+      };
+      const helpers = buildAppSpecHelpers({
+        resolveSpec: sinon.stub().resolves(legacyApp),
+        resolveInstantiatedSpec: sinon.stub().callsFake(async (inst) => inst.spec),
+      }, { '../utils/chainUtilities': { getChainParamsPriceUpdates: async () => [{ height: 0, ...card }] } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: daemonHeight } });
+      sinon.stub(appsRepository, 'getGlobalAppInfo')
+        .resolves(await registered(prev, daemonHeight + 44_000 - legacyApp.expire));
+      // Eleven updates in the window: the free-update rule refuses.
+      stubAppliedHistory(Array(11).fill({ type: 'fluxappupdate', height: 99_000 }));
+      cacheManager.appPriceBlockedRepoCache.set('appPrices', {
+        ...card, multiplier: 1, fluxmultiplier: 1, minUSDPrice: 0.99,
+      });
+      cacheManager.fluxRatesCache.set('fluxRates', 0.5);
+
+      try {
+        const result = await helpers.getAppFiatAndFluxPrice(legacyApp);
+
+        expect(result.usd).to.be.above(0);
+        expect(result.flux).to.be.above(0);
+      } finally {
+        cacheManager.appPriceBlockedRepoCache.delete('appPrices');
+        cacheManager.fluxRatesCache.delete('fluxRates');
+      }
+    });
+
+    it('v1-v8: an update the free rule allows is quoted at what the chain charges when that is above the minimum', async () => {
+      const daemonHeight = 100_000;
+      const compose = [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }];
+      const legacyApp = await legacySpec({ name: 'legacyapp', compose });
+      const prev = await legacySpec({ name: 'legacyapp', compose });
+      // The previous term was bought one block before the card got pricier, so
+      // the chain credits it at the cheaper card and the update owes the rest.
+      const cheap = {
+        cpu: 0.03, ram: 0.0006, hdd: 0.0015, port: 2, scope: 4, staticip: 3, minPrice: 0.01,
+      };
+      const chainRates = [{ height: 0, ...cheap }, { height: daemonHeight - 1, ...cheap, cpu: 3, ram: 0.06, hdd: 0.15 }];
+      const helpers = buildAppSpecHelpers({
+        resolveSpec: sinon.stub().resolves(legacyApp),
+        resolveInstantiatedSpec: sinon.stub().callsFake(async (inst) => inst.spec),
+      }, { '../utils/chainUtilities': { getChainParamsPriceUpdates: async () => chainRates } });
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: daemonHeight } });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await registered(prev, daemonHeight - 2));
+      stubAppliedHistory([]);
+      cacheManager.appPriceBlockedRepoCache.set('appPrices', {
+        ...cheap, multiplier: 1, fluxmultiplier: 1, minUSDPrice: 0.99,
+      });
+      cacheManager.fluxRatesCache.set('fluxRates', 1_000_000);
+
+      try {
+        const owed = Number(new flux.LegacyPricingEngine({ chainRates })
+          .updateFee(legacyApp, prev, daemonHeight, daemonHeight - 2)) / 1e8;
+        expect(owed).to.be.above(cheap.minPrice);
+
+        const result = await helpers.getAppFiatAndFluxPrice(legacyApp);
+
+        expect(result.flux).to.equal(owed);
+      } finally {
+        cacheManager.appPriceBlockedRepoCache.delete('appPrices');
+        cacheManager.fluxRatesCache.delete('fluxRates');
+      }
     });
   });
 
