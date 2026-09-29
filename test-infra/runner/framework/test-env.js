@@ -5,7 +5,9 @@ process.env.TESTCONTAINERS_HOST_OVERRIDE ??= '127.0.0.1';
 process.env.TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT ??= '5s';
 
 import { Readable } from 'node:stream';
-import { GenericContainer, Wait, getContainerRuntimeClient } from 'testcontainers';
+import {
+  GenericContainer, Wait, getContainerRuntimeClient, getReaper,
+} from 'testcontainers';
 import {
   readFileSync, mkdirSync, writeFileSync, rmSync, existsSync,
 } from 'node:fs';
@@ -372,7 +374,6 @@ export class StaticIpContainer extends GenericContainer {
 
 async function createNetwork() {
   const client = await getContainerRuntimeClient();
-  const { getReaper } = await import('testcontainers');
   const reaper = await getReaper(client);
   const networkName = `flux-test-${Date.now()}`;
   await client.container.dockerode.createNetwork({
@@ -1604,8 +1605,7 @@ async function _buildEnv(
   await pushImage('e2e-pause', 'v1');
 
   const rtClient = await getContainerRuntimeClient();
-  const { getReaper: getReaperFn } = await import('testcontainers');
-  const reaper = await getReaperFn(rtClient);
+  const reaper = await getReaper(rtClient);
   for (let i = 0; i < nodes; i++) {
     const volName = `${networkName}-node${i}`;
     await rtClient.container.dockerode.createVolume({

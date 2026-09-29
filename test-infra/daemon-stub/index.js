@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const zmq = require('zeromq');
 const benchCrypto = require('./benchCrypto');
+const benchCertificates = require('./benchCertificates');
 const zmqEncoders = require('./zmqEncoders');
 
 const app = express();
@@ -588,12 +589,12 @@ const benchHandlers = {
   // proxy convention); cacertificate takes a query string (the transportpublickey
   // convention). Both match what benchmarkService sends.
   signcertificate: async (params) => {
-    const res = await benchCrypto.signCertificate(JSON.parse(params[0]));
+    const res = await benchCertificates.signCertificate(JSON.parse(params[0]));
     return JSON.stringify({ status: 'ok', ...res });
   },
   cacertificate: async (params) => {
     const q = new URLSearchParams(params[0]);
-    const res = await benchCrypto.caCertificate({ appName: q.get('appName') });
+    const res = await benchCertificates.caCertificate({ appName: q.get('appName') });
     return JSON.stringify({ status: 'ok', ...res });
   },
 

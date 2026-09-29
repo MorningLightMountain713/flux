@@ -29,6 +29,7 @@
 // it had nothing but the output format to work back from. Same reason gate-progress.sh
 // and archive-run.sh are in the repo.
 
+import { createWriteStream } from 'node:fs';
 import { dbClient, closeDb } from './framework/db-client.js';
 import { getSubnetConfig } from './framework/subnet-config.js';
 
@@ -50,7 +51,6 @@ if (!Number.isInteger(nodeNum) || nodeNum < 1) {
 const db = dbClient(nodeNum);
 let out = null;
 if (outPath) {
-  const { createWriteStream } = await import('node:fs');
   out = createWriteStream(outPath, { flags: 'a' });
 }
 const emit = (line) => (out ? out.write(`${line}\n`) : console.log(line));
