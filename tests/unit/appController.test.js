@@ -113,7 +113,7 @@ describe('appController tests', () => {
   }
 
   /** A real v9 app whose single component replicates active/standby. */
-  async function activeStandbyApp(name, component) {
+  async function activeStandbyApp(name, component, state = {}) {
     const base = V9_SUBMISSION.components.web;
     const spec = await v9Spec({
       name,
@@ -125,7 +125,7 @@ describe('appController tests', () => {
         },
       },
     });
-    return instantiatedSpec(spec);
+    return instantiatedSpec(spec, state);
   }
 
   /** The one mongo read these handlers make, on the way into the real resolver. */
@@ -425,12 +425,13 @@ describe('appController tests', () => {
     // The logic function takes plain arguments — express objects never leave
     // the Api wrapper.
     it('locks the operator stop BEFORE releasing — the gate must never re-acquire its own yield', async () => {
+      // A v1-v8 app's identity is its name.
       // Fleet-proven ordering: release-then-lock left a window where this
       // node's own gate re-acquired the freshly released term (no lock-delay
       // on a released grant, and the ex-master is fastest to its registers).
       // With the lock first, an in-flight pursuit still sees the held key
       // and the gate is unconsulted afterwards.
-      registryHolds(await flatApp('TestApp'));
+      registryHolds(await flatApp('TestApp', { identity: 'TestApp' }));
 
       const outcome = await appController.appYield('TestApp');
 
@@ -452,12 +453,20 @@ describe('appController tests', () => {
     });
 
     it('yields the APP mastership even when a component is named — grants are app-scoped', async () => {
-      registryHolds(await composedApp('TestApp', ['Component']));
+      registryHolds(await composedApp('TestApp', ['Component'], { identity: 'TestApp' }));
 
       await appController.appYield('Component_TestApp');
 
       sinon.assert.calledOnceWithExactly(yieldMastership, 'TestApp');
       sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component_TestApp', true);
+    });
+
+    it('yields the lease of the app the name holds, keyed by its identity', async () => {
+      registryHolds(await activeStandbyApp('myapp', 'web', { identity: 'ab12cd34ef56' }));
+
+      await appController.appYield('myapp');
+
+      sinon.assert.calledOnceWithExactly(yieldMastership, 'ab12cd34ef56');
     });
 
     it('Api wrapper: refuses the unauthorized and never touches the logic', async () => {

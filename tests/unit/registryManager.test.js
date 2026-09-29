@@ -19,6 +19,7 @@ const transportCryptoProvider = require('../../ZelBack/src/services/providers/Fl
 const legacyTransportProvider = require('../../ZelBack/src/services/providers/FluxOSLegacyTransportProvider');
 const specCutover = require('../../ZelBack/src/services/utils/specCutover');
 const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCommittee');
+const decisionStore = require('../../ZelBack/src/services/appDecisions/decisionStore');
 const { RUNNING_EXPIRY_MS } = require('../../ZelBack/src/services/utils/appConstants');
 const { requireMongo } = require('./dbTestHelper');
 const {
@@ -74,8 +75,8 @@ describe('registryManager tests', () => {
    * It is therefore handed over unstored. v9 keeps its whole `encrypted` object
    * on the wire and round-trips intact.
    */
-  async function registryHolds(spec, { hash = 'storedhash', height = 1_700_000 } = {}) {
-    const instantiated = await instantiatedSpec(spec, { hash, height });
+  async function registryHolds(spec, { hash = 'storedhash', height = 1_700_000, identity = null } = {}) {
+    const instantiated = await instantiatedSpec(spec, { hash, height, identity });
     let stored = instantiated;
     if (!(spec instanceof flux.EncryptedSpecV8)) {
       const doc = instantiated.serialize();
@@ -1337,6 +1338,26 @@ describe('registryManager tests', () => {
   // These write and read the real globalAppsInformation rows, so the docs are
   // real stored forms: what a confirmed spec actually leaves in mongo, produced
   // by InstantiatedSpec.serialize rather than assembled by hand.
+  describe('the registry row of an app, by its identity', () => {
+    const collection = () => database.collection(config.database.appsglobal.collections.appsInformation);
+
+    beforeEach(async () => {
+      await collection().deleteMany({});
+    });
+
+    it('answers the app with that identity, never another app whose name matches the string', async () => {
+      const app = await instantiatedSpec(await v8Spec({ name: 'myapp' }), { hash: 'h', identity: 'ab12cd34ef56' });
+      const namedLikeIt = await instantiatedSpec(await v8Spec({ name: 'ab12cd34ef56', owner: '1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2' }), { hash: 'h2', identity: 'ab12cd34ef56x' });
+      await collection().insertMany([app.serialize(), namedLikeIt.serialize()]);
+
+      expect((await appsRepository.getGlobalAppInfoByIdentity('ab12cd34ef56')).name).to.equal('myapp');
+      expect(app.owner, 'the decoy has another owner').to.not.equal(namedLikeIt.owner);
+      expect(await appsRepository.getGlobalAppOwnerByIdentity('ab12cd34ef56')).to.equal(app.owner);
+      expect(await appsRepository.getGlobalAppInfoByIdentity('AB12CD34EF56')).to.equal(null);
+      expect(await appsRepository.getGlobalAppOwnerByIdentity(null)).to.equal(null);
+    });
+  });
+
   describe('getRunningApps tests', () => {
     it('should return running apps from global locations', async () => {
       const result = await registryManager.getRunningApps();
@@ -1660,6 +1681,31 @@ describe('registryManager tests', () => {
       expect(result.map((r) => r.replica).sort()).to.deep.equal(['r0', 'r1']);
     });
 
+    it('scoped to an app\'s specs, counts a node on any of them and none on another app of the name', async () => {
+      await database.collection(eventsCollection).insertMany([
+        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'current' }], now),
+        makeV2Event('2.2.2.2', [{ name: 'AppA', hash: 'earlier' }], now),
+        makeV2Event('3.3.3.3', [{ name: 'AppA', hash: 'another-app' }], now),
+      ]);
+
+      const result = await appsRepository.appLocationFromEvents({ appname: 'AppA', hashes: ['earlier', 'current'] });
+
+      expect(result.map((r) => r.ip).sort()).to.deep.equal(['1.1.1.1', '2.2.2.2']);
+    });
+
+    it('where an app runs is where its applied specs run, by its identity', async () => {
+      await database.collection(eventsCollection).insertMany([
+        makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'current' }], now),
+        makeV2Event('3.3.3.3', [{ name: 'AppA', hash: 'another-app' }], now),
+      ]);
+      const appliedHashesOf = sinon.stub(decisionStore, 'appliedHashesOf').callsFake(async (identity) => (identity === 'ab12cd34ef56'
+        ? { name: 'appa', hashes: ['current'] } : { name: null, hashes: [] }));
+
+      expect((await registryManager.appLocationOf('ab12cd34ef56')).map((r) => r.ip)).to.deep.equal(['1.1.1.1']);
+      expect(await registryManager.appLocationOf('ffffffffffff')).to.deep.equal([]);
+      sinon.assert.calledWith(appliedHashesOf, 'ab12cd34ef56');
+    });
+
     it('an untagged install reports a null replica and active state', async () => {
       await database.collection(eventsCollection).insertOne(
         makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'h1' }], now),
@@ -1917,7 +1963,7 @@ describe('registryManager tests', () => {
   describe('founding view materialization', () => {
     it('resolves the entry it just stored and maps the components off the cleartext view', async () => {
       const sealed = await sealedV9Spec({ name: 'meshapp' });
-      const stored = await registryHolds(sealed, { hash: 'hm', height: 2_500_000 });
+      const stored = await registryHolds(sealed, { hash: 'hm', height: 2_500_000, identity: 'ab12cd34ef56' });
       const doc = stored.serialize();
       sinon.stub(appsRepository, 'replaceGlobalAppRow').resolves();
       // The resolver decrypts through the benchmark channel, so it stays
@@ -1943,7 +1989,7 @@ describe('registryManager tests', () => {
       // the sealed row has no components at all.
       sinon.assert.calledOnce(applyComponentView);
       const [mapped] = applyComponentView.firstCall.args;
-      expect(mapped.name).to.equal('meshapp');
+      expect(mapped.identity).to.equal('ab12cd34ef56');
       expect(mapped.height).to.equal(2_500_000);
       expect(Object.keys(mapped.components)).to.deep.equal(['web']);
       expect(doc, 'the stored row itself carries none').to.not.have.property('components');

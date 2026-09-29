@@ -332,13 +332,14 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     const owner = appOwnerKey();
     const { currentHeight } = await getState();
     const at = Date.now();
+    // A v1-v8 app's identity is its name.
     const canonical = `fluxgrantgeneration:${name}|master|${generation}|${currentHeight}|${at}`;
     const signature = await signBtcMessage(canonical, owner.privkey);
     return fetch(`${env.clients[0].url}/apps/grantgeneration`, {
       method: 'POST',
       headers: { zelidauth: ownerAuth0, 'content-type': 'application/json' },
       body: JSON.stringify({
-        appName: name, role: 'master', generation, height: currentHeight, at, signature,
+        identity: name, role: 'master', generation, height: currentHeight, at, signature,
       }),
     });
   }
@@ -387,7 +388,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     // 1 — into the retirement drain first.
     await Promise.all(hosts.map((i) => env.clients[i].waitForEvent(
       'quorumGrant:generationRecord',
-      (d) => d.appName === name && d.role === 'master' && d.generation === 1,
+      (d) => d.identity === name && d.role === 'master' && d.generation === 1,
       120000,
     )));
 
@@ -454,7 +455,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       expect(submitted.status, submittedBody).to.equal(200);
       await Promise.all(hosts.map((i) => env.clients[i].waitForEvent(
         'quorumGrant:generationRecord',
-        (d) => d.appName === name && d.role === 'master' && d.generation === 2,
+        (d) => d.identity === name && d.role === 'master' && d.generation === 2,
         120000,
         { afterId: markers[i] },
       )));

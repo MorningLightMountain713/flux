@@ -419,7 +419,7 @@ async function teardownComponentCore(c, opts = {}) {
   // before: a grant released under a still-writing container is the overlap
   // the whole plane exists to prevent.
   if (removeVolumes) {
-    await mastershipGrantGate.onComponentTeardown(c.identifier, c.appName);
+    await mastershipGrantGate.onComponentTeardown(c.identifier, c.identity);
   }
 
   // Hold the component's 'removing' lease across remove + host cleanup so a
@@ -526,7 +526,7 @@ async function uninstallComponent(component, options = {}) {
 
   const { removed } = await teardownComponentCore(
     {
-      identifier: component.identifier, appId, appName, label, ports: component.hostPorts || [],
+      identifier: component.identifier, appId, appName, identity: component.identity, label, ports: component.hostPorts || [],
     },
     {
       forceKill: options.forceKill || false,
@@ -1284,7 +1284,7 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
       // eslint-disable-next-line no-await-in-loop
       const { removed, cleanupFailed } = await teardownComponentCore(
         {
-          identifier: c.identifier, appId: c.appId, appName: name, label: c.label, ports: c.ports,
+          identifier: c.identifier, appId: c.appId, appName: name, identity, label: c.label, ports: c.ports,
         },
         {
           forceKill, removeVolumes: true, stopHandled: true, onStatus,
@@ -1315,7 +1315,7 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
     if (identity) {
       // The app leaves this node: its ordinal goes back to the register for
       // the next joiner. A restart is not a leave and keeps it.
-      await meshOrdinals.releaseOrdinal(name).catch((e) => log.error(`ordinal release ${name}: ${e.message}`));
+      await meshOrdinals.releaseOrdinal(identity).catch((e) => log.error(`ordinal release ${identity}: ${e.message}`));
       await meshReconciler.removeAppMesh(identity).catch((e) => log.error(`mesh removal ${identity}: ${e.message}`));
     }
   });

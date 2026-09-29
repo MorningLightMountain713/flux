@@ -27,11 +27,11 @@ const SELF = `${SELF_TXHASH}:0`;
 const IDENTIFIER = 'fluxmyapp_component';
 
 function activeStandbyComp() {
-  return { appName: 'myapp', hasActiveStandbySyncthing: () => true };
+  return { identity: 'myapp', hasActiveStandbySyncthing: () => true };
 }
 
 function plainComp() {
-  return { appName: 'myapp', hasActiveStandbySyncthing: () => false };
+  return { identity: 'myapp', hasActiveStandbySyncthing: () => false };
 }
 
 describe('quorumGrant mastershipGrantGate', () => {

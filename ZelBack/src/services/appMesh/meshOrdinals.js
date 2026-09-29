@@ -43,19 +43,19 @@ function cap(instances) {
  * the register decides once — and the scan moves on. An undecided probe or a
  * waiting register is a wait: nothing is assumed free.
  *
- * @param {string} appName
+ * @param {string} identity
  * @param {number} instances the spec's instance count — the ordinal space
  * @returns {Promise<{state: string, ordinal?: number|null, retryAfterMs?: number, reason?: string}>}
  *   state is a CLAIM
  */
-async function claimOrdinal(appName, instances) {
+async function claimOrdinal(identity, instances) {
   const space = cap(instances);
   if (space === 0) return { state: CLAIM.STANDBY, ordinal: null };
   const me = await ownOutpoint();
   const holders = [];
   for (let ordinal = 0; ordinal < space; ordinal += 1) {
     // eslint-disable-next-line no-await-in-loop
-    const probe = await seam.probeOrdinal(appName, ordinal);
+    const probe = await seam.probeOrdinal(identity, ordinal);
     if (!probe.decided) return { state: CLAIM.WAIT, reason: 'undecided' };
     if (probe.holder === me) return { state: CLAIM.GRANTED, ordinal };
     holders.push(probe.holder);
@@ -68,11 +68,11 @@ async function claimOrdinal(appName, instances) {
       // placement-dead edge (NODE_DOWN_SCENARIOS.md R9), so nothing here
       // counts a grace or reads a certificate. A refusal is a held ordinal.
       // eslint-disable-next-line no-await-in-loop
-      const gone = await seam.vacateOrdinal(appName, ordinal, holders[ordinal]);
+      const gone = await seam.vacateOrdinal(identity, ordinal, holders[ordinal]);
       if (!gone.vacated) continue; // eslint-disable-line no-continue
     }
     // eslint-disable-next-line no-await-in-loop
-    const ask = await seam.askOrdinal(appName, ordinal);
+    const ask = await seam.askOrdinal(identity, ordinal);
     if (ask.answer === 'yes') return { state: CLAIM.GRANTED, ordinal };
     if (ask.answer === 'wait') {
       return {
@@ -93,7 +93,7 @@ async function claimOrdinal(appName, instances) {
 // epoch; an undecided or contrary quorum leaves the node a standby until the
 // next pass, or until the record catches up and names it no longer.
 let returnEpoch = 0;
-const verifiedEpoch = new Map(); // appName → the epoch at which a quorum confirmed the own ordinal
+const verifiedEpoch = new Map(); // identity → the epoch at which a quorum confirmed the own ordinal
 
 function noteReturnFromUnreachability() {
   returnEpoch += 1;
@@ -103,19 +103,19 @@ function noteReturnFromUnreachability() {
  * The ordinal the synced record names this node for, or null: a standby, a
  * grant the record has not carried here yet, or a name a returning node has
  * not yet had confirmed by the committee.
- * @param {string} appName
+ * @param {string} identity
  * @returns {Promise<number|null>}
  */
-async function ownOrdinal(appName) {
+async function ownOrdinal(identity) {
   const me = await ownOutpoint();
-  const holders = await seam.ordinalHolders(appName);
+  const holders = await seam.ordinalHolders(identity);
   const mine = [...holders.entries()].find(([, holder]) => holder === me);
   if (!mine) return null;
   const [ordinal] = mine;
-  if ((verifiedEpoch.get(appName) ?? 0) >= returnEpoch) return ordinal;
-  const probe = await seam.probeOrdinal(appName, ordinal);
+  if ((verifiedEpoch.get(identity) ?? 0) >= returnEpoch) return ordinal;
+  const probe = await seam.probeOrdinal(identity, ordinal);
   if (!probe.decided || probe.holder !== me) return null;
-  verifiedEpoch.set(appName, returnEpoch);
+  verifiedEpoch.set(identity, returnEpoch);
   return ordinal;
 }
 
@@ -126,13 +126,13 @@ function nodeIdOf(outpoint) {
 /**
  * Every recorded holder's ordinal by node id, for the snapshot's names and
  * SRV feed. Ordinals outside the spec's space are ignored.
- * @param {string} appName
+ * @param {string} identity
  * @param {number} instances
  * @returns {Promise<Map<string, number>>} nodeId → ordinal
  */
-async function holdersByNode(appName, instances) {
+async function holdersByNode(identity, instances) {
   const space = cap(instances);
-  const holders = await seam.ordinalHolders(appName);
+  const holders = await seam.ordinalHolders(identity);
   const byNode = new Map();
   holders.forEach((holder, ordinal) => {
     if (Number.isInteger(ordinal) && ordinal >= 0 && ordinal < space) {
@@ -145,14 +145,14 @@ async function holdersByNode(appName, instances) {
 /**
  * Release the ordinal the record names this node for — on uninstall, never
  * on a restart. Refused when the record names nothing of this node's.
- * @param {string} appName
+ * @param {string} identity
  * @returns {Promise<{released: boolean, ordinal: number|null, reason?: string}>}
  */
-async function releaseOrdinal(appName) {
-  const ordinal = await ownOrdinal(appName);
+async function releaseOrdinal(identity) {
+  const ordinal = await ownOrdinal(identity);
   if (ordinal === null) return { released: false, ordinal: null, reason: 'none_held' };
-  const result = await seam.releaseOrdinal(appName, ordinal);
-  verifiedEpoch.delete(appName);
+  const result = await seam.releaseOrdinal(identity, ordinal);
+  verifiedEpoch.delete(identity);
   return {
     released: result.released === true,
     ordinal,

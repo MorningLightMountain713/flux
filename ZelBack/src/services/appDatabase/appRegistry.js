@@ -12,6 +12,7 @@ const { compareChainOrder } = require('../utils/chainOrder');
 const appsRepository = require('./appsRepository');
 const registryManager = require('./registryManager');
 const contentSlotService = require('../appLifecycle/contentSlotService');
+const foundingCommittee = require('../appMesh/foundingCommittee');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const decider = require('../appDecisions/decider');
 const decisionStore = require('../appDecisions/decisionStore');
@@ -144,10 +145,15 @@ async function writeWithEffects(row) {
   await appsRepository.removeAppInstallingErrorRecords(row.name);
 }
 
-/** Removes a name's row and tells the `onRemoved` listeners. */
-async function removeRow(name) {
+/**
+ * Removes a name's row, deletes the app's founding record, and tells the
+ * `onRemoved` listeners.
+ * @param {{name: string, identity: string}} row - the row leaving
+ */
+async function removeRow({ name, identity }) {
   await appsRepository.removeGlobalAppInfo(name);
   await appsRepository.removeAppInstallingErrorRecords(name);
+  await foundingCommittee.forget(identity);
   listed.delete(name.toLowerCase());
   removedListeners.forEach((fn) => setImmediate(() => {
     Promise.resolve(fn(name)).catch((error) => log.error(`appRegistry - a removal listener failed for ${name}: ${error.message}`));
@@ -164,12 +170,16 @@ async function settle(name, instance) {
   const live = await liveRow(name);
   if (!instance) {
     if (!live) return null;
-    await removeRow(name);
+    await removeRow(live);
     return 'removed';
   }
   const row = instance.serialize();
   let outcome = null;
   if (!live || live.hash !== row.hash || live.name !== row.name) {
+    // Another app under the name keeps nothing of this one; the same app gone
+    // back to an earlier spec keeps only what that spec founded.
+    if (live && live.identity !== row.identity) await foundingCommittee.forget(live.identity);
+    else if (live && row.height < live.height) await foundingCommittee.retract(row.identity, row.height);
     await writeWithEffects(row);
     outcome = live ? 'changed' : 'added';
   } else if (live.uuid !== row.uuid || live.identity !== row.identity || live.registeredAt !== row.registeredAt) {
@@ -233,11 +243,11 @@ async function blockScanned(block) {
   scannedBlock = block;
   if (!capabilities.isUp(CAPABILITY)) return;
   const clock = { currentHeight: block.height, tipBlockTime: block.time };
-  const ended = [...listed].filter(([, row]) => endedAt(row, clock)).map(([, row]) => row.name);
-  for (const name of ended) {
-    log.info(`appRegistry - ${name}'s term ended at ${block.height}, leaving the list`);
+  const ended = [...listed.values()].filter((row) => endedAt(row, clock));
+  for (const row of ended) {
+    log.info(`appRegistry - ${row.name}'s term ended at ${block.height}, leaving the list`);
     // eslint-disable-next-line no-await-in-loop
-    await removeRow(name);
+    await removeRow(row);
   }
 }
 

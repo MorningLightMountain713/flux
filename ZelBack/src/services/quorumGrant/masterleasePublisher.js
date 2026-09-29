@@ -18,7 +18,7 @@ const log = require('../../lib/log');
  * the network echoing its own record back.
  *
  * @param {object} grant
- * @param {string} grant.key resource key, `<app>/<role>`
+ * @param {string} grant.key resource key, `<identity>/<role>`: the app's identity and the role
  * @param {string} grant.grantee grantee outpoint
  * @param {number} grant.epoch
  * @param {'held'|'oneshot'} grant.mode
@@ -37,7 +37,7 @@ const log = require('../../lib/log');
 async function publishMasterlease(grant) {
   try {
     const slash = grant.key.indexOf('/');
-    const appName = grant.key.slice(0, slash);
+    const identity = grant.key.slice(0, slash);
     const role = grant.key.slice(slash + 1);
 
     const ip = await fluxNetworkHelper.getLocalSocketAddress();
@@ -47,7 +47,7 @@ async function publishMasterlease(grant) {
       type: 'fluxmasterlease',
       version: 1,
       ip,
-      appName,
+      identity,
       role,
       grantee: grant.grantee,
       epoch: grant.epoch,

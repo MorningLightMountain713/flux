@@ -844,9 +844,10 @@ describe('meshReconciler', () => {
       ]);
       expect(result.hostname).to.equal('web-1');
       expect(result.aliases).to.deep.equal(['web']);
-      // The ordinal was claimed from the register for this app, once.
+      // The ordinal was claimed from the register for this app, once, keyed by
+      // the app's identity: a later app registered under the name has its own.
       expect(stubs.claims).to.have.length(1);
-      expect(stubs.claims[0][0]).to.equal('myblog');
+      expect(stubs.claims[0][0]).to.equal(IDENTITY);
     });
 
     it('a register that cannot decide yet defers the install: nothing is assumed free', async () => {

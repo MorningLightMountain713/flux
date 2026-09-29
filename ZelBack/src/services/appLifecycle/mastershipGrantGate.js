@@ -253,7 +253,7 @@ const windowRetries = new Map();
  * attempt re-asks docker and the record, so a node that stopped running the
  * container, or learned of a holder, stops here on its own.
  */
-function scheduleWindowRetry(identifier, appName, key, taughtMs) {
+function scheduleWindowRetry(identifier, identity, key, taughtMs) {
   if (windowRetries.has(key)) return;
   const taught = Number.isFinite(taughtMs) && taughtMs > 0;
   const delayMs = taught ? taughtMs : askTimeoutMs();
@@ -263,14 +263,14 @@ function scheduleWindowRetry(identifier, appName, key, taughtMs) {
     windowRetries.delete(key);
     if (grantClient.holderFor(key) || grantClient.isAcquiring(key)) return;
     pursuits.set(key, nowMs());
-    acquireUnlessSettled(identifier, appName, key);
+    acquireUnlessSettled(identifier, identity, key);
   }, delayMs);
   if (typeof timer.unref === 'function') timer.unref();
   windowRetries.set(key, timer);
 }
 
-function keyFor(appName) {
-  return `${appName}/${ROLE}`;
+function keyFor(identity) {
+  return `${identity}/${ROLE}`;
 }
 
 
@@ -281,8 +281,8 @@ function keyFor(appName) {
  * running node's periodic kick inside the window; the reconciler's own sweep
  * is hourly and cannot be relied on for it.
  */
-function kickInsideWindow(identifier, appName) {
-  if (registerOpen()) pursue(identifier, appName);
+function kickInsideWindow(identifier, identity) {
+  if (registerOpen()) pursue(identifier, identity);
 }
 
 /**
@@ -299,18 +299,18 @@ function kickInsideWindow(identifier, appName) {
  * and the rest adopt. Demotion re-enters the reconciler through the
  * queue — the veto on the next pass is what stops the container.
  */
-function pursue(identifier, appName) {
-  const key = keyFor(appName);
+function pursue(identifier, identity) {
+  const key = keyFor(identity);
   if (grantClient.holderFor(key) || grantClient.isAcquiring(key)) return;
   const last = pursuits.get(key) ?? 0;
   const interval = pursuitIntervalMs();
   const jittered = interval / 2 + Math.random() * interval;
   if (nowMs() - last < jittered) return;
   pursuits.set(key, nowMs());
-  acquireUnlessSettled(identifier, appName, key);
+  acquireUnlessSettled(identifier, identity, key);
 }
 
-async function acquireUnlessSettled(identifier, appName, key) {
+async function acquireUnlessSettled(identifier, identity, key) {
   // The operator stop lock silences EVERY pursue trigger — the reconciler
   // seam, the syncthing decider, and the coordinate path alike. A stopped
   // component that wins a term parks it on a node that will not run the
@@ -349,7 +349,7 @@ async function acquireUnlessSettled(identifier, appName, key) {
         + `-> ${local.running ? 'ASK' : 'WAIT'}`);
       if (!local.running) return;
     }
-    const record = await messageStore.getMasterleaseRecord(appName, ROLE);
+    const record = await messageStore.getMasterleaseRecord(identity, ROLE);
     const data = record?.data;
     if (data?.grantee && data.mode === 'held') {
       const self = await generalService.obtainNodeCollateralInformation();
@@ -391,7 +391,7 @@ async function acquireUnlessSettled(identifier, appName, key) {
         // straight, past the pursuit throttle: the lapse IS the kick.
         log.info(`mastershipGrantGate - ${identifier} lost ${key} below the activation height; re-acquiring`);
         pursuits.delete(key);
-        pursue(identifier, appName);
+        pursue(identifier, identity);
         return;
       }
       // A deposed master stops HARD and NOW, straight at docker: it has lost
@@ -409,7 +409,7 @@ async function acquireUnlessSettled(identifier, appName, key) {
     if (outcome.granted) {
       log.info(`mastershipGrantGate - ${identifier} holds ${key} (epoch ${outcome.holder.epoch}) `
         + `after ${nowMs() - acquireStarted}ms`);
-      if (outcome.deposed) raiseFence(appName, outcome.deposed);
+      if (outcome.deposed) raiseFence(identity, outcome.deposed);
       reconcilerQueue.enqueueComponent(identifier);
     } else {
       // A refusal names itself four different ways (reason, a live incumbent, a
@@ -422,13 +422,13 @@ async function acquireUnlessSettled(identifier, appName, key) {
       log.info(`mastershipGrantGate - ${key} not granted to ${identifier} `
         + `after ${nowMs() - acquireStarted}ms: ${refusal}`);
       // a live incumbent is an answer, not a door: the record will name it
-      if (inWindow && !outcome.incumbent) scheduleWindowRetry(identifier, appName, key, outcome.retryAfterMs);
+      if (inWindow && !outcome.incumbent) scheduleWindowRetry(identifier, identity, key, outcome.retryAfterMs);
     }
     return outcome;
   }).catch((error) => {
     log.warn(`mastershipGrantGate - pursuit of ${key} failed `
       + `after ${nowMs() - acquireStarted}ms: ${error.message}`);
-    if (inWindow) scheduleWindowRetry(identifier, appName, key, 0);
+    if (inWindow) scheduleWindowRetry(identifier, identity, key, 0);
   });
 }
 
@@ -443,24 +443,24 @@ async function acquireUnlessSettled(identifier, appName, key) {
  *   unknown, past the grace     -> { desired: false } — fail closed
  *
  * @param {string} identifier component identifier
- * @param {object} comp the deployment component (hasActiveStandbySyncthing, appName)
+ * @param {object} comp the deployment component (hasActiveStandbySyncthing, identity)
  * @returns {Promise<{desired: false|null, reason: string}|null>}
  */
 async function grantVerdict(identifier, comp) {
   if (!featureEnabled()) {
-    if (comp?.hasActiveStandbySyncthing?.()) kickInsideWindow(identifier, comp.appName);
+    if (comp?.hasActiveStandbySyncthing?.()) kickInsideWindow(identifier, comp.identity);
     return null;
   }
   if (!comp?.hasActiveStandbySyncthing?.()) return null;
 
-  const { appName } = comp;
+  const { identity } = comp;
 
-  const key = keyFor(appName);
+  const key = keyFor(identity);
   if (grantClient.holderFor(key)) {
     return null;
   }
 
-  pursue(identifier, appName);
+  pursue(identifier, identity);
 
   // Ask, never count. The published record is a claim; the registers are the
   // truth. A quorum of them either still records this node's term — the
@@ -502,17 +502,17 @@ async function blocksStart(identifier, comp) {
  * through acquisition, never through winning an address sort.
  *
  * @param {string} identifier component identifier
- * @param {string} appName
+ * @param {string} identity
  * @param {boolean} isActiveStandby
  * @returns {Promise<boolean|null>}
  */
-async function leaderIsSelf(identifier, appName, isActiveStandby) {
+async function leaderIsSelf(identifier, identity, isActiveStandby) {
   if (!isActiveStandby) return null;
   if (!featureEnabled()) {
-    kickInsideWindow(identifier, appName);
+    kickInsideWindow(identifier, identity);
     return null;
   }
-  const key = keyFor(appName);
+  const key = keyFor(identity);
   if (grantClient.holderFor(key)) return true;
   // No verdict while this node's own acquisition is in flight — a false
   // here would demote the incumbent against a round it itself started.
@@ -528,17 +528,17 @@ async function leaderIsSelf(identifier, appName, isActiveStandby) {
   // verdict, matching masterIntent's error path; the epoch fencing and the
   // successor-raised peer fence carry safety regardless.
   try {
-    const record = await messageStore.getMasterleaseRecord(appName, ROLE);
+    const record = await messageStore.getMasterleaseRecord(identity, ROLE);
     if (!record?.data?.grantee) {
-      pursue(identifier, appName);
+      pursue(identifier, identity);
       return null;
     }
   } catch (error) {
-    log.warn(`mastershipGrantGate - leaderIsSelf record read for ${appName} failed: ${error.message}`);
-    pursue(identifier, appName);
+    log.warn(`mastershipGrantGate - leaderIsSelf record read for ${identity} failed: ${error.message}`);
+    pursue(identifier, identity);
     return null;
   }
-  pursue(identifier, appName);
+  pursue(identifier, identity);
   return false;
 }
 
@@ -557,12 +557,12 @@ async function leaderIsSelf(identifier, appName, isActiveStandby) {
  */
 async function masterIntent(identifier, comp) {
   if (!featureEnabled()) {
-    if (comp?.hasActiveStandbySyncthing?.()) kickInsideWindow(identifier, comp.appName);
+    if (comp?.hasActiveStandbySyncthing?.()) kickInsideWindow(identifier, comp.identity);
     return null;
   }
   if (!comp?.hasActiveStandbySyncthing?.()) return null;
 
-  pursue(identifier, comp.appName);
+  pursue(identifier, comp.identity);
 
   // FluxOS owns mastership; FDM only routes where FluxOS elects. The primary
   // is this node's own held term, or the committee-signed masterlease record
@@ -573,13 +573,13 @@ async function masterIntent(identifier, comp) {
   // the election. FDM's /appips is reached only for apps this plane does not
   // govern (the not-applicable path above), never as an authority here.
   try {
-    const key = keyFor(comp.appName);
+    const key = keyFor(comp.identity);
     let grantee = null;
     if (grantClient.holderFor(key)) {
       const self = await generalService.obtainNodeCollateralInformation();
       grantee = `${self.txhash}:${self.txindex}`;
     } else {
-      const record = await messageStore.getMasterleaseRecord(comp.appName, ROLE);
+      const record = await messageStore.getMasterleaseRecord(comp.identity, ROLE);
       if (record?.verified === true) grantee = record.data?.grantee ?? null;
     }
     if (!grantee) return { ip: null, fdmOk: true };
@@ -588,7 +588,7 @@ async function masterIntent(identifier, comp) {
     // a grantee that has left the list resolves to no primary, never a stale address
     return { ip: node?.ip ?? null, fdmOk: true };
   } catch (error) {
-    log.warn(`mastershipGrantGate - intent for ${comp.appName} failed: ${error.message}`);
+    log.warn(`mastershipGrantGate - intent for ${comp.identity} failed: ${error.message}`);
     return { ip: null, fdmOk: true };
   }
 }
@@ -600,13 +600,13 @@ async function masterIntent(identifier, comp) {
 const folderDemotions = new Map();
 
 /** The syncthing state machine reports its cooperative self-fence here. */
-function noteFolderDemoted(appName) {
-  folderDemotions.set(appName, nowMs());
+function noteFolderDemoted(identity) {
+  folderDemotions.set(identity, nowMs());
 }
 
 /** Monotonic ms of the app's last self-demotion, or null. */
-function folderDemotedAt(appName) {
-  return folderDemotions.get(appName) ?? null;
+function folderDemotedAt(identity) {
+  return folderDemotions.get(identity) ?? null;
 }
 
 // The peer fence (the wedged-deposed case): app -> {outpoint, host, since}.
@@ -628,30 +628,30 @@ const liftPolls = new Map();
  * the fence outlives the deposed node's list entry, and a fence that could
  * no longer name its target would lift by accident.
  */
-function raiseFence(appName, deposedOutpoint) {
+function raiseFence(identity, deposedOutpoint) {
   const membership = networkStateService.membershipAt(networkStateService.membershipFingerprint()) ?? [];
   const node = membership.find((entry) => `${entry.txhash}:${entry.outidx}` === deposedOutpoint);
   if (!node) {
-    log.warn(`mastershipGrantGate - deposed ${deposedOutpoint} of ${appName} is not listed; nothing to fence`);
+    log.warn(`mastershipGrantGate - deposed ${deposedOutpoint} of ${identity} is not listed; nothing to fence`);
     return;
   }
-  fences.set(appName, {
+  fences.set(identity, {
     outpoint: deposedOutpoint, host: extractIp(node.ip), address: node.ip, since: nowMs(),
   });
-  log.warn(`mastershipGrantGate - fencing ${extractIp(node.ip)} out of ${appName}'s folder until it attests demotion`);
+  log.warn(`mastershipGrantGate - fencing ${extractIp(node.ip)} out of ${identity}'s folder until it attests demotion`);
   fluxEventBus.publish('quorumGrant:fenceRaised', {
-    app: appName, deposed: deposedOutpoint, host: extractIp(node.ip),
+    app: identity, deposed: deposedOutpoint, host: extractIp(node.ip),
   });
 }
 
-function liftFence(appName, reason) {
-  if (fences.delete(appName)) {
-    log.info(`mastershipGrantGate - fence on ${appName} lifted: ${reason}`);
+function liftFence(identity, reason) {
+  if (fences.delete(identity)) {
+    log.info(`mastershipGrantGate - fence on ${identity} lifted: ${reason}`);
     // the lift can only happen through the deposed node's own attestation
     // (or a fresh grant superseding the fence) — publishing it is what lets
     // the harness assert the raise→attest→lift cycle end to end. publish()
     // is a no-op outside the harness.
-    fluxEventBus.publish('quorumGrant:fenceLifted', { app: appName, reason });
+    fluxEventBus.publish('quorumGrant:fenceLifted', { app: identity, reason });
   }
 }
 
@@ -661,22 +661,22 @@ function liftFence(appName, reason) {
  * asked (throttled) whether it has demoted and reverted, and its own
  * attestation is what re-admits it.
  */
-function fenceFor(appName) {
-  const fence = fences.get(appName) ?? null;
-  if (fence) pollFenceLift(appName, fence);
+function fenceFor(identity) {
+  const fence = fences.get(identity) ?? null;
+  if (fence) pollFenceLift(identity, fence);
   return fence;
 }
 
-async function pollFenceLift(appName, fence) {
-  const last = liftPolls.get(appName) ?? 0;
+async function pollFenceLift(identity, fence) {
+  const last = liftPolls.get(identity) ?? 0;
   if (nowMs() - last < pursuitIntervalMs()) return;
-  liftPolls.set(appName, nowMs());
+  liftPolls.set(identity, nowMs());
   try {
     const url = `http://${extractIp(fence.address)}:${extractPort(fence.address)}/flux/quorumgrant/witness`;
-    const response = await serviceHelper.axiosPost(url, { key: keyFor(appName) }, { timeout: 5000 });
+    const response = await serviceHelper.axiosPost(url, { key: keyFor(identity) }, { timeout: 5000 });
     const answer = response?.data?.data;
     if (answer && answer.folderDemotedAt !== null && answer.folderDemotedAt !== undefined && !answer.holding) {
-      liftFence(appName, 'the deposed node attests it demoted and reverted');
+      liftFence(identity, 'the deposed node attests it demoted and reverted');
     }
   } catch (error) {
     // silence keeps the fence — exactly right for a node still down
@@ -693,13 +693,13 @@ async function pollFenceLift(appName, fence) {
  * teardown may no longer be able to read. Only activeStandby apps ever hold
  * a grant, so a held grant IS the eligibility.
  */
-async function onComponentTeardown(identifier, appName) {
-  if (!appName) return;
-  const holder = grantClient.holderFor(keyFor(appName));
+async function onComponentTeardown(identifier, identity) {
+  if (!identity) return;
+  const holder = grantClient.holderFor(keyFor(identity));
   if (!holder) return;
   try {
     await holder.release();
-    log.info(`mastershipGrantGate - released ${keyFor(appName)} on teardown of ${identifier}`);
+    log.info(`mastershipGrantGate - released ${keyFor(identity)} on teardown of ${identifier}`);
   } catch (error) {
     log.warn(`mastershipGrantGate - release on teardown of ${identifier} failed: ${error.message}`);
   }
@@ -719,8 +719,8 @@ async function onComponentTeardown(identifier, appName) {
  * no-op, so the global fan-out stays idempotent: every instance stops, only
  * the master releases.
  */
-async function yieldMastership(appName) {
-  const key = keyFor(appName);
+async function yieldMastership(identity) {
+  const key = keyFor(identity);
   // The fast-succession interleave: a yield can land while this node's own
   // gate is mid-pursuit (it may already be chasing a term another node just
   // yielded). The acquire completes milliseconds later and would seat a

@@ -276,7 +276,7 @@ describe('quorumGrant grantClient', () => {
       teachCalls.push({ host, record: body.record });
       if (unreachable.has(host) || dark.has(host)) throw new Error('unreachable');
       const generation = teachAcks.has(host) ? teachAcks.get(host) : body.record.generation;
-      return { data: { status: 'success', data: { appName: body.record.appName, role: body.record.role, generation } } };
+      return { data: { status: 'success', data: { identity: body.record.identity, role: body.record.role, generation } } };
     }
 
     if (path === '/flux/quorumgrant/witness') {
@@ -360,7 +360,7 @@ describe('quorumGrant grantClient', () => {
     sinon.stub(fluxNetworkHelper, 'getFluxNodePrivateKey').resolves(WIF);
     sinon.stub(networkStateService, 'membershipFingerprint').returns(fingerprint);
     sinon.stub(networkStateService, 'membershipAt').callsFake(() => activeMembership);
-    sinon.stub(registryManager, 'appLocation').resolves([
+    sinon.stub(registryManager, 'appLocationOf').resolves([
       { ip: `${SELF_HOST}:16127` },
       { ip: `${STANDBY_HOST}:16127` },
     ]);
@@ -706,7 +706,7 @@ describe('quorumGrant grantClient', () => {
       relayDelivers = false;
       // every standby's location row is gone: nobody resolves as a witness,
       // so nobody can vouch that no takeover is possible
-      registryManager.appLocation.resolves([{ ip: `${SELF_HOST}:16127` }]);
+      registryManager.appLocationOf.resolves([{ ip: `${SELF_HOST}:16127` }]);
 
       clockNow += TTL + 30_000;
       await holder.renewOnce();
@@ -1501,7 +1501,7 @@ describe('quorumGrant grantClient', () => {
       type: 'fluxgrantgeneration',
       version: 1,
       ip: '10.1.0.1:16127',
-      appName: 'myapp',
+      identity: 'myapp',
       role: 'master',
       generation: 2,
       height: 90,
@@ -1544,7 +1544,7 @@ describe('quorumGrant grantClient', () => {
     });
 
     it('a record about some other key is not this answer\'s to teach', async () => {
-      taughtRecord = { ...RECORD, appName: 'otherapp' };
+      taughtRecord = { ...RECORD, identity: 'otherapp' };
       const holder = await acquireHolder();
       committeeHosts.forEach((host) => teaching.add(host));
       clockNow += 20_000;
@@ -1612,7 +1612,7 @@ describe('quorumGrant grantClient', () => {
       const loop = handles.find((handle) => handle.ms < TTL);
       expect(loop, 'the loop is armed at acquisition').to.not.equal(undefined);
 
-      grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: 2 });
+      grantClient.noteGenerationRecord({ identity: 'myapp', role: 'master', generation: 2 });
       expect(cancelled).to.include(loop);
       expect(handles[handles.length - 1].ms).to.equal(0);
       expect(holder.state).to.equal('held');
@@ -1672,7 +1672,7 @@ describe('quorumGrant grantClient', () => {
         messageStore.getGrantGenerationRecord.resolves({ data: NEXT });
         oldHosts.forEach((host) => teaching.add(host));
         freshSeats = true;
-        grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: 1 });
+        grantClient.noteGenerationRecord({ identity: 'myapp', role: 'master', generation: 1 });
         return holder;
       };
 
@@ -1850,8 +1850,8 @@ describe('quorumGrant grantClient', () => {
         },
       });
       const armed = handles.length;
-      grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: 0 });
-      grantClient.noteGenerationRecord({ appName: 'otherapp', role: 'master', generation: 7 });
+      grantClient.noteGenerationRecord({ identity: 'myapp', role: 'master', generation: 0 });
+      grantClient.noteGenerationRecord({ identity: 'otherapp', role: 'master', generation: 7 });
       expect(handles).to.have.length(armed);
     });
   });
@@ -1874,7 +1874,7 @@ describe('quorumGrant grantClient', () => {
       type: 'fluxgrantgeneration',
       version: 1,
       ip: '10.1.0.1:16127',
-      appName: 'myapp',
+      identity: 'myapp',
       role: 'master',
       generation,
       height: 90,
@@ -1899,7 +1899,7 @@ describe('quorumGrant grantClient', () => {
         },
         (handle) => cancelled.push(handle),
       );
-      registryManager.appLocation.resolves([
+      registryManager.appLocationOf.resolves([
         { ip: `${SELF_HOST}:16127` },
         { ip: `${STANDBY_HOST}:16127` },
         { ip: `${THIRD_HOST}:16127` },
@@ -1917,7 +1917,7 @@ describe('quorumGrant grantClient', () => {
 
     it('carries the standing record to every instance but itself, once, and is done when each acknowledges', async () => {
       messageStore.getGrantGenerationRecord.resolves({ data: record(SEATED) });
-      await grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: SEATED });
+      await grantClient.noteGenerationRecord({ identity: 'myapp', role: 'master', generation: SEATED });
       expect(teachCalls.map((call) => call.host).sort()).to.deep.equal([STANDBY_HOST, THIRD_HOST].sort());
       teachCalls.forEach((call) => expect(call.record).to.deep.equal(record(SEATED)));
       expect(armed).to.have.length(0);
@@ -1925,7 +1925,7 @@ describe('quorumGrant grantClient', () => {
 
     it('a cell off the committee that generation draws carries nothing', async () => {
       messageStore.getGrantGenerationRecord.resolves({ data: record(UNSEATED) });
-      await grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: UNSEATED });
+      await grantClient.noteGenerationRecord({ identity: 'myapp', role: 'master', generation: UNSEATED });
       expect(teachCalls).to.have.length(0);
       expect(armed).to.have.length(0);
     });
@@ -1933,7 +1933,7 @@ describe('quorumGrant grantClient', () => {
     it('a silent instance is carried to again next interval; an acknowledged one is not', async () => {
       messageStore.getGrantGenerationRecord.resolves({ data: record(SEATED) });
       unreachable.add(THIRD_HOST);
-      await grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: SEATED });
+      await grantClient.noteGenerationRecord({ identity: 'myapp', role: 'master', generation: SEATED });
       expect(teachCalls.map((call) => call.host).sort()).to.deep.equal([STANDBY_HOST, THIRD_HOST].sort());
       expect(armed).to.have.length(1);
 
@@ -1947,7 +1947,7 @@ describe('quorumGrant grantClient', () => {
     it('an answer below the carried generation is not a delivery', async () => {
       messageStore.getGrantGenerationRecord.resolves({ data: record(SEATED) });
       teachAcks.set(STANDBY_HOST, SEATED - 1);
-      await grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: SEATED });
+      await grantClient.noteGenerationRecord({ identity: 'myapp', role: 'master', generation: SEATED });
       expect(armed).to.have.length(1);
       teachCalls = [];
       teachAcks.delete(STANDBY_HOST);
@@ -1961,13 +1961,13 @@ describe('quorumGrant grantClient', () => {
       expect(NEWER, 'no later generation seats this node').to.not.equal(undefined);
       messageStore.getGrantGenerationRecord.resolves({ data: record(SEATED) });
       unreachable.add(THIRD_HOST);
-      await grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: SEATED });
+      await grantClient.noteGenerationRecord({ identity: 'myapp', role: 'master', generation: SEATED });
       expect(armed).to.have.length(1);
 
       unreachable.delete(THIRD_HOST);
       teachCalls = [];
       messageStore.getGrantGenerationRecord.resolves({ data: record(NEWER) });
-      await grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: NEWER });
+      await grantClient.noteGenerationRecord({ identity: 'myapp', role: 'master', generation: NEWER });
       expect(cancelled).to.deep.equal([armed[0]]);
       teachCalls.forEach((call) => expect(call.record.generation).to.equal(NEWER));
       expect(teachCalls.map((call) => call.host).sort()).to.deep.equal([STANDBY_HOST, THIRD_HOST].sort());
@@ -1978,7 +1978,7 @@ describe('quorumGrant grantClient', () => {
       try {
         messageStore.getGrantGenerationRecord.resolves({ data: record(SEATED) });
         unreachable.add(THIRD_HOST);
-        await grantClient.noteGenerationRecord({ appName: 'myapp', role: 'master', generation: SEATED });
+        await grantClient.noteGenerationRecord({ identity: 'myapp', role: 'master', generation: SEATED });
         expect(armed).to.have.length(1);
         fixed.tick(300_001);
         teachCalls = [];

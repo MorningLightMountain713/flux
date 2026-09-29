@@ -762,7 +762,7 @@ async function resyncReturnedKey(ask) {
  * its first master until the floor ran.
  */
 async function askerHolds(ask, askerNode, type) {
-  const appName = ask.key.slice(0, ask.key.indexOf('/'));
+  const identity = ask.key.slice(0, ask.key.indexOf('/'));
   // A seat — an `ordinal-` row — is granted BEFORE the container exists
   // (meshOrdinals.claimOrdinal, inside the install: identity is fixed for the
   // container's lifetime), so its asker has no running row and cannot have one
@@ -777,7 +777,7 @@ async function askerHolds(ask, askerNode, type) {
   // instance fills, and a founder is a running member: for those the row is
   // real evidence and the rule stays.
   if (ORDINAL_ROLE_PATTERN.test(ask.key.slice(ask.key.indexOf('/') + 1))) return { holds: true };
-  const rows = await registryManager.appLocation(appName);
+  const rows = await registryManager.appLocationOf(identity);
   const askerHost = extractIp(askerNode.ip);
   const row = (rows || []).find((location) => extractIp(location.ip) === askerHost);
   if (!row) return { holds: false, reason: 'not a holder of the app' };
@@ -1246,20 +1246,20 @@ async function record(req, res) {
  */
 async function foundingBasis(req, res) {
   try {
-    const appName = req.query.app;
+    const { identity } = req.query;
     const anchor = Number(req.query.anchor);
-    if (typeof appName !== 'string' || !appName || appName.length > 200
+    if (typeof identity !== 'string' || !identity || identity.length > 200
       || !Number.isInteger(anchor) || anchor <= 0) {
       return res.status(400).json(messageHelper.createErrorMessage('malformed founding basis query'));
     }
     // Resolve the asked world to THIS node's newest rung — a host missing
     // a flip it never witnessed discovers the current basis, not the one
     // it asked about.
-    const rung = await foundingCommittee.newestRungFor(appName, anchor);
+    const rung = await foundingCommittee.newestRungFor(identity, anchor);
     if (rung === null) {
       return res.json(messageHelper.createDataMessage({ rung: null, basis: null }));
     }
-    const committee = await foundingCommittee.refereeCommittee(appName, rung);
+    const committee = await foundingCommittee.refereeCommittee(identity, rung);
     if (!committee) {
       return res.json(messageHelper.createDataMessage({ rung, basis: null }));
     }

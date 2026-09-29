@@ -32,7 +32,7 @@ const log = require('../../lib/log');
 //   - a founding is free-or-mine, so a row a vacate cut short at one cell is
 //     repaired by its holder's next founding (grantRegisterCore.onAccept).
 //
-// The key: `<app>/ordinal-<n>@<rung>` — the app's FIRST world's rung
+// The key: `<identity>/ordinal-<n>@<rung>` — the app's FIRST world's rung
 // (foundingCommittee.appWorld), because an ordinal names the node across
 // every component it hosts and components added later have worlds of their
 // own. The row is that key at the founder plane's current generation
@@ -57,9 +57,9 @@ function parseRole(role) {
  * currentGeneration), so the row this module addresses is the row the
  * committee judges.
  */
-async function currentGeneration(appName) {
+async function currentGeneration(identity) {
   try {
-    const record = await messageStore.getGrantGenerationRecord(appName, 'founder');
+    const record = await messageStore.getGrantGenerationRecord(identity, 'founder');
     return record?.data?.generation ?? 0;
   } catch (error) {
     return 0;
@@ -83,13 +83,13 @@ async function selfOutpoint() {
  * the founding service's own gate against starting a round that races it).
  * Null is an honest "not yet": no photo, no committee.
  */
-async function basisFor(appName) {
-  const world = await foundingCommittee.appWorld(appName);
+async function basisFor(identity) {
+  const world = await foundingCommittee.appWorld(identity);
   if (!world) return null;
   const rung = world.rungs[world.rungs.length - 1];
-  const committee = await foundingCommittee.refereeCommittee(appName, rung);
+  const committee = await foundingCommittee.refereeCommittee(identity, rung);
   if (!committee) return null;
-  const generation = await currentGeneration(appName);
+  const generation = await currentGeneration(identity);
   return {
     rung,
     generation,
@@ -98,8 +98,8 @@ async function basisFor(appName) {
   };
 }
 
-function keyFor(appName, ordinal, rung) {
-  return `${appName}/${roleFor(ordinal, rung)}`;
+function keyFor(identity, ordinal, rung) {
+  return `${identity}/${roleFor(ordinal, rung)}`;
 }
 
 /**
@@ -109,8 +109,8 @@ function keyFor(appName, ordinal, rung) {
  * answers "no" for anyone else — a record can lag a release, and the scan's
  * word on "free" is the probe's, never a record's.
  */
-async function recordedHolder(appName, ordinal, generation) {
-  const rows = await messageStore.getMasterleaseRecordsByRolePrefix(appName, `${ROLE_PREFIX}${ordinal}@`);
+async function recordedHolder(identity, ordinal, generation) {
+  const rows = await messageStore.getMasterleaseRecordsByRolePrefix(identity, `${ROLE_PREFIX}${ordinal}@`);
   let best = null;
   let bestRung = -1;
   (rows ?? []).forEach((row) => {
@@ -144,10 +144,10 @@ async function publishRow(key, grantee, epoch, basis, released) {
  * A quorum read: {decided, holder}. Burns no epoch. Undecided when no basis
  * exists yet or a quorum did not answer — the scan waits, never assumes free.
  */
-async function probeOrdinal(appName, ordinal) {
-  const basis = await basisFor(appName);
+async function probeOrdinal(identity, ordinal) {
+  const basis = await basisFor(identity);
   if (!basis) return { decided: false, holder: null };
-  const verdict = await grantClient.probeOneshot(keyFor(appName, ordinal, basis.rung), basis.committee);
+  const verdict = await grantClient.probeOneshot(keyFor(identity, ordinal, basis.rung), basis.committee);
   return { decided: verdict.decided, holder: verdict.holder };
 }
 
@@ -156,13 +156,13 @@ async function probeOrdinal(appName, ordinal) {
  * founding answers yes again without a round; no carries the holder so the
  * scan moves on; wait is every honest "not yet" with a hint when one exists.
  */
-async function askOrdinal(appName, ordinal) {
-  const basis = await basisFor(appName);
+async function askOrdinal(identity, ordinal) {
+  const basis = await basisFor(identity);
   if (!basis) return { answer: 'wait', reason: 'no founding basis' };
   const self = await selfOutpoint();
   if (!self) return { answer: 'wait', reason: 'node identity unavailable' };
 
-  const recorded = await recordedHolder(appName, ordinal, basis.generation);
+  const recorded = await recordedHolder(identity, ordinal, basis.generation);
   if (recorded === self) return { answer: 'yes' };
 
   if (daemonStatus.isDaemonSynced()?.data?.synced !== true) {
@@ -172,10 +172,10 @@ async function askOrdinal(appName, ordinal) {
     return { answer: 'wait', reason: 'world armed' };
   }
 
-  const key = keyFor(appName, ordinal, basis.rung);
+  const key = keyFor(identity, ordinal, basis.rung);
   const outcome = await grantClient.acquire(key, { mode: 'oneshot', committee: basis.committee });
   if (outcome.granted) {
-    fluxEventBus.publish('quorumGrant:ordinalFounded', { appName, ordinal, holder: self });
+    fluxEventBus.publish('quorumGrant:ordinalFounded', { identity, ordinal, holder: self });
     return { answer: 'yes' };
   }
   if (outcome.founder) {
@@ -194,13 +194,13 @@ async function askOrdinal(appName, ordinal) {
  * node's is a no-op success when nobody holds it and a refusal when someone
  * else does.
  */
-async function releaseOrdinal(appName, ordinal) {
-  const basis = await basisFor(appName);
+async function releaseOrdinal(identity, ordinal) {
+  const basis = await basisFor(identity);
   if (!basis) return { released: false, reason: 'no founding basis' };
   const self = await selfOutpoint();
   if (!self) return { released: false, reason: 'node identity unavailable' };
 
-  const key = keyFor(appName, ordinal, basis.rung);
+  const key = keyFor(identity, ordinal, basis.rung);
   const verdict = await grantClient.probeOneshot(key, basis.committee);
   if (!verdict.decided) return { released: false, reason: 'no quorum answered' };
   if (verdict.holder === null) return { released: true };
@@ -209,7 +209,7 @@ async function releaseOrdinal(appName, ordinal) {
   const ok = await grantClient.releaseOneshot(key, basis.committee, verdict.epoch);
   if (!ok) return { released: false, reason: 'no release quorum' };
   await publishRow(key, self, verdict.epoch, basis, true);
-  fluxEventBus.publish('quorumGrant:ordinalReleased', { appName, ordinal, holder: self });
+  fluxEventBus.publish('quorumGrant:ordinalReleased', { identity, ordinal, holder: self });
   return { released: true };
 }
 
@@ -221,10 +221,10 @@ async function releaseOrdinal(appName, ordinal) {
  *
  * @returns {Promise<Map<number, string>>} ordinal -> holder outpoint
  */
-async function ordinalHolders(appName) {
+async function ordinalHolders(identity) {
   const holders = new Map();
-  const generation = await currentGeneration(appName);
-  const rows = await messageStore.getMasterleaseRecordsByRolePrefix(appName, ROLE_PREFIX);
+  const generation = await currentGeneration(identity);
+  const rows = await messageStore.getMasterleaseRecordsByRolePrefix(identity, ROLE_PREFIX);
   const bestRung = new Map();
   (rows ?? []).forEach((row) => {
     const data = row?.data;
@@ -252,14 +252,14 @@ async function ordinalHolders(appName) {
  *
  * @returns {Promise<boolean|null>} null when the membership cannot be resolved
  */
-async function placedOnApp(appName, outpoint) {
+async function placedOnApp(identity, outpoint) {
   const membership = networkStateService.membershipAt(networkStateService.membershipFingerprint());
   if (!Array.isArray(membership)) return null;
   const [txhash, outidx] = outpoint.split(':');
   const listed = membership.find((entry) => entry.txhash === txhash && String(entry.outidx) === outidx);
   if (!listed?.ip) return false;
   const holderIp = extractIp(listed.ip);
-  const locations = await registryManager.appLocation(appName);
+  const locations = await registryManager.appLocationOf(identity);
   return (locations ?? []).some((location) => extractIp(location?.ip ?? '') === holderIp);
 }
 
@@ -277,17 +277,17 @@ async function placedOnApp(appName, outpoint) {
  *
  * @returns {Promise<{vacated: boolean, reason?: string}>}
  */
-async function vacateOrdinal(appName, ordinal, holder) {
+async function vacateOrdinal(identity, ordinal, holder) {
   if (typeof holder !== 'string' || !holder) return { vacated: false, reason: 'malformed holder' };
   const standing = await downCertificates.standingCertificateFor(holder);
   if (!standing) return { vacated: false, reason: 'no standing certificate' };
-  const placed = await placedOnApp(appName, holder);
+  const placed = await placedOnApp(identity, holder);
   if (placed === null) return { vacated: false, reason: 'membership unavailable' };
   if (placed) return { vacated: false, reason: 'still placed' };
 
-  const basis = await basisFor(appName);
+  const basis = await basisFor(identity);
   if (!basis) return { vacated: false, reason: 'no founding world' };
-  const key = keyFor(appName, ordinal, basis.rung);
+  const key = keyFor(identity, ordinal, basis.rung);
   const verdict = await grantClient.probeOneshot(key, basis.committee);
   if (!verdict.decided) return { vacated: false, reason: 'no quorum answered' };
   if (verdict.holder === null) return { vacated: true };
@@ -303,7 +303,7 @@ async function vacateOrdinal(appName, ordinal, holder) {
     return { vacated: false, reason: 'no vacate quorum' };
   }
   await publishRow(key, holder, verdict.epoch, basis, true);
-  fluxEventBus.publish('quorumGrant:ordinalVacated', { appName, ordinal, holder });
+  fluxEventBus.publish('quorumGrant:ordinalVacated', { identity, ordinal, holder });
   log.info(`ordinalRegister - ${key} vacated: certificate about ${holder}`);
   return { vacated: true };
 }

@@ -67,13 +67,20 @@ export function dbClient(nodeNum) {
       return res.deletedCount;
     },
 
+    // The identity of the app the registry lists under a name: what grant
+    // keys, lease records and generation records are keyed by. A v1-v8 app's
+    // identity is its name.
+    async identityOf(appName) {
+      return (await this.getGlobalApp(appName))?.identity ?? null;
+    },
+
     // The published masterlease record's roster, as THIS node has synced it.
     // The self-verifying heal proof (quorum-signed acceptances) rides here —
     // a register's own journaled chain is trusted and deliberately bare.
-    async getMasterleaseRoster(appName, role) {
+    async getMasterleaseRoster(identity, role) {
       const globalDb = await db('appsGlobal');
       const row = await globalDb.collection('appstateevents').findOne(
-        { type: 'masterlease', dedupKey: `masterlease:${appName}/${role}` },
+        { type: 'masterlease', dedupKey: `masterlease:${identity}/${role}` },
       );
       return row?.data?.roster ?? null;
     },
@@ -81,10 +88,10 @@ export function dbClient(nodeNum) {
     // The whole published record as THIS node has synced it — how a suite
     // asserts a node CONVERGED on the change-driven record (published once;
     // a node that missed it must be backfilled by the app-state sync).
-    async getMasterleaseRecord(appName, role) {
+    async getMasterleaseRecord(identity, role) {
       const globalDb = await db('appsGlobal');
       const row = await globalDb.collection('appstateevents').findOne(
-        { type: 'masterlease', dedupKey: `masterlease:${appName}/${role}` },
+        { type: 'masterlease', dedupKey: `masterlease:${identity}/${role}` },
       );
       // the row holds the record as signed, with this node's verdict beside it
       return row?.data ? { ...row.data, proofRank: row.proofRank, verified: row.verified } : null;
@@ -92,10 +99,10 @@ export function dbClient(nodeNum) {
 
     // Delete this node's synced copy of the record — stages "the node missed
     // the one-time gossip" without any partition timing.
-    async wipeMasterleaseRecord(appName, role) {
+    async wipeMasterleaseRecord(identity, role) {
       const globalDb = await db('appsGlobal');
       const res = await globalDb.collection('appstateevents').deleteOne(
-        { type: 'masterlease', dedupKey: `masterlease:${appName}/${role}` },
+        { type: 'masterlease', dedupKey: `masterlease:${identity}/${role}` },
       );
       return res.deletedCount;
     },

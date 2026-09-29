@@ -427,7 +427,7 @@ async function processContainerData(params) {
   // Consulting the fence also advances its lift poll; when the fence drops,
   // the same reconciliation re-adds the device and restores auto-accept.
   const fence = deployComp.hasActiveStandbySyncthing()
-    ? mastershipGrantGate.fenceFor(installedAppName)
+    ? mastershipGrantGate.fenceFor(deployComp.identity)
     : null;
   await reconcileFenceAutoAccept(installedAppName, locations, allDevices, fence);
 
@@ -474,6 +474,7 @@ async function processContainerData(params) {
       localSocketAddr,
       syncthingFolder,
       installedAppName,
+      appIdentity: deployComp.identity,
       mountVerifyNeeded: state.syncthingAppsFirstRun || erroredFolderIds.has(appId),
       liveness,
       // The scope the disk is read in: the platform's scaffolding, the content

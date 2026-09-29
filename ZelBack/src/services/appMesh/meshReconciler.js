@@ -235,10 +235,10 @@ async function reconcileAppMaterial(app, ctx) {
   // re-runs the scan every pass, so an ordinal freed since its last scan is
   // taken here, and the identity drift the detector reads off it recreates
   // the container under the ordinal it now holds.
-  let own = await meshOrdinals.ownOrdinal(app.name);
+  let own = await meshOrdinals.ownOrdinal(app.identity);
   if (own === null) {
     try {
-      const claim = await meshOrdinals.claimOrdinal(app.name, app.view.instances);
+      const claim = await meshOrdinals.claimOrdinal(app.identity, app.view.instances);
       if (claim.state === meshOrdinals.CLAIM.GRANTED) own = claim.ordinal;
     } catch (error) {
       log.warn(`meshReconciler - ${app.name}: standby re-scan failed: ${error.message}`);
@@ -246,7 +246,7 @@ async function reconcileAppMaterial(app, ctx) {
   }
   const ordinals = {
     own,
-    byNode: await meshOrdinals.holdersByNode(app.name, app.view.instances),
+    byNode: await meshOrdinals.holdersByNode(app.identity, app.view.instances),
   };
 
   const bundleChanged = await meshCertificates.writeTrustBundle(
@@ -781,7 +781,7 @@ async function prepareComponentMesh(appName, componentName) {
   // an ordinal frees (its promotion is a NEW identity: a recreated container).
   // A register that cannot decide yet is a node condition: the install
   // defers, and nothing is assumed free.
-  const claim = await meshOrdinals.claimOrdinal(appName, view.instances);
+  const claim = await meshOrdinals.claimOrdinal(inst.identity, view.instances);
   if (claim.state === meshOrdinals.CLAIM.WAIT) {
     throw new Error(`No ordinal is decided yet for ${componentName} of ${appName}: ${claim.reason ?? 'the register is waiting'}`);
   }

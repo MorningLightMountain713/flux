@@ -644,7 +644,7 @@ module.exports = (app) => {
   // exactly the next one, broadcasts it, and stores it here first. The
   // zelidauth session authorizes the submission; the record's inner owner
   // signature is what every node verifies for itself.
-  app.get('/apps/grantgeneration/:appname/:role', asyncRoute((req, res) => {
+  app.get('/apps/grantgeneration/:identity/:role', asyncRoute((req, res) => {
     return ownerGenerationController.current(req, res);
   }));
   app.post('/apps/grantgeneration', asyncRoute((req, res) => {

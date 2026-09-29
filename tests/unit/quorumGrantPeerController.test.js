@@ -52,7 +52,7 @@ describe('quorumGrant grantPeerController', () => {
     sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
       txhash: SELF_TXHASH, txindex: 0,
     });
-    sinon.stub(registryManager, 'appLocation').resolves([{ ip: `${SELF_HOST}:16127` }]);
+    sinon.stub(registryManager, 'appLocationOf').resolves([{ ip: `${SELF_HOST}:16127` }]);
     sinon.stub(grantClient, 'witnessAnswer').resolves({
       holding: false, acquiring: false, quorumReachable: true,
     });
@@ -122,7 +122,7 @@ describe('quorumGrant grantPeerController', () => {
     });
 
     it('refuses to carry for an app this node does not hold — no open proxy', async () => {
-      registryManager.appLocation.resolves([{ ip: '10.50.0.1:16127' }]);
+      registryManager.appLocationOf.resolves([{ ip: '10.50.0.1:16127' }]);
       const res = fakeRes();
       await grantPeerController.relay(fakeReq(relayBody()), res);
       expect(res.statusCode).to.equal(403);
@@ -142,7 +142,7 @@ describe('quorumGrant grantPeerController', () => {
       type: 'fluxgrantgeneration',
       version: 1,
       ip: '10.1.0.1:16127',
-      appName: 'myapp',
+      identity: 'myapp',
       role: 'master',
       generation: 2,
       height: 90,
@@ -162,7 +162,7 @@ describe('quorumGrant grantPeerController', () => {
       await grantPeerController.teach(fakeReq({ record: RECORD }), res);
       expect(res.statusCode).to.equal(200);
       expect(res.body.data).to.deep.equal({
-        appName: 'myapp', role: 'master', generation: 2, learned: true,
+        identity: 'myapp', role: 'master', generation: 2, learned: true,
       });
       expect(messageStore.storeAppStateEvent.calledOnce).to.equal(true);
       expect(messageStore.storeAppStateEvent.firstCall.args).to.deep.equal([
@@ -175,7 +175,7 @@ describe('quorumGrant grantPeerController', () => {
       await grantPeerController.teach(fakeReq({ record: RECORD }), res);
       expect(res.statusCode).to.equal(200);
       expect(res.body.data).to.deep.equal({
-        appName: 'myapp', role: 'master', generation: 2, learned: false,
+        identity: 'myapp', role: 'master', generation: 2, learned: false,
       });
       expect(messageStore.storeAppStateEvent.calledOnce).to.equal(true);
     });

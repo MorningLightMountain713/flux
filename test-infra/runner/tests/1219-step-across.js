@@ -156,13 +156,14 @@ describe('step-across: the owner re-rolls the committee under a running master, 
     const owner = appOwnerKey();
     const { currentHeight } = await getState();
     const at = Date.now();
+    // A v1-v8 app's identity is its name.
     const canonical = `fluxgrantgeneration:${name}|master|1|${currentHeight}|${at}`;
     const signature = await signBtcMessage(canonical, owner.privkey);
     const res = await fetch(`${env.clients[0].url}/apps/grantgeneration`, {
       method: 'POST',
       headers: { zelidauth: ownerAuth0, 'content-type': 'application/json' },
       body: JSON.stringify({
-        appName: name, role: 'master', generation: 1, height: currentHeight, at, signature,
+        identity: name, role: 'master', generation: 1, height: currentHeight, at, signature,
       }),
     });
     return { status: res.status, body: await res.text(), height: currentHeight };
@@ -268,7 +269,7 @@ describe('step-across: the owner re-rolls the committee under a running master, 
     // 3. The record reaches every holder.
     await Promise.all(HOLDERS.map((i) => env.clients[i].waitForEvent(
       'quorumGrant:generationRecord',
-      (d) => d.appName === name && d.role === 'master' && d.generation === 1,
+      (d) => d.identity === name && d.role === 'master' && d.generation === 1,
       120000,
       { afterId: beforeReroll[i] },
     )));

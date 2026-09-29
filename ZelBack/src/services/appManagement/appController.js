@@ -342,14 +342,13 @@ async function appYield(appname, { replica = null } = {}) {
   if (!appname) {
     throw new Error('No Flux App specified');
   }
-  const mainAppName = deploymentProvider.appNameFromRequest(appname);
   const { instantiated, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
 
   // A yield IS a stop, so it goes down in the reverse of the order it came up,
   // exactly like appstop. THE ORDER AGAINST THE RELEASE IS SEPARATE and stated
   // above: stop first, then release.
   await driveOperatorCommand(ids, (id) => appsRuntimeState.setOperatorStopped(id, true), { stopped: true });
-  const { held } = await mastershipGrantGate.yieldMastership(mainAppName);
+  const { held } = await mastershipGrantGate.yieldMastership(instantiated.identity);
 
   return { name: instantiated.name, held };
 }

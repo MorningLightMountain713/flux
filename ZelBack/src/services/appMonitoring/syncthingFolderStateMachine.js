@@ -1194,6 +1194,7 @@ async function handleReceiveOnlyTransition(params) {
     appId,
     identifier,
     installedAppName,
+    appIdentity,
     cache,
     runningAppList,
     localSocketAddr,
@@ -1263,7 +1264,7 @@ async function handleReceiveOnlyTransition(params) {
   // keeps winning and every survivor defers to it until its location broadcast
   // expires - 125 minutes with the app down. Dropped from the list here, before the
   // pick, when this node can show the holder is gone rather than merely silent to it.
-  const grantLeader = await mastershipGrantGate.leaderIsSelf(identifier, installedAppName, isActiveStandby);
+  const grantLeader = await mastershipGrantGate.leaderIsSelf(identifier, appIdentity, isActiveStandby);
   const electionList = await holderListExcludingDead(appId, runningAppList, localSocketAddr, liveness);
   // What each candidate says it holds for THIS folder, from the probe the pass has
   // already paid for. This node answers for itself rather than asking itself.
@@ -1317,7 +1318,7 @@ async function handleReceiveOnlyTransition(params) {
   // this node re-admits its device on exactly this word, including after a
   // reboot that landed the folder already-receiveonly (nothing to revert).
   if (grantLeader === false) {
-    mastershipGrantGate.noteFolderDemoted(installedAppName);
+    mastershipGrantGate.noteFolderDemoted(appIdentity);
   }
 
   // RESIDUAL LIMITATION (legacy election only - the grant path above is the
@@ -1649,6 +1650,7 @@ async function manageFolderSyncState(params) {
     localSocketAddr,
     syncthingFolder,
     installedAppName,
+    appIdentity,
     liveness,
   } = params;
 
@@ -1710,7 +1712,7 @@ async function manageFolderSyncState(params) {
     // reconciler's grant veto, which outranks everything below operator
     // intent. The leader answering true (or the plane being closed) changes
     // nothing on this path.
-    const grantSaysLeader = await mastershipGrantGate.leaderIsSelf(identifier, installedAppName, isActiveStandby);
+    const grantSaysLeader = await mastershipGrantGate.leaderIsSelf(identifier, appIdentity, isActiveStandby);
     if (grantSaysLeader === false) {
       log.warn(`manageFolderSyncState - ${appId} holds a sendreceive folder without the grant; demoting to receiveonly and reverting local changes`);
       syncthingFolder.type = 'receiveonly';
@@ -1722,7 +1724,7 @@ async function manageFolderSyncState(params) {
       } catch (error) {
         log.warn(`manageFolderSyncState - ${appId} revert after demotion failed, local changes stand: ${error.message}`);
       }
-      mastershipGrantGate.noteFolderDemoted(installedAppName);
+      mastershipGrantGate.noteFolderDemoted(appIdentity);
       const cache = { numberOfExecutions: 0, grantDemoted: true, demotedAt: Date.now() };
       await appCaches.setSyncedMark(receiveOnlySyncthingAppsCache, appId, cache);
       return { syncthingFolder, cache, skipUpdate: false };
@@ -1770,6 +1772,7 @@ async function manageFolderSyncState(params) {
       appId,
       identifier,
       installedAppName,
+      appIdentity,
       cache,
       runningAppList,
       localSocketAddr,

@@ -240,7 +240,7 @@ describe('syncthingMonitor tests', () => {
    * in production, built the same way (same appsFolder). `replica` is stated,
    * never defaulted, exactly as DeploymentSpec.fromSpec demands.
    */
-  async function deploymentFor(appName, compName, overrides = {}) {
+  async function deploymentFor(appName, compName, overrides = {}, identity = null) {
     // Callers pass content-slot mounts, which only work on the encrypted path,
     // so the envelope is stated for every spec this helper builds.
     const spec = await v9Spec({
@@ -249,7 +249,7 @@ describe('syncthingMonitor tests', () => {
         [compName]: { ...V9_SUBMISSION.components.web, name: compName, ...overrides },
       },
     }, { encrypted: true });
-    return flux.DeploymentSpec.fromSpec(spec, appsFolder, { replica: null });
+    return flux.DeploymentSpec.fromSpec(spec, appsFolder, { replica: null, identity });
   }
 
   before(async function loadLibrary() {
@@ -257,7 +257,7 @@ describe('syncthingMonitor tests', () => {
     this.timeout(30_000);
     flux = await loadSpecLibrary();
 
-    syncDeployment = await deploymentFor('testapp', 'web', { persistentStorage: ACTIVE_STANDBY_STORAGE });
+    syncDeployment = await deploymentFor('testapp', 'web', { persistentStorage: ACTIVE_STANDBY_STORAGE }, 'ab12cd34ef56');
     plainDeployment = await deploymentFor('testapp', 'web');
     syncComp = syncDeployment.getComponent('web');
     syncFolderId = `flux${syncComp.identifier}`;
@@ -268,9 +268,9 @@ describe('syncthingMonitor tests', () => {
     expect(syncComp.hasActiveStandbySyncthing(), 'mode activeStandby is the g: contract').to.be.true;
     expect(syncComp.requiresSyncBeforeStart(), 'activeStandby is not syncFirst').to.be.false;
     expect(plainDeployment.getComponent('web').hasSyncthing(), 'no sync block, no syncthing').to.be.false;
-    // A composed (v4+) component's identifier is comp_app - the bare app name is
-    // the flat v1-v3 form and cannot be minted from a v9 spec.
-    expect(syncComp.identifier).to.equal('web_testapp');
+    // A composed (v4+) component's identifier is comp_identity - the bare app
+    // name is the flat v1-v3 form and cannot be minted from a v9 spec.
+    expect(syncComp.identifier).to.equal('web_ab12cd34ef56');
     // The syncthing folder id and the component's host directory are the same
     // docker identifier, which is what makes `${appsFolder}${appId}` the folder.
     expect(syncComp.dir).to.equal(`${appsFolder}${syncFolderId}`);
@@ -850,7 +850,7 @@ describe('syncthingMonitor tests', () => {
       // docker-prefixed folder id and never the app name. That value comes off
       // the real DeploymentComponent, and the reconciler stays stubbed.
       sinon.assert.calledWith(appReconcilerMock.setControllerDesired, syncComp.identifier, 'stopped');
-      expect(appReconcilerMock.setControllerDesired.firstCall.args[0]).to.equal('web_testapp');
+      expect(appReconcilerMock.setControllerDesired.firstCall.args[0]).to.equal('web_ab12cd34ef56');
       expect(appReconcilerMock.setControllerDesired.calledWith('testapp'), 'never acts by app name').to.be.false;
       // the pass carried on past the app it held out
       sinon.assert.called(syncthingServiceMock.getDeviceId);
@@ -1251,6 +1251,8 @@ describe('syncthingMonitor tests', () => {
       expect(params.appId, 'the docker identifier is the syncthing folder id').to.equal(syncFolderId);
       expect(params.identifier, 'and the bare component identifier travels alongside it').to.equal(syncComp.identifier);
       expect(params.installedAppName).to.equal('testapp');
+      expect(syncComp.identity, 'the fixture app has an identity').to.be.a('string');
+      expect(params.appIdentity, 'the app identity the election keys its lease by').to.equal(syncComp.identity);
       // The component's derived ignore lines are what keep content-delivered files
       // and the platform's scaffolding out of the emptiness walk; without them
       // delivered content certifies a wiped dataset as populated.

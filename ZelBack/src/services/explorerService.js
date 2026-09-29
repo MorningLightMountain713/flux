@@ -1602,6 +1602,7 @@ async function initiateBlockProcessor(options = {}) {
       await databaseGlobal.collection(config.get('database.appsglobal.collections.appsInformation')).createIndex({ repotag: 1 }, { name: 'query for getting zelapp based on image' });
       await databaseGlobal.collection(config.get('database.appsglobal.collections.appsInformation')).createIndex({ height: 1 }, { name: 'query for getting zelapp based on last height update' });
       await databaseGlobal.collection(config.get('database.appsglobal.collections.appsInformation')).createIndex({ hash: 1 }, { name: 'query for getting zelapp based on last hash' });
+      await databaseGlobal.collection(config.get('database.appsglobal.collections.appsInformation')).createIndex({ identity: 1 }, { name: 'query for getting zelapp based on its identity' });
       await database.collection(config.get('database.appsglobal.collections.appsInstallingLocations')).createIndex({ name: 1 }, { name: 'query for getting zelapp install location based on zelapp specs name' });
       await database.collection(config.get('database.appsglobal.collections.appsInstallingLocations')).createIndex({ name: 1, ip: 1 }, { name: 'query for getting flux app install location based on specs name and node ip' });
       await database.collection(config.get('database.appsglobal.collections.appsInstallingErrorsLocations')).createIndex({ name: 1 }, { name: 'query for getting flux app install errors location based on specs name' });

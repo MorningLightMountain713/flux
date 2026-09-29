@@ -158,7 +158,7 @@ describe('record-deaf master: after the heal every certificate the partition for
 
   const recordEventsSince = (i, afterId) => env.clients[i].getEventBuffer()
     .filter((e) => e.event === 'quorumGrant:generationRecord' && e.id > afterId
-      && e.data?.appName === name && e.data?.role === 'master' && e.data?.generation === 1);
+      && e.data?.identity === name && e.data?.role === 'master' && e.data?.generation === 1);
 
   // The subjects of the certificates a node stored since a marker.
   const certifiedOn = (i, afterId) => new Set(env.clients[i].getEventBuffer()
@@ -169,13 +169,14 @@ describe('record-deaf master: after the heal every certificate the partition for
     const owner = appOwnerKey();
     const { currentHeight } = await getState();
     const at = Date.now();
+    // A v1-v8 app's identity is its name.
     const canonical = `fluxgrantgeneration:${name}|master|1|${currentHeight}|${at}`;
     const signature = await signBtcMessage(canonical, owner.privkey);
     const res = await fetch(`${env.clients[i].url}/apps/grantgeneration`, {
       method: 'POST',
       headers: { zelidauth: ownerAuthFar, 'content-type': 'application/json' },
       body: JSON.stringify({
-        appName: name, role: 'master', generation: 1, height: currentHeight, at, signature,
+        identity: name, role: 'master', generation: 1, height: currentHeight, at, signature,
       }),
     });
     return { status: res.status, body: await res.text(), height: currentHeight };
@@ -289,7 +290,7 @@ describe('record-deaf master: after the heal every certificate the partition for
       expect(rerolled.status, `the re-roll lands on the far side: ${rerolled.body}`).to.equal(200);
       await Promise.all([...couriers, ...farStandbys].map((i) => env.clients[i].waitForEvent(
         'quorumGrant:generationRecord',
-        (d) => d.appName === name && d.role === 'master' && d.generation === 1,
+        (d) => d.identity === name && d.role === 'master' && d.generation === 1,
         120000,
         { afterId: beforeReroll[i] },
       )));
@@ -298,7 +299,7 @@ describe('record-deaf master: after the heal every certificate the partition for
       await env.clients[couriers[0]].waitForEvent('quorumGrant:generationCarried',
         (d) => d.key === key() && d.generation === 1 && d.remaining > 0, 60000, { afterId: beforeReroll[couriers[0]] });
       await assertNoEvent(env.clients[master], 'quorumGrant:generationRecord',
-        (d) => d.appName === name && d.generation === 1, 2 * RENEW_MS + 5000);
+        (d) => d.identity === name && d.generation === 1, 2 * RENEW_MS + 5000);
       expect(recordEventsSince(master, beforeReroll[master]), 'the master is deaf to the re-roll while cut off').to.deep.equal([]);
       await assertNoEvent(env.clients[master], 'quorumGrant:coasting', (d) => d.key === key(), 5000);
       expect(await getAppContainerId(env.clients[master].container, name, name),
@@ -317,7 +318,7 @@ describe('record-deaf master: after the heal every certificate the partition for
         'nodedown:aliveAnnounced', () => true, 120000, { afterId: beforeHeal[indexOf(subject)] },
       )));
       await env.clients[master].waitForEvent('quorumGrant:generationRecord',
-        (d) => d.appName === name && d.role === 'master' && d.generation === 1, 120000, { afterId: beforeHeal[master] });
+        (d) => d.identity === name && d.role === 'master' && d.generation === 1, 120000, { afterId: beforeHeal[master] });
       expect(grantsSince(beforeReroll, 1), 'nobody was granted at generation 1 before the lift').to.deep.equal([]);
       await assertNoEvent(env.clients[master], 'quorumGrant:demoted', (d) => d.key === key(), 5000);
 

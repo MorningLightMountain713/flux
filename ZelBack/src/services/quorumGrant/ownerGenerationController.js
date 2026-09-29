@@ -33,7 +33,8 @@ const { Privilege, authOf } = require('../utils/privileges');
 // refusal. The door is a courtesy to the honest path, not a safety
 // property: safety is the owner signature plus the monotonic comparator.
 
-const APP_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
+// An app identity: a v1-v8 app's name, or a v9 app's minted identity.
+const IDENTITY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
 const ROLE_PATTERN = /^[a-zA-Z0-9-]{1,64}$/;
 
 /**
@@ -44,7 +45,7 @@ async function submit(req, res) {
   try {
     const body = serviceHelper.ensureObject(req.body) ?? {};
     const record = {
-      appName: body.appName,
+      identity: body.identity,
       role: body.role,
       generation: body.generation,
       height: body.height,
@@ -56,17 +57,20 @@ async function submit(req, res) {
       return res.status(400).json(messageHelper.createErrorMessage('malformed generation record'));
     }
 
-    const authorized = await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: record.appName });
+    const app = await appsRepository.getGlobalAppInfoByIdentity(record.identity);
+    if (!app) {
+      return res.status(404).json(messageHelper.createErrorMessage('the registry lists no app with that identity'));
+    }
+    const authorized = await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: app.name });
     if (authorized !== true) {
       return res.status(401).json(messageHelper.errUnauthorizedMessage());
     }
 
-    const owner = await appsRepository.getGlobalAppOwner(record.appName);
-    if (!owner || !ownerGenerationRecord.verify(record, owner)) {
+    if (!ownerGenerationRecord.verify(record, app.owner)) {
       return res.status(403).json(messageHelper.createErrorMessage('record is not signed by the app owner'));
     }
 
-    const stored = await messageStore.getGrantGenerationRecord(record.appName, record.role);
+    const stored = await messageStore.getGrantGenerationRecord(record.identity, record.role);
     const current = stored?.data?.generation ?? 0;
     if (record.generation !== current + 1) {
       return res.status(409).json(messageHelper.createErrorMessage(
@@ -90,7 +94,7 @@ async function submit(req, res) {
       type: 'fluxgrantgeneration',
       version: 1,
       ip,
-      appName: record.appName,
+      identity: record.identity,
       role: record.role,
       generation: record.generation,
       height: record.height,
@@ -110,7 +114,7 @@ async function submit(req, res) {
     );
 
     return res.json(messageHelper.createDataMessage({
-      appName: record.appName,
+      identity: record.identity,
       role: record.role,
       generation: record.generation,
     }));
@@ -128,18 +132,18 @@ async function submit(req, res) {
  */
 async function current(req, res) {
   try {
-    const appName = req.params.appname ?? req.query.appname;
+    const identity = req.params.identity ?? req.query.identity;
     const role = req.params.role ?? req.query.role;
-    if (typeof appName !== 'string' || !APP_PATTERN.test(appName)) {
-      return res.status(400).json(messageHelper.createErrorMessage('malformed app name'));
+    if (typeof identity !== 'string' || !IDENTITY_PATTERN.test(identity)) {
+      return res.status(400).json(messageHelper.createErrorMessage('malformed app identity'));
     }
     if (typeof role !== 'string' || !ROLE_PATTERN.test(role)) {
       return res.status(400).json(messageHelper.createErrorMessage('malformed role'));
     }
 
-    const stored = await messageStore.getGrantGenerationRecord(appName, role);
+    const stored = await messageStore.getGrantGenerationRecord(identity, role);
     return res.json(messageHelper.createDataMessage({
-      appName,
+      identity,
       role,
       generation: stored?.data?.generation ?? 0,
       record: stored?.data ?? null,

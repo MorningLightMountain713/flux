@@ -29,6 +29,7 @@ async function prepareCollection() {
     { key: { hash: 1 }, name: 'decision by hash', unique: true },
     { key: { name: 1 }, name: 'decisions by name' },
     { key: { height: 1 }, name: 'decisions by height' },
+    { key: { identity: 1 }, name: 'decisions by app identity' },
   ]);
 }
 
@@ -81,6 +82,21 @@ async function appliedFor(name) {
 }
 
 /**
+ * Every applied message of the app with an identity, whatever name it was
+ * applied under: only an applied decision carries an identity.
+ * @param {string} identity
+ * @returns {Promise<{name: ?string, hashes: string[]}>} the lower-cased name
+ *   they were applied for, null with no applied message
+ */
+async function appliedHashesOf(identity) {
+  const rows = await collection().find(
+    { identity },
+    { projection: { _id: 0, hash: 1, name: 1 } },
+  ).toArray();
+  return { name: rows[0]?.name ?? null, hashes: rows.map((row) => row.hash) };
+}
+
+/**
  * Removes decisions, leaving their messages undecided.
  * @param {string[]} hashes
  */
@@ -111,6 +127,7 @@ async function deleteAbove(height) {
 
 module.exports = {
   appliedFor,
+  appliedHashesOf,
   decidedHashes,
   decisionsFor,
   deleteAbove,

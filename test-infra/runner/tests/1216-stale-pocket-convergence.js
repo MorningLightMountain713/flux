@@ -37,6 +37,7 @@ describe('two founders born across a partition converge to one on heal', functio
   let env;
   let name;
   let anchor;
+  let identity;
   let pocket = []; // node indexes cut off, ⊇ a committee quorum, incl. one host
   let hostIn = null; // the pocket's hosting node
   let hostsOut = []; // majority-side hosting nodes
@@ -142,14 +143,16 @@ describe('two founders born across a partition converge to one on heal', functio
 
     // The anchor is row metadata, not spec content: the API serves the
     // serialized spec without it, the stored row carries it.
-    anchor = (await dbClient(1).getGlobalApp(name))?.height;
+    const row = await dbClient(1).getGlobalApp(name);
+    anchor = row?.height;
+    identity = row?.identity;
     expect(Number.isInteger(anchor), `the stored row carries the anchor height (${anchor})`).to.equal(true);
 
     // The committee decides the pocket: read it from the discovery endpoint
     // (public facts) and cut off SIX members — a quorum of five plus one
     // spare — so the pocket can found alone and the survivors' list rots.
     const res = await fetch(
-      `${env.clients[0].url}/flux/quorumgrant/foundingbasis?app=${encodeURIComponent(name)}&anchor=${anchor}`,
+      `${env.clients[0].url}/flux/quorumgrant/foundingbasis?identity=${encodeURIComponent(identity)}&anchor=${anchor}`,
       { signal: AbortSignal.timeout(10000) },
     );
     const body = await res.json();
@@ -199,7 +202,7 @@ describe('two founders born across a partition converge to one on heal', functio
 
     const founded = await env.clients[hostIn].waitForEvent(
       'quorumGrant:founded',
-      (d) => typeof d.key === 'string' && d.key.startsWith(`${name}/founder-`),
+      (d) => typeof d.key === 'string' && d.key.startsWith(`${identity}/founder-`),
       30000,
       { afterId: cutMarkers[hostIn] },
     );
@@ -220,7 +223,7 @@ describe('two founders born across a partition converge to one on heal', functio
     await waitFor(async () => {
       await advanceBlocks(1);
       const flipped = await Promise.all(majority.map(
-        (i, k) => env.clients[i].waitForEvent('quorumGrant:founderFlip', (d) => d.appName === name, 1, { afterId: markers[k] })
+        (i, k) => env.clients[i].waitForEvent('quorumGrant:founderFlip', (d) => d.identity === identity, 1, { afterId: markers[k] })
           .then(() => true).catch(() => false),
       ));
       return flipped.filter(Boolean).length >= 3;
@@ -247,7 +250,7 @@ describe('two founders born across a partition converge to one on heal', functio
     const yesHost = hosts[answers.indexOf('yes')];
     const founded = await env.clients[yesHost].waitForEvent(
       'quorumGrant:founded',
-      (d) => typeof d.key === 'string' && d.key.startsWith(`${name}/founder-`) && d.key !== pocketFounded.key,
+      (d) => typeof d.key === 'string' && d.key.startsWith(`${identity}/founder-`) && d.key !== pocketFounded.key,
       30000,
       { afterId: markers[majority.indexOf(yesHost)] },
     );
@@ -271,12 +274,12 @@ describe('two founders born across a partition converge to one on heal', functio
     // ladder never grows (its old committee stands again post-heal, so its
     // evaluator rightly never mints the rung), which is exactly why the scan
     // is knowledge-driven.
-    const role = rungFounded.key.slice(name.length + 1);
+    const role = rungFounded.key.slice(identity.length + 1);
     let lastRows = [];
     await waitFor(async () => {
       await advanceBlocks(1);
       lastRows = await Promise.all(env.clients.map(
-        (unused, i) => dbClient(i + 1).getMasterleaseRecord(name, role).catch(() => null),
+        (unused, i) => dbClient(i + 1).getMasterleaseRecord(identity, role).catch(() => null),
       ));
       return lastRows.every((r) => r && r.grantee === rungFounded.founder);
     }, { timeout: 300000, interval: 10000, label: 'the rung record reaches every node' }).catch((err) => {

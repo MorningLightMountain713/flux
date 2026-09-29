@@ -106,13 +106,14 @@ describe('mastership authority: FluxOS keeps the app up and FDM never decides th
     const owner = appOwnerKey();
     const { currentHeight } = await getState();
     const at = Date.now();
+    // A v1-v8 app's identity is its name.
     const canonical = `fluxgrantgeneration:${name}|master|${generation}|${currentHeight}|${at}`;
     const signature = await signBtcMessage(canonical, owner.privkey);
     const res = await fetch(`${env.clients[0].url}/apps/grantgeneration`, {
       method: 'POST',
       headers: { zelidauth: ownerAuth0, 'content-type': 'application/json' },
       body: JSON.stringify({
-        appName: name, role: 'master', generation, height: currentHeight, at, signature,
+        identity: name, role: 'master', generation, height: currentHeight, at, signature,
       }),
     });
     return { status: res.status, body: await res.text() };
@@ -195,7 +196,7 @@ describe('mastership authority: FluxOS keeps the app up and FDM never decides th
     const rolled = await submitReroll(1);
     expect(rolled.status, `the re-roll lands under the running master: ${rolled.body}`).to.equal(200);
     await Promise.all(HOLDERS.map((i) => env.clients[i].waitForEvent(
-      'quorumGrant:generationRecord', (d) => d.appName === name && d.generation === 1, 120000, { afterId: beforeReroll[i] },
+      'quorumGrant:generationRecord', (d) => d.identity === name && d.generation === 1, 120000, { afterId: beforeReroll[i] },
     )));
 
     await pauseHostContainer(env.clients[silent].container);

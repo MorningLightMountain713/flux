@@ -98,7 +98,7 @@ describe('quorumGrant grantorController', () => {
     sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
       txhash: ASKER_TXHASH, txindex: 0,
     });
-    sinon.stub(registryManager, 'appLocation').resolves([
+    sinon.stub(registryManager, 'appLocationOf').resolves([
       { ip: `${ASKER_HOST}:16127`, runningSince: Date.now() - 24 * 60 * 60 * 1000 },
       { ip: '10.1.0.1:16127', runningSince: Date.now() - 24 * 60 * 60 * 1000 },
     ]);
@@ -395,7 +395,7 @@ describe('quorumGrant grantorController', () => {
       // plane landed — the install waited on the seat, the seat on a row only
       // the install could write. The design's reclaims for a seat are the
       // uninstall's release and the holder's certificate, never this check.
-      registryManager.appLocation.resolves([
+      registryManager.appLocationOf.resolves([
         { ip: '10.1.0.1:16127', runningSince: Date.now() - 24 * 60 * 60 * 1000 },
       ]);
       const res = fakeRes();
@@ -405,7 +405,7 @@ describe('quorumGrant grantorController', () => {
     });
 
     it('a held ask and a founder ask still need the running row: those are roles a running member fills', async () => {
-      registryManager.appLocation.resolves([
+      registryManager.appLocationOf.resolves([
         { ip: '10.1.0.1:16127', runningSince: Date.now() - 24 * 60 * 60 * 1000 },
       ]);
       let res = fakeRes();
@@ -585,7 +585,7 @@ describe('quorumGrant grantorController', () => {
 
   describe('holdership — the anti-squat rule', () => {
     it('refuses an asker that does not hold the app', async () => {
-      registryManager.appLocation.resolves([]);
+      registryManager.appLocationOf.resolves([]);
       const res = fakeRes();
       await grantorController.accept(fakeReq(signedAsk('accept', { mode: 'oneshot', ttlMs: undefined, key: FOUNDER_KEY })), res);
       expect(res.statusCode).to.equal(403);
@@ -594,7 +594,7 @@ describe('quorumGrant grantorController', () => {
     });
 
     it('probe alone skips the holder check — reading costs nothing', async () => {
-      registryManager.appLocation.resolves([]);
+      registryManager.appLocationOf.resolves([]);
       const res = fakeRes();
       await grantorController.probe(fakeReq(signedAsk('probe')), res);
       expect(res.statusCode).to.equal(200);
@@ -604,7 +604,7 @@ describe('quorumGrant grantorController', () => {
     it('release skips the holder check — it gives back only the asker\'s own term — and renew does not', async () => {
       // a removal broadcasts its appremoved before its teardown releases, so
       // the releaser's row is already gone at every cell that heard it
-      registryManager.appLocation.resolves([]);
+      registryManager.appLocationOf.resolves([]);
       const released = fakeRes();
       await grantorController.release(fakeReq(signedAsk('release')), released);
       expect(released.statusCode).to.equal(200);
@@ -617,7 +617,7 @@ describe('quorumGrant grantorController', () => {
 
     it('a young holder may not CHALLENGE an existing held record', async () => {
       grantRegister.read.resolves({ accepted: { epoch: 2, grantee: 'x:1', mode: 'held' } });
-      registryManager.appLocation.resolves([
+      registryManager.appLocationOf.resolves([
         { ip: `${ASKER_HOST}:16127`, runningSince: Date.now() - 60_000 },
       ]);
       const res = fakeRes();
@@ -631,7 +631,7 @@ describe('quorumGrant grantorController', () => {
       // the incumbent's own term; the floor binds challengers only, the same
       // principle as lock-delay
       grantRegister.read.resolves({ accepted: { epoch: 2, grantee: ASKER, mode: 'held' } });
-      registryManager.appLocation.resolves([
+      registryManager.appLocationOf.resolves([
         { ip: `${ASKER_HOST}:16127`, runningSince: Date.now() - 60_000 },
       ]);
       const res = fakeRes();
@@ -641,7 +641,7 @@ describe('quorumGrant grantorController', () => {
     });
 
     it('a young holder may make a FIRST acquisition — a fresh app seats its first master', async () => {
-      registryManager.appLocation.resolves([
+      registryManager.appLocationOf.resolves([
         { ip: `${ASKER_HOST}:16127`, runningSince: Date.now() - 60_000 },
       ]);
       const res = fakeRes();
@@ -651,7 +651,7 @@ describe('quorumGrant grantorController', () => {
 
     it('a young holder may found — the age floor is a held-challenge rule only', async () => {
       grantRegister.read.resolves({ accepted: { epoch: 1, grantee: 'x:1', mode: 'oneshot' } });
-      registryManager.appLocation.resolves([
+      registryManager.appLocationOf.resolves([
         { ip: `${ASKER_HOST}:16127`, runningSince: Date.now() - 60_000 },
       ]);
       const res = fakeRes();
@@ -1867,7 +1867,7 @@ describe('quorumGrant grantorController', () => {
 
     it('a holdership 403 teaches — an asker off the app is still told what world it asked in', async () => {
       messageStore.getGrantGenerationRecord.resolves({ data: RECORD });
-      registryManager.appLocation.resolves([]);
+      registryManager.appLocationOf.resolves([]);
       const res = fakeRes();
       await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 2 })), res);
       expect(res.statusCode).to.equal(403);

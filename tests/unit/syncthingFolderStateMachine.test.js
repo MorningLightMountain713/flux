@@ -703,6 +703,7 @@ describe('syncthingFolderStateMachine tests', () => {
         leaderIsSelf = sinon.stub(mastershipGrantGate, 'leaderIsSelf').resolves(false);
         sinon.stub(mastershipGrantGate, 'noteFolderDemoted');
         mockParams.syncFolder = { type: 'sendreceive', path: '/apps/test-app' };
+        mockParams.appIdentity = 'ab12cd34ef56';
         dockerServiceMock.dockerContainerInspect.resolves({ State: { Running: true } });
       });
 
@@ -717,6 +718,9 @@ describe('syncthingFolderStateMachine tests', () => {
         expect(result.syncthingFolder.type).to.equal('receiveonly');
         sinon.assert.calledOnceWithExactly(syncthingServiceMock.dbRevert, 'test-app');
         expect(result.cache.grantDemoted).to.be.true;
+        // The lease asked about, and the demotion noted, are the app's: its identity.
+        sinon.assert.calledWith(leaderIsSelf, sinon.match.any, 'ab12cd34ef56');
+        sinon.assert.calledOnceWithExactly(mastershipGrantGate.noteFolderDemoted, 'ab12cd34ef56');
       });
 
       // The demotion stands whether or not the revert lands - it is what stops

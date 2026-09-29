@@ -200,9 +200,9 @@ async function committeeFor(key, mode, fingerprint) {
   let chainMembers = committee.members;
   let chain = [];
   let cancels = [];
-  const appName = key.slice(0, key.indexOf('/'));
+  const identity = key.slice(0, key.indexOf('/'));
   const role = key.slice(key.indexOf('/') + 1);
-  const published = await readMasterleaseRoster(appName, role);
+  const published = await readMasterleaseRoster(identity, role);
   const sameBasis = published
     && published.fingerprint === fingerprint
     && published.generation === generation;
@@ -281,7 +281,7 @@ async function learnGeneration(key, askedGeneration, answer) {
   if (!record || !Number.isSafeInteger(record.generation)) return;
   if (record.generation <= (askedGeneration ?? 0)) return;
   const slash = key.indexOf('/');
-  if (record.appName !== key.slice(0, slash) || record.role !== key.slice(slash + 1)) return;
+  if (record.identity !== key.slice(0, slash) || record.role !== key.slice(slash + 1)) return;
   if (learning.has(key)) return;
   learning.add(key);
   try {
@@ -303,9 +303,9 @@ async function learnGeneration(key, askedGeneration, answer) {
  * verification: the roster chain re-verifies against the membership, the
  * cancel chain is adopted as published state.
  */
-async function readMasterleaseRoster(appName, role) {
+async function readMasterleaseRoster(identity, role) {
   try {
-    const record = await messageStore.getMasterleaseRecord(appName, role);
+    const record = await messageStore.getMasterleaseRecord(identity, role);
     const data = record?.data;
     if (!data || typeof data.fingerprint !== 'string') return null;
     return {
@@ -382,8 +382,8 @@ async function withStoreCancellations(members, chain, cancels, membership, walkK
  * this node's own locations view.
  */
 async function standbysFor(key, selfOutpoint) {
-  const appName = key.slice(0, key.indexOf('/'));
-  const rows = await registryManager.appLocation(appName);
+  const identity = key.slice(0, key.indexOf('/'));
+  const rows = await registryManager.appLocationOf(identity);
   const membership = networkStateService.membershipAt(networkStateService.membershipFingerprint()) ?? [];
   const byHost = new Map();
   membership.forEach((node) => byHost.set(extractIp(node.ip), node));
@@ -1941,8 +1941,8 @@ function holderFor(key) {
  * with messageStore.onGrantGenerationRecord by the service wiring. Only a
  * holder of that key has anything to do about it.
  */
-function noteGenerationRecord({ appName, role, generation }) {
-  const key = `${appName}/${role}`;
+function noteGenerationRecord({ identity, role, generation }) {
+  const key = `${identity}/${role}`;
   const holder = held.get(key);
   if (holder) holder.noteGeneration(generation);
   return startCourier(key, generation);

@@ -27,6 +27,7 @@ describe('appUninstaller tests', () => {
   let relationshipResolverStub;
   let pendingTeardownStoreStub;
   let mastershipGrantGateStub;
+  let meshOrdinalsStub;
 
   beforeEach(() => {
     configStub = {
@@ -141,6 +142,7 @@ describe('appUninstaller tests', () => {
     mastershipGrantGateStub = {
       onComponentTeardown: sinon.stub().resolves(),
     };
+    meshOrdinalsStub = { releaseOrdinal: sinon.stub().resolves() };
 
     runCommandStub = sinon.stub().resolves({ error: null, stdout: '', stderr: '' });
     volumeServiceStub = {
@@ -209,6 +211,9 @@ describe('appUninstaller tests', () => {
       },
       '../utils/fluxShutdowndClient': fluxShutdowndClientStub,
       './mastershipGrantGate': mastershipGrantGateStub,
+      '../appMesh/meshOrdinals': meshOrdinalsStub,
+      '../appMesh/meshReconciler': { removeAppMesh: sinon.stub().resolves() },
+      '../appDecisions/appHistory': { latestApplied: sinon.stub().resolves(null) },
     });
   });
 
@@ -312,6 +317,7 @@ describe('appUninstaller tests', () => {
     const component = () => ({
       identifier: 'web_TestApp',
       appName: 'TestApp',
+      identity: 'ab12cd34ef56',
       name: 'web',
       hasActiveStandbySyncthing: () => true,
     });
@@ -324,7 +330,7 @@ describe('appUninstaller tests', () => {
     it('a volume-destroying teardown releases the grant', async () => {
       await appUninstaller.uninstallComponent(component(), { removeVolumes: true }).catch(() => {});
       sinon.assert.calledOnceWithExactly(
-        mastershipGrantGateStub.onComponentTeardown, 'web_TestApp', 'TestApp',
+        mastershipGrantGateStub.onComponentTeardown, 'web_TestApp', 'ab12cd34ef56',
       );
     });
 
@@ -375,13 +381,16 @@ describe('appUninstaller tests', () => {
         owner: '1own',
         reason: 'user-cancel',
         shutdownBudgetSeconds: 30,
+        identity: 'ab12cd34ef56',
         components: [{
           identifier: 'web_myapp', appId: 'fluxweb_myapp', label: 'web', ports: [],
         }],
       });
       sinon.assert.calledOnceWithExactly(
-        mastershipGrantGateStub.onComponentTeardown, 'web_myapp', 'myapp',
+        mastershipGrantGateStub.onComponentTeardown, 'web_myapp', 'ab12cd34ef56',
       );
+      // The app's ordinal goes back under its identity too.
+      sinon.assert.calledOnceWithExactly(meshOrdinalsStub.releaseOrdinal, 'ab12cd34ef56');
     });
   });
 

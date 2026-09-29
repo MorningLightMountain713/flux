@@ -3,6 +3,7 @@
 const config = require('config');
 const dbHelper = require('../dbHelper');
 const appsRepository = require('./appsRepository');
+const decisionStore = require('../appDecisions/decisionStore');
 const foundingCommittee = require('../appMesh/foundingCommittee');
 const log = require('../../lib/log');
 const messageHelper = require('../messageHelper');
@@ -86,7 +87,7 @@ async function materializeFoundingView(specDoc) {
     const view = await specCutover.resolveInstantiatedSpec(instantiated);
     if (!view) return;
     await foundingCommittee.applyComponentView({
-      name: specDoc.name,
+      identity: specDoc.identity,
       height: specDoc.height,
       network: view.network,
       components: view.components,
@@ -147,6 +148,19 @@ async function getAppHashes(_req, res) {
  */
 async function appLocation(appname) {
   return appsRepository.appLocationFromEvents(appname ? { appname } : {});
+}
+
+/**
+ * Where the app with an identity runs: the nodes whose announced spec is one of
+ * that app's applied specs, whichever of them each node runs. A node still
+ * running an earlier app registered under the same name is not one of them.
+ * @param {string} identity
+ * @returns {Promise<Array>} location rows
+ */
+async function appLocationOf(identity) {
+  const { name, hashes } = await decisionStore.appliedHashesOf(identity);
+  if (!name) return [];
+  return appsRepository.appLocationFromEvents({ appname: name, hashes });
 }
 
 /**
@@ -1289,6 +1303,7 @@ module.exports = {
   setOnSpecStored,
   getAppHashes,
   appLocation,
+  appLocationOf,
   appInstallingLocation,
   installingCountsByApp,
   appInstallingErrorsLocation,

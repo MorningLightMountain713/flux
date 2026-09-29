@@ -81,6 +81,7 @@ describe('appRegistry', () => {
       },
       './registryManager': { storeGlobalSpec: sinon.stub().resolves() },
       '../appLifecycle/contentSlotService': { promoteQuarantinedManifest: sinon.stub().resolves() },
+      '../appMesh/foundingCommittee': { forget: sinon.stub().resolves(), retract: sinon.stub().resolves() },
       '../utils/fluxEventBus': { publish: sinon.stub() },
       '../appDecisions/decider': { onDecided: sinon.stub(), onFullPass: sinon.stub() },
       '../appDecisions/decisionStore': {
@@ -286,7 +287,7 @@ describe('appRegistry', () => {
       // The message is refused on this run: the name has no applied message.
       await registry.applyDecided('myapp', [decision('r', { decision: 'refused', reason: 'unauthorized' })]);
 
-      sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeGlobalAppInfo, 'myapp');
+      sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeGlobalAppInfo, 'MyApp');
     });
 
     it('loses its row when its latest applied app has expired', async () => {
@@ -298,6 +299,42 @@ describe('appRegistry', () => {
 
       sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeGlobalAppInfo, 'myapp');
       sinon.assert.notCalled(stubs['./registryManager'].storeGlobalSpec);
+    });
+  });
+
+  describe('the founding record follows the row', () => {
+    it('is forgotten when the app leaves the list', async () => {
+      await listed([{ name: 'deadapp', spec: await v9Spec({ name: 'deadapp' }), fields: { termStart: NOW - 30 * 86_400, identity: 'aaaaaaaaaaaa' } }]);
+      stubs['../appMesh/foundingCommittee'].forget.resetHistory();
+
+      await registry.blockScanned({ height: SCANNED_HEIGHT + 1, time: NOW + 1 });
+
+      sinon.assert.calledOnceWithExactly(stubs['../appMesh/foundingCommittee'].forget, 'aaaaaaaaaaaa');
+    });
+
+    it('is forgotten when another app takes the name', async () => {
+      const spec = await v9Spec({ name: 'myapp' });
+      messages = [message('new', spec)];
+      rows = [{ ...(await instantiatedSpec(spec, { hash: 'old', height: 980_000 })).serialize(), identity: 'aaaaaaaaaaaa' }];
+
+      await registry.applyDecided('myapp', [decision('new', { identity: 'bbbbbbbbbbbb', height: 990_000 })]);
+
+      sinon.assert.calledOnceWithExactly(stubs['../appMesh/foundingCommittee'].forget, 'aaaaaaaaaaaa');
+      sinon.assert.notCalled(stubs['../appMesh/foundingCommittee'].retract);
+    });
+
+    it('is wound back when the app goes back to an earlier spec, and left alone when it moves forward', async () => {
+      const spec = await v9Spec({ name: 'myapp' });
+      messages = [message('earlier', spec), message('later', spec)];
+      rows = [{ ...(await instantiatedSpec(spec, { hash: 'refused-later', height: 995_000 })).serialize(), identity: 'aaaaaaaaaaaa' }];
+
+      await registry.applyDecided('myapp', [decision('earlier', { identity: 'aaaaaaaaaaaa', height: 990_000 })]);
+      sinon.assert.calledOnceWithExactly(stubs['../appMesh/foundingCommittee'].retract, 'aaaaaaaaaaaa', 990_000);
+
+      rows = [{ ...(await instantiatedSpec(spec, { hash: 'earlier', height: 990_000 })).serialize(), identity: 'aaaaaaaaaaaa' }];
+      await registry.applyDecided('myapp', [decision('later', { identity: 'aaaaaaaaaaaa', height: 999_000 })]);
+      sinon.assert.calledOnce(stubs['../appMesh/foundingCommittee'].retract);
+      sinon.assert.notCalled(stubs['../appMesh/foundingCommittee'].forget);
     });
   });
 

@@ -849,7 +849,7 @@ function buildOrdinalConditionalUpsert(ordinals, broadcastedAt, conditionalField
 }
 
 async function handleMasterleaseEvent({ message, envelope, announcer }) {
-  if (!message || !message.ip || !message.appName || !message.role || !message.grantee) return;
+  if (!message || !message.ip || !message.identity || !message.role || !message.grantee) return;
   if (!Number.isSafeInteger(message.epoch) || message.epoch < 1) return;
   if (message.mode !== 'held' && message.mode !== 'oneshot') return;
   if (!Number.isSafeInteger(message.broadcastedAt)) return;
@@ -879,7 +879,7 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
   const announced = local ? null : outpointOf(announcer);
   if (!local && message.released !== true && announced !== message.grantee) {
     fluxEventBus.publish('quorumGrant:masterleaseDropped', {
-      appName: message.appName,
+      identity: message.identity,
       role: message.role,
       grantee: message.grantee,
       announcer: announced,
@@ -904,7 +904,7 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
       acceptances: message.acceptances,
     };
     const dropped = (reason) => fluxEventBus.publish('quorumGrant:masterleaseDropped', {
-      appName: message.appName, role: message.role, grantee: message.grantee, announcer: announced, reason,
+      identity: message.identity, role: message.role, grantee: message.grantee, announcer: announced, reason,
     });
     if (!rosterOverlay.credentialWellFormed(carried)) {
       dropped('malformed acceptances');
@@ -912,7 +912,7 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
     }
     const membership = networkStateService.membershipAt(message.fingerprint);
     if (membership) {
-      const proved = rosterOverlay.verifyTermCredential(membership, `${message.appName}/${message.role}`, carried, {
+      const proved = rosterOverlay.verifyTermCredential(membership, `${message.identity}/${message.role}`, carried, {
         committeeSize: config.get('fluxapps.quorumGrantHeldCommitteeSize'),
         candidate: message.grantee,
         expectedGeneration: carried.generation,
@@ -924,14 +924,14 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
       verified = true;
     } else {
       fluxEventBus.publish('quorumGrant:masterleaseUnverified', {
-        appName: message.appName, role: message.role, grantee: message.grantee, fingerprint: message.fingerprint,
+        identity: message.identity, role: message.role, grantee: message.grantee, fingerprint: message.fingerprint,
       });
     }
   }
   try {
     const db = dbHelper.databaseConnection();
     const database = db.db(config.get('database.appsglobal.database'));
-    const dedupKey = `masterlease:${message.appName}/${message.role}`;
+    const dedupKey = `masterlease:${message.identity}/${message.role}`;
     // One row per app/role — the record names the MASTER, not a node, so the
     // query carries no ip: a successor's record replaces the deposed
     // master's rather than accumulating beside it. Durable until superseded,
@@ -986,7 +986,7 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
 const grantGenerationListeners = new Set();
 
 /**
- * Register a listener for `{appName, role, generation}`, called whenever a
+ * Register a listener for `{identity, role, generation}`, called whenever a
  * written generation record is the standing one for its key afterwards — a
  * fresh arrival and a re-delivery alike, so listeners must be idempotent.
  * Returns the unregister function.
@@ -1018,10 +1018,10 @@ async function handleGrantGenerationEvent({ message, envelope }) {
     // matters. Say WHICH drop this was — a record that never arrived and one
     // dropped for a missing spec are indistinguishable from outside, and the
     // ambiguity cost two fleet runs. publish() is a no-op outside the harness.
-    const owner = await appsRepository.getGlobalAppOwner(message.appName);
+    const owner = await appsRepository.getGlobalAppOwnerByIdentity(message.identity);
     if (!owner || !ownerGenerationRecord.verify(message, owner)) {
       fluxEventBus.publish('quorumGrant:generationRecordDropped', {
-        appName: message.appName,
+        identity: message.identity,
         role: message.role,
         generation: message.generation,
         reason: owner ? 'owner signature does not verify' : 'no spec to resolve the owner against',
@@ -1031,7 +1031,7 @@ async function handleGrantGenerationEvent({ message, envelope }) {
 
     const db = dbHelper.databaseConnection();
     const database = db.db(config.get('database.appsglobal.database'));
-    const dedupKey = `grantgeneration:${message.appName}/${message.role}`;
+    const dedupKey = `grantgeneration:${message.identity}/${message.role}`;
     // Durable and generation-newer-wins: a lower generation can never un-seat
     // a higher one, a replay refreshes nothing, and a re-pinned committee
     // months later must still find the newest generation standing.
@@ -1057,14 +1057,14 @@ async function handleGrantGenerationEvent({ message, envelope }) {
     );
 
     fluxEventBus.publish('quorumGrant:generationRecord', {
-      appName: message.appName, role: message.role, generation: message.generation,
+      identity: message.identity, role: message.role, generation: message.generation,
     });
 
     // The write decided newest-wins; the row as it now stands says whether
     // THIS record is the standing one. An older record that lost is not.
     if (standing?.data?.generation === message.generation) {
       notifyGrantGenerationListeners({
-        appName: message.appName, role: message.role, generation: message.generation,
+        identity: message.identity, role: message.role, generation: message.generation,
       });
     }
 
@@ -1082,11 +1082,11 @@ async function handleGrantGenerationEvent({ message, envelope }) {
 /**
  * The newest owner generation record for one app role, or null.
  */
-async function getGrantGenerationRecord(appName, role) {
+async function getGrantGenerationRecord(identity, role) {
   const db = dbHelper.databaseConnection();
   const database = db.db(config.get('database.appsglobal.database'));
   return database.collection(globalAppStateEvents).findOne(
-    { type: APP_STATE_EVENT_TYPES.GRANTGENERATION, dedupKey: `grantgeneration:${appName}/${role}` },
+    { type: APP_STATE_EVENT_TYPES.GRANTGENERATION, dedupKey: `grantgeneration:${identity}/${role}` },
     { projection: { _id: 0 } },
   );
 }
@@ -1095,11 +1095,11 @@ async function getGrantGenerationRecord(appName, role) {
  * The published grant record for one app role, or null. What standbys, FDM
  * and re-pinned committees consult — public fact, one row, newest epoch.
  */
-async function getMasterleaseRecord(appName, role) {
+async function getMasterleaseRecord(identity, role) {
   const db = dbHelper.databaseConnection();
   const database = db.db(config.get('database.appsglobal.database'));
   return database.collection(globalAppStateEvents).findOne(
-    { type: APP_STATE_EVENT_TYPES.MASTERLEASE, dedupKey: `masterlease:${appName}/${role}` },
+    { type: APP_STATE_EVENT_TYPES.MASTERLEASE, dedupKey: `masterlease:${identity}/${role}` },
     { projection: { _id: 0 } },
   );
 }
@@ -1139,10 +1139,10 @@ async function getMasterleaseRecordsByGrantee(rolePrefix, grantee) {
     .toArray();
 }
 
-async function getMasterleaseRecordsByRolePrefix(appName, rolePrefix) {
+async function getMasterleaseRecordsByRolePrefix(identity, rolePrefix) {
   const db = dbHelper.databaseConnection();
   const database = db.db(config.get('database.appsglobal.database'));
-  const escaped = `masterlease:${appName}/${rolePrefix}`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped = `masterlease:${identity}/${rolePrefix}`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return database.collection(globalAppStateEvents)
     .find(
       { type: APP_STATE_EVENT_TYPES.MASTERLEASE, dedupKey: { $regex: `^${escaped}` } },
