@@ -21,8 +21,9 @@ async function get(path) {
   return res.json();
 }
 
-// Full snapshot: blob metadata, stored manifests, the reconcile log, strict
-// floors, and the active mode. The primary assertion surface.
+// Full snapshot: blob metadata, the manifest each name serves (`manifests`),
+// every stored manifest row (`manifestRows`), the name holders, the reconcile
+// log, strict floors, and the active mode. The primary assertion surface.
 export async function getFluxDriveState() {
   return get('/state');
 }
@@ -31,6 +32,7 @@ export async function getFluxDriveBlob(locator) {
   return get(`/blob/${locator}`);
 }
 
+// The manifest the name serves.
 export async function getFluxDriveManifest(appName) {
   return get(`/manifest/${encodeURIComponent(appName)}`);
 }
@@ -41,13 +43,16 @@ export async function seedFluxDriveBlob(locator, bytes, opts = {}) {
   return post(`/blob/${locator}`, { base64, appName: opts.appName, source: opts.source });
 }
 
-// Pre-seed a manifest backstop. confirmed defaults true (immediately servable).
+// Pre-seed a manifest backstop under the identity it names. confirmed defaults
+// true (immediately servable).
 export async function seedFluxDriveManifest(appName, version, manifest, opts = {}) {
   return post(`/manifest/${encodeURIComponent(appName)}`, { version, manifest, confirmed: opts.confirmed });
 }
 
-export async function promoteFluxDriveManifest(appName) {
-  return post(`/manifest/${encodeURIComponent(appName)}/promote`);
+// Make `identity` the name's holder: its manifest is confirmed, every other
+// row of the name is evicted, and a manifest for another identity is refused.
+export async function promoteFluxDriveManifest(appName, identity) {
+  return post(`/manifest/${encodeURIComponent(appName)}/promote`, { identity });
 }
 
 // Toggle strict (floors/409s/confirmed-gating), slow (per-request delay ms), or
