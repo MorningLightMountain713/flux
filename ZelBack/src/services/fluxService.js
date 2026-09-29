@@ -1817,7 +1817,7 @@ async function getFluxInfo(req, res) {
     }
     info.benchmark.bench = benchmarkBenchRes.data;
 
-    const apppsFluxUsage = await resourceQueryService.fluxUsage();
+    const apppsFluxUsage = await appQueryService.fluxUsage();
     if (apppsFluxUsage.status === 'error') {
       throw apppsFluxUsage.data;
     }
