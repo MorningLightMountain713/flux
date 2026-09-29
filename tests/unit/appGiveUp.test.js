@@ -15,6 +15,7 @@ const appEvacuationSafety = require('../../ZelBack/src/services/appLifecycle/app
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
 const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
 const appGiveUp = require('../../ZelBack/src/services/appLifecycle/appGiveUp');
+const peerComponentProbe = require('../../ZelBack/src/services/appLifecycle/peerComponentProbe');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const domain = require('./fixtures/appDomain');
 const { loadSpecLibrary, v9Spec, V9_SUBMISSION } = require('./fixtures/fluxSpec');
@@ -311,8 +312,6 @@ describe('appGiveUp - handing an app back', () => {
   });
 
   describe('surplusVerdict - which copy stands aside', () => {
-    const appOperations = require('../../ZelBack/src/services/appLifecycle/appOperations');
-    const appEvacuationSafety = require('../../ZelBack/src/services/appLifecycle/appEvacuationSafety');
 
     const NEWEST = '1.2.3.4:16127';
     const OLDEST = '9.9.9.9:16127';
@@ -381,7 +380,7 @@ describe('appGiveUp - handing an app back', () => {
 
     it('the next copy trims instead, but only on a confirmed writer', async () => {
       withWriter('web_gapp');
-      sinon.stub(appOperations, 'peerComponentState').resolves(appOperations.PeerComponent.RUNNING);
+      sinon.stub(peerComponentProbe, 'peerComponentState').resolves(peerComponentProbe.PeerComponent.RUNNING);
 
       const verdict = await appGiveUp.surplusVerdict(
         app, twoCopies, OLDEST, { runningLocally: async () => false, liveness: {} },
@@ -397,7 +396,7 @@ describe('appGiveUp - handing an app back', () => {
     ['UNKNOWN', 'NOT_RUNNING'].forEach((state) => {
       it(`the next copy does NOT trim when the newest answers ${state}`, async () => {
         withWriter('web_gapp');
-        sinon.stub(appOperations, 'peerComponentState').resolves(appOperations.PeerComponent[state]);
+        sinon.stub(peerComponentProbe, 'peerComponentState').resolves(peerComponentProbe.PeerComponent[state]);
 
         const verdict = await appGiveUp.surplusVerdict(
           app, twoCopies, OLDEST, { runningLocally: async () => false, liveness: {} },
