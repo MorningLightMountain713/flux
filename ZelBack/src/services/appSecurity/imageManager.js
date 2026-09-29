@@ -12,6 +12,9 @@ const { supportedArchitectures } = require('../utils/appConstants');
 const { default: fluxCaching, FluxCacheManager } = require('../utils/cacheManager');
 const policyStore = require('../policyStore');
 const { Privilege, authOf } = require('../utils/privileges');
+const appsRepository = require('../appDatabase/appsRepository');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
+const appUninstaller = require('../appLifecycle/appUninstaller');
 
 /**
  * Classify error type and determine appropriate cache TTL
@@ -402,7 +405,6 @@ function createComplianceSweeper({
   imagesOf,
   uninstall,
   blocklist = getBlocklist,
-  // eslint-disable-next-line global-require
   policy = {
     get policyReady() { return capabilities.isUp('policyCurrent'); },
     waitForPolicyReady: () => capabilities.whenUp('policyCurrent'),
@@ -768,17 +770,9 @@ function createComplianceSweeper({
 /**
  * What the sweeper reads and acts on for this node: the installed table, the images
  * its deployment views run, and the uninstaller.
- *
- * Required when called, not when this module loads: the installer and the spawner
- * load this module, and the uninstaller and the deployment layer load theirs.
  * @returns {{listInstalled: Function, readInstalled: Function, imagesOf: Function, uninstall: Function}}
  */
 function nodeComplianceDeps() {
-  /* eslint-disable global-require */
-  const appsRepository = require('../appDatabase/appsRepository');
-  const deploymentProvider = require('../appRuntime/deploymentProvider');
-  const appUninstaller = require('../appLifecycle/appUninstaller');
-  /* eslint-enable global-require */
   return {
     listInstalled: () => appsRepository.listInstalledAppsAndUnreadable(),
     // A row this node holds and cannot read is not a row it does not hold.

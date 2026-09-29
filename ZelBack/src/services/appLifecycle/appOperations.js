@@ -2657,7 +2657,6 @@ async function coordinateActiveStandbyApps() {
 
                 if (!isReady) {
                   log.info(`activeStandby: app:${appName} is not ready yet (syncthing not synced), skipping primary selection for this cycle`);
-                  // eslint-disable-next-line global-require
                   // eslint-disable-next-line no-continue
                   continue;
                 }
@@ -2944,7 +2943,6 @@ function startActiveStandbyCoordinator() {
 
 /**
  * Get from another peer the list of apps installing errors or just for a specific application name
- // eslint-disable-next-line global-require
  * @returns {Promise<void>}
  */
 async function getPeerAppsInstallingErrorMessages() {

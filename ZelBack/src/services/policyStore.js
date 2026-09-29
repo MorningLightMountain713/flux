@@ -10,6 +10,7 @@ const capabilities = require('./utils/capabilities');
 const policyArtifactRepository = require('./appDatabase/policyArtifactRepository');
 const fluxEventBus = require('./utils/fluxEventBus');
 const { verifyBundle, MAX_BUNDLE_BYTES } = require('./utils/policySignature');
+const generalService = require('./generalService');
 
 // The network's policy documents, as one signed bundle.
 //
@@ -752,16 +753,12 @@ function backstopPhaseMs(identity, periodMs) {
 /**
  * This node's identity for phasing: its collateral, which is unique and outlives a reboot.
  *
- * Resolved through a local require to keep policyStore off generalService's load path -
- * the same reason fluxCommunicationMessagesSender requires this module locally. A node
- * that cannot answer falls back to a random phase, which is worse than a stable one but
- * still better than every node sharing zero.
+ * A node that cannot answer falls back to a random phase, which is worse than a stable
+ * one but still better than every node sharing zero.
  * @returns {Promise<string>}
  */
 async function nodePhaseIdentity() {
   try {
-    // eslint-disable-next-line global-require
-    const generalService = require('./generalService');
     const collateral = await generalService.obtainNodeCollateralInformation();
     if (collateral && collateral.txhash) return `${collateral.txhash}:${collateral.txindex}`;
   } catch (error) {

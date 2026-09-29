@@ -74,31 +74,6 @@ const REPO_ROOT = path.join(__dirname, '../../../');
 // Cache for OS distribution information
 let cachedOSDistInfo = null;
 
-// remove this when nodes are off 14.18.1
-function promiseAnyPolyfill(promisesArray) {
-  const promiseErrors = new Array(promisesArray.length);
-
-  return new Promise((resolve, reject) => {
-    promisesArray.forEach((promise, index) => {
-      Promise.resolve(promise)
-        .then(resolve)
-        .catch((error) => {
-          promiseErrors[index] = error;
-
-          if (index === promisesArray.length - 1) {
-            reject(promiseErrors);
-          }
-        });
-    });
-  });
-}
-
-if (typeof Promise.any === 'undefined') {
-  // polyfill for nodeJS 14.18.1
-  // eslint-disable-next-line global-require
-  globalThis.Promise.any = promiseAnyPolyfill;
-}
-
 /**
  * Stream chain lock, so only one request at a time
  */

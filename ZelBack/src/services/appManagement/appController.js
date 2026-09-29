@@ -255,7 +255,6 @@ async function appStop(req, res) {
     if (!appname) {
       throw new Error('No Flux App specified');
     }
-    // eslint-disable-next-line global-require
 
     const mainAppName = deploymentProvider.appNameFromRequest(appname);
 
@@ -412,7 +411,6 @@ async function appRestart(req, res) {
     global = global || req.query.global || false;
     global = serviceHelper.ensureBoolean(global);
 
-    // eslint-disable-next-line global-require
     if (!appname) {
       throw new Error('No Flux App specified');
     }
@@ -486,7 +484,6 @@ async function appRestart(req, res) {
 async function appKill(req, res) {
   try {
     let { appname } = req.params;
-    // eslint-disable-next-line global-require
     appname = appname || req.query.appname;
 
     if (!appname) {

@@ -16,6 +16,7 @@ const capabilities = require('./utils/capabilities');
 const { Privilege, authOf } = require('./utils/privileges');
 const appEventVerifier = require('./appMessaging/appEventVerifier');
 const appsRepository = require('./appDatabase/appsRepository');
+const policyStore = require('./policyStore');
 
 const myMessageCache = cacheManager.tempMessageCache;
 
@@ -146,8 +147,6 @@ async function respondWithAppMessage(msgObj, peer) {
  */
 async function respondWithPolicy(msgObj, peer) {
   try {
-    // eslint-disable-next-line global-require
-    const policyStore = require('./policyStore');
     const message = msgObj.data;
     if (!message || message.version !== 1) return;
     const askerSeq = Number.isInteger(message.seq) ? message.seq : 0;

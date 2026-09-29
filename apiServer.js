@@ -21,13 +21,6 @@ if (configError) {
   process.exit(1);
 }
 
-if (typeof AbortController === 'undefined') {
-  // polyfill for nodeJS 14.18.1 - without having to use experimental features
-  // eslint-disable-next-line global-require
-  const abortControler = require('node-abort-controller');
-  globalThis.AbortController = abortControler.AbortController;
-}
-
 const fs = require('node:fs');
 const http = require('node:http');
 const https = require('node:https');
