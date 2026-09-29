@@ -12,7 +12,7 @@ describe('fluxStorageRefs tests', () => {
     axiosGet = sinon.stub();
     fluxStorageRefs = proxyquire('../../ZelBack/src/services/utils/fluxStorageRefs', {
       '../serviceHelper': { axiosGet },
-      '../fluxCommunicationMessagesSender': {
+      './fluxBroadcastHelper': {
         getFluxMessageSignature: sinon.stub().resolves('sig'),
       },
       '../../lib/log': { error: sinon.stub(), info: sinon.stub() },
@@ -49,6 +49,15 @@ describe('fluxStorageRefs tests', () => {
       expect(payload).to.deep.equal(['A=1']);
       sinon.assert.calledOnce(axiosGet);
       expect(axiosGet.firstCall.args[1].maxRedirects).to.equal(0);
+    });
+
+    it('signs the request with the node key', async () => {
+      axiosGet.resolves({ data: ['A=1'] });
+      await fluxStorageRefs.obtainPayloadFromStorage('https://storage.runonflux.io/v1/env/abc', 'myapp');
+      const { headers } = axiosGet.firstCall.args[1];
+      expect(headers['flux-signature']).to.equal('sig');
+      expect(headers['flux-message']).to.match(/^1https:\/\/storage\.runonflux\.io\/v1\/env\/abc\d+$/);
+      expect(headers['flux-app']).to.equal('myapp');
     });
   });
 

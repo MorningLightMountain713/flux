@@ -9,12 +9,7 @@ const { version: FLUX_VERSION } = require('../../../../package.json');
 const peerCodec = require('./peerCodec');
 const rateLimit = require('./rateLimit');
 const { isOrdered } = require('./messageRoutes');
-
-let _fluxNetworkHelper;
-function getFluxNetworkHelper() {
-  if (!_fluxNetworkHelper) _fluxNetworkHelper = require('../fluxNetworkHelper');
-  return _fluxNetworkHelper;
-}
+const clockDrift = require('../clockDrift');
 
 /**
  * Milliseconds from a clock that only moves forward.
@@ -486,7 +481,7 @@ class FluxPeerSocket {
           const ts = Number(tsStr);
           if (ts > 0) {
             let delay = Date.now() - ts;
-            const localOffset = getFluxNetworkHelper().getLocalClockOffsetMs();
+            const localOffset = clockDrift.getLocalClockOffsetMs();
             if (localOffset !== null && this.remoteClockOffsetMs !== null) {
               delay -= (localOffset - this.remoteClockOffsetMs);
             }
