@@ -499,7 +499,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     }
 
     async function v8Spec() {
-      const { deserializeSpec } = await import('@runonflux/flux-spec-backend');
+      const { deserializeSpec } = await specLibs.getSpecBackend();
       return deserializeSpec({
         version: 8,
         name: 'upgradeapp',

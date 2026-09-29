@@ -22,6 +22,7 @@
 const benchmarkService = require('../benchmarkService');
 const { aeadDecrypt } = require('../utils/aeadCrypto');
 const { getSpec } = require('../utils/specLibs');
+const moduleLoader = require('../../lib/moduleLoader');
 
 let hpkeCache;
 
@@ -29,7 +30,7 @@ async function getHpke() {
   if (hpkeCache) return hpkeCache;
   const {
     CipherSuite, DhkemX25519HkdfSha256, HkdfSha256, Aes256Gcm,
-  } = await import('@hpke/core');
+  } = await moduleLoader.importModule('@hpke/core');
   const suite = new CipherSuite({
     kem: new DhkemX25519HkdfSha256(),
     kdf: new HkdfSha256(),

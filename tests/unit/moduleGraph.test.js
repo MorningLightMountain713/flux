@@ -6,9 +6,10 @@ const { expect } = require('chai');
 const espree = require('espree');
 
 // FluxOS loads code in one of two ways: a module requires what it uses at the top
-// of its file, or lib/moduleLoader loads a handler after the API listens. These
-// tests read every shipped source file and hold both rules, so a late require or an
-// import cycle fails here rather than as a half-initialised module on a node.
+// of its file, or lib/moduleLoader loads it later - a handler after the API
+// listens, or an ES module through importModule. These tests read every shipped
+// source file and hold both rules, so a late require, an import() or an import
+// cycle fails here rather than as a half-initialised module on a node.
 
 const ROOT = path.join(__dirname, '../..');
 const SOURCE_DIR = path.join(ROOT, 'ZelBack/src');
@@ -34,8 +35,9 @@ function resolveRelative(from, specifier) {
 }
 
 /**
- * Every require() call in a file: its line, its specifier (null when not a string
- * literal), and whether it runs when the file loads rather than inside a function.
+ * Every require() call and import() expression in a file: its line, its specifier
+ * (null when not a string literal), whether it is an import(), and whether it runs
+ * when the file loads rather than inside a function.
  */
 function requireCalls(file) {
   const ast = espree.parse(fs.readFileSync(file, 'utf8'), { ecmaVersion: 'latest', loc: true });
@@ -48,7 +50,16 @@ function requireCalls(file) {
       calls.push({
         line: node.loc.start.line,
         specifier: argument && argument.type === 'Literal' ? argument.value : null,
+        dynamic: false,
         atLoad: !inFunction,
+      });
+    }
+    if (node.type === 'ImportExpression') {
+      calls.push({
+        line: node.loc.start.line,
+        specifier: node.source.type === 'Literal' ? node.source.value : null,
+        dynamic: true,
+        atLoad: false,
       });
     }
     Object.keys(node).forEach((key) => {
@@ -106,7 +117,8 @@ describe('module graph', () => {
     expect(files.length).to.be.greaterThan(300);
     const loaderCalls = callsByFile.get(LOADER);
     expect(loaderCalls, 'the loader is read').to.not.equal(undefined);
-    expect(loaderCalls.some((call) => !call.atLoad), 'the loader\'s late require is seen as late').to.equal(true);
+    expect(loaderCalls.some((call) => !call.atLoad && !call.dynamic), 'the loader\'s late require is seen as late').to.equal(true);
+    expect(loaderCalls.some((call) => call.dynamic), 'the loader\'s import() is seen').to.equal(true);
   });
 
   it('requires every module when its file loads, apart from the loader', () => {
@@ -114,7 +126,7 @@ describe('module graph', () => {
     callsByFile.forEach((calls, file) => {
       if (file === LOADER) return;
       calls.filter((call) => !call.atLoad)
-        .forEach((call) => late.push(`${relative(file)}:${call.line} require(${JSON.stringify(call.specifier)})`));
+        .forEach((call) => late.push(`${relative(file)}:${call.line} ${call.dynamic ? 'import' : 'require'}(${JSON.stringify(call.specifier)})`));
     });
     expect(late, 'require it at the top of the file, or load it through lib/moduleLoader').to.deep.equal([]);
   });
@@ -123,6 +135,7 @@ describe('module graph', () => {
     const graph = new Map();
     callsByFile.forEach((calls, file) => {
       graph.set(file, new Set(calls
+        .filter((call) => !call.dynamic)
         .map((call) => (call.specifier ? resolveRelative(file, call.specifier) : null))
         .filter(Boolean)));
     });

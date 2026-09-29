@@ -33,6 +33,7 @@ const {
 const legacyPricingRegime = require('../../ZelBack/src/services/pricing/legacyPricingRegime');
 const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
 const appSpecHelpers = require('../../ZelBack/src/services/utils/appSpecHelpers');
+const moduleLoader = require('../../ZelBack/src/lib/moduleLoader');
 
 // The spec library is real here — see tests/unit/fixtures/fluxSpec.js for why.
 // Every spec, component, placement and registration below is a real class
@@ -545,7 +546,7 @@ describe('appSpecHelpers tests', () => {
     after(async () => {
       const {
         InsecureTestCryptoProvider, InsecureLegacyTestCryptoProvider,
-      } = await import('@runonflux/flux-spec-backend/testing');
+      } = await moduleLoader.importModule('@runonflux/flux-spec-backend/testing');
       flux.EncryptedSpecV8.registerProvider(() => new InsecureLegacyTestCryptoProvider());
       flux.EncryptedSpecV9.registerProvider(() => new InsecureTestCryptoProvider());
     });

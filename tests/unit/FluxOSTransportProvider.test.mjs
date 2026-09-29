@@ -1,14 +1,12 @@
-'use strict';
-
-const { expect } = require('chai');
-const transportProvider = require('../../ZelBack/src/services/providers/FluxOSTransportProvider');
+import { expect } from 'chai';
+import {
+  CipherSuite, DhkemX25519HkdfSha256, HkdfSha256, Aes256Gcm,
+} from '@hpke/core';
+import transportProvider from '../../ZelBack/src/services/providers/FluxOSTransportProvider.js';
 
 describe('FluxOSTransportProvider', () => {
   describe('seal (view direction)', () => {
     it('returns a TransportEnvelope a real HPKE recipient can open', async () => {
-      const {
-        CipherSuite, DhkemX25519HkdfSha256, HkdfSha256, Aes256Gcm,
-      } = await import('@hpke/core');
       const kem = new DhkemX25519HkdfSha256();
       const suite = new CipherSuite({ kem, kdf: new HkdfSha256(), aead: new Aes256Gcm() });
 
@@ -48,9 +46,6 @@ describe('FluxOSTransportProvider', () => {
     });
 
     it('binds the AAD — a recipient opening with the wrong AAD fails', async () => {
-      const {
-        CipherSuite, DhkemX25519HkdfSha256, HkdfSha256, Aes256Gcm,
-      } = await import('@hpke/core');
       const kem = new DhkemX25519HkdfSha256();
       const suite = new CipherSuite({ kem, kdf: new HkdfSha256(), aead: new Aes256Gcm() });
       const recipientKeyPair = await kem.generateKeyPair();

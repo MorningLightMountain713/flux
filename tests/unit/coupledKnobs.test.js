@@ -1,6 +1,8 @@
 const { expect } = require('chai');
 const proxyquire = require('proxyquire').noCallThru();
 const { asConfig } = require('./fixtures/config');
+const path = require('node:path');
+const moduleLoader = require('../../ZelBack/src/lib/moduleLoader');
 
 // coupled-knobs.js holds production's side of every harness ratio as constants,
 // because ZelBack/config/default.js requires the gitignored config/userconfig.js
@@ -11,11 +13,7 @@ describe('coupled harness knobs track production', () => {
   let knobs;
 
   before(async () => {
-    // The extension is required: this is a real ESM specifier resolved at
-    // runtime, not a bundler-resolved one, and the harness is ESM while this
-    // file is CJS.
-    // eslint-disable-next-line import/extensions
-    knobs = await import('../../test-infra/runner/framework/coupled-knobs.js');
+    knobs = await moduleLoader.importModule(path.join(__dirname, '../../test-infra/runner/framework/coupled-knobs.js'));
   });
 
   function productionConfig() {

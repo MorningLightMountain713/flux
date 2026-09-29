@@ -15,6 +15,7 @@ const v9PricingRegime = require('../../ZelBack/src/services/pricing/v9PricingReg
 const cacheManager = require('../../ZelBack/src/services/utils/cacheManager').default;
 const { v8Spec } = require('./fixtures/fluxSpec');
 const config = require('config');
+const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 
 let PricingModel;
 before(async () => {
@@ -181,7 +182,7 @@ describe('pricingRegime', () => {
         './legacyPricingRegime': legacy,
         './v9PricingRegime': v9,
       });
-      const { PricingModel } = await import('@runonflux/flux-spec');
+      const { PricingModel } = await specLibs.getSpec();
       const prevSpec = { pricingModel: PricingModel.CHAIN_FLOOR };
       const spec = { pricingModel: PricingModel.UNIFIED };
 
