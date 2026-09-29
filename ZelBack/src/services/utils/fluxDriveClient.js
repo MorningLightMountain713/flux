@@ -93,7 +93,8 @@ async function blobExists(locator, deps = {}) {
  * `{ version, timestamp, arcaneSig, ownerSig, manifest }` — FluxDrive authorizes the
  * operational dual-signature over sha256(appName:version:timestamp) (the node's
  * arcane sig + the owner PUT-sig produced by the frontend at submission), enforces a
- * per-(appName, owner) version floor, and stores the (sealed-slots) manifest verbatim.
+ * version floor per (appName, owner, manifest.identity), refuses a live app's manifest
+ * for another identity, and stores the (sealed-slots) manifest verbatim.
  *
  * @param {string} appName
  * @param {object} body - { version, timestamp, arcaneSig, ownerSig, manifest }
