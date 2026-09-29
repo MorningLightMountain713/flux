@@ -1,3 +1,5 @@
+'use strict';
+
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
@@ -10,6 +12,9 @@ const { untilSucceeds } = require('../../ZelBack/src/services/utils/untilSucceed
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
+const serviceManager = require('../../ZelBack/src/services/serviceManager');
+const nodeDownService = require('../../ZelBack/src/services/nodeDownService');
+const appStartupManager = require('../../ZelBack/src/services/appLifecycle/appStartupManager');
 
 describe('untilSucceeds', () => {
   afterEach(() => sinon.restore());
@@ -57,5 +62,22 @@ describe('serviceManager apps availability DOS state', () => {
     fluxNetworkHelper.setDosMessage('Flux IP detection failed');
 
     chai.expect(dosState.dosMessage).to.equal('Flux IP detection failed');
+  });
+});
+
+describe('serviceManager tests', () => {
+  afterEach(() => {
+    sinon.restore();
+  });
+
+  describe('wireServices', () => {
+    it('hands the node-down service the placement check that removes apps', () => {
+      const setPlacementCheck = sinon.stub(nodeDownService, 'setPlacementCheck');
+
+      serviceManager.wireServices();
+
+      sinon.assert.calledOnce(setPlacementCheck);
+      expect(setPlacementCheck.firstCall.args[0]).to.equal(appStartupManager.enforceNodePlacement);
+    });
   });
 });

@@ -122,6 +122,7 @@ const telemetryIdentityService = require('./telemetryIdentityService');
 const { version: fluxVersion } = require('../../../package.json');
 const clockDrift = require('./clockDrift');
 const appEnforcement = require('./appManagement/appEnforcement');
+const nodeDownService = require('./nodeDownService');
 // const throughputLogger = require('./utils/throughputLogger');
 
 // Initialize globalState caches with cacheManager
@@ -423,6 +424,15 @@ async function startDaemon() {
  * while the daemon syncs. An owner that throws is restarted on its own, which
  * is why a repeat claim returns the owner's handle.
  */
+/**
+ * Hand each service the collaborators it calls but must not import. Runs
+ * before any service starts: a certificate about this node can arrive by sync
+ * before the node-down service's own start.
+ */
+function wireServices() {
+  nodeDownService.setPlacementCheck(appStartupManager.enforceNodePlacement);
+}
+
 async function startFluxFunctions() {
   try {
     if (!config.get('server.allowedPorts').includes(+apiPort)) {
@@ -455,6 +465,7 @@ async function startFluxFunctions() {
     // the latch window (usually already latched by now). Depends only on the benchmark
     // channel, not the daemon/db.
     await nodeCapabilities.resolveNodeCapability();
+    wireServices();
     // De-auth hook: after each refresh that changes the enterprise owner map, drop
     // image-cache pins owned by a FluxId no longer allowed on this node. Tied to the
     // refresh (not a blind timer) because the owner list is the only input and it changes
@@ -1117,6 +1128,7 @@ async function startFluxFunctions() {
 module.exports = {
   startFluxFunctions,
   prepareDatabaseSchema,
+  wireServices,
   // testing exports
   dosState,
 };

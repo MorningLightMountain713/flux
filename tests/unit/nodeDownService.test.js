@@ -12,7 +12,7 @@ const tick = () => new Promise((resolve) => { setImmediate(() => setImmediate(re
 const MY_IP = '10.0.0.1:16127';
 const MY_OUTPOINT = 'me:0';
 
-function makeHarness() {
+function makeHarness(opts = {}) {
   const stubs = {
     registerWithGrantPlane: sinon.stub(),
     handleNodeDownEvent: sinon.stub().resolves({ accepted: true, rebroadcast: true, reason: 'stored' }),
@@ -62,7 +62,6 @@ function makeHarness() {
       holdAnnouncements: stubs.hold,
       releaseAnnouncements: stubs.release,
     },
-    './appLifecycle/appStartupManager': { enforceNodePlacement: stubs.enforcePlacement },
     './appMessaging/messageStore': {
       APP_STATE_EVENT_TYPES: { NODEALIVE: 'nodealive' },
       storeAppStateEvent: stubs.storeState,
@@ -77,6 +76,7 @@ function makeHarness() {
     './verificationHelper': { signMessage: stubs.signMessage, verifyMessage: stubs.verifyMessage },
     './utils/fluxBroadcastHelper': { serialiseAndSignFluxBroadcast: stubs.sign },
   });
+  if (opts.placementCheck !== false) service.setPlacementCheck(stubs.enforcePlacement);
   const peerManager = new EventEmitter();
   Object.assign(peerManager, {
     has: () => false,
@@ -243,6 +243,23 @@ describe('nodeDownService', () => {
     service.start(transport);
     await tick();
     expect(stubs.registerWithGrantPlane.callCount).to.equal(1);
+    service.stop();
+  });
+
+  // Nothing here may be the reason an app is deleted: with no check wired, the
+  // node keeps its apps and announces, as it does when the check throws.
+  it('announces when no placement check is wired', async () => {
+    const { service, transport, stubs } = makeHarness({ placementCheck: false });
+    service.start(transport);
+    await tick();
+
+    await service.onCertificateBroadcast({
+      certificate: { subject: MY_OUTPOINT, height: 100 },
+      broadcastedAt: Date.now(),
+    });
+    await tick();
+
+    expect(stubs.announce.callCount).to.equal(1);
     service.stop();
   });
 
