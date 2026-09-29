@@ -3,13 +3,14 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const { EventEmitter } = require('events');
-const proxyquire = require('proxyquire').noCallThru();
 
 const handlerA = sinon.stub();
 const handlerB = sinon.stub();
 const routes = { '/ws/flux/:port': handlerA, '/ws/flux': handlerA, '/ws/testendpoint': handlerB };
 
 const socketServer = require('../../ZelBack/src/lib/socketServer');
+const socketHandlersModule = require('../../ZelBack/src/lib/socketHandlers');
+const { peerManager } = require('../../ZelBack/src/services/utils/peerState');
 
 describe('FluxSocketServer tests', () => {
   beforeEach(async () => { });
@@ -180,10 +181,7 @@ describe('FluxSocketServer tests', () => {
   // handler table that failed to build.
   describe('the websocket routes a node answers', () => {
     it('is exactly this list', () => {
-      // eslint-disable-next-line global-require
-      const { socketHandlers } = require('../../ZelBack/src/lib/socketHandlers');
-
-      expect(Object.keys(socketHandlers).sort()).to.deep.equal([
+      expect(Object.keys(socketHandlersModule.socketHandlers).sort()).to.deep.equal([
         '/ws/flux',
         '/ws/flux/:port',
         '/ws/id/:loginphrase',
@@ -194,12 +192,15 @@ describe('FluxSocketServer tests', () => {
   });
 
   describe('admitUpgrade', () => {
-    const load = (acceptingConnections) => proxyquire('../../ZelBack/src/lib/socketHandlers', {
-      '../services/idService': { wsRespondLoginPhrase: sinon.stub(), wsRespondSignature: sinon.stub() },
-      '../services/utils/peerState': {
-        peerManager: { acceptingConnections, validateAndAddInbound: sinon.stub() },
-      },
-    }).admitUpgrade;
+    let accepting;
+    beforeEach(() => { accepting = peerManager.acceptingConnections; });
+    afterEach(() => { peerManager.acceptingConnections = accepting; });
+
+    // The real peer manager, in the state a test names.
+    const load = (acceptingConnections) => {
+      peerManager.acceptingConnections = acceptingConnections;
+      return socketHandlersModule.admitUpgrade;
+    };
 
     it('refuses a peer upgrade while the node is not accepting connections', () => {
       const admitUpgrade = load(false);

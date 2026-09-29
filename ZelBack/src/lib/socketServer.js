@@ -3,7 +3,7 @@
 const { match } = require('path-to-regexp');
 const WebSocketServer = require('ws').Server;
 const log = require('./log');
-const { FLUX_VERSION } = require('../services/utils/FluxPeerSocket');
+const { load } = require('./moduleLoader');
 const { FLUX_CAPABILITIES } = require('../services/utils/peerCapabilities');
 
 class FluxWebsocketServer {
@@ -66,11 +66,9 @@ class FluxWebsocketServer {
     // Old nodes silently ignore unknown headers.
     this.#socketServer.on('headers', (headers) => {
       headers.push(`X-Flux-Capabilities: ${FLUX_CAPABILITIES.join(',')}`);
-      headers.push(`X-Flux-Version: ${FLUX_VERSION}`);
+      headers.push(`X-Flux-Version: ${load('services/utils/FluxPeerSocket').FLUX_VERSION}`);
       headers.push(`X-Flux-Uptime: ${Math.floor(process.uptime())}`);
-      // Lazy require to avoid circular deps at module load time
-      const fluxNetworkHelper = require('../services/fluxNetworkHelper');
-      const offsetMs = fluxNetworkHelper.getLocalClockOffsetMs();
+      const offsetMs = load('services/fluxNetworkHelper').getLocalClockOffsetMs();
       if (offsetMs !== null) {
         headers.push(`X-Flux-Clock-Offset: ${offsetMs}`);
       }

@@ -1,16 +1,17 @@
 'use strict';
 
-const idService = require('../services/idService');
-const paymentRelayService = require('../services/paymentRelayService');
-const { peerManager } = require('../services/utils/peerState');
+const { load, lazyFunction } = require('./moduleLoader');
+
+/** The peer manager, loaded with the services it belongs to. */
+const peerManager = () => load('services/utils/peerState').peerManager;
 
 // these need to be most specific first (on the same route)
 const socketHandlers = {
-  '/ws/flux/:port': peerManager.validateAndAddInbound.bind(peerManager),
-  '/ws/flux': peerManager.validateAndAddInbound.bind(peerManager),
-  '/ws/id/:loginphrase': idService.wsRespondLoginPhrase,
-  '/ws/sign/:message': idService.wsRespondSignature,
-  '/ws/payment/:paymentid': paymentRelayService.wsRespondPayment,
+  '/ws/flux/:port': (ws, request) => peerManager().validateAndAddInbound(ws, request),
+  '/ws/flux': (ws, request) => peerManager().validateAndAddInbound(ws, request),
+  '/ws/id/:loginphrase': lazyFunction('services/idService', 'wsRespondLoginPhrase'),
+  '/ws/sign/:message': lazyFunction('services/idService', 'wsRespondSignature'),
+  '/ws/payment/:paymentid': lazyFunction('services/paymentRelayService', 'wsRespondPayment'),
 };
 
 const FLUX_PEER_ROUTE = /^\/ws\/flux(\/|$)/;
@@ -34,7 +35,7 @@ const FLUX_PEER_ROUTE = /^\/ws\/flux(\/|$)/;
  */
 function admitUpgrade(request) {
   if (!FLUX_PEER_ROUTE.test(request?.url ?? '')) return null;
-  if (peerManager.acceptingConnections) return null;
+  if (peerManager().acceptingConnections) return null;
 
   return { status: 503, message: 'Service Unavailable', reason: 'node-not-accepting-connections' };
 }

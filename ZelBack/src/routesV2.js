@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const express = require('express');
 const log = require('./lib/log');
 const { Privilege, authOf } = require('./services/utils/privileges');
-const verificationHelper = require('./services/verificationHelper');
+const { load } = require('./lib/moduleLoader');
 const routeTable = require('./routeTableV2');
 const { registerRoutes } = require('./routeBuilder');
 
@@ -163,7 +163,7 @@ async function decide(req, res, next, verdict) {
 function requireTier(privilege) {
   return async (req, res, next) => decide(
     req, res, next,
-    verificationHelper.verifyPrivilege(privilege, authOf(req)),
+    load('services/verificationHelper').verifyPrivilege(privilege, authOf(req)),
   );
 }
 
@@ -178,7 +178,7 @@ function requireTier(privilege) {
 function requireAppTier(privilege, appNameOf) {
   return async (req, res, next) => decide(
     req, res, next,
-    verificationHelper.verifyPrivilege(privilege, authOf(req), { appName: appNameOf(req) }),
+    load('services/verificationHelper').verifyPrivilege(privilege, authOf(req), { appName: appNameOf(req) }),
   );
 }
 

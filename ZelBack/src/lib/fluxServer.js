@@ -7,7 +7,7 @@ const express = require('express');
 const cors = require('cors');
 const compression = require('compression');
 const routes = require('../routes');
-const { analyticsMiddleware, startFlushTimer } = require('../services/analyticsService');
+const { lazyFunction } = require('./moduleLoader');
 
 const { socketHandlers, admitUpgrade } = require('./socketHandlers');
 const socketIoHandlers = require('./socketIoHandlers');
@@ -29,7 +29,7 @@ class FluxServer {
     compression(),
     bodyParser,
     cors(),
-    analyticsMiddleware,
+    lazyFunction('services/analyticsService', 'analyticsMiddleware'),
   ];
 
   static defaultRouteBuilder = routes;
@@ -149,7 +149,6 @@ class FluxServer {
         })
         .once('listening', () => {
           this.server.removeAllListeners('error');
-          startFlushTimer();
           resolve(null);
         });
       this.server.listen(port);

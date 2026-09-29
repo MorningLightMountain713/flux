@@ -90,6 +90,9 @@ describe('reconciler run-authority guard', () => {
       // teaching the reconciler about containers it must never try to keep alive.
       // start, teardown force-remove, orphan-reaper force-remove.
       'appPlayground/playgroundRunner.js': 3,
+      // The machine going down: every Flux app container is stopped, and killed
+      // if the stop fails, before the process exits (handleSigterm).
+      'nodeProcess.js': 2,
     };
     // No `\(` — a bare reference is a mutation too; see the header.
     const call = /\.appDocker(Start|Stop|Restart|Kill|ForceRemove)\b/;
