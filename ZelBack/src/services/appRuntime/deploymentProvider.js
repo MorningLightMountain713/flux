@@ -234,28 +234,29 @@ async function listInstalledDeployments(installedSpecs = null) {
  * standing safety demotion with it, and it does not come back until the app is
  * readable again.
  *
- * The names are enough: a folder id ends in _<appName> and an app name cannot
- * contain an underscore, so a folder names its owner even when that owner's
- * components cannot be read.
+ * An unreadable app is reported by its identity, which is what its folder ids
+ * are built from (`component_identity[_replica]`), so a folder names its owner
+ * even when that owner's components cannot be read.
  *
  * @param {Array<object>|null} [installedSpecs] - already-listed InstantiatedSpecs
- * @returns {Promise<{deployments: Array<object>, unreadableAppNames: Set<string>}>}
+ * @returns {Promise<{deployments: Array<object>, unreadableApps: Map<string, string>}>}
+ *   `unreadableApps`: identity -> app name
  */
 async function listInstalledDeploymentsDetailed(installedSpecs = null) {
   const installed = installedSpecs ?? await appsRepository.listInstalledApps();
   const deployments = [];
-  const unreadableAppNames = new Set();
+  const unreadableApps = new Map();
   for (const inst of installed) {
     try {
       // eslint-disable-next-line no-await-in-loop
       const appDeployments = await toDeployments(inst);
       deployments.push(...appDeployments);
     } catch (err) {
-      unreadableAppNames.add(inst.name);
+      unreadableApps.set(inst.identity ?? inst.name, inst.name);
       log.error(`deploymentProvider: failed to build deployment for ${inst.name}: ${err.message}`);
     }
   }
-  return { deployments, unreadableAppNames };
+  return { deployments, unreadableApps };
 }
 
 /**

@@ -13,6 +13,7 @@ const { ConfigMethod, ABSENT } = require('../utils/syncthingConstants');
 const globalState = require('../utils/globalState');
 const fluxEventBus = require('../utils/fluxEventBus');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
+const { getSpecBackend } = require('../utils/specLibs');
 const log = require('../../lib/log');
 const appsRepository = require('../appDatabase/appsRepository');
 const {
@@ -602,17 +603,17 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     // stop publishing the writable-folder answer its peers block on, for as long
     // as one app stayed unreadable.
     const {
-      deployments, unreadableAppNames,
+      deployments, unreadableApps,
     } = await deploymentProvider.listInstalledDeploymentsDetailed();
-    if (unreadableAppNames.size) {
-      log.warn(`syncthingAppsCore - folders of unreadable apps are protected this pass: ${[...unreadableAppNames].join(', ')}`);
+    if (unreadableApps.size) {
+      log.warn(`syncthingAppsCore - folders of unreadable apps are protected this pass: ${[...unreadableApps.values()].join(', ')}`);
     }
-    // A folder id is the component identifier, which ends in _<appName> - and an
-    // app name cannot contain an underscore - so a folder always names the app
-    // that owns it, even when that app's components cannot be read.
-    const ownedByUnreadableApp = (folderId) => unreadableAppNames.has(
-      folderId.slice(folderId.lastIndexOf('_') + 1),
-    );
+    // A folder id is the component identifier, `component_identity[_replica]`,
+    // so a folder always names the identity of the app that owns it, even when
+    // that app's components cannot be read.
+    const { DeploymentSpec } = await getSpecBackend();
+    const folderIdentity = (folderId) => DeploymentSpec.identityFromIdentifier(dockerService.getBaseAppName(folderId));
+    const ownedByUnreadableApp = (folderId) => unreadableApps.has(folderIdentity(folderId));
 
     // Drain the folders syncthing flagged with errors since the last cycle. Mount
     // safety is verified only at decision points - the first pass after start (the
@@ -722,11 +723,11 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     // An unreadable app's folders are protected from the SWEEP, not from the
     // mount check: the verdict derives entirely from the folder id, so a folder
     // whose owning app's spec cannot be read this pass is verified all the same.
-    const unreadableFolderEntries = unreadableAppNames.size === 0 ? [] : allFolders
+    const unreadableFolderEntries = unreadableApps.size === 0 ? [] : allFolders
       .filter((folder) => folder.type === 'sendreceive' && ownedByUnreadableApp(folder.id))
       .map((folder) => ({
         appId: folder.id,
-        appName: folder.id.slice(folder.id.lastIndexOf('_') + 1),
+        appName: unreadableApps.get(folderIdentity(folder.id)),
       }));
 
     // CRITICAL: Check if app folder mounts are ready before processing
