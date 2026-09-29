@@ -5,25 +5,38 @@ const express = require('express');
 // opaque-ciphertext storage by locator, the owner-signed manifest backstop, and
 // the GC reconcile. FluxDrive never decrypts — it stores bytes — so this stub
 // keeps raw buffers in memory and lets tests assert exactly what a node
-// uploaded / reconciled. Permissive by default; strict mode (control /mode) adds
-// the monotonic per-(appName,source) version floors, locator-ownership 409s, and
-// confirmed-only manifest serving the real service enforces, so the cold-start /
-// go-live gating paths can be exercised.
+// uploaded / reconciled.
+//
+// Manifests are kept per (appName, identity), as the real service keeps them per
+// (appName, owner, identity); the stub verifies no signature, so it has no owner.
+// The real service reads which registration holds a name from the network; the
+// stub is told it (control /manifest/:appName/promote). Once a name has a holder,
+// a manifest for another identity is refused 409 and only the holder's is served.
+//
+// Permissive by default; strict mode (control /mode) adds the monotonic version
+// floors (per identity and source, per manifest row), locator-ownership 409s, and
+// confirmed-only manifest serving, so the cold-start / go-live gating paths can be
+// exercised.
 
 const PORT = parseInt(process.env.FLUXDRIVE_PORT || '16140', 10);
 const CONTROL_PORT = parseInt(process.env.CONTROL_PORT || '16141', 10);
 
 // locator -> { bytes:Buffer, appName, source, timestamp, arcaneSig, ownerSig, tombstoned }
 const blobs = new Map();
-// appName -> { version, timestamp, arcaneSig, ownerSig, manifest, confirmed }
+// `${appName}\n${identity}` -> { appName, identity, version, timestamp, arcaneSig, ownerSig, manifest, confirmed, seq }
 const manifests = new Map();
+// appName -> the identity of the registration that holds the name
+const holders = new Map();
+// manifest write order, so a name with no holder serves its latest-written row
+let manifestSeq = 0;
 // every reconcile call, in arrival order, for assertions
 const reconciles = [];
 // every HEAD presence probe on the blob fetch route, in arrival order — the
 // carry-over submission contract asserts on these (a carried-over hash is
 // presence-checked instead of re-uploaded)
 const heads = [];
-// `${appName}:${source}` -> highest accepted version (strict floor)
+// `${identity}:${source}` (or `${appName}:${source}` before the name has a holder)
+// -> highest accepted version (strict floor)
 const floors = new Map();
 
 // Behavior knobs the control plane drives. slow = per-request delay ms; fail5xx
@@ -37,6 +50,8 @@ const mode = {
 function reset() {
   blobs.clear();
   manifests.clear();
+  holders.clear();
+  manifestSeq = 0;
   reconciles.length = 0;
   heads.length = 0;
   floors.clear();
@@ -47,6 +62,42 @@ function reset() {
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const manifestKey = (appName, identity) => `${appName}\n${identity}`;
+
+function manifestRowsOf(appName) {
+  return [...manifests.values()].filter((row) => row.appName === appName);
+}
+
+// The row the data API serves for a name: the holder's once the name has one,
+// else the latest written. Strict serves a confirmed row only.
+function servedManifest(appName) {
+  const holder = holders.get(appName);
+  const rows = manifestRowsOf(appName)
+    .filter((row) => holder == null || row.identity === holder)
+    .filter((row) => !mode.strict || row.confirmed)
+    .sort((a, b) => b.seq - a.seq);
+  return rows[0] || null;
+}
+
+function setManifest(appName, identity, fields) {
+  manifestSeq += 1;
+  manifests.set(manifestKey(appName, identity), {
+    appName, identity, timestamp: null, arcaneSig: null, ownerSig: null, ...fields, seq: manifestSeq,
+  });
+}
+
+// Confirm the holder's row and evict every other row of the name (the go-live transition).
+function promote(appName, identity) {
+  holders.set(appName, identity);
+  for (const [key, row] of manifests) {
+    if (row.appName !== appName) continue;
+    if (row.identity === identity) row.confirmed = true;
+    else manifests.delete(key);
+  }
+}
+
+const floorKeyOf = (appName, source) => `${holders.has(appName) ? holders.get(appName) : appName}:${source}`;
 
 // --- FluxDrive data API (what the FluxOS node calls via fluxDriveClient) ---
 
@@ -114,7 +165,7 @@ app.get('/api/v1/blob/:locator', (req, res) => {
 // version is an idempotent 409 that the client treats as success.
 app.post('/api/v1/blob/reconcile', express.json(), (req, res) => {
   const { appName, source, version, arcaneSig, ownerSig, liveLocators } = req.body || {};
-  const floorKey = `${appName}:${source}`;
+  const floorKey = floorKeyOf(appName, source);
   if (mode.strict) {
     const floor = floors.get(floorKey);
     if (floor != null && version <= floor) {
@@ -134,9 +185,12 @@ app.post('/api/v1/blob/reconcile', express.json(), (req, res) => {
   res.status(200).json({ ok: true });
 });
 
-// PUT the latest owner-signed manifest backstop. Strict enforces the version
-// floor and stores unconfirmed (the register-window self-assert); a live update
-// is confirmed via the control /promote, and strict GET serves confirmed-only.
+// PUT the latest owner-signed manifest backstop. A manifest must name its
+// identity, and once the name has a holder it must be the holder's (409
+// otherwise, in either mode). Strict enforces the per-row version floor and
+// stores a manifest for a name with no holder unconfirmed (the register-window
+// self-assert); the holder's manifest is confirmed. Strict GET serves
+// confirmed-only.
 app.put('/api/v1/manifest/:appName', express.json(), (req, res) => {
   const { appName } = req.params;
   // Fail ONLY the backstop manifest PUT — before the version check, so it's
@@ -146,20 +200,30 @@ app.put('/api/v1/manifest/:appName', express.json(), (req, res) => {
     return;
   }
   const { version, timestamp, arcaneSig, ownerSig, manifest } = req.body || {};
-  const stored = manifests.get(appName);
+  const identity = manifest && manifest.identity;
+  if (typeof identity !== 'string' || identity.length === 0) {
+    res.status(400).json({ error: 'Manifest names no identity' });
+    return;
+  }
+  const holder = holders.get(appName);
+  if (holder != null && holder !== identity) {
+    res.status(409).json({ error: 'Manifest is for another registration of this app name' });
+    return;
+  }
+  const stored = manifests.get(manifestKey(appName, identity));
   if (mode.strict && stored && version <= stored.version) {
     res.status(409).json({ error: 'version at or below stored' });
     return;
   }
-  manifests.set(appName, {
+  setManifest(appName, identity, {
     version,
     timestamp,
     arcaneSig,
     ownerSig,
     manifest,
-    // Strict models the real go-live gate: a PUT lands unconfirmed until
-    // promoted. Permissive serves everything, so confirmed is irrelevant there.
-    confirmed: mode.strict ? false : true,
+    // Strict models the real go-live gate: a manifest for a name with no holder
+    // lands unconfirmed until promoted. Permissive serves everything.
+    confirmed: !mode.strict || holder === identity,
   });
   res.status(200).json({ ok: true });
 });
@@ -167,8 +231,8 @@ app.put('/api/v1/manifest/:appName', express.json(), (req, res) => {
 // Fetch the confirmed manifest backstop (cold-start fallback). Strict serves
 // confirmed-only; 404 -> the client returns null and falls back to peers.
 app.get('/api/v1/manifest/:appName', (req, res) => {
-  const entry = manifests.get(req.params.appName);
-  if (!entry || (mode.strict && !entry.confirmed)) {
+  const entry = servedManifest(req.params.appName);
+  if (!entry) {
     res.status(404).json({ error: 'not found' });
     return;
   }
@@ -184,16 +248,21 @@ control.use(express.json({ limit: '64mb' }));
 
 control.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-// Full snapshot for assertions: blob metadata (not bytes), stored manifests,
-// the reconcile log, the HEAD presence-probe log, the strict floors, and the
-// active mode.
+// Full snapshot for assertions: blob metadata (not bytes), the manifest each
+// name serves (`manifests`, by name) and every stored manifest row
+// (`manifestRows`), the name holders, the reconcile log, the HEAD presence-probe
+// log, the strict floors, and the active mode.
 control.get('/state', (req, res) => {
   res.json({
     blobs: [...blobs.entries()].map(([locator, e]) => ({
       locator, appName: e.appName, source: e.source, timestamp: e.timestamp,
       arcaneSig: e.arcaneSig, ownerSig: e.ownerSig, tombstoned: e.tombstoned, byteLength: e.bytes.length,
     })),
-    manifests: Object.fromEntries(manifests),
+    manifests: Object.fromEntries([...new Set([...manifests.values()].map((row) => row.appName))]
+      .map((appName) => [appName, servedManifest(appName)])
+      .filter(([, row]) => row != null)),
+    manifestRows: [...manifests.values()],
+    holders: Object.fromEntries(holders),
     reconciles,
     heads,
     floors: Object.fromEntries(floors),
@@ -210,8 +279,9 @@ control.get('/blob/:locator', (req, res) => {
   res.json({ locator: req.params.locator, appName: e.appName, source: e.source, timestamp: e.timestamp, tombstoned: e.tombstoned, byteLength: e.bytes.length });
 });
 
+// The manifest the name serves.
 control.get('/manifest/:appName', (req, res) => {
-  const e = manifests.get(req.params.appName);
+  const e = servedManifest(req.params.appName);
   if (!e) {
     res.status(404).json({ error: 'not found' });
     return;
@@ -231,25 +301,30 @@ control.post('/blob/:locator', (req, res) => {
   res.json({ ok: true });
 });
 
-// Pre-seed a manifest (cold-start backstop). confirmed defaults true so a seeded
-// manifest is immediately servable even in strict mode.
+// Pre-seed a manifest (cold-start backstop) under the identity it names.
+// confirmed defaults true so a seeded manifest is immediately servable even in
+// strict mode.
 control.post('/manifest/:appName', (req, res) => {
   const { version, manifest, confirmed } = req.body || {};
-  manifests.set(req.params.appName, {
-    version, timestamp: null, arcaneSig: null, ownerSig: null, manifest,
-    confirmed: confirmed !== false,
-  });
+  const identity = manifest && manifest.identity;
+  if (typeof identity !== 'string' || identity.length === 0) {
+    res.status(400).json({ error: 'Manifest names no identity' });
+    return;
+  }
+  setManifest(req.params.appName, identity, { version, manifest, confirmed: confirmed !== false });
   res.json({ ok: true });
 });
 
-// Promote a stored manifest to confirmed (the go-live transition).
+// Make `identity` the name's holder: confirm its row and evict every other row
+// of the name (the go-live transition). A holder with no row yet is recorded,
+// and its first manifest lands confirmed.
 control.post('/manifest/:appName/promote', (req, res) => {
-  const e = manifests.get(req.params.appName);
-  if (!e) {
-    res.status(404).json({ error: 'not found' });
+  const { identity } = req.body || {};
+  if (typeof identity !== 'string' || identity.length === 0) {
+    res.status(400).json({ error: 'identity required' });
     return;
   }
-  e.confirmed = true;
+  promote(req.params.appName, identity);
   res.json({ ok: true });
 });
 
