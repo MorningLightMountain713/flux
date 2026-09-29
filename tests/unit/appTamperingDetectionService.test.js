@@ -302,6 +302,29 @@ describe('appTamperingDetectionService tests', () => {
       expect(ins.appHash).to.equal('spechash1');
     });
 
+    it('keys an incident by the installed app\'s identity as well as its name', async () => {
+      installedApps.myapp = { owner: '1ownerZelid', hash: 'spechash1', identity: 'bident' };
+
+      await service.recordEvent('myapp', 'container_vanished', 'x');
+
+      const { query, update } = eventUpserts()[0];
+      expect(query.identity).to.equal('bident');
+      expect(update.$setOnInsert.identity).to.equal('bident');
+    });
+
+    it('attributes a later app of the name to itself once the earlier one is forgotten', async () => {
+      installedApps.myapp = { owner: '1oldOwner', hash: 'oldhash', identity: 'bold' };
+      await service.recordEvent('myapp', 'container_vanished', 'x');
+      installedApps.myapp = { owner: '1newOwner', hash: 'newhash', identity: 'bnew' };
+
+      service.forgetApp('myapp');
+      await service.recordEvent('myapp', 'container_vanished', 'y');
+
+      const second = eventUpserts()[1];
+      expect(second.query.identity).to.equal('bnew');
+      expect(second.update.$setOnInsert.ownerZelid).to.equal('1newOwner');
+    });
+
     it('rolls every emitter up under one key for the same app', async () => {
       // The mount-safety path used to emit the flux-prefixed component id while
       // the reconciler emitted the app name, so one app wrote incidents under two
@@ -821,15 +844,17 @@ describe('appTamperingDetectionService tests', () => {
     // the unique index must have their counts SUMMED, not one dropped - dropping
     // would undercount the incident. Then the unique index makes twins impossible.
     let createIndexStub;
+    let dropIndexStub;
     let removed;
     let upserts;
 
     beforeEach(() => {
       createIndexStub = sinon.stub().resolves();
+      dropIndexStub = sinon.stub().rejects(Object.assign(new Error('index not found'), { codeName: 'IndexNotFound' }));
       removed = [];
       upserts = [];
       dbHelperStub.databaseConnection.returns({
-        db: () => ({ collection: () => ({ createIndex: createIndexStub }) }),
+        db: () => ({ collection: () => ({ createIndex: createIndexStub, dropIndex: dropIndexStub }) }),
       });
       dbHelperStub.removeDocumentsFromCollection = sinon.stub().callsFake(async (_db, _coll, query) => { removed.push(query); });
       dbHelperStub.updateOneInDatabase = sinon.stub().callsFake(async (_db, _coll, query, update) => { upserts.push({ query, set: update.$set }); });
@@ -847,7 +872,9 @@ describe('appTamperingDetectionService tests', () => {
 
       await service.prepareIncidentRollup();
 
-      expect(removed).to.deep.equal([{ appName: 'www', eventType: 'mountReadonly', incidentKey: 'boot:1' }]);
+      expect(removed).to.deep.equal([{
+        appName: 'www', identity: null, eventType: 'mountReadonly', incidentKey: 'boot:1',
+      }]);
       expect(upserts).to.have.lengthOf(1);
       const merged = upserts[0].set;
       expect(merged.count, 'counts were not summed').to.equal(7);
@@ -864,7 +891,9 @@ describe('appTamperingDetectionService tests', () => {
 
       expect(lastFindArgs.query).to.deep.equal({ incidentKey: { $exists: true } });
       const [spec, options] = createIndexStub.firstCall.args;
-      expect(spec).to.deep.equal({ appName: 1, eventType: 1, incidentKey: 1 });
+      expect(spec).to.deep.equal({
+        appName: 1, identity: 1, eventType: 1, incidentKey: 1,
+      });
       expect(options.unique).to.equal(true);
       expect(options.partialFilterExpression).to.deep.equal({ incidentKey: { $exists: true } });
     });
@@ -879,6 +908,34 @@ describe('appTamperingDetectionService tests', () => {
       expect(removed).to.deep.equal([]);
       expect(upserts).to.deep.equal([]);
       sinon.assert.calledOnce(createIndexStub);
+    });
+
+    it('keeps two apps of one name apart, and replaces the index keyed without the identity', async () => {
+      dropIndexStub.resolves();
+      findResults = [
+        {
+          appName: 'www', identity: 'bold', eventType: 'mountReadonly', incidentKey: 'boot:1', count: 2, firstSeen: new Date(1000), lastSeen: new Date(2000),
+        },
+        {
+          appName: 'www', identity: 'bnew', eventType: 'mountReadonly', incidentKey: 'boot:1', count: 5, firstSeen: new Date(1000), lastSeen: new Date(2000),
+        },
+      ];
+
+      await service.prepareIncidentRollup();
+
+      expect(removed).to.deep.equal([]);
+      sinon.assert.calledOnceWithExactly(dropIndexStub, 'incident_upsert');
+      sinon.assert.callOrder(dropIndexStub, createIndexStub);
+    });
+
+    it('does not build the index when the old one cannot be dropped for another reason', async () => {
+      dropIndexStub.rejects(new Error('not primary'));
+      findResults = [];
+
+      await service.prepareIncidentRollup();
+
+      sinon.assert.notCalled(createIndexStub);
+      expect(logStub.error.firstCall.args[0]).to.include('not primary');
     });
 
     it('logs and does not throw when the merge fails, leaving it for the next boot', async () => {

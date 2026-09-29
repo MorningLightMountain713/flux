@@ -255,6 +255,7 @@ async function getAppAttribution(appName) {
     const attribution = {
       ownerZelid: app?.owner ?? null,
       appHash: app?.hash ?? null,
+      identity: app?.identity ?? null,
       cachedAt: Date.now(),
     };
     appAttributionCache.set(appName, attribution);
@@ -266,8 +267,17 @@ async function getAppAttribution(appName) {
 }
 
 /**
+ * Forget an app's cached attribution: the app has left the node, and an app
+ * installed later under the name is another app with its own owner and identity.
+ * @param {string} appName
+ */
+function forgetApp(appName) {
+  appAttributionCache.delete(appName);
+}
+
+/**
  * Record a tampering event as an incident rollup (schemaVersion 1).
- * One document per (appName, eventType, incidentKey) where incidentKey is
+ * One document per (appName, identity, eventType, incidentKey) where incidentKey is
  * the boot_id plus an hourly time bucket; repeat calls increment `count` and
  * advance `lastSeen`, so retry storms collapse while the incident keeps its
  * full observation tally. Each document carries node identity, operator
@@ -296,11 +306,17 @@ async function recordEvent(appName, eventType, details) {
       getNodeIdentity(),
       getAppAttribution(appName),
     ]);
-    const query = { appName, eventType, incidentKey };
+    // Keyed by the app's identity as well as its name: a name registered again
+    // after expiry is another app, and its incidents are its own.
+    const appIdentity = attribution?.identity ?? null;
+    const query = {
+      appName, identity: appIdentity, eventType, incidentKey,
+    };
     const update = {
       $setOnInsert: {
         schemaVersion: 1,
         appName,
+        identity: appIdentity,
         eventType,
         incidentKey,
         severity: EVENT_SEVERITY[eventType] ?? 0,
@@ -450,7 +466,7 @@ async function checkNodeReboot() {
 /**
  * Merge duplicate incident rollups, then assert the unique index they need.
  *
- * The rollup keys on (appName, eventType, incidentKey) and each doc carries a
+ * The rollup keys on (appName, identity, eventType, incidentKey) and each doc carries a
  * `count` recordEvent increments. A node upgrading from before the unique index
  * - or two recorders racing on a fresh key before it existed - can hold two
  * rollups for one incident, and the unique build then fails on that dirty data.
@@ -478,10 +494,10 @@ async function prepareIncidentRollup() {
     // eslint-disable-next-line no-restricted-syntax
     for (const doc of rollups) {
       // NUL as the separator, written as an escape: it cannot occur in any of the
-      // three parts, so no combination of them can collide on one key. The raw
+      // four parts, so no combination of them can collide on one key. The raw
       // byte in the source classifies the whole file as binary, and grep then
       // finds nothing in it while reporting success.
-      const key = `${doc.appName}\x00${doc.eventType}\x00${doc.incidentKey}`;
+      const key = `${doc.appName}\x00${doc.identity ?? ''}\x00${doc.eventType}\x00${doc.incidentKey}`;
       const group = byKey.get(key) || [];
       group.push(doc);
       byKey.set(key, group);
@@ -490,7 +506,9 @@ async function prepareIncidentRollup() {
     // eslint-disable-next-line no-restricted-syntax
     for (const [, group] of byKey) {
       if (group.length <= 1) continue;
-      const query = { appName: group[0].appName, eventType: group[0].eventType, incidentKey: group[0].incidentKey };
+      const query = {
+        appName: group[0].appName, identity: group[0].identity ?? null, eventType: group[0].eventType, incidentKey: group[0].incidentKey,
+      };
       const newest = group.slice().sort((a, b) => new Date(b.lastSeen || 0).getTime() - new Date(a.lastSeen || 0).getTime())[0];
       const earliest = group.reduce((min, d) => (new Date(d.firstSeen || 0) < new Date(min) ? d.firstSeen : min), newest.firstSeen);
       const merged = {
@@ -507,9 +525,15 @@ async function prepareIncidentRollup() {
       await dbHelper.updateOneInDatabase(database, tamperingEventsCollection, query, { $set: merged }, { upsert: true });
     }
 
+    // The index keyed without the identity would refuse a second app's
+    // incident under the same name in the same hour.
+    await database.collection(tamperingEventsCollection).dropIndex('incident_upsert')
+      .catch((error) => { if (error?.codeName !== 'IndexNotFound' && error?.codeName !== 'NamespaceNotFound') throw error; });
     await database.collection(tamperingEventsCollection).createIndex(
-      { appName: 1, eventType: 1, incidentKey: 1 },
-      { unique: true, partialFilterExpression: { incidentKey: { $exists: true } }, name: 'incident_upsert' },
+      {
+        appName: 1, identity: 1, eventType: 1, incidentKey: 1,
+      },
+      { unique: true, partialFilterExpression: { incidentKey: { $exists: true } }, name: 'incident_upsert_by_app' },
     );
   } catch (error) {
     log.error(`appTamperingDetection - failed to prepare incident rollup: ${error.message}`);
@@ -517,6 +541,7 @@ async function prepareIncidentRollup() {
 }
 
 module.exports = {
+  forgetApp,
   recordEvent,
   classifyVolumeFault,
   getEvents,

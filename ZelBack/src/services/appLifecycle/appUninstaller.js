@@ -10,6 +10,7 @@ const dockerService = require('../dockerService');
 const globalState = require('../utils/globalState');
 const operationRegistry = require('../utils/operationRegistry');
 const telemetrySinkCache = require('../telemetrySinkCache');
+const appTamperingDetectionService = require('../appTamperingDetectionService');
 const telemetryConfigService = require('../telemetryConfigService');
 const log = require('../../lib/log');
 const config = require('config');
@@ -1339,6 +1340,7 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
 
   // App-level, non-host cleanup.
   if (appLeavesNode) {
+    appTamperingDetectionService.forgetApp(name);
     telemetrySinkCache.deleteSink(name);
     if (!telemetrySinkCache.hasAnyTelemetryApps()) {
       await telemetryConfigService.remove().catch((e) => log.warn(`telemetry config remove: ${e.message}`));

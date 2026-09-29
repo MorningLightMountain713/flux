@@ -20,6 +20,7 @@ describe('appsRepository', () => {
   let appsRepository;
   let dbHelperStub;
   let specLibsStub;
+  let decisionStoreStub;
   let logStub;
   let mockDb;
   let eventCollection;
@@ -128,8 +129,12 @@ describe('appsRepository', () => {
       },
     };
 
+    // The applied specs of earlier apps of a name: none unless a test says so.
+    decisionStoreStub = { earlierAppsHashes: sinon.stub().resolves([]) };
+
     appsRepository = proxyquire('../../ZelBack/src/services/appDatabase/appsRepository', {
       config: asConfig(configStub),
+      '../appDecisions/decisionStore': decisionStoreStub,
       '../../lib/log': logStub,
       '../dbHelper': dbHelperStub,
       '../utils/specLibs': specLibsStub,
@@ -261,6 +266,16 @@ describe('appsRepository', () => {
       const options = dbHelperStub.findOneInDatabase.firstCall.args[3];
       expect(options.projection).to.deep.equal({ _id: 0, owner: 1 });
       expect(specLibsStub.getSpec.called).to.be.false;
+    });
+
+    it('getInstalledAppAttribution returns the owner, hash and identity via their projection', async () => {
+      dbHelperStub.findOneInDatabase.resolves({ owner: 'ownerX', hash: 'h1', identity: 'bident' });
+      const result = await appsRepository.getInstalledAppAttribution('app');
+      expect(result).to.deep.equal({ owner: 'ownerX', hash: 'h1', identity: 'bident' });
+      const options = dbHelperStub.findOneInDatabase.firstCall.args[3];
+      expect(options.projection).to.deep.equal({
+        _id: 0, owner: 1, hash: 1, identity: 1,
+      });
     });
 
     it('getGlobalAppOwner returns null when the app is absent', async () => {
@@ -443,6 +458,18 @@ describe('appsRepository', () => {
       assertAnswers(result[0].instantiated, ['resourceTotals', 'requiresArcane', 'linkedAppNames', 'serialize']);
       expect(result[0].instantiated.spec.placement, 'the spawner filters candidates on it').to.exist;
       expect(result[0].instantiated.hash, 'and caches its spawn attempts by it').to.equal('h1');
+    });
+
+    it('counts no replica running a spec of an earlier app of the name', async () => {
+      dbHelperStub.aggregateInDatabase.resolves([await legacyDoc(await v8Spec({ name: 'testApp', instances: 3 }))]);
+      decisionStoreStub.earlierAppsHashes.resolves(['earlierhash']);
+
+      await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000);
+
+      const countPipeline = eventCollection.aggregate.getCalls()
+        .map((call) => call.args[0])
+        .find((pipeline) => pipeline.some((stage) => stage.$group && stage.$group._id === '$_v2Filtered.apps.name'));
+      expect(countPipeline.some((stage) => stage.$match?.['_v2Filtered.apps.hash']?.$nin?.includes('earlierhash'))).to.equal(true);
     });
 
     it('leaves an app alone once it is at target', async () => {

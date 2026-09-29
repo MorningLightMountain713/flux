@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const telemetrySinkCache = require('../../ZelBack/src/services/telemetrySinkCache');
+const appTamperingDetectionService = require('../../ZelBack/src/services/appTamperingDetectionService');
 // Real registry singleton - un-stubbed in proxyquire, so the uninstaller and the test share it.
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 const { asConfig } = require('./fixtures/config');
@@ -764,11 +765,16 @@ describe('appUninstaller tests', () => {
         ...doc(), key: 'myapp_s2', replica: 's2', identity: 'bident',
       });
       let deleteSink;
+      let forgetApp;
       beforeEach(() => {
         fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'complete' });
         deleteSink = sinon.spy(telemetrySinkCache, 'deleteSink');
+        forgetApp = sinon.spy(appTamperingDetectionService, 'forgetApp');
       });
-      afterEach(() => deleteSink.restore());
+      afterEach(() => {
+        deleteSink.restore();
+        forgetApp.restore();
+      });
 
       it('keeps the app\'s network, telemetry sink and content store while a sibling replica stays', async () => {
         appsRepositoryStub.countInstalledIdentities.resolves(1);
@@ -777,6 +783,7 @@ describe('appUninstaller tests', () => {
 
         sinon.assert.notCalled(dockerServiceStub.forceRemoveFluxAppDockerNetwork);
         sinon.assert.notCalled(deleteSink);
+        sinon.assert.notCalled(forgetApp);
         sinon.assert.notCalled(contentStoreStub.removeApp);
       });
 
@@ -787,6 +794,7 @@ describe('appUninstaller tests', () => {
 
         sinon.assert.calledWith(dockerServiceStub.forceRemoveFluxAppDockerNetwork, null, { networkName: 'fluxDockerNetwork_myapp' });
         sinon.assert.calledWith(deleteSink, 'myapp');
+        sinon.assert.calledOnceWithExactly(forgetApp, 'myapp');
         sinon.assert.calledOnceWithExactly(contentStoreStub.removeApp, 'bident');
       });
 

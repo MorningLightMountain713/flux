@@ -667,10 +667,10 @@ async function getInstalledAppAttribution(name) {
   const doc = await dbHelper.findOneInDatabase(
     localDb(), localAppsInformation,
     { name: nameRegex(name) },
-    { projection: { _id: 0, owner: 1, hash: 1 } },
+    { projection: { _id: 0, owner: 1, hash: 1, identity: 1 } },
   );
   if (!doc) return null;
-  return { owner: doc.owner ?? null, hash: doc.hash ?? null };
+  return { owner: doc.owner ?? null, hash: doc.hash ?? null, identity: doc.identity ?? null };
 }
 
 /**
