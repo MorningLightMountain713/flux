@@ -7,8 +7,6 @@ const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const resourceQueryService = require('../../ZelBack/src/services/appQuery/resourceQueryService');
 const messageHelper = require('../../ZelBack/src/services/messageHelper');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
-const nodeSpecs = require('../../ZelBack/src/services/appRequirements/nodeSpecs');
-const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
 const admissionControl = require('../../ZelBack/src/services/utils/admissionControl');
 const { requireMongo } = require('./dbTestHelper');
 const {
@@ -99,97 +97,6 @@ describe('resourceQueryService tests', () => {
   afterEach(() => {
     sinon.restore();
     admissionControl.clear();
-  });
-
-  describe('fluxUsage tests', () => {
-    it('should return flux usage statistics', async () => {
-      const req = {};
-      const res = {
-        json: sinon.stub(),
-      };
-
-      sinon.stub(appsRepository, 'countInstalledApps').resolves(3);
-      sinon.stub(appQueryService, 'listRunningApps').resolves({
-        status: 'success',
-        data: [
-          { name: 'App1' },
-          { name: 'App2' },
-        ],
-      });
-      sinon.stub(nodeSpecs, 'getNodeSpecs').resolves({
-        cpuCores: 8,
-        ram: 16_000,
-        ssdStorage: 500,
-      });
-      sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
-
-      await resourceQueryService.fluxUsage(req, res);
-
-      sinon.assert.calledOnce(res.json);
-      const response = res.json.firstCall.args[0];
-      expect(response.data.totalApps).to.equal(3);
-      expect(response.data.runningApps).to.equal(2);
-      expect(response.data.stoppedApps).to.equal(1);
-      expect(response.data.nodeSpecs.cpuCores).to.equal(8);
-    });
-
-    it('should work without response object', async () => {
-      sinon.stub(appsRepository, 'countInstalledApps').resolves(0);
-      sinon.stub(appQueryService, 'listRunningApps').resolves({
-        status: 'success',
-        data: [],
-      });
-      sinon.stub(nodeSpecs, 'getNodeSpecs').resolves({
-        cpuCores: 8,
-        ram: 16_000,
-        ssdStorage: 500,
-      });
-      sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
-
-      const result = await resourceQueryService.fluxUsage(null, null);
-
-      expect(result.status).to.equal('success');
-      expect(result.data.totalApps).to.equal(0);
-    });
-
-    it('should handle error gracefully', async () => {
-      const req = {};
-      const res = {
-        json: sinon.stub(),
-      };
-
-      sinon.stub(appsRepository, 'countInstalledApps').rejects(new Error('Database error'));
-      sinon.stub(messageHelper, 'createErrorMessage').returns({ status: 'error' });
-
-      await resourceQueryService.fluxUsage(req, res);
-
-      sinon.assert.calledOnce(res.json);
-      expect(res.json.firstCall.args[0].status).to.equal('error');
-    });
-
-    it('should handle missing running apps data', async () => {
-      const req = {};
-      const res = {
-        json: sinon.stub(),
-      };
-
-      sinon.stub(appsRepository, 'countInstalledApps').resolves(1);
-      sinon.stub(appQueryService, 'listRunningApps').resolves({
-        status: 'error',
-      });
-      sinon.stub(nodeSpecs, 'getNodeSpecs').resolves({
-        cpuCores: 8,
-        ram: 16_000,
-        ssdStorage: 500,
-      });
-      sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
-
-      await resourceQueryService.fluxUsage(req, res);
-
-      sinon.assert.calledOnce(res.json);
-      const response = res.json.firstCall.args[0];
-      expect(response.data.runningApps).to.equal(0);
-    });
   });
 
   describe('appsResources tests', () => {

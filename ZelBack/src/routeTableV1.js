@@ -209,7 +209,7 @@ module.exports = [
   { method: 'get', path: '/apps/listappsimages', none: NONE.OWN_ANSWER, handler: 'appManagement/appInspector#listAppsImagesApi' },
   { method: 'get', path: '/apps/installedapps/:appname?', none: NONE.OWN_ANSWER, cache: '30 seconds', handler: 'appQuery/appQueryService#installedApps' },
   { method: 'get', path: '/apps/availableapps', needs: APP_REGISTRY, cache: '30 seconds', handler: 'appDatabase/registryManager#availableApps' },
-  { method: 'get', path: '/apps/fluxusage', none: NONE.OWN_ANSWER, cache: '30 seconds', handler: 'appQuery/resourceQueryService#fluxUsage' },
+  { method: 'get', path: '/apps/fluxusage', none: NONE.OWN_ANSWER, cache: '30 seconds', handler: 'appQuery/appQueryService#fluxUsage' },
   { method: 'get', path: '/apps/appsresources', none: NONE.OWN_ANSWER, cache: '30 seconds', handler: 'appQuery/resourceQueryService#appsResourcesApi' },
   { method: 'get', path: '/apps/temporarymessages/:hash?', none: NONE.OWN_ANSWER, cache: '5 seconds', handler: 'appMessaging/messageVerifier#getAppsTemporaryMessages' },
   { method: 'get', path: '/apps/permanentmessages/:hash?/:owner?/:appname?', none: NONE.OWN_ANSWER, cache: '2 minutes', handler: 'appMessaging/messageVerifier#getAppsPermanentMessages' },

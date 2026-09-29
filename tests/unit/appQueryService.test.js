@@ -33,6 +33,7 @@ describe('appQueryService tests', () => {
   let registryManagerStub;
 
   let appsRepositoryStub;
+  let nodeSpecsStub;
   let logStub;
   let configStub;
 
@@ -125,7 +126,10 @@ describe('appQueryService tests', () => {
 
     appsRepositoryStub = {
       listInstalledApps: sinon.stub(),
+      countInstalledApps: sinon.stub(),
     };
+
+    nodeSpecsStub = { getNodeSpecs: sinon.stub().resolves({ cpuCores: 8, ram: 16_000, ssdStorage: 500 }) };
 
     logStub = {
       error: sinon.stub(),
@@ -143,6 +147,7 @@ describe('appQueryService tests', () => {
       '../dockerService': dockerServiceStub,
       '../appDatabase/registryManager': registryManagerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
+      '../appRequirements/nodeSpecs': nodeSpecsStub,
       '../../lib/log': logStub,
       '../utils/specLibs': {
         getSpecBackend: async () => ({
@@ -301,6 +306,59 @@ describe('appQueryService tests', () => {
 
       expect(res.json.calledOnce).to.be.true;
       expect(logStub.error.calledWith(error)).to.be.true;
+    });
+  });
+
+  describe('fluxUsage', () => {
+    const running = (...names) => names.map((name) => ({
+      Names: [`/${name}`], HostConfig: {}, NetworkSettings: {}, Mounts: [],
+    }));
+
+    it('counts installed, running and stopped apps and reports the node specs', async () => {
+      appsRepositoryStub.countInstalledApps.resolves(3);
+      dockerServiceStub.dockerListContainers.resolves(running('fluxapp1', 'fluxapp2', 'other'));
+      messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
+      const res = { json: sinon.stub() };
+
+      await appQueryService.fluxUsage({}, res);
+
+      const { data } = res.json.firstCall.args[0];
+      expect(data).to.deep.equal({
+        totalApps: 3, runningApps: 2, stoppedApps: 1, nodeSpecs: { cpuCores: 8, ram: 16_000, ssdStorage: 500 },
+      });
+    });
+
+    it('answers a programmatic caller', async () => {
+      appsRepositoryStub.countInstalledApps.resolves(0);
+      dockerServiceStub.dockerListContainers.resolves([]);
+      messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
+
+      const result = await appQueryService.fluxUsage();
+
+      expect(result.status).to.equal('success');
+      expect(result.data.totalApps).to.equal(0);
+    });
+
+    it('counts no running apps when the container list cannot be read', async () => {
+      appsRepositoryStub.countInstalledApps.resolves(1);
+      dockerServiceStub.dockerListContainers.rejects(new Error('docker down'));
+      messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
+      messageHelperStub.createErrorMessage.returns({ status: 'error' });
+      const res = { json: sinon.stub() };
+
+      await appQueryService.fluxUsage({}, res);
+
+      expect(res.json.firstCall.args[0].data.runningApps).to.equal(0);
+    });
+
+    it('answers an error when the installed apps cannot be counted', async () => {
+      appsRepositoryStub.countInstalledApps.rejects(new Error('Database error'));
+      messageHelperStub.createErrorMessage.returns({ status: 'error' });
+      const res = { json: sinon.stub() };
+
+      await appQueryService.fluxUsage({}, res);
+
+      expect(res.json.firstCall.args[0].status).to.equal('error');
     });
   });
 

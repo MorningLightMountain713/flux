@@ -1968,7 +1968,7 @@ describe('fluxService tests', () => {
       benchmarkServiceGetStatusStub = sinon.stub(benchmarkService, 'getStatus');
       benchmarkServiceGetBenchmarksStub = sinon.stub(benchmarkService, 'getBenchmarks');
       sinon.stub(appInspector, 'getAppsDOSState').returns({ status: 'success', data: { state: 'ok' } });
-      appsServiceFluxUsageStub = sinon.stub(resourceQueryService, 'fluxUsage');
+      appsServiceFluxUsageStub = sinon.stub(appQueryService, 'fluxUsage');
       appsServiceListRunningAppsStub = sinon.stub(appQueryService, 'listRunningApps');
       appsServiceAppsResourcesStub = sinon.stub(resourceQueryService, 'appsResources');
       appsServiceGetAppHashesStub = sinon.stub(registryManager, 'getAppHashes');

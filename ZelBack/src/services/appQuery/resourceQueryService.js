@@ -7,44 +7,6 @@ const deploymentProvider = require('../appRuntime/deploymentProvider');
 const admissionControl = require('../utils/admissionControl');
 const log = require('../../lib/log');
 
-// Import appQueryService to avoid circular dependency (will be cleaned up later)
-const appQueryService = require('./appQueryService');
-const nodeSpecs = require('../appRequirements/nodeSpecs');
-
-/**
- * Get application usage statistics
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- * @returns {object} Message.
- */
-async function fluxUsage(req, res) {
-  try {
-    const totalApps = await appsRepository.countInstalledApps();
-    const runningApps = await appQueryService.listRunningApps();
-    const totalRunning = runningApps.data ? runningApps.data.length : 0;
-
-    // Ensure node specs are loaded before accessing them
-    const specs = await nodeSpecs.getNodeSpecs();
-
-    const usage = {
-      totalApps,
-      runningApps: totalRunning,
-      stoppedApps: totalApps - totalRunning,
-      nodeSpecs: specs,
-    };
-
-    const dataResponse = messageHelper.createDataMessage(usage);
-    return res ? res.json(dataResponse) : dataResponse;
-  } catch (error) {
-    log.error(error);
-    const errorResponse = messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-    return res ? res.json(errorResponse) : errorResponse;
-  }
-}
 
 /**
  * What this node has committed to the applications it holds, and which of them it
@@ -194,7 +156,6 @@ function publicResourceView(usage) {
 }
 
 module.exports = {
-  fluxUsage,
   appsResources,
   unaccountedApps,
   appsResourcesApi,

@@ -20,6 +20,7 @@ const globalState = require('../utils/globalState');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const fluxCommunicationUtils = require('../fluxCommunicationUtils');
 const appReconciler = require('../appMonitoring/appReconciler');
+const nodeSpecs = require('../appRequirements/nodeSpecs');
 
 // Database collections
 const globalAppsMessages = config.get('database.appsglobal.collections.appsMessages');
@@ -176,6 +177,41 @@ async function listRunningApps(req, res) {
       return copy;
     });
     return messageHelper.createDataMessage(modifiedApps);
+  } catch (error) {
+    log.error(error);
+    const errorResponse = messageHelper.createErrorMessage(
+      error.message || error,
+      error.name,
+      error.code,
+    );
+    return res ? res.json(errorResponse) : errorResponse;
+  }
+}
+
+/**
+ * Get application usage statistics
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {object} Message.
+ */
+async function fluxUsage(req, res) {
+  try {
+    const totalApps = await appsRepository.countInstalledApps();
+    const runningApps = await listRunningApps();
+    const totalRunning = runningApps.data ? runningApps.data.length : 0;
+
+    // Ensure node specs are loaded before accessing them
+    const specs = await nodeSpecs.getNodeSpecs();
+
+    const usage = {
+      totalApps,
+      runningApps: totalRunning,
+      stoppedApps: totalApps - totalRunning,
+      nodeSpecs: specs,
+    };
+
+    const dataResponse = messageHelper.createDataMessage(usage);
+    return res ? res.json(dataResponse) : dataResponse;
   } catch (error) {
     log.error(error);
     const errorResponse = messageHelper.createErrorMessage(
@@ -551,6 +587,7 @@ async function promotedFolderHoldings(req, res) {
 }
 
 module.exports = {
+  fluxUsage,
   publicContainerView,
   installedApps,
   listRunningContainers,
