@@ -7,6 +7,7 @@ const path = require('node:path');
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const realDockerService = require('../../ZelBack/src/services/dockerService');
 // Real registry singleton - un-stubbed in proxyquire, so the module under test
 // and the test share it.
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
@@ -32,6 +33,8 @@ const dockerServiceMock = {
   // identity mapping. That makes the syncthing folder id in these tests the
   // same string production would use, and the same one `deployComp.dir` ends in.
   getAppIdentifier: sinon.stub().callsFake((identifier) => `flux${identifier}`),
+  // Its inverse, the real one: another pure string function.
+  getBaseAppName: realDockerService.getBaseAppName,
   dockerContainerInspect: sinon.stub(),
   appDockerStart: sinon.stub(),
 };
@@ -102,7 +105,7 @@ const deploymentProviderMock = {
 };
 deploymentProviderMock.listInstalledDeploymentsDetailed.callsFake(async () => ({
   deployments: await deploymentProviderMock.listInstalledDeployments(),
-  unreadableAppNames: new Set(),
+  unreadableApps: new Map(),
 }));
 
 const syncthingEventsConsumerMock = {
@@ -291,7 +294,7 @@ describe('syncthingMonitor tests', () => {
     deploymentProviderMock.listInstalledDeploymentsDetailed.resetHistory();
     deploymentProviderMock.listInstalledDeploymentsDetailed.callsFake(async () => ({
       deployments: await deploymentProviderMock.listInstalledDeployments(),
-      unreadableAppNames: new Set(),
+      unreadableApps: new Map(),
     }));
     syncthingServiceMock.getDeviceId.reset();
     syncthingServiceMock.getConfigFolders.reset();
@@ -590,7 +593,7 @@ describe('syncthingMonitor tests', () => {
       it('protects the folders of an app it could not read from the sweep', async () => {
         deploymentProviderMock.listInstalledDeploymentsDetailed.resolves({
           deployments: [],
-          unreadableAppNames: new Set(['sealed']),
+          unreadableApps: new Map([['sealed', 'sealed']]),
         });
         syncthingServiceMock.getConfigFolders.resolves([
           { id: 'fluxweb_sealed', type: 'sendreceive' },
@@ -608,6 +611,30 @@ describe('syncthingMonitor tests', () => {
           .to.deep.equal(['fluxweb_gone']);
       });
 
+      it('protects an unreadable app\'s folders by its identity, a replica\'s included', async () => {
+        deploymentProviderMock.listInstalledDeploymentsDetailed.resolves({
+          deployments: [],
+          unreadableApps: new Map([['bident', 'sealed']]),
+        });
+        syncthingServiceMock.getConfigFolders.resolves([
+          { id: 'fluxweb_bident', type: 'sendreceive' },
+          { id: 'fluxweb_bident_s1', type: 'sendreceive' },
+          { id: 'fluxweb_sealed', type: 'sendreceive' },
+        ]);
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        const deleted = syncthingServiceMock.adjustConfigFolders.getCalls()
+          .map((call) => call.args[0])
+          .filter((options) => options.method === 'delete')
+          .map((options) => options.id);
+        expect(deleted, 'the app\'s own folders are kept and a folder of its name alone is not its').to.deep.equal(['fluxweb_sealed']);
+        // and the mount check of each of its folders files under the app's name
+        sinon.assert.calledWith(syncthingFolderStateMachineMock.verifySendReceiveFolderSafety, 'fluxweb_bident', sinon.match.any, sinon.match({ appName: 'sealed' }));
+        sinon.assert.calledWith(syncthingFolderStateMachineMock.verifySendReceiveFolderSafety, 'fluxweb_bident_s1', sinon.match.any, sinon.match({ appName: 'sealed' }));
+      });
+
       // The single-app case, and the property the two-folder test above cannot
       // show: an app this node cannot read costs its own folders' sweep and
       // NOTHING ELSE. Standing the whole pass down instead would stop folder
@@ -616,7 +643,7 @@ describe('syncthingMonitor tests', () => {
       it('deletes nothing when an enterprise spec cannot be decrypted, and finishes the pass', async () => {
         deploymentProviderMock.listInstalledDeploymentsDetailed.resolves({
           deployments: [],
-          unreadableAppNames: new Set(['sealed']),
+          unreadableApps: new Map([['sealed', 'sealed']]),
         });
         syncthingServiceMock.getConfigFolders.resolves([{ id: 'fluxweb_sealed', type: 'sendreceive' }]);
 
@@ -638,7 +665,7 @@ describe('syncthingMonitor tests', () => {
       it('still mount-checks the folder of an app it could not read', async () => {
         deploymentProviderMock.listInstalledDeploymentsDetailed.resolves({
           deployments: [],
-          unreadableAppNames: new Set(['sealed']),
+          unreadableApps: new Map([['sealed', 'sealed']]),
         });
         syncthingServiceMock.getConfigFolders.resolves([{ id: 'fluxweb_sealed', type: 'sendreceive' }]);
         const held = ['/backup', '/lost+found', '/cache'];
@@ -1021,7 +1048,7 @@ describe('syncthingMonitor tests', () => {
     it('keeps a safety flag standing when its folder belongs to an app it cannot decrypt', async () => {
       deploymentProviderMock.listInstalledDeploymentsDetailed.resolves({
         deployments: [],
-        unreadableAppNames: new Set(['sealed']),
+        unreadableApps: new Map([['sealed', 'sealed']]),
       });
       syncthingEventsConsumerMock.mountVerifyPendingIds.returns(['fluxweb_sealed', 'fluxweb_gone']);
       syncthingServiceMock.getConfigFolders.resolves([]);
@@ -1399,7 +1426,7 @@ describe('syncthingMonitor tests', () => {
       // that acts on every unreadable folder regardless of what it found.
       deploymentProviderMock.listInstalledDeploymentsDetailed.resolves({
         deployments: [],
-        unreadableAppNames: new Set(['sealed']),
+        unreadableApps: new Map([['sealed', 'sealed']]),
       });
       syncthingServiceMock.getConfigFolders.resolves([{ id: 'fluxweb_sealed', type: 'sendreceive' }]);
       syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: true, isMounted: true, reason: 'ok' });

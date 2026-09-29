@@ -198,6 +198,18 @@ describe('deploymentProvider tests', () => {
     });
   });
 
+  describe('listInstalledDeploymentsDetailed', () => {
+    it('reports an app it cannot read by its identity, or its name where it has none', async () => {
+      const { deployments, unreadableApps } = await deploymentProvider.listInstalledDeploymentsDetailed([
+        { name: 'sealed', identity: 'bident' },
+        { name: 'legacy' },
+      ]);
+
+      expect(deployments).to.deep.equal([]);
+      expect([...unreadableApps]).to.deep.equal([['bident', 'sealed'], ['legacy', 'legacy']]);
+    });
+  });
+
   describe('buildDeployment identity contract', () => {
     afterEach(() => {
       sinon.restore();
