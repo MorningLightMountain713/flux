@@ -4,6 +4,7 @@
   "private": true,
   "description": "Stub for fluxd and fluxbenchd JSON-RPC for E2E testing",
   "main": "index.js",
+  "type": "module",
   "scripts": {
     "start": "node index.js"
   },

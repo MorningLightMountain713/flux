@@ -8,7 +8,7 @@ import { getFluxDriveState, getFluxDriveManifest, resetFluxDrive } from '../fram
 import { pushImage, pushTestApp } from '../framework/registry-helper.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { blobHash } from '../framework/content-crypto-v9.js';
-import benchCrypto from '../../daemon-stub/benchCrypto.js';
+import * as benchCrypto from '../../daemon-stub/benchCrypto.js';
 import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitFor } from '../framework/wait.js';
 import { getAppContainerStatus, execInContainer, isAppContainerRunning } from '../framework/container.js';

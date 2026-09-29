@@ -4,7 +4,7 @@
 // every door, and POSTs spec + content + ownerSigs as multipart/form-data.
 import { authenticate } from '../auth.js';
 import { appOwnerKey, userKey } from './keys.js';
-import benchCrypto from '../../daemon-stub/benchCrypto.js';
+import * as benchCrypto from '../../daemon-stub/benchCrypto.js';
 import * as tk from './content-crypto-v9.js';
 
 // The node's per-app transport pubkey (the real frontend fetches this before sealing).

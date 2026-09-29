@@ -274,7 +274,7 @@ function encode(topic, fields) {
   return encoder(fields);
 }
 
-module.exports = {
+export {
   STATUS_BYTES,
   TIER_BYTES,
   TOPICS,

@@ -1,13 +1,11 @@
-'use strict';
-
 // Only the stub server loads this module: @peculiar/x509 is installed in the
 // stub's image, not on the host that imports benchCrypto for its derivations.
 
-const crypto = require('node:crypto');
-const x509 = require('@peculiar/x509');
-const {
+import crypto from 'node:crypto';
+import * as x509 from '@peculiar/x509';
+import {
   TEST_SEED, ED25519_PKCS8_PREFIX, hkdf32, ed25519FromSeed,
-} = require('./benchCrypto');
+} from './benchCrypto.js';
 
 x509.cryptoProvider.set(crypto.webcrypto);
 
@@ -127,7 +125,4 @@ async function signCertificate({ csr, appName }) {
   return { certificate: leaf.toString('pem') };
 }
 
-module.exports = {
-  caCertificate,
-  signCertificate,
-};
+export { caCertificate, signCertificate };

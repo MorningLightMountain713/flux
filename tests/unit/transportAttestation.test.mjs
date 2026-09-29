@@ -1,12 +1,7 @@
-'use strict';
-
-// Set NODE_CONFIG_DIR before any requires
-process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
-
-const crypto = require('node:crypto');
-const { expect } = require('chai');
-const benchCrypto = require('../../test-infra/daemon-stub/benchCrypto');
-const specLibs = require('../../ZelBack/src/services/utils/specLibs');
+import crypto from 'node:crypto';
+import { expect } from 'chai';
+import * as benchCrypto from '../../test-infra/daemon-stub/benchCrypto.js';
+import specLibs from '../../ZelBack/src/services/utils/specLibs.js';
 
 const APP_NAME = 'transportattestapp';
 const FLUX_ID = '1KPKzy7iSSDpiLJ9DUiTHhwUwvsBFTGmLo';
