@@ -143,7 +143,7 @@ async function decideOne(entries, i, name, judge) {
 
     if (await judge.entitlementRefusal(spec, record.height)) return refused(entry, name, 'not-entitled', fee);
 
-    const uuid = judge.mintUuid(spec.name, record.txid);
+    const uuid = judge.mintUuid(spec.name, entry.hash);
     return decisionFor(entry, name, {
       decision: APPLIED,
       fee: String(fee),

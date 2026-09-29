@@ -48,10 +48,13 @@ describe('decisionJudge', () => {
     });
   });
 
-  it('names a v9 registration\'s app by its uuid and a legacy one by its name', async () => {
+  it('names a v9 registration\'s app by its whole uuid and a legacy one by its name', async () => {
     const judge = await loadJudge().createJudge();
-    const uuid = judge.mintUuid('MyApp', 'txid');
-    expect(judge.identityFor({ version: 9, name: 'MyApp' }, uuid)).to.equal(uuid.slice(0, 12));
+    const { appUuid, appIdentityFromUuid } = await load();
+    const hash = 'a'.repeat(64);
+    const uuid = judge.mintUuid('myapp', hash);
+    expect(uuid, 'the library\'s uuid of the name and the registration hash').to.equal(appUuid('myapp', hash));
+    expect(judge.identityFor({ version: 9, name: 'myapp' }, uuid)).to.equal(appIdentityFromUuid(uuid));
     expect(judge.identityFor({ version: 8, name: 'MyApp' }, uuid)).to.equal('MyApp');
   });
 

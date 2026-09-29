@@ -9,7 +9,7 @@ const appHistory = require('../appDecisions/appHistory');
 const { resolveSpec, resolveInstantiatedSpec } = require('../utils/specCutover');
 const { getSpec } = require('../utils/specLibs');
 const { getChainParamsPriceUpdates } = require('../utils/chainUtilities');
-const { isMarketplaceApp } = require('../utils/appIdentity');
+const { isMarketplaceApp } = require('../utils/marketplaceApps');
 const cacheManager = require('../utils/cacheManager').default;
 const log = require('../../lib/log');
 

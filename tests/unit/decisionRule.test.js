@@ -66,8 +66,8 @@ function makeJudge(overrides = {}) {
     assertCompatible: (prevSpec, spec) => {
       if (spec.version < prevSpec.version) throw new Error('lower version');
     },
-    mintUuid: (name, txid) => `uuid-${name}-${txid}`,
-    identityFor: (spec, uuid) => (spec.version >= 9 ? uuid.slice(0, 12) : spec.name),
+    mintUuid: (name, registrationHash) => `uuid-${name}-${registrationHash}`,
+    identityFor: (spec, uuid) => (spec.version >= 9 ? `id-${uuid}` : spec.name),
     blockTime: async (e) => {
       calls.blockTime.push(e.hash);
       return e.record.height * 10;
@@ -88,18 +88,18 @@ const verdicts = (result) => result.decisions.map((d) => (d.decision === 'applie
 
 describe('decisionRule', () => {
   describe('a registration', () => {
-    it('is applied with a uuid minted from its name and transaction, and its term starting at its block', async () => {
+    it('is applied with a uuid minted from its name and message hash, and its term starting at its block', async () => {
       const result = await decide([entry({ hash: 'r', height: 100 })]);
       const [d] = result.decisions;
       expect(d).to.include({
-        hash: 'r', name: 'myapp', decision: 'applied', uuid: 'uuid-MyApp-tx-r', identity: 'MyApp', termStart: 1000, fee: '10', ruleVersion: 1,
+        hash: 'r', name: 'myapp', decision: 'applied', uuid: 'uuid-MyApp-r', identity: 'MyApp', termStart: 1000, fee: '10', ruleVersion: 1,
       });
       expect(result.blocked).to.equal(null);
     });
 
     it('takes a v9 identity from its uuid', async () => {
       const [d] = (await decide([entry({ hash: 'r', height: 100, spec: v9Spec() })])).decisions;
-      expect(d.identity).to.equal('uuid-MyApp-t');
+      expect(d.identity).to.equal('id-uuid-MyApp-r');
     });
 
     it('is refused while the name is held by a live app, and applied once that app has expired', async () => {
@@ -109,7 +109,7 @@ describe('decisionRule', () => {
         entry({ hash: 'after', height: 1100 }),
       ]);
       expect(verdicts(result)).to.deep.equal(['applied', 'name-held', 'applied']);
-      expect(result.decisions[2].uuid).to.equal('uuid-MyApp-tx-after');
+      expect(result.decisions[2].uuid).to.equal('uuid-MyApp-after');
     });
 
     it('is refused when it pays less than the fee, or no fee is in force', async () => {
@@ -138,7 +138,7 @@ describe('decisionRule', () => {
       ]);
       const [, d] = result.decisions;
       expect(d).to.include({
-        decision: 'applied', uuid: 'uuid-MyApp-tx-r', identity: 'MyApp', termStart: 2000,
+        decision: 'applied', uuid: 'uuid-MyApp-r', identity: 'MyApp', termStart: 2000,
       });
     });
 
