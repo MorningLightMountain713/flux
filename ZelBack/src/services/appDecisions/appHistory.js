@@ -41,6 +41,20 @@ async function appliedMessages(name) {
 }
 
 /**
+ * The applied messages of the app that holds a name, in chain order: the latest
+ * applied message's app (its uuid). A name registered again after expiry is
+ * another app, so an earlier app's messages are left out.
+ * @param {string} name - in any letter case
+ * @returns {Promise<Array<{message: object, decision: object}>>}
+ */
+async function currentAppMessages(name) {
+  const applied = await appliedMessages(name);
+  if (applied.length === 0) return [];
+  const { uuid } = applied[applied.length - 1].decision;
+  return applied.filter(({ decision }) => decision.uuid === uuid);
+}
+
+/**
  * The latest applied message for a name.
  * @param {string} name - in any letter case
  * @param {{type?: 'registration'|'update', before?: number}} [filter] - only
@@ -55,14 +69,14 @@ async function latestApplied(name, { type, before } = {}) {
 }
 
 /**
- * The applied updates for a name, stamped with their confirming blocks' times:
- * what a free-update limit counts.
+ * The applied updates of the app that holds a name, stamped with their
+ * confirming blocks' times: what a free-update limit counts.
  * @param {string} name - in any letter case
  * @returns {Promise<Array<{type: string, timestamp: number}>>} timestamps in ms
  */
 async function appliedUpdateEvents(name) {
   const events = [];
-  for (const { decision } of await appliedMessages(name)) {
+  for (const { decision } of await currentAppMessages(name)) {
     if (decision.type !== 'update') continue;
     // eslint-disable-next-line no-await-in-loop
     const blockTime = decision.blockTime ?? await lookupBlockTime(decision.height);
@@ -74,5 +88,6 @@ async function appliedUpdateEvents(name) {
 module.exports = {
   appliedMessages,
   appliedUpdateEvents,
+  currentAppMessages,
   latestApplied,
 };

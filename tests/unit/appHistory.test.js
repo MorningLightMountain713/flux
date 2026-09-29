@@ -66,6 +66,23 @@ describe('appHistory', () => {
     expect(await history.latestApplied('myapp', { before: 100 })).to.equal(null);
   });
 
+  it('answers the applied messages of the app holding the name, leaving out an earlier app of the name', async () => {
+    applied = [
+      decision('r1', { type: 'registration', height: 100, uuid: 'first' }),
+      decision('u1', { type: 'update', height: 150, uuid: 'first' }),
+      decision('r2', { type: 'registration', height: 300, uuid: 'second' }),
+      decision('u2', { type: 'update', height: 350, uuid: 'second' }),
+    ];
+    stored = applied.map(({ hash }) => ({ hash }));
+
+    expect((await history.currentAppMessages('MyApp')).map(({ decision: d }) => d.hash)).to.deep.equal(['r2', 'u2']);
+    expect(await history.appliedUpdateEvents('myapp')).to.deep.equal([{ type: 'fluxappupdate', timestamp: 3_500_000 }]);
+  });
+
+  it('answers no messages for a name nothing was applied to', async () => {
+    expect(await history.currentAppMessages('myapp')).to.deep.equal([]);
+  });
+
   it('stamps the applied updates with their blocks\' times, asking the daemon only for a record without one', async () => {
     applied = [
       decision('r', { type: 'registration', height: 100 }),

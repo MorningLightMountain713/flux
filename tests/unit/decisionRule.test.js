@@ -233,6 +233,25 @@ describe('decisionRule', () => {
       ], judge);
       expect(events).to.deep.equal([{ type: 'fluxappupdate', timestamp: 2_000_000 }]);
     });
+
+    it('counts only the updates to its own app, not to an earlier app registered under the name', async () => {
+      let events = null;
+      const { judge } = makeJudge({
+        updateFee: async (spec, prevSpec, ctx) => {
+          if (ctx.height === 1400) events = await ctx.recentEvents();
+          return 10n;
+        },
+      });
+      const result = await decide([
+        entry({ hash: 'r1', height: 100 }),
+        entry({ hash: 'u1', type: 'update', height: 200 }),
+        entry({ hash: 'r2', height: 1300 }),
+        entry({ hash: 'u2', type: 'update', height: 1350 }),
+        entry({ hash: 'u3', type: 'update', height: 1400 }),
+      ], judge);
+      expect(verdicts(result)).to.deep.equal(['applied', 'applied', 'applied', 'applied', 'applied']);
+      expect(events).to.deep.equal([{ type: 'fluxappupdate', timestamp: 13_500_000 }]);
+    });
   });
 
   it('refuses a message carrying the signed timestamp of an earlier one for the name as a replay', async () => {

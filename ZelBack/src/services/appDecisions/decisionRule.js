@@ -90,14 +90,15 @@ async function blockTimeAgainst(entry, standing, judge) {
 }
 
 /**
- * The applied updates for the name before index `i`, stamped with their
- * confirming blocks' times: what the free-update limit counts.
+ * The applied updates to the app `uuid` before index `i`, stamped with their
+ * confirming blocks' times: what the free-update limit counts. An earlier app
+ * registered under the same name is another app, and its updates do not count.
  */
-async function appliedUpdatesBefore(entries, i, judge) {
+async function appliedUpdatesBefore(entries, i, judge, uuid) {
   const events = [];
   for (let k = 0; k < i; k += 1) {
     const earlier = entries[k];
-    if (earlier.decision?.decision === APPLIED && earlier.type === UPDATE) {
+    if (earlier.decision?.decision === APPLIED && earlier.type === UPDATE && earlier.decision.uuid === uuid) {
       // eslint-disable-next-line no-await-in-loop
       const blockTime = earlier.record.blockTime ?? await judge.blockTime(earlier);
       events.push({ type: 'fluxappupdate', timestamp: blockTime * 1000 });
@@ -178,7 +179,7 @@ async function decideOne(entries, i, name, judge) {
     prevHeight: predecessor.record.height,
     prevRegisteredAt: predecessor.decision.termStart,
     nowBlockTime: blockTime,
-    recentEvents: () => appliedUpdatesBefore(entries, i, judge),
+    recentEvents: () => appliedUpdatesBefore(entries, i, judge, predecessor.decision.uuid),
   });
   if (fee === null) return refused(entry, name, 'free-allowance-spent');
   if (BigInt(record.valueSat) < fee) return refused(entry, name, 'underpaid', fee);
