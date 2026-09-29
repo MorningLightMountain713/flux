@@ -1,5 +1,6 @@
 'use strict';
 
+const { parseArgs } = require('node:util');
 const log = require('../lib/log');
 
 /**
@@ -1358,9 +1359,6 @@ async function main(command) {
 }
 
 if (require.main === module) {
-  // eslint-disable-next-line global-require
-  const { parseArgs } = require('node:util');
-
   const { positionals } = parseArgs({
     allowPositionals: true,
     strict: true,

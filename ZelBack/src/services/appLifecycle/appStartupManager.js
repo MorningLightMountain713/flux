@@ -37,6 +37,7 @@ const { localAppsInformation, NODE_DOWN_GRACE_MS } = require('../utils/appConsta
 const { parseContainerName } = require('../utils/appUtilities');
 const { untilSucceeds, BOOT_STEP_RETRY_MS } = require('../utils/untilSucceeds');
 const nodeDownStore = require('../appMessaging/nodeDownStore');
+const appQueryService = require('../appQuery/appQueryService');
 
 const SYNC_TIMEOUT_MS = config.get('system.bootSyncTimeoutMs');
 
@@ -443,7 +444,6 @@ async function reconcileAppsOnBoot() {
 }
 
 async function removeAllApps(reason) {
-  const appQueryService = require('../appQuery/appQueryService');
   const installedAppsRes = await appQueryService.installedApps();
   if (installedAppsRes.status === 'success') {
     for (const app of installedAppsRes.data) {

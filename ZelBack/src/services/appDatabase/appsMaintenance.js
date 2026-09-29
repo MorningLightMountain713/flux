@@ -13,6 +13,7 @@
 
 const config = require('config');
 const dbHelper = require('../dbHelper');
+const { parseArgs } = require('node:util');
 
 async function findValueSatNanInAppsMessages() {
   const dbName = config.get('database.appsglobal.database');
@@ -194,9 +195,6 @@ async function main(command) {
 }
 
 if (require.main === module) {
-  // eslint-disable-next-line global-require
-  const { parseArgs } = require('node:util');
-
   const { positionals } = parseArgs({
     allowPositionals: true,
     strict: true,

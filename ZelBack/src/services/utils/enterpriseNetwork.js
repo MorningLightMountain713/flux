@@ -9,6 +9,7 @@ const signatureVerifier = require('../signatureVerifier');
 const policyStore = require('../policyStore');
 const capabilities = require('./capabilities');
 const log = require('../../lib/log');
+const appUninstaller = require('../appLifecycle/appUninstaller');
 
 // This node's own fluxnode pubkey, cached once resolved. The pubkey never
 // changes, so the expensive daemon/benchmark RPC runs only once. Enterprise
@@ -222,9 +223,6 @@ function getSpawnDelays(isEnterprise, appsAvailable) {
  * who may host what changes.
  */
 async function cleanupOwnershipViolations() {
-  // eslint-disable-next-line global-require
-  const appUninstaller = require('../appLifecycle/appUninstaller');
-
   // NOTHING IS UNINSTALLED ON POLICY THIS NODE HAS NOT ESTABLISHED IS THE NETWORK'S.
   // Holding a bundle is not that: one off disk is whatever this node last had, and a map
   // that has since granted an owner reads here as that owner's apps being violations. This
