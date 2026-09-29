@@ -1,4 +1,5 @@
-const { expect } = require('chai');
+import { expect } from 'chai';
+import * as placement from '../../test-infra/runner/framework/g-app-placement.js';
 
 // The g: placement rules are pure, so the orders three harness suites depend on
 // can be proven here rather than only on a fleet - which matters because getting
@@ -6,14 +7,6 @@ const { expect } = require('chai');
 // not written for, and the suite then times out waiting for something that was
 // never going to happen.
 describe('g: app placement orders', () => {
-  let placement;
-
-  before(async () => {
-    // Real ESM specifier resolved at runtime; the harness is ESM, this file is CJS.
-    // eslint-disable-next-line import/extensions
-    placement = await import('../../test-infra/runner/framework/g-app-placement.js');
-  });
-
   // The harness lays nodes out one per address, ascending with the index.
   const ipOf = (index) => `198.18.0.${index + 10}`;
 

@@ -1,7 +1,8 @@
-'use strict';
+import { expect } from 'chai';
+import softForkRows from '../../ZelBack/src/services/utils/softForkRows.js';
+import * as policyHelper from '../../test-infra/runner/framework/policy-helper.js';
 
-const { expect } = require('chai');
-const { inChainOrder } = require('../../ZelBack/src/services/utils/softForkRows');
+const { inChainOrder } = softForkRows;
 
 // The harness seeds a group-0 policy grant straight into each node's policy
 // collection before boot (test-infra/runner/framework/policy-helper.js); the
@@ -13,13 +14,7 @@ const { inChainOrder } = require('../../ZelBack/src/services/utils/softForkRows'
 // first v9 gate to run them since. This pins the seed's shape to the product's
 // rule, so the next field the rule grows fails here instead of in a gate.
 describe('the harness policy seed', () => {
-  let doc;
-
-  before(async () => {
-    // eslint-disable-next-line import/extensions -- an ESM module needs its extension
-    const helper = await import('../../test-infra/runner/framework/policy-helper.js');
-    doc = helper.defaultGroupGrantDoc();
-  });
+  const doc = policyHelper.defaultGroupGrantDoc();
 
   it('is a row the node accepts into its fork history: in chain order, with its positions in the block and the transaction', () => {
     expect(() => inChainOrder([doc], 'policygroupmessages')).to.not.throw();

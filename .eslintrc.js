@@ -115,6 +115,16 @@ module.exports = {
       },
     },
     {
+      // A unit test that loads an ES module (the harness framework, @hpke/core) is
+      // itself one, and imports it statically: CommonJS on the supported Node
+      // cannot require ESM.
+      files: ['tests/unit/**/*.mjs'],
+      parserOptions: { sourceType: 'module' },
+      rules: {
+        'import/extensions': ['error', 'ignorePackages', { js: 'always' }],
+      },
+    },
+    {
       // test-infra is ESM ("type": "module" in the runner), and ESM requires the
       // file extension on a relative import — drop it and node throws
       // ERR_MODULE_NOT_FOUND at startup. The repo-wide `js: 'never'` is correct

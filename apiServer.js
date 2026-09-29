@@ -76,8 +76,7 @@ async function createDnsCache(userCache) {
 
     const cache = userCache || new Map();
 
-    // we have to dynamic import here as cacheable-lookup only supports ESM.
-    const { default: CacheableLookup } = await import('cacheable-lookup');
+    const { default: CacheableLookup } = await moduleLoader.importModule('cacheable-lookup');
     cacheable = new CacheableLookup({ maxTtl: 360, cache });
 
     cacheable.install(http.globalAgent);

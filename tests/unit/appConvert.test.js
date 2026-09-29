@@ -11,6 +11,7 @@ const transportCryptoProvider = require('../../ZelBack/src/services/providers/Fl
 const {
   loadSpecLibrary, V8_SUBMISSION, v8Spec, v9Spec, sealedV8Spec, instantiatedSpec,
 } = require('./fixtures/fluxSpec');
+const moduleLoader = require('../../ZelBack/src/lib/moduleLoader');
 
 // Orchestration tests for registryManager.convertApplicationSpecification.
 //
@@ -41,7 +42,7 @@ describe('appConvert (registryManager) tests', () => {
     flux = await loadSpecLibrary();
     const {
       CipherSuite, DhkemX25519HkdfSha256, HkdfSha256, Aes256Gcm,
-    } = await import('@hpke/core');
+    } = await moduleLoader.importModule('@hpke/core');
     suite = new CipherSuite({
       kem: new DhkemX25519HkdfSha256(), kdf: new HkdfSha256(), aead: new Aes256Gcm(),
     });
