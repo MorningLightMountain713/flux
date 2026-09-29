@@ -14,13 +14,13 @@ const pricingRegime = require('../../ZelBack/src/services/pricing/pricingRegime'
 const appHistory = require('../../ZelBack/src/services/appDecisions/appHistory');
 
 /**
- * The applied history the pricers read, given as the messages the chain
- * applied: the legacy quote counts applied updates by height, the v9 quote by
- * their blocks' times.
+ * The applied history of the app holding the name, as the pricers read it,
+ * given as the messages the chain applied: the legacy quote counts applied
+ * updates by height, the v9 quote by their blocks' times.
  */
 function stubAppliedHistory(messages) {
   const isUpdate = (message) => /update$/.test(message.type);
-  sinon.stub(appHistory, 'appliedMessages').resolves(messages.map((message) => ({
+  sinon.stub(appHistory, 'currentAppMessages').resolves(messages.map((message) => ({
     message, decision: { type: isUpdate(message) ? 'update' : 'registration', height: message.height },
   })));
   sinon.stub(appHistory, 'appliedUpdateEvents').resolves(messages.filter(isUpdate)

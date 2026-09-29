@@ -192,8 +192,9 @@ async function engineFor({ quote = false, name = null } = {}) {
 async function checkLegacyFreeUpdate(spec, daemonHeight) {
   const { checkLegacyFreeUpdate: rule } = await getSpec();
   const instantiated = await appsRepository.getGlobalAppInfo(spec.name);
-  // Only applied updates count against the allowance: a refused one never happened.
-  const applied = instantiated ? await appHistory.appliedMessages(spec.name) : [];
+  // Only this app's applied updates count against the allowance: a refused one
+  // never happened, and an earlier app of the name is another app.
+  const applied = instantiated ? await appHistory.currentAppMessages(spec.name) : [];
 
   const { free, reason } = rule({
     oldSpec: instantiated ? await resolveInstantiatedSpec(instantiated) : null,
