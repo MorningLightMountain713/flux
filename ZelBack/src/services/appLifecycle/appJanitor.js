@@ -1,7 +1,6 @@
 'use strict';
 
 const config = require('config');
-const capabilities = require('../utils/capabilities');
 const log = require('../../lib/log');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const operationRegistry = require('../utils/operationRegistry');
@@ -9,7 +8,6 @@ const fluxEventBus = require('../utils/fluxEventBus');
 const dockerService = require('../dockerService');
 const appsRepository = require('../appDatabase/appsRepository');
 const { getSpecBackend } = require('../utils/specLibs');
-const appRegistry = require('../appDatabase/appRegistry');
 const appQueryService = require('../appQuery/appQueryService');
 const appDockerNetwork = require('../appNetwork/appDockerNetwork');
 const playgroundRunner = require('../appPlayground/playgroundRunner');
@@ -18,8 +16,7 @@ const appUninstaller = require('./appUninstaller');
 
 // The janitor owns debris: things that exist on this node with no desired-state
 // row referring to them. Anything a row DOES refer to belongs to the
-// specReconciler ladder - the janitor never interprets desired state. Its one
-// registry write (dropping expired global rows) executes the chain's verdict.
+// specReconciler ladder - the janitor never interprets desired state.
 
 
 /**
@@ -104,26 +101,13 @@ async function dockerOrphanSweep() {
 }
 
 /**
- * Registry hygiene: the registry owner drops expired registrations and their
- * install-error records, and orphaned content manifests are reaped. This sweep
- * never uninstalls anything - removing an expired LOCAL install is the
- * specReconciler's job (its per-app ladder, per block).
+ * Reap the content manifests of apps the registry no longer lists.
  * @returns {Promise<object>} sweep summary
  */
-async function registryExpirySweep() {
-  const { expired, unjudgeable } = await appRegistry.sweepExpired();
-
+async function contentManifestSweep() {
   const { reaped } = await appsRepository.reapOrphanedContentManifests();
   if (reaped > 0) log.info(`appJanitor - reaped ${reaped} content manifest(s) for removed apps`);
-
-  return {
-    expired: expired.length,
-    manifestsReaped: reaped,
-    // Reported as well as logged, so a caller sees an incomplete pass without
-    // reading the log for it.
-    unjudgeable: unjudgeable.length,
-    unjudgeableApps: unjudgeable,
-  };
+  return { manifestsReaped: reaped };
 }
 
 /**
@@ -197,7 +181,7 @@ async function playgroundOrphanSweep() {
 
 const SWEEPS = {
   dockerOrphans: dockerOrphanSweep,
-  registryExpiry: registryExpirySweep,
+  contentManifests: contentManifestSweep,
   dockerDebris: dockerDebrisSweep,
   playgroundOrphans: playgroundOrphanSweep,
 };
@@ -230,8 +214,8 @@ async function sweepDockerOrphans() {
   return result;
 }
 
-async function sweepRegistryExpiry() {
-  const result = await runSweep('registryExpiry');
+async function sweepContentManifests() {
+  const result = await runSweep('contentManifests');
   return result;
 }
 
@@ -247,11 +231,7 @@ async function sweepPlaygroundOrphans() {
 
 let started = false;
 
-/**
- * Register the periodic sweeps and the sync-transition trigger. Registry
- * expiry additionally runs on the explorer's at-tip cadence (explorerService
- * calls sweepRegistryExpiry directly - block-driven work cannot self-schedule).
- */
+/** Register the periodic sweeps. */
 function start() {
   if (started) return;
   started = true;
@@ -266,22 +246,19 @@ function start() {
 
   schedule('dockerOrphans', 30 * 60 * 1000, config.get('fluxapps.orphanSweepIntervalMs'));
   schedule('dockerDebris', 45 * 60 * 1000, config.get('fluxapps.dockerDebrisIntervalMs'));
+  schedule('contentManifests', 30 * 60 * 1000, config.get('fluxapps.orphanSweepIntervalMs'));
   // Much earlier than the other two: sessions live only in memory, so at this
   // point every playground container on the node belongs to a session that no
   // longer exists. Waiting half an hour to collect them would leave a restarted
   // node running strangers' containers with nothing watching them.
   schedule('playgroundOrphans', 2 * 60 * 1000, config.get('fluxapps.playgroundReapIntervalMs'));
 
-  // Every entry into READY (first sync and every resync recovery): the node
-  // just (re)gained an authoritative view, so clear what the registry says is
-  // dead before the spawner starts choosing apps from it.
-  capabilities.onUp('spawnerReady', () => runSweep('registryExpiry'));
 }
 
 module.exports = {
   start,
+  sweepContentManifests,
   sweepDockerOrphans,
-  sweepRegistryExpiry,
   sweepDockerDebris,
   sweepPlaygroundOrphans,
 };

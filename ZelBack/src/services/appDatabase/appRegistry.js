@@ -16,6 +16,7 @@ const appEventVerifier = require('../appMessaging/appEventVerifier');
 const decider = require('../appDecisions/decider');
 const decisionStore = require('../appDecisions/decisionStore');
 const { processPendingUpdates } = require('../appMessaging/messageStore');
+const { lookupBlockTime } = require('../appMessaging/confirmedMessageStore');
 
 /**
  * The app registry (`globalAppsInformation`): for each name, the latest applied
@@ -26,8 +27,13 @@ const { processPendingUpdates } = require('../appMessaging/messageStore');
  * with the scan caught up, every row is reconciled with the decisions, and
  * `appRegistryConsistent` rises once that is done; a rewind lowers it. Until
  * the scan catches up a rewind's blocks have no decisions yet, so a reconcile
- * then would move rows back only for the next pass to move them forward. An
- * app whose term runs out leaves the list at the next sweep.
+ * then would move rows back only for the next pass to move them forward.
+ *
+ * Liveness is judged at a chain position, never by this node's clock: the
+ * scanned block's height for a v1-v8 term and its time for a v9 term, the rule
+ * the decider judges a registration of a held name by. An app leaves the list
+ * at the block its term ends, before any registration in a later block can take
+ * the name, and the `onRemoved` listeners hear of it then.
  *
  * A row change runs its effects (wake the spawner, promote a held content
  * manifest, clear install errors, anchor the founding committee, map its
@@ -43,6 +49,16 @@ const OWNER = 'appRegistry';
 
 let started = false;
 
+// The block the scan last moved the cursor to, as {height, time}; null until
+// the scan reports one, and after a rewind.
+let scannedBlock = null;
+
+// Every listed row by lower-cased name, while `appRegistryConsistent` is up: the
+// rows this module wrote, which the block's expiry check runs over.
+const listed = new Map();
+
+const removedListeners = [];
+
 function globalDb() {
   return dbHelper.databaseConnection().db(config.get('database.appsglobal.database'));
 }
@@ -51,25 +67,45 @@ function nameRegex(name) {
   return new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
 }
 
-/** Now, as liveness is judged: the scan cursor and the wall clock. */
-async function currentClock() {
-  return {
-    currentHeight: await chainState.getScannedHeight(),
-    tipBlockTime: Math.floor(Date.now() / 1000),
-  };
+/**
+ * The chain position liveness is judged at: the scanned block's height and time.
+ * @returns {Promise<{currentHeight: number, tipBlockTime: number}>}
+ */
+async function chainClock() {
+  if (!scannedBlock) {
+    const height = await chainState.getScannedHeight();
+    const time = await lookupBlockTime(height);
+    if (!Number.isFinite(time)) throw new Error(`the time of the scanned block ${height} cannot be read`);
+    scannedBlock = { height, time };
+  }
+  return { currentHeight: scannedBlock.height, tipBlockTime: scannedBlock.time };
+}
+
+/**
+ * Whether a listed row's term has ended at a chain position. A row whose expiry
+ * cannot be computed is kept and reported: removing a registration on a verdict
+ * nothing could compute cannot be undone.
+ */
+function endedAt(row, clock) {
+  try {
+    return row.isExpired(clock.tipBlockTime, clock.currentHeight);
+  } catch (error) {
+    log.warn(`appRegistry - cannot determine expiry for ${row.name}, listing it: ${error.message}`);
+    return false;
+  }
 }
 
 /**
  * The rows the given applied decisions stand for, by name: each decision's
  * stored message projected with the decision's uuid, identity and term start,
- * or no row when that app is not alive now.
+ * or no row when its term has ended at the scanned block.
  * @param {Map<string, object>} applied - latest applied decision by name
- * @returns {Promise<Map<string, object>>} serialized rows by name
+ * @returns {Promise<Map<string, object>>} InstantiatedSpec rows by name
  */
 async function rowsFor(applied) {
   if (applied.size === 0) return new Map();
   const { InstantiatedSpec } = await getSpecBackend();
-  const clock = await currentClock();
+  const clock = await chainClock();
   const messages = await dbHelper.findInDatabase(
     globalDb(), globalAppsMessages, { hash: { $in: [...applied.values()].map((d) => d.hash) } }, { projection: { _id: 0 } },
   );
@@ -90,12 +126,7 @@ async function rowsFor(applied) {
       identity: decision.identity,
       uuid: decision.uuid,
     });
-    try {
-      if (row.isExpired(clock.tipBlockTime, clock.currentHeight)) continue;
-    } catch (error) {
-      log.warn(`appRegistry - cannot determine expiry for ${name}, listing it: ${error.message}`);
-    }
-    rows.set(name, row.serialize());
+    if (!endedAt(row, clock)) rows.set(name, row);
   }
   return rows;
 }
@@ -113,38 +144,43 @@ async function writeWithEffects(row) {
   await appsRepository.removeAppInstallingErrorRecords(row.name);
 }
 
-/** Removes a name's row. */
+/** Removes a name's row and tells the `onRemoved` listeners. */
 async function removeRow(name) {
   await appsRepository.removeGlobalAppInfo(name);
   await appsRepository.removeAppInstallingErrorRecords(name);
+  listed.delete(name.toLowerCase());
+  removedListeners.forEach((fn) => setImmediate(() => {
+    Promise.resolve(fn(name)).catch((error) => log.error(`appRegistry - a removal listener failed for ${name}: ${error.message}`));
+  }));
 }
 
 /**
  * Makes a name's row what its latest applied decision says.
  * @param {string} name - lower-cased
- * @param {?object} row - the row it should have, or null for none
+ * @param {?object} instance - the InstantiatedSpec it should have, or null for none
  * @returns {Promise<'added'|'changed'|'restamped'|'removed'|null>}
  */
-async function settle(name, row) {
+async function settle(name, instance) {
   const live = await liveRow(name);
-  if (!row) {
+  if (!instance) {
     if (!live) return null;
     await removeRow(name);
     return 'removed';
   }
+  const row = instance.serialize();
+  let outcome = null;
   if (!live || live.hash !== row.hash || live.name !== row.name) {
     await writeWithEffects(row);
-    if (live) return 'changed';
-    // Updates that reached this node before their app existed are judged now
-    // that the row they are judged against does.
-    await processPendingUpdates(row.name);
-    return 'added';
-  }
-  if (live.uuid !== row.uuid || live.identity !== row.identity || live.registeredAt !== row.registeredAt) {
+    outcome = live ? 'changed' : 'added';
+  } else if (live.uuid !== row.uuid || live.identity !== row.identity || live.registeredAt !== row.registeredAt) {
     await appsRepository.replaceGlobalAppRow(row);
-    return 'restamped';
+    outcome = 'restamped';
   }
-  return null;
+  listed.set(name, instance);
+  // Updates that reached this node before their app existed are judged now
+  // that the row they are judged against does.
+  if (outcome === 'added') await processPendingUpdates(row.name);
+  return outcome;
 }
 
 /**
@@ -189,33 +225,29 @@ async function reconcile() {
 }
 
 /**
- * Removes every row whose app is no longer alive, holding the chain-state lock.
- * A row whose expiry cannot be computed is kept and reported: removing a
- * registration on a verdict nothing could compute cannot be undone.
- * @returns {Promise<{expired: string[], unjudgeable: string[]}>}
+ * The scan moved to a block, holding the chain-state lock: every listed app
+ * whose term ends at it leaves the list.
+ * @param {{height: number, time: number}} block
  */
-async function sweepExpired() {
-  const { InstantiatedSpec } = await getSpecBackend();
-  return chainState.exclusive(async () => {
-    const clock = await currentClock();
-    const live = await dbHelper.findInDatabase(globalDb(), globalAppsInformation, {}, { projection: { _id: 0 } });
-    const expired = [];
-    const unjudgeable = [];
-    for (const doc of live) {
-      try {
-        if (InstantiatedSpec.deserialize(doc).isExpired(clock.tipBlockTime, clock.currentHeight)) expired.push(doc.name);
-      } catch (error) {
-        unjudgeable.push(doc.name);
-        log.warn(`appRegistry - cannot determine expiry for ${doc.name}, keeping it: ${error.message}`);
-      }
-    }
-    for (const name of expired) {
-      log.info(`appRegistry - ${name} expired, leaving the list`);
-      // eslint-disable-next-line no-await-in-loop
-      await removeRow(name);
-    }
-    return { expired, unjudgeable };
-  });
+async function blockScanned(block) {
+  scannedBlock = block;
+  if (!capabilities.isUp(CAPABILITY)) return;
+  const clock = { currentHeight: block.height, tipBlockTime: block.time };
+  const ended = [...listed].filter(([, row]) => endedAt(row, clock)).map(([, row]) => row.name);
+  for (const name of ended) {
+    log.info(`appRegistry - ${name}'s term ended at ${block.height}, leaving the list`);
+    // eslint-disable-next-line no-await-in-loop
+    await removeRow(name);
+  }
+}
+
+/**
+ * Registers `fn(name)`, called after a name's row leaves the list, outside the
+ * chain-state lock.
+ * @param {(name: string) => (void|Promise<void>)} fn
+ */
+function onRemoved(fn) {
+  removedListeners.push(fn);
 }
 
 /**
@@ -229,12 +261,15 @@ function start() {
   handle.starting('deriving the list from the decisions');
   decider.onDecided(applyDecided);
   decider.onFullPass(reconcile);
+  chainState.onBlockScanned(blockScanned);
+  chainState.onRewind(() => { scannedBlock = null; });
   capabilities.onDown('chainStateConsistent', () => handle.lower('chain state rewinding'));
 }
 
 module.exports = {
   applyDecided,
+  blockScanned,
+  onRemoved,
   reconcile,
   start,
-  sweepExpired,
 };

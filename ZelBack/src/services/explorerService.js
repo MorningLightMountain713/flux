@@ -22,7 +22,7 @@ const daemonServiceBlockchainRpcs = require('./daemonService/daemonServiceBlockc
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
 const chainUtilities = require('./utils/chainUtilities');
 const messageVerifier = require('./appMessaging/messageVerifier');
-const appJanitor = require('./appLifecycle/appJanitor');
+
 const specReconciler = require('./appLifecycle/specReconciler');
 const appGiveUp = require('./appLifecycle/appGiveUp');
 const benchmarkService = require('./benchmarkService');
@@ -795,13 +795,6 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
         // staggers any actual redeploys itself — so evaluating every block
         // cannot stampede anything.
         await specReconciler.requestFullConvergence({ reason: 'block' });
-        if (blockWorkDue('expireGlobalApplications', blockHeight, 2 * speedMultiplier)) {
-          // Registry hygiene at tip cadence: expired global rows, their error
-          // records, and orphaned content manifests. The sweep never throws,
-          // so it cannot stall the block loop; removing an expired LOCAL
-          // install is the reconciler's job (the convergence call above).
-          await appJanitor.sweepRegistryExpiry();
-        }
         const giveUpPeriod = config.get('fluxapps.removeFluxAppsPeriod') * speedMultiplier;
         if (blockWorkDue('checkAndRemoveApplicationInstance', blockHeight, giveUpPeriod)) {
           // The give-up-an-app pass, on the chain's cadence so every node
@@ -832,15 +825,16 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
       }
       await insertAndRequestAppHashes(appsTransactions, database, true);
       await dbHelper.updateOneInDatabase(database, scannedHeightCollection, query, update, options);
+      await chainState.blockScanned({ height: scannedHeight, time: blockDataVerbose.time });
       fluxEventBus.publish('block:processed', { height: scannedHeight });
       // After the cursor, never before it: a subscriber that reads the persisted
       // height in response to this event would otherwise read the previous block.
       blockEmitter.emit('blocksProcessed', scannedHeight);
     } else if (blockDataVerbose.height % cursorBatchSize() === 0) {
       log.info(`Processing Explorer Number of Transactions: ${appsTransactions.length}.`);
-      await appJanitor.sweepRegistryExpiry(); // in case node was shutdown for a while and it is started
       await insertTransactions(appsTransactions, database);
       await dbHelper.updateOneInDatabase(database, scannedHeightCollection, query, update, options);
+      await chainState.blockScanned({ height: scannedHeight, time: blockDataVerbose.time });
       fluxEventBus.publish('block:processed', { height: scannedHeight });
       blockEmitter.emit('syncProgress', scannedHeight);
     }

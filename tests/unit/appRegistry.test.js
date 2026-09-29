@@ -15,9 +15,10 @@ const {
 // builds, so expiry is the library's rule and not a stub that agrees with
 // itself. What is stubbed is I/O.
 describe('appRegistry', () => {
-  // What chainState.getScannedHeight() reports: v1-v8 expiry is measured
-  // against it, never against wall-clock time.
+  // What chainState.getScannedHeight() reports, and its block's time: every
+  // term is measured against them, never against this node's clock.
   const SCANNED_HEIGHT = 1_000_000;
+  const NOW = Math.floor(Date.now() / 1000);
   // The fixture v9 ttl is 30 days, so a term started at this timestamp
   // (2025-07-04) is long past it.
   const LONG_EXPIRED_AT = 1_751_628_800;
@@ -69,7 +70,10 @@ describe('appRegistry', () => {
       '../chainState': {
         getScannedHeight: sinon.stub().resolves(SCANNED_HEIGHT),
         exclusive: sinon.stub().callsFake((fn) => fn()),
+        onBlockScanned: sinon.stub(),
+        onRewind: sinon.stub(),
       },
+      '../appMessaging/confirmedMessageStore': { lookupBlockTime: sinon.stub().resolves(NOW) },
       './appsRepository': {
         replaceGlobalAppRow: sinon.stub().resolves(),
         removeGlobalAppInfo: sinon.stub().resolves(),
@@ -94,28 +98,61 @@ describe('appRegistry', () => {
     capabilities.resetForTests();
   });
 
-  describe('sweepExpired', () => {
-    it('drops an expired row with its error records, and keeps a live one', async () => {
-      rows = [
-        (await instantiatedSpec(await v9Spec({ name: 'deadapp' }), { registeredAt: LONG_EXPIRED_AT })).serialize(),
-        (await instantiatedSpec(await v9Spec({ name: 'liveapp' }), { registeredAt: Math.floor(Date.now() / 1000) })).serialize(),
-      ];
+  /**
+   * Lists apps through a reconcile, each from its own applied decision, and
+   * raises the capability.
+   * @param {Array<{name: string, spec: object, fields?: object}>} apps
+   */
+  async function listed(apps) {
+    const applied = new Map();
+    for (const { name, spec, fields } of apps) {
+      messages.push(message(name, spec));
+      applied.set(name, decision(name, { name, ...fields }));
+    }
+    stubs['../appDecisions/decisionStore'].latestApplied.resolves(applied);
+    capabilities.setForTests(['explorerSynced', 'appMessagesSynced'], true);
+    await registry.reconcile();
+    stubs['./appsRepository'].removeGlobalAppInfo.resetHistory();
+    stubs['./appsRepository'].removeAppInstallingErrorRecords.resetHistory();
+  }
 
-      const result = await registry.sweepExpired();
+  describe('a scanned block', () => {
+    it('drops a row once, at the block its term ends, with its error records, tells the listeners, and keeps a live one', async () => {
+      await listed([
+        { name: 'deadapp', spec: await v9Spec({ name: 'deadapp' }), fields: { termStart: NOW - 30 * 86_400 + 60 } },
+        { name: 'liveapp', spec: await v9Spec({ name: 'liveapp' }) },
+      ]);
+      const removed = sinon.stub();
+      registry.onRemoved(removed);
 
-      expect(result).to.deep.equal({ expired: ['deadapp'], unjudgeable: [] });
+      await registry.blockScanned({ height: SCANNED_HEIGHT + 2, time: NOW + 61 });
+      await registry.blockScanned({ height: SCANNED_HEIGHT + 3, time: NOW + 91 });
+      await new Promise((resolve) => { setImmediate(resolve); });
+
       sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeGlobalAppInfo, 'deadapp');
       sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeAppInstallingErrorRecords, 'deadapp');
+      sinon.assert.calledOnceWithExactly(removed, 'deadapp');
     });
 
-    it('expires a v1-v8 row by the scanned height, not by wall-clock time', async () => {
-      // The fixture's expire is 88,000 blocks, measured from each row's height.
-      rows = [
-        (await instantiatedSpec(await v8Spec({ name: 'deadapp' }), { height: SCANNED_HEIGHT - 88_000 })).serialize(),
-        (await instantiatedSpec(await v8Spec({ name: 'liveapp' }), { height: SCANNED_HEIGHT - 87_999 })).serialize(),
-      ];
+    it('keeps a v9 row until the first block whose time is past its term end', async () => {
+      await listed([{ name: 'deadapp', spec: await v9Spec({ name: 'deadapp' }), fields: { termStart: NOW - 30 * 86_400 + 60 } }]);
 
-      expect((await registry.sweepExpired()).expired).to.deep.equal(['deadapp']);
+      await registry.blockScanned({ height: SCANNED_HEIGHT + 1_000_000, time: NOW + 60 });
+      sinon.assert.notCalled(stubs['./appsRepository'].removeGlobalAppInfo);
+
+      await registry.blockScanned({ height: SCANNED_HEIGHT + 1_000_001, time: NOW + 61 });
+      sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeGlobalAppInfo, 'deadapp');
+    });
+
+    it('ends a v1-v8 term at the block height it runs to, whatever the block time', async () => {
+      // The fixture's expire is 88,000 blocks, measured from the row's height.
+      await listed([{ name: 'deadapp', spec: await v8Spec({ name: 'deadapp' }), fields: { height: SCANNED_HEIGHT - 87_999 } }]);
+
+      await registry.blockScanned({ height: SCANNED_HEIGHT, time: NOW + 10 ** 9 });
+      sinon.assert.notCalled(stubs['./appsRepository'].removeGlobalAppInfo);
+
+      await registry.blockScanned({ height: SCANNED_HEIGHT + 1, time: NOW });
+      sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeGlobalAppInfo, 'deadapp');
     });
 
     it('stretches a pre-fork term that crosses the PON fork: its blocks after the fork are 30 s, not 2 min', async () => {
@@ -123,35 +160,66 @@ describe('appRegistry', () => {
       // two-minute blocks, then the remaining 78,000 blocks' worth of time as
       // 312,000 thirty-second blocks. Its end is PON + 312,000, not PON + 78,000.
       const PON = 2_020_000;
-      rows = [(await instantiatedSpec(await v8Spec({ name: 'crossing' }), { height: PON - 10_000 })).serialize()];
+      stubs['../chainState'].getScannedHeight.resolves(PON);
+      await listed([{ name: 'crossing', spec: await v8Spec({ name: 'crossing' }), fields: { height: PON - 10_000 } }]);
 
-      stubs['../chainState'].getScannedHeight.resolves(PON + 78_000);
-      expect((await registry.sweepExpired()).expired, 'alive past the unstretched end').to.deep.equal([]);
+      await registry.blockScanned({ height: PON + 78_000, time: NOW });
+      sinon.assert.notCalled(stubs['./appsRepository'].removeGlobalAppInfo);
 
-      stubs['../chainState'].getScannedHeight.resolves(PON + 312_000);
-      expect((await registry.sweepExpired()).expired, 'expired at the stretched end').to.deep.equal(['crossing']);
+      await registry.blockScanned({ height: PON + 312_000, time: NOW });
+      sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeGlobalAppInfo, 'crossing');
     });
 
-    it('does not expire a v9 row on height: its clock is time', async () => {
-      rows = [(await instantiatedSpec(await v9Spec({ name: 'liveapp' }), { registeredAt: Math.floor(Date.now() / 1000), height: 100_000 })).serialize()];
+    it('keeps a row it cannot judge and drops every other ended row', async () => {
+      const bad = await v9Spec({ name: 'unjudgeable' });
+      await listed([
+        { name: 'unjudgeable', spec: bad, fields: { termStart: null } },
+        { name: 'deadapp', spec: await v9Spec({ name: 'deadapp' }), fields: { termStart: NOW - 30 * 86_400 } },
+      ]);
+      sinon.assert.calledWithMatch(stubs['./registryManager'].storeGlobalSpec, { name: 'unjudgeable' });
 
-      expect((await registry.sweepExpired()).expired).to.deep.equal([]);
-    });
+      await registry.blockScanned({ height: SCANNED_HEIGHT + 1, time: NOW + 1 });
 
-    it('keeps a row it cannot judge, reports it, and expires every other row in the pass', async () => {
-      const bad = (await instantiatedSpec(await v8Spec({ name: 'unjudgeable' }), { height: 1 })).serialize();
-      bad.height = 'notaheight';
-      rows = [bad, (await instantiatedSpec(await v9Spec({ name: 'deadapp' }), { registeredAt: LONG_EXPIRED_AT })).serialize()];
-
-      const result = await registry.sweepExpired();
-
-      expect(result).to.deep.equal({ expired: ['deadapp'], unjudgeable: ['unjudgeable'] });
       sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeGlobalAppInfo, 'deadapp');
     });
 
-    it('holds the chain-state lock', async () => {
-      await registry.sweepExpired();
-      sinon.assert.calledOnce(stubs['../chainState'].exclusive);
+    it('drops nothing while the list is not consistent', async () => {
+      await listed([{ name: 'deadapp', spec: await v9Spec({ name: 'deadapp' }), fields: { termStart: NOW - 30 * 86_400 + 60 } }]);
+      capabilities.setForTests('chainStateConsistent', false);
+
+      await registry.blockScanned({ height: SCANNED_HEIGHT + 1, time: NOW + 61 });
+
+      sinon.assert.notCalled(stubs['./appsRepository'].removeGlobalAppInfo);
+    });
+  });
+
+  describe('the clock a row is judged by', () => {
+    it('is the scanned block\'s time, not this node\'s clock', async () => {
+      // Past its term by this node's clock, inside it at the scanned block.
+      const blockTime = LONG_EXPIRED_AT + 86_400;
+      stubs['../appMessaging/confirmedMessageStore'].lookupBlockTime.resolves(blockTime);
+      const spec = await v9Spec({ name: 'myapp' });
+      messages = [message('r', spec)];
+
+      await registry.applyDecided('myapp', [decision('r', { termStart: LONG_EXPIRED_AT })]);
+
+      sinon.assert.calledOnceWithExactly(stubs['../appMessaging/confirmedMessageStore'].lookupBlockTime, SCANNED_HEIGHT);
+      sinon.assert.calledOnce(stubs['./registryManager'].storeGlobalSpec);
+    });
+
+    it('is the last block the scan reported, and is read from the cursor again after a rewind', async () => {
+      registry.start();
+      const [[onRewind]] = stubs['../chainState'].onRewind.args;
+      const spec = await v9Spec({ name: 'myapp' });
+      messages = [message('r', spec)];
+
+      await registry.blockScanned({ height: SCANNED_HEIGHT + 1, time: NOW });
+      await registry.applyDecided('myapp', [decision('r')]);
+      sinon.assert.notCalled(stubs['../appMessaging/confirmedMessageStore'].lookupBlockTime);
+
+      onRewind(SCANNED_HEIGHT - 10);
+      await registry.applyDecided('myapp', [decision('r')]);
+      sinon.assert.calledOnce(stubs['../appMessaging/confirmedMessageStore'].lookupBlockTime);
     });
   });
 
@@ -269,6 +337,7 @@ describe('appRegistry', () => {
       registry.start();
       sinon.assert.calledOnceWithExactly(stubs['../appDecisions/decider'].onDecided, registry.applyDecided);
       sinon.assert.calledOnceWithExactly(stubs['../appDecisions/decider'].onFullPass, registry.reconcile);
+      sinon.assert.calledOnceWithExactly(stubs['../chainState'].onBlockScanned, registry.blockScanned);
       expect(capabilities.isUp('appRegistryConsistent')).to.equal(false);
 
       await registry.reconcile();

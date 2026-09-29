@@ -31,7 +31,6 @@ describe('appJanitor tests', () => {
   let fluxNetworkHelperStub;
   let fluxEventBusStub;
   let appsRepositoryStub;
-  let appRegistryStub;
   let appQueryServiceStub;
   let appDockerNetworkStub;
   let appUninstallerStub;
@@ -110,9 +109,6 @@ describe('appJanitor tests', () => {
       removeAppInstallingErrorRecords: sinon.stub().resolves(),
       reapOrphanedContentManifests: sinon.stub().resolves({ reaped: 0, orphans: [] }),
     };
-    appRegistryStub = {
-      sweepExpired: sinon.stub().resolves({ expired: [], unjudgeable: [] }),
-    };
     appQueryServiceStub = {
       listAllApps: sinon.stub().resolves({ status: 'success', data: [] }),
       installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
@@ -128,7 +124,6 @@ describe('appJanitor tests', () => {
       '../fluxNetworkHelper': fluxNetworkHelperStub,
       '../utils/fluxEventBus': fluxEventBusStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
-      '../appDatabase/appRegistry': appRegistryStub,
       '../appQuery/appQueryService': appQueryServiceStub,
       '../appNetwork/appDockerNetwork': appDockerNetworkStub,
       './appUninstaller': appUninstallerStub,
@@ -224,24 +219,13 @@ describe('appJanitor tests', () => {
     });
   });
 
-  describe('sweepRegistryExpiry', () => {
-    it('has the registry owner drop expired rows, reaps manifests, and reports both', async () => {
-      appRegistryStub.sweepExpired.resolves({ expired: ['deadapp'], unjudgeable: ['odd'] });
+  describe('sweepContentManifests', () => {
+    it('reaps the manifests of apps the registry no longer lists, and reports them', async () => {
       appsRepositoryStub.reapOrphanedContentManifests.resolves({ reaped: 2, orphans: ['x', 'y'] });
 
-      const result = await appJanitor.sweepRegistryExpiry();
+      const result = await appJanitor.sweepContentManifests();
 
-      sinon.assert.calledOnce(appRegistryStub.sweepExpired);
-      expect(result).to.deep.equal({
-        expired: 1, manifestsReaped: 2, unjudgeable: 1, unjudgeableApps: ['odd'],
-      });
-    });
-
-    it('never uninstalls anything - expired local installs are the reconciler\'s', async () => {
-      appRegistryStub.sweepExpired.resolves({ expired: ['deadapp'], unjudgeable: [] });
-
-      await appJanitor.sweepRegistryExpiry();
-
+      expect(result).to.deep.equal({ manifestsReaped: 2 });
       expect(appUninstallerStub.uninstallApplication.called).to.be.false;
     });
   });

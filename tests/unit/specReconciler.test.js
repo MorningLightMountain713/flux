@@ -208,17 +208,7 @@ describe('specReconciler tests', () => {
     });
   });
 
-  describe('expiry', () => {
-    it('removes an installed app whose authoritative global row is expired', async () => {
-      const row = await specWith({}, { name: 'gone' });
-      setup({
-        installed: [row],
-        globalRows: [await specWith({}, { name: 'gone', expired: true })],
-      });
-      await specReconciler.requestFullConvergence({ reason: 'test' });
-      expect(uninstallStub.calledOnceWith('gone', sinon.match({ forceKill: false, background: true, broadcastRemoval: true }))).to.equal(true);
-    });
-
+  describe('the registry decides what is alive', () => {
     it('trusts the authoritative global row over a stale local one (renewed app stays)', async () => {
       setup({
         installed: [await specWith({}, { name: 'renewed', expired: true })],
