@@ -18,6 +18,7 @@ const dockerService = require('./dockerService');
 const benchmarkService = require('./benchmarkService');
 const meshSnapshot = require('./appMesh/meshSnapshot');
 const foundingService = require('./appMesh/foundingService');
+const appsRepository = require('./appDatabase/appsRepository');
 
 const express = require('express');
 
@@ -217,7 +218,13 @@ async function postMeshFounder(req, res) {
       res.json(messageHelper.errUnauthorizedMessage());
       return;
     }
-    const reply = await foundingService.founderAsk(scoped.app.name, scoped.component);
+    // The app installed here under the caller's name is the caller's app.
+    const installed = await appsRepository.getInstalledApp(scoped.app.name);
+    if (!installed?.identity) {
+      res.json(messageHelper.errUnauthorizedMessage());
+      return;
+    }
+    const reply = await foundingService.founderAsk(installed.identity, scoped.component);
     res.json(messageHelper.createDataMessage(reply));
   } catch (error) {
     log.error(`postMeshFounder: ${error}`);

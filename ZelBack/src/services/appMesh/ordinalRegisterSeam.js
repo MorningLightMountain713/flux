@@ -9,12 +9,12 @@
 // never found, release or name anything.
 //
 // Contract:
-//   probeOrdinal(appName, ordinal)   -> {decided, holder}   a quorum read; burns no epoch
-//   askOrdinal(appName, ordinal)     -> {answer: 'yes'} | {answer: 'no', holder} | {answer: 'wait', retryAfterMs?, reason?}
+//   probeOrdinal(identity, ordinal)   -> {decided, holder}   a quorum read; burns no epoch
+//   askOrdinal(identity, ordinal)     -> {answer: 'yes'} | {answer: 'no', holder} | {answer: 'wait', retryAfterMs?, reason?}
 //                                       'yes' is durable: asking again answers yes from the record
-//   releaseOrdinal(appName, ordinal) -> {released, reason?}   grantee-signed; only the holder's own node
-//   ordinalHolders(appName)          -> Map<ordinal, outpoint>   the fleet-synced record read, for names
-//   vacateOrdinal(appName, ordinal, holder) -> {vacated, reason?}   reclaim by node-down certificate, judged
+//   releaseOrdinal(identity, ordinal) -> {released, reason?}   grantee-signed; only the holder's own node
+//   ordinalHolders(identity)          -> Map<ordinal, outpoint>   the fleet-synced record read, for names
+//   vacateOrdinal(identity, ordinal, holder) -> {vacated, reason?}   reclaim by node-down certificate, judged
 //                                       by the register at the derivation's placement-dead edge; the
 //                                       joiner's scan asks it for a held ordinal, and founds on 'vacated'
 // A lagging holders record is a temporarily unknown name, never a collision;
@@ -55,24 +55,24 @@ function resetForTests() {
   provider = closed;
 }
 
-async function probeOrdinal(appName, ordinal) {
-  return provider.probeOrdinal(appName, ordinal);
+async function probeOrdinal(identity, ordinal) {
+  return provider.probeOrdinal(identity, ordinal);
 }
 
-async function askOrdinal(appName, ordinal) {
-  return provider.askOrdinal(appName, ordinal);
+async function askOrdinal(identity, ordinal) {
+  return provider.askOrdinal(identity, ordinal);
 }
 
-async function releaseOrdinal(appName, ordinal) {
-  return provider.releaseOrdinal(appName, ordinal);
+async function releaseOrdinal(identity, ordinal) {
+  return provider.releaseOrdinal(identity, ordinal);
 }
 
-async function ordinalHolders(appName) {
-  return provider.ordinalHolders(appName);
+async function ordinalHolders(identity) {
+  return provider.ordinalHolders(identity);
 }
 
-async function vacateOrdinal(appName, ordinal, holder) {
-  return provider.vacateOrdinal(appName, ordinal, holder);
+async function vacateOrdinal(identity, ordinal, holder) {
+  return provider.vacateOrdinal(identity, ordinal, holder);
 }
 
 module.exports = {

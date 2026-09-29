@@ -12,6 +12,7 @@ import {
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 import { execInContainer, requireAppContainerName } from '../framework/container.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
+import { dbClient } from '../framework/db-client.js';
 
 // David's year-old-referees challenge, run for real: the founding photo
 // pins nine referees at registration, and then most of them LEAVE the
@@ -173,11 +174,12 @@ describe('the founding committee rots, and the flip re-anchors it at the rung', 
     // arithmetic every node computes identically; the event names the
     // world and the rung, so a re-derivation of the OLD basis can never
     // fake this green.
+    const identity = await dbClient(1).identityOf(name);
     const markers = env.clients.map((c) => c.getLastEventId());
     await waitFor(async () => {
       await advanceBlocks(1);
       const flipped = await Promise.all(env.clients.map(
-        (c, i) => c.waitForEvent('quorumGrant:founderFlip', (d) => d.appName === name, 1, { afterId: markers[i] })
+        (c, i) => c.waitForEvent('quorumGrant:founderFlip', (d) => d.identity === identity, 1, { afterId: markers[i] })
           .then(() => true).catch(() => false),
       ));
       return flipped.filter(Boolean).length >= 3;

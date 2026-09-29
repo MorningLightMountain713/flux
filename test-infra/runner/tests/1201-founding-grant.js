@@ -9,6 +9,7 @@ import { pushBusybox } from '../framework/registry-helper.js';
 import { queueAppTx, advanceBlocks, getState } from '../framework/daemon-control.js';
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 import { authenticate, signBtcMessage } from '../auth.js';
+import { dbClient } from '../framework/db-client.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { execInContainer, requireAppContainerName, appContainersFor } from '../framework/container.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
@@ -141,7 +142,8 @@ describe('the founding grant on a multi-node fleet', function () {
   }
 
   async function readGeneration() {
-    const res = await fetch(`${env.clients[0].url}/apps/grantgeneration/${name}/founder`);
+    const identity = await dbClient(1).identityOf(name);
+    const res = await fetch(`${env.clients[0].url}/apps/grantgeneration/${identity}/founder`);
     return res.json();
   }
 
@@ -276,15 +278,16 @@ describe('the founding grant on a multi-node fleet', function () {
     const owner = appOwnerKey();
     const { currentHeight } = await getState();
     const at = Date.now();
+    const identity = await dbClient(1).identityOf(name);
 
     async function submitGeneration(generation) {
-      const canonical = `fluxgrantgeneration:${name}|founder|${generation}|${currentHeight}|${at}`;
+      const canonical = `fluxgrantgeneration:${identity}|founder|${generation}|${currentHeight}|${at}`;
       const signature = await signBtcMessage(canonical, owner.privkey);
       const res = await fetch(`${env.clients[0].url}/apps/grantgeneration`, {
         method: 'POST',
         headers: { zelidauth: ownerAuth0, 'content-type': 'application/json' },
         body: JSON.stringify({
-          appName: name, role: 'founder', generation, height: currentHeight, at, signature,
+          identity, role: 'founder', generation, height: currentHeight, at, signature,
         }),
       });
       return { code: res.status, body: await res.json() };
@@ -301,7 +304,7 @@ describe('the founding grant on a multi-node fleet', function () {
     // The record broadcast reaches every node's read surface.
     await waitFor(async () => {
       const reads = await Promise.all(env.clients.map(async (c) => {
-        const res = await fetch(`${c.url}/apps/grantgeneration/${name}/founder`);
+        const res = await fetch(`${c.url}/apps/grantgeneration/${identity}/founder`);
         return res.json();
       }));
       return reads.every((r) => r.status === 'success' && r.data.generation === 1);

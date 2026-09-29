@@ -327,4 +327,19 @@ describe('decider', function () {
 
     expect(await verdict('r')).to.equal('applied');
   });
+
+  it('answers every applied message of an app by its identity, whatever name it was applied under', async () => {
+    await decisionStore.write([
+      { hash: 'r', name: 'myapp', decision: 'applied', identity: 'ab12cd34ef56', height: 1 },
+      { hash: 'u', name: 'myapp', decision: 'applied', identity: 'ab12cd34ef56', height: 2 },
+      { hash: 'x', name: 'myapp', decision: 'refused', identity: null, height: 3 },
+      { hash: 'r2', name: 'myapp', decision: 'applied', identity: 'cd34ef56ab12', height: 4 },
+    ]);
+
+    const { name, hashes } = await decisionStore.appliedHashesOf('ab12cd34ef56');
+
+    expect(name).to.equal('myapp');
+    expect(hashes.sort()).to.deep.equal(['r', 'u']);
+    expect(await decisionStore.appliedHashesOf('ffffffffffff')).to.deep.equal({ name: null, hashes: [] });
+  });
 });

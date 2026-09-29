@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire');
+const messageHelper = require('../../ZelBack/src/services/messageHelper');
 
 describe('fluxNodeService — the mesh surface', () => {
   let fluxNodeService;
@@ -36,6 +37,8 @@ describe('fluxNodeService — the mesh surface', () => {
       readCurrentSnapshot: sinon.stub().callsFake(async () => stubs.snapshot),
       waitForGeneration: sinon.stub().callsFake(async () => stubs.snapshot?.generation ?? 0),
       founderAsk: sinon.stub().resolves({ answer: 'wait' }),
+      // The app installed here under the caller's name.
+      getInstalledApp: sinon.stub().callsFake(async (name) => (name === 'myblog' ? { name, identity: 'ab12cd34ef56' } : null)),
     };
     fluxNodeService = proxyquire('../../ZelBack/src/services/fluxNodeService', {
       './appMesh/meshSnapshot': {
@@ -44,6 +47,9 @@ describe('fluxNodeService — the mesh surface', () => {
       },
       './appMesh/foundingService': {
         founderAsk: stubs.founderAsk,
+      },
+      './appDatabase/appsRepository': {
+        getInstalledApp: stubs.getInstalledApp,
       },
     });
   });
@@ -143,7 +149,7 @@ describe('fluxNodeService — the mesh surface', () => {
       stubs.founderAsk.resolves({ answer: 'yes' });
       const { req, res, body } = request('::ffff:172.23.0.2');
       await fluxNodeService.postMeshFounder(req, res);
-      expect(stubs.founderAsk.calledOnceWith('myblog', 'db')).to.equal(true);
+      expect(stubs.founderAsk.calledOnceWith('ab12cd34ef56', 'db')).to.equal(true);
       expect(body().status).to.equal('success');
       expect(body().data).to.deep.equal({ answer: 'yes' });
     });
@@ -152,6 +158,14 @@ describe('fluxNodeService — the mesh surface', () => {
       const { req, res, body } = request('172.99.0.9');
       await fluxNodeService.postMeshFounder(req, res);
       expect(body().status).to.equal('error');
+      expect(stubs.founderAsk.called).to.equal(false);
+    });
+
+    it('refuses a caller whose app is not installed here', async () => {
+      stubs.getInstalledApp.resolves(null);
+      const { req, res, body } = request('172.23.0.2');
+      await fluxNodeService.postMeshFounder(req, res);
+      expect(body()).to.deep.equal(messageHelper.errUnauthorizedMessage());
       expect(stubs.founderAsk.called).to.equal(false);
     });
 

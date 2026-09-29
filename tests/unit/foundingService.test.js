@@ -50,7 +50,7 @@ describe('foundingService', () => {
     sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
       txhash: SELF_TXHASH, txindex: 0,
     });
-    sinon.stub(registryManager, 'appLocation').resolves([]);
+    sinon.stub(registryManager, 'appLocationOf').resolves([]);
     sinon.stub(serviceHelper, 'axiosGet').rejects(new Error('unreachable'));
   });
 
@@ -188,7 +188,7 @@ describe('foundingService', () => {
 
     beforeEach(() => {
       foundingCommittee.refereeCommittee.resolves(null);
-      registryManager.appLocation.resolves([{ ip: '198.18.0.11:16127' }, { ip: '198.18.0.12:16127' }]);
+      registryManager.appLocationOf.resolves([{ ip: '198.18.0.11:16127' }, { ip: '198.18.0.12:16127' }]);
     });
 
     it('an undecided round runs on a peer-discovered basis', async () => {

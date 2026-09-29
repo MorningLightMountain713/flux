@@ -39,7 +39,7 @@ function row(ordinal, grantee, overrides = {}) {
   return {
     dedupKey: `masterlease:myapp/ordinal-${ordinal}@${overrides.rung ?? RUNG}`,
     data: {
-      appName: 'myapp',
+      identity: 'myapp',
       role: `ordinal-${ordinal}@${overrides.rung ?? RUNG}`,
       mode: 'oneshot',
       grantee,
@@ -68,7 +68,7 @@ describe('quorumGrant ordinalRegister', () => {
     sinon.stub(grantClient, 'releaseOneshot').resolves(true);
     sinon.stub(grantClient, 'vacateOneshot').resolves(true);
     sinon.stub(masterleasePublisher, 'publishMasterlease').resolves(true);
-    sinon.stub(registryManager, 'appLocation').resolves([{ ip: '10.0.0.5:16127' }]);
+    sinon.stub(registryManager, 'appLocationOf').resolves([{ ip: '10.0.0.5:16127' }]);
     sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('10.0.0.5:16127');
     sinon.stub(downCertificates, 'standingCertificateFor').resolves(null);
     sinon.stub(networkStateService, 'membershipFingerprint').returns('f'.repeat(64));
@@ -121,7 +121,7 @@ describe('quorumGrant ordinalRegister', () => {
     it('maps the grant outcomes onto yes / no-with-holder / wait-with-hint', async () => {
       expect(await ordinalRegister.askOrdinal('myapp', 0)).to.deep.equal({ answer: 'yes' });
       expect(events.map((e) => e.name)).to.deep.equal(['quorumGrant:ordinalFounded']);
-      expect(events[0].payload).to.deep.equal({ appName: 'myapp', ordinal: 0, holder: SELF });
+      expect(events[0].payload).to.deep.equal({ identity: 'myapp', ordinal: 0, holder: SELF });
 
       grantClient.acquire.resolves({ granted: false, founder: OTHER });
       expect(await ordinalRegister.askOrdinal('myapp', 0)).to.deep.equal({ answer: 'no', holder: OTHER });
@@ -234,7 +234,7 @@ describe('quorumGrant ordinalRegister', () => {
       expect(cert, 'the certificate travels as gossiped, without the store\'s broadcastedAt').to.deep.equal(CERT);
       const published = masterleasePublisher.publishMasterlease.firstCall.args[0];
       expect(published).to.deep.include({ key: `myapp/ordinal-1@${RUNG}`, grantee: OTHER, epoch: 2, released: true });
-      expect(events).to.deep.equal([{ name: 'quorumGrant:ordinalVacated', payload: { appName: 'myapp', ordinal: 1, holder: OTHER } }]);
+      expect(events).to.deep.equal([{ name: 'quorumGrant:ordinalVacated', payload: { identity: 'myapp', ordinal: 1, holder: OTHER } }]);
     });
 
     it('no standing certificate: nothing is probed, nothing is asked', async () => {
@@ -245,7 +245,7 @@ describe('quorumGrant ordinalRegister', () => {
 
     it("a certified holder the derivation still places is not vacated — the edge is the view's, not a clock's", async () => {
       downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5000 });
-      registryManager.appLocation.resolves([{ ip: '10.0.0.7:16127' }, { ip: '10.0.0.5:16127' }]);
+      registryManager.appLocationOf.resolves([{ ip: '10.0.0.7:16127' }, { ip: '10.0.0.5:16127' }]);
       expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: false, reason: 'still placed' });
       expect(grantClient.vacateOneshot.called).to.equal(false);
       expect(events).to.deep.equal([]);

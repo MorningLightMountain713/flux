@@ -32,7 +32,7 @@ const HEX64 = /^[0-9a-f]{64}$/;
 //
 // Each component founds its own register, and the register's key carries
 // the component's WORLD: the block anchor of the owner-signed spec act that
-// introduced it (`<app>/founder-<component>@<anchor>`). A component removed
+// introduced it (`<identity>/founder-<component>@<anchor>`). A component removed
 // and re-added under the same name is a new world with a new anchor, so
 // nothing the dead world recorded — register cells, the published record —
 // can ever answer for it. The anchor rides the key because the key is
@@ -42,23 +42,23 @@ const HEX64 = /^[0-9a-f]{64}$/;
 /**
  * Answer one component's founding ask.
  *
- * @param {string} appName
+ * @param {string} identity
  * @param {string} component the calling container's component
  * @returns {Promise<{answer: 'yes'|'no'|'wait', retryAfterMs?: number}>}
  */
-async function founderAsk(appName, component) {
+async function founderAsk(identity, component) {
   // The world is host-side knowledge (this node runs the container, so it
   // resolves the view): the intro anchor and every flip rung this node has
   // minted. Missing it is an honest "not yet" — never a no, never a minted
   // basis.
-  const world = await foundingCommittee.componentWorld(appName, component);
+  const world = await foundingCommittee.componentWorld(identity, component);
   if (!world) {
-    log.info(`foundingService - ${appName}/${component}: wait (component world unresolved)`);
+    log.info(`foundingService - ${identity}/${component}: wait (component world unresolved)`);
     return { answer: 'wait' };
   }
 
-  const token = foundingCommittee.founderToken(appName, component);
-  const generation = await currentGeneration(appName);
+  const token = foundingCommittee.founderToken(identity, component);
+  const generation = await currentGeneration(identity);
 
   // Record first, HIGHEST rung wins (newest-decided-wins, §8.5): a decided
   // register's answer is a durable, fleet-synced fact, judged against the
@@ -70,11 +70,11 @@ async function founderAsk(appName, component) {
   // so its ladder rightly never grows, and only the record can retire its
   // older founding. No read here needs a photo, so a node however young
   // answers a founded world from its own database.
-  const recorded = await recordedFounderInWorld(appName, token, generation);
+  const recorded = await recordedFounderInWorld(identity, token, generation);
   if (recorded) {
     const collateral = await generalService.obtainNodeCollateralInformation();
     const self = `${collateral.txhash}:${collateral.txindex}`;
-    return settled(appName, component, recorded === self ? 'yes' : 'no');
+    return settled(identity, component, recorded === self ? 'yes' : 'no');
   }
 
   // Undecided everywhere — asker gates before any round (§8.5, both
@@ -82,11 +82,11 @@ async function founderAsk(appName, component) {
   // an ARMED world (rot sustained, flip within the quiet zone) refuses to
   // start a founding that would race the flip's one-block gossip window.
   if (daemonStatus.isDaemonSynced()?.data?.synced !== true) {
-    log.info(`foundingService - ${appName}/${component}: wait (own chain view stale)`);
+    log.info(`foundingService - ${identity}/${component}: wait (own chain view stale)`);
     return { answer: 'wait' };
   }
   if (world.armed) {
-    log.info(`foundingService - ${appName}/${component}: wait (world armed - flip inside the quiet zone)`);
+    log.info(`foundingService - ${identity}/${component}: wait (world armed - flip inside the quiet zone)`);
     return { answer: 'wait' };
   }
 
@@ -99,27 +99,27 @@ async function founderAsk(appName, component) {
   // node has minted (a missed flip window); asking there is the same
   // trust story. Nothing discovered is ever stored.
   let rung = world.rungs[world.rungs.length - 1];
-  let committee = await foundingCommittee.refereeCommittee(appName, rung);
+  let committee = await foundingCommittee.refereeCommittee(identity, rung);
   if (!committee) {
-    const discovered = await discoveredBasis(appName, world.intro);
+    const discovered = await discoveredBasis(identity, world.intro);
     if (discovered && discovered.rung >= rung) {
       ({ rung } = discovered);
       committee = discovered.basis;
     }
   }
   if (!committee) {
-    log.info(`foundingService - ${appName}/${component}: wait (no committee basis - no photo, nothing discovered)`);
+    log.info(`foundingService - ${identity}/${component}: wait (no committee basis - no photo, nothing discovered)`);
     return { answer: 'wait' };
   }
 
   const role = `founder-${token}@${rung}`;
-  const outcome = await grantClient.acquire(`${appName}/${role}`, {
+  const outcome = await grantClient.acquire(`${identity}/${role}`, {
     mode: 'oneshot',
     committee,
   });
-  if (outcome.granted) return settled(appName, component, 'yes');
-  if (outcome.founder) return settled(appName, component, 'no');
-  log.info(`foundingService - ${appName}/${component}: wait (${outcome.reason ?? `retry in ${outcome.retryAfterMs}ms`})`);
+  if (outcome.granted) return settled(identity, component, 'yes');
+  if (outcome.founder) return settled(identity, component, 'no');
+  log.info(`foundingService - ${identity}/${component}: wait (${outcome.reason ?? `retry in ${outcome.retryAfterMs}ms`})`);
   return {
     answer: 'wait',
     ...(outcome.retryAfterMs ? { retryAfterMs: outcome.retryAfterMs } : {}),
@@ -130,8 +130,8 @@ async function founderAsk(appName, component) {
  * A settled founder answer — yes or no, never wait — published to the
  * event bus so the harness can await the verdict instead of inferring it.
  */
-function settled(appName, component, answer) {
-  fluxEventBus.publish('quorumGrant:founderAnswer', { appName, component, answer });
+function settled(identity, component, answer) {
+  fluxEventBus.publish('quorumGrant:founderAnswer', { identity, component, answer });
   return { answer };
 }
 
@@ -146,9 +146,9 @@ function settled(appName, component, answer) {
  * arithmetic on the key. A malformed or retired-generation row is skipped
  * whole, never trusted partially.
  */
-async function recordedFounderInWorld(appName, token, generation) {
+async function recordedFounderInWorld(identity, token, generation) {
   try {
-    const rows = await messageStore.getMasterleaseRecordsByRolePrefix(appName, `founder-${token}@`);
+    const rows = await messageStore.getMasterleaseRecordsByRolePrefix(identity, `founder-${token}@`);
     let best = null;
     let bestRung = -1;
     for (const row of rows ?? []) {
@@ -175,9 +175,9 @@ async function recordedFounderInWorld(appName, token, generation) {
  * committee's judgment agree on which world is current. The re-roll is one
  * record for the whole plane, stored at role `founder`.
  */
-async function currentGeneration(appName) {
+async function currentGeneration(identity) {
   try {
-    const record = await messageStore.getGrantGenerationRecord(appName, 'founder');
+    const record = await messageStore.getGrantGenerationRecord(identity, 'founder');
     return record?.data?.generation ?? 0;
   } catch (error) {
     return 0;
@@ -194,10 +194,10 @@ async function currentGeneration(appName) {
  *
  * @returns {Promise<{rung: number, basis: object}|null>}
  */
-async function discoveredBasis(appName, anchor) {
+async function discoveredBasis(identity, anchor) {
   let locations;
   try {
-    locations = await registryManager.appLocation(appName);
+    locations = await registryManager.appLocationOf(identity);
   } catch (error) {
     return null;
   }
@@ -207,12 +207,12 @@ async function discoveredBasis(appName, anchor) {
     try {
       // eslint-disable-next-line no-await-in-loop
       const response = await serviceHelper.axiosGet(
-        `http://${location.ip}/flux/quorumgrant/foundingbasis?app=${encodeURIComponent(appName)}&anchor=${anchor}`,
+        `http://${location.ip}/flux/quorumgrant/foundingbasis?identity=${encodeURIComponent(identity)}&anchor=${anchor}`,
         { timeout },
       );
       const payload = response?.data?.data;
       if (Number.isInteger(payload?.rung) && payload.rung >= anchor && validBasis(payload?.basis)) {
-        log.info(`foundingService - ${appName}@${anchor}: founding basis discovered from ${location.ip} at rung ${payload.rung}`);
+        log.info(`foundingService - ${identity}@${anchor}: founding basis discovered from ${location.ip} at rung ${payload.rung}`);
         return { rung: payload.rung, basis: payload.basis };
       }
     } catch (error) {

@@ -63,8 +63,8 @@ async function callerIsListed(host) {
 }
 
 async function selfHoldsApp(key) {
-  const appName = key.slice(0, key.indexOf('/'));
-  const rows = await registryManager.appLocation(appName);
+  const identity = key.slice(0, key.indexOf('/'));
+  const rows = await registryManager.appLocationOf(identity);
   const nodes = await fluxCommunicationUtils.deterministicFluxList();
   // location rows carry addresses, so holdership is answered by this node's
   // own listed address, resolved through its collateral
@@ -101,8 +101,8 @@ async function witness(req, res) {
     // The self-fence attestation rides the same answer: "my folder for this
     // app is demoted and reverted, as of my time T" — what a fencing master
     // waits for before re-admitting this node's device.
-    const appName = key.slice(0, key.indexOf('/'));
-    answer.folderDemotedAt = mastershipGrantGate.folderDemotedAt(appName);
+    const identity = key.slice(0, key.indexOf('/'));
+    answer.folderDemotedAt = mastershipGrantGate.folderDemotedAt(identity);
     return res.json(messageHelper.createDataMessage(answer));
   } catch (error) {
     log.error(`quorumGrant witness: ${error.message}`);
@@ -175,21 +175,21 @@ async function teach(req, res) {
       return res.status(403).json(messageHelper.createErrorMessage('caller is not a listed node'));
     }
 
-    const before = await messageStore.getGrantGenerationRecord(record.appName, record.role);
+    const before = await messageStore.getGrantGenerationRecord(record.identity, record.role);
     await messageStore.storeAppStateEvent(
       messageStore.APP_STATE_EVENT_TYPES.GRANTGENERATION,
       { message: record, envelope: null },
     );
-    const standing = await messageStore.getGrantGenerationRecord(record.appName, record.role);
+    const standing = await messageStore.getGrantGenerationRecord(record.identity, record.role);
     const generation = standing?.data?.generation ?? 0;
     // Whether the delivery was news here: the courier reads only the
     // generation; a suite asserts its premise from this node's own answer.
     const learned = (before?.data?.generation ?? 0) < generation;
     fluxEventBus.publish('quorumGrant:generationTaught', {
-      appName: record.appName, role: record.role, generation, learned, from: host,
+      identity: record.identity, role: record.role, generation, learned, from: host,
     });
     return res.json(messageHelper.createDataMessage({
-      appName: record.appName,
+      identity: record.identity,
       role: record.role,
       generation,
       learned,

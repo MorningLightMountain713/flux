@@ -19,10 +19,12 @@ const ownerGenerationController = require('../../ZelBack/src/services/quorumGran
 
 const OWNER_WIF = '5JTeg79dTLzzHXoJPALMWuoGDM8QmLj4n5f6MeFjx8dzsirvjAh';
 const OWNER = '1KoXq8mLxpNt3BSnNLq2HzKC39Ne2pVJtF';
+// A v9 app's identity; the registry lists the app under another string, its name.
+const IDENTITY = 'ab12cd34ef56';
 
 function signedRecord(overrides = {}) {
   const record = {
-    appName: 'myapp',
+    identity: IDENTITY,
     role: 'founder',
     generation: 1,
     height: 500_100,
@@ -54,7 +56,7 @@ describe('quorumGrant ownerGenerationController', () => {
   beforeEach(() => {
     sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
     sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('203.0.113.5:16127');
-    sinon.stub(appsRepository, 'getGlobalAppOwner').resolves(OWNER);
+    sinon.stub(appsRepository, 'getGlobalAppInfoByIdentity').callsFake(async (identity) => (identity === IDENTITY ? { name: 'myapp', owner: OWNER } : null));
     sinon.stub(messageStore, 'getGrantGenerationRecord').resolves(null);
     sinon.stub(messageStore, 'getMasterleaseRecord').resolves(null);
     sinon.stub(messageStore, 'storeAppStateEvent').resolves();
@@ -72,7 +74,7 @@ describe('quorumGrant ownerGenerationController', () => {
       const res = fakeRes();
       await ownerGenerationController.submit(fakeReq(signedRecord()), res);
       expect(res.statusCode).to.equal(200);
-      expect(res.body.data).to.deep.equal({ appName: 'myapp', role: 'founder', generation: 1 });
+      expect(res.body.data).to.deep.equal({ identity: IDENTITY, role: 'founder', generation: 1 });
 
       const broadcast = fluxCommunicationMessagesSender.broadcastMessageToAll.firstCall.args[0];
       expect(broadcast.type).to.equal('fluxgrantgeneration');
@@ -139,10 +141,19 @@ describe('quorumGrant ownerGenerationController', () => {
       expect(res.statusCode).to.equal(403);
       expect(fluxCommunicationMessagesSender.broadcastMessageToAll.called).to.equal(false);
 
-      appsRepository.getGlobalAppOwner.resolves(null);
-      const orphan = fakeRes();
-      await ownerGenerationController.submit(fakeReq(signedRecord()), orphan);
-      expect(orphan.statusCode).to.equal(403);
+    });
+
+    it('refuses a record for an app the registry does not list, before any authority is consulted', async () => {
+      const res = fakeRes();
+      await ownerGenerationController.submit(fakeReq(signedRecord({ identity: 'ffffffffffff' })), res);
+      expect(res.statusCode).to.equal(404);
+      expect(verificationHelper.verifyPrivilege.called).to.equal(false);
+      expect(fluxCommunicationMessagesSender.broadcastMessageToAll.called).to.equal(false);
+    });
+
+    it('asks the session for the privilege over the app the identity names', async () => {
+      await ownerGenerationController.submit(fakeReq(signedRecord()), fakeRes());
+      sinon.assert.calledWithMatch(verificationHelper.verifyPrivilege, sinon.match.any, sinon.match.any, { appName: 'myapp' });
     });
   });
 
@@ -165,33 +176,33 @@ describe('quorumGrant ownerGenerationController', () => {
   describe('the read surface', () => {
     it('answers the standing generation, 0 and no record when the owner never re-rolled', async () => {
       const req = fakeReq({});
-      req.params = { appname: 'myapp', role: 'founder' };
+      req.params = { identity: IDENTITY, role: 'founder' };
       const res = fakeRes();
       await ownerGenerationController.current(req, res);
       expect(res.statusCode).to.equal(200);
       expect(res.body.data).to.deep.equal({
-        appName: 'myapp', role: 'founder', generation: 0, record: null,
+        identity: IDENTITY, role: 'founder', generation: 0, record: null,
       });
     });
 
     it('answers the stored record when one stands', async () => {
       const data = {
-        appName: 'myapp', role: 'founder', generation: 3, height: 500_200, at: 1,
+        identity: IDENTITY, role: 'founder', generation: 3, height: 500_200, at: 1,
       };
       messageStore.getGrantGenerationRecord.resolves({ data });
       const req = fakeReq({});
-      req.params = { appname: 'myapp', role: 'founder' };
+      req.params = { identity: IDENTITY, role: 'founder' };
       const res = fakeRes();
       await ownerGenerationController.current(req, res);
       expect(res.body.data.generation).to.equal(3);
       expect(res.body.data.record).to.deep.equal(data);
     });
 
-    it('refuses malformed names outright', async () => {
+    it('refuses malformed identities and roles outright', async () => {
       const cases = [
-        { appname: 'my|app', role: 'founder' },
-        { appname: 'myapp', role: 'foun_der' },
-        { appname: undefined, role: 'founder' },
+        { identity: 'my|app', role: 'founder' },
+        { identity: IDENTITY, role: 'foun_der' },
+        { identity: undefined, role: 'founder' },
       ];
       const results = await Promise.all(cases.map(async (params) => {
         const req = fakeReq({});

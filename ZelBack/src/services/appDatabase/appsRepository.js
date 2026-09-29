@@ -150,6 +150,37 @@ async function getGlobalAppOwner(name) {
   return doc ? doc.owner : null;
 }
 
+/**
+ * The registry row of the app with an identity, or null when the list holds no
+ * such app. Exact match: an identity is minted, never typed.
+ * @param {string} identity
+ * @returns {Promise<object|null>} InstantiatedSpec
+ */
+async function getGlobalAppInfoByIdentity(identity) {
+  if (!identity) return null;
+  const doc = await dbHelper.findOneInDatabase(
+    globalDb(), globalAppsInformation,
+    { identity },
+    { projection: { _id: 0 } },
+  );
+  return hydrate(doc);
+}
+
+/**
+ * The owner of the app with an identity, or null when the list holds no such app.
+ * @param {string} identity
+ * @returns {Promise<string|null>}
+ */
+async function getGlobalAppOwnerByIdentity(identity) {
+  if (!identity) return null;
+  const doc = await dbHelper.findOneInDatabase(
+    globalDb(), globalAppsInformation,
+    { identity },
+    { projection: { _id: 0, owner: 1 } },
+  );
+  return doc ? doc.owner : null;
+}
+
 async function getGlobalAppHeight(name) {
   const doc = await dbHelper.findOneInDatabase(
     globalDb(), globalAppsInformation,
@@ -1190,7 +1221,7 @@ async function upsertAppInstallingErrorLocations(records) {
  *   announces after it is back counts.
  */
 function buildAppLocationPipeline({
-  now, appname = null, ip = null, host = null, supersededIps = [], offListIps = [], offListReturned = [],
+  now, appname = null, hashes = null, ip = null, host = null, supersededIps = [], offListIps = [], offListReturned = [],
 }) {
   const escapedName = appname ? appname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : null;
   const nameMatch = escapedName ? new RegExp(`^${escapedName}$`, 'i') : null;
@@ -1294,6 +1325,7 @@ function buildAppLocationPipeline({
     { $unwind: '$_v2Filtered' },
     { $unwind: '$_v2Filtered.apps' },
     ...(nameMatch ? [{ $match: { '_v2Filtered.apps.name': nameMatch } }] : []),
+    ...(hashes ? [{ $match: { '_v2Filtered.apps.hash': { $in: hashes } } }] : []),
     // An app the node has since reported removed is gone even though its announcement
     // still names it. Compared against the unwound fields so this stays a shared rule
     // rather than something each tail has to re-apply after projecting.
@@ -1434,7 +1466,9 @@ async function sweepOffListRows() {
 }
 
 async function appLocationFromEvents(options = {}) {
-  const { appname = null, ip = null, host = null } = options;
+  const {
+    appname = null, hashes = null, ip = null, host = null,
+  } = options;
   const dbopen = dbHelper.databaseConnection();
   const database = dbopen.db(config.get('database.appsglobal.database'));
   const collection = database.collection(globalAppStateEvents);
@@ -1444,7 +1478,7 @@ async function appLocationFromEvents(options = {}) {
   const { absent: offListIps, returned: offListReturned } = departures.denySet(now.getTime());
   const rows = await collection.aggregate([
     ...buildAppLocationPipeline({
-      now, appname, ip, host, supersededIps, offListIps, offListReturned,
+      now, appname, hashes, ip, host, supersededIps, offListIps, offListReturned,
     }),
     ...RUNNING_ROW_TAIL,
   ]).toArray();
@@ -1581,6 +1615,8 @@ module.exports = {
   // global specs
   getGlobalAppInfo,
   getGlobalAppOwner,
+  getGlobalAppInfoByIdentity,
+  getGlobalAppOwnerByIdentity,
   getGlobalAppHeight,
   existsGlobalApp,
   listExistingGlobalAppNames,

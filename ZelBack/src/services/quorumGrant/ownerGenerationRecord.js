@@ -13,6 +13,10 @@ const verificationHelper = require('../verificationHelper');
 // mint it. FluxOS never holds this key; the record arrives already signed
 // from the owner's own tooling, exactly like an app registration does.
 //
+// The record names the app by its identity (a v1-v8 app's name, a v9 app's
+// minted identity), so a record signed for an app is never valid for a later
+// app registered under the same name.
+//
 // Generations are monotonic per (app, role): replays and duplicates are
 // no-ops, a lower generation can never un-seat a higher one, and the record
 // is durable — a re-pinned committee months later must still find it.
@@ -24,11 +28,11 @@ const FIELD_SEPARATOR = '|';
  * The exact string the owner signs, or null when a field would corrupt the
  * framing.
  *
- * @param {{appName: string, role: string, generation: number, height: number, at: number}} record
+ * @param {{identity: string, role: string, generation: number, height: number, at: number}} record
  * @returns {string|null}
  */
 function canonical(record) {
-  const parts = [record?.appName, record?.role, record?.generation, record?.height, record?.at];
+  const parts = [record?.identity, record?.role, record?.generation, record?.height, record?.at];
   const texts = [];
   for (let i = 0; i < parts.length; i += 1) {
     const part = parts[i];
@@ -45,7 +49,7 @@ function canonical(record) {
  * the VERIFIER from its own copy of the app's spec — never taken from the
  * record, or anyone could name a friendly "owner".
  *
- * @param {object} record {appName, role, generation, height, at, signature}
+ * @param {object} record {identity, role, generation, height, at, signature}
  * @param {string} owner the app's registered owner (ZelID)
  * @returns {boolean}
  */
@@ -65,7 +69,7 @@ function verify(record, owner) {
 function wellFormed(record) {
   return Boolean(
     record
-    && typeof record.appName === 'string' && record.appName.length > 0
+    && typeof record.identity === 'string' && record.identity.length > 0
     && typeof record.role === 'string' && /^[a-zA-Z0-9-]{1,64}$/.test(record.role)
     && Number.isSafeInteger(record.generation) && record.generation >= 1
     && Number.isSafeInteger(record.height) && record.height >= 1

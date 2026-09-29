@@ -64,7 +64,7 @@ function baseMessage(overrides = {}) {
     type: 'fluxmasterlease',
     version: 1,
     ip: '203.0.113.5:16127',
-    appName: 'myapp',
+    identity: 'myapp',
     role: 'master',
     grantee: GRANTEE,
     epoch: 3,
@@ -208,7 +208,7 @@ describe('quorumGrant masterlease', () => {
         expect(dropped).to.have.length(1);
         expect(dropped[0].name).to.equal('quorumGrant:masterleaseDropped');
         expect(dropped[0].payload).to.deep.include({
-          appName: 'myapp', role: 'master', grantee: `${'a'.repeat(64)}:0`, announcer: SELF_NAMED,
+          identity: 'myapp', role: 'master', grantee: `${'a'.repeat(64)}:0`, announcer: SELF_NAMED,
         });
       });
 
@@ -469,7 +469,7 @@ describe('quorumGrant masterlease', () => {
         baseMessage({ epoch: 0 }),
         baseMessage({ epoch: 1.5 }),
         baseMessage({ mode: 'lease' }),
-        baseMessage({ appName: undefined }),
+        baseMessage({ identity: undefined }),
         baseMessage({ grantee: undefined }),
         baseMessage({ mode: 'held', ttlMs: undefined }),
         baseMessage({ broadcastedAt: 'yesterday' }),
@@ -567,7 +567,7 @@ describe('quorumGrant masterlease', () => {
 
       const broadcast = fluxCommunicationMessagesSender.broadcastMessageToAll.firstCall.args[0];
       expect(broadcast.type).to.equal('fluxmasterlease');
-      expect(broadcast.appName).to.equal('myapp');
+      expect(broadcast.identity).to.equal('myapp');
       expect(broadcast.role).to.equal('master');
       expect(broadcast.epoch).to.equal(4);
       expect(broadcast.generation).to.equal(0);

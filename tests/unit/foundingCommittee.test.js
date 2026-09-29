@@ -28,15 +28,18 @@ function fleet(count, tag = 'm', offset = 0) {
   }));
 }
 
+// A v9 app's identity: the founding record is keyed by it, never by the name.
+const IDENTITY = 'ab12cd34ef56';
+
 function anchorDoc(overrides = {}) {
   return {
-    name: 'myapp', height: REG_HEIGHT, version: 9, ...overrides,
+    name: 'myapp', identity: IDENTITY, height: REG_HEIGHT, version: 9, ...overrides,
   };
 }
 
 function meshView(overrides = {}) {
   return {
-    name: 'myapp',
+    identity: IDENTITY,
     height: REG_HEIGHT,
     network: { mesh: true },
     components: { db: {} },
@@ -63,9 +66,14 @@ describe('foundingCommittee', () => {
       if (!existing) {
         store.set(query._id, { _id: query._id, ...(update.$setOnInsert ?? {}), ...(update.$set ?? {}) });
       } else {
-        store.set(query._id, { ...existing, ...(update.$set ?? {}) });
+        const next = { ...existing, ...(update.$set ?? {}) };
+        Object.keys(update.$unset ?? {}).forEach((field) => delete next[field]);
+        store.set(query._id, next);
       }
       return { value: store.get(query._id) };
+    });
+    sinon.stub(dbHelper, 'removeDocumentsFromCollection').callsFake(async (d, coll, query) => {
+      store.delete(query._id);
     });
     sinon.stub(dbHelper, 'findInDatabase').callsFake(async () => [...store.values()]);
     sinon.stub(networkStateService, 'membershipFingerprintAt').returns(FP);
@@ -81,10 +89,10 @@ describe('foundingCommittee', () => {
 
   describe('the blinded token', () => {
     it('is 16 hex chars, deterministic, and distinct per app and component', () => {
-      const a = foundingCommittee.founderToken('myapp', 'db');
+      const a = foundingCommittee.founderToken(IDENTITY, 'db');
       expect(a).to.match(/^[a-f0-9]{16}$/);
-      expect(foundingCommittee.founderToken('myapp', 'db')).to.equal(a);
-      expect(foundingCommittee.founderToken('myapp', 'web')).to.not.equal(a);
+      expect(foundingCommittee.founderToken(IDENTITY, 'db')).to.equal(a);
+      expect(foundingCommittee.founderToken(IDENTITY, 'web')).to.not.equal(a);
       expect(foundingCommittee.founderToken('other', 'db')).to.not.equal(a);
     });
   });
@@ -92,7 +100,7 @@ describe('foundingCommittee', () => {
   describe('anchors from public metadata', () => {
     it('records a v9 anchor and photographs nine seats, journaled, no view needed', async () => {
       await foundingCommittee.recordAnchor(anchorDoc());
-      const record = store.get('myapp');
+      const record = store.get(IDENTITY);
       expect(record.generation).to.equal(0);
       const photo = record.anchors[String(REG_HEIGHT)];
       expect(photo.fingerprint).to.equal(FP);
@@ -110,31 +118,31 @@ describe('foundingCommittee', () => {
     it('outside its window the anchor is recorded with no photo — an honest gap', async () => {
       networkStateService.membershipFingerprintAt.returns(null);
       await foundingCommittee.recordAnchor(anchorDoc());
-      const record = store.get('myapp');
+      const record = store.get(IDENTITY);
       expect(record.specHeight).to.equal(REG_HEIGHT);
       expect(record.anchors).to.deep.equal({});
-      expect(await foundingCommittee.refereeCommittee('myapp', REG_HEIGHT)).to.equal(null);
+      expect(await foundingCommittee.refereeCommittee(IDENTITY, REG_HEIGHT)).to.equal(null);
     });
 
     it('anchors apply in chain order and accumulate per update', async () => {
       await foundingCommittee.recordAnchor(anchorDoc({ height: 600_000 }));
       await foundingCommittee.recordAnchor(anchorDoc());
-      const record = store.get('myapp');
+      const record = store.get(IDENTITY);
       expect(record.specHeight).to.equal(600_000);
       expect(record.anchors[String(REG_HEIGHT)]).to.equal(undefined);
 
       await foundingCommittee.recordAnchor(anchorDoc({ height: 700_000 }));
-      expect(store.get('myapp').anchors[String(700_000)].members).to.have.length(9);
-      expect(store.get('myapp').anchors[String(600_000)].members).to.have.length(9);
+      expect(store.get(IDENTITY).anchors[String(700_000)].members).to.have.length(9);
+      expect(store.get(IDENTITY).anchors[String(600_000)].members).to.have.length(9);
     });
   });
 
   describe('the component mapping from the view', () => {
     it('maps components at their introducing height, mesh views only', async () => {
       await foundingCommittee.applyComponentView(meshView());
-      expect(store.get('myapp').components.db.anchorHeight).to.equal(REG_HEIGHT);
+      expect(store.get(IDENTITY).components.db.anchorHeight).to.equal(REG_HEIGHT);
 
-      await foundingCommittee.applyComponentView({ ...meshView({ name: 'plain' }), network: {} });
+      await foundingCommittee.applyComponentView({ ...meshView({ identity: 'plain' }), network: {} });
       expect(store.get('plain')).to.equal(undefined);
     });
 
@@ -143,14 +151,14 @@ describe('foundingCommittee', () => {
       await foundingCommittee.applyComponentView(meshView({
         height: 600_000, components: { db: {}, cache: {} },
       }));
-      let record = store.get('myapp');
+      let record = store.get(IDENTITY);
       expect(record.components.db.anchorHeight).to.equal(REG_HEIGHT);
       expect(record.components.cache.anchorHeight).to.equal(600_000);
 
       await foundingCommittee.applyComponentView(meshView({ height: 700_000 }));
-      record = store.get('myapp');
+      record = store.get(IDENTITY);
       expect(record.components.cache).to.equal(undefined);
-      expect(await foundingCommittee.componentAnchor('myapp', 'cache')).to.equal(null);
+      expect(await foundingCommittee.componentAnchor(IDENTITY, 'cache')).to.equal(null);
     });
 
     it('a re-added component is a NEW world at a new anchor', async () => {
@@ -159,8 +167,8 @@ describe('foundingCommittee', () => {
       await foundingCommittee.applyComponentView(meshView({
         height: 700_000, components: { db: {}, cache: {} },
       }));
-      expect(store.get('myapp').components.cache.anchorHeight).to.equal(700_000);
-      expect(store.get('myapp').components.db.anchorHeight).to.equal(REG_HEIGHT);
+      expect(store.get(IDENTITY).components.cache.anchorHeight).to.equal(700_000);
+      expect(store.get(IDENTITY).components.db.anchorHeight).to.equal(REG_HEIGHT);
     });
 
     it('a stale view write changes nothing', async () => {
@@ -168,7 +176,60 @@ describe('foundingCommittee', () => {
       await foundingCommittee.applyComponentView(meshView({
         height: REG_HEIGHT, components: { ghost: {} },
       }));
-      expect(store.get('myapp').components.ghost).to.equal(undefined);
+      expect(store.get(IDENTITY).components.ghost).to.equal(undefined);
+    });
+  });
+
+  describe('an app leaving the list, or going back to an earlier spec', () => {
+    it('forgets the whole record when the app leaves', async () => {
+      await foundingCommittee.recordAnchor(anchorDoc());
+      await foundingCommittee.applyComponentView(meshView());
+
+      await foundingCommittee.forget(IDENTITY);
+
+      expect(store.get(IDENTITY)).to.equal(undefined);
+    });
+
+    it('winds back to the earlier spec: later anchors and pins go, and that spec is recorded and mapped again', async () => {
+      await foundingCommittee.recordAnchor(anchorDoc());
+      await foundingCommittee.applyComponentView(meshView());
+      await foundingCommittee.recordAnchor(anchorDoc({ height: 600_000 }));
+      await foundingCommittee.applyComponentView(meshView({ height: 600_000, components: { db: {}, cache: {} } }));
+
+      await foundingCommittee.retract(IDENTITY, REG_HEIGHT);
+
+      let record = store.get(IDENTITY);
+      expect(Object.keys(record.anchors)).to.deep.equal([String(REG_HEIGHT)]);
+      expect(Object.keys(record.components)).to.deep.equal(['db']);
+
+      // The spec the app went back to is written again, and takes.
+      await foundingCommittee.recordAnchor(anchorDoc());
+      await foundingCommittee.applyComponentView(meshView({ components: { db: {}, web: {} } }));
+      record = store.get(IDENTITY);
+      expect(record.specHeight).to.equal(REG_HEIGHT);
+      expect(record.components.web.anchorHeight).to.equal(REG_HEIGHT);
+      expect(record.components.db.anchorHeight).to.equal(REG_HEIGHT);
+    });
+
+    it('keeps the flip rungs of a world it keeps, and drops those of a world it drops', async () => {
+      await foundingCommittee.recordAnchor(anchorDoc());
+      await foundingCommittee.recordAnchor(anchorDoc({ height: 600_000 }));
+      const record = store.get(IDENTITY);
+      record.anchors['650000'] = { ...record.anchors[String(REG_HEIGHT)], flipOf: REG_HEIGHT };
+      record.anchors['700000'] = { ...record.anchors['600000'], flipOf: 600_000 };
+
+      await foundingCommittee.retract(IDENTITY, REG_HEIGHT);
+
+      expect(Object.keys(store.get(IDENTITY).anchors).sort()).to.deep.equal([String(REG_HEIGHT), '650000']);
+    });
+
+    it('keeps the photo the standing owner generation record named', async () => {
+      await foundingCommittee.recordAnchor(anchorDoc());
+      await foundingCommittee.materializeGeneration({ identity: IDENTITY, generation: 1, height: 600_000 });
+
+      await foundingCommittee.retract(IDENTITY, REG_HEIGHT);
+
+      expect(Object.keys(store.get(IDENTITY).anchors).sort()).to.deep.equal([String(REG_HEIGHT), '600000']);
     });
   });
 
@@ -176,7 +237,7 @@ describe('foundingCommittee', () => {
     function generationRow(generation, height) {
       return {
         data: {
-          appName: 'myapp', role: 'founder', generation, height, at: 1,
+          identity: IDENTITY, role: 'founder', generation, height, at: 1,
         },
       };
     }
@@ -186,9 +247,9 @@ describe('foundingCommittee', () => {
       const ROLL_FP = 'e'.repeat(64);
       networkStateService.membershipFingerprintAt.withArgs(600_000).returns(ROLL_FP);
       networkStateService.membershipAt.callsFake((fp) => (fp === ROLL_FP || fp === CURRENT_FP || fp === FP ? fleet(12) : null));
-      generationRows.set('grantgeneration:myapp/founder', generationRow(2, 600_000));
+      generationRows.set(`grantgeneration:${IDENTITY}/founder`, generationRow(2, 600_000));
 
-      const committee = await foundingCommittee.refereeCommittee('myapp', 600_000);
+      const committee = await foundingCommittee.refereeCommittee(IDENTITY, 600_000);
       expect(committee.generation).to.equal(2);
       expect(committee.anchor).to.equal(600_000);
       expect(committee.fingerprint).to.equal(ROLL_FP);
@@ -196,47 +257,47 @@ describe('foundingCommittee', () => {
 
     it('the roll lifts mapped anchors to at least its height, and later views advance past it', async () => {
       await foundingCommittee.applyComponentView(meshView());
-      await foundingCommittee.materializeGeneration({ appName: 'myapp', generation: 1, height: 600_000 });
-      expect(store.get('myapp').components.db.anchorHeight).to.equal(600_000);
+      await foundingCommittee.materializeGeneration({ identity: IDENTITY, generation: 1, height: 600_000 });
+      expect(store.get(IDENTITY).components.db.anchorHeight).to.equal(600_000);
 
       await foundingCommittee.applyComponentView(meshView({
         height: 700_000, components: { db: {}, cache: {} },
       }));
-      expect(store.get('myapp').components.db.anchorHeight).to.equal(600_000);
-      expect(store.get('myapp').components.cache.anchorHeight).to.equal(700_000);
+      expect(store.get(IDENTITY).components.db.anchorHeight).to.equal(600_000);
+      expect(store.get(IDENTITY).components.cache.anchorHeight).to.equal(700_000);
     });
 
     it('a node whose window misses the named height answers null, not a stale generation', async () => {
       await foundingCommittee.recordAnchor(anchorDoc());
       networkStateService.membershipFingerprintAt.withArgs(600_000).returns(null);
-      generationRows.set('grantgeneration:myapp/founder', generationRow(2, 600_000));
-      expect(await foundingCommittee.refereeCommittee('myapp', REG_HEIGHT)).to.equal(null);
+      generationRows.set(`grantgeneration:${IDENTITY}/founder`, generationRow(2, 600_000));
+      expect(await foundingCommittee.refereeCommittee(IDENTITY, REG_HEIGHT)).to.equal(null);
     });
 
     it('a lower generation never overwrites a higher one', async () => {
       await foundingCommittee.recordAnchor(anchorDoc());
-      store.get('myapp').generation = 3;
-      store.get('myapp').generationHeight = 650_000;
+      store.get(IDENTITY).generation = 3;
+      store.get(IDENTITY).generationHeight = 650_000;
       const applied = await foundingCommittee.materializeGeneration({
-        appName: 'myapp', generation: 2, height: 500_050,
+        identity: IDENTITY, generation: 2, height: 500_050,
       });
       expect(applied).to.equal(true); // the call succeeds; the write is a no-op
-      expect(store.get('myapp').generation).to.equal(3);
+      expect(store.get(IDENTITY).generation).to.equal(3);
     });
 
     it('the re-roll MINTS the row on a node that never held one — no envelope needed', async () => {
       const applied = await foundingCommittee.materializeGeneration({
-        appName: 'myapp', generation: 1, height: 500_050,
+        identity: IDENTITY, generation: 1, height: 500_050,
       });
       expect(applied).to.equal(true);
-      const record = store.get('myapp');
+      const record = store.get(IDENTITY);
       expect(record.generation).to.equal(1);
       expect(record.anchors[String(500_050)].members).to.have.length(9);
     });
 
     it('an owner record rescues a photo-less referee end to end', async () => {
-      generationRows.set('grantgeneration:myapp/founder', generationRow(1, 500_050));
-      const committee = await foundingCommittee.refereeCommittee('myapp', 500_050);
+      generationRows.set(`grantgeneration:${IDENTITY}/founder`, generationRow(1, 500_050));
+      const committee = await foundingCommittee.refereeCommittee(IDENTITY, 500_050);
       expect(committee).to.not.equal(null);
       expect(committee.generation).to.equal(1);
       expect(committee.members).to.have.length(9);
@@ -246,19 +307,19 @@ describe('foundingCommittee', () => {
   describe('the referee committee', () => {
     it('the photo stands while a quorum of its owners remains listed', async () => {
       await foundingCommittee.recordAnchor(anchorDoc());
-      const committee = await foundingCommittee.refereeCommittee('myapp', REG_HEIGHT);
+      const committee = await foundingCommittee.refereeCommittee(IDENTITY, REG_HEIGHT);
       expect(committee.fingerprint).to.equal(FP);
       expect(committee.members).to.have.length(9);
     });
 
     it('a delisted member keeps its seat but loses its address', async () => {
       await foundingCommittee.recordAnchor(anchorDoc());
-      const gone = store.get('myapp').anchors[String(REG_HEIGHT)].members[0];
+      const gone = store.get(IDENTITY).anchors[String(REG_HEIGHT)].members[0];
       networkStateService.membershipAt.callsFake((fp) => {
         if (fp !== FP && fp !== CURRENT_FP) return null;
         return fleet(12).filter((node) => node.txhash !== gone.txhash);
       });
-      const committee = await foundingCommittee.refereeCommittee('myapp', REG_HEIGHT);
+      const committee = await foundingCommittee.refereeCommittee(IDENTITY, REG_HEIGHT);
       expect(committee.members.find((m) => m.txhash === gone.txhash).ip).to.equal(null);
     });
 
@@ -268,7 +329,7 @@ describe('foundingCommittee', () => {
       // hazard the model broke (formal/founder-pin-expiry). The flip
       // evaluator owns rot now; the read stays pinned.
       await foundingCommittee.recordAnchor(anchorDoc());
-      const photo = store.get('myapp').anchors[String(REG_HEIGHT)];
+      const photo = store.get(IDENTITY).anchors[String(REG_HEIGHT)];
       const survivor = photo.members[0];
       networkStateService.membershipAt.callsFake((fp) => {
         if (fp === FP) return fleet(12);
@@ -282,19 +343,19 @@ describe('foundingCommittee', () => {
         }
         return null;
       });
-      const committee = await foundingCommittee.refereeCommittee('myapp', REG_HEIGHT);
+      const committee = await foundingCommittee.refereeCommittee(IDENTITY, REG_HEIGHT);
       expect(committee.fingerprint).to.equal(FP);
       expect(committee.members.map((m) => m.txhash)).to.deep.equal(photo.members.map((m) => m.txhash));
     });
 
     it('no row, an unknown anchor, no current list — each answers null, never a guess', async () => {
-      expect(await foundingCommittee.refereeCommittee('myapp', REG_HEIGHT)).to.equal(null);
+      expect(await foundingCommittee.refereeCommittee(IDENTITY, REG_HEIGHT)).to.equal(null);
 
       await foundingCommittee.recordAnchor(anchorDoc());
-      expect(await foundingCommittee.refereeCommittee('myapp', 123_456)).to.equal(null);
+      expect(await foundingCommittee.refereeCommittee(IDENTITY, 123_456)).to.equal(null);
 
       networkStateService.membershipFingerprint.returns(null);
-      expect(await foundingCommittee.refereeCommittee('myapp', REG_HEIGHT)).to.equal(null);
+      expect(await foundingCommittee.refereeCommittee(IDENTITY, REG_HEIGHT)).to.equal(null);
     });
   });
 
@@ -306,7 +367,7 @@ describe('foundingCommittee', () => {
     const RUNG = REG_HEIGHT + 720;
 
     function rotTheFleet() {
-      const photo = store.get('myapp').anchors[String(REG_HEIGHT)];
+      const photo = store.get(IDENTITY).anchors[String(REG_HEIGHT)];
       const survivor = photo.members[0];
       networkStateService.membershipAt.callsFake((fp) => {
         if (fp === FP) return fleet(12);
@@ -324,13 +385,13 @@ describe('foundingCommittee', () => {
       rotTheFleet();
       daemonStatus.getCurrentDaemonHeight.returns(ROT_SEEN);
       await foundingCommittee.evaluateFlips();
-      expect(store.get('myapp').anchors[String(REG_HEIGHT)].rotSinceHeight).to.equal(ROT_SEEN);
-      expect(store.get('myapp').anchors[String(RUNG)]).to.equal(undefined);
+      expect(store.get(IDENTITY).anchors[String(REG_HEIGHT)].rotSinceHeight).to.equal(ROT_SEEN);
+      expect(store.get(IDENTITY).anchors[String(RUNG)]).to.equal(undefined);
 
       // the committee recovers: the stamp clears, nothing ever flips
       networkStateService.membershipAt.callsFake((fp) => (fp === FP || fp === CURRENT_FP ? fleet(12) : null));
       await foundingCommittee.evaluateFlips();
-      expect(store.get('myapp').anchors[String(REG_HEIGHT)].rotSinceHeight).to.equal(undefined);
+      expect(store.get(IDENTITY).anchors[String(REG_HEIGHT)].rotSinceHeight).to.equal(undefined);
     });
 
     it('the flip mints at the grid height once rot has aged past the gate', async () => {
@@ -343,11 +404,11 @@ describe('foundingCommittee', () => {
       daemonStatus.getCurrentDaemonHeight.returns(RUNG - 1);
       networkStateService.membershipFingerprintAt.callsFake((h) => (h === RUNG ? CURRENT_FP : FP));
       await foundingCommittee.evaluateFlips();
-      expect(store.get('myapp').anchors[String(RUNG)]).to.equal(undefined);
+      expect(store.get(IDENTITY).anchors[String(RUNG)]).to.equal(undefined);
 
       daemonStatus.getCurrentDaemonHeight.returns(RUNG);
       await foundingCommittee.evaluateFlips();
-      const minted = store.get('myapp').anchors[String(RUNG)];
+      const minted = store.get(IDENTITY).anchors[String(RUNG)];
       expect(minted.flipOf).to.equal(REG_HEIGHT);
       expect(minted.fingerprint).to.equal(CURRENT_FP);
       expect(minted.members).to.have.length(9);
@@ -361,7 +422,7 @@ describe('foundingCommittee', () => {
       daemonStatus.getCurrentDaemonHeight.returns(RUNG);
       networkStateService.membershipFingerprintAt.returns(null);
       await foundingCommittee.evaluateFlips();
-      expect(store.get('myapp').anchors[String(RUNG)]).to.equal(undefined);
+      expect(store.get(IDENTITY).anchors[String(RUNG)]).to.equal(undefined);
     });
 
     it('componentWorld walks the ladder and arms inside the quiet zone', async () => {
@@ -372,33 +433,33 @@ describe('foundingCommittee', () => {
       await foundingCommittee.evaluateFlips();
 
       // far from the rung: not armed
-      let world = await foundingCommittee.componentWorld('myapp', 'db');
+      let world = await foundingCommittee.componentWorld(IDENTITY, 'db');
       expect(world).to.deep.include({ intro: REG_HEIGHT, armed: false });
       expect(world.rungs).to.deep.equal([REG_HEIGHT]);
 
       // inside the quiet zone of the pending rung: armed
       daemonStatus.getCurrentDaemonHeight.returns(RUNG - 5);
-      world = await foundingCommittee.componentWorld('myapp', 'db');
+      world = await foundingCommittee.componentWorld(IDENTITY, 'db');
       expect(world.armed).to.equal(true);
 
       // the rung mints: the ladder grows and the world disarms
       networkStateService.membershipFingerprintAt.callsFake((h) => (h === RUNG ? CURRENT_FP : FP));
       daemonStatus.getCurrentDaemonHeight.returns(RUNG);
       await foundingCommittee.evaluateFlips();
-      world = await foundingCommittee.componentWorld('myapp', 'db');
+      world = await foundingCommittee.componentWorld(IDENTITY, 'db');
       expect(world.rungs).to.deep.equal([REG_HEIGHT, RUNG]);
       expect(world.armed).to.equal(false);
-      expect(await foundingCommittee.newestRungFor('myapp', REG_HEIGHT)).to.equal(RUNG);
+      expect(await foundingCommittee.newestRungFor(IDENTITY, REG_HEIGHT)).to.equal(RUNG);
     });
 
     it('appWorld is the app\'s FIRST world — the earliest component intro — whatever the component ladder', async () => {
       // an ordinal register is per app, shared by every component a node
       // hosts, so its rung ladder is the app's oldest world's
-      expect(await foundingCommittee.appWorld('myapp')).to.equal(null);
+      expect(await foundingCommittee.appWorld(IDENTITY)).to.equal(null);
       await foundingCommittee.recordAnchor(anchorDoc());
       await foundingCommittee.applyComponentView(meshView());
-      const byComponent = await foundingCommittee.componentWorld('myapp', 'db');
-      const byApp = await foundingCommittee.appWorld('myapp');
+      const byComponent = await foundingCommittee.componentWorld(IDENTITY, 'db');
+      const byApp = await foundingCommittee.appWorld(IDENTITY);
       expect(byApp).to.deep.equal(byComponent);
       expect(byApp.intro).to.equal(REG_HEIGHT);
     });
@@ -412,27 +473,27 @@ describe('foundingCommittee', () => {
       daemonStatus.getCurrentDaemonHeight.returns(RUNG);
       await foundingCommittee.evaluateFlips();
 
-      const minted = store.get('myapp').anchors[String(RUNG)];
+      const minted = store.get(IDENTITY).anchors[String(RUNG)];
       const member = minted.members[2];
       const oldAsk = await foundingCommittee.selfOnFoundingCommittee(
-        'myapp', REG_HEIGHT, FP, 0, { txhash: member.txhash, txindex: 0 },
+        IDENTITY, REG_HEIGHT, FP, 0, { txhash: member.txhash, txindex: 0 },
       );
       expect(oldAsk.member).to.equal(false);
       expect(oldAsk.reason).to.include('flipped past');
 
       const newAsk = await foundingCommittee.selfOnFoundingCommittee(
-        'myapp', RUNG, CURRENT_FP, 0, { txhash: member.txhash, txindex: 0 },
+        IDENTITY, RUNG, CURRENT_FP, 0, { txhash: member.txhash, txindex: 0 },
       );
       expect(newAsk.member).to.equal(true);
     });
 
     it('founder serving gates on the own view: stale chain and self-delisted both refuse', async () => {
       await foundingCommittee.recordAnchor(anchorDoc());
-      const member = store.get('myapp').anchors[String(REG_HEIGHT)].members[0];
+      const member = store.get(IDENTITY).anchors[String(REG_HEIGHT)].members[0];
       const collateral = { txhash: member.txhash, txindex: 0 };
 
       daemonStatus.isDaemonSynced.returns({ status: 'success', data: { synced: false } });
-      let verdict = await foundingCommittee.selfOnFoundingCommittee('myapp', REG_HEIGHT, FP, 0, collateral);
+      let verdict = await foundingCommittee.selfOnFoundingCommittee(IDENTITY, REG_HEIGHT, FP, 0, collateral);
       expect(verdict.member).to.equal(false);
       expect(verdict.reason).to.include('stale');
 
@@ -442,7 +503,7 @@ describe('foundingCommittee', () => {
         if (fp === CURRENT_FP) return fleet(12).filter((node) => node.txhash !== member.txhash);
         return null;
       });
-      verdict = await foundingCommittee.selfOnFoundingCommittee('myapp', REG_HEIGHT, FP, 0, collateral);
+      verdict = await foundingCommittee.selfOnFoundingCommittee(IDENTITY, REG_HEIGHT, FP, 0, collateral);
       expect(verdict.member).to.equal(false);
       expect(verdict.reason).to.include('no longer listed');
     });
@@ -451,14 +512,14 @@ describe('foundingCommittee', () => {
   describe('the grantor-side check', () => {
     it('membership keys on the anchor, blind to components', async () => {
       await foundingCommittee.recordAnchor(anchorDoc());
-      const member = store.get('myapp').anchors[String(REG_HEIGHT)].members[2];
-      const yes = await foundingCommittee.selfOnFoundingCommittee('myapp', REG_HEIGHT, FP, 0, {
+      const member = store.get(IDENTITY).anchors[String(REG_HEIGHT)].members[2];
+      const yes = await foundingCommittee.selfOnFoundingCommittee(IDENTITY, REG_HEIGHT, FP, 0, {
         txhash: member.txhash, txindex: member.outidx,
       });
       expect(yes.member).to.equal(true);
       expect(yes.quorum).to.equal(5);
 
-      const no = await foundingCommittee.selfOnFoundingCommittee('myapp', REG_HEIGHT, FP, 0, {
+      const no = await foundingCommittee.selfOnFoundingCommittee(IDENTITY, REG_HEIGHT, FP, 0, {
         txhash: 'f'.repeat(64), txindex: 0,
       });
       expect(no.member).to.equal(false);
@@ -466,15 +527,15 @@ describe('foundingCommittee', () => {
 
     it('refuses a basis this node does not agree with, and a retired generation teaching the current', async () => {
       await foundingCommittee.recordAnchor(anchorDoc());
-      const member = store.get('myapp').anchors[String(REG_HEIGHT)].members[0];
+      const member = store.get(IDENTITY).anchors[String(REG_HEIGHT)].members[0];
 
-      const basis = await foundingCommittee.selfOnFoundingCommittee('myapp', REG_HEIGHT, 'd'.repeat(64), 0, {
+      const basis = await foundingCommittee.selfOnFoundingCommittee(IDENTITY, REG_HEIGHT, 'd'.repeat(64), 0, {
         txhash: member.txhash, txindex: member.outidx,
       });
       expect(basis.member).to.equal(false);
       expect(basis.reason).to.contain('different committee basis');
 
-      const retired = await foundingCommittee.selfOnFoundingCommittee('myapp', REG_HEIGHT, FP, 1, {
+      const retired = await foundingCommittee.selfOnFoundingCommittee(IDENTITY, REG_HEIGHT, FP, 1, {
         txhash: member.txhash, txindex: member.outidx,
       });
       expect(retired.member).to.equal(false);

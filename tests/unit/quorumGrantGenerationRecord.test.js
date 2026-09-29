@@ -20,7 +20,7 @@ const OWNER = '1KoXq8mLxpNt3BSnNLq2HzKC39Ne2pVJtF';
 
 function signedRecord(overrides = {}) {
   const record = {
-    appName: 'myapp',
+    identity: 'myapp',
     role: 'founder',
     generation: 2,
     height: 500_100,
@@ -45,6 +45,12 @@ describe('quorumGrant ownerGenerationRecord', () => {
       expect(ownerGenerationRecord.verify({ ...record, height: 1 }, OWNER)).to.equal(false);
     });
 
+    it('is valid for the app it names only: never for another app registered under the same name', () => {
+      const record = signedRecord({ identity: 'ab12cd34ef56' });
+      expect(ownerGenerationRecord.verify(record, OWNER)).to.equal(true);
+      expect(ownerGenerationRecord.verify({ ...record, identity: 'cd34ef56ab12' }, OWNER)).to.equal(false);
+    });
+
     it('rejects malformed shapes before any crypto runs', () => {
       expect(ownerGenerationRecord.wellFormed(signedRecord())).to.equal(true);
       expect(ownerGenerationRecord.wellFormed(signedRecord({ generation: 0 }))).to.equal(false);
@@ -56,7 +62,7 @@ describe('quorumGrant ownerGenerationRecord', () => {
 
     it('refuses fields that would shift the framing', () => {
       expect(ownerGenerationRecord.canonical({
-        appName: 'my|app', role: 'founder', generation: 1, height: 1, at: 1,
+        identity: 'my|app', role: 'founder', generation: 1, height: 1, at: 1,
       })).to.equal(null);
     });
   });
@@ -75,7 +81,7 @@ describe('quorumGrant ownerGenerationRecord', () => {
         },
       };
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({ collection: () => collection }) });
-      sinon.stub(appsRepository, 'getGlobalAppOwner').resolves(OWNER);
+      sinon.stub(appsRepository, 'getGlobalAppOwnerByIdentity').resolves(OWNER);
       sinon.stub(foundingCommittee, 'materializeGeneration').resolves(true);
     });
 
@@ -123,8 +129,13 @@ describe('quorumGrant ownerGenerationRecord', () => {
       expect(updates).to.have.length(0);
     });
 
+    it('resolves the owner from the app the record names', async () => {
+      await stored(signedRecord());
+      sinon.assert.calledOnceWithExactly(appsRepository.getGlobalAppOwnerByIdentity, 'myapp');
+    });
+
     it('drops a record for an app this node has no spec for', async () => {
-      appsRepository.getGlobalAppOwner.resolves(null);
+      appsRepository.getGlobalAppOwnerByIdentity.resolves(null);
       await stored(signedRecord());
       expect(updates).to.have.length(0);
     });
@@ -133,7 +144,7 @@ describe('quorumGrant ownerGenerationRecord', () => {
       await stored(signedRecord({ generation: 0 }));
       await stored(signedRecord({ role: 'Bad Role' }));
       expect(updates).to.have.length(0);
-      expect(appsRepository.getGlobalAppOwner.called).to.equal(false);
+      expect(appsRepository.getGlobalAppOwnerByIdentity.called).to.equal(false);
     });
 
     // The product-side hook: the store owns the standing generation, and the
@@ -145,7 +156,7 @@ describe('quorumGrant ownerGenerationRecord', () => {
       try {
         standing = { data: { generation: 2 } };
         await stored(signedRecord({ role: 'master', generation: 2 }));
-        expect(heard).to.deep.equal([{ appName: 'myapp', role: 'master', generation: 2 }]);
+        expect(heard).to.deep.equal([{ identity: 'myapp', role: 'master', generation: 2 }]);
         expect(updates[0].options).to.include({ upsert: true, returnDocument: 'after' });
       } finally {
         off();

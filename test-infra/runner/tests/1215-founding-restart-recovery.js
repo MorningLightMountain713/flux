@@ -14,6 +14,7 @@ import {
   execInContainer, requireAppContainerName,
 } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, waitForUp } from '../framework/wait.js';
+import { dbClient } from '../framework/db-client.js';
 
 // Founding survives a fleet-wide FluxOS restart — §13.7 is CLOSED and this
 // suite pins the closure, not the hole. The founding photo is the pin made
@@ -129,13 +130,14 @@ describe('founding recovers through a fleet-wide restart', function () {
     return winner;
   }
 
-  // The founder register key is rung-salted (<app>/founder-<world>@<rung>)
+  // The founder register key is rung-salted (<identity>/founder-<world>@<rung>)
   // and the suite must never re-derive that arithmetic itself: the winner's
   // founded event names the key the founding actually used.
   async function foundedGrant(winner, appName, afterId) {
+    const identity = await dbClient(1).identityOf(appName);
     const entry = await env.clients[winner].waitForEvent(
       'quorumGrant:founded',
-      (d) => typeof d.key === 'string' && d.key.startsWith(`${appName}/founder-`),
+      (d) => typeof d.key === 'string' && d.key.startsWith(`${identity}/founder-`),
       30000,
       { afterId },
     );

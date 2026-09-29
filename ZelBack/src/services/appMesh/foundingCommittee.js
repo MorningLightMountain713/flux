@@ -10,6 +10,11 @@ const { globalAppStateEvents } = require('../utils/appConstants');
 const fluxEventBus = require('../utils/fluxEventBus');
 const log = require('../../lib/log');
 
+// One record per app, keyed by the app's identity, so a name registered again
+// after expiry starts with no anchors, pins or generation of the app before it.
+// The registry owner deletes the record when the app leaves the list, and winds
+// it back when the app goes back to an earlier spec.
+//
 // The founding committees, materialized: the photo, not the album. A founding
 // committee must be ONE agreed set however late the founding happens, and the
 // only moment everyone naturally shares the same list is when they process an
@@ -73,9 +78,9 @@ function outpointOf(member) {
  * non-hosting node learns nothing about an encrypted app's insides from
  * the keys it referees.
  */
-function founderToken(appName, component) {
+function founderToken(identity, component) {
   return crypto.createHash('sha256')
-    .update(`fluxfounder|${appName}|${component}`)
+    .update(`fluxfounder|${identity}|${component}`)
     .digest('hex')
     .slice(0, 16);
 }
@@ -86,13 +91,13 @@ function founderToken(appName, component) {
 // predecessor's caller already received.
 const inFlight = new Map();
 
-function serialized(appName, operation) {
-  const run = (inFlight.get(appName) ?? Promise.resolve())
+function serialized(identity, operation) {
+  const run = (inFlight.get(identity) ?? Promise.resolve())
     .catch(() => {})
     .then(operation);
-  inFlight.set(appName, run);
+  inFlight.set(identity, run);
   run.finally(() => {
-    if (inFlight.get(appName) === run) inFlight.delete(appName);
+    if (inFlight.get(identity) === run) inFlight.delete(identity);
   }).catch(() => {});
   return run;
 }
@@ -103,17 +108,17 @@ function serialized(appName, operation) {
  * from the current list would be exactly the two-photos hazard this record
  * exists to prevent).
  */
-function photoAt(appName, height) {
+function photoAt(identity, height) {
   const fingerprint = networkStateService.membershipFingerprintAt(height);
   if (!fingerprint) return null;
   const membership = networkStateService.membershipAt(fingerprint);
   if (!membership) return null;
 
-  const committee = selectCommittee(membership, `quorumgrant|${appName}/founder`, {
+  const committee = selectCommittee(membership, `quorumgrant|${identity}/founder`, {
     size: ONESHOT_COMMITTEE_SIZE(),
   });
   if (committee.refusal) {
-    log.warn(`foundingCommittee - ${appName} at ${height}: ${committee.refusal}`);
+    log.warn(`foundingCommittee - ${identity} at ${height}: ${committee.refusal}`);
     return null;
   }
   return {
@@ -140,38 +145,84 @@ function photoAt(appName, height) {
  */
 async function recordAnchor(specDoc) {
   try {
-    if (!specDoc?.name || !Number.isFinite(specDoc.height)) return;
+    if (!specDoc?.identity || !Number.isFinite(specDoc.height)) return;
     if ((specDoc.version ?? 0) < 9) return;
-    await serialized(specDoc.name, () => applyAnchor(specDoc.name, specDoc.height));
+    await serialized(specDoc.identity, () => applyAnchor(specDoc.identity, specDoc.height));
   } catch (error) {
-    log.warn(`foundingCommittee - anchor for ${specDoc?.name} failed: ${error.message}`);
+    log.warn(`foundingCommittee - anchor for ${specDoc?.identity} failed: ${error.message}`);
   }
 }
 
-async function applyAnchor(appName, height) {
+async function applyAnchor(identity, height) {
   const database = db();
   if (!database) return;
 
-  const existing = await dbHelper.findOneInDatabase(database, collection(), { _id: appName });
+  const existing = await dbHelper.findOneInDatabase(database, collection(), { _id: identity });
   if (existing && Number.isFinite(existing.specHeight) && height <= existing.specHeight) return;
 
   const anchors = { ...(existing?.anchors ?? {}) };
   if (!anchors[String(height)]) {
-    const photo = photoAt(appName, height);
+    const photo = photoAt(identity, height);
     if (photo) anchors[String(height)] = photo;
   }
 
   await dbHelper.findOneAndUpdateInDatabase(
     database,
     collection(),
-    { _id: appName },
+    { _id: identity },
     {
       $set: { specHeight: height, anchors },
       $setOnInsert: { generation: 0 },
     },
     { upsert: true, ...DURABLE },
   );
-  log.info(`foundingCommittee - ${appName} anchored at height ${height}`);
+  log.info(`foundingCommittee - ${identity} anchored at height ${height}`);
+}
+
+/**
+ * Deletes an app's founding record: the app left the list.
+ * @param {string} identity
+ */
+async function forget(identity) {
+  const database = db();
+  if (!database) return;
+  await serialized(identity, () => dbHelper.removeDocumentsFromCollection(database, collection(), { _id: identity }));
+}
+
+/**
+ * Winds an app's founding record back to an earlier spec at `height`: the spec
+ * anchors above it and the worlds they introduced are deleted, with the
+ * component pins above it, and the spec and mapping heights are cleared so the
+ * spec at `height` is recorded and mapped again. The photo the standing owner
+ * generation record named stays: that record still stands.
+ * @param {string} identity
+ * @param {number} height - the height of the spec the app went back to
+ */
+async function retract(identity, height) {
+  const database = db();
+  if (!database) return;
+  await serialized(identity, async () => {
+    const record = await dbHelper.findOneInDatabase(database, collection(), { _id: identity });
+    if (!record) return;
+    const generationHeight = (record.generation ?? 0) >= 1 ? record.generationHeight : null;
+    const anchors = {};
+    Object.entries(record.anchors ?? {}).forEach(([at, photo]) => {
+      const intro = introOf(record, Number(at));
+      if (intro <= height || intro === generationHeight) anchors[at] = photo;
+    });
+    const components = {};
+    Object.entries(record.components ?? {}).forEach(([name, entry]) => {
+      if (entry.anchorHeight <= height) components[name] = entry;
+    });
+    await dbHelper.findOneAndUpdateInDatabase(
+      database,
+      collection(),
+      { _id: identity },
+      { $set: { anchors, components }, $unset: { specHeight: '', mappedHeight: '' } },
+      DURABLE,
+    );
+    log.info(`foundingCommittee - ${identity} wound back to its spec at height ${height}`);
+  });
 }
 
 /**
@@ -187,20 +238,20 @@ async function applyAnchor(appName, height) {
  */
 async function applyComponentView(view) {
   try {
-    if (view?.network?.mesh !== true || !view.name || !Number.isFinite(view.height)) return;
+    if (view?.network?.mesh !== true || !view.identity || !Number.isFinite(view.height)) return;
     const names = Object.keys(view.components ?? {});
     if (!names.length) return;
-    await serialized(view.name, () => applyMapping(view.name, view.height, names));
+    await serialized(view.identity, () => applyMapping(view.identity, view.height, names));
   } catch (error) {
-    log.warn(`foundingCommittee - component view for ${view?.name} failed: ${error.message}`);
+    log.warn(`foundingCommittee - component view for ${view?.identity} failed: ${error.message}`);
   }
 }
 
-async function applyMapping(appName, height, names) {
+async function applyMapping(identity, height, names) {
   const database = db();
   if (!database) return;
 
-  const existing = await dbHelper.findOneInDatabase(database, collection(), { _id: appName });
+  const existing = await dbHelper.findOneInDatabase(database, collection(), { _id: identity });
   if (existing?.mappedHeight !== undefined && height <= existing.mappedHeight) return;
 
   const rollFloor = (existing?.generation ?? 0) >= 1 ? existing.generationHeight : 0;
@@ -213,7 +264,7 @@ async function applyMapping(appName, height, names) {
   await dbHelper.findOneAndUpdateInDatabase(
     database,
     collection(),
-    { _id: appName },
+    { _id: identity },
     {
       $set: { mappedHeight: height, components },
       $setOnInsert: { generation: 0 },
@@ -234,15 +285,15 @@ async function applyMapping(appName, height, names) {
  * generation never overwrites a higher one, whatever order records
  * arrive in.
  *
- * @param {{appName: string, generation: number, height: number}} record
+ * @param {{identity: string, generation: number, height: number}} record
  *   an ALREADY OWNER-VERIFIED generation record (the store verifies)
  * @returns {Promise<boolean>} whether this node now holds the generation
  */
 async function materializeGeneration(record) {
   try {
-    return await serialized(record.appName, () => applyGenerationRecord(record));
+    return await serialized(record.identity, () => applyGenerationRecord(record));
   } catch (error) {
-    log.warn(`foundingCommittee - generation materialization for ${record?.appName} failed: ${error.message}`);
+    log.warn(`foundingCommittee - generation materialization for ${record?.identity} failed: ${error.message}`);
     return false;
   }
 }
@@ -251,10 +302,10 @@ async function applyGenerationRecord(record) {
   const database = db();
   if (!database) return false;
 
-  const photo = photoAt(record.appName, record.height);
+  const photo = photoAt(record.identity, record.height);
   if (!photo) return false;
 
-  const existing = await dbHelper.findOneInDatabase(database, collection(), { _id: record.appName });
+  const existing = await dbHelper.findOneInDatabase(database, collection(), { _id: record.identity });
   if (existing && (existing.generation ?? 0) >= record.generation) {
     // a lower or equal generation never overwrites; the call succeeds
     // because this node already holds at least the generation asked about
@@ -278,11 +329,11 @@ async function applyGenerationRecord(record) {
   await dbHelper.findOneAndUpdateInDatabase(
     database,
     collection(),
-    { _id: record.appName },
+    { _id: record.identity },
     { $set: set, $setOnInsert: {} },
     { upsert: true, ...DURABLE },
   );
-  log.info(`foundingCommittee - ${record.appName} re-rolled to generation ${record.generation} at height ${record.height}`);
+  log.info(`foundingCommittee - ${record.identity} re-rolled to generation ${record.generation} at height ${record.height}`);
   return true;
 }
 
@@ -291,14 +342,14 @@ async function applyGenerationRecord(record) {
  * directly from the synced event store (never through messageStore — that
  * module consumes this one).
  */
-async function newestGenerationRecord(appName) {
+async function newestGenerationRecord(identity) {
   const connection = dbHelper.databaseConnection();
   if (!connection) return null;
   const database = connection.db(config.get('database.appsglobal.database'));
   const row = await dbHelper.findOneInDatabase(
     database,
     globalAppStateEvents,
-    { type: 'grantgeneration', dedupKey: `grantgeneration:${appName}/founder` },
+    { type: 'grantgeneration', dedupKey: `grantgeneration:${identity}/founder` },
   );
   return row?.data ?? null;
 }
@@ -318,24 +369,24 @@ async function newestGenerationRecord(appName) {
  * member keeps its seat in the denominator and simply has nowhere to be
  * reached — seats never quietly vanish.
  *
- * @param {string} appName
+ * @param {string} identity
  * @param {number} anchor a spec anchor height the ask names
  * @returns {Promise<object|null>}
  */
-async function refereeCommittee(appName, anchor) {
+async function refereeCommittee(identity, anchor) {
   const database = db();
   if (!database) return null;
-  let record = await dbHelper.findOneInDatabase(database, collection(), { _id: appName });
+  let record = await dbHelper.findOneInDatabase(database, collection(), { _id: identity });
 
   // An owner generation record outranks whatever is stored: try to catch up
   // in place, and when this node's window cannot reach the named height,
   // answer nothing rather than serve a retired generation — a stale
   // committee served confidently is the two-bases hazard.
-  const generationRecord = await newestGenerationRecord(appName);
+  const generationRecord = await newestGenerationRecord(identity);
   if (generationRecord && generationRecord.generation > (record?.generation ?? 0)) {
     const caughtUp = await materializeGeneration(generationRecord);
     if (!caughtUp) return null;
-    record = await dbHelper.findOneInDatabase(database, collection(), { _id: appName });
+    record = await dbHelper.findOneInDatabase(database, collection(), { _id: identity });
   }
   if (!record) return null;
 
@@ -430,10 +481,10 @@ async function evaluateFlips() {
   }
 }
 
-async function evaluateWorld(appName, intro, height, listedByOutpoint) {
+async function evaluateWorld(identity, intro, height, listedByOutpoint) {
   const database = db();
   if (!database) return;
-  const record = await dbHelper.findOneInDatabase(database, collection(), { _id: appName });
+  const record = await dbHelper.findOneInDatabase(database, collection(), { _id: identity });
   if (!record) return;
   const rungs = worldRungs(record, intro);
   const newest = rungs[rungs.length - 1];
@@ -444,7 +495,7 @@ async function evaluateWorld(appName, intro, height, listedByOutpoint) {
   if (standing) {
     if (photo.rotSinceHeight !== undefined) {
       await dbHelper.findOneAndUpdateInDatabase(
-        database, collection(), { _id: appName },
+        database, collection(), { _id: identity },
         { $set: { anchors: { ...record.anchors, [String(newest)]: stripRot(photo) } } },
         DURABLE,
       );
@@ -454,7 +505,7 @@ async function evaluateWorld(appName, intro, height, listedByOutpoint) {
 
   if (photo.rotSinceHeight === undefined) {
     await dbHelper.findOneAndUpdateInDatabase(
-      database, collection(), { _id: appName },
+      database, collection(), { _id: identity },
       { $set: { anchors: { ...record.anchors, [String(newest)]: { ...photo, rotSinceHeight: height } } } },
       DURABLE,
     );
@@ -463,17 +514,17 @@ async function evaluateWorld(appName, intro, height, listedByOutpoint) {
 
   const flipHeight = nextFlipHeight(intro, newest, photo.rotSinceHeight);
   if (height < flipHeight || record.anchors?.[String(flipHeight)]) return;
-  const flipPhoto = photoAt(appName, flipHeight);
+  const flipPhoto = photoAt(identity, flipHeight);
   if (!flipPhoto) return; // window missed on this node — an honest gap, never a guess
   await dbHelper.findOneAndUpdateInDatabase(
-    database, collection(), { _id: appName },
+    database, collection(), { _id: identity },
     { $set: { anchors: { ...record.anchors, [String(flipHeight)]: { ...flipPhoto, flipOf: newest } } } },
     DURABLE,
   );
   fluxEventBus.publish('quorumGrant:founderFlip', {
-    appName, world: intro, rung: flipHeight, of: newest,
+    identity, world: intro, rung: flipHeight, of: newest,
   });
-  log.info(`foundingCommittee - ${appName} world ${intro} flipped to basis ${flipHeight} (rot since ${photo.rotSinceHeight})`);
+  log.info(`foundingCommittee - ${identity} world ${intro} flipped to basis ${flipHeight} (rot since ${photo.rotSinceHeight})`);
 }
 
 function stripRot(photo) {
@@ -498,10 +549,10 @@ function startFlipEvaluator() {
  * knowledge, null wherever the view was never resolvable (which for a
  * non-hosting node is the design, not a gap).
  */
-async function componentAnchor(appName, component) {
+async function componentAnchor(identity, component) {
   const database = db();
   if (!database) return null;
-  const record = await dbHelper.findOneInDatabase(database, collection(), { _id: appName });
+  const record = await dbHelper.findOneInDatabase(database, collection(), { _id: identity });
   return record?.components?.[component]?.anchorHeight ?? null;
 }
 
@@ -513,10 +564,10 @@ async function componentAnchor(appName, component) {
  * (§8.5: a completion landing one block before a flip loses a one-block
  * gossip race; the quiet zone closes that race entirely).
  */
-async function componentWorld(appName, component) {
+async function componentWorld(identity, component) {
   const database = db();
   if (!database) return null;
-  const record = await dbHelper.findOneInDatabase(database, collection(), { _id: appName });
+  const record = await dbHelper.findOneInDatabase(database, collection(), { _id: identity });
   const intro = record?.components?.[component]?.anchorHeight ?? null;
   if (intro === null) return null;
 
@@ -541,13 +592,13 @@ async function componentWorld(appName, component) {
  * worlds for their own founder registers; the ordinals stay with the first.
  * Same shape as componentWorld; null until the app has a recorded anchor.
  *
- * @param {string} appName
+ * @param {string} identity
  * @returns {Promise<{intro: number, rungs: number[], armed: boolean}|null>}
  */
-async function appWorld(appName) {
+async function appWorld(identity) {
   const database = db();
   if (!database) return null;
-  const record = await dbHelper.findOneInDatabase(database, collection(), { _id: appName });
+  const record = await dbHelper.findOneInDatabase(database, collection(), { _id: identity });
   const intros = Object.values(record?.components ?? {})
     .map((entry) => entry?.anchorHeight)
     .filter((height) => Number.isInteger(height));
@@ -576,14 +627,14 @@ async function appWorld(appName) {
  * rounds run by two generations' committees against one register would
  * be two answers.
  *
- * @param {string} appName
+ * @param {string} identity
  * @param {number} anchor the spec anchor the register key names
  * @param {string} askFingerprint the basis the ask names
  * @param {number} askGeneration the generation the ask names
  * @param {{txhash: string, txindex: number|string}} collateral this node's outpoint
  * @returns {Promise<{member: boolean, reason: string|null, quorum?: number}>}
  */
-async function selfOnFoundingCommittee(appName, anchor, askFingerprint, askGeneration, collateral) {
+async function selfOnFoundingCommittee(identity, anchor, askFingerprint, askGeneration, collateral) {
   // Founder-serving gates (§8.5, each a LOCAL fact, each model-forced):
   // a grantor whose own chain view is stale cannot know the current basis
   // (the dark-rot arm); one that can SEE itself delisted has no seat to
@@ -600,7 +651,7 @@ async function selfOnFoundingCommittee(appName, anchor, askFingerprint, askGener
     return { member: false, reason: 'this node is no longer listed' };
   }
 
-  const committee = await refereeCommittee(appName, anchor);
+  const committee = await refereeCommittee(identity, anchor);
   if (!committee) {
     return { member: false, reason: 'no honest committee basis on this node' };
   }
@@ -611,7 +662,7 @@ async function selfOnFoundingCommittee(appName, anchor, askFingerprint, askGener
   // rungs; the register only ever collects at the current one.
   const database = db();
   const record = database
-    ? await dbHelper.findOneInDatabase(database, collection(), { _id: appName }) : null;
+    ? await dbHelper.findOneInDatabase(database, collection(), { _id: identity }) : null;
   if (record) {
     const intro = introOf(record, anchor);
     const rungs = worldRungs(record, intro);
@@ -650,10 +701,10 @@ function introOf(record, rung) {
  * referee-side and component-blind (the discovery endpoint's resolver).
  * Null when this node never photographed the world at all.
  */
-async function newestRungFor(appName, anchor) {
+async function newestRungFor(identity, anchor) {
   const database = db();
   if (!database) return null;
-  const record = await dbHelper.findOneInDatabase(database, collection(), { _id: appName });
+  const record = await dbHelper.findOneInDatabase(database, collection(), { _id: identity });
   if (!record?.anchors?.[String(anchor)]) return null;
   const rungs = worldRungs(record, introOf(record, anchor));
   return rungs[rungs.length - 1];
@@ -661,7 +712,9 @@ async function newestRungFor(appName, anchor) {
 
 module.exports = {
   founderToken,
+  forget,
   recordAnchor,
+  retract,
   applyComponentView,
   materializeGeneration,
   refereeCommittee,

@@ -98,7 +98,7 @@ describe('masterlease proof: a listed node\'s claim without the committee\'s sig
 
   const droppedOnAnyNode = (afterIds, reason, timeoutMs) => Promise.any(REAL.map((i) => env.clients[i].waitForEvent(
     'quorumGrant:masterleaseDropped',
-    (d) => d.appName === name && d.grantee === stubOutpoint && d.reason === reason,
+    (d) => d.identity === name && d.grantee === stubOutpoint && d.reason === reason,
     timeoutMs,
     { afterId: afterIds[i] },
   ).then(() => i))).catch(() => null);
@@ -180,7 +180,7 @@ describe('masterlease proof: a listed node\'s claim without the committee\'s sig
       type: 'fluxmasterlease',
       version: 1,
       ip: `${stub.ip}:16127`,
-      appName: name,
+      identity: name,
       role: 'master',
       grantee: stubOutpoint,
       epoch: record.epoch + 5,
@@ -213,7 +213,7 @@ describe('masterlease proof: a listed node\'s claim without the committee\'s sig
     }));
     const unverifiedOn = await Promise.any(REAL.map((i) => env.clients[i].waitForEvent(
       'quorumGrant:masterleaseUnverified',
-      (d) => d.appName === name && d.grantee === stubOutpoint,
+      (d) => d.identity === name && d.grantee === stubOutpoint,
       60000,
       { afterId: markers[i] },
     ).then(() => i))).catch(() => null);

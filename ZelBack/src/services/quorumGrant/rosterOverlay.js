@@ -52,7 +52,7 @@ function outpointOf(node) {
  * nobody else agrees with, loudly, instead of quietly deriving yesterday's
  * committee.
  *
- * @param {string} key resource key (`<app>/<role>`)
+ * @param {string} key resource key (`<identity>/<role>`)
  * @param {number} generation the owner's current generation for the key
  * @returns {string}
  */
@@ -203,7 +203,7 @@ function rosterAfter(baseMembers, membership, chain) {
  *     against the signer's registered key from the membership itself.
  *
  * @param {object[]} membership the membership the fingerprint names
- * @param {string} key resource key (`<app>/<role>`)
+ * @param {string} key resource key (`<identity>/<role>`)
  * @param {string} fingerprint the membership basis the signatures bind to
  * @param {number} generation the generation the chain overlays — signatures
  *   bind it beside the fingerprint, so a retired world's chain can never

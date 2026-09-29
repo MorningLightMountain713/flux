@@ -251,6 +251,15 @@ async function prepareDatabaseSchema() {
   ]);
   await dbHelper.ensureNewestAppMessageIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appsMessages')));
   await decisionStore.prepareCollection();
+  // The registry (appRegistry writes it): one row per listed app.
+  await dbHelper.ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appsInformation')), [
+    { key: { name: 1 }, name: 'query for getting zelapp based on zelapp specs name' },
+    { key: { owner: 1 }, name: 'query for getting zelapp based on zelapp specs owner' },
+    { key: { repotag: 1 }, name: 'query for getting zelapp based on image' },
+    { key: { height: 1 }, name: 'query for getting zelapp based on last height update' },
+    { key: { hash: 1 }, name: 'query for getting zelapp based on last hash' },
+    { key: { identity: 1 }, name: 'query for getting zelapp based on its identity' },
+  ]);
   await dbHelper.ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appStateEvents')), [
     { key: { expireAt: 1 }, expireAfterSeconds: 0 },
     { key: { ip: 1, type: 1, dedupKey: 1 }, unique: true, recover: dbHelper.dedupeByKey },
