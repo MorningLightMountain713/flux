@@ -19,6 +19,7 @@ const syncthingService = require('../../ZelBack/src/services/syncthingService');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const generalService = require('../../ZelBack/src/services/generalService');
 const enterpriseConfig = require('../../ZelBack/src/services/utils/enterpriseConfig');
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 
 const packageJson = require('../../package.json');
 
@@ -136,15 +137,18 @@ describe('loading express', () => {
   // it; the throwaway express apps elsewhere in this tier never mount apicache.
   it('http /flux/enterpriseappowners serves 503 before load and is not poisoned by it', async () => {
     const owners = sinon.stub(enterpriseConfig, 'getEnterpriseAppOwners').returns(null);
+    capabilities.setForTests('policyVerified', false);
     try {
       await request(serverHttp).get('/flux/enterpriseappowners').expect(503);
 
+      capabilities.setForTests('policyVerified', true);
       owners.returns(['ownerA', 'ownerB']);
 
       const res = await request(serverHttp).get('/flux/enterpriseappowners').expect(200);
       expect(JSON.parse(res.text).data).to.deep.equal(['ownerA', 'ownerB']);
     } finally {
       owners.restore();
+      capabilities.resetForTests();
     }
   });
 

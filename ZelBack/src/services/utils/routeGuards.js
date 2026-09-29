@@ -5,20 +5,6 @@
 const apicache = require('apicache');
 
 const messageHelper = require('../messageHelper');
-const globalState = require('./globalState');
-const capabilities = require('./capabilities');
-
-// What a caller turned away during boot is told to wait. The boot chain is
-// bounded by its own daemon and sync timeouts rather than by this number, so it
-// is a pacing hint and not a deadline: short enough that a dashboard retry feels
-// responsive, long enough that a client polling through a slow boot is not
-// making a request a second.
-const BOOT_RETRY_AFTER_SECONDS = 15;
-
-// What a caller turned away for policy is told to wait. A node reaches the
-// published source again on every peer arrival, departure and settled ask, so
-// what this paces is a client's polling rather than any interval of ours.
-const POLICY_RETRY_AFTER_SECONDS = 30;
 
 // What a caller turned away because the daemon cannot answer is told to wait.
 // fluxd loads its block index in about a minute on a node and answers nothing
@@ -44,108 +30,6 @@ const DAEMON_UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'ECONNAB
 function serviceUnavailable(res, message, retryAfterSeconds) {
   res.setHeader('Retry-After', String(retryAfterSeconds));
   return res.status(503).json(messageHelper.createErrorMessage(message, 'ServiceUnavailable', 503));
-}
-
-/**
- * Refuse a call that would create or destroy a container before boot
- * reconciliation has decided which applications this node is keeping.
- *
- * That decision runs behind daemon readiness, node confirmation and DB sync, so
- * it lands well after the API starts answering. Until it has, a container this
- * node did not know about when it booted is one reconciliation may still remove:
- * it keeps an app whose location record says this node is running it, and a
- * container created moments ago has no such record, because a record is written
- * from the running broadcast an app only makes once it has run.
- *
- * The internal actors already wait for the same gate - the reconciler queues
- * into bootPending rather than actuating, and crash recovery holds off. This is
- * the same rule at the front door.
- *
- * A refusal rather than a wait: the boot chain can run to its daemon timeout, and
- * holding a request open that long serves the caller worse than telling them when
- * to come back.
- * @param {import('express').Request} req Request
- * @param {import('express').Response} res Response
- * @param {Function} next Next handler
- * @returns {*} next(), or a 503 carrying a Retry-After
- */
-function requireBootSettled(req, res, next) {
-  if (capabilities.isUp('bootReconcileDecided')) return next();
-  return serviceUnavailable(res, 'Node is still reconciling its applications after boot', BOOT_RETRY_AFTER_SECONDS);
-}
-
-/**
- * Refuse a call that would pull an image before this node has obtained the
- * network's policy.
- *
- * The blocked-repository list is part of the signed bundle, so a node without
- * one cannot establish that an image is not banned. appInstaller refuses the
- * pull for that reason, but a redeploy has already uninstalled by the time it
- * asks - and only a successful install writes the local row back, so the app is
- * gone from this node with nothing to rebuild it.
- *
- * Asked at the front door for the same reason requireBootSettled is: the
- * internal actors already hold to this gate, and a caller is better served by
- * being told to come back than by a node that accepts the work and destroys
- * something on the way to refusing it.
- *
- * NAMED SEPARATELY FROM BOOT. The two are different facts with different
- * remedies - boot settles on its own, policy may need another node - and a
- * caller that cannot tell them apart is the defect this gate exists to answer.
- * @param {object} req Request
- * @param {object} res Response
- * @param {Function} next Next handler
- * @returns {*} next(), or a 503 carrying a Retry-After
- */
-function requirePolicyReady(req, res, next) {
-  if (capabilities.isUp('policyCurrent')) return next();
-  return serviceUnavailable(res, 'Node has not yet obtained the network policy', POLICY_RETRY_AFTER_SECONDS);
-}
-
-/**
- * Refuse a read of the global application registry while this node's registry
- * is not current.
- *
- * The registry is rebuilt from the permanent messages once the boot hash sync
- * completes, and stops being current when this node loses the peers new
- * messages reach it through. Until then a read answers from a registry that is
- * unbuilt or behind, and a caller cannot tell that answer from a network with
- * fewer apps: FDM takes it as the app list and routes to it.
- *
- * Keyed on appRegistryConsistent, which the sync orchestrator raises when a
- * rebuild finishes and lowers when it degrades. Runs ahead of the cache, so a refusal is never
- * stored and a stored answer is never served while the registry is not current.
- * @param {object} req Request
- * @param {object} res Response
- * @param {Function} next Next handler
- * @returns {*} next(), or a 503 carrying a Retry-After
- */
-function requireRegistryReady(req, res, next) {
-  if (capabilities.isUp('appRegistryConsistent')) return next();
-  return serviceUnavailable(res, 'Node application registry is not current', BOOT_RETRY_AFTER_SECONDS);
-}
-
-/**
- * Refuse a read of where applications run, install or fail before this node's
- * view of that is complete.
- *
- * Locations are what other nodes have announced to this one. After a restart
- * the store holds whatever outlived the outage until the orchestrator's state
- * sync has heard the network, and an answer drawn from it reads the same as one
- * from a node that knows.
- *
- * Keyed on what a peer asking for app state is answered on: the orchestrator's
- * own state sync done (appStateSynced), or its block timer spent.
- * Named separately from the registry guard: the two stores are filled by
- * different syncs and come up at different times.
- * @param {object} req Request
- * @param {object} res Response
- * @param {Function} next Next handler
- * @returns {*} next(), or a 503 carrying a Retry-After
- */
-function requireAppStateReady(req, res, next) {
-  if (capabilities.isUp('appStateSynced') || globalState.appStateSyncDeadlinePassed) return next();
-  return serviceUnavailable(res, 'Node has not yet synchronised application locations', BOOT_RETRY_AFTER_SECONDS);
 }
 
 /**
@@ -294,8 +178,4 @@ module.exports = {
   cache,
   isDaemonUnavailable,
   rejectQueryParameters,
-  requireAppStateReady,
-  requireBootSettled,
-  requirePolicyReady,
-  requireRegistryReady,
 };

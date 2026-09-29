@@ -5,7 +5,7 @@
 //
 // The explorer reset covers chain data only. Its apps flag would drop the app
 // messages, which come from the network rather than the chain, and the
-// registry, which has its own rebuild; it is refused.
+// registry, which follows the decisions on them; it is refused.
 
 const { expect } = require('chai');
 const sinon = require('sinon');
@@ -74,12 +74,12 @@ describe('the explorer reset\'s apps flag', () => {
     { name: 'explorer reindex', handler: () => explorerService.reindexExplorer, params: { reindexapps: 'true' } },
     { name: 'explorer rescan', handler: () => explorerService.rescanExplorer, params: { blockheight: '100', rescanapps: 'true' } },
   ].forEach(({ name, handler, params }) => {
-    it(`${name} refuses the apps flag with a 400 naming the registry rebuild, and touches nothing`, async () => {
+    it(`${name} refuses the apps flag with a 400 saying the registry needs no rebuild, and touches nothing`, async () => {
       const res = response();
       await handler()({ params, headers: { zelidauth: 'team' } }, res);
 
       expect(res.status.calledOnceWithExactly(400)).to.equal(true);
-      expect(res.json.firstCall.args[0].data.message).to.include('/apps/reindexglobalappsinformation');
+      expect(res.json.firstCall.args[0].data.message).to.include('needs no rebuild');
       writes.forEach((write) => sinon.assert.notCalled(write));
     });
   });

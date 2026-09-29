@@ -647,7 +647,6 @@ describe('appQueryService tests', () => {
       let verificationHelperStub;
       let fluxNetworkHelperStub;
       let fluxCommunicationUtilsStub;
-      let networkStateServiceStub;
       let holdingsService;
       const signed = (over = {}) => ({
         target: '10.0.0.9:16127', timestamp: Date.now(), pubKey: 'PUB', signature: 'SIG', ...over,
@@ -665,7 +664,6 @@ describe('appQueryService tests', () => {
           verifyTimestampInFluxBroadcast: sinon.stub().returns(true),
           BROADCAST_CLOCK_SKEW_MS: 120_000,
         };
-        networkStateServiceStub = { isReady: sinon.stub().returns(true) };
         holdingsService = proxyquire('../../ZelBack/src/services/appQuery/appQueryService', {
           config: asConfig(configStub),
           '../dbHelper': dbHelperStub,
@@ -677,7 +675,6 @@ describe('appQueryService tests', () => {
           '../verificationHelper': verificationHelperStub,
           '../fluxNetworkHelper': fluxNetworkHelperStub,
           '../fluxCommunicationUtils': fluxCommunicationUtilsStub,
-          '../networkStateService': networkStateServiceStub,
         });
         globalState.promotedFolderIds = new Set(['fluxa_a']);
         globalState.folderHoldings = new Map([['fluxa_a', { bytes: 5_821_604_997, newestModified: 200 }]]);
@@ -745,24 +742,6 @@ describe('appQueryService tests', () => {
         expect(result.holding, 'a peer 60s ahead is skew, not a forged expiry').to.deep.equal({
           fluxa_a: { bytes: 5_821_604_997, newestModified: 200 },
         });
-      });
-
-      // A node that cannot yet say who its peers are refuses, and says so at once. The
-      // open shape has no way to express it: `ready` there is syncthing's first pass,
-      // set by a different pass from this one, so this node can be syncthing-ready and
-      // still unable to identify anybody - and a peer would read that answer as this
-      // node holding nothing, which is a claim rather than a deferral.
-      it('refuses while the network state has not started, rather than waiting for it', async () => {
-        networkStateServiceStub.isReady.returns(false);
-        fluxNetworkHelperStub.verifySignedFluxnodeMessage.resolves(true);
-        messageHelperStub.createErrorMessage.returnsArg(0);
-        const res = { status: sinon.stub().returnsThis(), json: sinon.stub().returnsArg(0) };
-
-        await holdingsService.promotedFolderHoldings({ body: signed() }, res);
-
-        sinon.assert.calledWith(res.status, 503);
-        // and it never reached the list read that would have parked the request
-        sinon.assert.notCalled(fluxNetworkHelperStub.verifySignedFluxnodeMessage);
       });
 
       // The route is open, so the ORDER the checks run in is part of its contract: a
