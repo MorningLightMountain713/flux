@@ -226,11 +226,25 @@ function callerHost(req) {
  */
 async function heldGeneration(key) {
   const slash = key.indexOf('/');
-  const record = await messageStore.getGrantGenerationRecord(key.slice(0, slash), key.slice(slash + 1));
+  const { record, aside, ownership } = await messageStore.standingGeneration(key.slice(0, slash), key.slice(slash + 1));
+  const data = record?.data ?? null;
+  // The height the standing committee takes over at, which it drains from: a
+  // record the listed owner signed drains from its own named height, the
+  // re-roll's drain; the record a transfer names, or the registration's
+  // committee after a transfer naming none, from the height the transfer
+  // applied, at every transfer. No drain for an app that never changed hands
+  // and stands on its registration.
+  let height = null;
+  if (data) {
+    height = record.signer === ownership?.owner ? data.height : Math.max(data.height, ownership?.from ?? 0);
+  } else if (ownership?.transferred) {
+    height = ownership.from;
+  }
   return {
-    generation: record?.data?.generation ?? 0,
-    height: record?.data?.height ?? null,
-    record: record?.data ?? null,
+    generation: data?.generation ?? 0,
+    height,
+    record: data,
+    aside: Boolean(aside),
   };
 }
 
@@ -485,6 +499,11 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain,
   }
 
   const current = await heldGeneration(key);
+  // The spec names a record this cell does not hold: it serves nothing for
+  // the role until the record arrives, rather than the registration's world.
+  if (current.aside) {
+    return { member: false, code: 409, reason: 'the spec names a generation record this node does not hold' };
+  }
   // A release names the generation its row was written under and removes the
   // asker's own row, nothing else: a retired generation is served for it, on
   // that generation's committee, through the standing generation's drain,
@@ -493,7 +512,7 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain,
   if (generation !== current.generation && !retired) {
     return { member: false, code: 409, reason: `ask names generation ${generation}, current is ${current.generation}` };
   }
-  if (!retired && current.generation >= 1 && current.height !== null) {
+  if (!retired && current.height !== null) {
     const height = daemonStatus.isDaemonSynced()?.data?.height ?? 0;
     const drainUntil = current.height + generationDrainBlocks();
     if (height < drainUntil) {

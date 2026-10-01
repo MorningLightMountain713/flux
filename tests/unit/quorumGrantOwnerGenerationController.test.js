@@ -62,6 +62,7 @@ describe('quorumGrant ownerGenerationController', () => {
     sinon.stub(appsRepository, 'getGlobalAppInfoByIdentity').callsFake(async (identity) => (identity === IDENTITY ? { name: 'myapp', owner: OWNER } : null));
     sinon.stub(messageStore, 'standingGeneration').resolves({ record: null, aside: false });
     sinon.stub(messageStore, 'getGrantGenerationRecord').resolves(null);
+    sinon.stub(messageStore, 'heldGenerationRecords').resolves([]);
     sinon.stub(appHistory, 'ownerships').resolves([{ owner: OWNER, from: OWNED_FROM }]);
     sinon.stub(messageStore, 'getMasterleaseRecord').resolves(null);
     sinon.stub(messageStore, 'storeAppStateEvent').resolves();
@@ -205,8 +206,18 @@ describe('quorumGrant ownerGenerationController', () => {
       await ownerGenerationController.current(req, res);
       expect(res.statusCode).to.equal(200);
       expect(res.body.data).to.deep.equal({
-        identity: IDENTITY, role: 'founder', generation: 0, record: null,
+        identity: IDENTITY, role: 'founder', generation: 0, record: null, records: [],
       });
+    });
+
+    it('answers every record held beside the standing one, so a node asked at its row write keeps what it lacks', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: { generation: 2 } });
+      messageStore.heldGenerationRecords.resolves([{ data: { generation: 1 } }, { data: { generation: 2 } }]);
+      const res = fakeRes();
+      await ownerGenerationController.current({ params: { identity: IDENTITY, role: 'master' }, query: {} }, res);
+      expect(res.statusCode).to.equal(200);
+      expect(res.body.data.records).to.deep.equal([{ generation: 1 }, { generation: 2 }]);
+      sinon.assert.calledWith(messageStore.heldGenerationRecords, IDENTITY, 'master');
     });
 
     it('answers the stored record when one stands', async () => {

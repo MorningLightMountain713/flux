@@ -104,6 +104,14 @@ describe('quorumGrant grantorController', () => {
       { ip: '10.1.0.1:16127', runningSince: Date.now() - 24 * 60 * 60 * 1000 },
     ]);
     sinon.stub(messageStore, 'getGrantGenerationRecord').resolves(null);
+    // The grantor reads the standing record through standingGeneration; these
+    // tests drive it through the record they stub, never set aside, an app
+    // that never changed hands.
+    sinon.stub(messageStore, 'standingGeneration').callsFake(async (identity, role) => ({
+      record: await messageStore.getGrantGenerationRecord(identity, role),
+      aside: false,
+      ownership: { owner: 'owner', from: 1, transferred: false },
+    }));
     sinon.stub(foundingCommittee, 'selfOnFoundingCommittee').resolves({
       member: true, reason: null, quorum: 5,
     });
@@ -343,6 +351,42 @@ describe('quorumGrant grantorController', () => {
       await grantorController.release(fakeReq(signedAsk('release', { generation: 1 })), res);
       expect(res.statusCode, JSON.stringify(res.body)).to.equal(200);
       expect(grantRegister.release.calledOnce).to.equal(true);
+    });
+
+    // The sale. A transfer names the record the seller signed; every cell
+    // drains from the height the transfer applied before it serves the named
+    // committee, or the registration's when the transfer named none.
+    it('refuses every ask while the spec names a record this cell does not hold', async () => {
+      messageStore.standingGeneration.resolves({ record: null, aside: true, ownership: { owner: 'buyer', from: 200, transferred: true } });
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 0 })), res);
+      expect(res.statusCode).to.equal(409);
+      expect(res.body.data.message).to.contain('does not hold');
+      expect(grantRegister.prepare.called).to.equal(false);
+    });
+
+    it('the record a transfer names drains from the height the transfer applied, not its own', async () => {
+      // the seller's record at height 50, the sale applied at 200, this cell at 100
+      messageStore.standingGeneration.resolves({
+        record: { data: { generation: 2, height: 50 }, signer: 'seller' }, aside: false, ownership: { owner: 'buyer', from: 200, transferred: true },
+      });
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 2 })), res);
+      expect(res.statusCode).to.equal(409);
+      expect(res.body.data.message).to.contain('draining until height 220');
+    });
+
+    it('the registration\'s committee drains after a transfer naming nothing, and never for an app that never changed hands', async () => {
+      messageStore.standingGeneration.resolves({ record: null, aside: false, ownership: { owner: 'buyer', from: 200, transferred: true } });
+      const sold = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 0 })), sold);
+      expect(sold.statusCode).to.equal(409);
+      expect(sold.body.data.message).to.contain('draining until height 220');
+
+      messageStore.standingGeneration.resolves({ record: null, aside: false, ownership: { owner: 'owner', from: 200, transferred: false } });
+      const kept = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 0 })), kept);
+      expect(kept.statusCode, JSON.stringify(kept.body)).to.equal(200);
     });
 
     it('a retired renew stays refused', async () => {

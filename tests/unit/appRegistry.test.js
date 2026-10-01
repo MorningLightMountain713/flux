@@ -89,7 +89,7 @@ describe('appRegistry', () => {
         appliedFor: sinon.stub().resolves([]),
         latestApplied: sinon.stub().resolves(new Map()),
       },
-      '../appMessaging/messageStore': { processPendingUpdates: sinon.stub().resolves() },
+      '../appMessaging/messageStore': { processPendingUpdates: sinon.stub().resolves(), rejudgeGenerationRecords: sinon.stub().resolves() },
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
     };
     registry = proxyquire('../../ZelBack/src/services/appDatabase/appRegistry', stubs);
@@ -257,6 +257,21 @@ describe('appRegistry', () => {
       sinon.assert.calledOnce(stubs['./registryManager'].storeGlobalSpec);
       expect(stubs['./registryManager'].storeGlobalSpec.firstCall.args[0].hash).to.equal('u');
       sinon.assert.notCalled(stubs['../appMessaging/messageStore'].processPendingUpdates);
+    });
+
+    it('a row written with a new owner has its generation records judged again and asked for; the same owner does not', async () => {
+      const seller = await v8Spec({ name: 'MyApp' });
+      const buyer = await v8Spec({ name: 'MyApp', owner: '1F1tAaz5x1HUXrCNLbtMDqcw6o5GNn4xqX' });
+      messages = [message('t', buyer), message('u', seller)];
+      rows = [{ ...(await instantiatedSpec(seller, { hash: 'r', height: 980_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }];
+
+      await registry.applyDecided('myapp', [decision('u', { uuid: 'uuid-r' })]);
+      await new Promise((resolve) => { setImmediate(resolve); });
+      sinon.assert.notCalled(stubs['../appMessaging/messageStore'].rejudgeGenerationRecords);
+
+      await registry.applyDecided('myapp', [decision('t', { uuid: 'uuid-r' })]);
+      await new Promise((resolve) => { setImmediate(resolve); });
+      sinon.assert.calledOnceWithExactly(stubs['../appMessaging/messageStore'].rejudgeGenerationRecords, 'MyApp');
     });
 
     it('restamps a row whose message is unchanged without running any effect', async () => {

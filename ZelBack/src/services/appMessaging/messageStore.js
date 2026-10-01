@@ -17,6 +17,8 @@ const { getSpec, assertVersionActivated } = require('../utils/specLibs');
 const { ensureProvidersRegistered } = require('../utils/specCutover');
 const { getStateBeforeHeight } = require('../appDatabase/appSpecHistory');
 const appHistory = require('../appDecisions/appHistory');
+const serviceHelper = require('../serviceHelper');
+const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const globalState = require('../utils/globalState');
 const {
   globalAppsTempMessages,
@@ -1101,11 +1103,17 @@ async function handleGrantGenerationEvent({ message, envelope }) {
  * record); `aside` is true when the spec names a record this node lacks, and
  * the node serves nothing for the role until it arrives.
  *
- * @returns {Promise<{record: ?object, aside: boolean}>}
+ * `ownership` is who holds the app and from which height, and whether the app
+ * has changed hands: what the named committee's drain is read from.
+ *
+ * @returns {Promise<{record: ?object, aside: boolean, ownership: ?{owner: string, from: number, transferred: boolean}}>}
  */
 async function standingGeneration(identity, role) {
   const app = await appsRepository.getGlobalAppInfoByIdentity(identity);
-  if (!app) return { record: null, aside: false };
+  if (!app) return { record: null, aside: false, ownership: null };
+  const owners = await appHistory.ownerships(app.name);
+  const listed = owners.length ? owners[owners.length - 1] : null;
+  const ownership = listed ? { owner: listed.owner, from: listed.from, transferred: owners.length > 1 } : null;
   const grants = app.grants ?? app.spec?.grants ?? null;
   const namedHash = grants && typeof grants[role] === 'string' ? grants[role] : null;
   const db = dbHelper.databaseConnection();
@@ -1120,12 +1128,74 @@ async function standingGeneration(identity, role) {
     { identity, hash: row.hash },
     { appIdentity: identity, listedOwnerSigned: row.signer === app.owner, namedHash },
   ));
-  if (valid.length === 0) return { record: null, aside: namedHash !== null };
+  if (valid.length === 0) return { record: null, aside: namedHash !== null, ownership };
   let record = valid[0];
   for (const row of valid.slice(1)) {
     if (outranks(generationRecordRank(row.data), generationRecordRank(record.data))) record = row;
   }
-  return { record, aside: false };
+  return { record, aside: false, ownership };
+}
+
+/** Every generation record this node holds for one app role. */
+async function heldGenerationRecords(identity, role) {
+  const db = dbHelper.databaseConnection();
+  const database = db.db(config.get('database.appsglobal.database'));
+  return dbHelper.findInDatabase(
+    database, globalAppStateEvents,
+    { type: APP_STATE_EVENT_TYPES.GRANTGENERATION, identity, role },
+    { projection: { _id: 0 } },
+  );
+}
+
+const GENERATION_ROLES = ['master', 'founder'];
+
+/**
+ * The row of an app was written with a new owner: what this node stands on
+ * for each role follows from what it holds and the new row. It asks a sample
+ * of nodes for every record they hold for the app, keeps what it lacked, and
+ * tells the holder's listeners the standing generation of each role, so a
+ * running primary steps across to the named committee as it does at a
+ * re-roll.
+ */
+async function rejudgeGenerationRecords(identity) {
+  await askPeersForGenerationRecords(identity);
+  for (const role of GENERATION_ROLES) {
+    // eslint-disable-next-line no-await-in-loop
+    const { record } = await standingGeneration(identity, role);
+    notifyGrantGenerationListeners({ identity, role, generation: record?.data?.generation ?? 0 });
+  }
+}
+
+const RECORD_ASK_PEERS = 8;
+const RECORD_ASK_TIMEOUT_MS = 5000;
+
+/**
+ * Ask a sample of listed nodes for every generation record they hold for an
+ * app, and keep each one this node can validate. A peer answers with its
+ * history, not only its standing record, so a peer behind the chain still
+ * serves the one the new row names.
+ */
+async function askPeersForGenerationRecords(identity) {
+  const peers = await networkStateService.getRandomSocketAddressSample(RECORD_ASK_PEERS, {});
+  await Promise.all((peers || []).map(async (peer) => {
+    for (const role of GENERATION_ROLES) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const response = await serviceHelper.axiosGet(
+          `http://${extractIp(peer)}:${extractPort(peer)}/apps/grantgeneration/${encodeURIComponent(identity)}/${role}`,
+          { timeout: RECORD_ASK_TIMEOUT_MS },
+        );
+        const records = response?.data?.data?.records;
+        if (!Array.isArray(records)) continue;
+        for (const record of records) {
+          // eslint-disable-next-line no-await-in-loop
+          await handleGrantGenerationEvent({ message: record, envelope: null });
+        }
+      } catch (error) {
+        log.warn(`grantgeneration ask: ${peer} ${role} - ${error.message ?? error}`);
+      }
+    }
+  }));
 }
 
 /**
@@ -1522,6 +1592,9 @@ module.exports = {
   getMasterleaseRecordsByGrantee,
   getGrantGenerationRecord,
   standingGeneration,
+  heldGenerationRecords,
+  rejudgeGenerationRecords,
+  askPeersForGenerationRecords,
   onGrantGenerationRecord,
   LOCAL_ANNOUNCER,
 };
