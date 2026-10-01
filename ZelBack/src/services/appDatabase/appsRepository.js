@@ -1611,15 +1611,24 @@ async function listLiveV7Secrets() {
   return results;
 }
 
-async function listHistoricalV7Secrets() {
+async function listHistoricalV7Secrets(before = null) {
   await getSpec();
   const { deserializeSpec } = await getSpecBackend();
+  const query = {
+    'appSpecifications.version': 7,
+    'appSpecifications.nodes': { $exists: true, $ne: [] },
+  };
+  // Mined before a chain position: what the decider reads, so that a message
+  // decided late on one node and early on another meets the same uses.
+  if (before) {
+    query.$or = [
+      { height: { $lt: before.height } },
+      ...(Number.isInteger(before.txIndex) ? [{ height: before.height, txIndex: { $lt: before.txIndex } }] : []),
+    ];
+  }
   const docs = await dbHelper.findInDatabase(
     globalDb(), globalAppsMessages,
-    {
-      'appSpecifications.version': 7,
-      'appSpecifications.nodes': { $exists: true, $ne: [] },
-    },
+    query,
     { projection: { _id: 0, appSpecifications: 1 } },
   );
   const results = [];
@@ -1715,4 +1724,5 @@ module.exports = {
   // secrets
   listLiveV7Secrets,
   listHistoricalV7Secrets,
+  listHistoricalV7SecretsBefore: (position) => listHistoricalV7Secrets(position),
 };

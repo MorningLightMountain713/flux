@@ -6,6 +6,7 @@ const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const pricingRegime = require('../pricing/pricingRegime');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const { lookupBlockTime } = require('../appMessaging/confirmedMessageStore');
+const appsRepository = require('../appDatabase/appsRepository');
 
 /**
  * The chain-state answers the decision rule asks for, from this node's own
@@ -17,7 +18,7 @@ const { lookupBlockTime } = require('../appMessaging/confirmedMessageStore');
  */
 async function createJudge() {
   const {
-    UpdatePolicy, ValidationError, appUuid, registrationIdentity,
+    UpdatePolicy, ValidationError, appUuid, registrationIdentity, contentInTheClear, v7SecretsRefusal,
   } = await getSpec();
   const { authorizeAppEvent, verifierFromRecovered } = await getSpecBackend();
   const blockTimes = new Map();
@@ -61,6 +62,47 @@ async function createJudge() {
     mintUuid: appUuid,
 
     identityFor: registrationIdentity,
+
+    /** Whether a readable v9 spec carries content, which only the encrypted path may. */
+    contentInTheClear(spec) {
+      return contentInTheClear(spec).length > 0;
+    },
+
+    /**
+     * Why a message's component secrets are refused, or null: secrets another
+     * owner used in a message mined before this one, unless the app's own
+     * applied messages carry them. Read in chain order, so every node decides
+     * the same whenever it decides.
+     */
+    async secretsRefusal(spec, { name, record, isRegistration, ownUses }) {
+      const components = spec.getComponentSecrets();
+      if (components.length === 0) return null;
+      const earlier = await appsRepository.listHistoricalV7SecretsBefore(record);
+      for (const { componentName, secrets } of components) {
+        const refusal = v7SecretsRefusal(
+          { secrets, appName: name, owner: spec.owner, componentName, isRegistration },
+          { live: ownUses, earlier },
+        );
+        if (refusal) return refusal;
+      }
+      return null;
+    },
+
+    /** The time of a mined block, for a term that ended at a height. */
+    async blockTimeAtHeight(height) {
+      if (!blockTimes.has(height)) {
+        const time = await lookupBlockTime(height);
+        if (!Number.isFinite(time)) throw new Error(`no block time for height ${height}`);
+        blockTimes.set(height, time);
+      }
+      return blockTimes.get(height);
+    },
+
+    /** The height the name hold is judged from, null while not scheduled. */
+    nameReservedActivation() {
+      const height = config.get('fluxapps.nameReservedActivationHeight');
+      return Number.isInteger(height) && height > 0 ? height : null;
+    },
 
     /** The confirming block's time of an entry, from its record or the daemon. */
     async blockTime(entry) {
