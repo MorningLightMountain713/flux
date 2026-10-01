@@ -100,7 +100,7 @@ async function verifyManifest(manifest, ctx, deps = {}) {
   const { owner } = ctx;
   let { spec } = ctx;
   const { verify = signatureVerifier.verifySignature } = deps;
-  const { assertValidContentManifest } = await getSpec();
+  const { assertValidContentManifest, contentManifestHash, ownerSignedIsValid } = await getSpec();
 
   // A spec read from the registry is the sealed EncryptedSpec for an encrypted app
   // (all content-slot apps are encrypted), whose declared slots aren't visible while
@@ -135,16 +135,22 @@ async function verifyManifest(manifest, ctx, deps = {}) {
     throw new Error('contentSlot: manifest is for another registration of this app name');
   }
 
+  // A manifest is valid when the listed owner signed it, or the listed spec
+  // names it: a transfer names the manifest the outgoing owner signed, and it
+  // stands under the incoming owner until they sign one. The slots it lists
+  // are no part of its validity: one the spec does not declare maps to no
+  // mount, and no blob is fetched for it.
   const signed = await canonicalManifest(manifest);
-  if (!await verify(signed, owner, manifest.ownerSignature)) {
-    throw new Error('contentSlot: invalid owner signature on manifest');
-  }
-
-  const declared = specSlotNames(spec);
-  for (const name of Object.keys(manifest.slots)) {
-    if (!declared.has(name)) {
-      throw new Error(`contentSlot: manifest slot "${name}" is not declared in the spec`);
-    }
+  const listedOwnerSigned = Boolean(await verify(signed, owner, manifest.ownerSignature));
+  const namedHash = (spec.content && spec.content.manifest) || null;
+  const valid = ownerSignedIsValid(
+    { identity: manifest.identity, hash: contentManifestHash(manifest) },
+    { appIdentity: ctx.identity, listedOwnerSigned, namedHash },
+  );
+  if (!valid) {
+    throw new Error(namedHash
+      ? 'contentSlot: manifest is neither signed by the listed owner nor the one the spec names'
+      : 'contentSlot: invalid owner signature on manifest');
   }
 }
 

@@ -195,6 +195,7 @@ function manifest(overrides = {}) {
     appName: APP,
     identity: IDENTITY,
     version: 2,
+    ownedFrom: 2_400_000,
     slots: { 'app-config': { hash: CFG_HASH } },
     rollout: { strategy: 'immediate' },
     timestamp: NOW_MS, // unix epoch ms
@@ -286,12 +287,26 @@ describe('contentSlotService', () => {
       );
     });
 
-    it('rejects a slot the spec does not declare', async () => {
+    it('takes a manifest listing a slot the spec does not declare: the slot is ignored, not refused', async () => {
       const { service } = load();
       const otherSpec = cleartextSpec(webWith(slotMount('something-else')));
+      await service.verifyManifest(manifest(), { owner: OWNER, spec: otherSpec, identity: IDENTITY }, { verify: () => true });
+    });
+
+    it('takes a manifest the spec names though the listed owner did not sign it, and refuses one it does not name', async () => {
+      const { service } = load();
+      const named = flux.FluxAppSpecV9.fromSubmission({
+        ...V9_SUBMISSION, name: APP, components: webWith(slotMount('app-config')), content: { manifest: flux.contentManifestHash(manifest()) },
+      }, { encrypted: true });
+      await service.verifyManifest(manifest(), { owner: OWNER, spec: named, identity: IDENTITY }, { verify: () => false });
       await expectReject(
-        service.verifyManifest(manifest(), { owner: OWNER, spec: otherSpec, identity: IDENTITY }, { verify: () => true }),
-        /not declared in the spec/,
+        service.verifyManifest(manifest({ version: 3 }), { owner: OWNER, spec: named, identity: IDENTITY }, { verify: () => false }),
+        /neither signed by the listed owner nor the one the spec names/,
+      );
+      // the named one is refused all the same for another registration of the name
+      await expectReject(
+        service.verifyManifest(manifest({ identity: `b${'c'.repeat(51)}a` }), { owner: OWNER, spec: named, identity: IDENTITY }, { verify: () => false }),
+        /another registration/,
       );
     });
 
@@ -599,6 +614,7 @@ describe('contentSlotService', () => {
         appName: APP,
         identity: IDENTITY,
         version: 4,
+        ownedFrom: 2_400_000,
         slots: sealedSlots({ 'app-config': { hash: CFG_HASH } }),
         rollout: { strategy: 'immediate' },
         timestamp: NOW_MS,
