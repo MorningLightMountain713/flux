@@ -1047,7 +1047,7 @@ describe('registryManager tests', () => {
       expect(result.spec).to.have.all.keys(
         'version', 'name', 'description', 'owner', 'instances', 'ttl', 'network',
         'placement', 'assignment', 'components', 'contacts', 'marketplace',
-        'telemetry', 'referral', 'activation', 'dependencies',
+        'telemetry', 'content', 'grants', 'referral', 'activation', 'dependencies',
       );
       // Warnings are the owner's review list, not errors.
       expect(result.warnings.join(' ')).to.include('TCP only');
