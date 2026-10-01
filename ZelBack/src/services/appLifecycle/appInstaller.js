@@ -376,7 +376,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
         if (hasBlobs) {
           await contentBlobService.provisionContentBlobs(
             deployment,
-            { appName, fluxID: instantiated.owner, peers },
+            { appName, peers },
             { writeFile: writeInjectedContent, peerFetch: contentBlobService.fetchBlobFromPeer },
           );
         }

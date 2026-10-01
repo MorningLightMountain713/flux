@@ -267,7 +267,7 @@ async function installComponent(component, options = {}) {
     }
     status(`Provisioning backend TLS certificate for ${id}...`);
     try {
-      await backendTlsService.provisionCert(appName, tlsPaths);
+      await backendTlsService.provisionCert(appName, component.identity, tlsPaths);
     } catch (error) {
       throw Object.assign(
         new Error(`Could not provision the backend-TLS certificate for ${id}: ${error.message}`),

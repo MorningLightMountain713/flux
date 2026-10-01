@@ -15,7 +15,7 @@ describe('fluxDriveClient', () => {
       const framed = Buffer.from('cipher');
 
       await uploadBlob(framed, {
-        locator: 'loc', appName: 'app', timestamp: 123, arcaneSig: 'asig', ownerSig: 'osig', source: 'blob',
+        locator: 'loc', appName: 'app', identity: 'bident', timestamp: 123, arcaneSig: 'asig', ownerSig: 'osig', source: 'blob',
       }, { http, baseUrl: BASE });
 
       expect(calls.length).to.equal(1);
@@ -25,6 +25,7 @@ describe('fluxDriveClient', () => {
         'Content-Type': 'application/octet-stream',
         'X-Flux-Locator': 'loc',
         'X-Flux-AppName': 'app',
+        'X-Flux-Identity': 'bident',
         'X-Flux-Timestamp': '123',
         'X-Flux-Arcane-Sig': 'asig',
         'X-Flux-Owner-Sig': 'osig',
@@ -102,8 +103,19 @@ describe('fluxDriveClient', () => {
       }, { http, baseUrl: BASE });
       expect(calls.length).to.equal(1);
       expect(calls[0].url).to.equal(`${BASE}/api/v1/manifest/my-app`);
-      expect(calls[0].body).to.deep.include({ version: 3, timestamp: 123, arcaneSig: 'asig', ownerSig: 'osig' });
+      expect(calls[0].body).to.deep.include({
+        version: 3, timestamp: 123, arcaneSig: 'asig', ownerSig: 'osig', pendingMessageHash: null,
+      });
       expect(calls[0].body.manifest).to.deep.equal({ version: 3, slots: { sealed: {} } });
+    });
+
+    it('names the message the manifest is carried by', async () => {
+      const calls = [];
+      const http = { put: async (url, body) => { calls.push({ url, body }); return { status: 200 }; } };
+      await putManifest('my-app', {
+        version: 3, timestamp: 123, arcaneSig: 'asig', ownerSig: 'osig', manifest: {}, pendingMessageHash: 'f'.repeat(64),
+      }, { http, baseUrl: BASE });
+      expect(calls[0].body.pendingMessageHash).to.equal('f'.repeat(64));
     });
 
     it('url-encodes the appName', async () => {
@@ -124,8 +136,17 @@ describe('fluxDriveClient', () => {
       expect(calls.length).to.equal(1);
       expect(calls[0].url).to.equal(`${BASE}/api/v1/blob/reconcile`);
       expect(calls[0].body).to.deep.equal({
-        appName: 'my-app', source: 'slot', version: 4, arcaneSig: 'asig', ownerSig: 'osig', liveLocators: ['l1', 'l2'],
+        appName: 'my-app', source: 'slot', version: 4, arcaneSig: 'asig', ownerSig: 'osig', liveLocators: ['l1', 'l2'], pendingMessageHash: null,
       });
+    });
+
+    it('names the message the reconcile is carried by', async () => {
+      const calls = [];
+      const http = { post: async (url, body) => { calls.push({ url, body }); return { status: 200 }; } };
+      await reconcile('my-app', {
+        source: 'slot', version: 4, arcaneSig: 'asig', ownerSig: 'osig', liveLocators: ['l1'], pendingMessageHash: 'f'.repeat(64),
+      }, { http, baseUrl: BASE });
+      expect(calls[0].body.pendingMessageHash).to.equal('f'.repeat(64));
     });
 
     it('throws when the base URL is not configured', async () => {

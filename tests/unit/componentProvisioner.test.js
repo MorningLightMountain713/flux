@@ -12,6 +12,8 @@ describe('componentProvisioner tests', () => {
   let allowPortStub;
   let mapUpnpPortStub;
   let provisionCertStub;
+  // The app's identity, carried by every component the library resolves.
+  const IDENTITY = `b${'a'.repeat(52)}`;
 
   // installComponent isolated behind its provisioning deps. noCallThru + every
   // require stubbed, so nothing touches a real service.
@@ -56,6 +58,7 @@ describe('componentProvisioner tests', () => {
     return {
       name: 'web',
       appName: 'syncholdapp',
+      identity: IDENTITY,
       identifier: 'web_syncholdapp',
       image: 'nginx:latest',
       imageAuth: null,
@@ -217,8 +220,10 @@ describe('componentProvisioner tests', () => {
       await provisioner.installComponent(makeTlsComponent(), { owner: 'owner1', createVolumes: true });
 
       expect(provisionCertStub.calledOnce).to.be.true;
-      const [appName, tlsPaths] = provisionCertStub.firstCall.args;
+      const [appName, identity, tlsPaths] = provisionCertStub.firstCall.args;
       expect(appName).to.equal('syncholdapp');
+      // the CA is the app's, keyed by its identity
+      expect(identity).to.equal(IDENTITY);
       // exactly what the domain type reported - not a path the runtime rebuilt
       expect(tlsPaths).to.deep.equal(makeTlsComponent().backendTlsPaths());
       expect(provisionCertStub.calledBefore(appDockerCreateStub), 'cert written before create').to.be.true;

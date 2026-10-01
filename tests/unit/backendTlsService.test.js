@@ -11,6 +11,9 @@ const { execFileSync } = require('node:child_process');
 const benchmarkService = require('../../ZelBack/src/services/benchmarkService');
 const backendTlsService = require('../../ZelBack/src/services/appLifecycle/backendTlsService');
 
+// The app's identity: what the per-app CA is keyed by.
+const IDENTITY = `b${'a'.repeat(52)}`;
+
 // What DeploymentComponent.backendTlsPaths() hands the service. The service never
 // builds these itself - flux-spec derives them from the reserved prefix that its
 // validator protects, so there is only ever one copy of the layout.
@@ -48,15 +51,26 @@ describe('backendTlsService.provisionCert', () => {
     await fsp.rm(dir, { recursive: true, force: true });
   });
 
-  it('generates an Ed25519 CSR (CN=appName), signs it, and writes cert+key atomically', async () => {
+  it('refuses to issue a cert for an app with no identity, before reaching the signer', async () => {
+    let error;
+    try {
+      await backendTlsService.provisionCert('myapp', null, tlsPaths);
+    } catch (e) { error = e; }
+    expect(error.message).to.include('identity');
+    expect(signStub.called).to.equal(false);
+    expect(fs.existsSync(tlsPaths.certPath)).to.equal(false);
+  });
+
+  it('generates an Ed25519 CSR (CN=appName), signs it under the identity\'s CA, and writes cert+key atomically', async () => {
     const LEAF = '-----BEGIN CERTIFICATE-----\nLEAF\n-----END CERTIFICATE-----\n';
-    signStub.callsFake(async ({ csr, appName }) => {
+    signStub.callsFake(async ({ csr, appName, identity }) => {
       expect(appName).to.equal('myapp');
+      expect(identity).to.equal(IDENTITY);
       expect(csr).to.include('BEGIN CERTIFICATE REQUEST');
       return signerReturns(LEAF);
     });
 
-    await backendTlsService.provisionCert('myapp', tlsPaths);
+    await backendTlsService.provisionCert('myapp', IDENTITY, tlsPaths);
 
     expect(fs.readFileSync(tlsPaths.certPath, 'utf8')).to.equal(LEAF);
     const keyPem = fs.readFileSync(tlsPaths.keyPath, 'utf8');
@@ -75,7 +89,7 @@ describe('backendTlsService.provisionCert', () => {
     signStub.resolves(signerReturns('LEAF\n'));
     const odd = tlsPathsFor(path.join(dir, 'somewhere', 'else'));
 
-    await backendTlsService.provisionCert('myapp', odd);
+    await backendTlsService.provisionCert('myapp', IDENTITY, odd);
 
     expect(fs.readFileSync(odd.certPath, 'utf8')).to.equal('LEAF\n');
     expect(fs.existsSync(tlsPaths.dir), 'nothing written to a self-derived path').to.equal(false);
@@ -87,7 +101,7 @@ describe('backendTlsService.provisionCert', () => {
 
     let threw = false;
     try {
-      await backendTlsService.provisionCert('myapp', tlsPaths);
+      await backendTlsService.provisionCert('myapp', IDENTITY, tlsPaths);
     } catch (e) {
       threw = true;
     }
@@ -104,7 +118,7 @@ describe('backendTlsService.provisionCert', () => {
 
     let threw = false;
     try {
-      await backendTlsService.provisionCert('myapp', tlsPaths);
+      await backendTlsService.provisionCert('myapp', IDENTITY, tlsPaths);
     } catch (e) {
       threw = true;
     }
@@ -114,11 +128,11 @@ describe('backendTlsService.provisionCert', () => {
 
   it('replaces an existing cert in place, so a renewal is a plain overwrite', async () => {
     signStub.resolves(signerReturns('OLD\n'));
-    await backendTlsService.provisionCert('myapp', tlsPaths);
+    await backendTlsService.provisionCert('myapp', IDENTITY, tlsPaths);
     const oldKey = fs.readFileSync(tlsPaths.keyPath, 'utf8');
 
     signStub.resolves(signerReturns('NEW\n'));
-    await backendTlsService.provisionCert('myapp', tlsPaths);
+    await backendTlsService.provisionCert('myapp', IDENTITY, tlsPaths);
 
     expect(fs.readFileSync(tlsPaths.certPath, 'utf8')).to.equal('NEW\n');
     // a renewal is a fresh keypair, never a re-signing of the old one

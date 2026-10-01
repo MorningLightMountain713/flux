@@ -10,7 +10,7 @@ import {
 import {
   TransportEnvelope, buildTransportAad, buildContentTransportAad, buildSignaturePayloadV2,
   FluxAppSpecV9, canonicalContentManifest, TRANSPORT_ALGORITHM, TRANSPORT_INFO, TRANSPORT_EXPORT_LABEL,
-  appUuid, appIdentityFromUuid,
+  appUuid, appIdentityFromUuid, blobUploadDigest, manifestPutDigest, slotReconcileDigest,
 } from '@runonflux/flux-spec';
 import { computeMessageHashV2 } from '@runonflux/flux-spec-backend';
 import { signBtcMessage } from '../auth.js';
@@ -160,27 +160,33 @@ export async function buildSignedRegistration({
   return { specField, contentHash, timestamp };
 }
 
+// The hash of a signed registration or update message, as every node computes it
+// and as a FluxDrive write carried by the message names it.
+export function registrationMessageHash(specField) {
+  return computeMessageHashV2(
+    specField.type, specField.version, specField.contentHash, specField.timestamp, specField.extend, specField.signature,
+  );
+}
+
 // The identity of the app a signed registration makes: the library's uuid of the
 // name and the registration message's hash — what the owner signs its first
 // content manifest for, before the registration is paid.
 export function registrationIdentity(specField, name) {
-  const hash = computeMessageHashV2(
-    specField.type, specField.version, specField.contentHash, specField.timestamp, specField.extend, specField.signature,
-  );
-  return appIdentityFromUuid(appUuid(name, hash));
+  return appIdentityFromUuid(appUuid(name, registrationMessageHash(specField)));
 }
 
-// Per-blob owner signatures: the dual-sig owner half over sha256(locator:appName:timestamp),
-// keyed by the blob's plaintext contentHash. `locatorFor(hash)` derives the locator the
-// node/FluxDrive key on (fleet-deterministic, from the benchmark channel).
+// Per-blob owner signatures: the dual-sig owner half over the library's blob
+// upload text (`locator:identity:timestamp`), keyed by the blob's plaintext
+// contentHash. `locatorFor(hash)` derives the locator the node/FluxDrive key on
+// (fleet-deterministic, from the benchmark channel).
 export async function buildOwnerSigs({
-  hashes, appName, ownerKey, timestamp, locatorFor,
+  hashes, identity, ownerKey, timestamp, locatorFor,
 }) {
   const out = {};
   for (const hash of hashes) {
     const locator = await locatorFor(hash);
     // eslint-disable-next-line no-await-in-loop
-    out[hash] = { sig: await signBtcMessage(sha256Hex(`${locator}:${appName}:${timestamp}`), ownerKey.privkey), timestamp };
+    out[hash] = { sig: await signBtcMessage(blobUploadDigest({ locator, identity, timestamp }), ownerKey.privkey), timestamp };
   }
   return out;
 }
@@ -222,16 +228,25 @@ export async function buildOwnerSignedManifest({
   return manifest;
 }
 
-// The FluxDrive manifest-PUT dual-sig owner half: sha256(appName:version:timestamp).
+// The FluxDrive manifest-PUT dual-sig owner half, over the library's text
+// (`identity:version:timestamp:pendingMessageHash`). A manifest that rides a spec
+// message names that message's hash; a content update with no spec change names
+// none.
 export async function manifestPutSig({
-  appName, version, timestamp, ownerKey,
+  identity, version, timestamp, pendingMessageHash = null, ownerKey,
 }) {
-  return signBtcMessage(sha256Hex(`${appName}:${version}:${timestamp}`), ownerKey.privkey);
+  return signBtcMessage(manifestPutDigest({
+    identity, version, timestamp, pendingMessageHash,
+  }), ownerKey.privkey);
 }
 
-// The FluxDrive reconcile dual-sig owner half: sha256(appName:source:version).
+// The FluxDrive reconcile dual-sig owner half, over the library's text
+// (`identity:source:version:keptLocatorsHash:pendingMessageHash`): the kept
+// locators are bound by their hash, so the node can send no other list.
 export async function reconcileSig({
-  appName, source, version, ownerKey,
+  identity, source, version, keptLocators, pendingMessageHash = null, ownerKey,
 }) {
-  return signBtcMessage(sha256Hex(`${appName}:${source}:${version}`), ownerKey.privkey);
+  return signBtcMessage(slotReconcileDigest({
+    identity, source, version, keptLocators, pendingMessageHash,
+  }), ownerKey.privkey);
 }

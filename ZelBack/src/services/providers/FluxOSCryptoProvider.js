@@ -25,17 +25,27 @@ function assertAad(aad, operation) {
   }
 }
 
-async function create(appName, owner) {
+/**
+ * A provider sealing under one of the benchmark channel's two app keys. The key
+ * is named by the fields it is derived from, and the channel refuses a request
+ * naming both:
+ *  - `{ appName, fluxID }`: the app-secret key, for an encrypted spec, which is
+ *    sealed for the owner it names;
+ *  - `{ identity }`: the content key, for a manifest's sealed slots, which stay
+ *    the app's across an ownership transfer.
+ *
+ * @param {object} keyFields
+ * @returns {Promise<import('@runonflux/flux-spec-backend').CryptoProvider>}
+ */
+async function build(keyFields) {
   const { CryptoProvider: Base } = await getSpecBackend();
 
   class FluxOSCryptoProvider extends Base {
-    #appName;
-    #owner;
+    #keyFields;
 
-    constructor(app, own) {
+    constructor(fields) {
       super();
-      this.#appName = app;
-      this.#owner = own;
+      this.#keyFields = fields;
     }
 
     async encrypt(plaintext, aad) {
@@ -45,8 +55,7 @@ async function create(appName, owner) {
       // that knows nothing about which call site produced it.
       assertAad(aad, 'encrypt');
       const params = {
-        appName: this.#appName,
-        fluxID: this.#owner,
+        ...this.#keyFields,
         message: plaintext.toString('base64'),
         aad: aad.toString('base64'),
       };
@@ -74,8 +83,7 @@ async function create(appName, owner) {
     async decrypt(encrypted, aad) {
       assertAad(aad, 'decrypt');
       const params = {
-        appName: this.#appName,
-        fluxID: this.#owner,
+        ...this.#keyFields,
         ciphertext: encrypted.ciphertext,
         nonce: encrypted.nonce,
         tag: encrypted.tag,
@@ -98,9 +106,23 @@ async function create(appName, owner) {
     }
   }
 
-  return new FluxOSCryptoProvider(appName, owner);
+  return new FluxOSCryptoProvider(keyFields);
+}
+
+/** The provider for an app's encrypted spec, sealed for the owner it names. */
+async function create(appName, owner) {
+  return build({ appName, fluxID: owner });
+}
+
+/** The provider for an app's content, keyed by its identity alone. */
+async function forIdentity(identity) {
+  if (typeof identity !== 'string' || !identity) {
+    throw new Error('FluxOSCryptoProvider.forIdentity: content is sealed under the app identity, which is missing');
+  }
+  return build({ identity });
 }
 
 module.exports = {
   create,
+  forIdentity,
 };

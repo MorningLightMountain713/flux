@@ -202,4 +202,43 @@ describe('FluxOSCryptoProvider', () => {
       }, AAD)).to.be.rejectedWith(/unseal RPC rejected: DECRYPT_FAILED/);
     });
   });
+
+  describe('forIdentity()', () => {
+    const IDENTITY = `b${'a'.repeat(52)}`;
+    const sealed = {
+      status: 'success',
+      data: {
+        status: 'ok', algorithm: 'AES-256-GCM', ciphertext: 'Y2lwaGVy', nonce: 'bm9uY2U=', tag: 'dGFn',
+      },
+    };
+
+    it('names the content key by identity alone, with no name and no owner, on seal and unseal', async () => {
+      benchmarkServiceStub.seal.resolves(sealed);
+      benchmarkServiceStub.unseal.resolves({ status: 'success', data: { status: 'ok', message: 'cGxhaW4=' } });
+      const provider = await fluxOSCryptoProvider.forIdentity(IDENTITY);
+
+      await provider.encrypt(Buffer.from('plain'), AAD);
+      await provider.decrypt({ ciphertext: 'x', nonce: 'y', tag: 'z' }, AAD);
+
+      for (const params of [benchmarkServiceStub.seal.firstCall.args[0], benchmarkServiceStub.unseal.firstCall.args[0]]) {
+        expect(params.identity).to.equal(IDENTITY);
+        expect(params).to.not.have.property('appName');
+        expect(params).to.not.have.property('fluxID');
+      }
+    });
+
+    it('refuses to build a provider with no identity', async () => {
+      await expect(fluxOSCryptoProvider.forIdentity(null)).to.be.rejectedWith(/identity/);
+      await expect(fluxOSCryptoProvider.forIdentity('')).to.be.rejectedWith(/identity/);
+    });
+
+    it('keeps the spec\'s provider on the name and owner, with no identity', async () => {
+      benchmarkServiceStub.seal.resolves(sealed);
+      const provider = await fluxOSCryptoProvider.create('TestApp', '1abc');
+      await provider.encrypt(Buffer.from('plain'), AAD);
+      const params = benchmarkServiceStub.seal.firstCall.args[0];
+      expect(params).to.include({ appName: 'TestApp', fluxID: '1abc' });
+      expect(params).to.not.have.property('identity');
+    });
+  });
 });

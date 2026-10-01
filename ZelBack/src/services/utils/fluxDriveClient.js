@@ -14,10 +14,12 @@ function blobApiBase(override) {
 }
 
 /**
- * Dual-signature upload of framed ciphertext (nonce || ciphertext || tag).
+ * Dual-signature upload of framed ciphertext (nonce || ciphertext || tag). Both
+ * signatures are over `locator:identity:timestamp`; the name is what FluxDrive
+ * looks the app up by, the identity what it keeps the blob under.
  *
  * @param {Buffer} framed - encrypted blob bytes
- * @param {object} hdr - { locator, appName, timestamp, arcaneSig, ownerSig, source }
+ * @param {object} hdr - { locator, appName, identity, timestamp, arcaneSig, ownerSig, source }
  * @param {object} [deps] - { http, baseUrl } for injection
  */
 async function uploadBlob(framed, hdr, deps = {}) {
@@ -28,6 +30,7 @@ async function uploadBlob(framed, hdr, deps = {}) {
       'Content-Type': 'application/octet-stream',
       'X-Flux-Locator': hdr.locator,
       'X-Flux-AppName': hdr.appName,
+      'X-Flux-Identity': hdr.identity,
       'X-Flux-Timestamp': String(hdr.timestamp),
       'X-Flux-Arcane-Sig': hdr.arcaneSig,
       'X-Flux-Owner-Sig': hdr.ownerSig,
@@ -89,15 +92,17 @@ async function blobExists(locator, deps = {}) {
 }
 
 /**
- * PUT the latest owner-signed manifest to the FluxDrive backstop. Body is JSON
- * `{ version, timestamp, arcaneSig, ownerSig, manifest }` — FluxDrive authorizes the
- * operational dual-signature over sha256(appName:version:timestamp) (the node's
- * arcane sig + the owner PUT-sig produced by the frontend at submission), enforces a
- * version floor per (appName, owner, manifest.identity), refuses a live app's manifest
- * for another identity, and stores the (sealed-slots) manifest verbatim.
+ * PUT an owner-signed manifest to FluxDrive. Body is JSON `{ version, timestamp,
+ * arcaneSig, ownerSig, manifest, pendingMessageHash }`. FluxDrive verifies the
+ * dual signature over `identity:version:timestamp:pendingMessageHash` (the
+ * identity is the manifest's own), keeps one row per name, owner and identity
+ * behind a version floor, and refuses a listed app's manifest for another
+ * identity. A manifest naming a message hash is held until the nodes answer
+ * that the message applied; one naming none is stored at once. The manifest for
+ * a name FluxDrive does not list must name the registration that lists it.
  *
  * @param {string} appName
- * @param {object} body - { version, timestamp, arcaneSig, ownerSig, manifest }
+ * @param {object} body - { version, timestamp, arcaneSig, ownerSig, manifest, pendingMessageHash? }
  * @param {object} [deps] - { http, baseUrl }
  */
 async function putManifest(appName, body, deps = {}) {
@@ -111,21 +116,24 @@ async function putManifest(appName, body, deps = {}) {
       arcaneSig: body.arcaneSig,
       ownerSig: body.ownerSig,
       manifest: body.manifest,
+      pendingMessageHash: body.pendingMessageHash ?? null,
     },
     { timeout: 30_000 },
   );
 }
 
 /**
- * Push a slot app's live locator set to FluxDrive's reconcile endpoint (the GC
- * update-case, CONTENT_BLOBS §10.1c). FluxDrive verifies the dual-signature over
- * sha256(appName:source:version) — the node's arcane sig + the owner's reconcile-sig —
- * enforces the per-(appName, source) monotonic version floor, then ADDS new locators
- * and tombstones this app's superseded ones of that source (orphan-with-grace), never
- * a blind replace. A duplicate / stale version is an idempotent 409.
+ * Push a slot app's live locator set to FluxDrive's reconcile endpoint. FluxDrive
+ * verifies the dual signature over
+ * `identity:source:version:keptLocatorsHash:pendingMessageHash` (the kept list is
+ * bound by its hash, so the list sent is the list signed), enforces the version
+ * floor per identity and source, then tombstones the identity's other locators of
+ * that source with grace, never a blind replace. A reconcile naming a message
+ * hash is held until the nodes answer that the message applied. A duplicate or
+ * stale version is an idempotent 409.
  *
  * @param {string} appName
- * @param {object} body - { source, version, arcaneSig, ownerSig, liveLocators }
+ * @param {object} body - { source, version, arcaneSig, ownerSig, liveLocators, pendingMessageHash? }
  * @param {object} [deps] - { http, baseUrl }
  */
 async function reconcile(appName, body, deps = {}) {
@@ -140,6 +148,7 @@ async function reconcile(appName, body, deps = {}) {
       arcaneSig: body.arcaneSig,
       ownerSig: body.ownerSig,
       liveLocators: body.liveLocators,
+      pendingMessageHash: body.pendingMessageHash ?? null,
     },
     { timeout: 30_000 },
   );

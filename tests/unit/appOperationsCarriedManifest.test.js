@@ -72,7 +72,10 @@ describe('updateAppGlobaly and the manifest an update carries', () => {
 
     expect(hash).to.equal('outbound-hash');
     const [, , , bind] = uploadSealedContent.firstCall.args;
-    expect(bind).to.include({ identity: IDENTITY, owner: spec.owner });
+    // The FluxDrive writes the upload makes name this update's message, so the
+    // hash is computed before the content is opened.
+    expect(bind).to.include({ identity: IDENTITY, owner: spec.owner, messageHash: 'outbound-hash' });
+    sinon.assert.callOrder(appEventVerifier.computeOutboundHash, uploadSealedContent);
     expect(bind.priorSpec).to.equal(spec);
     const [message] = broadcast.firstCall.args;
     expect(message.hash).to.equal('outbound-hash');

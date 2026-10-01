@@ -140,10 +140,10 @@ describe('appOperations tests', () => {
       sinon.assert.calledWith(res.status, 503);
     });
 
-    it('serves the blob from the installed app store, with its owner as the fluxID', async () => {
+    it('serves the blob from the installed app store, by the installed app\'s identity', async () => {
       sinon.stub(globalState, 'isArcane').returns(true);
-      // The installed row hydrates to an InstantiatedSpec; its `owner` is a real
-      // FluxID, which is what the owner-keyed locator was derived from.
+      // The installed row hydrates to an InstantiatedSpec; its identity is what
+      // the locator was derived for and what keys the artifact store.
       const installed = await instantiatedSpec(await v9Spec(), { identity: `b${'a'.repeat(52)}` });
       sinon.stub(appsRepository, 'getInstalledApp').resolves(installed);
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(await oneComponentDeployment('myapp', 'web'));
@@ -153,13 +153,8 @@ describe('appOperations tests', () => {
 
       await appOperations.contentBlobServeApi({ params: { appName: 'myapp', locator: 'loc-1' } }, res);
 
-      // the locator is owner-keyed: fluxID must be the installed app's owner
       const [reqArg] = serveBlob.firstCall.args;
-      // the store is keyed by the installed app's identity
-      expect(reqArg).to.include({
-        appName: 'myapp', identity: installed.identity, fluxID: installed.owner, locator: 'loc-1',
-      });
-      expect(installed.owner, 'the owner must be the spec\'s real FluxID, not a placeholder').to.equal(V9_SUBMISSION.owner);
+      expect(reqArg).to.deep.equal({ appName: 'myapp', identity: installed.identity, locator: 'loc-1' });
       sinon.assert.calledWith(res.send, framed);
     });
 

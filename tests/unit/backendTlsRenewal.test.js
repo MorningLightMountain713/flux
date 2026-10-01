@@ -76,8 +76,13 @@ function specOf(roles, appName = 'myapp') {
 }
 
 /** A real DeploymentSpec — the class deploymentProvider hands the sweep. */
+// The identity of the app a deployment belongs to: what names its containers and
+// keys its per-app CA. One per app name here, so two apps never share one.
+const identityOf = (name) => `b${name.padEnd(52, 'a')}`;
+const IDENTITY = identityOf('myapp');
+
 function deploymentFor(spec, replica = null) {
-  return flux.DeploymentSpec.fromSpec(spec, APPS_FOLDER, { replica });
+  return flux.DeploymentSpec.fromSpec(spec, APPS_FOLDER, { replica, identity: identityOf(spec.name) });
 }
 
 /** The installed-list row appQueryService.installedApps actually produces: a
@@ -124,9 +129,10 @@ describe('backendTlsRenewal.renewalSweep', () => {
 
     expect(result).to.deep.equal({ checked: 1, renewed: 1 });
     expect(deps.provisionCert.calledOnce).to.equal(true);
-    // The cert is issued for the app's NAME (the lease), not its identity.
+    // The leaf is named after the app and signed by the CA its identity keys.
     expect(deps.provisionCert.firstCall.args[0]).to.equal('myapp');
-    expect(deps.provisionCert.firstCall.args[1]).to.deep.equal(web.backendTlsPaths());
+    expect(deps.provisionCert.firstCall.args[1]).to.equal(IDENTITY);
+    expect(deps.provisionCert.firstCall.args[2]).to.deep.equal(web.backendTlsPaths());
 
     // ...and those paths are the mount flux-spec materialized, not a path the
     // sweep rebuilt: a caller that joined its own would write outside the bind.
@@ -135,7 +141,7 @@ describe('backendTlsRenewal.renewalSweep', () => {
     expect(web.backendTlsPaths().dir).to.equal(mount.Source);
     expect(mount.Source).to.have.string(web.dir);
 
-    expect(web.identifier, 'the real container-naming rule').to.equal('web_myapp');
+    expect(web.identifier, 'the real container-naming rule: the component and the identity').to.equal(`web_${IDENTITY}`);
     expect(deps.signal.calledOnceWith(web.identifier, 'SIGHUP')).to.equal(true);
     expect(deps.restart.called).to.equal(false);
   });
@@ -176,7 +182,7 @@ describe('backendTlsRenewal.renewalSweep', () => {
     const result = await backendTlsRenewal.renewalSweep(deps);
 
     expect(result).to.deep.equal({ checked: 2, renewed: 2 });
-    expect(deps.restart.calledOnceWith('web_myapp')).to.equal(true);
+    expect(deps.restart.calledOnceWith(`web_${IDENTITY}`)).to.equal(true);
     expect(deps.signal.called).to.equal(false);
   });
 
@@ -189,9 +195,9 @@ describe('backendTlsRenewal.renewalSweep', () => {
     const result = await backendTlsRenewal.renewalSweep(deps);
 
     expect(result).to.deep.equal({ checked: 2, renewed: 2 });
-    expect(deps.signal.args.map(([id]) => id)).to.deep.equal(['web_myapp_r1', 'web_myapp_r2']);
+    expect(deps.signal.args.map(([id]) => id)).to.deep.equal([`web_${IDENTITY}_r1`, `web_${IDENTITY}_r2`]);
     // Each replica owns its own keypair, so each cert goes to its own directory.
-    const [dirA, dirB] = deps.provisionCert.args.map(([, paths]) => paths.dir);
+    const [dirA, dirB] = deps.provisionCert.args.map(([, , paths]) => paths.dir);
     expect(dirA).to.not.equal(dirB);
   });
 
@@ -211,7 +217,7 @@ describe('backendTlsRenewal.renewalSweep', () => {
 
     expect(result).to.deep.equal({ checked: 2, renewed: 1 });
     // the failed app is never signalled - there is no new cert to reload
-    expect(deps.signal.calledOnceWith('web_good', 'SIGHUP')).to.equal(true);
+    expect(deps.signal.calledOnceWith(`web_${identityOf('good')}`, 'SIGHUP')).to.equal(true);
   });
 
   it('does not fail the renewal when the reload reaction throws (a stopped container)', async () => {

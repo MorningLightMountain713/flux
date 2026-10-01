@@ -47,17 +47,26 @@ function benchmarkField(resp, field) {
   return data[field];
 }
 
+// Every derivation and every signed text names the app's identity, never its
+// name or owner: a name is a lease and an owner can change, while a blob and
+// the key it is sealed under stay the app's. The benchmark channel refuses a
+// request naming no identity; refusing here names the caller instead.
+function requireIdentity(identity) {
+  if (typeof identity !== 'string' || !identity) throw new Error('contentBlob: content is keyed by the app identity, which is missing');
+  return identity;
+}
+
 /**
  * Derive a content blob's locator over the benchmark channel — the single place the
  * blobLocator RPC reply is unwrapped, shared by upload, resolve, serve, and the slot
  * reconcile push, so they all key on byte-identical locators.
  *
  * @param {object} [benchmark] - the benchmark channel (defaults to the singleton)
- * @param {object} ref - { appName, fluxID, contentHash }
+ * @param {object} ref - { identity, contentHash }
  * @returns {Promise<string>} the locator
  */
-async function deriveLocator(benchmark = benchmarkService, { appName, fluxID, contentHash }) {
-  return benchmarkField(await benchmark.blobLocator({ appName, fluxID, contentHash }), 'locator');
+async function deriveLocator(benchmark = benchmarkService, { identity, contentHash }) {
+  return benchmarkField(await benchmark.blobLocator({ identity: requireIdentity(identity), contentHash }), 'locator');
 }
 
 /**
@@ -65,69 +74,82 @@ async function deriveLocator(benchmark = benchmarkService, { appName, fluxID, co
  * durably stored before the spec enters gossip. The owner's freshness-bound
  * signature is supplied by the caller (signed client-side); the arcane signature
  * is taken here. The locator and the per-blob key are both derived over the
- * benchmark channel; the AES-256-GCM happens locally.
+ * benchmark channel from the app's identity and the content hash; the
+ * AES-256-GCM happens locally. Both signatures are over the library's
+ * `blobUploadDigest` (`locator:identity:timestamp`); the name rides the upload
+ * so FluxDrive can look the app up.
  *
- * @param {object} blob - { appName, fluxID, contentHash, bytes, ownerSig, timestamp, source? }
+ * @param {object} blob - { appName, identity, contentHash, bytes, ownerSig, timestamp, source? }
  * @param {object} deps - { benchmark?, uploader, now? }
  * @returns {Promise<{ locator: string }>}
  */
 async function encryptAndUploadBlob(blob, deps) {
   const {
-    appName, fluxID, contentHash, bytes, ownerSig, timestamp, source = 'blob',
+    appName, identity, contentHash, bytes, ownerSig, timestamp, source = 'blob',
   } = blob;
   const { benchmark = benchmarkService, uploader, now = Date.now } = deps || {};
 
+  requireIdentity(identity);
   if (`sha256:${sha256Hex(bytes)}` !== contentHash) throw new Error(`contentBlob: hash mismatch for ${contentHash}`);
   const blobCap = await maxBlobBytes();
   if (bytes.length > blobCap) throw new Error(`contentBlob: blob exceeds ${blobCap} bytes`);
   // timestamp is the submission timestamp (milliseconds, like the app-message timestamp), so compare in ms.
   if (Math.abs(now() - Number(timestamp)) > FRESHNESS_WINDOW_SECONDS * 1000) throw new Error('contentBlob: owner signature is stale');
 
-  const locator = await deriveLocator(benchmark, { appName, fluxID, contentHash });
-  const key = Buffer.from(benchmarkField(await benchmark.contentKey({ appName, fluxID, contentHash }), 'key'), 'base64');
+  const locator = await deriveLocator(benchmark, { identity, contentHash });
+  const key = Buffer.from(benchmarkField(await benchmark.contentKey({ identity, contentHash }), 'key'), 'base64');
   const framed = aeadEncrypt(key, bytes, Buffer.from(contentHash));
 
   const arcaneSig = benchmarkField(await benchmark.signBlobUpload({
-    kind: 'upload', locator, appName, timestamp,
+    kind: 'upload', identity, locator, timestamp,
   }), 'signature');
 
   await uploader.uploadBlob(framed, {
-    locator, appName, timestamp, arcaneSig, ownerSig, source,
+    locator, appName, identity, timestamp, arcaneSig, ownerSig, source,
   });
   fluxEventBus.publish('content:blobUploaded', { appName, hash: contentHash, locator, source });
   return { locator };
 }
 
 /**
- * Take the arcane (fleet anti-abuse) signature for a manifest-backstop PUT. The
- * benchmark channel builds the signed bytes itself from these fields (a
- * domain-prefixed sha256(appName:version:timestamp)) and refuses a timestamp
- * outside the freshness window — it no longer signs caller-supplied bytes.
+ * Take the arcane (fleet anti-abuse) signature for a manifest PUT. The benchmark
+ * channel builds the signed text itself from these typed fields, under its own
+ * domain: the library's `manifestPutDigest`,
+ * `identity:version:timestamp:pendingMessageHash`, the last empty when the put is
+ * not carried by a spec update. It refuses a timestamp outside the freshness
+ * window and never signs caller-supplied bytes.
  *
- * @param {object} fields - { appName, version, timestamp }
+ * @param {object} fields - { identity, version, timestamp, pendingMessageHash? }
  * @param {object} [deps] - { benchmark? }
  * @returns {Promise<string>} the base64 arcane signature
  */
-async function signManifestPut({ appName, version, timestamp }, deps = {}) {
+async function signManifestPut({
+  identity, version, timestamp, pendingMessageHash = null,
+}, deps = {}) {
   const { benchmark = benchmarkService } = deps || {};
   return benchmarkField(await benchmark.signBlobUpload({
-    kind: 'manifest', appName, version, timestamp,
+    kind: 'manifest', identity: requireIdentity(identity), version, timestamp, pendingMessageHash,
   }), 'signature');
 }
 
 /**
- * Take the arcane signature for a reconcile push — channel-built bytes (a
- * domain-prefixed sha256(appName:source:version)); no timestamp, the verifier's
- * per-(appName, source) monotonic version floor bounds replay instead.
+ * Take the arcane signature for a slot reconcile. The channel builds the signed
+ * text itself: the library's `slotReconcileDigest`,
+ * `identity:source:version:keptLocatorsHash:pendingMessageHash`, the kept
+ * locators hashed sorted and each once, so no other list can ride the
+ * signature. No timestamp: FluxDrive's version floor per identity and source
+ * bounds replay instead.
  *
- * @param {object} fields - { appName, source, version }
+ * @param {object} fields - { identity, source, version, keptLocators, pendingMessageHash? }
  * @param {object} [deps] - { benchmark? }
  * @returns {Promise<string>} the base64 arcane signature
  */
-async function signReconcile({ appName, source, version }, deps = {}) {
+async function signReconcile({
+  identity, source, version, keptLocators, pendingMessageHash = null,
+}, deps = {}) {
   const { benchmark = benchmarkService } = deps || {};
   return benchmarkField(await benchmark.signBlobUpload({
-    kind: 'reconcile', appName, source, version,
+    kind: 'reconcile', identity: requireIdentity(identity), source, version, keptLocators, pendingMessageHash,
   }), 'signature');
 }
 
@@ -153,11 +175,11 @@ function specContentHashes(spec) {
 /**
  * Assert a carried-over blob is still present in FluxDrive. An update may omit
  * the bytes for a hash its previous version already delivered — the locator is
- * identical (appName:fluxID:contentHash), so the previous upload is the durable
+ * identical (identity and contentHash), so the previous upload is the durable
  * copy. This presence check closes the pathological gap (the backstop lost it)
  * with a precise reject instead of a silent hole every cold-start install hits.
  *
- * @param {object} ref - { appName, fluxID, contentHash }
+ * @param {object} ref - { identity, contentHash }
  * @param {object} deps - { uploader, benchmark? }
  * @returns {Promise<string>} the locator
  */
@@ -184,8 +206,9 @@ async function assertBlobStored(ref, deps) {
  * required only for attached blobs. Any mismatch, missing part, or upload failure
  * throws so the caller never broadcasts a spec whose content is not stored.
  *
- * @param {object} input - { spec, priorSpec?, blobs, ownerSigs }
+ * @param {object} input - { spec, identity, priorSpec?, blobs, ownerSigs }
  *   spec - decrypted submission spec (name, owner, components)
+ *   identity - the identity of the app the submission is for
  *   priorSpec - the decrypted spec this update supersedes (absent on register)
  *   blobs - Map of plaintext bytes keyed by "sha256:<hex>"
  *   ownerSigs - Map of { sig, timestamp } keyed by hash (attached blobs only)
@@ -194,11 +217,11 @@ async function assertBlobStored(ref, deps) {
  */
 async function encryptAndUploadBlobs(input, deps) {
   const {
-    spec, priorSpec, blobs, ownerSigs,
+    spec, identity, priorSpec, blobs, ownerSigs,
   } = input;
   const { uploader, benchmark, now } = deps || {};
   const appName = spec.name;
-  const fluxID = spec.owner;
+  requireIdentity(identity);
   const declared = specContentHashes(spec);
   const carriedOver = priorSpec ? specContentHashes(priorSpec) : new Set();
 
@@ -211,7 +234,7 @@ async function encryptAndUploadBlobs(input, deps) {
     if (!blobs.has(hash)) {
       if (!carriedOver.has(hash)) throw new Error(`contentBlob: missing blob part for ${hash}`);
       // eslint-disable-next-line no-await-in-loop
-      await assertBlobStored({ appName, fluxID, contentHash: hash }, { uploader, benchmark });
+      await assertBlobStored({ identity, contentHash: hash }, { uploader, benchmark });
       continue;
     }
     const owner = ownerSigs.get(hash);
@@ -222,7 +245,7 @@ async function encryptAndUploadBlobs(input, deps) {
     const { locator } = await encryptAndUploadBlob(
       {
         appName,
-        fluxID,
+        identity,
         contentHash: hash,
         bytes: blobs.get(hash),
         ownerSig: owner.sig,
@@ -241,15 +264,15 @@ async function encryptAndUploadBlobs(input, deps) {
  * hash mismatch, so a wrong/poisoned source is rejected and the caller falls
  * through to the next one.
  *
- * @param {object} blob - { appName, fluxID, contentHash, framed }
+ * @param {object} blob - { identity, contentHash, framed }
  * @param {object} deps - { benchmark? }
  * @returns {Promise<Buffer>} verified plaintext
  */
 async function decryptAndVerifyBlob(blob, deps) {
-  const { appName, fluxID, contentHash, framed } = blob;
+  const { identity, contentHash, framed } = blob;
   const { benchmark = benchmarkService } = deps || {};
 
-  const key = Buffer.from(benchmarkField(await benchmark.contentKey({ appName, fluxID, contentHash }), 'key'), 'base64');
+  const key = Buffer.from(benchmarkField(await benchmark.contentKey({ identity: requireIdentity(identity), contentHash }), 'key'), 'base64');
   const plaintext = aeadDecrypt(key, framed, Buffer.from(contentHash));
   if (`sha256:${sha256Hex(plaintext)}` !== contentHash) throw new Error(`contentBlob: post-decrypt hash mismatch for ${contentHash}`);
   return plaintext;
@@ -266,14 +289,14 @@ async function decryptAndVerifyBlob(blob, deps) {
  * retries later). Peers are tried in the order given; the caller shuffles for
  * herd-safety.
  *
- * @param {object} req - { appName, identity, fluxID, contentHash, peers } - the
- *   identity keys this node's store
+ * @param {object} req - { appName, identity, contentHash, peers } - the identity
+ *   keys this node's store, the locator and the blob's key
  * @param {object} deps - { benchmark?, fluxDrive?, peerFetch, maxPeerAttempts?, store? }
  * @returns {Promise<Buffer>} verified plaintext
  */
 async function resolveBlob(req, deps) {
   const {
-    appName, identity, fluxID, contentHash, peers = [],
+    appName, identity, contentHash, peers = [],
   } = req;
   const {
     benchmark = benchmarkService, fluxDrive = fluxDriveClient, peerFetch, maxPeerAttempts = 3,
@@ -281,7 +304,7 @@ async function resolveBlob(req, deps) {
   } = deps || {};
 
   const verify = (framed) => (framed
-    ? decryptAndVerifyBlob({ appName, fluxID, contentHash, framed }, { benchmark }).catch(() => null)
+    ? decryptAndVerifyBlob({ identity, contentHash, framed }, { benchmark }).catch(() => null)
     : null);
 
   const stored = await store.get(identity, contentHash);
@@ -294,7 +317,7 @@ async function resolveBlob(req, deps) {
     await store.remove(identity, contentHash);
   }
 
-  const locator = await deriveLocator(benchmark, { appName, fluxID, contentHash });
+  const locator = await deriveLocator(benchmark, { identity, contentHash });
 
   for (const peer of peers.slice(0, maxPeerAttempts)) {
     const framed = await peerFetch(peer, appName, locator).catch(() => null);
@@ -327,12 +350,12 @@ async function resolveBlob(req, deps) {
  * not installable without its declared content. The deployment exposes the
  * content mounts via its domain accessor (DeploymentComponent.contentBlobMounts).
  *
- * @param {object} deployment - DeploymentSpec
- * @param {object} ctx - { appName, fluxID, peers }
+ * @param {object} deployment - DeploymentSpec, whose identity keys every blob
+ * @param {object} ctx - { appName, peers }
  * @param {object} deps - { resolve?, writeFile, benchmark?, fluxDrive?, peerFetch }
  */
 async function provisionContentBlobs(deployment, ctx, deps) {
-  const { appName, fluxID, peers = [] } = ctx;
+  const { appName, peers = [] } = ctx;
   const {
     resolve = resolveBlob, writeFile, benchmark, fluxDrive, peerFetch,
   } = deps || {};
@@ -343,7 +366,7 @@ async function provisionContentBlobs(deployment, ctx, deps) {
       try {
         plaintext = await resolve(
           {
-            appName, identity: deployment.identity, fluxID, contentHash: hash, peers,
+            appName, identity: deployment.identity, contentHash: hash, peers,
           },
           { benchmark, fluxDrive, peerFetch },
         );
@@ -368,19 +391,17 @@ async function provisionContentBlobs(deployment, ctx, deps) {
  * stores them as it resolves them). Returns null when nothing matches; the
  * requester falls through to FluxDrive.
  *
- * @param {object} req - { appName, identity, fluxID, locator } - the identity of
- *   the app installed here, which keys its store
+ * @param {object} req - { appName, identity, locator } - the identity of the app
+ *   installed here, which keys its store and its locators
  * @param {object} deps - { benchmark?, store? }
  * @returns {Promise<Buffer|null>}
  */
 async function serveBlob(req, deps) {
-  const {
-    appName, identity, fluxID, locator,
-  } = req;
+  const { appName, identity, locator } = req;
   const { benchmark = benchmarkService, store = contentStore } = deps || {};
 
   for (const hash of await store.list(identity)) {
-    const derived = await deriveLocator(benchmark, { appName, fluxID, contentHash: hash });
+    const derived = await deriveLocator(benchmark, { identity, contentHash: hash });
     if (derived !== locator) continue;
     const framed = await store.get(identity, hash);
     if (!framed) return null;

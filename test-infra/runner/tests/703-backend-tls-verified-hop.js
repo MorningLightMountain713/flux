@@ -4,7 +4,7 @@ import { expect } from 'chai';
 import crypto from 'node:crypto';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
-import { deployContentApp } from '../framework/content-helper.js';
+import { deployContentApp, listedIdentity } from '../framework/content-helper.js';
 import { pushTlsEcho } from '../framework/registry-helper.js';
 import { queueAppTx, advanceBlocks, appCaCertificate } from '../framework/daemon-control.js';
 import { waitForAppInstalled, waitForUp } from '../framework/wait.js';
@@ -108,8 +108,9 @@ describe('backend TLS: the verified hop through a real HAProxy', function () {
 
     // FDM fetches the app's CA and writes it where the config names it; the
     // suite does the same thing by the same route.
-    const appCaPem = await appCaCertificate(app);
-    const foreignCaPem = await appCaCertificate(`${app}other`);
+    const appCaPem = await appCaCertificate(app, await listedIdentity(appClient.url, app));
+    // Another app's CA: the CA is keyed by identity, so any other identity is another app.
+    const foreignCaPem = await appCaCertificate(`${app}other`, `b${'a'.repeat(51)}q`);
 
     haproxy = await startHaproxy(env.networkName, {
       backends: [

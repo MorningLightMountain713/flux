@@ -3,10 +3,9 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
-import { deployContentApp, pushContentUpdate } from '../framework/content-helper.js';
+import { deployContentApp, pushContentUpdate, listedIdentity } from '../framework/content-helper.js';
 import { getFluxDriveState, getFluxDriveManifest, resetFluxDrive } from '../framework/fluxdrive-control.js';
 import { pushImage, pushTestApp } from '../framework/registry-helper.js';
-import { appOwnerKey } from '../framework/keys.js';
 import { blobHash } from '../framework/content-crypto-v9.js';
 import * as benchCrypto from '../../daemon-stub/benchCrypto.js';
 import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
@@ -349,8 +348,8 @@ describe('content slot updates (contentupdate): version advance + onUpdate react
     const client = env.clients[node.carry];
     const afterId = client.getLastEventId();
 
-    const owner = appOwnerKey().zelid;
-    const locatorOf = (bytes) => benchCrypto.locatorFor({ appName: nameCarry, fluxID: owner, contentHash: blobHash(bytes) });
+    const carryIdentity = await listedIdentity(client.url, nameCarry);
+    const locatorOf = (bytes) => benchCrypto.locatorFor({ identity: carryIdentity, contentHash: blobHash(bytes) });
     const keepLocator = locatorOf(KEEP_BYTES);
     const rotateV1Locator = locatorOf(ROTATE_V1);
     const rotateV2Locator = locatorOf(ROTATE_V2);
