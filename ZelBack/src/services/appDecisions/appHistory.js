@@ -85,9 +85,29 @@ async function appliedUpdateEvents(name) {
   return events;
 }
 
+/**
+ * Who has owned the app that holds a name, in order: each owner with the height
+ * at which they took it, the registration's height for the first. The last
+ * entry is the listed owner. Empty when nothing applied.
+ * @param {string} name - in any letter case
+ * @returns {Promise<Array<{owner: string, from: number}>>}
+ */
+async function ownerships(name) {
+  const owners = [];
+  for (const { message, decision } of await currentAppMessages(name)) {
+    const owner = message?.appSpecifications?.owner;
+    if (typeof owner !== 'string' || !owner) continue;
+    if (owners.length === 0 || owners[owners.length - 1].owner !== owner) {
+      owners.push({ owner, from: decision.height });
+    }
+  }
+  return owners;
+}
+
 module.exports = {
   appliedMessages,
   appliedUpdateEvents,
+  ownerships,
   currentAppMessages,
   latestApplied,
 };

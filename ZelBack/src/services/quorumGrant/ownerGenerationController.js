@@ -8,6 +8,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const messageStore = require('../appMessaging/messageStore');
 const ownerGenerationRecord = require('./ownerGenerationRecord');
+const appHistory = require('../appDecisions/appHistory');
 const log = require('../../lib/log');
 const { Privilege, authOf } = require('../utils/privileges');
 
@@ -50,9 +51,10 @@ async function submit(req, res) {
       generation: body.generation,
       height: body.height,
       at: body.at,
+      ownedFrom: body.ownedFrom,
       signature: body.signature,
     };
-    if (!ownerGenerationRecord.wellFormed(record)
+    if (!(await ownerGenerationRecord.wellFormed(record))
       || typeof record.signature !== 'string' || !record.signature) {
       return res.status(400).json(messageHelper.createErrorMessage('malformed generation record'));
     }
@@ -66,15 +68,26 @@ async function submit(req, res) {
       return res.status(401).json(messageHelper.errUnauthorizedMessage());
     }
 
-    if (!ownerGenerationRecord.verify(record, app.owner)) {
+    if (!(await ownerGenerationRecord.verify(record, app.owner))) {
       return res.status(403).json(messageHelper.createErrorMessage('record is not signed by the app owner'));
     }
+    // The ownership height the owner signed is the height they took the app,
+    // read from this node's applied history, never from the record.
+    const owners = await appHistory.ownerships(app.name);
+    const listed = owners.length ? owners[owners.length - 1] : null;
+    if (!listed || listed.owner !== app.owner || listed.from !== record.ownedFrom) {
+      return res.status(409).json(messageHelper.createErrorMessage(
+        `record names ownership height ${record.ownedFrom}; the listed owner took the app at ${listed ? listed.from : 'an unknown height'}`,
+      ));
+    }
 
-    const stored = await messageStore.getGrantGenerationRecord(record.identity, record.role);
-    const current = stored?.data?.generation ?? 0;
+    // Generations count within one ownership: the first record an owner signs
+    // after taking the app is 1, whatever an earlier owner signed.
+    const { record: standing } = await messageStore.standingGeneration(record.identity, record.role);
+    const current = standing && standing.data.ownedFrom === record.ownedFrom ? standing.data.generation : 0;
     if (record.generation !== current + 1) {
       return res.status(409).json(messageHelper.createErrorMessage(
-        `record names generation ${record.generation}; the standing generation is ${current}, so the next is ${current + 1}`,
+        `record names generation ${record.generation}; the standing generation under this ownership is ${current}, so the next is ${current + 1}`,
       ));
     }
 
@@ -99,6 +112,7 @@ async function submit(req, res) {
       generation: record.generation,
       height: record.height,
       at: record.at,
+      ownedFrom: record.ownedFrom,
       signature: record.signature,
       broadcastedAt: Date.now(),
     };
