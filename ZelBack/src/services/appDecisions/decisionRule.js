@@ -285,6 +285,7 @@ async function decideName({
 
 module.exports = {
   decideName,
+  PAYMENT_WINDOW_MS,
   RULE_VERSION,
   APPLIED,
   REFUSED,

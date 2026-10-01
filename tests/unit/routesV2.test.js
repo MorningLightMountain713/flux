@@ -24,7 +24,11 @@ const { expect } = chai;
 
 const routeTable = require('../../ZelBack/src/routeTableV2');
 const routesV2 = require('../../ZelBack/src/routesV2');
+const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
+const confirmedMessageStore = require('../../ZelBack/src/services/appMessaging/confirmedMessageStore');
+const decisionStore = require('../../ZelBack/src/services/appDecisions/decisionStore');
 const messageDelivery = require('../../ZelBack/src/services/appMessaging/messageDelivery');
+const temporaryPoolSweep = require('../../ZelBack/src/services/appMessaging/temporaryPoolSweep');
 const operationsController = require('../../ZelBack/src/services/appManagement/operationsController');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
@@ -223,6 +227,103 @@ describe('routesV2 - the /v2 surface', () => {
       expect(res.status).to.equal(422);
       expect(res.body.error.message).to.equal('request body too large');
       sinon.assert.notCalled(deliverMessage);
+    });
+  });
+
+  describe('GET /apps/messages/:hash/decision', () => {
+    let app;
+    let decisionsFor;
+    let unpayableRecord;
+    let getPermanentMessage;
+    let getTempMessage;
+    let paymentRecords;
+
+    beforeEach(() => {
+      decisionsFor = sinon.stub(decisionStore, 'decisionsFor').resolves(new Map());
+      unpayableRecord = sinon.stub(temporaryPoolSweep, 'unpayableRecord').resolves(null);
+      getPermanentMessage = sinon.stub(appsRepository, 'getPermanentMessage').resolves(null);
+      getTempMessage = sinon.stub(appsRepository, 'getTempMessage').resolves(null);
+      paymentRecords = sinon.stub(confirmedMessageStore, 'paymentRecords').resolves(new Map());
+      capabilities.resetForTests();
+      capabilities.setForTests(['localDbPrepared', 'chainStateConsistent'], true);
+      app = express();
+      app.use('/v2', routesV2);
+    });
+
+    afterEach(() => {
+      sinon.restore();
+      capabilities.resetForTests();
+    });
+
+    const read = () => supertest(app).get('/v2/apps/messages/abc123/decision');
+
+    it('answers the decision of a message this node applied', async () => {
+      decisionsFor.resolves(new Map([['abc123', { hash: 'abc123', decision: 'applied', height: 500 }]]));
+
+      const res = await read();
+
+      expect(res.status).to.equal(200);
+      expect(res.body.data).to.deep.equal({ hash: 'abc123', decision: 'applied' });
+      sinon.assert.calledOnceWithExactly(decisionsFor, ['abc123']);
+    });
+
+    it('answers a refusal with its reason', async () => {
+      decisionsFor.resolves(new Map([['abc123', { hash: 'abc123', decision: 'refused', reason: 'paid-late' }]]));
+
+      const res = await read();
+
+      expect(res.body.data).to.deep.equal({ hash: 'abc123', decision: 'refused', reason: 'paid-late' });
+    });
+
+    it('answers unpayable for a message it dropped unpaid, over a copy it still holds', async () => {
+      unpayableRecord.resolves({ hash: 'abc123', droppedAtHeight: 600 });
+      getTempMessage.resolves({ hash: 'abc123' });
+
+      const res = await read();
+
+      expect(res.body.data).to.deep.equal({ hash: 'abc123', decision: 'unpayable' });
+    });
+
+    it('answers undecided for a message waiting in the pool', async () => {
+      getTempMessage.resolves({ hash: 'abc123' });
+
+      const res = await read();
+
+      expect(res.body.data).to.deep.equal({ hash: 'abc123', decision: 'undecided' });
+    });
+
+    it('answers undecided for a stored message the decider has not reached', async () => {
+      getPermanentMessage.resolves({ hash: 'abc123' });
+
+      const res = await read();
+
+      expect(res.body.data).to.deep.equal({ hash: 'abc123', decision: 'undecided' });
+    });
+
+    it('answers undecided for a recorded payment whose message it has yet to receive', async () => {
+      paymentRecords.resolves(new Map([['abc123', { hash: 'abc123', height: 500 }]]));
+
+      const res = await read();
+
+      expect(res.body.data).to.deep.equal({ hash: 'abc123', decision: 'undecided' });
+      sinon.assert.calledOnceWithExactly(paymentRecords, ['abc123']);
+    });
+
+    it('answers 404 for a hash it holds nothing about', async () => {
+      const res = await read();
+
+      expect(res.status).to.equal(404);
+      expect(res.body.error.code).to.equal('NOT_FOUND');
+    });
+
+    it('answers 503 while chain state is rebuilding, and reads nothing', async () => {
+      capabilities.setForTests('chainStateConsistent', false);
+
+      const res = await read();
+
+      expect(res.status).to.equal(503);
+      expect(res.body.error.code).to.equal('UNAVAILABLE');
+      sinon.assert.notCalled(decisionsFor);
     });
   });
 

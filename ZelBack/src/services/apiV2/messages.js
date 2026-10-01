@@ -1,6 +1,11 @@
 'use strict';
 
+const appsRepository = require('../appDatabase/appsRepository');
+const confirmedMessageStore = require('../appMessaging/confirmedMessageStore');
 const messageDelivery = require('../appMessaging/messageDelivery');
+const temporaryPoolSweep = require('../appMessaging/temporaryPoolSweep');
+const decisionStore = require('../appDecisions/decisionStore');
+const { REFUSED } = require('../appDecisions/decisionRule');
 
 /**
  * POST /v2/apps/messages - the contents of a paid app message this node is
@@ -18,6 +23,31 @@ async function deliver(req, res) {
   return res.fail('UNPROCESSABLE', reason);
 }
 
+/**
+ * GET /v2/apps/messages/:hash/decision - what this node holds about an app
+ * message. A decision is this node's word on a paid message. An unpayable
+ * record outranks a copy still held: the copy's payment can no longer come. A
+ * copy, or a recorded payment, with neither is waiting on the decider. A node
+ * that holds nothing answers 404, which says nothing about the message.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res carrying the v2 envelope
+ * @returns {Promise<*>}
+ */
+async function decision(req, res) {
+  const { hash } = req.params;
+  const decided = (await decisionStore.decisionsFor([hash])).get(hash);
+  if (decided) {
+    return res.ok({ hash, decision: decided.decision, ...(decided.decision === REFUSED ? { reason: decided.reason } : {}) });
+  }
+  if (await temporaryPoolSweep.unpayableRecord(hash)) return res.ok({ hash, decision: 'unpayable' });
+  const held = await appsRepository.getPermanentMessage(hash)
+    || await appsRepository.getTempMessage(hash)
+    || (await confirmedMessageStore.paymentRecords([hash])).has(hash);
+  if (held) return res.ok({ hash, decision: 'undecided' });
+  return res.fail('NOT_FOUND', 'this node holds nothing about this hash');
+}
+
 module.exports = {
+  decision,
   deliver,
 };

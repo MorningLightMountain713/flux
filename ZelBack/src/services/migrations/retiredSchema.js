@@ -12,12 +12,14 @@ const RETIRED_COLLECTIONS = [
   { database: 'database.appsglobal.database', name: 'zelappslocation' },
 ];
 
-// Expiry indexes replaced by an `expireAt` expiry. Matched by name AND expiry,
-// because a plain index of the same name is part of the current schema.
+// Expiry indexes replaced by an `expireAt` expiry, or on the temporary pool by
+// the chain's sweep. Matched by name AND expiry, because a plain index of the
+// same name is part of the current schema.
 const RETIRED_EXPIRY_INDEXES = [
   { collection: 'database.appsglobal.collections.appsInstallingErrorsLocations', name: 'cachedAt_1' },
   { collection: 'database.appsglobal.collections.appsInstallingErrorsLocations', name: 'broadcastedAt_1' },
   { collection: 'database.appsglobal.collections.appsInstallingErrorsBroadcasts', name: 'broadcastedAt_1' },
+  { collection: 'database.appsglobal.collections.appsTemporaryMessages', name: 'receivedAt_1' },
 ];
 
 // Indexes keyed on a field the rows no longer carry: a unique one would refuse

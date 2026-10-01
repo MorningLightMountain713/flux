@@ -18,6 +18,11 @@ module.exports = [
   {
     method: 'post', path: '/apps/messages', ownsBody: true, guards: ['deliveryBody'], needs: ['localDbPrepared', 'chainStateConsistent'], handler: 'apiV2/messages#deliver',
   },
+  // What this node holds about an app message, by hash: it reads the decisions,
+  // the pool and the payment records, none of which is whole mid-rewind.
+  {
+    method: 'get', path: '/apps/messages/:hash/decision', needs: ['localDbPrepared', 'chainStateConsistent'], handler: 'apiV2/messages#decision',
+  },
   {
     method: 'get', path: '/operations/:id', none: 'reads the operation registry this process holds', handler: 'apiV2/operations#read',
   },

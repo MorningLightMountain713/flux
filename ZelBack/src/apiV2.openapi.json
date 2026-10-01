@@ -149,33 +149,6 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "Stored and announced.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "data",
-                    "meta"
-                  ],
-                  "properties": {
-                    "data": {
-                      "type": "object",
-                      "properties": {
-                        "hash": {
-                          "type": "string"
-                        }
-                      }
-                    },
-                    "meta": {
-                      "$ref": "#/components/schemas/Meta"
-                    }
-                  }
-                }
-              }
-            }
-          },
           "200": {
             "description": "This node already holds the message.",
             "content": {
@@ -206,6 +179,33 @@
               }
             }
           },
+          "201": {
+            "description": "Stored and announced.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "hash": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "404": {
             "description": "This node has recorded no payment for the hash.",
             "content": {
@@ -218,6 +218,93 @@
           },
           "422": {
             "description": "The contents fail a storage check, or the body exceeds 3 MiB.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The node's local database or chain state is not ready.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/apps/messages/{hash}/decision": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "operationId": "getAppMessageDecision",
+        "summary": "What this node holds about an app message",
+        "description": "By the message's hash. `applied` and `refused` (with its `reason`) are this node's decision on the paid message. `unpayable` means this node held the message, its chain scan recorded no payment stamped within the hour after its signing, and the block that closed that window is deeper than any reorganisation the daemon accepts, so the chain can no longer pay it. `undecided` means this node holds the message, or a payment for it, and has decided nothing yet. 404 means this node holds nothing about the hash, which says nothing about the message: ask other nodes. Needs no authentication.",
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "required": true,
+            "description": "The app message's hash.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What this node holds about the message.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "hash",
+                        "decision"
+                      ],
+                      "properties": {
+                        "hash": {
+                          "type": "string"
+                        },
+                        "decision": {
+                          "type": "string",
+                          "enum": [
+                            "applied",
+                            "refused",
+                            "undecided",
+                            "unpayable"
+                          ]
+                        },
+                        "reason": {
+                          "type": "string",
+                          "description": "Present when refused: why."
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This node holds nothing about the hash.",
             "content": {
               "application/json": {
                 "schema": {

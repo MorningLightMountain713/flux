@@ -278,6 +278,31 @@ describe('messageStore tests', () => {
       expect(dbHelperStub.insertOneToDatabase.calledOnce).to.be.true;
     });
 
+    it('stamps the row with the last block stamp a payment can carry, by the signed timestamp', async () => {
+      const message = {
+        type: 'fluxappregister',
+        version: 1,
+        appSpecifications: { name: 'test' },
+        hash: 'hash123',
+        timestamp: 1_700_000_000_000,
+        signature: 'sig123',
+      };
+
+      appsRepositoryStub.getPermanentMessage.resolves(null);
+      appsRepositoryStub.getTempMessage.resolves(null);
+      const mockDb = { db: sinon.stub().returns('database') };
+      dbHelperStub.databaseConnection.returns(mockDb);
+      dbHelperStub.findOneInDatabase.resolves(null);
+      dbHelperStub.insertOneToDatabase.resolves();
+
+      await messageStore.storeAppTemporaryMessage(message, { furtherVerification: false });
+
+      const [, , stored] = dbHelperStub.insertOneToDatabase.firstCall.args;
+      expect(stored.payableUntil).to.deep.equal(new Date(1_700_000_000_000 + 60 * 60 * 1000));
+      expect(stored).to.not.have.property('expireAt');
+      expect(stored.receivedAt).to.be.instanceOf(Date);
+    });
+
     it('should return promotion info when hash is already on chain', async () => {
       const message = {
         type: 'fluxappregister',

@@ -10,6 +10,7 @@ const retiredSchema = require('../../ZelBack/src/services/migrations/retiredSche
 const ERRORS_LOCATIONS = config.get('database.appsglobal.collections.appsInstallingErrorsLocations');
 const ERRORS_BROADCASTS = config.get('database.appsglobal.collections.appsInstallingErrorsBroadcasts');
 const CONTENT_MANIFESTS = config.get('database.appsglobal.collections.appContentManifests');
+const TEMP_MESSAGES = config.get('database.appsglobal.collections.appsTemporaryMessages');
 
 describe('retiredSchema', () => {
   let collectionsPresent;
@@ -70,6 +71,21 @@ describe('retiredSchema', () => {
     await retiredSchema.dropRetiredSchema();
 
     expect(droppedIndexes).to.deep.equal([`${ERRORS_LOCATIONS}.broadcastedAt_1`]);
+  });
+
+  it('drops the temporary pool\'s expiry index, and keeps the plain arrival index of the same name', async () => {
+    indexesOf[TEMP_MESSAGES] = [{ name: 'receivedAt_1', key: { receivedAt: 1 }, expireAfterSeconds: 3600 }];
+
+    await retiredSchema.dropRetiredSchema();
+
+    expect(droppedIndexes).to.deep.equal([`${TEMP_MESSAGES}.receivedAt_1`]);
+
+    droppedIndexes.length = 0;
+    indexesOf[TEMP_MESSAGES] = [{ name: 'receivedAt_1', key: { receivedAt: 1 } }];
+
+    await retiredSchema.dropRetiredSchema();
+
+    expect(droppedIndexes).to.deep.equal([]);
   });
 
   it('drops the content manifests\' index by app name, and keeps the one by identity', async () => {
