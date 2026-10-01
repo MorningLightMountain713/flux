@@ -257,14 +257,23 @@ describe('routesV2 - the /v2 surface', () => {
 
     const read = () => supertest(app).get('/v2/apps/messages/abc123/decision');
 
-    it('answers the decision of a message this node applied', async () => {
-      decisionsFor.resolves(new Map([['abc123', { hash: 'abc123', decision: 'applied', height: 500 }]]));
+    it('answers the decision of a message this node applied, with the owner and the identity it gave the app', async () => {
+      decisionsFor.resolves(new Map([['abc123', { hash: 'abc123', decision: 'applied', height: 500, identity: 'bident' }]]));
+      getPermanentMessage.resolves({ hash: 'abc123', appSpecifications: { name: 'app', owner: '1OwnerAddress' } });
 
       const res = await read();
 
       expect(res.status).to.equal(200);
-      expect(res.body.data).to.deep.equal({ hash: 'abc123', decision: 'applied' });
+      expect(res.body.data).to.deep.equal({ hash: 'abc123', decision: 'applied', owner: '1OwnerAddress', identity: 'bident' });
       sinon.assert.calledOnceWithExactly(decisionsFor, ['abc123']);
+    });
+
+    it('answers an applied decision whose message it no longer holds with no owner', async () => {
+      decisionsFor.resolves(new Map([['abc123', { hash: 'abc123', decision: 'applied', identity: 'bident' }]]));
+
+      const res = await read();
+
+      expect(res.body.data).to.deep.equal({ hash: 'abc123', decision: 'applied', owner: null, identity: 'bident' });
     });
 
     it('answers a refusal with its reason', async () => {
@@ -273,6 +282,7 @@ describe('routesV2 - the /v2 surface', () => {
       const res = await read();
 
       expect(res.body.data).to.deep.equal({ hash: 'abc123', decision: 'refused', reason: 'paid-late' });
+      sinon.assert.notCalled(getPermanentMessage);
     });
 
     it('answers unpayable for a message it dropped unpaid, over a copy it still holds', async () => {
