@@ -55,6 +55,24 @@ export async function promoteFluxDriveManifest(appName, identity) {
   return post(`/manifest/${encodeURIComponent(appName)}/promote`, { identity });
 }
 
+// The writes held pending, each naming the spec message it rides in; those
+// naming one message when a hash is given.
+export async function getFluxDrivePending(messageHash) {
+  return get(messageHash ? `/pending?messageHash=${encodeURIComponent(messageHash)}` : '/pending');
+}
+
+// Decide the pending writes naming a message as the nodes' majority would:
+// { decision: 'applied' | 'refused' | 'unpayable' | 'undecided', identity? }.
+// The stub asks the fleet itself; this is for a suite that models an outcome.
+export async function decideFluxDrivePending(messageHash, verdict) {
+  return post(`/pending/${encodeURIComponent(messageHash)}/decide`, verdict);
+}
+
+// Ask the fleet about every pending write now, instead of at the next poll.
+export async function askFluxDrivePending() {
+  return post('/pending/ask');
+}
+
 // Toggle strict (floors/409s/confirmed-gating), slow (per-request delay ms), or
 // fail5xx (data plane returns 503).
 export async function setFluxDriveMode(mode) {
