@@ -109,6 +109,7 @@ const harnessOverrides = {
         appDecisions: 'appdecisions', // one decision per paid app message: applied, or refused with its reason
         appsInformation: 'zelappsinformation', // stores actual state of flux app configuration info - initial state and its overwrites with update messages
         appsTemporaryMessages: 'zelappstemporarymessages', // storages for all flux apps messages that are not yet confirmed on the flux network
+        appsUnpayableMessages: 'appsunpayablemessages',
         appsInstallingLocations: 'appsInstallingLocations',
         appsInstallingErrorsLocations: 'appsInstallingErrorsLocations', // stores install errors location of flux apps as documents containing name, hash, ip, obtainedAt
         appStateEvents: 'appstateevents',
@@ -392,7 +393,6 @@ const harnessOverrides = {
     installingTtlS: 900,
     installingRenewalS: 720,
     installErrorTtlS: 86_400,
-    tempMsgTtlS: 3600,
     gossipValidityS: 300,
     clockSkewAllowanceMs: 120_000,
     hashSyncIntervalMs: 1_800_000,

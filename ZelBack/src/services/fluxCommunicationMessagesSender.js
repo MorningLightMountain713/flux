@@ -500,7 +500,7 @@ async function respondWithTempMessages(peer, sinceTimestamp = 0) {
     const database = db.db(config.get('database.appsglobal.database'));
     const query = sinceTimestamp > 0 ? { receivedAt: { $gt: new Date(sinceTimestamp) } } : {};
     const cursor = database.collection(globalAppsTempMessages)
-      .find(query, { projection: { _id: 0, receivedAt: 0, expireAt: 0 } })
+      .find(query, { projection: { _id: 0, receivedAt: 0, payableUntil: 0, windowClosedAt: 0 } })
       .sort({ receivedAt: 1 });
 
     const batchSize = 2000;

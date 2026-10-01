@@ -46,6 +46,7 @@ const ordinalRegister = require('./quorumGrant/ordinalRegister');
 const ordinalRegisterSeam = require('./appMesh/ordinalRegisterSeam');
 const meshOrdinals = require('./appMesh/meshOrdinals');
 const messageStore = require('./appMessaging/messageStore');
+const temporaryPoolSweep = require('./appMessaging/temporaryPoolSweep');
 const crontabAndMountsCleanup = require('./appLifecycle/crontabAndMountsCleanup');
 const appJanitor = require('./appLifecycle/appJanitor');
 const meshReconciler = require('./appMesh/meshReconciler');
@@ -128,7 +129,6 @@ function bootDelay(ms) { return Math.round(ms * bootDelayMultiplier); }
 const portRestoreIntervalMs = config.get('fluxapps.portRestoreIntervalMs');
 const cpuCheckIntervalMs = config.get('fluxapps.cpuCheckIntervalMs');
 const imageComplianceIntervalMs = config.get('fluxapps.imageComplianceIntervalMs');
-const tempMsgTtlS = config.get('fluxapps.tempMsgTtlS');
 const imageReaperIntervalMs = config.get('fluxapps.imageReaperIntervalMs');
 const imageCacheEnabled = config.get('fluxapps.imageCacheEnabled');
 
@@ -375,11 +375,10 @@ async function startFluxFunctions() {
         await appUninstaller.recoverOwedTeardowns();
         log.info('Local database prepared');
         log.info('Preparing temporary database...');
-        // no need to drop temporary messages
+        // The pool's rows are kept across a restart: the chain, not a clock,
+        // decides when one leaves.
         const databaseTemp = db.db(config.get('database.appsglobal.database'));
-        await ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appsTemporaryMessages')), [
-          { key: { receivedAt: 1 }, expireAfterSeconds: tempMsgTtlS },
-        ]);
+        await temporaryPoolSweep.prepareCollection();
         log.info('Temporary database prepared');
         log.info('Preparing Flux Apps locations');
 
@@ -453,12 +452,13 @@ async function startFluxFunctions() {
         // not reject.
         explorerService.initiateBlockProcessor({ deepRestore: true });
         log.info('Flux Block Processing Service started');
-        // Decides stored app messages whenever chain state is consistent, and
-        // derives the app registry from the decisions. The decisions collection
-        // is prepared with the local database.
+        // Decides stored app messages whenever chain state is consistent,
+        // derives the app registry from the decisions, and sweeps the pool as
+        // the scan moves. The collections are prepared with the local database.
         capabilities.onFirstUp('localDbPrepared', () => {
           appRegistry.start();
           decider.start();
+          temporaryPoolSweep.start();
         });
       }),
       runOwner('apps', async () => {

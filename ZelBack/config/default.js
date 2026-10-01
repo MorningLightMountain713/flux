@@ -91,6 +91,7 @@ module.exports = {
         appDecisions: 'appdecisions', // one decision per paid app message: applied, or refused with its reason
         appsInformation: 'zelappsinformation', // stores actual state of flux app configuration info - initial state and its overwrites with update messages
         appsTemporaryMessages: 'zelappstemporarymessages', // storages for all flux apps messages that are not yet confirmed on the flux network
+        appsUnpayableMessages: 'appsunpayablemessages', // v9 messages this node dropped from the pool with no payment inside their window: the chain can no longer pay them
         appsInstallingLocations: 'appsinstallinglocations', // stores install location of flux apps as documents containing name, ip, obtainedAt
         limitCounterRecords: 'limitcounterrecords', // gossiped record of one caller's use of a limited feature, keyed by the counter's hash; self-reaping on its own endsAt
         appsInstallingErrorsLocations: 'appsInstallingErrorsLocations', // stores install errors location of flux apps as documents containing name, hash, ip, obtainedAt
@@ -816,7 +817,6 @@ module.exports = {
     // key kept the old mechanism's number for three months while nothing read
     // it. The 24h the code has actually run since is the value.
     installErrorTtlS: 86_400,
-    tempMsgTtlS: 3600, // collection-level index, serviceManager.js
     clockSkewAllowanceMs: 120_000, // how far a peer's self-reported timestamp may run AHEAD of ours before we distrust it. Bounds clock disagreement, NOT message usefulness, so it is deliberately not the 5-min staleness window in verifyTimestampInFluxBroadcast. Consumed by both the envelope guard in verifyFluxBroadcast and the broadcastedAt guard in messageStore; boundary tests in both suites are written relative to this value, so changing it moves the tested boundary with it rather than breaking them
     hashSyncIntervalMs: 1_800_000,
     cpuCheckIntervalMs: 900_000,

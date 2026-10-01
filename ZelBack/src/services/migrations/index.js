@@ -4,6 +4,7 @@ const log = require('../../lib/log');
 const nodeIdentityMigration = require('../appDatabase/nodeIdentityMigration');
 const containerLabelBackfill = require('../appLifecycle/containerLabelBackfill');
 const retiredSchema = require('./retiredSchema');
+const temporaryPoolSweep = require('../appMessaging/temporaryPoolSweep');
 const paymentPositions = require('./paymentPositions');
 
 // One-off work that brings a node up to date with a change FluxOS has already
@@ -45,6 +46,13 @@ const migrations = [
     before: 'localDbPrepared',
     description: 'drop collections and indexes no version reads',
     run: () => retiredSchema.dropRetiredSchema(),
+  },
+  {
+    id: 'temporary-pool-deadlines',
+    // After the retired expiry index is dropped, before the sweep reads the stamp.
+    before: 'localDbPrepared',
+    description: 'stamp the payment deadline on pool rows written under the wall-clock expiry',
+    run: () => temporaryPoolSweep.stampDeadlines(),
   },
   {
     id: 'payment-positions',

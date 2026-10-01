@@ -17,6 +17,7 @@ const { getSpec, assertVersionActivated } = require('../utils/specLibs');
 const { ensureProvidersRegistered } = require('../utils/specCutover');
 const { getStateBeforeHeight } = require('../appDatabase/appSpecHistory');
 const appHistory = require('../appDecisions/appHistory');
+const temporaryPoolSweep = require('./temporaryPoolSweep');
 const serviceHelper = require('../serviceHelper');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const globalState = require('../utils/globalState');
@@ -254,9 +255,6 @@ async function storeAppTemporaryMessage(message, options = {}) {
     });
   }
 
-  const receivedAt = Date.now();
-  const validTill = receivedAt + (60 * 60 * 1000);
-
   const serialized = appEvent.serialize();
   const value = {
     type: serialized.type,
@@ -265,8 +263,8 @@ async function storeAppTemporaryMessage(message, options = {}) {
     hash: serialized.hash,
     timestamp: serialized.timestamp,
     signature: serialized.signature,
-    receivedAt: new Date(receivedAt),
-    expireAt: new Date(validTill),
+    receivedAt: new Date(),
+    payableUntil: temporaryPoolSweep.payableUntil(serialized.timestamp),
     arcaneAttestation: serialized.arcaneAttestation,
   };
   if (serialized.contentHash !== undefined) {

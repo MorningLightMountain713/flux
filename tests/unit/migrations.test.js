@@ -15,6 +15,7 @@ describe('migrations tests', () => {
       nodeIdentityMigration: { migrateNodeIdentity: sinon.stub().resolves({ migrated: [] }) },
       containerLabelBackfill: { backfillContainerLabels: sinon.stub().resolves({ covered: true }) },
       retiredSchema: { dropRetiredSchema: sinon.stub().resolves({ collections: [], indexes: [] }) },
+      temporaryPoolSweep: { stampDeadlines: sinon.stub().resolves({ stamped: 0 }) },
       paymentPositions: { backfillPaymentPositions: sinon.stub().resolves({ positioned: 0, unresolved: 0 }) },
     };
     migrations = proxyquire('../../ZelBack/src/services/migrations', {
@@ -22,6 +23,7 @@ describe('migrations tests', () => {
       '../appDatabase/nodeIdentityMigration': stubs.nodeIdentityMigration,
       '../appLifecycle/containerLabelBackfill': stubs.containerLabelBackfill,
       './retiredSchema': stubs.retiredSchema,
+      '../appMessaging/temporaryPoolSweep': stubs.temporaryPoolSweep,
       './paymentPositions': stubs.paymentPositions,
     });
   });
@@ -53,7 +55,14 @@ describe('migrations tests', () => {
 
       expect(stubs.nodeIdentityMigration.migrateNodeIdentity.calledOnce).to.be.true;
       expect(stubs.retiredSchema.dropRetiredSchema.calledOnce).to.be.true;
+      expect(stubs.temporaryPoolSweep.stampDeadlines.calledOnce).to.be.true;
       expect(stubs.containerLabelBackfill.backfillContainerLabels.called).to.be.false;
+    });
+
+    it('stamps the pool\'s deadlines after the retired expiry index is dropped', async () => {
+      await migrations.runBefore('localDbPrepared');
+
+      sinon.assert.callOrder(stubs.retiredSchema.dropRetiredSchema, stubs.temporaryPoolSweep.stampDeadlines);
     });
 
     it('runs the container work before the boot reconcile decides, while containers are still down', async () => {
@@ -84,7 +93,7 @@ describe('migrations tests', () => {
 
       const results = await migrations.runBefore('localDbPrepared');
 
-      expect(results).to.deep.equal([{ id: 'node-identity', ok: false }, { id: 'retired-schema', ok: true }]);
+      expect(results).to.deep.equal([{ id: 'node-identity', ok: false }, { id: 'retired-schema', ok: true }, { id: 'temporary-pool-deadlines', ok: true }]);
       sinon.assert.calledWithMatch(stubs.log.error, /node-identity failed/);
     });
 
@@ -104,10 +113,13 @@ describe('migrations tests', () => {
           migrateNodeIdentity: async () => { order.push('first'); throw new Error('boom'); },
         },
         '../appLifecycle/containerLabelBackfill': {
-          backfillContainerLabels: async () => { order.push('third'); },
+          backfillContainerLabels: async () => { order.push('fifth'); },
         },
         './retiredSchema': {
           dropRetiredSchema: async () => { order.push('second'); },
+        },
+        '../appMessaging/temporaryPoolSweep': {
+          stampDeadlines: async () => { order.push('third'); },
         },
         './paymentPositions': {
           backfillPaymentPositions: async () => { order.push('fourth'); },
@@ -120,8 +132,8 @@ describe('migrations tests', () => {
 
       const results = await rebuilt.runBefore('localDbPrepared');
 
-      expect(order).to.deep.equal(['first', 'second', 'fourth', 'third']);
-      expect(results.map((r) => r.ok)).to.deep.equal([false, true, true, true]);
+      expect(order).to.deep.equal(['first', 'second', 'third', 'fourth', 'fifth']);
+      expect(results.map((r) => r.ok)).to.deep.equal([false, true, true, true, true]);
     });
   });
 });
