@@ -105,6 +105,8 @@ module.exports = [
   { method: 'get', path: '/zelid/emergencyphrase', none: NONE.OWN_ANSWER, handler: 'idService#emergencyPhrase' }, // DEPRECATED
   { method: 'get', path: '/flux/nodetier', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxService#getNodeTier' },
   { method: 'get', path: '/flux/info', none: NONE.PROCESS, cache: '60 seconds', handler: 'fluxService#getFluxInfo' },
+  // Uncached: the answer depends on who is asking.
+  { method: 'get', path: '/flux/uplink', guards: ['rejectQueryParameters'], none: NONE.PROCESS, handler: 'uplinkService#uplinkAPI' },
   { method: 'get', path: '/flux/timezone', none: NONE.PROCESS, handler: 'fluxService#getFluxTimezone' },
   { method: 'get', path: '/flux/version', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxService#getFluxVersion' },
   { method: 'get', path: '/flux/nodejsversions', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxService#getNodeJsVersions' },

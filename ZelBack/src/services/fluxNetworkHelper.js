@@ -6,6 +6,7 @@ const { WIFToPrivKey, privKeyToPubKey } = require('./utils/fluxCryptoUtils');
 const fs = require('fs').promises;
 const os = require('os');
 const dgram = require('dgram');
+const { EventEmitter } = require('events');
 const net = require('net');
 const log = require('../lib/log');
 const serviceHelper = require('./serviceHelper');
@@ -65,6 +66,12 @@ let localSocketAddress = null;
 // clock step never serves the cache stale or expires it early.
 let localSocketAddressFreshUntil = 0n;
 const LOCAL_SOCKET_ADDRESS_TTL_NS = 60n * 1_000_000_000n;
+// The last address this node learned. A benchmark that does not answer clears
+// localSocketAddress but gives the node no new address, so this keeps it.
+let lastKnownSocketAddress = null;
+// Emits 'change' with the new address when the node learns one that differs
+// from lastKnownSocketAddress.
+const localSocketAddressEvents = new EventEmitter();
 
 // Whether ufw reports "Status: active", with a monotonic freshness deadline. The
 // answer only changes when an operator toggles ufw by hand, yet periodic callers
@@ -127,21 +134,17 @@ function getInterfaceIp(interfaceName) {
 }
 
 /**
- * The node's default routes from /proc/net/route, best metric first.
+ * The IPv4 default routes whose interface is operationally up, best metric
+ * first. The first is the route this node's traffic leaves by.
  * @returns {Promise<Array<{iface: string, gateway: string, metric: number}>>}
+ * @throws When the routing table cannot be read.
  */
-async function listDefaultRoutes() {
-  // Read the routing table from /proc/net/route
+async function getDefaultRoutes() {
   const routeData = await fs.readFile('/proc/net/route', 'utf8');
   const lines = routeData.trim().split('\n');
 
-  // Skip header line
-  if (lines.length < 2) {
-    return [];
-  }
-
-  // Find default routes (destination 0.0.0.0)
   const defaultRoutes = [];
+  // The first line is the header.
   for (let i = 1; i < lines.length; i += 1) {
     const fields = lines[i].split('\t');
     if (fields.length < 11) {
@@ -151,25 +154,28 @@ async function listDefaultRoutes() {
 
     const [iface, destination, gateway, flags, , , metric] = fields;
 
-    // Check if this is a default route (destination is 0.0.0.0)
-    if (destination === '00000000') {
-      // Check if the route is up (flag 0x1) and has a gateway (flag 0x2)
-      // eslint-disable-next-line no-bitwise
-      const flagsNum = parseInt(flags, 16);
-      // eslint-disable-next-line no-bitwise
-      if ((flagsNum & 0x1) && (flagsNum & 0x2)) {
-        defaultRoutes.push({
-          iface,
-          gateway: hexToIp(gateway),
-          metric: parseInt(metric, 10),
-        });
-      }
+    // A default route has destination 0.0.0.0, and is up (flag 0x1) with a
+    // gateway (flag 0x2).
+    // eslint-disable-next-line no-bitwise
+    const flagsNum = parseInt(flags, 16);
+    // eslint-disable-next-line no-bitwise
+    if (destination === '00000000' && (flagsNum & 0x1) && (flagsNum & 0x2)) {
+      defaultRoutes.push({
+        iface,
+        gateway: hexToIp(gateway),
+        metric: parseInt(metric, 10),
+      });
     }
   }
 
-  // Sort by metric (lowest first) so the best default route leads
   defaultRoutes.sort((a, b) => a.metric - b.metric);
-  return defaultRoutes;
+
+  const up = [];
+  for (const route of defaultRoutes) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await isInterfaceUp(route.iface)) up.push(route);
+  }
+  return up;
 }
 
 /**
@@ -179,14 +185,7 @@ async function listDefaultRoutes() {
  */
 async function getDefaultRouteInterface() {
   try {
-    const defaultRoutes = await listDefaultRoutes();
-    // eslint-disable-next-line no-restricted-syntax
-    for (const route of defaultRoutes) {
-      // eslint-disable-next-line no-await-in-loop
-      const isUp = await isInterfaceUp(route.iface);
-      if (isUp) return route.iface;
-    }
-    return null;
+    return (await getDefaultRoutes())[0]?.iface ?? null;
   } catch (error) {
     log.error(`Failed to read default routes: ${error.message}`);
     return null;
@@ -196,29 +195,19 @@ async function getDefaultRouteInterface() {
 /**
  * Checks if the node has a public IP directly configured on the default route interface.
  * This is a strong indicator of a static IP (data center/VPS/dedicated server).
- * Uses the Linux routing table to find the default route interface, then checks
- * if that interface has a public IP assigned.
  * @returns {Promise<boolean|null>} True if a public IP is configured on the
  *   default route interface, false if none is, null if the routing table could
  *   not be read - which is not the same answer as "there is none".
  */
 async function hasPublicIpOnInterface() {
   try {
-    const defaultRoutes = await listDefaultRoutes();
-    if (defaultRoutes.length === 0) {
-      return false;
-    }
+    const defaultRoutes = await getDefaultRoutes();
 
-    // Find the first interface that is operationally up
     for (const route of defaultRoutes) {
-      // eslint-disable-next-line no-await-in-loop
-      const isUp = await isInterfaceUp(route.iface);
-      if (isUp) {
-        const ip = getInterfaceIp(route.iface);
-        if (ip) {
-          log.info(`Public IP ${ip} found on default route interface ${route.iface}`);
-          return true;
-        }
+      const ip = getInterfaceIp(route.iface);
+      if (ip) {
+        log.info(`Public IP ${ip} found on default route interface ${route.iface}`);
+        return true;
       }
     }
 
@@ -847,6 +836,35 @@ function setLocalSocketAddress(value) {
   // that syncs from itself learns nothing, and it spends one of very few
   // attempts doing so. Optional because the unit suite stubs peerState.
   peerManager.setOwnSocketAddress?.(localSocketAddress);
+  if (localSocketAddress && localSocketAddress !== lastKnownSocketAddress) {
+    lastKnownSocketAddress = localSocketAddress;
+    localSocketAddressEvents.emit('change', localSocketAddress);
+  }
+}
+
+/**
+ * @returns {string|null} The last address this node learned (ip:port), without
+ *   asking the benchmark; null before the first.
+ */
+function getKnownLocalSocketAddress() {
+  return lastKnownSocketAddress;
+}
+
+/**
+ * @param {function(string): void} listener Called with the new address (ip:port)
+ *   each time the node learns an address that differs from the last one.
+ * @returns {void}
+ */
+function onLocalSocketAddressChange(listener) {
+  localSocketAddressEvents.on('change', listener);
+}
+
+/**
+ * @param {function(string): void} listener
+ * @returns {void}
+ */
+function offLocalSocketAddressChange(listener) {
+  localSocketAddressEvents.off('change', listener);
 }
 
 /**
@@ -1973,6 +1991,9 @@ module.exports = {
   checkFluxAvailability,
   getLocalSocketAddress,
   getCachedLocalSocketAddress,
+  getKnownLocalSocketAddress,
+  onLocalSocketAddressChange,
+  offLocalSocketAddressChange,
   getFluxNodePrivateKey,
   getFluxNodePublicKey,
   MAX_KEEPALIVE_PORTS,
@@ -1981,6 +2002,7 @@ module.exports = {
   getDOSState,
   setDOSStateApi,
   getNumberOfPeers,
+  getDefaultRoutes,
   hasPublicIpOnInterface,
   getDefaultRouteInterface,
   denyPort,
