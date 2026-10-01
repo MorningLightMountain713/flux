@@ -81,7 +81,8 @@ describe('mesh traffic across a link smaller than the overlay', function () {
       hookCtx: this,
       nodes: 3,
       tickerAutostart: false,
-      systemdMode: true,
+      fluxosJournal: true,
+      arcaneHost: true,
       shutdownd: 'none',
       arcane: true,
       // Founding photos pin committees at spec anchor heights, which needs the
