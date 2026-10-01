@@ -1005,6 +1005,22 @@ async function getTempMessageByName(name) {
   );
 }
 
+/**
+ * The versions of the manifests held in the pool with an app's waiting
+ * updates: a manifest a submission carries takes the number after the highest
+ * of these and the stored one.
+ * @param {string} identity
+ * @returns {Promise<number[]>}
+ */
+async function carriedManifestVersions(identity) {
+  const rows = await dbHelper.findInDatabase(
+    globalDb(), globalAppsTempMessages,
+    { 'contentManifest.identity': identity },
+    { projection: { _id: 0, 'contentManifest.version': 1 } },
+  );
+  return rows.map((row) => row.contentManifest.version);
+}
+
 // ── Ingress attestations ───────────────────────────────────────────
 // One node-signed record per (hash, node): where a register/update entered the
 // network. Keyed uniquely so records from different ingress nodes never collide.
@@ -1705,6 +1721,7 @@ module.exports = {
   getPermanentMessage,
   getTempMessage,
   getTempMessageByName,
+  carriedManifestVersions,
   listAppMessagesByName,
   // ingress attestations
   storeIngressAttestation,

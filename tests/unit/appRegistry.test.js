@@ -33,10 +33,10 @@ describe('appRegistry', () => {
     await loadSpecLibrary();
   });
 
-  // A stored legacy message whose spec is `spec`.
-  function message(hash, spec) {
+  // A stored legacy message whose spec is `spec`, carrying what `extra` says.
+  function message(hash, spec, extra = {}) {
     return {
-      type: 'fluxappupdate', version: 1, appSpecifications: spec.serialize(), hash, timestamp: 1, signature: 's', txid: `tx-${hash}`, height: 1, valueSat: 1,
+      type: 'fluxappupdate', version: 1, appSpecifications: spec.serialize(), hash, timestamp: 1, signature: 's', txid: `tx-${hash}`, height: 1, valueSat: 1, ...extra,
     };
   }
 
@@ -81,7 +81,7 @@ describe('appRegistry', () => {
         removeContentManifests: sinon.stub().resolves(),
       },
       './registryManager': { storeGlobalSpec: sinon.stub().resolves() },
-      '../appLifecycle/contentSlotService': { promoteQuarantinedManifest: sinon.stub().resolves() },
+      '../appLifecycle/contentSlotService': { promoteQuarantinedManifest: sinon.stub().resolves(), storeCarriedManifest: sinon.stub().resolves(true) },
       '../appMesh/foundingCommittee': { forget: sinon.stub().resolves(), retract: sinon.stub().resolves() },
       '../utils/fluxEventBus': { publish: sinon.stub() },
       '../appDecisions/decider': { onDecided: sinon.stub(), onFullPass: sinon.stub() },
@@ -245,6 +245,43 @@ describe('appRegistry', () => {
       sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeAppInstallingErrorRecords, 'MyApp');
       // Updates held ahead of the registration are judged now that it exists.
       sinon.assert.calledOnceWithExactly(stubs['../appMessaging/messageStore'].processPendingUpdates, 'MyApp');
+    });
+
+    it('stores the manifest its applied message carries, for the row it wrote, before the spec-stored event; a message carrying none stores nothing', async () => {
+      const spec = await v8Spec({ name: 'MyApp' });
+      const carried = { appName: 'MyApp', identity: 'MyApp', version: 2, slots: { sealed: { ciphertext: 'c' } } };
+      messages = [message('u', spec, { contentManifest: carried }), message('r', spec)];
+      rows = [{ ...(await instantiatedSpec(spec, { hash: 'r', height: 980_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }];
+      const order = [];
+      const contentSlotService = stubs['../appLifecycle/contentSlotService'];
+      contentSlotService.storeCarriedManifest.callsFake(async () => order.push('manifest'));
+      stubs['../utils/fluxEventBus'].publish.callsFake((event) => order.push(event));
+
+      await registry.applyDecided('myapp', [decision('u', { uuid: 'uuid-r' })]);
+
+      sinon.assert.calledOnce(contentSlotService.storeCarriedManifest);
+      const [instance, manifest] = contentSlotService.storeCarriedManifest.firstCall.args;
+      expect(instance.hash).to.equal('u');
+      expect(instance.name).to.equal('MyApp');
+      expect(manifest).to.deep.equal(carried);
+      expect(order.slice(0, 2)).to.deep.equal(['manifest', 'app:specStored']);
+
+      contentSlotService.storeCarriedManifest.resetHistory();
+      rows = [{ ...(await instantiatedSpec(spec, { hash: 'u', height: 985_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }];
+      await registry.applyDecided('myapp', [decision('r', { uuid: 'uuid-r', height: 990_000 })]);
+      sinon.assert.notCalled(contentSlotService.storeCarriedManifest);
+    });
+
+    it('writes the row when storing the manifest it carries fails', async () => {
+      const spec = await v8Spec({ name: 'MyApp' });
+      messages = [message('u', spec, { contentManifest: { version: 2 } })];
+      stubs['../appLifecycle/contentSlotService'].storeCarriedManifest.rejects(new Error('provider down'));
+
+      await registry.applyDecided('myapp', [decision('u')]);
+
+      sinon.assert.calledOnce(stubs['./registryManager'].storeGlobalSpec);
+      sinon.assert.calledWithMatch(stubs['../utils/fluxEventBus'].publish, 'app:specStored', { name: 'MyApp', hash: 'u' });
+      sinon.assert.calledWithMatch(stubs['../../lib/log'].warn, /provider down/);
     });
 
     it('moves its row to a later applied message, and replays nothing', async () => {

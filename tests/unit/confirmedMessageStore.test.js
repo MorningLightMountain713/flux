@@ -122,6 +122,18 @@ describe('confirmedMessageStore', () => {
     expect(inserted).to.deep.equal([]);
   });
 
+  it('keeps the manifest a v9 update carries with the stored message', async () => {
+    const carried = {
+      appName: 'myapp', identity: `b${'a'.repeat(52)}`, version: 2, ownedFrom: 2_400_000, slots: { sealed: { ciphertext: 'c' } }, rollout: { strategy: 'immediate' }, timestamp: 1_700_000_000_000, ownerSignature: 'owner-sig',
+    };
+    const message = await domain.paidTempMessage({ version: 2, type: 'fluxappupdate', contentManifest: carried });
+    pay(message);
+
+    await store.storeConfirmedMessages([message]);
+
+    expect(inserted[0].contentManifest).to.deep.equal(carried);
+  });
+
   it('stores an encrypted message whose attestation verifies', async () => {
     const message = await sealedMessage();
     pay(message);

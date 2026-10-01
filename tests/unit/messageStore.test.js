@@ -71,8 +71,21 @@ describe('messageStore tests', () => {
       signature: message.signature,
       hash: message.hash,
       arcaneAttestation,
+      contentManifest: message.contentManifest ?? null,
     });
   }
+
+  // The manifest a spec update carries, as it travels: slots sealed.
+  const CARRIED_MANIFEST = {
+    appName: 'test',
+    identity: `b${'a'.repeat(52)}`,
+    version: 2,
+    ownedFrom: 2_400_000,
+    slots: { sealed: { algorithm: 'aes-256-gcm', ciphertext: 'c', nonce: 'n', tag: 't' } },
+    rollout: { strategy: 'immediate' },
+    timestamp: 1_700_000_000_000,
+    ownerSignature: 'owner-sig',
+  };
 
   /** The real event for an ordinary cleartext message. */
   async function realAppEvent(message) {
@@ -276,6 +289,28 @@ describe('messageStore tests', () => {
 
       expect(result).to.deep.equal({ rebroadcast: true });
       expect(dbHelperStub.insertOneToDatabase.calledOnce).to.be.true;
+    });
+
+    it('keeps the manifest an update carries on the row, and no field for one that carries none', async () => {
+      const update = {
+        type: 'fluxappupdate',
+        version: 2,
+        appSpecifications: { name: 'test' },
+        hash: 'hash123',
+        timestamp: Date.now(),
+        signature: 'sig123',
+      };
+      appsRepositoryStub.getPermanentMessage.resolves(null);
+      appsRepositoryStub.getTempMessage.resolves(null);
+      dbHelperStub.databaseConnection.returns({ db: sinon.stub().returns('database') });
+      dbHelperStub.findOneInDatabase.resolves(null);
+      dbHelperStub.insertOneToDatabase.resolves();
+
+      await messageStore.storeAppTemporaryMessage({ ...update, contentManifest: CARRIED_MANIFEST }, { furtherVerification: false });
+      expect(dbHelperStub.insertOneToDatabase.firstCall.args[2].contentManifest).to.deep.equal(CARRIED_MANIFEST);
+
+      await messageStore.storeAppTemporaryMessage(update, { furtherVerification: false });
+      expect(dbHelperStub.insertOneToDatabase.secondCall.args[2]).to.not.have.property('contentManifest');
     });
 
     it('stamps the row with the last block stamp a payment can carry, by the signed timestamp', async () => {

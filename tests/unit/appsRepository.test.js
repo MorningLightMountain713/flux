@@ -143,6 +143,7 @@ describe('appsRepository', () => {
         globalAppsInformation: 'zelappsinformation',
         localAppsInformation: 'zelappsinformation',
         globalAppsMessages: 'zelappsmessages',
+        globalAppsTempMessages: 'zelappstemporarymessages',
         globalAppsIngressAttestations: 'appingressattestations',
         globalAppsIngressAttestationDigests: 'appingressattestationdigests',
       },
@@ -391,6 +392,20 @@ describe('appsRepository', () => {
       expect(dbHelperStub.bulkWriteInDatabase.firstCall.args[2]).to.deep.equal([]);
     });
 
+  });
+
+  describe('carriedManifestVersions', () => {
+    it('reads the versions of the manifests held in the pool for an identity', async () => {
+      dbHelperStub.findInDatabase.resolves([{ contentManifest: { version: 3 } }, { contentManifest: { version: 2 } }]);
+
+      const versions = await appsRepository.carriedManifestVersions('bident');
+
+      expect(versions).to.deep.equal([3, 2]);
+      const [, collection, query, options] = dbHelperStub.findInDatabase.firstCall.args;
+      expect(collection).to.equal('zelappstemporarymessages');
+      expect(query).to.deep.equal({ 'contentManifest.identity': 'bident' });
+      expect(options.projection).to.deep.equal({ _id: 0, 'contentManifest.version': 1 });
+    });
   });
 
   describe('list accessors', () => {

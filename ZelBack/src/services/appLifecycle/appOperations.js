@@ -1840,11 +1840,14 @@ async function updateAppGlobaly(params) {
   // toward this node's per-app transport key and upload synchronously so it is
   // durably stored before the spec is gossiped. The superseded spec's contentRef
   // hashes are carried over (already stored under identical locators), so the
-  // envelope attaches only new or changed files.
+  // envelope attaches only new or changed files. A manifest the envelope carries
+  // is verified for the listed app and its listed owner, who signed this update,
+  // and rides in the update's message.
+  let carriedManifest = null;
   if (contentCtx) {
-    await uploadSealedContent(spec, contentCtx.content, contentCtx.ownerSigs, {
-      ref: cleanContentHash, timestamp: cleanTimestamp, priorSpec: priorCleartext,
-    });
+    ({ carriedManifest } = await uploadSealedContent(spec, contentCtx.content, contentCtx.ownerSigs, {
+      ref: cleanContentHash, timestamp: cleanTimestamp, identity: appInfo.identity, owner: appInfo.owner, priorSpec: priorCleartext,
+    }));
   }
 
   const messageHASH = await appEventVerifier.computeOutboundHash({
@@ -1879,6 +1882,7 @@ async function updateAppGlobaly(params) {
     signature: cleanSignature,
     arcaneAttestation,
   };
+  if (carriedManifest) temporaryAppMessage.contentManifest = carriedManifest;
 
   await fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage);
   await serviceHelper.delay(1200);

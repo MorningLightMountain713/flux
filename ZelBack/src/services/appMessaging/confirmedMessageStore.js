@@ -108,6 +108,7 @@ async function confirmedEvent(contents, record) {
       ...chain,
       registeredAt,
       arcaneAttestation: contents.arcaneAttestation || null,
+      contentManifest: contents.contentManifest ?? null,
     });
   }
 
