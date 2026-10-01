@@ -14,6 +14,7 @@ function legacySpec({ version = 8, owner = OWNER, lifetime = 1000 } = {}) {
     name: 'MyApp',
     owner,
     isExpired: (state, clock) => clock.currentHeight >= state.height + lifetime,
+    termEndTime: (state, clock) => clock.blockTimeAt(state.height + lifetime),
   };
 }
 
@@ -29,13 +30,14 @@ function v9Spec({ owner = OWNER, ttl = 3600 } = {}) {
       }
       return state.registeredAt + ttl < clock.tipBlockTime;
     },
+    termEndTime: (state) => state.registeredAt + ttl,
   };
 }
 
 let nextTimestamp = 1;
 function entry({
   hash, type = 'registration', height, txIndex = 0, valueSat = 100, spec = legacySpec(),
-  signers = [OWNER], blockTime = height * 10, timestamp = nextTimestamp++,
+  signers = [OWNER], blockTime = height * 10, timestamp = blockTime * 1000 - 60_000 + (nextTimestamp++),
 }) {
   return {
     hash,
@@ -73,6 +75,10 @@ function makeJudge(overrides = {}) {
       return e.record.height * 10;
     },
     isValidationError: (error) => error.name === 'ValidationError',
+    contentInTheClear: (spec) => spec.clear === true,
+    secretsRefusal: async () => null,
+    blockTimeAtHeight: async (height) => height * 10,
+    nameReservedActivation: () => 0,
     ...overrides,
   };
   return { judge, calls };
@@ -92,7 +98,7 @@ describe('decisionRule', () => {
       const result = await decide([entry({ hash: 'r', height: 100 })]);
       const [d] = result.decisions;
       expect(d).to.include({
-        hash: 'r', name: 'myapp', decision: 'applied', uuid: 'uuid-MyApp-r', identity: 'MyApp', termStart: 1000, fee: '10', ruleVersion: 1,
+        hash: 'r', name: 'myapp', decision: 'applied', uuid: 'uuid-MyApp-r', identity: 'MyApp', termStart: 1000, fee: '10', ruleVersion: 2,
       });
       expect(result.blocked).to.equal(null);
     });
@@ -127,6 +133,64 @@ describe('decisionRule', () => {
       expect(verdicts(await decide([entry({ hash: 'r', height: 100, spec: null })]))).to.deep.equal(['invalid']);
       const { judge } = makeJudge({ activationHeight: () => 200 });
       expect(verdicts(await decide([entry({ hash: 'r', height: 100 })], judge))).to.deep.equal(['not-activated']);
+    });
+  });
+
+  describe('a v9 message', () => {
+    it('is refused when its payment block is stamped more than an hour after its signing; a v8 message is not', async () => {
+      const late = (await decide([entry({ hash: 'r', height: 100, spec: v9Spec(), timestamp: 100 * 10 * 1000 - 61 * 60 * 1000 })])).decisions;
+      expect(late[0].reason).to.equal('paid-late');
+      const inTime = (await decide([entry({ hash: 'r', height: 100, spec: v9Spec(), timestamp: 100 * 10 * 1000 - 60 * 60 * 1000 })])).decisions;
+      expect(inTime[0].decision).to.equal('applied');
+      const legacy = (await decide([entry({ hash: 'r', height: 100, spec: legacySpec(), timestamp: 100 * 10 * 1000 - 61 * 60 * 1000 })])).decisions;
+      expect(legacy[0].decision).to.equal('applied');
+    });
+
+    it('is refused as invalid when it is readable and carries content in the clear; a sealed one is not judged', async () => {
+      const clear = (await decide([entry({ hash: 'r', height: 100, spec: { ...v9Spec(), clear: true } })])).decisions;
+      expect(clear[0].reason).to.equal('invalid');
+      const sealed = (await decide([entry({ hash: 'r', height: 100, spec: { ...v9Spec(), clear: true, sealed: true } })])).decisions;
+      expect(sealed[0].decision).to.equal('applied');
+    });
+  });
+
+  describe('the name hold', () => {
+    const other = '1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2';
+    it('refuses another owner the name within 30 days of the last app\'s term end, and takes the last owner, and anyone after 30 days', async () => {
+      const soon = await decide([entry({ hash: 'first', height: 100 }), entry({ hash: 'again', height: 1100, signers: [other] })]);
+      expect(verdicts(soon)).to.deep.equal(['applied', 'name-reserved']);
+      const own = await decide([entry({ hash: 'first', height: 100 }), entry({ hash: 'again', height: 1100 })]);
+      expect(verdicts(own)).to.deep.equal(['applied', 'applied']);
+      const later = await decide([entry({ hash: 'first', height: 100 }), entry({ hash: 'again', height: 1100 + 259_200, signers: [other] })]);
+      expect(verdicts(later)).to.deep.equal(['applied', 'applied']);
+    });
+
+    it('judges nothing before its activation height, and reads a v1-v8 term\'s end as its end height\'s block time', async () => {
+      const { judge } = makeJudge({ nameReservedActivation: () => 2000 });
+      const before = await decide([entry({ hash: 'first', height: 100 }), entry({ hash: 'again', height: 1100, signers: [other] })], judge);
+      expect(verdicts(before)).to.deep.equal(['applied', 'applied']);
+      const heights = [];
+      const { judge: reading } = makeJudge({ blockTimeAtHeight: async (h) => { heights.push(h); return h * 10; } });
+      await decide([entry({ hash: 'first', height: 100 }), entry({ hash: 'again', height: 1100, signers: [other] })], reading);
+      expect(heights).to.deep.equal([1100]);
+    });
+  });
+
+  describe('component secrets', () => {
+    const withSecrets = (spec) => ({ ...spec, getComponentSecrets: () => [{ componentName: 'db', secrets: 'PGP' }] });
+    it('is refused when the judge finds the secrets used before by another owner, and the app\'s own uses are handed to the judge', async () => {
+      const seen = [];
+      const { judge } = makeJudge({
+        secretsRefusal: async (spec, ctx) => { seen.push(ctx); return ctx.isRegistration ? null : { code: 'DUPLICATE_VALUE' }; },
+      });
+      const result = await decide([
+        entry({ hash: 'r', height: 100, spec: withSecrets(legacySpec()) }),
+        entry({ hash: 'u', type: 'update', height: 200, spec: withSecrets(legacySpec()) }),
+      ], judge);
+      expect(verdicts(result)).to.deep.equal(['applied', 'secrets-conflict']);
+      expect(seen[0].ownUses).to.deep.equal([]);
+      expect(seen[1].ownUses).to.deep.equal([{ appName: 'myapp', owner: OWNER, secrets: 'PGP' }]);
+      expect(seen[1].record.height).to.equal(200);
     });
   });
 

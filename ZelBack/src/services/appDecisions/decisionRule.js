@@ -18,7 +18,11 @@
  */
 
 /** Decisions carry the rule version they were made under. */
-const RULE_VERSION = 1;
+const RULE_VERSION = 2;
+/** A v9 message is paid for this long after its signing, by its block's stamp. */
+const PAYMENT_WINDOW_MS = 60 * 60 * 1000;
+/** After an app's term ends, only its last owner may register the name for this long. */
+const NAME_HOLD_SECONDS = 30 * 24 * 60 * 60;
 
 const APPLIED = 'applied';
 const REFUSED = 'refused';
@@ -63,6 +67,23 @@ function decisionFor(entry, name, fields) {
 
 function refused(entry, name, reason, fee = null) {
   return decisionFor(entry, name, { decision: REFUSED, reason, fee: fee === null ? null : String(fee) });
+}
+
+/**
+ * The secrets the app that holds this name carries in its applied messages
+ * before index `i`: what an update of its own may keep, whoever it names as
+ * owner.
+ */
+function ownSecretUses(entries, i, name) {
+  const uses = [];
+  for (let k = 0; k < i; k += 1) {
+    const earlier = entries[k];
+    if (earlier.decision?.decision !== APPLIED || typeof earlier.spec?.getComponentSecrets !== 'function') continue;
+    for (const { secrets } of earlier.spec.getComponentSecrets()) {
+      uses.push({ appName: name, owner: earlier.spec.owner, secrets });
+    }
+  }
+  return uses;
 }
 
 /** The latest applied entry before index `i`, or null. */
@@ -131,11 +152,41 @@ async function decideOne(entries, i, name, judge) {
   const activation = judge.activationHeight(spec.version);
   if (activation === undefined || record.height < activation) return refused(entry, name, 'not-activated');
 
+  if (spec.version >= 9) {
+    // Content in the clear is invalid wherever it is read: a content app is
+    // encrypted, and a cleartext spec carrying content came through a node
+    // that skipped the submission rule.
+    if (!spec.sealed && judge.contentInTheClear(spec)) return refused(entry, name, 'invalid');
+    // The chain's clock is the block's stamp: a payment mined more than the
+    // window after the signing is not this message's payment.
+    const paidAt = await blockTimeAgainst(entry, entry, judge);
+    if (paidAt * 1000 - entry.timestamp > PAYMENT_WINDOW_MS) return refused(entry, name, 'paid-late');
+  }
+
+  // Secrets another owner used before, in a message mined before this one,
+  // are refused; the app's own secrets it keeps, whoever it names as owner.
+  if (typeof spec.getComponentSecrets === 'function') {
+    const conflict = await judge.secretsRefusal(spec, {
+      name, record, isRegistration: entry.type === REGISTRATION, ownUses: ownSecretUses(entries, i, name),
+    });
+    if (conflict) return refused(entry, name, 'secrets-conflict');
+  }
+
   if (entry.type === REGISTRATION) {
     const standing = latestApplied(entries, i);
     if (standing) {
       const clock = { currentHeight: record.height, tipBlockTime: await blockTimeAgainst(entry, standing, judge) };
       if (!standing.spec.isExpired(standingState(standing), clock)) return refused(entry, name, 'name-held');
+      // For 30 days after the term ended only the app's last owner may take the
+      // name again, judged at this block's time against the term's end, from
+      // the rule's activation height on so that it never judges history.
+      const activatedAt = judge.nameReservedActivation();
+      if (Number.isInteger(activatedAt) && record.height >= activatedAt && !entry.signers.includes(standing.spec.owner)) {
+        const ended = await standing.spec.termEndTime(standingState(standing), {
+          ...clock, blockTimeAt: (height) => judge.blockTimeAtHeight(height),
+        });
+        if (clock.tipBlockTime - ended < NAME_HOLD_SECONDS) return refused(entry, name, 'name-reserved');
+      }
     }
 
     const fee = await judge.registrationFee(spec, record.height);

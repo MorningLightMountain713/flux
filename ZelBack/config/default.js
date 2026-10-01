@@ -1021,6 +1021,7 @@ module.exports = {
     // Each now ships the value that says the same thing out loud, and every
     // guard that read them treats these identically to undefined.
     quorumGrantActivationHeight: null, // null = not scheduled; the plane stays inert
+    nameReservedActivationHeight: null, // null = not scheduled; the 30-day name hold judges nothing
     quorumGrantMastership: false, // the mastership gate is off until this is true
     restartAlwaysOwners: [], // FluxIDs whose apps always restart; nobody by default
     verifyPoolSize: null, // null = cpus-1, which is what production runs
