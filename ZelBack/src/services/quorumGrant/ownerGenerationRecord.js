@@ -1,85 +1,65 @@
 'use strict';
 
 const verificationHelper = require('../verificationHelper');
+const { getSpec } = require('../utils/specLibs');
 
 // The owner generation record: one signed object that retires a grant key's
 // current world and names the moment the next one is drawn from. It is the
 // §8.3 re-found for founding (a new write-once round) and the tier-2 referee
 // re-roll for dark committees (§7.1) — one record, both jobs, because both
-// are the same statement: "for my app, generation N, as of block H."
+// are the same statement: "for my app, this role, generation N, as of block
+// H, as the owner from block F."
 //
 // Signed by the APP OWNER's key — the ZelID that signs every registration
 // and update — never a node key: nodes relay and verify it, no node may
 // mint it. FluxOS never holds this key; the record arrives already signed
 // from the owner's own tooling, exactly like an app registration does.
 //
-// The record names the app by its identity (a v1-v8 app's name, a v9 app's
-// minted identity), so a record signed for an app is never valid for a later
-// app registered under the same name.
-//
-// Generations are monotonic per (app, role): replays and duplicates are
-// no-ops, a lower generation can never un-seat a higher one, and the record
-// is durable — a re-pinned committee months later must still find it.
-
-const DOMAIN = 'fluxgrantgeneration';
-const FIELD_SEPARATOR = '|';
+// The signed text, its hash and its shape are flux-spec's
+// (ownerGenerationRecord.js there): the frontend signs what the library
+// says, and every node verifies the same string.
 
 /**
  * The exact string the owner signs, or null when a field would corrupt the
  * framing.
- *
- * @param {{identity: string, role: string, generation: number, height: number, at: number}} record
- * @returns {string|null}
  */
-function canonical(record) {
-  const parts = [record?.identity, record?.role, record?.generation, record?.height, record?.at];
-  const texts = [];
-  for (let i = 0; i < parts.length; i += 1) {
-    const part = parts[i];
-    if (typeof part !== 'string' && typeof part !== 'number') return null;
-    const text = String(part);
-    if (text.includes(FIELD_SEPARATOR)) return null;
-    texts.push(text);
-  }
-  return `${DOMAIN}:${texts.join(FIELD_SEPARATOR)}`;
+async function canonical(record) {
+  const { generationRecordText } = await getSpec();
+  return generationRecordText(record);
+}
+
+/** The hash a spec's grants block names the record by, or null. */
+async function hash(record) {
+  const { generationRecordHash } = await getSpec();
+  return generationRecordHash(record);
 }
 
 /**
  * Whether the record is signed by the given owner. The owner is looked up by
- * the VERIFIER from its own copy of the app's spec — never taken from the
+ * the VERIFIER from its own copy of the app's history — never taken from the
  * record, or anyone could name a friendly "owner".
  *
- * @param {object} record {identity, role, generation, height, at, signature}
- * @param {string} owner the app's registered owner (ZelID)
- * @returns {boolean}
+ * @param {object} record {identity, role, generation, height, at, ownedFrom, signature}
+ * @param {string} owner an owner of the app (ZelID)
+ * @returns {Promise<boolean>}
  */
-function verify(record, owner) {
-  const payload = canonical(record);
+async function verify(record, owner) {
+  const payload = await canonical(record);
   if (!payload || !owner || typeof record?.signature !== 'string' || !record.signature) {
     return false;
   }
   return verificationHelper.verifyMessage(payload, owner, record.signature) === true;
 }
 
-/**
- * Shape validation, shared by every intake: safe integers, sane role, a
- * generation that starts at 1 (generation 0 is the registration itself and
- * needs no record).
- */
-function wellFormed(record) {
-  return Boolean(
-    record
-    && typeof record.identity === 'string' && record.identity.length > 0
-    && typeof record.role === 'string' && /^[a-zA-Z0-9-]{1,64}$/.test(record.role)
-    && Number.isSafeInteger(record.generation) && record.generation >= 1
-    && Number.isSafeInteger(record.height) && record.height >= 1
-    && Number.isSafeInteger(record.at),
-  );
+/** Shape validation, shared by every intake. */
+async function wellFormed(record) {
+  const { generationRecordWellFormed } = await getSpec();
+  return generationRecordWellFormed(record);
 }
 
 module.exports = {
-  DOMAIN,
   canonical,
+  hash,
   verify,
   wellFormed,
 };

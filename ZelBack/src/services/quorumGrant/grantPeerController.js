@@ -167,7 +167,7 @@ async function teach(req, res) {
     }
     const body = serviceHelper.ensureObject(req.body) ?? {};
     const record = serviceHelper.ensureObject(body.record) ?? null;
-    if (!ownerGenerationRecord.wellFormed(record) || !Number.isSafeInteger(record.broadcastedAt)
+    if (!(await ownerGenerationRecord.wellFormed(record)) || !Number.isSafeInteger(record.broadcastedAt)
       || typeof record.signature !== 'string' || !record.signature) {
       return res.status(400).json(messageHelper.createErrorMessage('malformed generation record'));
     }

@@ -16,6 +16,7 @@ const networkStateService = require('../networkStateService');
 const { getSpec, assertVersionActivated } = require('../utils/specLibs');
 const { ensureProvidersRegistered } = require('../utils/specCutover');
 const { getStateBeforeHeight } = require('../appDatabase/appSpecHistory');
+const appHistory = require('../appDecisions/appHistory');
 const globalState = require('../utils/globalState');
 const {
   globalAppsTempMessages,
@@ -1009,70 +1010,82 @@ function notifyGrantGenerationListeners(event) {
 }
 
 async function handleGrantGenerationEvent({ message, envelope }) {
-  if (!ownerGenerationRecord.wellFormed(message)) return;
+  if (!(await ownerGenerationRecord.wellFormed(message))) return;
   if (!Number.isSafeInteger(message.broadcastedAt)) return;
   try {
-    // The signer is the app's OWNER, and the owner comes from this node's own
-    // copy of the spec — never from the record. No spec here means nothing to
-    // verify against: drop, and sync delivers the spec before the record
-    // matters. Say WHICH drop this was — a record that never arrived and one
-    // dropped for a missing spec are indistinguishable from outside, and the
-    // ambiguity cost two fleet runs. publish() is a no-op outside the harness.
-    const owner = await appsRepository.getGlobalAppOwnerByIdentity(message.identity);
-    if (!owner || !ownerGenerationRecord.verify(message, owner)) {
-      fluxEventBus.publish('quorumGrant:generationRecordDropped', {
-        identity: message.identity,
-        role: message.role,
-        generation: message.generation,
-        reason: owner ? 'owner signature does not verify' : 'no spec to resolve the owner against',
-      });
+    // The signer is an OWNER of the app, and the owners come from this node's
+    // own applied history — never from the record, or anyone could name a
+    // friendly "owner". No app here means nothing to verify against: drop,
+    // and sync delivers the spec before the record matters. Say WHICH drop
+    // this was — a record that never arrived and one dropped for a missing
+    // spec are indistinguishable from outside, and the ambiguity cost two
+    // fleet runs. publish() is a no-op outside the harness.
+    const app = await appsRepository.getGlobalAppInfoByIdentity(message.identity);
+    const owners = app ? await appHistory.ownerships(app.name) : [];
+    const dropped = (reason) => fluxEventBus.publish('quorumGrant:generationRecordDropped', {
+      identity: message.identity, role: message.role, generation: message.generation, reason,
+    });
+    if (!app || owners.length === 0) { dropped('no spec to resolve the owner against'); return; }
+    let signer = null;
+    for (const { owner } of owners) {
+      // eslint-disable-next-line no-await-in-loop
+      if (await ownerGenerationRecord.verify(message, owner)) { signer = owner; break; }
+    }
+    if (!signer) { dropped('no owner of the app signed it'); return; }
+    // The ownership height inside the signed text is a height at which the
+    // signer took the app, never trusted from the record alone.
+    if (!owners.some((o) => o.owner === signer && o.from === message.ownedFrom)) {
+      dropped('ownedFrom is not a height at which the signer took the app');
       return;
     }
 
+    // Every record the node takes is kept: one row per record, keyed by its
+    // hash, so a record the listed row stops validating is set aside and
+    // stands again should the row return to its signer. Which one the node
+    // stands on is derived at read (standingGeneration), never chosen here.
+    const hash = await ownerGenerationRecord.hash(message);
     const db = dbHelper.databaseConnection();
     const database = db.db(config.get('database.appsglobal.database'));
-    const dedupKey = `grantgeneration:${message.identity}/${message.role}`;
-    // Durable and generation-newer-wins: a lower generation can never un-seat
-    // a higher one, a replay refreshes nothing, and a re-pinned committee
-    // months later must still find the newest generation standing.
-    const standing = await dbHelper.findOneAndUpdateInDatabase(
+    const dedupKey = `grantgeneration:${message.identity}/${message.role}/${hash}`;
+    await dbHelper.updateOneInDatabase(
       database, globalAppStateEvents,
       { type: APP_STATE_EVENT_TYPES.GRANTGENERATION, dedupKey },
-      buildOrdinalConditionalUpsert([
-        { field: 'generation', value: message.generation, absent: -1 },
-      ], message.broadcastedAt, {
-        type: APP_STATE_EVENT_TYPES.GRANTGENERATION,
-        dedupKey,
-        broadcastedAt: new Date(message.broadcastedAt),
-        envelope: envelope ?? null,
-        data: message,
-        // In alwaysSetFields, never a conditional field: a conditional slot
-        // keeps the stored value on a losing touch, so a row carrying a Date
-        // here would keep being reaped by the collection's TTL index until a
-        // strictly newer record happened to arrive. Cleared on EVERY touch —
-        // boot sync re-delivers these records, so every row is touched. The
-        // TTL monitor skips non-date values.
-      }, { alwaysSetFields: { receivedAt: new Date(), expireAt: null } }),
-      { upsert: true, returnDocument: 'after', projection: { _id: 0, 'data.generation': 1 } },
+      {
+        $setOnInsert: {
+          type: APP_STATE_EVENT_TYPES.GRANTGENERATION,
+          dedupKey,
+          identity: message.identity,
+          role: message.role,
+          hash,
+          signer,
+          broadcastedAt: new Date(message.broadcastedAt),
+          envelope: envelope ?? null,
+          data: message,
+        },
+        // Cleared on EVERY touch, never only on insert: a row carrying a Date
+        // here would be reaped by the collection's TTL index, and boot sync
+        // re-delivers these records, so every row is touched.
+        $set: { receivedAt: new Date(), expireAt: null },
+      },
+      { upsert: true },
     );
 
     fluxEventBus.publish('quorumGrant:generationRecord', {
       identity: message.identity, role: message.role, generation: message.generation,
     });
 
-    // The write decided newest-wins; the row as it now stands says whether
-    // THIS record is the standing one. An older record that lost is not.
-    if (standing?.data?.generation === message.generation) {
+    // Whether THIS record is the one the node now stands on.
+    const { record: standing } = await standingGeneration(message.identity, message.role);
+    if (standing && standing.hash === hash) {
       notifyGrantGenerationListeners({
         identity: message.identity, role: message.role, generation: message.generation,
       });
-    }
-
-    // In-window processors re-materialize the founding committee at the
-    // record's named height; late ones store the record and answer honestly
-    // until they can.
-    if (message.role === 'founder') {
-      await foundingCommittee.materializeGeneration(message);
+      // In-window processors re-materialize the founding committee at the
+      // record's named height; late ones store the record and answer honestly
+      // until they can.
+      if (message.role === 'founder') {
+        await foundingCommittee.materializeGeneration(message);
+      }
     }
   } catch (err) {
     log.error(`storeAppStateEvent(grantgeneration): ${err.message}`);
@@ -1080,15 +1093,46 @@ async function handleGrantGenerationEvent({ message, envelope }) {
 }
 
 /**
- * The newest owner generation record for one app role, or null.
+ * The record a node stands on for one app role, derived from what it holds
+ * and what the chain says: the highest-ranked record (ownership height, then
+ * generation) the listed row validates, which is one the listed owner signed
+ * or the one the listed spec's grants block names. `record` is null and
+ * `aside` false when the app stands on its registration (generation 0, no
+ * record); `aside` is true when the spec names a record this node lacks, and
+ * the node serves nothing for the role until it arrives.
+ *
+ * @returns {Promise<{record: ?object, aside: boolean}>}
  */
-async function getGrantGenerationRecord(identity, role) {
+async function standingGeneration(identity, role) {
+  const app = await appsRepository.getGlobalAppInfoByIdentity(identity);
+  if (!app) return { record: null, aside: false };
+  const grants = app.grants ?? app.spec?.grants ?? null;
+  const namedHash = grants && typeof grants[role] === 'string' ? grants[role] : null;
   const db = dbHelper.databaseConnection();
   const database = db.db(config.get('database.appsglobal.database'));
-  return database.collection(globalAppStateEvents).findOne(
-    { type: APP_STATE_EVENT_TYPES.GRANTGENERATION, dedupKey: `grantgeneration:${identity}/${role}` },
+  const rows = await dbHelper.findInDatabase(
+    database, globalAppStateEvents,
+    { type: APP_STATE_EVENT_TYPES.GRANTGENERATION, identity, role },
     { projection: { _id: 0 } },
   );
+  const { ownerSignedIsValid, generationRecordRank, outranks } = await getSpec();
+  const valid = rows.filter((row) => ownerSignedIsValid(
+    { identity, hash: row.hash },
+    { appIdentity: identity, listedOwnerSigned: row.signer === app.owner, namedHash },
+  ));
+  if (valid.length === 0) return { record: null, aside: namedHash !== null };
+  let record = valid[0];
+  for (const row of valid.slice(1)) {
+    if (outranks(generationRecordRank(row.data), generationRecordRank(record.data))) record = row;
+  }
+  return { record, aside: false };
+}
+
+/**
+ * The owner generation record one app role stands on, or null.
+ */
+async function getGrantGenerationRecord(identity, role) {
+  return (await standingGeneration(identity, role)).record;
 }
 
 /**
@@ -1477,6 +1521,7 @@ module.exports = {
   getMasterleaseRecordsByRolePrefix,
   getMasterleaseRecordsByGrantee,
   getGrantGenerationRecord,
+  standingGeneration,
   onGrantGenerationRecord,
   LOCAL_ANNOUNCER,
 };

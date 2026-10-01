@@ -147,6 +147,7 @@ describe('quorumGrant grantPeerController', () => {
       generation: 2,
       height: 90,
       at: 1_750_000_000_000,
+      ownedFrom: 10,
       signature: 'ownersig',
       broadcastedAt: 1_750_000_000_500,
     };
