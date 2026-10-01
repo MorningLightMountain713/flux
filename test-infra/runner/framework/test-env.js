@@ -1492,9 +1492,13 @@ async function _buildEnv(
   containers.fdmStub = fdmStub;
   watchInfra(env, 'fdmStub', fdmStub);
 
+  // The stub holds a write that names a spec message until the nodes answer
+  // what became of the message, asking the fleet's decision route as the real
+  // service does.
+  const nodeUrls = Array.from({ length: nodes }, (_, i) => `http://${subnet.nodeIp(i + 1)}:16127`).join(',');
   const fluxDriveStub = await new StaticIpContainer(image('flux-e2e-fluxdrive-stub'))
     .withStaticIp(networkName, FLUXDRIVE_IP)
-    .withEnvironment({ FLUXDRIVE_PORT: '16140', CONTROL_PORT: '16141' })
+    .withEnvironment({ FLUXDRIVE_PORT: '16140', CONTROL_PORT: '16141', FLUX_NODE_URLS: nodeUrls })
     .withWaitStrategy(new HttpPollWaitStrategy(`http://${FLUXDRIVE_IP}:16141/health`))
     .withHealthCheck({
       test: ['CMD', 'node', '-e', "require('http').get('http://localhost:16141/health', r => { r.on('data', () => {}); r.statusCode === 200 ? process.exit(0) : process.exit(1) })"],
