@@ -542,8 +542,9 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
   // toward this node's per-app transport key and upload synchronously so it is
   // durably stored before the spec is gossiped.
   if (contentCtx) {
+    const { appUuid, registrationIdentity } = await getSpec();
     await uploadSealedContent(spec, contentCtx.content, contentCtx.ownerSigs, {
-      ref: contentHash, timestamp, registrationHash: messageHASH,
+      ref: contentHash, timestamp, identity: registrationIdentity(spec, appUuid(spec.name, messageHASH)), owner: spec.owner,
     });
   }
 
@@ -655,17 +656,23 @@ async function parseMultipartSubmission(req) {
  * carried over — already stored under identical locators — so the envelope attaches
  * only new or changed files; a register has no prior and attaches everything.
  *
+ * A manifest the envelope carries is verified against the spec submitted, for
+ * the app's identity, and its slot blobs are uploaded. A registration's is stored
+ * as the app's and gossiped; an update's is returned to ride in the update's
+ * message, held with it on every node and stored when the update applies.
+ *
  * @param {object} spec - resolved submission spec (name, owner, contentRef mounts)
  * @param {object} content - the sealed TransportEnvelope JSON
  * @param {Map} ownerSigs - per-blob owner signatures
- * @param {object} bind - { ref, timestamp, registrationHash, priorSpec? } — transport
- *   AAD, the hash of the registration message (which names the app it makes, and so
- *   the identity its first manifest is signed for), and the decrypted spec this
+ * @param {object} bind - { ref, timestamp, identity, owner, priorSpec? } — transport
+ *   AAD, the app's identity (a registration's from its message hash, an update's
+ *   from the listed row), the owner who signs (the listed owner for an update: a
+ *   transfer's carried manifest is the seller's), and the decrypted spec this
  *   update supersedes (absent on register)
- * @returns {Promise<{ payload: object, blobs: Map<string, Buffer> }>}
+ * @returns {Promise<{ payload: object, blobs: Map<string, Buffer>, carriedManifest: ?object }>}
  */
 async function uploadSealedContent(spec, content, ownerSigs, {
-  ref, timestamp, registrationHash, priorSpec,
+  ref, timestamp, identity, owner, priorSpec,
 }) {
   const opened = await transportHelper.openContentEnvelope(content, {
     appName: spec.name, owner: spec.owner, ref, timestamp,
@@ -685,16 +692,16 @@ async function uploadSealedContent(spec, content, ownerSigs, {
   // slots with no content for the install-hold to find. A slot app always forces an
   // encrypted spec (flux-spec validation), so the gossiped slots payload is sealed.
   if (payload.manifest) {
-    const { appUuid, registrationIdentity } = await getSpec();
-    const identity = registrationIdentity(spec, appUuid(spec.name, registrationHash));
+    if (typeof identity !== 'string' || !identity) throw new Error('uploadSealedContent: a manifest needs the app identity it is for');
     const slotHashes = new Set(Object.values(payload.manifest.slots || {}).map((s) => s.hash));
     const slotBlobs = new Map([...blobs].filter(([h]) => slotHashes.has(h)));
     const gossipManifest = await contentSlotService.processManifestSubmission(
       {
-        manifest: payload.manifest, spec, owner: spec.owner, encrypted: true, identity, blobs: slotBlobs, ownerSigs,
+        manifest: payload.manifest, spec, owner, encrypted: true, identity, blobs: slotBlobs, ownerSigs,
       },
       { uploader: fluxDriveClient },
     );
+    if (priorSpec) return { payload, blobs, carriedManifest: gossipManifest };
     // Broadcast first: broadcastMessageToAll returns the exact signed node broadcast it
     // relayed, so the stored row carries that same envelope (one signature) and is
     // boot-sync-servable to a fresh node.
@@ -721,7 +728,7 @@ async function uploadSealedContent(spec, content, ownerSigs, {
     }, {});
   }
 
-  return { payload, blobs };
+  return { payload, blobs, carriedManifest: null };
 }
 
 /**

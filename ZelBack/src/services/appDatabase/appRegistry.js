@@ -100,12 +100,15 @@ function endedAt(row, clock) {
 /**
  * The rows the given applied decisions stand for, by name: each decision's
  * stored message projected with the decision's uuid, identity and term start,
- * or no row when its term has ended at the scanned block.
+ * or no row when its term has ended at the scanned block; and, by name, the
+ * manifest the message carries, when it carries one.
  * @param {Map<string, object>} applied - latest applied decision by name
- * @returns {Promise<Map<string, object>>} InstantiatedSpec rows by name
+ * @returns {Promise<{rows: Map<string, object>, carried: Map<string, object>}>}
+ *   InstantiatedSpec rows and carried manifests, by name
  */
 async function rowsFor(applied) {
-  if (applied.size === 0) return new Map();
+  const carried = new Map();
+  if (applied.size === 0) return { rows: new Map(), carried };
   const { InstantiatedSpec } = await getSpecBackend();
   const clock = await chainClock();
   const messages = await dbHelper.findInDatabase(
@@ -128,18 +131,32 @@ async function rowsFor(applied) {
       identity: decision.identity,
       uuid: decision.uuid,
     });
-    if (!endedAt(row, clock)) rows.set(name, row);
+    if (!endedAt(row, clock)) {
+      rows.set(name, row);
+      if (message.contentManifest) carried.set(name, message.contentManifest);
+    }
   }
-  return rows;
+  return { rows, carried };
 }
 
 async function liveRow(name) {
   return dbHelper.findOneInDatabase(globalDb(), globalAppsInformation, { name: nameRegex(name) }, { projection: { _id: 0 } });
 }
 
-/** Writes a row whose spec changed, or that is new, and runs its effects. */
-async function writeWithEffects(row) {
+/**
+ * Writes a row whose spec changed, or that is new, and runs its effects. The
+ * manifest the row's message carries is stored first: a component the new
+ * spec recreates finds the slot it adds filled.
+ * @param {object} row - the serialized InstantiatedSpec
+ * @param {object} instance - the InstantiatedSpec the row stands on
+ * @param {?object} carried - the manifest the row's message carries, or null
+ */
+async function writeWithEffects(row, instance, carried) {
   await registryManager.storeGlobalSpec(row);
+  if (carried) {
+    await contentSlotService.storeCarriedManifest(instance, carried)
+      .catch((e) => log.warn(`contentSlot: storing the manifest ${row.name}'s update carries failed - ${e.message ?? e}`));
+  }
   fluxEventBus.publish('app:specStored', { name: row.name, hash: row.hash });
   setImmediate(() => contentSlotService.promoteQuarantinedManifest(row.identity)
     .catch((e) => log.warn(`contentSlot: promote-on-confirm for ${row.name} failed - ${e.message ?? e}`)));
@@ -175,9 +192,10 @@ async function removeRow({ name, identity }) {
  * Makes a name's row what its latest applied decision says.
  * @param {string} name - lower-cased
  * @param {?object} instance - the InstantiatedSpec it should have, or null for none
+ * @param {?object} [carried] - the manifest its message carries, or null
  * @returns {Promise<'added'|'changed'|'restamped'|'removed'|null>}
  */
-async function settle(name, instance) {
+async function settle(name, instance, carried = null) {
   const live = await liveRow(name);
   if (!instance) {
     if (!live) return null;
@@ -191,7 +209,7 @@ async function settle(name, instance) {
     // back to an earlier spec keeps only what that spec founded.
     if (live && live.identity !== row.identity) await forgetApp(live.identity);
     else if (live && row.height < live.height) await foundingCommittee.retract(row.identity, row.height);
-    await writeWithEffects(row);
+    await writeWithEffects(row, instance, carried);
     // A new owner: what this node stands on for each role follows from the
     // new row, the holder hears it, and the records a peer holds are asked for.
     if (live && live.owner !== row.owner) {
@@ -224,8 +242,8 @@ async function applyDecided(name, decisions) {
     ...decisions.filter((decision) => decision.decision === 'applied'),
   ];
   const latest = candidates.reduce((held, decision) => (!held || compareChainOrder(held, decision) < 0 ? decision : held), null);
-  const rows = await rowsFor(latest ? new Map([[name, latest]]) : new Map());
-  await settle(name, rows.get(name) ?? null);
+  const { rows, carried } = await rowsFor(latest ? new Map([[name, latest]]) : new Map());
+  await settle(name, rows.get(name) ?? null, carried.get(name) ?? null);
 }
 
 /**
@@ -236,13 +254,13 @@ async function applyDecided(name, decisions) {
 async function reconcile() {
   if (!capabilities.isUp('explorerSynced')) return;
   const counts = await chainState.exclusive(async () => {
-    const rows = await rowsFor(await decisionStore.latestApplied());
+    const { rows, carried } = await rowsFor(await decisionStore.latestApplied());
     const live = await dbHelper.findInDatabase(globalDb(), globalAppsInformation, {}, { projection: { _id: 0, name: 1 } });
     const names = new Set([...rows.keys(), ...live.map((row) => row.name.toLowerCase())]);
     const tally = {};
     for (const name of names) {
       // eslint-disable-next-line no-await-in-loop
-      const outcome = await settle(name, rows.get(name) ?? null);
+      const outcome = await settle(name, rows.get(name) ?? null, carried.get(name) ?? null);
       if (outcome) tally[outcome] = (tally[outcome] ?? 0) + 1;
     }
     return tally;

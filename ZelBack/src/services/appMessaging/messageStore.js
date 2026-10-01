@@ -271,6 +271,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
     value.contentHash = serialized.contentHash;
     value.extend = serialized.extend;
   }
+  if (serialized.contentManifest !== undefined) value.contentManifest = serialized.contentManifest;
 
   database = db.db(config.get('database.appsglobal.database'));
   await dbHelper.insertOneToDatabase(database, globalAppsTempMessages, value).catch((error) => {

@@ -120,6 +120,7 @@ function fakeRepo(overrides = {}) {
     upsertContentManifest: sinon.stub().resolves(true),
     deleteQuarantinedContentManifest: sinon.stub().resolves(),
     listInstalledApps: sinon.stub().resolves([]),
+    carriedManifestVersions: sinon.stub().resolves([]),
     ...overrides,
   };
 }
@@ -414,8 +415,9 @@ describe('contentSlotService', () => {
       return {
         // Stored view defaults to version 1 with no slots, so the fixture manifest
         // (version 2) is its strict successor. refresh defaults inert — a test that
-        // wants the catch-up path injects its own.
+        // wants the catch-up path injects its own. Nothing waits in the pool.
         getLatest: async () => priorRow(1, {}),
+        pendingVersions: async () => [],
         refresh: async () => {},
         uploader: makeUploader(),
         benchmark: makeBenchmark(),
@@ -466,6 +468,36 @@ describe('contentSlotService', () => {
         service.processManifestSubmission(baseInput({ manifest: manifest({ version: 5 }) }), baseDeps()),
         /must be 2/,
       );
+    });
+
+    it('counts the manifests waiting in the pool with the app\'s unpaid updates: the next number follows the highest of them and the stored one', async () => {
+      const { service } = load();
+      const pendingVersions = sinon.stub().resolves([2, 3]);
+      await expectReject(
+        service.processManifestSubmission(baseInput({ manifest: manifest({ version: 2 }) }), baseDeps({ pendingVersions })),
+        /must be 4 \(stored is 1, waiting up to 3\)/,
+      );
+      sinon.assert.calledWith(pendingVersions, IDENTITY);
+
+      const uploader = makeUploader();
+      const out = await service.processManifestSubmission(baseInput({ manifest: manifest({ version: 4 }) }), baseDeps({ pendingVersions, uploader }));
+      expect(out.version).to.equal(4);
+      expect(uploader.calls.length).to.equal(1);
+    });
+
+    it('reads the waiting manifests again after catching up a stale stored view', async () => {
+      const { service } = load();
+      let refreshed = false;
+      const pendingVersions = sinon.stub().callsFake(async () => (refreshed ? [3] : []));
+      const deps = baseDeps({
+        pendingVersions,
+        getLatest: async () => (refreshed ? priorRow(2, {}) : priorRow(1, {})),
+        refresh: async () => { refreshed = true; },
+        uploader: makeUploader(),
+      });
+      const out = await service.processManifestSubmission(baseInput({ manifest: manifest({ version: 4 }) }), deps);
+      expect(out.version).to.equal(4);
+      sinon.assert.calledTwice(pendingVersions);
     });
 
     it('catches up a stale stored view once before enforcing', async () => {
@@ -895,6 +927,72 @@ describe('contentSlotService', () => {
       const bad = bc(manifest({ appName: 'other' })); // verifyManifest rejects appName != spec
       const { stored } = await service.storeBatchContentManifests([good, bad], batchDeps({ store }));
       expect(stored).to.equal(1);
+    });
+  });
+
+  describe('storeCarriedManifest (the manifest an applied update carries)', () => {
+    // The row the update wrote, as the registry hands it: the sealed spec, its
+    // owner and identity.
+    let instance;
+    before(() => { instance = {
+      name: APP, owner: OWNER, isEncrypted: true, spec: slotSpecSealed, identity: IDENTITY,
+    }; });
+
+    it('stores the manifest as the app\'s once it is valid for the row, and says so', async () => {
+      const { service, bus } = load();
+      const provider = fakeProvider();
+      const store = sinon.stub().resolves(true);
+      const sealed = await service.sealManifestSlots(manifest(), { owner: OWNER, encrypted: true }, { provider });
+
+      const stored = await service.storeCarriedManifest(instance, sealed, { store, provider, verify: () => true });
+
+      expect(stored).to.equal(true);
+      sinon.assert.calledOnceWithExactly(store, sealed, { confirmed: true });
+      sinon.assert.calledWith(bus.publish, 'content:manifestApplied', { appName: APP, identity: IDENTITY, version: 2 });
+    });
+
+    it('verifies it against the row\'s owner, spec and identity, opened with the app secret', async () => {
+      const { service, specLib } = load();
+      const provider = fakeProvider();
+      const sealed = await service.sealManifestSlots(manifest(), { owner: OWNER, encrypted: true }, { provider });
+      const verify = sinon.stub().resolves(true);
+
+      await service.storeCarriedManifest(instance, sealed, { store: sinon.stub().resolves(true), provider, verify });
+
+      sinon.assert.calledOnce(specLib.assertValidContentManifest);
+      expect(verify.firstCall.args[1]).to.equal(OWNER);
+      expect(verify.firstCall.args[2]).to.equal('owner-sig');
+    });
+
+    it('stores nothing the row does not validate, and says why', async () => {
+      const { service, bus } = load();
+      const provider = fakeProvider();
+      const store = sinon.spy();
+      const sealed = await service.sealManifestSlots(manifest(), { owner: OWNER, encrypted: true }, { provider });
+
+      const stored = await service.storeCarriedManifest(instance, sealed, { store, provider, verify: () => false });
+
+      expect(stored).to.equal(false);
+      sinon.assert.notCalled(store);
+      sinon.assert.calledWith(bus.publish, 'content:manifestDropped', { appName: APP, reason: 'carried_invalid' });
+    });
+
+    it('stores nothing for another registration of the name', async () => {
+      const { service } = load();
+      const provider = fakeProvider();
+      const store = sinon.spy();
+      const sealed = await service.sealManifestSlots(manifest({ identity: `b${'z'.repeat(52)}` }), { owner: OWNER, encrypted: true }, { provider });
+
+      expect(await service.storeCarriedManifest(instance, sealed, { store, provider, verify: () => true })).to.equal(false);
+      sinon.assert.notCalled(store);
+    });
+
+    it('answers false when a manifest at or above this version is already stored', async () => {
+      const { service } = load();
+      const provider = fakeProvider();
+      const sealed = await service.sealManifestSlots(manifest(), { owner: OWNER, encrypted: true }, { provider });
+
+      expect(await service.storeCarriedManifest(instance, sealed, { store: sinon.stub().resolves(false), provider, verify: () => true })).to.equal(false);
     });
   });
 

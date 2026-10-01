@@ -969,30 +969,65 @@ describe('appSubmission tests', () => {
       expect([...out.blobs.keys()]).to.have.members([HA, HSLOT]);
     });
 
-    it('verifies a bundled first manifest against the identity the registration makes', async () => {
+    const IDENTITY = `b${'a'.repeat(52)}`;
+    function slotPath() {
       const contentSlotService = {
-        processManifestSubmission: sinon.stub().resolves({ sealed: true }),
+        processManifestSubmission: sinon.stub().resolves({ sealed: true, version: 2 }),
         storeManifest: sinon.stub().resolves(true),
         backstopManifest: sinon.stub().resolves(false),
         reconcileSlots: sinon.stub().resolves(false),
       };
-      appSubmission = load({
-        '../appLifecycle/contentSlotService': contentSlotService,
-        '../fluxCommunicationMessagesSender': { broadcastMessageToAll: sinon.stub().resolves({}) },
-      });
-      const firstManifest = { appName: 'myapp', version: 1, slots: { s: { hash: HSLOT } } };
-      stubs.transportHelper.openContentEnvelope.resolves(Buffer.from(JSON.stringify({
-        blobs: { [HSLOT]: Buffer.from('slot-bytes').toString('base64') }, manifest: firstManifest,
-      })));
+      const sender = { broadcastMessageToAll: sinon.stub().resolves({}) };
+      appSubmission = load({ '../appLifecycle/contentSlotService': contentSlotService, '../fluxCommunicationMessagesSender': sender });
       stubs.contentBlobService.specContentHashes.returns(new Set());
+      return { contentSlotService, sender };
+    }
+    const envelopeWith = (manifest) => stubs.transportHelper.openContentEnvelope.resolves(Buffer.from(JSON.stringify({
+      blobs: { [HSLOT]: Buffer.from('slot-bytes').toString('base64') }, manifest,
+    })));
 
-      const registrationHash = 'f'.repeat(64);
+    it('verifies a registration\'s first manifest for the identity and owner it was given, then stores and gossips it', async () => {
+      const { contentSlotService, sender } = slotPath();
+      const firstManifest = { appName: 'myapp', version: 1, slots: { s: { hash: HSLOT } } };
+      envelopeWith(firstManifest);
       const v9 = { name: 'myapp', owner: '1id', version: 9 };
-      await appSubmission.uploadSealedContent(v9, envelope, new Map(), { ref: 'HASH123', timestamp: 1, registrationHash });
+
+      const out = await appSubmission.uploadSealedContent(v9, envelope, new Map(), { ref: 'HASH123', timestamp: 1, identity: IDENTITY, owner: '1id' });
 
       const [input] = contentSlotService.processManifestSubmission.firstCall.args;
-      expect(input.identity, 'the identity the decider will give the registration').to.equal(flux.appIdentityFromUuid(flux.appUuid('myapp', registrationHash)));
+      expect(input.identity).to.equal(IDENTITY);
+      expect(input.owner).to.equal('1id');
       expect(input.manifest).to.deep.equal(firstManifest);
+      sinon.assert.calledOnce(sender.broadcastMessageToAll);
+      sinon.assert.calledOnce(contentSlotService.storeManifest);
+      expect(out.carriedManifest).to.equal(null);
+    });
+
+    it('returns an update\'s manifest to ride in the update\'s message, verified for the listed owner, and stores or gossips nothing', async () => {
+      const { contentSlotService, sender } = slotPath();
+      envelopeWith({ appName: 'myapp', version: 2, slots: { s: { hash: HSLOT } } });
+      const buyer = { name: 'myapp', owner: '1buyer', version: 9 };
+
+      const out = await appSubmission.uploadSealedContent(buyer, envelope, new Map(), { ref: 'HASH123', timestamp: 1, identity: IDENTITY, owner: '1id', priorSpec: { name: 'myapp', owner: '1id' } });
+
+      const [input] = contentSlotService.processManifestSubmission.firstCall.args;
+      expect(input.identity).to.equal(IDENTITY);
+      expect(input.owner, 'the listed owner signed the update and its manifest').to.equal('1id');
+      expect(input.spec).to.equal(buyer);
+      expect(out.carriedManifest).to.deep.equal({ sealed: true, version: 2 });
+      sinon.assert.notCalled(sender.broadcastMessageToAll);
+      sinon.assert.notCalled(contentSlotService.storeManifest);
+      sinon.assert.notCalled(contentSlotService.backstopManifest);
+      sinon.assert.notCalled(contentSlotService.reconcileSlots);
+    });
+
+    it('refuses a manifest with no identity to verify it for', async () => {
+      slotPath();
+      envelopeWith({ appName: 'myapp', version: 1, slots: { s: { hash: HSLOT } } });
+
+      const error = await appSubmission.uploadSealedContent(spec, envelope, new Map(), { ref: 'HASH123', timestamp: 1 }).catch((e) => e);
+
+      expect(error.message).to.match(/needs the app identity/);
     });
 
     it('forwards the superseded spec on update so unchanged content is carried over', async () => {
@@ -1001,10 +1036,11 @@ describe('appSubmission tests', () => {
       stubs.contentBlobService.specContentHashes.returns(new Set([HA]));
 
       const prior = { name: 'myapp', owner: '1id' };
-      await appSubmission.uploadSealedContent(spec, envelope, new Map(), { ref: 'HASH123', timestamp: 1, priorSpec: prior });
+      const out = await appSubmission.uploadSealedContent(spec, envelope, new Map(), { ref: 'HASH123', timestamp: 1, priorSpec: prior });
 
       const input = stubs.contentBlobService.encryptAndUploadBlobs.firstCall.args[0];
       expect(input.priorSpec).to.equal(prior);
+      expect(out.carriedManifest).to.equal(null);
     });
   });
 

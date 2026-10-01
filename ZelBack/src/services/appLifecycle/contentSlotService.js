@@ -198,9 +198,11 @@ async function openManifestSlots(manifest, ctx, deps = {}) {
 /**
  * Process a manifest submission: verify it against the app's spec/owner, enforce
  * the strict-successor version rule (first manifest is 1, every later one exactly
- * current + 1), upload every slot's content as
- * a content blob (source 'slot', reusing the blob dual-sig upload), then return the
- * gossip-form manifest (slots sealed for an encrypted app) ready to store + gossip.
+ * one above the highest of the stored manifest and those waiting in the pool with
+ * the app's unpaid updates, so two slot-adding updates waiting at once take
+ * consecutive numbers), upload every slot's content as a content blob (source
+ * 'slot', reusing the blob dual-sig upload), then return the gossip-form manifest
+ * (slots sealed for an encrypted app) ready to store, gossip or carry.
  * The blob parts are matched to the manifest's slot hashes exactly like content
  * blobs: every supplied blob must be referenced (a stray blob is an anti-abuse
  * reject), and every declared hash must either carry its blob part or be CARRIED
@@ -209,7 +211,7 @@ async function openManifestSlots(manifest, ctx, deps = {}) {
  * instead of re-uploaded, so rotating one slot attaches one file.
  *
  * @param {object} input - { manifest, spec, owner, encrypted, identity, blobs, ownerSigs }
- * @param {object} deps - { getLatest?, refresh?, uploader, benchmark?, now?, verify?, provider? }
+ * @param {object} deps - { getLatest?, pendingVersions?, refresh?, uploader, benchmark?, now?, verify?, provider? }
  * @returns {Promise<object>} the gossip-form manifest
  */
 async function processManifestSubmission(input, deps) {
@@ -217,7 +219,7 @@ async function processManifestSubmission(input, deps) {
     manifest, spec, owner, encrypted, identity, blobs, ownerSigs,
   } = input;
   const {
-    getLatest = getLatestManifest, refresh = refreshLatestManifest, uploader, benchmark, now, verify, provider,
+    getLatest = getLatestManifest, pendingVersions = appsRepository.carriedManifestVersions, refresh = refreshLatestManifest, uploader, benchmark, now, verify, provider,
   } = deps;
 
   await verifyManifest(manifest, { owner, spec, identity }, { verify });
@@ -225,11 +227,13 @@ async function processManifestSubmission(input, deps) {
   // Strict successor: the submission door is the only stage that can be strict —
   // gossip / boot-sync / the FluxDrive backstop must tolerate gaps (a receiver's
   // gap just means missed messages), but every submission is owner-interactive, so
-  // requiring exactly current + 1 here keeps the network-wide sequence gapless and
-  // bounds a leaked owner key to advancing the never-resetting counter one step per
-  // signed update instead of burning the version space.
+  // requiring exactly the next number here keeps the network-wide sequence gapless
+  // and bounds a leaked owner key to advancing the never-resetting counter one step
+  // per signed update instead of burning the version space. A manifest waiting in
+  // the pool with an unpaid update counts: the update may yet apply.
+  const floorOf = async (stored) => Math.max(stored ? stored.version : 0, ...(await pendingVersions(identity)));
   let prior = await getLatest(identity);
-  let expected = prior ? prior.version + 1 : 1;
+  let expected = (await floorOf(prior)) + 1;
   if (manifest.version > expected) {
     // Ahead of this node's view, which may just be stale (gossip lag, restart):
     // catch up once, then re-derive. A version BELOW expected is hopeless either
@@ -238,10 +242,10 @@ async function processManifestSubmission(input, deps) {
       owner, encrypted, spec, identity,
     }, { verify, provider });
     prior = await getLatest(identity);
-    expected = prior ? prior.version + 1 : 1;
+    expected = (await floorOf(prior)) + 1;
   }
   if (manifest.version !== expected) {
-    throw new Error(`contentSlot: manifest version must be ${expected} (current is ${prior ? prior.version : 'none'}), got ${manifest.version}`);
+    throw new Error(`contentSlot: manifest version must be ${expected} (stored is ${prior ? prior.version : 'none'}, waiting up to ${expected - 1 || 'none'}), got ${manifest.version}`);
   }
 
   // Hashes the stored prior manifest already delivered are carried over: their
@@ -568,6 +572,38 @@ async function promoteQuarantinedManifest(identity, deps = {}) {
   const promoted = await store(heldManifest, { confirmed: true, broadcast });
   if (promoted) fluxEventBus.publish('content:manifestPromoted', { appName: info.name, identity });
   return promoted;
+}
+
+/**
+ * Stores the manifest an applied spec update carries as the app's, judged
+ * against the row the update wrote: the owner it names, or the manifest its
+ * `content` block names, and the registration its identity names. One the row
+ * does not validate is not stored, and the slots it covers are fetched as any
+ * missing manifest's are. Runs when the row is written, before anything that
+ * recreates a component for the new spec, so the slot it adds is filled first.
+ *
+ * @param {object} instance - the InstantiatedSpec the row stands on
+ * @param {object} gossipManifest - the manifest as carried: slots sealed for an encrypted app
+ * @param {object} [deps] - { store?, verify?, provider? }
+ * @returns {Promise<boolean>} stored
+ */
+async function storeCarriedManifest(instance, gossipManifest, deps = {}) {
+  const { store = storeManifest, verify, provider } = deps;
+  const {
+    name: appName, owner, isEncrypted: encrypted, spec, identity,
+  } = instance;
+  let plaintext;
+  try {
+    plaintext = await openManifestSlots(gossipManifest, { owner, encrypted }, { provider });
+    await verifyManifest(plaintext, { owner, spec, identity }, { verify });
+  } catch (error) {
+    log.warn(`contentSlot: the manifest ${appName}'s applied update carries is not the app's - ${error.message ?? error}`);
+    fluxEventBus.publish('content:manifestDropped', { appName, reason: 'carried_invalid' });
+    return false;
+  }
+  const stored = await store(gossipManifest, { confirmed: true });
+  if (stored) fluxEventBus.publish('content:manifestApplied', { appName, identity, version: gossipManifest.version });
+  return stored;
 }
 
 /** The IPs of nodes currently running an app, for peers-first content resolution. */
@@ -1582,6 +1618,7 @@ async function submitContentUpdateApi(req, res) {
 }
 
 module.exports = {
+  storeCarriedManifest,
   specSlotNames,
   submitContentUpdate,
   submitContentUpdateApi,
