@@ -246,7 +246,7 @@
         ],
         "operationId": "getAppMessageDecision",
         "summary": "What this node holds about an app message",
-        "description": "By the message's hash. `applied` and `refused` (with its `reason`) are this node's decision on the paid message. `unpayable` means this node held the message, its chain scan recorded no payment stamped within the hour after its signing, and the block that closed that window is deeper than any reorganisation the daemon accepts, so the chain can no longer pay it. `undecided` means this node holds the message, or a payment for it, and has decided nothing yet. 404 means this node holds nothing about the hash, which says nothing about the message: ask other nodes. Needs no authentication.",
+        "description": "By the message's hash. `applied` and `refused` (with its `reason`) are this node's decision on the paid message; an applied answer names the `owner` and the `identity` the message gave the app. `unpayable` means this node held the message, its chain scan recorded no payment stamped within the hour after its signing, and the block that closed that window is deeper than any reorganisation the daemon accepts, so the chain can no longer pay it. `undecided` means this node holds the message, or a payment for it, and has decided nothing yet. 404 means this node holds nothing about the hash, which says nothing about the message: ask other nodes. Needs no authentication.",
         "parameters": [
           {
             "name": "hash",
@@ -292,6 +292,20 @@
                         "reason": {
                           "type": "string",
                           "description": "Present when refused: why."
+                        },
+                        "owner": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Present when applied: the owner the message names."
+                        },
+                        "identity": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Present when applied: the identity of the app the message belongs to."
                         }
                       }
                     },

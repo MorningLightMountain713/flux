@@ -25,10 +25,12 @@ async function deliver(req, res) {
 
 /**
  * GET /v2/apps/messages/:hash/decision - what this node holds about an app
- * message. A decision is this node's word on a paid message. An unpayable
- * record outranks a copy still held: the copy's payment can no longer come. A
- * copy, or a recorded payment, with neither is waiting on the decider. A node
- * that holds nothing answers 404, which says nothing about the message.
+ * message. A decision is this node's word on a paid message; an applied one
+ * names the owner and the identity the message gave the app, which is what a
+ * write held for that message is checked against. An unpayable record outranks
+ * a copy still held: the copy's payment can no longer come. A copy, or a
+ * recorded payment, with neither is waiting on the decider. A node that holds
+ * nothing answers 404, which says nothing about the message.
  * @param {import('express').Request} req
  * @param {import('express').Response} res carrying the v2 envelope
  * @returns {Promise<*>}
@@ -36,8 +38,10 @@ async function deliver(req, res) {
 async function decision(req, res) {
   const { hash } = req.params;
   const decided = (await decisionStore.decisionsFor([hash])).get(hash);
+  if (decided && decided.decision === REFUSED) return res.ok({ hash, decision: REFUSED, reason: decided.reason });
   if (decided) {
-    return res.ok({ hash, decision: decided.decision, ...(decided.decision === REFUSED ? { reason: decided.reason } : {}) });
+    const message = await appsRepository.getPermanentMessage(hash);
+    return res.ok({ hash, decision: decided.decision, owner: message?.appSpecifications?.owner ?? null, identity: decided.identity ?? null });
   }
   if (await temporaryPoolSweep.unpayableRecord(hash)) return res.ok({ hash, decision: 'unpayable' });
   const held = await appsRepository.getPermanentMessage(hash)
