@@ -15,6 +15,7 @@ const contentSlotService = require('../appLifecycle/contentSlotService');
 const foundingCommittee = require('../appMesh/foundingCommittee');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const decider = require('../appDecisions/decider');
+const messageStore = require('../appMessaging/messageStore');
 const decisionStore = require('../appDecisions/decisionStore');
 const { processPendingUpdates } = require('../appMessaging/messageStore');
 const { lookupBlockTime } = require('../appMessaging/confirmedMessageStore');
@@ -191,6 +192,12 @@ async function settle(name, instance) {
     if (live && live.identity !== row.identity) await forgetApp(live.identity);
     else if (live && row.height < live.height) await foundingCommittee.retract(row.identity, row.height);
     await writeWithEffects(row);
+    // A new owner: what this node stands on for each role follows from the
+    // new row, the holder hears it, and the records a peer holds are asked for.
+    if (live && live.owner !== row.owner) {
+      setImmediate(() => messageStore.rejudgeGenerationRecords(row.identity)
+        .catch((e) => log.warn(`grantgeneration: rejudge after the owner change of ${row.name} failed - ${e.message ?? e}`)));
+    }
     outcome = live ? 'changed' : 'added';
   } else if (live.uuid !== row.uuid || live.identity !== row.identity || live.registeredAt !== row.registeredAt) {
     await appsRepository.replaceGlobalAppRow(row);

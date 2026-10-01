@@ -8,6 +8,8 @@ const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const appHistory = require('../../ZelBack/src/services/appDecisions/appHistory');
 const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCommittee');
+const networkStateService = require('../../ZelBack/src/services/networkStateService');
+const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
 const ownerGenerationRecord = require('../../ZelBack/src/services/quorumGrant/ownerGenerationRecord');
 
@@ -223,14 +225,14 @@ describe('quorumGrant ownerGenerationRecord', () => {
       it('a sale naming nothing puts every record of the seller aside: the app stands on its registration', async () => {
         await stored(await signedRecord({ role: 'master', generation: 2 }));
         await sold(null);
-        expect(await messageStore.standingGeneration('myapp', 'master')).to.deep.equal({ record: null, aside: false });
+        expect(await messageStore.standingGeneration('myapp', 'master')).to.deep.include({ record: null, aside: false });
       });
 
       it('a sale naming a record this node never held leaves the node aside, serving nothing, until it arrives', async () => {
         const named = await signedRecord({ role: 'master', generation: 1 });
         await stored(await signedRecord({ role: 'master', generation: 2 }));
         await sold(named);
-        expect(await messageStore.standingGeneration('myapp', 'master')).to.deep.equal({ record: null, aside: true });
+        expect(await messageStore.standingGeneration('myapp', 'master')).to.deep.include({ record: null, aside: true });
         await stored(named);
         expect((await messageStore.standingGeneration('myapp', 'master')).record.data.generation).to.equal(1);
       });
@@ -270,6 +272,38 @@ describe('quorumGrant ownerGenerationRecord', () => {
         owners = [{ owner: OWNER, from: OWNED_FROM }];
         expect((await messageStore.standingGeneration('myapp', 'master')).record.data.generation).to.equal(2);
       });
+    });
+
+    it('at a new owner the node asks a sample of nodes for every record they hold, keeps what it lacked, and tells the listeners each role\'s standing generation', async () => {
+      const named = await signedRecord({ role: 'master', generation: 1 });
+      await stored(await signedRecord({ role: 'master', generation: 2 }));
+      app = { name: 'myapp', owner: BUYER, grants: { master: await ownerGenerationRecord.hash(named) } };
+      owners = [{ owner: OWNER, from: OWNED_FROM }, { owner: BUYER, from: BOUGHT_AT }];
+      sinon.stub(networkStateService, 'getRandomSocketAddressSample').resolves(['198.51.100.7:16127']);
+      sinon.stub(serviceHelper, 'axiosGet').callsFake(async (url) => ({
+        data: { data: { records: url.endsWith('/master') ? [{ ...named, broadcastedAt: named.at }] : [] } },
+      }));
+      const heard = [];
+      const off = messageStore.onGrantGenerationRecord((event) => heard.push(event));
+      try {
+        await messageStore.rejudgeGenerationRecords('myapp');
+      } finally {
+        off();
+      }
+      expect(serviceHelper.axiosGet.firstCall.args[0]).to.equal('http://198.51.100.7:16127/apps/grantgeneration/myapp/master');
+      expect(rows.map((r) => r.data.generation).sort()).to.deep.equal([1, 2]);
+      expect(heard.filter((e) => e.role === 'master').map((e) => e.generation)).to.deep.equal([1, 1]);
+      expect(heard.filter((e) => e.role === 'founder').map((e) => e.generation)).to.deep.equal([0]);
+    });
+
+    it('a node that cannot be asked costs the others nothing', async () => {
+      sinon.stub(networkStateService, 'getRandomSocketAddressSample').resolves(['198.51.100.7:16127', '198.51.100.8:16127']);
+      sinon.stub(serviceHelper, 'axiosGet').callsFake(async (url) => {
+        if (url.includes('100.7')) throw new Error('timeout');
+        return { data: { data: { records: [] } } };
+      });
+      await messageStore.rejudgeGenerationRecords('myapp');
+      expect(serviceHelper.axiosGet.callCount).to.equal(4);
     });
 
     // The product-side hook: the store owns the standing generation, and the

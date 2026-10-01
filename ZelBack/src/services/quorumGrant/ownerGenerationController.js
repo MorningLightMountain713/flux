@@ -156,11 +156,15 @@ async function current(req, res) {
     }
 
     const stored = await messageStore.getGrantGenerationRecord(identity, role);
+    // Every record held, beside the standing one: a node asked at its row
+    // write keeps what it lacks and judges it against its own row.
+    const held = await messageStore.heldGenerationRecords(identity, role);
     return res.json(messageHelper.createDataMessage({
       identity,
       role,
       generation: stored?.data?.generation ?? 0,
       record: stored?.data ?? null,
+      records: held.map((row) => row.data),
     }));
   } catch (error) {
     log.error(`quorumGrant ownerGenerationController current: ${error.message}`);
