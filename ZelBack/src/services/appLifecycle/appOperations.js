@@ -1836,20 +1836,6 @@ async function updateAppGlobaly(params) {
   UpdatePolicy.assertVersionTransition(previousSpec, spec, latestSupportedSpecVersion);
   UpdatePolicy.assertCompatible(previousSpec, spec);
 
-  // Content rides as ONE HPKE-sealed envelope — never plaintext in transit. Open it
-  // toward this node's per-app transport key and upload synchronously so it is
-  // durably stored before the spec is gossiped. The superseded spec's contentRef
-  // hashes are carried over (already stored under identical locators), so the
-  // envelope attaches only new or changed files. A manifest the envelope carries
-  // is verified for the listed app and its listed owner, who signed this update,
-  // and rides in the update's message.
-  let carriedManifest = null;
-  if (contentCtx) {
-    ({ carriedManifest } = await uploadSealedContent(spec, contentCtx.content, contentCtx.ownerSigs, {
-      ref: cleanContentHash, timestamp: cleanTimestamp, identity: appInfo.identity, owner: appInfo.owner, priorSpec: priorCleartext,
-    }));
-  }
-
   const messageHASH = await appEventVerifier.computeOutboundHash({
     type: cleanMessageType,
     envelopeVersion: cleanTypeVersion,
@@ -1859,6 +1845,26 @@ async function updateAppGlobaly(params) {
     extend: cleanExtend,
     signature: cleanSignature,
   });
+
+  // Content rides as ONE HPKE-sealed envelope — never plaintext in transit. Open it
+  // toward this node's per-app transport key and upload synchronously so it is
+  // durably stored before the spec is gossiped. The superseded spec's contentRef
+  // hashes are carried over (already stored under identical locators), so the
+  // envelope attaches only new or changed files. A manifest the envelope carries
+  // is verified for the listed app and its listed owner, who signed this update,
+  // and rides in the update's message; its FluxDrive writes name this message's
+  // hash, so FluxDrive holds them until the nodes answer that the update applied.
+  let carriedManifest = null;
+  if (contentCtx) {
+    ({ carriedManifest } = await uploadSealedContent(spec, contentCtx.content, contentCtx.ownerSigs, {
+      ref: cleanContentHash,
+      timestamp: cleanTimestamp,
+      identity: appInfo.identity,
+      owner: appInfo.owner,
+      messageHash: messageHASH,
+      priorSpec: priorCleartext,
+    }));
+  }
 
   // v9 only (envelope version 2). v8 enterprise messages are envelope version 1,
   // which old nodes still parse — they must not carry an unknown arcaneAttestation
@@ -2002,8 +2008,8 @@ let activeContentServes = 0;
  * and integrity is the requester's own hash-check, so this gates on a
  * concurrency cap (429 over the limit), not auth. The bytes come verbatim from
  * this node's artifact store (what it fetched and verified) — never the app's
- * live mount, which the app may legitimately have mutated. fluxID is the
- * installed app's owner — the same identity the locator was derived from at
+ * live mount, which the app may legitimately have mutated. The locator is
+ * derived for the installed app's identity, the one it was derived for at
  * upload/provision time, so the served artifact matches the requested locator.
  * @param {import('express').Request} req - Request object (params: appName, locator)
  * @param {import('express').Response} res
@@ -2027,9 +2033,7 @@ async function contentBlobServeApi(req, res) {
         return;
       }
       const framed = await contentBlobService.serveBlob(
-        {
-          appName, identity: installed.identity, fluxID: installed.owner, locator,
-        },
+        { appName, identity: installed.identity, locator },
       );
       if (!framed) {
         res.status(404).end();

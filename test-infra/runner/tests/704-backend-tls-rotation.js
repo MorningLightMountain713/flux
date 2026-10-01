@@ -4,7 +4,7 @@ import { expect } from 'chai';
 import crypto from 'node:crypto';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
-import { deployContentApp } from '../framework/content-helper.js';
+import { deployContentApp, listedIdentity } from '../framework/content-helper.js';
 import { pushTlsEcho } from '../framework/registry-helper.js';
 import { queueAppTx, advanceBlocks, appCaCertificate } from '../framework/daemon-control.js';
 import { waitForAppInstalled, waitForUp, waitFor } from '../framework/wait.js';
@@ -127,7 +127,7 @@ describe('backend TLS: certificate rotation under live traffic', function () {
     expect(initialPem, 'a certificate was delivered').to.be.a('string');
     originalFingerprint = fingerprintOf(initialPem);
 
-    const appCaPem = await appCaCertificate(app);
+    const appCaPem = await appCaCertificate(app, await listedIdentity(appClient.url, app));
     haproxy = await startHaproxy(env.networkName, {
       backends: [{ name: app, host: 'app.test', target: `${subnet.nodeIp(idx + 1)}:${HOST_PORT}` }],
       cas: { [app]: appCaPem },
@@ -193,7 +193,7 @@ describe('backend TLS: certificate rotation under live traffic', function () {
     // The new leaf must still chain to the SAME per-app CA — the CA is permanent
     // and is what the load balancer trusts. A rotation that changed it would
     // invalidate every director's cached copy.
-    const appCaPem = await appCaCertificate(app);
+    const appCaPem = await appCaCertificate(app, await listedIdentity(appClient.url, app));
     const caKey = new crypto.X509Certificate(appCaPem).publicKey;
     expect(new crypto.X509Certificate(await servedCertPem()).verify(caKey), 'new leaf chains to the same CA').to.equal(true);
 

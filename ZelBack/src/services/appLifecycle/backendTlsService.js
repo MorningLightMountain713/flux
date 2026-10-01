@@ -7,7 +7,9 @@
 //   1. generate an Ed25519 keypair + CSR (CN = appName) locally — the private
 //      key never leaves the node;
 //   2. get a 30-day host cert signed by the app's per-app CA through fluxbench
-//      (benchmarkService.signCertificate);
+//      (benchmarkService.signCertificate); the CA is keyed by the app's
+//      identity, so the chain survives an ownership transfer, and named after
+//      the app;
 //   3. atomically write cert.pem + key.pem into the container's reserved
 //      /io.runonflux/tls/ mount source, so the app reads them from
 //      FLUX_TLS_CERT_PATH / FLUX_TLS_KEY_PATH.
@@ -75,12 +77,16 @@ async function writeAtomic(filePath, contents, mode) {
  * reserved TLS directory. Throws on failure — the caller decides whether that
  * blocks the install or just leaves the app unrouted this cycle.
  *
- * @param {string} appName the app name (CSR CN + per-app CA binding)
+ * @param {string} appName the app name (CSR CN)
+ * @param {string} identity the app's identity (the per-app CA's key)
  * @param {{dir: string, certPath: string, keyPath: string}} tlsPaths from
  *   `deployComp.backendTlsPaths()` — never rebuilt here
  * @returns {Promise<void>}
  */
-async function provisionCert(appName, tlsPaths) {
+async function provisionCert(appName, identity, tlsPaths) {
+  if (typeof identity !== 'string' || !identity) {
+    throw new Error(`No identity to issue the backend-TLS cert for ${appName} under`);
+  }
   const { dir, certPath, keyPath } = tlsPaths;
   await fsp.mkdir(dir, { recursive: true, mode: 0o755 });
 
@@ -92,7 +98,7 @@ async function provisionCert(appName, tlsPaths) {
   // the signer's own JSON string carrying { status: 'ok', certificate }. Reading
   // the signer's status off the outer object silently never matches, because the
   // outer status is 'success', so every issue looks like a refusal to sign.
-  const returned = await benchmarkService.signCertificate({ csr, appName });
+  const returned = await benchmarkService.signCertificate({ csr, appName, identity });
   if (!returned || returned.status !== 'success') {
     throw new Error(`Could not reach the certificate signer for ${appName}`);
   }

@@ -109,7 +109,7 @@ async function renewalSweep(deps = {}) {
         if (!await needsRenewal(tlsPaths)) continue;
         try {
           // eslint-disable-next-line no-await-in-loop
-          await provisionCert(deployComp.appName, tlsPaths);
+          await provisionCert(deployComp.appName, deployComp.identity, tlsPaths);
         } catch (error) {
           log.error(`backendTls: could not renew the certificate for ${deployComp.identifier} - ${error.message ?? error}`);
           continue;

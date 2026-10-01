@@ -4,7 +4,7 @@ import { expect } from 'chai';
 import crypto from 'node:crypto';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
-import { deployContentApp } from '../framework/content-helper.js';
+import { deployContentApp, listedIdentity } from '../framework/content-helper.js';
 import { pushBusybox } from '../framework/registry-helper.js';
 import { queueAppTx, advanceBlocks, appCaCertificate } from '../framework/daemon-control.js';
 import { waitForAppInstalled, waitForUp } from '../framework/wait.js';
@@ -162,13 +162,13 @@ describe('backend TLS: managed certificate delivery into the container', functio
     const { content: certPem } = await readFileInContainer(verifiedClient.container, verifiedApp, 'web', CERT_PATH);
     const leaf = new crypto.X509Certificate(certPem);
 
-    const ownCaPem = await appCaCertificate(verifiedApp);
+    const ownCaPem = await appCaCertificate(verifiedApp, await listedIdentity(verifiedClient.url, verifiedApp));
     const ownCa = new crypto.X509Certificate(ownCaPem);
     expect(leaf.verify(ownCa.publicKey), 'leaf signed by its own app CA').to.equal(true);
 
     // Per-app isolation is the entire point of a per-app CA. If another app's CA
     // verified this leaf, one tenant could impersonate another's backend.
-    const foreignCaPem = await appCaCertificate(ownCertApp);
+    const foreignCaPem = await appCaCertificate(ownCertApp, await listedIdentity(ownCertClient.url, ownCertApp));
     const foreignCa = new crypto.X509Certificate(foreignCaPem);
     expect(leaf.verify(foreignCa.publicKey), 'another app CA must not verify it').to.equal(false);
   });

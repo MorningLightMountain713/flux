@@ -19,8 +19,8 @@ export async function fetchTransportPubKey(nodeUrl, appName, owner) {
 }
 
 // The identity of the app a node's registry lists under a name: what a content
-// update's manifest is signed for.
-async function listedIdentity(nodeUrl, name) {
+// update's manifest is signed for, and what every FluxDrive write names.
+export async function listedIdentity(nodeUrl, name) {
   const res = await fetch(`${nodeUrl}/apps/globalappsspecifications?appname=${encodeURIComponent(name)}`);
   const body = await res.json();
   const row = body.status === 'success' && Array.isArray(body.data) ? body.data[0] : null;
@@ -74,21 +74,32 @@ export async function deployContentApp(nodeUrl, opts) {
     slotMap[s.name] = { hash: h };
   }
 
-  // Owner sigs over sha256(locator:appName:timestamp) — locator from the same
-  // fleet-deterministic derivation the node uses, so the dual-sig matches.
-  const locatorFor = (h) => benchCrypto.locatorFor({ appName: name, fluxID: owner, contentHash: h });
-  const ownerSigs = await tk.buildOwnerSigs({ hashes: Object.keys(blobs), appName: name, ownerKey, timestamp, locatorFor });
+  // Every FluxDrive text names the identity this registration makes; the locator
+  // comes from the same fleet-deterministic derivation the node uses, so the
+  // dual-sig matches.
+  const identity = tk.registrationIdentity(specField, name);
+  const messageHash = tk.registrationMessageHash(specField);
+  const locatorFor = (h) => benchCrypto.locatorFor({ identity, contentHash: h });
+  const ownerSigs = await tk.buildOwnerSigs({
+    hashes: Object.keys(blobs), identity, ownerKey, timestamp, locatorFor,
+  });
 
-  // Initial manifest (slot apps only) + its FluxDrive dual-sigs.
+  // Initial manifest (slot apps only) + its FluxDrive dual-sigs. Both writes name
+  // this registration's message, so FluxDrive holds them until the nodes answer
+  // that the registration applied.
   let manifest;
   let manifestPutSig;
   let reconcileSig;
   if (contentSlots.length) {
     manifest = await tk.buildOwnerSignedManifest({
-      appName: name, identity: tk.registrationIdentity(specField, name), version: 1, slots: slotMap, ownerKey, timestamp,
+      appName: name, identity, version: 1, slots: slotMap, ownerKey, timestamp,
     });
-    manifestPutSig = await tk.manifestPutSig({ appName: name, version: 1, timestamp, ownerKey });
-    reconcileSig = await tk.reconcileSig({ appName: name, source: 'slot', version: 1, ownerKey });
+    manifestPutSig = await tk.manifestPutSig({
+      identity, version: 1, timestamp, pendingMessageHash: messageHash, ownerKey,
+    });
+    reconcileSig = await tk.reconcileSig({
+      identity, source: 'slot', version: 1, keptLocators: Object.values(slotMap).map((s) => locatorFor(s.hash)), pendingMessageHash: messageHash, ownerKey,
+    });
   }
 
   const envelope = await tk.buildContentEnvelope({
@@ -238,15 +249,22 @@ export async function pushContentUpdate(nodeUrl, opts) {
   }
 
   const transportPubB64 = await fetchTransportPubKey(nodeUrl, name, owner);
+  const identity = await listedIdentity(nodeUrl, name);
   const manifest = await tk.buildOwnerSignedManifest({
-    appName: name, identity: await listedIdentity(nodeUrl, name), version, slots: slotMap, ownerKey, timestamp, rollout: opts.rollout,
+    appName: name, identity, version, slots: slotMap, ownerKey, timestamp, rollout: opts.rollout,
   });
-  const locatorFor = (h) => benchCrypto.locatorFor({ appName: name, fluxID: owner, contentHash: h });
+  const locatorFor = (h) => benchCrypto.locatorFor({ identity, contentHash: h });
   const ownerSigs = await tk.buildOwnerSigs({
-    hashes: Object.keys(blobs), appName: name, ownerKey, timestamp, locatorFor,
+    hashes: Object.keys(blobs), identity, ownerKey, timestamp, locatorFor,
   });
-  const mPutSig = await tk.manifestPutSig({ appName: name, version, timestamp, ownerKey });
-  const rSig = await tk.reconcileSig({ appName: name, source: 'slot', version, ownerKey });
+  // A content update changes no spec, so its FluxDrive writes name no message and
+  // are applied on arrival.
+  const mPutSig = await tk.manifestPutSig({
+    identity, version, timestamp, ownerKey,
+  });
+  const rSig = await tk.reconcileSig({
+    identity, source: 'slot', version, keptLocators: Object.values(slotMap).map((s) => locatorFor(s.hash)), ownerKey,
+  });
 
   const envelope = await tk.buildContentEnvelope({
     blobs, manifest, manifestPutSig: mPutSig, reconcileSig: rSig,

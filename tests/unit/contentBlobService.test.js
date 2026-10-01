@@ -19,9 +19,9 @@ const now = () => NOW_MS;
 const freshTs = String(NOW_MS);
 
 const APP = V9_SUBMISSION.name;
-// The installed app's identity, which keys this node's artifact store.
+// The app's identity: what keys every locator, every blob key and this node's
+// artifact store.
 const IDENTITY = `b${'a'.repeat(52)}`;
-const OWNER = V9_SUBMISSION.owner;
 const APPS_FOLDER = '/dat/var/lib/fluxos/flux-apps';
 
 const hashOf = (buf) => `sha256:${crypto.createHash('sha256').update(buf).digest('hex')}`;
@@ -152,7 +152,7 @@ describe('contentBlobService', () => {
 
       const out = await encryptAndUploadBlob(
         {
-          appName: APP, fluxID: OWNER, contentHash, bytes, ownerSig: 'owner-sig', timestamp: freshTs,
+          appName: APP, identity: IDENTITY, contentHash, bytes, ownerSig: 'owner-sig', timestamp: freshTs,
         },
         { benchmark: makeBenchmark(), uploader, now },
       );
@@ -161,18 +161,53 @@ describe('contentBlobService', () => {
       expect(uploader.calls.length).to.equal(1);
       const { framed, headers } = uploader.calls[0];
       expect(headers).to.include({
-        locator: 'a'.repeat(64), appName: APP, ownerSig: 'owner-sig', arcaneSig: 'arcane-sig-b64', source: 'blob', timestamp: freshTs,
+        locator: 'a'.repeat(64), appName: APP, identity: IDENTITY, ownerSig: 'owner-sig', arcaneSig: 'arcane-sig-b64', source: 'blob', timestamp: freshTs,
       });
       // ciphertext is nonce || ciphertext || tag (plaintext + 28) and hides the plaintext
       expect(framed.length).to.equal(bytes.length + 28);
       expect(framed.includes(bytes)).to.equal(false);
     });
 
+    it('derives the locator and the key by identity, and hands the signer the upload text\'s fields', async () => {
+      const bytes = Buffer.from('hello content');
+      const contentHash = hashOf(bytes);
+      const asked = { blobLocator: [], contentKey: [], signBlobUpload: [] };
+      const benchmark = makeBenchmark({
+        blobLocator: async (ref) => { asked.blobLocator.push(ref); return ok({ locator: 'a'.repeat(64) }); },
+        contentKey: async (ref) => { asked.contentKey.push(ref); return ok({ key: KEY.toString('base64') }); },
+        signBlobUpload: async (fields) => { asked.signBlobUpload.push(fields); return ok({ signature: 'arcane-sig-b64' }); },
+      });
+
+      await encryptAndUploadBlob(
+        {
+          appName: APP, identity: IDENTITY, contentHash, bytes, ownerSig: 'owner-sig', timestamp: freshTs,
+        },
+        { benchmark, uploader: makeUploader(), now },
+      );
+
+      expect(asked.blobLocator).to.deep.equal([{ identity: IDENTITY, contentHash }]);
+      expect(asked.contentKey).to.deep.equal([{ identity: IDENTITY, contentHash }]);
+      expect(asked.signBlobUpload).to.deep.equal([{
+        kind: 'upload', identity: IDENTITY, locator: 'a'.repeat(64), timestamp: freshTs,
+      }]);
+    });
+
+    it('refuses a blob with no identity before touching the channel', async () => {
+      const bytes = Buffer.from('data');
+      const benchmark = makeBenchmark({ blobLocator: async () => { throw new Error('channel reached'); } });
+      await expectReject(encryptAndUploadBlob(
+        {
+          appName: APP, contentHash: hashOf(bytes), bytes, ownerSig: 's', timestamp: freshTs,
+        },
+        { benchmark, uploader: makeUploader(), now },
+      ), /keyed by the app identity/);
+    });
+
     it('rejects a hash mismatch', async () => {
       const bytes = Buffer.from('data');
       await expectReject(encryptAndUploadBlob(
         {
-          appName: APP, fluxID: OWNER, contentHash: `sha256:${'0'.repeat(64)}`, bytes, ownerSig: 's', timestamp: freshTs,
+          appName: APP, identity: IDENTITY, contentHash: `sha256:${'0'.repeat(64)}`, bytes, ownerSig: 's', timestamp: freshTs,
         },
         { benchmark: makeBenchmark(), uploader: makeUploader(), now },
       ), /hash mismatch/);
@@ -182,7 +217,7 @@ describe('contentBlobService', () => {
       const bytes = Buffer.alloc(await maxBlobBytes() + 1);
       await expectReject(encryptAndUploadBlob(
         {
-          appName: APP, fluxID: OWNER, contentHash: hashOf(bytes), bytes, ownerSig: 's', timestamp: freshTs,
+          appName: APP, identity: IDENTITY, contentHash: hashOf(bytes), bytes, ownerSig: 's', timestamp: freshTs,
         },
         { benchmark: makeBenchmark(), uploader: makeUploader(), now },
       ), /exceeds/);
@@ -192,7 +227,7 @@ describe('contentBlobService', () => {
       const bytes = Buffer.from('data');
       await expectReject(encryptAndUploadBlob(
         {
-          appName: APP, fluxID: OWNER, contentHash: hashOf(bytes), bytes, ownerSig: 's', timestamp: String(NOW_MS - 6 * 60 * 1000),
+          appName: APP, identity: IDENTITY, contentHash: hashOf(bytes), bytes, ownerSig: 's', timestamp: String(NOW_MS - 6 * 60 * 1000),
         },
         { benchmark: makeBenchmark(), uploader: makeUploader(), now },
       ), /stale/);
@@ -203,7 +238,7 @@ describe('contentBlobService', () => {
       const benchmark = makeBenchmark({ contentKey: async () => ({ status: 'error', data: 'boom' }) });
       await expectReject(encryptAndUploadBlob(
         {
-          appName: APP, fluxID: OWNER, contentHash: hashOf(bytes), bytes, ownerSig: 's', timestamp: freshTs,
+          appName: APP, identity: IDENTITY, contentHash: hashOf(bytes), bytes, ownerSig: 's', timestamp: freshTs,
         },
         { benchmark, uploader: makeUploader(), now },
       ), /benchmark channel/);
@@ -246,7 +281,7 @@ describe('contentBlobService', () => {
       const blobs = new Map([[ha, a], [hb, b]]);
 
       const out = await encryptAndUploadBlobs(
-        { spec: specAB, blobs, ownerSigs },
+        { spec: specAB, identity: IDENTITY, blobs, ownerSigs },
         { benchmark: makeBenchmark(), uploader, now },
       );
 
@@ -256,14 +291,15 @@ describe('contentBlobService', () => {
       expect(out.map((u) => u.hash)).to.have.members(declaredHashes(specAB));
       expect(uploader.calls.length).to.equal(2);
       expect(uploader.calls.map((c2) => c2.headers.ownerSig)).to.have.members(['sig-a', 'sig-b']);
-      // appName/fluxID are read off the real spec, so every upload is filed under
-      // the app identity the submission actually carries.
+      // The name is read off the real spec and the identity is the one the
+      // submission was given, so every upload is filed under both.
       expect(uploader.calls.every((c2) => c2.headers.appName === specAB.name)).to.equal(true);
+      expect(uploader.calls.every((c2) => c2.headers.identity === IDENTITY)).to.equal(true);
     });
 
     it('rejects when a declared contentRef has no blob part (no prior spec)', async () => {
       await expectReject(encryptAndUploadBlobs(
-        { spec: specA, blobs: new Map(), ownerSigs: new Map([[ha, { sig: 's', timestamp: freshTs }]]) },
+        { spec: specA, identity: IDENTITY, blobs: new Map(), ownerSigs: new Map([[ha, { sig: 's', timestamp: freshTs }]]) },
         { benchmark: makeBenchmark(), uploader: makeUploader(), now },
       ), /missing blob part/);
     });
@@ -272,6 +308,7 @@ describe('contentBlobService', () => {
       await expectReject(encryptAndUploadBlobs(
         {
           spec: specA,
+          identity: IDENTITY,
           priorSpec: priorC,
           blobs: new Map(),
           ownerSigs: new Map(),
@@ -293,6 +330,7 @@ describe('contentBlobService', () => {
       const out = await encryptAndUploadBlobs(
         {
           spec: specAB,
+          identity: IDENTITY,
           priorSpec: priorB,
           blobs: new Map([[ha, a]]),
           ownerSigs: new Map([[ha, { sig: 'sig-a', timestamp: freshTs }]]),
@@ -310,6 +348,7 @@ describe('contentBlobService', () => {
       await expectReject(encryptAndUploadBlobs(
         {
           spec: specA,
+          identity: IDENTITY,
           priorSpec: priorA,
           blobs: new Map(),
           ownerSigs: new Map(),
@@ -324,6 +363,7 @@ describe('contentBlobService', () => {
       const out = await encryptAndUploadBlobs(
         {
           spec: specA,
+          identity: IDENTITY,
           priorSpec: priorA,
           blobs: new Map([[ha, a]]),
           ownerSigs: new Map([[ha, { sig: 'sig-a', timestamp: freshTs }]]),
@@ -340,6 +380,7 @@ describe('contentBlobService', () => {
       await expectReject(encryptAndUploadBlobs(
         {
           spec: specA,
+          identity: IDENTITY,
           blobs: new Map([[ha, a], [hs, stray]]),
           ownerSigs: new Map([[ha, { sig: 's', timestamp: freshTs }], [hs, { sig: 's', timestamp: freshTs }]]),
         },
@@ -349,7 +390,7 @@ describe('contentBlobService', () => {
 
     it('rejects a declared blob with no owner signature', async () => {
       await expectReject(encryptAndUploadBlobs(
-        { spec: specA, blobs: new Map([[ha, a]]), ownerSigs: new Map() },
+        { spec: specA, identity: IDENTITY, blobs: new Map([[ha, a]]), ownerSigs: new Map() },
         { benchmark: makeBenchmark(), uploader: makeUploader(), now },
       ), /missing owner signature/);
     });
@@ -362,7 +403,7 @@ describe('contentBlobService', () => {
       const uploader = makeUploader();
       await encryptAndUploadBlob(
         {
-          appName: APP, fluxID: OWNER, contentHash, bytes, ownerSig: 's', timestamp: freshTs,
+          appName: APP, identity: IDENTITY, contentHash, bytes, ownerSig: 's', timestamp: freshTs,
         },
         { benchmark: makeBenchmark(), uploader, now },
       );
@@ -370,7 +411,7 @@ describe('contentBlobService', () => {
 
       const out = await decryptAndVerifyBlob(
         {
-          appName: APP, fluxID: OWNER, contentHash, framed,
+          identity: IDENTITY, contentHash, framed,
         },
         { benchmark: makeBenchmark() },
       );
@@ -383,7 +424,7 @@ describe('contentBlobService', () => {
       const uploader = makeUploader();
       await encryptAndUploadBlob(
         {
-          appName: APP, fluxID: OWNER, contentHash, bytes, ownerSig: 's', timestamp: freshTs,
+          appName: APP, identity: IDENTITY, contentHash, bytes, ownerSig: 's', timestamp: freshTs,
         },
         { benchmark: makeBenchmark(), uploader, now },
       );
@@ -392,7 +433,7 @@ describe('contentBlobService', () => {
       const wrongKey = makeBenchmark({ contentKey: async () => ok({ key: crypto.randomBytes(32).toString('base64') }) });
       await expectReject(decryptAndVerifyBlob(
         {
-          appName: APP, fluxID: OWNER, contentHash, framed,
+          identity: IDENTITY, contentHash, framed,
         },
         { benchmark: wrongKey },
       ), /./);
@@ -410,7 +451,7 @@ describe('contentBlobService', () => {
       const store = memStore();
       const out = await resolveBlob(
         {
-          appName: APP, identity: IDENTITY, fluxID: OWNER, contentHash, peers: ['p1', 'p2'],
+          appName: APP, identity: IDENTITY, contentHash, peers: ['p1', 'p2'],
         },
         {
           benchmark: makeBenchmark(), peerFetch: async () => framed, fluxDrive: noFluxDrive, store,
@@ -426,7 +467,7 @@ describe('contentBlobService', () => {
       const peerFetch = async () => { throw new Error('network must not be touched'); };
       const out = await resolveBlob(
         {
-          appName: APP, identity: IDENTITY, fluxID: OWNER, contentHash, peers: ['p1'],
+          appName: APP, identity: IDENTITY, contentHash, peers: ['p1'],
         },
         {
           benchmark: makeBenchmark(), peerFetch, fluxDrive: { fetchBlobByLocator: peerFetch }, store,
@@ -441,7 +482,7 @@ describe('contentBlobService', () => {
       const framed = validFramed();
       const out = await resolveBlob(
         {
-          appName: APP, identity: IDENTITY, fluxID: OWNER, contentHash, peers: ['p1'],
+          appName: APP, identity: IDENTITY, contentHash, peers: ['p1'],
         },
         {
           benchmark: makeBenchmark(), peerFetch: async () => framed, fluxDrive: noFluxDrive, store,
@@ -458,7 +499,7 @@ describe('contentBlobService', () => {
       const peerFetch = async () => { n += 1; if (n === 1) throw new Error('peer down'); return framed; };
       const out = await resolveBlob(
         {
-          appName: APP, identity: IDENTITY, fluxID: OWNER, contentHash, peers: ['p1', 'p2'],
+          appName: APP, identity: IDENTITY, contentHash, peers: ['p1', 'p2'],
         },
         {
           benchmark: makeBenchmark(), peerFetch, fluxDrive: noFluxDrive, store: memStore(),
@@ -473,7 +514,7 @@ describe('contentBlobService', () => {
       const store = memStore();
       const out = await resolveBlob(
         {
-          appName: APP, identity: IDENTITY, fluxID: OWNER, contentHash, peers: ['p1'],
+          appName: APP, identity: IDENTITY, contentHash, peers: ['p1'],
         },
         {
           benchmark: makeBenchmark(), peerFetch: async () => Buffer.alloc(40, 7), fluxDrive, store,
@@ -486,7 +527,7 @@ describe('contentBlobService', () => {
     it('throws when no source yields verified content', async () => {
       await expectReject(resolveBlob(
         {
-          appName: APP, identity: IDENTITY, fluxID: OWNER, contentHash, peers: ['p1'],
+          appName: APP, identity: IDENTITY, contentHash, peers: ['p1'],
         },
         {
           benchmark: makeBenchmark(), peerFetch: async () => null, fluxDrive: noFluxDrive, store: memStore(),
@@ -527,7 +568,7 @@ describe('contentBlobService', () => {
       const resolve = async (req) => { resolved.push(req); return Buffer.from(`plain:${req.contentHash}`); };
       await provisionContentBlobs(
         deployment,
-        { appName: APP, fluxID: OWNER, peers: ['p1'] },
+        { appName: APP, peers: ['p1'] },
         { resolve, writeFile: async (s, b) => writes.push({ source: s, body: b }) },
       );
 
@@ -541,10 +582,10 @@ describe('contentBlobService', () => {
 
       // resolveBlob stays stubbed, so nothing here exercises what it does with the
       // request it is handed. The real one keys the benchmark locator/key derivation
-      // AND the AEAD AAD on contentHash, and reads appName/fluxID/peers — so assert
+      // AND the AEAD AAD on contentHash, and reads appName/identity/peers — so assert
       // the handed request actually carries them.
       expect(resolved.map((r) => r.contentHash)).to.deep.equal(mounts.map((m) => m.hash));
-      expect(resolved[0]).to.include({ appName: APP, identity: IDENTITY, fluxID: OWNER });
+      expect(resolved[0]).to.include({ appName: APP, identity: IDENTITY });
       expect(resolved[0].peers).to.deep.equal(['p1']);
     });
 
@@ -566,7 +607,7 @@ describe('contentBlobService', () => {
 
       await provisionContentBlobs(
         deployment,
-        { appName: APP, fluxID: OWNER, peers: ['p1'] },
+        { appName: APP, peers: ['p1'] },
         { resolve, writeFile: async (s, b) => writes.push({ source: s, body: b }) },
       );
 
@@ -578,7 +619,7 @@ describe('contentBlobService', () => {
       const resolve = async () => { throw new Error(`contentBlob: no source for ${hCfg}`); };
       await expectReject(provisionContentBlobs(
         deployment,
-        { appName: APP, fluxID: OWNER, peers: [] },
+        { appName: APP, peers: [] },
         { resolve, writeFile: async () => {} },
       ), /no source/);
     });
@@ -593,12 +634,12 @@ describe('contentBlobService', () => {
       const store = memStore({ [`${IDENTITY}/${contentHash}`]: storedFramed });
       const framed = await serveBlob(
         {
-          appName: APP, identity: IDENTITY, fluxID: OWNER, locator: 'a'.repeat(64) },
+          appName: APP, identity: IDENTITY, locator: 'a'.repeat(64) },
         { benchmark: makeBenchmark(), store },
       );
       expect(framed.equals(storedFramed)).to.equal(true); // verbatim — never re-read or re-encrypted
       const out = await decryptAndVerifyBlob({
-        appName: APP, fluxID: OWNER, contentHash, framed,
+        identity: IDENTITY, contentHash, framed,
       }, { benchmark: makeBenchmark() });
       expect(out.equals(bytes)).to.equal(true);
     });
@@ -607,7 +648,7 @@ describe('contentBlobService', () => {
       const store = memStore({ [`${IDENTITY}/${contentHash}`]: storedFramed });
       const framed = await serveBlob(
         {
-          appName: APP, identity: IDENTITY, fluxID: OWNER, locator: 'b'.repeat(64) },
+          appName: APP, identity: IDENTITY, locator: 'b'.repeat(64) },
         { benchmark: makeBenchmark(), store },
       );
       expect(framed).to.equal(null);
@@ -616,7 +657,7 @@ describe('contentBlobService', () => {
     it('returns null when the app has no stored artifacts', async () => {
       const framed = await serveBlob(
         {
-          appName: APP, identity: IDENTITY, fluxID: OWNER, locator: 'a'.repeat(64) },
+          appName: APP, identity: IDENTITY, locator: 'a'.repeat(64) },
         { benchmark: makeBenchmark(), store: memStore() },
       );
       expect(framed).to.equal(null);
@@ -652,15 +693,15 @@ describe('contentBlobService', () => {
         blobLocator: async (ref) => { calls.push(ref); return ok({ locator: 'L'.repeat(64) }); },
       });
       const contentHash = hashOf(Buffer.from('locate me'));
-      const locator = await deriveLocator(benchmark, { appName: APP, fluxID: OWNER, contentHash });
+      const locator = await deriveLocator(benchmark, { identity: IDENTITY, contentHash });
       expect(locator).to.equal('L'.repeat(64));
-      expect(calls).to.deep.equal([{ appName: APP, fluxID: OWNER, contentHash }]);
+      expect(calls).to.deep.equal([{ identity: IDENTITY, contentHash }]);
     });
 
     it('throws when the benchmark channel rejects the request', async () => {
       const benchmark = makeBenchmark({ blobLocator: async () => ({ status: 'error' }) });
       await expectReject(
-        deriveLocator(benchmark, { appName: APP, fluxID: OWNER, contentHash: hashOf(Buffer.from('x')) }),
+        deriveLocator(benchmark, { identity: IDENTITY, contentHash: hashOf(Buffer.from('x')) }),
         /benchmark channel/,
       );
     });

@@ -58,24 +58,44 @@ function signEd25519(privateKey, messageBuf) {
 }
 
 // --- Per-content / per-app symmetric material (node does the bulk AES) ---
-function locatorFor({ appName, fluxID, contentHash }) {
+// A v9 identity: `b`, 51 base32 characters, then `a` or `q`. Every content
+// derivation is keyed by it, never by the app's name or owner, and any other
+// spelling is refused rather than deriving a key that is not the app's.
+const IDENTITY_PATTERN = /^b[a-z2-7]{51}[aq]$/;
+
+function requireIdentity(identity) {
+  if (typeof identity !== 'string' || !IDENTITY_PATTERN.test(identity)) throw new Error('identity invalid');
+  return identity;
+}
+
+function locatorFor({ identity, contentHash }) {
   return crypto.createHash('sha256')
     .update(TEST_SEED).update('bloblocator')
-    .update(appName).update(String(fluxID)).update(contentHash)
+    .update(requireIdentity(identity)).update(contentHash)
     .digest('hex');
 }
 
-function contentKeyFor({ appName, fluxID, contentHash }) {
-  return hkdf32('contentkey', `${appName}:${fluxID}:${contentHash}`).toString('base64');
+function contentKeyFor({ identity, contentHash }) {
+  return hkdf32('contentkey', `${requireIdentity(identity)}:${contentHash}`).toString('base64');
 }
 
-function appSecretKeyFor({ appName, fluxID }) {
+// The key an appencrypt/appdecrypt request names: the app-secret key by name and
+// owner, for an encrypted spec sealed for the owner it names; or the content seal
+// key by identity, for a manifest's slots, which stay the app's across an
+// ownership transfer. A request naming both is refused.
+function sealKeyFor({ appName, fluxID, identity }) {
+  if (identity !== undefined) {
+    if (appName !== undefined || fluxID !== undefined) throw new Error('AMBIGUOUS_KEY');
+    return hkdf32('contentseal', requireIdentity(identity));
+  }
   return hkdf32('appsecret', `${appName}:${fluxID}`);
 }
 
-// app-secret encrypt/decrypt (the at-rest EncryptedSpecV9 path: appencrypt/appdecrypt).
-function appEncrypt({ appName, fluxID, message, aad }) {
-  const key = appSecretKeyFor({ appName, fluxID });
+// appencrypt/appdecrypt: the at-rest seal of a spec or of a manifest's slots.
+function appEncrypt({
+  appName, fluxID, identity, message, aad,
+}) {
+  const key = sealKeyFor({ appName, fluxID, identity });
   const nonce = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
   if (aad != null) cipher.setAAD(Buffer.from(aad, 'base64'));
@@ -88,8 +108,10 @@ function appEncrypt({ appName, fluxID, message, aad }) {
   };
 }
 
-function appDecrypt({ appName, fluxID, ciphertext, nonce, tag, aad }) {
-  const key = appSecretKeyFor({ appName, fluxID });
+function appDecrypt({
+  appName, fluxID, identity, ciphertext, nonce, tag, aad,
+}) {
+  const key = sealKeyFor({ appName, fluxID, identity });
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(nonce, 'base64'));
   decipher.setAuthTag(Buffer.from(tag, 'base64'));
   if (aad != null) decipher.setAAD(Buffer.from(aad, 'base64'));
@@ -97,9 +119,13 @@ function appDecrypt({ appName, fluxID, ciphertext, nonce, tag, aad }) {
   return { message: pt.toString('base64') };
 }
 
-// --- Arcane blob signatures (wire contract v2) ---
-// The channel builds the signed bytes itself: a per-shape domain prefix over the
-// hex digest of that shape's fields. Callers send typed fields, never a message.
+// --- Arcane blob signatures ---
+// The channel builds the signed text itself from typed fields, as the library's
+// fluxDriveWrites does: a per-kind domain prefix over the hex digest of that
+// kind's text. Every text names the app's identity; a manifest or reconcile
+// carried by a spec update names the update's message hash, empty otherwise; a
+// reconcile names the hash of the locators it keeps, sorted and each once, so no
+// caller can have a different list signed. Callers send fields, never a message.
 function sha256Hex(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
@@ -111,18 +137,30 @@ const BLOB_SIGNATURE_DOMAINS = {
 };
 
 // Upload and manifest carry a timestamp and are refused outside this window.
-// Reconcile carries none: the verifier's per-(appName, source) monotonic version
-// floor bounds replay there instead.
+// Reconcile carries none: the verifier's version floor per identity and source
+// bounds replay there instead.
 const BLOB_FRESHNESS_WINDOW_MS = 300 * 1000;
 
+function pendingMessageHashField(value) {
+  if (value === undefined || value === null) return '';
+  if (typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value)) throw new Error('signblobupload: pendingMessageHash invalid');
+  return value;
+}
+
+function keptLocatorsHash(locators) {
+  if (!Array.isArray(locators) || !locators.length) throw new Error('signblobupload: keptLocators invalid');
+  return sha256Hex([...new Set(locators)].sort().join('\n'));
+}
+
 function blobSignedDigest(fields) {
+  const identity = requireIdentity(fields.identity);
   switch (fields.kind) {
     case 'upload':
-      return sha256Hex(`${fields.locator}:${fields.appName}:${fields.timestamp}`);
+      return sha256Hex(`${fields.locator}:${identity}:${fields.timestamp}`);
     case 'manifest':
-      return sha256Hex(`${fields.appName}:${fields.version}:${fields.timestamp}`);
+      return sha256Hex(`${identity}:${fields.version}:${fields.timestamp}:${pendingMessageHashField(fields.pendingMessageHash)}`);
     case 'reconcile':
-      return sha256Hex(`${fields.appName}:${fields.source}:${fields.version}`);
+      return sha256Hex(`${identity}:${fields.source}:${fields.version}:${keptLocatorsHash(fields.keptLocators)}:${pendingMessageHashField(fields.pendingMessageHash)}`);
     default:
       throw new Error(`signblobupload: unknown kind ${fields.kind}`);
   }
@@ -230,6 +268,8 @@ export const meshAttestationPubkeyB64 = meshAttestationKey.rawPubB64;
 export const appAttestationPubkeyB64 = appAttestationKey.rawPubB64;
 
 export {
+  IDENTITY_PATTERN,
+  requireIdentity,
   locatorFor,
   contentKeyFor,
   appEncrypt,

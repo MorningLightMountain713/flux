@@ -521,8 +521,11 @@ export async function benchRpc(method, params = []) {
   return parsed;
 }
 
-/** An app's backend-TLS CA certificate (PEM), fetched the way FDM fetches it. */
-export async function appCaCertificate(appName) {
-  const { certificate } = await benchRpc('cacertificate', [`appName=${encodeURIComponent(appName)}`]);
+/**
+ * An app's backend-TLS CA certificate (PEM), fetched the way FDM fetches it: the
+ * CA is keyed by the app's identity and named after the app.
+ */
+export async function appCaCertificate(appName, identity) {
+  const { certificate } = await benchRpc('cacertificate', [`appName=${encodeURIComponent(appName)}&identity=${encodeURIComponent(identity)}`]);
   return certificate;
 }

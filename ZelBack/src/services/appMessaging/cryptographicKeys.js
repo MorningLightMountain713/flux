@@ -12,6 +12,9 @@ const globalState = require('../utils/globalState');
 const transportHelper = require('../utils/transportHelper');
 const contentBlobService = require('../appLifecycle/contentBlobService');
 const specLibs = require('../utils/specLibs');
+const appsRepository = require('../appDatabase/appsRepository');
+const signatureVerifier = require('../signatureVerifier');
+const appEventVerifier = require('./appEventVerifier');
 
 const CONTENT_HASH_PATTERN = /^sha256:[a-f0-9]{64}$/;
 
@@ -134,22 +137,70 @@ async function getTransportPublicKey(req, res) {
 }
 
 /**
+ * The identity a caller may derive locators for. A listed app's belongs to its
+ * listed owner alone, so once a name is listed an earlier owner cannot test a
+ * guessed file against the app's content. An unlisted name's belongs to whoever
+ * signed the registration that will list it: the caller presents that message's
+ * signed fields, the node checks the signature recovers to the caller, recomputes
+ * the message hash and derives the identity the hash makes. The caller never
+ * names an identity.
+ *
+ * @param {string} callerZelid - the authenticated caller
+ * @param {string} appName
+ * @param {object} [registration] - { type, version, contentHash, timestamp, extend, signature }
+ * @returns {Promise<string>} the identity
+ */
+async function identityProvenBy(callerZelid, appName, registration) {
+  const listed = await appsRepository.getGlobalAppInfo(appName);
+  if (listed) {
+    if (!signatureVerifier.sameSigningIdentity(listed.owner, callerZelid)) {
+      throw new Error(`${appName} is listed under another owner`);
+    }
+    if (!listed.identity) throw new Error(`${appName} has no identity to derive locators for`);
+    return listed.identity;
+  }
+  const message = serviceHelper.ensureObject(registration);
+  const wellFormed = message && message.type === 'fluxappregister' && message.version === 2
+    && typeof message.contentHash === 'string' && message.contentHash
+    && Number.isFinite(message.timestamp) && typeof message.extend === 'boolean'
+    && typeof message.signature === 'string' && message.signature;
+  if (!wellFormed) {
+    throw new Error(`${appName} is not listed: present the v9 registration message you signed for it`);
+  }
+  const { buildSignaturePayloadV2, appUuid, appIdentityFromUuid } = await specLibs.getSpec();
+  const payload = buildSignaturePayloadV2(message.type, message.version, message.contentHash, message.timestamp, message.extend);
+  if (!(await signatureVerifier.verifySignature(payload, callerZelid, message.signature))) {
+    throw new Error('the registration presented was not signed by the caller');
+  }
+  const hash = await appEventVerifier.computeOutboundHash({
+    type: message.type,
+    envelopeVersion: message.version,
+    contentHash: message.contentHash,
+    timestamp: message.timestamp,
+    extend: message.extend,
+    signature: message.signature,
+  });
+  return appIdentityFromUuid(appUuid(appName, hash));
+}
+
+/**
  * POST /apps/bloblocator — derive a content blob's locator for the app owner (the
  * frontend), so they can owner-sign the dual-sig upload over
- * sha256(locator:appName:timestamp). The locator is fleet-secret-derived (the owner
+ * `locator:identity:timestamp`. The locator is fleet-secret-derived (the owner
  * can't compute it), and an OPEN endpoint would be a confirmation-of-file oracle —
- * appName + owner are public, so an attacker need only supply a guessed contentHash to
- * test whether a victim app uses a known file (CONTENT_BLOBS §4.5: the locator must stay
- * un-testable against a known file). Two controls close that:
+ * an attacker need only supply a guessed contentHash to test whether a victim app
+ * uses a known file. Two controls close that:
  *  - the contentHash (the fingerprint the locator scheme hides) rides HPKE-sealed toward
  *    THIS node's per-app transport key — never in the clear — and is opened only here;
- *  - the locator is derived for fluxID = the AUTHENTICATED caller's zelid (the caller can't
- *    even name another identity), so you can only derive locators for your OWN content.
+ *  - the locator is derived for an identity the AUTHENTICATED caller proves is theirs
+ *    (identityProvenBy), never one the caller names.
  * Arcane-only (the fleet secret lives in the benchmark channel).
  *
- * Body: { appName, timestamp, sealed } — sealed = TransportEnvelope JSON over
- * { contentHash }, AAD = buildContentTransportAad({ appName, ref: CONTENT_LOCATOR_AAD_REF,
- * timestamp }).
+ * Body: { appName, timestamp, sealed, registration? } — sealed = TransportEnvelope JSON
+ * over { contentHash }, AAD = buildContentTransportAad({ appName, ref:
+ * CONTENT_LOCATOR_AAD_REF, timestamp }); registration = { type, version, contentHash,
+ * timestamp, extend, signature }, the v9 registration message the caller signed,
+ * required while the name is not listed.
  */
 async function getBlobLocator(req, res) {
   try {
@@ -168,13 +219,17 @@ async function getBlobLocator(req, res) {
       return;
     }
 
-    const { appName, timestamp, sealed } = req.body || {};
+    const {
+      appName, timestamp, sealed, registration,
+    } = req.body || {};
     if (!appName || timestamp == null || !sealed) {
       throw new Error('bloblocator requires appName, timestamp, and the sealed contentHash');
     }
 
+    const identity = await identityProvenBy(callerZelid, appName, registration);
+
     // Open the sealed contentHash toward this node's per-app transport key for the
-    // CALLER's identity; the AAD ref distinguishes a locator request from a submission part.
+    // CALLER; the AAD ref distinguishes a locator request from a submission part.
     const { CONTENT_LOCATOR_AAD_REF } = await specLibs.getSpec();
     const plaintext = await transportHelper.openContentEnvelope(sealed, {
       appName, owner: callerZelid, ref: CONTENT_LOCATOR_AAD_REF, timestamp: Number(timestamp),
@@ -184,10 +239,7 @@ async function getBlobLocator(req, res) {
       throw new Error('sealed payload must carry a contentHash of the form sha256:<64 hex>');
     }
 
-    // Derive for the caller's OWN identity — never a fluxID the caller named.
-    const locator = await contentBlobService.deriveLocator(benchmarkService, {
-      appName, fluxID: callerZelid, contentHash,
-    });
+    const locator = await contentBlobService.deriveLocator(benchmarkService, { identity, contentHash });
     res.json(messageHelper.createDataMessage({ locator }));
   } catch (error) {
     log.error(error);
@@ -205,4 +257,5 @@ module.exports = {
   getPublicKey,
   getTransportPublicKey,
   getBlobLocator,
+  identityProvenBy,
 };

@@ -597,7 +597,7 @@ const benchHandlers = {
   },
   cacertificate: async (params) => {
     const q = new URLSearchParams(params[0]);
-    const res = await benchCertificates.caCertificate({ appName: q.get('appName') });
+    const res = await benchCertificates.caCertificate({ appName: q.get('appName'), identity: q.get('identity') });
     return JSON.stringify({ status: 'ok', ...res });
   },
 

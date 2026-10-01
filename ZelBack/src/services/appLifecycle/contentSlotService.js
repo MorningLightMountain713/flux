@@ -155,20 +155,22 @@ async function verifyManifest(manifest, ctx, deps = {}) {
 }
 
 /**
- * Seal a manifest's plaintext slots map with the app secret, so the gossiped /
- * stored manifest never exposes the slot hashes of an encrypted app. The owner
- * signed the plaintext manifest, so the cleartext fields (appName/version/rollout/
- * timestamp) and the signature are unchanged — only `slots` is replaced by the
- * sealed envelope. Plaintext apps keep `slots` as-is.
+ * Seal a manifest's plaintext slots map under the app's content key, so the
+ * gossiped / stored manifest never exposes the slot hashes of an encrypted app.
+ * The key is the identity's alone: the manifest stays readable by the app's
+ * nodes across an ownership transfer. The owner signed the plaintext manifest,
+ * so the cleartext fields (appName/identity/version/rollout/timestamp) and the
+ * signature are unchanged — only `slots` is replaced by the sealed envelope.
+ * Plaintext apps keep `slots` as-is.
  *
  * @param {object} manifest - plaintext manifest
- * @param {object} ctx - { owner, encrypted }
+ * @param {object} ctx - { encrypted }
  * @param {object} deps - { provider? }
  * @returns {Promise<object>} the gossip-form manifest
  */
 async function sealManifestSlots(manifest, ctx, deps = {}) {
   if (!ctx.encrypted) return manifest;
-  const provider = deps.provider || (await cryptoProvider.create(manifest.appName, ctx.owner));
+  const provider = deps.provider || (await cryptoProvider.forIdentity(manifest.identity));
   const sealed = await provider.encrypt(
     Buffer.from(JSON.stringify(manifest.slots)),
     await sealAad(manifest),
@@ -181,7 +183,7 @@ async function sealManifestSlots(manifest, ctx, deps = {}) {
  * manifest. Plaintext apps are returned unchanged.
  *
  * @param {object} manifest - gossip-form manifest
- * @param {object} ctx - { owner, encrypted }
+ * @param {object} ctx - { encrypted }
  * @param {object} deps - { provider? }
  * @returns {Promise<object>} the plaintext manifest
  */
@@ -190,7 +192,7 @@ async function openManifestSlots(manifest, ctx, deps = {}) {
   if (!manifest.slots || !manifest.slots.sealed) {
     throw new Error('contentSlot: encrypted manifest is missing its sealed slots payload');
   }
-  const provider = deps.provider || (await cryptoProvider.create(manifest.appName, ctx.owner));
+  const provider = deps.provider || (await cryptoProvider.forIdentity(manifest.identity));
   const plaintext = await provider.decrypt(manifest.slots.sealed, await sealAad(manifest));
   return { ...manifest, slots: JSON.parse(plaintext.toString('utf8')) };
 }
@@ -268,7 +270,7 @@ async function processManifestSubmission(input, deps) {
       if (!carriedOver.has(hash)) throw new Error(`contentSlot: missing blob part for ${hash}`);
       // eslint-disable-next-line no-await-in-loop
       await contentBlobService.assertBlobStored(
-        { appName: manifest.appName, fluxID: owner, contentHash: hash },
+        { identity, contentHash: hash },
         { uploader, benchmark },
       );
       continue;
@@ -281,7 +283,7 @@ async function processManifestSubmission(input, deps) {
     await contentBlobService.encryptAndUploadBlob(
       {
         appName: manifest.appName,
-        fluxID: owner,
+        identity,
         contentHash: hash,
         bytes: blobs.get(hash),
         ownerSig: ownerSig.sig,
@@ -781,14 +783,14 @@ async function reactSafely(fn) {
  * skip reacting (install-time provisioning, before the container exists). No write
  * happens unless every slot resolved (stage-all-then-apply).
  *
- * @param {object} deployment - DeploymentSpec for the app
+ * @param {object} deployment - DeploymentSpec for the app, whose identity keys every blob
  * @param {object} manifest - plaintext manifest (slot -> { hash })
- * @param {object} ctx - { appName, owner, peers }
+ * @param {object} ctx - { appName, peers }
  * @param {object} deps
  * @returns {Promise<Array<{comp: object, mount: object, bytes: Buffer}>>}
  */
 async function stageAndApplySlots(deployment, manifest, ctx, deps = {}) {
-  const { appName, owner, peers = [] } = ctx;
+  const { appName, peers = [] } = ctx;
   const {
     resolve = contentBlobService.resolveBlob,
     benchmark, fluxDrive, peerFetch = contentBlobService.fetchBlobFromPeer,
@@ -804,7 +806,7 @@ async function stageAndApplySlots(deployment, manifest, ctx, deps = {}) {
       // eslint-disable-next-line no-await-in-loop
       const bytes = await resolve(
         {
-          appName, identity: deployment.identity, fluxID: owner, contentHash: entry.hash, peers,
+          appName, identity: deployment.identity, contentHash: entry.hash, peers,
         },
         { benchmark, fluxDrive, peerFetch },
       );
@@ -1032,7 +1034,7 @@ async function scheduleContentApplication(manifest, spec, deps = {}) {
     if (!deployment) return;
     if (!(await componentsRunning(deployment, applyDeps))) return;
     const peers = await getPeers(appName);
-    await apply(deployment, manifest, { appName, owner: spec.owner, peers }, applyDeps);
+    await apply(deployment, manifest, { appName, peers }, applyDeps);
   };
   const runApplyDetached = () => runApply().catch((error) => log.warn(`contentSlot: deferred rollout apply for ${appName} failed - ${error.message ?? error}`));
 
@@ -1355,7 +1357,7 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
     }
   }
 
-  await stageApply(deployment, plaintext, { appName, owner, peers }, resolveDeps);
+  await stageApply(deployment, plaintext, { appName, peers }, resolveDeps);
   // Record the version we just staged so the steady-state "am I behind?" check
   // (applyStoredIfBehind) does not re-apply this same content to the now-running
   // container WITH a reaction — install content is provisioned before the container
@@ -1370,24 +1372,27 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
 }
 
 /**
- * Best-effort PUT of the latest owner-signed manifest to the FluxDrive backstop, so a
+ * Best-effort PUT of an owner-signed manifest to the FluxDrive backstop, so a
  * cold-starting node with no running peer can still provision the app (the first
  * instance has no peers — FluxDrive is its source, not a fallback). The node takes the
- * arcane sig over the benchmark channel, which builds the signed bytes itself from
- * (appName, version, timestamp); the OWNER PUT-sig is produced by the frontend at
- * submission over sha256(appName:version:timestamp) and carried in the sealed content
- * payload (the owner is offline at backup time). A failed PUT is logged, not fatal —
- * gossip + boot-sync are the primary path and the next content-update re-establishes
- * the backstop.
+ * arcane sig over the benchmark channel, which builds the signed text itself from
+ * the identity, version, timestamp and the message hash the put names; the OWNER
+ * PUT-sig is produced by the frontend at submission over the same text and carried
+ * in the sealed content payload (the owner is offline at backup time). A manifest
+ * that rides a spec message names that message's hash, and FluxDrive holds it until
+ * the nodes answer that the message applied; a content update with no spec change
+ * names none and is stored at once. A failed PUT is logged, not fatal — gossip +
+ * boot-sync are the primary path and the next content-update re-establishes the
+ * backstop.
  *
  * @param {object} gossipManifest - the stored gossip-form manifest (sealed slots)
- * @param {object} ctx - { appName, version, timestamp, manifestPutSig }
+ * @param {object} ctx - { appName, identity, version, timestamp, manifestPutSig, pendingMessageHash? }
  * @param {object} deps - { sign?, put?, benchmark? }
  * @returns {Promise<boolean>} true if the PUT succeeded
  */
 async function backstopManifest(gossipManifest, ctx, deps = {}) {
   const {
-    appName, version, timestamp, manifestPutSig,
+    appName, identity, version, timestamp, manifestPutSig, pendingMessageHash = null,
   } = ctx;
   const {
     sign = contentBlobService.signManifestPut, put = fluxDriveClient.putManifest, benchmark,
@@ -1396,9 +1401,11 @@ async function backstopManifest(gossipManifest, ctx, deps = {}) {
   // PUT. Skip; gossip + peers still carry the manifest.
   if (!manifestPutSig) return false;
   try {
-    const arcaneSig = await sign({ appName, version, timestamp }, { benchmark });
+    const arcaneSig = await sign({
+      identity, version, timestamp, pendingMessageHash,
+    }, { benchmark });
     await put(appName, {
-      version, timestamp, arcaneSig, ownerSig: manifestPutSig, manifest: gossipManifest,
+      version, timestamp, arcaneSig, ownerSig: manifestPutSig, manifest: gossipManifest, pendingMessageHash,
     });
     fluxEventBus.publish('content:manifestBackstopped', { appName, version });
     return true;
@@ -1410,17 +1417,19 @@ async function backstopManifest(gossipManifest, ctx, deps = {}) {
 
 /**
  * Push the slot app's live locator set to FluxDrive after a content update, so the GC
- * tombstones the now-superseded slot blobs (CONTENT_SLOTS §11; security scan N2/N4/F1).
- * The owner reconcile-sig over sha256(appName:slot:version) rides the sealed content
- * payload (frontend-produced at submission — the owner is online only then); the node
- * takes the arcane sig over the benchmark channel, which builds its own domain-prefixed
- * form of the same token. liveLocators are the current manifest's slot
- * locators, derived over the benchmark channel exactly as resolveBlob/serveBlob derive
- * them — the manifest carries every declared slot, so this is the FULL live set, not a
- * delta. FluxDrive ADDS new locators + tombstones this app's other slot locators with
- * grace (never blind-replace), gated by the per-(appName, 'slot') monotonic version floor,
- * so a duplicate or stale push is an idempotent 409. Best-effort: a failed push leaves the
- * superseded blobs pinned until the next update's reconcile (self-healing) or app death
+ * tombstones the now-superseded slot blobs. The owner reconcile-sig rides the sealed
+ * content payload (frontend-produced at submission — the owner is online only then)
+ * over the library's `slotReconcileDigest`, which binds the kept list by its hash; the
+ * node takes the arcane sig over the benchmark channel, which builds its own
+ * domain-prefixed form of the same text from the same list. liveLocators are the
+ * current manifest's slot locators, derived over the benchmark channel exactly as
+ * resolveBlob/serveBlob derive them — the manifest carries every declared slot, so this
+ * is the FULL live set, not a delta. FluxDrive tombstones the identity's other slot
+ * locators with grace (never blind-replace), gated by the version floor per identity
+ * and source, so a duplicate or stale push is an idempotent 409. A reconcile that rides
+ * a spec message names that message's hash and FluxDrive holds it until the nodes
+ * answer that the message applied. Best-effort: a failed push leaves the superseded
+ * blobs pinned until the next update's reconcile (self-healing) or app death
  * (lifecycle GC) — never fatal to the update.
  *
  * The first manifest (version 1, register) supersedes nothing — no prior version exists,
@@ -1428,12 +1437,14 @@ async function backstopManifest(gossipManifest, ctx, deps = {}) {
  * it is skipped (it would also 404, the app not being in the confirmed feed at register).
  *
  * @param {object} plaintextManifest - the plaintext manifest (slots = { name: { hash } })
- * @param {object} ctx - { appName, owner, version, reconcileSig }
+ * @param {object} ctx - { appName, identity, version, reconcileSig, pendingMessageHash? }
  * @param {object} deps - { benchmark?, deriveLocator?, sign?, reconcile? }
  * @returns {Promise<boolean>} true if the push was sent
  */
 async function reconcileSlots(plaintextManifest, ctx, deps = {}) {
-  const { appName, owner, version, reconcileSig } = ctx;
+  const {
+    appName, identity, version, reconcileSig, pendingMessageHash = null,
+  } = ctx;
   const {
     benchmark,
     deriveLocator = contentBlobService.deriveLocator,
@@ -1448,14 +1459,16 @@ async function reconcileSlots(plaintextManifest, ctx, deps = {}) {
     for (const slot of Object.values(plaintextManifest.slots || {})) {
       if (!slot || !slot.hash) continue;
       // eslint-disable-next-line no-await-in-loop
-      liveLocators.push(await deriveLocator(benchmark, { appName, fluxID: owner, contentHash: slot.hash }));
+      liveLocators.push(await deriveLocator(benchmark, { identity, contentHash: slot.hash }));
     }
     // Never push an empty live set — it would tombstone every slot blob. A slot app always
     // declares at least one slot, so this only guards a malformed manifest.
     if (!liveLocators.length) return false;
-    const arcaneSig = await sign({ appName, source: 'slot', version }, { benchmark });
+    const arcaneSig = await sign({
+      identity, source: 'slot', version, keptLocators: liveLocators, pendingMessageHash,
+    }, { benchmark });
     await reconcile(appName, {
-      source: 'slot', version, arcaneSig, ownerSig: reconcileSig, liveLocators,
+      source: 'slot', version, arcaneSig, ownerSig: reconcileSig, liveLocators, pendingMessageHash,
     });
     fluxEventBus.publish('content:reconcilePushed', { appName, source: 'slot', version });
     return true;
@@ -1542,14 +1555,14 @@ async function submitContentUpdate(body, deps = {}) {
   // still provision (best-effort; gossip + boot-sync are primary). The owner PUT-sig
   // rides the sealed payload (frontend-produced at submission); the node mints its arcane sig.
   await backstop(gossipManifest, {
-    appName, version: ver, timestamp: ts, manifestPutSig,
+    appName, identity, version: ver, timestamp: ts, manifestPutSig,
   }, { benchmark });
 
   // Tell FluxDrive's GC the new live slot-locator set so the superseded blobs are
-  // reclaimed (CONTENT_SLOTS §11). Best-effort; the owner reconcile-sig rides the sealed
-  // payload, the node mints the arcane sig. Derives locators from the plaintext manifest.
+  // reclaimed. Best-effort; the owner reconcile-sig rides the sealed payload, the
+  // node mints the arcane sig. Derives locators from the plaintext manifest.
   await reconcile(manifest, {
-    appName, owner, version: ver, reconcileSig,
+    appName, identity, version: ver, reconcileSig,
   }, { benchmark });
 
   // The submitter applies locally if it runs the app — gossip doesn't loop back. Detached,

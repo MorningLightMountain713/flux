@@ -540,11 +540,17 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
 
   // Content rides as ONE HPKE-sealed envelope — never plaintext in transit. Open it
   // toward this node's per-app transport key and upload synchronously so it is
-  // durably stored before the spec is gossiped.
+  // durably stored before the spec is gossiped. The identity is the one this
+  // registration's hash makes, and FluxDrive holds the manifest until the nodes
+  // answer that the registration applied.
   if (contentCtx) {
     const { appUuid, registrationIdentity } = await getSpec();
     await uploadSealedContent(spec, contentCtx.content, contentCtx.ownerSigs, {
-      ref: contentHash, timestamp, identity: registrationIdentity(spec, appUuid(spec.name, messageHASH)), owner: spec.owner,
+      ref: contentHash,
+      timestamp,
+      identity: registrationIdentity(spec, appUuid(spec.name, messageHASH)),
+      owner: spec.owner,
+      messageHash: messageHASH,
     });
   }
 
@@ -657,23 +663,30 @@ async function parseMultipartSubmission(req) {
  * only new or changed files; a register has no prior and attaches everything.
  *
  * A manifest the envelope carries is verified against the spec submitted, for
- * the app's identity, and its slot blobs are uploaded. A registration's is stored
- * as the app's and gossiped; an update's is returned to ride in the update's
- * message, held with it on every node and stored when the update applies.
+ * the app's identity, and its slot blobs are uploaded. Its FluxDrive put and its
+ * slot reconcile name the submission's message hash, so FluxDrive holds both
+ * until the nodes answer that the message applied: a registration lists the
+ * name, an update changes the spec the manifest is judged against. A
+ * registration's manifest is stored as the app's and gossiped; an update's is
+ * returned to ride in the update's message, held with it on every node and
+ * stored when the update applies.
  *
  * @param {object} spec - resolved submission spec (name, owner, contentRef mounts)
  * @param {object} content - the sealed TransportEnvelope JSON
  * @param {Map} ownerSigs - per-blob owner signatures
- * @param {object} bind - { ref, timestamp, identity, owner, priorSpec? } — transport
- *   AAD, the app's identity (a registration's from its message hash, an update's
- *   from the listed row), the owner who signs (the listed owner for an update: a
- *   transfer's carried manifest is the seller's), and the decrypted spec this
- *   update supersedes (absent on register)
+ * @param {object} bind - { ref, timestamp, identity, owner, messageHash, priorSpec? } —
+ *   transport AAD, the app's identity (a registration's from its message hash,
+ *   an update's from the listed row), the owner who signs (the listed owner for
+ *   an update: a transfer's carried manifest is the seller's), the submission's
+ *   message hash, and the decrypted spec this update supersedes (absent on
+ *   register)
  * @returns {Promise<{ payload: object, blobs: Map<string, Buffer>, carriedManifest: ?object }>}
  */
 async function uploadSealedContent(spec, content, ownerSigs, {
-  ref, timestamp, identity, owner, priorSpec,
+  ref, timestamp, identity, owner, messageHash, priorSpec,
 }) {
+  if (typeof identity !== 'string' || !identity) throw new Error('uploadSealedContent: content is keyed by the identity of the app it is for');
+  if (typeof messageHash !== 'string' || !messageHash) throw new Error('uploadSealedContent: a FluxDrive write names the hash of the message that carries it');
   const opened = await transportHelper.openContentEnvelope(content, {
     appName: spec.name, owner: spec.owner, ref, timestamp,
   });
@@ -683,16 +696,14 @@ async function uploadSealedContent(spec, content, ownerSigs, {
   const refHashes = contentBlobService.specContentHashes(spec);
   const refBlobs = new Map([...blobs].filter(([h]) => refHashes.has(h)));
   await contentBlobService.encryptAndUploadBlobs({
-    spec, priorSpec, blobs: refBlobs, ownerSigs,
+    spec, identity, priorSpec, blobs: refBlobs, ownerSigs,
   }, { uploader: fluxDriveClient });
 
-  // A slot app bundles its INITIAL owner-signed manifest with the submission: upload
-  // the slot blobs, store the manifest, and gossip it so the network has the slots'
-  // starting content alongside the spec. Without this an app would register declaring
-  // slots with no content for the install-hold to find. A slot app always forces an
-  // encrypted spec (flux-spec validation), so the gossiped slots payload is sealed.
+  // A slot app bundles its owner-signed manifest with the submission: upload the
+  // slot blobs and hand the manifest and the reconcile to FluxDrive naming this
+  // submission's message. A slot app always forces an encrypted spec (flux-spec
+  // validation), so the slots payload is sealed.
   if (payload.manifest) {
-    if (typeof identity !== 'string' || !identity) throw new Error('uploadSealedContent: a manifest needs the app identity it is for');
     const slotHashes = new Set(Object.values(payload.manifest.slots || {}).map((s) => s.hash));
     const slotBlobs = new Map([...blobs].filter(([h]) => slotHashes.has(h)));
     const gossipManifest = await contentSlotService.processManifestSubmission(
@@ -701,31 +712,36 @@ async function uploadSealedContent(spec, content, ownerSigs, {
       },
       { uploader: fluxDriveClient },
     );
+    // Best-effort, as every FluxDrive write is; the owner's signatures ride the
+    // sealed payload (frontend-produced at submission). The first installing
+    // instance has no peers, so FluxDrive is its only manifest source.
+    await contentSlotService.backstopManifest(gossipManifest, {
+      appName: spec.name,
+      identity,
+      version: payload.manifest.version,
+      timestamp: payload.manifest.timestamp,
+      manifestPutSig: payload.manifestPutSig,
+      pendingMessageHash: messageHash,
+    }, {});
+    // The live slot-locator set, so FluxDrive's GC reclaims the blobs this
+    // manifest supersedes (a no-op at register: version 1 supersedes nothing).
+    await contentSlotService.reconcileSlots(payload.manifest, {
+      appName: spec.name,
+      identity,
+      version: payload.manifest.version,
+      reconcileSig: payload.reconcileSig,
+      pendingMessageHash: messageHash,
+    }, {});
     if (priorSpec) return { payload, blobs, carriedManifest: gossipManifest };
-    // Broadcast first: broadcastMessageToAll returns the exact signed node broadcast it
-    // relayed, so the stored row carries that same envelope (one signature) and is
-    // boot-sync-servable to a fresh node.
+    // A registration's manifest is the app's from the start: store it and gossip
+    // it so the network has the slots' starting content alongside the spec.
+    // Broadcast first: broadcastMessageToAll returns the exact signed node
+    // broadcast it relayed, so the stored row carries that same envelope (one
+    // signature) and is boot-sync-servable to a fresh node.
     const signedBroadcast = await fluxCommunicationMessagesSender.broadcastMessageToAll({
       type: 'fluxappcontentmanifest', appName: spec.name, manifest: gossipManifest,
     });
     await contentSlotService.storeManifest(gossipManifest, { broadcast: signedBroadcast });
-    // Populate the FluxDrive backstop at register too — the first installing instance
-    // has no peers, so FluxDrive is its only manifest source. Best-effort; the owner
-    // PUT-sig rides the sealed payload (frontend-produced at submission).
-    await contentSlotService.backstopManifest(gossipManifest, {
-      appName: spec.name,
-      version: payload.manifest.version,
-      timestamp: payload.manifest.timestamp,
-      manifestPutSig: payload.manifestPutSig,
-    }, {});
-    // Reconcile the live slot-locator set with FluxDrive's GC so an update that supersedes
-    // slot content reclaims the old blobs (a no-op at register: version 1 supersedes nothing).
-    await contentSlotService.reconcileSlots(payload.manifest, {
-      appName: spec.name,
-      owner: spec.owner,
-      version: payload.manifest.version,
-      reconcileSig: payload.reconcileSig,
-    }, {});
   }
 
   return { payload, blobs, carriedManifest: null };

@@ -387,19 +387,21 @@ async function blobLocator(params) {
 }
 
 // Backend-TLS: submit a CSR through fluxbench and get back a signed 30-day host
-// cert. The RPC takes the request object as a single JSON string param (same
+// cert from the app's CA, which is keyed by the app's identity and named after
+// the app. The RPC takes the request object as a single JSON string param (same
 // convention as the other POST proxy methods).
-async function signCertificate({ csr, appName }) {
+async function signCertificate({ csr, appName, identity }) {
   const rpccall = 'signcertificate';
-  const rpcparameters = [JSON.stringify({ csr, appName })];
+  const rpcparameters = [JSON.stringify({ csr, appName, identity })];
   return executeCall(rpccall, rpcparameters);
 }
 
-// Backend-TLS: fetch the per-app CA cert (byte-deterministic, ~100-year window).
-// Query-string param, same convention as transportPublicKey.
-async function caCertificate({ appName }) {
+// Backend-TLS: fetch the per-app CA cert (byte-deterministic, ~100-year window),
+// keyed by the app's identity and named after the app. Query-string params, same
+// convention as transportPublicKey.
+async function caCertificate({ appName, identity }) {
   const rpccall = 'cacertificate';
-  const rpcparameters = [`appName=${encodeURIComponent(appName)}`];
+  const rpcparameters = [`appName=${encodeURIComponent(appName)}&identity=${encodeURIComponent(identity)}`];
   return executeCall(rpccall, rpcparameters);
 }
 

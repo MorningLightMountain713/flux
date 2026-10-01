@@ -4,7 +4,7 @@
 import crypto from 'node:crypto';
 import * as x509 from '@peculiar/x509';
 import {
-  TEST_SEED, ED25519_PKCS8_PREFIX, hkdf32, ed25519FromSeed,
+  TEST_SEED, ED25519_PKCS8_PREFIX, hkdf32, ed25519FromSeed, requireIdentity,
 } from './benchCrypto.js';
 
 x509.cryptoProvider.set(crypto.webcrypto);
@@ -12,17 +12,18 @@ x509.cryptoProvider.set(crypto.webcrypto);
 // Backend TLS: per-app CA and the host certificates it signs.
 //
 // Production derives a per-app CA inside a private backend from secret master
-// salts. This reproduces the SHAPE of that arrangement — one CA per app,
-// signing a short-lived leaf per container — and none of the scheme: the key
-// comes from the public TEST_SEED above via harness-local info strings. The CA
-// this produces for a given app and the real CA for the same app are unrelated
-// keys, so nothing signed here is valid anywhere but a harness fleet, and
-// nothing here discloses how a real certificate is derived.
+// salts. This reproduces the SHAPE of that arrangement — one CA per app
+// identity, signing a short-lived leaf per container — and none of the scheme:
+// the key comes from the public TEST_SEED above via harness-local info strings.
+// The CA this produces for a given app and the real CA for the same app are
+// unrelated keys, so nothing signed here is valid anywhere but a harness fleet,
+// and nothing here discloses how a real certificate is derived.
 //
 // What it does share with production is the contract the node has to satisfy:
-// an Ed25519 CA, a leaf carrying serverAuth EKU and the app's SANs, and a CA
-// certificate whose bytes are identical on every node so a cached copy is
-// never stale.
+// an Ed25519 CA keyed by the app's identity and named
+// `O=Flux Internal CA, CN=<app name>, OU=<identity>`, a leaf carrying serverAuth
+// EKU and the app's SANs, and a CA certificate whose bytes are identical on
+// every node so a cached copy is never stale.
 // The CA window is fixed rather than relative so the certificate is
 // byte-deterministic: every node deriving it independently must produce the
 // same file, which is what lets FDM cache it and treat the write as idempotent.
@@ -46,21 +47,23 @@ async function importCaKeyPair(seed) {
   return { privateKey, publicKey };
 }
 
-// One CA per app, memoized so repeated calls return byte-identical PEM.
+// One CA per app identity, memoized so repeated calls return byte-identical PEM.
 const caCache = new Map();
 
-async function appCa(appName) {
-  if (caCache.has(appName)) return caCache.get(appName);
+async function appCa(appName, identity) {
+  requireIdentity(identity);
+  if (!appName) throw new Error('MISSING_FIELD');
+  if (caCache.has(identity)) return caCache.get(identity);
   const pending = (async () => {
-    const keys = await importCaKeyPair(hkdf32('backendtls-ca', `ca-signing-key:${appName}`));
+    const keys = await importCaKeyPair(hkdf32('backendtls-ca', `ca-signing-key:${identity}`));
     // Deterministic serial: same app, same bytes, on every node.
     const serialNumber = crypto.createHash('sha256')
-      .update(TEST_SEED).update('backendtls-ca-serial').update(appName)
+      .update(TEST_SEED).update('backendtls-ca-serial').update(identity)
       .digest('hex')
       .slice(0, 32);
     const cert = await x509.X509CertificateGenerator.createSelfSigned({
       serialNumber,
-      name: `CN=flux-ca-${appName}`,
+      name: `O=Flux Internal CA, CN=${appName}, OU=${identity}`,
       notBefore: CA_NOT_BEFORE,
       notAfter: CA_NOT_AFTER,
       keys,
@@ -74,16 +77,16 @@ async function appCa(appName) {
     });
     return { keys, cert };
   })();
-  caCache.set(appName, pending);
+  caCache.set(identity, pending);
   return pending;
 }
 
 /**
- * The app's CA certificate, PEM. Byte-deterministic for a given app name.
- * @param {{appName: string}} req
+ * The app's CA certificate, PEM. Byte-deterministic for a given app identity.
+ * @param {{appName: string, identity: string}} req
  */
-async function caCertificate({ appName }) {
-  const { cert } = await appCa(appName);
+async function caCertificate({ appName, identity }) {
+  const { cert } = await appCa(appName, identity);
   return { certificate: cert.toString('pem') };
 }
 
@@ -92,11 +95,11 @@ async function caCertificate({ appName }) {
  * signer would: 30-day life, serverAuth EKU, and the app's SANs. The CSR's
  * public key is used as submitted — the node generated it and keeps the private
  * half, which is the property that makes the leaf per-container.
- * @param {{csr: string, appName: string}} req
+ * @param {{csr: string, appName: string, identity: string}} req
  */
-async function signCertificate({ csr, appName }) {
+async function signCertificate({ csr, appName, identity }) {
   const request = new x509.Pkcs10CertificateRequest(csr);
-  const { keys, cert: caCert } = await appCa(appName);
+  const { keys, cert: caCert } = await appCa(appName, identity);
   const notBefore = new Date();
   const notAfter = new Date(notBefore.getTime() + LEAF_VALID_DAYS * 24 * 60 * 60 * 1000);
 

@@ -337,14 +337,34 @@ describe('contentSlotService', () => {
   });
 
   describe('seal/openManifestSlots', () => {
-    it('round-trips an encrypted app\'s slots through the app secret', async () => {
+    it('round-trips an encrypted app\'s slots through the content key', async () => {
       const { service } = load();
       const provider = fakeProvider();
-      const sealed = await service.sealManifestSlots(manifest(), { owner: OWNER, encrypted: true }, { provider });
+      const sealed = await service.sealManifestSlots(manifest(), { encrypted: true }, { provider });
       expect(sealed.slots).to.have.property('sealed');
       expect(sealed.slots['app-config']).to.equal(undefined);
-      const opened = await service.openManifestSlots(sealed, { owner: OWNER, encrypted: true }, { provider });
+      const opened = await service.openManifestSlots(sealed, { encrypted: true }, { provider });
       expect(opened.slots).to.deep.equal(manifest().slots);
+    });
+
+    it('seals and opens under the provider keyed by the manifest\'s identity, never by name and owner', async () => {
+      const provider = fakeProvider();
+      const forIdentity = sinon.stub().resolves(provider);
+      const create = sinon.stub().rejects(new Error('the name-and-owner key is the spec\'s, not the content\'s'));
+      const service = proxyquire('../../ZelBack/src/services/appLifecycle/contentSlotService', {
+        '../utils/specLibs': { getSpec: sinon.stub().resolves(specLibNamespace()) },
+        '../appDatabase/appsRepository': fakeRepo(),
+        '../utils/fluxEventBus': { publish: sinon.stub() },
+        '../providers/FluxOSCryptoProvider': { forIdentity, create },
+      });
+
+      const sealed = await service.sealManifestSlots(manifest(), { owner: OWNER, encrypted: true });
+      const opened = await service.openManifestSlots(sealed, { owner: OWNER, encrypted: true });
+
+      expect(opened.slots).to.deep.equal(manifest().slots);
+      sinon.assert.alwaysCalledWithExactly(forIdentity, IDENTITY);
+      sinon.assert.calledTwice(forIdentity);
+      sinon.assert.notCalled(create);
     });
 
     // The owner's signature covers the whole plaintext manifest, and every path
@@ -1210,15 +1230,37 @@ describe('contentSlotService', () => {
       const okPut = await service.backstopManifest(
         { appName: APP, version: 2, slots: { sealed: {} } },
         {
-          appName: APP, version: 2, timestamp: 1_700_000_000_000, manifestPutSig: 'owner-sig',
+          appName: APP, identity: IDENTITY, version: 2, timestamp: 1_700_000_000_000, manifestPutSig: 'owner-sig',
         },
         { put, sign },
       );
       expect(okPut).to.equal(true);
+      // The signer is handed the text's fields: the identity, never the name.
+      sinon.assert.calledWithMatch(sign, {
+        identity: IDENTITY, version: 2, timestamp: 1_700_000_000_000, pendingMessageHash: null,
+      });
       sinon.assert.calledOnce(put);
       const [appName, body] = put.firstCall.args;
       expect(appName).to.equal(APP);
-      expect(body).to.include({ version: 2, ownerSig: 'owner-sig', arcaneSig: 'arcane-sig' });
+      expect(body).to.include({
+        version: 2, ownerSig: 'owner-sig', arcaneSig: 'arcane-sig', pendingMessageHash: null,
+      });
+    });
+
+    it('names the message a carried manifest rides in, to the signer and to FluxDrive', async () => {
+      const { service } = load();
+      const put = sinon.spy();
+      const sign = sinon.stub().resolves('arcane-sig');
+      const pending = 'f'.repeat(64);
+      await service.backstopManifest(
+        { appName: APP, version: 2, slots: { sealed: {} } },
+        {
+          appName: APP, identity: IDENTITY, version: 2, timestamp: 1, manifestPutSig: 'owner-sig', pendingMessageHash: pending,
+        },
+        { put, sign },
+      );
+      sinon.assert.calledWithMatch(sign, { pendingMessageHash: pending });
+      expect(put.firstCall.args[1].pendingMessageHash).to.equal(pending);
     });
 
     it('skips the PUT when the frontend supplied no operational owner sig', async () => {
@@ -1255,19 +1297,38 @@ describe('contentSlotService', () => {
       const pushed = await service.reconcileSlots(
         manifest({ version: 3 }),
         {
-          appName: APP, owner: OWNER, version: 3, reconcileSig: 'owner-rsig',
+          appName: APP, identity: IDENTITY, version: 3, reconcileSig: 'owner-rsig',
         },
         { reconcile, sign, deriveLocator },
       );
       expect(pushed).to.equal(true);
-      sinon.assert.calledWithMatch(deriveLocator, sinon.match.any, { appName: APP, fluxID: OWNER, contentHash: CFG_HASH });
-      sinon.assert.calledWithMatch(sign, { appName: APP, source: 'slot', version: 3 });
+      sinon.assert.calledWithMatch(deriveLocator, sinon.match.any, { identity: IDENTITY, contentHash: CFG_HASH });
+      // The signer binds the kept list by its hash, so it is handed the very list sent.
+      sinon.assert.calledWithMatch(sign, {
+        identity: IDENTITY, source: 'slot', version: 3, keptLocators: ['loc-cfg'], pendingMessageHash: null,
+      });
       sinon.assert.calledOnce(reconcile);
       const [appName, body] = reconcile.firstCall.args;
       expect(appName).to.equal(APP);
       expect(body).to.deep.equal({
-        source: 'slot', version: 3, arcaneSig: 'arcane-sig', ownerSig: 'owner-rsig', liveLocators: ['loc-cfg'],
+        source: 'slot', version: 3, arcaneSig: 'arcane-sig', ownerSig: 'owner-rsig', liveLocators: ['loc-cfg'], pendingMessageHash: null,
       });
+    });
+
+    it('names the message a carried reconcile rides in, to the signer and to FluxDrive', async () => {
+      const { service } = load();
+      const reconcile = sinon.spy();
+      const sign = sinon.stub().resolves('arcane-sig');
+      const pending = 'f'.repeat(64);
+      await service.reconcileSlots(
+        manifest({ version: 3 }),
+        {
+          appName: APP, identity: IDENTITY, version: 3, reconcileSig: 'owner-rsig', pendingMessageHash: pending,
+        },
+        { reconcile, sign, deriveLocator: sinon.stub().resolves('loc-cfg') },
+      );
+      sinon.assert.calledWithMatch(sign, { pendingMessageHash: pending });
+      expect(reconcile.firstCall.args[1].pendingMessageHash).to.equal(pending);
     });
 
     it('derives one locator per slot for a multi-slot manifest', async () => {
@@ -1282,7 +1343,7 @@ describe('contentSlotService', () => {
       });
       const pushed = await service.reconcileSlots(
         m, {
-          appName: APP, owner: OWNER, version: 3, reconcileSig: 'sig',
+          appName: APP, identity: IDENTITY, version: 3, reconcileSig: 'sig',
         }, { reconcile, sign, deriveLocator },
       );
       expect(pushed).to.equal(true);
@@ -1294,7 +1355,7 @@ describe('contentSlotService', () => {
       const reconcile = sinon.spy();
       const pushed = await service.reconcileSlots(
         manifest({ version: 3 }), {
-          appName: APP, owner: OWNER, version: 3, reconcileSig: undefined,
+          appName: APP, identity: IDENTITY, version: 3, reconcileSig: undefined,
         }, { reconcile },
       );
       expect(pushed).to.equal(false);
@@ -1306,7 +1367,7 @@ describe('contentSlotService', () => {
       const reconcile = sinon.spy();
       const pushed = await service.reconcileSlots(
         manifest({ version: 1 }), {
-          appName: APP, owner: OWNER, version: 1, reconcileSig: 'sig',
+          appName: APP, identity: IDENTITY, version: 1, reconcileSig: 'sig',
         }, { reconcile },
       );
       expect(pushed).to.equal(false);
@@ -1320,7 +1381,7 @@ describe('contentSlotService', () => {
       const pushed = await service.reconcileSlots(
         { ...manifest({ version: 3 }), slots: {} },
         {
-          appName: APP, owner: OWNER, version: 3, reconcileSig: 'sig',
+          appName: APP, identity: IDENTITY, version: 3, reconcileSig: 'sig',
         },
         { reconcile, deriveLocator },
       );
@@ -1335,7 +1396,7 @@ describe('contentSlotService', () => {
       const deriveLocator = sinon.stub().resolves('loc-cfg');
       const pushed = await service.reconcileSlots(
         manifest({ version: 3 }), {
-          appName: APP, owner: OWNER, version: 3, reconcileSig: 'sig',
+          appName: APP, identity: IDENTITY, version: 3, reconcileSig: 'sig',
         }, { reconcile, sign, deriveLocator },
       );
       expect(pushed).to.equal(false);
@@ -1519,7 +1580,7 @@ describe('contentSlotService', () => {
       );
       sinon.assert.calledOnce(apply);
       expect(apply.firstCall.args[0]).to.equal(dep);
-      expect(apply.firstCall.args[2]).to.deep.equal({ appName: APP, owner: OWNER, peers: ['1.2.3.4:16127'] });
+      expect(apply.firstCall.args[2]).to.deep.equal({ appName: APP, peers: ['1.2.3.4:16127'] });
       // applyManifest stays stubbed here; the real one walks the deployment's
       // components for their slot and blob mounts.
       assertAnswers(apply.firstCall.args[0], ['componentEntries']);
@@ -2151,7 +2212,7 @@ describe('contentSlotService', () => {
       sinon.assert.notCalled(fetchPeers);
       sinon.assert.calledOnce(stageApply);
       expect(stageApply.firstCall.args[1].slots).to.deep.equal(manifest().slots);
-      expect(stageApply.firstCall.args[2]).to.deep.equal({ appName: APP, owner: OWNER, peers: ['p1'] });
+      expect(stageApply.firstCall.args[2]).to.deep.equal({ appName: APP, peers: ['p1'] });
       // stageAndApplySlots stays stubbed; the real one walks the deployment's
       // components for their contentSlotMounts.
       assertAnswers(stageApply.firstCall.args[0], ['componentEntries']);

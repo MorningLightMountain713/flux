@@ -14,6 +14,10 @@ const globalState = require('../../ZelBack/src/services/utils/globalState');
 const transportHelper = require('../../ZelBack/src/services/utils/transportHelper');
 const contentBlobService = require('../../ZelBack/src/services/appLifecycle/contentBlobService');
 const specLibs = require('../../ZelBack/src/services/utils/specLibs');
+const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
+const signatureVerifier = require('../../ZelBack/src/services/signatureVerifier');
+const appEventVerifier = require('../../ZelBack/src/services/appMessaging/appEventVerifier');
+const { loadSpecLibrary } = require('./fixtures/fluxSpec');
 
 describe('cryptographicKeys tests', () => {
   let req;
@@ -454,43 +458,132 @@ describe('cryptographicKeys tests', () => {
 
   describe('getBlobLocator tests', () => {
     const CALLER = '1CallerZelidXXXXXXXXXXXXXXXXXXXXXXX';
+    const OTHER = '1OtherZelidYYYYYYYYYYYYYYYYYYYYYYYY';
     const HASH = `sha256:${'a'.repeat(64)}`;
+    const IDENTITY = `b${'a'.repeat(52)}`;
+    const MESSAGE_HASH = 'c'.repeat(64);
+    // The v9 registration message a caller presents for a name not yet listed.
+    const REGISTRATION = {
+      type: 'fluxappregister', version: 2, contentHash: 'd'.repeat(64), timestamp: 1_700_000_000_000, extend: true, signature: 'reg-sig',
+    };
+    let flux;
 
-    // Stub the full happy path: a logged-in arcane caller, a sealed payload that opens
-    // to a valid contentHash, and a derived locator. ensureObject is called twice — the
-    // zelidauth header, then the decrypted payload.
-    const stubHappyPath = () => {
+    before(async function loadLibrary() {
+      this.timeout(30_000);
+      flux = await loadSpecLibrary();
+    });
+
+    // The route's seams: a logged-in arcane caller, the list, a sealed payload
+    // that opens to a contentHash, and the derivation. The spec library is real,
+    // so the signature payload and the identity are the ones every node builds.
+    const stubRoute = ({ listed = null } = {}) => {
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-      const ensureObjectStub = sinon.stub(serviceHelper, 'ensureObject');
-      ensureObjectStub.onFirstCall().returns({ zelid: CALLER }); // zelidauth header
-      ensureObjectStub.onSecondCall().returns({ contentHash: HASH }); // decrypted payload
-      sinon.stub(specLibs, 'getSpec').resolves({ CONTENT_LOCATOR_AAD_REF: 'bloblocator' });
+      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(listed);
+      sinon.stub(specLibs, 'getSpec').resolves(flux);
       sinon.stub(transportHelper, 'openContentEnvelope').resolves(Buffer.from(JSON.stringify({ contentHash: HASH })));
       sinon.stub(contentBlobService, 'deriveLocator').resolves('derived-locator');
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
       sinon.stub(messageHelper, 'createErrorMessage').callsFake((msg) => ({ status: 'error', data: { message: msg } }));
       sinon.stub(messageHelper, 'errUnauthorizedMessage').returns({ status: 'error', data: { code: 401 } });
     };
+    const answer = () => res.json.firstCall.args[0];
 
-    it('derives the locator for the AUTHENTICATED caller, never a fluxID the body names', async () => {
-      stubHappyPath();
+    it('derives for the listed identity when the caller is the listed owner, whatever the body names', async () => {
+      stubRoute({ listed: { owner: CALLER, identity: IDENTITY } });
       req.headers.zelidauth = { zelid: CALLER, signature: 's', loginPhrase: 'p' };
-      // The body even tries to name a victim fluxID — it must be ignored.
+      // The body names a victim fluxID and a registration; neither is read.
       req.body = {
-        appName: 'myapp', timestamp: 1_700_000_000, sealed: { algorithm: 'x' }, fluxID: '1VICTIMzelidYYYYYYYYYYYYYYYYYYYYYYY',
+        appName: 'myapp', timestamp: 1_700_000_000, sealed: { algorithm: 'x' }, fluxID: '1VICTIMzelidYYYYYYYYYYYYYYYYYYYYYYY', registration: REGISTRATION,
       };
 
       await cryptographicKeys.getBlobLocator(req, res);
 
-      const deriveArgs = contentBlobService.deriveLocator.firstCall.args[1];
-      expect(deriveArgs).to.deep.equal({ appName: 'myapp', fluxID: CALLER, contentHash: HASH });
-      sinon.assert.calledOnce(res.json);
-      expect(res.json.firstCall.args[0].status).to.equal('success');
-      expect(res.json.firstCall.args[0].data).to.deep.equal({ locator: 'derived-locator' });
+      expect(contentBlobService.deriveLocator.firstCall.args[1]).to.deep.equal({ identity: IDENTITY, contentHash: HASH });
+      expect(answer().status).to.equal('success');
+      expect(answer().data).to.deep.equal({ locator: 'derived-locator' });
     });
 
-    it('opens the sealed payload with the locator AAD ref toward the caller identity', async () => {
-      stubHappyPath();
+    it('refuses the listed app to a caller who is not its listed owner, before opening the payload', async () => {
+      stubRoute({ listed: { owner: OTHER, identity: IDENTITY } });
+      req.headers.zelidauth = { zelid: CALLER };
+      req.body = { appName: 'myapp', timestamp: 1_700_000_000, sealed: { algorithm: 'x' } };
+
+      await cryptographicKeys.getBlobLocator(req, res);
+
+      expect(answer().status).to.equal('error');
+      expect(answer().data.message).to.include('another owner');
+      sinon.assert.notCalled(transportHelper.openContentEnvelope);
+      sinon.assert.notCalled(contentBlobService.deriveLocator);
+    });
+
+    it('derives for the identity a presented registration makes, once the caller is shown to have signed it', async () => {
+      stubRoute();
+      const verify = sinon.stub(signatureVerifier, 'verifySignature').resolves(true);
+      const hashOf = sinon.stub(appEventVerifier, 'computeOutboundHash').resolves(MESSAGE_HASH);
+      req.headers.zelidauth = { zelid: CALLER };
+      req.body = {
+        appName: 'myapp', timestamp: 1_700_000_000, sealed: { algorithm: 'x' }, registration: REGISTRATION,
+      };
+
+      await cryptographicKeys.getBlobLocator(req, res);
+
+      // The signature is checked over the library's v2 payload, for the caller.
+      sinon.assert.calledOnceWithExactly(
+        verify,
+        flux.buildSignaturePayloadV2('fluxappregister', 2, REGISTRATION.contentHash, REGISTRATION.timestamp, true),
+        CALLER,
+        'reg-sig',
+      );
+      // The hash is the one every node computes for that message, and the
+      // identity is the one the hash makes for the name.
+      sinon.assert.calledOnceWithExactly(hashOf, {
+        type: 'fluxappregister', envelopeVersion: 2, contentHash: REGISTRATION.contentHash, timestamp: REGISTRATION.timestamp, extend: true, signature: 'reg-sig',
+      });
+      const expected = flux.appIdentityFromUuid(flux.appUuid('myapp', MESSAGE_HASH));
+      expect(contentBlobService.deriveLocator.firstCall.args[1]).to.deep.equal({ identity: expected, contentHash: HASH });
+      expect(answer().status).to.equal('success');
+    });
+
+    it('refuses a registration the caller did not sign', async () => {
+      stubRoute();
+      sinon.stub(signatureVerifier, 'verifySignature').resolves(false);
+      sinon.stub(appEventVerifier, 'computeOutboundHash').resolves(MESSAGE_HASH);
+      req.headers.zelidauth = { zelid: CALLER };
+      req.body = {
+        appName: 'myapp', timestamp: 1_700_000_000, sealed: { algorithm: 'x' }, registration: REGISTRATION,
+      };
+
+      await cryptographicKeys.getBlobLocator(req, res);
+
+      expect(answer().status).to.equal('error');
+      expect(answer().data.message).to.include('not signed by the caller');
+      sinon.assert.notCalled(contentBlobService.deriveLocator);
+    });
+
+    it('refuses an unlisted name with no well-formed v9 registration presented', async () => {
+      stubRoute();
+      sinon.stub(signatureVerifier, 'verifySignature').resolves(true);
+      req.headers.zelidauth = { zelid: CALLER };
+      for (const registration of [
+        undefined,
+        { ...REGISTRATION, type: 'fluxappupdate' },
+        { ...REGISTRATION, version: 1 },
+        { ...REGISTRATION, extend: 'true' },
+        { ...REGISTRATION, signature: '' },
+      ]) {
+        res.json.resetHistory();
+        req.body = {
+          appName: 'myapp', timestamp: 1_700_000_000, sealed: { algorithm: 'x' }, registration,
+        };
+        await cryptographicKeys.getBlobLocator(req, res);
+        expect(answer().status, JSON.stringify(registration)).to.equal('error');
+        expect(answer().data.message).to.include('not listed');
+      }
+      sinon.assert.notCalled(contentBlobService.deriveLocator);
+    });
+
+    it('opens the sealed payload with the locator AAD ref toward the caller', async () => {
+      stubRoute({ listed: { owner: CALLER, identity: IDENTITY } });
       req.headers.zelidauth = { zelid: CALLER };
       req.body = { appName: 'myapp', timestamp: 1_700_000_000, sealed: { algorithm: 'x' } };
 
@@ -498,7 +591,7 @@ describe('cryptographicKeys tests', () => {
 
       const openArgs = transportHelper.openContentEnvelope.firstCall.args[1];
       expect(openArgs).to.include({
-        appName: 'myapp', owner: CALLER, ref: 'bloblocator', timestamp: 1_700_000_000,
+        appName: 'myapp', owner: CALLER, ref: flux.CONTENT_LOCATOR_AAD_REF, timestamp: 1_700_000_000,
       });
     });
 
@@ -510,7 +603,7 @@ describe('cryptographicKeys tests', () => {
       await cryptographicKeys.getBlobLocator(req, res);
 
       sinon.assert.calledOnce(res.json);
-      expect(res.json.firstCall.args[0].data.code).to.equal(401);
+      expect(answer().data.code).to.equal(401);
     });
 
     it('errors on a non-arcane node', async () => {
@@ -521,37 +614,32 @@ describe('cryptographicKeys tests', () => {
 
       await cryptographicKeys.getBlobLocator(req, res);
 
-      expect(res.json.firstCall.args[0].status).to.equal('error');
-      expect(res.json.firstCall.args[0].data.message).to.include('arcane');
+      expect(answer().status).to.equal('error');
+      expect(answer().data.message).to.include('arcane');
     });
 
     it('rejects a sealed payload that does not carry a valid contentHash', async () => {
-      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-      const ensureObjectStub = sinon.stub(serviceHelper, 'ensureObject');
-      ensureObjectStub.onFirstCall().returns({ zelid: CALLER });
-      ensureObjectStub.onSecondCall().returns({ contentHash: 'not-a-hash' });
-      sinon.stub(specLibs, 'getSpec').resolves({ CONTENT_LOCATOR_AAD_REF: 'bloblocator' });
-      sinon.stub(transportHelper, 'openContentEnvelope').resolves(Buffer.from('{}'));
-      sinon.stub(messageHelper, 'createErrorMessage').callsFake((msg) => ({ status: 'error', data: { message: msg } }));
+      stubRoute({ listed: { owner: CALLER, identity: IDENTITY } });
+      transportHelper.openContentEnvelope.resolves(Buffer.from(JSON.stringify({ contentHash: 'not-a-hash' })));
       req.headers.zelidauth = { zelid: CALLER };
       req.body = { appName: 'a', timestamp: 1, sealed: { x: 1 } };
 
       await cryptographicKeys.getBlobLocator(req, res);
 
-      expect(res.json.firstCall.args[0].status).to.equal('error');
-      expect(res.json.firstCall.args[0].data.message).to.include('sha256');
+      expect(answer().status).to.equal('error');
+      expect(answer().data.message).to.include('sha256');
+      sinon.assert.notCalled(contentBlobService.deriveLocator);
     });
 
     it('errors when required fields are missing', async () => {
-      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-      sinon.stub(serviceHelper, 'ensureObject').returns({ zelid: CALLER });
-      sinon.stub(messageHelper, 'createErrorMessage').callsFake((msg) => ({ status: 'error', data: { message: msg } }));
+      stubRoute({ listed: { owner: CALLER, identity: IDENTITY } });
       req.headers.zelidauth = { zelid: CALLER };
       req.body = { appName: 'a' }; // missing timestamp + sealed
 
       await cryptographicKeys.getBlobLocator(req, res);
 
-      expect(res.json.firstCall.args[0].status).to.equal('error');
+      expect(answer().status).to.equal('error');
+      sinon.assert.notCalled(appsRepository.getGlobalAppInfo);
     });
   });
 });
