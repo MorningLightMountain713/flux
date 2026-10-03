@@ -41,11 +41,12 @@ const ASK_TIMEOUT_MS = 4000;
 
 // locator -> { bytes:Buffer, appName, identity, source, timestamp, arcaneSig, ownerSig, tombstoned }
 const blobs = new Map();
-// `${appName}\n${identity}` -> { appName, identity, version, timestamp, arcaneSig, ownerSig, manifest, confirmed, seq }
+// `${appName}\n${identity}\n${ownedFrom}\n${version}` -> { appName, identity, version, timestamp, arcaneSig, ownerSig, manifest, confirmed, seq }
+// — one row per version of an identity, as the real service keeps them (D4)
 const manifests = new Map();
 // appName -> the identity of the registration that holds the name
 const holders = new Map();
-// manifest write order, so a name with no holder serves its latest-written row
+// manifest write order, the tie-break among equally ranked rows
 let manifestSeq = 0;
 // every reconcile call, in arrival order, for assertions
 const reconciles = [];
@@ -87,33 +88,47 @@ function reset() {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const manifestKey = (appName, identity) => `${appName}\n${identity}`;
+const ownedFromOf = (manifest) => Number(manifest?.ownedFrom ?? 0);
+const manifestKey = (appName, identity, ownedFrom, version) => `${appName}\n${identity}\n${ownedFrom}\n${version}`;
 
 function manifestRowsOf(appName) {
   return [...manifests.values()].filter((row) => row.appName === appName);
 }
 
-// The row the data API serves for a name: of the holder's rows once the name has
-// one, else of every row, the one ranking highest by the height its signer took
-// the app (`ownedFrom`, 0 when the manifest names none) and its version within
-// that. Strict serves a confirmed row only.
-function servedManifest(appName) {
+// The versions the data API serves for a name, newest first: of the holder's
+// rows once the name has one, else of every row, ranked by the height each
+// signer took the app (`ownedFrom`, 0 when the manifest names none) and the
+// version within that. Strict serves confirmed rows only.
+function servedManifests(appName) {
   const holder = holders.get(appName);
-  const rank = (row) => [Number(row.manifest?.ownedFrom ?? 0), Number(row.version ?? 0), row.seq];
-  const rows = manifestRowsOf(appName)
+  const rank = (row) => [ownedFromOf(row.manifest), Number(row.version ?? 0), row.seq];
+  const after = (a, b) => {
+    const [ao, av, as] = rank(a);
+    const [bo, bv, bs] = rank(b);
+    return ao > bo || (ao === bo && (av > bv || (av === bv && as > bs)));
+  };
+  return manifestRowsOf(appName)
     .filter((row) => holder == null || row.identity === holder)
-    .filter((row) => !mode.strict || row.confirmed);
-  return rows.reduce((best, row) => {
-    if (!best) return row;
-    const [bo, bv, bs] = rank(best);
-    const [o, v, s] = rank(row);
-    return o > bo || (o === bo && (v > bv || (v === bv && s > bs))) ? row : best;
-  }, null);
+    .filter((row) => !mode.strict || row.confirmed)
+    .sort((a, b) => (after(a, b) ? -1 : after(b, a) ? 1 : 0));
+}
+
+// The newest served version, for the control plane's view by name.
+function servedManifest(appName) {
+  return servedManifests(appName)[0] ?? null;
+}
+
+// The highest version stored for one ownership of an identity, or null.
+function manifestFloor(identity, ownedFrom) {
+  const versions = [...manifests.values()]
+    .filter((row) => row.identity === identity && ownedFromOf(row.manifest) === ownedFrom)
+    .map((row) => Number(row.version));
+  return versions.length ? Math.max(...versions) : null;
 }
 
 function setManifest(appName, identity, fields) {
   manifestSeq += 1;
-  manifests.set(manifestKey(appName, identity), {
+  manifests.set(manifestKey(appName, identity, ownedFromOf(fields.manifest), Number(fields.version)), {
     appName, identity, timestamp: null, arcaneSig: null, ownerSig: null, ...fields, seq: manifestSeq,
   });
 }
@@ -168,12 +183,13 @@ function applyReconcile({
   return true;
 }
 
-// Store a manifest row; strict refuses a version at or below the stored one.
+// Store a manifest version as its own row; strict refuses a version at or
+// below the ownership's floor. An upload removes no version.
 function applyManifestPut({
   appName, identity, version, timestamp, arcaneSig, ownerSig, manifest,
 }) {
-  const stored = manifests.get(manifestKey(appName, identity));
-  if (mode.strict && stored && version <= stored.version) return false;
+  const floor = manifestFloor(identity, ownedFromOf(manifest));
+  if (mode.strict && floor != null && Number(version) <= floor) return false;
   const holder = holders.get(appName);
   setManifest(appName, identity, {
     version,
@@ -446,15 +462,20 @@ app.put('/api/v1/manifest/:appName', express.json(), (req, res) => {
   res.status(200).json({ ok: true });
 });
 
-// Fetch the manifest the name serves (cold-start fallback). Strict serves
-// confirmed-only; 404 -> the client returns null and falls back to peers.
+// Fetch every kept version the name serves, newest first (cold-start fallback).
+// Strict serves confirmed-only; 404 -> the client returns null and falls back to
+// peers. The stub records no owner, so each version's is null.
 app.get('/api/v1/manifest/:appName', (req, res) => {
-  const entry = servedManifest(req.params.appName);
-  if (!entry) {
+  const rows = servedManifests(req.params.appName);
+  if (rows.length === 0) {
     res.status(404).json({ error: 'not found' });
     return;
   }
-  res.status(200).json({ version: entry.version, manifest: entry.manifest });
+  res.status(200).json({
+    versions: rows.map((row) => ({
+      version: row.version, ownedFrom: ownedFromOf(row.manifest), owner: null, manifest: row.manifest,
+    })),
+  });
 });
 
 app.listen(PORT, () => console.log(`FluxDrive stub data API on port ${PORT}, asking ${NODE_URLS.length} node(s) about pending writes`));

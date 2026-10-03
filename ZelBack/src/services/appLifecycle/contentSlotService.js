@@ -521,9 +521,9 @@ const MANIFEST_ASK_PEERS = 3;
 
 /**
  * Asks nodes running the app for every manifest they hold, and FluxDrive for
- * the one it serves, and keeps each one this node can judge — so a node that
- * lacks the manifest a new row names takes it, and a fresh node takes what the
- * network holds. Best-effort: a peer that fails contributes nothing.
+ * every version it keeps, and keeps each one this node can judge — so a node
+ * that lacks the manifest a new row names takes it, and a fresh node takes what
+ * the network holds. Best-effort: a peer that fails contributes nothing.
  *
  * @param {string} appName
  * @param {string} identity
@@ -554,7 +554,10 @@ async function refreshManifests(appName, identity, deps = {}) {
       }
     }
     const fromDrive = await fetchFromDrive(appName).catch(() => null);
-    if (fromDrive && fromDrive.manifest) await judge(fromDrive.manifest);
+    for (const kept of (fromDrive && Array.isArray(fromDrive.versions)) ? fromDrive.versions : []) {
+      // eslint-disable-next-line no-await-in-loop
+      await judge(kept.manifest);
+    }
   } catch (error) {
     log.warn(`contentSlot: asking for ${appName}'s manifests failed - ${error.message ?? error}`);
   }
