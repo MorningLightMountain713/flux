@@ -69,7 +69,7 @@ describe('appOperations tests', () => {
    * never defaulted, exactly as DeploymentSpec.fromSpec demands.
    */
   function deploymentFor(spec, opts = {}) {
-    return flux.DeploymentSpec.fromSpec(spec, appsFolder, { replica: null, ...opts });
+    return flux.DeploymentSpec.fromSpec(spec, appsFolder, { replica: null, registrationVersion: 9, ...opts });
   }
 
   /** A real FluxAppSpecV9 with one component, named. */
@@ -1973,7 +1973,7 @@ describe('appOperations tests', () => {
 
       expect(failure, `the restore must complete: ${failure?.message}`).to.equal(null);
       const marked = setSyncedMark.getCalls().filter((call) => call.args[2]?.restarted === true).map((call) => call.args[1]);
-      expect(marked).to.deep.equal(['fluxweb_bident_s1']);
+      expect(marked).to.deep.equal(['web_bident_s1']);
     });
 
     it('restarts the peers of a component every instance runs, and never redeploys them', async () => {

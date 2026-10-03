@@ -20,6 +20,7 @@ const globalState = require('../utils/globalState');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const fluxCommunicationUtils = require('../fluxCommunicationUtils');
 const appReconciler = require('../appMonitoring/appReconciler');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 const nodeSpecs = require('../appRequirements/nodeSpecs');
 
 // Database collections
@@ -262,10 +263,11 @@ async function fluxUsage(req, res) {
  */
 async function heldComponents(req, res) {
   try {
+    const { LABEL_KEYS } = await getSpecBackend();
     const containers = await dockerService.dockerListContainers(false);
     const running = containers
-      .map((container) => (container.Names?.[0] || '').replace(/^\//, ''))
-      .filter((name) => name.slice(0, 3) === 'zel' || name.slice(0, 4) === 'flux');
+      .filter((container) => dockerService.isManagedContainer({ labels: container.Labels, name: container.Names?.[0] }, LABEL_KEYS))
+      .map((container) => (container.Names?.[0] || '').replace(/^\//, ''));
 
     const committed = appReconciler.committedIdentifiers()
       .map((identifier) => dockerService.getAppIdentifier(identifier));
@@ -274,7 +276,10 @@ async function heldComponents(req, res) {
       .map((identifier) => dockerService.getAppIdentifier(identifier));
 
     const held = [...new Set([...running, ...committed, ...operatorStopped])];
-    const response = messageHelper.createDataMessage(held);
+    // A component of an app registered before v9 is held under its 8.x name as
+    // well: a peer that has not moved the app onto its identity, or runs 8.x,
+    // asks by that name and reads its absence as a component it may start.
+    const response = messageHelper.createDataMessage([...new Set([...held, ...(await formerNamesOf(held))])]);
     return res ? res.json(response) : response;
   } catch (error) {
     log.error(error);
@@ -285,6 +290,34 @@ async function heldComponents(req, res) {
     );
     return res ? res.json(errorResponse) : errorResponse;
   }
+}
+
+/**
+ * The 8.x container names of the held components whose app was registered
+ * before v9, read from the installed deployments. A view built without the
+ * registration version has no former name to serve.
+ * @param {string[]} held - docker names
+ * @returns {Promise<string[]>}
+ */
+async function formerNamesOf(held) {
+  if (held.length === 0) return [];
+  const wanted = new Set(held);
+  const names = [];
+  const { deployments } = await deploymentProvider.listInstalledDeploymentsDetailed();
+  for (const deployment of deployments) {
+    for (const [, comp] of deployment.componentEntries()) {
+      const dockerName = dockerService.getAppIdentifier(comp.identifier);
+      if (!wanted.has(dockerName)) continue;
+      let former;
+      try {
+        former = comp.syncFolderId;
+      } catch (error) {
+        former = null;
+      }
+      if (former && former !== dockerName) names.push(former);
+    }
+  }
+  return names;
 }
 
 /**

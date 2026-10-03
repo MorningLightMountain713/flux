@@ -779,11 +779,12 @@ async function getVolumeFilePath(identifier) {
  * every other app's boot.
  *
  * @param {string} appName Application name.
- * @returns {Promise<{appIds: string[], conclusive: boolean}>} Docker app
- *   identifiers whose images exist on disk, and whether every location was
- *   searched.
+ * @param {string|null} [identity] The app's identity, which names an image made
+ *   since the app moved onto it; an image made before is named by the app name.
+ * @returns {Promise<{appIds: string[], conclusive: boolean}>} The disk names
+ *   whose images exist, and whether every location was searched.
  */
-async function getComponentAppIdsFromVolumeFiles(appName) {
+async function getComponentAppIdsFromVolumeFiles(appName, identity = null) {
   const appIds = new Set();
   const searchDirs = new Set([appVolumesPath, legacyAppVolumesPath]);
   let conclusive = true;
@@ -796,18 +797,23 @@ async function getComponentAppIdsFromVolumeFiles(appName) {
     log.warn(`getComponentAppIdsFromVolumeFiles - findmnt failed (${error.message}), so ${appName}'s component list is not complete`);
   }
 
-  const escapedName = appName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // A hyphenated component name and a named replica both belong to the app: a
-  // component the pattern cannot see is a volume nothing mounts at boot.
-  const componentImage = new RegExp(`^flux[a-z0-9-]+_${escapedName}(?:_[a-z0-9-]+)?FLUXFSVOL$`, 'i');
-  const legacyImage = `flux${appName}FLUXFSVOL`;
+  // component the pattern cannot see is a volume nothing mounts at boot. An
+  // image made since the app moved onto its identity is named by the bare
+  // identifier; one made before carries the 8.x prefix and the app's name.
+  const componentImages = [
+    new RegExp(`^flux[a-z0-9-]+_${escape(appName)}(?:_[a-z0-9-]+)?FLUXFSVOL$`, 'i'),
+    ...(identity ? [new RegExp(`^[a-z0-9-]+_${escape(identity)}(?:_[a-z0-9-]+)?FLUXFSVOL$`, 'i')] : []),
+  ];
+  const flatImages = new Set([`flux${appName}FLUXFSVOL`, ...(identity ? [`${identity}FLUXFSVOL`] : [])]);
 
   // eslint-disable-next-line no-restricted-syntax
   for (const dir of searchDirs) {
     // eslint-disable-next-line no-await-in-loop
     const failure = await fs.readdir(dir).then((entries) => {
       entries.forEach((entry) => {
-        if (componentImage.test(entry) || entry === legacyImage) {
+        if (componentImages.some((image) => image.test(entry)) || flatImages.has(entry)) {
           appIds.add(entry.slice(0, -'FLUXFSVOL'.length));
         }
       });

@@ -1238,7 +1238,7 @@ async function runBackupTask(appname, backup, force, report) {
     const requested = new Set(backup.filter((item) => item.backup).map((item) => item.component));
     const incomplete = [];
     for (const comp of backupSynced.filter((c) => requested.has(c.name))) {
-      const folderId = dockerService.getAppIdentifier(comp.identifier);
+      const folderId = comp.syncFolderId;
       // eslint-disable-next-line no-await-in-loop
       const { status: syncStatus, reason } = await syncthingFolderStateMachine
         .probeFolderSyncCompletion(folderId);
@@ -1425,17 +1425,29 @@ async function appendRestoreTask(req, res) {
 }
 
 /**
+ * The syncthing folder of a restored volume. For a v9 registration the folder
+ * id is the volume's own identifier, the app's identity and replica; for an
+ * earlier one it is the component's 8.x name, which no replica qualifies.
+ * @param {object} comp the component the volume belongs to
+ * @param {{identifier: string}} volume
+ * @returns {string}
+ */
+function folderIdOfVolume(comp, volume) {
+  return comp.syncFolderId === comp.identifier ? volume.identifier : comp.syncFolderId;
+}
+
+/**
  * A restore that failed after clearing a component's appdata leaves that
  * directory neither copy. The component is held stopped, its synced folder
  * demoted to receiveonly so the partial copy is never offered to the peers, and
  * the rest of the app restarts on data the restore never touched.
  * @param {string} appname
- * @param {Array<{identifier: string, synced: boolean}>} swaps components whose clear began
+ * @param {Array<{identifier: string, folderId: string, synced: boolean}>} swaps components whose clear began
  */
 async function holdPartialRestore(appname, swaps) {
   for (const swap of swaps) {
     if (swap.synced) {
-      const folderId = dockerService.getAppIdentifier(swap.identifier);
+      const { folderId } = swap;
       // eslint-disable-next-line no-await-in-loop
       const demoted = await changeSyncthingFolderType(folderId, 'receiveonly');
       if (!demoted) {
@@ -1639,16 +1651,14 @@ async function runRestoreTask(appname, restore, type, zelidauth, report, { force
         report(`Replacing ${volume.forWhich} component data from the backup archive...\n`);
         // eslint-disable-next-line no-await-in-loop
         await serviceHelper.delay(2 * 1000);
-        swapsInFlight.push({ identifier: volume.identifier, synced: target.synced });
+        swapsInFlight.push({ identifier: volume.identifier, folderId: folderIdOfVolume(target.comp, volume), synced: target.synced });
         // eslint-disable-next-line no-await-in-loop
         const tarStatus = await appDataEntries.restoreAppData(volume.mount, volume.archivePath, target.comp);
         if (tarStatus.status === false) {
           throw new Error(`Error: Failed to restore ${volume.forWhich} from its archive, ${tarStatus.error}`);
         }
         if (target.synced) {
-          // The volume's own identifier, resolved from the installed app's
-          // identity and replica: the folder this restore unpacked into.
-          const appId = dockerService.getAppIdentifier(volume.identifier);
+          const appId = folderIdOfVolume(target.comp, volume);
           // eslint-disable-next-line no-await-in-loop
           await appCaches.setSyncedMark(appCaches.receiveOnlySyncthingAppsCache, appId, {
             restarted: true,
@@ -2519,6 +2529,7 @@ async function coordinateActiveStandbyApps() {
       let identifier;
       let needsToBeChecked = false;
       let appId;
+      let folderId;
       let activeStandbyComp = null;
       if (operationRegistry.isHeld(appName)) {
         log.info(`activeStandby: operation in progress for ${appName}, skipping`);
@@ -2530,6 +2541,7 @@ async function coordinateActiveStandbyApps() {
         if (deployComp.hasActiveStandbySyncthing()) {
           ({ identifier } = deployComp);
           appId = dockerService.getAppIdentifier(identifier);
+          folderId = deployComp.syncFolderId;
           needsToBeChecked = true;
           activeStandbyComp = deployComp;
           break;
@@ -2703,8 +2715,10 @@ async function coordinateActiveStandbyApps() {
                 // same way - myapp against myapp2, or simplexsmp against simplexsmp1,
                 // both live on the network - and a false positive here reads as "a peer
                 // already runs this", so the component is never started at all.
+                // A peer that has not moved the app onto its identity, or runs 8.x,
+                // holds the component under its 8.x name, the folder id.
                 const peerRunsThisComponent = (appsRunning) => (appsRunning || []).some(
-                  (app) => (app.Names || []).some((name) => name.replace(/^\//, '') === appId),
+                  (app) => (app.Names || []).some((name) => [appId, folderId].includes(name.replace(/^\//, ''))),
                 );
 
                 // 'lower' consults only peers ahead of us in the ordering; 'all' consults
@@ -2735,7 +2749,7 @@ async function coordinateActiveStandbyApps() {
                   // component is not running locally throughout, and ahead of every later
                   // g: app in the same pass.
                   const verdicts = await Promise.all(peers.map(({ i, node }) => peerComponentState({
-                    appId, identifier, appName, peerSocketAddr: node.ip, label: `index ${i}`, liveness,
+                    appId, folderId, aliases: folderId === appId ? [] : [folderId], identifier, appName, peerSocketAddr: node.ip, label: `index ${i}`, liveness,
                   })));
                   return anyPeerHoldsComponent(verdicts);
                 };

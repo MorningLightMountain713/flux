@@ -393,13 +393,13 @@ async function removeSyncthingFolder(appComponentName, report) {
  * set enforce right away instead of waiting for the watcher delay or the
  * rescan interval. Never throws — the watcher/rescan remains the fallback.
  *
- * @param {string} appComponentName - component identifier
+ * @param {string} folderId - the component's syncthing folder id
  */
-async function requestFolderScan(appComponentName) {
+async function requestFolderScan(folderId) {
   try {
-    await syncthingService.dbScan(dockerService.getAppIdentifier(appComponentName));
+    await syncthingService.dbScan(folderId);
   } catch (error) {
-    log.warn(`requestFolderScan: syncthing scan request for ${appComponentName} failed - ${error.message ?? error}`);
+    log.warn(`requestFolderScan: syncthing scan request for ${folderId} failed - ${error.message ?? error}`);
   }
 }
 

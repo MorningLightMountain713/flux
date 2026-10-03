@@ -1910,7 +1910,7 @@ async function reconcile(identifier) {
   // before its next scan/sync, which on an idle folder is the rescan interval.
   const stignoreChanged = await appVolumeService.ensureMountSourcesExist(spec.comp);
   if (stignoreChanged) {
-    await syncthingMonitorHelpers.requestFolderScan(spec.comp.identifier);
+    await syncthingMonitorHelpers.requestFolderScan(spec.comp.syncFolderId);
   }
 
   // Wire the container's network memberships before it runs: every creation

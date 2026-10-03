@@ -114,15 +114,17 @@ async function scopeLinesFor(folderId, deployComp) {
  * index is judged against a mounted volume rather than against the absence of
  * one.
  *
- * @param {string} appId - Docker app identifier
+ * @param {string} appId - the syncthing folder id
  * @param {string} appFolder - App folder path
  * @param {string} appName - the app this component belongs to
  * @param {boolean} [sending] - Whether syncthing currently holds this folder sendreceive
  * @param {object} [deployComp] - the component the folder replicates, when its
  *  specification can be read this pass
+ * @param {string} [identifier] - the component identifier the volume is mounted
+ *  under; the folder id where the two are one
  * @returns {Promise<{isSafe: boolean, reason: string}>} Result after any repair
  */
-async function verifyAppFolderMountWithRepair(appId, appFolder, appName, sending = false, deployComp = null) {
+async function verifyAppFolderMountWithRepair(appId, appFolder, appName, sending = false, deployComp = null, identifier = appId) {
   const ignoreLines = sending ? await scopeLinesFor(appId, deployComp) : [];
   // appName reaches BOTH verifiers - the sendreceive one takes it through its
   // options and forwards it to the shallow check it starts with.
@@ -131,7 +133,7 @@ async function verifyAppFolderMountWithRepair(appId, appFolder, appName, sending
     : verifyFolderMountSafety(appId, appFolder, appName));
   let mountSafety = await verify();
   if (!mountSafety.isSafe && !mountSafety.isMounted) {
-    const mountAttempt = await volumeService.ensureAppVolumeMounted(appId);
+    const mountAttempt = await volumeService.ensureAppVolumeMounted(identifier);
     if (mountAttempt.mounted) {
       // This pass replaces the record when it mounts from somewhere other than
       // where the record puts it, so a later one cannot re-derive the fact -
@@ -162,9 +164,9 @@ async function verifyAppFolderMountWithRepair(appId, appFolder, appName, sending
  *  sendreceive is the only mode that can BROADCAST a deletion, so it is the only
  *  mode where a stale index over an empty volume has to be refused rather than
  *  noted. Nothing passed this, so the deeper check never ran on any folder.
- * @param {Array<{appId: string, appName: string}>} [extraFolders] - Folder
- *  entries verified by id alone, for folders whose owning app's spec cannot be
- *  read this pass
+ * @param {Array<{appId: string, appName: string, path: string}>} [extraFolders] - Folder
+ *  entries verified by id and path alone, for folders whose owning app's spec
+ *  cannot be read this pass
  * Each unmounted entry carries `sending`, the folder's mode as this pass's own
  * folder read observed it, and `syncing`, whether the component declares sync at
  * all. The demotion reads both off the entry: A SAFETY ACTION MUST NOT DEPEND ON
@@ -207,24 +209,26 @@ async function checkAppFolderMounts(deployments, sendingFolderIds, knownFolderId
       if (deployComp.isStateless) continue;
       // deployComp.identifier is the docker-style id - bare appName for flat
       // (v1-3) specs, comp_app for composed (v4+) - so no version branching here.
-      const appId = dockerService.getAppIdentifier(deployComp.identifier);
-      const appFolder = `${appsFolder}${appId}`;
+      // The folder is shared under the id the app's registration fixed; the
+      // directory it replicates is named by the identifier.
+      const folderId = deployComp.syncFolderId;
+      const appFolder = `${appsFolder}${dockerService.getAppIdentifier(deployComp.identifier)}`;
       // eslint-disable-next-line no-await-in-loop
       const mountSafety = await verifyAppFolderMountWithRepair(
-        appId, appFolder, deployment.appName, sendingFolderIds.has(appId), deployComp,
+        folderId, appFolder, deployment.appName, sendingFolderIds.has(folderId), deployComp, deployComp.identifier,
       );
-      if (mountSafety.isSafe) verifiedSafeIds.push(appId);
+      if (mountSafety.isSafe) verifiedSafeIds.push(folderId);
       if (!mountSafety.isSafe) {
         // Folder exists but mount is not safe (empty and not mounted - likely unmounted loop device)
-        // identifier travels alongside appId: the reconciler is keyed by the bare form
-        // and this loop already holds it, so nothing downstream has to recover it.
+        // identifier travels alongside the folder id: the reconciler is keyed by the
+        // bare form and this loop already holds it, so nothing downstream has to recover it.
         unmountedApps.push({
-          appId,
+          appId: folderId,
           identifier: deployComp.identifier,
           appName: deployment.appName,
           reason: mountSafety.reason,
-          sending: sendingFolderIds.has(appId),
-          known: knownFolderIds.has(appId),
+          sending: sendingFolderIds.has(folderId),
+          known: knownFolderIds.has(folderId),
           syncing: deployComp.hasSyncthing(),
         });
       }
@@ -237,11 +241,10 @@ async function checkAppFolderMounts(deployments, sendingFolderIds, knownFolderId
   // vanished mount broadcasts its emptiness whether or not this node can read
   // the spec that named it.
   // eslint-disable-next-line no-restricted-syntax
-  for (const { appId, appName } of extraFolders) {
-    const appFolder = `${appsFolder}${appId}`;
+  for (const { appId, appName, path: appFolder } of extraFolders) {
     // eslint-disable-next-line no-await-in-loop
     const mountSafety = await verifyAppFolderMountWithRepair(
-      appId, appFolder, appName, sendingFolderIds.has(appId),
+      appId, appFolder, appName, sendingFolderIds.has(appId), null, path.basename(appFolder),
     );
     if (mountSafety.isSafe) verifiedSafeIds.push(appId);
     else {
@@ -296,8 +299,7 @@ function deploymentsAwaitingPromotion(deployments, receiveOnlySyncthingAppsCache
       // hasSyncthing() is exactly the old requiresSyncing() gate - the folder is
       // minted only for activeStandby (g:) and syncFirst (r:).
       if (!deployComp.hasSyncthing()) continue;
-      const appId = dockerService.getAppIdentifier(deployComp.identifier);
-      const cache = receiveOnlySyncthingAppsCache.get(appId);
+      const cache = receiveOnlySyncthingAppsCache.get(deployComp.syncFolderId);
       if (cache && !cache.restarted) names.add(deployment.appName);
     }
   }
@@ -309,7 +311,7 @@ function deploymentsMatchingFolderIds(deployments, folderIds) {
   return deployments.filter((deployment) => {
     // eslint-disable-next-line no-restricted-syntax
     for (const [, deployComp] of deployment.componentEntries()) {
-      if (folderIds.has(dockerService.getAppIdentifier(deployComp.identifier))) return true;
+      if (folderIds.has(deployComp.syncFolderId)) return true;
     }
     return false;
   });
@@ -401,10 +403,12 @@ async function processContainerData(params) {
     return;
   }
 
-  // Sync the entire appId folder (not individual mount points)
-  // This ensures all subdirectories (appdata, logs, config, etc.) are synced together
-  const appId = dockerService.getAppIdentifier(identifier);
-  const folder = `${appsFolder}${appId}`;
+  // The whole component directory is one folder (appdata, logs, config
+  // together), shared under the id the app's registration fixed: the identifier
+  // for a v9 registration, the 8.x container name for an earlier one, so every
+  // node running the app joins the same folder whatever the directory is called.
+  const appId = deployComp.syncFolderId;
+  const folder = `${appsFolder}${dockerService.getAppIdentifier(identifier)}`;
   const id = appId;
   const label = appId;
 
@@ -608,11 +612,17 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     if (unreadableApps.size) {
       log.warn(`syncthingAppsCore - folders of unreadable apps are protected this pass: ${[...unreadableApps.values()].join(', ')}`);
     }
-    // A folder id is the component identifier, `component_identity[_replica]`,
-    // so a folder always names the identity of the app that owns it, even when
-    // that app's components cannot be read.
-    const { DeploymentSpec } = await getSpecBackend();
-    const folderIdentity = (folderId) => DeploymentSpec.identityFromIdentifier(dockerService.getBaseAppName(folderId));
+    // A folder id names the app that owns it even when the app's components
+    // cannot be read: a v9 registration's folder is the component identifier,
+    // `component_identity[_replica]`, and an earlier registration's is the 8.x
+    // container name, `flux<component>_<name>`.
+    const { DeploymentSpec, isAppIdentity } = await getSpecBackend();
+    const unreadableIdentityByName = new Map([...unreadableApps].map(([identity, name]) => [name, identity]));
+    const folderIdentity = (folderId) => {
+      const segment = DeploymentSpec.identityFromIdentifier(folderId);
+      if (isAppIdentity(segment)) return segment;
+      return unreadableIdentityByName.get(DeploymentSpec.identityFromIdentifier(dockerService.getBaseAppName(folderId))) ?? null;
+    };
     const ownedByUnreadableApp = (folderId) => unreadableApps.has(folderIdentity(folderId));
 
     // Drain the folders syncthing flagged with errors since the last cycle. Mount
@@ -728,6 +738,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       .map((folder) => ({
         appId: folder.id,
         appName: unreadableApps.get(folderIdentity(folder.id)),
+        path: folder.path,
       }));
 
     // CRITICAL: Check if app folder mounts are ready before processing
@@ -888,7 +899,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       // eslint-disable-next-line no-restricted-syntax
       for (const deployment of deployments) {
         for (const [, comp] of deployment.componentEntries()) {
-          componentsByAppId.set(dockerService.getAppIdentifier(comp.identifier), {
+          componentsByAppId.set(comp.syncFolderId, {
             comp,
             appName: deployment.appName,
           });

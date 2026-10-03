@@ -52,7 +52,7 @@ describe('containerHealthMonitor tests', () => {
     const spec = await v9Spec({ name: 'testapp', components });
     return {
       instantiated: await instantiatedSpec(spec),
-      deployment: flux.DeploymentSpec.fromSpec(spec, appsFolder, { replica: null }),
+      deployment: flux.DeploymentSpec.fromSpec(spec, appsFolder, { replica: null, registrationVersion: 9 }),
     };
   }
 
@@ -90,7 +90,7 @@ describe('containerHealthMonitor tests', () => {
     expect(instantiated.name).to.equal('testapp');
     expect(instantiated.identity, 'no identity stored, so the bare name is the app-level identifier').to.equal(null);
     expect(webComp.isStateless, 'persistentStorage.sizeGb 5 is stateful').to.be.false;
-    expect(webComp.dir, 'and a stateful component always has a host directory').to.equal(`${appsFolder}flux${webComp.identifier}`);
+    expect(webComp.dir, 'and a stateful component always has a host directory').to.equal(`${appsFolder}${webComp.identifier}`);
     expect(statelessDeployment.getComponent('web').isStateless, 'sizeGb 0 is stateless').to.be.true;
     expect(statelessDeployment.getComponent('web').dir, 'and therefore has no directory').to.equal(null);
   });

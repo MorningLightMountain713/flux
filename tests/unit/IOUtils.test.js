@@ -28,13 +28,13 @@ describe('IOUtils getVolumeInfo tests', () => {
       source: '/dev/mapper/flux_crypt', target: '/dat', fstype: 'xfs', sizeBytes: 926_165_774_336, usedBytes: 349_526_016_000, availableBytes: 576_639_758_336, usePercent: 38,
     },
     {
-      source: '/dev/loop2', target: appVolume('fluxweb_myapp'), fstype: 'ext4', sizeBytes: 2_000_000_000, usedBytes: 500_000_000, availableBytes: 1_500_000_000, usePercent: 25,
+      source: '/dev/loop2', target: appVolume('web_myapp'), fstype: 'ext4', sizeBytes: 2_000_000_000, usedBytes: 500_000_000, availableBytes: 1_500_000_000, usePercent: 25,
     },
     {
-      source: '/dev/loop3', target: appVolume('fluxdb_myapp'), fstype: 'ext4', sizeBytes: 4_000_000_000, usedBytes: 1_000_000_000, availableBytes: 3_000_000_000, usePercent: 25,
+      source: '/dev/loop3', target: appVolume('db_myapp'), fstype: 'ext4', sizeBytes: 4_000_000_000, usedBytes: 1_000_000_000, availableBytes: 3_000_000_000, usePercent: 25,
     },
     {
-      source: '/dev/loop4', target: appVolume('fluxsingleapp'), fstype: 'ext4', sizeBytes: 1_000_000_000, usedBytes: 250_000_000, availableBytes: 750_000_000, usePercent: 25,
+      source: '/dev/loop4', target: appVolume('singleapp'), fstype: 'ext4', sizeBytes: 1_000_000_000, usedBytes: 250_000_000, availableBytes: 750_000_000, usePercent: 25,
     },
   ];
 
@@ -74,17 +74,17 @@ describe('IOUtils getVolumeInfo tests', () => {
     const result = await IOUtils.getVolumeInfo('myapp', 'web', 'B', 0, 'mount');
 
     sinon.assert.calledOnce(listStub);
-    expect(result).to.eql({ error: null, mounts: [{ mount: appVolume('fluxweb_myapp') }] });
+    expect(result).to.eql({ error: null, mounts: [{ mount: appVolume('web_myapp') }] });
   });
 
   it('matches only the requested component, not a sibling of the same app', async () => {
     const result = await IOUtils.getVolumeInfo('myapp', 'db', 'B', 0, 'mount');
-    expect(result).to.eql({ error: null, mounts: [{ mount: appVolume('fluxdb_myapp') }] });
+    expect(result).to.eql({ error: null, mounts: [{ mount: appVolume('db_myapp') }] });
   });
 
   it("matches a single-component app when component is 'null'", async () => {
     const result = await IOUtils.getVolumeInfo('singleapp', 'null', 'B', 0, 'mount');
-    expect(result).to.eql({ error: null, mounts: [{ mount: appVolume('fluxsingleapp') }] });
+    expect(result).to.eql({ error: null, mounts: [{ mount: appVolume('singleapp') }] });
   });
 
   it('returns full usage in MB with capacity as a fraction when no fields filter is given', async () => {
@@ -95,7 +95,7 @@ describe('IOUtils getVolumeInfo tests', () => {
       used: 500,
       available: 1500,
       capacity: 0.25,
-      mount: appVolume('fluxweb_myapp'),
+      mount: appVolume('web_myapp'),
       // Reported so a co-located app's rows can be told apart: this route
       // answers for every identity of the component, and two rows that differ
       // only by which replica owns them are useless without it.
@@ -125,7 +125,7 @@ describe('IOUtils getVolumeInfo tests', () => {
   it('refuses a volume mounted outside the apps folder rather than reporting it', async () => {
     listStub.resolves([
       {
-        source: '/dev/loop9', target: '/mnt/elsewhere/fluxweb_myapp', fstype: 'ext4', sizeBytes: 2_000_000_000, usedBytes: 500_000_000, availableBytes: 1_500_000_000, usePercent: 25,
+        source: '/dev/loop9', target: '/mnt/elsewhere/web_myapp', fstype: 'ext4', sizeBytes: 2_000_000_000, usedBytes: 500_000_000, availableBytes: 1_500_000_000, usePercent: 25,
       },
     ]);
 

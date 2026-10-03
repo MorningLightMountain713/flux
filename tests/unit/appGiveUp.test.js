@@ -348,7 +348,7 @@ describe('appGiveUp - handing an app back', () => {
           },
         },
       });
-      const deployment = flux.DeploymentSpec.fromSpec(spec, '/apps/', { replica: null, identity: 'bident' });
+      const deployment = flux.DeploymentSpec.fromSpec(spec, '/apps/', { replica: null, identity: 'bident', registrationVersion: 9 });
       const runningLocally = sinon.stub().resolves(true);
 
       const verdict = await appGiveUp.surplusVerdict({ name: 'gapp', deployment, instances: 1 }, twoCopies, NEWEST, { runningLocally });

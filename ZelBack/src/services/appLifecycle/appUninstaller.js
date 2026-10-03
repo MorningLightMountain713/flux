@@ -515,11 +515,10 @@ async function uninstallComponent(component, options = {}) {
 
   const { appName } = component;
   const componentName = component.name;
-  // The PHYSICAL name, `flux{identifier}`: the volume dir, the appdata path, the
-  // crontab comment, the syncthing folder id - and the container's docker name.
-  // It is never what dockerService takes: those calls own the physical naming and
-  // prefix the BARE identifier themselves, so passing this back in asks docker for
-  // `fluxflux...` and quietly matches nothing.
+  // The physical name: the volume dir, the appdata path, the crontab comment
+  // and the container's docker name, all the identifier. The syncthing folder
+  // id is the component's own (syncFolderId), which differs for an app
+  // registered before v9.
   const appId = dockerService.getAppIdentifier(component.identifier);
   const label = componentName === appName ? appName : `component ${componentName} of ${appName}`;
 

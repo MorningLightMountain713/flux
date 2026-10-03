@@ -28,11 +28,10 @@ const serviceHelperMock = {
 };
 
 const dockerServiceMock = {
-  // The real one is `flux${identifier}` - a pure string function over the
-  // component identifier, so the stub reproduces it rather than inventing an
-  // identity mapping. That makes the syncthing folder id in these tests the
-  // same string production would use, and the same one `deployComp.dir` ends in.
-  getAppIdentifier: sinon.stub().callsFake((identifier) => `flux${identifier}`),
+  // The real one is the identifier itself, so the stub reproduces it rather than
+  // inventing a mapping: the component's host directory ends in it, and for a
+  // v9 registration its syncthing folder id is the same string.
+  getAppIdentifier: sinon.stub().callsFake((identifier) => identifier),
   // Its inverse, the real one: another pure string function.
   getBaseAppName: realDockerService.getBaseAppName,
   dockerContainerInspect: sinon.stub(),
@@ -244,7 +243,7 @@ describe('syncthingMonitor tests', () => {
    * in production, built the same way (same appsFolder). `replica` is stated,
    * never defaulted, exactly as DeploymentSpec.fromSpec demands.
    */
-  async function deploymentFor(appName, compName, overrides = {}, identity = null) {
+  async function deploymentFor(appName, compName, overrides = {}, identity = null, registrationVersion = 9) {
     // Callers pass content-slot mounts, which only work on the encrypted path,
     // so the envelope is stated for every spec this helper builds.
     const spec = await v9Spec({
@@ -253,7 +252,7 @@ describe('syncthingMonitor tests', () => {
         [compName]: { ...V9_SUBMISSION.components.web, name: compName, ...overrides },
       },
     }, { encrypted: true });
-    return flux.DeploymentSpec.fromSpec(spec, appsFolder, { replica: null, identity });
+    return flux.DeploymentSpec.fromSpec(spec, appsFolder, { replica: null, identity, registrationVersion });
   }
 
   before(async function loadLibrary() {
@@ -264,7 +263,7 @@ describe('syncthingMonitor tests', () => {
     syncDeployment = await deploymentFor('testapp', 'web', { persistentStorage: ACTIVE_STANDBY_STORAGE }, 'ab12cd34ef56');
     plainDeployment = await deploymentFor('testapp', 'web');
     syncComp = syncDeployment.getComponent('web');
-    syncFolderId = `flux${syncComp.identifier}`;
+    ({ syncFolderId } = syncComp);
 
     // The sync state under test is derived by the library from the submission,
     // never asserted onto the object here.
@@ -275,9 +274,10 @@ describe('syncthingMonitor tests', () => {
     // A composed (v4+) component's identifier is comp_identity - the bare app
     // name is the flat v1-v3 form and cannot be minted from a v9 spec.
     expect(syncComp.identifier).to.equal('web_ab12cd34ef56');
-    // The syncthing folder id and the component's host directory are the same
-    // docker identifier, which is what makes `${appsFolder}${appId}` the folder.
-    expect(syncComp.dir).to.equal(`${appsFolder}${syncFolderId}`);
+    // For a v9 registration the folder id is the identifier, and the component's
+    // host directory is that identifier under the apps folder.
+    expect(syncFolderId).to.equal(syncComp.identifier);
+    expect(syncComp.dir).to.equal(`${appsFolder}${syncComp.identifier}`);
   });
 
   beforeEach(() => {
@@ -589,8 +589,8 @@ describe('syncthingMonitor tests', () => {
           unreadableApps: new Map([['sealed', 'sealed']]),
         });
         syncthingServiceMock.getConfigFolders.resolves([
-          { id: 'fluxweb_sealed', type: 'sendreceive' },
-          { id: 'fluxweb_gone', type: 'sendreceive' },
+          { id: 'fluxweb_sealed', type: 'sendreceive', path: `${appsFolder}web_sealed` },
+          { id: 'fluxweb_gone', type: 'sendreceive', path: `${appsFolder}web_gone` },
         ]);
 
         monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
@@ -604,15 +604,19 @@ describe('syncthingMonitor tests', () => {
           .to.deep.equal(['fluxweb_gone']);
       });
 
-      it('protects an unreadable app\'s folders by its identity, a replica\'s included', async () => {
+      it('protects an unreadable app\'s folders by its identity, a replica\'s and its 8.x name included', async () => {
+        // A v9 registration's folder names the app's identity; an app registered
+        // before v9 holds its folder under the 8.x name, which names the app.
+        const identity = `b${'a'.repeat(51)}q`;
         deploymentProviderMock.listInstalledDeploymentsDetailed.resolves({
           deployments: [],
-          unreadableApps: new Map([['bident', 'sealed']]),
+          unreadableApps: new Map([[identity, 'sealed']]),
         });
         syncthingServiceMock.getConfigFolders.resolves([
-          { id: 'fluxweb_bident', type: 'sendreceive' },
-          { id: 'fluxweb_bident_s1', type: 'sendreceive' },
-          { id: 'fluxweb_sealed', type: 'sendreceive' },
+          { id: `web_${identity}`, type: 'sendreceive', path: `${appsFolder}web_${identity}` },
+          { id: `web_${identity}_s1`, type: 'sendreceive', path: `${appsFolder}web_${identity}_s1` },
+          { id: 'fluxweb_sealed', type: 'sendreceive', path: `${appsFolder}web_${identity}` },
+          { id: 'fluxweb_other', type: 'sendreceive', path: `${appsFolder}web_other` },
         ]);
 
         monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
@@ -622,10 +626,11 @@ describe('syncthingMonitor tests', () => {
           .map((call) => call.args[0])
           .filter((options) => options.method === 'delete')
           .map((options) => options.id);
-        expect(deleted, 'the app\'s own folders are kept and a folder of its name alone is not its').to.deep.equal(['fluxweb_sealed']);
+        expect(deleted, 'the app\'s own folders are kept, by identity and by its 8.x name; another name\'s is not').to.deep.equal(['fluxweb_other']);
         // and the mount check of each of its folders files under the app's name
-        sinon.assert.calledWith(syncthingFolderStateMachineMock.verifySendReceiveFolderSafety, 'fluxweb_bident', sinon.match.any, sinon.match({ appName: 'sealed' }));
-        sinon.assert.calledWith(syncthingFolderStateMachineMock.verifySendReceiveFolderSafety, 'fluxweb_bident_s1', sinon.match.any, sinon.match({ appName: 'sealed' }));
+        sinon.assert.calledWith(syncthingFolderStateMachineMock.verifySendReceiveFolderSafety, `web_${identity}`, sinon.match.any, sinon.match({ appName: 'sealed' }));
+        sinon.assert.calledWith(syncthingFolderStateMachineMock.verifySendReceiveFolderSafety, `web_${identity}_s1`, sinon.match.any, sinon.match({ appName: 'sealed' }));
+        sinon.assert.calledWith(syncthingFolderStateMachineMock.verifySendReceiveFolderSafety, 'fluxweb_sealed', sinon.match.any, sinon.match({ appName: 'sealed' }));
       });
 
       // The single-app case, and the property the two-folder test above cannot
@@ -638,7 +643,7 @@ describe('syncthingMonitor tests', () => {
           deployments: [],
           unreadableApps: new Map([['sealed', 'sealed']]),
         });
-        syncthingServiceMock.getConfigFolders.resolves([{ id: 'fluxweb_sealed', type: 'sendreceive' }]);
+        syncthingServiceMock.getConfigFolders.resolves([{ id: 'fluxweb_sealed', type: 'sendreceive', path: `${appsFolder}web_sealed` }]);
 
         monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
         await clock.tickAsync(100);
@@ -660,7 +665,7 @@ describe('syncthingMonitor tests', () => {
           deployments: [],
           unreadableApps: new Map([['sealed', 'sealed']]),
         });
-        syncthingServiceMock.getConfigFolders.resolves([{ id: 'fluxweb_sealed', type: 'sendreceive' }]);
+        syncthingServiceMock.getConfigFolders.resolves([{ id: 'fluxweb_sealed', type: 'sendreceive', path: `${appsFolder}web_sealed` }]);
         const held = ['/backup', '/lost+found', '/cache'];
         syncthingServiceMock.getFolderIgnores.withArgs('fluxweb_sealed').resolves({ status: 'success', data: { ignore: held } });
 
@@ -690,6 +695,25 @@ describe('syncthingMonitor tests', () => {
 
         // With the component, which is what the whole ignore set is derived from.
         sinon.assert.calledWith(ignorePolicyMock.ensureStignoreCovers, syncFolderId, sinon.match((comp) => typeof comp.injectedSyncExcludes === 'function' && Boolean(comp.sync)));
+      });
+
+      // An app registered before v9 shares its folder under the 8.x container
+      // name, whatever its directory is called on this node.
+      it('configures a component of an app registered before v9 under its 8.x folder id, at the directory its identifier names', async () => {
+        const legacy = await deploymentFor('legacyapp', 'web', { persistentStorage: ACTIVE_STANDBY_STORAGE }, 'ab12cd34ef56', 8);
+        const comp = legacy.getComponent('web');
+        expect(comp.syncFolderId).to.equal('fluxweb_legacyapp');
+        expect(comp.identifier).to.equal('web_ab12cd34ef56');
+        deploymentProviderMock.listInstalledDeployments.resolves([legacy]);
+        syncthingServiceMock.getConfigFolders.resolves([{ id: comp.syncFolderId, type: 'sendreceive', path: `${appsFolder}${comp.identifier}` }]);
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        sinon.assert.calledWith(ignorePolicyMock.ensureStignoreCovers, 'fluxweb_legacyapp', sinon.match.any);
+        const configured = syncthingMonitorHelpersMock.ensureStfolderExists.getCalls().map((call) => String(call.args[0]));
+        expect(configured).to.include(`${appsFolder}web_ab12cd34ef56`);
+        expect(configured.some((dir) => dir.endsWith('fluxweb_legacyapp')), 'the folder id is not a directory').to.be.false;
       });
 
       // The one pass where a fresh install is not yet configured. Its .stignore
@@ -805,8 +829,8 @@ describe('syncthingMonitor tests', () => {
       // one the mount check consults, and the shallow one is never called.
       const [checkedId, checkedFolder, checkedOpts] = syncthingFolderStateMachineMock
         .verifySendReceiveFolderSafety.firstCall.args;
-      expect(checkedId, 'the mount check is keyed by the docker identifier').to.equal(syncFolderId);
-      expect(checkedFolder, 'and the folder is that identifier under the apps folder').to.equal(`${appsFolder}${syncFolderId}`);
+      expect(checkedId, 'the mount check is keyed by the folder id').to.equal(syncFolderId);
+      expect(checkedFolder, 'and the folder is the component directory').to.equal(`${appsFolder}${syncComp.identifier}`);
       expect(checkedOpts.appName, 'the owning app, for incident roll-up').to.equal('testapp');
       expect(checkedOpts.ignoreLines, 'the disk is read in the scope the component derives')
         .to.deep.equal(await derivedIgnoreLines(syncComp));
@@ -881,7 +905,7 @@ describe('syncthingMonitor tests', () => {
     // the first-run flag never clears, so the full sweep repeats every cycle.
     it('processes healthy apps, and clears the first-run flag, when another app can never mount', async () => {
       const healthy = await deploymentFor('healthyapp', 'web', { persistentStorage: ACTIVE_STANDBY_STORAGE });
-      const healthyId = `flux${healthy.getComponent('web').identifier}`;
+      const healthyId = healthy.getComponent('web').syncFolderId;
       mockState.syncthingAppsFirstRun = true;
       deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment, healthy]);
       const brokenMount = async (appId) => (appId === syncFolderId
@@ -1135,7 +1159,7 @@ describe('syncthingMonitor tests', () => {
     // never empties, and the node sweeps every mount on every cycle - so
     // "does not sweep mounts in steady state" can never hold for it again.
     it('resolves the flag of a non-syncing component syncthing holds no folder for', async () => {
-      const plainFolderId = `flux${plainDeployment.getComponent('web').identifier}`;
+      const plainFolderId = plainDeployment.getComponent('web').syncFolderId;
       deploymentProviderMock.listInstalledDeployments.resolves([plainDeployment]);
       syncthingEventsConsumerMock.mountVerifyPendingIds.returns([plainFolderId]);
       syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
@@ -1153,7 +1177,7 @@ describe('syncthingMonitor tests', () => {
     // a component that DOES sync and whose folder syncthing has lost is a
     // contradiction, not an answer - its flag stands and its container is held.
     it('keeps the flag of a syncing component whose folder syncthing has lost', async () => {
-      const syncFolderIdLocal = `flux${syncDeployment.getComponent('web').identifier}`;
+      const syncFolderIdLocal = syncDeployment.getComponent('web').syncFolderId;
       deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
       syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderIdLocal]);
       syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
@@ -1169,7 +1193,7 @@ describe('syncthingMonitor tests', () => {
     });
 
     it('leaves a component that declares no sync alone when syncthing has no folder for it', async () => {
-      const plainFolderId = `flux${plainDeployment.getComponent('web').identifier}`;
+      const plainFolderId = plainDeployment.getComponent('web').syncFolderId;
       deploymentProviderMock.listInstalledDeployments.resolves([plainDeployment]);
       syncthingEventsConsumerMock.mountVerifyPendingIds.returns([plainFolderId]);
       syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });

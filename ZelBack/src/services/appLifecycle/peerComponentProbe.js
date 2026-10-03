@@ -45,20 +45,25 @@ function anyPeerHoldsComponent(verdicts) {
  * FDM, index ordering), and a rule about not creating a second writer should not
  * only be reachable through all of them.
  *
- * @param {{appId: string, identifier: string, appName: string,
- *   peerSocketAddr: string, label: string, liveness: object}} params
+ * @param {{appId: string, folderId?: string, aliases?: string[], identifier: string,
+ *   appName: string, peerSocketAddr: string, label: string, liveness: object}} params -
+ *   appId is the component's docker name here; folderId its syncthing folder id,
+ *   the docker name when not given; aliases the other names a peer may hold it
+ *   under, the 8.x name of an app registered before v9
  * @returns {Promise<string>} one of PeerComponent
  */
 async function peerComponentState({
-  appId, identifier, appName, peerSocketAddr, label, liveness,
+  appId, folderId = appId, aliases = [], identifier, appName, peerSocketAddr, label, liveness,
 }) {
   // Docker reports names with a leading slash, and getAppIdentifier yields exactly
   // the container name for this component. Compare WHOLE names: a substring test
   // also matches a longer app whose name merely begins the same way - myapp
   // against myapp2 - and a false positive here means the component is never
-  // started at all.
+  // started at all. A peer that has not moved the app onto its identity, or runs
+  // 8.x, holds it under its 8.x name, which the caller passes as an alias.
+  const names = new Set([appId, ...aliases]);
   const peerRunsThisComponent = (appsRunning) => appsRunning.some(
-    (app) => (app.Names || []).some((name) => name.replace(/^\//, '') === appId),
+    (app) => (app.Names || []).some((name) => names.has(name.replace(/^\//, ''))),
   );
   const ipToCheck = extractIp(peerSocketAddr);
   const portToCheck = extractPort(peerSocketAddr);
@@ -91,7 +96,7 @@ async function peerComponentState({
       });
     const held = heldResponse?.data?.data;
     if (Array.isArray(held)) {
-      if (held.includes(appId)) {
+      if (held.some((name) => names.has(name))) {
         fluxEventBus.count('masterSlave:decision', identifier, 'heldOnPeer');
         log.info(`activeStandby: component:${identifier} is held on peer (${label}) at ${ipToCheck}, will not start`);
         return PeerComponent.RUNNING;
@@ -137,9 +142,9 @@ async function peerComponentState({
     // already demands before dropping a holder: this node's own syncthing showing
     // the peer's connection to the folder gone, read on a node that can still see
     // the fleet.
-    const verdict = await peerFolderLiveness.silenceVerdict(appId, peerSocketAddr, liveness);
+    const verdict = await peerFolderLiveness.silenceVerdict(folderId, peerSocketAddr, liveness);
     if (verdict === peerFolderLiveness.SilenceVerdict.GONE) {
-      log.info(`activeStandby: peer (${label}) at ${ipToCheck} is silent and this node's syncthing shows its connection for ${appId} gone - the component is free there`);
+      log.info(`activeStandby: peer (${label}) at ${ipToCheck} is silent and this node's syncthing shows its connection for ${folderId} gone - the component is free there`);
       return PeerComponent.NOT_RUNNING;
     }
     log.info(`activeStandby: peer (${label}) at ${ipToCheck} is silent for app:${appName} (${verdict}), will not start`);

@@ -17,7 +17,6 @@
 
 const config = require('config');
 const log = require('../../lib/log');
-const dockerService = require('../dockerService');
 const operationRegistry = require('../utils/operationRegistry');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const { socketAddressesMatch, extractIp } = require('../utils/socketAddressUtils');
@@ -58,7 +57,7 @@ function syncedComponents(deployment) {
       name,
       syncMode,
       identifier: component.identifier,
-      folderId: dockerService.getAppIdentifier(component.identifier),
+      folderId: component.syncFolderId,
     });
     return acc;
   }, []);

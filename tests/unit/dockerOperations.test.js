@@ -75,7 +75,7 @@ describe('dockerOperations tests', () => {
       // `flux`, which is what makes a single prefix unambiguous — a component that
       // carried its own would point the wipe at a different directory.
       expect(component.identifier.startsWith('flux'), 'the identifier must not carry the namespace prefix itself').to.be.false;
-      return { component, appId: `flux${component.identifier}` };
+      return { component, appId: component.identifier };
     }
 
     it('wipes the app data in the component volume, and nothing by name', async () => {

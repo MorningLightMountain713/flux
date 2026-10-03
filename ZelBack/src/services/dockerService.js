@@ -64,27 +64,17 @@ function getDockerContainerHandle(id) {
 }
 
 /**
- * The docker name for a bare component identifier.
- *
- * Unconditional. It used to return the input untouched when it already began
- * with `flux`, so that one function could serve both callers holding a bare
- * identifier and callers holding a docker name — deciding which it had been
- * given by sniffing the string. That made it non-injective: a component named
- * `proxy` and a component named `fluxproxy` both produced `fluxproxy_<app>`,
- * so two distinct components claimed one container name and one volume
- * directory. Prepending a constant cannot collide. Callers that already hold a
- * docker name keep it rather than passing it back through here.
- *
- * The prefix itself decides nothing any more: ownership is the identity label
- * (isManagedContainer) and identity is read off the app's row. It survives as
- * part of names that already exist, because changing those means renaming live
- * volumes.
+ * The docker name of a component: its identifier, `<component>_<identity>`
+ * (`<identity>` alone for a flat v1-3 spec), qualified by a replica when it has
+ * one. One function, so every site that names a container, its volume
+ * directory or its backing image agrees. Ownership is the identity label
+ * (isManagedContainer), never the name.
  *
  * @param {string} identifier bare component identifier
  * @returns {string} docker name
  */
 function getAppIdentifier(identifier) {
-  return `flux${identifier}`;
+  return identifier;
 }
 
 /**
@@ -115,21 +105,16 @@ function isManagedContainer({ labels, name }, labelKeys) {
 
 /**
  * The bare component identifier (`{component}_{app}`, or `{app}` for v1-3)
- * behind a docker name — the exact inverse of getAppIdentifier.
+ * behind a legacy prefixed name: a container or a volume directory named before
+ * the app moved onto its identity, a container made before the labels shipped,
+ * or the syncthing folder id of an app registered before v9.
  *
- * Unconditional, because getAppIdentifier is: the caller states which form it
- * holds by choosing to call this at all. It used to strip only when the input
- * began with `flux`, which made it a guess rather than an inverse — a component
- * genuinely named `fluxproxy` has the bare identifier `fluxproxy_<app>`, which
- * begins with those four characters without carrying a prefix, so the strip
- * yielded `proxy_<app>`: a different component.
- *
- * Callers must hold a prefixed form — a docker name, a syncthing folder id or a
- * volume directory name. A caller that already holds the bare identifier must
- * not come through here; consumers keyed on the bare form (the reconciler
- * queue, appsRuntimeState) take it as given rather than normalising, because
- * `fluxproxy_<app>` is a legitimate value of both forms and no function of that
- * string alone can tell them apart.
+ * Callers must hold such a form. A name made since the move is the bare
+ * identifier already and must not come through here: a component genuinely
+ * named `fluxproxy` has the identifier `fluxproxy_<identity>`, which begins
+ * with those four characters without carrying a prefix, and the strip would
+ * yield a different component. A caller holding a name of unknown age tells
+ * the two apart by the identity segment: an app identity means the bare form.
  *
  * Both namespaces are handled: the legacy fleet's containers carry `zel`, and
  * isManagedContainer claims them, so they reach the same consumers. Testing the
@@ -2607,9 +2592,11 @@ function escapeRegExp(str) {
  */
 async function getAppContainerObjects(appName) {
   const containers = await dockerListContainers(true);
-  const singleComponentSlashName = getAppDockerNameIdentifier(appName);
-  // The optional third segment is a replica name (co-located named replicas).
-  const componentRegex = new RegExp(`^/(?:flux|zel)[a-zA-Z0-9]+_${escapeRegExp(appName)}(?:_[a-z0-9-]+)?$`);
+  // A container made before the labels shipped carries the legacy prefix and
+  // the app's name: `flux<name>` for a flat spec, `flux<component>_<name>`
+  // with an optional replica segment for a composed one.
+  const legacyFlat = new RegExp(`^/(?:flux|zel)${escapeRegExp(appName)}$`);
+  const legacyComponent = new RegExp(`^/(?:flux|zel)[a-zA-Z0-9]+_${escapeRegExp(appName)}(?:_[a-z0-9-]+)?$`);
   const { LABEL_KEYS } = await getSpecBackend();
 
   return (containers || []).filter((container) => {
@@ -2619,7 +2606,7 @@ async function getAppContainerObjects(appName) {
       return container.Labels[LABEL_KEYS.APP] === appName;
     }
     const names = container.Names || [];
-    return names.some((name) => name === singleComponentSlashName || componentRegex.test(name));
+    return names.some((name) => legacyFlat.test(name) || legacyComponent.test(name));
   });
 }
 

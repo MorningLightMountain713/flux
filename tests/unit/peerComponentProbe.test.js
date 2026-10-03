@@ -52,6 +52,34 @@ describe('peerComponentProbe tests', () => {
       expect(await ask()).to.equal(PeerComponent.NOT_RUNNING);
     });
 
+    // A peer that has not moved the app onto its identity, or runs 8.x, holds a
+    // component of an app registered before v9 under its 8.x name.
+    it('holds the start when the peer holds the component under its 8.x name, by the held list or by the container list', async () => {
+      const askByIdentity = () => peerComponentProbe.peerComponentState({
+        appId: 'web_bident', folderId: 'fluxweb_gapp', aliases: ['fluxweb_gapp'], identifier: 'web_bident', appName: 'gapp', peerSocketAddr: '203.0.113.7:16127', label: 'index 1', liveness: { localConnectivity: () => ({ connected: true }) },
+      });
+      sinon.stub(axios, 'get').resolves(held(['fluxweb_gapp']));
+      expect(await askByIdentity()).to.equal(PeerComponent.RUNNING);
+      sinon.restore();
+
+      const get = sinon.stub(axios, 'get');
+      get.withArgs(sinon.match('/apps/heldcomponents'), sinon.match.any)
+        .rejects(Object.assign(new Error('Not Found'), { response: { status: 404 } }));
+      get.withArgs(sinon.match('/apps/listrunningapps'), sinon.match.any)
+        .resolves({ data: { status: 'success', data: [{ Names: ['/fluxweb_gapp'] }] } });
+      expect(await askByIdentity()).to.equal(PeerComponent.RUNNING);
+    });
+
+    it('judges a silent peer by the folder id, not the container name', async () => {
+      sinon.stub(axios, 'get').rejects(new Error('ECONNREFUSED'));
+      const verdict = sinon.stub(peerFolderLiveness, 'silenceVerdict').resolves(peerFolderLiveness.SilenceVerdict.GONE);
+      const liveness = { localConnectivity: () => ({ connected: true }) };
+      expect(await peerComponentProbe.peerComponentState({
+        appId: 'web_bident', folderId: 'fluxweb_gapp', identifier: 'web_bident', appName: 'gapp', peerSocketAddr: '203.0.113.7:16127', label: 'index 1', liveness,
+      })).to.equal(PeerComponent.NOT_RUNNING);
+      sinon.assert.calledOnceWithExactly(verdict, 'fluxweb_gapp', '203.0.113.7:16127', liveness);
+    });
+
     it('falls back to the container list for a peer too old for the route', async () => {
       const get = sinon.stub(axios, 'get');
       // A STATUS is an answer: the peer is alive, merely too old for the route.

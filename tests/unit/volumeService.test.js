@@ -790,6 +790,21 @@ describe('volumeService tests', () => {
       expect(result.conclusive).to.be.false;
     });
 
+    it('finds an image named by the app\'s identity as well as one by its 8.x name, and no other app\'s', async () => {
+      const identity = `b${'a'.repeat(51)}q`;
+      const other = `b${'c'.repeat(51)}a`;
+      deviceHelperStub.listMountedFilesystems.resolves([]);
+      fsStub.promises.readdir.resolves([]);
+      fsStub.promises.readdir.withArgs(APP_VOLUMES).resolves([
+        `web_${identity}FLUXFSVOL`, `${identity}FLUXFSVOL`, 'fluxdb_myappFLUXFSVOL', 'fluxmyappFLUXFSVOL',
+        `web_${other}FLUXFSVOL`, 'web_myappFLUXFSVOL', 'fluxdb_myappextraFLUXFSVOL',
+      ]);
+
+      const result = await volumeService.getComponentAppIdsFromVolumeFiles('myapp', identity);
+
+      expect(result.appIds).to.have.members([`web_${identity}`, identity, 'fluxdb_myapp', 'fluxmyapp']);
+    });
+
     it('answers from every eligible mount when the table reads', async () => {
       deviceHelperStub.listMountedFilesystems.resolves([{ source: '/dev/sda1', target: '/dat' }]);
       fsStub.promises.readdir.resolves([]);
