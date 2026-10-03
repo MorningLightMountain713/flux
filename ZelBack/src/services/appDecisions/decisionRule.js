@@ -18,7 +18,7 @@
  */
 
 /** Decisions carry the rule version they were made under. */
-const RULE_VERSION = 2;
+const RULE_VERSION = 3;
 /** A v9 message is paid for this long after its signing, by its block's stamp. */
 const PAYMENT_WINDOW_MS = 60 * 60 * 1000;
 /** After an app's term ends, only its last owner may register the name for this long. */
@@ -59,6 +59,7 @@ function decisionFor(entry, name, fields) {
     fee: null,
     uuid: null,
     identity: null,
+    registrationVersion: null,
     termStart: null,
     ruleVersion: RULE_VERSION,
     ...fields,
@@ -149,6 +150,9 @@ async function decideOne(entries, i, name, judge) {
   }
 
   if (!spec) return refused(entry, name, 'invalid');
+  // A name in an identity's form is reserved for identities, whatever version
+  // the message is: the legacy classes tolerate it on read so history replays.
+  if (judge.isAppIdentity(spec.name)) return refused(entry, name, 'invalid');
   const activation = judge.activationHeight(spec.version);
   if (activation === undefined || record.height < activation) return refused(entry, name, 'not-activated');
 
@@ -201,6 +205,7 @@ async function decideOne(entries, i, name, judge) {
       fee: String(fee),
       uuid,
       identity: judge.identityFor(spec, uuid),
+      registrationVersion: spec.version,
       termStart: record.blockTime ?? null,
     });
   }
@@ -242,6 +247,7 @@ async function decideOne(entries, i, name, judge) {
     fee: String(fee),
     uuid: predecessor.decision.uuid,
     identity: predecessor.decision.identity,
+    registrationVersion: predecessor.decision.registrationVersion ?? null,
     // A free update bought no time, so it keeps the term it supersedes.
     termStart: fee === 0n ? predecessor.decision.termStart : blockTime,
   });

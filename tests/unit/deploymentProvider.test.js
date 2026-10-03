@@ -286,6 +286,15 @@ describe('deploymentProvider tests', () => {
       expect(ids).to.deep.equal(['web_myapp']);
     });
 
+    it('hands the view the version the row says the app was registered with, which fixes its folder id and its kept alias', async () => {
+      const [before] = await provider.buildDeployments({ name: 'myapp', identity: 'a1b2c3d4e5f6', registrationVersion: 8 });
+      const web = before.getComponent('web');
+      expect(web.syncFolderId).to.equal('fluxweb_myapp');
+      expect(web.networkAliases).to.include('fluxweb_myapp');
+      const [unstated] = await provider.buildDeployments({ name: 'myapp', identity: 'a1b2c3d4e5f6' });
+      expect(() => unstated.getComponent('web').syncFolderId).to.throw(/registration version/);
+    });
+
     it('an opts identity overrides the spec view - the update path builds the NEW view at the INSTALLED identity', async () => {
       // A registry spec carries no identity (identities are minted at install),
       // so the update diff's new side must be handed the installed row's.

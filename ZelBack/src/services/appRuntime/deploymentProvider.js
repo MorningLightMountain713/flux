@@ -90,6 +90,10 @@ async function toDeployment(instantiated, opts = {}) {
     // update hands in the installed row's — the app keeps the identity it was
     // installed with for as long as it is installed.
     identity: opts.identity ?? instantiated.identity ?? null,
+    // The version the app was registered with fixes its syncthing folder ids and
+    // the aliases its containers keep; a row that states none builds a view with
+    // neither.
+    registrationVersion: instantiated.registrationVersion ?? undefined,
   });
 }
 
@@ -180,6 +184,7 @@ async function toDeployments(instantiated, opts = {}) {
     deployments.push(DeploymentSpec.fromSpec(resolved, appsFolder, {
       replica,
       identity: opts.identity ?? instantiated.identity ?? null,
+      registrationVersion: instantiated.registrationVersion ?? undefined,
     }));
   }
   return deployments;

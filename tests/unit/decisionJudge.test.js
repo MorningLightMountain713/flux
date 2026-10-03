@@ -48,14 +48,16 @@ describe('decisionJudge', () => {
     });
   });
 
-  it('names a v9 registration\'s app by its whole uuid and a legacy one by its name', async () => {
+  it('names every registration\'s app by its uuid\'s identity, whatever version registered it, and knows a name in that form', async () => {
     const judge = await loadJudge().createJudge();
     const { appUuid, appIdentityFromUuid } = await load();
     const hash = 'a'.repeat(64);
     const uuid = judge.mintUuid('myapp', hash);
     expect(uuid, 'the library\'s uuid of the name and the registration hash').to.equal(appUuid('myapp', hash));
     expect(judge.identityFor({ version: 9, name: 'myapp' }, uuid)).to.equal(appIdentityFromUuid(uuid));
-    expect(judge.identityFor({ version: 8, name: 'MyApp' }, uuid)).to.equal('MyApp');
+    expect(judge.identityFor({ version: 8, name: 'MyApp' }, uuid)).to.equal(appIdentityFromUuid(uuid));
+    expect(judge.isAppIdentity(appIdentityFromUuid(uuid))).to.equal(true);
+    expect(judge.isAppIdentity('MyApp')).to.equal(false);
   });
 
   it('reads the activation height of each version from the enforcement heights', async () => {

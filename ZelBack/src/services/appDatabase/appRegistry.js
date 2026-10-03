@@ -130,6 +130,7 @@ async function rowsFor(applied) {
       contentHash: message.contentHash ?? null,
       identity: decision.identity,
       uuid: decision.uuid,
+      registrationVersion: decision.registrationVersion ?? null,
     });
     if (!endedAt(row, clock)) {
       rows.set(name, row);
