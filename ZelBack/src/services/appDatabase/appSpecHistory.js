@@ -26,6 +26,7 @@ async function stateOf(latest) {
     contentHash: latest.message.contentHash ?? null,
     identity: latest.decision.identity,
     uuid: latest.decision.uuid,
+    registrationVersion: latest.decision.registrationVersion ?? null,
   });
 }
 

@@ -69,6 +69,7 @@ function fakeJudge(overrides = {}) {
     assertCompatible: () => {},
     mintUuid: (name, registrationHash) => `uuid-${registrationHash}`,
     identityFor: (spec) => spec.name,
+    isAppIdentity: () => false,
     blockTime: async () => 0,
     isValidationError: () => false,
     ...overrides,

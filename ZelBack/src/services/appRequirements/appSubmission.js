@@ -551,7 +551,7 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
     await uploadSealedContent(spec, contentCtx.content, contentCtx.ownerSigs, {
       ref: contentHash,
       timestamp,
-      identity: registrationIdentity(spec, appUuid(spec.name, messageHASH)),
+      identity: registrationIdentity(appUuid(spec.name, messageHASH)),
       owner: spec.owner,
       messageHash: messageHASH,
     });

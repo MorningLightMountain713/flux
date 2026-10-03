@@ -34,6 +34,9 @@ function v9Spec({ owner = OWNER, ttl = 3600 } = {}) {
   };
 }
 
+// A name the judge reads as having an identity's form.
+const RESERVED_NAME = `b${'a'.repeat(51)}q`;
+
 let nextTimestamp = 1;
 function entry({
   hash, type = 'registration', height, txIndex = 0, valueSat = 100, spec = legacySpec(),
@@ -70,6 +73,7 @@ function makeJudge(overrides = {}) {
     },
     mintUuid: (name, registrationHash) => `uuid-${name}-${registrationHash}`,
     identityFor: (spec, uuid) => (spec.version >= 9 ? `id-${uuid}` : spec.name),
+    isAppIdentity: (name) => name === RESERVED_NAME,
     blockTime: async (e) => {
       calls.blockTime.push(e.hash);
       return e.record.height * 10;
@@ -98,9 +102,17 @@ describe('decisionRule', () => {
       const result = await decide([entry({ hash: 'r', height: 100 })]);
       const [d] = result.decisions;
       expect(d).to.include({
-        hash: 'r', name: 'myapp', decision: 'applied', uuid: 'uuid-MyApp-r', identity: 'MyApp', termStart: 1000, fee: '10', ruleVersion: 2,
+        hash: 'r', name: 'myapp', decision: 'applied', uuid: 'uuid-MyApp-r', identity: 'MyApp', registrationVersion: 8, termStart: 1000, fee: '10', ruleVersion: 3,
       });
       expect(result.blocked).to.equal(null);
+    });
+
+    it('is refused as invalid when its name has an identity\'s form, whatever its version', async () => {
+      for (const spec of [{ ...legacySpec(), name: RESERVED_NAME }, { ...v9Spec(), name: RESERVED_NAME }]) {
+        // eslint-disable-next-line no-await-in-loop
+        const result = await decide([entry({ hash: 'r', height: 100, spec })]);
+        expect(verdicts(result)).to.deep.equal(['invalid']);
+      }
     });
 
     it('takes a v9 identity from its uuid', async () => {
@@ -202,8 +214,18 @@ describe('decisionRule', () => {
       ]);
       const [, d] = result.decisions;
       expect(d).to.include({
-        decision: 'applied', uuid: 'uuid-MyApp-r', identity: 'MyApp', termStart: 2000,
+        decision: 'applied', uuid: 'uuid-MyApp-r', identity: 'MyApp', registrationVersion: 8, termStart: 2000,
       });
+    });
+
+    it('carries the version its registration was made with, through a later spec version', async () => {
+      const result = await decide([
+        entry({ hash: 'r', height: 100 }),
+        entry({ hash: 'u', type: 'update', height: 200, spec: v9Spec() }),
+      ]);
+      const [r, u] = result.decisions;
+      expect(r.registrationVersion).to.equal(8);
+      expect(u.registrationVersion, 'the registration\'s, not the update\'s').to.equal(8);
     });
 
     it('keeps the term it supersedes when it was free', async () => {

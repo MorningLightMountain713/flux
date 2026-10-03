@@ -18,7 +18,7 @@ const appsRepository = require('../appDatabase/appsRepository');
  */
 async function createJudge() {
   const {
-    UpdatePolicy, ValidationError, appUuid, registrationIdentity, contentInTheClear, v7SecretsRefusal,
+    UpdatePolicy, ValidationError, appUuid, registrationIdentity, isAppIdentity, contentInTheClear, v7SecretsRefusal,
   } = await getSpec();
   const { authorizeAppEvent, verifierFromRecovered } = await getSpecBackend();
   const blockTimes = new Map();
@@ -61,7 +61,11 @@ async function createJudge() {
     /** The uuid of the app a registration makes, from its name and message hash. */
     mintUuid: appUuid,
 
-    identityFor: registrationIdentity,
+    /** The identity of the app a registration makes: its uuid's, whatever version registered it. */
+    identityFor: (spec, uuid) => registrationIdentity(uuid),
+
+    /** Whether a name has an identity's form, which is reserved for identities. */
+    isAppIdentity,
 
     /** Whether a readable v9 spec carries content, which only the encrypted path may. */
     contentInTheClear(spec) {
