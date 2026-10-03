@@ -46,14 +46,9 @@ import { fluxTeamKey } from '../framework/keys.js';
 
 const subnet = getSubnetConfig();
 
-// `flux<component>_<identity>` — the identity is minted at registration and cannot be
-// spelled from the app's name, so it is resolved once (resolveAppIds) and read from
-// here afterwards, leaving every call site synchronous.
-// A SEEDED app's identifier is its own name: seedGlobalSpec writes the spec
-// with no minted identity, and the product states identity as the name for
-// such rows (prepareInstalledAppsCollection's backfill rule; 310's captures
-// show the containers spelled fluxe2eopstop..._e2eopstop...). Deterministic by
-// construction - a registration-row read here races the seeding it precedes.
+// `<component>_<identity>` — the identity is minted from the registration's hash
+// and cannot be spelled from the app's name: a built app carries it
+// (componentIdentifier) and a container's label states it (appComponentIdentifier).
 
 async function isMountpoint(container, dir) {
   const r = await execInContainer(container, `mountpoint -q ${dir}`);
@@ -110,8 +105,8 @@ describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs',
   const rmName = `e2evolrm${ts}`; // plain app on node 3 (uninstall deletes image)
   const entName = `e2evolent${ts}`; // ENTERPRISE app on node 4 (reboot remount for the encrypted-compose class)
   // Named from the app's minted identity, so resolved in before() rather than spelled.
-  const syncIdentifier = componentIdentifier(syncName);
-  const inertIdentifier = componentIdentifier(inertName);
+  let syncIdentifier;
+  let inertIdentifier;
   let syncDir; let syncVol; let syncContainer;
   let rebootDir;
   let inertDir; let inertVol; let inertContainer;
@@ -126,13 +121,13 @@ describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs',
     // index claiming bytes over an empty disk is the phantom state the guard
     // demotes, and the demote/hold would latch the app down mid-suite
     const syncInstallAfter = env.clients[0].getLastEventId();
-    await seedSyncthingApp(env, { name: syncName, syncMode: 'syncFirst', index: 0 });
+    ({ identifier: syncIdentifier } = await seedSyncthingApp(env, { name: syncName, syncMode: 'syncFirst', index: 0 }));
     await waitForReconcileActuated(env.clients[0], syncIdentifier, 'dataCleared', 60000, { afterId: syncInstallAfter });
     await seedSyncScopedData(env, syncName, 0);
     // pin the folder synced so the leader promotes and the app runs steadily
     await setSynced({ ip: subnet.nodeIp(1), folder: await appSyncthingFolderId(env.clients[0], syncName, syncName) });
     await installPlainApp(env, rebootName, 1);
-    await installPlainApp(env, inertName, 2);
+    inertIdentifier = componentIdentifier(await installPlainApp(env, inertName, 2));
     await installPlainApp(env, rmName, 3);
     syncDir = await appDataRoot(env.clients[0].container, syncName);
     syncVol = await appVolumeFile(env.clients[0].container, syncName);

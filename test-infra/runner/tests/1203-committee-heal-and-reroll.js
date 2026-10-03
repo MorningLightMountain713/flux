@@ -37,6 +37,7 @@ const HOLDERS = [0, 1, 2];
 describe('the committee heals its dark seat, and the owner re-deals the walk', function () {
   let env;
   let name;
+  let app;
   let outpoints; // node index -> outpoint, all ten
   let ownerAuth0;
   let refereeIndex;
@@ -63,7 +64,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       // verdict on one frozen node. Silence is a non-answer; the quorum
       // arithmetic already tolerates missing cells.
       const res = await fetch(
-        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${name}/master`)}`,
+        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${app.identity}/master`)}`,
         { signal: AbortSignal.timeout(5000) },
       );
       const body = await res.json();
@@ -140,7 +141,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
 
     name = `e2eheal${Date.now()}`;
     await pushImage(name, 'v1');
-    const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
+    app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
     const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, HOLDERS);
     // Every node must know the app, not just its holders: the outsider
@@ -159,7 +160,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     // claimed-bytes index over an empty volume - written only AFTER each
     // holder's first-run reset, which clears anything seeded earlier.
     await Promise.all(HOLDERS.map(async (i, k) => {
-      await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
+      await waitForReconcileActuated(env.clients[i], componentIdentifier(app), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
     await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]], name, name) });
@@ -210,7 +211,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       // with the entry it installed, and the registers read back the chain.
       await env.clients[masterIndex].waitForEvent(
         'quorumGrant:healed',
-        (d) => d.key === `${name}/master` && d.remove === outpoints[refereeIndex],
+        (d) => d.key === `${app.identity}/master` && d.remove === outpoints[refereeIndex],
         480000,
       );
       let healed = null;
@@ -275,7 +276,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     await pauseHostContainer(env.clients[masterIndex].container);
     try {
       await Promise.any(survivors.map((i) => env.clients[i].waitForEvent(
-        'quorumGrant:granted', (d) => d.key === `${name}/master`, 300000, { afterId: survivorAfters.get(i) },
+        'quorumGrant:granted', (d) => d.key === `${app.identity}/master`, 300000, { afterId: survivorAfters.get(i) },
       ))).catch((err) => {
         throw new Error(`no survivor acquired through the healed committee (${err.errors?.[0]?.message ?? err.message})`);
       });
@@ -332,14 +333,13 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     const owner = appOwnerKey();
     const { currentHeight } = await getState();
     const at = Date.now();
-    // A v1-v8 app's identity is its name.
-    const canonical = `fluxgrantgeneration:${name}|master|${generation}|${currentHeight}|${at}`;
+    const canonical = `fluxgrantgeneration:${app.identity}|master|${generation}|${currentHeight}|${at}`;
     const signature = await signBtcMessage(canonical, owner.privkey);
     return fetch(`${env.clients[0].url}/apps/grantgeneration`, {
       method: 'POST',
       headers: { zelidauth: ownerAuth0, 'content-type': 'application/json' },
       body: JSON.stringify({
-        identity: name, role: 'master', generation, height: currentHeight, at, signature,
+        identity: app.identity, role: 'master', generation, height: currentHeight, at, signature,
       }),
     });
   }
@@ -374,9 +374,9 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       headers: { zelidauth: ownerAuth0 },
     });
     expect(yielded.status).to.equal(200);
-    await env.clients[masterIndex].waitForEvent('quorumGrant:yielded', (d) => d.key === `${name}/master`, 60000, { afterId: markers[masterIndex] });
+    await env.clients[masterIndex].waitForEvent('quorumGrant:yielded', (d) => d.key === `${app.identity}/master`, 60000, { afterId: markers[masterIndex] });
     await Promise.all(hosts.map((i) => waitForReconcileActuated(
-      env.clients[i], componentIdentifier(name), 'settledStopped', 90000, { afterId: markers[i] },
+      env.clients[i], componentIdentifier(app), 'settledStopped', 90000, { afterId: markers[i] },
     )));
     const submitted = await submitReroll(1);
     const submittedBody = await submitted.text();
@@ -388,7 +388,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     // 1 — into the retirement drain first.
     await Promise.all(hosts.map((i) => env.clients[i].waitForEvent(
       'quorumGrant:generationRecord',
-      (d) => d.identity === name && d.role === 'master' && d.generation === 1,
+      (d) => d.identity === app.identity && d.role === 'master' && d.generation === 1,
       120000,
     )));
 
@@ -407,7 +407,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     await Promise.all(hosts.map((i) => assertNoEvent(
       env.clients[i],
       'quorumGrant:granted',
-      (d) => d.key === `${name}/master` && d.generation === 1,
+      (d) => d.key === `${app.identity}/master` && d.generation === 1,
       40000,
     )));
     // The passage of blocks is the one thing that lifts the drain — the
@@ -417,7 +417,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     await advanceBlock();
     await Promise.any(hosts.map((i) => env.clients[i].waitForEvent(
       'quorumGrant:granted',
-      (d) => d.key === `${name}/master` && d.generation === 1,
+      (d) => d.key === `${app.identity}/master` && d.generation === 1,
       360000,
     )));
     await waitFor(async () => {
@@ -446,7 +446,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       expect(before, 'a standing grant before the re-roll').to.not.equal(null);
       expect(before.generation).to.equal(1);
       const masterIndex = Number(Object.keys(outpoints).find((i) => outpoints[i] === before.grantee));
-      const key = `${name}/master`;
+      const key = `${app.identity}/master`;
       const markers = env.clients.map((c) => c.getLastEventId());
 
       // the re-roll lands under the running master; every holder stores it
@@ -455,7 +455,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       expect(submitted.status, submittedBody).to.equal(200);
       await Promise.all(hosts.map((i) => env.clients[i].waitForEvent(
         'quorumGrant:generationRecord',
-        (d) => d.identity === name && d.role === 'master' && d.generation === 2,
+        (d) => d.identity === app.identity && d.role === 'master' && d.generation === 2,
         120000,
         { afterId: markers[i] },
       )));
@@ -472,7 +472,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
         return rows.length > 0 && rows.every((c) => c.accepted.released === true);
       }, { timeout: 60000, interval: 5000, label: 'every generation-1 row naming the master is released' });
       await Promise.all(hosts.map((i) => waitForReconcileActuated(
-        env.clients[i], componentIdentifier(name), 'settledStopped', 90000, { afterId: markers[i] },
+        env.clients[i], componentIdentifier(app), 'settledStopped', 90000, { afterId: markers[i] },
       )));
 
       // restart into the drain: nothing at generation 2 while the chain stands still

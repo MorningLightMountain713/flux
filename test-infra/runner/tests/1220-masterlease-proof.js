@@ -37,11 +37,12 @@ const REAL = Array.from({ length: NODES }, (unused, i) => i).filter((i) => i !==
 describe('masterlease proof: a listed node\'s claim without the committee\'s signatures never becomes the record', function () {
   let env;
   let name;
+  let app;
   let outpoints; // real node index -> outpoint
   let stub;
   let stubOutpoint;
 
-  const key = () => `${name}/master`;
+  const key = () => `${app.identity}/master`;
   const label = (i) => `node-${env.clients[i].num} (${env.clients[i].ip})`;
 
   async function readCell(i) {
@@ -82,7 +83,7 @@ describe('masterlease proof: a listed node\'s claim without the committee\'s sig
 
   // Every real node's stored record names the master and is verified.
   const recordsNameTheMaster = async (master) => {
-    const records = await Promise.all(REAL.map((i) => dbClient(i + 1).getMasterleaseRecord(name, 'master')));
+    const records = await Promise.all(REAL.map((i) => dbClient(i + 1).getMasterleaseRecord(app.identity, 'master')));
     return records.every((r) => r?.grantee === master && r.verified === true);
   };
 
@@ -98,7 +99,7 @@ describe('masterlease proof: a listed node\'s claim without the committee\'s sig
 
   const droppedOnAnyNode = (afterIds, reason, timeoutMs) => Promise.any(REAL.map((i) => env.clients[i].waitForEvent(
     'quorumGrant:masterleaseDropped',
-    (d) => d.identity === name && d.grantee === stubOutpoint && d.reason === reason,
+    (d) => d.identity === app.identity && d.grantee === stubOutpoint && d.reason === reason,
     timeoutMs,
     { afterId: afterIds[i] },
   ).then(() => i))).catch(() => null);
@@ -132,13 +133,13 @@ describe('masterlease proof: a listed node\'s claim without the committee\'s sig
 
     name = `e2eproof${Date.now()}`;
     await pushImage(name, 'v1');
-    const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
+    app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
     const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, HOLDERS);
     await seedGlobalSpec(env, app, REAL.filter((i) => !HOLDERS.includes(i)));
     await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
     await Promise.all(HOLDERS.map(async (i, k) => {
-      await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
+      await waitForReconcileActuated(env.clients[i], componentIdentifier(app), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
     await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]], name, name) });
@@ -173,14 +174,14 @@ describe('masterlease proof: a listed node\'s claim without the committee\'s sig
     const container = await getAppContainerId(env.clients[master].container, name, name);
     await waitFor(() => recordsNameTheMaster(first.grantee),
       { timeout: 120000, interval: 5000, label: 'every real node holds the master\'s verified record' });
-    const record = await dbClient(master + 1).getMasterleaseRecord(name, 'master');
+    const record = await dbClient(master + 1).getMasterleaseRecord(app.identity, 'master');
     expect(record.acceptances.length, 'the record carries a quorum of acceptances').to.be.at.least(5);
 
     const claim = (overrides = {}) => ({
       type: 'fluxmasterlease',
       version: 1,
       ip: `${stub.ip}:16127`,
-      identity: name,
+      identity: app.identity,
       role: 'master',
       grantee: stubOutpoint,
       epoch: record.epoch + 5,
@@ -213,7 +214,7 @@ describe('masterlease proof: a listed node\'s claim without the committee\'s sig
     }));
     const unverifiedOn = await Promise.any(REAL.map((i) => env.clients[i].waitForEvent(
       'quorumGrant:masterleaseUnverified',
-      (d) => d.identity === name && d.grantee === stubOutpoint,
+      (d) => d.identity === app.identity && d.grantee === stubOutpoint,
       60000,
       { afterId: markers[i] },
     ).then(() => i))).catch(() => null);
@@ -223,7 +224,7 @@ describe('masterlease proof: a listed node\'s claim without the committee\'s sig
     //    master's container never stopped and no standby started.
     await waitFor(() => recordsNameTheMaster(first.grantee),
       { timeout: 60000, interval: 5000, label: 'every real node\'s record still names the master, verified' });
-    const stored = await dbClient(unverifiedOn + 1).getMasterleaseRecord(name, 'master');
+    const stored = await dbClient(unverifiedOn + 1).getMasterleaseRecord(app.identity, 'master');
     expect(stored.grantee, `${label(unverifiedOn)} kept the verified record over the unverified claim`).to.equal(first.grantee);
     expect(stored.verified).to.equal(true);
     await assertNoEvent(env.clients[master], 'quorumGrant:demoted', (d) => d.key === key(), 15000);

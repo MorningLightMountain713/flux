@@ -7,6 +7,7 @@ import { signBtcMessage } from '../auth.js';
 import { appOwnerKey } from './keys.js';
 import { REGISTRY_REPO_HOST } from './subnet-config.js';
 import { assertHermeticRepotags } from './app-helper.js';
+import { appIdentityFromUuid, appUuid } from '@runonflux/flux-spec';
 import { allocatePortFor, assignPorts } from './port-allocator.js';
 import chainStart from './chain-start.cjs';
 
@@ -168,14 +169,20 @@ export async function buildSeedableApp(opts) {
   };
 
   assertHermeticRepotags(spec, allowExternalRepotag);
-  // The row the decider writes for a registration carries the version the app was
-  // registered with, which fixes its syncthing folder ids and the alias an app
-  // registered before v9 keeps; a row without it builds no deployment view.
+  // The row as the decider writes it for a registration: the uuid minted from the
+  // name and the message hash, the identity every container, directory, image
+  // and network of the app is named from, and the version the app was registered
+  // with, which fixes its syncthing folder ids and the alias an app registered
+  // before v9 keeps. A row without them builds no deployment view.
+  const uuid = appUuid(name, hash);
+  const identity = appIdentityFromUuid(uuid);
   const specWithMeta = {
-    ...spec, hash, height, registrationVersion: spec.version,
+    ...spec, hash, height, uuid, identity, registrationVersion: spec.version,
   };
 
-  return { spec: specWithMeta, permanentMessage, hashEntry, hash, txid };
+  return {
+    spec: specWithMeta, permanentMessage, hashEntry, hash, txid, uuid, identity,
+  };
 }
 
 // The v9 sync-mode names, mapped to the legacy containerData letter flags
@@ -221,14 +228,16 @@ export function syncedContainerData(syncMode, path = '/appdata') {
 export async function buildSeedableUpdate(app, mutate, { height = null } = {}) {
   const ownerKey = appOwnerKey();
 
-  // hash, height and the registration version are what the seeding added; the
-  // signature and the hash below are taken over the specification alone, exactly
-  // as registration took them.
+  // hash, height, uuid, identity and the registration version are what the seeding
+  // added; the signature and the hash below are taken over the specification
+  // alone, exactly as registration took them.
   const previousHeight = app.spec.height;
-  const { registrationVersion } = app.spec;
+  const { registrationVersion, uuid, identity } = app.spec;
   const bare = JSON.parse(JSON.stringify(app.spec));
   delete bare.hash;
   delete bare.height;
+  delete bare.uuid;
+  delete bare.identity;
   delete bare.registrationVersion;
   // Present if this fixture has already been seeded into mongo, and it belongs
   // to that row rather than to the specification the owner signed.
@@ -253,11 +262,13 @@ export async function buildSeedableUpdate(app, mutate, { height = null } = {}) {
   const txid = fakeTxid();
   const at = height ?? previousHeight + 1;
 
-  // An update's row keeps the version its registration was made with.
+  // An update's row keeps its registration's uuid, identity and version.
   return {
     spec: {
-      ...spec, hash, height: at, registrationVersion,
+      ...spec, hash, height: at, uuid, identity, registrationVersion,
     },
+    uuid,
+    identity,
     permanentMessage: {
       type, version, appSpecifications: spec, hash, timestamp, signature, txid, height: at, valueSat: 200000000,
     },
@@ -361,14 +372,18 @@ export async function buildSeedableLegacyApp({
   };
 
   assertHermeticRepotags(spec, allowExternalRepotag);
+  const uuid = appUuid(name, hash);
+  const identity = appIdentityFromUuid(uuid);
   return {
     spec: {
-      ...spec, hash, height, registrationVersion: spec.version,
+      ...spec, hash, height, uuid, identity, registrationVersion: spec.version,
     },
     permanentMessage,
     hashEntry,
     hash,
     txid,
+    uuid,
+    identity,
   };
 }
 

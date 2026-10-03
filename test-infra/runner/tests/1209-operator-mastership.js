@@ -42,13 +42,14 @@ const HOLDERS = [0, 1, 2];
 describe('operator commands against a held mastership', function () {
   let env;
   let name;
+  let app;
   let holderOutpoints;
   let ownerAuths; // node index -> zelidauth for the app owner
 
   async function readCell(clientIndex) {
     try {
       const res = await fetch(
-        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${name}/master`)}`,
+        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${app.identity}/master`)}`,
         { signal: AbortSignal.timeout(5000) },
       );
       const body = await res.json();
@@ -136,7 +137,7 @@ describe('operator commands against a held mastership', function () {
 
     name = `e2eyield${Date.now()}`;
     await pushImage(name, 'v1');
-    const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
+    app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
     const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, HOLDERS);
     await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
@@ -148,7 +149,7 @@ describe('operator commands against a held mastership', function () {
     // claimed-bytes index over an empty volume - written only AFTER each
     // holder's first-run reset, which clears anything seeded earlier.
     await Promise.all(HOLDERS.map(async (i, k) => {
-      await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
+      await waitForReconcileActuated(env.clients[i], componentIdentifier(app), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
     await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]], name, name) });
@@ -188,7 +189,7 @@ describe('operator commands against a held mastership', function () {
     // A full term with the container down: the Holder keeps renewing, the
     // standbys rest — down because the operator said down is not a failure.
     await Promise.all(standbys.map((i) => assertNoEvent(
-      env.clients[i], 'quorumGrant:granted', (d) => d.key === `${name}/master`, 100000,
+      env.clients[i], 'quorumGrant:granted', (d) => d.key === `${app.identity}/master`, 100000,
     )));
     const during = await quorumVerdict();
     expect(during, 'the quorum view stands').to.not.equal(null);
@@ -218,7 +219,7 @@ describe('operator commands against a held mastership', function () {
     // standbys' next rest-check cadence, minutes faster than a dead-master
     // failover.
     await Promise.any(standbys.map((i) => env.clients[i].waitForEvent(
-      'quorumGrant:granted', (d) => d.key === `${name}/master`, 120000, { afterId: standbyAfters.get(i) },
+      'quorumGrant:granted', (d) => d.key === `${app.identity}/master`, 120000, { afterId: standbyAfters.get(i) },
     ))).catch((err) => {
       throw new Error(`no standby was seated after the yield (${err.errors?.[0]?.message ?? err.message})`);
     });
@@ -233,7 +234,7 @@ describe('operator commands against a held mastership', function () {
     // The deposed node is operator-stopped: its gate is unconsulted, so it
     // cannot re-acquire behind the successor — and its container stays down.
     await assertNoEvent(env.clients[masterIndex], 'quorumGrant:granted',
-      (d) => d.key === `${name}/master`, 45000);
+      (d) => d.key === `${app.identity}/master`, 45000);
     // Bounded, not a single sample: the yield's stop is asynchronous (operator
     // lock, reconciler pass, graceful drain) and the successor seating above is
     // another node's clock — sampling at that instant can catch a healthy stop
@@ -265,7 +266,7 @@ describe('operator commands against a held mastership', function () {
 
     const buffered = env.clients[masterIndex].getEventBuffer();
     const demoted = buffered.find((e) => e.event === 'quorumGrant:demoted'
-      && e.id > masterAfter && e.data.key === `${name}/master`);
+      && e.id > masterAfter && e.data.key === `${app.identity}/master`);
     expect(demoted, 'the redeploy demoted nobody').to.equal(undefined);
 
     const after = await quorumVerdict();

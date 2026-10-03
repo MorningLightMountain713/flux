@@ -57,8 +57,8 @@ describe('one unmountable app does not block g: election node-wide', function ()
   const ts = Date.now();
   const jamName = `e2ejam${ts}`; // plain app on node 0, volume demolished
   const gName = `e2egate${ts}`; // g: app held by nodes 0 and 1
-  const jamIdentifier = componentIdentifier(jamName);
-  const gIdentifier = componentIdentifier(gName);
+  let jamIdentifier;
+  let gIdentifier;
   // Everything physical is named from the identity the container carries, so it
   // is read off the container once the app is installed, never spelled.
   let jamDir;
@@ -73,6 +73,7 @@ describe('one unmountable app does not block g: election node-wide', function ()
     // the g: app, on the same node as the jammer plus one peer to fail over to
     await pushImage(gName, 'v1');
     const gApp = await buildSeedableSyncthingApp({ name: gName, syncMode: 'activeStandby' });
+    gIdentifier = componentIdentifier(gApp);
     const installAfters = [0, 1].map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, gApp, [0, 1]);
     // real data on disk before the index claims bytes, and only after the sync
@@ -105,6 +106,7 @@ describe('one unmountable app does not block g: election node-wide', function ()
         repoauth: '',
       }],
     });
+    jamIdentifier = componentIdentifier(jamApp);
     await installOnNodes(env, jamApp, [0]);
 
     // node 0 starts as the elected primary, running

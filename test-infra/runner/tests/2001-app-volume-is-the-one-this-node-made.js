@@ -3,7 +3,7 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import {
-  appDataRoot, appVolumeFile, execInContainer, getAppContainerStatus, requireAppContainerName,
+  appDataRoot, appVolumeFile, componentIdentifier, execInContainer, getAppContainerStatus, requireAppContainerName,
 } from '../framework/container.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
@@ -55,7 +55,7 @@ describe('an app volume is the image this node made, not the one under its name'
   const ts = Date.now();
   const name = `e2evolstamp${ts}`;
   const MARKER = 'ours.txt';
-  const identifier = `${name}_${name}`;
+  let identifier;
 
   let container;
   let containerName;
@@ -87,6 +87,7 @@ describe('an app volume is the image this node made, not the one under its name'
         repoauth: '',
       }],
     });
+    identifier = componentIdentifier(app);
     await installOnNodes(env, app, [0]);
     container = env.clients[0].container;
     containerName = await requireAppContainerName(container, name, name);

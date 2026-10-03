@@ -26,7 +26,7 @@ import {
   componentIdentifier,
   execInContainer,
   restartFluxos,
-  syncthingFolderIdOf,
+  folderIdOf,
 } from './container.js';
 import { bootstrapPricing } from './price-helper.js';
 
@@ -60,7 +60,8 @@ export async function seedSyncScopedData(env, name, index) {
   //
   // Harmless on a `syncthing: 'binary'` fleet, where the daemon has already scanned the
   // file and the control surface is not in the path.
-  const folder = syncthingFolderIdOf(componentIdentifier(name));
+  const folder = await dbClient(index + 1).appFolderId(name, name);
+  if (!folder) throw new Error(`seedSyncScopedData: node ${index} holds no row for ${name}`);
   await setSyncState({
     ip: getSubnetConfig().nodeIp(index + 1),
     folder,
@@ -205,9 +206,10 @@ export function electionOrder(locations) {
 // true cold start first (empty global, no connected peer holding the data), which must
 // happen BEFORE install so the first election evaluation sees it.
 export async function placeGAppInOrder(env, app, {
-  placementOrder, identifier, coldStart = true, gapMs = 3000,
+  placementOrder, coldStart = true, gapMs = 3000,
 }) {
-  const folder = syncthingFolderIdOf(identifier);
+  const identifier = componentIdentifier(app);
+  const folder = folderIdOf(app);
   if (coldStart) {
     await Promise.all(placementOrder.map((i) => Promise.all([
       setSyncState({
@@ -620,7 +622,7 @@ export async function seedSyncthingApp(env, {
   }
   await pushImage(name, 'v1');
   const app = await buildSeedableSyncthingApp({ name, syncMode, extraMounts, hdd });
-  const identifier = componentIdentifier(name);
+  const identifier = componentIdentifier(app);
   // The install-settled signal is mode-dependent: decider modes (activeStandby/
   // syncFirst) run the first-run clean-install reset (dataCleared) before any
   // start, while a plain-sync component has no decider and no reset - it just
@@ -667,7 +669,7 @@ export async function seedTestApp(env, { name, exitCode = 0, exitAfterS = null }
   await pushTestApp(name);
   const app = await buildSeedableTestApp({ name, exitCode, exitAfterS });
   const index = await seedAndInstall(env, app);
-  return { app, index, identifier: componentIdentifier(name) };
+  return { app, index, identifier: componentIdentifier(app) };
 }
 
 export async function seedSimpleApp(env, appName) {
@@ -691,5 +693,5 @@ export async function seedSimpleApp(env, appName) {
     }],
   });
   const index = await seedAndInstall(env, app);
-  return { app, index };
+  return { app, index, identifier: componentIdentifier(app) };
 }

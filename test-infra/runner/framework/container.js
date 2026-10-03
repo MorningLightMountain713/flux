@@ -227,15 +227,28 @@ export async function appComponentIdentifier(container, appName, componentName, 
 }
 
 /**
- * The syncthing folder id of an app registered before v9, from its 8.x identifier
- * `<component>_<name>[_<replica>]`: the 8.x container name, which every node running
- * the app names the folder by, whatever its containers are called. For a preset a
- * suite has to make before the app's row exists; once one does, read
- * appSyncthingFolderId. A v9 registration's folder id is its identifier and is never
- * spelled this way.
+ * The syncthing folder id of an app registered before v9, from its name: the 8.x
+ * container name `flux<component>_<name>`, which every node running the app names
+ * the folder by, whatever its containers are called. For a preset a suite has to
+ * make before the app is even built; folderIdOf answers for a built app of any
+ * version, and appSyncthingFolderId from the row once one exists.
  */
-export function syncthingFolderIdOf(identifier) {
-  return `flux${identifier}`;
+export function legacyFolderId(appName, componentName = appName) {
+  return `flux${componentName}_${appName}`;
+}
+
+/**
+ * The syncthing folder id a built app's registration fixes, before any row exists:
+ * the 8.x name for an app registered before v9, the component identifier for a v9
+ * registration.
+ */
+export function folderIdOf(app, componentName = undefined) {
+  if (!Number.isInteger(app?.spec?.registrationVersion)) {
+    throw new Error('folderIdOf needs a built app: the folder id is fixed by the version it was registered with');
+  }
+  return app.spec.registrationVersion < 9
+    ? legacyFolderId(app.spec.name, componentName ?? app.spec.name)
+    : componentIdentifier(app, componentName);
 }
 
 /**
@@ -269,16 +282,19 @@ export async function appVolumeFile(container, appName, componentName = appName,
 }
 
 /**
- * The identifier of a component of a SEEDED spec, which carries no minted
- * identity: `<component>_<app>`. Only for what has to be named before any
- * container exists - an event wait on the install itself, or a stub preset the
- * install must find in place. A spec registered through the chain may mint an
- * identity; its identifier is read off its container's label
- * (appComponentIdentifier) or its registration row (db-client appContainerName), and
- * nothing physical is ever spelled from a name.
+ * The identifier of a component of a BUILT app, `<component>_<identity>`, from
+ * the identity its registration mints (seed-helper, app-helper). For what has to
+ * be named before any container exists: an event wait on the install itself, or
+ * a stub preset the install must find in place. Once a container exists its
+ * label states it (appComponentIdentifier), and the registration row answers it
+ * on any node (db-client appContainerName). Nothing physical is ever spelled
+ * from a name: the identity is minted from the registration's hash.
  */
-export function componentIdentifier(appName, componentName = appName) {
-  return `${componentName}_${appName}`;
+export function componentIdentifier(app, componentName = undefined) {
+  if (typeof app?.identity !== 'string' || typeof app?.spec?.name !== 'string') {
+    throw new Error('componentIdentifier needs a built app: the identifier is derived from the identity its registration mints');
+  }
+  return `${componentName ?? app.spec.name}_${app.identity}`;
 }
 
 export async function appComponentIdentifiers(container, appName) {

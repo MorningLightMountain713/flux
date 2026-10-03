@@ -97,7 +97,7 @@ async function bringUpFleet(hookCtx) {
   await installOnNodes(env, app, HOLDERS);
   await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
   await Promise.all(HOLDERS.map(async (i, k) => {
-    await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
+    await waitForReconcileActuated(env.clients[i], componentIdentifier(app), 'dataCleared', 60000, { afterId: installAfters[k] });
     await seedSyncScopedData(env, name, i);
   }));
   await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]], name, name) });
@@ -105,7 +105,7 @@ async function bringUpFleet(hookCtx) {
   const { currentHeight } = await getState();
   expect(currentHeight, 'the setup stayed below the window; the suite opens it by hand')
     .to.be.below(OPENS_AT);
-  return { env, name };
+  return { env, name, app };
 }
 
 async function advanceTo(height) {
@@ -116,8 +116,8 @@ async function advanceTo(height) {
   expect(reached, `the chain reached ${height}`).to.equal(height);
 }
 
-function helpers(env, name) {
-  const key = `${name}/master`;
+function helpers(env, name, app) {
+  const key = `${app.identity}/master`;
   const label = (i) => `node-${env.clients[i].num} (${env.clients[i].ip})`;
 
   const upHolders = async () => {
@@ -227,10 +227,11 @@ function helpers(env, name) {
 describe('activation crossing: the running node takes its lease inside the window, and nothing moves at the height', function () {
   let env;
   let name;
+  let app;
 
   before(async function () {
     this.timeout(900000);
-    ({ env, name } = await bringUpFleet(this));
+    ({ env, name, app } = await bringUpFleet(this));
   });
 
   after(async function () {
@@ -240,7 +241,7 @@ describe('activation crossing: the running node takes its lease inside the windo
 
   it('the incumbent holds BEFORE the height, alone; at the height its container never restarts', async function () {
     this.timeout(900000);
-    const h = helpers(env, name);
+    const h = helpers(env, name, app);
 
     // 1. The legacy election seats exactly one master, below the window.
     const seated = await h.seatByElection();
@@ -281,10 +282,11 @@ describe('activation crossing: the running node takes its lease inside the windo
 describe('activation crossing: a referee majority restarting inside the window costs the incumbent nothing at the height', function () {
   let env;
   let name;
+  let app;
 
   before(async function () {
     this.timeout(900000);
-    ({ env, name } = await bringUpFleet(this));
+    ({ env, name, app } = await bringUpFleet(this));
   });
 
   after(async function () {
@@ -294,7 +296,7 @@ describe('activation crossing: a referee majority restarting inside the window c
 
   it('the incumbent coasts through the wave, is renewed again when the referees return, the container is never stopped, and nothing moves at the height', async function () {
     this.timeout(1200000);
-    const h = helpers(env, name);
+    const h = helpers(env, name, app);
 
     // 1. Seat by election; every non-holder cell past its post-boot drain, so the
     //    lease lands on all of them; open the window, let the incumbent take it.

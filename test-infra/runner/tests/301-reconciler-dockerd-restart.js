@@ -66,20 +66,22 @@ async function seedAndWaitForInstall(env, appName) {
       return i;
     }),
   );
-  return installed;
+  return { index: installed, app };
 }
 
 describe('reconciler recovers orphaned containers after a dockerd restart', function () {
   let env;
   let installedOnIndex;
   const appName = `e2edockerd${Date.now()}`;
-  const identifier = componentIdentifier(appName); // bare component id the reconciler uses
+  let identifier;
 
   before(async function () {
     this.timeout(300000);
     env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
     await bootAndPeer(env);
-    installedOnIndex = await seedAndWaitForInstall(env, appName);
+    const seeded = await seedAndWaitForInstall(env, appName);
+    installedOnIndex = seeded.index;
+    identifier = componentIdentifier(seeded.app);
   });
 
   after(async function () {

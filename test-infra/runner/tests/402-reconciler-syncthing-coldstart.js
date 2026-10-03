@@ -3,7 +3,7 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import {
-  componentIdentifier, getAppContainerStatus, syncthingFolderIdOf,
+  folderIdOf, getAppContainerStatus,
   blockPeerAccess, unblockPeerAccess, execInContainer,
 } from '../framework/container.js';
 import {
@@ -117,11 +117,11 @@ describe('reconciler cold start - fresh multi-node placement, no seeded source',
     await pushImage(claimApp, 'v1');
     const claimSpec = await buildSeedableSyncthingApp({ name: claimApp, syncMode: 'syncFirst' });
 
-    // A SEEDED app's folder id is its own name (no minted identity on a seeded
-    // spec) - and this must run before install, when there is no row to ask.
-    await pinColdStart(holders, syncthingFolderIdOf(componentIdentifier(rApp)));
-    await pinColdStart(holders, syncthingFolderIdOf(componentIdentifier(gApp)));
-    const claimFolder = syncthingFolderIdOf(componentIdentifier(claimApp));
+    // The folder id the registration fixes, from the built spec: this runs before
+    // install, when there is no row to ask.
+    await pinColdStart(holders, folderIdOf(rSpec));
+    await pinColdStart(holders, folderIdOf(gSpec));
+    const claimFolder = folderIdOf(claimSpec);
     await pinColdStart(holders, claimFolder);
     // Declared BEFORE install, like the cold start itself, so the first election
     // evaluation already has a field where one candidate holds the owner's data.
@@ -208,7 +208,6 @@ describe('reconciler cold start - fresh multi-node placement, no seeded source',
   // claim it needs to reach it.
   it('r: elects one seed even when a candidate is silent to only one node', async function () {
     this.timeout(300000);
-    const folder = syncthingFolderIdOf(componentIdentifier(splitApp));
     // The candidate to silence is neither the address-order winner nor the holder: it
     // has to be a claim whose ABSENCE changes which rule the winner applies, without
     // changing what the ranking would answer for anyone who can see the whole field.
@@ -217,6 +216,7 @@ describe('reconciler cold start - fresh multi-node placement, no seeded source',
 
     await pushImage(splitApp, 'v1');
     const splitSpec = await buildSeedableSyncthingApp({ name: splitApp, syncMode: 'syncFirst' });
+    const folder = folderIdOf(splitSpec);
     await pinColdStart(holders, folder);
     await pinHolding(claimHolder, folder, claimBytes);
 

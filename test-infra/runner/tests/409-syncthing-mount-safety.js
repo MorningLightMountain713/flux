@@ -38,14 +38,9 @@ import { getSubnetConfig } from '../framework/subnet-config.js';
 
 const subnet = getSubnetConfig();
 
-// `flux<component>_<identity>` — the identity is minted at registration and cannot be
-// spelled from the app's name, so it is resolved once (resolveAppIds) and read from
-// here afterwards, leaving every call site synchronous.
-// A SEEDED app's identifier is its own name: seedGlobalSpec writes the spec
-// with no minted identity, and the product states identity as the name for
-// such rows (prepareInstalledAppsCollection's backfill rule; 310's captures
-// show the containers spelled fluxe2eopstop..._e2eopstop...). Deterministic by
-// construction - a registration-row read here races the seeding it precedes.
+// `<component>_<identity>` — the identity is minted from the registration's hash
+// and cannot be spelled from the app's name: a built app carries it
+// (componentIdentifier) and a container's label states it (appComponentIdentifier).
 
 async function isUp(client, appName) {
   const status = await getAppContainerStatus(client.container, appName);

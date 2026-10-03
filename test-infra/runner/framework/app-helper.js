@@ -1,3 +1,4 @@
+import { appIdentityFromUuid, appUuid } from '@runonflux/flux-spec';
 import { authenticate, signBtcMessage } from '../auth.js';
 import { appOwnerKey } from './keys.js';
 import { buildEnterpriseBlob } from './enterprise-helper.js';
@@ -183,7 +184,19 @@ export async function registerAndConfirm(nodeUrl, adminKeypair, spec, nodes, {
     propagationTimeoutMs, explorerTimeoutMs, valueSat,
   });
 
-  return { status: 'success', appHash, ...confirm };
+  // The app as the decider names it: its uuid is minted from the name and the
+  // message hash, and its identity from the uuid, so a suite can name the app's
+  // components (componentIdentifier) the moment the registration is confirmed.
+  const uuid = appUuid(spec.name, appHash);
+  const app = {
+    spec: { ...spec, hash: appHash, registrationVersion: spec.version },
+    hash: appHash,
+    uuid,
+    identity: appIdentityFromUuid(uuid),
+  };
+  return {
+    status: 'success', appHash, app, ...confirm,
+  };
 }
 
 // A spec change, confirmed on chain the same way a registration is. The node

@@ -90,7 +90,6 @@ describe('primary election under a divergent placement order', function () {
     const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
     await placeGAppInOrder(env, app, {
       placementOrder,
-      identifier: componentIdentifier(appName),
     });
     return app;
   };
@@ -326,7 +325,6 @@ describe('primary election under a divergent placement order', function () {
     await pushImage(pairApp, 'v1');
     await placeGAppInOrder(env, app, {
       placementOrder: placementOrderWithSeedAt([0, 1], 1),
-      identifier: componentIdentifier(pairApp),
     });
 
     const position = await electionIndexOf(env, pairApp, seedIndex);

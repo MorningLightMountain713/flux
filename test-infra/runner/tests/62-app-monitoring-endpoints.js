@@ -51,7 +51,7 @@ describe('App monitoring endpoints', function () {
   let env;
   dumpLogsOnFailure(() => env);
   const appName = `e2emon${Date.now()}`;
-  const component = componentIdentifier(appName);
+  let component;
   let node;
   let ownerAuth;
 
@@ -71,6 +71,7 @@ describe('App monitoring endpoints', function () {
       env.clients[0].url, nodeKey(1), spec, env.clients,
     );
     expect(regResult.status).to.equal('success');
+    component = componentIdentifier(regResult.app);
 
     await waitForBlockProcessed(
       env.clients[0], (d) => d.height >= regResult.targetHeight, 60000,

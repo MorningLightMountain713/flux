@@ -45,12 +45,13 @@ const SPARE = 9;
 describe('dark referees: the list lies, the plane must not', function () {
   let env;
   let name;
+  let app;
   const paused = new Set();
 
   async function readCell(clientIndex) {
     try {
       const res = await fetch(
-        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${name}/master`)}`,
+        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${app.identity}/master`)}`,
         { signal: AbortSignal.timeout(5000) },
       );
       const body = await res.json();
@@ -107,12 +108,12 @@ describe('dark referees: the list lies, the plane must not', function () {
 
     name = `e2edark${Date.now()}`;
     await pushImage(name, 'v1');
-    const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
+    app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
     const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, HOLDERS);
     await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
     await Promise.all(HOLDERS.map(async (i, k) => {
-      await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
+      await waitForReconcileActuated(env.clients[i], componentIdentifier(app), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
     await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]], name, name) });
@@ -134,7 +135,7 @@ describe('dark referees: the list lies, the plane must not', function () {
     // five: no grant may form, and the gate must hold the app DOWN — running
     // it masterless is the split-brain the plane exists to prevent.
     await Promise.all(env.clients.map((c, i) => (paused.has(i) ? Promise.resolve() : assertNoEvent(
-      c, 'quorumGrant:granted', (d) => d.key === `${name}/master`, 120000,
+      c, 'quorumGrant:granted', (d) => d.key === `${app.identity}/master`, 120000,
     ))));
     expect(await runningMasters(), 'fail closed: nobody runs without a term').to.equal(0);
 
@@ -186,7 +187,7 @@ describe('dark referees: the list lies, the plane must not', function () {
     // never the delisted one, which the walk can no longer see.
     await env.clients[masterIndex].waitForEvent(
       'quorumGrant:healed',
-      (d) => d.key === `${name}/master` && d.remove === outpoints[refereeIndex],
+      (d) => d.key === `${app.identity}/master` && d.remove === outpoints[refereeIndex],
       480000,
     );
     let healedEntry = null;

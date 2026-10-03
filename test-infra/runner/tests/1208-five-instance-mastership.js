@@ -44,6 +44,7 @@ const OUTSIDERS = [5, 6, 7, 8, 9];
 describe('the mastership grant with five instances', function () {
   let env;
   let name;
+  let app;
   let holderOutpoints;
 
   async function readCell(clientIndex) {
@@ -51,7 +52,7 @@ describe('the mastership grant with five instances', function () {
       // a paused node completes the TCP connect and never answers — bound
       // the read; silence is a non-answer the quorum arithmetic tolerates
       const res = await fetch(
-        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${name}/master`)}`,
+        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${app.identity}/master`)}`,
         { signal: AbortSignal.timeout(5000) },
       );
       const body = await res.json();
@@ -125,7 +126,7 @@ describe('the mastership grant with five instances', function () {
 
     name = `e2efive${Date.now()}`;
     await pushImage(name, 'v1');
-    const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby', instances: 5 });
+    app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby', instances: 5 });
     const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, HOLDERS);
     await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
@@ -137,7 +138,7 @@ describe('the mastership grant with five instances', function () {
     // claimed-bytes index over an empty volume - written only AFTER each
     // holder's first-run reset, which clears anything seeded earlier.
     await Promise.all(HOLDERS.map(async (i, k) => {
-      await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
+      await waitForReconcileActuated(env.clients[i], componentIdentifier(app), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
     await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]], name, name) });
@@ -161,7 +162,7 @@ describe('the mastership grant with five instances', function () {
     // what must NOT happen is the 1205 fight: a residue promise left by a
     // losing pursuit deposing the winner on an early renewal pass.
     await Promise.any(HOLDERS.map((i) => env.clients[i].waitForEvent(
-      'quorumGrant:granted', (d) => d.key === `${name}/master`, 240000,
+      'quorumGrant:granted', (d) => d.key === `${app.identity}/master`, 240000,
     )));
     let first = null;
     await waitFor(async () => {
@@ -176,7 +177,7 @@ describe('the mastership grant with five instances', function () {
     // forward under the same grantee (a repair refresh, never a re-fight).
     await new Promise((resolve) => { setTimeout(resolve, 60000); });
     await assertNoEvent(env.clients[masterIndex], 'quorumGrant:demoted',
-      (d) => d.key === `${name}/master`, 5000);
+      (d) => d.key === `${app.identity}/master`, 5000);
     const during = await quorumVerdict();
     expect(during, 'the quorum view stands').to.not.equal(null);
     expect(during.grantee, 'the master never changed').to.equal(first.grantee);
@@ -203,7 +204,7 @@ describe('the mastership grant with five instances', function () {
     }
     expect(wipedIndex, 'an outsider committee cell holds the record').to.not.equal(null);
 
-    const wiped = await dbClient(wipedIndex + 1).wipeQuorumGrantRegister(`${name}/master`);
+    const wiped = await dbClient(wipedIndex + 1).wipeQuorumGrantRegister(`${app.identity}/master`);
     expect(wiped, 'the wipe removed the row').to.equal(1);
     await waitFor(async () => (await readCell(wipedIndex)) === null, {
       timeout: 30000, interval: 5000, label: 'the cell reads empty after the wipe',
@@ -223,7 +224,7 @@ describe('the mastership grant with five instances', function () {
     expect(now.grantee, 'the master never changed').to.equal(before.grantee);
     expect(cell.epoch, 'the re-seated cell carries the term the quorum holds').to.equal(now.epoch);
     await assertNoEvent(env.clients[masterIndex], 'quorumGrant:demoted',
-      (d) => d.key === `${name}/master`, 10000);
+      (d) => d.key === `${app.identity}/master`, 10000);
     expect(await runningMasters(), 'exactly one master throughout').to.equal(1);
   });
 
@@ -244,9 +245,9 @@ describe('the mastership grant with five instances', function () {
       // Four standbys pursue on jitter once the term lapses; the registers
       // serialize them into exactly one successor at a higher epoch.
       await Promise.any(survivors.map((i) => env.clients[i].waitForEvent(
-        'quorumGrant:granted', (d) => d.key === `${name}/master`, 300000, { afterId: survivorAfters.get(i) },
+        'quorumGrant:granted', (d) => d.key === `${app.identity}/master`, 300000, { afterId: survivorAfters.get(i) },
       ))).catch((err) => {
-        throw new Error(`no survivor acquired ${name}/master after the master died (${err.errors?.[0]?.message ?? err.message})`);
+        throw new Error(`no survivor acquired ${app.identity}/master after the master died (${err.errors?.[0]?.message ?? err.message})`);
       });
       let second = null;
       await waitFor(async () => {

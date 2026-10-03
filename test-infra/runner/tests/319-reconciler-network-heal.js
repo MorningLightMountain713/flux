@@ -67,13 +67,14 @@ describe('reconciler network-detach heal', function () {
   let idx;
   let client;
   const healName = `e2eheal${Date.now()}`;
-  const healId = componentIdentifier(healName);
+  let healId;
   const stormName = `e2estorm${Date.now()}`;
   const stormComps = ['www', 'api', 'db'];
+  let stormApp;
   const restartName = `e2ehealboot${Date.now()}`;
-  const restartId = componentIdentifier(restartName);
+  let restartId;
   const stopName = `e2ehealstop${Date.now()}`;
-  const stopId = componentIdentifier(stopName);
+  let stopId;
   const markerPath = async (container, app) => `${await appDataRoot(container, app)}/appdata/heal-marker`;
 
   before(async function () {
@@ -101,7 +102,7 @@ describe('reconciler network-detach heal', function () {
     });
     await bootAndPeer(env);
 
-    ({ index: idx } = await seedSimpleApp(env, healName));
+    ({ index: idx, identifier: healId } = await seedSimpleApp(env, healName));
     client = env.clients[idx];
     // Proven before any tampering: an unproven app is still inside its install
     // trial, where external interference draws a rollback verdict - not this
@@ -112,7 +113,7 @@ describe('reconciler network-detach heal', function () {
     // fluxDockerNetwork, all on the node under test (targeted install - the storm
     // guard counts detached containers per node).
     await pushImage(stormName, 'v1');
-    const stormApp = await buildSeedableApp({
+    stormApp = await buildSeedableApp({
       name: stormName,
       compose: stormComps.map((comp, i) => ({
         name: comp,
@@ -133,7 +134,7 @@ describe('reconciler network-detach heal', function () {
     await installOnNodes(env, stormApp, [idx]);
     for (const comp of stormComps) {
       // eslint-disable-next-line no-await-in-loop
-      await waitForReconcileActuated(client, componentIdentifier(stormName, comp), 'firstRunProven', 90000);
+      await waitForReconcileActuated(client, componentIdentifier(stormApp, comp), 'firstRunProven', 90000);
     }
 
     // The restart-mid-heal app, pinned to the same node.
@@ -156,6 +157,7 @@ describe('reconciler network-detach heal', function () {
         repoauth: '',
       }],
     });
+    restartId = componentIdentifier(restartApp);
     await installOnNodes(env, restartApp, [idx]);
     await waitForReconcileActuated(client, restartId, 'firstRunProven', 90000);
 
@@ -180,6 +182,7 @@ describe('reconciler network-detach heal', function () {
         repoauth: '',
       }],
     });
+    stopId = componentIdentifier(stopApp);
     await installOnNodes(env, stopApp, [idx]);
     await waitForReconcileActuated(client, stopId, 'firstRunProven', 90000);
   });
@@ -328,13 +331,13 @@ describe('reconciler network-detach heal', function () {
 
     await client.waitForEvent(
       'reconciler:actuated',
-      (d) => d.action === 'networkDetachStorm' && d.identifier.endsWith(`_${stormName}`),
+      (d) => d.action === 'networkDetachStorm' && d.identifier.endsWith(`_${stormApp.identity}`),
       60000,
       { afterId },
     );
 
     for (const comp of stormComps) {
-      const compId = componentIdentifier(stormName, comp);
+      const compId = componentIdentifier(stormApp, comp);
       // eslint-disable-next-line no-await-in-loop
       const nowId = await getAppContainerId(client.container, stormName, comp);
       expect(nowId, `${comp} must not be force-removed under a storm`).to.equal(ids[comp]);

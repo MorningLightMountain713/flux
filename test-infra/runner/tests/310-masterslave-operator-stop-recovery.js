@@ -68,7 +68,7 @@ describe('masterSlave recovery after an operator stop', function () {
   let env;
   let holders;
   const appName = `e2eopstop${Date.now()}`;
-  const identifier = componentIdentifier(appName);
+  let identifier;
 
   const runningFlags = async () => Promise.all(holders.map((i) => isUp(env.clients[i], appName)));
   const runningCount = async () => (await runningFlags()).filter(Boolean).length;
@@ -81,6 +81,7 @@ describe('masterSlave recovery after an operator stop', function () {
     await resetSyncState();
     await pushImage(appName, 'v1');
     const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
+    identifier = componentIdentifier(app);
 
     const installAfters = [0, 1].map((i) => env.clients[i].getLastEventId());
     holders = await installOnNodes(env, app, [0, 1]);

@@ -58,10 +58,9 @@ describe('mount safety decides on what a node can actually read', function () {
   dumpLogsOnFailure(() => env);
 
   const name = `e2eunpriv${Date.now()}`;
-  // The folder id of an app registered before v9 is its 8.x container name.
-  const folder = `flux${name}_${name}`;
+  let folder;
+  let identifier;
   let dir;
-  const identifier = `${name}_${name}`;
   const ip0 = subnet.nodeIp(1);
 
   // What a container that owns its data leaves behind: the mount point belongs to
@@ -103,7 +102,7 @@ describe('mount safety decides on what a node can actually read', function () {
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1 });
     await resetSyncState();
 
-    await seedSyncthingApp(env, { name, syncMode: 'syncFirst', index: 0 });
+    ({ folder, identifier } = await seedSyncthingApp(env, { name, syncMode: 'syncFirst', index: 0 }));
     dir = await appDataRoot(env.clients[0].container, name);
     await setSynced({ ip: ip0, folder });
     await waitFor(async () => (await folderType(ip0, folder)) === 'sendreceive', { timeout: 90000, interval: 3000, label: `${folder} sendreceive` });

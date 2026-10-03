@@ -24,14 +24,14 @@ import {
 describe('deliberate stop during an event-stream outage neither wedges nor flaps', function () {
   let env;
   const appName = `e2estreamout${Date.now()}`;
-  const identifier = componentIdentifier(appName);
+  let identifier;
   let idx;
 
   before(async function () {
     this.timeout(420000);
     env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
     await bootAndPeer(env);
-    ({ index: idx } = await seedSimpleApp(env, appName));
+    ({ index: idx, identifier } = await seedSimpleApp(env, appName));
   });
 
   after(async function () {

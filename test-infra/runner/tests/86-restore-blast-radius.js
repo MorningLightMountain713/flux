@@ -96,7 +96,7 @@ describe('a restore does not reach the other instances data', function () {
 
   const ts = Date.now();
   const appName = `e2erestore${ts}`;
-  const identifier = componentIdentifier(appName);
+  let identifier;
 
   let auth;
   let peerContainerBefore;
@@ -111,11 +111,12 @@ describe('a restore does not reach the other instances data', function () {
     // the incident's shape: a g: app with two instances, one elected
     await pushImage(appName, 'v1');
     const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
+    identifier = componentIdentifier(app);
     // Placed one at a time with node 0 first: the election's index 0 is the
     // holder placed first, and the fixture elects node 0. Each holder's data is
     // seeded after its own first-run reset has cleared appdata - otherwise the
     // phantom-index guard holds the app down.
-    await placeGAppInOrder(env, app, { placementOrder: [0, 1], identifier, coldStart: false });
+    await placeGAppInOrder(env, app, { placementOrder: [0, 1], coldStart: false });
     const folder = await appSyncthingFolderId(env.clients[0], appName, appName);
     await Promise.all([0, 1].map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder })));
 
@@ -222,14 +223,15 @@ describe('a restore does not reach the other instances data', function () {
   // fleet is the expensive part and stays shared; a second app is cheap.
   describe('a restore on a node the election did not choose', () => {
     const ownName = `e2eelect${ts}`;
-    const ownIdentifier = componentIdentifier(ownName);
+    let ownIdentifier;
 
     before(async function () {
       this.timeout(420000);
       await pushImage(ownName, 'v1');
       const app = await buildSeedableSyncthingApp({ name: ownName, syncMode: 'activeStandby' });
+      ownIdentifier = componentIdentifier(app);
       await placeGAppInOrder(env, app, {
-        placementOrder: [0, 1], identifier: ownIdentifier, coldStart: false,
+        placementOrder: [0, 1], coldStart: false,
       });
       const ownFolder = await appSyncthingFolderId(env.clients[0], ownName, ownName);
       await Promise.all([0, 1].map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder: ownFolder })));

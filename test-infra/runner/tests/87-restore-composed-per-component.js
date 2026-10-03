@@ -105,10 +105,10 @@ describe('a restore acts on the components it was asked for, by their own folder
     // appdata - which removes the directory - and the component's next start
     // has recreated it; written before that, the marker has nowhere to land.
     const cleared = await Promise.all([compA, compB].map((comp) => waitForReconcileActuated(
-      env.clients[0], componentIdentifier(appName, comp), 'dataCleared', 90000, { afterId: installAfter },
+      env.clients[0], componentIdentifier(app, comp), 'dataCleared', 90000, { afterId: installAfter },
     )));
     await Promise.all([compA, compB].map((comp, i) => waitForReconcileActuated(
-      env.clients[0], componentIdentifier(appName, comp), START_ACTIONS, 90000, { afterId: cleared[i].id },
+      env.clients[0], componentIdentifier(app, comp), START_ACTIONS, 90000, { afterId: cleared[i].id },
     )));
     for (const comp of [compA, compB]) {
       // eslint-disable-next-line no-await-in-loop

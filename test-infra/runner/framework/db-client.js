@@ -68,8 +68,8 @@ export function dbClient(nodeNum) {
     },
 
     // The identity of the app the registry lists under a name: what grant
-    // keys, lease records and generation records are keyed by. A v1-v8 app's
-    // identity is its name.
+    // keys, lease records and generation records are keyed by. Every
+    // registration's is its uuid's, whatever version registered it.
     async identityOf(appName) {
       return (await this.getGlobalApp(appName))?.identity ?? null;
     },
@@ -175,7 +175,10 @@ export function dbClient(nodeNum) {
     async appContainerName(appName, componentName, replica = null) {
       const app = await this.getGlobalApp(appName);
       if (!app) return null;
-      const base = `${componentName}_${app.identity ?? appName}`;
+      if (typeof app.identity !== 'string') {
+        throw new Error(`appContainerName(${appName}): the row states no identity`);
+      }
+      const base = `${componentName}_${app.identity}`;
       return replica != null ? `${base}_${replica}` : base;
     },
 

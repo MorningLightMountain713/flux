@@ -36,6 +36,7 @@ const HOLDERS = [0, 1, 2];
 describe('rollout sequencing: the plane stays inert below the activation height', function () {
   let env;
   let name;
+  let app;
 
   before(async function () {
     this.timeout(900000);
@@ -65,12 +66,12 @@ describe('rollout sequencing: the plane stays inert below the activation height'
 
     name = `e2einert${Date.now()}`;
     await pushImage(name, 'v1');
-    const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
+    app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
     const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, HOLDERS);
     await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
     await Promise.all(HOLDERS.map(async (i, k) => {
-      await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
+      await waitForReconcileActuated(env.clients[i], componentIdentifier(app), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
     await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]], name, name) });
@@ -102,7 +103,7 @@ describe('rollout sequencing: the plane stays inert below the activation height'
     const cells = await Promise.all(env.clients.map(async (client) => {
       try {
         const res = await fetch(
-          `${client.url}/flux/quorumgrant/record?key=${encodeURIComponent(`${name}/master`)}`,
+          `${client.url}/flux/quorumgrant/record?key=${encodeURIComponent(`${app.identity}/master`)}`,
           { signal: AbortSignal.timeout(5000) },
         );
         const body = await res.json();

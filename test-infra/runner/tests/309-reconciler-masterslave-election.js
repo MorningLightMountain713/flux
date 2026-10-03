@@ -42,7 +42,7 @@ describe('reconciler enforces masterSlave g: election', function () {
   let env;
   let holders; // node indices that installed the app
   const appName = `e2egw${Date.now()}`;
-  const identifier = componentIdentifier(appName);
+  let identifier;
 
   before(async function () {
     this.timeout(360000);
@@ -52,6 +52,7 @@ describe('reconciler enforces masterSlave g: election', function () {
     await resetSyncState();
     await pushImage(appName, 'v1');
     const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
+    identifier = componentIdentifier(app);
     // targeted install on two specific nodes — deterministic g: holders
     const installAfters = [0, 1].map((i) => env.clients[i].getLastEventId());
     holders = await installOnNodes(env, app, [0, 1]);

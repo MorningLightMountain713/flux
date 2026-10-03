@@ -65,7 +65,7 @@ describe('a restore restarts the other instances and never rebuilds them', funct
 
   const ts = Date.now();
   const appName = `e2erpeer${ts}`;
-  const identifier = componentIdentifier(appName);
+  let identifier;
   // The app's folder id and paths are the same on every holder; read off node
   // 0's container once it is installed, never spelled.
   let folder;
@@ -92,6 +92,7 @@ describe('a restore restarts the other instances and never rebuilds them', funct
     // containers stale after a restore
     await pushImage(appName, 'v1');
     const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'syncFirst' });
+    identifier = componentIdentifier(app);
     const nodes = [0, 1, 2];
     const installAfters = nodes.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, nodes);

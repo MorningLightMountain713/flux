@@ -57,16 +57,16 @@ describe('an app log stream loses nothing and is shared between viewers', functi
 
   const appName = `e2elogstream${Date.now()}`;
   const component = `${appName}a`;
-  const identifier = componentIdentifier(appName, component);
+  let identifier;
   // A second component, because one connection following several containers is
   // part of the contract and a single-component app cannot exercise it.
   const secondComponent = `${appName}b`;
-  const secondIdentifier = componentIdentifier(appName, secondComponent);
+  let secondIdentifier;
   // A third, which writes the line no reader can hold. Its own container because
   // every other test here watches one whose entire output is its numbered lines,
   // and a megabyte arriving every few seconds is not that.
   const blobComponent = `${appName}c`;
-  const blobIdentifier = componentIdentifier(appName, blobComponent);
+  let blobIdentifier;
   let holder;
   let auth;
 
@@ -160,6 +160,9 @@ describe('an app log stream loses nothing and is shared between viewers', functi
       })),
     });
 
+    identifier = componentIdentifier(app, component);
+    secondIdentifier = componentIdentifier(app, secondComponent);
+    blobIdentifier = componentIdentifier(app, blobComponent);
     await installOnNodes(env, app, [0]);
     await waitFor(
       async () => {
