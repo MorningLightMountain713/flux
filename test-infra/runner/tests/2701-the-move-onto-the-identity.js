@@ -1,11 +1,14 @@
-// fleet: 2
+// fleet: 3
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
+import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { buildAppSpec, registerAndConfirm } from '../framework/app-helper.js';
-import { nodeKey } from '../framework/keys.js';
-import { waitFor, waitForBootSettled } from '../framework/wait.js';
+import { nodeKey, fluxTeamKey } from '../framework/keys.js';
+import {
+  waitFor, waitForBootSettled, waitForHashSyncComplete, waitForInstallSettled,
+} from '../framework/wait.js';
+import { authenticate } from '../auth.js';
 import {
   execInContainer, listAppContainers, getAppContainerStatus, componentIdentifier, legacyFolderId,
   appDataRoot, appVolumeFile, getAppNetwork, networkExists,
@@ -22,8 +25,11 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 // image (env.upgradeNode), and asserts what the first start of the new code leaves:
 // every artifact named by the identity the registration minted, the data intact,
 // the former name still answering on the app's network, the row naming the
-// registration it came from, and the component running. Node 1 runs the run's image
-// throughout, as the peer the upgraded node announces to.
+// registration it came from, and the component running. Nodes 1 and 2 run the run's
+// image throughout: a three-node ring is the smallest whose registration door opens,
+// the registration is submitted from the middle of the ring, and the old node
+// installs the app from the registration it holds, without the harness seeding a
+// row, so the layout under the name is the old code's own.
 //
 // Control: run with FLUX_E2E_TAG naming an image from before the move (the tree at
 // 825619fcf, after the names changed and before the move existed); the upgrade
@@ -62,10 +68,11 @@ describe('the move onto the identity at the first start of the new code', functi
     }
     if (BASE_TAG === IMAGE_TAG) throw new Error('FLUX_E2E_BASE_TAG must name another build than FLUX_E2E_TAG: the suite upgrades from the one to the other');
     env = await createTestEnv({
-      hookCtx: this, nodes: 2, nodeImageTags: { 0: BASE_TAG }, tickerAutostart: false,
+      hookCtx: this, nodes: 3, nodeImageTags: { 0: BASE_TAG }, tickerAutostart: false,
     });
     await bootAndPeer(env);
     node = env.clients[0];
+    const registrar = env.clients[1];
     db = dbClient(node.num);
 
     const spec = buildAppSpec({
@@ -86,10 +93,22 @@ describe('the move onto the identity at the first start of the new code', functi
         repoauth: '',
       }],
     });
-    const registered = await registerAndConfirm(node.url, nodeKey(1), spec, env.clients);
+    const registered = await registerAndConfirm(registrar.url, nodeKey(2), spec, env.clients);
     expect(registered.status, JSON.stringify(registered)).to.equal('success');
     app = registered.app;
-    await installOnNodes(env, app, [0]);
+
+    // The old node installs from the registration it holds: the install route answers
+    // once its boot reconcile has decided, and the app:installed event says it holds it.
+    await waitForHashSyncComplete(node);
+    await waitForBootSettled(node);
+    const auth = await authenticate(node.url, fluxTeamKey());
+    const installMark = node.getLastEventId();
+    const body = await node.installAppLocally(appName, auth.zelidauth);
+    try {
+      await waitForInstallSettled(node, appName, 180000, { afterId: installMark });
+    } catch (error) {
+      throw new Error(`node 0 does not hold ${appName}: ${error.message} :: ${String(body).slice(-400)}`);
+    }
 
     // The old layout, read off the node rather than spelled: the fixture is what the
     // base image made, and the suite is wrong if it is not the layout under the name.
