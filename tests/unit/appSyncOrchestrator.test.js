@@ -3055,6 +3055,7 @@ describe('AppSyncOrchestrator', () => {
       expect(ctx.firstBoot).to.be.true;
       expect(ctx.machineRebooted).to.be.true;
       expect(ctx.downtimeMs).to.equal(Infinity);
+      expect(ctx.lastAlive).to.equal(null);
     });
 
     it('should detect unclean shutdown when shutdownReason is absent', async () => {
@@ -3079,6 +3080,7 @@ describe('AppSyncOrchestrator', () => {
       const ctx = await AppSyncOrchestrator.readBootContext();
 
       expect(ctx.downtimeMs).to.be.within(299_000, 301_000);
+      expect(ctx.lastAlive, 'the stopped process\'s heartbeat, for the checks the boot makes later').to.equal(fiveMinAgo);
     });
 
     it('should return safe defaults on error', async () => {
@@ -3088,6 +3090,7 @@ describe('AppSyncOrchestrator', () => {
 
       expect(ctx.machineRebooted).to.be.true;
       expect(ctx.downtimeMs).to.equal(Infinity);
+      expect(ctx.lastAlive).to.equal(null);
       expect(ctx.cleanShutdown).to.be.false;
       expect(ctx.firstBoot).to.be.true;
     });

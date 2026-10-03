@@ -337,54 +337,149 @@ describe('appStartupManager tests', () => {
     });
   });
 
-  describe('manageAppsOnBoot - the placement question comes before the migrations', () => {
-    function loadWithMigrations(runBefore) {
-      return proxyquire('../../ZelBack/src/services/appLifecycle/appStartupManager', {
-        '../../lib/log': logStub,
-        '../dockerService': dockerServiceStub,
-        '../serviceHelper': { delay: sinon.stub().resolves() },
-        '../fluxNetworkHelper': fluxNetworkHelperStub,
-        '../nodeDosState': { isNodeDos: sinon.stub().returns(false) },
-        '../appMonitoring/appReconciler': appReconcilerStub,
-        '../appDatabase/appsRepository': appsRepositoryStub,
-        './appUninstaller': appUninstallerStub,
-        '../utils/globalState': globalStateStub,
-        '../appQuery/appQueryService': appQueryServiceStub,
-        '../utils/appConstants': { localAppsInformation: 'localAppsInformation', NODE_DOWN_GRACE_MS: 420_000, RUNNING_EXPIRY_MS: 7_500_000 },
-        '../utils/appUtilities': appUtilities,
-        '../appMessaging/nodeDownStore': nodeDownStoreStub,
-        '../nodeConfirmationService': { isConfirmed: sinon.stub().returns(true) },
-        '../migrations': { runBefore },
-        './contentSlotService': { reconcileBootContent: sinon.stub().resolves() },
+  // The module with the migrations stubbed, for the boot path between the sync
+  // and the reconcile. bootSyncTimeoutMs bounds the registry wait and the state
+  // pull together, in real milliseconds here.
+  function loadWithMigrations(runBefore, { bootSyncTimeoutMs } = {}) {
+    return proxyquire('../../ZelBack/src/services/appLifecycle/appStartupManager', {
+      ...(bootSyncTimeoutMs === undefined ? {} : {
+        config: asConfig({ ...realConfig, system: { ...realConfig.system, bootSyncTimeoutMs } }),
+      }),
+      '../../lib/log': logStub,
+      '../dockerService': dockerServiceStub,
+      '../serviceHelper': { delay: sinon.stub().resolves() },
+      '../fluxNetworkHelper': fluxNetworkHelperStub,
+      '../nodeDosState': { isNodeDos: sinon.stub().returns(false) },
+      '../appMonitoring/appReconciler': appReconcilerStub,
+      '../appDatabase/appsRepository': appsRepositoryStub,
+      './appUninstaller': appUninstallerStub,
+      '../utils/globalState': globalStateStub,
+      '../appQuery/appQueryService': appQueryServiceStub,
+      '../utils/appConstants': { localAppsInformation: 'localAppsInformation', NODE_DOWN_GRACE_MS: 420_000, RUNNING_EXPIRY_MS: 7_500_000 },
+      '../utils/appUtilities': appUtilities,
+      '../appMessaging/nodeDownStore': nodeDownStoreStub,
+      '../nodeConfirmationService': { isConfirmed: sinon.stub().returns(true) },
+      '../migrations': { runBefore },
+      './contentSlotService': { reconcileBootContent: sinon.stub().resolves() },
+    });
+  }
+
+  describe('manageAppsOnBoot - the boot reconcile decides by the rows when it holds the network\'s view, by the jurors\' clock when it does not', () => {
+    const BY_ROWS = { forceKill: true, skipGuard: true, broadcastRemoval: false };
+    const BY_CLOCK = { forceKill: true, broadcastRemoval: true };
+    let clock;
+    let bootStart;
+
+    beforeEach(() => {
+      bootStart = Date.now();
+      clock = sinon.useFakeTimers({ now: bootStart, toFake: ['Date'] });
+      fluxNetworkHelperStub.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppA', 'AppB']);
+      appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA', ip: '10.0.0.1:16127' }]);
+      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [{ name: 'AppA' }, { name: 'AppB' }] });
+      dockerServiceStub.dockerListContainers.resolves([]);
+    });
+
+    afterEach(() => {
+      clock.restore();
+    });
+
+    // The context read at process start: the stopped process stamped its drop
+    // droppedAgoMs before this process started, and the downtime was read then.
+    function contextDropped(droppedAgoMs) {
+      return {
+        machineRebooted: true, cleanShutdown: true, firstBoot: false, lastAlive: bootStart - droppedAgoMs, downtimeMs: droppedAgoMs,
+      };
+    }
+
+    // The migrations take migrationsMs of the boot.
+    function migrationsTaking(migrationsMs) {
+      return sinon.stub().callsFake(async () => {
+        clock.tick(migrationsMs);
+        return [];
       });
     }
 
-    it('runs the migrations only once the rows still place this node, after the question', async () => {
-      const runBefore = sinon.stub().resolves([]);
+    // The state pull never completes: no peer answers.
+    function statePullNeverCompletes() {
+      whenUpStub.withArgs('appStateSynced').returns(new Promise(() => {}));
+    }
+
+    it('waits for the state pull, runs the migrations, then asks the rows', async () => {
+      const runBefore = migrationsTaking(1000);
       const manager = loadWithMigrations(runBefore);
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
-      fluxNetworkHelperStub.getLocalSocketAddress.resolves('10.0.0.1:16127');
-      appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA', ip: '10.0.0.1:16127' }]);
-      dockerServiceStub.dockerListContainers.resolves([]);
 
-      await manager.manageAppsOnBoot({ firstBoot: true });
+      await manager.manageAppsOnBoot(contextDropped(60_000));
 
+      const pullWait = whenUpStub.withArgs('appStateSynced');
+      expect(pullWait.calledOnce, 'the pull is waited for').to.equal(true);
       sinon.assert.calledOnceWithExactly(runBefore, 'bootReconcileDecided');
-      expect(runBefore.calledAfter(appsRepositoryStub.appLocationFromEvents), 'the question first').to.equal(true);
+      expect(pullWait.calledBefore(appsRepositoryStub.appLocationFromEvents), 'the pull before the question').to.equal(true);
+      expect(runBefore.calledBefore(appsRepositoryStub.appLocationFromEvents), 'the migrations before the question').to.equal(true);
       expect(appsRepositoryStub.appLocationFromEvents.calledOnce, 'asked once for the whole boot').to.equal(true);
+      expect(dockerServiceStub.dockerListContainers.calledOnce, 'the reconcile ran').to.equal(true);
     });
 
-    it('migrates nothing when the network has moved on from this node', async () => {
-      const runBefore = sinon.stub().resolves([]);
+    it('the rows outrank the clock: a node long past the grace whose rows still place it starts its apps', async () => {
+      const runBefore = migrationsTaking(200_000);
       const manager = loadWithMigrations(runBefore);
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
-      fluxNetworkHelperStub.getLocalSocketAddress.resolves('10.0.0.1:16127');
+
+      await manager.manageAppsOnBoot(contextDropped(300_000));
+
+      expect(appUninstallerStub.uninstallApplication.called).to.equal(false);
+      expect(dockerServiceStub.dockerListContainers.calledOnce, 'the reconcile ran').to.equal(true);
+    });
+
+    it('no row places this node once the pull is in: every app removed after the migrations, no broadcast, nothing started', async () => {
+      const runBefore = migrationsTaking(1000);
+      const manager = loadWithMigrations(runBefore);
       appsRepositoryStub.appLocationFromEvents.resolves([]);
 
-      await manager.manageAppsOnBoot({ firstBoot: true });
+      await manager.manageAppsOnBoot(contextDropped(60_000));
 
-      expect(runBefore.called).to.equal(false);
-      sinon.assert.calledOnce(appUninstallerStub.uninstallApplication);
+      sinon.assert.calledOnce(runBefore);
+      expect(appUninstallerStub.uninstallApplication.calledWith('AppA', BY_ROWS)).to.equal(true);
+      expect(appUninstallerStub.uninstallApplication.calledWith('AppB', BY_ROWS)).to.equal(true);
+      expect(dockerServiceStub.dockerListContainers.called, 'the reconcile never ran').to.equal(false);
+    });
+
+    it('no pull within the sync budget and past the grace since the drop: every app removed, each broadcast, nothing started, the rows never asked', async () => {
+      statePullNeverCompletes();
+      const runBefore = migrationsTaking(200_000);
+      const manager = loadWithMigrations(runBefore, { bootSyncTimeoutMs: 50 });
+
+      await manager.manageAppsOnBoot(contextDropped(300_000));
+
+      sinon.assert.calledOnce(runBefore);
+      expect(appUninstallerStub.uninstallApplication.calledWith('AppA', BY_CLOCK)).to.equal(true);
+      expect(appUninstallerStub.uninstallApplication.calledWith('AppB', BY_CLOCK)).to.equal(true);
+      expect(appsRepositoryStub.appLocationFromEvents.called, 'no rows to ask').to.equal(false);
+      expect(dockerServiceStub.dockerListContainers.called, 'the reconcile never ran').to.equal(false);
+    });
+
+    it('no pull, inside the grace: the apps start and the rows are not asked', async () => {
+      statePullNeverCompletes();
+      const runBefore = migrationsTaking(100_000);
+      const manager = loadWithMigrations(runBefore, { bootSyncTimeoutMs: 50 });
+
+      await manager.manageAppsOnBoot(contextDropped(100_000));
+
+      expect(appUninstallerStub.uninstallApplication.called).to.equal(false);
+      expect(appsRepositoryStub.appLocationFromEvents.called).to.equal(false);
+      expect(dockerServiceStub.dockerListContainers.calledOnce, 'the reconcile ran').to.equal(true);
+    });
+
+    it('no pull on a first boot: there is no drop to measure from, and the apps start however long the boot took', async () => {
+      statePullNeverCompletes();
+      const runBefore = migrationsTaking(500_000);
+      const manager = loadWithMigrations(runBefore, { bootSyncTimeoutMs: 50 });
+
+      await manager.manageAppsOnBoot({
+        machineRebooted: true, downtimeMs: Infinity, cleanShutdown: false, firstBoot: true, lastAlive: null,
+      });
+
+      expect(appUninstallerStub.uninstallApplication.called).to.equal(false);
+      expect(dockerServiceStub.dockerListContainers.calledOnce, 'the reconcile ran').to.equal(true);
     });
   });
 
