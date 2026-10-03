@@ -180,7 +180,7 @@ describe('encrypted mastership: a sealed spec holds and fails over a term', func
       const r = await execInContainer(env.clients[i].container, `sh -c 'mkdir -p ${appDataDir} && echo seeded > ${appDataDir}/seed-data'`);
       expect(r.exitCode, `seed data written on node ${i}: ${r.output}`).to.equal(0);
     }));
-    await setSynced({ folder: await appSyncthingFolderId(env.clients[hosts[0]].container, name, null) });
+    await setSynced({ folder: await appSyncthingFolderId(env.clients[hosts[0]], name, null) });
   });
 
   after(async function () {

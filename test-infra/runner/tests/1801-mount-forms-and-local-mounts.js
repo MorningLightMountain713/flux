@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer } from '../framework/container.js';
+import { appDataRoot, execInContainer, requireAppContainerName } from '../framework/container.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { waitFor, waitForReconcileActuated, START_ACTIONS } from '../framework/wait.js';
@@ -33,8 +33,6 @@ import { signBtcMessage } from '../auth.js';
 // Run against REAL syncthing daemons. The control-plane stub moves no files, so it
 // can show a folder's configuration and never what crossed between two nodes, which
 // is the whole claim here.
-
-const appDir = (name) => `/mnt/appdata/flux-apps/flux${name}_${name}`;
 
 async function sh(client, command) {
   return execInContainer(client.container, `sh -c '${command}'`);
@@ -75,7 +73,9 @@ describe('mount forms on a replicated volume, and the directory a spec keeps loc
   dumpLogsOnFailure(() => env);
   const appName = `e2emounts${Date.now()}`;
   const identifier = `${appName}_${appName}`;
-  const dir = appDir(appName);
+  // The folder id of an app registered before v9 is its 8.x container name, on every node.
+  const folderId = `flux${appName}_${appName}`;
+  let dir;
   const nodes = [0, 1];
   let clearedAt;
 
@@ -140,6 +140,9 @@ describe('mount forms on a replicated volume, and the directory a spec keeps loc
     });
     const installAfters = nodes.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, nodes);
+    // The same on every node: the directory is named by the component identifier,
+    // which the app's identity fixes.
+    dir = await appDataRoot(env.clients[nodes[0]].container, appName);
     clearedAt = (await Promise.all(nodes.map((i, k) => waitForReconcileActuated(
       env.clients[i], identifier, 'dataCleared', 120000, { afterId: installAfters[k] },
     )))).map((event) => event.id);
@@ -192,7 +195,6 @@ describe('mount forms on a replicated volume, and the directory a spec keeps loc
     // scripted and cannot read the volume at all, so the shape is unreachable there -
     // which is why suite 51 stayed green through the live version of this bug.
     const [a, b] = env.clients;
-    const folderId = `flux${appName}_${appName}`;
 
     await waitFor(async () => {
       const modes = await Promise.all([a, b].map(async (client) => {
@@ -216,7 +218,6 @@ describe('mount forms on a replicated volume, and the directory a spec keeps loc
   // wins the seed. A stub cannot show any of this: it reports what a suite declared.
   it('claims the owner\'s data, and not the scaffolding every mount form leaves beside it', async function () {
     this.timeout(420000);
-    const folderId = `flux${appName}_${appName}`;
 
     // The node that did NOT seed is the only one that publishes a claim at all:
     // holdings are recorded where they are computed, inside the receive-only
@@ -309,7 +310,7 @@ describe('mount forms on a replicated volume, and the directory a spec keeps loc
     // image is a static binary with no shell, so there is nothing to exec. This is the
     // binding itself as docker recorded it, which is what decides where a write lands.
     const client = env.clients[nodes[0]];
-    const container = `flux${appName}_${appName}`;
+    const container = await requireAppContainerName(client.container, appName, appName);
     const r = await execInContainer(client.container,
       `docker inspect ${container} --format '{{range .Mounts}}{{.Source}}=>{{.Destination}} {{end}}'`);
     expect(r.exitCode, `could not inspect ${container}: ${r.output}`).to.equal(0);
@@ -330,7 +331,6 @@ describe('mount forms on a replicated volume, and the directory a spec keeps loc
   // nothing but a FluxOS ignore line keeps it off every other holder.
   it('replicates an m: directory, and neither an ml: one nor the filesystem\'s own', async function () {
     this.timeout(720000);
-    const folderId = `flux${appName}_${appName}`;
 
     // WHICH node writes is read, never assumed. The cold-start election above is not
     // pinned to an address - it waits for exactly one seed and does not say whose - and

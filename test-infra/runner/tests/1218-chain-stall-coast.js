@@ -122,7 +122,7 @@ describe('a chain stall coasts every master and demotes none', function () {
       await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
-    await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]].container, name, name) });
+    await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]], name, name) });
 
     outpoints = {};
     for (let i = 0; i < env.clients.length; i += 1) {

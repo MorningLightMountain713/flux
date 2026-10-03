@@ -116,7 +116,7 @@ describe('a restore does not reach the other instances data', function () {
     // time with node 0 first, so it is also the election's index 0.
     await electMaster(appName, env.clients[0].ip);
     await placeGAppInOrder(env, app, { placementOrder: [0, 1], identifier, coldStart: false });
-    const folder = await appSyncthingFolderId(env.clients[0].container, appName, appName);
+    const folder = await appSyncthingFolderId(env.clients[0], appName, appName);
     await Promise.all([0, 1].map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder })));
 
     // something identifiable in each copy, so "untouched" is checkable rather
@@ -234,7 +234,7 @@ describe('a restore does not reach the other instances data', function () {
       await placeGAppInOrder(env, app, {
         placementOrder: [0, 1], identifier: ownIdentifier, coldStart: false,
       });
-      const ownFolder = await appSyncthingFolderId(env.clients[0].container, ownName, ownName);
+      const ownFolder = await appSyncthingFolderId(env.clients[0], ownName, ownName);
       await Promise.all([0, 1].map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder: ownFolder })));
       await waitForReconcilerDesiredChanged(env.clients[0], ownIdentifier, 'running', 90000);
     });

@@ -104,7 +104,7 @@ describe('a backup refuses to archive a copy that is not there', function () {
     // next start recreates it; the marker is written after that start.
     const cleared = await waitForReconcileActuated(client, componentIdentifier(appName, comp), 'dataCleared', 120000, { afterId: after });
     await waitForReconcileActuated(client, componentIdentifier(appName, comp), START_ACTIONS, 120000, { afterId: cleared.id });
-    folderId = await appSyncthingFolderId(client.container, appName, comp);
+    folderId = await appSyncthingFolderId(client, appName, comp);
     dir = await appDataRoot(client.container, appName, comp);
     archive = `${dir}/backup/local/backup_${comp.toLowerCase()}.tar.gz`;
     await execInContainer(client.container, `printf 'the-real-world\\n' > ${dir}/appdata/marker.txt`);

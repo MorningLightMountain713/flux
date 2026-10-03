@@ -126,7 +126,7 @@ describe('a restore fetches its archive from where it was told', function () {
     // next start recreates it; the tests seed appdata only after that start.
     const cleared = await waitForReconcileActuated(client, componentIdentifier(appName, comp), 'dataCleared', 90000, { afterId: installAfter });
     await waitForReconcileActuated(client, componentIdentifier(appName, comp), START_ACTIONS, 90000, { afterId: cleared.id });
-    folderId = await appSyncthingFolderId(client.container, appName, comp);
+    folderId = await appSyncthingFolderId(client, appName, comp);
     dir = await appDataRoot(client.container, appName, comp);
     remoteArchive = `${dir}/backup/remote/backup_${comp.toLowerCase()}.tar.gz`;
     uploadArchive = `${dir}/backup/upload/backup_${comp.toLowerCase()}.tar.gz`;

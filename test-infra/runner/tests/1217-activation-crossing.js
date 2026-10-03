@@ -100,7 +100,7 @@ async function bringUpFleet(hookCtx) {
     await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
     await seedSyncScopedData(env, name, i);
   }));
-  await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]].container, name, name) });
+  await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]], name, name) });
 
   const { currentHeight } = await getState();
   expect(currentHeight, 'the setup stayed below the window; the suite opens it by hand')

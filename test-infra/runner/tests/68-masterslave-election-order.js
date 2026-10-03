@@ -245,7 +245,7 @@ describe('primary election under a divergent placement order', function () {
     // the data and are connected to one another, and the connection to the node whose
     // FluxOS is about to go away is the whole evidence the probe reads while its API
     // is silent.
-    const orderFolder = await appSyncthingFolderId(env.clients[holders[0]].container, orderApp, orderApp);
+    const orderFolder = await appSyncthingFolderId(env.clients[holders[0]], orderApp, orderApp);
     await Promise.all(holders.map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder: orderFolder })));
     await Promise.all(holders.map((i) => setPeerHasData({ ip: subnet.nodeIp(i + 1), folder: orderFolder })));
 
@@ -293,7 +293,7 @@ describe('primary election under a divergent placement order', function () {
     // The standbys have genuinely synced from the primary by now, so pin them synced
     // (over the data seeded at install) to make them election-eligible - otherwise
     // nothing could take over and this would pass for the wrong reason.
-    const orderFolder = await appSyncthingFolderId(env.clients[primary].container, orderApp, orderApp);
+    const orderFolder = await appSyncthingFolderId(env.clients[primary], orderApp, orderApp);
     await Promise.all(holders.filter((i) => i !== primary).map(
       (i) => setSynced({ ip: subnet.nodeIp(i + 1), folder: orderFolder }),
     ));
@@ -487,7 +487,7 @@ describe('primary election under a divergent placement order', function () {
     const position = await electionIndexOf(env, fdmApp, seedIndex);
     expect(position, 'fixture: seed must be off index 0').to.be.greaterThan(0);
 
-    const folder = await appSyncthingFolderId(env.clients[holders[0]].container, fdmApp, fdmApp);
+    const folder = await appSyncthingFolderId(env.clients[holders[0]], fdmApp, fdmApp);
     await Promise.all(holders.map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder })));
     // Every holder is ready, which is what the election reads as eligible to start.
     // A standby that is not stops each pass as not ready, so it has no decision to

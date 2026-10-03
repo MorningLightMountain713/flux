@@ -73,7 +73,7 @@ describe('a restore reaches the other instances through syncthing', function () 
       await waitForReconcileActuated(env.clients[i], identifier, 'dataCleared', 120000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, appName, i);
     }));
-    folder = await appSyncthingFolderId(env.clients[0].container, appName, appName);
+    folder = await appSyncthingFolderId(env.clients[0], appName, appName);
     appDirPath = await appDataRoot(env.clients[0].container, appName);
 
     auth = await authenticate(env.clients[0].url, appOwnerKey());

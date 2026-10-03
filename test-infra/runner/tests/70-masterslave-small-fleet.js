@@ -90,7 +90,7 @@ describe('masterSlave election on a three-node fleet', function () {
     await placeGAppInOrder(env, app, {
       placementOrder, identifier: componentIdentifier(appName),
     });
-    folder = await appSyncthingFolderId(env.clients[holders[0]].container, appName, appName);
+    folder = await appSyncthingFolderId(env.clients[holders[0]], appName, appName);
   });
 
   after(async function () {
