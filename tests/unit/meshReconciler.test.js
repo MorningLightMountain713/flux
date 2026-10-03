@@ -174,7 +174,7 @@ describe('meshReconciler', () => {
       namespaces: [],
       transitInstances: [],
       portInstances: [],
-      getDefaultRouteInterface: sinon.stub().resolves('eth0'),
+      egressDevice: sinon.stub().resolves('eth0'),
       ordinals: null,
       claims: [],
       claim: null,
@@ -240,7 +240,7 @@ describe('meshReconciler', () => {
         getFluxnodeBySocketAddress: sinon.stub().callsFake(async (addr) => stubs.nodeByAddress?.[addr] ?? null),
         getFluxnodesByPubkey: sinon.stub().callsFake(async (key) => stubs.nodesByPubkey?.[key] ?? null),
       },
-      '../fluxNetworkHelper': { getDefaultRouteInterface: (...args) => stubs.getDefaultRouteInterface(...args) },
+      '../fluxNetworkHelper': { egressDevice: (...args) => stubs.egressDevice(...args) },
       '../appMonitoring/reconcilerQueue': {
         enqueueComponent: sinon.stub().callsFake((identifier) => stubs.enqueued.push(identifier)),
       },
@@ -579,7 +579,7 @@ describe('meshReconciler', () => {
     });
 
     it('with no default-route interface: converges locally, chains empty, degradation loud and visible', async () => {
-      stubs.getDefaultRouteInterface = sinon.stub().resolves(null);
+      stubs.egressDevice = sinon.stub().resolves(null);
       await meshReconciler.reconcileAllMeshApps();
       // The local overlay still came up — material, snapshot, units.
       expect(stubs.writeSnapshotCalls).to.have.length(1);

@@ -689,7 +689,7 @@ async function runReconcilePass() {
 
   await reconcileSnapshotAndTayga(healthy, ctx);
 
-  const externalInterface = await fluxNetworkHelper.getDefaultRouteInterface();
+  const externalInterface = await fluxNetworkHelper.egressDevice();
   // The DNAT that carries a peer's transport in must be scoped to the interface
   // that traffic arrives on, and MASQUERADE to the interface it leaves by — both
   // the node's default-route interface. Without one the firewall cannot be
