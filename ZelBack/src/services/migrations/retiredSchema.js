@@ -20,12 +20,14 @@ const RETIRED_EXPIRY_INDEXES = [
   { collection: 'database.appsglobal.collections.appsInstallingErrorsLocations', name: 'broadcastedAt_1' },
   { collection: 'database.appsglobal.collections.appsInstallingErrorsBroadcasts', name: 'broadcastedAt_1' },
   { collection: 'database.appsglobal.collections.appsTemporaryMessages', name: 'receivedAt_1' },
+  { collection: 'database.appsglobal.collections.appContentManifests', name: 'manifest_quarantine_ttl' },
 ];
 
-// Indexes keyed on a field the rows no longer carry: a unique one would refuse
-// every row after the first that lacks it.
+// Indexes keyed on a field the rows no longer carry, or unique on one the rows
+// now share: a unique one would refuse every row after the first.
 const RETIRED_INDEXES = [
   { collection: 'database.appsglobal.collections.appContentManifests', name: 'appName' },
+  { collection: 'database.appsglobal.collections.appContentManifests', name: 'identity' },
 ];
 
 /**

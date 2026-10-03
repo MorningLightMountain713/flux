@@ -420,12 +420,12 @@ async function startFluxFunctions() {
         ]);
         log.info('Signed app installing errors broadcasts collection prepared');
 
-        // Content-slot manifests: one row per app (unique appName — the atomic
-        // compare-and-set guard storeManifest relies on), plus a PARTIAL TTL that
-        // auto-reaps quarantined (unverified, confirmed:false) rows by their expireAt;
-        // confirmed rows carry no expireAt and persist.
-        await ensureIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appContentManifests')), { identity: 1 }, { name: 'identity', unique: true });
-        await ensureIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appContentManifests')), { expireAt: 1 }, { expireAfterSeconds: 0, partialFilterExpression: { confirmed: false }, name: 'manifest_quarantine_ttl' });
+        // Content manifests: one row per manifest, keyed by the app identity and
+        // the manifest's hash, plus a PARTIAL TTL that reaps rows held for an app
+        // not yet listed (signer null) by their expireAt; a resolved row carries no
+        // expireAt and persists.
+        await ensureIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appContentManifests')), { identity: 1, hash: 1 }, { name: 'identity_hash', unique: true });
+        await ensureIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appContentManifests')), { expireAt: 1 }, { expireAfterSeconds: 0, partialFilterExpression: { signer: null }, name: 'manifest_held_ttl' });
         log.info('App content manifests collection prepared');
 
         // Ingress attestations: one node-signed record per (hash, node) — where a

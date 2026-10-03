@@ -16,6 +16,7 @@ const capabilities = require('./utils/capabilities');
 const { Privilege, authOf } = require('./utils/privileges');
 const appEventVerifier = require('./appMessaging/appEventVerifier');
 const appsRepository = require('./appDatabase/appsRepository');
+const manifestStanding = require('./appLifecycle/manifestStanding');
 const policyStore = require('./policyStore');
 
 const myMessageCache = cacheManager.tempMessageCache;
@@ -633,13 +634,14 @@ async function respondWithAppInstallingErrorsMessages(peer, sinceTimestamp = 0) 
 }
 
 /**
- * Step 1 of the two-step manifest reconcile: serve this node's (identity, version) index
- * of every confirmed manifest — cheap (no bodies), so a requester can fan out to several
- * peers, union the indexes, and pull only the bodies it's missing/stale on.
+ * Step 1 of the two-step manifest reconcile: serve this node's index of the
+ * manifest each app stands on, as (identity, version, ownedFrom) — cheap (no
+ * bodies), so a requester can fan out to several peers, union the indexes by
+ * rank, and pull only the bodies it is missing or behind on.
  */
 async function respondWithManifestIndex(peer) {
   try {
-    const index = await appsRepository.listConfirmedContentManifestVersions();
+    const index = await manifestStanding.standingIndex();
     await sendSignedMessage({ type: 'fluxappcontentmanifestindex', index, done: true }, peer, { awaitDrain: true });
   } catch (error) {
     log.error(error);
@@ -647,10 +649,11 @@ async function respondWithManifestIndex(peer) {
 }
 
 /**
- * Step 2 of the two-step manifest reconcile: serve the re-servable signed broadcasts for
- * the specific apps a peer asked for (`msgObj.data.identities`). Only rows carrying a node
- * `envelope` are servable — re-served as { ...envelope, data } so the requester verifies
- * with batchVerifyBroadcasts on top of the manifest's intrinsic owner signature.
+ * Step 2 of the two-step manifest reconcile: serve the re-servable signed broadcasts of
+ * every resolved manifest held for the apps a peer asked for (`msgObj.data.identities`),
+ * so a peer behind the chain still serves the one a new row names. Only rows carrying a
+ * node `envelope` are servable — re-served as { ...envelope, data } so the requester
+ * verifies with batchVerifyBroadcasts on top of the manifest's intrinsic owner signature.
  */
 async function respondWithContentManifests(msgObj, peer) {
   try {
@@ -659,7 +662,7 @@ async function respondWithContentManifests(msgObj, peer) {
       await sendSignedMessage({ type: 'fluxappcontentmanifestsync', messages: [], done: true }, peer, { awaitDrain: true });
       return;
     }
-    const broadcasts = await appsRepository.listConfirmedContentManifestBroadcasts(identities);
+    const broadcasts = await appsRepository.listContentManifestBroadcasts(identities);
 
     const batchSize = 2000;
     if (broadcasts.length === 0) {

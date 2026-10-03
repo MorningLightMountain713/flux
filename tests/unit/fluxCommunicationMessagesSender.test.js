@@ -12,6 +12,7 @@ const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
+const manifestStanding = require('../../ZelBack/src/services/appLifecycle/manifestStanding');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const generalService = require('../../ZelBack/src/services/generalService');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
@@ -2335,15 +2336,15 @@ describe('fluxCommunicationMessagesSender tests', () => {
 
     afterEach(() => sinon.restore());
 
-    it('respondWithManifestIndex reads the confirmed (identity, version) vector', async () => {
-      const listStub = sinon.stub(appsRepository, 'listConfirmedContentManifestVersions')
-        .resolves([{ identity: 'a', version: 2 }]);
+    it('respondWithManifestIndex serves the index of the manifests the apps stand on', async () => {
+      const indexStub = sinon.stub(manifestStanding, 'standingIndex')
+        .resolves([{ identity: 'a', version: 2, ownedFrom: 100 }]);
       await fluxCommunicationMessagesSender.respondWithManifestIndex(peer());
-      sinon.assert.calledOnce(listStub);
+      sinon.assert.calledOnce(indexStub);
     });
 
     it('respondWithContentManifests queries only the requested apps (the two-step fetch)', async () => {
-      const listStub = sinon.stub(appsRepository, 'listConfirmedContentManifestBroadcasts')
+      const listStub = sinon.stub(appsRepository, 'listContentManifestBroadcasts')
         .resolves([{ version: 1, data: { manifest: { identity: 'b' } } }]);
       const msgObj = { data: { type: 'fluxappcontentmanifestrequest', identities: ['b'] } };
       await fluxCommunicationMessagesSender.respondWithContentManifests(msgObj, peer());
@@ -2351,7 +2352,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
     });
 
     it('respondWithContentManifests does not query the registry for an empty ask', async () => {
-      const listStub = sinon.stub(appsRepository, 'listConfirmedContentManifestBroadcasts').resolves([]);
+      const listStub = sinon.stub(appsRepository, 'listContentManifestBroadcasts').resolves([]);
       await fluxCommunicationMessagesSender.respondWithContentManifests({ data: { identities: [] } }, peer());
       sinon.assert.notCalled(listStub);
     });

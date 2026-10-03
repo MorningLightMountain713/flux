@@ -434,43 +434,74 @@ export function dbClient(nodeNum) {
       await localDb.collection('policydocuments').deleteOne({ _id: name });
     },
 
-    // v9 content-slot manifest register (one row per app, version-monotonic). The
-    // row shape is contentSlotService.storeManifest's: { appName, version, data, confirmed }.
+    // v9 content manifests: one row per manifest a node holds, keyed by the app
+    // identity and the manifest's hash. The row shape is appsRepository.putContentManifest's:
+    // { identity, hash, version, ownedFrom, signer, applied, data, envelope? }; a row held
+    // for an app not yet listed has signer null and an expireAt.
     async contentManifestCount() {
       const globalDb = await db('appsGlobal');
       return globalDb.collection('appcontentmanifests').countDocuments({});
     },
 
-    // The manifest row of the app the registry lists under a name, by its identity.
-    async getContentManifest(appName) {
+    // Every manifest row held for the app the registry lists under a name.
+    async getContentManifests(appName) {
       const identity = await this.identityOf(appName);
-      if (!identity) return null;
+      if (!identity) return [];
+      return this.getContentManifestsByIdentity(identity);
+    },
+
+    async getContentManifestsByIdentity(identity) {
       const globalDb = await db('appsGlobal');
-      return globalDb.collection('appcontentmanifests').findOne({ identity }, { projection: { _id: 0 } });
+      return globalDb.collection('appcontentmanifests').find({ identity }, { projection: { _id: 0 } }).toArray();
+    },
+
+    // The highest-ranked row held for the app listed under a name — resolved rows
+    // first, by the ownership height then the version — or the one held row. What a
+    // suite reads as "the manifest this node holds".
+    async getContentManifest(appName) {
+      const rows = await this.getContentManifests(appName);
+      if (!rows.length) return null;
+      const rank = (r) => [r.signer ? 1 : 0, Number(r.ownedFrom ?? 0), Number(r.version ?? 0)];
+      return rows.reduce((best, r) => {
+        const [bs, bo, bv] = rank(best);
+        const [s, o, v] = rank(r);
+        return s > bs || (s === bs && (o > bo || (o === bo && v > bv))) ? r : best;
+      });
     },
 
     async getContentManifestByIdentity(identity) {
-      const globalDb = await db('appsGlobal');
-      return globalDb.collection('appcontentmanifests').findOne({ identity }, { projection: { _id: 0 } });
+      const rows = await this.getContentManifestsByIdentity(identity);
+      return rows.find((r) => r.signer) ?? rows[0] ?? null;
     },
 
-    // Seed an appcontentmanifests row directly, mirroring contentSlotService.storeManifest's
-    // stored shape, to stage a stale/divergent/quarantined manifest without the live path.
-    // For an encrypted app the manifest slots must already be SEALED (seed confirmed:true to
-    // skip re-verify on serve); an optional envelope enables boot-sync re-serve.
+    // The row marked as delivered to the running app, or null.
+    async getAppliedContentManifest(appName) {
+      const rows = await this.getContentManifests(appName);
+      return rows.find((r) => r.applied === true) ?? null;
+    },
+
+    // Seed an appcontentmanifests row directly, in the stored shape, to stage a
+    // stale, divergent or held manifest without the live path. For an encrypted app
+    // the manifest slots must already be SEALED; an optional envelope enables
+    // boot-sync re-serve. `hash` is the manifest's library hash (contentManifestHash
+    // of the plaintext); a suite that only needs a distinct row may pass any string.
     async seedContentManifest({
-      appName, version, manifest, confirmed = true, envelope,
+      appName, version, manifest, hash, signer, envelope,
     }) {
       const globalDb = await db('appsGlobal');
+      const identity = manifest.identity ?? await this.identityOf(appName);
       const row = {
-        identity: manifest.identity ?? await this.identityOf(appName),
+        identity,
+        hash: hash ?? `seed-${version}-${Date.now()}`,
         version,
-        confirmed,
+        ownedFrom: manifest.ownedFrom ?? 0,
+        signer: signer ?? null,
+        applied: false,
         receivedAt: new Date(),
         data: { type: 'fluxappcontentmanifest', appName, manifest },
       };
       if (envelope) row.envelope = envelope;
-      if (!confirmed) row.expireAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
+      if (!row.signer) row.expireAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
       await globalDb.collection('appcontentmanifests').insertOne(row);
     },
 

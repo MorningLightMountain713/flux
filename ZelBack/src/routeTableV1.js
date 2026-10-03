@@ -557,6 +557,7 @@ module.exports = [
   { method: 'get', path: '/apps/contentblob/:appName/:locator', none: NONE.OWN_ANSWER, handler: 'appLifecycle/appOperations#contentBlobServeApi' },
   { method: 'post', path: '/apps/contentupdate', needs: APP_REGISTRY, handler: 'appLifecycle/contentSlotService#submitContentUpdateApi' },
   { method: 'get', path: '/apps/contentmanifest/:appname', none: NONE.OWN_ANSWER, handler: 'appLifecycle/contentSlotService#getContentManifestApi' },
+  { method: 'get', path: '/apps/contentmanifests/:appname', none: NONE.OWN_ANSWER, handler: 'appLifecycle/contentSlotService#getContentManifestsApi' },
   { method: 'post', path: '/apps/getpublickey', none: NONE.OWN_ANSWER, handler: 'appMessaging/cryptographicKeys#getPublicKey' },
   { method: 'get', path: '/apps/transportpubkey/:appname', none: NONE.OWN_ANSWER, handler: 'appMessaging/cryptographicKeys#getTransportPublicKey' },
   { method: 'post', path: '/apps/bloblocator', none: NONE.OWN_ANSWER, handler: 'appMessaging/cryptographicKeys#getBlobLocator' },

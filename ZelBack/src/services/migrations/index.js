@@ -5,6 +5,7 @@ const nodeIdentityMigration = require('../appDatabase/nodeIdentityMigration');
 const containerLabelBackfill = require('../appLifecycle/containerLabelBackfill');
 const retiredSchema = require('./retiredSchema');
 const temporaryPoolSweep = require('../appMessaging/temporaryPoolSweep');
+const appsRepository = require('../appDatabase/appsRepository');
 const paymentPositions = require('./paymentPositions');
 
 // One-off work that brings a node up to date with a change FluxOS has already
@@ -53,6 +54,14 @@ const migrations = [
     before: 'localDbPrepared',
     description: 'stamp the payment deadline on pool rows written under the wall-clock expiry',
     run: () => temporaryPoolSweep.stampDeadlines(),
+  },
+  {
+    id: 'content-manifest-rows',
+    // After the retired unique index is dropped, before the preparation asserts
+    // the index on identity and hash, which a hashless row would collide on.
+    before: 'localDbPrepared',
+    description: 'drop manifest rows written before a manifest row carried its hash',
+    run: () => appsRepository.removeContentManifestsWithoutHash(),
   },
   {
     id: 'payment-positions',

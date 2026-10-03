@@ -145,8 +145,11 @@ async function liveRow(name) {
 
 /**
  * Writes a row whose spec changed, or that is new, and runs its effects. The
- * manifest the row's message carries is stored first: a component the new
- * spec recreates finds the slot it adds filled.
+ * manifest the row's message carries is kept first: a component the new spec
+ * recreates finds the slot it adds filled. Then the app's manifests are judged
+ * against the new row: those held before the app was listed are resolved, peers
+ * are asked for what this node lacks, and a running instance is brought to the
+ * manifest the app now stands on.
  * @param {object} row - the serialized InstantiatedSpec
  * @param {object} instance - the InstantiatedSpec the row stands on
  * @param {?object} carried - the manifest the row's message carries, or null
@@ -158,8 +161,8 @@ async function writeWithEffects(row, instance, carried) {
       .catch((e) => log.warn(`contentSlot: storing the manifest ${row.name}'s update carries failed - ${e.message ?? e}`));
   }
   fluxEventBus.publish('app:specStored', { name: row.name, hash: row.hash });
-  setImmediate(() => contentSlotService.promoteQuarantinedManifest(row.identity)
-    .catch((e) => log.warn(`contentSlot: promote-on-confirm for ${row.name} failed - ${e.message ?? e}`)));
+  setImmediate(() => contentSlotService.rejudgeManifests(instance, { specChanged: true })
+    .catch((e) => log.warn(`contentSlot: judging ${row.name}'s manifests after its row write failed - ${e.message ?? e}`)));
   await appsRepository.removeAppInstallingErrorRecords(row.name);
 }
 

@@ -88,11 +88,16 @@ describe('retiredSchema', () => {
     expect(droppedIndexes).to.deep.equal([]);
   });
 
-  it('drops the content manifests\' index by app name, and keeps the one by identity', async () => {
-    indexesOf[CONTENT_MANIFESTS] = [{ name: 'appName', key: { appName: 1 }, unique: true }, { name: 'identity', key: { identity: 1 }, unique: true }];
+  it('drops the content manifests\' unique indexes by app name and by identity, and the quarantine expiry, keeping the one by identity and hash', async () => {
+    indexesOf[CONTENT_MANIFESTS] = [
+      { name: 'appName', key: { appName: 1 }, unique: true },
+      { name: 'identity', key: { identity: 1 }, unique: true },
+      { name: 'manifest_quarantine_ttl', key: { expireAt: 1 }, expireAfterSeconds: 0 },
+      { name: 'identity_hash', key: { identity: 1, hash: 1 }, unique: true },
+    ];
 
     await retiredSchema.dropRetiredSchema();
 
-    expect(droppedIndexes).to.deep.equal([`${CONTENT_MANIFESTS}.appName`]);
+    expect(droppedIndexes.sort()).to.deep.equal([`${CONTENT_MANIFESTS}.appName`, `${CONTENT_MANIFESTS}.identity`, `${CONTENT_MANIFESTS}.manifest_quarantine_ttl`].sort());
   });
 });

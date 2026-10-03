@@ -5,25 +5,30 @@ const serviceHelper = require('../serviceHelper');
 const appsRepository = require('../appDatabase/appsRepository');
 const { serialiseAndSignFluxBroadcast } = require('../utils/fluxBroadcastHelper');
 const fluxEventBus = require('../utils/fluxEventBus');
+const { getSpec } = require('../utils/specLibs');
 
-// The content manifest is a permanent, latest-wins register reconciled OFF the
-// ephemeral boot-sync plane. A returning node converges its register to the network's
+// The content manifests a node holds are a permanent store reconciled OFF the
+// ephemeral boot-sync plane. A returning node converges its store to the network's
 // via a two-step in-band exchange (the permanent-message discipline: request only the
 // missing, never re-pull everything), peer-sourced since the manifest has no on-chain
 // anchor:
-//   1. INDEX  — ask peers for their (identity, version) vector (cheap, no bodies),
-//               union it, and compute which apps are missing/stale locally.
+//   1. INDEX  — ask peers for the rank of the manifest each app stands on, as
+//               (identity, version, ownedFrom) (cheap, no bodies), union it by rank,
+//               and compute which apps are missing or behind locally.
 //   2. FETCH  — pull only those bodies, one peer at a time, re-checking the gap after
 //               each so every body is fetched once from the first peer that has it
 //               (fan-out for freshness on the cheap index, single-copy on the bodies).
 // Bodies land via the shared fluxappcontentmanifestsync receive path
-// (storeBatchContentManifests: full owner-sig + spec gate, latest-wins). The change-only
-// gossip stays the live-update path; this backfills a node that was away.
+// (storeBatchContentManifests: each judged and kept). The change-only gossip stays
+// the live-update path; this backfills a node that was away.
 //
-// The LOCAL gap view counts every held row, quarantined included: on a truly cold node
-// the fetched body races the app-spec sync and lands confirmed:false, but transport is
-// done — it promotes when the spec confirms, and re-fetching from another peer would
-// hit the same local spec gate. Only the index SERVED to peers is confirmed-only.
+// Rank is the height at which the signer took the app, then the version within
+// that ownership (the library's rule), so a buyer's first manifest outranks the
+// seller's last. The LOCAL gap view counts every held row, those held for an app not
+// yet listed included: on a truly cold node the fetched body races the app-spec sync
+// and lands unresolved, but transport is done — it is judged when the row is written,
+// and re-fetching from another peer would meet the same missing row. Only the index
+// SERVED to peers is of standing manifests.
 
 const INDEX_TIMEOUT_MS = config.get('fluxapps.manifestIndexTimeoutMs');
 const FETCH_SETTLE_MS = config.get('fluxapps.manifestFetchSettleMs');
@@ -70,24 +75,51 @@ function depositFetchDone(peerKey) {
   }
 }
 
-function unionTarget(indexes) {
+/** The rank an index entry carries: the ownership height, then the version. */
+const rankOf = (entry) => ({ ownedFrom: Number(entry.ownedFrom ?? 0), number: Number(entry.version) });
+
+/**
+ * The highest rank per app across every peer index.
+ * @param {Map<string, object[]>} indexes - peer key -> [{ identity, version, ownedFrom }]
+ * @param {(a, b) => boolean} outranks - the library's rank order
+ * @returns {Map<string, {version: number, ownedFrom: number}>}
+ */
+function unionTarget(indexes, outranks) {
   const target = new Map();
   for (const index of indexes.values()) {
     for (const entry of index) {
       if (!entry || !entry.identity || entry.version == null) continue;
       const current = target.get(entry.identity);
-      if (current == null || entry.version > current) target.set(entry.identity, entry.version);
+      if (current == null || outranks(rankOf(entry), rankOf(current))) {
+        target.set(entry.identity, { version: Number(entry.version), ownedFrom: Number(entry.ownedFrom ?? 0) });
+      }
     }
   }
   return target;
 }
 
-/** Apps the local register is missing or stale on, given the union target. */
-function computeNeeded(target, local) {
+/**
+ * The highest rank held locally per app, from every row.
+ * @param {Array<{identity: string, version: number, ownedFrom: number}>} rows
+ * @param {(a, b) => boolean} outranks
+ * @returns {Map<string, {version: number, ownedFrom: number}>}
+ */
+function localBest(rows, outranks) {
+  return unionTarget(new Map([['local', rows]]), outranks);
+}
+
+/**
+ * Apps the local store is missing or behind on, given the union target.
+ * @param {Map<string, object>} target
+ * @param {Map<string, object>} local
+ * @param {(a, b) => boolean} outranks
+ * @returns {string[]}
+ */
+function computeNeeded(target, local, outranks) {
   const needed = [];
-  for (const [identity, version] of target) {
+  for (const [identity, best] of target) {
     const have = local.get(identity);
-    if (have == null || version > have) needed.push(identity);
+    if (have == null || outranks(rankOf(best), rankOf(have))) needed.push(identity);
   }
   return needed;
 }
@@ -118,7 +150,7 @@ async function reconcile(peers, deps = {}) {
 
 async function runReconcile(peers, deps = {}) {
   const {
-    getLocalVersions = appsRepository.listContentManifestVersions,
+    getLocalRanks = appsRepository.listContentManifestRanks,
     sign = serialiseAndSignFluxBroadcast,
     delay = serviceHelper.delay,
     now = Date.now,
@@ -151,10 +183,9 @@ async function runReconcile(peers, deps = {}) {
     await Promise.race([indexesReady, delay(indexTimeoutMs)]);
 
     const indexesReceived = activeRound.indexes.size;
-    const target = unionTarget(activeRound.indexes);
-    const localList = await getLocalVersions();
-    const local = new Map(localList.map((row) => [row.identity, row.version]));
-    let remaining = computeNeeded(target, local);
+    const { outranks } = await getSpec();
+    const target = unionTarget(activeRound.indexes, outranks);
+    let remaining = computeNeeded(target, localBest(await getLocalRanks(), outranks), outranks);
     const neededCount = remaining.length;
 
     // Step 2 — fetch the bodies, one peer at a time, re-checking the gap from the store
@@ -186,10 +217,10 @@ async function runReconcile(peers, deps = {}) {
       await Promise.race([peerDone, delay(fetchSettleMs)]);
       activeRound.fetchWaiters.delete(peer.key);
       // eslint-disable-next-line no-await-in-loop
-      const after = new Map((await getLocalVersions()).map((row) => [row.identity, row.version]));
+      const after = localBest(await getLocalRanks(), outranks);
       remaining = remaining.filter((identity) => {
         const have = after.get(identity);
-        return have == null || target.get(identity) > have;
+        return have == null || outranks(rankOf(target.get(identity)), rankOf(have));
       });
     }
 
@@ -222,5 +253,6 @@ module.exports = {
   isPeerInActiveRound,
   // exposed for tests
   unionTarget,
+  localBest,
   computeNeeded,
 };

@@ -702,13 +702,22 @@ async function uploadSealedContent(spec, content, ownerSigs, {
   // A slot app bundles its owner-signed manifest with the submission: upload the
   // slot blobs and hand the manifest and the reconcile to FluxDrive naming this
   // submission's message. A slot app always forces an encrypted spec (flux-spec
-  // validation), so the slots payload is sealed.
+  // validation), so the slots payload is sealed. The manifest is signed under the
+  // listed ownership: the height the chain says the owner took the app, or 0 for
+  // a registration, whose height does not exist yet.
   if (payload.manifest) {
+    let ownedFrom = 0;
+    if (priorSpec) {
+      const owners = await appHistory.ownerships(spec.name);
+      const listed = owners.length ? owners[owners.length - 1] : null;
+      if (!listed || listed.owner !== owner) throw new Error(`uploadSealedContent: ${spec.name} has no applied ownership for ${owner}`);
+      ownedFrom = listed.from;
+    }
     const slotHashes = new Set(Object.values(payload.manifest.slots || {}).map((s) => s.hash));
     const slotBlobs = new Map([...blobs].filter(([h]) => slotHashes.has(h)));
     const gossipManifest = await contentSlotService.processManifestSubmission(
       {
-        manifest: payload.manifest, spec, owner, encrypted: true, identity, blobs: slotBlobs, ownerSigs,
+        manifest: payload.manifest, spec, owner, encrypted: true, identity, ownedFrom, blobs: slotBlobs, ownerSigs,
       },
       { uploader: fluxDriveClient },
     );
@@ -733,15 +742,16 @@ async function uploadSealedContent(spec, content, ownerSigs, {
       pendingMessageHash: messageHash,
     }, {});
     if (priorSpec) return { payload, blobs, carriedManifest: gossipManifest };
-    // A registration's manifest is the app's from the start: store it and gossip
-    // it so the network has the slots' starting content alongside the spec.
-    // Broadcast first: broadcastMessageToAll returns the exact signed node
-    // broadcast it relayed, so the stored row carries that same envelope (one
-    // signature) and is boot-sync-servable to a fresh node.
+    // A registration's manifest is gossiped so the network holds the slots'
+    // starting content alongside the spec; every node, this one included, holds
+    // it until the registration applies and judges it then. Broadcast first:
+    // broadcastMessageToAll returns the exact signed node broadcast it relayed,
+    // so the held row carries that same envelope (one signature) and is
+    // boot-sync-servable to a fresh node.
     const signedBroadcast = await fluxCommunicationMessagesSender.broadcastMessageToAll({
       type: 'fluxappcontentmanifest', appName: spec.name, manifest: gossipManifest,
     });
-    await contentSlotService.storeManifest(gossipManifest, { broadcast: signedBroadcast });
+    await contentSlotService.takeManifest(gossipManifest, { broadcast: signedBroadcast });
   }
 
   return { payload, blobs, carriedManifest: null };

@@ -105,7 +105,7 @@ describe('content manifest sync: cold-boot in-band reconcile off the ephemeral p
     // joiner will fetch from. Wait for it so the joiner's reconcile sees a real gap.
     await waitFor(async () => {
       const row = await dbClient(1).getContentManifest(appName).catch(() => null);
-      return !!(row && row.version === 1 && row.confirmed === true);
+      return !!(row && row.version === 1 && row.signer);
     }, { timeout: 60000, interval: 2000, label: 'manifest confirmed on register node' });
   });
 
@@ -145,13 +145,13 @@ describe('content manifest sync: cold-boot in-band reconcile off the ephemeral p
     // is observable in both orderings. afterId omitted: it may already be buffered.
     await deferredClient.waitForEvent(
       'content:manifestStored',
-      (d) => d.appName === appName && d.version === 1 && d.confirmed === true,
+      (d) => d.appName === appName && d.version === 1 && d.resolved === true,
       150000,
     );
     const row = await dbClient(DEFERRED + 1).getContentManifest(appName);
-    expect(row.appName).to.equal(appName);
+    expect(row.data.appName).to.equal(appName);
     expect(row.version).to.equal(1);
-    expect(row.confirmed).to.equal(true);
+    expect(row.signer, 'resolved to the owner who signed it').to.be.a('string');
   });
 
   it('gates the spawner on #manifestSyncComplete before a slot app starts (readiness gate)', async function () {
