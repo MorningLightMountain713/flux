@@ -10,7 +10,8 @@ const log = require('../../lib/log');
 //
 // Three lease scopes, one uniform shape:
 //   app-scoped (key = app name)            : install | remove | redeploy |
-//                                            rebuild | reconcile | backup | restore
+//                                            rebuild | reconcile | backup | restore |
+//                                            move (onto the identity, at boot)
 //   component-scoped (key = component id)  : actuating (a create/start heading to
 //                                            running) | stopping (a stop/kill/restart
 //                                            heading to stopped, was stoppingContainers) |
@@ -41,6 +42,7 @@ const TTL_MS = {
   remove: 30 * 60 * 1000,
   redeploy: 30 * 60 * 1000,
   rebuild: 30 * 60 * 1000,
+  move: 30 * 60 * 1000,
   reconcile: 30 * 60 * 1000,
   backup: 60 * 60 * 1000,
   restore: 60 * 60 * 1000,

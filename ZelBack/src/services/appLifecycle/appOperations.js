@@ -3031,6 +3031,7 @@ async function getPeerAppsInstallingErrorMessages() {
 
 module.exports = {
   redeployComponent,
+  requestComponentDaemonStop,
   redeployApplication,
   reconcileComponents,
   redeployApplicationAPI,

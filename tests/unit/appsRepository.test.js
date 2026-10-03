@@ -906,4 +906,72 @@ describe('appsRepository', () => {
       expect(thrown.message).to.match(/identifiersFor required/);
     });
   });
+
+  describe('the move onto the identity', () => {
+    it('lists every installed row with the facts the move reads, without hydrating', async () => {
+      dbHelperStub.findInDatabase.resolves([
+        { name: 'myapp', replica: null, identity: 'myapp', hash: 'h1' },
+        { name: 'myapp', replica: 'r1', identity: 'bident', uuid: 'u', registrationVersion: 8, hash: 'h1', move: { to: 'bident', since: 1 } },
+      ]);
+
+      const rows = await appsRepository.listInstalledRows();
+
+      expect(rows).to.deep.equal([
+        { name: 'myapp', replica: null, identity: 'myapp', uuid: null, registrationVersion: null, hash: 'h1', move: null },
+        { name: 'myapp', replica: 'r1', identity: 'bident', uuid: 'u', registrationVersion: 8, hash: 'h1', move: { to: 'bident', since: 1 } },
+      ]);
+      expect(specLibsStub.getSpecBackend.called, 'no spec is hydrated').to.equal(false);
+    });
+
+    it('records the uuid and the registration version on one identity\'s row', async () => {
+      await appsRepository.setInstalledRegistration('MyApp', 'r1', { uuid: 'u', registrationVersion: 8 });
+
+      const [, , query, update] = dbHelperStub.updateOneInDatabase.firstCall.args;
+      expect(query.name.test('myapp'), 'the name matches whatever its case').to.equal(true);
+      expect(query.name.test('myapp2')).to.equal(false);
+      expect(query.replica).to.equal('r1');
+      expect(update).to.deep.equal({ $set: { uuid: 'u', registrationVersion: 8 } });
+    });
+
+    it('refuses a registration short of either fact', async () => {
+      let thrown = null;
+      await appsRepository.setInstalledRegistration('myapp', null, { uuid: 'u' }).catch((error) => { thrown = error; });
+      expect(thrown).to.be.an('error');
+      expect(dbHelperStub.updateOneInDatabase.called).to.equal(false);
+    });
+
+    it('records a move in progress on the row, and ends it with null', async () => {
+      await appsRepository.setInstalledMove('myapp', null, { to: 'bident', since: 5 });
+      await appsRepository.setInstalledMove('myapp', null, null);
+
+      expect(dbHelperStub.updateOneInDatabase.firstCall.args[3]).to.deep.equal({ $set: { move: { to: 'bident', since: 5 } } });
+      expect(dbHelperStub.updateOneInDatabase.secondCall.args[3]).to.deep.equal({ $unset: { move: '' } });
+      expect(dbHelperStub.updateOneInDatabase.firstCall.args[2].replica).to.equal(null);
+    });
+
+    it('writes the identity with its component identifiers and ends the move in one write', async () => {
+      await appsRepository.setInstalledIdentity('myapp', null, 'bident', ['www_bident']);
+
+      const [, , query, update] = dbHelperStub.updateOneInDatabase.firstCall.args;
+      expect(query.replica).to.equal(null);
+      expect(update).to.deep.equal({ $set: { identity: 'bident', componentIdentifiers: ['www_bident'] }, $unset: { move: '' } });
+    });
+
+    it('refuses to write an identity without its component identifiers', async () => {
+      let thrown = null;
+      await appsRepository.setInstalledIdentity('myapp', null, 'bident', []).catch((error) => { thrown = error; });
+      expect(thrown).to.be.an('error');
+      expect(dbHelperStub.updateOneInDatabase.called).to.equal(false);
+    });
+
+    it('strips a move in progress before the stored spec is read', async () => {
+      const doc = await legacyDoc(await v8Spec());
+      dbHelperStub.findOneInDatabase.resolves({ ...doc, replica: null, move: { to: 'bident', since: 1 } });
+
+      const installed = await appsRepository.getInstalledApp(doc.name);
+
+      expect(installed, 'the row still hydrates').to.not.equal(null);
+      expect(installed.name).to.equal(doc.name);
+    });
+  });
 });

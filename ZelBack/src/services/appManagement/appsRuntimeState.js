@@ -681,6 +681,31 @@ async function getVolumeImage(identifier) {
 }
 
 /**
+ * Carries a component's runtime state from one identifier to another: every
+ * field the old document holds that the new one does not, then the old
+ * document is dropped. A field the new key already holds is kept, so a run
+ * interrupted between the copy and the drop can run again and change nothing.
+ * Reads through dbHelper rather than getState: a state that cannot be read is
+ * not one that is absent, and dropping it on that answer would lose an
+ * operator's stop or a proven start.
+ *
+ * @param {string} fromIdentifier
+ * @param {string} toIdentifier
+ * @returns {Promise<boolean>} whether a document was carried and dropped
+ */
+async function rekey(fromIdentifier, toIdentifier) {
+  const database = collection();
+  const old = await dbHelper.findOneInDatabase(database, appsRuntimeState, { identifier: fromIdentifier }, { projection: { _id: 0 } });
+  if (!old) return false;
+  const held = await dbHelper.findOneInDatabase(database, appsRuntimeState, { identifier: toIdentifier }, { projection: { _id: 0 } }) || {};
+  const carried = Object.fromEntries(Object.entries(old)
+    .filter(([field]) => field !== 'identifier' && !(field in held)));
+  await upsertState(toIdentifier, { $set: { identifier: toIdentifier, ...carried, updatedAt: Date.now() } });
+  await dbHelper.removeDocumentsFromCollection(database, appsRuntimeState, { identifier: fromIdentifier });
+  return true;
+}
+
+/**
  * Prepares the collection for use: merges any same-identifier twins, then
  * creates the unique index that makes twins impossible.
  *
@@ -796,6 +821,7 @@ module.exports = {
   getVolumeImage,
   removeControllerState,
   remove,
+  rekey,
   BACKOFF_DELAYS_MS,
   STABLE_RUN_MS,
   MAX_HISTORY,

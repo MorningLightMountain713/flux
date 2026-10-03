@@ -1053,4 +1053,48 @@ describe('appsRuntimeState tests', () => {
       expect(merged.condemnedForce).to.equal(true);
     });
   });
+
+  describe('rekey', () => {
+    it('carries every field onto the new identifier and drops the old document', async () => {
+      store.set('www_App', {
+        identifier: 'www_App', operatorStopped: true, condemned: false, hasEverStarted: true, restartHistory: [1, 2], volumeImagePath: '/vol/old',
+      });
+
+      expect(await appsRuntimeState.rekey('www_App', 'www_bidentity')).to.equal(true);
+
+      expect(store.has('www_App'), 'the old document is gone').to.equal(false);
+      const moved = await appsRuntimeState.getState('www_bidentity');
+      expect(moved).to.include({
+        identifier: 'www_bidentity', operatorStopped: true, condemned: false, hasEverStarted: true, volumeImagePath: '/vol/old',
+      });
+      expect(moved.restartHistory).to.deep.equal([1, 2]);
+    });
+
+    it('keeps a field the new identifier already holds, so a repeated run changes nothing', async () => {
+      store.set('www_App', { identifier: 'www_App', operatorStopped: true, volumeImagePath: '/vol/old' });
+      store.set('www_bidentity', { identifier: 'www_bidentity', volumeImagePath: '/vol/new' });
+
+      await appsRuntimeState.rekey('www_App', 'www_bidentity');
+
+      const moved = await appsRuntimeState.getState('www_bidentity');
+      expect(moved.volumeImagePath, 'the newer record outranks the carried one').to.equal('/vol/new');
+      expect(moved.operatorStopped, 'what the new key lacked is carried').to.equal(true);
+      expect(store.has('www_App')).to.equal(false);
+    });
+
+    it('answers false and writes nothing when there is nothing to carry', async () => {
+      expect(await appsRuntimeState.rekey('www_App', 'www_bidentity')).to.equal(false);
+      expect(store.has('www_bidentity')).to.equal(false);
+    });
+
+    it('throws rather than drop a state it cannot read', async () => {
+      store.set('www_App', { identifier: 'www_App', operatorStopped: true });
+      readFails = true;
+      let thrown = null;
+      await appsRuntimeState.rekey('www_App', 'www_bidentity').catch((error) => { thrown = error; });
+      readFails = false;
+      expect(thrown).to.be.an('error');
+      expect(store.get('www_App').operatorStopped, 'the operator stop survives').to.equal(true);
+    });
+  });
 });
