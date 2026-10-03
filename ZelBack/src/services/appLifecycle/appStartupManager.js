@@ -172,7 +172,7 @@ async function enforceNodePlacement(trigger) {
   return { placed: false, removed, failed };
 }
 
-async function reconcileAppsOnBoot() {
+async function reconcileAppsOnBoot({ placement: decided = null } = {}) {
   const results = {
     appsChecked: 0,
     appsEnqueued: [],
@@ -236,8 +236,9 @@ async function reconcileAppsOnBoot() {
 
     // The node-level question, for every installed app whatever its
     // containers are doing — a FluxOS restart with nothing stopped included:
-    // a node the network moved on from starts nothing and keeps nothing.
-    const placement = await enforceNodePlacement('boot');
+    // a node the network moved on from starts nothing and keeps nothing. The
+    // boot asks it before the migrations and hands the answer in.
+    const placement = decided ?? await enforceNodePlacement('boot');
     if (!placement.placed) {
       results.appsRemoved.push(...placement.removed);
       results.appsFailed.push(...placement.failed);
@@ -392,6 +393,14 @@ async function manageAppsOnBoot(bootContext) {
       log.warn(`appStartupManager - off-list boot sweep failed, the register starts empty: ${error.message}`);
     }
 
+    // The node-level question first: a node the network has moved on from
+    // removes every app and migrates nothing.
+    const placement = await enforceNodePlacement('boot');
+    if (!placement.placed) {
+      log.info(`appStartupManager - the network has moved on from this node; ${placement.removed.length} app(s) removed, nothing to start`);
+      return;
+    }
+
     // Anything that would rather act on a container while it is down runs here:
     // FluxOS keeps every container on RestartPolicy 'no', so after a host reboot
     // nothing is running until the reconcile below starts it. Never allowed to stop
@@ -399,7 +408,7 @@ async function manageAppsOnBoot(bootContext) {
     await migrations.runBefore('bootReconcileDecided');
 
     log.info('appStartupManager - Daemon, DB, and node confirmed, reconciling apps');
-    await reconcileAppsOnBoot();
+    await reconcileAppsOnBoot({ placement });
   } finally {
     capabilities.claim('bootReconcileDecided', 'appStartupManager').raise('boot reconcile has decided what this node keeps');
     fluxEventBus.publish('boot:settled', {});

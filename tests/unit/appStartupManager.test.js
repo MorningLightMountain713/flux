@@ -316,6 +316,78 @@ describe('appStartupManager tests', () => {
     });
   });
 
+  describe('reconcileAppsOnBoot - the placement the boot already decided', () => {
+    it('uses the answer handed in and does not ask again', async () => {
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
+      dockerServiceStub.dockerListContainers.resolves([]);
+
+      const results = await appStartupManager.reconcileAppsOnBoot({ placement: { placed: true, removed: [], failed: [] } });
+
+      expect(appsRepositoryStub.appLocationFromEvents.called, 'the rows are not read a second time').to.equal(false);
+      expect(results.appsRemoved).to.deep.equal([]);
+    });
+
+    it('starts nothing when the boot decided the network has moved on', async () => {
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
+
+      const results = await appStartupManager.reconcileAppsOnBoot({ placement: { placed: false, removed: ['AppA'], failed: [] } });
+
+      expect(results.appsRemoved).to.deep.equal(['AppA']);
+      expect(appReconcilerStub.enqueueApp.called, 'nothing is started').to.equal(false);
+    });
+  });
+
+  describe('manageAppsOnBoot - the placement question comes before the migrations', () => {
+    function loadWithMigrations(runBefore) {
+      return proxyquire('../../ZelBack/src/services/appLifecycle/appStartupManager', {
+        '../../lib/log': logStub,
+        '../dockerService': dockerServiceStub,
+        '../serviceHelper': { delay: sinon.stub().resolves() },
+        '../fluxNetworkHelper': fluxNetworkHelperStub,
+        '../nodeDosState': { isNodeDos: sinon.stub().returns(false) },
+        '../appMonitoring/appReconciler': appReconcilerStub,
+        '../appDatabase/appsRepository': appsRepositoryStub,
+        './appUninstaller': appUninstallerStub,
+        '../utils/globalState': globalStateStub,
+        '../appQuery/appQueryService': appQueryServiceStub,
+        '../utils/appConstants': { localAppsInformation: 'localAppsInformation', NODE_DOWN_GRACE_MS: 420_000, RUNNING_EXPIRY_MS: 7_500_000 },
+        '../utils/appUtilities': appUtilities,
+        '../appMessaging/nodeDownStore': nodeDownStoreStub,
+        '../nodeConfirmationService': { isConfirmed: sinon.stub().returns(true) },
+        '../migrations': { runBefore },
+        './contentSlotService': { reconcileBootContent: sinon.stub().resolves() },
+      });
+    }
+
+    it('runs the migrations only once the rows still place this node, after the question', async () => {
+      const runBefore = sinon.stub().resolves([]);
+      const manager = loadWithMigrations(runBefore);
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
+      fluxNetworkHelperStub.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA', ip: '10.0.0.1:16127' }]);
+      dockerServiceStub.dockerListContainers.resolves([]);
+
+      await manager.manageAppsOnBoot({ firstBoot: true });
+
+      sinon.assert.calledOnceWithExactly(runBefore, 'bootReconcileDecided');
+      expect(runBefore.calledAfter(appsRepositoryStub.appLocationFromEvents), 'the question first').to.equal(true);
+      expect(appsRepositoryStub.appLocationFromEvents.calledOnce, 'asked once for the whole boot').to.equal(true);
+    });
+
+    it('migrates nothing when the network has moved on from this node', async () => {
+      const runBefore = sinon.stub().resolves([]);
+      const manager = loadWithMigrations(runBefore);
+      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
+      fluxNetworkHelperStub.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      appsRepositoryStub.appLocationFromEvents.resolves([]);
+
+      await manager.manageAppsOnBoot({ firstBoot: true });
+
+      expect(runBefore.called).to.equal(false);
+      sinon.assert.calledOnce(appUninstallerStub.uninstallApplication);
+    });
+  });
+
   describe('enforceNodePlacement - the one question a returning node asks (R5)', () => {
     const REMOVE = { forceKill: true, skipGuard: true, broadcastRemoval: false };
 

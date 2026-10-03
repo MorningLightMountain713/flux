@@ -33,22 +33,41 @@ const log = require('../../lib/log');
 // sharing it.
 //
 // Runs before the boot reconcile decides, while the reconciler actuates
-// nothing. Each app is moved under its own lease, one at a time: the old
-// container goes, the runtime state is rekeyed, the volume moves, the folder is
-// re-pointed, the network exists under the identity, the row names the identity
-// and the containers are recreated on the kept volume for the reconciler to
-// start. The row names the identity before the recreate, so a recreate that
-// fails leaves a row the reconciler already finishes on its own. Each step asks
-// the world whether it is still needed, and the row carries the move while it
-// is in progress, so a run interrupted anywhere resumes at the next start and a
-// row already on its identity is never touched.
+// nothing, and inside the window the fleet gives a node to announce itself
+// again after a stop. Every former container on the node is stopped at once,
+// so the node pays docker's grace once; then each app is moved in turn: the
+// old container goes, the runtime state is rekeyed, the volume moves, the
+// folder is re-pointed, the network exists under the identity, the row names
+// the identity, and the containers are recreated on the kept volume, from the
+// image already on this daemon, for the reconciler to start.
 //
-// Data is moved with mv, never copied: syncthing compares a file's mtime, and a
-// copy would make every file of the folder look changed to every peer.
+// The row names the identity before the recreate, so a recreate that fails
+// leaves a row the reconciler already finishes on its own, and a volume that
+// will not mount leaves the mount and the create to the reconciler as well.
+// Each step asks the world whether it is still needed, and a step that fails is
+// tried again on the spot. An app that still cannot be finished keeps its
+// lease, which holds the reconciler and the syncthing monitor off it, and is
+// tried again on a timer until it completes; a start runs the boot move again,
+// which continues from wherever the world is. A row already on its identity is
+// never touched.
+//
+// Data is renamed, never copied: syncthing compares a file's mtime, and a copy
+// would make every file of the folder look changed to every peer.
 
 // The docker names a component carried before the move: the 8.x prefixed forms,
 // and the bare identifier of a container created under the name since.
 const FORMER_NAME_PREFIXES = ['flux', 'zel', ''];
+const ATTEMPTS = 3;
+const ATTEMPT_DELAY_MS = 2000;
+const RETRY_MS = 60 * 1000;
+
+// The apps whose move did not complete, by row, each holding its lease until it does.
+const held = new Map();
+let retryTimer = null;
+
+function rowKey(name, replica) {
+  return `${name}|${replica ?? ''}`;
+}
 
 function formerContainerNames(identifier) {
   return FORMER_NAME_PREFIXES.map((prefix) => `${prefix}${identifier}`);
@@ -62,6 +81,31 @@ async function run(command, params) {
   const result = await serviceHelper.runCommand(command, { runAsRoot: true, params, logError: false });
   if (result.error) throw new Error(`${command} ${params.join(' ')}: ${result.error.message}`);
   return result;
+}
+
+/**
+ * Runs a step up to ATTEMPTS times, a pause between tries. The last error is
+ * the one thrown.
+ *
+ * @param {string} label
+ * @param {() => Promise<*>} step
+ */
+async function attempt(label, step) {
+  let lastError;
+  for (let i = 1; i <= ATTEMPTS; i += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      return await step();
+    } catch (error) {
+      lastError = error;
+      if (i < ATTEMPTS) {
+        log.warn(`appIdentityMove - ${label} failed (${error.message}); attempt ${i + 1} of ${ATTEMPTS}`);
+        // eslint-disable-next-line no-await-in-loop
+        await serviceHelper.delay(ATTEMPT_DELAY_MS);
+      }
+    }
+  }
+  throw lastError;
 }
 
 /**
@@ -89,27 +133,77 @@ async function registrationOf(installed) {
 }
 
 /**
- * Stops and removes the container a component ran in under its former name.
- * The stop goes through the shutdown daemon when the component's shutdown
- * does, as a redeploy's does. A former container that is not there is a step
- * already taken.
+ * Everything one row's move needs, read before anything is touched, with the
+ * app's lease taken: the deployment under the name and the deployment under
+ * the identity. A row already on its identity is done; one that cannot be
+ * read, whose uuid nothing names, whose app another operation holds or whose
+ * deployment cannot be built is not planned, and says why.
  *
- * @param {object} installed - InstantiatedSpec of the row
- * @param {string|null} replica
+ * @param {{name: string, replica: string|null}} row
+ * @param {{isAppIdentity: Function, appIdentityFromUuid: Function}} spec
+ * @returns {Promise<object>}
+ */
+async function planRow(row, { isAppIdentity, appIdentityFromUuid }) {
+  const { name, replica } = row;
+  let installed = await appsRepository.getInstalledIdentity(name, replica);
+  if (!installed) return { name, replica, skipped: 'the row cannot be read yet' };
+  if (isAppIdentity(installed.identity)) return { name, replica, done: true };
+  const registration = await registrationOf(installed);
+  if (!registration) return { name, replica, skipped: 'no applied decision names its uuid' };
+  if (!registration.fromRow) {
+    await appsRepository.setInstalledRegistration(name, replica, registration);
+    installed = await appsRepository.getInstalledIdentity(name, replica);
+  }
+  const to = appIdentityFromUuid(registration.uuid);
+  const token = operationRegistry.acquire(name, 'move', 'appIdentityMove', `moving ${name} onto ${to}`);
+  if (!token) return { name, replica, skipped: 'held by another operation' };
+  try {
+    const former = await deploymentProvider.buildDeployment(installed, { replica });
+    const next = await deploymentProvider.buildDeployment(installed, { replica, identity: to });
+    return {
+      name, replica, installed, registration, from: installed.identity, to, former, next, token,
+    };
+  } catch (error) {
+    operationRegistry.release(name, token);
+    return { name, replica, skipped: `its deployment cannot be built: ${error.message}` };
+  }
+}
+
+/**
+ * Stops the container a component runs in under its former name, through the
+ * shutdown daemon when the component's shutdown does, as a redeploy's does. A
+ * former container that is not there, or not running, costs nothing.
+ *
+ * @param {object} plan
  * @param {object} formerComp - the component of the deployment built under the name
  */
-async function removeFormerContainer(installed, replica, formerComp) {
+async function stopFormerContainer(plan, formerComp) {
   // eslint-disable-next-line no-restricted-syntax
   for (const name of formerContainerNames(formerComp.identifier)) {
     // eslint-disable-next-line no-await-in-loop
     if (await dockerService.getDockerContainer(name)) {
       stopAppMonitoring(formerComp.identifier, true);
       // eslint-disable-next-line no-await-in-loop
-      const stopHandled = await appOperations.requestComponentDaemonStop(installed.owner, installed.name, replica, formerComp);
+      const handled = await appOperations.requestComponentDaemonStop(plan.installed.owner, plan.name, plan.replica, formerComp);
       // eslint-disable-next-line no-await-in-loop
-      if (!stopHandled) await dockerService.appDockerStop(name);
+      if (!handled) await dockerService.appDockerStop(name);
+    }
+  }
+}
+
+/**
+ * Removes the container a component ran in under its former name, forcing it
+ * when a plain remove leaves it. One that is not there is a step already taken.
+ *
+ * @param {object} formerComp
+ */
+async function removeFormerContainer(formerComp) {
+  // eslint-disable-next-line no-restricted-syntax
+  for (const name of formerContainerNames(formerComp.identifier)) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await dockerService.getDockerContainer(name)) {
       // eslint-disable-next-line no-await-in-loop
-      await dockerService.appDockerRemove(name);
+      await dockerService.appDockerRemove(name).catch((error) => log.warn(`appIdentityMove - remove ${name}: ${error.message}`));
       // eslint-disable-next-line no-await-in-loop
       if (await dockerService.getDockerContainer(name)) {
         // eslint-disable-next-line no-await-in-loop
@@ -162,10 +256,13 @@ async function formerImage(formerIdentifier, formerDir) {
  * unmounted, the image is renamed beside itself and recorded under the new
  * identifier with the stamp it carries, the directory is renamed, and the
  * volume is mounted at the new path through the one path every mount takes.
- * An image already in place is recorded and mounted without a rename.
+ * An image already in place is recorded and mounted without a rename. A
+ * volume that will not mount is left for the reconciler, which mounts every
+ * volume before it starts an app and reports one that will not.
  *
  * @param {object} formerComp
  * @param {object} comp - the same component of the deployment built under the identity
+ * @returns {Promise<{mounted: boolean, reason?: string}>}
  */
 async function moveVolume(formerComp, comp) {
   const formerDir = `${appsFolder}${formerComp.identifier}`;
@@ -190,14 +287,10 @@ async function moveVolume(formerComp, comp) {
     await run('mv', [formerDir, dir]);
   }
 
-  if (!image) {
-    log.warn(`appIdentityMove - no image found for ${formerComp.identifier}; the reconciler reports the volume`);
-    return;
-  }
+  if (!image) return { mounted: false, reason: 'no image found under the former names' };
   const mounted = await volumeService.ensureAppVolumeMounted(comp.identifier);
-  if (!mounted.mounted) {
-    throw new Error(`the volume of ${comp.identifier} could not be mounted at ${dir}: ${mounted.reason}`);
-  }
+  if (!mounted.mounted) return { mounted: false, reason: mounted.reason };
+  return { mounted: true };
 }
 
 /**
@@ -224,8 +317,10 @@ async function repointFolder(comp) {
 
 /**
  * Recreates an app's containers under the identity its row now names, on the
- * volumes kept, for the reconciler to start; attaches each to the networks of
- * the apps it links; and hands the shutdown daemon the plan the new names make.
+ * volumes kept and from the images on this daemon, for the reconciler to
+ * start; attaches each to the networks of the apps it links; and hands the
+ * shutdown daemon the plan the new names make. A container already there is
+ * left as it is.
  *
  * @param {string} name
  * @param {string|null} replica
@@ -238,9 +333,12 @@ async function recreate(name, replica, uuid) {
   // eslint-disable-next-line no-restricted-syntax
   for (const [, component] of deployment.componentEntries()) {
     // eslint-disable-next-line no-await-in-loop
+    if (await dockerService.getDockerContainer(component.identifier)) continue;
+    // eslint-disable-next-line no-await-in-loop
     await componentProvisioner.installComponent(component, {
       createVolumes: false,
       skipPorts: true,
+      localImageFirst: true,
       allowLocalImageFallback: true,
       specVersion: installed.version,
       owner: installed.owner,
@@ -257,105 +355,187 @@ async function recreate(name, replica, uuid) {
 }
 
 /**
- * Moves one identity's row and everything it names onto the identity.
+ * Moves one planned row and everything it names onto the identity. Throws on
+ * a step that still fails after its attempts; the row then keeps its move
+ * record and its lease for the retry.
  *
- * @param {{name: string, replica: string|null}} row
- * @param {{appIdentityFromUuid: Function}} spec
- * @returns {Promise<{moved: boolean, reason?: string, from?: string, to?: string}>}
+ * @param {object} plan - from planRow
+ * @returns {Promise<{deferred: string|null}>} what was left to the reconciler
  */
-async function moveRow(row, { appIdentityFromUuid }) {
-  const { name, replica } = row;
-  let installed = await appsRepository.getInstalledIdentity(name, replica);
-  if (!installed) return { moved: false, reason: 'the row cannot be read yet' };
-  const registration = await registrationOf(installed);
-  if (!registration) return { moved: false, reason: 'no applied decision names its uuid' };
-  if (!registration.fromRow) {
-    await appsRepository.setInstalledRegistration(name, replica, registration);
-    installed = await appsRepository.getInstalledIdentity(name, replica);
-  }
-  const from = installed.identity;
-  const to = appIdentityFromUuid(registration.uuid);
+async function executePlan(plan) {
+  const {
+    name, replica, registration, from, to, former, next,
+  } = plan;
+  await appsRepository.setInstalledMove(name, replica, { to, since: Date.now() });
+  let deferred = null;
 
-  const token = operationRegistry.acquire(name, 'move', 'appIdentityMove', `moving ${name} onto ${to}`);
-  if (!token) return { moved: false, reason: 'held by another operation' };
-  try {
-    const former = await deploymentProvider.buildDeployment(installed, { replica });
-    const next = await deploymentProvider.buildDeployment(installed, { replica, identity: to });
-    await appsRepository.setInstalledMove(name, replica, { to, since: Date.now() });
-
-    // eslint-disable-next-line no-restricted-syntax
-    for (const [componentName, formerComp] of former.componentEntries()) {
-      const comp = next.getComponent(componentName);
+  // eslint-disable-next-line no-restricted-syntax
+  for (const [componentName, formerComp] of former.componentEntries()) {
+    const comp = next.getComponent(componentName);
+    // eslint-disable-next-line no-await-in-loop
+    await attempt(`stop ${formerComp.identifier}`, () => stopFormerContainer(plan, formerComp));
+    // eslint-disable-next-line no-await-in-loop
+    await attempt(`remove ${formerComp.identifier}`, () => removeFormerContainer(formerComp));
+    // Before the image is recorded under the new identifier: the record is one
+    // field of this document, and the move's own write outranks a carried one.
+    // eslint-disable-next-line no-await-in-loop
+    await appsRuntimeState.rekey(formerComp.identifier, comp.identifier);
+    if (!formerComp.isStateless) {
       // eslint-disable-next-line no-await-in-loop
-      await removeFormerContainer(installed, replica, formerComp);
-      // Before the image is recorded under the new identifier: the record is
-      // one field of this document, and the move's own write outranks a carried one.
-      // eslint-disable-next-line no-await-in-loop
-      await appsRuntimeState.rekey(formerComp.identifier, comp.identifier);
-      // eslint-disable-next-line no-await-in-loop
-      if (!formerComp.isStateless) await moveVolume(formerComp, comp);
-      // eslint-disable-next-line no-await-in-loop
-      if (comp.hasSyncthing()) await repointFolder(comp);
+      const volume = await attempt(`move the volume of ${formerComp.identifier}`, () => moveVolume(formerComp, comp));
+      if (!volume.mounted) deferred = `${comp.identifier}: ${volume.reason}`;
     }
-
-    await appDockerNetwork.ensureAppDockerNetwork(name, { networkName: next.networkName });
-    await appsRepository.setInstalledIdentity(name, replica, to, next.componentEntries().map(([, c]) => c.identifier));
-    await recreate(name, replica, registration.uuid);
-    await dockerService.removeFluxAppDockerNetwork(from)
-      .catch((error) => log.warn(`appIdentityMove - ${former.networkName} stays until it is empty: ${error.message}`));
-    fluxEventBus.publish('app:movedOntoIdentity', {
-      name, replica, from, to,
-    });
-    return { moved: true, from, to };
-  } finally {
-    operationRegistry.release(name, token);
+    // eslint-disable-next-line no-await-in-loop
+    if (comp.hasSyncthing()) await repointFolder(comp);
   }
+
+  await attempt(`network of ${name}`, () => appDockerNetwork.ensureAppDockerNetwork(name, { networkName: next.networkName }));
+  await appsRepository.setInstalledIdentity(name, replica, to, next.componentEntries().map(([, c]) => c.identifier));
+  if (deferred) {
+    log.warn(`appIdentityMove - ${name} is on its identity; the reconciler mounts and creates its containers (${deferred})`);
+  } else {
+    await attempt(`recreate ${name}`, () => recreate(name, replica, registration.uuid));
+  }
+  await dockerService.removeFluxAppDockerNetwork(from)
+    .catch((error) => log.warn(`appIdentityMove - ${former.networkName} stays until it is empty: ${error.message}`));
+  fluxEventBus.publish('app:movedOntoIdentity', {
+    name, replica, from, to, deferred: Boolean(deferred),
+  });
+  return { deferred };
+}
+
+function resetForTests() {
+  held.clear();
+  if (retryTimer) clearTimeout(retryTimer);
+  retryTimer = null;
+}
+
+function scheduleRetry() {
+  if (retryTimer || held.size === 0) return;
+  retryTimer = setTimeout(() => {
+    retryHeldApps().catch((error) => log.error(`appIdentityMove - retry failed: ${error.message}`));
+  }, RETRY_MS);
+  if (retryTimer.unref) retryTimer.unref();
 }
 
 /**
- * Moves every installed app whose identity is not its registration's onto it.
- * One app at a time; a failure is logged and the next app is moved, and the
- * failed one resumes at the next start from the record on its row.
+ * Records a finished plan's outcome, releases its lease and drops it from the
+ * held set.
+ */
+function settle(plan, results, outcome) {
+  const entry = { name: plan.name, replica: plan.replica, to: plan.to };
+  if (outcome.deferred) {
+    log.warn(`appIdentityMove - ${plan.name} moved onto ${plan.to}, containers left to the reconciler`);
+    results.deferred.push({ ...entry, reason: outcome.deferred });
+  } else {
+    log.info(`appIdentityMove - ${plan.name} moved from ${plan.from} onto ${plan.to}`);
+    results.moved.push(entry);
+  }
+  operationRegistry.release(plan.name, plan.token);
+  held.delete(rowKey(plan.name, plan.replica));
+}
+
+function hold(plan, results, error) {
+  log.error(`appIdentityMove - ${plan.name} could not be finished, held for retry: ${error.message}`);
+  held.set(rowKey(plan.name, plan.replica), plan);
+  results.held.push({ name: plan.name, replica: plan.replica, error: error.message });
+}
+
+/**
+ * Tries again every app the last run left held, each planned afresh from its
+ * row. Arms the next retry while any remains.
  *
- * @returns {Promise<{moved: object[], skipped: object[], failed: object[]}>}
+ * @returns {Promise<{moved: object[], deferred: object[], held: object[]}>}
+ */
+async function retryHeldApps() {
+  retryTimer = null;
+  const results = { moved: [], deferred: [], held: [] };
+  if (held.size === 0) return results;
+  const spec = await getSpec();
+  // eslint-disable-next-line no-restricted-syntax
+  for (const [key, stale] of [...held]) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const plan = await planRow({ name: stale.name, replica: stale.replica }, spec);
+      if (plan.done) {
+        operationRegistry.release(stale.name, stale.token);
+        held.delete(key);
+        results.moved.push({ name: stale.name, replica: stale.replica, to: stale.to });
+      } else if (plan.skipped) {
+        throw new Error(plan.skipped);
+      } else {
+        // eslint-disable-next-line no-await-in-loop
+        settle(plan, results, await executePlan(plan));
+      }
+    } catch (error) {
+      hold(stale, results, error);
+    }
+  }
+  scheduleRetry();
+  return results;
+}
+
+/**
+ * Moves every installed app whose identity is not its registration's onto it:
+ * every former container stopped at once, then one app at a time. An app that
+ * cannot be finished is held, lease kept, and tried again on a timer.
+ *
+ * @returns {Promise<{moved: object[], deferred: object[], skipped: object[], held: object[]}>}
  */
 async function moveInstalledAppsOntoIdentity() {
-  const results = { moved: [], skipped: [], failed: [] };
-  const { isAppIdentity, appIdentityFromUuid } = await getSpec();
+  const results = {
+    moved: [], deferred: [], skipped: [], held: [],
+  };
+  held.clear();
+  const spec = await getSpec();
   const rows = await appsRepository.listInstalledRows();
-  const due = rows.filter((row) => !isAppIdentity(row.identity));
+  const due = rows.filter((row) => !spec.isAppIdentity(row.identity));
   if (due.length === 0) {
     log.info(`appIdentityMove - every installed app (${rows.length}) is on its identity`);
     return results;
   }
   log.info(`appIdentityMove - ${due.length} of ${rows.length} installed row(s) still named by their name`);
   const startedAt = Date.now();
+
+  const plans = [];
   // eslint-disable-next-line no-restricted-syntax
   for (const row of due) {
-    const label = row.replica ? `${row.name} replica ${row.replica}` : row.name;
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      const outcome = await moveRow(row, { appIdentityFromUuid });
-      if (outcome.moved) {
-        log.info(`appIdentityMove - ${label} moved from ${outcome.from} onto ${outcome.to}`);
-        results.moved.push({ name: row.name, replica: row.replica, to: outcome.to });
-      } else {
-        log.warn(`appIdentityMove - ${label} not moved: ${outcome.reason}`);
-        results.skipped.push({ name: row.name, replica: row.replica, reason: outcome.reason });
-      }
-    } catch (error) {
-      log.error(`appIdentityMove - ${label} failed, resuming at the next start: ${error.message}`);
-      results.failed.push({ name: row.name, replica: row.replica, error: error.message });
+    // eslint-disable-next-line no-await-in-loop
+    const plan = await planRow(row, spec);
+    if (plan.skipped) {
+      log.warn(`appIdentityMove - ${row.name} not moved: ${plan.skipped}`);
+      results.skipped.push({ name: row.name, replica: row.replica, reason: plan.skipped });
+    } else if (!plan.done) {
+      plans.push(plan);
     }
   }
-  log.info(`appIdentityMove - moved ${results.moved.length}, skipped ${results.skipped.length}, failed ${results.failed.length} in ${Math.round((Date.now() - startedAt) / 1000)}s`);
+
+  // Every former container at once: the node pays docker's grace once.
+  await Promise.all(plans.flatMap((plan) => plan.former.componentEntries().map(([, formerComp]) => (
+    stopFormerContainer(plan, formerComp)
+      .catch((error) => log.warn(`appIdentityMove - stop ${formerComp.identifier}: ${error.message}; tried again with its move`))
+  ))));
+
+  // eslint-disable-next-line no-restricted-syntax
+  for (const plan of plans) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      settle(plan, results, await executePlan(plan));
+    } catch (error) {
+      hold(plan, results, error);
+    }
+  }
+  scheduleRetry();
+  log.info(`appIdentityMove - moved ${results.moved.length}, deferred ${results.deferred.length}, skipped ${results.skipped.length}, held ${results.held.length} in ${Math.round((Date.now() - startedAt) / 1000)}s`);
   return results;
 }
 
 module.exports = {
   moveInstalledAppsOntoIdentity,
+  retryHeldApps,
   // exposed for tests
-  moveRow,
   registrationOf,
   formerContainerNames,
+  heldRows: () => [...held.keys()],
+  resetForTests,
 };

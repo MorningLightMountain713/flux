@@ -586,7 +586,7 @@ async function reconcileNetworkMembership(identifier, spec, actual) {
 // deliberately NOT here — they hold run-state through the transient operationDesired
 // (driven via drive()) and the reconciler keeps actuating; freezing it would force
 // them to reach around it, the very thing the single-actuator invariant forbids.
-const CONSTRUCTION_LEASE_TYPES = new Set(['install', 'remove', 'redeploy', 'rebuild', 'reconcile']);
+const CONSTRUCTION_LEASE_TYPES = new Set(['install', 'remove', 'redeploy', 'rebuild', 'reconcile', 'move']);
 
 /**
  * Whether a lease blocks the reconciler from actuating this container: a
