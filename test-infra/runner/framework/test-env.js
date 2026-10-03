@@ -278,10 +278,10 @@ async function assertNodeImageStamped(tag) {
 }
 
 // The FluxOS code of one built node image, copied into a running node: the
-// parts of the tree the process loads. Its data, its containers and its
-// database stay.
+// parts of the tree the process loads, and the vendored spec library beside
+// it. Its data, its containers and its database stay.
 const UPGRADE_DIRS = ['ZelBack/src', 'helpers', 'lib'];
-const UPGRADE_FILES = ['package.json', 'ZelBack/pinEnvironment.js', 'ZelBack/config/default.js', 'ZelBack/config/volumeToolsImage.json', 'app.js', 'apiServer.js', 'init.js'];
+const UPGRADE_FILES = ['package.json', 'ZelBack/pinEnvironment.js', 'ZelBack/configReconciliation.js', 'ZelBack/config/default.js', 'ZelBack/config/volumeToolsImage.json', 'app.js', 'apiServer.js', 'init.js'];
 // The new build's per-node config files and the script that writes the overlay from them.
 const UPGRADE_HARNESS = ['test-infra/config', 'test-infra/write-node-config.sh'];
 
@@ -2387,7 +2387,8 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
           // eslint-disable-next-line no-await-in-loop
           await dockerCp(`${sourceId}:/flux/${part}`, `${host}/flux/${part}`);
         }
-        const clear = [...replaced, ...UPGRADE_HARNESS].map((d) => `rm -rf /flux/${d}`).join(' && ');
+        await dockerCp(`${sourceId}:/flux-spec`, `${host}/flux-spec`);
+        const clear = [...[...replaced, ...UPGRADE_HARNESS].map((d) => `/flux/${d}`), '/flux-spec'].map((d) => `rm -rf ${d}`).join(' && ');
         const cleared = await execInContainer(node.container, clear);
         if (cleared.exitCode !== 0) throw new Error(`upgradeNode: cannot clear node ${index}'s code: ${cleared.output}`);
         for (const part of [...replaced, ...UPGRADE_HARNESS]) {
@@ -2398,6 +2399,7 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
           // eslint-disable-next-line no-await-in-loop
           await dockerCp(`${host}/flux/${file}`, `${nodeId}:/flux/${file}`);
         }
+        await dockerCp(`${host}/flux-spec`, `${nodeId}:/`);
         const owned = [...replaced, ...UPGRADE_FILES].map((p) => `/flux/${p}`).join(' ');
         const configured = await execInContainer(node.container, `/flux/test-infra/write-node-config.sh && chown -R fluxuser:fluxuser ${owned} /flux/ZelBack/config && (chown fluxuser:fluxuser /flux/ZelBack/shared.js 2>/dev/null || true)`);
         if (configured.exitCode !== 0) throw new Error(`upgradeNode: cannot write node ${index}'s config: ${configured.output}`);
