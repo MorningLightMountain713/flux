@@ -11,19 +11,20 @@ import { waitForAppSpecStored } from '../framework/wait.js';
 import { dbClient, closeDb } from '../framework/db-client.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
-// Content lifecycle GC: the permanent content-manifest register is reaped to the
+// Content lifecycle GC: the content manifests a node holds are reaped to the
 // live-app set and the FluxDrive blob set is reconciled to the live slot-locator
 // set. One slot app drives its whole lifecycle on the submitting node (node 0):
-//   - register  → the bundled v1 manifest is stored CONFIRMED + its slot blob lands
+//   - register  → the bundled v1 manifest is HELD (signer null) + its slot blob lands
 //                 in FluxDrive (source 'slot'); confirm on-chain so the global spec
-//                 (the live-set membership the reaper keys on) exists.
+//                 (the live-set membership the reaper keys on) exists and the row
+//                 write resolves the held manifest to its signer.
 //   - update v2 → the GC reconcile is pushed and FluxDrive TOMBSTONES the superseded
-//                 v1 slot blob (the blob-set complement of the manifest register).
-//   - latest-wins → a higher version (v3) supersedes; a stale version (v2) is refused
-//                 without advancing the register.
+//                 v1 slot blob (the blob-set complement of the manifest rows).
+//   - the door  → a higher version (v3) is taken and stands; a version below the
+//                 next within the ownership (v2) is refused at the door.
 //   - reaper    → once the app leaves globalappsspecifications, the janitor's
-//                 registry-expiry sweep on the block loop drops the confirmed
-//                 manifest row.
+//                 registry-expiry sweep on the block loop drops the resolved
+//                 manifest rows.
 // Asserts on the SSE event bus + the appcontentmanifests DB row + the FluxDrive stub
 // state (reconciles, tombstoned blobs), never log scraping. Complements suite 53
 // (which proves onUpdate reactions on the RUNNING node); this suite is install-free —
@@ -33,7 +34,7 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 // ~2 outbound/node — peers connect inbound first and FluxOS dedups); arcane:true so
 // the node accepts content apps, runs the benchmark crypto, and opens sealed content.
 
-describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-wins', function () {
+describe('content lifecycle GC: manifest reaper, reconcile tombstone, the version door', function () {
   let env;
 
   const appName = `lifecyclegc${Date.now()}`;
@@ -67,7 +68,7 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-win
     await env?.teardown();
   });
 
-  it('registers a slot app: the bundled v1 manifest is stored confirmed, its slot blob lands in FluxDrive, then confirms on-chain', async function () {
+  it('registers a slot app: the bundled v1 manifest is held until the registration applies, its slot blob lands in FluxDrive, then confirms on-chain', async function () {
     this.timeout(240000);
     const node = env.clients[0];
     const afterId = node.getLastEventId();
@@ -83,8 +84,8 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-win
     expect(res.status).to.equal('success');
     appHash = res.data;
 
-    // The register synchronously uploads the slot blob (source 'slot') and stores the
-    // bundled v1 manifest confirmed — both before any on-chain confirmation exists.
+    // The register synchronously uploads the slot blob (source 'slot') and holds the
+    // bundled v1 manifest unresolved — both before any on-chain confirmation exists.
     const uploaded = await node.waitForEvent(
       'content:blobUploaded',
       (d) => d.appName === appName && d.source === 'slot',
@@ -100,14 +101,15 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-win
       30000,
       { afterId },
     );
-    expect(stored.data.confirmed).to.equal(true);
+    expect(stored.data.resolved).to.equal(false);
 
-    // The confirmed v1 manifest row is present at register time (asserted pre-confirm,
+    // The held v1 manifest row is present at register time (asserted pre-confirm,
     // before the global spec exists, so it is independent of the install path).
-    const row = await dbc.getContentManifest(appName);
+    const identity = stored.data.identity;
+    const row = await dbc.getContentManifestByIdentity(identity);
     expect(row, 'v1 manifest row present at register').to.exist;
     expect(row.version).to.equal(1);
-    expect(row.confirmed).to.equal(true);
+    expect(row.signer, 'held unresolved until the app is listed').to.equal(null);
 
     // The slot blob is in FluxDrive under the upload's locator, tagged source 'slot'.
     const state = await getFluxDriveState();
@@ -117,10 +119,20 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-win
     expect(blob.tombstoned).to.equal(false);
 
     // Confirm on-chain so the app enters globalappsspecifications — the live-set
-    // membership the reaper checks, and the spec contentupdate's getApp reads.
+    // membership the reaper checks, and the spec contentupdate's getApp reads. The
+    // row write judges the held manifest: its signer is the listed owner.
     await queueAppTx(appHash);
     await advanceBlocks(3);
     await waitForAppSpecStored(node, appName, 200000);
+    await node.waitForEvent(
+      'content:manifestPromoted',
+      (d) => d.appName === appName && d.version === 1,
+      60000,
+      { afterId },
+    );
+    const resolved = await dbc.getContentManifest(appName);
+    expect(resolved.signer, 'resolved to the listed owner at the row write').to.be.a('string');
+    expect(resolved.version).to.equal(1);
   });
 
   it('a v2 content update pushes the live slot-locator set to FluxDrive and tombstones the superseded v1 blob', async function () {
@@ -160,13 +172,13 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-win
     );
     expect(pushed.data.source).to.equal('slot');
 
-    // The manifest register advanced to v2.
+    // The highest-ranked row this node holds is now v2.
     const row = await dbc.getContentManifest(appName);
     expect(row.version).to.equal(2);
 
     // FluxDrive recorded an ACCEPTED v2 reconcile whose live set is exactly the v2 slot
     // locator (not the v1 one), and tombstoned the now-superseded v1 slot blob while
-    // leaving v2 live — the blob-set complement of the manifest version advance.
+    // leaving v2 live — the blob-set complement of the new standing manifest.
     const state = await getFluxDriveState();
     const rec = state.reconciles.find((r) => r.appName === appName && r.source === 'slot' && r.version === 2);
     expect(rec, 'v2 slot reconcile recorded').to.exist;
@@ -182,12 +194,12 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-win
     expect(v2Blob.tombstoned, 'live v2 slot blob not tombstoned').to.equal(false);
   });
 
-  it('latest-wins store: a higher version (v3) supersedes, a stale version (v2) is refused without advancing the register', async function () {
+  it('the door: a higher version (v3) is taken and stands, a version below the next (v2) is refused without a row', async function () {
     this.timeout(120000);
     const node = env.clients[0];
     const afterId = node.getLastEventId();
 
-    // Higher version wins: v3 supersedes the stored v2.
+    // The next version within the ownership: v3 is taken and outranks v2.
     const v3 = await pushContentUpdate(node.url, {
       name: appName,
       version: 3,
@@ -202,9 +214,9 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-win
     );
     expect((await dbc.getContentManifest(appName)).version).to.equal(3);
 
-    // Stale version loses: a v2 resubmission is rejected (not newer than the stored v3).
-    // The register stays at v3 and no update is applied — the submission path throws on
-    // the version-monotonicity check before storing or applying anything.
+    // Below the next: a v2 resubmission is refused at the door (the next within the
+    // ownership is 4). Nothing is stored or applied — the submission path throws on
+    // the version rule before storing or applying anything.
     const staleAfterId = node.getLastEventId();
     const stale = await pushContentUpdate(node.url, {
       name: appName,
@@ -222,20 +234,20 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-win
     expect((await dbc.getContentManifest(appName)).version).to.equal(3);
   });
 
-  it('the periodic reaper drops a confirmed manifest whose app identity no registry row carries', async function () {
+  it('the periodic reaper drops a resolved manifest whose app identity no registry row carries', async function () {
     this.timeout(300000);
     const node = env.clients[0];
 
-    // Precondition: the confirmed v3 manifest is present and the app is in the live set.
+    // Precondition: the resolved v3 manifest is present and the app is in the live set.
     const before = await dbc.getContentManifest(appName);
-    expect(before, 'confirmed manifest present before removal').to.exist;
+    expect(before, 'resolved manifest present before removal').to.exist;
     expect(before.version).to.equal(3);
-    expect(before.confirmed).to.equal(true);
+    expect(before.signer).to.be.a('string');
     const { identity } = before;
 
     // Delete the registry row behind the registry's back: the registry deletes an app's
     // manifests itself when a row leaves, so a row gone any other way is what leaves an
-    // orphan for the reaper — a confirmed manifest whose identity no row carries.
+    // orphan for the reaper — a resolved manifest whose identity no row carries.
     await dbc.deleteGlobalAppSpec(appName);
     const afterId = node.getLastEventId();
 
@@ -244,8 +256,8 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, latest-win
     const reaped = await node.waitForEvent('content:manifestReaped', (d) => d.count >= 1, 240000, { afterId });
     expect(reaped.data.count).to.be.at.least(1);
 
-    // The confirmed manifest row for the orphaned identity is gone.
-    const after = await dbc.getContentManifestByIdentity(identity);
-    expect(after, 'manifest row reaped').to.not.exist;
+    // Every manifest row of the orphaned identity is gone.
+    const after = await dbc.getContentManifestsByIdentity(identity);
+    expect(after, 'manifest rows reaped').to.deep.equal([]);
   });
 });

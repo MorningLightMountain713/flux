@@ -505,8 +505,8 @@ export function dbClient(nodeNum) {
       await globalDb.collection('appcontentmanifests').insertOne(row);
     },
 
-    // Remove a global app spec so the dead-app manifest reaper has an orphaned
-    // confirmed manifest to drop (appremove/expiry don't clear the global row in a test).
+    // Remove a global app spec so the dead-app manifest reaper has orphaned
+    // resolved manifests to drop (appremove/expiry don't clear the global row in a test).
     async deleteGlobalAppSpec(name) {
       const globalDb = await db('appsGlobal');
       await globalDb.collection('zelappsinformation').deleteOne({ name });
