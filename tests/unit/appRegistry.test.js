@@ -362,18 +362,18 @@ describe('appRegistry', () => {
     });
   });
 
-  describe('the founding record and content manifests follow the row', () => {
-    it('is forgotten when the app leaves the list', async () => {
+  describe('the founding record follows the row; the content manifests stay', () => {
+    it('is forgotten when the app leaves the list, and its manifests are kept for a renewal', async () => {
       await listed([{ name: 'deadapp', spec: await v9Spec({ name: 'deadapp' }), fields: { termStart: NOW - 30 * 86_400, identity: 'aaaaaaaaaaaa' } }]);
       stubs['../appMesh/foundingCommittee'].forget.resetHistory();
 
       await registry.blockScanned({ height: SCANNED_HEIGHT + 1, time: NOW + 1 });
 
       sinon.assert.calledOnceWithExactly(stubs['../appMesh/foundingCommittee'].forget, 'aaaaaaaaaaaa');
-      sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeContentManifests, 'aaaaaaaaaaaa');
+      sinon.assert.notCalled(stubs['./appsRepository'].removeContentManifests);
     });
 
-    it('is forgotten when another app takes the name', async () => {
+    it('is forgotten when another app takes the name, and the displaced app\'s manifests are left to the reaper', async () => {
       const spec = await v9Spec({ name: 'myapp' });
       messages = [message('new', spec)];
       rows = [{ ...(await instantiatedSpec(spec, { hash: 'old', height: 980_000 })).serialize(), identity: 'aaaaaaaaaaaa' }];
@@ -381,7 +381,7 @@ describe('appRegistry', () => {
       await registry.applyDecided('myapp', [decision('new', { identity: 'bbbbbbbbbbbb', height: 990_000 })]);
 
       sinon.assert.calledOnceWithExactly(stubs['../appMesh/foundingCommittee'].forget, 'aaaaaaaaaaaa');
-      sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeContentManifests, 'aaaaaaaaaaaa');
+      sinon.assert.notCalled(stubs['./appsRepository'].removeContentManifests);
       sinon.assert.notCalled(stubs['../appMesh/foundingCommittee'].retract);
     });
 

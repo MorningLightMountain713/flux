@@ -4,7 +4,6 @@ const config = require('config');
 const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
-const fluxEventBus = require('../utils/fluxEventBus');
 const setReconciler = require('../appMessaging/setReconciler');
 const MongoStorageProvider = require('../providers/MongoStorageProvider');
 const { expireHeightExpr } = require('./appsMaintenance');
@@ -371,11 +370,13 @@ async function markContentManifestApplied(identity, hash) {
 }
 
 /**
- * Deletes every manifest row of an app: it left the registry.
+ * Deletes every manifest row of an identity. Returns the count.
  * @param {string} identity
+ * @returns {Promise<number>}
  */
 async function removeContentManifests(identity) {
-  await dbHelper.removeDocumentsFromCollection(globalDb(), appContentManifests, { identity });
+  const res = await dbHelper.removeDocumentsFromCollection(globalDb(), appContentManifests, { identity });
+  return res?.deletedCount ?? 0;
 }
 
 /**
@@ -444,33 +445,20 @@ async function listContentManifestBroadcasts(identities) {
 }
 
 /**
- * Reap resolved manifests whose app identity no registry row carries. The registry
- * deletes an app's manifests when its row leaves; this collects the rows no app ever
- * listed. Unresolved rows are left to the TTL index, so this never races a manifest
- * that arrived just before its app's row. Rows younger than the reap grace are
- * never touched: a manifest submitted with a registration is held before the app
- * applies, so an identity not yet listed is not evidence of an app that never will
- * be. Returns the reaped count.
- * @returns {Promise<{reaped: number, orphans: string[]}>}
+ * Each identity with a resolved manifest row, with the app name its rows name:
+ * what the content domain's reaper judges against the name's history.
+ * @returns {Promise<Array<{identity: string, appName: string}>>}
  */
-async function reapOrphanedContentManifests() {
-  const cutoff = new Date(Date.now() - config.get('fluxapps.contentManifestReapGraceMs'));
-  const identities = await globalDb().collection(appContentManifests)
-    .distinct('identity', { signer: { $ne: null }, receivedAt: { $lte: cutoff } });
-  if (!identities.length) return { reaped: 0, orphans: [] };
-  const listed = await dbHelper.findInDatabase(
-    globalDb(), globalAppsInformation, { identity: { $in: identities } }, { projection: { _id: 0, identity: 1 } },
+async function listResolvedContentManifestIdentities() {
+  const docs = await dbHelper.findInDatabase(
+    globalDb(), appContentManifests, { signer: { $ne: null } }, { projection: { _id: 0, identity: 1, 'data.appName': 1 } },
   );
-  const live = new Set(listed.map((doc) => doc.identity));
-  const orphans = identities.filter((identity) => !live.has(identity));
-  if (!orphans.length) return { reaped: 0, orphans: [] };
-  const result = await dbHelper.removeDocumentsFromCollection(
-    globalDb(), appContentManifests,
-    { identity: { $in: orphans }, signer: { $ne: null }, receivedAt: { $lte: cutoff } },
-  );
-  const reaped = result?.deletedCount ?? 0;
-  if (reaped) fluxEventBus.publish('content:manifestReaped', { count: reaped });
-  return { reaped, orphans };
+  const byIdentity = new Map();
+  for (const doc of docs) {
+    const appName = doc.data?.appName;
+    if (appName && !byIdentity.has(doc.identity)) byIdentity.set(doc.identity, { identity: doc.identity, appName });
+  }
+  return [...byIdentity.values()];
 }
 
 // ── Installed Apps (localAppsInformation) ──────────────────────────
@@ -1709,7 +1697,7 @@ module.exports = {
   listResolvedContentManifests,
   listContentManifestRanks,
   listContentManifestBroadcasts,
-  reapOrphanedContentManifests,
+  listResolvedContentManifestIdentities,
   listGlobalAppNodes,
   removeGlobalAppInfo,
   replaceGlobalAppRow,

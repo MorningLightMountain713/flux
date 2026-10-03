@@ -140,13 +140,20 @@ function specLibNamespace() {
   return { ...flux, assertValidContentManifest: sinon.spy(flux.assertValidContentManifest) };
 }
 
-function load(repo = fakeRepo(), { standing = async () => ({ app: null, row: null, aside: false, rows: [] }), ownerships = async () => [] } = {}) {
+function load(repo = fakeRepo(), {
+  standing = async () => ({ app: null, row: null, aside: false, rows: [] }),
+  ownerships = async () => [],
+  latestAppliedState = async () => null,
+} = {}) {
   const bus = { publish: sinon.stub() };
   const specLib = specLibNamespace();
   const service = proxyquire('../../ZelBack/src/services/appLifecycle/contentSlotService', {
     '../utils/specLibs': { getSpec: sinon.stub().resolves(specLib) },
     '../appDatabase/appsRepository': repo,
     '../appDecisions/appHistory': { ownerships },
+    '../appDatabase/appSpecHistory': { latestAppliedState },
+    '../chainState': { getScannedHeight: async () => 0 },
+    '../appMessaging/temporaryPoolSweep': { MAX_REORG_LENGTH: 40 },
     './manifestStanding': { ...manifestStanding, standingManifest: standing },
     '../utils/fluxEventBus': bus,
   });
@@ -2205,11 +2212,91 @@ describe('contentSlotService', () => {
       expect(data.manifests.map((m) => m.version)).to.deep.equal([1, 2]);
     });
 
-    it('answers 404 for a name the registry does not list', async () => {
-      const { service } = load(fakeRepo({ getGlobalAppInfo: sinon.stub().resolves(null) }));
+    it('answers for an expired app from the state it last held: its ownership, the rows kept and the next version, standing on nothing', async () => {
+      const rows = [storedRow(1, {}), storedRow(2, {})];
+      const standing = sinon.stub().resolves({ app: null, row: null, aside: false, rows });
+      const latestAppliedState = sinon.stub().resolves({ name: APP, identity: IDENTITY, owner: OWNER });
+      const repo = fakeRepo({
+        getGlobalAppInfo: sinon.stub().resolves(null),
+        getContentManifests: sinon.stub().resolves(rows),
+      });
+      const { service } = load(repo, { standing, ownerships: async () => [{ owner: OWNER, from: 2_400_000 }], latestAppliedState });
       const r = res();
       await service.getContentManifestsApi({ params: { appname: APP } }, r);
+      sinon.assert.calledOnceWithExactly(latestAppliedState, APP);
+      const { data } = r.json.firstCall.args[0];
+      expect(data.identity).to.equal(IDENTITY);
+      expect(data.ownership).to.deep.equal({ owner: OWNER, from: 2_400_000 });
+      expect(data.standing).to.equal(null);
+      expect(data.nextVersion, 'the owner numbers a renewal\'s file list above what the node kept').to.equal(3);
+      expect(data.manifests.map((m) => m.version)).to.deep.equal([1, 2]);
+    });
+
+    it('answers 404 for a name no app is listed under or ever held', async () => {
+      const latestAppliedState = sinon.stub().resolves(null);
+      const { service } = load(fakeRepo({ getGlobalAppInfo: sinon.stub().resolves(null) }), { latestAppliedState });
+      const r = res();
+      await service.getContentManifestsApi({ params: { appname: APP } }, r);
+      sinon.assert.calledOnceWithExactly(latestAppliedState, APP);
       sinon.assert.calledWith(r.status, 404);
+    });
+  });
+
+  // An identity's manifest rows outlive its row: an expired app renews on
+  // them. They are dead once another registration of the name holds it, and
+  // reaped once that registration is beyond the chain's reorg cap.
+  describe('reapDisplacedManifests', () => {
+    const OTHER = `b${'c'.repeat(52)}`;
+    const registrationOf = (identity, height) => ({ decision: { identity, height, type: 'registration' } });
+
+    function reaperDeps(overrides = {}) {
+      return {
+        listHeld: async () => [{ identity: IDENTITY, appName: APP }],
+        latestRegistration: sinon.stub().resolves(registrationOf(OTHER, 1000)),
+        scannedHeight: async () => 1040,
+        remove: sinon.stub().resolves(2),
+        ...overrides,
+      };
+    }
+
+    it('reaps the rows of an identity another registration of its name displaced, once that registration is a reorg cap deep', async () => {
+      const { service, bus } = load();
+      const deps = reaperDeps();
+      const out = await service.reapDisplacedManifests(deps);
+      expect(out).to.deep.equal({ reaped: 2, orphans: [IDENTITY] });
+      sinon.assert.calledOnceWithExactly(deps.latestRegistration, APP);
+      sinon.assert.calledOnceWithExactly(deps.remove, IDENTITY);
+      sinon.assert.calledWithMatch(bus.publish, 'content:manifestReaped', { count: 2, identities: [IDENTITY] });
+    });
+
+    it('keeps the rows while the displacing registration is within the reorg cap', async () => {
+      const { service, bus } = load();
+      const deps = reaperDeps({ scannedHeight: async () => 1039 });
+      expect(await service.reapDisplacedManifests(deps)).to.deep.equal({ reaped: 0, orphans: [] });
+      sinon.assert.notCalled(deps.remove);
+      sinon.assert.neverCalledWith(bus.publish, 'content:manifestReaped');
+    });
+
+    it('keeps the rows of the identity the name\'s latest registration made: an expired app renews on them', async () => {
+      const { service } = load();
+      const deps = reaperDeps({ latestRegistration: sinon.stub().resolves(registrationOf(IDENTITY, 1000)) });
+      expect(await service.reapDisplacedManifests(deps)).to.deep.equal({ reaped: 0, orphans: [] });
+      sinon.assert.notCalled(deps.remove);
+    });
+
+    it('keeps the rows of a name with no applied registration: an empty history is not evidence', async () => {
+      const { service } = load();
+      const deps = reaperDeps({ latestRegistration: sinon.stub().resolves(null) });
+      expect(await service.reapDisplacedManifests(deps)).to.deep.equal({ reaped: 0, orphans: [] });
+      sinon.assert.notCalled(deps.remove);
+    });
+
+    it('reads nothing further when no resolved row is held', async () => {
+      const { service } = load();
+      const deps = reaperDeps({ listHeld: async () => [] });
+      expect(await service.reapDisplacedManifests(deps)).to.deep.equal({ reaped: 0, orphans: [] });
+      sinon.assert.notCalled(deps.latestRegistration);
+      sinon.assert.notCalled(deps.remove);
     });
   });
 });

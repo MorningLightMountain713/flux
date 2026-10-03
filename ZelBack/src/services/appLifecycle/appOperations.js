@@ -30,6 +30,7 @@ const {
   extractIp, extractPort, ipsMatch, DEFAULT_API_PORT,
 } = require('../utils/socketAddressUtils');
 const appsRepository = require('../appDatabase/appsRepository');
+const appSpecHistory = require('../appDatabase/appSpecHistory');
 const appDataEntries = require('../utils/appDataEntries');
 const ingressAttestationService = require('../appMessaging/ingressAttestationService');
 const registryManager = require('../appDatabase/registryManager');
@@ -1797,7 +1798,10 @@ async function updateAppGlobaly(params) {
     await assertSecretsNotConflicting(spec.name, componentName, secrets, spec.owner);
   }
 
-  const appInfo = await appsRepository.getGlobalAppInfo(spec.name);
+  // The app the update is judged against: the one the list carries under the
+  // name, or the one that last held it, so an expired app is renewed on what it
+  // held.
+  const appInfo = (await appsRepository.getGlobalAppInfo(spec.name)) ?? (await appSpecHistory.latestAppliedState(spec.name));
   if (!appInfo) {
     throw new Error('Flux App update received but application to update does not exist!');
   }

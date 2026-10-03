@@ -31,6 +31,7 @@ describe('appJanitor tests', () => {
   let fluxNetworkHelperStub;
   let fluxEventBusStub;
   let appsRepositoryStub;
+  let contentSlotServiceStub;
   let appQueryServiceStub;
   let appDockerNetworkStub;
   let appUninstallerStub;
@@ -107,8 +108,8 @@ describe('appJanitor tests', () => {
       listGlobalAppInfo: sinon.stub().resolves([]),
       removeGlobalAppInfo: sinon.stub().resolves(),
       removeAppInstallingErrorRecords: sinon.stub().resolves(),
-      reapOrphanedContentManifests: sinon.stub().resolves({ reaped: 0, orphans: [] }),
     };
+    contentSlotServiceStub = { reapDisplacedManifests: sinon.stub().resolves({ reaped: 0, orphans: [] }) };
     appQueryServiceStub = {
       listAllApps: sinon.stub().resolves({ status: 'success', data: [] }),
       installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
@@ -127,6 +128,7 @@ describe('appJanitor tests', () => {
       '../appQuery/appQueryService': appQueryServiceStub,
       '../appNetwork/appDockerNetwork': appDockerNetworkStub,
       './appUninstaller': appUninstallerStub,
+      './contentSlotService': contentSlotServiceStub,
     });
   });
 
@@ -220,8 +222,8 @@ describe('appJanitor tests', () => {
   });
 
   describe('sweepContentManifests', () => {
-    it('reaps the manifests of apps the registry no longer lists, and reports them', async () => {
-      appsRepositoryStub.reapOrphanedContentManifests.resolves({ reaped: 2, orphans: ['x', 'y'] });
+    it('reaps the manifests of identities another registration of their name displaced, and reports them', async () => {
+      contentSlotServiceStub.reapDisplacedManifests.resolves({ reaped: 2, orphans: ['x', 'y'] });
 
       const result = await appJanitor.sweepContentManifests();
 

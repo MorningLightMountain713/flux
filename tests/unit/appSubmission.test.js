@@ -66,6 +66,7 @@ describe('appSubmission tests', () => {
       '../daemonService/daemonStatus': stubs.daemonStatus,
       '../appDatabase/appsRepository': stubs.appsRepository,
       '../appDecisions/appHistory': stubs.appHistory,
+      '../appDatabase/appSpecHistory': stubs.appSpecHistory,
       '../utils/enterpriseNetwork': stubs.enterpriseNetwork,
       '../appMessaging/messageVerifier': {},
       '../appMessaging/appEventVerifier': {},
@@ -119,6 +120,7 @@ describe('appSubmission tests', () => {
         getGlobalAppInfo: sinon.stub().resolves(null),
       },
       appHistory: { latestApplied: sinon.stub().resolves(null) },
+      appSpecHistory: { latestAppliedState: sinon.stub().resolves(null) },
       enterpriseNetwork: { isEnterpriseAppOwner: sinon.stub().returns(true) },
     };
     // resolveSubmission parses via the strict backend deserializer; the default
@@ -637,7 +639,29 @@ describe('appSubmission tests', () => {
       }
     });
 
-    it('rejects when the app to update does not exist', async () => {
+    it('validates a renewal of an expired app, one the list no longer carries, against the state it last held', async () => {
+      appSubmission = load();
+      const spec = v9Spec();
+      const held = { spec: v9Spec() };
+      stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
+      stubs.parseSpec.resolves({ isEncrypted: false });
+      stubs.specLibs.validateSubmissionSpec.resolves(spec);
+      stubs.appsRepository.getGlobalAppInfo.resolves(null);
+      stubs.appSpecHistory.latestAppliedState.resolves(held);
+      const lockErr = new Error('referral is registration-locked and cannot change');
+      stubs.specLibs.assertUpdateInvariants.rejects(lockErr);
+
+      try {
+        await appSubmission.validateAppUpdate({ version: 9 }, {});
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err.message).to.include('registration-locked');
+        sinon.assert.calledOnceWithExactly(stubs.appSpecHistory.latestAppliedState, spec.name);
+        expect(stubs.specLibs.assertUpdateInvariants.firstCall.args[0], 'the invariants compare against what the app last held').to.equal(held.spec);
+      }
+    });
+
+    it('rejects when no app of the name is listed or was ever applied', async () => {
       appSubmission = load();
       const spec = v9Spec();
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
@@ -650,6 +674,7 @@ describe('appSubmission tests', () => {
         expect.fail('should have thrown');
       } catch (err) {
         expect(err.message).to.include('does not exist and cannot be updated');
+        sinon.assert.calledOnceWithExactly(stubs.appSpecHistory.latestAppliedState, spec.name);
       }
     });
 

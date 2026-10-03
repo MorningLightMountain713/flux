@@ -13,6 +13,7 @@ const appDockerNetwork = require('../appNetwork/appDockerNetwork');
 const playgroundRunner = require('../appPlayground/playgroundRunner');
 const playgroundSessionRegistry = require('../appPlayground/playgroundSessionRegistry');
 const appUninstaller = require('./appUninstaller');
+const contentSlotService = require('./contentSlotService');
 
 // The janitor owns debris: things that exist on this node with no desired-state
 // row referring to them. Anything a row DOES refer to belongs to the
@@ -101,12 +102,13 @@ async function dockerOrphanSweep() {
 }
 
 /**
- * Reap the content manifests of apps the registry no longer lists.
+ * Reap the content manifests of identities another registration of their name
+ * has displaced.
  * @returns {Promise<object>} sweep summary
  */
 async function contentManifestSweep() {
-  const { reaped } = await appsRepository.reapOrphanedContentManifests();
-  if (reaped > 0) log.info(`appJanitor - reaped ${reaped} content manifest(s) for removed apps`);
+  const { reaped } = await contentSlotService.reapDisplacedManifests();
+  if (reaped > 0) log.info(`appJanitor - reaped ${reaped} content manifest(s) of displaced apps`);
   return { manifestsReaped: reaped };
 }
 
