@@ -52,8 +52,10 @@ module.exports = {
         "database": "node16_globalzelapps",
         "collections": {
             "appsMessages": "zelappsmessages",
+            "appDecisions": "appdecisions",
             "appsInformation": "zelappsinformation",
             "appsTemporaryMessages": "zelappstemporarymessages",
+            "appsUnpayableMessages": "appsunpayablemessages",
             "appsInstallingLocations": "appsinstallinglocations",
             "limitCounterRecords": "limitcounterrecords",
             "appsInstallingErrorsLocations": "appsInstallingErrorsLocations",
