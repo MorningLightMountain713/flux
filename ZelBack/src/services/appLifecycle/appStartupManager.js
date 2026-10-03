@@ -444,7 +444,13 @@ async function reconcileAppsOnBoot({ placement: decided = null } = {}) {
   }
 }
 
+/**
+ * Removes every installed app, each removal broadcast.
+ * @param {string} reason journal only
+ * @returns {Promise<string[]>} the names removed
+ */
 async function removeAllApps(reason) {
+  const removed = [];
   const installedAppsRes = await appQueryService.installedApps();
   if (installedAppsRes.status === 'success') {
     for (const app of installedAppsRes.data) {
@@ -452,8 +458,51 @@ async function removeAllApps(reason) {
       // One removal that never returns must not hold boot, or every app after it.
       // eslint-disable-next-line no-await-in-loop
       await appUninstaller.uninstallApplication(app.name, { forceKill: true, broadcastRemoval: true });
+      removed.push(app.name);
     }
   }
+  return removed;
+}
+
+/**
+ * Waits for the state pull: what peers kept while this node was dark, a
+ * certificate about it and every other node's announcements, without which the
+ * rows are this node's own stale view. Bounded by what is left of the sync
+ * budget; a pull that does not complete leaves the decision to the clock.
+ * @param {number} deadline epoch ms at which the sync budget ends
+ * @returns {Promise<boolean>} whether the pull completed in time
+ */
+async function awaitStatePull(deadline) {
+  try {
+    await awaitWithin(capabilities.whenUp('appStateSynced'), Math.max(0, deadline - Date.now()), 'state_pull_timeout');
+    return true;
+  } catch (error) {
+    if (error.message !== 'state_pull_timeout') throw error;
+    log.warn('appStartupManager - the state pull did not complete within the sync budget; deciding placement by the clock');
+    return false;
+  }
+}
+
+/**
+ * The placement a node without the network's view decides for itself, by the
+ * jurors' own rule: a node not back on the network within NODE_DOWN_GRACE_MS
+ * of its drop is certified, and its rows are dead from the drop plus the grace,
+ * so past that it removes every app, each removal broadcast, as the fast path at
+ * process start does. Measured from the drop the stopped process stamped, not
+ * from the downtime read at process start. A first boot has no drop. A boot
+ * context that could not be read has no drop either, and answers nothing
+ * (placed: null): the reconcile holds the apps until the rows answer.
+ * @param {{firstBoot: boolean, unreadable?: boolean, lastAlive: ?number}} bootContext
+ * @returns {Promise<{placed: boolean|null, removed: string[], failed: Array<{app: string, error: string}>}>}
+ */
+async function placementByClock(bootContext) {
+  if (bootContext.firstBoot) return { placed: true, removed: [], failed: [] };
+  if (bootContext.unreadable || !Number.isFinite(bootContext.lastAlive)) return { placed: null, removed: [], failed: [] };
+  const sinceDropMs = Date.now() - bootContext.lastAlive;
+  if (sinceDropMs <= NODE_DOWN_GRACE_MS) return { placed: true, removed: [], failed: [] };
+  log.warn(`appStartupManager - no network view and ${Math.round(sinceDropMs / 1000)}s since the drop, past the ${NODE_DOWN_GRACE_MS / 1000}s grace: the fleet has certified this node; removing all apps`);
+  const removed = await removeAllApps('Boot past the node-down grace');
+  return { placed: false, removed, failed: [] };
 }
 
 /**
@@ -522,6 +571,7 @@ async function manageAppsOnBoot(bootContext) {
       return;
     }
 
+    const syncDeadline = Date.now() + SYNC_TIMEOUT_MS;
     try {
       await awaitWithin(capabilities.whenUp('appRegistryConsistent'), SYNC_TIMEOUT_MS, 'sync_timeout');
     } catch (error) {
@@ -543,20 +593,24 @@ async function manageAppsOnBoot(bootContext) {
       log.warn(`appStartupManager - off-list boot sweep failed, the register starts empty: ${error.message}`);
     }
 
-    // The node-level question first: a node the network has moved on from
-    // removes every app and migrates nothing. One whose rows cannot be read
-    // (placed: null) goes on: the reconcile holds its apps until it can answer.
-    const placement = await enforceNodePlacement('boot');
-    if (placement.placed === false) {
-      log.info(`appStartupManager - the network has moved on from this node; ${placement.removed.length} app(s) removed, nothing to start`);
-      return;
-    }
+    const statePulled = await awaitStatePull(syncDeadline);
 
     // Anything that would rather act on a container while it is down runs here:
     // FluxOS keeps every container on RestartPolicy 'no', so after a host reboot
     // nothing is running until the reconcile below starts it. Never allowed to stop
     // that reconcile - a node that cannot migrate must still start its apps.
     await migrations.runBefore('bootReconcileDecided');
+
+    // The node-level question, asked where the apps are about to start: by the
+    // rows when this node holds the network's view, by the jurors' clock when it
+    // does not. A node the network has moved on from removes every app and
+    // starts nothing. Rows that cannot be read (placed: null) go on: the
+    // reconcile holds the apps until the question answers.
+    const placement = statePulled ? await enforceNodePlacement('boot') : await placementByClock(bootContext);
+    if (placement.placed === false) {
+      log.info(`appStartupManager - the network has moved on from this node; ${placement.removed.length} app(s) removed, nothing to start`);
+      return;
+    }
 
     log.info('appStartupManager - Daemon, DB, and node confirmed, reconciling apps');
     await openInstalledAppPorts();

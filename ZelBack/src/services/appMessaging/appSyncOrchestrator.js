@@ -1467,9 +1467,14 @@ class AppSyncOrchestrator {
       const downtimeMs = heartbeat ? Date.now() - heartbeat.lastAlive : Infinity;
       const cleanShutdown = heartbeat?.shutdownReason === 'sigterm';
 
+      // lastAlive is the drop: the stopped process stamped it as it closed its
+      // connections, or its last tick if it crashed. This process writes its
+      // own heartbeat from start, so a check made later in the boot measures
+      // from here, never from the collection.
       const ctx = {
         machineRebooted,
         downtimeMs,
+        lastAlive: heartbeat ? heartbeat.lastAlive : null,
         cleanShutdown,
         currentBootId,
         firstBoot: !heartbeat,
@@ -1479,7 +1484,9 @@ class AppSyncOrchestrator {
       return ctx;
     } catch (error) {
       log.error(`Failed to read boot context: ${error.message}`);
-      return { machineRebooted: true, downtimeMs: Infinity, cleanShutdown: false, currentBootId: null, firstBoot: true };
+      return {
+        machineRebooted: true, downtimeMs: Infinity, lastAlive: null, cleanShutdown: false, currentBootId: null, firstBoot: true,
+      };
     }
   }
 

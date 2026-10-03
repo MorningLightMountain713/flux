@@ -3253,6 +3253,7 @@ describe('AppSyncOrchestrator', () => {
       expect(ctx.firstBoot).to.be.true;
       expect(ctx.machineRebooted).to.be.true;
       expect(ctx.downtimeMs).to.equal(Infinity);
+      expect(ctx.lastAlive).to.equal(null);
     });
 
     it('should detect unclean shutdown when shutdownReason is absent', async () => {
@@ -3277,6 +3278,7 @@ describe('AppSyncOrchestrator', () => {
       const ctx = await AppSyncOrchestrator.readBootContext();
 
       expect(ctx.downtimeMs).to.be.within(299_000, 301_000);
+      expect(ctx.lastAlive, 'the stopped process\'s heartbeat, for the checks the boot makes later').to.equal(fiveMinAgo);
     });
 
     it('reports an unread context as unreadable, neither a first boot nor a long absence', async () => {

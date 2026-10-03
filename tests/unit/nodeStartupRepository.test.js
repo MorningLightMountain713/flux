@@ -157,12 +157,17 @@ describe('nodeStartupRepository tests', () => {
       expect(update).to.deep.equal({ $set: { lastAlive: 1000 } });
     });
 
-    it('records a shutdown reason', async () => {
-      await repository.setShutdownReason('sigterm');
+    it('records a shutdown reason and stamps the stop as the last moment alive', async () => {
+      const clock = sinon.useFakeTimers({ now: 1_700_000_000_000, toFake: ['Date'] });
+      try {
+        await repository.setShutdownReason('sigterm');
+      } finally {
+        clock.restore();
+      }
 
       const [, , query, update, options] = dbHelperStub.findOneAndUpdateInDatabase.firstCall.args;
       expect(query).to.deep.equal({ _id: 'heartbeat' });
-      expect(update).to.deep.equal({ $set: { shutdownReason: 'sigterm' } });
+      expect(update).to.deep.equal({ $set: { shutdownReason: 'sigterm', lastAlive: 1_700_000_000_000 } });
       expect(options).to.deep.equal({ upsert: true });
     });
 

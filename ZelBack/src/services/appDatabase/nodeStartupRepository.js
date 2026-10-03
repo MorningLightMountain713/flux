@@ -127,9 +127,11 @@ async function writeHeartbeat(beat) {
 }
 
 /**
- * Record why FluxOS is stopping, so the next boot reads a clean shutdown rather
- * than inferring a crash. Bounded: this runs on the shutdown path, where a
- * blocked write would hold up the stop.
+ * Record why FluxOS is stopping and stamp its liveness at the stop, so the next
+ * boot reads a clean shutdown rather than inferring a crash and measures its
+ * downtime from the drop the jurors saw rather than from the last heartbeat
+ * tick. Bounded: this runs on the shutdown path, where a blocked write would
+ * hold up the stop.
  * @param {string} reason
  * @param {number} [timeoutMs]
  */
@@ -141,7 +143,7 @@ async function setShutdownReason(reason, timeoutMs = 3000) {
       database,
       nodeStartupTrackerCollection,
       { _id: HEARTBEAT_KEY },
-      { $set: { shutdownReason: reason } },
+      { $set: { shutdownReason: reason, lastAlive: Date.now() } },
       { upsert: true },
     ),
     new Promise((_, reject) => { setTimeout(() => reject(new Error('shutdown write timeout')), timeoutMs); }),
