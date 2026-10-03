@@ -85,7 +85,7 @@ describe('appEvacuationSafety tests', () => {
       // from the app name unless a test gives it an identity.
       getInstalledDeployment: sinon.stub().callsFake(async (name) => {
         const spec = await deps.getApplicationGlobalSpecifications(name);
-        return spec ? flux.DeploymentSpec.fromSpec(spec, '/apps/', { replica: null }) : null;
+        return spec ? flux.DeploymentSpec.fromSpec(spec, '/apps/', { replica: null, registrationVersion: 9 }) : null;
       }),
       findSyncedPeer: sinon.stub().resolves({ deviceID: 'PEER1', globalBytes: 1024 }),
       // Both required. The default case is this node running the g: component
@@ -253,7 +253,7 @@ describe('appEvacuationSafety tests', () => {
       const result = await appEvacuationSafety.canSafelyRemoveApp('palworld1', deps);
 
       expect(result.safe).to.equal(true);
-      sinon.assert.calledWith(deps.findSyncedPeer, 'fluxserver_palworld1');
+      sinon.assert.calledWith(deps.findSyncedPeer, 'server_palworld1');
     });
 
     it('requires EVERY synced component to be held, not just the first', async () => {
@@ -439,7 +439,7 @@ describe('appEvacuationSafety tests', () => {
   });
 
   describe('syncedComponents', () => {
-    const deploymentOf = (spec, identity = null) => flux.DeploymentSpec.fromSpec(spec, '/apps/', { replica: null, identity });
+    const deploymentOf = (spec, identity = null, registrationVersion = 9) => flux.DeploymentSpec.fromSpec(spec, '/apps/', { replica: null, identity, registrationVersion });
 
     it('reads the sync mode through the mount parser, not a substring', async () => {
       // `/dogs/data` contains "g:" nowhere but a naive check on the letter would
@@ -463,7 +463,7 @@ describe('appEvacuationSafety tests', () => {
       const components = appEvacuationSafety.syncedComponents(deploymentOf(spec));
 
       expect(components).to.have.lengthOf(1);
-      expect(components[0].folderId).to.equal('fluxserver_palworld1');
+      expect(components[0].folderId).to.equal('server_palworld1');
       expect(components[0].syncMode).to.equal('g');
     });
 
@@ -494,14 +494,16 @@ describe('appEvacuationSafety tests', () => {
       const components = appEvacuationSafety.syncedComponents(deploymentOf(await statefulSpec()));
 
       expect(components).to.have.lengthOf(1);
-      expect(components[0].folderId).to.equal('fluxserver_palworld1');
+      expect(components[0].folderId).to.equal('server_palworld1');
       expect(components[0].syncMode).to.equal('g');
     });
 
-    it('names each folder by the identifier the deployment carries, its identity and not its name', async () => {
-      const components = appEvacuationSafety.syncedComponents(deploymentOf(await statefulSpecV9(), 'bident'));
+    it('names each folder by the id the registration fixed: the identifier for a v9 registration, the 8.x name for an earlier one', async () => {
+      const v9 = appEvacuationSafety.syncedComponents(deploymentOf(await statefulSpecV9(), 'bident'));
+      expect(v9.map((c) => [c.identifier, c.folderId])).to.deep.equal([['server_bident', 'server_bident']]);
 
-      expect(components.map((c) => [c.identifier, c.folderId])).to.deep.equal([['server_bident', 'fluxserver_bident']]);
+      const before = appEvacuationSafety.syncedComponents(deploymentOf(await statefulSpecV9(), 'bident', 8));
+      expect(before.map((c) => [c.identifier, c.folderId])).to.deep.equal([['server_bident', 'fluxserver_palworld1']]);
     });
   });
 
@@ -511,7 +513,7 @@ describe('appEvacuationSafety tests', () => {
     beforeEach(async () => {
       const spec = await statefulSpecV9({ instances: 2 });
       deps.getApplicationGlobalSpecifications.resolves(spec);
-      deps.getInstalledDeployment = sinon.stub().resolves(flux.DeploymentSpec.fromSpec(spec, '/apps/', { replica: null, identity: IDENTITY }));
+      deps.getInstalledDeployment = sinon.stub().resolves(flux.DeploymentSpec.fromSpec(spec, '/apps/', { replica: null, identity: IDENTITY, registrationVersion: 9 }));
       deps.appLocation.resolves(locations(LOCAL, '5.6.7.8:16127'));
     });
 
@@ -520,7 +522,7 @@ describe('appEvacuationSafety tests', () => {
 
       const result = await appEvacuationSafety.canSafelyRemoveApp('palworld1', deps);
 
-      sinon.assert.calledWith(deps.findSyncedPeer, `fluxserver_${IDENTITY}`);
+      sinon.assert.calledWith(deps.findSyncedPeer, `server_${IDENTITY}`);
       sinon.assert.calledWith(deps.isComponentRunningLocally, `server_${IDENTITY}`);
       sinon.assert.calledWith(deps.isElectedPrimary, 'palworld1', [`server_${IDENTITY}`]);
       expect(result.code).to.equal('STAND_DOWN_REQUIRED');

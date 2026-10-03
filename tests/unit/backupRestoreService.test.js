@@ -6,6 +6,7 @@ const IOUtils = require('../../ZelBack/src/services/IOUtils');
 const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
 const { Privilege, authOf } = require('../../ZelBack/src/services/utils/privileges');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
+const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 
 const { expect } = chai;
 
@@ -24,7 +25,16 @@ function messageOf(res) {
   return res.json.firstCall.args[0].data.message;
 }
 
+// The app's identity, which names its volumes since the move onto it; another
+// app's, which must not be reached.
+const IDENTITY = `b${'a'.repeat(51)}q`;
+const OTHER_IDENTITY = `b${'c'.repeat(51)}a`;
+
 describe('backupRestoreService tests', () => {
+  beforeEach(() => {
+    sinon.stub(appsRepository, 'getInstalledApp').callsFake(async (name) => (name === 'myapp' ? { identity: IDENTITY } : null));
+  });
+
   afterEach(() => {
     sinon.restore();
   });
@@ -68,11 +78,15 @@ describe('backupRestoreService tests', () => {
   describe('an authorized app owner reaches only their own volume', () => {
     const appname = 'myapp';
 
-    // An app is mounted at `<appsFolder>/flux<app>`, or at
-    // `<appsFolder>/flux<component>_<app>` once per component when it composes.
+    // An app is mounted at `<appsFolder>/<identity>`, or at
+    // `<appsFolder>/<component>_<identity>` once per component when it composes;
+    // one not yet moved onto its identity at the 8.x names, `flux<app>` and
+    // `flux<component>_<app>`.
     const reachable = [
       { what: 'its single-component volume', dir: 'fluxmyapp' },
       { what: 'a component volume of the same app', dir: 'fluxmongo_myapp' },
+      { what: 'its volume named by its identity', dir: IDENTITY },
+      { what: 'a component volume named by its identity', dir: `mongo_${IDENTITY}` },
     ];
 
     // The app name is the field after the separator, never the one before it and
@@ -82,6 +96,9 @@ describe('backupRestoreService tests', () => {
       { what: "another tenant's component volume", dir: 'fluxmongo_victim' },
       { what: 'a longer app name that starts with this one', dir: 'fluxmyappextra' },
       { what: 'a volume whose component is named after this app', dir: 'fluxmyapp_victim' },
+      { what: "another app's volume named by its identity", dir: OTHER_IDENTITY },
+      { what: "another app's component volume named by its identity", dir: `mongo_${OTHER_IDENTITY}` },
+      { what: 'a volume named by this app\'s name without the 8.x prefix', dir: 'mongo_myapp' },
     ];
 
     beforeEach(() => {

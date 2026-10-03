@@ -96,7 +96,7 @@ async function recreateMissingContainers(componentIdentifier, instantiated, { ab
       // rearchitect (pruner coordination / sources outside the synced tree).
       const stignoreChanged = await appVolumeService.ensureMountSourcesExist(deployComp);
       if (stignoreChanged) {
-        await syncthingMonitorHelpers.requestFolderScan(deployComp.identifier);
+        await syncthingMonitorHelpers.requestFolderScan(deployComp.syncFolderId);
       }
     }
     // A stateless component has no volume by design, so "not mounted" is its

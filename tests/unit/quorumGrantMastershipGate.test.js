@@ -421,7 +421,7 @@ describe('quorumGrant mastershipGrantGate', () => {
       const line = windowDecisionLine(info);
       expect(line, 'the decision is logged').to.be.a('string');
       expect(line).to.include(`identifier=${IDENTIFIER}`);
-      expect(line).to.include(`lookup=/flux${IDENTIFIER}`);
+      expect(line).to.include(`lookup=/${IDENTIFIER}`);
       expect(line).to.include('found=true');
       expect(line).to.include('running=true');
       expect(line).to.include('-> ASK');

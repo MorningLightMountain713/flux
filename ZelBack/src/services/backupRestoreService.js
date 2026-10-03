@@ -7,6 +7,7 @@ const verificationHelper = require('./verificationHelper');
 const { sendFile } = require('./utils/fileTransfer');
 const IOUtils = require('./IOUtils');
 const dockerService = require('./dockerService');
+const appsRepository = require('./appDatabase/appsRepository');
 const { appsFolder } = require('./utils/appConstants');
 const fs = require('fs').promises;
 const { sanitizePath, verifyRealPathOfExistingPath } = require('./utils/pathSecurity');
@@ -26,22 +27,28 @@ const { resolveVolumeTarget } = require('./appSystem/volumeTarget');
  * @param {string} appname - The app the caller holds a privilege over.
  * @returns {boolean} - True when the directory is that app's own volume.
  */
-function volumeDirectoryBelongsToApp(volumeDir, appname) {
+function volumeDirectoryBelongsToApp(volumeDir, appname, identity = null) {
   // An appname carrying the separator could otherwise be spelled to rebuild
   // another app's composed directory, so it is refused here rather than left to
   // the caller's ordering.
   if (!volumeDir || !appname || appname.includes('_')) {
     return false;
   }
-  if (volumeDir === dockerService.getAppIdentifier(appname)) {
+  // A directory named since the app moved onto its identity: `<identity>` or
+  // `<component>_<identity>[_<replica>]`.
+  if (identity && (volumeDir === identity || volumeDir.split('_')[1] === identity)) {
     return true;
   }
-  const separatorIndex = volumeDir.indexOf('_');
-  if (separatorIndex === -1) {
+  // One named before: the 8.x form, `flux<name>` or `flux<component>_<name>`.
+  const bare = dockerService.getBaseAppName(volumeDir);
+  if (bare === volumeDir) {
     return false;
   }
-  const component = dockerService.getBaseAppName(volumeDir.slice(0, separatorIndex));
-  return volumeDir === dockerService.getAppIdentifier(`${component}_${appname}`);
+  if (bare === appname) {
+    return true;
+  }
+  const separatorIndex = bare.indexOf('_');
+  return separatorIndex !== -1 && bare.slice(separatorIndex + 1) === appname;
 }
 
 /**
@@ -78,7 +85,7 @@ function appVolumeRoot(filepath) {
  * @param {string} appname - The app the caller holds a privilege over.
  * @returns {string|false} - The filepath if valid, otherwise false.
  */
-function pathValidation(filepath, appname) {
+async function pathValidation(filepath, appname) {
   if (!filepath || typeof filepath !== 'string') {
     return false;
   }
@@ -101,7 +108,8 @@ function pathValidation(filepath, appname) {
   // An app volume is mounted at `<appsFolder>/<identifier>` and sanitizePath has
   // already refused any traversal leaving it, so the first segment of the
   // relative path is the volume the request would reach.
-  if (!volumeDirectoryBelongsToApp(appVolumeDir(filepath), appname)) {
+  const installed = await appsRepository.getInstalledApp(appname);
+  if (!volumeDirectoryBelongsToApp(appVolumeDir(filepath), appname, installed?.identity ?? null)) {
     return false;
   }
 
@@ -201,7 +209,7 @@ async function getLocalBackupList(req, res) {
     }
     const authorized = await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: appname });
     if (authorized === true) {
-      if (!pathValidation(vPath, appname)) {
+      if (!(await pathValidation(vPath, appname))) {
         throw new Error('Path validation failed..');
       }
       await verifyRealPathOfExistingPath(vPath, appVolumeRoot(vPath));
@@ -293,7 +301,7 @@ async function removeBackupFile(req, res) {
     }
     const authorized = await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: appname });
     if (authorized === true) {
-      if (!pathValidation(filepath, appname)) {
+      if (!(await pathValidation(filepath, appname))) {
         throw new Error('Path validation failed..');
       }
       await verifyRealPathOfExistingPath(filepath, appVolumeRoot(filepath));
@@ -335,7 +343,7 @@ async function downloadLocalFile(req, res) {
     }
     const authorized = await verificationHelper.verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName: appname });
     if (authorized) {
-      if (!pathValidation(filepath, appname)) {
+      if (!(await pathValidation(filepath, appname))) {
         throw new Error('Path validation failed..');
       }
       await verifyRealPathOfExistingPath(filepath, appVolumeRoot(filepath));

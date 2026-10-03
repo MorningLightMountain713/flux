@@ -33,6 +33,7 @@ describe('appQueryService tests', () => {
   let dbHelperStub;
   let messageHelperStub;
   let dockerServiceStub;
+  let deploymentProviderStub;
   let registryManagerStub;
 
   let appsRepositoryStub;
@@ -90,16 +91,15 @@ describe('appQueryService tests', () => {
       createErrorMessage: sinon.stub(),
     };
 
+    deploymentProviderStub = { listInstalledDeploymentsDetailed: sinon.stub().resolves({ deployments: [], unreadableApps: new Map() }) };
     dockerServiceStub = {
       dockerListContainers: sinon.stub(),
       // Namespacing, rather than returning a constant: these tests assert which
       // containers survive the filter, so a stub that waved everything through
       // would stop testing anything. The real one is pinned by its own cases in
       // dockerService.test.js.
-      // heldComponents is compared against a docker name by the peer that reads
-      // it, so an identity stub would hide a missing prefix and pass on an
-      // answer no caller could match.
-      getAppIdentifier: (appName) => (appName.startsWith('zel') || appName.startsWith('flux') ? appName : `flux${appName}`),
+      // The real one is the identifier itself.
+      getAppIdentifier: (identifier) => identifier,
       // mirrors the real ownership test: the identity label is authoritative, the
       // name test survives only for containers created before labels shipped
       isManagedContainer: ({ labels, name }, labelKeys) => {
@@ -148,6 +148,7 @@ describe('appQueryService tests', () => {
       '../dbHelper': dbHelperStub,
       '../messageHelper': messageHelperStub,
       '../dockerService': dockerServiceStub,
+      '../appRuntime/deploymentProvider': deploymentProviderStub,
       '../appDatabase/registryManager': registryManagerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../appRequirements/nodeSpecs': nodeSpecsStub,
@@ -559,8 +560,15 @@ describe('appQueryService tests', () => {
 
     // The three sources, each independently switchable, because the point of every
     // case below is which one carried the answer.
-    const held = async ({ running = [], committed = [], stopped = [] } = {}) => {
-      dockerServiceStub.dockerListContainers.resolves(running.map((name) => ({ Names: [`/${name}`] })));
+    // A running container is ours by its identity label; one made before the
+    // labels shipped is recognised by its legacy prefix.
+    const held = async ({
+      running = [], committed = [], stopped = [], strangers = [],
+    } = {}) => {
+      dockerServiceStub.dockerListContainers.resolves([
+        ...running.map((name) => ({ Names: [`/${name}`], Labels: { 'io.runonflux.identifier': name } })),
+        ...strangers.map((name) => ({ Names: [`/${name}`], Labels: {} })),
+      ]);
       sinon.stub(appReconciler, 'committedIdentifiers').returns(committed);
       sinon.stub(appsRuntimeState, 'operatorStoppedIdentifiers').resolves(stopped);
       messageHelperStub.createDataMessage.returnsArg(0);
@@ -574,26 +582,37 @@ describe('appQueryService tests', () => {
       // new primary over an owner who had stopped theirs to work on it.
       const result = await held({ stopped: ['www_App'] });
 
-      expect(result).to.deep.equal(['fluxwww_App']);
+      expect(result).to.deep.equal(['www_App']);
     });
 
-    it('namespaces a stopped identifier the way the caller asks about it', async () => {
-      // The lock store is keyed on the bare identifier and the election compares
-      // against the docker name, so an unprefixed entry would never match and the
-      // hold would silently do nothing.
+    it('reports a stopped identifier as the docker name the caller asks about, which is the identifier', async () => {
       const result = await held({ stopped: ['www_App', 'zelKadena'] });
 
-      expect(result).to.deep.equal(['fluxwww_App', 'zelKadena']);
+      expect(result).to.deep.equal(['www_App', 'zelKadena']);
     });
 
     it('unions the three sources and reports each component once', async () => {
       const result = await held({
-        running: ['fluxwww_App'],
+        running: ['www_App'],
         committed: ['www_App'],
         stopped: ['www_App'],
       });
 
-      expect(result).to.deep.equal(['fluxwww_App']);
+      expect(result).to.deep.equal(['www_App']);
+    });
+
+    it('reports a component of an app registered before v9 under its 8.x name as well', async () => {
+      // The deployment this node runs for an app registered on v8 and since
+      // moved onto its identity: the container is named by the identity, the
+      // folder id is still the 8.x container name, and a peer that has not
+      // moved, or runs 8.x, asks by that name.
+      const deployment = flux.DeploymentSpec.fromSpec(await v9Spec({ name: 'myapp' }), '/apps/', { replica: null, identity: 'bident', registrationVersion: 8 });
+      deploymentProviderStub.listInstalledDeploymentsDetailed.resolves({ deployments: [deployment], unreadableApps: new Map() });
+      const [identifier] = deployment.componentEntries().map(([, c]) => c.identifier);
+
+      const result = await held({ running: [identifier] });
+
+      expect(result).to.deep.equal([identifier, 'fluxweb_myapp']);
     });
 
     // Each source is the SOLE carrier of one name. Feeding all three the same
@@ -603,18 +622,18 @@ describe('appQueryService tests', () => {
     // lost with no test able to see it.
     it('reports a component that only one source carries, for each source', async () => {
       const result = await held({
-        running: ['fluxa_App'],
+        running: ['a_App'],
         committed: ['b_App'],
         stopped: ['c_App'],
       });
 
-      expect(result).to.deep.equal(['fluxa_App', 'fluxb_App', 'fluxc_App']);
+      expect(result).to.deep.equal(['a_App', 'b_App', 'c_App']);
     });
 
-    it('still reports a running container that carries no lock and no commitment', async () => {
-      const result = await held({ running: ['fluxapi_App'] });
+    it('still reports a running container that carries no lock and no commitment, and never a container that is not ours', async () => {
+      const result = await held({ running: ['api_App'], strangers: ['nostalgic_hopper'] });
 
-      expect(result).to.deep.equal(['fluxapi_App']);
+      expect(result).to.deep.equal(['api_App']);
     });
 
     it('holds nothing when the node holds nothing', async () => {
@@ -724,6 +743,7 @@ describe('appQueryService tests', () => {
           '../dbHelper': dbHelperStub,
           '../messageHelper': messageHelperStub,
           '../dockerService': dockerServiceStub,
+          '../appRuntime/deploymentProvider': deploymentProviderStub,
           '../appDatabase/registryManager': registryManagerStub,
           '../appDatabase/appsRepository': appsRepositoryStub,
           '../../lib/log': logStub,

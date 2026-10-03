@@ -151,6 +151,18 @@ describe('componentIdentifierResolver', () => {
     expect(identifier, 'the bare form is what the row records').to.equal('web_ent');
   });
 
+  it('keeps a disk id made since the app moved onto its identity as it is, a component named flux* included', async () => {
+    const identity = `b${'a'.repeat(51)}q`;
+    const installed = await instantiatedSpec(await sealedV9Spec({ name: 'ent' }), { identity });
+    stubs.getInstalledApp.resolves(installed);
+    stubs.buildDeployment.rejects(new Error('benchd unavailable'));
+    stubs.getComponentAppIdsFromVolumeFiles.withArgs('ent', identity)
+      .resolves({ appIds: [`fluxproxy_${identity}`, 'fluxdb_ent'], conclusive: true });
+
+    // A component genuinely named flux*: its identity segment says the id is bare already.
+    expect(await resolver.resolveComponentIdentifiers('ent', null)).to.deep.equal([`fluxproxy_${identity}`, 'db_ent']);
+  });
+
   it('does not guess from disk for a plain spec that failed to build', async () => {
     // A plain spec failed for some other reason; filenames would paper over it.
     const installed = await instantiatedSpec(await specWithComponents('plain', ['web']));

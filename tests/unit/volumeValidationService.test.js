@@ -37,6 +37,7 @@ const volumeValidationService = proxyquire('../../ZelBack/src/services/volumeVal
       DeploymentSpec: {
         identityFromIdentifier: (id) => { const p = id.split('_'); return p.length <= 1 ? id : p[1]; },
       },
+      isAppIdentity: (value) => /^b[a-z2-7]{51}[aq]$/.test(value),
     }),
   },
 });
@@ -123,6 +124,15 @@ describe('volumeValidationService tests', () => {
 
       expect(result).to.equal('MyApp');
       expect(getInstalledAppByIdentityStub.called, 'the parse must not run when the row states it').to.be.false;
+    });
+
+    it('reads a mount entry made since the app moved onto its identity as the identifier it is, a component named flux* included', async () => {
+      const identity = `b${'a'.repeat(51)}q`;
+      getInstalledAppByComponentIdentifierStub.withArgs(`fluxproxy_${identity}`).resolves({ name: 'MyApp' });
+
+      const result = await volumeValidationService.resolveAppForMountEntry(`fluxproxy_${identity}`);
+
+      expect(result).to.equal('MyApp');
     });
 
     // Rows written before componentIdentifiers existed state nothing to the index,

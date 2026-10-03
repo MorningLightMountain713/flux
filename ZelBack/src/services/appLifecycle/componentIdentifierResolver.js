@@ -4,6 +4,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const dockerService = require('../dockerService');
 const volumeService = require('../utils/volumeService');
+const { getSpecBackend } = require('../utils/specLibs');
 
 // What a row's components are called, for the startup backfill that records them.
 //
@@ -40,11 +41,13 @@ async function resolveComponentIdentifiers(name, replica) {
   // What this answers is recorded as the app's components, so a search that could
   // not look everywhere answers nothing: a list short by an unknown amount would be
   // recorded as the whole of them.
-  const { appIds, conclusive } = await volumeService.getComponentAppIdsFromVolumeFiles(name);
+  const { appIds, conclusive } = await volumeService.getComponentAppIdsFromVolumeFiles(name, installed.identity);
   if (!conclusive || appIds.length === 0) return null;
-  // Disk ids carry docker's prefix; a row states the bare component identifier
-  // and consumers add the prefix back. Storing the docker form would double it.
-  return appIds.map((id) => dockerService.getBaseAppName(id));
+  // A disk id made since the app moved onto its identity is the bare component
+  // identifier; one made before carries the 8.x prefix and the app's name. A
+  // row states the bare form.
+  const { DeploymentSpec, isAppIdentity } = await getSpecBackend();
+  return appIds.map((id) => (isAppIdentity(DeploymentSpec.identityFromIdentifier(id)) ? id : dockerService.getBaseAppName(id)));
 }
 
 module.exports = { resolveComponentIdentifiers };

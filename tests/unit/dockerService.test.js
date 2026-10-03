@@ -29,7 +29,7 @@ const { expect } = chai;
 // The few tests whose subject really is docker's own behaviour say so, and
 // stub only as far as the boundary they are testing.
 const FIXTURE_ID = '46274c58c9a969e93c1f91a057f0a371c7b952e31a7aec73839afe1433fdee94';
-const FIXTURE_NAME = 'fluxwebsite';
+const FIXTURE_NAME = 'website';
 
 /** One entry, shaped as docker lists it, for the container the tests name. */
 function fixtureListing(overrides = {}) {
@@ -80,16 +80,16 @@ describe('dockerService tests', () => {
     // function could serve both a bare identifier and a docker name by sniffing
     // which it had been handed. That made it non-injective, and two distinct
     // components collided on one container name and one volume directory.
-    it('is injective - a component named flux* does not collide with its unprefixed twin', async () => {
-      expect(dockerService.getAppIdentifier('proxy_myapp')).to.equal('fluxproxy_myapp');
-      expect(dockerService.getAppIdentifier('fluxproxy_myapp')).to.equal('fluxfluxproxy_myapp');
+    it('is the identifier itself, so a component named flux* and its unprefixed twin stay distinct', async () => {
+      expect(dockerService.getAppIdentifier('proxy_myapp')).to.equal('proxy_myapp');
+      expect(dockerService.getAppIdentifier('fluxproxy_myapp')).to.equal('fluxproxy_myapp');
       expect(dockerService.getAppIdentifier('fluxproxy_myapp'))
         .to.not.equal(dockerService.getAppIdentifier('proxy_myapp'));
     });
 
-    it('gives the formerly zel-prefixed names the flux prefix like any other', async () => {
-      expect(dockerService.getAppIdentifier('KadenaChainWebNode')).to.equal('fluxKadenaChainWebNode');
-      expect(dockerService.getAppIdentifier('FoldingAtHomeB')).to.equal('fluxFoldingAtHomeB');
+    it('names a flat app\'s container by its identifier alone', async () => {
+      expect(dockerService.getAppIdentifier('KadenaChainWebNode')).to.equal('KadenaChainWebNode');
+      expect(dockerService.getAppIdentifier('FoldingAtHomeB')).to.equal('FoldingAtHomeB');
     });
 
     it('should round-trip getAppIdentifier for compose and plain names', async () => {
@@ -98,9 +98,9 @@ describe('dockerService tests', () => {
       });
     });
 
-    it('should add "flux" to app identifier with any other name', async () => {
+    it('leaves any other identifier as it is', async () => {
       const appName = 'testing1234';
-      const expected = 'fluxtesting1234';
+      const expected = 'testing1234';
 
       const result = dockerService.getAppIdentifier(appName);
 
@@ -109,7 +109,7 @@ describe('dockerService tests', () => {
 
     it('should handle empty app name', async () => {
       const appName = '';
-      const expected = 'flux';
+      const expected = '';
 
       const result = dockerService.getAppIdentifier(appName);
 
@@ -128,15 +128,15 @@ describe('dockerService tests', () => {
       expect(dockerService.getBaseAppName('zeldb_App')).to.equal('db_App');
     });
 
-    it('should invert getAppIdentifier for every identifier, flux-named included', async () => {
-      // The round trip is the contract: this is the inverse of getAppIdentifier
-      // and nothing else. It is exact for a component genuinely named `fluxproxy`
-      // (docker name `fluxfluxproxy_App`) precisely because the caller states it
-      // holds a docker name by calling at all — the ambiguity that used to bite
-      // was a CONSUMER handing its own bare identifier through here.
-      ['db_App', 'testing1234', 'KadenaChainWebNode', 'fluxproxy_App', 'zelnode_App'].forEach((bare) => {
-        expect(dockerService.getBaseAppName(dockerService.getAppIdentifier(bare))).to.equal(bare);
-      });
+    it('strips the legacy prefix a name made before the move carries, and is not for a name made since', async () => {
+      // A legacy name is `flux` or `zel` and the bare identifier; the caller
+      // states it holds one by calling at all. A name made since the move is the
+      // identifier already, and one whose component is genuinely named `flux*`
+      // would lose its first four letters here.
+      expect(dockerService.getBaseAppName('fluxKadenaChainWebNode')).to.equal('KadenaChainWebNode');
+      expect(dockerService.getBaseAppName('zelnode_App')).to.equal('node_App');
+      expect(dockerService.getBaseAppName('testing1234')).to.equal('testing1234');
+      expect(dockerService.getBaseAppName('fluxproxy_App'), 'a modern name must not come through here').to.equal('proxy_App');
     });
   });
 
@@ -218,18 +218,18 @@ describe('dockerService tests', () => {
   });
 
   describe('getAppDockerNameIdentifier tests', () => {
-    it('should add /flux/ if name starts with "/"', async () => {
+    it('keeps a name that already starts with "/"', async () => {
       const appName = '/Testing';
-      const expected = '/flux/Testing';
+      const expected = '/Testing';
 
       const result = dockerService.getAppDockerNameIdentifier(appName);
 
       expect(result).to.equal(expected);
     });
 
-    it('should add "/flux" to app identifier with any other name', async () => {
+    it('prefixes the slash docker lists a name with', async () => {
       const appName = 'testing1234';
-      const expected = '/fluxtesting1234';
+      const expected = '/testing1234';
 
       const result = dockerService.getAppDockerNameIdentifier(appName);
 
@@ -238,7 +238,7 @@ describe('dockerService tests', () => {
 
     it('should handle empty app name', async () => {
       const appName = '';
-      const expected = '/flux';
+      const expected = '/';
 
       const result = dockerService.getAppDockerNameIdentifier(appName);
 
@@ -1439,7 +1439,7 @@ describe('dockerService tests', () => {
       await dockerService.appDockerNetworkConnect('web_myapp', 'fluxDockerNetwork_dep');
 
       sinon.assert.calledOnceWithExactly(getNetworkStub, 'fluxDockerNetwork_dep');
-      sinon.assert.calledOnceWithExactly(connectStub, { Container: 'fluxweb_myapp' });
+      sinon.assert.calledOnceWithExactly(connectStub, { Container: 'web_myapp' });
     });
 
     it('skips the connect call when the container is already attached', async () => {
@@ -1459,7 +1459,7 @@ describe('dockerService tests', () => {
 
       await dockerService.appDockerNetworkConnect('web_myapp', 'fluxDockerNetwork_dep');
 
-      sinon.assert.calledOnceWithExactly(connectStub, { Container: 'fluxweb_myapp' });
+      sinon.assert.calledOnceWithExactly(connectStub, { Container: 'web_myapp' });
     });
 
     it('swallows the race-window already-exists error from connect', async () => {
@@ -1492,7 +1492,7 @@ describe('dockerService tests', () => {
       await expect(dockerService.appDockerNetworkConnect('web_myapp', 'fluxDockerNetwork_dep')).to.be.rejectedWith('swarm-scoped');
     });
 
-    it('normalises a bare component identifier to the docker name', async () => {
+    it('asks docker by the identifier, which is the docker name', async () => {
       const inspectStub = sinon.stub().resolves({ NetworkSettings: { Networks: { bridge: {} } } });
       const getContainerStub = sinon.stub(Dockerode.prototype, 'getContainer').returns({ inspect: inspectStub });
       const connectStub = sinon.stub().resolves();
@@ -1500,8 +1500,8 @@ describe('dockerService tests', () => {
 
       await dockerService.appDockerNetworkConnect('web_myapp', 'fluxDockerNetwork_dep');
 
-      sinon.assert.calledOnceWithExactly(getContainerStub, 'fluxweb_myapp');
-      sinon.assert.calledOnceWithExactly(connectStub, { Container: 'fluxweb_myapp' });
+      sinon.assert.calledOnceWithExactly(getContainerStub, 'web_myapp');
+      sinon.assert.calledOnceWithExactly(connectStub, { Container: 'web_myapp' });
     });
   });
 
@@ -1518,7 +1518,7 @@ describe('dockerService tests', () => {
       return inspectStub;
     }
 
-    it('disconnects an attached container, normalising a bare identifier', async () => {
+    it('disconnects an attached container by its identifier', async () => {
       stubInspect({ fluxDockerNetwork_dep: {} });
       const disconnectStub = sinon.stub().resolves();
       const getNetworkStub = sinon.stub(Dockerode.prototype, 'getNetwork').returns({ disconnect: disconnectStub });
@@ -1526,7 +1526,7 @@ describe('dockerService tests', () => {
       await dockerService.appDockerNetworkDisconnect('web_myapp', 'fluxDockerNetwork_dep');
 
       sinon.assert.calledOnceWithExactly(getNetworkStub, 'fluxDockerNetwork_dep');
-      sinon.assert.calledOnceWithExactly(disconnectStub, { Container: 'fluxweb_myapp' });
+      sinon.assert.calledOnceWithExactly(disconnectStub, { Container: 'web_myapp' });
     });
 
     it('skips the disconnect call when the container is not attached', async () => {
@@ -1558,7 +1558,7 @@ describe('dockerService tests', () => {
 
       await dockerService.appDockerNetworkDisconnect('web_myapp', 'fluxDockerNetwork_dep');
 
-      sinon.assert.calledOnceWithExactly(disconnectStub, { Container: 'fluxweb_myapp' });
+      sinon.assert.calledOnceWithExactly(disconnectStub, { Container: 'web_myapp' });
     });
 
     it('swallows the race-window not-connected error from disconnect', async () => {
@@ -1594,13 +1594,13 @@ describe('dockerService tests', () => {
       sinon.restore();
     });
 
-    it('returns multi-component and legacy single-component containers, anchored to flux', async () => {
+    it('returns pre-label containers by their legacy names, composed and flat, and nothing unprefixed', async () => {
       stubListing([
         { Names: ['/fluxweb_myapp'] },
         { Names: ['/fluxapi_myapp'] },
         { Names: ['/fluxother_differentapp'] },
         { Names: ['/fluxmyapp'] },
-        { Names: ['/someoneelse_myapp'] }, // missing flux prefix — must NOT match
+        { Names: ['/someoneelse_myapp'] }, // no legacy prefix and no label: not a pre-label container of ours
       ]);
 
       const names = await dockerService.getAppContainerNames('myapp');
@@ -1676,7 +1676,7 @@ describe('dockerService tests', () => {
       const actualConfig = dockerStub.firstCall.args[0];
 
       expect(actualConfig.Image).to.equal('runonflux/website');
-      expect(actualConfig.name).to.equal('fluxwebsite_fluxwebsite');
+      expect(actualConfig.name).to.equal('website_fluxwebsite');
       expect(actualConfig.Hostname).to.equal('website');
       expect(actualConfig.HostConfig.NanoCPUs).to.equal(800_000_000);
       expect(actualConfig.HostConfig.Memory).to.equal(1_887_436_800);

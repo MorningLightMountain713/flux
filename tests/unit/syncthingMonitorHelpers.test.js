@@ -567,7 +567,7 @@ describe('syncthingMonitorHelpers tests', () => {
       // getConfigFolders answers the rows themselves; the envelope goes back on
       // only in the Api half.
       sandbox.stub(syncthingService, 'getConfigFolders')
-        .resolves([{ id: 'fluxweb_app', path: `${appsBase}fluxweb_app` }]);
+        .resolves([{ id: 'fluxweb_app', path: `${appsBase}web_app` }]);
       const adjust = sandbox.stub(syncthingService, 'adjustConfigFolders').resolves({ status: 'success', data: {} });
       sandbox.stub(syncthingService, 'getConfigRestartRequired').resolves({ status: 'success', data: { requiresRestart: false } });
 
@@ -580,7 +580,7 @@ describe('syncthingMonitorHelpers tests', () => {
     // otherwise claims a folder deregistered that syncthing still holds.
     it('does not report a removal syncthing refused', async () => {
       sandbox.stub(syncthingService, 'getConfigFolders')
-        .resolves([{ id: 'fluxweb_app', path: `${appsBase}fluxweb_app` }]);
+        .resolves([{ id: 'fluxweb_app', path: `${appsBase}web_app` }]);
       const adjust = sandbox.stub(syncthingService, 'adjustConfigFolders')
         .rejects(Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:8384'), { code: 'ECONNREFUSED' }));
       const emitted = [];
@@ -596,7 +596,7 @@ describe('syncthingMonitorHelpers tests', () => {
       // getConfigFolders answers the rows themselves; the envelope goes back on
       // only in the Api half.
       sandbox.stub(syncthingService, 'getConfigFolders')
-        .resolves([{ id: 'fluxweb_app', path: `${appsBase}fluxweb_app` }]);
+        .resolves([{ id: 'fluxweb_app', path: `${appsBase}web_app` }]);
       const adjust = sandbox.stub(syncthingService, 'adjustConfigFolders').resolves({ status: 'success', data: {} });
       sandbox.stub(syncthingService, 'getConfigRestartRequired').resolves({ status: 'success', data: { requiresRestart: false } });
 
@@ -607,10 +607,10 @@ describe('syncthingMonitorHelpers tests', () => {
   });
 
   describe('requestFolderScan', () => {
-    it('requests a db scan of the component identifier-derived folder id', async () => {
+    it('requests a db scan of the folder id it is given', async () => {
       const scanFolder = sandbox.stub(syncthingService, 'scanFolder').resolves({ status: 'success' });
 
-      await helpers.requestFolderScan('web_app');
+      await helpers.requestFolderScan('fluxweb_app');
 
       sinon.assert.calledOnceWithExactly(scanFolder, 'fluxweb_app');
     });
@@ -619,10 +619,10 @@ describe('syncthingMonitorHelpers tests', () => {
       const scanFolder = sandbox.stub(syncthingService, 'scanFolder').rejects(new Error('syncthing down'));
       const logWarn = sandbox.stub(log, 'warn');
 
-      await helpers.requestFolderScan('web_app');
+      await helpers.requestFolderScan('fluxweb_app');
 
       sinon.assert.calledOnceWithExactly(scanFolder, 'fluxweb_app');
-      sinon.assert.calledWithMatch(logWarn, /scan request for web_app failed - syncthing down/);
+      sinon.assert.calledWithMatch(logWarn, /scan request for fluxweb_app failed - syncthing down/);
     });
   });
 });

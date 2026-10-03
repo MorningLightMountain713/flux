@@ -277,10 +277,11 @@ async function fluxUsage(req, res) {
  * @returns {Promise<string[]>} container-name identifiers
  */
 async function ownHoldings() {
+  const { LABEL_KEYS } = await getSpecBackend();
   const containers = await dockerService.dockerListContainers(false);
   const running = containers
-    .map((container) => (container.Names?.[0] || '').replace(/^\//, ''))
-    .filter((name) => name.slice(0, 3) === 'zel' || name.slice(0, 4) === 'flux');
+    .filter((container) => dockerService.isManagedContainer({ labels: container.Labels, name: container.Names?.[0] }, LABEL_KEYS))
+    .map((container) => (container.Names?.[0] || '').replace(/^\//, ''));
 
   const committed = [...appReconciler.committedIdentifiers(), ...primaryRoleChanges.promotingIdentifiers()]
     .map((identifier) => dockerService.getAppIdentifier(identifier));
@@ -411,7 +412,10 @@ async function heldComponents(req, res) {
       const notReady = notKnownYet();
       return res ? res.json(notReady) : notReady;
     }
-    const response = messageHelper.createDataMessage(account.held);
+    // A component of an app registered before v9 is held under its 8.x name as
+    // well: a peer that has not moved the app onto its identity, or runs 8.x,
+    // asks by that name and reads its absence as a component it may start.
+    const response = messageHelper.createDataMessage([...new Set([...account.held, ...(await formerNamesOf(account.held))])]);
     return res ? res.json(response) : response;
   } catch (error) {
     log.error(error);
@@ -472,6 +476,34 @@ async function heldComponentsAnswer(req, res) {
     log.error(error);
     return res.json(messageHelper.createErrorMessage(error.message || error, error.name, error.code));
   }
+}
+
+/**
+ * The 8.x container names of the held components whose app was registered
+ * before v9, read from the installed deployments. A view built without the
+ * registration version has no former name to serve.
+ * @param {string[]} held - docker names
+ * @returns {Promise<string[]>}
+ */
+async function formerNamesOf(held) {
+  if (held.length === 0) return [];
+  const wanted = new Set(held);
+  const names = [];
+  const { deployments } = await deploymentProvider.listInstalledDeploymentsDetailed();
+  for (const deployment of deployments) {
+    for (const [, comp] of deployment.componentEntries()) {
+      const dockerName = dockerService.getAppIdentifier(comp.identifier);
+      if (!wanted.has(dockerName)) continue;
+      let former;
+      try {
+        former = comp.syncFolderId;
+      } catch (error) {
+        former = null;
+      }
+      if (former && former !== dockerName) names.push(former);
+    }
+  }
+  return names;
 }
 
 /**

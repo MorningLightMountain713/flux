@@ -43,10 +43,12 @@ function hasIncorrectFluxPath(volumePath) {
 async function resolveAppForMountEntry(appId) {
   if (!appId) return null;
   try {
-    const identifier = dockerService.getBaseAppName(appId);
+    const { DeploymentSpec, isAppIdentity } = await getSpecBackend();
+    // A mount entry made since the app moved onto its identity is the bare
+    // identifier; one made before carries the 8.x prefix.
+    const identifier = isAppIdentity(DeploymentSpec.identityFromIdentifier(appId)) ? appId : dockerService.getBaseAppName(appId);
     const stated = await appsRepository.getInstalledAppByComponentIdentifier(identifier);
     if (stated) return stated.name;
-    const { DeploymentSpec } = await getSpecBackend();
     const identity = DeploymentSpec.identityFromIdentifier(identifier);
     const installed = await appsRepository.getInstalledAppByIdentity(identity);
     return installed ? installed.name : null;

@@ -185,19 +185,20 @@ async function isComponentRunningLocally(identifier) {
 }
 
 /**
- * The identifier of an app's `g:` component, or null when it has none. The one
- * component that runs on a single node at a time and writes to the volume.
+ * An app's `g:` component, or null when it has none: the one component that
+ * runs on a single node at a time and writes to the volume, as its identifier
+ * and its syncthing folder id.
  *
  * Read from the deployment this node runs, through appEvacuationSafety, so the
  * identifier is the one the container and the election carry.
  *
  * @param {?object} deployment the DeploymentSpec installed on this node
- * @returns {string|null}
+ * @returns {?{identifier: string, folderId: string}}
  */
-function writerIdentifier(deployment) {
+function writerComponent(deployment) {
   if (!deployment) return null;
   const g = appEvacuationSafety.syncedComponents(deployment).find((c) => c.syncMode === 'g');
-  return g ? g.identifier : null;
+  return g ? { identifier: g.identifier, folderId: g.folderId } : null;
 }
 
 /**
@@ -228,7 +229,8 @@ async function surplusVerdict(app, locations, localSocketAddr, deps) {
   // shared ordering so every node names the same surplus.
   const ordered = [...locations].sort((a, b) => compareInstanceSeniority(b, a));
   const index = ordered.findIndex((x) => socketAddressesMatch(x.ip, localSocketAddr));
-  const writer = writerIdentifier(app.deployment);
+  const writerComp = writerComponent(app.deployment);
+  const writer = writerComp ? writerComp.identifier : null;
   const detail = `running on ${locations.length} instances (max: ${minInstances}) and this node is the newest`;
 
   // "THE NEWEST STANDS ASIDE" IS A STAND-IN FOR "THE LEAST VALUABLE COPY STANDS
@@ -261,8 +263,12 @@ async function surplusVerdict(app, locations, localSocketAddr, deps) {
   // Silence, a timeout, a refusal, "not running": all mean this node does
   // nothing. The rule can only ever fail towards no trim, never towards two.
   if (index === 1 && writer && liveness) {
+    const appId = dockerService.getAppIdentifier(writer);
+    const { folderId } = writerComp;
     const newestState = await peerComponentProbe.peerComponentState({
-      appId: dockerService.getAppIdentifier(writer),
+      appId,
+      folderId,
+      aliases: folderId === appId ? [] : [folderId],
       identifier: writer,
       appName: app.name,
       peerSocketAddr: ordered[0].ip,
@@ -460,6 +466,6 @@ module.exports = {
   clearRefusals,
   isStandingDown,
   forgetStandDowns,
-  checkAndGiveUpAnApp, surplusVerdict, evacuationVerdict, writerIdentifier,
+  checkAndGiveUpAnApp, surplusVerdict, evacuationVerdict, writerComponent,
   isComponentRunningLocally, GiveUpReason,
 };

@@ -10,7 +10,6 @@ const appUninstaller = require('../appLifecycle/appUninstaller');
 const syncthingService = require('../syncthingService');
 const serviceHelper = require('../serviceHelper');
 const appCaches = require('../utils/appCaches');
-const { appsFolder } = require('../utils/appConstants');
 const { ABSENT } = require('../utils/syncthingConstants');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
 const mastershipGrantGate = require('../appLifecycle/mastershipGrantGate');
@@ -379,7 +378,7 @@ async function localHoldings(folderId, ignoreLines = []) {
 /**
  * Verify that a Syncthing folder's mount is properly initialized
  * This is CRITICAL to prevent data loss when mounts are not ready after reboot
- * @param {string} appId - App ID (e.g., fluxwp_myapp)
+ * @param {string} appId - the syncthing folder id
  * @param {string} appName - the app this component belongs to; the key tampering
  *        incidents roll up under
  * @param {string} folderPath - Syncthing folder path
@@ -396,7 +395,7 @@ async function verifyFolderMountSafety(appId, folderPath, appName) {
 
   try {
     // Check 1: Does the base app directory exist?
-    const baseDir = `${appsFolder}${appId}`;
+    const baseDir = folderPath;
     const baseDirExists = await fs.promises.stat(baseDir).then((stats) => stats.isDirectory()).catch(() => false);
 
     if (!baseDirExists) {
@@ -500,14 +499,13 @@ async function verifySendReceiveFolderSafety(appId, folderPath, opts = {}) {
  * Fix permissions on all mount directories for containers
  * Critical for synced data that may have wrong ownership
  * Fixes permissions on appdata and all additional mount points
- * @param {string} appId - App ID
+ * @param {string} appPath - the component directory, the folder's path
  * @returns {Promise<void>}
  */
-async function fixAppdataPermissions(appId) {
+async function fixAppdataPermissions(appPath) {
   try {
     // Fix permissions on entire app directory to cover appdata and all additional mounts
     // (appdata, logs, config, file mounts, etc.)
-    const appPath = `${appsFolder}${appId}`;
 
     // ONE ARGUMENT, AND IT IS THE DIRECTORY FLUXOS CREATED. chmod resolves a
     // symbolic link given as an argument and ignores one met inside a traversal,
@@ -525,7 +523,7 @@ async function fixAppdataPermissions(appId) {
     if (chmod.error) throw chmod.error;
     log.info(`fixAppdataPermissions - Fixed permissions on ${appPath} (includes appdata and all mount points)`);
   } catch (error) {
-    log.warn(`fixAppdataPermissions - Could not fix permissions for ${appId}: ${error.message}`);
+    log.warn(`fixAppdataPermissions - Could not fix permissions for ${appPath}: ${error.message}`);
     // Continue anyway - container might still work
   }
 }
@@ -1392,7 +1390,7 @@ async function handleReceiveOnlyTransition(params) {
     }
 
     // Fix permissions before changing to sendreceive - ensures correct ownership for synced data
-    await fixAppdataPermissions(appId);
+    await fixAppdataPermissions(syncthingFolder.path);
 
     syncthingFolder.type = 'sendreceive';
 
@@ -1484,7 +1482,7 @@ async function handleReceiveOnlyTransition(params) {
         return { syncthingFolder, cache };
       }
       log.info(`handleReceiveOnlyTransition - ${appId} is synced (${syncStatus.syncPercentage.toFixed(2)}%), switching to sendreceive`);
-      await fixAppdataPermissions(appId);
+      await fixAppdataPermissions(syncthingFolder.path);
       syncthingFolder.type = 'sendreceive';
       if (requiresSyncBeforeStart) {
         log.info(`handleReceiveOnlyTransition - requesting start of ${appId} (synced)`);
