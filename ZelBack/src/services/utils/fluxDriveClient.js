@@ -95,9 +95,9 @@ async function blobExists(locator, deps = {}) {
  * PUT an owner-signed manifest to FluxDrive. Body is JSON `{ version, timestamp,
  * arcaneSig, ownerSig, manifest, pendingMessageHash }`. FluxDrive verifies the
  * dual signature over `identity:version:timestamp:pendingMessageHash` (the
- * identity is the manifest's own), keeps one row per name, owner and identity
- * behind a version floor, and refuses a listed app's manifest for another
- * identity. A manifest naming a message hash is held until the nodes answer
+ * identity is the manifest's own), keeps every version of the identity as its
+ * own row behind a floor per ownership, and refuses a listed app's manifest for
+ * another identity. A manifest naming a message hash is held until the nodes answer
  * that the message applied; one naming none is stored at once. The manifest for
  * a name FluxDrive does not list must name the registration that lists it.
  *
@@ -155,14 +155,16 @@ async function reconcile(appName, body, deps = {}) {
 }
 
 /**
- * Fetch the confirmed manifest from the FluxDrive backstop (the cold-start fallback
- * when no running peer is reachable). Returns `{ version, manifest }`, or null when
- * none is stored (404). The caller re-verifies the owner sig + highest-version-wins,
- * so a stale/poisoned copy self-corrects.
+ * Fetch every kept manifest version from the FluxDrive backstop (the cold-start
+ * fallback when no running peer is reachable). FluxDrive keeps each version of
+ * the identity that holds the name and returns them newest first, by the height
+ * each signer took the app then its version; the caller judges each one against
+ * the listed row, so a stale or poisoned copy self-corrects. Returns null when
+ * none is stored (404).
  *
  * @param {string} appName
  * @param {object} [deps] - { http, baseUrl }
- * @returns {Promise<{version:number, manifest:object}|null>}
+ * @returns {Promise<{versions: Array<{version:number, ownedFrom:number, owner:string, manifest:object}>}|null>}
  */
 async function fetchManifest(appName, deps = {}) {
   const http = deps.http || axios;

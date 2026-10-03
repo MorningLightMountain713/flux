@@ -644,14 +644,20 @@ describe('contentSlotService', () => {
   });
 
   describe('refreshManifests', () => {
-    it('takes every manifest each running peer holds, and the one FluxDrive serves, counting those newly stored', async () => {
+    it('takes every manifest each running peer holds, and every version FluxDrive keeps, counting those newly stored', async () => {
       const { service } = load();
       const take = sinon.stub()
         .onFirstCall().resolves({ outcome: 'stored' })
         .onSecondCall().resolves({ outcome: 'duplicate' })
-        .onThirdCall().resolves({ outcome: 'stored' });
+        .onThirdCall().resolves({ outcome: 'stored' })
+        .onCall(3).resolves({ outcome: 'duplicate' });
       const peers = { p1: [manifest({ version: 2 }), manifest({ version: 3 })], p2: [] };
-      const fetchFromDrive = sinon.stub().resolves({ version: 4, manifest: manifest({ version: 4 }) });
+      const fetchFromDrive = sinon.stub().resolves({
+        versions: [
+          { version: 4, ownedFrom: 0, owner: OWNER, manifest: manifest({ version: 4 }) },
+          { version: 1, ownedFrom: 0, owner: OWNER, manifest: manifest({ version: 1 }) },
+        ],
+      });
       const stored = await service.refreshManifests(APP, IDENTITY, {
         getPeers: async () => ['p1', 'p2'],
         fetchPeer: async (peer) => peers[peer],
@@ -659,8 +665,9 @@ describe('contentSlotService', () => {
         take,
       });
       expect(stored).to.equal(2);
-      sinon.assert.calledThrice(take);
-      expect(take.thirdCall.args[0].version).to.equal(4);
+      sinon.assert.callCount(take, 4);
+      expect(take.thirdCall.args[0].version, 'the newest kept version').to.equal(4);
+      expect(take.getCall(3).args[0].version, 'and the older one FluxDrive still keeps').to.equal(1);
     });
 
     it('judges nothing that names another identity, asks at most maxPeers, and swallows a failing source', async () => {

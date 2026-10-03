@@ -161,10 +161,11 @@ describe('fluxDriveClient', () => {
   });
 
   describe('fetchManifest', () => {
-    it('returns the { version, manifest } body', async () => {
-      const http = { get: async () => ({ data: { version: 5, manifest: { slots: {} } } }) };
+    it('returns the { versions } body, every kept version as FluxDrive ranks them', async () => {
+      const versions = [{ version: 5, ownedFrom: 0, owner: '1own', manifest: { slots: {} } }, { version: 4, ownedFrom: 0, owner: '1own', manifest: { slots: {} } }];
+      const http = { get: async () => ({ data: { versions } }) };
       const out = await fetchManifest('app', { http, baseUrl: BASE });
-      expect(out).to.deep.equal({ version: 5, manifest: { slots: {} } });
+      expect(out).to.deep.equal({ versions });
     });
 
     it('returns null on 404', async () => {
