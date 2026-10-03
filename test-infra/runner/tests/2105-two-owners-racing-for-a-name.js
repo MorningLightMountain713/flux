@@ -40,7 +40,7 @@ describe('two owners racing for one app name: the chain decides who holds it', f
       nodeKey(1),
       buildAppSpec({ name, ownerKey, description: `${name} by ${ownerKey.zelid}` }),
       'fluxappregister',
-      { ownerKey },
+      { signerKey: ownerKey },
     );
     expect(result.status, JSON.stringify(result)).to.equal('success');
     return result.data;

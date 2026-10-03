@@ -99,12 +99,13 @@ export function buildAppSpec({
   return spec;
 }
 
-// Signed by the owner's key: the app owner unless the spec names another.
-export async function signAppSpec(spec, type = 'fluxappregister', ownerKey = appOwnerKey()) {
+// signerKey is the owner on record, who alone may sign the message: for a sale it
+// is the outgoing owner while spec.owner already names the incoming one.
+export async function signAppSpec(spec, type = 'fluxappregister', signerKey = appOwnerKey()) {
   const timestamp = Date.now();
   const version = 1;
   const payload = type + version + JSON.stringify(spec) + timestamp;
-  const signature = await signBtcMessage(payload, ownerKey.privkey);
+  const signature = await signBtcMessage(payload, signerKey.privkey);
   return { type, version, appSpecification: spec, timestamp, signature };
 }
 
@@ -117,9 +118,9 @@ function endpointForType(type) {
   return type === 'fluxappupdate' || type === 'zelappupdate' ? 'appupdate' : 'appregister';
 }
 
-export async function registerApp(nodeUrl, adminKeypair, spec, type = 'fluxappregister', { ownerKey } = {}) {
+export async function registerApp(nodeUrl, adminKeypair, spec, type = 'fluxappregister', { signerKey } = {}) {
   const auth = await authenticate(nodeUrl, adminKeypair);
-  const signed = await signAppSpec(spec, type, ownerKey);
+  const signed = await signAppSpec(spec, type, signerKey);
 
   // Updates have their own door — the register route accepts only register types.
   const res = await fetch(`${nodeUrl}/apps/${endpointForType(type)}`, {
@@ -174,8 +175,9 @@ export async function registerAndConfirm(nodeUrl, adminKeypair, spec, nodes, {
   propagationTimeoutMs = 30000,
   explorerTimeoutMs = 120000,
   valueSat,
+  signerKey,
 } = {}) {
-  const regResult = await registerApp(nodeUrl, adminKeypair, spec, type);
+  const regResult = await registerApp(nodeUrl, adminKeypair, spec, type, { signerKey });
   if (regResult.status !== 'success') return regResult;
 
   const appHash = regResult.data;
