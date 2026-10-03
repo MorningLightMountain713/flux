@@ -168,7 +168,12 @@ export async function buildSeedableApp(opts) {
   };
 
   assertHermeticRepotags(spec, allowExternalRepotag);
-  const specWithMeta = { ...spec, hash, height };
+  // The row the decider writes for a registration carries the version the app was
+  // registered with, which fixes its syncthing folder ids and the alias an app
+  // registered before v9 keeps; a row without it builds no deployment view.
+  const specWithMeta = {
+    ...spec, hash, height, registrationVersion: spec.version,
+  };
 
   return { spec: specWithMeta, permanentMessage, hashEntry, hash, txid };
 }
@@ -216,12 +221,15 @@ export function syncedContainerData(syncMode, path = '/appdata') {
 export async function buildSeedableUpdate(app, mutate, { height = null } = {}) {
   const ownerKey = appOwnerKey();
 
-  // hash and height are what the seeding added; the signature and the hash below
-  // are taken over the specification alone, exactly as registration took them.
+  // hash, height and the registration version are what the seeding added; the
+  // signature and the hash below are taken over the specification alone, exactly
+  // as registration took them.
   const previousHeight = app.spec.height;
+  const { registrationVersion } = app.spec;
   const bare = JSON.parse(JSON.stringify(app.spec));
   delete bare.hash;
   delete bare.height;
+  delete bare.registrationVersion;
   // Present if this fixture has already been seeded into mongo, and it belongs
   // to that row rather than to the specification the owner signed.
   delete bare._id;
@@ -245,8 +253,11 @@ export async function buildSeedableUpdate(app, mutate, { height = null } = {}) {
   const txid = fakeTxid();
   const at = height ?? previousHeight + 1;
 
+  // An update's row keeps the version its registration was made with.
   return {
-    spec: { ...spec, hash, height: at },
+    spec: {
+      ...spec, hash, height: at, registrationVersion,
+    },
     permanentMessage: {
       type, version, appSpecifications: spec, hash, timestamp, signature, txid, height: at, valueSat: 200000000,
     },
@@ -350,7 +361,15 @@ export async function buildSeedableLegacyApp({
   };
 
   assertHermeticRepotags(spec, allowExternalRepotag);
-  return { spec: { ...spec, hash, height }, permanentMessage, hashEntry, hash, txid };
+  return {
+    spec: {
+      ...spec, hash, height, registrationVersion: spec.version,
+    },
+    permanentMessage,
+    hashEntry,
+    hash,
+    txid,
+  };
 }
 
 /**

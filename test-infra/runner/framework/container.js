@@ -2,6 +2,7 @@ import { throwIfInfraDead, sleepUnlessInfraDead } from './infra-death.js';
 
 import { execFile } from 'node:child_process';
 import { NotPresentError } from './errors.js';
+import { dbClient } from './db-client.js';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -206,16 +207,17 @@ export async function requireAppContainerName(container, appName, componentName,
 
 // The identifiers this app's containers are named from, read off the containers
 // themselves. Physical artifacts — the appdata directory and its loop mount — are named
-// `flux<identifier>`, which since minting contains no trace of the app's name. A
+// by the identifier, which since minting contains no trace of the app's name. A
 // teardown assertion therefore has to capture these WHILE the app is alive and check
 // they are gone afterwards; nothing on a torn-down node can still say what to look for.
 /**
  * The identifier ONE component's artifacts are named from —
  * `<component>_<identity>[_<replica>]` — read off the container's own label.
  *
- * Everything physical on the node is built from it: the container name is `flux` +
- * this, and so are the appdata directory and the syncthing folder id. None of it can
- * be spelled from the app's name, because the identity is minted at registration.
+ * The container, its appdata directory and its backing image are named by it
+ * outright. The syncthing folder id is not: an app registered before v9 keeps its
+ * 8.x name as the folder id (appSyncthingFolderId). None of it can be spelled from
+ * the app's name, because the identity is minted at registration.
  */
 export async function appComponentIdentifier(container, appName, componentName, replica = null) {
   const containers = await listAppContainers(container, { all: true });
@@ -225,18 +227,24 @@ export async function appComponentIdentifier(container, appName, componentName, 
 }
 
 /**
- * The syncthing folder id an identifier registers: `flux<identifier>`. For a preset a
- * suite has to make before any container exists; once one does, read
- * appSyncthingFolderId off it.
+ * The syncthing folder id of an app registered before v9, from its 8.x identifier
+ * `<component>_<name>[_<replica>]`: the 8.x container name, which every node running
+ * the app names the folder by, whatever its containers are called. For a preset a
+ * suite has to make before the app's row exists; once one does, read
+ * appSyncthingFolderId. A v9 registration's folder id is its identifier and is never
+ * spelled this way.
  */
 export function syncthingFolderIdOf(identifier) {
   return `flux${identifier}`;
 }
 
-/** The syncthing folder id for one component, read off its container. */
-export async function appSyncthingFolderId(container, appName, componentName, replica = null) {
-  const identifier = await appComponentIdentifier(container, appName, componentName, replica);
-  return identifier ? syncthingFolderIdOf(identifier) : null;
+/**
+ * The syncthing folder id for one component, from the app's registration row on
+ * this node: the 8.x name for an app registered before v9, the identifier for a v9
+ * registration (db-client appFolderId). Null while the node holds no row.
+ */
+export async function appSyncthingFolderId(client, appName, componentName, replica = null) {
+  return dbClient(client.num).appFolderId(appName, componentName, replica);
 }
 
 // Same, for the helpers that need the artifact to exist: a path that resolves to
@@ -250,14 +258,14 @@ export async function requireAppComponentIdentifier(container, appName, componen
   return identifier;
 }
 
-/** The directory one component's data lives under: `/mnt/appdata/flux-apps/flux<identifier>`. */
+/** The directory one component's data lives under: `/mnt/appdata/flux-apps/<identifier>`. */
 export async function appDataRoot(container, appName, componentName = appName, replica = null) {
-  return `/mnt/appdata/flux-apps/flux${await requireAppComponentIdentifier(container, appName, componentName, replica)}`;
+  return `/mnt/appdata/flux-apps/${await requireAppComponentIdentifier(container, appName, componentName, replica)}`;
 }
 
-/** The loop-mount image behind that directory: `/mnt/appdata/flux<identifier>FLUXFSVOL`. */
+/** The loop-mount image behind that directory: `/mnt/appdata/<identifier>FLUXFSVOL`. */
 export async function appVolumeFile(container, appName, componentName = appName, replica = null) {
-  return `/mnt/appdata/flux${await requireAppComponentIdentifier(container, appName, componentName, replica)}FLUXFSVOL`;
+  return `/mnt/appdata/${await requireAppComponentIdentifier(container, appName, componentName, replica)}FLUXFSVOL`;
 }
 
 /**
@@ -266,7 +274,7 @@ export async function appVolumeFile(container, appName, componentName = appName,
  * container exists - an event wait on the install itself, or a stub preset the
  * install must find in place. A spec registered through the chain may mint an
  * identity; its identifier is read off its container's label
- * (appComponentIdentifier) or its registration row (db-client appFolderId), and
+ * (appComponentIdentifier) or its registration row (db-client appContainerName), and
  * nothing physical is ever spelled from a name.
  */
 export function componentIdentifier(appName, componentName = appName) {
@@ -544,7 +552,7 @@ export async function getAppContainerAttachment(container, appName, componentNam
 }
 
 // The node's flux appdata root (harness FLUX_APPS_FOLDER). Per-component appdata lives at
-// <root>/flux<identifier>, loop-mounted then umount+rm -rf'd by the teardown.
+// <root>/<identifier>, loop-mounted then umount+rm -rf'd by the teardown.
 const APPDATA_ROOT = '/mnt/appdata/flux-apps';
 
 // Still-present appdata artifacts for an app: live loop mounts and/or leftover
@@ -552,7 +560,7 @@ const APPDATA_ROOT = '/mnt/appdata/flux-apps';
 // (unmounted AND removed).
 //
 // Keyed on the app's component IDENTIFIERS, which the caller captures while the app is
-// alive (appComponentIdentifiers). The directories are named `flux<identifier>`, built
+// alive (appComponentIdentifiers). The directories are named by the identifier, built
 // from the app's minted identity, so only an identifier finds them; the app's name
 // appears nowhere in the path.
 export async function getAppVolumeArtifacts(container, appName, { identifiers } = {}) {
@@ -568,10 +576,10 @@ export async function getAppVolumeArtifacts(container, appName, { identifiers } 
   for (const identifier of identifiers) {
     // eslint-disable-next-line no-await-in-loop
     const { stdout: m } = await execInContainer(container,
-      `mount 2>/dev/null | grep -F '${APPDATA_ROOT}/' | grep -F 'flux${identifier}' || true`);
+      `mount 2>/dev/null | grep -F '${APPDATA_ROOT}/' | grep -F '${identifier}' || true`);
     // eslint-disable-next-line no-await-in-loop
     const { stdout: d } = await execInContainer(container,
-      `ls -1 ${APPDATA_ROOT} 2>/dev/null | grep -F 'flux${identifier}' || true`);
+      `ls -1 ${APPDATA_ROOT} 2>/dev/null | grep -F '${identifier}' || true`);
     mounts.push(...lines(m));
     dirs.push(...lines(d));
   }

@@ -51,6 +51,7 @@ describe('Residential node evacuation: standing down as the elected primary', fu
 
     const seededAfter = env.clients[TARGET - 1].getLastEventId();
     await seedApp(env, 'primaryapp', { instances: 5, syncMode: 'activeStandby' });
+    const primaryContainer = await dbClient(TARGET).appContainerName('primaryapp', 'primaryapp');
     await setSynced({ folder: 'fluxprimaryapp_primaryapp' });
     await setPeerHasData({ folder: 'fluxprimaryapp_primaryapp' });
     await advanceBlocks(3);
@@ -72,7 +73,7 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     // the election question only of a node running the activeStandby component, so a pass that
     // reaches a node the election has not yet started answers SYNCED_ELSEWHERE and
     // hands the app back, which is correct and tests nothing.
-    await waitFor(async () => (await runningComponents(env, TARGET)).includes('fluxprimaryapp_primaryapp'),
+    await waitFor(async () => (await runningComponents(env, TARGET)).includes(primaryContainer),
       { timeout: 300000, label: 'the elected primary is running the activeStandby component' });
 
     await setSystemSecure(subnet.nodeIp(TARGET), false);
@@ -129,14 +130,14 @@ describe('Residential node evacuation: standing down as the elected primary', fu
 
     // The intent above, carried out. Both are worth having: the reconciler can
     // record a desired state it never applies.
-    await waitFor(async () => !(await runningComponents(env, TARGET)).includes('fluxprimaryapp_primaryapp'),
+    await waitFor(async () => !(await runningComponents(env, TARGET)).includes(primaryContainer),
       { timeout: 180000, label: 'the activeStandby component is stopped on the standing-down node' });
 
     // And it must STAY stopped. appReconciler takes an activeStandby component's desired
     // state from controllerDesired, so a stand-down that stops the container
     // without telling the controller is undone on the next sweep.
     await advanceBlocks(3);
-    expect(await runningComponents(env, TARGET)).to.not.include('fluxprimaryapp_primaryapp');
+    expect(await runningComponents(env, TARGET)).to.not.include(primaryContainer);
   });
 
   it('hands the app back on the pass after standing down, and the app survives elsewhere', async function () {
@@ -170,6 +171,7 @@ describe('Residential node evacuation: standing down as the elected primary', fu
 
     const seededAfter = env.clients[TARGET - 1].getLastEventId();
     await seedApp(env, 'lockedapp', { instances: 5, syncMode: 'activeStandby' });
+    const lockedContainer = await dbClient(TARGET).appContainerName('lockedapp', 'lockedapp');
     await setSynced({ folder: 'fluxlockedapp_lockedapp' });
     await setPeerHasData({ folder: 'fluxlockedapp_lockedapp' });
     await advanceBlocks(3);
@@ -199,7 +201,7 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     // answers SYNCED_ELSEWHERE and hands the app back, which is correct and
     // tests nothing. masterSlaveApps only starts the component because FDM
     // named this node, so taking FDM down first means it never starts at all.
-    await waitFor(async () => (await runningComponents(env, TARGET)).includes('fluxlockedapp_lockedapp'),
+    await waitFor(async () => (await runningComponents(env, TARGET)).includes(lockedContainer),
       { timeout: 300000, label: 'the elected primary is running the activeStandby component' });
 
     // The stub closes its listening socket, not an empty ips array. An empty

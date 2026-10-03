@@ -116,7 +116,7 @@ describe('a restore does not reach the other instances data', function () {
     // seeded after its own first-run reset has cleared appdata - otherwise the
     // phantom-index guard holds the app down.
     await placeGAppInOrder(env, app, { placementOrder: [0, 1], identifier, coldStart: false });
-    const folder = await appSyncthingFolderId(env.clients[0].container, appName, appName);
+    const folder = await appSyncthingFolderId(env.clients[0], appName, appName);
     await Promise.all([0, 1].map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder })));
 
     // something identifiable in each copy, so "untouched" is checkable rather
@@ -231,7 +231,7 @@ describe('a restore does not reach the other instances data', function () {
       await placeGAppInOrder(env, app, {
         placementOrder: [0, 1], identifier: ownIdentifier, coldStart: false,
       });
-      const ownFolder = await appSyncthingFolderId(env.clients[0].container, ownName, ownName);
+      const ownFolder = await appSyncthingFolderId(env.clients[0], ownName, ownName);
       await Promise.all([0, 1].map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder: ownFolder })));
       // node 0 holds it, so node 1 is a standby the election has stopped - which
       // is the state a restore must not undo

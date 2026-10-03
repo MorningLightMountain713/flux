@@ -99,7 +99,7 @@ describe('a restore restarts the other instances and never rebuilds them', funct
       await waitForReconcileActuated(env.clients[i], identifier, 'dataCleared', 90000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, appName, i);
     }));
-    folder = await appSyncthingFolderId(env.clients[0].container, appName, appName);
+    folder = await appSyncthingFolderId(env.clients[0], appName, appName);
     appDirPath = await appDataRoot(env.clients[0].container, appName);
     volFilePath = await appVolumeFile(env.clients[0].container, appName);
     await Promise.all(nodes.map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder })));

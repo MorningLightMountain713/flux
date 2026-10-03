@@ -2,7 +2,9 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer, getAppContainerStatus } from '../framework/container.js';
+import {
+  appDataRoot, appVolumeFile, execInContainer, getAppContainerStatus, requireAppContainerName,
+} from '../framework/container.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { waitFor, waitForReconcileActuated } from '../framework/wait.js';
@@ -24,9 +26,6 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 //  - and the genuine image still mounts once it is put back, so the refusal
 //    above is a refusal and not a node that mounts nothing
 
-const appId = (name) => `flux${name}_${name}`;
-const appDir = (name) => `/mnt/appdata/flux-apps/${appId(name)}`;
-const volFile = (name) => `/mnt/appdata/${appId(name)}FLUXFSVOL`;
 // Beside the image, so moving it there is a rename and not a copy, and its
 // name matches no FLUXFSVOL pattern so nothing searches it up.
 const ASIDE = '/mnt/appdata/genuine-under-test.img';
@@ -59,6 +58,9 @@ describe('an app volume is the image this node made, not the one under its name'
   const identifier = `${name}_${name}`;
 
   let container;
+  let containerName;
+  let dir;
+  let vol;
   let stamp;
 
   before(async function () {
@@ -87,10 +89,13 @@ describe('an app volume is the image this node made, not the one under its name'
     });
     await installOnNodes(env, app, [0]);
     container = env.clients[0].container;
+    containerName = await requireAppContainerName(container, name, name);
+    dir = await appDataRoot(container, name);
+    vol = await appVolumeFile(container, name);
 
     // a file inside the app's own volume, so a swapped image is visible as the
     // absence of data rather than having to be inferred
-    await execInContainer(container, `sh -c 'echo ours > ${appDir(name)}/${MARKER}'`);
+    await execInContainer(container, `sh -c 'echo ours > ${dir}/${MARKER}'`);
   });
 
   after(async function () {
@@ -101,16 +106,16 @@ describe('an app volume is the image this node made, not the one under its name'
   it('stamps the filesystem it creates, on the image that is actually on disk', async function () {
     this.timeout(60000);
 
-    const r = await execInContainer(container, `test -f ${volFile(name)}`);
+    const r = await execInContainer(container, `test -f ${vol}`);
     expect(r.exitCode, 'the volume image is not where the install put it').to.equal(0);
 
-    stamp = await fsUuidOf(container, volFile(name));
+    stamp = await fsUuidOf(container, vol);
     // mke2fs without -U generates one too, so the assertion that matters is
     // that it is there to be compared against later, on a real filesystem
     expect(stamp, 'the image carries no filesystem UUID').to.match(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
-    expect(await isMountpoint(container, appDir(name)), 'the app directory is not a mountpoint').to.equal(true);
+    expect(await isMountpoint(container, dir), 'the app directory is not a mountpoint').to.equal(true);
   });
 
   it('refuses a foreign filesystem left at the image path, rather than mounting it', async function () {
@@ -126,21 +131,21 @@ describe('an app volume is the image this node made, not the one under its name'
     // back the same bytes that were taken, not a copy that may not have fitted.
     const afterId = env.clients[0].getLastEventId();
     const r = await execInContainer(container,
-      `umount -l ${appDir(name)} && mv ${volFile(name)} ${ASIDE} && fallocate -l 1G ${volFile(name)}`
-      + ` && mke2fs -t ext4 ${volFile(name)} >/dev/null 2>&1 && docker stop ${appId(name)} >/dev/null 2>&1`);
+      `umount -l ${dir} && mv ${vol} ${ASIDE} && fallocate -l 1G ${vol}`
+      + ` && mke2fs -t ext4 ${vol} >/dev/null 2>&1 && docker stop ${containerName} >/dev/null 2>&1`);
     expect(r.exitCode, `substitution failed: ${r.output}`).to.equal(0);
     // the aside copy is what the canary depends on, so it is checked here
     // rather than discovered to be wrong two assertions later
     expect(await fsUuidOf(container, ASIDE), 'the genuine image was not the file moved aside').to.equal(stamp);
 
-    const substitute = await fsUuidOf(container, volFile(name));
+    const substitute = await fsUuidOf(container, vol);
     expect(substitute, 'the substitute carries the same stamp, so this proves nothing').to.not.equal(stamp);
 
     // the reconciler must report the volume unavailable and never start it
     await waitForReconcileActuated(env.clients[0], identifier, 'volumeUnavailable', 90000, { afterId });
 
     expect(
-      await isMountpoint(container, appDir(name)),
+      await isMountpoint(container, dir),
       'a filesystem this node did not make was mounted over the app directory',
     ).to.equal(false);
     expect(await isUp(env.clients[0], name), 'the app ran on a volume that is not its own').to.equal(false);
@@ -151,17 +156,17 @@ describe('an app volume is the image this node made, not the one under its name'
 
     // the canary: without this, a node that mounts nothing at all would pass
     // the test above
-    const r = await execInContainer(container, `rm -f ${volFile(name)} && mv ${ASIDE} ${volFile(name)}`);
+    const r = await execInContainer(container, `rm -f ${vol} && mv ${ASIDE} ${vol}`);
     expect(r.exitCode, `restore failed: ${r.output}`).to.equal(0);
-    expect(await fsUuidOf(container, volFile(name)), 'the restored image is not the one that was taken').to.equal(stamp);
+    expect(await fsUuidOf(container, vol), 'the restored image is not the one that was taken').to.equal(stamp);
 
     // the reconciler retries the mount on its own timer
     await waitFor(
-      async () => isMountpoint(container, appDir(name)),
+      async () => isMountpoint(container, dir),
       120000,
       'the genuine image was never remounted',
     );
-    const marker = await execInContainer(container, `test -e ${appDir(name)}/${MARKER}`);
+    const marker = await execInContainer(container, `test -e ${dir}/${MARKER}`);
     expect(marker.exitCode, "the app's own data did not come back with it").to.equal(0);
   });
 });

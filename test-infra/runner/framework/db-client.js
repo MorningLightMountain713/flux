@@ -167,16 +167,35 @@ export function dbClient(nodeNum) {
         .findOne({ name: appName }, { projection: { _id: 0 } });
     },
 
-    // The syncthing folder id / appdata dir for one component: `flux<identifier>`,
-    // where the identifier is `<component>_<identity>[_<replica>]`. Read from the
-    // registration row, so it answers BEFORE the app is installed — which is when the
-    // cold-start suites need it, and when no container exists to read a label from.
+    // The container identifier of one component, `<component>_<identity>[_<replica>]`,
+    // from this node's registration row: the docker name, the appdata directory under
+    // the apps folder and the backing image are all named by it. Answers BEFORE the
+    // app is installed, when no container exists to read a label from. Null while
+    // the node holds no row.
+    async appContainerName(appName, componentName, replica = null) {
+      const app = await this.getGlobalApp(appName);
+      if (!app) return null;
+      const base = `${componentName}_${app.identity ?? appName}`;
+      return replica != null ? `${base}_${replica}` : base;
+    },
+
+    // The syncthing folder id of one component, fixed by the version the app was
+    // registered with: an app registered before v9 keeps its 8.x container name,
+    // `flux<component>_<name>[_<replica>]`, so that every node running it names the
+    // folder alike; a v9 registration's is its container identifier. Every row
+    // states the version, as the decider writes it and the seed builders mirror it;
+    // one that does not is a broken fixture, not a v9 app.
     async appFolderId(appName, componentName, replica = null) {
       const app = await this.getGlobalApp(appName);
       if (!app) return null;
-      const segment = app.identity ?? appName;
-      const base = `flux${componentName}_${segment}`;
-      return replica != null ? `${base}_${replica}` : base;
+      if (!Number.isInteger(app.registrationVersion)) {
+        throw new Error(`appFolderId(${appName}): the row states no registrationVersion`);
+      }
+      if (app.registrationVersion < 9) {
+        const base = `flux${componentName}_${appName}`;
+        return replica != null ? `${base}_${replica}` : base;
+      }
+      return this.appContainerName(appName, componentName, replica);
     },
 
     async appSpecCount() {

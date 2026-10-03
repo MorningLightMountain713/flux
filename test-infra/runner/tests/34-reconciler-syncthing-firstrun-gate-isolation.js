@@ -82,7 +82,7 @@ describe('one unmountable app does not block g: election node-wide', function ()
       await waitForReconcileActuated(env.clients[i], gIdentifier, 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, gName, i);
     }));
-    const gFolder = await appSyncthingFolderId(env.clients[0].container, gName, gName);
+    const gFolder = await appSyncthingFolderId(env.clients[0], gName, gName);
     await Promise.all([0, 1].map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder: gFolder })));
 
     // the jammer: a plain app sharing node 0

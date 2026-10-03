@@ -582,10 +582,10 @@ export async function waitForInstanceCount(env, appName, target, {
   return last;
 }
 
-// Deploy a syncthing (r:/g:/s:) app on a chosen node (targeted install) and wait
-// for it to install. The syncthing folder id the deciders query is
-// getAppIdentifier(`${name}_${name}`) i.e. `flux${name}_${name}` — returned as
-// `folder` for driving syncthing-control.
+// Deploy a syncthing (sync, syncFirst or activeStandby) app on a chosen node
+// (targeted install) and wait for it to install. The syncthing folder id the
+// deciders query is the one the registration fixed, `flux${name}_${name}` for the
+// v8 spec seeded here — returned as `folder` for driving syncthing-control.
 //
 // forceNonLeader: make the installed node a follower rather than the syncthing
 // leader (a leader starts immediately; only a follower waits for sync). Done the
@@ -640,7 +640,7 @@ export async function seedSyncthingApp(env, {
     await seedSyncScopedData(env, name, peerIndex);
     await setSynced({
       ip: getSubnetConfig().nodeIp(peerIndex + 1),
-      folder: await appSyncthingFolderId(env.clients[peerIndex].container, name, name),
+      folder: await appSyncthingFolderId(env.clients[peerIndex], name, name),
     });
     await env.clients[index].waitForEvent(
       'network:apprunning', (d) => d.apps?.some((a) => a.name === name), 60000, { afterId },
@@ -651,7 +651,7 @@ export async function seedSyncthingApp(env, {
   await installOnNodes(env, app, [index]);
   await waitForReconcileActuated(env.clients[index], identifier, settleAction, 60000, { afterId: installAfter });
   await seedSyncScopedData(env, name, index);
-  const folder = await appSyncthingFolderId(env.clients[index].container, name, name);
+  const folder = await appSyncthingFolderId(env.clients[index], name, name);
   return {
     app, index, peerIndex, folder, identifier,
   };

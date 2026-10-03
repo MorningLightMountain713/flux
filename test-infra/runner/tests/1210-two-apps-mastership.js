@@ -128,7 +128,7 @@ describe('two apps share their holders, and their terms never entangle', functio
         await seedSyncScopedData(env, name, i);
       }));
       // eslint-disable-next-line no-await-in-loop
-      await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]].container, name, name) });
+      await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]], name, name) });
     }
 
     holderOutpoints = {};

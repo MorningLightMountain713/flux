@@ -99,7 +99,7 @@ describe('a g: app with holders on both sides of a partition', function () {
     await placeGAppInOrder(env, app, {
       placementOrder, identifier: componentIdentifier(appName),
     });
-    folder = await appSyncthingFolderId(env.clients[holders[0]].container, appName, appName);
+    folder = await appSyncthingFolderId(env.clients[holders[0]], appName, appName);
   });
 
   after(async function () {

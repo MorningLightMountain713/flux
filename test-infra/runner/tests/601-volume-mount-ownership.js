@@ -130,7 +130,7 @@ describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs',
     await waitForReconcileActuated(env.clients[0], syncIdentifier, 'dataCleared', 60000, { afterId: syncInstallAfter });
     await seedSyncScopedData(env, syncName, 0);
     // pin the folder synced so the leader promotes and the app runs steadily
-    await setSynced({ ip: subnet.nodeIp(1), folder: await appSyncthingFolderId(env.clients[0].container, syncName, syncName) });
+    await setSynced({ ip: subnet.nodeIp(1), folder: await appSyncthingFolderId(env.clients[0], syncName, syncName) });
     await installPlainApp(env, rebootName, 1);
     await installPlainApp(env, inertName, 2);
     await installPlainApp(env, rmName, 3);

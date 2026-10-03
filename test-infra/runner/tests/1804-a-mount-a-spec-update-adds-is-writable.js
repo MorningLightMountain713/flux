@@ -38,7 +38,9 @@ import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp, buildSeedableUpdate } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { bootAndPeer, installOnNodes, seedSpecUpdate } from '../framework/reconciler-suite.js';
-import { execInContainer, getAppContainerId } from '../framework/container.js';
+import {
+  appDataRoot, execInContainer, getAppContainerId, requireAppContainerName,
+} from '../framework/container.js';
 import { waitFor } from '../framework/wait.js';
 import { driveUntil, stopTicker } from '../framework/daemon-control.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
@@ -54,9 +56,9 @@ describe('a mount directory a specification update adds is writable by the app\'
   let env;
   dumpLogsOnFailure(() => env);
   const appName = `e2emntupd${Date.now()}`;
-  const containerName = `flux${appName}_${appName}`;
-  const volume = `/mnt/appdata/flux-apps/${containerName}`;
-  const marker = `${volume}/appdata/written-before-the-update`;
+  let containerName;
+  let volume;
+  let marker;
   let holder;
   let app;
   let updated;
@@ -100,6 +102,9 @@ describe('a mount directory a specification update adds is writable by the app\'
       }],
     });
     await installOnNodes(env, app, [0]);
+    containerName = await requireAppContainerName(holder.container, appName, appName);
+    volume = await appDataRoot(holder.container, appName);
+    marker = `${volume}/appdata/written-before-the-update`;
     await waitFor(async () => {
       containerBefore = await getAppContainerId(holder.container, appName, appName);
       return Boolean(containerBefore) && (await appLogs()).includes(`write probe ok: /tmp (uid ${APP_USER})`);

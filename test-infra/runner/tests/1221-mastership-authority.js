@@ -163,7 +163,7 @@ describe('mastership authority: FluxOS keeps the app up and FDM never decides th
       await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
-    await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]].container, name, name) });
+    await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]], name, name) });
 
     outpoints = {};
     for (let i = 0; i < env.clients.length; i += 1) {

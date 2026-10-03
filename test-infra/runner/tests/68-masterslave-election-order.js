@@ -78,7 +78,7 @@ describe('primary election under a divergent placement order', function () {
   // separate decisions, made by different code on different orderings, and the
   // failure this suite exists for is two nodes owning the data.
   const writableHolders = async (appName) => {
-    const folder = await appSyncthingFolderId(env.clients[placementOrder[0]].container, appName, appName);
+    const folder = await appSyncthingFolderId(env.clients[placementOrder[0]], appName, appName);
     const state = await getSyncthingState();
     return (state.nodes || [])
       .filter((node) => (node.folders || []).some((f) => f.id === folder && f.type === 'sendreceive'))
@@ -210,7 +210,7 @@ describe('primary election under a divergent placement order', function () {
     // the data and are connected to one another, and the connection to the node whose
     // FluxOS is about to go away is the whole evidence the probe reads while its API
     // is silent.
-    const orderFolder = await appSyncthingFolderId(env.clients[holders[0]].container, orderApp, orderApp);
+    const orderFolder = await appSyncthingFolderId(env.clients[holders[0]], orderApp, orderApp);
     await Promise.all(holders.map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder: orderFolder })));
     await Promise.all(holders.map((i) => setPeerHasData({ ip: subnet.nodeIp(i + 1), folder: orderFolder })));
 
@@ -250,7 +250,7 @@ describe('primary election under a divergent placement order', function () {
     // The standbys have genuinely synced from the seed by now, so pin them synced (over
     // the data seeded at install) to make them election-eligible - otherwise nothing
     // could take over and this would pass for the wrong reason.
-    const orderFolder = await appSyncthingFolderId(env.clients[seedIndex].container, orderApp, orderApp);
+    const orderFolder = await appSyncthingFolderId(env.clients[seedIndex], orderApp, orderApp);
     await Promise.all(holders.filter((i) => i !== seedIndex).map(
       (i) => setSynced({ ip: subnet.nodeIp(i + 1), folder: orderFolder }),
     ));
@@ -412,7 +412,7 @@ describe('primary election under a divergent placement order', function () {
     const position = await electionIndexOf(env, fdmApp, seedIndex);
     expect(position, 'fixture: seed must be off index 0').to.be.greaterThan(0);
 
-    const folder = await appSyncthingFolderId(env.clients[holders[0]].container, fdmApp, fdmApp);
+    const folder = await appSyncthingFolderId(env.clients[holders[0]], fdmApp, fdmApp);
     await Promise.all(holders.map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder })));
 
     // FDM is named AFTER discovering which holder actually runs it, because that is

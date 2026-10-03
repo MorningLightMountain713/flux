@@ -2,6 +2,7 @@
 import { describe, it, before, after, beforeEach } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
+import { dbClient } from '../framework/db-client.js';
 import { appDataRoot, appSyncthingFolderId, componentIdentifier, execInContainer } from '../framework/container.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
@@ -53,7 +54,9 @@ describe('a restore acts on the components it was asked for, by their own folder
   const dirs = new Map();
   const folderOf = (comp) => folders.get(comp);
   const dirOf = (comp) => dirs.get(comp);
-  const appLevelFolderId = `flux${appName}`;
+  // An id for the whole app rather than one component, in each form a node could
+  // spell one; the app's identity joins the set once its row exists.
+  const appLevelFolderIds = new Set([`flux${appName}`, appName]);
 
   let auth;
   let nodeIp;
@@ -97,6 +100,7 @@ describe('a restore acts on the components it was asked for, by their own folder
 
     const installAfter = env.clients[0].getLastEventId();
     await installOnNodes(env, app, [0]);
+    appLevelFolderIds.add((await dbClient(1).getGlobalApp(appName))?.identity ?? appName);
     // data goes down only after the sync layer's first-run reset has cleared
     // appdata - which removes the directory - and the component's next start
     // has recreated it; written before that, the marker has nowhere to land.
@@ -108,7 +112,7 @@ describe('a restore acts on the components it was asked for, by their own folder
     )));
     for (const comp of [compA, compB]) {
       // eslint-disable-next-line no-await-in-loop
-      folders.set(comp, await appSyncthingFolderId(env.clients[0].container, appName, comp));
+      folders.set(comp, await appSyncthingFolderId(env.clients[0], appName, comp));
       // eslint-disable-next-line no-await-in-loop
       dirs.set(comp, await appDataRoot(env.clients[0].container, appName, comp));
     }
@@ -178,9 +182,9 @@ describe('a restore acts on the components it was asked for, by their own folder
     // wrote anything at all. Without this the test passed while the monitor was
     // deleting the folders out from under the restore.
     expect(writes.length, 'folder writes observed for this restore').to.be.greaterThan(0);
-    // flux<app> is the id the old code went looking for; it matches no composed
-    // app's folder, which is why the freeze silently never happened
-    expect(writes.filter((w) => w.id === appLevelFolderId), 'writes to the app-level id').to.deep.equal([]);
+    // An app-level id matches no composed app's folder; a restore that froze by
+    // one would freeze nothing.
+    expect(writes.filter((w) => appLevelFolderIds.has(w.id)), 'writes to an app-level id').to.deep.equal([]);
     expect(writes.filter((w) => w.method === 'delete'), 'folder deletions').to.deep.equal([]);
   });
 
