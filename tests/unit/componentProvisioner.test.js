@@ -145,6 +145,39 @@ describe('componentProvisioner tests', () => {
     });
   });
 
+  describe('a recreate from the image on this node (the move onto the identity)', () => {
+    it('neither verifies nor pulls when the image is on the daemon', async () => {
+      const provisioner = loadProvisioner({ pullError: new Error('registry must not be asked') });
+      appDockerImageSizeStub.resolves(5e8);
+      await provisioner.installComponent(makeComponent(null), { owner: 'owner1', localImageFirst: true });
+      sinon.assert.calledOnce(appDockerCreateStub);
+    });
+
+    it('verifies and pulls as any install does when the image is not on the daemon', async () => {
+      const provisioner = loadProvisioner({ pullError: new Error('manifest unknown') });
+      appDockerImageSizeStub.resolves(0);
+      try {
+        await provisioner.installComponent(makeComponent(null), { owner: 'owner1', localImageFirst: true });
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err.message).to.include('manifest unknown');
+      }
+      sinon.assert.notCalled(appDockerCreateStub);
+    });
+
+    it('pulls first without the option, image on the daemon or not', async () => {
+      const provisioner = loadProvisioner({ pullError: new Error('manifest unknown') });
+      appDockerImageSizeStub.resolves(5e8);
+      try {
+        await provisioner.installComponent(makeComponent(null), { owner: 'owner1' });
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err.message).to.include('manifest unknown');
+      }
+      sinon.assert.notCalled(appDockerCreateStub);
+    });
+  });
+
   describe('owner guard', () => {
     const component = { identifier: 'web_testapp', appName: 'testapp' };
 

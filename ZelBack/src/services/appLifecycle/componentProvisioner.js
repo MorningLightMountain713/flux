@@ -160,6 +160,11 @@ async function installComponent(component, options = {}) {
   // through an outage beats sitting down until the registry heals. Fresh installs
   // never set this: they have no local copy to trust and defer instead.
   const allowLocalImageFallback = options.allowLocalImageFallback || false;
+  // The move onto the identity recreates a container from the image it ran
+  // under its former name, which is on this daemon: no registry round trip, so
+  // the move stays inside the boot's window. An image not on the daemon is
+  // verified and pulled as any install's is.
+  const localImageFirst = options.localImageFirst || false;
   const { owner } = options;
   // Which app INSTANCE this container belongs to. Unlike owner this is NOT
   // load-bearing yet and is absent for every app registered before identities
@@ -191,23 +196,28 @@ async function installComponent(component, options = {}) {
     await openHostPorts(component.hostPorts, appName, status);
   }
 
-  try {
-    const pullConfig = await verifyComponentImage(component);
-    // Thread the install's abort signal so a concurrent cancel/removal of this app ends the
-    // in-flight download (docker-modem >=5 makes the pull abortable).
-    if (abortSignal) pullConfig.abortSignal = abortSignal;
-    await dockerPullStreamPromise(pullConfig, onStatus ? { write: (data) => onStatus(data), flush: () => {} } : null);
-    status(`Pulling ${id} was successful`);
-  } catch (error) {
-    // Pull-first keeps recreates fresh (a same-tag pull is a cheap manifest
-    // check); the local image only substitutes when the registry is unreachable
-    // AND the bits are already here - the stale-run window is exactly the
-    // outage's duration, never a policy. Image-bad (permanent) failures rethrow.
-    const localImagePresent = allowLocalImageFallback
-      && error.registryErrorClass === 'transient'
-      && await dockerService.appDockerImageSize(component.image) > 0;
-    if (!localImagePresent) throw error;
-    status(`Registry unreachable; recreating ${id} from the local image`);
+  const imageOnThisNode = localImageFirst && await dockerService.appDockerImageSize(component.image) > 0;
+  if (imageOnThisNode) {
+    status(`Creating ${id} from the image on this node`);
+  } else {
+    try {
+      const pullConfig = await verifyComponentImage(component);
+      // Thread the install's abort signal so a concurrent cancel/removal of this app ends the
+      // in-flight download (docker-modem >=5 makes the pull abortable).
+      if (abortSignal) pullConfig.abortSignal = abortSignal;
+      await dockerPullStreamPromise(pullConfig, onStatus ? { write: (data) => onStatus(data), flush: () => {} } : null);
+      status(`Pulling ${id} was successful`);
+    } catch (error) {
+      // Pull-first keeps recreates fresh (a same-tag pull is a cheap manifest
+      // check); the local image only substitutes when the registry is unreachable
+      // AND the bits are already here - the stale-run window is exactly the
+      // outage's duration, never a policy. Image-bad (permanent) failures rethrow.
+      const localImagePresent = allowLocalImageFallback
+        && error.registryErrorClass === 'transient'
+        && await dockerService.appDockerImageSize(component.image) > 0;
+      if (!localImagePresent) throw error;
+      status(`Registry unreachable; recreating ${id} from the local image`);
+    }
   }
 
   // Post-pull backstop: a cancel that landed while/after the pull ran (the abort is then a
