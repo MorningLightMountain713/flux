@@ -26,7 +26,7 @@ const {
 const { departures } = require('./offListDepartures');
 const decisionStore = require('../appDecisions/decisionStore');
 
-// One-row-per-app content-slot manifest register (latest-wins). Not in appConstants
+// The content manifests a node holds, one row per manifest. Not in appConstants
 // because only the content-manifest plane touches it.
 const { appContentManifests } = config.get('database.appsglobal.collections');
 
@@ -267,22 +267,107 @@ async function removeAppInstallingErrorRecords(name) {
   );
 }
 
-// ── Content-Slot Manifests (appContentManifests) ───────────────────
-// The content manifest is a latest-wins register: one row per app identity,
-// ordered by a monotonic version, deleted when the app leaves the registry. The content domain (contentSlotService) owns the
-// verify/decrypt logic and the row shape; this registry owns every read/write.
+// ── Content manifests (appContentManifests) ────────────────────────
+// One row per manifest a node takes, keyed by the app identity and the manifest's
+// hash. Which manifest the app stands on is derived at read by the content domain
+// (contentSlotService.standingManifest): the highest-ranked row the listed row
+// validates. A row whose signer is not yet resolved (it arrived before the app's
+// row) carries `signer: null` and an `expireAt` the TTL index reaps; resolving it
+// sets the signer and clears the expiry. `applied` marks the one row whose content
+// this node last delivered to the app. The content domain owns the verify/open
+// logic and the body shape; this registry owns every read and write.
 
 /**
- * The stored gossip-form manifest row for an app, or null. Carries the top-level
- * monotonic `version` floor alongside the signed `data` body and the broadcast
- * `envelope` (absent on a catch-up body).
- * @param {string} identity - the app's identity
+ * Every manifest row held for an app identity, resolved and not.
+ * @param {string} identity
+ * @returns {Promise<object[]>}
+ */
+async function getContentManifests(identity) {
+  return dbHelper.findInDatabase(globalDb(), appContentManifests, { identity }, { projection: { _id: 0 } });
+}
+
+/**
+ * One manifest row, by the app identity and the manifest's hash, or null.
+ * @param {string} identity
+ * @param {string} hash
  * @returns {Promise<object|null>}
  */
-async function getContentManifest(identity) {
-  return dbHelper.findOneInDatabase(
-    globalDb(), appContentManifests, { identity }, { projection: { _id: 0 } },
+async function getContentManifest(identity, hash) {
+  return dbHelper.findOneInDatabase(globalDb(), appContentManifests, { identity, hash }, { projection: { _id: 0 } });
+}
+
+/**
+ * Keeps a manifest row. A row is inserted once per identity and hash; a second
+ * arrival of the same manifest touches its receipt time and, when it brings a
+ * node broadcast the row lacked, the verbatim signed data and its envelope, so a
+ * body first pulled over HTTP becomes servable over sync. A signer given here
+ * resolves the row; a row stored with none holds `expireAt` until it is resolved.
+ *
+ * @param {object} row - { identity, hash, version, ownedFrom, signer, data, envelope?, expireAt? }
+ * @param {object} [opts] - { now? }
+ * @returns {Promise<{inserted: boolean}>}
+ */
+async function putContentManifest(row, opts = {}) {
+  const {
+    identity, hash, version, ownedFrom, signer, data, envelope, expireAt,
+  } = row;
+  const now = opts.now ? new Date(opts.now) : new Date();
+  const setOnInsert = {
+    identity, hash, version, ownedFrom, applied: false,
+  };
+  const set = { receivedAt: now };
+  const unset = {};
+  if (envelope) {
+    set.data = data;
+    set.envelope = envelope;
+  } else {
+    setOnInsert.data = data;
+  }
+  if (signer) {
+    set.signer = signer;
+    unset.expireAt = '';
+  } else {
+    setOnInsert.signer = null;
+    setOnInsert.expireAt = expireAt;
+  }
+  const update = { $setOnInsert: setOnInsert, $set: set };
+  if (Object.keys(unset).length) update.$unset = unset;
+  const res = await dbHelper.updateOneInDatabase(globalDb(), appContentManifests, { identity, hash }, update, { upsert: true });
+  return { inserted: Boolean(res && res.upsertedCount) };
+}
+
+/**
+ * Resolves a held row: the owner whose signature verifies over it, and the
+ * expiry cleared.
+ * @param {string} identity
+ * @param {string} hash
+ * @param {string} signer
+ */
+async function resolveContentManifest(identity, hash, signer) {
+  await dbHelper.updateOneInDatabase(
+    globalDb(), appContentManifests, { identity, hash }, { $set: { signer }, $unset: { expireAt: '' } },
   );
+}
+
+/**
+ * Deletes one manifest row.
+ * @param {string} identity
+ * @param {string} hash
+ */
+async function deleteContentManifest(identity, hash) {
+  await dbHelper.removeDocumentsFromCollection(globalDb(), appContentManifests, { identity, hash });
+}
+
+/**
+ * Marks the manifest whose content this node delivered to the app, and clears
+ * the mark on every other row of the identity. Never inserts: a node cannot have
+ * applied a manifest it never stored.
+ * @param {string} identity
+ * @param {string} hash
+ */
+async function markContentManifestApplied(identity, hash) {
+  await dbHelper.updateInDatabase(globalDb(), appContentManifests, { identity, hash: { $ne: hash }, applied: true }, { $set: { applied: false } });
+  await dbHelper.updateOneInDatabase(globalDb(), appContentManifests, { identity, hash }, { $set: { applied: true } });
 }
 
 /**
@@ -294,151 +379,84 @@ async function removeContentManifests(identity) {
 }
 
 /**
- * Record the manifest version this node has actually delivered to the app's RUNNING
- * container, as a node-local annotation on the register row. Distinct from the row's
- * `version` (the latest KNOWN manifest): the gap `version > appliedVersion` is what tells
- * a returning/steady node its running content is behind, independent of the (mutable)
- * on-disk bytes. Advanced monotonically; never upserts (you cannot have applied a manifest
- * you never stored). Written on disjoint fields from upsertContentManifest, so the two
- * writers never clobber each other on the same row.
- *
- * @param {string} identity
- * @param {number} version
- * @returns {Promise<void>}
+ * Deletes the rows written before a manifest carried its hash; nothing reads
+ * them, and the unique index on identity and hash takes one hashless row per
+ * identity only. Returns the count.
+ * @returns {Promise<number>}
  */
-async function setContentManifestApplied(identity, version) {
-  await dbHelper.updateOneInDatabase(
-    globalDb(), appContentManifests,
-    { identity, $or: [{ appliedVersion: { $exists: false } }, { appliedVersion: { $lt: version } }] },
-    { $set: { appliedVersion: version } },
-  );
+async function removeContentManifestsWithoutHash() {
+  const res = await dbHelper.removeDocumentsFromCollection(globalDb(), appContentManifests, { hash: { $exists: false } });
+  return res?.deletedCount ?? 0;
 }
 
 /**
- * Latest-wins upsert of a manifest row. A confirmed store advances a strictly-older
- * row OR promotes a same-version quarantined row in place (clearing its TTL); a
- * quarantine store holds only a strictly-newer version (TTL-reaped if its spec never
- * arrives). Returns false when a same/higher version already stands — decided by this
- * function's own read, never delegated to the unique index: with upsert a non-matching
- * guard filter INSERTS, so index absence (a freshly-prepared collection) would turn
- * refusals into regressions. The index remains the backstop for the fresh-insert race.
- *
- * @param {object} row - { identity, version, data, envelope? }
- * @param {object} opts - { confirmed=true, expireAt?, clearEnvelope? }
- * @returns {Promise<boolean>}
+ * Every resolved manifest row, with whether it carries a node broadcast and so
+ * can be served over sync — the content domain picks each identity's standing
+ * row from these for the index it publishes.
+ * @returns {Promise<Array<{identity: string, hash: string, version: number, ownedFrom: number, signer: string, servable: boolean}>>}
  */
-async function upsertContentManifest(row, opts = {}) {
-  const {
-    identity, version, data, envelope,
-  } = row;
-  const confirmed = opts.confirmed !== false;
-  const base = {
-    identity, version, confirmed, receivedAt: new Date(), data,
-  };
-  if (envelope) base.envelope = envelope;
-  // A store WITHOUT an envelope (a catch-up body) must carry none — clear any stale
-  // one left by a row it promotes/advances over, else the kept envelope would sign the
-  // OLD data and the row would be served-then-rejected over sync.
-  const clearEnvelope = opts.clearEnvelope ?? !envelope;
-
-  let filter;
-  let update;
-  if (confirmed) {
-    filter = { identity, $or: [{ version: { $lt: version } }, { version, confirmed: false }] };
-    update = { $set: base, $unset: clearEnvelope ? { expireAt: '', envelope: '' } : { expireAt: '' } };
-  } else {
-    filter = { identity, version: { $lt: version } };
-    update = { $set: { ...base, expireAt: opts.expireAt } };
-    if (clearEnvelope) update.$unset = { envelope: '' };
-  }
-  try {
-    const res = await dbHelper.updateOneInDatabase(globalDb(), appContentManifests, filter, update);
-    if (res && res.matchedCount > 0) return true;
-    // Nothing matched: either no row exists (a fresh insert is legal) or a
-    // same/higher version stands (refuse).
-    const existing = await dbHelper.findOneInDatabase(
-      globalDb(), appContentManifests, { identity }, { projection: { _id: 0, version: 1 } },
-    );
-    if (existing) return false;
-    const insertDoc = confirmed ? base : { ...base, expireAt: opts.expireAt };
-    await dbHelper.insertOneToDatabase(globalDb(), appContentManifests, insertDoc);
-    return true;
-  } catch (error) {
-    if (error && error.code === 11_000) return false; // lost the fresh-insert race
-    throw error;
-  }
-}
-
-/** Delete a quarantined (confirmed:false) manifest row — used when it fails
- *  verification, so a real manifest at the same version isn't blocked by the floor. */
-async function deleteQuarantinedContentManifest(identity) {
-  return dbHelper.removeDocumentsFromCollection(
-    globalDb(), appContentManifests, { identity, confirmed: false },
-  );
-}
-
-/** The (identity, version) vector of every confirmed manifest this node can actually serve
- *  — the version index SERVED to peers (only verified rows are authoritative to others).
- *  Filtered exactly as listConfirmedContentManifestBroadcasts serves the bodies: the index
- *  is a promise to hand those manifests over, and a confirmed row without an envelope (one
- *  pulled over HTTP from a running peer, or restored from the FluxDrive backstop) has no
- *  broadcast to send. Advertising one makes every asking node request it, receive a
- *  well-formed EMPTY answer, and stay behind for as long as this node is its source — a
- *  stale state no retry clears, because the fetch was answered correctly. */
-async function listConfirmedContentManifestVersions() {
+async function listResolvedContentManifests() {
   const docs = await dbHelper.findInDatabase(
     globalDb(), appContentManifests,
-    { confirmed: true, envelope: { $exists: true } },
-    { projection: { _id: 0, identity: 1, version: 1 } },
+    { signer: { $ne: null } },
+    {
+      projection: {
+        _id: 0, identity: 1, hash: 1, version: 1, ownedFrom: 1, signer: 1, envelope: 1,
+      },
+    },
   );
-  return docs.map((doc) => ({ identity: doc.identity, version: doc.version }));
+  return docs.map((doc) => ({
+    identity: doc.identity, hash: doc.hash, version: doc.version, ownedFrom: doc.ownedFrom, signer: doc.signer, servable: Boolean(doc.envelope),
+  }));
 }
 
-/** The (identity, version) vector of every HELD manifest, quarantined included — the
- *  reconcile's local gap view. A body held pending spec-confirm is already fetched
- *  (transport done, promotion is the spec-gated lifecycle), so it is not a gap:
- *  re-fetching it from another peer would hit the same local spec gate. */
-async function listContentManifestVersions() {
+/**
+ * The rank of every manifest row held, resolved or not — the sync round's local
+ * gap view. A body held unresolved is already fetched; fetching it again from
+ * another peer would meet the same missing row.
+ * @returns {Promise<Array<{identity: string, version: number, ownedFrom: number}>>}
+ */
+async function listContentManifestRanks() {
   const docs = await dbHelper.findInDatabase(
     globalDb(), appContentManifests,
     {},
-    { projection: { _id: 0, identity: 1, version: 1 } },
+    { projection: { _id: 0, identity: 1, version: 1, ownedFrom: 1 } },
   );
-  return docs.map((doc) => ({ identity: doc.identity, version: doc.version }));
+  return docs.map((doc) => ({ identity: doc.identity, version: doc.version, ownedFrom: doc.ownedFrom }));
 }
 
 /**
- * The re-servable signed broadcasts for confirmed manifests, rebuilt as
- * `{ ...envelope, data }` so a requester verifies them with batchVerifyBroadcasts.
- * Only rows that carry an envelope are servable. Scope to `identities` for the two-step
- * fetch (the specific rows a peer asked for); omit for the full confirmed set.
- * @param {string[]} [identities]
+ * The re-servable signed broadcasts of every resolved manifest held for the
+ * identities asked, rebuilt as `{ ...envelope, data }` so a requester verifies
+ * them with batchVerifyBroadcasts. A peer behind the chain still serves the one
+ * a new row names. Only rows that carry an envelope are servable.
+ * @param {string[]} identities
  * @returns {Promise<object[]>}
  */
-async function listConfirmedContentManifestBroadcasts(identities) {
-  const filter = { confirmed: true, envelope: { $exists: true } };
-  if (Array.isArray(identities) && identities.length) filter.identity = { $in: identities };
+async function listContentManifestBroadcasts(identities) {
+  if (!Array.isArray(identities) || identities.length === 0) return [];
   const rows = await dbHelper.findInDatabase(
-    globalDb(), appContentManifests, filter, { projection: { _id: 0, envelope: 1, data: 1 } },
+    globalDb(), appContentManifests,
+    { identity: { $in: identities }, signer: { $ne: null }, envelope: { $exists: true } },
+    { projection: { _id: 0, envelope: 1, data: 1 } },
   );
   return rows.map((row) => ({ ...row.envelope, data: row.data }));
 }
 
 /**
- * Reap confirmed manifests whose app identity no registry row carries. The registry
+ * Reap resolved manifests whose app identity no registry row carries. The registry
  * deletes an app's manifests when its row leaves; this collects the rows no app ever
- * listed. Quarantined (confirmed:false) rows are left to the TTL index, so this never
- * races a manifest that arrived just before its app's row. Rows younger than the reap
- * grace are never touched: a manifest submitted with a registration is stored
- * confirmed BEFORE the app tx confirms on-chain, so an identity not yet listed is not
- * evidence of an app that never will be — the grace spans that register window, and a
- * registration that never confirms reaps once it ages out. Returns the reaped count.
+ * listed. Unresolved rows are left to the TTL index, so this never races a manifest
+ * that arrived just before its app's row. Rows younger than the reap grace are
+ * never touched: a manifest submitted with a registration is held before the app
+ * applies, so an identity not yet listed is not evidence of an app that never will
+ * be. Returns the reaped count.
  * @returns {Promise<{reaped: number, orphans: string[]}>}
  */
 async function reapOrphanedContentManifests() {
   const cutoff = new Date(Date.now() - config.get('fluxapps.contentManifestReapGraceMs'));
   const identities = await globalDb().collection(appContentManifests)
-    .distinct('identity', { confirmed: true, receivedAt: { $lte: cutoff } });
+    .distinct('identity', { signer: { $ne: null }, receivedAt: { $lte: cutoff } });
   if (!identities.length) return { reaped: 0, orphans: [] };
   const listed = await dbHelper.findInDatabase(
     globalDb(), globalAppsInformation, { identity: { $in: identities } }, { projection: { _id: 0, identity: 1 } },
@@ -448,7 +466,7 @@ async function reapOrphanedContentManifests() {
   if (!orphans.length) return { reaped: 0, orphans: [] };
   const result = await dbHelper.removeDocumentsFromCollection(
     globalDb(), appContentManifests,
-    { identity: { $in: orphans }, confirmed: true, receivedAt: { $lte: cutoff } },
+    { identity: { $in: orphans }, signer: { $ne: null }, receivedAt: { $lte: cutoff } },
   );
   const reaped = result?.deletedCount ?? 0;
   if (reaped) fluxEventBus.publish('content:manifestReaped', { count: reaped });
@@ -1006,19 +1024,19 @@ async function getTempMessageByName(name) {
 }
 
 /**
- * The versions of the manifests held in the pool with an app's waiting
- * updates: a manifest a submission carries takes the number after the highest
- * of these and the stored one.
+ * The ranks of the manifests held in the pool with an app's waiting updates: a
+ * manifest a submission carries takes the number after the highest of these
+ * within its ownership and the stored ones.
  * @param {string} identity
- * @returns {Promise<number[]>}
+ * @returns {Promise<Array<{version: number, ownedFrom: number}>>}
  */
-async function carriedManifestVersions(identity) {
+async function carriedManifestRanks(identity) {
   const rows = await dbHelper.findInDatabase(
     globalDb(), globalAppsTempMessages,
     { 'contentManifest.identity': identity },
-    { projection: { _id: 0, 'contentManifest.version': 1 } },
+    { projection: { _id: 0, 'contentManifest.version': 1, 'contentManifest.ownedFrom': 1 } },
   );
-  return rows.map((row) => row.contentManifest.version);
+  return rows.map((row) => ({ version: row.contentManifest.version, ownedFrom: row.contentManifest.ownedFrom }));
 }
 
 // ── Ingress attestations ───────────────────────────────────────────
@@ -1680,15 +1698,18 @@ module.exports = {
   getGlobalAppHeight,
   existsGlobalApp,
   listGlobalAppInfo,
+  getContentManifests,
   getContentManifest,
-  setContentManifestApplied,
-  upsertContentManifest,
-  deleteQuarantinedContentManifest,
-  listConfirmedContentManifestVersions,
-  listContentManifestVersions,
-  listConfirmedContentManifestBroadcasts,
-  reapOrphanedContentManifests,
+  putContentManifest,
+  resolveContentManifest,
+  deleteContentManifest,
+  markContentManifestApplied,
   removeContentManifests,
+  removeContentManifestsWithoutHash,
+  listResolvedContentManifests,
+  listContentManifestRanks,
+  listContentManifestBroadcasts,
+  reapOrphanedContentManifests,
   listGlobalAppNodes,
   removeGlobalAppInfo,
   replaceGlobalAppRow,
@@ -1721,7 +1742,7 @@ module.exports = {
   getPermanentMessage,
   getTempMessage,
   getTempMessageByName,
-  carriedManifestVersions,
+  carriedManifestRanks,
   listAppMessagesByName,
   // ingress attestations
   storeIngressAttestation,

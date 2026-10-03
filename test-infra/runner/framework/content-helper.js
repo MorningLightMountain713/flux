@@ -28,6 +28,16 @@ export async function listedIdentity(nodeUrl, name) {
   return row.identity;
 }
 
+// What a node holds for the app listed under a name, as the owner reads it before
+// signing: the identity, the listed ownership (owner and the height they took the
+// app), the manifest the app stands on and the version the next manifest takes.
+export async function manifestStanding(nodeUrl, name) {
+  const res = await fetch(`${nodeUrl}/apps/contentmanifests/${encodeURIComponent(name)}`);
+  const body = await res.json();
+  if (body.status !== 'success' || !body.data) throw new Error(`contentmanifests failed for ${name}: ${JSON.stringify(body)}`);
+  return body.data;
+}
+
 /**
  * Deploy a v9 content app via the real submission path.
  *
@@ -237,7 +247,7 @@ export async function updateEncryptedV9App(nodeUrl, opts) {
 export async function pushContentUpdate(nodeUrl, opts) {
   const ownerKey = opts.ownerKey || appOwnerKey();
   const owner = opts.owner || ownerKey.zelid;
-  const { name, version } = opts;
+  const { name } = opts;
   const timestamp = opts.timestamp || Date.now();
 
   const slotMap = {};
@@ -249,9 +259,13 @@ export async function pushContentUpdate(nodeUrl, opts) {
   }
 
   const transportPubB64 = await fetchTransportPubKey(nodeUrl, name, owner);
-  const identity = await listedIdentity(nodeUrl, name);
+  // Signed under the listed ownership: the manifest carries the height the owner
+  // took the app, and the version the node says comes next unless the suite names one.
+  const standing = await manifestStanding(nodeUrl, name);
+  const { identity } = standing;
+  const version = opts.version ?? standing.nextVersion;
   const manifest = await tk.buildOwnerSignedManifest({
-    appName: name, identity, version, slots: slotMap, ownerKey, timestamp, rollout: opts.rollout,
+    appName: name, identity, version, ownedFrom: standing.ownership.from, slots: slotMap, ownerKey, timestamp, rollout: opts.rollout,
   });
   const locatorFor = (h) => benchCrypto.locatorFor({ identity, contentHash: h });
   const ownerSigs = await tk.buildOwnerSigs({
@@ -302,7 +316,7 @@ export async function injectForgedManifestGossip(stub, opts) {
   const slotMap = {};
   for (const s of opts.slots || []) slotMap[s.name] = { hash: tk.blobHash(s.bytes) };
   const manifest = await tk.buildOwnerSignedManifest({
-    appName: opts.appName, identity: opts.identity, version: opts.version, slots: slotMap, ownerKey: forgerKey,
+    appName: opts.appName, identity: opts.identity, version: opts.version, ownedFrom: opts.ownedFrom ?? 0, slots: slotMap, ownerKey: forgerKey,
   });
   return stub.broadcast({ type: 'fluxappcontentmanifest', appName: opts.appName, manifest });
 }
@@ -328,7 +342,7 @@ export async function assertManifestSynced(dbClients, appName, version) {
  * (a node whose register caught up but whose container is still serving the old content).
  */
 export async function assertContentApplied(dbClients, appName, version) {
-  const rows = await Promise.all(dbClients.map((dbc) => dbc.getContentManifest(appName).catch(() => null)));
-  const appliedVersions = rows.map((r) => (r ? (r.appliedVersion ?? null) : null));
+  const rows = await Promise.all(dbClients.map((dbc) => dbc.getAppliedContentManifest(appName).catch(() => null)));
+  const appliedVersions = rows.map((r) => (r ? r.version : null));
   return { applied: appliedVersions.every((v) => v === version), appliedVersions };
 }

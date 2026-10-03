@@ -279,13 +279,13 @@ async function prepareDatabaseSchema() {
   // The installing-claims collections key on (name, ip, replica); their owner
   // prepares them.
   await registryManager.prepareInstallingClaimsCollections();
-  // Content-slot manifests: one row per app identity (unique — the atomic
-  // compare-and-set guard storeManifest relies on), plus a PARTIAL TTL that
-  // auto-reaps quarantined (unverified, confirmed:false) rows by their expireAt;
-  // confirmed rows carry no expireAt and persist.
+  // Content manifests: one row per manifest, keyed by the app identity and
+  // the manifest's hash, plus a PARTIAL TTL that reaps rows held for an app
+  // not yet listed (signer null) by their expireAt; a resolved row carries no
+  // expireAt and persists.
   await dbHelper.ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appContentManifests')), [
-    { key: { identity: 1 }, name: 'identity', unique: true },
-    { key: { expireAt: 1 }, name: 'manifest_quarantine_ttl', expireAfterSeconds: 0, partialFilterExpression: { confirmed: false } },
+    { key: { identity: 1, hash: 1 }, name: 'identity_hash', unique: true },
+    { key: { expireAt: 1 }, name: 'manifest_held_ttl', expireAfterSeconds: 0, partialFilterExpression: { signer: null } },
   ]);
   log.info('App content manifests collection prepared');
   // Ingress attestations: one node-signed record per (hash, node) — where a

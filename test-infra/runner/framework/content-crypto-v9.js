@@ -209,16 +209,18 @@ export async function buildContentEnvelope({
 
 // An owner-signed plaintext ContentManifest (gossip form for a plaintext app; the node
 // seals the slots for an encrypted app). The owner signs the canonical form flux-spec
-// derives, the same bytes every verifier recomputes.
+// derives, the same bytes every verifier recomputes. `ownedFrom` is the height the
+// signer took the app, 0 for a registration's manifest, signed before its height exists.
 export async function buildOwnerSignedManifest({
   // rollout is mandatory on a manifest (contentManifest.js requires a strategy);
   // immediate is the simplest valid value, overridden by the rollout-strategy tests
-  appName, identity, version, slots, ownerKey, timestamp = Date.now(), rollout = { strategy: 'immediate' },
+  appName, identity, version, ownedFrom = 0, slots, ownerKey, timestamp = Date.now(), rollout = { strategy: 'immediate' },
 }) {
   const manifest = {
     appName,
     identity,
     version,
+    ownedFrom,
     slots,
     timestamp,
     rollout,

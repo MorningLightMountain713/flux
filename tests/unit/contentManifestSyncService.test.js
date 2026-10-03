@@ -4,15 +4,24 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { asConfig } = require('./fixtures/config');
+const { loadSpecLibrary } = require('./fixtures/fluxSpec');
+
+// The rank order is the library's: the height the signer took the app, then the version.
+let outranks;
+before(async function loadLibrary() {
+  this.timeout(30_000);
+  ({ outranks } = await loadSpecLibrary());
+});
 
 // Pass a publish stub to assert on what a round reports; the default discards it.
 function load(publish = sinon.stub()) {
   return proxyquire('../../ZelBack/src/services/appMessaging/contentManifestSyncService', {
     config: asConfig({ fluxapps: {} }),
     '../serviceHelper': { delay: sinon.stub().resolves() },
-    '../appDatabase/appsRepository': { listConfirmedContentManifestVersions: sinon.stub().resolves([]) },
+    '../appDatabase/appsRepository': { listContentManifestRanks: sinon.stub().resolves([]) },
     '../utils/fluxBroadcastHelper': { serialiseAndSignFluxBroadcast: sinon.stub().callsFake(async (m) => m) },
     '../utils/fluxEventBus': { publish },
+    '../utils/specLibs': { getSpec: async () => ({ outranks }) },
   });
 }
 
@@ -20,30 +29,39 @@ describe('contentManifestSyncService', () => {
   afterEach(() => sinon.restore());
 
   describe('unionTarget', () => {
-    it('takes the highest version per app across every peer index', () => {
+    it('takes the highest rank per app across every peer index: the ownership height first, the version within it', () => {
       const svc = load();
       const indexes = new Map([
-        ['p1', [{ identity: 'a', version: 2 }, { identity: 'b', version: 5 }]],
-        ['p2', [{ identity: 'a', version: 4 }, { identity: 'c', version: 1 }]],
+        ['p1', [{ identity: 'a', version: 2, ownedFrom: 0 }, { identity: 'b', version: 5, ownedFrom: 100 }]],
+        ['p2', [{ identity: 'a', version: 4, ownedFrom: 0 }, { identity: 'b', version: 1, ownedFrom: 200 }, { identity: 'c', version: 1 }]],
       ]);
-      const target = svc.unionTarget(indexes);
-      expect([...target.entries()]).to.have.deep.members([['a', 4], ['b', 5], ['c', 1]]);
+      const target = svc.unionTarget(indexes, outranks);
+      expect([...target.entries()]).to.have.deep.members([
+        ['a', { version: 4, ownedFrom: 0 }],
+        ['b', { version: 1, ownedFrom: 200 }], // the later owner's 1 outranks the earlier owner's 5
+        ['c', { version: 1, ownedFrom: 0 }],
+      ]);
     });
 
     it('ignores malformed entries', () => {
       const svc = load();
-      const indexes = new Map([['p1', [{ identity: 'a' }, { version: 3 }, null, { identity: 'b', version: 2 }]]]);
-      const target = svc.unionTarget(indexes);
-      expect([...target.entries()]).to.deep.equal([['b', 2]]);
+      const indexes = new Map([['p1', [{ identity: 'a' }, { version: 3 }, null, { identity: 'b', version: 2, ownedFrom: 0 }]]]);
+      const target = svc.unionTarget(indexes, outranks);
+      expect([...target.entries()]).to.deep.equal([['b', { version: 2, ownedFrom: 0 }]]);
     });
   });
 
   describe('computeNeeded', () => {
-    it('returns apps the local register is missing or stale on', () => {
+    it('returns apps the local store is missing or behind on, by rank', () => {
       const svc = load();
-      const target = new Map([['a', 4], ['b', 5], ['c', 1]]);
-      const local = new Map([['a', 4], ['b', 3]]); // a current, b stale, c absent
-      expect(svc.computeNeeded(target, local).sort()).to.deep.equal(['b', 'c']);
+      const target = new Map([
+        ['a', { version: 4, ownedFrom: 0 }], ['b', { version: 5, ownedFrom: 0 }], ['c', { version: 1, ownedFrom: 0 }], ['d', { version: 1, ownedFrom: 300 }],
+      ]);
+      // a current, b behind, c absent, d held only under an earlier ownership
+      const local = svc.localBest([
+        { identity: 'a', version: 4, ownedFrom: 0 }, { identity: 'b', version: 3, ownedFrom: 0 }, { identity: 'd', version: 9, ownedFrom: 100 },
+      ], outranks);
+      expect(svc.computeNeeded(target, local, outranks).sort()).to.deep.equal(['b', 'c', 'd']);
     });
   });
 
@@ -83,13 +101,13 @@ describe('contentManifestSyncService', () => {
     it('hands a concurrent caller the real outcome of the round in flight', async () => {
       const svc = load();
       const store = new Map([['a', 4]]);
-      const getLocalVersions = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
+      const getLocalRanks = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
       const p1 = makePeer(svc, 'p1', [{ identity: 'a', version: 4 }], store);
 
       // Two triggers land together - a partition heal produces exactly this, with
       // peers recovering and a block arriving in the same turn.
-      const first = svc.reconcile([p1], { getLocalVersions, sign: async () => ({ type: 'fluxappcontentmanifestindexrequest' }), delay: async () => {}, indexTimeoutMs: 5, fetchSettleMs: 0 });
-      const second = svc.reconcile([p1], { getLocalVersions, sign: async () => ({ type: 'fluxappcontentmanifestindexrequest' }), delay: async () => {}, indexTimeoutMs: 5, fetchSettleMs: 0 });
+      const first = svc.reconcile([p1], { getLocalRanks, sign: async () => ({ type: 'fluxappcontentmanifestindexrequest' }), delay: async () => {}, indexTimeoutMs: 5, fetchSettleMs: 0 });
+      const second = svc.reconcile([p1], { getLocalRanks, sign: async () => ({ type: 'fluxappcontentmanifestindexrequest' }), delay: async () => {}, indexTimeoutMs: 5, fetchSettleMs: 0 });
 
       const [a, b] = await Promise.all([first, second]);
 
@@ -102,11 +120,11 @@ describe('contentManifestSyncService', () => {
     it('runs the two-step exchange: index from all peers, fetch only the missing/stale', async () => {
       const svc = load();
       const store = new Map([['a', 4]]); // locally current on a, missing b and c
-      const getLocalVersions = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
+      const getLocalRanks = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
       const p1 = makePeer(svc, 'p1', [{ identity: 'a', version: 4 }, { identity: 'b', version: 5 }], store);
       const p2 = makePeer(svc, 'p2', [{ identity: 'c', version: 1 }], store);
 
-      const result = await svc.reconcile([p1, p2], { getLocalVersions });
+      const result = await svc.reconcile([p1, p2], { getLocalRanks });
 
       expect(result.peers).to.equal(2);
       expect(result.indexesReceived).to.equal(2);
@@ -130,10 +148,10 @@ describe('contentManifestSyncService', () => {
     it('sends no fetch when the local register already matches the union', async () => {
       const svc = load();
       const store = new Map([['a', 4]]);
-      const getLocalVersions = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
+      const getLocalRanks = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
       const p1 = makePeer(svc, 'p1', [{ identity: 'a', version: 4 }], store);
 
-      const result = await svc.reconcile([p1], { getLocalVersions });
+      const result = await svc.reconcile([p1], { getLocalRanks });
       expect(result.fetched).to.equal(0);
       const fetch = p1.send.getCalls().find((c) => c.args[0].type === 'fluxappcontentmanifestrequest');
       expect(fetch).to.equal(undefined);
@@ -142,7 +160,7 @@ describe('contentManifestSyncService', () => {
     it('falls to the next peer for bodies the first peer did not supply', async () => {
       const svc = load();
       const store = new Map(); // missing both a and b
-      const getLocalVersions = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
+      const getLocalRanks = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
       // p1 advertises a+b but its fetch only stores 'a'; p2 fills 'b'.
       const p1 = { key: 'p1' };
       p1.send = sinon.stub().callsFake((msg) => {
@@ -155,7 +173,7 @@ describe('contentManifestSyncService', () => {
         else if (msg.type === 'fluxappcontentmanifestrequest') { for (const n of msg.identities) store.set(n, 9999); }
       });
 
-      const result = await svc.reconcile([p1, p2], { getLocalVersions });
+      const result = await svc.reconcile([p1, p2], { getLocalRanks });
       expect(result.fetched).to.equal(2); // a from p1, b from p2
       const p2Fetch = p2.send.getCalls().find((c) => c.args[0].type === 'fluxappcontentmanifestrequest');
       expect(p2Fetch.args[0].identities).to.deep.equal(['b']); // only the still-missing one
@@ -168,7 +186,7 @@ describe('contentManifestSyncService', () => {
       it('asks only the peers that answered the index', async () => {
         const svc = load();
         const store = new Map();
-        const getLocalVersions = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
+        const getLocalRanks = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
         // The gap must still be OPEN when the loop reaches the silent peer, or the round
         // breaks out early and the assertion below passes without exercising anything.
         const answered = { key: 'p1' };
@@ -181,7 +199,7 @@ describe('contentManifestSyncService', () => {
         // full settle window and can only ever return what it never claimed to have.
         const silent = { key: 'p2', send: sinon.stub() };
 
-        const result = await svc.reconcile([answered, silent], { getLocalVersions });
+        const result = await svc.reconcile([answered, silent], { getLocalRanks });
 
         expect(result.fetched, 'the gap was still open at the silent peer').to.equal(1);
         const silentFetch = silent.send.getCalls().find((c) => c.args[0].type === 'fluxappcontentmanifestrequest');
@@ -191,14 +209,14 @@ describe('contentManifestSyncService', () => {
       it('re-resolves each peer at the moment it sends, and skips one that has gone', async () => {
         const svc = load();
         const store = new Map();
-        const getLocalVersions = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
+        const getLocalRanks = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
         const p1 = makePeer(svc, 'p1', [{ identity: 'a', version: 2 }], store);
         // The socket this round selected is closed by the time the fetch runs — the state
         // every one of these peers was in after the heal. The handle captured at selection
         // cannot report that, so the round has to ask for the peer again by key.
         const resolvePeer = sinon.stub().returns(null);
 
-        const result = await svc.reconcile([p1], { getLocalVersions, resolvePeer });
+        const result = await svc.reconcile([p1], { getLocalRanks, resolvePeer });
 
         expect(resolvePeer.calledWith('p1'), 'the peer is looked up again before sending').to.equal(true);
         const fetch = p1.send.getCalls().find((c) => c.args[0].type === 'fluxappcontentmanifestrequest');
@@ -209,7 +227,7 @@ describe('contentManifestSyncService', () => {
       it('treats a refused send as a peer that cannot be reached', async () => {
         const svc = load();
         const store = new Map();
-        const getLocalVersions = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
+        const getLocalRanks = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
         const p1 = { key: 'p1' };
         // send() reports failure by returning false and never throws, so the boolean is the
         // only liveness signal a caller gets.
@@ -219,7 +237,7 @@ describe('contentManifestSyncService', () => {
         });
         const delay = sinon.stub().resolves();
 
-        const result = await svc.reconcile([p1], { getLocalVersions, delay });
+        const result = await svc.reconcile([p1], { getLocalRanks, delay });
 
         expect(result.fetched).to.equal(0);
         // One call, and it is the index wait — no second call for a settle window the
@@ -230,7 +248,7 @@ describe('contentManifestSyncService', () => {
       it('stops waiting on a peer the moment it says it is done', async () => {
         const svc = load();
         const store = new Map();
-        const getLocalVersions = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
+        const getLocalRanks = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
         const p1 = { key: 'p1' };
         p1.send = sinon.stub().callsFake((msg) => {
           if (msg.type === 'fluxappcontentmanifestindexrequest') { svc.depositIndex('p1', [{ identity: 'a', version: 2 }]); return true; }
@@ -242,7 +260,7 @@ describe('contentManifestSyncService', () => {
         // by waiting it out, a peer that answered instantly still costs the full window.
         const neverSettles = sinon.stub().returns(new Promise(() => {}));
 
-        const result = await svc.reconcile([p1], { getLocalVersions, delay: neverSettles });
+        const result = await svc.reconcile([p1], { getLocalRanks, delay: neverSettles });
 
         expect(result.fetched).to.equal(1);
       });
@@ -257,10 +275,10 @@ describe('contentManifestSyncService', () => {
         const publish = sinon.stub();
         const svc = load(publish);
         const store = new Map([['a', 4]]);
-        const getLocalVersions = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
+        const getLocalRanks = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
         const p1 = makePeer(svc, 'p1', [{ identity: 'a', version: 4 }], store);
 
-        await svc.reconcile([p1], { getLocalVersions });
+        await svc.reconcile([p1], { getLocalRanks });
 
         sinon.assert.calledOnceWithExactly(publish, 'content:manifestReconciled', {
           requested: 0, fetched: 0, peers: 1, indexesReceived: 1,
@@ -274,7 +292,7 @@ describe('contentManifestSyncService', () => {
       it('returns the size of the gap it set out to close, not only what it closed', async () => {
         const svc = load();
         const store = new Map();
-        const getLocalVersions = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
+        const getLocalRanks = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
         // Advertises a body and then supplies nothing — the shape of a peer that dropped
         // mid-round, and of one serving an index it cannot back.
         const hollow = { key: 'p1' };
@@ -283,7 +301,7 @@ describe('contentManifestSyncService', () => {
           return true;
         });
 
-        const result = await svc.reconcile([hollow], { getLocalVersions });
+        const result = await svc.reconcile([hollow], { getLocalRanks });
 
         expect(result.requested, 'the round knows it needed one').to.equal(1);
         expect(result.fetched).to.equal(0);
@@ -296,7 +314,7 @@ describe('contentManifestSyncService', () => {
         // union is empty and nothing is requested — same requested/fetched as above.
         const silent = { key: 'p1', send: sinon.stub() };
 
-        await svc.reconcile([silent], { getLocalVersions: sinon.stub().resolves([]) });
+        await svc.reconcile([silent], { getLocalRanks: sinon.stub().resolves([]) });
 
         const payload = publish.firstCall.args[1];
         expect(payload).to.include({ requested: 0, fetched: 0 });

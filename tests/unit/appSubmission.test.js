@@ -988,11 +988,11 @@ describe('appSubmission tests', () => {
     function slotPath() {
       const contentSlotService = {
         processManifestSubmission: sinon.stub().resolves({ sealed: true, version: 2 }),
-        storeManifest: sinon.stub().resolves(true),
+        takeManifest: sinon.stub().resolves({ outcome: 'held' }),
         backstopManifest: sinon.stub().resolves(false),
         reconcileSlots: sinon.stub().resolves(false),
       };
-      const sender = { broadcastMessageToAll: sinon.stub().resolves({}) };
+      const sender = { broadcastMessageToAll: sinon.stub().resolves({ signed: true }) };
       appSubmission = load({ '../appLifecycle/contentSlotService': contentSlotService, '../fluxCommunicationMessagesSender': sender });
       stubs.contentBlobService.specContentHashes.returns(new Set());
       return { contentSlotService, sender };
@@ -1016,6 +1016,7 @@ describe('appSubmission tests', () => {
       const [input] = contentSlotService.processManifestSubmission.firstCall.args;
       expect(input.identity).to.equal(IDENTITY);
       expect(input.owner).to.equal('1id');
+      expect(input.ownedFrom, 'a registration\'s manifest is signed before its height exists').to.equal(0);
       expect(input.manifest).to.deep.equal(firstManifest);
       // FluxDrive holds both writes until the nodes answer that this registration applied.
       const [putManifest, putCtx] = contentSlotService.backstopManifest.firstCall.args;
@@ -1029,12 +1030,14 @@ describe('appSubmission tests', () => {
         appName: 'myapp', identity: IDENTITY, version: 1, reconcileSig: 'rec-sig', pendingMessageHash: MSG,
       });
       sinon.assert.calledOnce(sender.broadcastMessageToAll);
-      sinon.assert.calledOnce(contentSlotService.storeManifest);
+      // Taken with the broadcast it was gossiped in; this node holds it until the registration applies.
+      sinon.assert.calledOnceWithExactly(contentSlotService.takeManifest, { sealed: true, version: 2 }, { broadcast: { signed: true } });
       expect(out.carriedManifest).to.equal(null);
     });
 
     it('returns an update\'s manifest to ride in the update\'s message, verified for the listed owner, hands FluxDrive the writes naming the update, and stores or gossips nothing', async () => {
       const { contentSlotService, sender } = slotPath();
+      stubs.appHistory.ownerships = sinon.stub().resolves([{ owner: '1id', from: 2_400_000 }]);
       envelopeWith({ appName: 'myapp', version: 2, slots: { s: { hash: HSLOT } } });
       const buyer = { name: 'myapp', owner: '1buyer', version: 9 };
 
@@ -1043,12 +1046,22 @@ describe('appSubmission tests', () => {
       const [input] = contentSlotService.processManifestSubmission.firstCall.args;
       expect(input.identity).to.equal(IDENTITY);
       expect(input.owner, 'the listed owner signed the update and its manifest').to.equal('1id');
+      expect(input.ownedFrom, 'the height the listed owner took the app').to.equal(2_400_000);
       expect(input.spec).to.equal(buyer);
       expect(out.carriedManifest).to.deep.equal({ sealed: true, version: 2 });
       expect(contentSlotService.backstopManifest.firstCall.args[1]).to.include({ identity: IDENTITY, pendingMessageHash: MSG });
       expect(contentSlotService.reconcileSlots.firstCall.args[1]).to.include({ identity: IDENTITY, pendingMessageHash: MSG });
       sinon.assert.notCalled(sender.broadcastMessageToAll);
-      sinon.assert.notCalled(contentSlotService.storeManifest);
+      sinon.assert.notCalled(contentSlotService.takeManifest);
+    });
+
+    it('refuses an update\'s manifest when the signing owner has no applied ownership of the app', async () => {
+      const { contentSlotService } = slotPath();
+      stubs.appHistory.ownerships = sinon.stub().resolves([{ owner: '1other', from: 5 }]);
+      envelopeWith({ appName: 'myapp', version: 2, slots: { s: { hash: HSLOT } } });
+      const error = await appSubmission.uploadSealedContent(spec, envelope, new Map(), bind({ priorSpec: { name: 'myapp', owner: '1id' } })).catch((e) => e);
+      expect(error.message).to.match(/no applied ownership/);
+      sinon.assert.notCalled(contentSlotService.processManifestSubmission);
     });
 
     it('forwards the superseded spec on update so unchanged content is carried over', async () => {

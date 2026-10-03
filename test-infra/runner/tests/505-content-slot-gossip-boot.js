@@ -94,11 +94,11 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
     // populated the FluxDrive backstop so a cold installer has a manifest source.
     const stored = await origin.waitForEvent(
       'content:manifestStored',
-      (d) => d.appName === appName && d.version === 1 && d.confirmed === true,
+      (d) => d.appName === appName && d.version === 1 && d.resolved === true,
       30000,
       { afterId: beforeIds[2] },
     );
-    expect(stored.data.confirmed).to.equal(true);
+    expect(stored.data.resolved).to.equal(true);
     await origin.waitForEvent(
       'content:manifestBackstopped',
       (d) => d.appName === appName && d.version === 1,
@@ -110,7 +110,7 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
     // spec, so they QUARANTINE (confirmed:false) — never a drop. This IS scenario 2.
     await Promise.all([0, 1, 3, 4].map((i) => env.clients[i].waitForEvent(
       'content:manifestStored',
-      (d) => d.appName === appName && d.confirmed === false,
+      (d) => d.appName === appName && d.resolved === false,
       45000,
       { afterId: beforeIds[i] },
     )));
@@ -119,9 +119,9 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
     for (const i of [0, 1, 3, 4]) {
       // eslint-disable-next-line no-await-in-loop
       const row = await dbClients[i].getContentManifest(appName);
-      expect(row, `node ${i} holds a quarantined manifest`).to.exist;
+      expect(row, `node ${i} holds the manifest for the app it does not yet list`).to.exist;
       expect(row.version).to.equal(1);
-      expect(row.confirmed).to.equal(false);
+      expect(row.signer, 'held unresolved until the registration applies').to.equal(null);
     }
   });
 
