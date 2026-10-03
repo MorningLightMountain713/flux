@@ -124,8 +124,8 @@ describe('a restore fetches its archive from where it was told', function () {
     await installOnNodes(env, app, [0]);
     // The first-run reset removes the appdata directory and the component's
     // next start recreates it; the tests seed appdata only after that start.
-    const cleared = await waitForReconcileActuated(client, componentIdentifier(appName, comp), 'dataCleared', 90000, { afterId: installAfter });
-    await waitForReconcileActuated(client, componentIdentifier(appName, comp), START_ACTIONS, 90000, { afterId: cleared.id });
+    const cleared = await waitForReconcileActuated(client, componentIdentifier(app, comp), 'dataCleared', 90000, { afterId: installAfter });
+    await waitForReconcileActuated(client, componentIdentifier(app, comp), START_ACTIONS, 90000, { afterId: cleared.id });
     folderId = await appSyncthingFolderId(client, appName, comp);
     dir = await appDataRoot(client.container, appName, comp);
     remoteArchive = `${dir}/backup/remote/backup_${comp.toLowerCase()}.tar.gz`;

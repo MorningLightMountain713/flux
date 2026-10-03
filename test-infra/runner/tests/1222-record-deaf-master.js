@@ -68,26 +68,31 @@ const DRAIN_BLOCKS = 3;
 const RENEW_MS = 10000;
 
 const outpointOf = (node) => `${node.txhash}:${node.outidx}`;
-const walkKeyFor = (name, generation) => `quorumgrant|${name}/master@${generation}`;
+// rosterOverlay.walkKeyFor, over the grant key `<identity>/<role>`
+const walkKeyFor = (key, generation) => `quorumgrant|${key}@${generation}`;
 
-function committeeOf(membership, name, generation) {
-  const dealt = selectCommittee(membership, walkKeyFor(name, generation), { size: COMMITTEE_SIZE });
-  expect(dealt.refusal, `the walk seats a committee for ${name} at generation ${generation}`).to.equal(null);
+// The committee the walk seats for a BUILT app: the key carries the identity its
+// registration mints, so a candidate name is judged only once its app is built.
+function committeeOf(membership, app, generation) {
+  const dealt = selectCommittee(membership, walkKeyFor(`${app.identity}/master`, generation), { size: COMMITTEE_SIZE });
+  expect(dealt.refusal, `the walk seats a committee for ${app.spec.name} at generation ${generation}`).to.equal(null);
   return { members: new Set(dealt.members.map(outpointOf)), quorum: dealt.quorum };
 }
 
-function chooseDeafableApp(membership, stem, holderOutpoints) {
+async function chooseDeafableApp(membership, stem, holderOutpoints) {
   for (let i = 0; i < 2000; i += 1) {
     const name = `${stem}${i.toString(36)}`;
-    const granting = committeeOf(membership, name, 0);
-    const reRolled = committeeOf(membership, name, 1);
+    // eslint-disable-next-line no-await-in-loop
+    const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
+    const granting = committeeOf(membership, app, 0);
+    const reRolled = committeeOf(membership, app, 1);
     if (holderOutpoints.filter((holder) => granting.members.has(holder)).length > 1) continue;
     const shared = [...granting.members].filter((cell) => reRolled.members.has(cell));
     if (shared.length > granting.quorum - 2) continue;
     const farSideNew = [...reRolled.members].filter((cell) => !granting.members.has(cell) && !holderOutpoints.includes(cell));
     if (farSideNew.length < reRolled.quorum) continue;
     return {
-      name, granting, reRolled, shared, farSideNew,
+      name, app, granting, reRolled, shared, farSideNew,
     };
   }
   throw new Error(`no app name off ${stem} in 2000 tries seats at most one holder on its granting committee, shares at most quorum − 2 cells, and leaves a quorum of re-rolled cells outside both`);
@@ -96,12 +101,13 @@ function chooseDeafableApp(membership, stem, holderOutpoints) {
 describe('record-deaf master: after the heal every certificate the partition formed is refuted, and the master steps across', function () {
   let env;
   let name;
+  let app;
   let outpoints; // node index -> outpoint
   let ownerAuthFar;
   let walk;
   let installAfters; // holder k -> the last event id before its install
 
-  const key = () => `${name}/master`;
+  const key = () => `${app.identity}/master`;
   const label = (i) => `node-${env.clients[i].num} (${env.clients[i].ip})`;
   const indexOf = (outpoint) => Number(Object.keys(outpoints).find((i) => outpoints[i] === outpoint));
   const describeCells = (cells) => [...cells].map((cell) => label(indexOf(cell))).join(', ');
@@ -158,7 +164,7 @@ describe('record-deaf master: after the heal every certificate the partition for
 
   const recordEventsSince = (i, afterId) => env.clients[i].getEventBuffer()
     .filter((e) => e.event === 'quorumGrant:generationRecord' && e.id > afterId
-      && e.data?.identity === name && e.data?.role === 'master' && e.data?.generation === 1);
+      && e.data?.identity === app.identity && e.data?.role === 'master' && e.data?.generation === 1);
 
   // The subjects of the certificates a node stored since a marker.
   const certifiedOn = (i, afterId) => new Set(env.clients[i].getEventBuffer()
@@ -169,14 +175,13 @@ describe('record-deaf master: after the heal every certificate the partition for
     const owner = appOwnerKey();
     const { currentHeight } = await getState();
     const at = Date.now();
-    // A v1-v8 app's identity is its name.
-    const canonical = `fluxgrantgeneration:${name}|master|1|${currentHeight}|${at}`;
+    const canonical = `fluxgrantgeneration:${app.identity}|master|1|${currentHeight}|${at}`;
     const signature = await signBtcMessage(canonical, owner.privkey);
     const res = await fetch(`${env.clients[i].url}/apps/grantgeneration`, {
       method: 'POST',
       headers: { zelidauth: ownerAuthFar, 'content-type': 'application/json' },
       body: JSON.stringify({
-        identity: name, role: 'master', generation: 1, height: currentHeight, at, signature,
+        identity: app.identity, role: 'master', generation: 1, height: currentHeight, at, signature,
       }),
     });
     return { status: res.status, body: await res.text(), height: currentHeight };
@@ -222,16 +227,15 @@ describe('record-deaf master: after the heal every certificate the partition for
       const status = await env.clients[i].getNodeStatus();
       outpoints[i] = `${status.data.txhash}:${status.data.outidx}`;
     }
-    ({ name, ...walk } = chooseDeafableApp(membership, `e2edeaf${Date.now()}`, HOLDERS.map((i) => outpoints[i])));
+    ({ name, app, ...walk } = await chooseDeafableApp(membership, `e2edeaf${Date.now()}`, HOLDERS.map((i) => outpoints[i])));
 
     await pushImage(name, 'v1');
-    const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
     installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, HOLDERS);
     await seedGlobalSpec(env, app, env.clients.map((_, i) => i).filter((i) => !HOLDERS.includes(i)));
     await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
     await Promise.all(HOLDERS.map(async (i, k) => {
-      await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
+      await waitForReconcileActuated(env.clients[i], componentIdentifier(app), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
     await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]], name, name) });
@@ -290,7 +294,7 @@ describe('record-deaf master: after the heal every certificate the partition for
       expect(rerolled.status, `the re-roll lands on the far side: ${rerolled.body}`).to.equal(200);
       await Promise.all([...couriers, ...farStandbys].map((i) => env.clients[i].waitForEvent(
         'quorumGrant:generationRecord',
-        (d) => d.identity === name && d.role === 'master' && d.generation === 1,
+        (d) => d.identity === app.identity && d.role === 'master' && d.generation === 1,
         120000,
         { afterId: beforeReroll[i] },
       )));
@@ -299,7 +303,7 @@ describe('record-deaf master: after the heal every certificate the partition for
       await env.clients[couriers[0]].waitForEvent('quorumGrant:generationCarried',
         (d) => d.key === key() && d.generation === 1 && d.remaining > 0, 60000, { afterId: beforeReroll[couriers[0]] });
       await assertNoEvent(env.clients[master], 'quorumGrant:generationRecord',
-        (d) => d.identity === name && d.generation === 1, 2 * RENEW_MS + 5000);
+        (d) => d.identity === app.identity && d.generation === 1, 2 * RENEW_MS + 5000);
       expect(recordEventsSince(master, beforeReroll[master]), 'the master is deaf to the re-roll while cut off').to.deep.equal([]);
       await assertNoEvent(env.clients[master], 'quorumGrant:coasting', (d) => d.key === key(), 5000);
       expect(await getAppContainerId(env.clients[master].container, name, name),
@@ -318,7 +322,7 @@ describe('record-deaf master: after the heal every certificate the partition for
         'nodedown:aliveAnnounced', () => true, 120000, { afterId: beforeHeal[indexOf(subject)] },
       )));
       await env.clients[master].waitForEvent('quorumGrant:generationRecord',
-        (d) => d.identity === name && d.role === 'master' && d.generation === 1, 120000, { afterId: beforeHeal[master] });
+        (d) => d.identity === app.identity && d.role === 'master' && d.generation === 1, 120000, { afterId: beforeHeal[master] });
       expect(grantsSince(beforeReroll, 1), 'nobody was granted at generation 1 before the lift').to.deep.equal([]);
       await assertNoEvent(env.clients[master], 'quorumGrant:demoted', (d) => d.key === key(), 5000);
 

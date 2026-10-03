@@ -11,9 +11,7 @@
 // clean passes. A fixture that silently did not happen turns an assertion into
 // decoration, so the check belongs next to the write, not in the test.
 
-import {
-  appDataRoot, execInContainer, requireAppComponentIdentifier, syncthingFolderIdOf,
-} from './container.js';
+import { appDataRoot, execInContainer, requireAppComponentIdentifier } from './container.js';
 
 // A plausible application uid: an app runs as something like www-data, not as
 // root, and its files belong to that user. Copies MUST keep belonging to it -
@@ -29,8 +27,9 @@ export const APP_GID = 33;
 export async function volumeRoot(container, name) {
   return appDataRoot(container, name, name);
 }
-const folderRoot = (folderId) => `/mnt/appdata/flux-apps/${folderId}`;
-const folderImage = (folderId) => `/mnt/appdata/${folderId}FLUXFSVOL`;
+// A component's directory and its backing image are named by its identifier.
+const componentRoot = (identifier) => `/mnt/appdata/flux-apps/${identifier}`;
+const volumeImage = (identifier) => `/mnt/appdata/${identifier}FLUXFSVOL`;
 
 // Single-quote for the shell. Fixture content is chosen by the suites, but a
 // literal $ or backtick in one must stay a literal rather than becoming
@@ -50,14 +49,14 @@ async function run(container, command, what) {
 /**
  * Takes a component's volume away for good: unmounted, its directory no longer
  * immutable, and its image removed, so nothing on the node can mount it again.
- * @param {string} folderId The component's syncthing folder id, flux<identifier>.
+ * @param {string} identifier The component's identifier, which names its directory and image.
  */
-export async function destroyFolderVolume(container, folderId) {
-  const root = folderRoot(folderId);
-  await run(container, `umount -l ${sq(root)} && chattr -i ${sq(root)} && rm -f ${sq(folderImage(folderId))}`, `destroy the volume of ${folderId}`);
+export async function destroyFolderVolume(container, identifier) {
+  const root = componentRoot(identifier);
+  await run(container, `umount -l ${sq(root)} && chattr -i ${sq(root)} && rm -f ${sq(volumeImage(identifier))}`, `destroy the volume of ${identifier}`);
 }
 
-const folderImageHeader = (folderId) => `${folderImage(folderId)}.header`;
+const volumeImageHeader = (identifier) => `${volumeImage(identifier)}.header`;
 
 /**
  * Leaves a component's volume image on the node with nothing able to mount it:
@@ -65,21 +64,21 @@ const folderImageHeader = (folderId) => `${folderImage(folderId)}.header`;
  * carry its filesystem's superblock, zeroed. The bytes are kept beside the image for
  * restoreFolderVolume. Waits for the loop device to release the image first, so no
  * mount still open on it writes the superblock back.
- * @param {string} folderId The component's syncthing folder id, flux<identifier>.
+ * @param {string} identifier The component's identifier, which names its directory and image.
  */
-export async function breakFolderVolume(container, folderId) {
-  const root = folderRoot(folderId);
-  const image = folderImage(folderId);
-  await run(container, `umount -l ${sq(root)} && chattr -i ${sq(root)}`, `unmount the volume of ${folderId}`);
+export async function breakFolderVolume(container, identifier) {
+  const root = componentRoot(identifier);
+  const image = volumeImage(identifier);
+  await run(container, `umount -l ${sq(root)} && chattr -i ${sq(root)}`, `unmount the volume of ${identifier}`);
   await run(
     container,
     `for i in $(seq 1 60); do [ -z "$(losetup -j ${sq(image)})" ] && exit 0; sleep 1; done; losetup -j ${sq(image)}; exit 1`,
-    `wait for the loop device to release the image of ${folderId}`,
+    `wait for the loop device to release the image of ${identifier}`,
   );
   await run(
     container,
-    `dd if=${sq(image)} of=${sq(folderImageHeader(folderId))} bs=4096 count=1 status=none && dd if=/dev/zero of=${sq(image)} bs=4096 count=1 conv=notrunc status=none`,
-    `zero the superblock of ${folderId}`,
+    `dd if=${sq(image)} of=${sq(volumeImageHeader(identifier))} bs=4096 count=1 status=none && dd if=/dev/zero of=${sq(image)} bs=4096 count=1 conv=notrunc status=none`,
+    `zero the superblock of ${identifier}`,
   );
   const probe = await execInContainer(container, `blkid -p ${sq(image)}`);
   if (probe.exitCode === 0) throw new Error(`breakFolderVolume: ${image} still reads as a filesystem: ${probe.output}`);
@@ -87,13 +86,13 @@ export async function breakFolderVolume(container, folderId) {
 
 /**
  * Puts back what breakFolderVolume zeroed, so the image mounts again.
- * @param {string} folderId The component's syncthing folder id, flux<identifier>.
+ * @param {string} identifier The component's identifier, which names its directory and image.
  */
-export async function restoreFolderVolume(container, folderId) {
-  const image = folderImage(folderId);
-  const header = folderImageHeader(folderId);
-  await run(container, `dd if=${sq(header)} of=${sq(image)} bs=4096 count=1 conv=notrunc status=none && rm -f ${sq(header)}`, `restore the superblock of ${folderId}`);
-  await run(container, `blkid -p ${sq(image)}`, `read the restored image of ${folderId} as a filesystem`);
+export async function restoreFolderVolume(container, identifier) {
+  const image = volumeImage(identifier);
+  const header = volumeImageHeader(identifier);
+  await run(container, `dd if=${sq(header)} of=${sq(image)} bs=4096 count=1 conv=notrunc status=none && rm -f ${sq(header)}`, `restore the superblock of ${identifier}`);
+  await run(container, `blkid -p ${sq(image)}`, `read the restored image of ${identifier} as a filesystem`);
 }
 
 /**
@@ -101,7 +100,7 @@ export async function restoreFolderVolume(container, folderId) {
  * the container that carries its identity.
  */
 export async function destroyVolume(container, name) {
-  await destroyFolderVolume(container, syncthingFolderIdOf(await requireAppComponentIdentifier(container, name)));
+  await destroyFolderVolume(container, await requireAppComponentIdentifier(container, name));
 }
 
 /**

@@ -108,6 +108,8 @@ describe('a component redeploy replaces that component and leaves the app alone'
     if (!await exists(client.container, path)) throw new Error(`${path} was not written`);
   }
 
+  let app;
+
   before(async function () {
     this.timeout(420000);
 
@@ -131,7 +133,7 @@ describe('a component redeploy replaces that component and leaves the app alone'
       hdd: 1,
       repoauth: '',
     });
-    const app = await buildSeedableApp({
+    app = await buildSeedableApp({
       env,
       name: appName,
       compose: [component(subject), component(sibling)],
@@ -311,7 +313,7 @@ describe('a component redeploy replaces that component and leaves the app alone'
     const killed = await killAppContainer(holder.container, appName, sibling);
     expect(killed.exitCode, `could not remove the container: ${killed.output}`).to.equal(0);
 
-    await waitForReconcileActuated(holder, componentIdentifier(appName, sibling), 'recreated', 180000, { afterId: from });
+    await waitForReconcileActuated(holder, componentIdentifier(app, sibling), 'recreated', 180000, { afterId: from });
 
     // Polled rather than read once: the recreate and the event write are separate
     // steps, and the event is what the tamper score is computed from.

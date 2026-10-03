@@ -54,26 +54,30 @@ const HELD_TTL_MS = 90000;
 const DRAIN_BLOCKS = 3;
 
 const outpointOf = (node) => `${node.txhash}:${node.outidx}`;
-// rosterOverlay.walkKeyFor
-const walkKeyFor = (name, generation) => `quorumgrant|${name}/master@${generation}`;
+// rosterOverlay.walkKeyFor, over the grant key `<identity>/<role>`
+const walkKeyFor = (key, generation) => `quorumgrant|${key}@${generation}`;
 
-function committeeOf(membership, name, generation) {
-  const dealt = selectCommittee(membership, walkKeyFor(name, generation), { size: COMMITTEE_SIZE });
-  expect(dealt.refusal, `the walk seats a committee for ${name} at generation ${generation}`).to.equal(null);
+// The committee the walk seats for a BUILT app: the key carries the identity its
+// registration mints, so a candidate name is judged only once its app is built.
+function committeeOf(membership, app, generation) {
+  const dealt = selectCommittee(membership, walkKeyFor(`${app.identity}/master`, generation), { size: COMMITTEE_SIZE });
+  expect(dealt.refusal, `the walk seats a committee for ${app.spec.name} at generation ${generation}`).to.equal(null);
   return { members: new Set(dealt.members.map(outpointOf)), quorum: dealt.quorum };
 }
 
 // An app whose re-rolled committee shares at most quorum − 2 cells with its
 // granting one. A run that finds none says so.
-function chooseFreshCellApp(membership, stem) {
+async function chooseFreshCellApp(membership, stem) {
   for (let i = 0; i < 400; i += 1) {
     const name = `${stem}${i.toString(36)}`;
-    const granting = committeeOf(membership, name, 0);
-    const reRolled = committeeOf(membership, name, 1);
+    // eslint-disable-next-line no-await-in-loop
+    const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
+    const granting = committeeOf(membership, app, 0);
+    const reRolled = committeeOf(membership, app, 1);
     const shared = [...granting.members].filter((cell) => reRolled.members.has(cell));
     if (shared.length <= granting.quorum - 2) {
       return {
-        name, granting, reRolled, shared,
+        name, app, granting, reRolled, shared,
       };
     }
   }
@@ -83,11 +87,12 @@ function chooseFreshCellApp(membership, stem) {
 describe('step-across: the owner re-rolls the committee under a running master, and the master keeps its container', function () {
   let env;
   let name;
+  let app;
   let outpoints; // node index -> outpoint
   let ownerAuth0;
   let walk; // { granting, reRolled, shared } as the suite dealt them
 
-  const key = () => `${name}/master`;
+  const key = () => `${app.identity}/master`;
   const label = (i) => `node-${env.clients[i].num} (${env.clients[i].ip})`;
   const indexOf = (outpoint) => Number(Object.keys(outpoints).find((i) => outpoints[i] === outpoint));
   const describeCells = (cells) => [...cells].map((cell) => label(indexOf(cell))).join(', ');
@@ -156,14 +161,13 @@ describe('step-across: the owner re-rolls the committee under a running master, 
     const owner = appOwnerKey();
     const { currentHeight } = await getState();
     const at = Date.now();
-    // A v1-v8 app's identity is its name.
-    const canonical = `fluxgrantgeneration:${name}|master|1|${currentHeight}|${at}`;
+    const canonical = `fluxgrantgeneration:${app.identity}|master|1|${currentHeight}|${at}`;
     const signature = await signBtcMessage(canonical, owner.privkey);
     const res = await fetch(`${env.clients[0].url}/apps/grantgeneration`, {
       method: 'POST',
       headers: { zelidauth: ownerAuth0, 'content-type': 'application/json' },
       body: JSON.stringify({
-        identity: name, role: 'master', generation: 1, height: currentHeight, at, signature,
+        identity: app.identity, role: 'master', generation: 1, height: currentHeight, at, signature,
       }),
     });
     return { status: res.status, body: await res.text(), height: currentHeight };
@@ -205,17 +209,16 @@ describe('step-across: the owner re-rolls the committee under a running master, 
     const listed = await fetch(`${env.clients[0].url}/daemon/viewdeterministicfluxnodelist`, { signal: AbortSignal.timeout(10000) });
     const membership = (await listed.json())?.data;
     expect(membership, 'the deterministic list is the whole fleet').to.have.lengthOf(NODES);
-    ({ name, ...walk } = chooseFreshCellApp(membership, `e2estep${Date.now()}`));
+    ({ name, app, ...walk } = await chooseFreshCellApp(membership, `e2estep${Date.now()}`));
 
     await pushImage(name, 'v1');
-    const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
     const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, HOLDERS);
     // grantors verify the owner's record against their own copy of the spec
     await seedGlobalSpec(env, app, env.clients.map((_, i) => i).filter((i) => !HOLDERS.includes(i)));
     await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
     await Promise.all(HOLDERS.map(async (i, k) => {
-      await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
+      await waitForReconcileActuated(env.clients[i], componentIdentifier(app), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
     await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]], name, name) });
@@ -269,7 +272,7 @@ describe('step-across: the owner re-rolls the committee under a running master, 
     // 3. The record reaches every holder.
     await Promise.all(HOLDERS.map((i) => env.clients[i].waitForEvent(
       'quorumGrant:generationRecord',
-      (d) => d.identity === name && d.role === 'master' && d.generation === 1,
+      (d) => d.identity === app.identity && d.role === 'master' && d.generation === 1,
       120000,
       { afterId: beforeReroll[i] },
     )));
@@ -312,7 +315,7 @@ describe('step-across: the owner re-rolls the committee under a running master, 
     expect(second.epoch, 'at a fresh epoch').to.be.greaterThan(first.epoch);
     const standby = HOLDERS.find((i) => i !== master);
     await waitFor(async () => {
-      const record = await dbClient(standby + 1).getMasterleaseRecord(name, 'master');
+      const record = await dbClient(standby + 1).getMasterleaseRecord(app.identity, 'master');
       return record?.grantee === first.grantee && record.generation === 1;
     }, { timeout: 90000, interval: 5000, label: 'the published record names the master at generation 1' });
 

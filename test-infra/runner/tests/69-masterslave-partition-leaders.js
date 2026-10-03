@@ -97,7 +97,7 @@ describe('a g: app with holders on both sides of a partition', function () {
     await pushImage(appName, 'v1');
     const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
     await placeGAppInOrder(env, app, {
-      placementOrder, identifier: componentIdentifier(appName),
+      placementOrder,
     });
     folder = await appSyncthingFolderId(env.clients[holders[0]], appName, appName);
   });

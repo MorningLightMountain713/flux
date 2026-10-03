@@ -5,7 +5,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
-import { componentIdentifier, execInContainer, syncthingFolderIdOf } from '../framework/container.js';
+import { componentIdentifier, execInContainer, folderIdOf } from '../framework/container.js';
 import {
   bootAndPeer, placeGAppInOrder, electionOrder, installedInstanceIndices,
 } from '../framework/reconciler-suite.js';
@@ -119,15 +119,15 @@ describe('a surplus copy that is also the writer', function () {
     app = await buildSeedableSyncthingApp({
       name: appName, syncMode: 'activeStandby', instances: 3,
     });
-    identifier = componentIdentifier(appName);
-    folder = syncthingFolderIdOf(identifier);
+    identifier = componentIdentifier(app);
+    folder = folderIdOf(app);
     // The writer is the seed, the newest copy. FDM names it before any copy is
     // placed, so no other holder starts the writer: each reads another node off
     // FDM and holds as a standby, and the seed starts it once no other holder
     // holds it.
     await electMaster(appName, ipOfIndex(SEED_INDEX));
     order = await placeGAppInOrder(env, app, {
-      placementOrder: PLACEMENT_ORDER, identifier,
+      placementOrder: PLACEMENT_ORDER,
     });
 
     // Every holder's folder complete and a connected peer holding it, or the

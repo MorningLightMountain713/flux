@@ -88,7 +88,7 @@ describe('masterSlave election on a three-node fleet', function () {
     await pushImage(appName, 'v1');
     const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
     await placeGAppInOrder(env, app, {
-      placementOrder, identifier: componentIdentifier(appName),
+      placementOrder,
     });
     folder = await appSyncthingFolderId(env.clients[holders[0]], appName, appName);
   });

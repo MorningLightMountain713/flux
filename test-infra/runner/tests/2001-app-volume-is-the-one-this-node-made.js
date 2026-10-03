@@ -55,7 +55,7 @@ describe('an app volume is the image this node made, not the one under its name'
   const ts = Date.now();
   const name = `e2evolstamp${ts}`;
   const MARKER = 'ours.txt';
-  const identifier = componentIdentifier(name);
+  let identifier;
 
   let container;
   let dir;
@@ -87,6 +87,7 @@ describe('an app volume is the image this node made, not the one under its name'
         repoauth: '',
       }],
     });
+    identifier = componentIdentifier(app);
     await installOnNodes(env, app, [0]);
     container = env.clients[0].container;
     dir = await appDataRoot(container, name);

@@ -14,13 +14,13 @@ describe('reconciler restarts a crashed container', function () {
   let env;
   let installedOnIndex;
   const appName = `e2ecrash${Date.now()}`;
-  const identifier = componentIdentifier(appName);
+  let identifier;
 
   before(async function () {
     this.timeout(300000);
     env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
     await bootAndPeer(env);
-    ({ index: installedOnIndex } = await seedSimpleApp(env, appName));
+    ({ index: installedOnIndex, identifier } = await seedSimpleApp(env, appName));
   });
 
   after(async function () {

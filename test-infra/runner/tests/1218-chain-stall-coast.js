@@ -47,6 +47,7 @@ const LOCATION_TTL_S = Math.ceil((PRODUCTION.fluxapps.locationTtlS * CHAIN_STALE
 describe('a chain stall coasts every master and demotes none', function () {
   let env;
   let name;
+  let app;
   let outpoints;
   let masterIndex;
   let stubPaused = false;
@@ -54,7 +55,7 @@ describe('a chain stall coasts every master and demotes none', function () {
   async function readCell(clientIndex) {
     try {
       const res = await fetch(
-        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${name}/master`)}`,
+        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${app.identity}/master`)}`,
         { signal: AbortSignal.timeout(5000) },
       );
       const body = await res.json();
@@ -114,12 +115,12 @@ describe('a chain stall coasts every master and demotes none', function () {
 
     name = `e2estall${Date.now()}`;
     await pushImage(name, 'v1');
-    const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
+    app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
     const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, HOLDERS);
     await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
     await Promise.all(HOLDERS.map(async (i, k) => {
-      await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
+      await waitForReconcileActuated(env.clients[i], componentIdentifier(app), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
     await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]], name, name) });
@@ -156,7 +157,7 @@ describe('a chain stall coasts every master and demotes none', function () {
     // window; from then on held asks are refused, visibly.
     await Promise.any(env.clients.map((c) => c.waitForEvent(
       'quorumGrant:served',
-      (d) => d.key === `${name}/master` && d.outcome === 'refusedStale',
+      (d) => d.key === `${app.identity}/master` && d.outcome === 'refusedStale',
       180000,
     )));
 
@@ -165,7 +166,7 @@ describe('a chain stall coasts every master and demotes none', function () {
     // running with its demotion alarm disarmed.
     await env.clients[masterIndex].waitForEvent(
       'quorumGrant:coasting',
-      (d) => d.key === `${name}/master`,
+      (d) => d.key === `${app.identity}/master`,
       180000,
       { afterId: coastAfter },
     );
@@ -175,7 +176,7 @@ describe('a chain stall coasts every master and demotes none', function () {
     await assertNoEvent(
       env.clients[masterIndex],
       'quorumGrant:demoted',
-      (d) => d.key === `${name}/master`,
+      (d) => d.key === `${app.identity}/master`,
       120000,
     );
     const status = await getAppContainerStatus(env.clients[masterIndex].container, name);
@@ -193,14 +194,14 @@ describe('a chain stall coasts every master and demotes none', function () {
     // that referees again, and the holder reports itself held.
     await env.clients[masterIndex].waitForEvent(
       'quorumGrant:assess',
-      (d) => d.key === `${name}/master` && d.outcome === 'held',
+      (d) => d.key === `${app.identity}/master` && d.outcome === 'held',
       120000,
       { afterId: resumeAfter },
     );
     await assertNoEvent(
       env.clients[masterIndex],
       'quorumGrant:demoted',
-      (d) => d.key === `${name}/master`,
+      (d) => d.key === `${app.identity}/master`,
       60000,
     );
 

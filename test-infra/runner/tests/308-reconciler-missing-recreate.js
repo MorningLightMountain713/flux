@@ -28,7 +28,7 @@ describe('reconciler recreates a missing container', function () {
   let env;
   let idx;
   const appName = `e2emissing${Date.now()}`;
-  const identifier = componentIdentifier(appName);
+  let identifier;
 
   before(async function () {
     this.timeout(300000);
@@ -51,7 +51,7 @@ describe('reconciler recreates a missing container', function () {
       },
     });
     await bootAndPeer(env);
-    ({ index: idx } = await seedSimpleApp(env, appName));
+    ({ index: idx, identifier } = await seedSimpleApp(env, appName));
     // The app must be PROVEN before any tampering: an unproven app is still inside
     // its install trial, where an external kill counts toward the trial's bounded
     // start attempts and draws a rollback verdict — not this suite's subject.

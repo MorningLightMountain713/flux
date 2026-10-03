@@ -35,6 +35,7 @@ const OUTSIDERS = [3, 4, 5, 6, 7, 8, 9];
 describe('relay renewal and the partitioned app island', function () {
   let env;
   let name;
+  let app;
   let holderOutpoints;
 
   async function readCell(clientIndex) {
@@ -44,7 +45,7 @@ describe('relay renewal and the partitioned app island', function () {
       // stalls the whole verdict on one silent node. Silence is a non-answer;
       // the quorum arithmetic already tolerates missing cells.
       const res = await fetch(
-        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${name}/master`)}`,
+        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${app.identity}/master`)}`,
         { signal: AbortSignal.timeout(5000) },
       );
       const body = await res.json();
@@ -122,7 +123,7 @@ describe('relay renewal and the partitioned app island', function () {
 
     name = `e2erelay${Date.now()}`;
     await pushImage(name, 'v1');
-    const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
+    app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
     const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, HOLDERS);
     await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
@@ -134,7 +135,7 @@ describe('relay renewal and the partitioned app island', function () {
     // claimed-bytes index over an empty volume - written only AFTER each
     // holder's first-run reset, which clears anything seeded earlier.
     await Promise.all(HOLDERS.map(async (i, k) => {
-      await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
+      await waitForReconcileActuated(env.clients[i], componentIdentifier(app), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
     await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]], name, name) });
@@ -173,7 +174,7 @@ describe('relay renewal and the partitioned app island', function () {
       // window would seat a successor at a higher epoch and fail the check.
       await new Promise((resolve) => { setTimeout(resolve, 175000); });
       await assertNoEvent(env.clients[masterIndex], 'quorumGrant:demoted',
-        (d) => d.key === `${name}/master`, 5000);
+        (d) => d.key === `${app.identity}/master`, 5000);
       const during = await quorumVerdict();
       expect(during, 'the quorum view survives the partition').to.not.equal(null);
       expect(during.grantee, 'the master never changed').to.equal(first.grantee);
@@ -205,7 +206,7 @@ describe('relay renewal and the partitioned app island', function () {
     await env.partitionGroups(HOLDERS, OUTSIDERS);
     try {
       await env.clients[masterIndex].waitForEvent(
-        'quorumGrant:coasting', (d) => d.key === `${name}/master`, 120000,
+        'quorumGrant:coasting', (d) => d.key === `${app.identity}/master`, 120000,
       );
       const deadline = Date.now() + 150000;
       while (Date.now() < deadline) {
@@ -272,9 +273,9 @@ describe('relay renewal and the partitioned app island', function () {
     await env.partitionGroups([masterIndex], everyoneElse);
     try {
       await Promise.any(survivors.map((i) => env.clients[i].waitForEvent(
-        'quorumGrant:granted', (d) => d.key === `${name}/master`, 300000, { afterId: survivorAfters.get(i) },
+        'quorumGrant:granted', (d) => d.key === `${app.identity}/master`, 300000, { afterId: survivorAfters.get(i) },
       ))).catch(() => {
-        throw new Error(`no survivor acquired ${name}/master after the master was isolated`);
+        throw new Error(`no survivor acquired ${app.identity}/master after the master was isolated`);
       });
       const grantedAtMs = Date.now();
 
@@ -282,7 +283,7 @@ describe('relay renewal and the partitioned app island', function () {
       // that granted, so the fence event must already sit in its buffer.
       winner = survivors.find((i) => env.clients[i].getEventBuffer()
         .some((e) => e.event === 'quorumGrant:granted' && e.id > survivorAfters.get(i)
-          && e.data.key === `${name}/master`));
+          && e.data.key === `${app.identity}/master`));
       expect(winner, 'a survivor holds the granted event').to.not.equal(undefined);
       await env.clients[winner].waitForEvent(
         'quorumGrant:fenceRaised', (d) => d.app === name, 15000, { afterId: survivorAfters.get(winner) },
@@ -383,7 +384,7 @@ describe('relay renewal and the partitioned app island', function () {
 
     const buffered = env.clients[masterIndex].getEventBuffer();
     const demoted = buffered.find((e) => e.event === 'quorumGrant:demoted'
-      && e.id > masterAfter && e.data.key === `${name}/master`);
+      && e.id > masterAfter && e.data.key === `${app.identity}/master`);
     expect(demoted, 'no flap cycle demoted the master').to.equal(undefined);
 
     const after = await quorumVerdict();

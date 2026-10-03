@@ -34,7 +34,7 @@ describe('an app volume behind a symlinked apps folder', function () {
   dumpLogsOnFailure(() => env);
 
   const appName = `e2evollink${Date.now()}`;
-  const identifier = componentIdentifier(appName);
+  let identifier;
   let holder;
 
   // How many mounts the mount table lists at the volume's real path.
@@ -87,6 +87,7 @@ describe('an app volume behind a symlinked apps folder', function () {
         repoauth: '',
       }],
     });
+    identifier = componentIdentifier(app);
 
     await installOnNodes(env, app, [0]);
     await waitFor(

@@ -8,7 +8,7 @@ import { appOwnerKey } from '../framework/keys.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import {
   appSyncthingFolderId, blockPeerAccess, componentIdentifier, crashFluxos, execInContainer, getAppContainerStatus,
-  releaseFluxos, syncthingFolderIdOf, unblockPeerAccess,
+  folderIdOf, releaseFluxos, unblockPeerAccess,
 } from '../framework/container.js';
 import { electMaster, clearMaster, resetFdm } from '../framework/fdm-control.js';
 import {
@@ -97,8 +97,11 @@ describe('primary election under a divergent placement order', function () {
     holders.map((i) => isUp(env.clients[i], appName)),
   )).filter(Boolean).length;
 
-  const identifierOf = (appName) => componentIdentifier(appName);
-  const folderOf = (appName) => syncthingFolderIdOf(identifierOf(appName));
+  // Each app as built: its identifier and folder id are derived from the
+  // identity its registration mints.
+  const built = new Map();
+  const identifierOf = (appName) => componentIdentifier(built.get(appName));
+  const folderOf = (appName) => folderIdOf(built.get(appName));
   // One node's count of an election decision about an app.
   const electionCount = (i, appName, decision) => electionDecisionCount(env.clients[i], identifierOf(appName), decision);
   // One node's count of folder-election passes over an app's folder.
@@ -121,12 +124,18 @@ describe('primary election under a divergent placement order', function () {
   const writableSince = (nodes, appName, from) => nodes.filter((i, k) => env.clients[i].getEventBuffer()
     .some((e) => e.event === 'syncthing:folderWritable' && e.data?.folder === folderOf(appName) && e.id > from[k]));
 
+  // Built ahead of placement where a test needs the identifier first, to hold a
+  // checkpoint before the install.
+  const build = async (appName) => {
+    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
+    built.set(appName, app);
+    return app;
+  };
   const deploy = async (appName, order = placementOrder) => {
     await pushImage(appName, 'v1');
-    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
+    const app = built.get(appName) ?? await build(appName);
     await placeGAppInOrder(env, app, {
       placementOrder: order,
-      identifier: identifierOf(appName),
     });
     return app;
   };
@@ -341,6 +350,7 @@ describe('primary election under a divergent placement order', function () {
     //
     // The window is held open at the start path's checkpoint, on every holder
     // since any of them may win, for as long as the peers take to decide.
+    await build(windowApp);
     const identifier = identifierOf(windowApp);
     await Promise.all(holders.map((i) => env.clients[i].holdCheckpoint(BEFORE_START, identifier)));
     try {
@@ -374,12 +384,12 @@ describe('primary election under a divergent placement order', function () {
     // index 1, and with only two holders there is no third opinion to fall back on:
     // whatever the pair decides is the answer.
     const app = await buildSeedableSyncthingApp({ name: pairApp, syncMode: 'activeStandby' });
+    built.set(pairApp, app);
     await pushImage(pairApp, 'v1');
     const pair = [0, 1];
     const placedFrom = pair.map((i) => env.clients[i].getLastEventId());
     await placeGAppInOrder(env, app, {
       placementOrder: placementOrderWithSeedAt([0, 1], 1),
-      identifier: componentIdentifier(pairApp),
     });
 
     const position = await electionIndexOf(env, pairApp, seedIndex);
@@ -662,6 +672,7 @@ describe('primary election under a divergent placement order', function () {
     // over the whole field, and the address order decides it because no holder
     // holds anything.
     const deployedFrom = holders.map((i) => env.clients[i].getLastEventId());
+    await build(lossApp);
     const folder = folderOf(lossApp);
     const others = holders.filter((i) => i !== seedIndex);
     const waitedOnSeed = (i) => env.clients[i].getDecisionCount('syncthing:seedDecision', folder, 'holderNotLookedAt');

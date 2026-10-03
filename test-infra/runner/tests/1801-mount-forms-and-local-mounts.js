@@ -2,7 +2,9 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { appDataRoot, execInContainer, requireAppContainerName } from '../framework/container.js';
+import {
+  appDataRoot, componentIdentifier, execInContainer, folderIdOf, requireAppContainerName,
+} from '../framework/container.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { waitFor, waitForReconcileActuated, START_ACTIONS } from '../framework/wait.js';
@@ -72,9 +74,8 @@ describe('mount forms on a replicated volume, and the directory a spec keeps loc
   let env;
   dumpLogsOnFailure(() => env);
   const appName = `e2emounts${Date.now()}`;
-  const identifier = `${appName}_${appName}`;
-  // The folder id of an app registered before v9 is its 8.x container name, on every node.
-  const folderId = `flux${appName}_${appName}`;
+  let identifier;
+  let folderId;
   let dir;
   const nodes = [0, 1];
   let clearedAt;
@@ -138,6 +139,8 @@ describe('mount forms on a replicated volume, and the directory a spec keeps loc
         'f:server.json:/etc/server.json',
       ],
     });
+    identifier = componentIdentifier(app);
+    folderId = folderIdOf(app);
     const installAfters = nodes.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, nodes);
     // The same on every node: the directory is named by the component identifier,

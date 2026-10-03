@@ -83,7 +83,7 @@ describe('masterSlave election while FDM is unreachable', function () {
     await startFdmOutage('refuse');
 
     await placeGAppInOrder(env, app, {
-      placementOrder, identifier: componentIdentifier(appName),
+      placementOrder,
     });
     folder = await appSyncthingFolderId(env.clients[holders[0]], appName, appName);
   });

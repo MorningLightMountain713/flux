@@ -124,7 +124,7 @@ describe('two apps share their holders, and their terms never entangle', functio
       // reset (suite 309's ordering, load-bearing on every step).
       // eslint-disable-next-line no-await-in-loop
       await Promise.all(HOLDERS.map(async (i, k) => {
-        await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
+        await waitForReconcileActuated(env.clients[i], componentIdentifier(app), 'dataCleared', 60000, { afterId: installAfters[k] });
         await seedSyncScopedData(env, name, i);
       }));
       // eslint-disable-next-line no-await-in-loop

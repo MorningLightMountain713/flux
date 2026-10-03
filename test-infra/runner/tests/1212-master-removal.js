@@ -26,13 +26,14 @@ const HOLDERS = [0, 1, 2];
 describe('removing the master\'s app from a live node', function () {
   let env;
   let name;
+  let app;
   let holderOutpoints;
   let ownerAuths;
 
   async function readCell(clientIndex) {
     try {
       const res = await fetch(
-        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${name}/master`)}`,
+        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${app.identity}/master`)}`,
         { signal: AbortSignal.timeout(5000) },
       );
       const body = await res.json();
@@ -93,14 +94,14 @@ describe('removing the master\'s app from a live node', function () {
 
     name = `e2eremove${Date.now()}`;
     await pushImage(name, 'v1');
-    const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
+    app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
     const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, HOLDERS);
     await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
     // Synced-on-every-holder before anything else — the stall ladder otherwise
     // removes the standbys mid-test (see 1209's before for the full account).
     await Promise.all(HOLDERS.map(async (i, k) => {
-      await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
+      await waitForReconcileActuated(env.clients[i], componentIdentifier(app), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
     await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]], name, name) });
@@ -137,7 +138,7 @@ describe('removing the master\'s app from a live node', function () {
     // Voluntary release rides the teardown: a successor seats with no
     // lock-delay, on the standbys' next pursuit cadence.
     await Promise.any(standbys.map((i) => env.clients[i].waitForEvent(
-      'quorumGrant:granted', (d) => d.key === `${name}/master`, 120000, { afterId: standbyAfters.get(i) },
+      'quorumGrant:granted', (d) => d.key === `${app.identity}/master`, 120000, { afterId: standbyAfters.get(i) },
     ))).catch((err) => {
       throw new Error(`no standby was seated after the removal (${err.errors?.[0]?.message ?? err.message})`);
     });

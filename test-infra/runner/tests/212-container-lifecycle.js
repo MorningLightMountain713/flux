@@ -80,7 +80,7 @@ async function seedAndWaitForInstall(env, appName) {
     const status = await getAppContainerStatus(client.container, appName);
     return status && status.status.startsWith('Up');
   }, { timeout: 60000, interval: 2000, label: 'app running after install' });
-  await waitForReconcileActuated(client, componentIdentifier(appName), 'firstRunProven', 60000);
+  await waitForReconcileActuated(client, componentIdentifier(app), 'firstRunProven', 60000);
   return installed;
 }
 

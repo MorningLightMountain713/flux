@@ -32,7 +32,7 @@ describe('a restore reaches the other instances through syncthing', function () 
 
   const ts = Date.now();
   const appName = `e2ereal${ts}`;
-  const identifier = componentIdentifier(appName);
+  let identifier;
   // The app's folder id and directory are the same on every holder; read off
   // node 0's container once it is installed, never spelled.
   let folder;
@@ -66,6 +66,7 @@ describe('a restore reaches the other instances through syncthing', function () 
 
     await pushImage(appName, 'v1');
     const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'syncFirst' });
+    identifier = componentIdentifier(app);
     const nodes = [0, 1];
     const installAfters = nodes.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, nodes);

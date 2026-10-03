@@ -31,7 +31,7 @@ describe('reconnect sweep covers enterprise apps (encrypted at rest)', function 
     await pushImage(appName, 'v1');
     const app = await buildSeedableEnterpriseApp({ name: appName });
     await installOnNodes(env, app, [0]);
-    identifier = componentIdentifier(appName);
+    identifier = componentIdentifier(app);
   });
 
   after(async function () {

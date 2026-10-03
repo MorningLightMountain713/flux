@@ -3,7 +3,7 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import {
-  appDataRoot, appVolumeFile, componentIdentifier, execInContainer, getAppContainerStatus, syncthingFolderIdOf,
+  appDataRoot, appVolumeFile, componentIdentifier, execInContainer, folderIdOf, getAppContainerStatus,
 } from '../framework/container.js';
 import {
   setSyncState, setSynced, setSyncing, getSyncthingState, resetSyncState,
@@ -46,14 +46,9 @@ const subnet = getSubnetConfig();
 const BEFORE_PROMOTION_CHECK = 'syncthing:beforePromotionCheck';
 const BEFORE_SEED_CHECK = 'syncthing:beforeSeedCheck';
 
-// `flux<component>_<identity>` — the identity is minted at registration and cannot be
-// spelled from the app's name, so it is resolved once (resolveAppIds) and read from
-// here afterwards, leaving every call site synchronous.
-// A SEEDED app's identifier is its own name: seedGlobalSpec writes the spec
-// with no minted identity, and the product states identity as the name for
-// such rows (prepareInstalledAppsCollection's backfill rule; 310's captures
-// show the containers spelled fluxe2eopstop..._e2eopstop...). Deterministic by
-// construction - a registration-row read here races the seeding it precedes.
+// `<component>_<identity>` — the identity is minted from the registration's hash
+// and cannot be spelled from the app's name: a built app carries it
+// (componentIdentifier) and a container's label states it (appComponentIdentifier).
 
 async function isUp(client, appName) {
   const status = await getAppContainerStatus(client.container, appName);
@@ -284,8 +279,9 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
 
     // Held at the checkpoint, the volume is emptied and the status made unreadable;
     // let go, the pass judges the disk.
-    const holdEmptyAndRelease = async ({ index, name, afterId, checkpoint }) => {
-      const folder = syncthingFolderIdOf(componentIdentifier(name));
+    const holdEmptyAndRelease = async ({
+      index, name, folder, afterId, checkpoint,
+    }) => {
       const client = env.clients[index];
       const ip = subnet.nodeIp(index + 1);
       try {
@@ -307,8 +303,10 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
       this.timeout(420000);
       const index = 2;
       const name = `e2eseedcheck${ts}`;
-      const identifier = componentIdentifier(name);
-      const folder = syncthingFolderIdOf(identifier);
+      await pushImage(name, 'v1');
+      const app = await buildSeedableSyncthingApp({ name, syncMode: 'syncFirst', instances: 1 });
+      const identifier = componentIdentifier(app);
+      const folder = folderIdOf(app);
       const client = env.clients[index];
       const afterId = client.getLastEventId();
       const refusedFrom = await client.getDecisionCount('syncthing:seedRefused', folder, 'phantom_index_empty_disk');
@@ -316,14 +314,14 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
       // and the index claims a whole copy from its first pass. Installed without
       // seeding: seeded data declares the cold start, an empty index the leader
       // rightly seeds over.
-      await pushImage(name, 'v1');
-      const app = await buildSeedableSyncthingApp({ name, syncMode: 'syncFirst', instances: 1 });
       await client.holdCheckpoint(BEFORE_SEED_CHECK, folder);
       await claimSyncedOverEmptyDisk(subnet.nodeIp(index + 1), folder);
       await installOnNodes(env, app, [index]);
       await waitForReconcileActuated(client, identifier, 'dataCleared', 60000, { afterId });
 
-      await holdEmptyAndRelease({ index, name, afterId, checkpoint: BEFORE_SEED_CHECK });
+      await holdEmptyAndRelease({
+        index, name, folder, afterId, checkpoint: BEFORE_SEED_CHECK,
+      });
 
       expect(await client.getDecisionCount('syncthing:seedRefused', folder, 'phantom_index_empty_disk'),
         'the seed refused over the empty volume').to.be.above(refusedFrom);
@@ -335,11 +333,11 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
       this.timeout(420000);
       const index = 3;
       const name = `e2estandbycheck${ts}`;
-      const identifier = componentIdentifier(name);
-      const folder = syncthingFolderIdOf(identifier);
       const client = env.clients[index];
       // A running peer is ahead of it, so it promotes only once synced.
-      await seedSyncthingApp(env, { name, syncMode: 'syncFirst', index, forceNonLeader: true });
+      const { identifier, folder } = await seedSyncthingApp(env, {
+        name, syncMode: 'syncFirst', index, forceNonLeader: true,
+      });
       expect(await folderType(subnet.nodeIp(index + 1), folder), 'fixture: the standby receives').to.equal('receiveonly');
 
       const afterId = client.getLastEventId();
@@ -347,7 +345,9 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
       await client.holdCheckpoint(BEFORE_PROMOTION_CHECK, folder);
       await claimSyncedOverEmptyDisk(subnet.nodeIp(index + 1), folder);
 
-      await holdEmptyAndRelease({ index, name, afterId, checkpoint: BEFORE_PROMOTION_CHECK });
+      await holdEmptyAndRelease({
+        index, name, folder, afterId, checkpoint: BEFORE_PROMOTION_CHECK,
+      });
 
       expect(await client.getDecisionCount('syncthing:promotionRefused', folder, 'phantom_index_empty_disk'),
         'the promotion refused over the empty volume').to.be.above(refusedFrom);

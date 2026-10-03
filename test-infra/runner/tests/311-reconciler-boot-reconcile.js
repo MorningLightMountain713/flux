@@ -22,13 +22,13 @@ describe('reconciler restarts app containers on FluxOS boot', function () {
   let env;
   let idx;
   const appName = `e2eboot${Date.now()}`;
-  const identifier = componentIdentifier(appName);
+  let identifier;
 
   before(async function () {
     this.timeout(300000);
     env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
     await bootAndPeer(env);
-    ({ index: idx } = await seedSimpleApp(env, appName));
+    ({ index: idx, identifier } = await seedSimpleApp(env, appName));
   });
 
   after(async function () {

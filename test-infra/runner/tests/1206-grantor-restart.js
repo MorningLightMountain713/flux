@@ -26,6 +26,7 @@ const HOLDERS = [0, 1, 2];
 describe('a grantor restarts, and its promises outlive the process', function () {
   let env;
   let name;
+  let app;
   let holderOutpoints;
 
   async function readCell(clientIndex) {
@@ -35,7 +36,7 @@ describe('a grantor restarts, and its promises outlive the process', function ()
       // verdict on one silent node. Silence is a non-answer; the quorum
       // arithmetic already tolerates missing cells.
       const res = await fetch(
-        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${name}/master`)}`,
+        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${app.identity}/master`)}`,
         { signal: AbortSignal.timeout(5000) },
       );
       const body = await res.json();
@@ -109,7 +110,7 @@ describe('a grantor restarts, and its promises outlive the process', function ()
 
     name = `e2edrain${Date.now()}`;
     await pushImage(name, 'v1');
-    const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
+    app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
     const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, HOLDERS);
     await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
@@ -121,7 +122,7 @@ describe('a grantor restarts, and its promises outlive the process', function ()
     // claimed-bytes index over an empty volume - written only AFTER each
     // holder's first-run reset, which clears anything seeded earlier.
     await Promise.all(HOLDERS.map(async (i, k) => {
-      await waitForReconcileActuated(env.clients[i], componentIdentifier(name), 'dataCleared', 60000, { afterId: installAfters[k] });
+      await waitForReconcileActuated(env.clients[i], componentIdentifier(app), 'dataCleared', 60000, { afterId: installAfters[k] });
       await seedSyncScopedData(env, name, i);
     }));
     await setSynced({ folder: await appSyncthingFolderId(env.clients[HOLDERS[0]], name, name) });
@@ -192,7 +193,7 @@ describe('a grantor restarts, and its promises outlive the process', function ()
       await new Promise((resolve) => { setTimeout(resolve, 15000); });
     }
     await assertNoEvent(env.clients[masterIndex], 'quorumGrant:demoted',
-      (d) => d.key === `${name}/master`, 5000);
+      (d) => d.key === `${app.identity}/master`, 5000);
 
     // The drained referee rejoins the quorum: after the drain window its
     // cell's expiry advances again — proof it is granting renewals, at (or,
@@ -291,7 +292,7 @@ describe('a grantor restarts, and its promises outlive the process', function ()
     await redialAndPeer(env, [standby], preRestartMarkers);
 
     await waitFor(async () => {
-      const record = await dbClient(standby + 1).getMasterleaseRecord(name, 'master');
+      const record = await dbClient(standby + 1).getMasterleaseRecord(app.identity, 'master');
       return record !== null && record.grantee === verdict.grantee;
     }, { timeout: 300000, interval: 10000, label: 'the restarted standby re-syncs the published record' });
 

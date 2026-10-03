@@ -4,7 +4,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import {
-  componentIdentifier, crashAppContainer, getAppContainerStatus, syncthingFolderIdOf,
+  componentIdentifier, crashAppContainer, getAppContainerStatus, folderIdOf,
 } from '../framework/container.js';
 import { resetFdm, electMaster } from '../framework/fdm-control.js';
 import {
@@ -39,8 +39,8 @@ describe('a start the reconciler does not make records no attempt', function () 
   dumpLogsOnFailure(() => env);
   let holders;
   const appName = `e2enoattempt${Date.now()}`;
-  const identifier = componentIdentifier(appName);
-  const folder = syncthingFolderIdOf(identifier);
+  let identifier;
+  let folder;
 
   const runningFlags = async () => Promise.all(holders.map((i) => isUp(env.clients[i], appName)));
 
@@ -52,6 +52,8 @@ describe('a start the reconciler does not make records no attempt', function () 
     await resetSyncState();
     await pushImage(appName, 'v1');
     const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
+    identifier = componentIdentifier(app);
+    folder = folderIdOf(app);
 
     const installAfters = [0, 1].map((i) => env.clients[i].getLastEventId());
     holders = await installOnNodes(env, app, [0, 1]);

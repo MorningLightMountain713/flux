@@ -9,6 +9,7 @@ import { pushImage } from '../framework/registry-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { setSynced } from '../framework/syncthing-control.js';
+import { dbClient } from '../framework/db-client.js';
 import {
   appComponentIdentifiers,
   appDataRoot,
@@ -34,13 +35,14 @@ import { fluxTeamKey } from '../framework/keys.js';
 describe('encrypted mastership: a sealed spec holds and fails over a term', function () {
   let env;
   let name;
+  let identity;
   let hosts = [];
   let identifiers = new Map(); // node index -> physical identifier
 
   async function readCell(clientIndex) {
     try {
       const res = await fetch(
-        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${name}/master`)}`,
+        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${identity}/master`)}`,
         { signal: AbortSignal.timeout(5000) },
       );
       const body = await res.json();
@@ -127,6 +129,7 @@ describe('encrypted mastership: a sealed spec holds and fails over a term', func
       const rows = await Promise.all(env.clients.map((c) => c.getAppSpecs(name).catch(() => null)));
       return rows.every((r) => r && r.status === 'success' && r.data && r.data.name === name);
     }, { timeout: 180000, interval: 5000, label: `global spec for ${name} on all nodes` });
+    identity = await dbClient(1).identityOf(name);
 
     // Targeted installs: the spawner's same-ip-range guard refuses to
     // co-place a syncthing app twice inside one /24, and the whole harness

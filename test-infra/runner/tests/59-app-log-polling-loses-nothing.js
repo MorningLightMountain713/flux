@@ -52,7 +52,7 @@ describe('a log poll answers at once and loses nothing between polls', function 
 
   const appName = `e2elogpoll${Date.now()}`;
   const component = `${appName}a`;
-  const identifier = componentIdentifier(appName, component);
+  let identifier;
   let holder;
   let auth;
 
@@ -106,6 +106,7 @@ describe('a log poll answers at once and loses nothing between polls', function 
       }],
     });
 
+    identifier = componentIdentifier(app, component);
     await installOnNodes(env, app, [0]);
     await waitFor(
       async () => {

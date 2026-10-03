@@ -7,7 +7,7 @@ import {
   componentIdentifier,
   execInContainer,
   getAppContainerStatus,
-  syncthingFolderIdOf,
+  folderIdOf,
 } from '../framework/container.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
@@ -44,10 +44,12 @@ describe('a restore with no peer to fall back on', function () {
   const syncedApp = `e2esolo${ts}`;
   const plainApp = `e2eplain${ts}`;
 
-  // Seeded specs carry no minted identity, so the identifier and folder id are
-  // known before install; the directory is read off the container afterwards.
-  const idOf = (app) => componentIdentifier(app, `${app}c`);
-  const folderOf = (app) => syncthingFolderIdOf(idOf(app));
+  // The identifier and folder id are derived from the identity a build mints, so
+  // the built specs are kept by name; the directory is read off the container
+  // afterwards.
+  const specs = new Map();
+  const idOf = (app) => componentIdentifier(specs.get(app), `${app}c`);
+  const folderOf = (app) => folderIdOf(specs.get(app), `${app}c`);
   const dirOf = async (app) => appDataRoot(client.container, app, `${app}c`);
 
   let auth;
@@ -102,6 +104,7 @@ describe('a restore with no peer to fall back on', function () {
         instances: 1,
         compose: [component(app, data)],
       });
+      specs.set(app, spec);
       const after = client.getLastEventId();
       // eslint-disable-next-line no-await-in-loop
       await installOnNodes(env, spec, [0]);

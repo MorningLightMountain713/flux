@@ -65,8 +65,8 @@ describe('a node whose address changed restarts the apps that stay', function ()
   let peerIdx;
   let peerBaseline;
   const appName = `e2eipchg${Date.now()}`;
-  const idA = componentIdentifier(appName, COMPONENT_A);
-  const idB = componentIdentifier(appName, COMPONENT_B);
+  let idA;
+  let idB;
 
   async function isUp(client, component) {
     const status = await getAppContainerStatus(client.container, appName, { component });
@@ -106,6 +106,8 @@ describe('a node whose address changed restarts the apps that stay', function ()
       name: appName,
       compose: [component(COMPONENT_A), component(COMPONENT_B)],
     });
+    idA = componentIdentifier(app, COMPONENT_A);
+    idB = componentIdentifier(app, COMPONENT_B);
     idx = await seedAndInstall(env, app);
     nodeIp = subnet.nodeIp(idx + 1);
     // Inside the fleet's own /24, so the node can hold it on the same interface and
