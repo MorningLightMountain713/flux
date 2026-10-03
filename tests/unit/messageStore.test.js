@@ -112,6 +112,7 @@ describe('messageStore tests', () => {
       '../appDatabase/registryManager': registryManagerStub,
       '../appDatabase/appSpecHistory': {
         getStateBeforeHeight: sinon.stub().resolves(priorState),
+        latestAppliedState: sinon.stub().resolves(null),
       },
       '../utils/specLibs': {
         // The real library behind FluxOS's own accessor — UpdatePolicy.assertCompatible
@@ -457,7 +458,26 @@ describe('messageStore tests', () => {
         sinon.assert.notCalled(appsRepositoryStub.getGlobalAppInfo);
       });
 
-      it('queues the update when there is no app of that name to update', async () => {
+      // A name the list no longer carries is judged against the app that last
+      // held it, so a renewal of an expired app is taken and relayed by every
+      // node, not only the one that took it.
+      it('reads the app that last held the name when the list carries none, and takes the renewal', async () => {
+        const stubs = buildProxyquireStubs();
+        dbHelperStub.findOneInDatabase.resolves(null);
+        appsRepositoryStub.getGlobalAppInfo.resolves(null);
+        stubs['../appDatabase/appSpecHistory'].latestAppliedState.resolves(priorState);
+        messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', stubs);
+
+        const result = await messageStore.storeAppTemporaryMessage(updateMessage());
+
+        expect(result).to.deep.equal({ rebroadcast: true });
+        sinon.assert.calledOnceWithExactly(stubs['../appDatabase/appSpecHistory'].latestAppliedState, 'test');
+        sinon.assert.notCalled(stubs['../utils/globalState'].queuePendingUpdate);
+        const [handed] = stubs['./appEventVerifier'].authorize.firstCall.args;
+        expect(handed.previousState.owner, 'the owner who last held the name').to.equal(priorState.spec.owner);
+      });
+
+      it('queues the update when no app of that name is listed or was ever applied', async () => {
         const stubs = buildProxyquireStubs();
         dbHelperStub.findOneInDatabase.resolves(null);
         appsRepositoryStub.getGlobalAppInfo.resolves(null);
@@ -466,6 +486,7 @@ describe('messageStore tests', () => {
         const result = await messageStore.storeAppTemporaryMessage(updateMessage());
 
         expect(result).to.equal(false);
+        sinon.assert.calledOnceWithExactly(stubs['../appDatabase/appSpecHistory'].latestAppliedState, 'test');
         sinon.assert.calledOnce(stubs['../utils/globalState'].queuePendingUpdate);
         sinon.assert.notCalled(stubs['./appEventVerifier'].authorize);
       });

@@ -16,6 +16,9 @@ const deploymentProvider = require('../appRuntime/deploymentProvider');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const appsRepository = require('../appDatabase/appsRepository');
 const appHistory = require('../appDecisions/appHistory');
+const appSpecHistory = require('../appDatabase/appSpecHistory');
+const chainState = require('../chainState');
+const temporaryPoolSweep = require('../appMessaging/temporaryPoolSweep');
 const {
   manifestOf, standingManifest, highestVersionInOwnership,
 } = require('./manifestStanding');
@@ -559,6 +562,46 @@ async function refreshManifests(appName, identity, deps = {}) {
 }
 
 /**
+ * Reaps the manifests of an identity another registration of its name has
+ * displaced. A name's manifests belong to the app its latest applied
+ * registration made; an earlier app of the name cannot come back once another
+ * holds it, so its rows are dead. They are reaped only once the displacing
+ * registration is deeper than the longest reorganisation the chain accepts, so
+ * a registration a reorg takes back finds them still here. An identity whose
+ * name has no applied registration is kept: a history being rebuilt is empty,
+ * not evidence. Rows held unresolved are the TTL index's.
+ *
+ * @param {object} [deps] - { listHeld?, latestRegistration?, scannedHeight?, remove? }
+ * @returns {Promise<{reaped: number, orphans: string[]}>}
+ */
+async function reapDisplacedManifests(deps = {}) {
+  const {
+    listHeld = appsRepository.listResolvedContentManifestIdentities,
+    latestRegistration = (name) => appHistory.latestApplied(name, { type: 'registration' }),
+    scannedHeight = chainState.getScannedHeight,
+    remove = appsRepository.removeContentManifests,
+  } = deps;
+  const held = await listHeld();
+  if (!held.length) return { reaped: 0, orphans: [] };
+  const tip = await scannedHeight();
+  const orphans = [];
+  for (const { identity, appName } of held) {
+    // eslint-disable-next-line no-await-in-loop
+    const registration = await latestRegistration(appName);
+    if (!registration || registration.decision.identity === identity) continue;
+    if (tip - registration.decision.height < temporaryPoolSweep.MAX_REORG_LENGTH) continue;
+    orphans.push(identity);
+  }
+  let reaped = 0;
+  for (const identity of orphans) {
+    // eslint-disable-next-line no-await-in-loop
+    reaped += await remove(identity);
+  }
+  if (reaped) fluxEventBus.publish('content:manifestReaped', { count: reaped, identities: orphans });
+  return { reaped, orphans };
+}
+
+/**
  * The row of an app was written: what this node stands on follows from what it
  * holds and the new row. Rows held before the app was listed are judged now;
  * when the spec changed, peers and FluxDrive are asked for the manifests they
@@ -712,10 +755,12 @@ async function getContentManifestApi(req, res) {
 
 /**
  * GET /apps/contentmanifests/:appname — what this node holds for the app the
- * registry lists under the name: every resolved manifest, the one it stands on,
- * the listed ownership and the version the owner's next manifest takes. A node
- * asked at its row write keeps what it lacks and judges it against its own row;
- * an owner reads the ownership height and the version to sign.
+ * registry lists under the name, or, when it lists none, the app that last
+ * held it: every resolved manifest, the one it stands on (none for an app not
+ * listed), the ownership and the version the owner's next manifest takes. A
+ * node asked at its row write keeps what it lacks and judges it against its
+ * own row; an owner reads the ownership height and the version to sign, the
+ * owner of an expired app included.
  */
 async function getContentManifestsApi(req, res) {
   try {
@@ -724,9 +769,9 @@ async function getContentManifestsApi(req, res) {
       res.json(messageHelper.createErrorMessage('appname is required'));
       return;
     }
-    const app = await appsRepository.getGlobalAppInfo(appname);
+    const app = (await appsRepository.getGlobalAppInfo(appname)) ?? (await appSpecHistory.latestAppliedState(appname));
     if (!app) {
-      res.status(404).json(messageHelper.createErrorMessage(`No listed app ${appname}`));
+      res.status(404).json(messageHelper.createErrorMessage(`No app ${appname} is listed or was applied`));
       return;
     }
     const owners = await appHistory.ownerships(app.name);
@@ -1623,6 +1668,7 @@ module.exports = {
   highestVersionInOwnership,
   resolveHeldManifests,
   rejudgeManifests,
+  reapDisplacedManifests,
   storeBatchContentManifests,
   receiveManifest,
   handleIncomingManifest,

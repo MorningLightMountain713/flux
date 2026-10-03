@@ -15,7 +15,7 @@ const rosterOverlay = require('../quorumGrant/rosterOverlay');
 const networkStateService = require('../networkStateService');
 const { getSpec, assertVersionActivated } = require('../utils/specLibs');
 const { ensureProvidersRegistered } = require('../utils/specCutover');
-const { getStateBeforeHeight } = require('../appDatabase/appSpecHistory');
+const { getStateBeforeHeight, latestAppliedState } = require('../appDatabase/appSpecHistory');
 const appHistory = require('../appDecisions/appHistory');
 const temporaryPoolSweep = require('./temporaryPoolSweep');
 const serviceHelper = require('../serviceHelper');
@@ -219,16 +219,18 @@ async function storeAppTemporaryMessage(message, options = {}) {
     let previousState = null;
     if (!appEvent.isRegistration) {
       // Who this update has to be signed by. A live message is judged against
-      // the app that holds the name NOW — its active registry row. A message
-      // already on chain is a replay: the node is catching up on something the
-      // network accepted at a past height, so it is judged against the state at
-      // that height (isAppRequested is set from the confirming block, so `block`
-      // is that height rather than the tip).
+      // the app that holds the name NOW — its active registry row, or, when the
+      // list carries none, the app that last held the name, so a renewal of an
+      // expired app is taken and relayed. A message already on chain is a
+      // replay: the node is catching up on something the network accepted at a
+      // past height, so it is judged against the state at that height
+      // (isAppRequested is set from the confirming block, so `block` is that
+      // height rather than the tip).
       previousState = isAppRequested
         ? await getStateBeforeHeight(appEvent.spec.name, block)
-        : await appsRepository.getGlobalAppInfo(appEvent.spec.name);
+        : (await appsRepository.getGlobalAppInfo(appEvent.spec.name)) ?? (await latestAppliedState(appEvent.spec.name));
       if (!previousState) {
-        log.info(`Queueing update for ${appEvent.spec.name} - registration not yet stored`);
+        log.info(`Queueing update for ${appEvent.spec.name} - no app of that name is listed or was applied`);
         globalState.queuePendingUpdate(appEvent.spec.name, message, block);
         return false;
       }

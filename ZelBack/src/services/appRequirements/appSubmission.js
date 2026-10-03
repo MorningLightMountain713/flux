@@ -22,6 +22,7 @@ const { ensureProvidersRegistered, resolveInstantiatedSpec } = require('../utils
 const transportHelper = require('../utils/transportHelper');
 const appsRepository = require('../appDatabase/appsRepository');
 const appHistory = require('../appDecisions/appHistory');
+const appSpecHistory = require('../appDatabase/appSpecHistory');
 const entitlementsState = require('../entitlementsState');
 const marketplaceTemplateCache = require('../marketplace/marketplaceTemplateCache');
 const contentBlobService = require('../appLifecycle/contentBlobService');
@@ -409,11 +410,13 @@ async function validateAppUpdate(appSpecification, meta = {}) {
     contentHash, timestamp, type: type || 'fluxappupdate', daemonHeight,
   });
 
-  // The app as it stands now, from its active registry row — the same authority
-  // the submission path itself uses, so a preflight cannot pass an update that
-  // the submission then rejects. An enterprise app's stored spec is sealed and
-  // the invariants compare cleartext, so resolve it first.
-  const appInfo = await appsRepository.getGlobalAppInfo(spec.name);
+  // The app as it stands now: its active registry row, the same authority the
+  // submission path itself uses, so a preflight cannot pass an update that the
+  // submission then rejects; or, when the list carries none, the app that last
+  // held the name, so an expired app is renewed on what it held. An enterprise
+  // app's stored spec is sealed and the invariants compare cleartext, so
+  // resolve it first.
+  const appInfo = (await appsRepository.getGlobalAppInfo(spec.name)) ?? (await appSpecHistory.latestAppliedState(spec.name));
   if (!appInfo) {
     throw new Error(`Flux App ${spec.name} does not exist and cannot be updated`);
   }

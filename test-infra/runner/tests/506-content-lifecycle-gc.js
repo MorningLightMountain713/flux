@@ -22,9 +22,10 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 //                 v1 slot blob (the blob-set complement of the manifest rows).
 //   - the door  → a higher version (v3) is taken and stands; a version below the
 //                 next within the ownership (v2) is refused at the door.
-//   - reaper    → once the app leaves globalappsspecifications, the janitor's
-//                 registry-expiry sweep on the block loop drops the resolved
-//                 manifest rows.
+//   - reaper    → the janitor's sweep drops the resolved manifest rows of an
+//                 identity another registration of its name has displaced, once
+//                 that registration is a reorg cap (40 blocks) deep; the listed
+//                 app's own rows stay.
 // Asserts on the SSE event bus + the appcontentmanifests DB row + the FluxDrive stub
 // state (reconciles, tombstoned blobs), never log scraping. Complements suite 53
 // (which proves onUpdate reactions on the RUNNING node); this suite is install-free —
@@ -48,13 +49,9 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, the versio
 
   before(async function () {
     this.timeout(420000);
-    // contentManifestReapGraceMs: the prod default (2h) would keep test 4's
-    // just-stored manifest un-reapable for the whole suite; 30s still covers this
-    // suite's own register window (manifest stored before the app tx confirms)
-    // while letting the reap land inside test 4's wait as ticker blocks sweep.
     env = await createTestEnv({
       hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true,
-      configOverrides: { fluxapps: { minOutgoing: 2, contentManifestReapGraceMs: 30000 } },
+      configOverrides: { fluxapps: { minOutgoing: 2 } },
     });
     await bootAndPeer(env, { minOutbound: 2, minInbound: 2, pricing: true });
     await pushImage(appName, 'v1');
@@ -234,30 +231,37 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, the versio
     expect((await dbc.getContentManifest(appName)).version).to.equal(3);
   });
 
-  it('the periodic reaper drops a resolved manifest whose app identity no registry row carries', async function () {
+  it('the periodic reaper drops the rows of an identity another registration of the name displaced, and keeps the listed app\'s', async function () {
     this.timeout(300000);
     const node = env.clients[0];
 
-    // Precondition: the resolved v3 manifest is present and the app is in the live set.
+    // Precondition: the listed app's resolved v3 manifest is present.
     const before = await dbc.getContentManifest(appName);
-    expect(before, 'resolved manifest present before removal').to.exist;
+    expect(before, 'resolved manifest present').to.exist;
     expect(before.version).to.equal(3);
     expect(before.signer).to.be.a('string');
     const { identity } = before;
 
-    // Delete the registry row behind the registry's back: the registry deletes an app's
-    // manifests itself when a row leaves, so a row gone any other way is what leaves an
-    // orphan for the reaper — a resolved manifest whose identity no row carries.
-    await dbc.deleteGlobalAppSpec(appName);
+    // A resolved row under the same name for another identity: what a node holds
+    // for an earlier app of the name once this registration displaced it. Seeded,
+    // since an earlier registration of the name would have had to expire first.
+    const displaced = `b${'c'.repeat(52)}`;
+    await dbc.seedContentManifest({
+      appName, version: 5, hash: 'displaced-v5', signer: 'earlierowner', manifest: { appName, identity: displaced, version: 5, ownedFrom: 0, slots: {} },
+    });
+    expect(await dbc.getContentManifestsByIdentity(displaced)).to.have.length(1);
     const afterId = node.getLastEventId();
 
-    // The janitor sweeps orphaned manifests every orphanSweepIntervalMs (120 s in the
-    // harness), past the 30 s reap grace this suite configures.
-    const reaped = await node.waitForEvent('content:manifestReaped', (d) => d.count >= 1, 240000, { afterId });
-    expect(reaped.data.count).to.be.at.least(1);
+    // The registration that displaced it must be a reorg cap deep before the rows
+    // go; the janitor sweeps every orphanSweepIntervalMs (120 s in the harness).
+    await advanceBlocks(41);
+    const reaped = await node.waitForEvent('content:manifestReaped', (d) => d.identities?.includes(displaced), 300000, { afterId });
+    expect(reaped.data.count).to.equal(1);
 
-    // Every manifest row of the orphaned identity is gone.
-    const after = await dbc.getContentManifestsByIdentity(identity);
-    expect(after, 'manifest rows reaped').to.deep.equal([]);
+    expect(await dbc.getContentManifestsByIdentity(displaced), 'the displaced identity\'s rows').to.deep.equal([]);
+    const kept = await dbc.getContentManifest(appName);
+    expect(kept, 'the listed app\'s rows stay').to.exist;
+    expect(kept.identity).to.equal(identity);
+    expect(kept.version).to.equal(3);
   });
 });

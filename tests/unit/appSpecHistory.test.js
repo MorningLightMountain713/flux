@@ -62,4 +62,28 @@ describe('appSpecHistory tests', () => {
       expect(result).to.be.null;
     });
   });
+
+  describe('latestAppliedState', () => {
+    it('returns null when nothing was ever applied for the name', async () => {
+      expect(await appSpecHistory.latestAppliedState('myapp')).to.be.null;
+      sinon.assert.calledOnceWithExactly(appHistoryStub.latestApplied, 'myapp');
+    });
+
+    it('answers the latest applied message at any height, so an expired app is renewed on what it held', async () => {
+      appHistoryStub.latestApplied.resolves(applied('last', { owner: 'ownerB', height: 900 }));
+
+      const result = await appSpecHistory.latestAppliedState('myapp');
+
+      expect(result).to.include({
+        hash: 'last', height: 900, registeredAt: 1_700_000_000, uuid: 'uuid-last', identity: 'myapp', owner: 'ownerB',
+      });
+      sinon.assert.calledOnceWithExactly(appHistoryStub.latestApplied, 'myapp');
+    });
+
+    it('returns null when the spec cannot be resolved on this node', async () => {
+      appHistoryStub.latestApplied.resolves(applied('x'));
+      resolveSpecStub.resolves(null);
+      expect(await appSpecHistory.latestAppliedState('myapp')).to.be.null;
+    });
+  });
 });

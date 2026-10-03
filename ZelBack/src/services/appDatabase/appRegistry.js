@@ -167,13 +167,13 @@ async function writeWithEffects(row, instance, carried) {
 }
 
 /**
- * Deletes what an app keeps beyond its row: its founding record and its content
- * manifests.
+ * Deletes what an app keeps beyond its row: its founding record. Its content
+ * manifests stay: an expired app renews on them, and the content domain reaps
+ * those of an identity another registration of the name has displaced.
  * @param {string} identity
  */
 async function forgetApp(identity) {
   await foundingCommittee.forget(identity);
-  await appsRepository.removeContentManifests(identity);
 }
 
 /**
@@ -208,8 +208,8 @@ async function settle(name, instance, carried = null) {
   const row = instance.serialize();
   let outcome = null;
   if (!live || live.hash !== row.hash || live.name !== row.name) {
-    // Another app under the name keeps nothing of this one; the same app gone
-    // back to an earlier spec keeps only what that spec founded.
+    // Another app under the name keeps nothing this one founded; the same app
+    // gone back to an earlier spec keeps only what that spec founded.
     if (live && live.identity !== row.identity) await forgetApp(live.identity);
     else if (live && row.height < live.height) await foundingCommittee.retract(row.identity, row.height);
     await writeWithEffects(row, instance, carried);
