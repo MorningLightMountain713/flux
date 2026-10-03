@@ -74,6 +74,10 @@ describe('the move onto the identity at the first start of the new code', functi
     node = env.clients[0];
     const registrar = env.clients[1];
     db = dbClient(node.num);
+    // A submission is broadcast only once the node can sign as itself, which its
+    // orchestrator's READY requires; one sent before that is signed by nobody and
+    // sent nowhere, and the door answers that the network could not be reached.
+    await registrar.waitForEvent('orchestrator:stateChanged', (d) => d.to === 'READY', 300000);
 
     const spec = buildAppSpec({
       name: appName,
