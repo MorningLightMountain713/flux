@@ -93,6 +93,13 @@ describe('reconciler run-authority guard', () => {
       // The machine going down: every Flux app container is stopped, and killed
       // if the stop fails, before the process exits (handleSigterm).
       'nodeProcess.js': 2,
+      // The move of an app onto the identity its registration mints, at boot
+      // before the reconciler actuates anything. The container under the app's
+      // former name is one the reconciler never knows by name once the row names
+      // the identity, so the move stops it when the shutdown daemon does not,
+      // and force-removes it when a plain remove leaves it; the container it
+      // creates under the identity is left for the reconciler to start.
+      'appLifecycle/appIdentityMove.js': 2,
     };
     // No `\(` — a bare reference is a mutation too; see the header.
     const call = /\.appDocker(Start|Stop|Restart|Kill|ForceRemove)\b/;

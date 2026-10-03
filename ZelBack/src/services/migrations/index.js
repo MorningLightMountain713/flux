@@ -4,6 +4,7 @@ const log = require('../../lib/log');
 const { untilSucceeds } = require('../utils/untilSucceeds');
 const nodeIdentityMigration = require('../appDatabase/nodeIdentityMigration');
 const containerLabelBackfill = require('../appLifecycle/containerLabelBackfill');
+const appIdentityMove = require('../appLifecycle/appIdentityMove');
 const retiredSchema = require('./retiredSchema');
 const temporaryPoolSweep = require('../appMessaging/temporaryPoolSweep');
 const appsRepository = require('../appDatabase/appsRepository');
@@ -78,6 +79,15 @@ const migrations = [
     mustSucceed: true,
     description: 'record the block position and chain height of app payments recorded without a position',
     run: () => paymentPositions.backfillPaymentPositions(),
+  },
+  {
+    id: 'app-identity',
+    // Before the containers are restamped and before the boot reconcile starts
+    // anything: a moved app's containers are created under the identity, with
+    // their labels, for the reconcile to start.
+    before: 'bootReconcileDecided',
+    description: 'move apps installed under their name onto the identity their registration mints',
+    run: () => appIdentityMove.moveInstalledAppsOntoIdentity(),
   },
   {
     id: 'container-labels',

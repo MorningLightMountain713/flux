@@ -48,12 +48,13 @@ async function hydrate(doc) {
   await getSpec();
   const { InstantiatedSpec } = await getSpecBackend();
 
-  // `replica` is this collection's own key field and `componentIdentifiers` is
-  // this collection's own index, neither part of the spec's wire form. The
-  // encrypted deserializers reject unknown fields outright, so storage fields
-  // are stripped here rather than leaking into the spec layer.
+  // `replica` is this collection's own key field, `componentIdentifiers` is
+  // this collection's own index and `move` is a move onto the identity in
+  // progress, none part of the spec's wire form. The encrypted deserializers
+  // reject unknown fields outright, so storage fields are stripped here rather
+  // than leaking into the spec layer.
   // eslint-disable-next-line no-unused-vars
-  const { replica, componentIdentifiers, ...specDoc } = doc;
+  const { replica, componentIdentifiers, move, ...specDoc } = doc;
 
   try {
     return InstantiatedSpec.deserialize(specDoc);
@@ -977,6 +978,90 @@ async function upsertInstalledIdentity(name, replica, specDoc, componentIdentifi
   );
 }
 
+/**
+ * Every installed row's keys and the facts a move onto the identity reads,
+ * without hydrating the specs: a sealed spec that cannot open yet is still a
+ * row that may need moving.
+ * @returns {Promise<Array<{name: string, replica: string|null, identity: string|null, uuid: string|null, registrationVersion: number|null, hash: string|null, move: object|null}>>}
+ */
+async function listInstalledRows() {
+  const docs = await dbHelper.findInDatabase(
+    localDb(), localAppsInformation, {},
+    {
+      projection: {
+        _id: 0, name: 1, replica: 1, identity: 1, uuid: 1, registrationVersion: 1, hash: 1, move: 1,
+      },
+    },
+  );
+  return docs.map((doc) => ({
+    name: doc.name,
+    replica: doc.replica ?? null,
+    identity: doc.identity ?? null,
+    uuid: doc.uuid ?? null,
+    registrationVersion: doc.registrationVersion ?? null,
+    hash: doc.hash ?? null,
+    move: doc.move ?? null,
+  }));
+}
+
+/**
+ * Records on one identity's row the uuid its registration minted and the
+ * version it was registered with, for a row written before rows carried them.
+ * @param {string} name
+ * @param {string|null} replica
+ * @param {{uuid: string, registrationVersion: number}} registration
+ */
+async function setInstalledRegistration(name, replica, { uuid, registrationVersion }) {
+  if (!uuid || !Number.isInteger(registrationVersion)) {
+    throw new Error('appsRepository.setInstalledRegistration: uuid and registrationVersion required');
+  }
+  return dbHelper.updateOneInDatabase(
+    localDb(), localAppsInformation,
+    { name: nameRegex(name), replica: replicaKey(replica) },
+    { $set: { uuid, registrationVersion } },
+    {},
+  );
+}
+
+/**
+ * The move of one identity's row onto its identity while it is in progress:
+ * the identity it moves to and when it began. Null ends the record.
+ * @param {string} name
+ * @param {string|null} replica
+ * @param {{to: string, since: number}|null} move
+ */
+async function setInstalledMove(name, replica, move) {
+  return dbHelper.updateOneInDatabase(
+    localDb(), localAppsInformation,
+    { name: nameRegex(name), replica: replicaKey(replica) },
+    move ? { $set: { move } } : { $unset: { move: '' } },
+    {},
+  );
+}
+
+/**
+ * Writes the identity one identity's row names its containers, volumes and
+ * network from, with the component identifiers built from it, and ends any
+ * move in progress. The one write that changes a stored identity; every other
+ * write keeps the one it finds (withStoredIdentity).
+ * @param {string} name
+ * @param {string|null} replica
+ * @param {string} identity
+ * @param {string[]} componentIdentifiers
+ */
+async function setInstalledIdentity(name, replica, identity, componentIdentifiers) {
+  if (!identity) throw new Error('appsRepository.setInstalledIdentity: identity required');
+  if (!Array.isArray(componentIdentifiers) || componentIdentifiers.length === 0) {
+    throw new Error('appsRepository.setInstalledIdentity: componentIdentifiers required');
+  }
+  return dbHelper.updateOneInDatabase(
+    localDb(), localAppsInformation,
+    { name: nameRegex(name), replica: replicaKey(replica) },
+    { $set: { identity, componentIdentifiers: [...componentIdentifiers] }, $unset: { move: '' } },
+    {},
+  );
+}
+
 // ── Permanent / Temporary Messages ─────────────────────────────────
 
 async function getAppMessage(hash) {
@@ -1725,6 +1810,10 @@ module.exports = {
   countInstalledIdentities,
   removeInstalledIdentity,
   upsertInstalledIdentity,
+  listInstalledRows,
+  setInstalledRegistration,
+  setInstalledMove,
+  setInstalledIdentity,
   // messages
   getAppMessage,
   getPermanentMessage,

@@ -1,0 +1,550 @@
+'use strict';
+
+const { expect } = require('chai');
+const sinon = require('sinon');
+const proxyquire = require('proxyquire').noCallThru();
+const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
+const { loadSpecLibrary } = require('./fixtures/fluxSpec');
+
+const APPS = '/apps/';
+const UUID = 'ab'.repeat(32);
+const NAME = 'myapp';
+
+describe('appIdentityMove tests', () => {
+  let flux;
+  let IDENTITY;
+  let stubs;
+  let appIdentityMove;
+  // The world the move acts on, as the stubs hold it.
+  let db; // `${name}|${replica}` -> installed row
+  let containers; // docker names present
+  let mounts; // mounted directories
+  let backing; // mounted directory -> the file the kernel mounts there
+  let files; // paths that exist
+  let records; // identifier -> {path, fsUuid}
+  let folders; // syncthing folder id -> {id, path}
+  let calls; // every call that matters, in order
+
+  before(async function loadLibrary() {
+    this.timeout(30_000);
+    flux = await loadSpecLibrary();
+    IDENTITY = flux.appIdentityFromUuid(UUID);
+  });
+
+  const key = (name, replica) => `${name}|${replica ?? ''}`;
+  const record = (what, ...args) => calls.push([what, ...args]);
+  const indexOf = (what, matcher = () => true) => calls.findIndex(([w, ...args]) => w === what && matcher(...args));
+
+  function comp(identity, { stateless = false, syncthing = true, daemonStop = false } = {}) {
+    return {
+      name: NAME,
+      appName: NAME,
+      identity,
+      identifier: `${NAME}_${identity}`,
+      isStateless: stateless,
+      hasSyncthing: () => syncthing,
+      syncFolderId: `flux${NAME}_${NAME}`,
+      qualifiedNetworkAliases: [`${NAME}.${NAME}`],
+      requiresDaemonShutdown: () => daemonStop,
+    };
+  }
+
+  function deployment(identity, compOpts) {
+    const c = comp(identity, compOpts);
+    return {
+      appName: NAME,
+      networkName: `fluxDockerNetwork_${identity}`,
+      linkedApps: [],
+      componentEntries: () => [[NAME, c]],
+      getComponent: () => c,
+    };
+  }
+
+  function installedRow(overrides = {}) {
+    return {
+      name: NAME, replica: null, identity: NAME, hash: 'h1', owner: 'owner', version: 8, uuid: null, registrationVersion: null, ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    db = new Map();
+    containers = new Set();
+    mounts = new Set();
+    backing = new Map();
+    files = new Set();
+    records = new Map();
+    folders = new Map();
+    calls = [];
+    let compOpts = {};
+
+    stubs = {
+      compOpts: (o) => { compOpts = o; },
+      log: { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
+      appsRepository: {
+        listInstalledRows: async () => [...db.values()].map((row) => ({
+          name: row.name, replica: row.replica, identity: row.identity, uuid: row.uuid, registrationVersion: row.registrationVersion, hash: row.hash, move: row.move ?? null,
+        })),
+        getInstalledIdentity: async (name, replica) => {
+          record('getInstalledIdentity', name, replica);
+          const row = db.get(key(name, replica));
+          return row ? { ...row } : null;
+        },
+        setInstalledRegistration: async (name, replica, registration) => {
+          record('setInstalledRegistration', name, replica, registration);
+          Object.assign(db.get(key(name, replica)), registration);
+        },
+        setInstalledMove: async (name, replica, move) => {
+          record('setInstalledMove', name, replica, move);
+          const row = db.get(key(name, replica));
+          if (move) row.move = move; else delete row.move;
+        },
+        setInstalledIdentity: async (name, replica, identity, componentIdentifiers) => {
+          record('setInstalledIdentity', name, replica, identity, componentIdentifiers);
+          const row = db.get(key(name, replica));
+          row.identity = identity;
+          row.componentIdentifiers = componentIdentifiers;
+          delete row.move;
+        },
+      },
+      appHistory: { appliedMessages: sinon.stub().resolves([{ message: {}, decision: { hash: 'h1', uuid: UUID, registrationVersion: 8 } }]) },
+      deploymentProvider: {
+        buildDeployment: async (installed, opts) => {
+          record('buildDeployment', installed.identity, opts);
+          return deployment(opts.identity ?? installed.identity, compOpts);
+        },
+      },
+      dockerService: {
+        getDockerContainer: async (name) => (containers.has(name) ? { name } : null),
+        appDockerStop: async (name) => { record('appDockerStop', name); },
+        appDockerRemove: async (name) => { record('appDockerRemove', name); containers.delete(name); },
+        appDockerForceRemove: async (name) => { record('appDockerForceRemove', name); containers.delete(name); },
+        removeFluxAppDockerNetwork: async (name) => { record('removeFluxAppDockerNetwork', name); },
+      },
+      volumeService: {
+        isPathMounted: async (dir) => mounts.has(dir),
+        mountedImagePath: async (dir) => backing.get(dir) ?? null,
+        imageFsUuid: async () => 'uuid-probed',
+        getVolumeFilePath: async (named) => {
+          const candidate = `/vol/${named}FLUXFSVOL`;
+          return files.has(candidate) ? { path: candidate, conclusive: true, blocked: null } : { path: null, conclusive: true, blocked: null };
+        },
+        recordNewVolumeImage: async (identifier, imagePath, fsUuid) => {
+          record('recordNewVolumeImage', identifier, imagePath, fsUuid);
+          records.set(identifier, { path: imagePath, fsUuid });
+        },
+        ensureAppVolumeMounted: async (identifier) => {
+          record('ensureAppVolumeMounted', identifier);
+          return { mounted: true };
+        },
+      },
+      appsRuntimeState: {
+        rekey: async (from, to) => { record('rekey', from, to); return true; },
+        getVolumeImage: async (identifier) => records.get(identifier) ?? null,
+      },
+      appInspector: { stopAppMonitoring: (identifier, drop) => record('stopAppMonitoring', identifier, drop) },
+      syncthingService: {
+        getConfigFolders: async (id) => {
+          if (!folders.has(id)) throw Object.assign(new Error('not found'), { httpStatus: 404 });
+          return folders.get(id);
+        },
+        adjustConfigFolders: async (options) => { record('adjustConfigFolders', options); },
+      },
+      appDockerNetwork: { ensureAppDockerNetwork: async (name, options) => { record('ensureAppDockerNetwork', name, options); } },
+      componentProvisioner: {
+        installComponent: async (component, options) => {
+          record('installComponent', component.identifier, options, operationRegistry.isHeld(NAME));
+        },
+      },
+      appNetworkLinker: { connectComponentToLinkedApps: async (identifier, dep, aliases) => { record('connectComponentToLinkedApps', identifier, aliases); } },
+      appOperations: { requestComponentDaemonStop: sinon.stub().resolves(false) },
+      shutdownPlan: { appRequiresDaemonShutdown: sinon.stub().returns(false), buildShutdownPlan: sinon.stub().returns({ plan: true }) },
+      fluxShutdowndClient: { upsertAppPlanBestEffort: sinon.stub().resolves() },
+      serviceHelper: {
+        runCommand: async (command, { params }) => {
+          record(command, ...params);
+          if (command === 'umount') mounts.delete(params[0]);
+          if (command === 'mv') { files.delete(params[0]); files.add(params[1]); }
+          return { error: null };
+        },
+      },
+      fluxEventBus: { publish: sinon.stub() },
+      specLibs: { getSpec: async () => ({ isAppIdentity: flux.isAppIdentity, appIdentityFromUuid: flux.appIdentityFromUuid }) },
+      fs: { access: async (p) => { if (!files.has(p)) throw new Error(`ENOENT ${p}`); } },
+    };
+
+    appIdentityMove = proxyquire('../../ZelBack/src/services/appLifecycle/appIdentityMove', {
+      'node:fs/promises': stubs.fs,
+      '../appDatabase/appsRepository': stubs.appsRepository,
+      '../appDecisions/appHistory': stubs.appHistory,
+      '../appRuntime/deploymentProvider': stubs.deploymentProvider,
+      '../dockerService': stubs.dockerService,
+      '../utils/volumeService': stubs.volumeService,
+      '../appManagement/appsRuntimeState': stubs.appsRuntimeState,
+      '../appManagement/appInspector': stubs.appInspector,
+      '../syncthingService': stubs.syncthingService,
+      '../appNetwork/appDockerNetwork': stubs.appDockerNetwork,
+      './componentProvisioner': stubs.componentProvisioner,
+      './appNetworkLinker': stubs.appNetworkLinker,
+      './appOperations': stubs.appOperations,
+      './shutdownPlan': stubs.shutdownPlan,
+      '../utils/fluxShutdowndClient': stubs.fluxShutdowndClient,
+      '../utils/operationRegistry': operationRegistry,
+      '../serviceHelper': stubs.serviceHelper,
+      '../utils/fluxEventBus': stubs.fluxEventBus,
+      '../utils/specLibs': stubs.specLibs,
+      '../utils/appConstants': { appsFolder: APPS },
+      '../../lib/log': stubs.log,
+    });
+  });
+
+  afterEach(() => {
+    operationRegistry.clear();
+    sinon.restore();
+  });
+
+  // One app under its name, running under its 8.x container name on a mounted volume.
+  function seedRunningUnderName(overrides = {}) {
+    db.set(key(NAME, null), installedRow(overrides));
+    containers.add(`flux${NAME}_${NAME}`);
+    mounts.add(`${APPS}${NAME}_${NAME}`);
+    backing.set(`${APPS}${NAME}_${NAME}`, `/vol/flux${NAME}_${NAME}FLUXFSVOL`);
+    files.add(`/vol/flux${NAME}_${NAME}FLUXFSVOL`);
+    files.add(`${APPS}${NAME}_${NAME}`);
+    folders.set(`flux${NAME}_${NAME}`, { id: `flux${NAME}_${NAME}`, path: `${APPS}${NAME}_${NAME}` });
+  }
+
+  describe('which rows move', () => {
+    it('leaves a row already on its identity alone', async () => {
+      db.set(key(NAME, null), installedRow({ identity: IDENTITY, uuid: UUID, registrationVersion: 8 }));
+
+      const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(results).to.deep.equal({ moved: [], skipped: [], failed: [] });
+      expect(indexOf('getInstalledIdentity')).to.equal(-1);
+    });
+
+    it('reads the uuid and version off the applied decision of the row\'s message and records them on the row', async () => {
+      seedRunningUnderName();
+
+      const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(results.moved).to.deep.equal([{ name: NAME, replica: null, to: IDENTITY }]);
+      expect(calls[indexOf('setInstalledRegistration')].slice(1)).to.deep.equal([NAME, null, { uuid: UUID, registrationVersion: 8, fromRow: false }]);
+      expect(flux.isAppIdentity(IDENTITY)).to.equal(true);
+    });
+
+    it('takes them off the row when it carries them', async () => {
+      seedRunningUnderName({ uuid: UUID, registrationVersion: 8 });
+
+      const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(results.moved).to.have.lengthOf(1);
+      expect(stubs.appHistory.appliedMessages.called).to.equal(false);
+      expect(indexOf('setInstalledRegistration')).to.equal(-1);
+    });
+
+    it('skips a row whose message no applied decision names, touching nothing', async () => {
+      seedRunningUnderName();
+      stubs.appHistory.appliedMessages.resolves([{ message: {}, decision: { hash: 'other', uuid: UUID, registrationVersion: 8 } }]);
+
+      const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(results.skipped).to.deep.equal([{ name: NAME, replica: null, reason: 'no applied decision names its uuid' }]);
+      expect(containers.has(`flux${NAME}_${NAME}`), 'the container is left').to.equal(true);
+      expect(db.get(key(NAME, null)).identity).to.equal(NAME);
+    });
+
+    it('refuses an app another operation holds, and holds nothing itself afterwards', async () => {
+      seedRunningUnderName({ uuid: UUID, registrationVersion: 8 });
+      const token = operationRegistry.acquire(NAME, 'install', 'test');
+
+      const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(results.skipped).to.deep.equal([{ name: NAME, replica: null, reason: 'held by another operation' }]);
+      expect(containers.has(`flux${NAME}_${NAME}`)).to.equal(true);
+      operationRegistry.release(NAME, token);
+      expect(operationRegistry.isHeld(NAME)).to.equal(false);
+    });
+
+    it('moves each replica\'s row on its own', async () => {
+      db.set(key(NAME, 'r1'), installedRow({ replica: 'r1', uuid: UUID, registrationVersion: 8 }));
+
+      const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(results.moved).to.deep.equal([{ name: NAME, replica: 'r1', to: IDENTITY }]);
+      expect(calls[indexOf('buildDeployment')].slice(1)).to.deep.equal([NAME, { replica: 'r1' }]);
+      expect(calls[indexOf('buildDeployment', (id, o) => o.identity)].slice(1)).to.deep.equal([NAME, { replica: 'r1', identity: IDENTITY }]);
+    });
+  });
+
+  describe('the former container', () => {
+    it('is stopped locally when its shutdown does not go through the daemon, removed under its 8.x name, and its monitoring dropped', async () => {
+      seedRunningUnderName();
+
+      await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(calls[indexOf('stopAppMonitoring')].slice(1)).to.deep.equal([`${NAME}_${NAME}`, true]);
+      expect(calls[indexOf('appDockerStop')].slice(1)).to.deep.equal([`flux${NAME}_${NAME}`]);
+      expect(calls[indexOf('appDockerRemove')].slice(1)).to.deep.equal([`flux${NAME}_${NAME}`]);
+      expect(containers.size).to.equal(0);
+    });
+
+    it('is stopped through the shutdown daemon when its shutdown does', async () => {
+      seedRunningUnderName();
+      stubs.appOperations.requestComponentDaemonStop.resolves(true);
+
+      await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(stubs.appOperations.requestComponentDaemonStop.firstCall.args.slice(0, 3)).to.deep.equal(['owner', NAME, null]);
+      expect(indexOf('appDockerStop')).to.equal(-1);
+      expect(indexOf('appDockerRemove')).to.be.greaterThan(-1);
+    });
+
+    it('is removed under the zel name and under the bare identifier as well', async () => {
+      seedRunningUnderName();
+      containers.clear();
+      containers.add(`zel${NAME}_${NAME}`);
+      containers.add(`${NAME}_${NAME}`);
+
+      await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(calls.filter(([w]) => w === 'appDockerRemove').map(([, n]) => n)).to.deep.equal([`zel${NAME}_${NAME}`, `${NAME}_${NAME}`]);
+      expect(containers.size).to.equal(0);
+    });
+
+    it('is force-removed when it stays, and the move fails when it still stays', async () => {
+      seedRunningUnderName();
+      stubs.dockerService.appDockerRemove = async (name) => { record('appDockerRemove', name); };
+
+      let results = await appIdentityMove.moveInstalledAppsOntoIdentity();
+      expect(indexOf('appDockerForceRemove')).to.be.greaterThan(indexOf('appDockerRemove'));
+      expect(results.moved).to.have.lengthOf(1);
+
+      calls = [];
+      seedRunningUnderName();
+      stubs.dockerService.appDockerForceRemove = async (name) => { record('appDockerForceRemove', name); };
+      results = await appIdentityMove.moveInstalledAppsOntoIdentity();
+      expect(results.failed).to.have.lengthOf(1);
+      expect(results.failed[0].error).to.match(/still present/);
+    });
+
+    it('a former container that is not there is a step already taken', async () => {
+      seedRunningUnderName();
+      containers.clear();
+
+      const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(results.moved).to.have.lengthOf(1);
+      expect(indexOf('appDockerRemove')).to.equal(-1);
+    });
+  });
+
+  describe('the volume', () => {
+    it('is unmounted, its image renamed from the file the kernel mounts and recorded with its stamp, its directory renamed, and mounted under the identity', async () => {
+      seedRunningUnderName();
+      records.set(`${NAME}_${NAME}`, { path: `/vol/flux${NAME}_${NAME}FLUXFSVOL`, fsUuid: 'uuid-recorded' });
+
+      await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      const newIdentifier = `${NAME}_${IDENTITY}`;
+      const umount = indexOf('umount');
+      const mvImage = indexOf('mv', (from) => from.startsWith('/vol/'));
+      const mvDir = indexOf('mv', (from) => from.startsWith(APPS));
+      expect(calls[umount].slice(1)).to.deep.equal([`${APPS}${NAME}_${NAME}`]);
+      expect(calls[mvImage].slice(1)).to.deep.equal([`/vol/flux${NAME}_${NAME}FLUXFSVOL`, `/vol/${newIdentifier}FLUXFSVOL`]);
+      expect(umount, 'unmounted before the image moves').to.be.lessThan(mvImage);
+      expect(calls[indexOf('recordNewVolumeImage')].slice(1)).to.deep.equal([newIdentifier, `/vol/${newIdentifier}FLUXFSVOL`, 'uuid-recorded']);
+      expect(calls[indexOf('chattr')].slice(1)).to.deep.equal(['-i', `${APPS}${NAME}_${NAME}`]);
+      expect(calls[mvDir].slice(1)).to.deep.equal([`${APPS}${NAME}_${NAME}`, `${APPS}${newIdentifier}`]);
+      expect(indexOf('chattr')).to.be.lessThan(mvDir);
+      expect(calls[indexOf('ensureAppVolumeMounted')].slice(1)).to.deep.equal([newIdentifier]);
+      expect(indexOf('ensureAppVolumeMounted')).to.be.greaterThan(mvDir);
+      expect(indexOf('cp'), 'nothing is copied').to.equal(-1);
+    });
+
+    it('finds the image by the record, then by its 8.x filename, then by its bare one, when nothing is mounted', async () => {
+      const newIdentifier = `${NAME}_${IDENTITY}`;
+      const cases = [
+        { name: 'record', setup: () => { records.set(`${NAME}_${NAME}`, { path: '/elsewhere/img', fsUuid: 'u' }); files.add('/elsewhere/img'); }, from: '/elsewhere/img', to: `/elsewhere/${newIdentifier}FLUXFSVOL`, stamp: 'u' },
+        { name: '8.x filename', setup: () => { files.add(`/vol/flux${NAME}_${NAME}FLUXFSVOL`); }, from: `/vol/flux${NAME}_${NAME}FLUXFSVOL`, to: `/vol/${newIdentifier}FLUXFSVOL`, stamp: 'uuid-probed' },
+        { name: 'bare filename', setup: () => { files.add(`/vol/${NAME}_${NAME}FLUXFSVOL`); }, from: `/vol/${NAME}_${NAME}FLUXFSVOL`, to: `/vol/${newIdentifier}FLUXFSVOL`, stamp: 'uuid-probed' },
+      ];
+      // eslint-disable-next-line no-restricted-syntax
+      for (const c of cases) {
+        db.clear(); files.clear(); records.clear(); calls = []; containers.clear(); mounts.clear();
+        db.set(key(NAME, null), installedRow({ uuid: UUID, registrationVersion: 8 }));
+        c.setup();
+        // eslint-disable-next-line no-await-in-loop
+        const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
+        expect(results.moved, c.name).to.have.lengthOf(1);
+        expect(indexOf('umount'), `${c.name}: nothing to unmount`).to.equal(-1);
+        expect(calls[indexOf('mv')].slice(1), c.name).to.deep.equal([c.from, c.to]);
+        expect(calls[indexOf('recordNewVolumeImage')].slice(1), c.name).to.deep.equal([newIdentifier, c.to, c.stamp]);
+      }
+    });
+
+    it('rekeys the runtime state before the image is recorded, so the record outranks a carried path', async () => {
+      seedRunningUnderName();
+
+      await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(calls[indexOf('rekey')].slice(1)).to.deep.equal([`${NAME}_${NAME}`, `${NAME}_${IDENTITY}`]);
+      expect(indexOf('rekey')).to.be.lessThan(indexOf('recordNewVolumeImage'));
+    });
+
+    it('records and mounts an image already in place without renaming it', async () => {
+      const newIdentifier = `${NAME}_${IDENTITY}`;
+      db.set(key(NAME, null), installedRow({ uuid: UUID, registrationVersion: 8 }));
+      records.set(newIdentifier, { path: `/vol/${newIdentifier}FLUXFSVOL`, fsUuid: 'u' });
+      files.add(`/vol/${newIdentifier}FLUXFSVOL`);
+      files.add(`${APPS}${newIdentifier}`);
+
+      const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(results.moved).to.have.lengthOf(1);
+      expect(indexOf('mv')).to.equal(-1);
+      expect(calls[indexOf('recordNewVolumeImage')].slice(1)).to.deep.equal([newIdentifier, `/vol/${newIdentifier}FLUXFSVOL`, 'u']);
+      expect(indexOf('ensureAppVolumeMounted')).to.be.greaterThan(-1);
+    });
+
+    it('a stateless component moves no volume and keeps its runtime state', async () => {
+      seedRunningUnderName();
+      stubs.compOpts({ stateless: true, syncthing: false });
+
+      const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(results.moved).to.have.lengthOf(1);
+      expect(indexOf('umount')).to.equal(-1);
+      expect(indexOf('mv')).to.equal(-1);
+      expect(indexOf('ensureAppVolumeMounted')).to.equal(-1);
+      expect(indexOf('rekey')).to.be.greaterThan(-1);
+    });
+
+    it('fails the app when the volume will not mount under the identity, leaving the move on the row', async () => {
+      seedRunningUnderName();
+      stubs.volumeService.ensureAppVolumeMounted = async () => ({ mounted: false, reason: 'volume_image_unrecognised' });
+
+      const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(results.failed).to.have.lengthOf(1);
+      expect(results.failed[0].error).to.match(/volume_image_unrecognised/);
+      expect(db.get(key(NAME, null)).identity).to.equal(NAME);
+      expect(db.get(key(NAME, null)).move.to).to.equal(IDENTITY);
+      expect(operationRegistry.isHeld(NAME), 'the lease is released').to.equal(false);
+    });
+  });
+
+  describe('the syncthing folder', () => {
+    it('keeps its id and is pointed at the directory the identity names', async () => {
+      seedRunningUnderName();
+
+      await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(calls[indexOf('adjustConfigFolders')][1]).to.deep.equal({
+        method: 'patch', id: `flux${NAME}_${NAME}`, config: { path: `${APPS}${NAME}_${IDENTITY}` },
+      });
+    });
+
+    it('is left alone when syncthing does not hold it, or already has the path', async () => {
+      seedRunningUnderName();
+      folders.clear();
+      await appIdentityMove.moveInstalledAppsOntoIdentity();
+      expect(indexOf('adjustConfigFolders')).to.equal(-1);
+
+      calls = [];
+      seedRunningUnderName();
+      folders.set(`flux${NAME}_${NAME}`, { id: `flux${NAME}_${NAME}`, path: `${APPS}${NAME}_${IDENTITY}` });
+      await appIdentityMove.moveInstalledAppsOntoIdentity();
+      expect(indexOf('adjustConfigFolders')).to.equal(-1);
+    });
+
+    it('costs the move nothing when syncthing cannot answer', async () => {
+      seedRunningUnderName();
+      stubs.syncthingService.getConfigFolders = async () => { throw new Error('ECONNREFUSED'); };
+
+      const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(results.moved).to.have.lengthOf(1);
+    });
+  });
+
+  describe('the row, the network and the recreate', () => {
+    it('records the move before anything goes, and names the identity with its component identifiers before the containers are recreated', async () => {
+      seedRunningUnderName();
+
+      await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      const newIdentifier = `${NAME}_${IDENTITY}`;
+      expect(calls[indexOf('setInstalledMove')][3].to).to.equal(IDENTITY);
+      expect(indexOf('setInstalledMove')).to.be.lessThan(indexOf('appDockerRemove'));
+      expect(calls[indexOf('setInstalledIdentity')].slice(1)).to.deep.equal([NAME, null, IDENTITY, [newIdentifier]]);
+      expect(indexOf('setInstalledIdentity')).to.be.lessThan(indexOf('installComponent'));
+      expect(db.get(key(NAME, null)).move, 'the move record is cleared').to.equal(undefined);
+    });
+
+    it('recreates each container on its kept volume, under the lease, and attaches the linked networks', async () => {
+      seedRunningUnderName();
+
+      await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      const newIdentifier = `${NAME}_${IDENTITY}`;
+      const [, identifier, options, heldDuring] = calls[indexOf('installComponent')];
+      expect(identifier).to.equal(newIdentifier);
+      expect(options).to.deep.include({
+        createVolumes: false, skipPorts: true, allowLocalImageFallback: true, owner: 'owner', uuid: UUID, specVersion: 8,
+      });
+      expect(heldDuring, 'the app is leased while its containers are recreated').to.equal(true);
+      expect(calls[indexOf('buildDeployment', (id, o) => id === IDENTITY && !o.identity)].slice(1), 'the recreate builds from the row the identity is on').to.deep.equal([IDENTITY, { replica: null }]);
+      expect(calls[indexOf('connectComponentToLinkedApps')].slice(1)).to.deep.equal([newIdentifier, [`${NAME}.${NAME}`]]);
+      expect(operationRegistry.isHeld(NAME)).to.equal(false);
+      expect(stubs.fluxShutdowndClient.upsertAppPlanBestEffort.called).to.equal(false);
+    });
+
+    it('hands the shutdown daemon the plan when the app needs one', async () => {
+      seedRunningUnderName();
+      stubs.shutdownPlan.appRequiresDaemonShutdown.returns(true);
+
+      await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(stubs.fluxShutdowndClient.upsertAppPlanBestEffort.calledOnceWith({ plan: true })).to.equal(true);
+      expect(calls[indexOf('installComponent')][2].requiresEncryption).to.equal(true);
+    });
+
+    it('makes the network under the identity before the row flips, and removes the one named by the name once the containers are recreated', async () => {
+      seedRunningUnderName();
+
+      await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(calls[indexOf('ensureAppDockerNetwork')].slice(1)).to.deep.equal([NAME, { networkName: `fluxDockerNetwork_${IDENTITY}` }]);
+      expect(indexOf('ensureAppDockerNetwork')).to.be.lessThan(indexOf('setInstalledIdentity'));
+      expect(calls[indexOf('removeFluxAppDockerNetwork')].slice(1)).to.deep.equal([NAME]);
+      expect(indexOf('removeFluxAppDockerNetwork')).to.be.greaterThan(indexOf('installComponent'));
+    });
+
+    it('publishes the move', async () => {
+      seedRunningUnderName();
+
+      await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(stubs.fluxEventBus.publish.calledOnceWith('app:movedOntoIdentity', {
+        name: NAME, replica: null, from: NAME, to: IDENTITY,
+      })).to.equal(true);
+    });
+
+    it('moves the next app when one fails', async () => {
+      seedRunningUnderName();
+      db.set(key('other', null), installedRow({ name: 'other', hash: 'h2', uuid: 'cd'.repeat(32), registrationVersion: 8 }));
+      stubs.volumeService.ensureAppVolumeMounted = async (identifier) => {
+        record('ensureAppVolumeMounted', identifier);
+        return identifier.startsWith(`${NAME}_`) ? { mounted: false, reason: 'nope' } : { mounted: true };
+      };
+
+      const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(results.failed.map((f) => f.name)).to.deep.equal([NAME]);
+      expect(results.moved.map((m) => m.name)).to.deep.equal(['other']);
+      expect(operationRegistry.isHeld(NAME)).to.equal(false);
+      expect(operationRegistry.isHeld('other')).to.equal(false);
+    });
+  });
+});
