@@ -2,11 +2,12 @@
 
 const { expect } = require('chai');
 const sinon = require('sinon');
+const proxyquire = require('proxyquire').noCallThru();
 const { EventEmitter } = require('events');
 
 const handlerA = sinon.stub();
 const handlerB = sinon.stub();
-const routes = { '/ws/flux/:port': handlerA, '/ws/flux': handlerA, '/ws/testendpoint': handlerB };
+const routes = { '/ws/flux/:port': handlerA, '/ws/testendpoint': handlerB };
 
 const socketServer = require('../../ZelBack/src/lib/socketServer');
 const socketHandlersModule = require('../../ZelBack/src/lib/socketHandlers');
@@ -25,9 +26,9 @@ describe('FluxSocketServer tests', () => {
   });
 
   it('should call the correct handler for the supplied route', () => {
-    const testUrls = ['/ws/flux/3333/', '/ws/flux/', '/ws/testendpoint'];
-    const testHandlers = [handlerA, handlerA, handlerB];
-    const testParams = [['3333'], [], []];
+    const testUrls = ['/ws/flux/3333/', '/ws/testendpoint'];
+    const testHandlers = [handlerA, handlerB];
+    const testParams = [['3333'], []];
 
     const server = new socketServer.FluxWebsocketServer({ routes });
     const fakeRequest = { headers: {}, url: '/test' };
@@ -156,7 +157,7 @@ describe('FluxSocketServer tests', () => {
     const headersOf = () => {
       const server = new socketServer.FluxWebsocketServer({ routes });
       const headers = [];
-      server.wsServer.emit('headers', headers, { headers: {}, url: '/ws/flux' });
+      server.wsServer.emit('headers', headers, { headers: {}, url: '/ws/flux/16127' });
       return headers;
     };
 
@@ -173,6 +174,35 @@ describe('FluxSocketServer tests', () => {
 
       expect(capabilities.split(':')[1].split(',').map((c) => c.trim()))
         .to.include('appStateSync');
+    });
+  });
+
+  describe('an inbound peer reaches the peer manager with what it dialled', () => {
+    function handlersWith(validateAndAddInbound) {
+      return proxyquire('../../ZelBack/src/lib/socketHandlers', {
+        './moduleLoader': {
+          load: (name) => (name === 'services/utils/peerState' ? { peerManager: { validateAndAddInbound, acceptingConnections: true } } : {}),
+          lazyFunction: () => () => {},
+        },
+      }).socketHandlers;
+    }
+
+    it('the port route hands the socket, the port the route carried and the upgrade request, in that order', () => {
+      const validateAndAddInbound = sinon.stub();
+      const ws = { close: sinon.stub() };
+      const request = { headers: {}, socket: { remoteAddress: '10.0.0.1' } };
+      handlersWith(validateAndAddInbound)['/ws/flux/:port'](ws, '16127', request);
+      sinon.assert.calledOnceWithExactly(validateAndAddInbound, ws, '16127', request);
+    });
+
+    // A node running FluxOS before the port route existed, and development's
+    // network health probe, dial the bare route.
+    it('the bare route hands the socket, the default API port and the upgrade request', () => {
+      const validateAndAddInbound = sinon.stub();
+      const ws = { close: sinon.stub() };
+      const request = { headers: {}, socket: { remoteAddress: '10.0.0.1' } };
+      handlersWith(validateAndAddInbound)['/ws/flux'](ws, request);
+      sinon.assert.calledOnceWithExactly(validateAndAddInbound, ws, '16127', request);
     });
   });
 
@@ -205,16 +235,14 @@ describe('FluxSocketServer tests', () => {
     it('refuses a peer upgrade while the node is not accepting connections', () => {
       const admitUpgrade = load(false);
 
-      expect(admitUpgrade({ url: '/ws/flux' })).to.deep.equal({
+      expect(admitUpgrade({ url: '/ws/flux/16127' })).to.deep.equal({
         status: 503, message: 'Service Unavailable', reason: 'node-not-accepting-connections',
       });
-      expect(admitUpgrade({ url: '/ws/flux/16127' })).to.not.equal(null);
     });
 
     it('admits a peer upgrade once the node is accepting connections', () => {
       const admitUpgrade = load(true);
 
-      expect(admitUpgrade({ url: '/ws/flux' })).to.equal(null);
       expect(admitUpgrade({ url: '/ws/flux/16127' })).to.equal(null);
     });
 

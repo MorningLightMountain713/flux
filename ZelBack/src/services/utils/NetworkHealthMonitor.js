@@ -1,6 +1,5 @@
 'use strict';
 
-const WebSocket = require('ws');
 const log = require('../../lib/log');
 const { CLOSE_CODES } = require('./FluxPeerSocket');
 const networkStateService = require('../networkStateService');
@@ -13,7 +12,6 @@ const VELOCITY_WINDOW_MS = 60 * 1000;
 const MIN_CONNECTION_AGE_MS = 30 * 1000;
 const STEADY_STATE_DELAY_MS = 120 * 1000;
 const DIAGNOSIS_PING_TIMEOUT_MS = 2000;
-const PROBE_CONNECT_TIMEOUT_MS = 5000;
 const DIAGNOSIS_COOLDOWN_MS = 30 * 1000;
 const PROBE_PEER_COUNT = 3;
 const DIAGNOSIS_HISTORY_SIZE = 50;
@@ -44,6 +42,9 @@ class NetworkHealthMonitor {
   /** @type {import('./FluxPeerManager').FluxPeerManager|null} */
   #peerManager = null;
 
+  /** @type {((socketAddress: string) => Promise<import('./FluxPeerSocket').FluxPeerSocket|null>)|null} */
+  #openEphemeralConnection = null;
+
   // Velocity ring buffer — just timestamps
   #disconnectTimes = new Array(VELOCITY_BUFFER_SIZE);
   #velocityIndex = 0;
@@ -68,6 +69,15 @@ class NetworkHealthMonitor {
 
   setPeerManager(pm) {
     this.#peerManager = pm;
+  }
+
+  /**
+   * The dialler the known-good probe uses: a transient connection that never
+   * registers a peer.
+   * @param {(socketAddress: string) => Promise<import('./FluxPeerSocket').FluxPeerSocket|null>} open
+   */
+  setEphemeralDialer(open) {
+    this.#openEphemeralConnection = open;
   }
 
   // --- Recording ---
@@ -286,36 +296,20 @@ class NetworkHealthMonitor {
 
   /**
    * Try fresh outbound connections to known-good peers we're not currently connected to.
-   * Lightweight probes — connect, wait for open, close immediately.
+   * A peer counts as reached once its transient connection opens; it is closed at once.
    * @returns {Promise<{attempted: number, succeeded: number, targets: string[]}>}
    */
   async #probeKnownGoodPeers() {
     const targets = await this.#getProbeTargets();
     const attempted = targets.length;
-    if (attempted === 0) return { attempted: 0, succeeded: 0, targets: [] };
+    if (attempted === 0 || !this.#openEphemeralConnection) return { attempted, succeeded: 0, targets };
 
-    const results = await Promise.allSettled(targets.map((target) => new Promise((resolve) => {
-      try {
-        const ws = new WebSocket(`ws://${target}/ws/flux`, {
-          handshakeTimeout: PROBE_CONNECT_TIMEOUT_MS,
-        });
-        const timer = setTimeout(() => {
-          try { ws.close(); } catch (_) { /* noop */ }
-          resolve(false);
-        }, PROBE_CONNECT_TIMEOUT_MS);
-        ws.onopen = () => {
-          clearTimeout(timer);
-          try { ws.close(); } catch (_) { /* noop */ }
-          resolve(true);
-        };
-        ws.onerror = () => {
-          clearTimeout(timer);
-          resolve(false);
-        };
-      } catch (_e) {
-        resolve(false);
-      }
-    })));
+    const results = await Promise.allSettled(targets.map(async (target) => {
+      const peer = await this.#openEphemeralConnection(target);
+      if (!peer) return false;
+      try { peer.close(); } catch (_) { /* already gone */ }
+      return true;
+    }));
 
     const succeeded = results.filter((r) => r.status === 'fulfilled' && r.value === true).length;
     return { attempted, succeeded, targets };
