@@ -815,7 +815,14 @@ async function migrateZelAppSpecifications(databaseGlobal) {
   if (result.modifiedCount > 0) {
     log.info(`Migrated ${result.modifiedCount} records from zelAppSpecifications to appSpecifications`);
   }
-  const existingIndexes = await col.indexes();
+  let existingIndexes;
+  try {
+    existingIndexes = await col.indexes();
+  } catch (error) {
+    // A node that has never stored an app message has no collection and nothing to migrate.
+    if (error?.codeName === 'NamespaceNotFound' || error?.code === 26) return;
+    throw error;
+  }
   const legacyIndexNames = [
     'query for getting zelapp message based on zelapp specs name',
     'query for getting zelapp message based on zelapp specs owner',
@@ -1519,8 +1526,7 @@ async function initiateBlockProcessor(options = {}) {
     await cleanupDuplicateScannedHeight(database);
 
     if (!zelAppSpecsMigrationDone) {
-      // Wrapped so a malformed or fresh-sync DB (e.g. col.indexes() on a
-      // not-yet-created collection) can't stall block-processor init.
+      // Wrapped so a malformed DB can't stall block-processor init.
       try {
         const globalDb = db.db(config.get('database.appsglobal.database'));
         await migrateZelAppSpecifications(globalDb);
@@ -1889,6 +1895,7 @@ function getAddressFusionCoinbase(_req, res) {
 module.exports = {
   // exported for tests
   pushedTip: () => pushedTipHeight,
+  migrateZelAppSpecifications,
   initiateBlockProcessor,
   processOneBlock,
   reindexExplorer,

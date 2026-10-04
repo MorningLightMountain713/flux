@@ -1967,4 +1967,47 @@ describe('explorerService tests', () => {
       await fresh.stopScanning();
     });
   });
+
+  describe('migrateZelAppSpecifications', () => {
+    const globalDbWith = (col) => ({ collection: () => col });
+
+    it('finds nothing to migrate on a node that has never stored an app message', async () => {
+      const missing = Object.assign(new Error('ns does not exist: node01_globalzelapps.zelappsmessages'), { codeName: 'NamespaceNotFound', code: 26 });
+      const col = {
+        updateMany: sinon.stub().resolves({ modifiedCount: 0 }),
+        indexes: sinon.stub().rejects(missing),
+        dropIndex: sinon.stub(),
+      };
+
+      await explorerService.migrateZelAppSpecifications(globalDbWith(col));
+
+      sinon.assert.calledOnce(col.indexes);
+      sinon.assert.notCalled(col.dropIndex);
+    });
+
+    it('still fails on any other error reading the indexes', async () => {
+      const col = {
+        updateMany: sinon.stub().resolves({ modifiedCount: 0 }),
+        indexes: sinon.stub().rejects(Object.assign(new Error('not authorized'), { codeName: 'Unauthorized', code: 13 })),
+        dropIndex: sinon.stub(),
+      };
+
+      let thrown = null;
+      await explorerService.migrateZelAppSpecifications(globalDbWith(col)).catch((error) => { thrown = error; });
+
+      expect(thrown?.message).to.equal('not authorized');
+    });
+
+    it('drops the legacy indexes of a collection that has them', async () => {
+      const col = {
+        updateMany: sinon.stub().resolves({ modifiedCount: 0 }),
+        indexes: sinon.stub().resolves([{ name: '_id_' }, { name: 'query for getting zelapp message based on image' }]),
+        dropIndex: sinon.stub().resolves(),
+      };
+
+      await explorerService.migrateZelAppSpecifications(globalDbWith(col));
+
+      sinon.assert.calledOnceWithExactly(col.dropIndex, 'query for getting zelapp message based on image');
+    });
+  });
 });
