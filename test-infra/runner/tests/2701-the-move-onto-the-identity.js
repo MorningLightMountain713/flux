@@ -17,26 +17,28 @@ import { dbClient, closeDb } from '../framework/db-client.js';
 import { IMAGE_TAG } from '../framework/flux-spec-vendor.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
-// The move onto the identity, on a real upgrade. Node 0 boots the node image built
-// from the branch base (FLUX_E2E_BASE_TAG), where a v8 app is installed under its
-// name: the container flux<component>_<name>, the directory and backing image named
-// from it, the network fluxDockerNetwork_<name>, the row's identity its name. The
-// suite writes a marker into the app's data, upgrades node 0 in place to the run's
-// image (env.upgradeNode), and asserts what the first start of the new code leaves:
-// every artifact named by the identity the registration minted, the data intact,
-// the former name still answering on the app's network, the row naming the
-// registration it came from, and the component running. Nodes 1 and 2 run the run's
-// image throughout: a three-node ring is the smallest whose registration door opens,
-// the registration is submitted from the middle of the ring, and the old node
-// installs the app from the registration it holds, without the harness seeding a
-// row, so the layout under the name is the old code's own.
+// The move onto the identity, on the upgrade a node takes: from released FluxOS to
+// this tree. Node 0 boots a released FluxOS (FLUX_E2E_BASE_TAG, an image built by
+// test-infra/build-release-image.sh from the release's ref), where a v8 app is
+// installed under its name: the container flux<component>_<name>, the directory and
+// backing image named from it, the network fluxDockerNetwork_<name>, a row with no
+// identity. The suite writes a marker into the app's data, upgrades node 0 in place to
+// the run's image (env.upgradeNode), and asserts what the first start of the new code
+// leaves once every migration has run: every artifact named by the identity the
+// registration minted, the data intact, the former name still answering on the app's
+// network, the row naming the registration it came from, and the component running.
+// Nodes 1 and 2 run the run's image throughout: a three-node ring is the smallest
+// whose registration door opens, the registration is submitted from the middle of the
+// ring, and the released node installs the app from the registration it holds,
+// without the harness seeding a row, so the layout under the name is its own.
 //
-// Control: run with FLUX_E2E_TAG naming an image from before the move (the tree at
-// 825619fcf, after the names changed and before the move existed); the upgrade
-// then changes nothing under the name and the first assertion fails. Without
-// FLUX_E2E_BASE_TAG the suite fails before booting, naming the build it needs.
+// Control: run with FLUX_E2E_TAG naming images built from this tree with the
+// app-identity migration removed (E2E_IMAGES_VERIFIED=1, since they are not this
+// tree's); the upgrade then changes nothing under the name and the first assertion
+// fails. Without FLUX_E2E_BASE_TAG the suite fails before booting, naming the build
+// it needs.
 //
-// The base image's node talks to the run's stubs, which moved since the base in the
+// The released node talks to the run's stubs, which moved since the release in the
 // daemon stub's content crypto and the FluxDrive stub's manifest rows; a cleartext
 // v8 install touches neither.
 
@@ -64,7 +66,7 @@ describe('the move onto the identity at the first start of the new code', functi
   before(async function () {
     this.timeout(900000);
     if (!BASE_TAG) {
-      throw new Error('FLUX_E2E_BASE_TAG names the node image built from the branch base (e074d6e6a): build it from a clone at that commit with FLUX_E2E_TAG=<base-tag> ./test-infra/build-images.sh fluxos-01');
+      throw new Error('FLUX_E2E_BASE_TAG names the node image of the released FluxOS the node upgrades from: build it with FLUX_E2E_TAG=<base-tag> ./test-infra/build-release-image.sh <release ref>');
     }
     if (BASE_TAG === IMAGE_TAG) throw new Error('FLUX_E2E_BASE_TAG must name another build than FLUX_E2E_TAG: the suite upgrades from the one to the other');
     env = await createTestEnv({
@@ -115,14 +117,15 @@ describe('the move onto the identity at the first start of the new code', functi
     }
 
     // The old layout, read off the node rather than spelled: the fixture is what the
-    // base image made, and the suite is wrong if it is not the layout under the name.
+    // released code made, and the suite is wrong if it is not the layout under the name.
     formerName = legacyFolderId(appName, COMPONENT);
     const mounts = await execInContainer(node.container, `docker inspect ${formerName} --format '{{range .Mounts}}{{.Source}}\n{{end}}'`);
-    expect(mounts.exitCode, `the base image installs the app under its name, as container ${formerName}: ${mounts.output}`).to.equal(0);
+    expect(mounts.exitCode, `the released node installs the app under its name, as container ${formerName}: ${mounts.output}`).to.equal(0);
     formerDataDir = mounts.stdout.split('\n').map((s) => s.trim()).find((p) => p.includes('/flux-apps/'));
     expect(formerDataDir, `a data directory under the apps folder bound into ${formerName}: ${mounts.stdout}`).to.be.a('string');
     const row = await db.getLocalApp(appName);
-    expect(row?.identity, 'the base image keeps the row under the name').to.equal(appName);
+    expect(row, 'the released node holds a row for the app').to.include({ name: appName });
+    expect(row, 'a released row carries no identity').to.not.have.property('identity');
     const networks = await execInContainer(node.container, `docker inspect ${formerName} --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}\n{{end}}'`);
     [formerNetwork] = networks.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
     expect(formerNetwork, 'the app network under the name').to.be.a('string');

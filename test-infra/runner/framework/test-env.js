@@ -303,12 +303,11 @@ async function assertNodeImageStamped(tag) {
 
 // The FluxOS code of one built node image, copied into a running node: the
 // parts of the tree the process loads, and the vendored spec library beside it.
-// Everything else on the node stays: its data, its containers, its database,
-// the config overlay the entrypoint wrote and the installed packages. A node
-// cannot install packages inside the fleet, so the two trees must declare the
-// same dependencies.
+// Its data, its containers and its database stay.
 const UPGRADE_DIRS = ['ZelBack/src', 'helpers', 'lib'];
-const UPGRADE_FILES = ['ZelBack/pinEnvironment.js', 'ZelBack/configReconciliation.js', 'ZelBack/config/default.js', 'ZelBack/config/volumeToolsImage.json', 'app.js', 'apiServer.js', 'init.js'];
+const UPGRADE_FILES = ['package.json', 'ZelBack/pinEnvironment.js', 'ZelBack/configReconciliation.js', 'ZelBack/config/default.js', 'ZelBack/config/volumeToolsImage.json', 'app.js', 'apiServer.js', 'init.js'];
+// The new build's per-node config files and the script that writes the overlay from them.
+const UPGRADE_HARNESS = ['test-infra/config', 'test-infra/write-node-config.sh'];
 
 async function dockerCp(from, to) {
   const res = await dockerCli(['cp', from, to], 180000);
@@ -2306,9 +2305,12 @@ async function _buildEnv(
     },
 
     // Make a running node run the FluxOS of another built image and restart
-    // FluxOS on it, as a node's own update does: its data, containers, database
-    // and config stay, and the move onto the identity, like every migration,
-    // runs at the first start of the new code. Upgrade or downgrade alike.
+    // FluxOS on it, as a node's own update does: its data, containers and database
+    // stay; its code, its installed packages when the build declares others, and
+    // its config overlay become the new build's - the overlay written from that
+    // build's per-node file and this run's overrides, by the script the entrypoint
+    // runs at boot. Every migration runs at the first start of the new code.
+    // Upgrade or downgrade alike.
     async upgradeNode(index, { tag, readyTimeoutMs = 180000 } = {}) {
       const node = fluxNodes[index];
       if (!node?.container) throw new Error(`upgradeNode: node ${index} is not running`);
@@ -2322,33 +2324,30 @@ async function _buildEnv(
       try {
         await dockerCp(`${sourceId}:/flux/package.json`, `${host}/source-package.json`);
         await dockerCp(`${nodeId}:/flux/package.json`, `${host}/node-package.json`);
-        if (dependenciesOf(`${host}/source-package.json`) !== dependenciesOf(`${host}/node-package.json`)) {
-          throw new Error(`upgradeNode: ${nodeImageRef(tag)} declares other dependencies than node ${index} has installed, and a node cannot install packages inside the fleet`);
-        }
+        const packagesChange = dependenciesOf(`${host}/source-package.json`) !== dependenciesOf(`${host}/node-package.json`);
+        const replaced = [...UPGRADE_DIRS, ...(packagesChange ? ['node_modules'] : [])];
         mkdirSync(`${host}/flux/ZelBack/config`, { recursive: true });
-        for (const part of [...UPGRADE_DIRS, ...UPGRADE_FILES]) {
+        mkdirSync(`${host}/flux/test-infra`, { recursive: true });
+        for (const part of [...replaced, ...UPGRADE_FILES, ...UPGRADE_HARNESS]) {
           // eslint-disable-next-line no-await-in-loop
           await dockerCp(`${sourceId}:/flux/${part}`, `${host}/flux/${part}`);
         }
         await dockerCp(`${sourceId}:/flux-spec`, `${host}/flux-spec`);
-        // The overlay the entrypoint wrote at boot is the node's, not the image's.
-        const keep = 'mkdir -p /tmp/upgrade-keep && cp /flux/ZelBack/config/local.js /tmp/upgrade-keep/local.js && (cp /flux/ZelBack/shared.js /tmp/upgrade-keep/shared.js 2>/dev/null || true)';
-        const kept = await execInContainer(node.container, keep);
-        if (kept.exitCode !== 0) throw new Error(`upgradeNode: cannot keep node ${index}'s config overlay: ${kept.output}`);
-        const clear = [...UPGRADE_DIRS.map((d) => `/flux/${d}`), '/flux-spec'].map((p) => `rm -rf ${p}`).join(' && ');
-        await execInContainer(node.container, clear);
-        for (const dir of UPGRADE_DIRS) {
+        const clear = [...[...replaced, ...UPGRADE_HARNESS].map((d) => `/flux/${d}`), '/flux-spec'].map((p) => `rm -rf ${p}`).join(' && ');
+        const cleared = await execInContainer(node.container, clear);
+        if (cleared.exitCode !== 0) throw new Error(`upgradeNode: cannot clear node ${index}'s code: ${cleared.output}`);
+        for (const part of [...replaced, ...UPGRADE_HARNESS]) {
           // eslint-disable-next-line no-await-in-loop
-          await dockerCp(`${host}/flux/${dir}`, `${nodeId}:/flux/${dirname(dir)}/`);
+          await dockerCp(`${host}/flux/${part}`, `${nodeId}:/flux/${dirname(part)}/`);
         }
         for (const file of UPGRADE_FILES) {
           // eslint-disable-next-line no-await-in-loop
           await dockerCp(`${host}/flux/${file}`, `${nodeId}:/flux/${file}`);
         }
         await dockerCp(`${host}/flux-spec`, `${nodeId}:/`);
-        const restore = 'cp /tmp/upgrade-keep/local.js /flux/ZelBack/config/local.js && (cp /tmp/upgrade-keep/shared.js /flux/ZelBack/shared.js 2>/dev/null || true) && chown -R fluxuser:fluxuser /flux/ZelBack /flux/helpers /flux/lib /flux/app.js /flux/apiServer.js /flux/init.js';
-        const restored = await execInContainer(node.container, restore);
-        if (restored.exitCode !== 0) throw new Error(`upgradeNode: cannot restore node ${index}'s config overlay: ${restored.output}`);
+        const owned = [...replaced, ...UPGRADE_FILES].map((p) => `/flux/${p}`).join(' ');
+        const configured = await execInContainer(node.container, `/flux/test-infra/write-node-config.sh && chown -R fluxuser:fluxuser ${owned} /flux/ZelBack/config && (chown fluxuser:fluxuser /flux/ZelBack/shared.js 2>/dev/null || true)`);
+        if (configured.exitCode !== 0) throw new Error(`upgradeNode: cannot write node ${index}'s config: ${configured.output}`);
       } finally {
         await dockerCli(['rm', '-f', sourceId], 60000);
         rmSync(host, { recursive: true, force: true });
