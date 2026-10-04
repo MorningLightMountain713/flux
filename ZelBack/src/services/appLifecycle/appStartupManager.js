@@ -17,6 +17,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const nodeDosState = require('../nodeDosState');
 const migrations = require('../migrations');
 const appUninstaller = require('./appUninstaller');
+const specReconciler = require('./specReconciler');
 const appNetworkLinker = require('./appNetworkLinker');
 const meshReconciler = require('../appMesh/meshReconciler');
 const { getSpecBackend } = require('../utils/specLibs');
@@ -458,6 +459,11 @@ async function manageAppsOnBoot(bootContext) {
       return;
     }
 
+    // Whether each installed app is still one this node may run, asked of the
+    // registry after the migrations have moved every app onto its identity and
+    // before any container starts: an app the registry does not list is removed
+    // rather than started.
+    await specReconciler.convergeAtBoot();
     log.info('appStartupManager - Daemon, DB, and node confirmed, reconciling apps');
     await reconcileAppsOnBoot({ placement });
   } finally {

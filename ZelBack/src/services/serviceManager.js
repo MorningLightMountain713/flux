@@ -869,7 +869,6 @@ async function startFluxFunctions() {
           ipLocationSync.startSync().catch((err) => log.error(`ipLocationSync start error: ${err.message}`));
           // Warm the marketplace template cache (best-effort; cache-miss fetch covers any gaps).
           marketplaceTemplateCache.bootstrapCache().catch((error) => log.error(error));
-          specReconciler.requestFullConvergence({ reason: 'boot' });
           // Driven by the policy bundle from here: a pass when the gate opens and on every
           // change while it is open. Nothing waits on it.
           imageManager.startComplianceSweeps();

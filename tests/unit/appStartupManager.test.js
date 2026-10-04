@@ -340,7 +340,10 @@ describe('appStartupManager tests', () => {
   // The module with the migrations stubbed, for the boot path between the sync
   // and the reconcile. bootSyncTimeoutMs bounds the registry wait and the state
   // pull together, in real milliseconds here.
+  let specReconcilerStub;
+
   function loadWithMigrations(runBefore, { bootSyncTimeoutMs } = {}) {
+    specReconcilerStub = { convergeAtBoot: sinon.stub().resolves() };
     return proxyquire('../../ZelBack/src/services/appLifecycle/appStartupManager', {
       ...(bootSyncTimeoutMs === undefined ? {} : {
         config: asConfig({ ...realConfig, system: { ...realConfig.system, bootSyncTimeoutMs } }),
@@ -361,6 +364,7 @@ describe('appStartupManager tests', () => {
       '../nodeConfirmationService': { isConfirmed: sinon.stub().returns(true) },
       '../migrations': { runBefore },
       './contentSlotService': { reconcileBootContent: sinon.stub().resolves() },
+      './specReconciler': specReconcilerStub,
     });
   }
 
@@ -418,6 +422,20 @@ describe('appStartupManager tests', () => {
       expect(runBefore.calledBefore(appsRepositoryStub.appLocationFromEvents), 'the migrations before the question').to.equal(true);
       expect(appsRepositoryStub.appLocationFromEvents.calledOnce, 'asked once for the whole boot').to.equal(true);
       expect(dockerServiceStub.dockerListContainers.calledOnce, 'the reconcile ran').to.equal(true);
+    });
+
+    // An installed app the registry does not list must never start: the cleanup's
+    // pass runs once the migrations have moved every app onto its identity, and
+    // before the reconcile starts any container.
+    it('asks the registry about every installed app after the migrations and before anything starts', async () => {
+      const runBefore = migrationsTaking(1000);
+      const manager = loadWithMigrations(runBefore);
+
+      await manager.manageAppsOnBoot(contextDropped(60_000));
+
+      sinon.assert.calledOnce(specReconcilerStub.convergeAtBoot);
+      expect(runBefore.calledBefore(specReconcilerStub.convergeAtBoot), 'the migrations before the pass').to.equal(true);
+      expect(specReconcilerStub.convergeAtBoot.calledBefore(dockerServiceStub.dockerListContainers), 'the pass before the reconcile').to.equal(true);
     });
 
     it('the rows outrank the clock: a node long past the grace whose rows still place it starts its apps', async () => {
