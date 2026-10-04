@@ -1223,19 +1223,22 @@ class AppSyncOrchestrator {
 
   /**
    * Publish whether this node's ephemeral app state is worth another node's
-   * survey: `appStateSynced` once its own state sync completed, and, for the
-   * sync responder's deadline, whether it has spent the block timer taking live
-   * broadcasts. Called wherever either input moves. A peer asking for app state
-   * is refused while neither holds, because an empty answer from a node that
-   * does not yet know is indistinguishable from an empty answer from one that
-   * does, and the asker counts both as a completed survey.
+   * survey, and its own callers' reads: `appStateSynced` once its own state sync
+   * completed or it has spent the block timer taking live broadcasts, and, for
+   * the sync responder's deadline, whether the block timer has run out. Called
+   * wherever either input moves. A peer asking for app state is refused while
+   * neither holds, because an empty answer from a node that does not yet know is
+   * indistinguishable from an empty answer from one that does, and the asker
+   * counts both as a completed survey.
    * @returns {void}
    */
   #publishStateSyncAuthority() {
     const synced = capabilities.claim('appStateSynced', 'appSyncOrchestrator');
+    const deadlinePassed = this.#isBlockTimerExpired();
     if (this.#stateSyncComplete) synced.raise('ephemeral state sync complete');
+    else if (deadlinePassed) synced.raise('block fallback elapsed taking live broadcasts');
     else synced.lower('ephemeral state sync not complete');
-    globalState.appStateSyncDeadlinePassed = this.#isBlockTimerExpired();
+    globalState.appStateSyncDeadlinePassed = deadlinePassed;
   }
 
   #isStateSyncReady() {
