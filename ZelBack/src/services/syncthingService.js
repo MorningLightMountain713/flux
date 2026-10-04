@@ -783,11 +783,10 @@ async function getDbCompletion({ folder, device } = {}) {
 }
 
 /**
- * Read a folder's ignore patterns, for internal callers. Returns the standard
- * message shape - { status, data: { ignore, expanded } } on success - and never
- * throws, so the caller checks status rather than catching.
+ * Read a folder's ignore patterns, for internal callers. Throws when syncthing
+ * cannot answer.
  * @param {string} folderId syncthing folder id
- * @returns {Promise<object>} message
+ * @returns {Promise<{ignore: string[]|null, expanded: string[]|null}>}
  */
 async function getFolderIgnores(folderId) {
   return request('get', `/rest/db/ignores?folder=${encodeURIComponent(folderId)}`);
@@ -797,11 +796,10 @@ async function getFolderIgnores(folderId) {
  * Set a folder's ignore patterns, for internal callers. Syncthing owns and
  * writes .stignore itself (atomically, and it never replicates it), so this is
  * how FluxOS sets the ignores rather than writing the file. REPLACES the whole
- * set - pass the complete desired list. Returns the standard message shape and
- * never throws.
+ * set - pass the complete desired list. Throws when syncthing refuses it.
  * @param {string} folderId syncthing folder id
  * @param {Array<string>} lines the full ignore pattern list
- * @returns {Promise<object>} message
+ * @returns {Promise<object>} syncthing's answer
  */
 async function setFolderIgnores(folderId, lines) {
   return request('post', `/rest/db/ignores?folder=${encodeURIComponent(folderId)}`, { ignore: lines });

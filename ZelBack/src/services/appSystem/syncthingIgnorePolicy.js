@@ -150,8 +150,8 @@ function outOfScopePaths(root, ignoreLines = []) {
  * line that stopped round-tripping would show as this folder being set on every
  * pass, in the log below.
  *
- * A syncthing call that did not happen throws; that is reported here and dropped,
- * and the next pass converges.
+ * The syncthing calls answer the folder's data and throw when syncthing cannot
+ * answer; a failure is logged and leaves the folder for the next pass.
  *
  * Call only for a folder syncthing already knows (the caller checks); on an
  * unknown folder the API would answer with an error and nothing would converge.
@@ -168,18 +168,22 @@ function outOfScopePaths(root, ignoreLines = []) {
  * @param {object} deployComp - the component the folder replicates
  */
 async function ensureStignoreCovers(folderId, deployComp) {
+  let held;
   try {
-    const read = await syncthingService.getFolderIgnores(folderId);
-    const desired = await ignoreLinesFor(deployComp);
-    const current = Array.isArray(read?.ignore) ? read.ignore : [];
-    if (sameLines(desired, current)) return;
-
-    await syncthingService.setFolderIgnores(folderId, desired);
-    log.info(`ensureStignoreCovers - ${folderId} ignores set to ${desired.join(', ')}`);
+    held = await syncthingService.getFolderIgnores(folderId);
   } catch (error) {
-    // Reported and dropped: the ignore policy converges on the next pass, and
-    // one folder's unreadable ignores must not end the caller's sweep.
-    log.error(`ensureStignoreCovers - could not converge ignores for ${folderId}: ${error.message}`);
+    log.error(`ensureStignoreCovers - could not read ignores for ${folderId}: ${error.message}`);
+    return;
+  }
+  const desired = await ignoreLinesFor(deployComp);
+  const current = Array.isArray(held?.ignore) ? held.ignore : [];
+  if (sameLines(desired, current)) return;
+
+  try {
+    await syncthingService.setFolderIgnores(folderId, desired);
+  } catch (error) {
+    log.error(`ensureStignoreCovers - could not set ignores for ${folderId}: ${error.message}`);
+    return;
   }
 }
 

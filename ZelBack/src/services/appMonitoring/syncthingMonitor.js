@@ -95,14 +95,14 @@ async function syncthingApplied(write, what) {
  */
 async function scopeLinesFor(folderId, deployComp) {
   if (deployComp) return syncthingIgnorePolicy.ignoreLinesFor(deployComp);
+  let held;
   try {
-    const read = await syncthingService.getFolderIgnores(folderId);
-    if (Array.isArray(read?.ignore)) return read.ignore;
-    log.warn(`scopeLinesFor - ${folderId}: syncthing holds no ignores for it; the folder's scaffolding counts as its content`);
+    held = await syncthingService.getFolderIgnores(folderId);
   } catch (error) {
     log.warn(`scopeLinesFor - ${folderId}: ignores unreadable (${error.message}); the folder's scaffolding counts as its content`);
+    return [];
   }
-  return [];
+  return Array.isArray(held?.ignore) ? held.ignore : [];
 }
 
 /**
