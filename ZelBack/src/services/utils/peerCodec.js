@@ -15,6 +15,7 @@
  * Type 0x21 — requestAppRunning   [type:1][sinceTs:8]          = 9 bytes
  * Type 0x22 — requestAppInstalling [type:1][sinceTs:8]         = 9 bytes
  * Type 0x23 — requestAppInstallingErrors [type:1][sinceTs:8]  = 9 bytes
+ * Type 0x24 — stateSyncReady      [type:1]                     = 1 byte
  */
 
 const MSG_TYPE = Object.freeze({
@@ -27,6 +28,7 @@ const MSG_TYPE = Object.freeze({
   REQUEST_APP_RUNNING: 0x21,
   REQUEST_APP_INSTALLING: 0x22,
   REQUEST_APP_INSTALLING_ERRORS: 0x23,
+  STATE_SYNC_READY: 0x24,
 });
 
 const NAK_REASON = Object.freeze({
@@ -294,6 +296,15 @@ function encodeRequestAppInstallingErrors(sinceTimestamp, requestTimestamp, pubk
   return encodeSignedSyncRequest(MSG_TYPE.REQUEST_APP_INSTALLING_ERRORS, sinceTimestamp, requestTimestamp, pubkey, signature);
 }
 
+/**
+ * "This node can answer the state-sync request it declined." Sent once to each
+ * peer it declined, when its own app state becomes authoritative.
+ * @returns {Buffer}
+ */
+function encodeStateSyncReady() {
+  return Buffer.from([MSG_TYPE.STATE_SYNC_READY]);
+}
+
 function decodeSyncTimestamp(buf) {
   if (buf.length < 9) return 0;
   return Number(buf.readBigUInt64BE(1));
@@ -323,5 +334,6 @@ module.exports = {
   encodeRequestAppRunning,
   encodeRequestAppInstalling,
   encodeRequestAppInstallingErrors,
+  encodeStateSyncReady,
   decodeSyncTimestamp,
 };

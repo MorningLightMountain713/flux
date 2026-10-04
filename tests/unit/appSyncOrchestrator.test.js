@@ -1087,6 +1087,99 @@ describe('AppSyncOrchestrator', () => {
       expect(spare.send.called).to.equal(false);
     });
 
+    // A decline from a peer whose own state is not authoritative yet means "not yet".
+    // When the whole fleet boots at once every peer declines every other; the peer
+    // says when it can answer, and is asked again then rather than this node waiting
+    // out the block fallback.
+    describe('a peer that declined and then says it can answer', () => {
+      async function allDeclined(peers) {
+        const orchestrator = makeOrchestrator();
+        orchestrator.start(defaultBootContext);
+        peerEmitter.emit('peerThresholdReached', 12);
+        await clock.tickAsync(0);
+        for (const peer of peers) appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_REFUSED, 'apprunning', peer.key);
+        await clock.tickAsync(0);
+        return orchestrator;
+      }
+
+      it('is asked again on the connection it declined on', async () => {
+        const peers = makeEligiblePeers(3);
+        getEligibleSyncPeersStub = sinon.stub().returns(peers);
+        const orchestrator = await allDeclined(peers);
+        expect(peers[0].send.callCount).to.equal(4);
+
+        appSyncEvents.emit(EVENTS.PEER_STATE_SYNC_READY, peers[0].key, peers[0].connectionId);
+        await clock.tickAsync(0);
+
+        expect(peers[0].send.callCount, 'the ready peer was not asked again').to.equal(8);
+        expect(peers[1].send.callCount, 'a peer that said nothing was asked again').to.equal(4);
+        await orchestrator.stop();
+      });
+
+      it('is not asked again when it says so on another connection', async () => {
+        const peers = makeEligiblePeers(3);
+        getEligibleSyncPeersStub = sinon.stub().returns(peers);
+        const orchestrator = await allDeclined(peers);
+
+        appSyncEvents.emit(EVENTS.PEER_STATE_SYNC_READY, peers[0].key, peers[0].connectionId + 1000);
+        await clock.tickAsync(0);
+
+        expect(peers[0].send.callCount).to.equal(4);
+        await orchestrator.stop();
+      });
+
+      it('is not asked again for a request it did not decline', async () => {
+        const peers = makeEligiblePeers(3);
+        getEligibleSyncPeersStub = sinon.stub().returns(peers);
+        const orchestrator = makeOrchestrator();
+        orchestrator.start(defaultBootContext);
+        peerEmitter.emit('peerThresholdReached', 12);
+        await clock.tickAsync(0);
+
+        // still waiting on its answer
+        appSyncEvents.emit(EVENTS.PEER_STATE_SYNC_READY, peers[0].key, peers[0].connectionId);
+        await clock.tickAsync(0);
+
+        expect(peers[0].send.callCount).to.equal(4);
+        await orchestrator.stop();
+      });
+
+      it('is not asked again once it has answered', async () => {
+        const peers = makeEligiblePeers(3);
+        getEligibleSyncPeersStub = sinon.stub().returns(peers);
+        const orchestrator = makeOrchestrator();
+        orchestrator.start(defaultBootContext);
+        peerEmitter.emit('peerThresholdReached', 12);
+        await clock.tickAsync(0);
+        for (const type of ['apptemp', 'apprunning', 'appinstalling', 'apperrors']) {
+          appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, type, peers[0].key);
+        }
+        // the other two decline, so the pool is short and looking for someone to ask
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_REFUSED, 'apprunning', peers[1].key);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_REFUSED, 'apprunning', peers[2].key);
+        await clock.tickAsync(0);
+
+        appSyncEvents.emit(EVENTS.PEER_STATE_SYNC_READY, peers[0].key, peers[0].connectionId);
+        await clock.tickAsync(0);
+
+        expect(peers[0].send.callCount, 'a peer that had answered was asked again').to.equal(4);
+        await orchestrator.stop();
+      });
+
+      it('is not asked again once the budget has been spent', async () => {
+        const peers = makeEligiblePeers(3);
+        getEligibleSyncPeersStub = sinon.stub().returns(peers);
+        const orchestrator = await allDeclined(peers);
+        await clock.tickAsync(realConfig.get('fluxapps.syncTimeoutMs') + 1000);
+
+        appSyncEvents.emit(EVENTS.PEER_STATE_SYNC_READY, peers[0].key, peers[0].connectionId);
+        await clock.tickAsync(0);
+
+        expect(peers[0].send.callCount).to.equal(4);
+        await orchestrator.stop();
+      });
+    });
+
     it('reports a refusal that names no peer instead of absorbing it', async () => {
       const peers = makeEligiblePeers(3);
       getEligibleSyncPeersStub = sinon.stub().returns(peers);

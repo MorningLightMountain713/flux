@@ -685,6 +685,8 @@ async function startFluxFunctions() {
         capabilities.onUp('nodeMessageCapable', () => orchestrator.onMessageCapabilityChange(true));
         capabilities.onDown('nodeMessageCapable', () => orchestrator.onMessageCapabilityChange(false));
         if (capabilities.isUp('nodeMessageCapable')) orchestrator.onMessageCapabilityChange(true);
+        // The peers this node declined while it could not answer are told when it can.
+        capabilities.onUp('appStateSynced', () => fluxCommunicationMessagesSender.tellDeclinedAskersStateSyncReady());
         // A grantor referees from the records this orchestrator's sync delivers,
         // so it refuses to referee until the orchestrator is READY — the live
         // level, read per ask; fail-closed until this line runs.

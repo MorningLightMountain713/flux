@@ -22,6 +22,9 @@ const FLUX_CAPABILITIES = Object.freeze([
   // that does not claim it cannot tell us it knows nothing, so it is still held
   // to the uptime proxy - see getEligibleSyncPeers.
   'appStateSyncRefusal',
+  // This build tells a peer whose state-sync request it declined when it can
+  // answer it (stateSyncReady), and asks again a peer that tells it the same.
+  'appStateSyncReady',
   'appInstallingClaims',
   'limitCounterRecords',
   'masterlease',

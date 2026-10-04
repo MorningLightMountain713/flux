@@ -13,6 +13,7 @@ const { serialiseAndSignFluxBroadcast, getFluxMessageSignature } = require('./ut
 const fluxEventBus = require('./utils/fluxEventBus');
 const globalState = require('./utils/globalState');
 const capabilities = require('./utils/capabilities');
+const peerCodec = require('./utils/peerCodec');
 const { Privilege, authOf } = require('./utils/privileges');
 const appEventVerifier = require('./appMessaging/appEventVerifier');
 const appsRepository = require('./appDatabase/appsRepository');
@@ -476,6 +477,35 @@ async function respondWithIngressAttestations(msgObj, peer) {
   }
 }
 
+// The peers this node declined a state-sync request while its own app state was not
+// authoritative, by key. Each is told once, on the connection it asked on, when this node
+// can answer; a peer that reconnected in between asks afresh on its own.
+const declinedStateSyncAskers = new Map();
+
+/**
+ * Remember a peer this node just declined, when it can be told later.
+ * @param {object} peer FluxPeerSocket
+ */
+function rememberDeclinedAsker(peer) {
+  if (!peer.remoteCapabilities?.has('appStateSyncReady')) return;
+  declinedStateSyncAskers.set(peer.key, peer);
+}
+
+/**
+ * Tell every peer this node declined that it can answer now (stateSyncReady). A
+ * connection that has closed since takes nothing. Run on every up edge of
+ * appStateSynced, which is up exactly when this node answers a state-sync request
+ * rather than declining it.
+ */
+function tellDeclinedAskersStateSyncReady() {
+  const declined = [...declinedStateSyncAskers.values()];
+  declinedStateSyncAskers.clear();
+  const message = peerCodec.encodeStateSyncReady();
+  declined.forEach((peer) => {
+    if (peer.send(message)) log.info(`stateSyncReady - told ${peer.key} this node can answer its state-sync request`);
+  });
+}
+
 async function respondWithTempMessages(peer, sinceTimestamp = 0) {
   try {
     // THE SAME INCOMPLETENESS, ON A DIFFERENT COLLECTION. A node still catching
@@ -492,6 +522,7 @@ async function respondWithTempMessages(peer, sinceTimestamp = 0) {
     if (!capabilities.isUp('appStateSynced') && !globalState.appStateSyncDeadlinePassed) {
       log.info(`respondWithTempMessages - Refusing ${peer.key}: this node's app state is not authoritative yet`);
       await sendSignedMessage({ type: 'fluxapptempsync', version: 1, messages: [], done: true, refused: true }, peer, { awaitDrain: true });
+      rememberDeclinedAsker(peer);
       fluxEventBus.publish('sync:refused', { syncType: 'fluxapptempsync', peer: peer.key });
       return;
     }
@@ -541,6 +572,7 @@ async function streamBatchedSync(peer, { sinceTimestamp, collectionName, validit
     if (!capabilities.isUp('appStateSynced') && !globalState.appStateSyncDeadlinePassed) {
       log.info(`${label} - Refusing ${peer.key}: this node's app state is not authoritative yet`);
       await sendSignedMessage({ type: messageType, messages: [], done: true, refused: true }, peer, { awaitDrain: true });
+      rememberDeclinedAsker(peer);
       fluxEventBus.publish('sync:refused', { syncType: messageType, peer: peer.key });
       return;
     }
@@ -683,6 +715,7 @@ async function respondWithContentManifests(msgObj, peer) {
 
 module.exports = {
   relay,
+  tellDeclinedAskersStateSyncReady,
   announcePolicySeq,
   requestPolicyFromPeer,
   respondWithPolicy,
