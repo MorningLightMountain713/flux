@@ -100,6 +100,7 @@ describe('appStartupManager tests', () => {
     appStartupManager = proxyquire('../../ZelBack/src/services/appLifecycle/appStartupManager', {
       './crontabAndMountsCleanup': { cleanupCrontabAndMounts: sinon.stub().resolves() },
       './hardwareValidationService': { performBootTimeHardwareValidation: sinon.stub().resolves() },
+      '../appNetwork/portManager': { restoreAppsPortsSupport: sinon.stub().resolves() },
       './containerMountRecovery': { performContainerMountRecovery: sinon.stub().resolves() },
       '../appSystem/fileOperationRecovery': { recoverInterruptedFileOperations: sinon.stub().resolves() },
       '../../lib/log': logStub,
@@ -148,6 +149,7 @@ describe('appStartupManager tests', () => {
       const flaggedStartupManager = proxyquire('../../ZelBack/src/services/appLifecycle/appStartupManager', {
         './crontabAndMountsCleanup': { cleanupCrontabAndMounts: sinon.stub().resolves() },
         './hardwareValidationService': { performBootTimeHardwareValidation: sinon.stub().resolves() },
+        '../appNetwork/portManager': { restoreAppsPortsSupport: sinon.stub().resolves() },
         './containerMountRecovery': { performContainerMountRecovery: sinon.stub().resolves() },
         '../appSystem/fileOperationRecovery': { recoverInterruptedFileOperations: sinon.stub().resolves() },
         config: asConfig({ ...realConfig, fluxapps: { ...realConfig.fluxapps, manageCollectorLifecycle: true } }),
@@ -353,11 +355,13 @@ describe('appStartupManager tests', () => {
   // pull together, in real milliseconds here.
   let specReconcilerStub;
   let hardwareStub;
+  let portManagerStub;
   let storageStubs;
 
   function loadWithMigrations(runBefore, { bootSyncTimeoutMs } = {}) {
     specReconcilerStub = { convergeAtBoot: sinon.stub().resolves() };
     hardwareStub = { performBootTimeHardwareValidation: sinon.stub().resolves() };
+    portManagerStub = { restoreAppsPortsSupport: sinon.stub().resolves() };
     storageStubs = {
       mounts: { cleanupCrontabAndMounts: sinon.stub().resolves() },
       mountRecovery: { performContainerMountRecovery: sinon.stub().resolves() },
@@ -385,6 +389,7 @@ describe('appStartupManager tests', () => {
       './contentSlotService': { reconcileBootContent: sinon.stub().resolves() },
       './specReconciler': specReconcilerStub,
       './hardwareValidationService': hardwareStub,
+      '../appNetwork/portManager': portManagerStub,
       './crontabAndMountsCleanup': storageStubs.mounts,
       './containerMountRecovery': storageStubs.mountRecovery,
       '../appSystem/fileOperationRecovery': storageStubs.fileOperations,
@@ -489,6 +494,22 @@ describe('appStartupManager tests', () => {
       expect(hardwareStub.performBootTimeHardwareValidation.calledBefore(dockerServiceStub.getFluxDockerNetworkPhysicalInterfaceNames), 'the removals before the networks are read').to.equal(true);
       expect(isolate.calledBefore(dockerServiceStub.dockerListContainers), 'the isolation before the reconcile').to.equal(true);
       expect(fluxNetworkHelperStub.purgeUFW.calledBefore(dockerServiceStub.dockerListContainers), 'the deny purge before the reconcile').to.equal(true);
+    });
+
+    // The kept apps' ports are opened ahead of their containers, and a router that
+    // never answers holds up nothing.
+    it('starts opening the kept apps\' ports after the firewall and before anything starts, without waiting for it', async () => {
+      const runBefore = migrationsTaking(1000);
+      const manager = loadWithMigrations(runBefore);
+      portManagerStub.restoreAppsPortsSupport.returns(new Promise(() => {}));
+
+      await manager.manageAppsOnBoot(contextDropped(60_000));
+
+      const ports = portManagerStub.restoreAppsPortsSupport;
+      sinon.assert.calledOnce(ports);
+      expect(fluxNetworkHelperStub.purgeUFW.calledBefore(ports), 'the deny purge before the ports open').to.equal(true);
+      expect(ports.calledBefore(dockerServiceStub.dockerListContainers), 'the ports before the reconcile').to.equal(true);
+      expect(dockerServiceStub.dockerListContainers.calledOnce, 'the reconcile ran').to.equal(true);
     });
 
     it('a firewall step that fails is logged, and the deny purge and the apps still run', async () => {

@@ -777,12 +777,6 @@ async function startFluxFunctions() {
 
         // await throughput.start();
 
-        setTimeout(() => {
-          appController.stopAllNonFluxRunningApps();
-          // Best effort during boot — the reconciler starts monitoring per app as it settles.
-          monitoringOrchestrator.startMonitoringOfApps(null).catch((error) => log.error(error));
-          portManager.restoreAppsPortsSupport();
-        }, bootDelay(1 * 60 * 1000));
         // Resolve this node's enterprise identity once, up front. The key comes off disk and
         // policy arrives on an event, so this settles at boot rather than on a timer; the
         // interval is the fallback for a config that cannot be read at all. Once cached, hot
@@ -864,6 +858,9 @@ async function startFluxFunctions() {
         // decider self-gates per cycle on its own prerequisites (mounts, syncthing health,
         // own-IP, FDM), so an early start is safe - it skips and retries until ready.
         capabilities.whenUp('bootReconcileDecided').then(() => {
+          appController.stopAllNonFluxRunningApps();
+          // Best effort - the reconciler also starts monitoring per app as it settles.
+          monitoringOrchestrator.startMonitoringOfApps(null).catch((error) => log.error(error));
           // The syncthing decider is declare-only: it writes desired run-state and
           // data-state (via appReconciler) and enqueues; the reconciler is the sole
           // actuator that stops, starts, and wipes - inside its per-key single-flight,
