@@ -2,8 +2,8 @@
 
 // Loads the IP location artifact into the one node database its config names,
 // through the calls a node makes when it fetches the table: setArtifact, then
-// the stored artifact and its digest. Started by build.js with NODE_CONFIG set.
-//   node load-node.js <artifact file>
+// the stored artifact and its digest. Started by build.cjs with NODE_CONFIG set.
+//   node load-node.cjs <artifact file>
 
 const fs = require('fs');
 const config = require('config');
