@@ -470,7 +470,28 @@ const rpcHandlers = {
   getaddressbalance: () => ({ balance: 0, received: 0 }),
   getaddressutxos: () => [],
   getaddresstxids: () => (seededAddressTxids.length > 0 ? seededAddressTxids : []),
-  getaddressdeltas: () => (seededAddressDeltas.length > 0 ? seededAddressDeltas : []),
+  // What a node with an address index answers: every output paying one of the
+  // addresses in the blocks of the range, positioned as getblock orders them, and
+  // whatever a suite seeded.
+  getaddressdeltas: (params) => {
+    const { addresses = [], start = 0, end = currentHeight } = params?.[0] ?? {};
+    const wanted = new Set(addresses);
+    const mined = [];
+    for (const block of pendingBlocks) {
+      const height = Number(block.height);
+      if (height < start || height > end) continue;
+      (block.tx || []).forEach((tx, blockindex) => {
+        (tx.vout || []).forEach((out, index) => {
+          const address = (out.scriptPubKey?.addresses || []).find((a) => wanted.has(a));
+          if (!address || !(out.valueSat > 0)) return;
+          mined.push({
+            satoshis: out.valueSat, txid: tx.txid, index, blockindex, height, address,
+          });
+        });
+      });
+    }
+    return [...mined, ...seededAddressDeltas];
+  },
 
   listunspent: () => [],
   validateaddress: (params) => ({
