@@ -4,11 +4,10 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { buildAppSpec, registerAndConfirm } from '../framework/app-helper.js';
-import { nodeKey, fluxTeamKey } from '../framework/keys.js';
+import { nodeKey } from '../framework/keys.js';
 import {
-  waitFor, waitForBootSettled, waitForHashSyncComplete, waitForInstallSettled,
+  waitFor, waitForBootSettled, waitForInstallSettled,
 } from '../framework/wait.js';
-import { authenticate } from '../auth.js';
 import {
   execInContainer, listAppContainers, getAppContainerStatus, componentIdentifier, legacyFolderId,
   appDataRoot, appVolumeFile, getAppNetwork, networkExists,
@@ -29,8 +28,8 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 // network, the row naming the registration it came from, and the component running.
 // Nodes 1 and 2 run the run's image throughout: a three-node ring is the smallest
 // whose registration door opens, the registration is submitted from the middle of the
-// ring, and the released node installs the app from the registration it holds,
-// without the harness seeding a row, so the layout under the name is its own.
+// ring, and the released node's spawner installs the app from the registration it
+// holds, without the harness seeding a row, so the layout under the name is its own.
 //
 // Control: run with FLUX_E2E_TAG naming images built from this tree with the
 // app-identity migration removed (E2E_IMAGES_VERIFIED=1, since they are not this
@@ -99,21 +98,19 @@ describe('the move onto the identity at the first start of the new code', functi
         repoauth: '',
       }],
     });
+    const installMark = node.getLastEventId();
     const registered = await registerAndConfirm(registrar.url, nodeKey(2), spec, env.clients);
     expect(registered.status, JSON.stringify(registered)).to.equal('success');
     app = registered.app;
 
-    // The old node installs from the registration it holds: the install route answers
-    // once its boot reconcile has decided, and the app:installed event says it holds it.
-    await waitForHashSyncComplete(node);
-    await waitForBootSettled(node);
-    const auth = await authenticate(node.url, fluxTeamKey());
-    const installMark = node.getLastEventId();
-    const body = await node.installAppLocally(appName, auth.zelidauth);
+    // The released node installs the app the way a node takes one from the network: its
+    // own spawner places it from the registration it holds. An install asked for over the
+    // route as well would race that spawner, whose pre-install port check holds the app's
+    // port while it runs.
     try {
-      await waitForInstallSettled(node, appName, 180000, { afterId: installMark });
+      await waitForInstallSettled(node, appName, 300000, { afterId: installMark });
     } catch (error) {
-      throw new Error(`node 0 does not hold ${appName}: ${error.message} :: ${String(body).slice(-400)}`);
+      throw new Error(`node 0 does not hold ${appName}: ${error.message}`);
     }
 
     // The old layout, read off the node rather than spelled: the fixture is what the
