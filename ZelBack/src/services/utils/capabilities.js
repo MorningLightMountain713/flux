@@ -55,7 +55,7 @@ const DEFINITIONS = Object.freeze([
   { name: 'appStateSynced', owner: 'appSyncOrchestrator', needs: [] },
   { name: 'bootReconcileDecided', owner: 'appStartupManager', needs: ['mongoReachable', 'dockerReachable'] },
   { name: 'bootReconcilePassed', owner: 'reconcilerQueue', needs: [] },
-  { name: 'spawnerReady', owner: 'appSyncOrchestrator', needs: [] },
+  { name: 'spawnerReady', owner: 'appSyncOrchestrator', needs: ['bootReconcileDecided'] },
 ]);
 
 const HISTORY_LIMIT = 2000;

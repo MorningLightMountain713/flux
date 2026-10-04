@@ -89,6 +89,24 @@ describe('capabilities tests', () => {
       expect(capabilities.isUp('appRegistryConsistent')).to.equal(true);
     });
 
+    // Nothing is installed while the boot is still deciding what this node keeps.
+    it('holds the spawner coming-up until the boot has decided, and brings it up then', () => {
+      capabilities.claim('mongoReachable', 'serviceManager').raise('up');
+      capabilities.claim('dockerReachable', 'serviceManager').raise('up');
+      const spawner = capabilities.claim('spawnerReady', 'appSyncOrchestrator');
+      const boot = capabilities.claim('bootReconcileDecided', 'appStartupManager');
+      const ups = [];
+      capabilities.onUp('spawnerReady', () => ups.push('up'));
+
+      spawner.raise('orchestrator READY');
+      expect(capabilities.stateOf('spawnerReady')).to.equal(STATE.COMING_UP);
+      expect(ups).to.deep.equal([]);
+
+      boot.raise('decided');
+      expect(capabilities.isUp('spawnerReady')).to.equal(true);
+      expect(ups).to.deep.equal(['up']);
+    });
+
     it('does not bring back a dependent its owner lowered', () => {
       const mongo = capabilities.claim('mongoReachable', 'serviceManager');
       const localDb = capabilities.claim('localDbPrepared', 'serviceManager');
