@@ -21,6 +21,7 @@ const migrations = require('../migrations');
 const appUninstaller = require('./appUninstaller');
 const specReconciler = require('./specReconciler');
 const hardwareValidationService = require('./hardwareValidationService');
+const portManager = require('../appNetwork/portManager');
 const crontabAndMountsCleanup = require('./crontabAndMountsCleanup');
 const containerMountRecovery = require('./containerMountRecovery');
 const fileOperationRecovery = require('../appSystem/fileOperationRecovery');
@@ -660,6 +661,10 @@ async function manageAppsOnBoot(bootContext) {
     // The networks are final here: the migrations renamed them and the removals
     // above deleted theirs.
     await prepareAppFirewall();
+    // Each kept app's ports opened on ufw and mapped on the router, started ahead
+    // of the containers and not waited for: a router that fails delays only its
+    // own mappings.
+    portManager.restoreAppsPortsSupport().catch((error) => log.error(`appStartupManager - app ports: ${error.message}`));
     log.info('appStartupManager - Daemon, DB, and node confirmed, reconciling apps');
     await openInstalledAppPorts();
     await reconcileAppsOnBoot({ placement });
