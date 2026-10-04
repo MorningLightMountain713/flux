@@ -244,6 +244,7 @@ async function instantiatedSpec(spec, state = {}) {
     registeredAt: state.registeredAt ?? 1_751_628_800,
     identity: state.identity ?? null,
     uuid: state.uuid ?? null,
+    registrationVersion: state.registrationVersion ?? null,
   });
 }
 

@@ -48,13 +48,12 @@ async function hydrate(doc) {
   await getSpec();
   const { InstantiatedSpec } = await getSpecBackend();
 
-  // `replica` is this collection's own key field, `componentIdentifiers` is
-  // this collection's own index and `move` is a move onto the identity in
-  // progress, none part of the spec's wire form. The encrypted deserializers
-  // reject unknown fields outright, so storage fields are stripped here rather
-  // than leaking into the spec layer.
+  // The collection's own fields - its document id, the `replica` key, the
+  // `componentIdentifiers` index and a move onto the identity in progress - are
+  // taken off here; InstantiatedSpec takes off its own, and the spec class sees
+  // only the spec's.
   // eslint-disable-next-line no-unused-vars
-  const { replica, componentIdentifiers, move, ...specDoc } = doc;
+  const { _id, replica, componentIdentifiers, move, ...specDoc } = doc;
 
   try {
     return InstantiatedSpec.deserialize(specDoc);
