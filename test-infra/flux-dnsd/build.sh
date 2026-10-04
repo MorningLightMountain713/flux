@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the flux-dnsd this branch pairs with, for the mesh DNS e2e suite
-# (dnsdReal nodes bind-mount dist/). The pairing is declared by `pin` (full
+# (`dnsd: 'real'` nodes bind-mount dist/). The pairing is declared by `pin` (full
 # commit hash) — bump it deliberately, like a flux_iso pin.
 #
 # Skips when dist/ already matches the pin; pass --force to rebuild anyway.

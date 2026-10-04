@@ -66,10 +66,10 @@ describe('fluxos logging: journald sink under a real systemd unit', function () 
 
   before(async function () {
     this.timeout(240000);
-    // shutdowndMock explicitly off: the mock is started by the default
+    // shutdownd explicitly 'none': the stub is started by the default
     // entrypoint path, which systemd mode replaces; nothing here stops apps.
     env = await createTestEnv({
-      hookCtx: this, nodes: 1, tickerAutostart: false, systemdMode: true, shutdowndMock: false,
+      hookCtx: this, nodes: 1, tickerAutostart: false, systemdMode: true, shutdownd: 'none',
     });
     client = env.clients[0];
     ({ zelidauth } = await authenticate(client.url, fluxTeamKey()));

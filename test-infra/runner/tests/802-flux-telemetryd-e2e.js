@@ -145,8 +145,8 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
       nodes: NODES,
       tickerAutostart: false,
       systemdMode: true,
-      telemetrydReal: true,
-      shutdowndMock: false,
+      telemetryd: 'real',
+      shutdownd: 'none',
       // Submission-door sizing for a 5-node mesh. minOutgoing is what the mesh
       // actually yields (~2); minIncoming drops to 1 because a later scenario
       // restarts FluxOS on a node, and a freshly re-peered node can sit at a

@@ -1022,12 +1022,18 @@ function nodeServingWaitStrategy(nodeIp) {
   return new HttpPollWaitStrategy(`http://${nodeIp}:16127/flux/version`);
 }
 
-// `syncthing` selects what each node talks to. 'stub' (the default) is the
-// shared control-plane stub: it serves every node, moves no files, and is what
-// the gate runs on. 'binary' gives each node its own real daemon from the image
-// - the only way to observe data actually moving between nodes, and
-// correspondingly slower. A suite that asserts on transfers has to ask for it;
-// nothing else should.
+// Each dependency the harness can stand in for is one option named after it,
+// saying what the nodes talk to: 'none', 'stub' or 'real', each taking only the
+// states that dependency has.
+//
+// `syncthing`: 'stub' (the default) is the shared control-plane stub: it serves
+// every node, moves no files, and is what the gate runs on. 'real' gives each
+// node its own real daemon from the image - the only way to observe data
+// actually moving between nodes, and correspondingly slower. A suite that
+// asserts on transfers has to ask for it; nothing else should.
+//
+// An option createTestEnv does not know is refused: it would otherwise be
+// dropped without a word and the suite would run on a fleet it did not ask for.
 export async function createTestEnv({
   hookCtx = null, nodes = 1, deferredNodes = 0, legacyNodes = [], unprivilegedNodes = [], stubPeers = [], syncedNodes = null, silentSyncPeers = [],
   unverifiableSyncPeers = [], policyUnawarePeers = [], stubCapabilities = {}, stubPeeredWith = null,
@@ -1039,7 +1045,7 @@ export async function createTestEnv({
   awaitPolicy = true,
   // Arcane is the fleet default (audit 2026-07-15): most suites are flavour-agnostic,
   // and arcane-without-daemon is the unreal state, so it pairs with the in-container
-  // shutdownd mock. A suite testing legacy behaviour pins arcane: false, or opts out
+  // shutdownd stub. A suite testing legacy behaviour pins arcane: false, or opts out
   // per node via legacyNodes.
   arcane = true,
   nodeImageTags = {},
@@ -1048,24 +1054,23 @@ export async function createTestEnv({
   // 1.5 million rows into the shared mongod. false boots onto an empty mongo and every
   // node fetches and loads the table itself - for a suite whose subject is that load.
   ipLocationSeeded = true,
-  shutdowndMock = true,
-  // The mock flux-telemetryd is the CLIENT of FluxOS's identity socket, so a suite
-  // that asserts on OTLP identity asks for it explicitly. Off by default: it is a
-  // consumer, not part of a node's normal shape.
-  telemetrydMock = false,
+  // flux-shutdownd: 'stub' (the default) is the in-container stub; 'real' is the
+  // real daemon from test-infra/flux-shutdownd/dist, run under the default
+  // entrypoint, not as a systemd unit.
+  shutdownd = 'stub',
+  // flux-telemetryd: the stub is the CLIENT of FluxOS's identity socket, so a suite
+  // that asserts on OTLP identity asks for it explicitly; 'none' by default, as it
+  // is a consumer, not part of a node's normal shape. 'real' (systemd mode only) is
+  // the vendored cargo build and its production hardened unit, bind-mounted from
+  // the runner host.
+  telemetryd = 'none',
   // systemd-mode nodes: the entrypoint execs a real systemd as PID 1, so fluxos
   // logs through the journal (JOURNAL_STREAM set) instead of a rolling file.
   // Env-level and uniform across the fleet.
   systemdMode = false,
-  // Real flux-telemetryd (systemd mode only): the vendored cargo build and its
-  // production hardened unit, bind-mounted from the runner host.
-  telemetrydReal = false,
-  // Real flux-shutdownd from test-infra/flux-shutdownd/dist, replacing the mock
-  // in-container (it runs under the default entrypoint, not as a systemd unit).
-  shutdowndReal = false,
-  // Real flux-dnsd from test-infra/flux-dnsd/dist, delivered to systemd-mode
+  // flux-dnsd: 'real' is test-infra/flux-dnsd/dist, delivered to systemd-mode
   // nodes as its production unit.
-  dnsdReal = false,
+  dnsd = 'none',
   // The default-group grant seeded into every node's chainparams before boot.
   // false leaves the chain as a fresh one is - granting nothing - for the
   // suites that put the policy on chain themselves (14xx).
@@ -1078,7 +1083,17 @@ export async function createTestEnv({
   // Own-status is about the RECEIVER, so a fleet that wants it reads from its own
   // socket rather than the shared one every node hears.
   perNodeZmq = false,
+  ...unknownOptions
 } = {}) {
+  const unknown = Object.keys(unknownOptions);
+  if (unknown.length) throw new Error(`createTestEnv: unknown option(s) ${unknown.join(', ')}`);
+  const oneOf = (name, value, allowed) => {
+    if (!allowed.includes(value)) throw new Error(`createTestEnv: ${name} must be ${allowed.map((a) => `'${a}'`).join(' or ')}, got '${value}'`);
+  };
+  oneOf('syncthing', syncthing, ['stub', 'real']);
+  oneOf('shutdownd', shutdownd, ['none', 'stub', 'real']);
+  oneOf('telemetryd', telemetryd, ['none', 'stub', 'real']);
+  oneOf('dnsd', dnsd, ['none', 'real']);
   // Before the boot lock, the network, or a single container: a flux-spec
   // vendor lagging the branch surfaces as a product mystery minutes later,
   // and only in suites that install something.
@@ -1087,9 +1102,6 @@ export async function createTestEnv({
   // declares and a node config lacks fails as a product mystery, or as a
   // startup that never finishes.
   assertNodeConfigsCurrent();
-  if (syncthing !== 'stub' && syncthing !== 'binary') {
-    throw new Error(`createTestEnv: syncthing must be 'stub' or 'binary', got '${syncthing}'`);
-  }
   // WHICH NODES ARE ALREADY PART OF THE NETWORK, rather than joining it.
   //
   // A node here waits no blocks for its own state sync, so it is authoritative
@@ -1356,7 +1368,7 @@ export async function createTestEnv({
     // mongo starts, i.e. inside the fleet boot, where the waits at risk are the
     // boot's own.
     await startInfraDeathWatch(env);
-    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, mergedOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal, shutdowndReal, dnsdReal, zmqTopics, nodeZmqTopics, { perNodeZmq, seedPolicyGrant, nodeImageTags, ipLocationSeeded }, stubCapabilities);
+    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, mergedOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, arcane, shutdownd, telemetryd, systemdMode, dnsd, zmqTopics, nodeZmqTopics, { perNodeZmq, seedPolicyGrant, nodeImageTags, ipLocationSeeded }, stubCapabilities);
     // A systemd-mode node logs to its journal, which nodeLogCount cannot read.
     if (env.ipLocationSnapshot && !systemdMode) await assertIpLocationSnapshotAdopted(env);
     return env;
@@ -1425,8 +1437,8 @@ async function _buildEnv(
   nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing = 'stub',
   aptSeeded = true, aptBadSource = false, geolocation, locationTable, staticIp = true,
   policy = null, policySeeds = null, policyReachable = false, arcane = false,
-  shutdowndMock = false, telemetrydMock = false, systemdMode = false, telemetrydReal = false,
-  shutdowndReal = false, dnsdReal = false, zmqTopics, nodeZmqTopics, options = {},
+  shutdownd = 'none', telemetryd = 'none', systemdMode = false,
+  dnsd = 'none', zmqTopics, nodeZmqTopics, options = {},
   stubCapabilities,
 ) {
   const {
@@ -1775,14 +1787,14 @@ async function _buildEnv(
     // (production flow). A dist that is missing, or built from anything but the
     // pin, fails here rather than letting a skewed daemon produce runtime
     // mysteries — see the pin check below for why stale is the dangerous case.
-    if (telemetrydReal) {
+    if (telemetryd === 'real') {
       const distDir = join(__dirname, '..', '..', 'flux-telemetryd', 'dist');
       const overridden = Boolean(process.env.TELEMETRYD_BINARY);
       const distBinary = process.env.TELEMETRYD_BINARY ?? join(distDir, 'flux-telemetryd');
       const distUnit = process.env.TELEMETRYD_UNIT ?? join(distDir, 'flux-telemetryd.service');
       const buildCmd = 'run: bash test-infra/flux-telemetryd/build.sh';
       if (!existsSync(distBinary) || !existsSync(distUnit)) {
-        throw new Error(`telemetrydReal: ${distBinary} missing — ${buildCmd}`);
+        throw new Error(`telemetryd 'real': ${distBinary} missing — ${buildCmd}`);
       }
       // A stale dist is worse than a missing one: the suite runs, the daemon
       // behaves like whatever it was built from, and a test written for a fix the
@@ -1797,7 +1809,7 @@ async function _buildEnv(
           ? readFileSync(join(distDir, '.built-ref'), 'utf-8').trim()
           : '(none)';
         if (builtRef !== pin) {
-          throw new Error(`telemetrydReal: dist built from ${builtRef}, pin is ${pin} — ${buildCmd}`);
+          throw new Error(`telemetryd 'real': dist built from ${builtRef}, pin is ${pin} — ${buildCmd}`);
         }
       }
       bindMounts.push(
@@ -1808,15 +1820,15 @@ async function _buildEnv(
     // Real flux-dnsd (systemd mode only): the pinned resolver build from
     // test-infra/flux-dnsd/dist (binary + its REAL hardened unit),
     // bind-mounted; the entrypoint installs them and — matching the OS —
-    // enables the unit at boot. Same pin discipline as telemetrydReal.
-    if (dnsdReal) {
+    // enables the unit at boot. Same pin discipline as the real telemetryd.
+    if (dnsd === 'real') {
       const distDir = join(__dirname, '..', '..', 'flux-dnsd', 'dist');
       const overridden = Boolean(process.env.DNSD_BINARY);
       const distBinary = process.env.DNSD_BINARY ?? join(distDir, 'flux-dnsd');
       const distUnit = process.env.DNSD_UNIT ?? join(distDir, 'flux-dnsd.service');
       const buildCmd = 'run: bash test-infra/flux-dnsd/build.sh';
       if (!existsSync(distBinary) || !existsSync(distUnit)) {
-        throw new Error(`dnsdReal: ${distBinary} missing — ${buildCmd}`);
+        throw new Error(`dnsd 'real': ${distBinary} missing — ${buildCmd}`);
       }
       if (!overridden) {
         const pin = readFileSync(join(__dirname, '..', '..', 'flux-dnsd', 'pin'), 'utf-8').trim();
@@ -1824,7 +1836,7 @@ async function _buildEnv(
           ? readFileSync(join(distDir, '.built-ref'), 'utf-8').trim()
           : '(none)';
         if (builtRef !== pin) {
-          throw new Error(`dnsdReal: dist built from ${builtRef}, pin is ${pin} — ${buildCmd}`);
+          throw new Error(`dnsd 'real': dist built from ${builtRef}, pin is ${pin} — ${buildCmd}`);
         }
       }
       bindMounts.push(
@@ -1838,14 +1850,14 @@ async function _buildEnv(
     // readiness notify is best-effort — but it must live in the node container,
     // since each node is DinD and the app containers it drains are inside.
     // A dist that does not match the pin fails here, not as a runtime mystery.
-    if (shutdowndReal) {
+    if (shutdownd === 'real') {
       const distDir = join(__dirname, '..', '..', 'flux-shutdownd', 'dist');
       const distBinary = process.env.SHUTDOWND_BINARY ?? join(distDir, 'flux-shutdownd');
       const distCtl = process.env.SHUTDOWNCTL_BINARY ?? join(distDir, 'shutdownctl');
       const distDbus = join(distDir, 'io.runonflux.Shutdownd.conf');
       const buildCmd = 'run: bash test-infra/flux-shutdownd/build.sh';
       if (!existsSync(distBinary) || !existsSync(distCtl) || !existsSync(distDbus)) {
-        throw new Error(`shutdowndReal: ${distDir} incomplete — ${buildCmd}`);
+        throw new Error(`shutdownd 'real': ${distDir} incomplete — ${buildCmd}`);
       }
       const pinPath = join(__dirname, '..', '..', 'flux-shutdownd', 'pin');
       const pin = readFileSync(pinPath, 'utf-8').trim();
@@ -1853,7 +1865,7 @@ async function _buildEnv(
         ? readFileSync(join(distDir, '.built-ref'), 'utf-8').trim()
         : '(none)';
       if (builtRef !== pin) {
-        throw new Error(`shutdowndReal: dist built from ${builtRef}, pin is ${pin} — ${buildCmd}`);
+        throw new Error(`shutdownd 'real': dist built from ${builtRef}, pin is ${pin} — ${buildCmd}`);
       }
       bindMounts.push(
         { source: distBinary, target: '/opt/shutdownd-dist/flux-shutdownd', mode: 'ro' },
@@ -1880,7 +1892,7 @@ async function _buildEnv(
       // entrypoint installs it before FluxOS starts; see the note there.
       ...(staticIp ? { FLUX_E2E_DEFAULT_ROUTE: subnet.gateway } : {}),
     };
-    if (syncthing === 'binary') {
+    if (syncthing === 'real') {
       // the node runs its own daemon and binds apiport+2 itself, so there is
       // nothing to forward and nothing shared to point at
       nodeEnv.FLUX_SYNCTHING_MODE = 'binary';
@@ -1923,14 +1935,14 @@ async function _buildEnv(
     // stop, mirroring the daemon's production role.
     // The real daemon takes the mock's place rather than joining it: both bind
     // the same socket, so running the pair would race for it.
-    if (shutdowndMock && !shutdowndReal && !isLegacy) nodeEnv.FLUX_SHUTDOWND_MOCK = 'true';
-    if (shutdowndReal && !isLegacy) nodeEnv.FLUX_SHUTDOWND_REAL = 'true';
+    if (shutdownd === 'stub' && !isLegacy) nodeEnv.FLUX_SHUTDOWND_MOCK = 'true';
+    if (shutdownd === 'real' && !isLegacy) nodeEnv.FLUX_SHUTDOWND_REAL = 'true';
     // The mock flux-telemetryd is the CLIENT of FluxOS's identity socket (the
     // inverse of shutdownd's direction). Opt-in: only the telemetry suites pay
     // for the identity server + stub; the entrypoint also creates the
     // /run/flux/telemetry runtime dir the identity server's Arcane write-probe
     // demands.
-    if (telemetrydMock && !isLegacy) nodeEnv.FLUX_TELEMETRYD_MOCK = 'true';
+    if (telemetryd === 'stub' && !isLegacy) nodeEnv.FLUX_TELEMETRYD_MOCK = 'true';
     // systemd mode (the journald-logging suite): the entrypoint execs a real
     // systemd as PID 1 — dockerd and fluxos run as units, fluxos's stdout is
     // journal-connected (JOURNAL_STREAM set, the Arcane sink mode) and
@@ -1939,8 +1951,8 @@ async function _buildEnv(
     // the shutdownd/telemetryd mocks) do not exist under systemd; suites
     // using them must stay in the default mode.
     if (systemdMode) nodeEnv.FLUX_SYSTEMD_MODE = 'true';
-    if (telemetrydReal) nodeEnv.FLUX_TELEMETRYD_REAL = 'true';
-    if (dnsdReal) nodeEnv.FLUX_DNSD_REAL = 'true';
+    if (telemetryd === 'real') nodeEnv.FLUX_TELEMETRYD_REAL = 'true';
+    if (dnsd === 'real') nodeEnv.FLUX_DNSD_REAL = 'true';
     if (discoveryAutostart) nodeEnv.FLUX_DISCOVERY_AUTOSTART = 'true';
     // Point the node's config at the base-derived infra IPs. The mounted config
     // files carry the default 198.18 addresses; this is written into the node's
@@ -1955,7 +1967,7 @@ async function _buildEnv(
       // binary mode the node has to be pointed at its own daemon. local.js is
       // loaded after the mounted files, so this is the only place that wins.
       syncthing: {
-        ip: syncthing === 'binary' ? '127.0.0.1' : SYNCTHING_IP,
+        ip: syncthing === 'real' ? '127.0.0.1' : SYNCTHING_IP,
         // The apt repository and its signing key, served by the external stub out of
         // the node image. A legacy node writes this source and fetches this key itself
         // on first boot; pointed here it does both without leaving the fleet network.

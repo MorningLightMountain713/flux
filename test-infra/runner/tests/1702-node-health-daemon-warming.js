@@ -51,7 +51,7 @@ describe('Node health: a daemon still warming is not a syncthing fault', functio
       // binary, not the default stub: the gate only applies where FluxOS owns
       // the daemon, and a stub on another host is not owned. On the default the
       // fitness assertions below cannot fail, whatever the node reports.
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       rpcFailures: [subnet.nodeIp(NODE)],
       configOverrides: {

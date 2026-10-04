@@ -26,7 +26,7 @@ import { shutdowndControl, waitForShutdowndCall } from '../framework/shutdownd-c
 // Deploy goes through the REAL v9 submission (registerEncryptedV9App: sealed spec,
 // no content) + on-chain confirm + spawner install, mirroring the content suites.
 // arcane:true makes the node accept the v9 app and run the benchmark crypto;
-// shutdowndMock stands up the daemon socket the stop routes to.
+// The shutdownd stub stands up the daemon socket the stop routes to.
 const NODES = 5;
 const GRACEFUL_S = 3;
 
@@ -60,7 +60,7 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (encrypt
       nodes: NODES,
       tickerAutostart: false,
       arcane: true,
-      shutdowndMock: true,
+      shutdownd: 'stub',
       // A 5-node mesh only reaches ~2 outbound; lower the app-submission peer gate
       // (default minOutgoing 4) to match, as the content-registration suites do.
       configOverrides: { fluxapps: { minOutgoing: 2 } },

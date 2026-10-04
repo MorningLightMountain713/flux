@@ -93,7 +93,7 @@ const report = (fields) => { console.log(`# boot-lock ${fields}`); };
 
 // The fleet's shape is what explains held_ms, and a duration without it is two
 // populations stirred together: nodes boot in parallel, so fleet size moves the cost
-// by a few times rather than in proportion, and `syncthing: 'binary'` gives every node
+// by a few times rather than in proportion, and `syncthing: 'real'` gives every node
 // its own daemon instead of one shared stub. Both axes are needed to tell whether the
 // width can vary BY fleet - two small boots overlapping is a different question from
 // two ten-node ones. Carried on both lines so each is self-describing: a process takes

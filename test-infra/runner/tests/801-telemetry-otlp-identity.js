@@ -24,7 +24,7 @@ import {
 // declared component/port shape and never talks to Docker.
 //
 // This suite stands up an Arcane fleet with the mock flux-telemetryd
-// (telemetrydMock — the daemon-side CLIENT of the identity socket) and drives
+// (the telemetryd stub — the daemon-side CLIENT of the identity socket) and drives
 // the FluxOS half end to end: registration through the real submission door,
 // install, announce (send-set gated — the same-app collector stays out by
 // default), reconnect-sync, agent recreation, the scoping gate, a
@@ -124,7 +124,7 @@ describe('otlp telemetry: the identity socket carries the resolved agent endpoin
   before(async function () {
     this.timeout(600000);
     env = await createTestEnv({
-      hookCtx: this, nodes: NODES, tickerAutostart: false, telemetrydMock: true,
+      hookCtx: this, nodes: NODES, tickerAutostart: false, telemetryd: 'stub',
       // The registration door checks the submit node's own peer counts against
       // config; relax minOutgoing to what a 5-node mesh actually yields. The
       // stagger overrides bound the update-adoption delay (default window is

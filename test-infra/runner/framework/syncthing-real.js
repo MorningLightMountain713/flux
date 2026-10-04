@@ -1,5 +1,5 @@
 // Reads a node's OWN syncthing daemon, for suites booted with
-// `createTestEnv({ syncthing: 'binary' })`.
+// `createTestEnv({ syncthing: 'real' })`.
 //
 // Deliberately observers, not setters. The stub's control surface
 // (syncthing-control.js) scripts what a node believes about sync state, because

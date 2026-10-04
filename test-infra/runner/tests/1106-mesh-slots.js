@@ -122,8 +122,8 @@ describe('mesh ordinals — granted identity, replacement inheritance', function
       nodes: 4,
       tickerAutostart: false,
       systemdMode: true,
-      shutdowndMock: false,
-      dnsdReal: true,
+      shutdownd: 'none',
+      dnsd: 'real',
       arcane: true,
       // The founding photos pin committees at spec anchor heights, which
       // needs the ANCHORED membership history — the ZMQ delta machinery

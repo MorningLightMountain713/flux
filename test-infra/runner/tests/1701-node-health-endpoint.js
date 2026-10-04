@@ -22,7 +22,7 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 const FLEETS = [
   // binary so FluxOS owns the daemon - the gate is held to that, and a stubbed
   // syncthing on another host is carved out exactly as Arcane is.
-  { name: 'legacy, where syncthing decides fitness', options: { nodes: 1, legacyNodes: [0], syncthing: 'binary' } },
+  { name: 'legacy, where syncthing decides fitness', options: { nodes: 1, legacyNodes: [0], syncthing: 'real' } },
   { name: 'Arcane, where that check is carved out', options: { nodes: 1 } },
 ];
 

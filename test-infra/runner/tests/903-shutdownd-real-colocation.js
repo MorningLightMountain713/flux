@@ -114,7 +114,7 @@ describe('flux-shutdownd (real): per-identity plans and replica-scoped drains', 
   before(async function () {
     this.timeout(600000);
     env = await createTestEnv({
-      hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true, shutdowndReal: true,
+      hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true, shutdownd: 'real',
       configOverrides: {
         fluxapps: {
           minOutgoing: 2,

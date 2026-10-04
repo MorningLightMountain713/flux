@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the flux-shutdownd this branch pairs with, for the real-daemon e2e
-# suite (shutdowndReal nodes bind-mount dist/). The pairing is declared by
+# suite (`shutdownd: 'real'` nodes bind-mount dist/). The pairing is declared by
 # `pin` (full commit hash) — bump it deliberately, like a flux_iso pin.
 #
 # Skips when dist/ already matches the pin; pass --force to rebuild anyway.

@@ -68,8 +68,8 @@ describe('mesh DNS through the real resolver', function () {
       nodes: 3,
       tickerAutostart: false,
       systemdMode: true,
-      shutdowndMock: false,
-      dnsdReal: true,
+      shutdownd: 'none',
+      dnsd: 'real',
       arcane: true,
       // The founding photos pin committees at spec anchor heights, which
       // needs the ANCHORED membership history — the ZMQ delta machinery
