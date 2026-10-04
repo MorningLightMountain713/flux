@@ -1,26 +1,27 @@
 'use strict';
 
-const operationRegistry = require('../utils/operationRegistry');
 const log = require('../../lib/log');
-const daemonStatus = require('../daemonService/daemonStatus');
+const capabilities = require('../utils/capabilities');
 const appsRepository = require('../appDatabase/appsRepository');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 
-// Module-level state tracking
-let daemonUnsyncedSince = null;  // Timestamp when daemon became unsynced, or null if synced
-let allAppsRemoved = false;
+// A node whose daemon has not been synced for this long removes every app.
+const UNSYNCED_REMOVAL_MS = 2 * 60 * 60 * 1000;
 
-// Thresholds
-const RUNTIME_THRESHOLD = 2 * 60 * 60 * 1000;  // 2 hours
+let deadline = null;
+let started = false;
 
 /**
- * Removes all installed applications due to daemon failure
+ * Removes all installed applications due to daemon failure.
+ *
+ * Each removal is the uninstaller's emergency removal (skipGuard): it cancels an
+ * install of that app in flight, goes past any other operation on it, and never
+ * starts a second teardown of an app already being removed.
+ *
  * @param {string} reason - Reason for removal (for logging)
  */
 async function removeAllApps(reason) {
   try {
-    allAppsRemoved = true;  // Set flag to prevent repeated attempts
-
     const installedApps = await appsRepository.listInstalledApps();
 
     if (!installedApps || installedApps.length === 0) {
@@ -36,12 +37,12 @@ async function removeAllApps(reason) {
       log.warn(`REMOVAL REASON: Daemon failure - removing ${app.name} (${reason})`);
       try {
         // we probably won't have peers - but broadcast anyway
+        // eslint-disable-next-line no-await-in-loop
         await appUninstaller.uninstallApplication(app.name, {
           forceKill: true, skipGuard: true, broadcastRemoval: true, background: true,
         });
       } catch (error) {
         log.error(`Failed to remove ${app.name}: ${error.message}`);
-        // Continue with next app even if one fails
       }
     }
 
@@ -51,54 +52,40 @@ async function removeAllApps(reason) {
   }
 }
 
+async function onDeadline() {
+  deadline = null;
+  const reason = 'Daemon not synced for 2+ hours';
+  log.error(`CRITICAL: ${reason}. Removing all applications.`);
+  await removeAllApps(reason);
+}
+
+function armDeadline() {
+  log.warn('Daemon not synced, apps are removed if it stays unsynced for 2 hours');
+  deadline = setTimeout(() => {
+    onDeadline().catch((error) => log.error(`Daemon health removal error: ${error.message}`));
+  }, UNSYNCED_REMOVAL_MS);
+}
+
+function cancelDeadline() {
+  if (!deadline) return;
+  clearTimeout(deadline);
+  deadline = null;
+  log.info('Daemon synced again, app removal cancelled');
+}
+
 /**
- * Checks daemon health and removes all apps if daemon unsynced beyond threshold
- * Called periodically (every 15 minutes) from serviceManager
+ * Follows `daemonSynced`: each time it goes down a 2 hour deadline is armed, each
+ * time it comes up the deadline is cancelled, and a deadline that fires removes
+ * every app. Armed at once when the daemon is not synced as this starts.
  */
-async function checkDaemonHealthAndCleanup() {
-  try {
-    // Skip while ANY operation is in flight: the cleanup this watchdog can trigger
-    // is a node-wide mass-removal of every installed app, so it must never run
-    // concurrently with any install/remove/redeploy/reconcile/backup/restore.
-    if (operationRegistry.anyHeld()) {
-      return;
-    }
-
-    // Check daemon sync status (updated every 30 seconds by daemonStatus)
-    const syncStatus = daemonStatus.isDaemonSynced();
-
-    if (syncStatus.data.synced) {
-      // Daemon is synced - reset tracking
-      if (daemonUnsyncedSince !== null) {
-        log.info('Daemon sync recovered, resetting health monitor state');
-      }
-      daemonUnsyncedSince = null;
-      allAppsRemoved = false;
-      return;
-    }
-
-    // Daemon NOT synced
-    if (daemonUnsyncedSince === null) {
-      // Just became unsynced, start tracking
-      log.warn('Daemon detected as unsynced, starting health monitoring');
-      daemonUnsyncedSince = Date.now();
-      return;
-    }
-
-    // Calculate how long daemon has been unsynced
-    const unsyncedDuration = Date.now() - daemonUnsyncedSince;
-
-    // Check if threshold exceeded
-    if (unsyncedDuration >= RUNTIME_THRESHOLD && !allAppsRemoved) {
-      const reason = 'Daemon not synced for 2+ hours';
-      log.error(`CRITICAL: ${reason}. Removing all applications.`);
-      await removeAllApps(reason);
-    }
-  } catch (error) {
-    log.error(`Error in daemon health check: ${error.message}`);
-  }
+function start() {
+  if (started) return;
+  started = true;
+  capabilities.onDown('daemonSynced', armDeadline);
+  capabilities.onUp('daemonSynced', cancelDeadline);
+  if (!capabilities.isUp('daemonSynced')) armDeadline();
 }
 
 module.exports = {
-  checkDaemonHealthAndCleanup,
+  start,
 };

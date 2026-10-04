@@ -6,315 +6,157 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire');
-// Real registry singleton - un-stubbed in proxyquire, so the module and the test share it.
+// Real capability singleton - un-stubbed in proxyquire, so the module and the test share it.
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
+
+const TWO_HOURS = 2 * 60 * 60 * 1000;
 
 describe('daemonHealthMonitor tests', () => {
   let daemonHealthMonitor;
-  let serviceHelperStub;
   let logStub;
-  let daemonStatusStub;
   let appsRepositoryStub;
   let appUninstallerStub;
+  let reachable;
+  let synced;
   let clock;
 
   beforeEach(() => {
-    // Restore any existing clock first
-    if (clock) {
-      clock.restore();
-    }
-
-    // Create stubs
-    serviceHelperStub = {
-      delay: sinon.stub().resolves(),
-    };
+    capabilities.resetForTests();
+    reachable = capabilities.claim('daemonReachable', 'daemonStatus');
+    synced = capabilities.claim('daemonSynced', 'daemonStatus');
+    reachable.raise('RPC answered');
+    clock = sinon.useFakeTimers();
 
     logStub = {
       info: sinon.stub(),
       warn: sinon.stub(),
       error: sinon.stub(),
     };
-
-    daemonStatusStub = {
-      isDaemonSynced: sinon.stub(),
-    };
-
     appsRepositoryStub = {
-      listInstalledApps: sinon.stub(),
+      listInstalledApps: sinon.stub().resolves([{ name: 'app1' }, { name: 'app2' }]),
     };
-
     appUninstallerStub = {
       uninstallApplication: sinon.stub().resolves(),
     };
 
-    // Use proxyquire to inject stubs
     daemonHealthMonitor = proxyquire.noCallThru()('../../ZelBack/src/services/appMonitoring/daemonHealthMonitor', {
       '../../lib/log': logStub,
-      '../daemonService/daemonStatus': daemonStatusStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../appLifecycle/appUninstaller': appUninstallerStub,
     });
   });
 
   afterEach(() => {
-    operationRegistry.clear();
+    clock.restore();
     sinon.restore();
-    if (clock) {
-      clock.restore();
-      clock = null;
-    }
+    capabilities.resetForTests();
   });
 
-  describe('checkDaemonHealthAndCleanup tests', () => {
-    it('should skip checks while any operation is in flight', async () => {
-      operationRegistry.acquire('someapp', 'install', 'test');
-      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
+  // Lets the removal the deadline started run through its awaits.
+  async function settle() {
+    await clock.tickAsync(0);
+  }
 
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
+  it('removes every app once the daemon has been unsynced for two hours', async () => {
+    synced.raise('synced');
+    daemonHealthMonitor.start();
 
-      expect(daemonStatusStub.isDaemonSynced.called).to.be.false;
+    synced.lower('behind');
+    await clock.tickAsync(TWO_HOURS - 1);
+    expect(appUninstallerStub.uninstallApplication.called, 'not before the two hours').to.equal(false);
+
+    await clock.tickAsync(1);
+    await settle();
+    expect(appUninstallerStub.uninstallApplication.callCount).to.equal(2);
+    sinon.assert.calledWith(appUninstallerStub.uninstallApplication, 'app1', {
+      forceKill: true, skipGuard: true, broadcastRemoval: true, background: true,
     });
-
-    it('should skip checks during a backup too (any lease counts for the node-wide mass-wipe)', async () => {
-      operationRegistry.acquire('someapp', 'backup', 'test');
-      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
-
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      expect(daemonStatusStub.isDaemonSynced.called).to.be.false;
-    });
-
-    it('should reset state when daemon is synced after being unsynced', async () => {
-      // First call - daemon becomes unsynced
-      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-      expect(logStub.warn.calledWith('Daemon detected as unsynced, starting health monitoring')).to.be.true;
-
-      // Second call - daemon is synced again
-      daemonStatusStub.isDaemonSynced.returns({ data: { synced: true } });
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      expect(logStub.info.calledWith('Daemon sync recovered, resetting health monitor state')).to.be.true;
-    });
-
-    it('should do nothing when daemon is synced and was never unsynced', async () => {
-      daemonStatusStub.isDaemonSynced.returns({ data: { synced: true } });
-
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      expect(logStub.info.called).to.be.false;
-      expect(logStub.warn.called).to.be.false;
-      expect(logStub.error.called).to.be.false;
-    });
-
-    it('should start tracking when daemon becomes unsynced', async () => {
-      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
-
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      expect(logStub.warn.calledWith('Daemon detected as unsynced, starting health monitoring')).to.be.true;
-      expect(appsRepositoryStub.listInstalledApps.called).to.be.false;
-    });
-
-    it('should not remove apps when daemon unsynced for less than 2 hours', async () => {
-      clock = sinon.useFakeTimers();
-
-      // First call - daemon becomes unsynced
-      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      // Advance time by 1 hour (less than threshold)
-      clock.tick(60 * 60 * 1000);
-
-      // Second call - still unsynced but not past threshold
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      expect(appsRepositoryStub.listInstalledApps.called).to.be.false;
-      expect(logStub.error.called).to.be.false;
-    });
-
-    it('should remove apps when daemon unsynced for 2+ hours', async () => {
-      clock = sinon.useFakeTimers();
-
-      const mockApps = [
-        { name: 'app1' },
-        { name: 'app2' },
-      ];
-      appsRepositoryStub.listInstalledApps.resolves(mockApps);
-
-      // First call - daemon becomes unsynced
-      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      // Advance time by 2 hours (past threshold)
-      clock.tick(2 * 60 * 60 * 1000);
-
-      // Second call - should trigger app removal
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      expect(logStub.error.calledWith('CRITICAL: Daemon not synced for 2+ hours. Removing all applications.')).to.be.true;
-      expect(appsRepositoryStub.listInstalledApps.called).to.be.true;
-      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(2);
-      expect(appUninstallerStub.uninstallApplication.firstCall.args[0]).to.equal('app1');
-      expect(appUninstallerStub.uninstallApplication.secondCall.args[0]).to.equal('app2');
-    });
-
-    it('should not remove apps multiple times', async () => {
-      clock = sinon.useFakeTimers();
-
-      const mockApps = [{ name: 'app1' }];
-      appsRepositoryStub.listInstalledApps.resolves(mockApps);
-
-      // First call - daemon becomes unsynced
-      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      // Advance time by 2 hours
-      clock.tick(2 * 60 * 60 * 1000);
-
-      // Second call - should trigger app removal
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(1);
-
-      // Third call - should not trigger removal again
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(1);
-    });
-
-    it('should log info when no apps are installed', async () => {
-      clock = sinon.useFakeTimers();
-
-      appsRepositoryStub.listInstalledApps.resolves([]);
-
-      // First call - daemon becomes unsynced
-      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      // Advance time by 2 hours
-      clock.tick(2 * 60 * 60 * 1000);
-
-      // Second call - should attempt removal but find no apps
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      expect(logStub.info.calledWith('No apps installed, nothing to remove')).to.be.true;
-      expect(appUninstallerStub.uninstallApplication.called).to.be.false;
-    });
-
-    it('should handle null installed apps', async () => {
-      clock = sinon.useFakeTimers();
-
-      appsRepositoryStub.listInstalledApps.resolves(null);
-
-      // First call - daemon becomes unsynced
-      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      // Advance time by 2 hours
-      clock.tick(2 * 60 * 60 * 1000);
-
-      // Second call - should handle null gracefully
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      expect(logStub.info.calledWith('No apps installed, nothing to remove')).to.be.true;
-      expect(appUninstallerStub.uninstallApplication.called).to.be.false;
-    });
-
-    it('should continue removing apps even if one fails', async () => {
-      clock = sinon.useFakeTimers();
-
-      const mockApps = [
-        { name: 'app1' },
-        { name: 'app2' },
-        { name: 'app3' },
-      ];
-      appsRepositoryStub.listInstalledApps.resolves(mockApps);
-
-      // Make the second app fail
-      appUninstallerStub.uninstallApplication
-        .onCall(0).resolves()
-        .onCall(1).rejects(new Error('Removal failed'))
-        .onCall(2).resolves();
-
-      // First call - daemon becomes unsynced
-      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      // Advance time by 2 hours
-      clock.tick(2 * 60 * 60 * 1000);
-
-      // Second call - should attempt all removals
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(3);
-      expect(logStub.error.calledWith('Failed to remove app2: Removal failed')).to.be.true;
-    });
-
-    it('removes without self-pacing - teardowns are backgrounded and lock-serialized', async () => {
-      clock = sinon.useFakeTimers();
-
-      const mockApps = [
-        { name: 'app1' },
-        { name: 'app2' },
-      ];
-      appsRepositoryStub.listInstalledApps.resolves(mockApps);
-
-      // First call - daemon becomes unsynced
-      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      // Advance time by 2 hours
-      clock.tick(2 * 60 * 60 * 1000);
-
-      // Second call - triggers the wipe
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      expect(serviceHelperStub.delay.called).to.be.false;
-      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(2);
-      sinon.assert.calledWithMatch(
-        appUninstallerStub.uninstallApplication,
-        'app1',
-        sinon.match({ forceKill: true, skipGuard: true, broadcastRemoval: true, background: true }),
-      );
-    });
-
-    it('should handle errors during health check gracefully', async () => {
-      daemonStatusStub.isDaemonSynced.throws(new Error('RPC error'));
-
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      expect(logStub.error.calledWith('Error in daemon health check: RPC error')).to.be.true;
-    });
-
-    it('should reset allAppsRemoved flag when daemon recovers', async () => {
-      clock = sinon.useFakeTimers();
-
-      const mockApps = [{ name: 'app1' }];
-      appsRepositoryStub.listInstalledApps.resolves(mockApps);
-
-      // First call - daemon becomes unsynced
-      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      // Advance time by 2 hours and trigger removal
-      clock.tick(2 * 60 * 60 * 1000);
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(1);
-
-      // Daemon recovers
-      daemonStatusStub.isDaemonSynced.returns({ data: { synced: true } });
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      // Daemon goes unsynced again
-      daemonStatusStub.isDaemonSynced.returns({ data: { synced: false } });
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      // Advance time by 2 hours again
-      clock.tick(2 * 60 * 60 * 1000);
-      appsRepositoryStub.listInstalledApps.resolves([{ name: 'app2' }]);
-      await daemonHealthMonitor.checkDaemonHealthAndCleanup();
-
-      // Should attempt removal again since flag was reset
-      expect(appUninstallerStub.uninstallApplication.callCount).to.equal(2);
-    });
+  });
+
+  it('cancels the removal when the daemon syncs again inside the two hours', async () => {
+    synced.raise('synced');
+    daemonHealthMonitor.start();
+
+    synced.lower('behind');
+    await clock.tickAsync(TWO_HOURS / 2);
+    synced.raise('caught up');
+    await clock.tickAsync(TWO_HOURS);
+    await settle();
+
+    expect(appUninstallerStub.uninstallApplication.called).to.equal(false);
+  });
+
+  it('arms at once when the daemon is not synced as it starts', async () => {
+    daemonHealthMonitor.start();
+
+    await clock.tickAsync(TWO_HOURS);
+    await settle();
+
+    expect(appUninstallerStub.uninstallApplication.callCount).to.equal(2);
+  });
+
+  it('counts an unreachable daemon as unsynced', async () => {
+    synced.raise('synced');
+    daemonHealthMonitor.start();
+
+    reachable.lower('RPC did not answer');
+    await clock.tickAsync(TWO_HOURS);
+    await settle();
+
+    expect(appUninstallerStub.uninstallApplication.callCount).to.equal(2);
+  });
+
+  // A canary for the negative tests above: the same timeline with the daemon
+  // staying down does remove.
+  it('measures the two hours from the down edge, and a second down edge starts a new two hours', async () => {
+    synced.raise('synced');
+    daemonHealthMonitor.start();
+
+    synced.lower('behind');
+    await clock.tickAsync(TWO_HOURS / 2);
+    synced.raise('caught up');
+    synced.lower('behind again');
+    await clock.tickAsync(TWO_HOURS - 1);
+    await settle();
+    expect(appUninstallerStub.uninstallApplication.called, 'the first window was cancelled').to.equal(false);
+
+    await clock.tickAsync(1);
+    await settle();
+    expect(appUninstallerStub.uninstallApplication.callCount).to.equal(2);
+  });
+
+  it('removes even while an operation is in flight - the uninstaller handles a busy app', async () => {
+    operationRegistry.acquire('app1', 'backup', 'test');
+    daemonHealthMonitor.start();
+
+    await clock.tickAsync(TWO_HOURS);
+    await settle();
+    operationRegistry.clear();
+
+    expect(appUninstallerStub.uninstallApplication.callCount).to.equal(2);
+  });
+
+  it('keeps removing the rest when one removal fails', async () => {
+    appsRepositoryStub.listInstalledApps.resolves([{ name: 'app1' }, { name: 'app2' }, { name: 'app3' }]);
+    appUninstallerStub.uninstallApplication.onCall(1).rejects(new Error('Removal failed'));
+    daemonHealthMonitor.start();
+
+    await clock.tickAsync(TWO_HOURS);
+    await settle();
+
+    expect(appUninstallerStub.uninstallApplication.callCount).to.equal(3);
+    expect(logStub.error.calledWith('Failed to remove app2: Removal failed')).to.equal(true);
+  });
+
+  it('removes nothing when no apps are installed', async () => {
+    appsRepositoryStub.listInstalledApps.resolves(null);
+    daemonHealthMonitor.start();
+
+    await clock.tickAsync(TWO_HOURS);
+    await settle();
+
+    expect(logStub.info.calledWith('No apps installed, nothing to remove')).to.equal(true);
+    expect(appUninstallerStub.uninstallApplication.called).to.equal(false);
   });
 });

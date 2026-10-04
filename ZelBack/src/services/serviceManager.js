@@ -908,12 +908,7 @@ async function startFluxFunctions() {
         // Re-issue managed backend-TLS leaves before their 30-day life runs out
         // (dormant on a node running no verify:required app).
         backendTlsRenewal.start();
-        setTimeout(() => {
-          daemonHealthMonitor.checkDaemonHealthAndCleanup();
-          setInterval(() => {
-            daemonHealthMonitor.checkDaemonHealthAndCleanup();
-          }, bootDelay(15 * 60 * 1000));
-        }, bootDelay(5 * 60 * 1000));
+        daemonHealthMonitor.start();
         // Gated for the same reason as the image updater: this pass redeploys on a
         // storage violation, and one that runs before policy refuses and re-arms
         // thirty minutes out. It re-arms itself from then on, so only the first run
