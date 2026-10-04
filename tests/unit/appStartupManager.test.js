@@ -96,6 +96,7 @@ describe('appStartupManager tests', () => {
 
     appStartupManager = proxyquire('../../ZelBack/src/services/appLifecycle/appStartupManager', {
       './crontabAndMountsCleanup': { cleanupCrontabAndMounts: sinon.stub().resolves() },
+      './hardwareValidationService': { performBootTimeHardwareValidation: sinon.stub().resolves() },
       './containerMountRecovery': { performContainerMountRecovery: sinon.stub().resolves() },
       '../appSystem/fileOperationRecovery': { recoverInterruptedFileOperations: sinon.stub().resolves() },
       '../../lib/log': logStub,
@@ -143,6 +144,7 @@ describe('appStartupManager tests', () => {
       // Rebuild the module against a config whose lifecycle toggle is on.
       const flaggedStartupManager = proxyquire('../../ZelBack/src/services/appLifecycle/appStartupManager', {
         './crontabAndMountsCleanup': { cleanupCrontabAndMounts: sinon.stub().resolves() },
+        './hardwareValidationService': { performBootTimeHardwareValidation: sinon.stub().resolves() },
         './containerMountRecovery': { performContainerMountRecovery: sinon.stub().resolves() },
         '../appSystem/fileOperationRecovery': { recoverInterruptedFileOperations: sinon.stub().resolves() },
         config: asConfig({ ...realConfig, fluxapps: { ...realConfig.fluxapps, manageCollectorLifecycle: true } }),
@@ -347,10 +349,12 @@ describe('appStartupManager tests', () => {
   // and the reconcile. bootSyncTimeoutMs bounds the registry wait and the state
   // pull together, in real milliseconds here.
   let specReconcilerStub;
+  let hardwareStub;
   let storageStubs;
 
   function loadWithMigrations(runBefore, { bootSyncTimeoutMs } = {}) {
     specReconcilerStub = { convergeAtBoot: sinon.stub().resolves() };
+    hardwareStub = { performBootTimeHardwareValidation: sinon.stub().resolves() };
     storageStubs = {
       mounts: { cleanupCrontabAndMounts: sinon.stub().resolves() },
       mountRecovery: { performContainerMountRecovery: sinon.stub().resolves() },
@@ -377,6 +381,7 @@ describe('appStartupManager tests', () => {
       '../migrations': { runBefore },
       './contentSlotService': { reconcileBootContent: sinon.stub().resolves() },
       './specReconciler': specReconcilerStub,
+      './hardwareValidationService': hardwareStub,
       './crontabAndMountsCleanup': storageStubs.mounts,
       './containerMountRecovery': storageStubs.mountRecovery,
       '../appSystem/fileOperationRecovery': storageStubs.fileOperations,
@@ -451,6 +456,20 @@ describe('appStartupManager tests', () => {
       sinon.assert.calledOnce(specReconcilerStub.convergeAtBoot);
       expect(runBefore.calledBefore(specReconcilerStub.convergeAtBoot), 'the migrations before the pass').to.equal(true);
       expect(specReconcilerStub.convergeAtBoot.calledBefore(dockerServiceStub.dockerListContainers), 'the pass before the reconcile').to.equal(true);
+    });
+
+    // The hardware sum counts only the apps the registry lets this node keep, and
+    // an app it removes never starts.
+    it('fits the kept apps to the hardware after the registry pass and before anything starts', async () => {
+      const runBefore = migrationsTaking(1000);
+      const manager = loadWithMigrations(runBefore);
+
+      await manager.manageAppsOnBoot(contextDropped(60_000));
+
+      const hardware = hardwareStub.performBootTimeHardwareValidation;
+      sinon.assert.calledOnce(hardware);
+      expect(specReconcilerStub.convergeAtBoot.calledBefore(hardware), 'the registry pass before the hardware sum').to.equal(true);
+      expect(hardware.calledBefore(dockerServiceStub.dockerListContainers), 'the hardware sum before the reconcile').to.equal(true);
     });
 
     // Every installed app's storage is touched only under the names the migrations

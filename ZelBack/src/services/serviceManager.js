@@ -54,7 +54,6 @@ const backendTlsRenewal = require('./appLifecycle/backendTlsRenewal');
 const volumeExecutor = require('./appSystem/volumeExecutor');
 const appStartupManager = require('./appLifecycle/appStartupManager');
 const contentSlotService = require('./appLifecycle/contentSlotService');
-const hardwareValidationService = require('./appLifecycle/hardwareValidationService');
 const globalState = require('./utils/globalState');
 const capabilities = require('./utils/capabilities');
 const nodeCapabilities = require('./utils/nodeCapabilities');
@@ -468,14 +467,6 @@ async function startFluxFunctions() {
         // baseline is the expensive half and stays in startDbDependentServices,
         // where its two-million-row ingest cannot land on top of that rebuild.
         ipLocationSync.restoreCachedTable().catch((err) => log.error(`ipLocationSync restore error: ${err.message}`));
-
-        // Validate hardware requirements and remove non-compliant apps FIRST
-        log.info('Scheduling hardware validation check...');
-        setTimeout(() => {
-          hardwareValidationService.performBootTimeHardwareValidation().catch((error) => {
-            log.error(`Hardware validation service error: ${error.message}`);
-          });
-        }, bootDelay(50 * 1000)); // Run at 50 seconds - BEFORE boot reconciliation
 
         // Migrate existing containers from 'unless-stopped'/'always' to 'no' restart policy.
         // Non-destructive — doesn't stop containers, just prevents Docker from auto-starting
