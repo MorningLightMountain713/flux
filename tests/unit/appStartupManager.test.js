@@ -52,10 +52,13 @@ describe('appStartupManager tests', () => {
       },
 
       dockerListContainers: sinon.stub(),
+      getFluxDockerNetworkPhysicalInterfaceNames: sinon.stub().resolves(['br-0123456789ab']),
     };
 
     fluxNetworkHelperStub = {
       getLocalSocketAddress: sinon.stub(),
+      removeDockerContainerAccessToNonRoutable: sinon.stub().resolves(true),
+      purgeUFW: sinon.stub().resolves(),
     };
 
     appReconcilerStub = {
@@ -470,6 +473,33 @@ describe('appStartupManager tests', () => {
       sinon.assert.calledOnce(hardware);
       expect(specReconcilerStub.convergeAtBoot.calledBefore(hardware), 'the registry pass before the hardware sum').to.equal(true);
       expect(hardware.calledBefore(dockerServiceStub.dockerListContainers), 'the hardware sum before the reconcile').to.equal(true);
+    });
+
+    // The isolation chain is built over the networks the migrations and removals
+    // left, and is in place before any container starts.
+    it('builds the container firewall over the final networks before anything starts', async () => {
+      const runBefore = migrationsTaking(1000);
+      const manager = loadWithMigrations(runBefore);
+
+      await manager.manageAppsOnBoot(contextDropped(60_000));
+
+      const isolate = fluxNetworkHelperStub.removeDockerContainerAccessToNonRoutable;
+      sinon.assert.calledOnceWithExactly(isolate, ['br-0123456789ab']);
+      sinon.assert.calledOnce(fluxNetworkHelperStub.purgeUFW);
+      expect(hardwareStub.performBootTimeHardwareValidation.calledBefore(dockerServiceStub.getFluxDockerNetworkPhysicalInterfaceNames), 'the removals before the networks are read').to.equal(true);
+      expect(isolate.calledBefore(dockerServiceStub.dockerListContainers), 'the isolation before the reconcile').to.equal(true);
+      expect(fluxNetworkHelperStub.purgeUFW.calledBefore(dockerServiceStub.dockerListContainers), 'the deny purge before the reconcile').to.equal(true);
+    });
+
+    it('a firewall step that fails is logged, and the deny purge and the apps still run', async () => {
+      fluxNetworkHelperStub.removeDockerContainerAccessToNonRoutable.rejects(new Error('iptables gone'));
+      const runBefore = migrationsTaking(1000);
+      const manager = loadWithMigrations(runBefore);
+
+      await manager.manageAppsOnBoot(contextDropped(60_000));
+
+      sinon.assert.calledOnce(fluxNetworkHelperStub.purgeUFW);
+      expect(dockerServiceStub.dockerListContainers.calledOnce, 'the reconcile ran').to.equal(true);
     });
 
     // Every installed app's storage is touched only under the names the migrations

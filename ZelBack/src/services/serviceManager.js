@@ -777,12 +777,6 @@ async function startFluxFunctions() {
 
         // await throughput.start();
 
-        setTimeout(async () => {
-          const fluxNetworkInterfaces = await dockerService.getFluxDockerNetworkPhysicalInterfaceNames();
-          await fluxNetworkHelper.removeDockerContainerAccessToNonRoutable(fluxNetworkInterfaces);
-          log.info('Rechecking firewall app rules');
-          await fluxNetworkHelper.purgeUFW();
-        }, bootDelay(30 * 1000));
         setTimeout(() => {
           appController.stopAllNonFluxRunningApps();
           // Best effort during boot — the reconciler starts monitoring per app as it settles.
