@@ -210,6 +210,19 @@ async function prepareInstalledAppStorage() {
 }
 
 /**
+ * The node-wide firewall every app container runs behind: the rules that keep
+ * containers off private networks and off each other's networks, applied over
+ * the flux networks that exist now, and the port deny rules ufw still holds purged. Docker brings the
+ * chain back empty after a host reboot, so this runs before any container starts.
+ */
+async function prepareAppFirewall() {
+  await dockerService.applyContainerFirewall()
+    .catch((error) => log.error(`appStartupManager - container network isolation: ${error.message}`));
+  await fluxNetworkHelper.purgeUFW()
+    .catch((error) => log.error(`appStartupManager - ufw deny rules: ${error.message}`));
+}
+
+/**
  * The one question, asked at boot, on the return from total unreachability
  * after the resync, and on hearing a certificate about this node. Placed: every
  * app is kept and the caller announces. Not placed: every installed app is
@@ -644,6 +657,9 @@ async function manageAppsOnBoot(bootContext) {
     // What is left must fit this node's hardware, summed over the apps the
     // registry lets it keep: the newest are removed until the rest fit.
     await hardwareValidationService.performBootTimeHardwareValidation();
+    // The networks are final here: the migrations renamed them and the removals
+    // above deleted theirs.
+    await prepareAppFirewall();
     log.info('appStartupManager - Daemon, DB, and node confirmed, reconciling apps');
     await openInstalledAppPorts();
     await reconcileAppsOnBoot({ placement });

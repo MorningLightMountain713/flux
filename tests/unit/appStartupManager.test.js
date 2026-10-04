@@ -52,10 +52,12 @@ describe('appStartupManager tests', () => {
       },
 
       dockerListContainers: sinon.stub(),
+      applyContainerFirewall: sinon.stub().resolves(true),
     };
 
     fluxNetworkHelperStub = {
       getLocalSocketAddress: sinon.stub(),
+      purgeUFW: sinon.stub().resolves(),
     };
 
     appReconcilerStub = {
@@ -515,6 +517,33 @@ describe('appStartupManager tests', () => {
       sinon.assert.calledOnce(hardware);
       expect(specReconcilerStub.convergeAtBoot.calledBefore(hardware), 'the registry pass before the hardware sum').to.equal(true);
       expect(hardware.calledBefore(dockerServiceStub.dockerListContainers), 'the hardware sum before the reconcile').to.equal(true);
+    });
+
+    // The container firewall is applied over the networks the migrations and
+    // removals left, and is in place before any container starts.
+    it('applies the container firewall over the final networks before anything starts', async () => {
+      const runBefore = migrationsTaking(1000);
+      const manager = loadWithMigrations(runBefore);
+
+      await manager.manageAppsOnBoot(contextDropped(60_000));
+
+      const isolate = dockerServiceStub.applyContainerFirewall;
+      sinon.assert.calledOnce(isolate);
+      sinon.assert.calledOnce(fluxNetworkHelperStub.purgeUFW);
+      expect(hardwareStub.performBootTimeHardwareValidation.calledBefore(isolate), 'the removals before the firewall').to.equal(true);
+      expect(isolate.calledBefore(dockerServiceStub.dockerListContainers), 'the isolation before the reconcile').to.equal(true);
+      expect(fluxNetworkHelperStub.purgeUFW.calledBefore(dockerServiceStub.dockerListContainers), 'the deny purge before the reconcile').to.equal(true);
+    });
+
+    it('a firewall step that fails is logged, and the deny purge and the apps still run', async () => {
+      dockerServiceStub.applyContainerFirewall.rejects(new Error('iptables gone'));
+      const runBefore = migrationsTaking(1000);
+      const manager = loadWithMigrations(runBefore);
+
+      await manager.manageAppsOnBoot(contextDropped(60_000));
+
+      sinon.assert.calledOnce(fluxNetworkHelperStub.purgeUFW);
+      expect(dockerServiceStub.dockerListContainers.calledOnce, 'the reconcile ran').to.equal(true);
     });
 
     // Every installed app's storage is touched only under the names the migrations

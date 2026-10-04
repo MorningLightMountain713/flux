@@ -595,10 +595,10 @@ async function startFluxFunctions() {
         const bootContext = await bootContextRead;
 
         // The rules that keep app containers off private networks and off each
-        // other's networks, applied before any app container starts. A failure is
-        // logged and apps still start. Rechecked so a removed chain returns; each
-        // network FluxOS creates or removes re-applies them as it goes.
-        await dockerService.applyContainerFirewall();
+        // other's networks are applied by the boot reconcile before any container
+        // starts (appStartupManager.prepareAppFirewall). Rechecked so a removed
+        // chain returns; each network FluxOS creates or removes re-applies them as
+        // it goes.
         setInterval(() => dockerService.applyContainerFirewall(), 10 * 60 * 1000);
 
         // App startup manager owns all boot-time container lifecycle decisions:
@@ -900,10 +900,6 @@ async function startFluxFunctions() {
 
         // await throughput.start();
 
-        setTimeout(async () => {
-          log.info('Rechecking firewall app rules');
-          await fluxNetworkHelper.purgeUFW();
-        }, bootDelay(30 * 1000));
         setTimeout(() => {
           appController.stopAllNonFluxRunningApps();
           // Best effort during boot — the reconciler starts monitoring per app as it settles.
