@@ -1,5 +1,4 @@
 // fleet: 4
-import { createHash, randomBytes } from 'node:crypto';
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
@@ -8,10 +7,9 @@ import { pushTestApp } from '../framework/registry-helper.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { restartFluxos } from '../framework/container.js';
 import { waitFor } from '../framework/wait.js';
-import { dbClient } from '../framework/db-client.js';
-import { appOwnerKey } from '../framework/keys.js';
+import { appOwnerKey, nodeKey } from '../framework/keys.js';
+import { registerAndConfirm } from '../framework/app-helper.js';
 import { assignPorts } from '../framework/port-allocator.js';
-import { signBtcMessage } from '../auth.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // The location table's LIFE, as opposed to its first fetch.
@@ -72,6 +70,8 @@ const QUERY_NODE = 0;
 const REFRESH_NODE = 1;
 const REJECT_NODE = 2;
 const FLOOR_NODE = 3;
+// Registers the app the update scenarios need; any node inside the ring, never index 0.
+const REGISTRAR_NODE = 1;
 
 // The v8 spec shape the registration validator wants in full: it runs before the
 // placement gate, so a hand-rolled spec fails on a missing field long before it
@@ -114,39 +114,11 @@ function gateSpec({ name, instances, geolocation = [] }) {
   return spec;
 }
 
-// The permanent registration message an update is validated against. The update
-// path resolves the app's PREVIOUS specifications out of the message collection,
-// so an app the network has never heard of cannot be updated at all. Built the
-// way the network builds it (seed-helper's construction): the owner signs
-// type + version + spec + timestamp, and the message hash covers that plus the
-// signature.
-async function permanentRegistrationMessage(spec, height) {
-  const ownerKey = appOwnerKey();
-  const type = 'fluxappregister';
-  const version = 1;
-  const timestamp = Date.now();
-  const signature = await signBtcMessage(type + version + JSON.stringify(spec) + timestamp, ownerKey.privkey);
-  const hash = createHash('sha256')
-    .update(type + version + JSON.stringify(spec) + timestamp + signature)
-    .digest('hex');
-  return {
-    type,
-    version,
-    appSpecifications: spec,
-    hash,
-    timestamp,
-    signature,
-    txid: randomBytes(32).toString('hex'),
-    height,
-    valueSat: 200000000,
-  };
-}
-
 describe('the location table survives restarts and refuses bad publications', function () {
   let env;
   let baselineGenerated; // the artifact identity every node ingests at boot
   let fleetContinent; // the continent the baseline split puts the whole fleet in
-  let registeredSpec; // the formatted spec seeded as the app's previous version
+  let registeredSpec; // the formatted spec registered as the app's previous version
   let instanceCount; // the app's instance count: the whole fleet
   const subnet = getSubnetConfig();
   const appName = `e2elifecycle${Date.now()}`;
@@ -596,13 +568,16 @@ describe('the location table survives restarts and refuses bad publications', fu
     // the update path below compares against exactly that
     registeredSpec = accepted.data;
 
-    // Give the app a past. An update is validated against the specifications it
-    // replaces, which the node reads out of the permanent message collection.
-    await dbClient(env.clients[QUERY_NODE].num)
-      // seeded relative to this suite's chain: a literal here expires the app
-      // before the fleet's first block, and this suite restarts FluxOS - which
-      // re-arms expireGlobalApplications and deletes the very app it asserts on
-      .seedPermanentMessage(await permanentRegistrationMessage(registeredSpec, env.initialHeight + 10));
+    // Give the app a past: registered and confirmed on chain, so the decider applies
+    // it and every node holds its registry row. An update is validated against that
+    // row. Registered from inside the ring, where the door finds its peer floor.
+    const registered = await registerAndConfirm(
+      env.clients[REGISTRAR_NODE].url, nodeKey(REGISTRAR_NODE + 1), registeredSpec, env.clients,
+    );
+    expect(registered.status, JSON.stringify(registered)).to.equal('success');
+    await waitFor(async () => (await env.clients[QUERY_NODE].get(`/apps/appspecifications/${appName}`)).data?.name === appName, {
+      timeout: 60000, interval: 2000, label: `${appName} in node ${QUERY_NODE}'s registry`,
+    });
 
     // Now the publisher moves a fleet address into the artifact's non-European
     // country. Nothing about the app changes; its geography simply stops being
