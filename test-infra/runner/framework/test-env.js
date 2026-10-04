@@ -1359,7 +1359,7 @@ export async function createTestEnv({
     await startInfraDeathWatch(env);
     await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, mergedOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, arcane, shutdowndMock, telemetrydMock, systemdMode, telemetrydReal, shutdowndReal, dnsdReal, zmqTopics, nodeZmqTopics, { perNodeZmq, seedPolicyGrant, nodeImageTags, ipLocationSeeded }, stubCapabilities);
     // A systemd-mode node logs to its journal, which nodeLogCount cannot read.
-    if (env.ipLocationSnapshot && !systemdMode) await assertIpLocationSnapshotAdopted(env, nodes);
+    if (env.ipLocationSnapshot && !systemdMode) await assertIpLocationSnapshotAdopted(env);
     return env;
   } catch (err) {
     // Boot failed: the env owns everything started so far. The shared teardown
@@ -1392,19 +1392,28 @@ const SNAPSHOT_ADOPTED = /ipLocationStore - adopted the stored baseline/;
 const TABLE_LOADED = /ipLocationStore - baseline installed/;
 
 /**
- * Every node on the main image adopted the IP location table its database holds and
- * loaded none. A node that loads it anyway pays the cost the snapshot removes, and
- * nothing else would say so.
+ * Every started node on the main image adopted the IP location table its database holds
+ * and loaded none. A node that loads it anyway pays the cost the snapshot removes, and
+ * nothing else would say so. Stub peers run no FluxOS, and a deferred node has not booted.
  * @param {object} env
- * @param {number} nodes
  */
-async function assertIpLocationSnapshotAdopted(env, nodes) {
-  const indexes = Array.from({ length: nodes }, (unused, i) => i)
-    .filter((i) => env.nodeImageTag(i) === IMAGE_TAG);
-  await waitFor(() => indexes.every((i) => env.nodeLogCount(i, SNAPSHOT_ADOPTED) > 0), {
-    timeout: 60000, interval: 1000, label: 'every node adopted the IP location table from the mongo snapshot',
-  });
-  const loaded = indexes.filter((i) => env.nodeLogCount(i, TABLE_LOADED) > 0);
+async function assertIpLocationSnapshotAdopted(env) {
+  const booted = env.containers.fluxNodes
+    .map((node, index) => ({ node, index }))
+    .filter(({ node }) => node.container && node.logCollector && node.imageTag === IMAGE_TAG);
+  try {
+    await waitFor(() => booted.every(({ node }) => node.logCollector.countPattern(SNAPSHOT_ADOPTED) > 0), {
+      timeout: 60000, interval: 1000, label: 'every node adopted the IP location table from the mongo snapshot',
+    });
+  } catch (error) {
+    const missing = booted.filter(({ node }) => node.logCollector.countPattern(SNAPSHOT_ADOPTED) === 0);
+    const said = missing.map(({ node, index }) => {
+      const lines = node.logCollector.getLines().filter((line) => /ipLocation/.test(line)).slice(-5);
+      return `node ${index}: ${lines.length ? lines.join(' | ') : 'no ipLocation line at all'}`;
+    });
+    throw new Error(`${error.message}\n${said.join('\n')}`);
+  }
+  const loaded = booted.filter(({ node }) => node.logCollector.countPattern(TABLE_LOADED) > 0).map(({ index }) => index);
   if (loaded.length) {
     throw new Error(`createTestEnv: node(s) ${loaded.join(', ')} loaded the IP location table although the mongo snapshot holds it`);
   }
