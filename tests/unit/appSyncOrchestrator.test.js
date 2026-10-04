@@ -1203,6 +1203,28 @@ describe('AppSyncOrchestrator', () => {
       expect(answersPeers()).to.equal(false);
     });
 
+    // The routes that serve app locations are gated on appStateSynced. A node that
+    // reached readiness on the fallback answers its peers from what it holds, so it
+    // answers its own callers on the same rule.
+    it('raises appStateSynced when the fallback elapses with no survey completed', async () => {
+      const mod = loadWithConfig({ appSyncFallbackMinutes: 2 });
+      getEligibleSyncPeersStub = sinon.stub().returns([]);
+      const orchestrator = new mod.AppSyncOrchestrator({
+        blockEmitter, ...makePeerOptions(),
+      });
+      orchestrator.onMessageCapabilityChange(true);
+      await orchestrator.start(defaultBootContext);
+      peersUp();
+
+      blockEmitter.emit('blocksProcessed', 2_555_000);
+      await clock.tickAsync(0);
+      expect(capabilities.isUp('appStateSynced'), 'up before the fallback with no survey').to.equal(false);
+      for (let i = 1; i <= 4; i += 1) blockEmitter.emit('blocksProcessed', 2_555_000 + i);
+      await clock.tickAsync(0);
+
+      expect(capabilities.isUp('appStateSynced')).to.equal(true);
+    });
+
     it('reaches readiness on the configured number of blocks rather than 250', async () => {
       const mod = loadWithConfig({ appSyncFallbackMinutes: 2 });
       getEligibleSyncPeersStub = sinon.stub().returns([]);
