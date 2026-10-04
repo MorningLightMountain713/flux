@@ -273,6 +273,8 @@ describe('the location table survives restarts and refuses bad publications', fu
       hookCtx: this,
       nodes: NODES,
       tickerAutostart: false,
+      // This suite's subject is the fetch and the load, so every node does both.
+      ipLocationSeeded: false,
       // BEFORE THE NODES START, so every node's first fetch is of THIS artifact and the
       // counters it zeroes describe the boot.
       //
@@ -682,6 +684,8 @@ describe('a fleet with no artifact to fetch holds the tableless posture', functi
       hookCtx: this,
       nodes: NODES,
       tickerAutostart: false,
+      // This suite's subject is the fetch and the load, so every node does both.
+      ipLocationSeeded: false,
       // Withdrawn BEFORE ANY NODE STARTS, so the only bundle this fleet ever sees names no
       // artifact at all.
       //
