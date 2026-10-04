@@ -27,6 +27,7 @@ const docker = new Docker();
 
 const PROBE_TIMEOUT_MS = config.get('fluxapps.dockerProbeTimeoutMs');
 const STOP_SLACK_MS = config.get('fluxapps.dockerStopSlackMs');
+const REQUEST_TIMEOUT_MS = config.get('fluxapps.dockerRequestTimeoutMs');
 // docker's own default when a stop is asked without one.
 const DEFAULT_STOP_SECONDS = 10;
 
@@ -49,6 +50,42 @@ const DEFAULT_STOP_SECONDS = 10;
  */
 function deadline(ms) {
   return AbortSignal.timeout(ms);
+}
+
+/**
+ * Inspects a docker network, bounded by the probe deadline. The ONLY place in
+ * this tree that inspects a network: every caller goes through here.
+ *
+ * WHY THIS DOES NOT CALL dockerode: `docker.getNetwork(name).inspect(opts)`
+ * does not hand `opts.abortSignal` to the request (dockerode 5.0.1, the
+ * current release - its container, image and list methods all do, its network
+ * inspect alone does not). docker-modem strips the signal from the query string
+ * and, never having been given it as the request's signal, sends the request
+ * unbounded. A deadline passed through dockerode here would therefore do
+ * nothing, silently.
+ *
+ * So this makes the same request dockerode makes - the same path, method and
+ * status codes - through the same modem, adding only the signal. When a
+ * dockerode release forwards the signal from Network#inspect, this body becomes
+ * `docker.getNetwork(networkName).inspect({ abortSignal: deadline(PROBE_TIMEOUT_MS) })`.
+ *
+ * @param {string} networkName
+ * @returns {Promise<object>} docker's network inspect body
+ */
+function inspectDockerNetwork(networkName) {
+  return new Promise((resolve, reject) => {
+    docker.modem.dial({
+      path: `/networks/${encodeURIComponent(networkName)}?`,
+      method: 'GET',
+      statusCodes: {
+        200: true,
+        404: 'no such network',
+        500: 'server error',
+      },
+      options: {},
+      abortSignal: deadline(PROBE_TIMEOUT_MS),
+    }, (err, data) => (err ? reject(err) : resolve(data)));
+  });
 }
 
 /**
@@ -215,8 +252,7 @@ async function dockerRemoveNetwork(netw) {
  * @returns {object} ispect network object
  */
 async function dockerNetworkInspect(netw) {
-  const network = await netw.inspect();
-  return network;
+  return inspectDockerNetwork(netw.id);
 }
 
 /**
@@ -236,6 +272,9 @@ async function dockerListContainers(all, limit, size, filter) {
     size,
     filter,
   };
+  // With sizes docker walks every container's writable layer, which is
+  // legitimately slow on a full disk, so only the plain list is bounded.
+  if (!size) options.abortSignal = deadline(REQUEST_TIMEOUT_MS);
   const containers = await docker.listContainers(options);
   return containers;
 }
@@ -929,7 +968,7 @@ function parseCidrSubnet(cidr) {
  */
 async function getNextAvailableIPForApp(appName, networkName = `fluxDockerNetwork_${appName}`) {
   try {
-    const { IPAM, Containers } = await docker.getNetwork(networkName).inspect();
+    const { IPAM, Containers } = await inspectDockerNetwork(networkName);
     if (!IPAM?.Config?.length) throw new Error('No IPAM configuration found');
 
     const { Subnet, Gateway } = IPAM.Config[0];
@@ -1451,7 +1490,7 @@ async function appDockerStart(idOrName) {
     if (!dockerContainer) throw containerGoneError(idOrName);
 
     try {
-      await dockerContainer.start(); // may throw
+      await dockerContainer.start({ abortSignal: deadline(REQUEST_TIMEOUT_MS) }); // may throw
     } catch (err) {
       throw tagIfContainerGone(err);
     }
@@ -1462,7 +1501,7 @@ async function appDockerStart(idOrName) {
     // is reapplied on every start path (initial install, restart, recovery)
     // without each caller having to know about burst.
     try {
-      const containerInspect = await dockerContainer.inspect();
+      const containerInspect = await dockerContainer.inspect({ abortSignal: deadline(PROBE_TIMEOUT_MS) });
       const dockerLabels = containerInspect.Config?.Labels || {};
       const { LABEL_KEYS, readLabel } = await getSpecBackend();
       // Through readLabel: a container created before the label scheme was
@@ -1504,7 +1543,7 @@ async function appDockerStop(idOrName, timeout) {
   if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
 
   // Check if container is running before attempting to stop
-  const containerInfo = await dockerContainer.inspect();
+  const containerInfo = await dockerContainer.inspect({ abortSignal: deadline(PROBE_TIMEOUT_MS) });
   if (!containerInfo.State.Running) {
     return `Flux App ${idOrName} is already stopped.`;
   }
@@ -1547,13 +1586,13 @@ async function appDockerRestart(idOrName) {
 
   const dockerName = getDockerName(idOrName);
   // Check if container is running
-  const containerInfo = await dockerContainer.inspect();
+  const containerInfo = await dockerContainer.inspect({ abortSignal: deadline(PROBE_TIMEOUT_MS) });
   if (!containerInfo.State.Running) {
     // Stopped -> this is really a start, so hold 'actuating' (a die here is a real
     // crash) rather than 'stopping'; a concurrent teardown's remove defers on it.
     const startToken = acquireTransitionLease(dockerName, 'actuating', `restart(start) ${dockerName}`);
     try {
-      await dockerContainer.start();
+      await dockerContainer.start({ abortSignal: deadline(REQUEST_TIMEOUT_MS) });
     } catch (err) {
       throw tagIfContainerGone(err);
     } finally {
@@ -1564,7 +1603,8 @@ async function appDockerRestart(idOrName) {
 
   const token = acquireTransitionLease(dockerName, 'stopping', `restart ${dockerName}`);
   try {
-    await dockerContainer.restart();
+    // A restart is a stop at docker's default SIGKILL deadline, then a start.
+    await dockerContainer.restart({ abortSignal: deadline((DEFAULT_STOP_SECONDS * 1000) + STOP_SLACK_MS + REQUEST_TIMEOUT_MS) });
   } catch (err) {
     throw tagIfContainerGone(err);
   } finally {
@@ -1590,7 +1630,7 @@ async function appDockerKill(idOrName) {
   const token = acquireTransitionLease(dockerName, 'stopping', `kill ${dockerName}`);
 
   try {
-    await dockerContainer.kill();
+    await dockerContainer.kill({ abortSignal: deadline(REQUEST_TIMEOUT_MS) });
   } finally {
     operationRegistry.release(dockerName, token);
   }
@@ -1648,7 +1688,7 @@ async function appDockerForceRemove(idOrName, removeVolumes = true, options = {}
   const dockerContainer = await getDockerContainer(idOrName, { identifierType: options.identifierType });
   if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
   // Lease-free: see appDockerRemove — the teardown owns the 'removing' lease.
-  await dockerContainer.remove({ force: true, v: removeVolumes });
+  await dockerContainer.remove({ force: true, v: removeVolumes, abortSignal: deadline(REQUEST_TIMEOUT_MS) });
   if (removalIsWorthRecording(idOrName)) globalState.fluxRemovedContainers.add(getDockerName(idOrName));
   return `Flux App ${idOrName} successfully force removed.`;
 }
@@ -2040,12 +2080,12 @@ function isContainerDetachedFromNetwork(attachment) {
 async function dockerNetworkState(networkName) {
   if (!networkName) return 'absent';
   try {
-    await docker.getNetwork(networkName).inspect();
+    await inspectDockerNetwork(networkName);
     return 'exists';
   } catch (err) {
     let networks;
     try {
-      networks = await docker.listNetworks();
+      networks = await docker.listNetworks({ abortSignal: deadline(PROBE_TIMEOUT_MS) });
     } catch (probeErr) {
       return 'unknown';
     }
@@ -2072,7 +2112,7 @@ async function dockerNetworkState(networkName) {
 async function dockerNetworkId(networkName) {
   if (!networkName) return null;
   try {
-    const info = await docker.getNetwork(networkName).inspect();
+    const info = await inspectDockerNetwork(networkName);
     return info?.Id ?? null;
   } catch (err) {
     return null;
@@ -2537,7 +2577,7 @@ async function appDockerNetworkDisconnect(componentIdentifier, networkName) {
  */
 async function isFluxAppNetwork(networkName) {
   try {
-    const info = await docker.getNetwork(networkName).inspect();
+    const info = await inspectDockerNetwork(networkName);
     const { LABEL_KEYS } = await getSpecBackend();
     return !!(info && info.Labels
       && Object.prototype.hasOwnProperty.call(info.Labels, LABEL_KEYS.APP_NETWORK));
@@ -2560,7 +2600,7 @@ async function isFluxAppNetwork(networkName) {
  */
 async function fluxDockerNetworkExists(networkName) {
   try {
-    await docker.getNetwork(networkName).inspect();
+    await inspectDockerNetwork(networkName);
     return true;
   } catch (error) {
     if (error.statusCode === 404) {
@@ -2717,8 +2757,7 @@ async function getAppNameByContainerIp(ip) {
 
   const networkPromises = [];
   fluxNetworkNames.forEach((networkName) => {
-    const dockerNetwork = docker.getNetwork(networkName);
-    networkPromises.push(dockerNetwork.inspect());
+    networkPromises.push(inspectDockerNetwork(networkName));
   });
 
   const fluxNetworkData = await Promise.all(networkPromises);

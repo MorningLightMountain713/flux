@@ -6,6 +6,7 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 const Dockerode = require('dockerode');
+const config = require('config');
 const sinon = require('sinon');
 const path = require('path');
 const { PassThrough } = require('stream');
@@ -47,6 +48,20 @@ function fixtureListing(overrides = {}) {
  * suite-wide hook below gets there first, and a test wanting its own listing
  * must be able to say so without tripping over it.
  */
+/**
+ * Network inspects reach docker through the modem directly (see
+ * dockerService.inspectDockerNetwork), so this answers that request: `bodyOf`
+ * gets the network name and returns the inspect body, or an Error to fail with.
+ */
+function stubNetworkInspect(bodyOf) {
+  return sinon.stub(new Dockerode().modem.constructor.prototype, 'dial').callsFake((opts, callback) => {
+    const name = decodeURIComponent(opts.path.slice('/networks/'.length, -1));
+    const body = bodyOf(name);
+    if (body instanceof Error) callback(body);
+    else callback(null, body);
+  });
+}
+
 function stubListing(entries) {
   const { listContainers } = Dockerode.prototype;
   if (listContainers.restore) return listContainers.resolves(entries);
@@ -475,20 +490,20 @@ describe('dockerService tests', () => {
     });
 
     it('reports exists when the network inspects cleanly', async () => {
-      sinon.stub(Dockerode.prototype, 'getNetwork').returns({ inspect: sinon.stub().resolves({ Name: 'fluxDockerNetwork_appx' }) });
+      stubNetworkInspect(() => ({ Name: 'fluxDockerNetwork_appx' }));
 
       await expect(dockerService.dockerNetworkState('fluxDockerNetwork_appx')).to.eventually.equal('exists');
     });
 
     it('reports absent only when docker itself confirms the network is not listed', async () => {
-      sinon.stub(Dockerode.prototype, 'getNetwork').returns({ inspect: sinon.stub().rejects(new Error('no such network')) });
+      stubNetworkInspect(() => new Error('no such network'));
       sinon.stub(Dockerode.prototype, 'listNetworks').resolves([{ Name: 'bridge' }, { Name: 'fluxDockerNetwork_other' }]);
 
       await expect(dockerService.dockerNetworkState('fluxDockerNetwork_appx')).to.eventually.equal('absent');
     });
 
     it('reports exists when the inspect failed transiently but the network IS listed', async () => {
-      sinon.stub(Dockerode.prototype, 'getNetwork').returns({ inspect: sinon.stub().rejects(new Error('EAI_AGAIN')) });
+      stubNetworkInspect(() => new Error('EAI_AGAIN'));
       sinon.stub(Dockerode.prototype, 'listNetworks').resolves([{ Name: 'fluxDockerNetwork_appx' }]);
 
       await expect(dockerService.dockerNetworkState('fluxDockerNetwork_appx')).to.eventually.equal('exists');
@@ -497,7 +512,7 @@ describe('dockerService tests', () => {
     it('reports unknown (never absent) when docker cannot answer at all', async () => {
       // the caller destroys a container on "absent", so an unreachable daemon must
       // never be read as a missing network
-      sinon.stub(Dockerode.prototype, 'getNetwork').returns({ inspect: sinon.stub().rejects(new Error('connect ENOENT /var/run/docker.sock')) });
+      stubNetworkInspect(() => new Error('connect ENOENT /var/run/docker.sock'));
       sinon.stub(Dockerode.prototype, 'listNetworks').rejects(new Error('connect ENOENT /var/run/docker.sock'));
 
       await expect(dockerService.dockerNetworkState('fluxDockerNetwork_appx')).to.eventually.equal('unknown');
@@ -519,7 +534,7 @@ describe('dockerService tests', () => {
 
     beforeEach(() => {
       sinon.stub(Dockerode.prototype, 'listNetworks').resolves(Object.values(networks).map(({ Name }) => ({ Name })));
-      sinon.stub(Dockerode.prototype, 'getNetwork').callsFake((name) => ({ inspect: async () => networks[name] }));
+      stubNetworkInspect((name) => networks[name]);
     });
 
     it('answers the app name its network is labelled with, not the identity it is named from', async () => {
@@ -1104,6 +1119,111 @@ describe('dockerService tests', () => {
     });
   });
 
+  // Every short docker request is bounded, so a daemon that never answers for one
+  // container fails that call instead of holding its caller forever. A stop's
+  // bound is its own SIGKILL deadline plus slack; a sized listing is unbounded.
+  describe('docker requests carry their deadline', () => {
+    const PROBE = config.get('fluxapps.dockerProbeTimeoutMs');
+    const REQUEST = config.get('fluxapps.dockerRequestTimeoutMs');
+    const SLACK = config.get('fluxapps.dockerStopSlackMs');
+    let timeouts;
+
+    beforeEach(() => {
+      timeouts = sinon.spy(AbortSignal, 'timeout');
+    });
+
+    function signalOf(stub) {
+      return stub.lastCall.args[0].abortSignal;
+    }
+
+    function deadlineOf(signal) {
+      const call = timeouts.getCalls().find((c) => c.returnValue === signal);
+      return call ? call.args[0] : null;
+    }
+
+    it('bounds a start and the inspect after it', async () => {
+      const start = sinon.stub(Dockerode.Container.prototype, 'start').resolves();
+      const inspect = sinon.stub(Dockerode.Container.prototype, 'inspect').resolves({ Config: { Labels: {} }, State: {} });
+
+      await dockerService.appDockerStart(FIXTURE_NAME);
+
+      expect(deadlineOf(signalOf(start))).to.equal(REQUEST);
+      expect(deadlineOf(signalOf(inspect))).to.equal(PROBE);
+    });
+
+    it('bounds a kill', async () => {
+      const kill = sinon.stub(Dockerode.Container.prototype, 'kill').resolves();
+
+      await dockerService.appDockerKill(FIXTURE_NAME);
+
+      expect(deadlineOf(signalOf(kill))).to.equal(REQUEST);
+    });
+
+    it('bounds a force remove', async () => {
+      const remove = sinon.stub(Dockerode.Container.prototype, 'remove').resolves();
+
+      await dockerService.appDockerForceRemove(FIXTURE_NAME, false);
+
+      expect(deadlineOf(signalOf(remove))).to.equal(REQUEST);
+    });
+
+    it('bounds a restart of a running container by its stop deadline, slack, and a start', async () => {
+      sinon.stub(Dockerode.Container.prototype, 'inspect').resolves({ State: { Running: true } });
+      const restart = sinon.stub(Dockerode.Container.prototype, 'restart').resolves();
+
+      await dockerService.appDockerRestart(FIXTURE_NAME);
+
+      expect(deadlineOf(signalOf(restart))).to.equal(10_000 + SLACK + REQUEST);
+    });
+
+    it('bounds the start a restart of a stopped container makes', async () => {
+      sinon.stub(Dockerode.Container.prototype, 'inspect').resolves({ State: { Running: false } });
+      const start = sinon.stub(Dockerode.Container.prototype, 'start').resolves();
+
+      await dockerService.appDockerRestart(FIXTURE_NAME);
+
+      expect(deadlineOf(signalOf(start))).to.equal(REQUEST);
+    });
+
+    it('bounds the inspect a stop makes before its own deadline applies', async () => {
+      const inspect = sinon.stub(Dockerode.Container.prototype, 'inspect').resolves({ State: { Running: false } });
+
+      await dockerService.appDockerStop(FIXTURE_NAME);
+
+      expect(deadlineOf(signalOf(inspect))).to.equal(PROBE);
+    });
+
+    it('bounds a plain listing and leaves a sized one unbounded', async () => {
+      const list = Dockerode.prototype.listContainers;
+
+      await dockerService.dockerListContainers(true);
+      expect(deadlineOf(signalOf(list))).to.equal(REQUEST);
+
+      await dockerService.dockerListContainers(true, undefined, true);
+      expect(signalOf(list), 'a sized listing walks every writable layer').to.equal(undefined);
+    });
+
+    it('inspects a network through the modem with the probe deadline, at dockerode\'s path', async () => {
+      const dial = stubNetworkInspect(() => ({ Id: 'abc' }));
+
+      expect(await dockerService.dockerNetworkId('fluxDockerNetwork_appx')).to.equal('abc');
+
+      const opts = dial.lastCall.args[0];
+      expect(opts.path).to.equal('/networks/fluxDockerNetwork_appx?');
+      expect(opts.method).to.equal('GET');
+      expect(deadlineOf(opts.abortSignal)).to.equal(PROBE);
+    });
+
+    it('bounds the network listing a failed inspect falls back to', async () => {
+      stubNetworkInspect(() => new Error('EAI_AGAIN'));
+      const list = sinon.stub(Dockerode.prototype, 'listNetworks').resolves([]);
+
+      await dockerService.dockerNetworkState('fluxDockerNetwork_appx');
+
+      expect(deadlineOf(signalOf(list))).to.equal(PROBE);
+    });
+  });
+
   describe('appDockerForceRemove by container id', () => {
     const containerId = '46274c58c9a969e93c1f91a057f0a371c7b952e31a7aec73839afe1433fdee94';
     let removeStub;
@@ -1119,7 +1239,7 @@ describe('dockerService tests', () => {
       const result = await dockerService.appDockerForceRemove(containerId, false, { identifierType: 'id' });
 
       sinon.assert.calledOnce(removeStub);
-      sinon.assert.calledWith(removeStub, { force: true, v: false });
+      sinon.assert.calledWith(removeStub, sinon.match({ force: true, v: false, abortSignal: sinon.match.instanceOf(AbortSignal) }));
       const { filters } = Dockerode.prototype.listContainers.lastCall.args[0];
       expect(JSON.parse(filters), 'the listing is filtered by id, not by name').to.deep.equal({ id: [containerId] });
       expect(result).to.equal(`Flux App ${containerId} successfully force removed.`);

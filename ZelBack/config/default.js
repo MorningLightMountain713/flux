@@ -852,6 +852,10 @@ module.exports = {
     // deadline plus slack and is never used alone.
     dockerProbeTimeoutMs: 20_000,
     dockerStopSlackMs: 30_000,
+    // Any other short docker request - start, kill, remove, a list or a network
+    // read. A request past this is cancelled, raised as an error and retried by
+    // its caller; docker may still complete it.
+    dockerRequestTimeoutMs: 120_000,
     orphanSweepIntervalMs: 7_200_000, // docker-orphan janitor cadence (containers with no installed-app row)
     dockerDebrisIntervalMs: 21_600_000, // docker prune cadence (stopped containers/unused networks/volumes; guarded)
     meshReconcileIntervalMs: 1_800_000, // mesh reconcile cadence (membership, certs incl. aged-replacement promotion, detector)
