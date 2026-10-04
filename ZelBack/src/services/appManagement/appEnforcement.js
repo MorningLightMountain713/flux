@@ -64,6 +64,18 @@ async function monitorSharedDBApps() {
 }
 
 /**
+ * Drops every recorded violation of one app, in place: the list is the caller's
+ * and outlives each pass.
+ * @param {string[]} appsStorageViolations
+ * @param {string} appName
+ */
+function forgetViolations(appsStorageViolations, appName) {
+  for (let i = appsStorageViolations.length - 1; i >= 0; i -= 1) {
+    if (appsStorageViolations[i] === appName) appsStorageViolations.splice(i, 1);
+  }
+}
+
+/**
  * Enforce the per-app writable-layer + swap budget on legacy (non-managed) nodes.
  * Managed nodes hard-cap the writable layer in the kernel via the XFS StorageOpt
  * project quota, so the software sweep only runs where there is no quota.
@@ -97,7 +109,10 @@ async function enforceWritableLayerLimit(appsStorageViolations) {
           totalSize += contExists.SizeRootFs;
         }
       }
-      if (totalSize > maxAllowedSize) {
+      if (totalSize <= maxAllowedSize) {
+        // Violations count in a row: a pass within budget starts the count again.
+        forgetViolations(appsStorageViolations, deployment.appName);
+      } else {
         appsStorageViolations.push(deployment.appName);
         const occurancies = appsStorageViolations.filter((appName) => (appName) === deployment.appName).length;
         if (occurancies > 3) {
@@ -107,9 +122,7 @@ async function enforceWritableLayerLimit(appsStorageViolations) {
           await appUninstaller.uninstallApplication(deployment.appName, { forceKill: true, skipGuard: true, broadcastRemoval: true }).catch((error) => {
             log.error(error);
           });
-          const adjArray = appsStorageViolations.filter((appName) => (appName) !== deployment.appName);
-          // eslint-disable-next-line no-param-reassign
-          appsStorageViolations = adjArray;
+          forgetViolations(appsStorageViolations, deployment.appName);
         } else {
           log.warn(`Application ${deployment.appName} is using ${totalSize} space which is more than allowed ${maxAllowedSize}. Redeploying...`);
           // eslint-disable-next-line no-await-in-loop

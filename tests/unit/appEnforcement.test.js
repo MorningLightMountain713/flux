@@ -161,8 +161,12 @@ describe('appEnforcement tests', () => {
     let listInstalledDeploymentsStub;
     let supportsManagedStorageStub;
     let dockerGetUsageStub;
+    let uninstallStub;
+    let redeployStub;
 
     function load() {
+      uninstallStub = sinon.stub().resolves();
+      redeployStub = sinon.stub().resolves();
       listInstalledDeploymentsStub = sinon.stub().resolves([]);
       supportsManagedStorageStub = sinon.stub().resolves(false);
       dockerGetUsageStub = sinon.stub().resolves({ Containers: [] });
@@ -174,8 +178,8 @@ describe('appEnforcement tests', () => {
         '../appRuntime/deploymentProvider': { listInstalledDeployments: listInstalledDeploymentsStub },
         '../utils/hostStorageCapability': { supportsManagedStorage: supportsManagedStorageStub },
         '../utils/operationRegistry': { isHeld: sinon.stub().returns(false) },
-        '../appLifecycle/appUninstaller': { uninstallApplication: sinon.stub().resolves() },
-        '../appLifecycle/appOperations': { redeployApplication: sinon.stub().resolves() },
+        '../appLifecycle/appUninstaller': { uninstallApplication: uninstallStub },
+        '../appLifecycle/appOperations': { redeployApplication: redeployStub },
         '../../lib/log': logStub,
         '../serviceHelper': { delay: sinon.stub().resolves() },
       });
@@ -204,6 +208,49 @@ describe('appEnforcement tests', () => {
       const violations = [];
       await inspector.enforceWritableLayerLimit(violations);
       expect(violations).to.include('big');
+    });
+
+    // budget (2 + 1) * 1e9 = 3e9 for the app these name
+    async function overBudget(inspector, violations) {
+      listInstalledDeploymentsStub.resolves([await deploymentOf({ name: 'big', rootFsGb: 2, swapGb: 1 })]);
+      dockerGetUsageStub.resolves({ Containers: [{ Names: ['/web_big'], SizeRootFs: 5e9 }] });
+      await inspector.enforceWritableLayerLimit(violations);
+    }
+
+    async function withinBudget(inspector, violations) {
+      listInstalledDeploymentsStub.resolves([await deploymentOf({ name: 'big', rootFsGb: 2, swapGb: 1 })]);
+      dockerGetUsageStub.resolves({ Containers: [{ Names: ['/web_big'], SizeRootFs: 1e9 }] });
+      await inspector.enforceWritableLayerLimit(violations);
+    }
+
+    it('removes an app on its fourth violation in a row, and forgets its violations', async () => {
+      const inspector = load();
+      const violations = [];
+      await overBudget(inspector, violations);
+      await overBudget(inspector, violations);
+      await overBudget(inspector, violations);
+      expect(uninstallStub.called, 'three violations redeploy').to.equal(false);
+      expect(redeployStub.callCount).to.equal(3);
+
+      await overBudget(inspector, violations);
+
+      sinon.assert.calledOnceWithExactly(uninstallStub, 'big', { forceKill: true, skipGuard: true, broadcastRemoval: true });
+      expect(violations, 'a reinstalled app starts with none').to.deep.equal([]);
+    });
+
+    it('starts the count again after a pass within budget', async () => {
+      const inspector = load();
+      const violations = [];
+      await overBudget(inspector, violations);
+      await overBudget(inspector, violations);
+      await overBudget(inspector, violations);
+      await withinBudget(inspector, violations);
+      expect(violations).to.deep.equal([]);
+
+      await overBudget(inspector, violations);
+
+      expect(uninstallStub.called, 'one violation since the clean pass').to.equal(false);
+      expect(redeployStub.callCount).to.equal(4);
     });
 
     it('does not flag a non-managed app within its per-component budget', async () => {
