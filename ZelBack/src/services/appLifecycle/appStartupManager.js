@@ -28,7 +28,6 @@ const fileOperationRecovery = require('../appSystem/fileOperationRecovery');
 const appNetworkLinker = require('./appNetworkLinker');
 const appSlice = require('./appSlice');
 const appPlacements = require('../appManagement/appPlacements');
-const portManager = require('../appNetwork/portManager');
 const meshReconciler = require('../appMesh/meshReconciler');
 const { getSpecBackend } = require('../utils/specLibs');
 const contentSlotService = require('./contentSlotService');
