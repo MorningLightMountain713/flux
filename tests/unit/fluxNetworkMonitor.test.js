@@ -50,6 +50,7 @@ describe('fluxNetworkMonitor tests', () => {
       // whatever another suite left in the shared database, and the uninstaller
       // is a canary asserted untouched.
       sinon.stub(appQueryService, 'installedApps').resolves({ status: 'success', data: [] });
+      sinon.stub(appsRepository, 'listInstalledApps').resolves([]);
       uninstallApplication = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
       fluxNetworkHelper.setStoredFluxBenchAllowed('6.2.0');
       fluxNetworkHelper.setLocalSocketAddress('129.3.3.3');
