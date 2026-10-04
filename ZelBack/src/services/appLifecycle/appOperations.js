@@ -27,7 +27,7 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 const upnpService = require('../upnpService');
 const { appsFolder } = require('../utils/appConstants');
 const {
-  extractIp, extractPort, ipsMatch, DEFAULT_API_PORT,
+  extractIp, extractPort, ipsMatch,
 } = require('../utils/socketAddressUtils');
 const appsRepository = require('../appDatabase/appsRepository');
 const appSpecHistory = require('../appDatabase/appSpecHistory');
@@ -2796,7 +2796,7 @@ async function coordinateActiveStandbyApps() {
                   // Look up the correct port from runningAppList since FDM API returns IP without port
                   const previousMasterNode = runningAppList.find((x) => ipsMatch(x.ip, previousMasterIp));
                   const ipToCheckAppRunning = extractIp(previousMasterIp);
-                  const portToCheckAppRunning = previousMasterNode ? extractPort(previousMasterNode.ip) : DEFAULT_API_PORT;
+                  const portToCheckAppRunning = extractPort(previousMasterNode?.ip);
                   let previousMasterStillRunning = false;
                   try {
                     // eslint-disable-next-line no-await-in-loop

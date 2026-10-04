@@ -32,7 +32,6 @@ const config = require('config');
 const appsRepository = require('../appDatabase/appsRepository');
 const { resolveInstantiatedSpec } = require('../utils/specCutover');
 const dockerService = require('../dockerService');
-const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 const { NodeCondition } = require('./nodeConditions');
 const log = require('../../lib/log');
 
@@ -361,7 +360,7 @@ async function getRequiredDependencyNamesForNode(nodeIdentity) {
   const globalApps = await appsRepository.listGlobalAppInfo();
   const assigned = (globalApps || []).filter((app) => app && app.placement
     && app.placement.isPinnedTo({
-      ip, outpoint, operator, ipMatcher: socketAddressesMatch,
+      ip, outpoint, operator,
     }));
   const { viewsByName, complete } = await buildViewsByName(assigned);
   if (!complete) {
@@ -423,7 +422,7 @@ async function findUnrequiredInstalledDependencies(options = {}) {
       return true;
     }
     return app.placement.isPinnedTo({
-      ip, outpoint, operator, ipMatcher: socketAddressesMatch,
+      ip, outpoint, operator,
     });
   };
   const orphans = installed.filter((app) => app && app.name

@@ -1,7 +1,7 @@
 'use strict';
 
 const { load, lazyFunction } = require('./moduleLoader');
-const { DEFAULT_API_PORT } = require('../services/utils/socketAddressUtils');
+const specLibrary = require('../services/utils/specLibrary');
 
 /** The peer manager, loaded with the services it belongs to. */
 const peerManager = () => load('services/utils/peerState').peerManager;
@@ -11,7 +11,7 @@ const socketHandlers = {
   // The route's port arrives between the socket and the request, as every route parameter does.
   '/ws/flux/:port': (ws, port, request) => peerManager().validateAndAddInbound(ws, port, request),
   // A v1 route: a node that names no port dials the default API port's.
-  '/ws/flux': (ws, request) => peerManager().validateAndAddInbound(ws, String(DEFAULT_API_PORT), request),
+  '/ws/flux': (ws, request) => peerManager().validateAndAddInbound(ws, String(specLibrary.loaded().DEFAULT_NODE_API_PORT), request),
   '/ws/id/:loginphrase': lazyFunction('services/idService', 'wsRespondLoginPhrase'),
   '/ws/sign/:message': lazyFunction('services/idService', 'wsRespondSignature'),
   '/ws/payment/:paymentid': lazyFunction('services/paymentRelayService', 'wsRespondPayment'),

@@ -6,6 +6,7 @@ const path = require('path');
 // Real network I/O from a unit test makes its outcome depend on what else is
 // listening on the machine. Loud failure instead of a lucky ECONNREFUSED.
 const noRealNetwork = require('./noRealNetwork');
+const specLibrary = require('../ZelBack/src/services/utils/specLibrary');
 const { testUserconfig } = require('./fixtures/userconfig');
 
 // adjustExternalIP rewrites config/userconfig.js — the node's real identity and
@@ -51,6 +52,10 @@ const { resetGlobalState } = require('./unit/fixtures/globalState');
 // network/userconfig guards arrived as two separate assignments and the second
 // silently won, which left the guards below dead.
 exports.mochaHooks = {
+  // flux-spec is loaded before anything runs, as the process loads it at start.
+  async beforeAll() {
+    await specLibrary.loadSpecLibrary();
+  },
   beforeEach() {
     currentTest = this.currentTest ? this.currentTest.fullTitle() : '(unknown)';
     noRealNetwork.setCurrentTest(currentTest);

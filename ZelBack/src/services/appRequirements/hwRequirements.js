@@ -5,7 +5,6 @@ const generalService = require('../generalService');
 const geolocationService = require('../geolocationService');
 const benchmarkService = require('../benchmarkService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
-const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 const { collateralOutpoint } = require('../utils/nodePinning');
 const enterpriseNetwork = require('../utils/enterpriseNetwork');
 const admissionControl = require('../utils/admissionControl');
@@ -109,7 +108,7 @@ async function targetsNameThisNode(spec) {
   if (!placement.hasTargets()) return true;
 
   const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
-  if (localSocketAddr && placement.matchesTarget({ ip: localSocketAddr, ipMatcher: socketAddressesMatch })) {
+  if (localSocketAddr && placement.matchesTarget({ ip: localSocketAddr })) {
     return true;
   }
 
