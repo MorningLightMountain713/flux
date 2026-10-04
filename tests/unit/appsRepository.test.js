@@ -174,7 +174,11 @@ describe('appsRepository', () => {
       expect(result.name).to.equal('example');
       expect(result.isEncrypted, 'a cleartext row is not encrypted').to.be.false;
       sinon.assert.calledOnce(deserialize);
-      expect(deserialize.firstCall.args[0]).to.deep.equal(doc);
+      // The record takes its own fields off: the spec class sees the spec's only.
+      const specFields = { ...doc };
+      delete specFields.hash;
+      delete specFields.height;
+      expect(deserialize.firstCall.args[0]).to.deep.equal(specFields);
       // assertNoNameConflicts reads both off this object, and only the real class
       // derives the second — a legacy app's expiry is height + expire over the fork.
       expect(result.expiresAtHeight).to.be.a('number').and.be.greaterThan(100);
@@ -227,23 +231,38 @@ describe('appsRepository', () => {
       expect(result.resourceTotals()).to.be.null;
     });
 
-    it('strips the storage-only fields a sealed spec would refuse', async () => {
-      // `replica` and `componentIdentifiers` are this collection's own key and
-      // index, not part of any spec wire form. hydrate strips them because the
-      // encrypted deserializers reject an unknown field outright rather than
-      // letting it into the AAD and failing later as an opaque GCM error.
+    it('takes off each field the collection adds before a sealed spec sees it', async () => {
+      // The document id, the `replica` key, the `componentIdentifiers` index and a
+      // move in progress are this collection's, not part of any spec wire form.
       const stored = await modernDoc(await sealedV9Spec({ name: 'sealed9' }));
-      expect(
-        () => flux.InstantiatedSpec.deserialize({ ...stored, replica: 'r1' }),
-        'the real class must refuse a decorated doc, or this test proves nothing',
-      ).to.throw(/unexpected fields/);
+      const collectionFields = {
+        _id: 'mongo-id', replica: 'r1', componentIdentifiers: ['web_sealed9_r1'], move: { step: 'stopped' },
+      };
+      for (const [field, value] of Object.entries(collectionFields)) {
+        expect(
+          () => flux.InstantiatedSpec.deserialize({ ...stored, [field]: value }),
+          `the real class must refuse ${field}, or this test proves nothing`,
+        ).to.throw(new RegExp(`unexpected fields on doc: ${field}`));
+      }
 
-      dbHelperStub.findOneInDatabase.resolves({
-        ...stored, replica: 'r1', componentIdentifiers: ['web_sealed9_r1'],
-      });
+      dbHelperStub.findOneInDatabase.resolves({ ...stored, ...collectionFields });
       const result = await appsRepository.getInstalledIdentity('sealed9', 'r1');
       expect(result).to.not.be.null;
       expect(result.spec).to.be.instanceOf(flux.EncryptedSpecV9);
+    });
+
+    // The decider stamps the version of the app's registration on its row; a
+    // sealed row carrying it reads back like any other.
+    it('hydrates a sealed v9 row carrying its registration version', async () => {
+      const stored = (await instantiatedSpec(await sealedV9Spec({ name: 'regver9' }), {
+        hash: 'hrv', height: 900, registeredAt: 1_751_628_800, registrationVersion: 8,
+      })).serialize();
+      expect(stored.registrationVersion).to.equal(8);
+      dbHelperStub.findOneInDatabase.resolves(stored);
+
+      const result = await appsRepository.getGlobalAppInfo('regver9');
+      expect(result.spec).to.be.instanceOf(flux.EncryptedSpecV9);
+      expect(result.registrationVersion).to.equal(8);
     });
   });
 
@@ -460,10 +479,9 @@ describe('appsRepository', () => {
       expect(result.spec.hash).to.equal('abc');
       expect(result.spec.height).to.equal(500);
 
-      // The hydrate call should have received the spec blob with hash/height appended
-      const docForHydrate = deserialize.firstCall.args[0];
-      expect(docForHydrate.hash).to.equal('abc');
-      expect(docForHydrate.height).to.equal(500);
+      // The record carries the message's chain state; the spec class sees the
+      // spec's own wire form and nothing else.
+      expect(deserialize.firstCall.args[0]).to.deep.equal(spec.serialize());
     });
   });
 
