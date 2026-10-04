@@ -352,6 +352,45 @@ describe('fluxCommunicationMessagesSender tests', () => {
         expect(messages[0]).to.not.have.property('refused');
       });
     });
+
+    // A decline means "not yet", and this node is the one that knows when that
+    // changes: it tells each peer it declined, once, when it can answer.
+    describe('telling a declined peer it can answer now', () => {
+      const READY = Buffer.from([0x24]);
+      const readySends = (p) => p.send.getCalls().filter((c) => Buffer.isBuffer(c.args[0]) && c.args[0].equals(READY));
+
+      responders.forEach(([fn]) => {
+        it(`tells a peer ${fn} declined, once`, async () => {
+          peer.remoteCapabilities = new Set(['appStateSyncReady']);
+          await fluxCommunicationMessagesSender[fn](peer, 0);
+          await fluxCommunicationMessagesSender[fn](peer, 0);
+
+          fluxCommunicationMessagesSender.tellDeclinedAskersStateSyncReady();
+          fluxCommunicationMessagesSender.tellDeclinedAskersStateSyncReady();
+
+          expect(readySends(peer)).to.have.lengthOf(1);
+        });
+      });
+
+      it('tells nothing to a peer that does not speak it', async () => {
+        peer.remoteCapabilities = new Set(['appStateSyncRefusal']);
+        await fluxCommunicationMessagesSender.respondWithAppRunningMessages(peer, 0);
+
+        fluxCommunicationMessagesSender.tellDeclinedAskersStateSyncReady();
+
+        expect(readySends(peer)).to.have.lengthOf(0);
+      });
+
+      it('tells nothing to a peer it answered', async () => {
+        peer.remoteCapabilities = new Set(['appStateSyncReady']);
+        capabilities.setForTests('appStateSynced', true);
+        await fluxCommunicationMessagesSender.respondWithAppRunningMessages(peer, 0);
+
+        fluxCommunicationMessagesSender.tellDeclinedAskersStateSyncReady();
+
+        expect(readySends(peer)).to.have.lengthOf(0);
+      });
+    });
   });
 
   // The peer half of policy distribution. A node that adopts a sequence tells its peers; a

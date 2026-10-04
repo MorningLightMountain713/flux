@@ -10,6 +10,7 @@ const { compareSocketAddresses } = require('./socketAddressUtils');
 const peerCodec = require('./peerCodec');
 const fluxEventBus = require('./fluxEventBus');
 const capabilities = require('./capabilities');
+const { appSyncEvents, EVENTS } = require('./appSyncEvents');
 
 const UNSTABLE_DISCONNECT_THRESHOLD = 5;
 const UNSTABLE_WINDOW_MS = 2 * 60 * 60 * 1000; // 2 hours
@@ -1832,6 +1833,11 @@ class FluxPeerManager extends EventEmitter {
           if (this.hashHandlers?.handleAppInstallingErrorsRequest) {
             this.hashHandlers.handleAppInstallingErrorsRequest(peer, decoded);
           }
+          break;
+        }
+        case peerCodec.MSG_TYPE.STATE_SYNC_READY: {
+          if (!peer.remoteCapabilities.has('appStateSyncReady')) return;
+          appSyncEvents.emit(EVENTS.PEER_STATE_SYNC_READY, peer.key, peer.connectionId ?? null);
           break;
         }
         default:

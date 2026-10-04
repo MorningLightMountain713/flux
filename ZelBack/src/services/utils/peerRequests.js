@@ -175,16 +175,20 @@ class PeerRequests {
   }
 
   /**
-   * How the request against this peer ended, or null while it is open or absent.
+   * How the request against this peer ended, or null while it is open or absent,
+   * optionally only when it went out on a given channel.
    *
    * What a caller reads to decide something about the peer SET: the outcome records what the
    * peer's answer established, not merely that one arrived.
    * @param {string} peerKey ip:port
+   * @param {object} [match] channel the request went out on.
    * @returns {string|null}
    */
-  outcomeOf(peerKey) {
+  outcomeOf(peerKey, match = {}) {
     const request = this.#requests.get(peerKey);
-    return (request && request.outcome) || null;
+    if (!request || !request.outcome) return null;
+    if ('channel' in match && (match.channel ?? null) !== request.channel) return null;
+    return request.outcome;
   }
 
   /** How many are still open. */

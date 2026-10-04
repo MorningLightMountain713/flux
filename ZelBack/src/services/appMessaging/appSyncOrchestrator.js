@@ -191,6 +191,7 @@ class AppSyncOrchestrator {
   #peerDisconnectedHandler = null;
   #peerConnectedHandler = null;
   #ephemeralRefusedHandler = null;
+  #peerStateSyncReadyHandler = null;
   #ephemeralUnverifiedHandler = null;
   #ephemeralProgressHandler = null;
   #syncPeersAvailableHandler = null;
@@ -361,6 +362,9 @@ class AppSyncOrchestrator {
     this.#ephemeralRefusedHandler = (syncType, peerKey) => this.#onEphemeralSyncRefused(syncType, peerKey);
     appSyncEvents.on(EVENTS.EPHEMERAL_SYNC_REFUSED, this.#ephemeralRefusedHandler);
 
+    this.#peerStateSyncReadyHandler = (peerKey, channel) => this.#onPeerStateSyncReady(peerKey, channel);
+    appSyncEvents.on(EVENTS.PEER_STATE_SYNC_READY, this.#peerStateSyncReadyHandler);
+
     this.#ephemeralUnverifiedHandler = (peerKey) => this.#onEphemeralSyncUnverified(peerKey);
     appSyncEvents.on(EVENTS.EPHEMERAL_SYNC_UNVERIFIED, this.#ephemeralUnverifiedHandler);
 
@@ -494,6 +498,25 @@ class AppSyncOrchestrator {
       return;
     }
     this.#endRequest(peerKey, 'declined', `declined the ${syncType} sync`);
+  }
+
+  /**
+   * A peer that declined this node's request says it can answer now.
+   *
+   * Its decline meant "not yet": its own app state was not authoritative. Its
+   * record is dropped, which makes it a candidate again on the connection it
+   * declined on - once per decline - and the next pass asks it if the attempt is
+   * still running: the pass asks nobody once the sync is complete or the budget
+   * is spent.
+   *
+   * @param {string} peerKey ip:port of the peer that is ready
+   * @param {*} channel the connection it said so on
+   */
+  #onPeerStateSyncReady(peerKey, channel) {
+    if (this.#requests.outcomeOf(peerKey, { channel }) !== 'declined') return;
+    this.#requests.discard(peerKey);
+    log.info(`AppSyncOrchestrator - ${peerKey} can answer the state sync it declined`);
+    this.#own(this.#runRequestPass());
   }
 
   /**
@@ -1539,6 +1562,7 @@ class AppSyncOrchestrator {
     if (this.#ephemeralSyncHandler) {
       appSyncEvents.removeListener(EVENTS.EPHEMERAL_SYNC_COMPLETE, this.#ephemeralSyncHandler);
       appSyncEvents.removeListener(EVENTS.EPHEMERAL_SYNC_REFUSED, this.#ephemeralRefusedHandler);
+      appSyncEvents.removeListener(EVENTS.PEER_STATE_SYNC_READY, this.#peerStateSyncReadyHandler);
       appSyncEvents.removeListener(EVENTS.EPHEMERAL_SYNC_UNVERIFIED, this.#ephemeralUnverifiedHandler);
       appSyncEvents.removeListener(EVENTS.EPHEMERAL_SYNC_PROGRESS, this.#ephemeralProgressHandler);
     }

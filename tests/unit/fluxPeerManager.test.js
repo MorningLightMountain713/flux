@@ -14,6 +14,7 @@ const { FluxPeerManager, peerManager } = require('../../ZelBack/src/services/uti
 const peerCodec = require('../../ZelBack/src/services/utils/peerCodec');
 const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 const log = require('../../ZelBack/src/lib/log');
+const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const rateLimit = require('../../ZelBack/src/services/utils/rateLimit');
 // Loaded for its side effect: the route table the socket reads is declared as the
@@ -3202,6 +3203,38 @@ describe('FluxPeerManager tests', () => {
         const entry = manager.getTopologyEntry(peer.key);
         expect(entry.outbound.size).to.equal(1);
         expect(entry.inbound.size).to.equal(1);
+      });
+
+      it('passes a stateSyncReady on, with the connection it came on, from a peer that speaks it', () => {
+        const ws = createMockWs('44.0.0.1');
+        const peer = manager.add(ws, '44.0.0.1', '16127', {
+          source: PEER_SOURCE.RANDOM,
+          remoteCapabilities: ['binaryMessages', 'appStateSyncReady'],
+        });
+        const heard = sinon.spy();
+        appSyncEvents.on(EVENTS.PEER_STATE_SYNC_READY, heard);
+        try {
+          manager.handleBinaryMessage(peer, peerCodec.encodeStateSyncReady());
+        } finally {
+          appSyncEvents.removeListener(EVENTS.PEER_STATE_SYNC_READY, heard);
+        }
+        sinon.assert.calledOnceWithExactly(heard, peer.key, peer.connectionId);
+      });
+
+      it('ignores a stateSyncReady from a peer that never said it speaks it', () => {
+        const ws = createMockWs('44.0.0.1');
+        const peer = manager.add(ws, '44.0.0.1', '16127', {
+          source: PEER_SOURCE.RANDOM,
+          remoteCapabilities: ['binaryMessages'],
+        });
+        const heard = sinon.spy();
+        appSyncEvents.on(EVENTS.PEER_STATE_SYNC_READY, heard);
+        try {
+          manager.handleBinaryMessage(peer, peerCodec.encodeStateSyncReady());
+        } finally {
+          appSyncEvents.removeListener(EVENTS.PEER_STATE_SYNC_READY, heard);
+        }
+        sinon.assert.notCalled(heard);
       });
 
       it('should ignore unknown message types', () => {
