@@ -1332,6 +1332,7 @@ function peerResponsiveness() {
  */
 function keepConnectionsAlive() {
   networkHealthMonitor.setPeerManager(peerManager);
+  networkHealthMonitor.setEphemeralDialer(openEphemeralConnection);
   peerManager.networkHealthMonitor = networkHealthMonitor;
   setInterval(() => {
     peerManager.pingAll();

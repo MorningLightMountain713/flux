@@ -284,6 +284,39 @@ describe('NetworkHealthMonitor', () => {
     }).timeout(10_000);
   });
 
+  describe('diagnose — the known-good probe', () => {
+    function silencePeers() {
+      const ws = createMockWs();
+      ws.ping = sinon.stub(); // no pong
+      manager.add(ws, '44.0.0.1', '16127', { source: 'random' });
+      sinon.stub(networkStateService, 'getRandomSocketAddress').resolves('50.0.0.1:16127');
+    }
+
+    it('diagnoses IP_CHANGE when a transient connection to a known-good peer opens, and closes it', async () => {
+      silencePeers();
+      const peer = { close: sinon.stub() };
+      const open = sinon.stub().resolves(peer);
+      monitor.setEphemeralDialer(open);
+
+      await monitor.diagnose(5);
+
+      expect(monitor.getStatus()).to.equal(HEALTH_STATUS.IP_CHANGE);
+      sinon.assert.calledWith(open, '50.0.0.1:16127');
+      expect(peer.close.callCount).to.equal(open.callCount);
+    }).timeout(10_000);
+
+    it('diagnoses NETWORK_LOSS when no transient connection opens', async () => {
+      silencePeers();
+      const open = sinon.stub().resolves(null);
+      monitor.setEphemeralDialer(open);
+
+      await monitor.diagnose(5);
+
+      expect(monitor.getStatus()).to.equal(HEALTH_STATUS.NETWORK_LOSS);
+      sinon.assert.calledWith(open, '50.0.0.1:16127');
+    }).timeout(10_000);
+  });
+
   describe('diagnose — DEGRADED', () => {
     it('should diagnose DEGRADED when some peers respond', async () => {
       // Peer 1 responds

@@ -1881,13 +1881,13 @@ describe('FluxPeerManager tests', () => {
       expect(manager.has('8.8.8.8:16127')).to.equal(true);
     });
 
-    it('should use default port 16127 when not provided', () => {
+    it('keys the peer by the port the dialling node named', () => {
       manager.numberOfFluxNodes = 10_000;
-      const ws = createMockWs('8.8.8.8', '16127');
+      const ws = createMockWs('8.8.8.8', '16137');
 
-      manager.validateAndAddInbound(ws, createMockReq('8.8.8.8'));
+      manager.validateAndAddInbound(ws, '16137', createMockReq('8.8.8.8'));
 
-      expect(manager.has('8.8.8.8:16127')).to.equal(true);
+      expect(manager.has('8.8.8.8:16137')).to.equal(true);
     });
 
     it('should reject when max connections reached', () => {

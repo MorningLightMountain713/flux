@@ -6,7 +6,6 @@ const config = require('config');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const { FluxPeerSocket, CLOSE_CODES, PEER_SOURCE, DIRECTION, FLUX_VERSION } = require('./FluxPeerSocket');
-const { DEFAULT_API_PORT } = require('./socketAddressUtils');
 const peerCodec = require('./peerCodec');
 const fluxEventBus = require('./fluxEventBus');
 const capabilities = require('./capabilities');
@@ -1328,14 +1327,13 @@ class FluxPeerManager extends EventEmitter {
    * Handles max connections, IPv4 extraction, private IP rejection, and duplicate checks.
    * Extracts remote peer metadata (capabilities, clock offset) from the HTTP upgrade request headers.
    *
-   * Called by socketServer route matching. For `/ws/flux/:port`, args are (ws, port, request).
-   * For `/ws/flux`, args are (ws, request) — the request lands in optionalPort.
+   * Called by socketServer route matching for `/ws/flux/:port`.
    *
    * @param {WebSocket} ws
-   * @param {string|object} [optionalPort] - Port string, or the request object if no :port in route
-   * @param {object} [request] - HTTP upgrade request (carries headers for metadata extraction)
+   * @param {string} port - the API port the dialling node named in the route
+   * @param {object} request - HTTP upgrade request (carries headers for metadata extraction)
    */
-  validateAndAddInbound(ws, optionalPort, request) {
+  validateAndAddInbound(ws, port, request) {
     if (this.#stopCode !== null) {
       this.#refuseForStop(ws, 'an inbound upgrade');
       return;
@@ -1345,38 +1343,27 @@ class FluxPeerManager extends EventEmitter {
       return;
     }
     try {
-      let port;
-      let req;
-      if (typeof optionalPort === 'object' && optionalPort !== null) {
-        // No :port in route — optionalPort is actually the request
-        req = optionalPort;
-        port = String(DEFAULT_API_PORT);
-      } else {
-        port = optionalPort || String(DEFAULT_API_PORT);
-        req = request;
-      }
-
       // Extract remote peer metadata from upgrade request headers
       const metadata = {};
-      if (req && req.headers) {
-        if (req.headers['x-flux-capabilities']) {
-          metadata.remoteCapabilities = req.headers['x-flux-capabilities']
+      if (request && request.headers) {
+        if (request.headers['x-flux-capabilities']) {
+          metadata.remoteCapabilities = request.headers['x-flux-capabilities']
             .split(',').map((s) => s.trim()).filter(Boolean);
         }
-        const clockHeader = req.headers['x-flux-clock-offset'];
+        const clockHeader = request.headers['x-flux-clock-offset'];
         if (clockHeader !== undefined) {
           metadata.remoteClockOffsetMs = Number(clockHeader);
         }
-        if (req.headers['x-flux-version']) {
-          metadata.remoteVersion = req.headers['x-flux-version'];
+        if (request.headers['x-flux-version']) {
+          metadata.remoteVersion = request.headers['x-flux-version'];
         }
-        if (req.headers['x-flux-uptime']) {
-          metadata.remoteFluxUptime = Number(req.headers['x-flux-uptime']);
+        if (request.headers['x-flux-uptime']) {
+          metadata.remoteFluxUptime = Number(request.headers['x-flux-uptime']);
         }
       }
       let ipv4Peer;
       try {
-        ipv4Peer = (req.socket.remoteAddress || '').replace('::ffff:', '');
+        ipv4Peer = (request.socket.remoteAddress || '').replace('::ffff:', '');
       } catch (error) {
         log.error(error);
         return;
@@ -1402,16 +1389,16 @@ class FluxPeerManager extends EventEmitter {
       // limits. It also never meets the peering gate: a quarantined juror's
       // verdict must still reach the pile, since quarantine never feeds the
       // jury math.
-      if (req && req.headers && req.headers['x-flux-ephemeral']) {
+      if (request && request.headers && request.headers['x-flux-ephemeral']) {
         this.addInboundEphemeral(ws, ipv4Peer, port, metadata);
         return;
       }
 
       if (this.#inboundGate) {
-        this.#admitInboundThroughGate(ws, ipv4Peer, port, metadata, req);
+        this.#admitInboundThroughGate(ws, ipv4Peer, port, metadata, request);
         return;
       }
-      this.#admitInbound(ws, ipv4Peer, port, metadata, req);
+      this.#admitInbound(ws, ipv4Peer, port, metadata, request);
     } catch (error) {
       log.error(error);
     }

@@ -24,6 +24,7 @@ const generalService = require('../../ZelBack/src/services/generalService');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
 const { peerManager } = require('../../ZelBack/src/services/utils/peerState');
+const { networkHealthMonitor } = require('../../ZelBack/src/services/utils/NetworkHealthMonitor');
 const nodeDownService = require('../../ZelBack/src/services/nodeDownService');
 const verifyPool = require('../../ZelBack/src/services/utils/verifyPool');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
@@ -2399,5 +2400,19 @@ describe('the flood filter cannot be talked out of deduplicating', () => {
     await peerManager.messageDispatcher(envelope(data), peerSocket);
 
     expect(cacheManager.announcementSeen.has(objectHash(data))).to.equal(true);
+  });
+});
+
+describe('keepConnectionsAlive', () => {
+  afterEach(() => sinon.restore());
+
+  it('gives the network health monitor the transient dialler for its known-good probe', () => {
+    const clock = sinon.useFakeTimers({ toFake: ['setInterval'] });
+    const setEphemeralDialer = sinon.spy(networkHealthMonitor, 'setEphemeralDialer');
+
+    fluxCommunication.keepConnectionsAlive();
+
+    sinon.assert.calledOnceWithExactly(setEphemeralDialer, fluxCommunication.openEphemeralConnection);
+    clock.restore();
   });
 });

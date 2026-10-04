@@ -7,8 +7,8 @@ const peerManager = () => load('services/utils/peerState').peerManager;
 
 // these need to be most specific first (on the same route)
 const socketHandlers = {
-  '/ws/flux/:port': (ws, request) => peerManager().validateAndAddInbound(ws, request),
-  '/ws/flux': (ws, request) => peerManager().validateAndAddInbound(ws, request),
+  // The route's port arrives between the socket and the request, as every route parameter does.
+  '/ws/flux/:port': (ws, port, request) => peerManager().validateAndAddInbound(ws, port, request),
   '/ws/id/:loginphrase': lazyFunction('services/idService', 'wsRespondLoginPhrase'),
   '/ws/sign/:message': lazyFunction('services/idService', 'wsRespondSignature'),
   '/ws/payment/:paymentid': lazyFunction('services/paymentRelayService', 'wsRespondPayment'),
