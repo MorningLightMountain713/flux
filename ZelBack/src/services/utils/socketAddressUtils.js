@@ -6,7 +6,7 @@
 // normalizeSocketAddress becomes a no-op and socketAddressesMatch
 // becomes ===. At that point simplify or remove this module.
 
-const DEFAULT_API_PORT = 16_127;
+const specLibrary = require('./specLibrary');
 
 // The highest port number there is - a TCP port is a uint16. Named because it
 // was written out at ten call sites, each of them a `1 <= p <= 65535` range
@@ -14,10 +14,10 @@ const DEFAULT_API_PORT = 16_127;
 // the protocol sets.
 const MAX_PORT = 65_535;
 
+// A node address's canonical form is flux-spec's rule, the one placement and
+// the stored pin targets match by.
 function normalizeSocketAddress(address) {
-  if (!address) return null;
-  if (address.includes(':')) return address;
-  return `${address}:${DEFAULT_API_PORT}`;
+  return specLibrary.loaded().canonicalNodeAddress(address);
 }
 
 function extractIp(address) {
@@ -46,9 +46,10 @@ function bareIp(address) {
 }
 
 function extractPort(address) {
-  if (!address) return DEFAULT_API_PORT;
+  const defaultPort = specLibrary.loaded().DEFAULT_NODE_API_PORT;
+  if (!address) return defaultPort;
   const parts = address.split(':');
-  return parts.length > 1 && +parts[1] ? +parts[1] : DEFAULT_API_PORT;
+  return parts.length > 1 && +parts[1] ? +parts[1] : defaultPort;
 }
 
 const ipPattern = /^(?!0)(?!.*\.$)(?:(?:1?\d?\d|25[0-5]|2[0-4]\d)(?:\.|$)){4}$/;
@@ -59,17 +60,13 @@ function parseSocketAddress(raw) {
   const parts = raw.split(':');
   if (parts.length > 2) return null;
   const ip = parts[0];
-  const portStr = parts[1] || String(DEFAULT_API_PORT);
+  const portStr = parts[1] || String(specLibrary.loaded().DEFAULT_NODE_API_PORT);
   if (!ipPattern.test(ip) || !portPattern.test(portStr)) return null;
   return { ip, port: +portStr };
 }
 
 function socketAddressesMatch(a, b) {
-  if (!a || !b) return false;
-  if (a === b) return true;
-  const normalA = normalizeSocketAddress(a);
-  const normalB = normalizeSocketAddress(b);
-  return normalA === normalB;
+  return specLibrary.loaded().nodeAddressesMatch(a, b);
 }
 
 // Compare two addresses at IP granularity, ignoring the port entirely.
@@ -109,7 +106,6 @@ function nodeApiUrl(address) {
 }
 
 module.exports = {
-  DEFAULT_API_PORT,
   MAX_PORT,
   NODE_API_DOMAIN,
   nodeApiUrl,

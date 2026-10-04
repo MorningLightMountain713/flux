@@ -2,7 +2,6 @@
 
 const { expect } = require('chai');
 const {
-  DEFAULT_API_PORT,
   normalizeSocketAddress,
   extractIp,
   extractPort,
@@ -13,12 +12,6 @@ const {
 } = require('../../ZelBack/src/services/utils/socketAddressUtils');
 
 describe('socketAddressUtils tests', () => {
-  describe('DEFAULT_API_PORT', () => {
-    it('should be 16127', () => {
-      expect(DEFAULT_API_PORT).to.equal(16_127);
-    });
-  });
-
   describe('normalizeSocketAddress', () => {
     it('should return null for null', () => {
       expect(normalizeSocketAddress(null)).to.be.null;

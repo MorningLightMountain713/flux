@@ -7,7 +7,6 @@ const { getSpecBackend } = require('../utils/specLibs');
 const { resolveInstantiatedSpec } = require('../utils/specCutover');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const generalService = require('../generalService');
-const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 const log = require('../../lib/log');
 
 /**
@@ -30,7 +29,7 @@ async function resolveLocalReplicas(spec) {
   const collateral = await generalService.obtainNodeCollateralInformation();
   const outpoint = `${collateral.txhash}:${collateral.txindex}`;
 
-  const names = spec.assignment.replicasFor({ ip, outpoint, ipMatcher: socketAddressesMatch });
+  const names = spec.assignment.replicasFor({ ip, outpoint });
   if (names.length === 0) {
     log.warn(`deploymentProvider: pinned placement for ${spec.name} does not target this node`);
   }

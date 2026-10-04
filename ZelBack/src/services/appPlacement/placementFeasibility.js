@@ -31,7 +31,7 @@ const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const cidrUtils = require('../utils/cidrUtils');
 const verificationHelper = require('../verificationHelper');
-const { bareIp, socketAddressesMatch } = require('../utils/socketAddressUtils');
+const { bareIp } = require('../utils/socketAddressUtils');
 const ipLocationStore = require('./ipLocationStore');
 const { Privilege, authOf } = require('../utils/privileges');
 const { getSpecBackend } = require('../utils/specLibs');
@@ -158,7 +158,6 @@ function pooledNodes(nodeList, placement) {
     ip: node.ip,
     outpoint: `${node.txhash}:${node.outidx}`,
     operator: node.pubkey ?? undefined,
-    ipMatcher: socketAddressesMatch,
   }));
 }
 
@@ -260,7 +259,7 @@ async function placementComputation(spec, minInstances) {
     if (!domain) continue; // eslint-disable-line no-continue
     // A node the assignment names seats every replica assigned to it: three
     // co-located replicas on one node are three candidates there, not one.
-    const assigned = spec.assignment?.replicasFor({ ip: node.ip, ipMatcher: socketAddressesMatch }).length ?? 0;
+    const assigned = spec.assignment?.replicasFor({ ip: node.ip }).length ?? 0;
     const seats = Math.max(1, assigned);
     candidateCount += seats;
     domains.set(domain, (domains.get(domain) ?? 0) + seats);
@@ -323,7 +322,7 @@ async function specNamesThisNode(spec, localSocketAddr) {
   if (!placement || !placement.hasTargets()) return false;
   // The address answers without a daemon call, so it is asked first and the
   // collateral lookup only happens when the address did not settle it.
-  if (placement.isPinnedTo({ ip: localSocketAddr, ipMatcher: socketAddressesMatch })) return true;
+  if (placement.isPinnedTo({ ip: localSocketAddr })) return true;
   try {
     const collateral = await generalService.obtainNodeCollateralInformation();
     return placement.isPinnedTo({ outpoint: `${collateral.txhash}:${collateral.txindex}` });

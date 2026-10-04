@@ -454,7 +454,6 @@ async function trySpawningGlobalApplication() {
       ip: localSocketAddr,
       outpoint: nodeOutpoint,
       operator: typeof nodeOperator === 'string' ? nodeOperator : undefined,
-      ipMatcher: socketAddressesMatch,
     };
     let runningAppList = [];
     let installingAppList = [];
@@ -605,7 +604,7 @@ async function trySpawningGlobalApplication() {
       // "pinned here" means exactly one thing in both places.
       const placementOf = (c) => c.instantiated.spec.placement;
       const targetsThisNodeByIp = (c) => placementOf(c).targetIps.length > 0
-        && placementOf(c).matchesTarget({ ip: localSocketAddr, ipMatcher: socketAddressesMatch });
+        && placementOf(c).matchesTarget({ ip: localSocketAddr });
       const targetsThisNodeByOutpoint = (c) => placementOf(c).targetOutpoints.length > 0
         && placementOf(c).matchesTarget({ outpoint: nodeOutpoint });
       const targetsThisNodeByOperator = (c) => placementOf(c).targetOperators.length > 0
@@ -1652,7 +1651,7 @@ async function notifySpecStored(specDoc) {
     // pin simply rides the normal cadence). lastKnownLocalSocketAddr is null until the
     // first spawn cycle resolves this node's address, before which isPinnedTo yields
     // false and the spec rides the normal cadence.
-    if (!placement.isPinnedTo({ ip: lastKnownLocalSocketAddr, ipMatcher: socketAddressesMatch })) return;
+    if (!placement.isPinnedTo({ ip: lastKnownLocalSocketAddr })) return;
     // Pinned placement is contention-free by construction (each name pins exactly
     // one node), so any pinned spec targeting this node wakes the loop. A candidate
     // spec races other candidates, so it wakes only for the contention-free

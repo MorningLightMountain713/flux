@@ -35,6 +35,7 @@ const moduleLoader = require('./ZelBack/src/lib/moduleLoader');
 const log = require('./ZelBack/src/lib/log');
 const serviceHelper = require('./ZelBack/src/services/serviceHelper');
 const capabilities = require('./ZelBack/src/services/utils/capabilities');
+const specLibrary = require('./ZelBack/src/services/utils/specLibrary');
 
 // Read through the manager rather than off globalThis: the dependency on the config
 // having been loaded is then a real one, not an ordering convention between requires.
@@ -127,6 +128,8 @@ async function logErrorAndExit(msg, options = {}) {
  * @returns {Promise<String>}
  */
 async function initiate() {
+  // Before anything else: every later caller reaches flux-spec synchronously.
+  await specLibrary.loadSpecLibrary();
   if (!config.server.allowedPorts.includes(+apiPort)) {
     await logErrorAndExit(`Flux port ${apiPort} is not supported. Shutting down.`);
   }

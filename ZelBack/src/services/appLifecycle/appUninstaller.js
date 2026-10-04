@@ -17,7 +17,6 @@ const config = require('config');
 const upnpService = require('../upnpService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
-const { socketAddressesMatch } = require('../utils/socketAddressUtils');
 const appsRepository = require('../appDatabase/appsRepository');
 const appHistory = require('../appDecisions/appHistory');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
@@ -587,7 +586,7 @@ async function clearSpawnThrottleForPinnedReinstall(appName, { forceKill, backgr
   const placement = globalSpec && globalSpec.placement;
   if (!placement || !placement.hasTargets()) return;
   const localSocketAddress = await fluxNetworkHelper.getLocalSocketAddress();
-  if (!localSocketAddress || !placement.isPinnedTo({ ip: localSocketAddress, ipMatcher: socketAddressesMatch })) return;
+  if (!localSocketAddress || !placement.isPinnedTo({ ip: localSocketAddress })) return;
   const { trySpawningGlobalAppCache } = globalState;
   if (globalSpec.hash && trySpawningGlobalAppCache && trySpawningGlobalAppCache.has(globalSpec.hash)) {
     trySpawningGlobalAppCache.delete(globalSpec.hash);
