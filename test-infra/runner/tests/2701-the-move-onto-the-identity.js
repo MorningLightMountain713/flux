@@ -53,6 +53,8 @@ describe('the move onto the identity at the first start of the new code', functi
   const appName = `move${Date.now()}`;
   let formerName;
   let formerDataDir;
+  let formerRoot; // the component's directory under the apps folder, under the name
+  let dataSubdir; // where the bound data directory sits within it
   let formerVolumeFiles;
   let formerNetwork;
 
@@ -120,6 +122,7 @@ describe('the move onto the identity at the first start of the new code', functi
     expect(mounts.exitCode, `the released node installs the app under its name, as container ${formerName}: ${mounts.output}`).to.equal(0);
     formerDataDir = mounts.stdout.split('\n').map((s) => s.trim()).find((p) => p.includes('/flux-apps/'));
     expect(formerDataDir, `a data directory under the apps folder bound into ${formerName}: ${mounts.stdout}`).to.be.a('string');
+    [, formerRoot, dataSubdir = ''] = formerDataDir.match(/^(.*\/flux-apps\/[^/]+)\/?(.*)$/);
     const row = await db.getLocalApp(appName);
     expect(row, 'the released node holds a row for the app').to.include({ name: appName });
     expect(row, 'a released row carries no identity').to.not.have.property('identity');
@@ -166,12 +169,13 @@ describe('the move onto the identity at the first start of the new code', functi
   it('carries the data: the marker is in the volume under the identity, and the directory and image under the name are gone', async function () {
     this.timeout(60000);
     const dir = await appDataRoot(node.container, appName, COMPONENT);
-    expect(dir).to.not.equal(formerDataDir);
-    const marker = await execInContainer(node.container, `cat ${dir}/marker`);
+    expect(dir).to.not.equal(formerRoot);
+    // the same place within the volume the released node bound and the marker was written to
+    const marker = await execInContainer(node.container, `cat ${dir}${dataSubdir ? `/${dataSubdir}` : ''}/marker`);
     expect(marker.stdout.trim(), marker.output).to.equal(MARKER);
     const volume = await appVolumeFile(node.container, appName, COMPONENT);
     expect((await execInContainer(node.container, `test -f ${volume}`)).exitCode, `backing image ${volume}`).to.equal(0);
-    expect((await execInContainer(node.container, `test -e ${formerDataDir}`)).exitCode, `${formerDataDir} still there`).to.not.equal(0);
+    expect((await execInContainer(node.container, `test -e ${formerRoot}`)).exitCode, `${formerRoot} still there`).to.not.equal(0);
     const listing = await appdataListing();
     const remaining = listing.split('\n').filter((l) => l.endsWith('FLUXFSVOL'));
     formerVolumeFiles.forEach((f) => expect(remaining, `${f} still there`).to.not.include(f));
