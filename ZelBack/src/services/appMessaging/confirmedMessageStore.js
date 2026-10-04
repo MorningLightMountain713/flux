@@ -124,14 +124,15 @@ async function confirmedEvent(contents, record) {
 }
 
 /**
- * This node's payment record for each hash its scan has recorded.
+ * This node's payment record for each hash its scan has recorded, except one
+ * whose transaction the chain does not hold (`notOnChain`): that is no payment.
  * @param {string[]} hashes
  * @returns {Promise<Map<string, object>>} by hash
  */
 async function paymentRecords(hashes) {
   const daemonDb = dbHelper.databaseConnection().db(config.get('database.daemon.database'));
   const records = await dbHelper.findInDatabase(
-    daemonDb, appsHashesCollection, { hash: { $in: hashes } }, { projection: { _id: 0 } },
+    daemonDb, appsHashesCollection, { hash: { $in: hashes }, notOnChain: { $ne: true } }, { projection: { _id: 0 } },
   );
   return new Map(records.map((record) => [record.hash, record]));
 }

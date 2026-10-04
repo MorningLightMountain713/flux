@@ -82,8 +82,9 @@ function onDecided(fn) {
 }
 
 /**
- * Registers `fn()`, called after each full pass completes.
- * @param {() => Promise<void>} fn
+ * Registers `fn({unpositioned})`, called after each full pass completes with the
+ * number of names it left undecided because a payment record has no position.
+ * @param {(outcome: {unpositioned: number}) => Promise<void>} fn
  * @returns {() => void} unsubscribe
  */
 function onFullPass(fn) {
@@ -96,13 +97,14 @@ function onFullPass(fn) {
 
 /**
  * Every name holding a stored message with a payment record and no decision
- * under the current rule version.
+ * under the current rule version. A record whose transaction the chain does not
+ * hold is no payment, as paymentRecords reads it.
  * @returns {Promise<Set<string>>}
  */
 async function undecidedNames() {
   const [messages, records, decided] = await Promise.all([
     dbHelper.findInDatabase(messagesDb(), globalAppsMessages, {}, { projection: { _id: 0, hash: 1, 'appSpecifications.name': 1 } }),
-    dbHelper.findInDatabase(daemonDb(), appsHashesCollection, {}, { projection: { _id: 0, hash: 1 } }),
+    dbHelper.findInDatabase(daemonDb(), appsHashesCollection, { notOnChain: { $ne: true } }, { projection: { _id: 0, hash: 1 } }),
     decisionStore.decidedHashes(RULE_VERSION),
   ]);
   const paid = new Set(records.map((record) => record.hash));
@@ -291,7 +293,7 @@ async function runOnce() {
   if (full) {
     for (const fn of fullPassListeners) {
       // eslint-disable-next-line no-await-in-loop
-      await fn();
+      await fn({ unpositioned });
     }
   }
 }

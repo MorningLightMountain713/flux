@@ -292,6 +292,21 @@ describe('appHashSyncService tests', () => {
       expect(result[1].hash).to.equal('b');
     });
 
+    // A payment the chain does not hold has no message worth fetching, forced or not.
+    it('never asks for the message of a payment the chain does not hold', async () => {
+      const mockDb = { db: sinon.stub().returns('database') };
+      dbHelperStub.databaseConnection.returns(mockDb);
+      dbHelperStub.findInDatabase.resolves([]);
+
+      await appHashSyncService.getMissingHashes();
+      await appHashSyncService.getMissingHashes({ force: true });
+
+      dbHelperStub.findInDatabase.getCalls().forEach((call) => {
+        expect(call.args[2].notOnChain).to.deep.equal({ $ne: true });
+      });
+      expect(dbHelperStub.findInDatabase.callCount).to.equal(2);
+    });
+
     it('should exclude invalid messages when not forced', async () => {
       const mod = proxyquire(
         '../../ZelBack/src/services/appMessaging/appHashSyncService',

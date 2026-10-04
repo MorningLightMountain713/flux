@@ -252,10 +252,13 @@ async function applyDecided(name, decisions) {
 
 /**
  * Reconciles every row with the decisions, holding the chain-state lock, then
- * raises `appRegistryConsistent`. Waits for the scan to catch up: the decider
- * runs a full pass then, and this runs after it.
+ * raises `appRegistryConsistent` when the full pass it follows left no name
+ * undecided: a name whose payment has no position yet is neither listed nor
+ * refused, so a list missing it would read as one that dropped it. Waits for
+ * the scan to catch up: the decider runs a full pass then, and this runs after it.
+ * @param {{unpositioned?: number}} [outcome] the full pass's
  */
-async function reconcile() {
+async function reconcile({ unpositioned = 0 } = {}) {
   if (!capabilities.isUp('explorerSynced')) return;
   const counts = await chainState.exclusive(async () => {
     const { rows, carried } = await rowsFor(await decisionStore.latestApplied());
@@ -270,6 +273,10 @@ async function reconcile() {
     return tally;
   });
   log.info(`appRegistry - list reconciled with the decisions: ${JSON.stringify(counts)}`);
+  if (unpositioned) {
+    capabilities.claim(CAPABILITY, OWNER).lower(`${unpositioned} name(s) not decided yet: a payment record has no position`);
+    return;
+  }
   capabilities.claim(CAPABILITY, OWNER).raise('the list is derived from every decision');
 }
 

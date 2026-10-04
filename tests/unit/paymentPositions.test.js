@@ -33,7 +33,7 @@ describe('paymentPositions', () => {
   it('asks the daemon nothing and writes nothing when everything has a position', async () => {
     const result = await paymentPositions.backfillPaymentPositions();
 
-    expect(result).to.deep.equal({ positioned: 0, heightsCorrected: 0, unresolved: 0 });
+    expect(result).to.deep.equal({ positioned: 0, heightsCorrected: 0, notOnChain: 0 });
     sinon.assert.notCalled(executeCallStub);
     sinon.assert.notCalled(bulkStub);
   });
@@ -44,8 +44,11 @@ describe('paymentPositions', () => {
   }
 
   const written = () => bulkStub.firstCall.args[2].map((op) => [op.updateOne.filter.txid, op.updateOne.update.$set]);
+  // The first height any app payment address is active from: where a search that
+  // can prove a transaction absent from the chain has to begin.
+  const FIRST_PAYMENT_HEIGHT = Math.min(...config.get('fluxapps.appPaymentAddresses').map((a) => a.activeFromHeight));
 
-  it('positions each record from one address-index call from the lowest recorded height to the tip', async () => {
+  it('positions each record from one address-index call over every height a payment can be at, and marks one the chain does not hold', async () => {
     rows.unpositionedRecords = [{ txid: 'a', height: 900 }, { txid: 'b', height: 700 }, { txid: 'gone', height: 800 }];
     daemonAnswers(950, [
       { txid: 'a', height: 900, blockindex: 4, satoshis: 100 },
@@ -56,9 +59,11 @@ describe('paymentPositions', () => {
     const result = await paymentPositions.backfillPaymentPositions();
 
     sinon.assert.calledOnce(executeCallStub.withArgs('getaddressdeltas'));
-    expect(executeCallStub.withArgs('getaddressdeltas').firstCall.args[1][0]).to.include({ start: 700, end: 950 });
-    expect(result).to.deep.equal({ positioned: 2, heightsCorrected: 0, unresolved: 1 });
-    expect(written()).to.deep.equal([['a', { txIndex: 4, height: 900 }], ['b', { txIndex: 1, height: 700 }]]);
+    expect(executeCallStub.withArgs('getaddressdeltas').firstCall.args[1][0]).to.include({ start: FIRST_PAYMENT_HEIGHT, end: 950 });
+    expect(result).to.deep.equal({ positioned: 2, heightsCorrected: 0, notOnChain: 1 });
+    expect(written()).to.deep.equal([
+      ['a', { txIndex: 4, height: 900 }], ['b', { txIndex: 1, height: 700 }], ['gone', { notOnChain: true }],
+    ]);
     expect(bulkStub.firstCall.args[2][0].updateOne.filter.txIndex).to.deep.equal({ $exists: false });
   });
 
@@ -75,7 +80,7 @@ describe('paymentPositions', () => {
 
     const result = await paymentPositions.backfillPaymentPositions();
 
-    expect(result).to.deep.equal({ positioned: 2, heightsCorrected: 1, unresolved: 0 });
+    expect(result).to.deep.equal({ positioned: 2, heightsCorrected: 1, notOnChain: 0 });
     expect(written()).to.deep.equal([['a', { txIndex: 3, height: 2_021_557 }], ['b', { txIndex: 2, height: 2_020_000 }]]);
   });
 
