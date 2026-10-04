@@ -153,13 +153,16 @@ describe('specReconciler tests', () => {
 
   let decisionsForStub;
 
-  function setup({ installed = [], globalRows = [], synced = true, registryConsistent = true } = {}) {
+  function setup({
+    installed = [], globalRows = [], synced = true, registryConsistent = true, bootDecided = true,
+  } = {}) {
     decisionsForStub = sinon.stub(decisionStore, 'decisionsFor').resolves(new Map());
     sinon.stub(serviceHelper, 'delay').resolves();
     sinon.stub(generalService, 'checkSynced').resolves(synced);
     sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: OUTPOINT_TXID, txindex: 0 });
     sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(LOCAL_IP);
-    sinon.stub(capabilities, 'isUp').callsFake((name) => name === 'appRegistryConsistent' && registryConsistent);
+    sinon.stub(capabilities, 'isUp').callsFake((name) => (name === 'appRegistryConsistent' && registryConsistent)
+      || (name === 'bootReconcileDecided' && bootDecided));
     sinon.stub(appsRepository, 'listInstalledApps').resolves(installed);
     sinon.stub(appsRepository, 'listGlobalAppInfo').resolves(globalRows);
     sinon.stub(registryManager, 'getScannedHeight').resolves(1_000_000);
@@ -187,6 +190,21 @@ describe('specReconciler tests', () => {
       setup({ registryConsistent: false, installed: [await specWith({}, { expired: true })] });
       await specReconciler.requestFullConvergence({ reason: 'test' });
       expect(uninstallStub.called).to.equal(false);
+    });
+
+    // The boot decides what this node keeps and runs its own pass first: before
+    // that, the migrations that move installed apps may not have run, and an app
+    // removed here would be one the boot had not yet looked at.
+    it('does nothing before the boot has decided what this node keeps', async () => {
+      setup({ bootDecided: false, installed: [await specWith({}, { expired: true })] });
+      await specReconciler.requestFullConvergence({ reason: 'test' });
+      expect(uninstallStub.called).to.equal(false);
+    });
+
+    it('runs the boot pass before the boot has decided, removing an app the registry does not list', async () => {
+      setup({ bootDecided: false, installed: [await specWith({}, { expired: true })] });
+      await specReconciler.convergeAtBoot();
+      expect(uninstallStub.calledOnce).to.equal(true);
     });
 
     it('declines a full pass while one is still running', async () => {

@@ -345,9 +345,16 @@ async function convergeApp(installed, registrySpec, ctx) {
   return 'converged';
 }
 
-/** Gates shared by every convergence request: never act while syncing. */
-async function convergenceAllowed() {
+/**
+ * Gates shared by every convergence request: never act while syncing, and never
+ * before the boot has decided what this node keeps. The boot runs its own pass
+ * (convergeAtBoot) between the migrations that rewrite installed apps and the
+ * start of any container.
+ * @param {{atBoot?: boolean}} [opts]
+ */
+async function convergenceAllowed({ atBoot = false } = {}) {
   if (!capabilities.isUp('appRegistryConsistent')) return false;
+  if (!atBoot && !capabilities.isUp('bootReconcileDecided')) return false;
   const synced = await generalService.checkSynced();
   return synced === true;
 }
@@ -358,16 +365,16 @@ const fullPassLock = new AsyncLock();
 
 /**
  * Converge every installed app.
- * @param {{ reason: string }} opts
+ * @param {{ reason: string, atBoot?: boolean }} opts
  */
-async function requestFullConvergence({ reason } = {}) {
+async function fullConvergence({ reason, atBoot = false } = {}) {
   const release = fullPassLock.tryAcquire({ label: 'specReconciler' });
   if (!release) {
     log.info(`specReconciler(${reason}): a full pass is already running, leaving this one to it`);
     return;
   }
   try {
-    if (!await convergenceAllowed()) return;
+    if (!await convergenceAllowed({ atBoot })) return;
     const installedApps = await appsRepository.listInstalledApps();
     if (!installedApps.length) return;
     const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
@@ -399,6 +406,23 @@ async function requestFullConvergence({ reason } = {}) {
   } finally {
     release();
   }
+}
+
+/**
+ * Converge every installed app once the boot has decided what this node keeps.
+ * @param {{ reason: string }} opts
+ */
+async function requestFullConvergence({ reason } = {}) {
+  return fullConvergence({ reason });
+}
+
+/**
+ * The boot's pass, run by the boot reconcile after the migrations and before it
+ * starts any container: an installed app the registry does not list is removed
+ * before it can start.
+ */
+async function convergeAtBoot() {
+  return fullConvergence({ reason: 'boot', atBoot: true });
 }
 
 /**
@@ -439,6 +463,7 @@ async function notifySpecStored(specDoc) {
 
 module.exports = {
   requestFullConvergence,
+  convergeAtBoot,
   requestAppConvergence,
   notifySpecStored,
   // exposed for tests
