@@ -60,6 +60,9 @@ import { assertFluxSpecVendorCurrent, NODE_IMAGE, IMAGE_TAG } from './flux-spec-
 import { assertNodeConfigsCurrent } from './node-configs.js';
 import { statelessRegex } from './log-reader.js';
 import {
+  bootArtifact, ensureIpLocationSnapshot, snapshotEntrypoint, SNAPSHOT_MOUNT,
+} from './mongo-snapshot.js';
+import {
   renderFluxdConf, DEFAULT_ZMQ_TOPICS, ZMQ_NODE_PORT_BASE, zmqNodePort,
 } from './fluxd-conf.js';
 
@@ -265,6 +268,9 @@ const image = (name) => `${name}:${IMAGE_TAG}`;
 // its own tree, which is not here to check it against, so what can be required
 // is that it exists and was stamped by build-images.sh.
 const nodeImageRef = (tag) => `${NODE_IMAGE}:${tag}`;
+// Pinned by digest so a crash can be bisected across image updates.
+const MONGO_IMAGE = 'mongo:8@sha256:a706cb4e493bcd0262f345b3b0c78732ca0e54301f0d7bbe2b66f26313ce7ccb';
+const MONGO_ARGS = ['--wiredTigerCacheSizeGB', '1', '--setParameter', 'maxNumActiveUserIndexBuilds=64', '--setParameter', 'enableTestCommands=1'];
 
 async function assertNodeImageStamped(tag) {
   const ref = nodeImageRef(tag);
@@ -1067,6 +1073,11 @@ export async function createTestEnv({
   // shutdownd mock. A suite testing legacy behaviour pins arcane: false, or opts out
   // per node via legacyNodes.
   arcane = true,
+  // The fleet's mongo starts from a snapshot whose node databases already hold the IP
+  // location table the stub serves at boot, so each node adopts it instead of loading
+  // 1.5 million rows into the shared mongod. false boots onto an empty mongo and every
+  // node fetches and loads the table itself - for a suite whose subject is that load.
+  ipLocationSeeded = true,
   shutdowndMock = true,
   // The mock flux-telemetryd is the CLIENT of FluxOS's identity socket, so a suite
   // that asserts on OTLP identity asks for it explicitly. Off by default: it is a
@@ -1443,7 +1454,9 @@ export async function createTestEnv({
     // mongo starts, i.e. inside the fleet boot, where the waits at risk are the
     // boot's own.
     await startInfraDeathWatch(env);
-    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, mergedOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, pm2Nodes, pausedSyncthingNodes, { ...sharedKeys, ...collateralOf }, networkShapes, globalIpv6, dnsRecords, firewall, collateralOf, syncthingFaults, configuredIp, nodeImageTags, freezableDockerRoot, symlinkedAppsFolder, arcane, shutdowndMock, telemetrydMock, fluxosJournal, arcaneHost, telemetrydReal, shutdowndReal, dnsdReal, zmqTopics, nodeZmqTopics, { perNodeZmq, seedPolicyGrant }, stubCapabilities);
+    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, mergedOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, pm2Nodes, pausedSyncthingNodes, { ...sharedKeys, ...collateralOf }, networkShapes, globalIpv6, dnsRecords, firewall, collateralOf, syncthingFaults, configuredIp, nodeImageTags, freezableDockerRoot, symlinkedAppsFolder, arcane, shutdowndMock, telemetrydMock, fluxosJournal, arcaneHost, telemetrydReal, shutdowndReal, dnsdReal, zmqTopics, nodeZmqTopics, { perNodeZmq, seedPolicyGrant, ipLocationSeeded }, stubCapabilities);
+    // A node whose FluxOS logs to its journal is one nodeLogCount cannot read.
+    if (env.ipLocationSnapshot && !fluxosJournal) await assertIpLocationSnapshotAdopted(env, nodes);
     return env;
   } catch (err) {
     // Boot failed: the env owns everything started so far. The shared teardown
@@ -1472,8 +1485,30 @@ function mergeConfigs(base, override) {
   return result;
 }
 
+const SNAPSHOT_ADOPTED = /ipLocationStore - adopted the stored baseline/;
+const TABLE_LOADED = /ipLocationStore - baseline installed/;
+
+/**
+ * Every node on the main image adopted the IP location table its database holds and
+ * loaded none. A node that loads it anyway pays the cost the snapshot removes, and
+ * nothing else would say so.
+ * @param {object} env
+ * @param {number} nodes
+ */
+async function assertIpLocationSnapshotAdopted(env, nodes) {
+  const indexes = Array.from({ length: nodes }, (unused, i) => i)
+    .filter((i) => env.nodeImageTag(i) === IMAGE_TAG);
+  await waitFor(() => indexes.every((i) => env.nodeLogCount(i, SNAPSHOT_ADOPTED) > 0), {
+    timeout: 60000, interval: 1000, label: 'every node adopted the IP location table from the mongo snapshot',
+  });
+  const loaded = indexes.filter((i) => env.nodeLogCount(i, TABLE_LOADED) > 0);
+  if (loaded.length) {
+    throw new Error(`createTestEnv: node(s) ${loaded.join(', ')} loaded the IP location table although the mongo snapshot holds it`);
+  }
+}
+
 async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing = 'stub', aptSeeded = true, aptBadSource = false, geolocation, locationTable, staticIp = true, policy = null, policySeeds = null, policyReachable = false, pm2Nodes = {}, pausedSyncthingNodes = [], sharedKeys = {}, networkShapes = {}, globalIpv6 = [], dnsRecords = [], firewall = false, collateralOf = {}, syncthingFaults = {}, configuredIp = {}, nodeImageTags = {}, freezableDockerRoot = [], symlinkedAppsFolder = [], arcane = false, shutdowndMock = false, telemetrydMock = false, fluxosJournal = false, arcaneHost = false, telemetrydReal = false, shutdowndReal = false, dnsdReal = false, zmqTopics, nodeZmqTopics, zmqOptions = {}, stubCapabilities) {
-  const { perNodeZmq = false, seedPolicyGrant = true } = zmqOptions;
+  const { perNodeZmq = false, seedPolicyGrant = true, ipLocationSeeded = true } = zmqOptions;
   // Everything built here registers onto the env shell as it comes up, so a
   // boot-phase throw leaves the partial state reachable (see makeEnvShell).
   const {
@@ -1494,7 +1529,6 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
   // and a node boot for every stub. Around 37% of a core per fleet, ~2 cores at
   // six fleets in flight, spent producing a signal with no consumer.
   //
-  // Pinned by digest so a crash can be bisected across image updates.
   // nofile: Docker's default soft limit is 1024, and a whole fleet's connection
   // pools plus WiredTiger's file-per-collection cross it during concurrent node
   // boot — EMFILE panics WT (directory-sync fails) and mongod dies with what
@@ -1504,13 +1538,25 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
   // this one mongod at boot, and on disk each creation waits on a sync, which
   // makes a ten-node fleet's setup take about a minute; on tmpfs, a few seconds.
   // The data lives as long as the container, which is the fleet's lifetime.
-  const mongo = await new StaticIpContainer('mongo:8@sha256:a706cb4e493bcd0262f345b3b0c78732ca0e54301f0d7bbe2b66f26313ce7ccb')
-    .withCommand(['--wiredTigerCacheSizeGB', '1', '--setParameter', 'maxNumActiveUserIndexBuilds=64', '--setParameter', 'enableTestCommands=1'])
+  const mongoContainer = new StaticIpContainer(MONGO_IMAGE)
+    .withCommand(MONGO_ARGS)
     .withUlimits({ nofile: { soft: 65536, hard: 65536 } })
     .withTmpFs({ '/data/db': 'rw,size=4g' })
     .withStaticIp(networkName, MONGO_IP)
-    .withWaitStrategy(new TcpPollWaitStrategy(MONGO_IP, 27017))
-    .start();
+    .withWaitStrategy(new TcpPollWaitStrategy(MONGO_IP, 27017));
+  // Built by the main node image's code; a node booted on another image is not
+  // asked to adopt it (see the adoption check in createTestEnv).
+  const seededArtifact = ipLocationSeeded ? bootArtifact(locationTable) : null;
+  if (seededArtifact) {
+    const tarPath = await ensureIpLocationSnapshot({
+      nodes, artifact: seededArtifact, nodeImage: nodeImageRef(IMAGE_TAG), mongoImage: MONGO_IMAGE, mongoArgs: MONGO_ARGS,
+    });
+    mongoContainer
+      .withEntrypoint(snapshotEntrypoint())
+      .withBindMounts([{ source: tarPath, target: SNAPSHOT_MOUNT, mode: 'ro' }]);
+    env.ipLocationSnapshot = { sha256: seededArtifact.sha256, nodes };
+  }
+  const mongo = await mongoContainer.start();
   started.push(mongo);
   containers.mongo = mongo;
   watchInfra(env, 'mongo', mongo);
@@ -1695,6 +1741,16 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
       throw new Error(`createTestEnv: the stub refused the location table (${published.status})`);
     }
     locationTablePublication = await published.json();
+  }
+
+  // The snapshot holds the bytes the stub was expected to serve. Any other digest leaves
+  // every node fetching and loading the table at boot - the cost the snapshot exists to
+  // remove - with every suite still green, so a mismatch fails the env here.
+  if (env.ipLocationSnapshot) {
+    const served = await (await fetch(`http://${EXTERNAL_STUB_IP}:3001/state`)).json();
+    if (served.ipLocationSha256 !== env.ipLocationSnapshot.sha256) {
+      throw new Error(`createTestEnv: the stub serves IP location table ${served.ipLocationSha256} but the fleet's mongo snapshot holds ${env.ipLocationSnapshot.sha256}`);
+    }
   }
 
   // The policy bundle the fleet will boot onto, published before any node starts, for the
