@@ -25,7 +25,7 @@ const {
 const appQueryService = require('./appQuery/appQueryService');
 const appUninstaller = require('./appLifecycle/appUninstaller');
 const registryManager = require('./appDatabase/registryManager');
-const { resolveSpec } = require('./utils/specCutover');
+const appsRepository = require('./appDatabase/appsRepository');
 
 const myCache = cacheManager.ipCache;
 
@@ -145,11 +145,10 @@ async function adjustExternalIP(ip) {
         nodeDosState.setDosMessage('IP changes over the limit allowed, one in 20 hours');
         log.error(nodeDosState.getRawDosMessage());
       }
-      let apps = await appQueryService.installedApps();
+      const apps = await appsRepository.listInstalledApps();
       let appsHeld = 0;
       let appsRemoved = 0;
-      if (apps.status === 'success' && apps.data.length > 0) {
-        apps = apps.data;
+      if (apps.length > 0) {
         appsHeld = apps.length;
         // The apps still installed once the loop has removed the ones that cannot
         // stay. Handed to whoever registered for an address change; nothing here
@@ -157,30 +156,17 @@ async function adjustExternalIP(ip) {
         const staying = [];
         // eslint-disable-next-line no-restricted-syntax
         for (const app of apps) {
-          // Check if app requires static IP - if so, uninstall it since IP changed
-          // Only decrypt enterprise app specs if the app has enterprise field (v8+)
-          if (app.version >= 7 && (app.staticip === true || app.enterprise)) {
-            let appSpecs = app;
-            // Decrypt enterprise app specs if needed (v8+ with enterprise field)
-            if (app.enterprise) {
-              try {
-                // eslint-disable-next-line no-await-in-loop
-                appSpecs = await resolveSpec(app);
-              } catch (decryptError) {
-                log.error(`Failed to decrypt enterprise specs for ${app.name}: ${decryptError.message}`);
-                // eslint-disable-next-line no-continue
-                continue;
-              }
-            }
-            if (appSpecs.staticip === true) {
-              log.info(`Application ${app.name} requires static IP but node IP has changed, uninstalling app`);
-              log.warn(`REMOVAL REASON: Static IP required - ${app.name} requires static IP but node IP changed from ${oldIP} to ${newIP}`);
-              // eslint-disable-next-line no-await-in-loop
-              await appUninstaller.uninstallApplication(app.name, { forceKill: true, skipGuard: true, broadcastRemoval: true }).catch((error) => log.error(error));
-              appsRemoved += 1;
-              // eslint-disable-next-line no-continue
-              continue;
-            }
+          // An app that requires a static IP cannot stay once the IP changes. Every
+          // version's record answers this from its placement, which an encrypted
+          // spec carries in the clear.
+          if (app.placement.staticIp === true) {
+            log.info(`Application ${app.name} requires static IP but node IP has changed, uninstalling app`);
+            log.warn(`REMOVAL REASON: Static IP required - ${app.name} requires static IP but node IP changed from ${oldIP} to ${newIP}`);
+            // eslint-disable-next-line no-await-in-loop
+            await appUninstaller.uninstallApplication(app.name, { forceKill: true, skipGuard: true, broadcastRemoval: true }).catch((error) => log.error(error));
+            appsRemoved += 1;
+            // eslint-disable-next-line no-continue
+            continue;
           }
 
           // eslint-disable-next-line no-await-in-loop
