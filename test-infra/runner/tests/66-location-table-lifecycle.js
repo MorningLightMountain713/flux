@@ -4,7 +4,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { pushTestApp } from '../framework/registry-helper.js';
-import { bootAndPeer } from '../framework/reconciler-suite.js';
+import { bootAndPeer, redialAndPeer } from '../framework/reconciler-suite.js';
 import { restartFluxos } from '../framework/container.js';
 import { waitFor } from '../framework/wait.js';
 import { appOwnerKey, nodeKey } from '../framework/keys.js';
@@ -72,6 +72,10 @@ const REJECT_NODE = 2;
 const FLOOR_NODE = 3;
 // Registers the app the update scenarios need; any node inside the ring, never index 0.
 const REGISTRAR_NODE = 1;
+// Each node dials the next minOutgoing (2) in a four-node ring, which connects every
+// pair: a peered node holds all three others, and the registration door asks for three
+// (minOutgoing + minIncoming).
+const FULL_MESH_PEERS = NODES - 1;
 
 // The v8 spec shape the registration validator wants in full: it runs before the
 // placement gate, so a hand-rolled spec fails on a missing field long before it
@@ -220,7 +224,11 @@ describe('the location table survives restarts and refuses bad publications', fu
   // survive, so the fresh process redoes exactly the startup a node does after
   // `systemctl restart fluxos`: adopt what is stored, then refresh conditionally.
   const restartAndSettle = async (index, { generated = null, timeout = 240000 } = {}) => {
+    const markers = env.clients.map((client) => client.getLastEventId());
     await restartFluxos(env.clients[index].container);
+    // Back into the full mesh the fleet booted to: discovery never restarts on its own
+    // in the harness, and the registration below needs its node's whole peer floor.
+    await redialAndPeer(env, [index], markers, { minPeers: FULL_MESH_PEERS });
     await waitFor(async () => {
       const tree = await locationsTree(env.clients[index]);
       if (!tree) return false;
@@ -571,6 +579,12 @@ describe('the location table survives restarts and refuses bad publications', fu
     // Give the app a past: registered and confirmed on chain, so the decider applies
     // it and every node holds its registry row. An update is validated against that
     // row. Registered from inside the ring, where the door finds its peer floor.
+    await waitFor(async () => {
+      const [outgoing, incoming] = await Promise.all([
+        env.clients[REGISTRAR_NODE].getPeers(), env.clients[REGISTRAR_NODE].getIncomingPeers(),
+      ]);
+      return (outgoing.data?.length ?? 0) + (incoming.data?.length ?? 0) >= FULL_MESH_PEERS;
+    }, { timeout: 120000, interval: 2000, label: `node ${REGISTRAR_NODE} holds every other node as a peer` });
     const registered = await registerAndConfirm(
       env.clients[REGISTRAR_NODE].url, nodeKey(REGISTRAR_NODE + 1), registeredSpec, env.clients,
     );
