@@ -1140,6 +1140,20 @@ async function getDbCompletion({ folder, device } = {}) {
 }
 
 /**
+ * A request's outcome as the standard message shape, for the internal callers that
+ * check status rather than catch: its data on success, its error otherwise. Never throws.
+ * @param {Promise<*>} pending A request() call
+ * @returns {Promise<object>} message
+ */
+async function asMessage(pending) {
+  try {
+    return messageHelper.createDataMessage(await pending);
+  } catch (error) {
+    return messageHelper.createErrorMessage(error.message, error.name, error.code);
+  }
+}
+
+/**
  * Read a folder's ignore patterns, for internal callers. Returns the standard
  * message shape - { status, data: { ignore, expanded } } on success - and never
  * throws, so the caller checks status rather than catching.
@@ -1147,7 +1161,7 @@ async function getDbCompletion({ folder, device } = {}) {
  * @returns {Promise<object>} message
  */
 async function getFolderIgnores(folderId) {
-  return request('get', `/rest/db/ignores?folder=${encodeURIComponent(folderId)}`);
+  return asMessage(request('get', `/rest/db/ignores?folder=${encodeURIComponent(folderId)}`));
 }
 
 /**
@@ -1161,7 +1175,7 @@ async function getFolderIgnores(folderId) {
  * @returns {Promise<object>} message
  */
 async function setFolderIgnores(folderId, lines) {
-  return request('post', `/rest/db/ignores?folder=${encodeURIComponent(folderId)}`, { ignore: lines });
+  return asMessage(request('post', `/rest/db/ignores?folder=${encodeURIComponent(folderId)}`, { ignore: lines }));
 }
 
 /**

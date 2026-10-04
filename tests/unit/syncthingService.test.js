@@ -1317,4 +1317,60 @@ describe('syncthingService tests', () => {
       expect(logErrorStub.args.some((a) => String(a[0]).includes('2 further'))).to.equal(true);
     });
   });
+  // The internal callers of the ignores helpers check status rather than catch:
+  // the policy that keeps a folder's ignore lines converged and the monitor that
+  // scopes its content check. A helper that answered with the bare data would read
+  // to both as a failure on every call.
+  describe('the folder ignores helpers answer in the message shape', () => {
+    const wire = (instance) => {
+      syncthingService.getAxiosCache().reset();
+      sinon.stub(serviceHelper, 'runCommand').resolves({ error: null, stdout: '' });
+      sinon.stub(fs, 'readFile').resolves(syncthingFixtures.configFile);
+      sinon.stub(axios, 'create').returns(instance);
+    };
+
+    afterEach(() => {
+      syncthingService.getAxiosCache().reset();
+      sinon.restore();
+    });
+
+    it('reads a folder\'s ignore lines as a success carrying them', async () => {
+      const get = sinon.fake.resolves({ data: { ignore: ['/backup'], expanded: ['/backup'] } });
+      wire({ get });
+
+      const read = await syncthingService.getFolderIgnores('fluxweb_app');
+
+      expect(read).to.deep.equal({ status: 'success', data: { ignore: ['/backup'], expanded: ['/backup'] } });
+      expect(get.firstArg).to.equal('/rest/db/ignores?folder=fluxweb_app');
+    });
+
+    it('answers a refused read as an error carrying its message, without throwing', async () => {
+      wire({ get: sinon.fake.rejects(Object.assign(new Error('folder paused'), { response: { status: 500 } })) });
+
+      const read = await syncthingService.getFolderIgnores('fluxweb_app');
+
+      expect(read.status).to.equal('error');
+      expect(read.data.message).to.equal('folder paused');
+    });
+
+    it('writes the whole line set and answers with a success', async () => {
+      const post = sinon.fake.resolves({ data: {} });
+      wire({ post });
+
+      const written = await syncthingService.setFolderIgnores('fluxweb_app', ['/backup', '/.flux-op']);
+
+      expect(written.status).to.equal('success');
+      expect(post.firstArg).to.equal('/rest/db/ignores?folder=fluxweb_app');
+      expect(post.args[0][1]).to.deep.equal({ ignore: ['/backup', '/.flux-op'] });
+    });
+
+    it('answers a refused write as an error, without throwing', async () => {
+      wire({ post: sinon.fake.rejects(new Error('no such folder')) });
+
+      const written = await syncthingService.setFolderIgnores('fluxweb_app', []);
+
+      expect(written.status).to.equal('error');
+      expect(written.data.message).to.equal('no such folder');
+    });
+  });
 });
