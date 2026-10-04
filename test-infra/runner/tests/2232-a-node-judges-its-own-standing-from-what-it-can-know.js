@@ -50,7 +50,7 @@ describe('a node judges its own standing from what it can know', function () {
         hookCtx: this,
         nodes: 4,
         deferredNodes: 2,
-        syncthing: 'binary',
+        syncthing: 'real',
         syncthingFaults: { [PORT_TAKEN]: SYNCTHING_FAULT.PORT_TAKEN, [NOT_STARTED]: SYNCTHING_FAULT.NOT_STARTED },
         configOverrides: { fluxapps: { minOutgoing: 1, minIncoming: 1 } },
         nodeConfigOverrides: {

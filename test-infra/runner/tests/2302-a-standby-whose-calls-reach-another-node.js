@@ -87,7 +87,7 @@ describe('a standby whose calls to its primary reach another node', function () 
     env = await createTestEnv({
       hookCtx: this,
       nodes: 3,
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: {

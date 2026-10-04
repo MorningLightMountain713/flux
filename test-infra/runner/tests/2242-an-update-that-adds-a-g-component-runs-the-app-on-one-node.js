@@ -51,7 +51,7 @@ describe('an update that adds a g: component runs the app on one node', function
     env = await createTestEnv({
       hookCtx: this,
       nodes: 3,
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: { minOutgoing: 1, minIncoming: 1 },

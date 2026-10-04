@@ -111,7 +111,7 @@ describe('an owner start keeps the primary', function () {
     env = await createTestEnv({
       hookCtx: this,
       nodes: NODES.length,
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: { minOutgoing: 1, minIncoming: 1 },

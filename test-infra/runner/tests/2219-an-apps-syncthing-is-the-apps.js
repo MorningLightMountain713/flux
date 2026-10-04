@@ -67,7 +67,7 @@ describe('an app\'s syncthing is the app\'s', function () {
       hookCtx: this,
       nodes: 3,
       legacyNodes: [LEGACY],
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: { minOutgoing: 1, minIncoming: 1 },

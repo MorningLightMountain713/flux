@@ -81,7 +81,7 @@ describe('single-writer election on real syncthing', function () {
     env = await createTestEnv({
       hookCtx: this,
       nodes: 4,
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: { minOutgoing: 1, minIncoming: 1, locationTtlS: LOCATION_TTL_S },

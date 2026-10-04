@@ -57,7 +57,7 @@ describe('an update applied in place leaves a standby\'s g: component stopped', 
     env = await createTestEnv({
       hookCtx: this,
       nodes: 3,
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: { minOutgoing: 1, minIncoming: 1 },

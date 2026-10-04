@@ -18,7 +18,7 @@ import {
 // Per-app graceful-stop (M7): on an Arcane node the stop is routed through
 // flux-shutdownd — a graceful drain, or a zero-budget force — rather than a local
 // appDockerKill, and FluxOS awaits the daemon before removing the container. This
-// suite stands up an Arcane fleet with the mock flux-shutdownd (shutdowndMock) and
+// suite stands up an Arcane fleet with the flux-shutdownd stub (`shutdownd: 'stub'`) and
 // drives each routing case, asserting on the mock's call log (the daemon-side view)
 // plus container/installed state. A cleartext v8 graceful app carries the legacy
 // `gracefulShutdownSec:<n>` description token (AppComponentV8 parses it); suite 60
@@ -45,7 +45,7 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', f
   before(async function () {
     this.timeout(600000);
     env = await createTestEnv({
-      hookCtx: this, nodes: NODES, tickerAutostart: false, arcane: true, shutdowndMock: true,
+      hookCtx: this, nodes: NODES, tickerAutostart: false, arcane: true, shutdownd: 'stub',
     });
     await bootAndPeer(env, { minOutbound: 2, minInbound: 1 });
     client = env.clients[NODE_IDX];

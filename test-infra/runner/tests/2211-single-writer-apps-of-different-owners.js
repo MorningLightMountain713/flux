@@ -143,7 +143,7 @@ describe('single-writer apps of different owners on shared holders', function ()
       hookCtx: this,
       nodes: NODES.length,
       legacyNodes: [1, 3],
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: { minOutgoing: 1, minIncoming: 1 },

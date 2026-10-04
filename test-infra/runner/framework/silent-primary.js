@@ -53,7 +53,7 @@ export async function placeSilentPrimaryApp({
     hookCtx,
     nodes: 3,
     ...moreFleet,
-    syncthing: 'binary',
+    syncthing: 'real',
     tickerAutostart: false,
     configOverrides: {
       fluxapps: {

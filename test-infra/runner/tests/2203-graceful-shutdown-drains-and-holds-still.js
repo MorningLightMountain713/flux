@@ -50,7 +50,7 @@ describe('a graceful shutdown drains to the standby and holds still', function (
     env = await createTestEnv({
       hookCtx: this,
       nodes: 3,
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: { minOutgoing: 1, minIncoming: 1 },

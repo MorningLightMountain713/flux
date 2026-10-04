@@ -41,7 +41,7 @@ describe('an app\'s g: components run together on its primary', function () {
     env = await createTestEnv({
       hookCtx: this,
       nodes: 3,
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: { minOutgoing: 1, minIncoming: 1 },

@@ -174,7 +174,7 @@ describe('replica co-location: two named replicas of one app on one node, separa
   before(async function () {
     this.timeout(600000);
     env = await createTestEnv({
-      hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true, shutdowndMock: true,
+      hookCtx: this, nodes: 5, tickerAutostart: false, arcane: true, shutdownd: 'stub',
       configOverrides: {
         fluxapps: {
           minOutgoing: 2,

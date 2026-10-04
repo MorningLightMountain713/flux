@@ -74,9 +74,10 @@ describe('mesh SRV discovery and membership-not-liveness', function () {
       hookCtx: this,
       nodes: 3,
       tickerAutostart: false,
-      systemdMode: true,
-      shutdowndMock: false,
-      dnsdReal: true,
+      fluxosJournal: true,
+      arcaneHost: true,
+      shutdownd: 'none',
+      dnsd: 'real',
       arcane: true,
       // The founding photos pin committees at spec anchor heights, which
       // needs the ANCHORED membership history — the ZMQ delta machinery

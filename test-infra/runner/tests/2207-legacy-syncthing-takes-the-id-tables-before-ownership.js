@@ -78,7 +78,7 @@ describe('a legacy node\'s syncthing takes the numeric id tables before any owne
       hookCtx: this,
       nodes: 3,
       legacyNodes: [LEGACY],
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: { minOutgoing: 1, minIncoming: 1 },

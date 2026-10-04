@@ -76,7 +76,7 @@ describe('an owner stop and start keeps every g: component on the primary', func
     env = await createTestEnv({
       hookCtx: this,
       nodes: 4,
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: { minOutgoing: 1, minIncoming: 1 },

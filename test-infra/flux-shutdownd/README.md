@@ -31,7 +31,7 @@ The clone is over ssh (private repo) — run with your agent forwarded.
 
 ## How it runs in a node
 
-`createTestEnv({ shutdowndReal: true })` bind-mounts `dist/` and the
+`createTestEnv({ shutdownd: 'real' })` bind-mounts `dist/` and the
 entrypoint starts the daemon in the node container, replacing the mock.
 Unlike the real flux-telemetryd — which needs systemd-mode nodes because
 FluxOS starts it as a unit — this daemon runs under the default entrypoint:

@@ -63,7 +63,7 @@ describe('a primary dropped from the node list hands its app over', function () 
     env = await createTestEnv({
       hookCtx: this,
       nodes: 3,
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: {

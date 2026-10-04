@@ -66,7 +66,7 @@ describe('a verified peer whose calls are redirected between the question and th
     env = await createTestEnv({
       hookCtx: this,
       nodes: 3,
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: {

@@ -1,5 +1,5 @@
 // Reads a node's OWN syncthing daemon, for suites booted with
-// `createTestEnv({ syncthing: 'binary' })`.
+// `createTestEnv({ syncthing: 'real' })`.
 //
 // Observers, apart from the actions a machine itself takes on its daemon
 // (start, stop, scan, pause a folder). The stub's control surface

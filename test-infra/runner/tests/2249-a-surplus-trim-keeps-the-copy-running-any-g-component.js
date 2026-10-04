@@ -85,7 +85,7 @@ describe('a surplus trim keeps the copy running any g: component', function () {
       hookCtx: this,
       nodes: STUB_INDEX + 1,
       stubPeers: [STUB_INDEX],
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: { minOutgoing: 1, minIncoming: 1 },

@@ -33,7 +33,7 @@ To pair with a new daemon commit: update `pin`, run `build.sh`, run suite
 
 ## How the pairing is enforced
 
-- `createTestEnv({ telemetrydReal: true })` bind-mounts `dist/` into the
+- `createTestEnv({ telemetryd: 'real' })` bind-mounts `dist/` into the
   (systemd-mode) node containers and fails fast with the build command if
   `dist/` is missing.
 - The node entrypoint installs the binary and the unit **without enabling

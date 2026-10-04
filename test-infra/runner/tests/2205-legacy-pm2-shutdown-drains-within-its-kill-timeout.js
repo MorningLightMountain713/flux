@@ -91,7 +91,7 @@ describe('a legacy node under pm2 drains within its kill timeout', function () {
       nodes: 4,
       legacyNodes: [TIMED, DEFAULT],
       pm2Nodes: { [TIMED]: MULTITOOL_KILL_TIMEOUT_MS, [DEFAULT]: null },
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: { minOutgoing: 1, minIncoming: 1 },

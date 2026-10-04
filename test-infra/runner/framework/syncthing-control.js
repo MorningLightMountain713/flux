@@ -361,7 +361,7 @@ export async function setFolderPatchDelay({ ip = '*', ms = 0 }) {
 // and no connected peer holding the data. Set before install, so the first election
 // sees it rather than the stub's default phantom-synced peer. Honest only for a bare
 // g:/r: component: an f:/m:/ml: mount leaves FluxOS scaffolding on the volume that a
-// real daemon counts and the stub cannot see, so those shapes run on syncthing: 'binary'.
+// real daemon counts and the stub cannot see, so those shapes run on syncthing: 'real'.
 export async function pinColdStart(holders, folder) {
   const subnet = getSubnetConfig();
   await Promise.all(holders.map((i) => Promise.all([

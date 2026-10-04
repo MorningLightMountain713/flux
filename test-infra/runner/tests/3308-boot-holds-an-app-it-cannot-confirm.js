@@ -174,7 +174,7 @@ describe('boot holds an app whose location it cannot read', function () {
     env = await createTestEnv({
       hookCtx: this,
       nodes: NODES,
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: { minOutgoing: 1, minIncoming: 1 },

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the flux-telemetryd this branch pairs with, for the real-daemon e2e
-# suite (telemetrydReal nodes bind-mount dist/). The pairing is declared by
+# suite (`telemetryd: 'real'` nodes bind-mount dist/). The pairing is declared by
 # `pin` (full commit hash) — bump it deliberately, like a flux_iso pin.
 #
 # Skips when dist/ already matches the pin; pass --force to rebuild anyway.

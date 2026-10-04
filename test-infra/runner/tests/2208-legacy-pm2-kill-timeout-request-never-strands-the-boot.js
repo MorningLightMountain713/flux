@@ -81,7 +81,7 @@ describe('a legacy node\'s request for a longer pm2 kill timeout never strands i
       nodes: 3,
       legacyNodes: [PM2],
       pm2Nodes: { [PM2]: null },
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: { minOutgoing: 1, minIncoming: 1 },

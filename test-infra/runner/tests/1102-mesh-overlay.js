@@ -76,8 +76,9 @@ describe('mesh overlay across a real systemd fleet', function () {
       hookCtx: this,
       nodes: 3,
       tickerAutostart: false,
-      systemdMode: true,
-      shutdowndMock: false,
+      fluxosJournal: true,
+      arcaneHost: true,
+      shutdownd: 'none',
       arcane: true,
       // The founding photos pin committees at spec anchor heights, which
       // needs the ANCHORED membership history — the ZMQ delta machinery

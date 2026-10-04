@@ -58,7 +58,7 @@ export async function seedSyncScopedData(env, name, index) {
   // decides as though the volume were empty. That is what let the cold-start suites
   // pass against a data-holder that could not seed.
   //
-  // Harmless on a `syncthing: 'binary'` fleet, where the daemon has already scanned the
+  // Harmless on a `syncthing: 'real'` fleet, where the daemon has already scanned the
   // file and the control surface is not in the path.
   const folder = await dbClient(index + 1).appFolderId(name, name);
   if (!folder) throw new Error(`seedSyncScopedData: node ${index} holds no row for ${name}`);

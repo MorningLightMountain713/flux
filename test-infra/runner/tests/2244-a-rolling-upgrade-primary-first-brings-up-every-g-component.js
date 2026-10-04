@@ -53,7 +53,7 @@ describe('a rolling upgrade, primary first, brings up every g: component', funct
       hookCtx: this,
       nodes: 3,
       nodeImageTags: { [STANDBY]: BASE_TAG, [PRIMARY]: BASE_TAG },
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: { minOutgoing: 1, minIncoming: 1 },

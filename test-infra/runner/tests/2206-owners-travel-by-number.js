@@ -127,7 +127,7 @@ describe('owners travel by number on real syncthing', function () {
       nodes: 4,
       legacyNodes: LEGACY,
       unprivilegedNodes: [UNPRIVILEGED],
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: { minOutgoing: 1, minIncoming: 1 },

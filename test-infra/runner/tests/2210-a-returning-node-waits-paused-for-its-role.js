@@ -145,7 +145,7 @@ describe('a returning node waits paused until its role is decided', function () 
       hookCtx: this,
       nodes: 3,
       legacyNodes: [LEGACY],
-      syncthing: 'binary',
+      syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
         fluxapps: {

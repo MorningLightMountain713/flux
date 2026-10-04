@@ -733,7 +733,7 @@ export async function getContainerImageDigest(container, appName, componentName)
 // `hold` keeps the node down after the exit, as a machine stays down between a
 // shutdown and its next boot; releaseFluxos brings it back. `stopSyncthingAfter`
 // stops the node's own syncthing the moment FluxOS exits, which is what the OS
-// does next on an Arcane node - for a node booted with syncthing: 'binary'.
+// does next on an Arcane node - for a node booted with syncthing: 'real'.
 //
 // @returns {Promise<{pid: number, exitedAt: number}>} the process that shut down,
 //   and when this saw it gone (ms)

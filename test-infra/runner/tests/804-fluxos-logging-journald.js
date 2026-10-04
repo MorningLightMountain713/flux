@@ -66,9 +66,9 @@ describe('fluxos logging: journald sink under a real systemd unit', function () 
 
   before(async function () {
     this.timeout(240000);
-    // shutdowndMock off: nothing here stops apps.
+    // shutdownd 'none': nothing here stops apps.
     env = await createTestEnv({
-      hookCtx: this, nodes: 1, tickerAutostart: false, fluxosJournal: true, arcaneHost: true, shutdowndMock: false,
+      hookCtx: this, nodes: 1, tickerAutostart: false, fluxosJournal: true, arcaneHost: true, shutdownd: 'none',
     });
     client = env.clients[0];
     ({ zelidauth } = await authenticate(client.url, fluxTeamKey()));
