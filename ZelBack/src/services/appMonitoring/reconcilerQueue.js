@@ -50,8 +50,9 @@ const nonSettleHolding = new Set();
 
 // `bootReconcilePassed`: every boot-held component has completed ONE reconcile
 // pass (started, backoff-deferred, awaiting-controller, or failed loudly) - NOT
-// "all containers running". A reader that must not wait on a wedged reconcile
-// states its own deadline.
+// "all containers running". A pass completes because every docker request it
+// makes is bounded (dockerService); a pass that awaits something unbounded
+// holds this capability down for as long as that wait lasts.
 const bootDraining = new Set(); // boot-held ids still on their first pass
 
 // Injected by the engine (appReconciler) at module load.
@@ -225,7 +226,7 @@ function forgetFailures(identifier) {
 /**
  * Drain everything enqueued during boot, now that daemon/DB are ready. The engine
  * calls this after its boot warm-up. Tracks the boot-held ids so the boot-drain gate
- * opens once each has completed one pass, capped so a wedge can't suppress presence.
+ * opens once each has completed one pass.
  */
 function beginBootDrain() {
   const pending = [...bootPending];
