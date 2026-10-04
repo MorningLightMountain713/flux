@@ -23,7 +23,6 @@ const decisionStore = require('./appDecisions/decisionStore');
 const appInstaller = require('./appLifecycle/appInstaller');
 const appUninstaller = require('./appLifecycle/appUninstaller');
 const appController = require('./appManagement/appController');
-const monitoringOrchestrator = require('./appMonitoring/monitoringOrchestrator');
 const portManager = require('./appNetwork/portManager');
 const appInspector = require('./appManagement/appInspector');
 const availabilityChecker = require('./appMonitoring/availabilityChecker');
@@ -699,17 +698,6 @@ async function startFluxFunctions() {
         log.info('Clock offset cache initialized');
         // Remove existing watchtower container (replaced by native image update service)
         imageUpdateService.removeWatchtowerContainer();
-        // Start native image update service (delayed start)
-        // A check that lands before the policy gate opens refuses, and the next one is
-        // six hours away - so the app runs on the image it has for that long over a
-        // window measured in minutes. The interval is the fallback; the gate is when
-        // the first check is actually able to do its work.
-        setTimeout(() => {
-          capabilities.whenUp('policyCurrent').then(() => {
-            imageUpdateService.startImageUpdateService();
-            log.info('Native image update service started');
-          }).catch((error) => log.error(`Image update service start error: ${error.message}`));
-        }, bootDelay(10 * 60 * 1000)); // 10 minutes after startup
         fluxNetworkMonitor.checkDeterministicNodesCollisions();
         // STARTED ON THE POLICY, NOT ON BOOT. The blocklist this enforces is a document in the
         // signed bundle, and the bundle is not resolved by the time this line runs. Started
@@ -838,20 +826,6 @@ async function startFluxFunctions() {
             log.error(err);
           }
         }, bootDelay(20 * 60 * 1000));
-        setTimeout(() => {
-          appInspector.checkApplicationsCpuUSage(globalState.appsMonitored, appQueryService.installedApps);
-          setInterval(() => {
-            appInspector.checkApplicationsCpuUSage(globalState.appsMonitored, appQueryService.installedApps);
-          }, cpuCheckIntervalMs);
-        }, bootDelay(cpuCheckIntervalMs));
-        setTimeout(() => {
-          // appsService.checkForNonAllowedAppsOnLocalNetwork();
-          availabilityChecker.checkMyAppsAvailability(
-            dosState,
-            portsNotWorking,
-            portManager.failedNodesTestPortsCache,
-          );
-        }, bootDelay(3 * 60 * 1000));
         nodeSelfDefense.initialize();
         // Start the syncthing/masterSlave deciders once boot container state has settled
         // (the same AsyncGate the reconciler starts on), not after a fixed delay. Each
@@ -859,8 +833,13 @@ async function startFluxFunctions() {
         // own-IP, FDM), so an early start is safe - it skips and retries until ready.
         capabilities.whenUp('bootReconcileDecided').then(() => {
           appController.stopAllNonFluxRunningApps();
-          // Best effort - the reconciler also starts monitoring per app as it settles.
-          monitoringOrchestrator.startMonitoringOfApps(null).catch((error) => log.error(error));
+          // Reads the installed apps' ports only to never bind one, and the list is
+          // final here; it needs no container running.
+          availabilityChecker.checkMyAppsAvailability(
+            dosState,
+            portsNotWorking,
+            portManager.failedNodesTestPortsCache,
+          );
           // The syncthing decider is declare-only: it writes desired run-state and
           // data-state (via appReconciler) and enqueues; the reconciler is the sole
           // actuator that stops, starts, and wipes - inside its per-key single-flight,
@@ -870,9 +849,27 @@ async function startFluxFunctions() {
             () => globalState,
           ); // rechecks syncthing configuration each cycle
           appOperations.startActiveStandbyCoordinator();
-          setTimeout(() => {
-            appEnforcement.monitorSharedDBApps();
-          }, 60 * 1000);
+        });
+        // The sweeps over running apps start once every kept app has had its first
+        // start attempt, so none of them lands on top of the boot's container starts.
+        capabilities.whenUp('bootReconcilePassed').then(() => {
+          // A shared-db operator answers only once it is running.
+          appEnforcement.monitorSharedDBApps();
+          // Judges an hour of samples, so its first pass is one interval out.
+          setInterval(() => {
+            appInspector.checkApplicationsCpuUSage(globalState.appsMonitored, appQueryService.installedApps);
+          }, cpuCheckIntervalMs);
+          imageReaper.pruneUnusedImages().catch((err) => log.error(`imageReaper boot run error: ${err.message}`));
+          setInterval(() => {
+            imageReaper.pruneUnusedImages().catch((err) => log.error(`imageReaper error: ${err.message}`));
+          }, imageReaperIntervalMs);
+          // Both redeploy, which pulls under the policy. The updater spreads its own
+          // first check; the writable-layer pass re-arms itself every 30 minutes.
+          capabilities.whenUp('policyCurrent').then(() => {
+            imageUpdateService.startImageUpdateService();
+            log.info('Native image update service started');
+            return appEnforcement.enforceWritableLayerLimit(appsStorageViolations);
+          }).catch((error) => log.error(`Image update or storage check start error: ${error.message}`));
         });
         // Hash sync and spawner startup are now managed by the AppSyncOrchestrator (event-driven)
         orchestrator.start(await bootContextRead);
@@ -887,15 +884,6 @@ async function startFluxFunctions() {
               .catch((err) => log.error(`imageCache - orphan reconcile error: ${err.message}`));
           }
         }, imageComplianceIntervalMs);
-        // Cold-image reaper (ALL nodes — deliberately NOT gated on imageCacheEnabled): reclaim
-        // unused tagged images. Delayed first run so docker has loaded its container objects, then
-        // daily. Also triggered at the end of every image update (imageUpdateService).
-        setTimeout(() => {
-          imageReaper.pruneUnusedImages().catch((err) => log.error(`imageReaper boot run error: ${err.message}`));
-          setInterval(() => {
-            imageReaper.pruneUnusedImages().catch((err) => log.error(`imageReaper error: ${err.message}`));
-          }, imageReaperIntervalMs);
-        }, bootDelay(10 * 60 * 1000));
         appJanitor.start();
         // The mesh sweep: membership, certificates (aged-replacement promotion
         // rides it), the impersonation detector. Dormant on a node running no
@@ -909,15 +897,6 @@ async function startFluxFunctions() {
         // (dormant on a node running no verify:required app).
         backendTlsRenewal.start();
         daemonHealthMonitor.start();
-        // Gated for the same reason as the image updater: this pass redeploys on a
-        // storage violation, and one that runs before policy refuses and re-arms
-        // thirty minutes out. It re-arms itself from then on, so only the first run
-        // needs the gate.
-        setTimeout(() => {
-          capabilities.whenUp('policyCurrent').then(() => appEnforcement.enforceWritableLayerLimit(
-            appsStorageViolations,
-          )).catch((error) => log.error(`Storage space check error: ${error.message}`));
-        }, bootDelay(20 * 60 * 1000));
         setInterval(() => {
           backupRestoreService.cleanLocalBackup();
         }, bootDelay(25 * 60 * 1000));
