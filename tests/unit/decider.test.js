@@ -269,6 +269,41 @@ describe('decider', function () {
     expect(await decisionOf('r')).to.equal(null);
   });
 
+  // The registry calls itself complete only after a pass that left no name
+  // waiting: a name the decider could not order is neither listed nor refused.
+  it('tells its full-pass listeners how many names it left waiting for a position', async () => {
+    await store({ hash: 'r', height: 100 });
+    await records().updateOne({ hash: 'r' }, { $unset: { txIndex: '' } });
+    const decider = loadDecider();
+    const heard = [];
+    decider.onFullPass(async (outcome) => { heard.push(outcome); });
+
+    decider.wakeAll();
+    await decider.idle();
+    await records().updateOne({ hash: 'r' }, { $set: { txIndex: 0 } });
+    decider.wakeAll();
+    await decider.idle();
+
+    expect(heard).to.deep.equal([{ unpositioned: 1 }, { unpositioned: 0 }]);
+    expect(await verdict('r')).to.equal('applied');
+  });
+
+  // A record whose transaction the chain does not hold is no payment: its
+  // message is not one the decider has to order, and holds nothing up.
+  it('neither decides nor waits on a message whose payment is not on the chain', async () => {
+    await store({ hash: 'r', height: 100 });
+    await records().updateOne({ hash: 'r' }, { $unset: { txIndex: '' }, $set: { notOnChain: true } });
+    const decider = loadDecider();
+    const heard = [];
+    decider.onFullPass(async (outcome) => { heard.push(outcome); });
+
+    decider.wakeAll();
+    await decider.idle();
+
+    expect(await decisionOf('r')).to.equal(null);
+    expect(heard).to.deep.equal([{ unpositioned: 0 }]);
+  });
+
   it('decides only holding the chain-state lock', async () => {
     await store({ hash: 'r', height: 100 });
     const decider = loadDecider();

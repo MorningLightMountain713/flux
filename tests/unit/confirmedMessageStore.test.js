@@ -37,6 +37,7 @@ describe('confirmedMessageStore', () => {
         databaseConnection: () => ({ db: (name) => name }),
         findInDatabase: async (_db, collection, query) => (collection === 'appsHashes'
           ? query.hash.$in.filter((hash) => records.has(hash)).map((hash) => records.get(hash))
+            .filter((record) => !(query.notOnChain?.$ne === true && record.notOnChain === true))
           : query.hash.$in.filter((hash) => storedHashes.has(hash)).map((hash) => ({ hash }))),
         insertManyToDatabase: async (_db, _collection, docs) => {
           if (insertError) throw insertError;
@@ -79,6 +80,17 @@ describe('confirmedMessageStore', () => {
     await store.storeConfirmedMessages([message]);
 
     expect(inserted[0].registeredAt).to.equal(1_761_000_000);
+  });
+
+  // The payment positions migration marks a record whose transaction the chain
+  // does not hold. It is no payment: the decider must not see a paid message.
+  it('reads no payment record for a transaction the chain does not hold', async () => {
+    records.set('onchain', { hash: 'onchain', txid: 't1', height: 10, txIndex: 1 });
+    records.set('gone', { hash: 'gone', txid: 't2', height: 11, notOnChain: true });
+
+    const found = await store.paymentRecords(['onchain', 'gone']);
+
+    expect([...found.keys()]).to.deep.equal(['onchain']);
   });
 
   it('does not store a message whose payment this node has not recorded', async () => {

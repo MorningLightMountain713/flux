@@ -437,6 +437,29 @@ describe('appRegistry', () => {
     });
   });
 
+  // A name whose payment has no position is neither listed nor refused, so a list
+  // that called itself complete would read as one that dropped the app, and the
+  // spec reconciler would remove it.
+  describe('reconcile after a full pass that left names undecided', () => {
+    it('writes the rows it can, and leaves the capability down until a pass leaves none', async () => {
+      const spec = await v8Spec({ name: 'MyApp' });
+      messages = [message('r', spec)];
+      stubs['../appDecisions/decisionStore'].latestApplied.resolves(new Map([['myapp', decision('r')]]));
+      capabilities.setForTests(['explorerSynced', 'appMessagesSynced'], true);
+
+      await registry.reconcile({ unpositioned: 1 });
+
+      expect(stubs['./registryManager'].storeGlobalSpec.firstCall.args[0].name).to.equal('MyApp');
+      expect(capabilities.isUp('appRegistryConsistent'), 'complete with a name undecided').to.equal(false);
+
+      await registry.reconcile({ unpositioned: 0 });
+      expect(capabilities.isUp('appRegistryConsistent')).to.equal(true);
+
+      await registry.reconcile({ unpositioned: 2 });
+      expect(capabilities.isUp('appRegistryConsistent'), 'still complete once a pass leaves names undecided').to.equal(false);
+    });
+  });
+
   describe('reconcile before the scan has caught up', () => {
     it('writes and removes nothing, and leaves the capability down', async () => {
       rows = [(await instantiatedSpec(await v8Spec({ name: 'recent' }), { hash: 'r' })).serialize()];
