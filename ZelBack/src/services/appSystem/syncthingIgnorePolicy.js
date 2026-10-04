@@ -150,8 +150,8 @@ function outOfScopePaths(root, ignoreLines = []) {
  * line that stopped round-tripping would show as this folder being set on every
  * pass, in the log below.
  *
- * Every syncthing call returns its outcome in-band and never throws, so status is
- * checked rather than caught.
+ * The syncthing calls answer the folder's data and throw when syncthing cannot
+ * answer; a failure is logged and leaves the folder for the next pass.
  *
  * Call only for a folder syncthing already knows (the caller checks); on an
  * unknown folder the API would answer with an error and nothing would converge.
@@ -168,18 +168,21 @@ function outOfScopePaths(root, ignoreLines = []) {
  * @param {object} deployComp - the component the folder replicates
  */
 async function ensureStignoreCovers(folderId, deployComp) {
-  const read = await syncthingService.getFolderIgnores(folderId);
-  if (read.status !== 'success') {
-    log.error(`ensureStignoreCovers - could not read ignores for ${folderId}: ${read.data?.message ?? 'unknown error'}`);
+  let held;
+  try {
+    held = await syncthingService.getFolderIgnores(folderId);
+  } catch (error) {
+    log.error(`ensureStignoreCovers - could not read ignores for ${folderId}: ${error.message}`);
     return;
   }
   const desired = await ignoreLinesFor(deployComp);
-  const current = Array.isArray(read.data?.ignore) ? read.data.ignore : [];
+  const current = Array.isArray(held?.ignore) ? held.ignore : [];
   if (sameLines(desired, current)) return;
 
-  const written = await syncthingService.setFolderIgnores(folderId, desired);
-  if (written.status !== 'success') {
-    log.error(`ensureStignoreCovers - could not set ignores for ${folderId}: ${written.data?.message ?? 'unknown error'}`);
+  try {
+    await syncthingService.setFolderIgnores(folderId, desired);
+  } catch (error) {
+    log.error(`ensureStignoreCovers - could not set ignores for ${folderId}: ${error.message}`);
     return;
   }
   log.info(`ensureStignoreCovers - ${folderId} ignores set to ${desired.join(', ')}`);

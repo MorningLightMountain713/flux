@@ -111,8 +111,6 @@ describe('syncthingIgnorePolicy tests', () => {
   // handing each other a folder that has already had its attempt.
     let ID;
     let folderCounter = 0;
-    const ok = (data) => ({ status: 'success', data });
-    const err = (message) => ({ status: 'error', data: { message } });
 
     beforeEach(() => {
       folderCounter += 1;
@@ -124,8 +122,8 @@ describe('syncthingIgnorePolicy tests', () => {
     // through it rather than touching the file. What may leave this node is decided
     // by the specification, so the whole set is derived rather than merged into
     // what happens to be on the volume.
-      sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: ['/backup'] }));
-      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves({ ignore: ['/backup'] });
+      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves({});
 
       await policy.ensureStignoreCovers(ID, comp());
 
@@ -133,8 +131,8 @@ describe('syncthingIgnorePolicy tests', () => {
     });
 
     it('seeds every line when the folder has no ignores yet', async () => {
-      sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: null }));
-      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves({ ignore: null });
+      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves({});
 
       await policy.ensureStignoreCovers(ID, comp());
 
@@ -144,8 +142,8 @@ describe('syncthingIgnorePolicy tests', () => {
     it('posts nothing when the folder already reads exactly the derived set', async () => {
     // Idempotent: a converged folder is neither rewritten nor rescanned, which
     // is what keeps this safe to run on every monitor pass.
-      sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: BASE }));
-      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves({ ignore: BASE });
+      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves({});
 
       await policy.ensureStignoreCovers(ID, comp());
 
@@ -155,8 +153,8 @@ describe('syncthingIgnorePolicy tests', () => {
     it('adds the directories the spec declared local', async () => {
     // An ml: subdir is excluded from replication by the same mechanism that keeps
     // /backup off the network, and comes from the same place: the spec.
-      sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: [] }));
-      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves({ ignore: [] });
+      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves({});
 
       await policy.ensureStignoreCovers(ID, comp(['/game']));
 
@@ -164,8 +162,8 @@ describe('syncthingIgnorePolicy tests', () => {
     });
 
     it('posts nothing when the declared directories are already the whole set', async () => {
-      sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: [...BASE, '/game'] }));
-      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves({ ignore: [...BASE, '/game'] });
+      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves({});
 
       await policy.ensureStignoreCovers(ID, comp(['/game']));
 
@@ -176,8 +174,8 @@ describe('syncthingIgnorePolicy tests', () => {
     // A spec that drops an ml: mount is asking for that directory to replicate.
     // The derived set is built afresh every pass and never accumulates, so the
     // line goes with the mount rather than outliving it as a silent exclusion.
-      sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: [...BASE, '/game'] }));
-      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves({ ignore: [...BASE, '/game'] });
+      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves({});
 
       await policy.ensureStignoreCovers(ID, comp());
 
@@ -188,8 +186,8 @@ describe('syncthingIgnorePolicy tests', () => {
     // Only what the spec derives survives a pass. Every node computes the set
     // from the same specification, so a line present on one node's volume is not
     // an input the others have.
-      sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: ['/backup', 'cache/**'] }));
-      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves({ ignore: ['/backup', 'cache/**'] });
+      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves({});
 
       await policy.ensureStignoreCovers(ID, comp());
 
@@ -200,8 +198,8 @@ describe('syncthingIgnorePolicy tests', () => {
     // syncthing takes the FIRST pattern that matches, so a negation ahead of a
     // derived line answers in its place. It is not demoted below the derived set
     // - the derived set is the whole file, so it is not there at all.
-      sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: ['!/backup', '/backup', '/.flux-op', '/.flux-op-*'] }));
-      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves({ ignore: ['!/backup', '/backup', '/.flux-op', '/.flux-op-*'] });
+      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves({});
 
       await policy.ensureStignoreCovers(ID, comp());
 
@@ -209,8 +207,8 @@ describe('syncthingIgnorePolicy tests', () => {
     });
 
     it('collapses a policy line the folder holds more than once', async () => {
-      sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: ['/backup', 'cache/**', '/backup'] }));
-      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves({ ignore: ['/backup', 'cache/**', '/backup'] });
+      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves({});
 
       await policy.ensureStignoreCovers(ID, comp());
 
@@ -220,8 +218,8 @@ describe('syncthingIgnorePolicy tests', () => {
     it('rewrites a folder that holds the right lines in the wrong order', async () => {
     // syncthing takes the FIRST pattern that matches, so the same lines in another
     // order are not the same policy and the comparison is order-sensitive.
-      sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: ['/.flux-op', '/.flux-op-*', '/backup'] }));
-      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves({ ignore: ['/.flux-op', '/.flux-op-*', '/backup'] });
+      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves({});
 
       await policy.ensureStignoreCovers(ID, comp());
 
@@ -229,10 +227,9 @@ describe('syncthingIgnorePolicy tests', () => {
     });
 
     it('logs and posts nothing when the read fails, rather than failing the pass', async () => {
-    // Every syncthing call returns its outcome in-band and never throws, so a
-    // missed status check would silently skip the converge - it is checked.
-      sandbox.stub(syncthingService, 'getFolderIgnores').resolves(err('syncthing restarting'));
-      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves(ok({}));
+    // A syncthing call that cannot answer throws; the pass logs it and goes on.
+      sandbox.stub(syncthingService, 'getFolderIgnores').rejects(new Error('syncthing restarting'));
+      const set = sandbox.stub(syncthingService, 'setFolderIgnores').resolves({});
       const logError = sandbox.stub(log, 'error');
 
       await policy.ensureStignoreCovers(ID, comp());
@@ -242,8 +239,8 @@ describe('syncthingIgnorePolicy tests', () => {
     });
 
     it('logs when the write fails, rather than failing the pass', async () => {
-      sandbox.stub(syncthingService, 'getFolderIgnores').resolves(ok({ ignore: [] }));
-      sandbox.stub(syncthingService, 'setFolderIgnores').resolves(err('folder paused'));
+      sandbox.stub(syncthingService, 'getFolderIgnores').resolves({ ignore: [] });
+      sandbox.stub(syncthingService, 'setFolderIgnores').rejects(new Error('folder paused'));
       const logError = sandbox.stub(log, 'error');
 
       await policy.ensureStignoreCovers(ID, comp());

@@ -332,7 +332,7 @@ describe('syncthingMonitor tests', () => {
     ignorePolicyMock.ensureStignoreCovers.resetHistory();
     ignorePolicyMock.ignoreLinesFor.resetHistory();
     syncthingServiceMock.getFolderIgnores.reset();
-    syncthingServiceMock.getFolderIgnores.resolves({ status: 'success', data: { ignore: [] } });
+    syncthingServiceMock.getFolderIgnores.resolves({ ignore: [] });
     syncthingMonitorHelpersMock.ensureStfolderExists.reset();
     syncthingMonitorHelpersMock.ensureStfolderExists.resolves(true);
     syncthingMonitorHelpersMock.createSyncthingFolderConfig.resetHistory();
@@ -667,7 +667,7 @@ describe('syncthingMonitor tests', () => {
         });
         syncthingServiceMock.getConfigFolders.resolves([{ id: 'fluxweb_sealed', type: 'sendreceive', path: `${appsFolder}web_sealed` }]);
         const held = ['/backup', '/lost+found', '/cache'];
-        syncthingServiceMock.getFolderIgnores.withArgs('fluxweb_sealed').resolves({ status: 'success', data: { ignore: held } });
+        syncthingServiceMock.getFolderIgnores.withArgs('fluxweb_sealed').resolves({ ignore: held });
 
         monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
         await clock.tickAsync(100);
@@ -1463,7 +1463,7 @@ describe('syncthingMonitor tests', () => {
       fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
       deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
       syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, path: syncComp.dir, type: 'sendreceive' }]);
-      syncthingServiceMock.getFolderIgnores.resolves({ status: 'success', data: { ignore: ['/held-by-syncthing'] } });
+      syncthingServiceMock.getFolderIgnores.resolves({ ignore: ['/held-by-syncthing'] });
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
