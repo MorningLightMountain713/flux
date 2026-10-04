@@ -18,6 +18,9 @@ const nodeDosState = require('../nodeDosState');
 const migrations = require('../migrations');
 const appUninstaller = require('./appUninstaller');
 const specReconciler = require('./specReconciler');
+const crontabAndMountsCleanup = require('./crontabAndMountsCleanup');
+const containerMountRecovery = require('./containerMountRecovery');
+const fileOperationRecovery = require('../appSystem/fileOperationRecovery');
 const appNetworkLinker = require('./appNetworkLinker');
 const meshReconciler = require('../appMesh/meshReconciler');
 const { getSpecBackend } = require('../utils/specLibs');
@@ -171,6 +174,24 @@ async function enforceNodePlacement(trigger) {
     }
   }
   return { placed: false, removed, failed };
+}
+
+/**
+ * Every installed app's storage, under the names the boot's migrations left: its
+ * data volumes mounted (and the superseded legacy @reboot remount entries
+ * dropped), a container that started before its mount restarted, and a file
+ * operation the restart interrupted reclaimed - its container is detached from
+ * the process that started it, and its staging directory is on a volume, so it
+ * runs once the volumes are mounted. Each step is best effort.
+ */
+async function prepareInstalledAppStorage() {
+  log.info('appStartupManager - mounting installed app volumes');
+  await crontabAndMountsCleanup.cleanupCrontabAndMounts()
+    .catch((error) => log.error(`appStartupManager - crontab and mounts: ${error.message}`));
+  await containerMountRecovery.performContainerMountRecovery()
+    .catch((error) => log.error(`appStartupManager - container mount recovery: ${error.message}`));
+  await fileOperationRecovery.recoverInterruptedFileOperations()
+    .catch((error) => log.error(`appStartupManager - file operation recovery: ${error.message}`));
 }
 
 async function reconcileAppsOnBoot({ placement: decided = null } = {}) {
@@ -459,6 +480,7 @@ async function manageAppsOnBoot(bootContext) {
       return;
     }
 
+    await prepareInstalledAppStorage();
     // Whether each installed app is still one this node may run, asked of the
     // registry after the migrations have moved every app onto its identity and
     // before any container starts: an app the registry does not list is removed

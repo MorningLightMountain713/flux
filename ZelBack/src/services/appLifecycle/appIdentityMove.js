@@ -77,6 +77,23 @@ async function exists(filePath) {
   return fs.access(filePath).then(() => true).catch(() => false);
 }
 
+/**
+ * The directory a component's volume had before the move, under the same names
+ * its container carried: the 8.x prefixed forms, then the bare identifier. The
+ * first that exists, else the 8.x form.
+ * @param {string} identifier
+ * @returns {Promise<string>}
+ */
+async function formerDirectory(identifier) {
+  const candidates = formerContainerNames(identifier).map((name) => `${appsFolder}${name}`);
+  // eslint-disable-next-line no-restricted-syntax
+  for (const dir of candidates) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await exists(dir)) return dir;
+  }
+  return candidates[0];
+}
+
 async function run(command, params) {
   const result = await serviceHelper.runCommand(command, { runAsRoot: true, params, logError: false });
   if (result.error) throw new Error(`${command} ${params.join(' ')}: ${result.error.message}`);
@@ -265,7 +282,7 @@ async function formerImage(formerIdentifier, formerDir) {
  * @returns {Promise<{mounted: boolean, reason?: string}>}
  */
 async function moveVolume(formerComp, comp) {
-  const formerDir = `${appsFolder}${formerComp.identifier}`;
+  const formerDir = await formerDirectory(formerComp.identifier);
   const dir = `${appsFolder}${comp.identifier}`;
 
   let image = await formerImage(formerComp.identifier, formerDir);

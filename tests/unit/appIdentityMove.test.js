@@ -446,6 +446,25 @@ describe('appIdentityMove tests', () => {
       expect(indexOf('ensureAppVolumeMounted')).to.be.greaterThan(-1);
     });
 
+    // FluxOS 8.x names a component's container, its directory and its image
+    // flux<component>_<name>; that is the layout a node upgrading from a release holds.
+    it('moves a released node\'s volume from the 8.x directory and image', async () => {
+      db.set(key(NAME, null), installedRow({ name: NAME }));
+      containers.set(`flux${NAME}_${NAME}`, { running: true });
+      mounts.add(`${APPS}flux${NAME}_${NAME}`);
+      backing.set(`${APPS}flux${NAME}_${NAME}`, `/vol/flux${NAME}_${NAME}FLUXFSVOL`);
+      files.add(`/vol/flux${NAME}_${NAME}FLUXFSVOL`);
+      files.add(`${APPS}flux${NAME}_${NAME}`);
+
+      const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(results.moved).to.have.lengthOf(1);
+      expect(calls[indexOf('umount')].slice(1)).to.deep.equal([`${APPS}flux${NAME}_${NAME}`]);
+      expect(calls[indexOf('mv', (from) => from.startsWith(APPS))].slice(1))
+        .to.deep.equal([`${APPS}flux${NAME}_${NAME}`, `${APPS}${newIdentifier()}`]);
+      expect(files.has(`${APPS}${NAME}_${NAME}`), 'a directory under the bare name was made').to.equal(false);
+    });
+
     it('a stateless component moves no volume and keeps its runtime state', async () => {
       seedRunningUnderName();
       stubs.compOpts({ stateless: true, syncthing: false });

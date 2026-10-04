@@ -47,13 +47,10 @@ const ordinalRegisterSeam = require('./appMesh/ordinalRegisterSeam');
 const meshOrdinals = require('./appMesh/meshOrdinals');
 const messageStore = require('./appMessaging/messageStore');
 const temporaryPoolSweep = require('./appMessaging/temporaryPoolSweep');
-const crontabAndMountsCleanup = require('./appLifecycle/crontabAndMountsCleanup');
 const appJanitor = require('./appLifecycle/appJanitor');
 const meshReconciler = require('./appMesh/meshReconciler');
 const foundingCommittee = require('./appMesh/foundingCommittee');
 const backendTlsRenewal = require('./appLifecycle/backendTlsRenewal');
-const containerMountRecovery = require('./appLifecycle/containerMountRecovery');
-const fileOperationRecovery = require('./appSystem/fileOperationRecovery');
 const volumeExecutor = require('./appSystem/volumeExecutor');
 const appStartupManager = require('./appLifecycle/appStartupManager');
 const contentSlotService = require('./appLifecycle/contentSlotService');
@@ -529,26 +526,9 @@ async function startFluxFunctions() {
         // is making cannot report a fault - see syncthingService's health stamps.
         syncthingService.startSyncthingSentinel();
         log.info('Syncthing service started');
-        // Mount every installed app's data volume (derived from the installed-apps
-        // DB) and drop the superseded legacy @reboot remount crontab entries
-        log.info('crontab and mounts cleanup...');
-        await crontabAndMountsCleanup.cleanupCrontabAndMounts().catch((error) => {
-          log.error(`Crontab and mounts cleanup service error: ${error.message}`);
-        });
-        // Perform container mount recovery - restart containers that started before their mounts were created
-        log.info('Container mount recovery check...');
-        await containerMountRecovery.performContainerMountRecovery().catch((error) => {
-          log.error(`Container mount recovery service error: ${error.message}`);
-        });
-        // A file operation's container is detached from the process that started
-        // it, so a FluxOS restart leaves one running with nobody waiting for its
-        // result, and its staging directory on the volume. The recovery below
-        // reclaims both, after the volumes above are mounted, since it reads them.
-        //
-        // The fetch starts early so the image is in hand before the first file
-        // operation arrives, rather than being pulled while an owner waits on a
-        // request. The recovery does not depend on it: that is a host rm over names
-        // readdir returned, and runs on a node that can reach nothing.
+        // The file-operation image is fetched early so it is in hand before the first
+        // file operation arrives, rather than being pulled while an owner waits on a
+        // request.
         //
         // Not awaited: the node takes the image at its own place in a window, so
         // the fleet ends up holding it without every node fetching at the same
@@ -556,10 +536,6 @@ async function startFluxFunctions() {
         // which only works if they have it.
         volumeExecutor.startImagePrefetch();
 
-        log.info('Reclaiming interrupted file operations...');
-        await fileOperationRecovery.recoverInterruptedFileOperations().catch((error) => {
-          log.error(`File operation recovery error: ${error.message}`);
-        });
       }),
       runOwner('network', async () => {
         await capabilities.whenUp(['localDbPrepared', 'daemonReachable']);

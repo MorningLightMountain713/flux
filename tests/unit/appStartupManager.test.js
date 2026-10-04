@@ -95,6 +95,9 @@ describe('appStartupManager tests', () => {
     });
 
     appStartupManager = proxyquire('../../ZelBack/src/services/appLifecycle/appStartupManager', {
+      './crontabAndMountsCleanup': { cleanupCrontabAndMounts: sinon.stub().resolves() },
+      './containerMountRecovery': { performContainerMountRecovery: sinon.stub().resolves() },
+      '../appSystem/fileOperationRecovery': { recoverInterruptedFileOperations: sinon.stub().resolves() },
       '../../lib/log': logStub,
       '../dockerService': dockerServiceStub,
       '../serviceHelper': { delay: sinon.stub().resolves() },
@@ -139,6 +142,9 @@ describe('appStartupManager tests', () => {
     it('flag on: boot reaps orphaned followers after recovery', async () => {
       // Rebuild the module against a config whose lifecycle toggle is on.
       const flaggedStartupManager = proxyquire('../../ZelBack/src/services/appLifecycle/appStartupManager', {
+        './crontabAndMountsCleanup': { cleanupCrontabAndMounts: sinon.stub().resolves() },
+        './containerMountRecovery': { performContainerMountRecovery: sinon.stub().resolves() },
+        '../appSystem/fileOperationRecovery': { recoverInterruptedFileOperations: sinon.stub().resolves() },
         config: asConfig({ ...realConfig, fluxapps: { ...realConfig.fluxapps, manageCollectorLifecycle: true } }),
         '../../lib/log': logStub,
         '../dockerService': dockerServiceStub,
@@ -341,9 +347,15 @@ describe('appStartupManager tests', () => {
   // and the reconcile. bootSyncTimeoutMs bounds the registry wait and the state
   // pull together, in real milliseconds here.
   let specReconcilerStub;
+  let storageStubs;
 
   function loadWithMigrations(runBefore, { bootSyncTimeoutMs } = {}) {
     specReconcilerStub = { convergeAtBoot: sinon.stub().resolves() };
+    storageStubs = {
+      mounts: { cleanupCrontabAndMounts: sinon.stub().resolves() },
+      mountRecovery: { performContainerMountRecovery: sinon.stub().resolves() },
+      fileOperations: { recoverInterruptedFileOperations: sinon.stub().resolves() },
+    };
     return proxyquire('../../ZelBack/src/services/appLifecycle/appStartupManager', {
       ...(bootSyncTimeoutMs === undefined ? {} : {
         config: asConfig({ ...realConfig, system: { ...realConfig.system, bootSyncTimeoutMs } }),
@@ -365,6 +377,9 @@ describe('appStartupManager tests', () => {
       '../migrations': { runBefore },
       './contentSlotService': { reconcileBootContent: sinon.stub().resolves() },
       './specReconciler': specReconcilerStub,
+      './crontabAndMountsCleanup': storageStubs.mounts,
+      './containerMountRecovery': storageStubs.mountRecovery,
+      '../appSystem/fileOperationRecovery': storageStubs.fileOperations,
     });
   }
 
@@ -436,6 +451,24 @@ describe('appStartupManager tests', () => {
       sinon.assert.calledOnce(specReconcilerStub.convergeAtBoot);
       expect(runBefore.calledBefore(specReconcilerStub.convergeAtBoot), 'the migrations before the pass').to.equal(true);
       expect(specReconcilerStub.convergeAtBoot.calledBefore(dockerServiceStub.dockerListContainers), 'the pass before the reconcile').to.equal(true);
+    });
+
+    // Every installed app's storage is touched only under the names the migrations
+    // left: volumes mounted, a container started before its mount restarted, an
+    // interrupted file operation reclaimed from the mounted volume - in that order,
+    // and before anything is asked of the registry or started.
+    it('mounts and recovers installed app storage after the migrations and before the registry pass', async () => {
+      const runBefore = migrationsTaking(1000);
+      const manager = loadWithMigrations(runBefore);
+
+      await manager.manageAppsOnBoot(contextDropped(60_000));
+
+      const { mounts, mountRecovery, fileOperations } = storageStubs;
+      sinon.assert.calledOnce(mounts.cleanupCrontabAndMounts);
+      expect(runBefore.calledBefore(mounts.cleanupCrontabAndMounts), 'the migrations before the mounts').to.equal(true);
+      expect(mounts.cleanupCrontabAndMounts.calledBefore(mountRecovery.performContainerMountRecovery)).to.equal(true);
+      expect(mountRecovery.performContainerMountRecovery.calledBefore(fileOperations.recoverInterruptedFileOperations)).to.equal(true);
+      expect(fileOperations.recoverInterruptedFileOperations.calledBefore(specReconcilerStub.convergeAtBoot), 'storage before the registry pass').to.equal(true);
     });
 
     it('the rows outrank the clock: a node long past the grace whose rows still place it starts its apps', async () => {
