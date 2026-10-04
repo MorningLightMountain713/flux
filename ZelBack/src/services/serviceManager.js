@@ -83,7 +83,6 @@ const componentIdentifierResolver = require('./appLifecycle/componentIdentifierR
 const backupRestoreService = require('./backupRestoreService');
 const systemService = require('./systemService');
 const fluxNodeService = require('./fluxNodeService');
-const volumeValidationService = require('./volumeValidationService');
 const watchdogService = require('./watchdogService');
 const cloudUIUpdateService = require('./cloudUIUpdateService');
 const appTamperingBlocklistService = require('./appTamperingBlocklistService');
@@ -469,19 +468,6 @@ async function startFluxFunctions() {
         // baseline is the expensive half and stays in startDbDependentServices,
         // where its two-million-row ingest cannot land on top of that rebuild.
         ipLocationSync.restoreCachedTable().catch((err) => log.error(`ipLocationSync restore error: ${err.message}`));
-
-        // Check for apps with incorrect volume mounts (containing /flux/ path)
-        log.info('Checking for apps with incorrect volume mounts...');
-        // BOTH CONDITIONS, because neither implies the other. The delay is for the host
-        // settling - docker, mounts, crontab - and the gate is for the policy the hard
-        // redeploy it performs needs to pull an image again. This pass runs ONCE per
-        // boot and has nothing that retries it, so firing it into a closed gate loses
-        // the fix until the node next restarts.
-        setTimeout(() => {
-          capabilities.whenUp('policyCurrent').then(() => volumeValidationService.checkAndFixIncorrectVolumeMounts()).catch((error) => {
-            log.error(`Volume validation service error: ${error.message}`);
-          });
-        }, bootDelay(45 * 1000)); // Run after 45 seconds to allow system to stabilize
 
         // Validate hardware requirements and remove non-compliant apps FIRST
         log.info('Scheduling hardware validation check...');
