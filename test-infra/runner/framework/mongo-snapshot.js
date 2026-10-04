@@ -21,7 +21,7 @@ const { artifactForPublication, encodeIpLocationBinary } = require('../../extern
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BUILDER_DIR = join(__dirname, '..', '..', 'mongo-snapshot');
-const BUILDER_FILES = ['build.js', 'load-node.js'];
+const BUILDER_FILES = ['build.cjs', 'load-node.cjs'];
 const SNAPSHOT_DIR = process.env.E2E_MONGO_SNAPSHOT_DIR || join(tmpdir(), 'flux-e2e-mongo-snapshots');
 // A build takes one fleet's load, about a minute for sixteen nodes; a lock older
 // than this belongs to a builder that died.
@@ -145,7 +145,7 @@ async function buildSnapshot({
     }
     const loaded = await run('docker', [
       'run', '--rm', '--network', `container:${mongoId}`, '-v', `${work}/iplocation.bin.gz:/tmp/iplocation.bin.gz:ro`,
-      '--entrypoint', 'node', nodeImage, '/flux/test-infra/mongo-snapshot/build.js', '/tmp/iplocation.bin.gz', '127.0.0.1', String(nodes),
+      '--entrypoint', 'node', nodeImage, '/flux/test-infra/mongo-snapshot/build.cjs', '/tmp/iplocation.bin.gz', '127.0.0.1', String(nodes),
     ], BUILD_TIMEOUT_MS);
     if (!loaded.ok) throw new Error(`loading the table failed: ${loaded.stderr.trim() || loaded.error?.message}`);
     const digests = loaded.stdout.trim().split('\n').map((line) => JSON.parse(line).sha256);
