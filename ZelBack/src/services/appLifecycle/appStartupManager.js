@@ -20,6 +20,7 @@ const nodeDosState = require('../nodeDosState');
 const migrations = require('../migrations');
 const appUninstaller = require('./appUninstaller');
 const specReconciler = require('./specReconciler');
+const hardwareValidationService = require('./hardwareValidationService');
 const crontabAndMountsCleanup = require('./crontabAndMountsCleanup');
 const containerMountRecovery = require('./containerMountRecovery');
 const fileOperationRecovery = require('../appSystem/fileOperationRecovery');
@@ -640,6 +641,9 @@ async function manageAppsOnBoot(bootContext) {
     // before any container starts: an app the registry does not list is removed
     // rather than started.
     await specReconciler.convergeAtBoot();
+    // What is left must fit this node's hardware, summed over the apps the
+    // registry lets it keep: the newest are removed until the rest fit.
+    await hardwareValidationService.performBootTimeHardwareValidation();
     log.info('appStartupManager - Daemon, DB, and node confirmed, reconciling apps');
     await openInstalledAppPorts();
     await reconcileAppsOnBoot({ placement });
