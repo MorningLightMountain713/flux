@@ -7,10 +7,10 @@ const moduleLoader = require('../../../ZelBack/src/lib/moduleLoader');
 const { loadSpecLibrary } = require('./fluxSpec');
 
 /**
- * The app registry and the installed apps a unit test's subject reads: a real
- * collection held in memory, or one whose every operation is a stub. Either is
- * installed as appRecords.registry() or appRecords.installed() until
- * sinon.restore().
+ * The app registry, the installed apps and the installed ledgers a unit test's
+ * subject reads: a real collection held in memory, or one whose every
+ * operation is a stub. Either is installed as appRecords.registry(),
+ * appRecords.installed() or appRecords.ledgers() until sinon.restore().
  */
 
 // What each operation answers until a test says otherwise.
@@ -58,13 +58,21 @@ const INSTALLED_ANSWERS = {
   byName: null,
   byReplica: null,
   byIdentity: null,
-  byIdentifier: null,
   instancesOf: [],
   all: [],
   names: [],
   owed: [],
-  unadopted: [],
+  legacyMoves: [],
   completeDerivedFields: 0,
+};
+
+// What each installed-ledgers operation answers until a test says otherwise.
+const LEDGER_ANSWERS = {
+  byInstance: null,
+  byIdentifier: null,
+  all: [],
+  keys: [],
+  addComponent: true,
 };
 
 /**
@@ -75,6 +83,16 @@ const INSTALLED_ANSWERS = {
 function stubInstalled() {
   if (appRecords.installed.restore) return appRecords.installed();
   return install('installed', stubbed(specLibrary.loaded().InstalledApps, INSTALLED_ANSWERS));
+}
+
+/**
+ * The installed ledgers with every operation a sinon stub, installed as
+ * appRecords.ledgers(); calling it again in the same test returns it.
+ * @returns {Object<string, sinon.SinonStub>}
+ */
+function stubLedgers() {
+  if (appRecords.ledgers.restore) return appRecords.ledgers();
+  return install('ledgers', stubbed(specLibrary.loaded().InstalledLedgers, LEDGER_ANSWERS));
 }
 
 /**
@@ -101,6 +119,18 @@ async function inMemoryInstalled() {
   return { installed: install('installed', new InstalledApps(provider)), provider };
 }
 
+/**
+ * A real InstalledLedgers over flux-spec's in-memory store, installed as
+ * appRecords.ledgers(), with the store beside it.
+ * @returns {Promise<{ledgers: import('@runonflux/flux-spec-backend').InstalledLedgers, provider: object}>}
+ */
+async function inMemoryLedgers() {
+  const { InstalledLedgers } = await loadSpecLibrary();
+  const { InMemoryStorageProvider } = await moduleLoader.importModule('@runonflux/flux-spec-backend/testing');
+  const provider = new InMemoryStorageProvider();
+  return { ledgers: install('ledgers', new InstalledLedgers(provider)), provider };
+}
+
 module.exports = {
-  stubRegistry, inMemoryRegistry, stubInstalled, inMemoryInstalled,
+  stubRegistry, inMemoryRegistry, stubInstalled, inMemoryInstalled, stubLedgers, inMemoryLedgers,
 };

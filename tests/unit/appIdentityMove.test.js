@@ -72,11 +72,10 @@ describe('appIdentityMove tests', () => {
   }
 
   // The stored row as the installed collection hands it back: the registered
-  // fields, the record beneath them, the ledger beside.
+  // fields, the record beneath them.
   function rowView(row) {
-    const { ledger = null, ...registered } = row;
     return {
-      ...registered, record: registered, owed: null, ledger, serialize: () => ({ ...registered }),
+      ...row, record: row, owed: null, serialize: () => ({ ...row }),
     };
   }
 
@@ -104,19 +103,20 @@ describe('appIdentityMove tests', () => {
           return row ? rowView(row) : null;
         },
         put: async (rec) => {
-          record('put', rec.record.name, rec.replica, rec.record.identity, rec.ledger);
-          const row = db.get(key(rec.record.name, rec.replica));
-          Object.assign(row, rec.record);
-          if (rec.ledger) row.ledger = rec.ledger;
+          record('put', rec.record.name, rec.replica, rec.record.identity);
+          Object.assign(db.get(key(rec.record.name, rec.replica)), rec.record);
         },
+      },
+      ledgers: {
+        put: async (ledger) => { record('putLedger', ledger.name, ledger.replica, ledger.network, ledger.components); },
       },
       moveStore: {
         begin: async (name, replica, to) => { record('begin', name, replica, to); moves.set(key(name, replica), { to }); },
         end: async (name, replica) => { record('end', name, replica); moves.delete(key(name, replica)); },
       },
       installedLedger: {
-        observeLedger: async (dep) => {
-          record('observeLedger', dep.networkName);
+        observeLedger: async (dep, volumeOf) => {
+          record('observeLedger', dep.networkName, volumeOf);
           return {
             network: { name: dep.networkName },
             components: Object.fromEntries(dep.componentEntries().map(([n, c]) => [n, { identifier: c.identifier }])),
@@ -128,6 +128,7 @@ describe('appIdentityMove tests', () => {
       specLibrary: {
         loaded: () => ({
           InstalledSpec: function InstalledSpec(fields) { Object.assign(this, fields); },
+          InstalledLedger: function InstalledLedger(fields) { Object.assign(this, fields); },
           InstantiatedSpec: { deserialize: (doc) => ({ ...doc }) },
         }),
       },
@@ -163,6 +164,7 @@ describe('appIdentityMove tests', () => {
           const candidate = `/vol/${named}FLUXFSVOL`;
           return files.has(candidate) ? { path: candidate, conclusive: true, blocked: null } : { path: null, conclusive: true, blocked: null };
         },
+        recordedVolumeImage: async () => null,
         recordNewVolumeImage: async (identifier, imagePath, fsUuid) => {
           record('recordNewVolumeImage', identifier, imagePath, fsUuid);
           records.set(identifier, { path: imagePath, fsUuid });
@@ -213,7 +215,7 @@ describe('appIdentityMove tests', () => {
 
     appIdentityMove = proxyquire('../../ZelBack/src/services/appLifecycle/appIdentityMove', {
       'node:fs/promises': stubs.fs,
-      '../appDatabase/appRecords': { installed: () => stubs.installed },
+      '../appDatabase/appRecords': { installed: () => stubs.installed, ledgers: () => stubs.ledgers },
       './appIdentityMoveStore': stubs.moveStore,
       './installedLedger': stubs.installedLedger,
       '../utils/specLibrary': stubs.specLibrary,
@@ -560,7 +562,7 @@ describe('appIdentityMove tests', () => {
   });
 
   describe('the row, the network and the recreate', () => {
-    it('records the move before anything goes, and names the identity with its component identifiers before the containers are recreated', async () => {
+    it('records the move before anything goes, names the identity, and writes the ledger of what it left before the containers are recreated', async () => {
       seedRunningUnderName();
 
       await appIdentityMove.moveInstalledAppsOntoIdentity();
@@ -568,11 +570,13 @@ describe('appIdentityMove tests', () => {
       expect(calls[indexOf('begin')].slice(1)).to.deep.equal([NAME, null, IDENTITY]);
       expect(indexOf('begin')).to.be.lessThan(indexOf('appDockerRemove'));
       const flip = indexOf('put', (name, replica, identity) => identity === IDENTITY);
-      expect(calls[flip].slice(1)).to.deep.equal([NAME, null, IDENTITY, {
-        network: { name: `fluxDockerNetwork_${IDENTITY}` }, components: { [NAME]: { identifier: newIdentifier() } },
-      }]);
-      expect(flip).to.be.lessThan(indexOf('installComponent'));
-      expect(indexOf('end'), 'the move record ends with the flip').to.be.greaterThan(flip);
+      expect(calls[flip].slice(1)).to.deep.equal([NAME, null, IDENTITY]);
+      const ledger = indexOf('putLedger');
+      expect(calls[ledger].slice(1)).to.deep.equal([NAME, null, { name: `fluxDockerNetwork_${IDENTITY}` }, { [NAME]: { identifier: newIdentifier() } }]);
+      expect(calls[indexOf('observeLedger')][2], 'observed with the volume this node recorded').to.equal(stubs.volumeService.recordedVolumeImage);
+      expect(ledger).to.be.greaterThan(flip);
+      expect(ledger).to.be.lessThan(indexOf('installComponent'));
+      expect(indexOf('end'), 'the move record ends with the ledger').to.be.greaterThan(ledger);
       expect(moves.has(key(NAME, null))).to.equal(false);
     });
 

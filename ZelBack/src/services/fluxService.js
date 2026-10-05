@@ -1634,8 +1634,11 @@ async function getFluxInfo(req, res) {
     // Same reason: the two derivations that recover an app from a container name
     // or from image filenames on disk can only be deleted once the fleet reports
     // every installed instance holds its ledger.
-    info.apps.installedLedger = await appRecords.installed().all()
-      .then((instances) => ({ instances: instances.length, adopted: instances.filter((instance) => instance.hasLedger()).length }))
+    info.apps.installedLedger = await Promise.all([appRecords.installed().all(), appRecords.ledgers().keys()])
+      .then(([instances, keys]) => {
+        const ledgered = new Set(keys.map(appRecords.instanceKey));
+        return { instances: instances.length, adopted: instances.filter((instance) => ledgered.has(appRecords.instanceKey(instance))).length };
+      })
       .catch((error) => {
         log.warn(`getFluxInfo - installed ledger coverage unavailable: ${error.message}`);
         return null;

@@ -340,12 +340,13 @@ async function startFluxFunctions() {
         // cachedImages (localzelapps): unique index on (fluxId, repotag) so a re-submit
         // can't fork an owner's pin record, plus a repotag lookup for the retention gate
         await imageCacheStore.prepareCollection();
-        // The installed apps: the indexes the collection's queries are answered
-        // by, the derived keys of any record stored without them, and the move
-        // records.
+        // The installed apps and their ledgers: the indexes each collection's
+        // queries are answered by, the derived key of any record stored without
+        // it, and the move records.
         await appRecords.installed().ensureIndexes();
         const completedInstalled = await appRecords.installed().completeDerivedFields();
         log.info(`Installed apps prepared${completedInstalled ? `, ${completedInstalled} record(s) completed` : ''}`);
+        await appRecords.ledgers().ensureIndexes();
         await appIdentityMoveStore.prepareCollection();
         // playgroundsessions (localzelapps): the retention TTL the collection's own
         // comment promises, plus the (callerFingerprint, flagged, observedAt) index

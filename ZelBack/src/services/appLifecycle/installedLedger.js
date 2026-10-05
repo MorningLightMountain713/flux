@@ -7,7 +7,7 @@ const appRecords = require('../appDatabase/appRecords');
 const appIdentityMoveStore = require('./appIdentityMoveStore');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const dockerService = require('../dockerService');
-const volumeService = require('../utils/volumeService');
+const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const upnpService = require('../upnpService');
 const specLibrary = require('../utils/specLibrary');
@@ -15,11 +15,11 @@ const { appsFolder } = require('../utils/appConstants');
 
 /**
  * The ledger of an installed instance as the host holds it now, read for an
- * instance installed before the node kept one. Every entry is what the host
- * can tell: the names the deployment states, the volume image the node
- * recorded, the digest and the mesh name the daemon holds, the folder the
- * deployment names; null where the host holds nothing. Each port is recorded
- * as opened by the node's current firewall and UPnP state.
+ * instance whose ledger the node did not write as it provisioned. Every entry
+ * is what the host can tell: the names the deployment states, the volume image
+ * the caller's reader answers, the digest and the mesh name the daemon holds,
+ * the folder the deployment names; null where the host holds nothing. Each
+ * port is recorded as opened by the node's current firewall and UPnP state.
  */
 
 // The disk a volume image was placed on: the root disk when the image sits in
@@ -37,9 +37,11 @@ async function meshNameOf(identifier) {
 
 /**
  * @param {object} deployment - the instance's DeploymentSpec
- * @returns {Promise<object>} the ledger
+ * @param {(identifier: string) => Promise<{path: string, fsUuid: string|null}|null>} volumeOf
+ *   the volume image recorded for a component's identifier, or null
+ * @returns {Promise<{network: {name: string}, components: object}>} the ledger's body
  */
-async function observeLedger(deployment) {
+async function observeLedger(deployment, volumeOf) {
   const { hostTlsDir } = specLibrary.loaded();
   const opened = [
     ...(await fluxNetworkHelper.isFirewallActive() ? ['ufw'] : []),
@@ -50,7 +52,7 @@ async function observeLedger(deployment) {
   for (const [name, component] of deployment.componentEntries()) {
     const compDir = path.join(appsFolder, component.identifier);
     // eslint-disable-next-line no-await-in-loop
-    const recorded = component.isStateless ? null : await volumeService.recordedVolumeImage(component.identifier);
+    const recorded = component.isStateless ? null : await volumeOf(component.identifier);
     components[name] = {
       identifier: component.identifier,
       // eslint-disable-next-line no-await-in-loop
@@ -74,41 +76,50 @@ async function observeLedger(deployment) {
 }
 
 /**
- * Writes the ledger of every instance installed before the node kept one, and
- * moves its move-in-progress record, if it carries one, to the move's own
- * collection. An instance whose record states no identity is named by its
- * name. An instance that cannot be adopted is left as it is and logged.
+ * Writes the ledger of every installed instance that has none, from what the
+ * host holds for it: the volume image from the component's runtime-state
+ * document. The move onto the identity an instance's record carries goes to
+ * the move's own collection, and an instance whose record states no identity
+ * is named by its name. An instance that cannot be adopted is left as it is
+ * and logged.
  * @returns {Promise<{adopted: Array<{name: string, replica: string|null}>, skipped: Array<{name: string, replica: string|null, reason: string}>}>}
  */
 async function adoptInstalledLedgers() {
-  const { InstalledSpec, InstantiatedSpec } = specLibrary.loaded();
-  const pending = await appRecords.installed().unadopted();
+  const { InstalledSpec, InstalledLedger, InstantiatedSpec } = specLibrary.loaded();
+  const installed = appRecords.installed();
+  const ledgers = appRecords.ledgers();
+  const moves = new Map((await installed.legacyMoves()).map(({ record, move }) => [appRecords.instanceKey(record), move]));
+  const ledgered = new Set((await ledgers.keys()).map(appRecords.instanceKey));
+  const pending = (await installed.all()).filter((record) => !ledgered.has(appRecords.instanceKey(record)));
   const results = { adopted: [], skipped: [] };
   // eslint-disable-next-line no-restricted-syntax
-  for (const { record, move } of pending) {
+  for (const record of pending) {
     const key = { name: record.name, replica: record.replica };
     try {
+      const move = moves.get(appRecords.instanceKey(record)) ?? null;
       let registered = record.record;
       if (registered.identity === null) {
         registered = InstantiatedSpec.deserialize({ ...registered.serialize(), identity: registered.name });
       }
       // eslint-disable-next-line no-await-in-loop
       if (move) await appIdentityMoveStore.begin(record.name, record.replica, move.to, move.since);
+      if (move || registered !== record.record) {
+        // eslint-disable-next-line no-await-in-loop
+        await installed.put(new InstalledSpec({ record: registered, replica: record.replica, owed: record.owed }));
+      }
       // eslint-disable-next-line no-await-in-loop
       const deployment = await deploymentProvider.buildDeployment(registered, { replica: record.replica });
       // eslint-disable-next-line no-await-in-loop
-      const ledger = await observeLedger(deployment);
+      const body = await observeLedger(deployment, appsRuntimeState.getVolumeImage);
       // eslint-disable-next-line no-await-in-loop
-      await appRecords.installed().put(new InstalledSpec({
-        record: registered, replica: record.replica, owed: null, ledger,
-      }));
+      await ledgers.put(new InstalledLedger({ name: record.name, replica: record.replica, ...body }));
       results.adopted.push(key);
     } catch (error) {
       log.warn(`installedLedger - ${record.name}${record.replica ? ` (${record.replica})` : ''} not adopted: ${error.message}`);
       results.skipped.push({ ...key, reason: error.message });
     }
   }
-  if (pending.length) log.info(`installedLedger - ${results.adopted.length} of ${pending.length} installed instance(s) adopted the ledger`);
+  if (pending.length) log.info(`installedLedger - ${results.adopted.length} of ${pending.length} installed instance(s) adopted a ledger`);
   return results;
 }
 

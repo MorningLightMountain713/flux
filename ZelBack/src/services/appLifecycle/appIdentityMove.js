@@ -140,16 +140,15 @@ async function attempt(label, step) {
  */
 /**
  * Writes an instance's record with the registered fields changed, keeping its
- * replica, its removal owed and its ledger.
+ * replica and its removal owed.
  * @param {object} installed - the InstalledSpec
  * @param {object} fields - the registered fields to change
- * @param {object|null} [ledger] - the ledger to store instead of the record's
  */
-async function putRecord(installed, fields, ledger = installed.ledger) {
+async function putRecord(installed, fields) {
   const { InstalledSpec, InstantiatedSpec } = specLibrary.loaded();
   const registered = InstantiatedSpec.deserialize({ ...installed.serialize(), ...fields });
   await appRecords.installed().put(new InstalledSpec({
-    record: registered, replica: installed.replica, owed: installed.owed, ledger,
+    record: registered, replica: installed.replica, owed: installed.owed,
   }));
 }
 
@@ -425,9 +424,13 @@ async function executePlan(plan) {
   }
 
   await attempt(`network of ${name}`, () => appDockerNetwork.ensureAppDockerNetwork(name, { networkName: next.networkName }));
-  // The record names the identity, with the ledger of what the move left on the
-  // host under it; the move's own record ends with it.
-  await putRecord(plan.installed, { identity: to }, await installedLedger.observeLedger(next));
+  // The record names the identity, the ledger holds what the move left on the
+  // host under it, and the move's own record ends with them.
+  const { InstalledLedger } = specLibrary.loaded();
+  await putRecord(plan.installed, { identity: to });
+  await appRecords.ledgers().put(new InstalledLedger({
+    name, replica, ...(await installedLedger.observeLedger(next, volumeService.recordedVolumeImage)),
+  }));
   await appIdentityMoveStore.end(name, replica);
   if (deferred) {
     log.warn(`appIdentityMove - ${name} is on its identity; the reconciler mounts and creates its containers (${deferred})`);
