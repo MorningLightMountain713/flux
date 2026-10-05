@@ -312,6 +312,11 @@ async function gatherContainers(app) {
   const deployments = await deploymentProvider.getInstalledDeployments(app.name);
   // eslint-disable-next-line no-restricted-syntax
   for (const deployment of deployments) {
+    // The member name each container was created with is the ledger's, written
+    // by the install before the create; the slot-drift check compares it with
+    // the name the register resolves now.
+    // eslint-disable-next-line no-await-in-loop
+    const ledger = await appRecords.ledgers().byInstance(deployment.appName, deployment.replica ?? null);
     // eslint-disable-next-line no-restricted-syntax
     for (const [componentName, component] of deployment.componentEntries()) {
       // eslint-disable-next-line no-await-in-loop
@@ -333,11 +338,7 @@ async function gatherContainers(app) {
         identifier: component.identifier,
         pid,
         sourceIp: bridge?.IPAddress || null,
-        // The identity the container was created with — read back for the
-        // slot-drift check (a promoted standby's env is stale until recreate).
-        meshSelf: (info?.Config?.Env ?? [])
-          .find((entry) => entry.startsWith('FLUX_MESH_SELF='))
-          ?.slice('FLUX_MESH_SELF='.length) ?? null,
+        meshSelf: ledger?.component(componentName)?.mesh?.name ?? null,
       });
     }
   }

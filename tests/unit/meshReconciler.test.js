@@ -96,9 +96,24 @@ describe('meshReconciler', () => {
   );
 
   /** The deployment view of an installed spec — one loose instance. */
-  const deploymentFor = (spec) => flux.DeploymentSpec.fromSpec(
-    spec, appsFolder, { replica: null, identity: IDENTITY },
+  const deploymentFor = (spec, replica = null) => flux.DeploymentSpec.fromSpec(
+    spec, appsFolder, { replica, identity: IDENTITY },
   );
+
+  /**
+   * The ledger the install wrote for a deployment: every block projected off the
+   * real DeploymentSpec, the mesh member name each container was created with as
+   * given, null for a component created with none.
+   */
+  const ledgerNaming = (deployment, meshNames) => new flux.InstalledLedger({
+    name: deployment.appName,
+    replica: deployment.replica ?? null,
+    network: { name: deployment.networkName },
+    components: Object.fromEntries(deployment.componentEntries().map(([name, c]) => [name, {
+      ...flux.InstalledLedger.newBlock({ identifier: c.identifier, image: c.image }),
+      mesh: meshNames[name] ? { name: meshNames[name] } : null,
+    }])),
+  });
 
   beforeEach(async () => {
     tmpRoot = await realFsp.mkdtemp(path.join(os.tmpdir(), 'mesh-rec-'));
@@ -111,6 +126,13 @@ describe('meshReconciler', () => {
       installedApps: [await installedRow(spec)],
       listInstalledApps: sinon.stub().callsFake(async () => stubs.installedApps),
       deployments: [deploymentFor(spec)],
+      // The mesh member name the ledger holds for each component; none by default.
+      meshNames: {},
+      ledgerCalls: [],
+      ledgerFor: (name, replica) => {
+        const deployment = stubs.deployments.find((d) => d.appName === name && (d.replica ?? null) === replica);
+        return deployment ? ledgerNaming(deployment, stubs.meshNames) : null;
+      },
       // Mirrors specCutover.resolveInstantiatedSpec for a cleartext row: the
       // held spec instance itself. Stubbed only because the encrypted branch
       // would register FluxOS's own crypto providers, which need a node.
@@ -171,6 +193,12 @@ describe('meshReconciler', () => {
         installed: () => ({
           apps: async (...args) => (await stubs.listInstalledApps(...args)).map((record) => installedRecord(record)),
           byName: async (name) => installedRecord(stubs.installedApps.find((app) => app.name === name) ?? null),
+        }),
+        ledgers: () => ({
+          byInstance: async (name, replica) => {
+            stubs.ledgerCalls.push([name, replica]);
+            return stubs.ledgerFor(name, replica);
+          },
         }),
       },
       '../appRuntime/deploymentProvider': {
@@ -721,16 +749,20 @@ describe('meshReconciler', () => {
     });
 
     it('surfaces slot-identity drift, and enqueues the rebuild only once confirmed', async () => {
-      // The container was created as a standby (nodeid identity); the passes
-      // resolve slot 1 — drift. One pass records it, the second confirms and
-      // hands the identifier to the app reconciler's queue. The identifier is
-      // the DeploymentSpec's own, built from the app identity.
+      // The container was created as a standby (nodeid identity), as its ledger
+      // block records; the passes resolve slot 1 — drift. One pass records it,
+      // the second confirms and hands the identifier to the app reconciler's
+      // queue. The identifier is the DeploymentSpec's own, built from the app
+      // identity.
       const [[, component]] = stubs.deployments[0].componentEntries();
       expect(component.identifier).to.equal(`web_${IDENTITY}`);
       stubs.ordinals = { own: 1, byNode: new Map([[OWN_NODE_ID, 1]]) };
+      stubs.meshNames = { web: `web-${OWN_NODE_ID}` };
+      // The name is the ledger's, not the container's environment: an
+      // environment that already says the slot name changes nothing.
       stubs.containerInspect = {
         State: { Pid: 4242 },
-        Config: { Env: [`FLUX_MESH_SELF=web-${OWN_NODE_ID}`] },
+        Config: { Env: ['FLUX_MESH_SELF=web-1'] },
         NetworkSettings: { Networks: { [NETWORK_NAME]: { IPAddress: '172.23.4.5' } } },
       };
       await meshReconciler.reconcileAllMeshApps();
@@ -740,8 +772,25 @@ describe('meshReconciler', () => {
       expect(stubs.enqueued).to.deep.equal([]);
       await meshReconciler.reconcileAllMeshApps();
       expect(stubs.enqueued).to.deep.equal([`web_${IDENTITY}`]);
-      // A container matching its resolved slot records no drift at all.
-      stubs.containerInspect.Config.Env = ['FLUX_MESH_SELF=web-1'];
+      // A container created with its resolved slot's name records no drift at all.
+      stubs.meshNames.web = 'web-1';
+      await meshReconciler.reconcileAllMeshApps();
+      expect(meshReconciler.lastPassStatus('myblog').identityDrift).to.deep.equal([]);
+    });
+
+    it('reads the ledger of the instance the deployment is, replica included', async () => {
+      stubs.deployments = [deploymentFor(stubs.installedApps[0].spec, 's1')];
+      await meshReconciler.reconcileAllMeshApps();
+      expect(stubs.ledgerCalls).to.deep.equal([['myblog', 's1']]);
+    });
+
+    it('records no created-with name for a component whose ledger block names none', async () => {
+      stubs.ordinals = { own: 1, byNode: new Map([[OWN_NODE_ID, 1]]) };
+      stubs.containerInspect = {
+        State: { Pid: 4242 },
+        Config: { Env: [`FLUX_MESH_SELF=web-${OWN_NODE_ID}`] },
+        NetworkSettings: { Networks: { [NETWORK_NAME]: { IPAddress: '172.23.4.5' } } },
+      };
       await meshReconciler.reconcileAllMeshApps();
       expect(meshReconciler.lastPassStatus('myblog').identityDrift).to.deep.equal([]);
     });
