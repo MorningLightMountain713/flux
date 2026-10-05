@@ -2,7 +2,10 @@
 
 const path = require('node:path');
 const fs = require('node:fs/promises');
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
+const appIdentityMoveStore = require('./appIdentityMoveStore');
+const installedLedger = require('./installedLedger');
+const specLibrary = require('../utils/specLibrary');
 const appHistory = require('../appDecisions/appHistory');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const dockerService = require('../dockerService');
@@ -135,6 +138,21 @@ async function attempt(label, step) {
  * @param {object} installed - InstantiatedSpec of the row
  * @returns {Promise<{uuid: string, registrationVersion: number, fromRow: boolean}|null>}
  */
+/**
+ * Writes an instance's record with the registered fields changed, keeping its
+ * replica, its removal owed and its ledger.
+ * @param {object} installed - the InstalledSpec
+ * @param {object} fields - the registered fields to change
+ * @param {object|null} [ledger] - the ledger to store instead of the record's
+ */
+async function putRecord(installed, fields, ledger = installed.ledger) {
+  const { InstalledSpec, InstantiatedSpec } = specLibrary.loaded();
+  const registered = InstantiatedSpec.deserialize({ ...installed.serialize(), ...fields });
+  await appRecords.installed().put(new InstalledSpec({
+    record: registered, replica: installed.replica, owed: installed.owed, ledger,
+  }));
+}
+
 async function registrationOf(installed) {
   const { uuid, registrationVersion } = installed;
   if (uuid && Number.isInteger(registrationVersion)) return { uuid, registrationVersion, fromRow: true };
@@ -162,21 +180,21 @@ async function registrationOf(installed) {
  */
 async function planRow(row, { isAppIdentity, appIdentityFromUuid }) {
   const { name, replica } = row;
-  let installed = await appsRepository.getInstalledIdentity(name, replica);
+  let installed = await appRecords.installed().byReplica(name, replica);
   if (!installed) return { name, replica, skipped: 'the row cannot be read yet' };
   if (isAppIdentity(installed.identity)) return { name, replica, done: true };
   const registration = await registrationOf(installed);
   if (!registration) return { name, replica, skipped: 'no applied decision names its uuid' };
   if (!registration.fromRow) {
-    await appsRepository.setInstalledRegistration(name, replica, registration);
-    installed = await appsRepository.getInstalledIdentity(name, replica);
+    await putRecord(installed, { uuid: registration.uuid, registrationVersion: registration.registrationVersion });
+    installed = await appRecords.installed().byReplica(name, replica);
   }
   const to = appIdentityFromUuid(registration.uuid);
   const token = operationRegistry.acquire(name, 'move', 'appIdentityMove', `moving ${name} onto ${to}`);
   if (!token) return { name, replica, skipped: 'held by another operation' };
   try {
-    const former = await deploymentProvider.buildDeployment(installed, { replica });
-    const next = await deploymentProvider.buildDeployment(installed, { replica, identity: to });
+    const former = await deploymentProvider.buildDeployment(installed.record, { replica });
+    const next = await deploymentProvider.buildDeployment(installed.record, { replica, identity: to });
     return {
       name, replica, installed, registration, from: installed.identity, to, former, next, token,
     };
@@ -344,8 +362,8 @@ async function repointFolder(comp) {
  * @param {string} uuid
  */
 async function recreate(name, replica, uuid) {
-  const installed = await appsRepository.getInstalledIdentity(name, replica);
-  const deployment = await deploymentProvider.buildDeployment(installed, { replica });
+  const installed = await appRecords.installed().byReplica(name, replica);
+  const deployment = await deploymentProvider.buildDeployment(installed.record, { replica });
   const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(deployment);
   // eslint-disable-next-line no-restricted-syntax
   for (const [, component] of deployment.componentEntries()) {
@@ -366,7 +384,7 @@ async function recreate(name, replica, uuid) {
     await appNetworkLinker.connectComponentToLinkedApps(component.identifier, deployment, component.qualifiedNetworkAliases);
   }
   if (requiresEncryption) {
-    await fluxShutdowndClient.upsertAppPlanBestEffort(shutdownPlan.buildShutdownPlan(installed, deployment))
+    await fluxShutdowndClient.upsertAppPlanBestEffort(shutdownPlan.buildShutdownPlan(installed.record, deployment))
       .catch((error) => log.warn(`appIdentityMove - shutdown plan for ${name} not delivered: ${error.message}`));
   }
 }
@@ -383,7 +401,7 @@ async function executePlan(plan) {
   const {
     name, replica, registration, from, to, former, next,
   } = plan;
-  await appsRepository.setInstalledMove(name, replica, { to, since: Date.now() });
+  await appIdentityMoveStore.begin(name, replica, to);
   let deferred = null;
 
   // eslint-disable-next-line no-restricted-syntax
@@ -407,7 +425,10 @@ async function executePlan(plan) {
   }
 
   await attempt(`network of ${name}`, () => appDockerNetwork.ensureAppDockerNetwork(name, { networkName: next.networkName }));
-  await appsRepository.setInstalledIdentity(name, replica, to, next.componentEntries().map(([, c]) => c.identifier));
+  // The record names the identity, with the ledger of what the move left on the
+  // host under it; the move's own record ends with it.
+  await putRecord(plan.installed, { identity: to }, await installedLedger.observeLedger(next));
+  await appIdentityMoveStore.end(name, replica);
   if (deferred) {
     log.warn(`appIdentityMove - ${name} is on its identity; the reconciler mounts and creates its containers (${deferred})`);
   } else {
@@ -505,7 +526,7 @@ async function moveInstalledAppsOntoIdentity() {
   };
   held.clear();
   const spec = await getSpec();
-  const rows = await appsRepository.listInstalledRows();
+  const rows = await appRecords.installed().all();
   const due = rows.filter((row) => !spec.isAppIdentity(row.identity));
   if (due.length === 0) {
     log.info(`appIdentityMove - every installed app (${rows.length}) is on its identity`);

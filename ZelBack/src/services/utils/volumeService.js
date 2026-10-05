@@ -1198,6 +1198,7 @@ module.exports = {
   useDirectIo,
   recordNewVolumeImage,
   recordVolumeImage,
+  recordedVolumeImage,
   getComponentAppIdsFromVolumeFiles,
   ensureAppVolumeMounted,
   listComponentVolumeMounts,

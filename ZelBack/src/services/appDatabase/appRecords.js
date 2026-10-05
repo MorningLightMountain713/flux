@@ -16,12 +16,19 @@ const STORES = Object.freeze({
     database: config.get('database.appsglobal.database'),
     collection: config.get('database.appsglobal.collections.appsInformation'),
   }),
+  installedApps: Object.freeze({
+    database: config.get('database.appslocal.database'),
+    collection: config.get('database.appslocal.collections.appsInformation'),
+  }),
 });
 
+let storage = null;
 let appRegistry = null;
+let installedApps = null;
 
-function onUnreadable(stored, error) {
-  log.warn(`appRegistry: a stored record cannot be read: ${error.message} (name=${stored.name}, version=${stored.version})`);
+function provider() {
+  if (!storage) storage = MongoStorageProvider.create(STORES);
+  return storage;
 }
 
 /**
@@ -31,9 +38,26 @@ function onUnreadable(stored, error) {
 function registry() {
   if (!appRegistry) {
     const { AppRegistry } = specLibrary.loaded();
-    appRegistry = new AppRegistry(MongoStorageProvider.create(STORES), { onUnreadable });
+    appRegistry = new AppRegistry(provider(), {
+      onUnreadable: (stored, error) => log.warn(`appRegistry: a stored record cannot be read: ${error.message} (name=${stored.name}, version=${stored.version})`),
+    });
   }
   return appRegistry;
 }
 
-module.exports = { registry, STORES };
+/**
+ * The installed apps: this node's record of each instance it runs and the
+ * ledger of what it created for it.
+ * @returns {import('@runonflux/flux-spec-backend').InstalledApps}
+ */
+function installed() {
+  if (!installedApps) {
+    const { InstalledApps } = specLibrary.loaded();
+    installedApps = new InstalledApps(provider(), {
+      onUnreadable: (stored, error) => log.warn(`installedApps: a stored record cannot be read: ${error.message} (name=${stored.name}, replica=${stored.replica ?? null}, version=${stored.version})`),
+    });
+  }
+  return installedApps;
+}
+
+module.exports = { registry, installed, STORES };

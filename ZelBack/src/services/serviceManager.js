@@ -84,7 +84,6 @@ const upnpService = require('./upnpService');
 const syncthingService = require('./syncthingService');
 const pgpService = require('./pgpService');
 const dockerService = require('./dockerService');
-const componentIdentifierResolver = require('./appLifecycle/componentIdentifierResolver');
 const backupRestoreService = require('./backupRestoreService');
 const systemService = require('./systemService');
 const systemdNotify = require('./utils/systemdNotify');
@@ -101,8 +100,8 @@ const appTamperingDetectionService = require('./appTamperingDetectionService');
 const appsRuntimeState = require('./appManagement/appsRuntimeState');
 const appPlacements = require('./appManagement/appPlacements');
 const imageCacheStore = require('./appLifecycle/imageCacheStore');
-const appsRepository = require('./appDatabase/appsRepository');
 const appRecords = require('./appDatabase/appRecords');
+const appIdentityMoveStore = require('./appLifecycle/appIdentityMoveStore');
 const imageManager = require('./appSecurity/imageManager');
 const playgroundAudit = require('./appPlayground/playgroundAudit');
 const playgroundService = require('./appPlayground/playgroundService');
@@ -205,9 +204,13 @@ async function prepareDatabaseSchema() {
   // cachedImages (localzelapps): unique index on (fluxId, repotag) so a re-submit
   // can't fork an owner's pin record, plus a repotag lookup for the retention gate
   await imageCacheStore.prepareCollection();
-  // zelappsinformation (localzelapps): one row per deployed identity, unique on
-  // (name, replica), which co-located replicas need.
-  await appsRepository.prepareInstalledAppsCollection();
+  // The installed apps: the indexes the collection's queries are answered
+  // by, the derived keys of any record stored without them, and the move
+  // records.
+  await appRecords.installed().ensureIndexes();
+  const completedInstalled = await appRecords.installed().completeDerivedFields();
+  log.info(`Installed apps prepared${completedInstalled ? `, ${completedInstalled} record(s) completed` : ''}`);
+  await appIdentityMoveStore.prepareCollection();
   // playgroundsessions (localzelapps): the retention TTL the collection's own
   // comment promises, plus the (callerFingerprint, flagged, observedAt) index
   // the admission-path miner check reads
@@ -526,14 +529,6 @@ async function startFluxFunctions() {
         // tidy path rather than the only one.
         await migrations.runBefore('localDbPrepared');
         await untilSucceeds('Database schema preparation', prepareDatabaseSchema);
-        // Rows written before the identifier index existed. The resolver lives here
-        // rather than in the repository because building a deployment needs the
-        // resolved spec, and the repository must not depend on what resolves it.
-        await appsRepository.backfillComponentIdentifiers(
-          componentIdentifierResolver.resolveComponentIdentifiers,
-        ).catch((error) => {
-          log.error(`Recording component identifiers failed: ${error.message}`);
-        });
         // Who gives capacity back when paid work cannot otherwise fit. Registered
         // rather than imported: admissionControl is depended on by every resource
         // check, and it must not in turn depend on whichever feature happens to hold

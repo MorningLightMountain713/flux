@@ -17,6 +17,7 @@ describe('appIdentityMove tests', () => {
   let appIdentityMove;
   // The world the move acts on, as the stubs hold it.
   let db; // `${name}|${replica}` -> installed row
+  let moves; // `${name}|${replica}` -> the move in progress
   let containers; // docker names present -> { running }
   let mounts; // mounted directories
   let backing; // mounted directory -> the file the kernel mounts there
@@ -70,8 +71,18 @@ describe('appIdentityMove tests', () => {
     };
   }
 
+  // The stored row as the installed collection hands it back: the registered
+  // fields, the record beneath them, the ledger beside.
+  function rowView(row) {
+    const { ledger = null, ...registered } = row;
+    return {
+      ...registered, record: registered, owed: null, ledger, serialize: () => ({ ...registered }),
+    };
+  }
+
   beforeEach(() => {
     db = new Map();
+    moves = new Map();
     containers = new Map();
     mounts = new Set();
     backing = new Map();
@@ -85,31 +96,40 @@ describe('appIdentityMove tests', () => {
     stubs = {
       compOpts: (o) => { compOpts = o; },
       log: { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
-      appsRepository: {
-        listInstalledRows: async () => [...db.values()].map((row) => ({
-          name: row.name, replica: row.replica, identity: row.identity, uuid: row.uuid, registrationVersion: row.registrationVersion, hash: row.hash, move: row.move ?? null,
-        })),
-        getInstalledIdentity: async (name, replica) => {
-          record('getInstalledIdentity', name, replica);
+      installed: {
+        all: async () => [...db.values()].map(rowView),
+        byReplica: async (name, replica) => {
+          record('byReplica', name, replica);
           const row = db.get(key(name, replica));
-          return row ? { ...row } : null;
+          return row ? rowView(row) : null;
         },
-        setInstalledRegistration: async (name, replica, registration) => {
-          record('setInstalledRegistration', name, replica, registration);
-          Object.assign(db.get(key(name, replica)), registration);
+        put: async (rec) => {
+          record('put', rec.record.name, rec.replica, rec.record.identity, rec.ledger);
+          const row = db.get(key(rec.record.name, rec.replica));
+          Object.assign(row, rec.record);
+          if (rec.ledger) row.ledger = rec.ledger;
         },
-        setInstalledMove: async (name, replica, move) => {
-          record('setInstalledMove', name, replica, move);
-          const row = db.get(key(name, replica));
-          if (move) row.move = move; else delete row.move;
+      },
+      moveStore: {
+        begin: async (name, replica, to) => { record('begin', name, replica, to); moves.set(key(name, replica), { to }); },
+        end: async (name, replica) => { record('end', name, replica); moves.delete(key(name, replica)); },
+      },
+      installedLedger: {
+        observeLedger: async (dep) => {
+          record('observeLedger', dep.networkName);
+          return {
+            network: { name: dep.networkName },
+            components: Object.fromEntries(dep.componentEntries().map(([n, c]) => [n, { identifier: c.identifier }])),
+          };
         },
-        setInstalledIdentity: async (name, replica, identity, componentIdentifiers) => {
-          record('setInstalledIdentity', name, replica, identity, componentIdentifiers);
-          const row = db.get(key(name, replica));
-          row.identity = identity;
-          row.componentIdentifiers = componentIdentifiers;
-          delete row.move;
-        },
+      },
+      // The record classes stand in as plain objects: the rows here are not
+      // deserializable specs, and what the move writes is what is asserted.
+      specLibrary: {
+        loaded: () => ({
+          InstalledSpec: function InstalledSpec(fields) { Object.assign(this, fields); },
+          InstantiatedSpec: { deserialize: (doc) => ({ ...doc }) },
+        }),
       },
       appHistory: { appliedMessages: sinon.stub().resolves([{ message: {}, decision: { hash: 'h1', uuid: UUID, registrationVersion: 8 } }]) },
       deploymentProvider: {
@@ -193,7 +213,10 @@ describe('appIdentityMove tests', () => {
 
     appIdentityMove = proxyquire('../../ZelBack/src/services/appLifecycle/appIdentityMove', {
       'node:fs/promises': stubs.fs,
-      '../appDatabase/appsRepository': stubs.appsRepository,
+      '../appDatabase/appRecords': { installed: () => stubs.installed },
+      './appIdentityMoveStore': stubs.moveStore,
+      './installedLedger': stubs.installedLedger,
+      '../utils/specLibrary': stubs.specLibrary,
       '../appDecisions/appHistory': stubs.appHistory,
       '../appRuntime/deploymentProvider': stubs.deploymentProvider,
       '../dockerService': stubs.dockerService,
@@ -242,7 +265,7 @@ describe('appIdentityMove tests', () => {
       expect(results).to.deep.equal({
         moved: [], deferred: [], skipped: [], held: [],
       });
-      expect(indexOf('getInstalledIdentity')).to.equal(-1);
+      expect(indexOf('byReplica')).to.equal(-1);
     });
 
     it('reads the uuid and version off the applied decision of the row\'s message and records them on the row', async () => {
@@ -251,7 +274,9 @@ describe('appIdentityMove tests', () => {
       const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
 
       expect(results.moved).to.deep.equal([{ name: NAME, replica: null, to: IDENTITY }]);
-      expect(calls[indexOf('setInstalledRegistration')].slice(1)).to.deep.equal([NAME, null, { uuid: UUID, registrationVersion: 8, fromRow: false }]);
+      expect(calls[indexOf('put')].slice(1, 4), 'the record carries them before anything is planned').to.deep.equal([NAME, null, NAME]);
+      expect(indexOf('put')).to.be.lessThan(indexOf('buildDeployment'));
+      expect(db.get(key(NAME, null))).to.include({ uuid: UUID, registrationVersion: 8 });
       expect(flux.isAppIdentity(IDENTITY)).to.equal(true);
     });
 
@@ -262,7 +287,8 @@ describe('appIdentityMove tests', () => {
 
       expect(results.moved).to.have.lengthOf(1);
       expect(stubs.appHistory.appliedMessages.called).to.equal(false);
-      expect(indexOf('setInstalledRegistration')).to.equal(-1);
+      expect(calls.filter((call) => call[0] === 'put'), 'the one write names the identity').to.have.lengthOf(1);
+      expect(calls[indexOf('put')][3]).to.equal(IDENTITY);
     });
 
     it('skips a row whose message no applied decision names, touching nothing', async () => {
@@ -539,11 +565,15 @@ describe('appIdentityMove tests', () => {
 
       await appIdentityMove.moveInstalledAppsOntoIdentity();
 
-      expect(calls[indexOf('setInstalledMove')][3].to).to.equal(IDENTITY);
-      expect(indexOf('setInstalledMove')).to.be.lessThan(indexOf('appDockerRemove'));
-      expect(calls[indexOf('setInstalledIdentity')].slice(1)).to.deep.equal([NAME, null, IDENTITY, [newIdentifier()]]);
-      expect(indexOf('setInstalledIdentity')).to.be.lessThan(indexOf('installComponent'));
-      expect(db.get(key(NAME, null)).move, 'the move record is cleared').to.equal(undefined);
+      expect(calls[indexOf('begin')].slice(1)).to.deep.equal([NAME, null, IDENTITY]);
+      expect(indexOf('begin')).to.be.lessThan(indexOf('appDockerRemove'));
+      const flip = indexOf('put', (name, replica, identity) => identity === IDENTITY);
+      expect(calls[flip].slice(1)).to.deep.equal([NAME, null, IDENTITY, {
+        network: { name: `fluxDockerNetwork_${IDENTITY}` }, components: { [NAME]: { identifier: newIdentifier() } },
+      }]);
+      expect(flip).to.be.lessThan(indexOf('installComponent'));
+      expect(indexOf('end'), 'the move record ends with the flip').to.be.greaterThan(flip);
+      expect(moves.has(key(NAME, null))).to.equal(false);
     });
 
     it('recreates each container from the image on this node, on its kept volume, under the lease, and attaches the linked networks', async () => {
@@ -589,7 +619,7 @@ describe('appIdentityMove tests', () => {
       await appIdentityMove.moveInstalledAppsOntoIdentity();
 
       expect(calls[indexOf('ensureAppDockerNetwork')].slice(1)).to.deep.equal([NAME, { networkName: `fluxDockerNetwork_${IDENTITY}` }]);
-      expect(indexOf('ensureAppDockerNetwork')).to.be.lessThan(indexOf('setInstalledIdentity'));
+      expect(indexOf('ensureAppDockerNetwork')).to.be.lessThan(indexOf('put', (name, replica, identity) => identity === IDENTITY));
       expect(calls[indexOf('removeFluxAppDockerNetwork')].slice(1)).to.deep.equal([NAME]);
       expect(indexOf('removeFluxAppDockerNetwork')).to.be.greaterThan(indexOf('installComponent'));
     });
@@ -633,7 +663,7 @@ describe('appIdentityMove tests', () => {
       expect(operationRegistry.get('alpha').type).to.equal('move');
       expect(operationRegistry.isHeld('beta')).to.equal(false);
       expect(db.get(key('alpha', null)).identity).to.equal('alpha');
-      expect(db.get(key('alpha', null)).move.to).to.equal(flux.appIdentityFromUuid(UUID));
+      expect(moves.get(key('alpha', null)).to, 'the move record stays while the app is held').to.equal(flux.appIdentityFromUuid(UUID));
       expect(appIdentityMove.heldRows()).to.deep.equal(['alpha|']);
     });
 

@@ -303,42 +303,6 @@ async function listResolvedContentManifestIdentities() {
 const replicaKey = (replica) => (replica == null ? null : replica);
 
 /**
- * Index prep, owned by this module rather than the boot block: the rows are
- * this module's. Unique on `(name, replica)` — before it, one-row-per-app was
- * enforced only by a racy exists-then-insert, so a concurrent install could
- * duplicate a row silently. Note name matching at the query layer stays
- * case-insensitive (nameRegex), which a plain index cannot express; the
- * constraint here is exact-case, which is strictly more than existed before.
- */
-async function prepareInstalledAppsCollection() {
-  const collection = localDb().collection(localAppsInformation);
-  // Rows written before the identity field carry no `replica`. Every one of
-  // them is a loose install — named placement arrives with v9, which is
-  // unreleased — so they backfill to null, which is exactly what a loose row
-  // stores. Runs before the unique index so the index is built over a complete
-  // key.
-  await collection.updateMany({ replica: { $exists: false } }, { $set: { replica: null } });
-  // Every row states the app identity its containers, volumes and syncthing
-  // folder are named from. Rows predating the field state it as their own name,
-  // which is the segment those artifacts already carry — so this pass is a
-  // no-op on disk and the value can then be READ everywhere instead of being
-  // recomputed from a name that a later owner of that name could change under
-  // it. Idempotent by construction: only rows without the field are touched.
-  await collection.updateMany({ identity: { $exists: false } }, [{ $set: { identity: '$name' } }]);
-  await dbHelper.ensureIndex(collection, { name: 1, replica: 1 }, { unique: true, name: 'installed app identity' });
-  await dbHelper.ensureIndex(collection, { name: 1 }, { name: 'installed apps by name' });
-  // NOT unique: a co-located app holds one row per replica, all sharing the
-  // app's single identity.
-  await dbHelper.ensureIndex(collection, { identity: 1 }, { name: 'installed apps by app identity' });
-  // The container identifiers each row's components are named by. Sparse in
-  // effect: rows written before the field carry none and simply do not answer,
-  // which costs their caller a fallback rather than a wrong answer. Cannot be
-  // backfilled here — an identifier is built from a RESOLVED deployment, which
-  // can need decryption, so it is not something an update pipeline can compute.
-  await dbHelper.ensureIndex(collection, { componentIdentifiers: 1 }, { name: 'installed apps by component identifier' });
-}
-
-/**
  * Every container identifier this node's rows for an app recorded, across all of
  * its identities.
  *
@@ -359,86 +323,6 @@ async function listComponentIdentifiers(name) {
   const seen = new Set();
   docs.forEach((doc) => (doc.componentIdentifiers || []).forEach((id) => seen.add(id)));
   return [...seen];
-}
-
-/**
- * How many installed rows can answer the component-identifier index.
- *
- * Published rather than only logged, because the two derivations this replaces —
- * decomposing a container's name, and matching image filenames on disk — can
- * only be deleted once the fleet reports every row covered. Until then their
- * removal would be a guess.
- *
- * A node with nothing installed is trivially covered: there is no container for
- * a consumer to fall back on.
- */
-async function componentIdentifierCoverage() {
-  const db = localDb();
-  const total = await dbHelper.countInDatabase(db, localAppsInformation, {});
-  const stating = await dbHelper.countInDatabase(
-    db, localAppsInformation, { componentIdentifiers: { $exists: true } },
-  );
-  return { stating, total, covered: stating === total };
-}
-
-/**
- * Record the container identifiers on rows written before they were stored.
- *
- * A row that predates the field answers nothing to the identifier index, and its
- * readers fall back to taking a container's name apart. This gives them the fact
- * instead. Nothing on disk moves: the identifiers are re-derived from the row's
- * own spec and are exactly the names its containers already carry.
- *
- * Idempotent by construction rather than by a marker — the condition IS the
- * field's absence, so an interrupted pass resumes and a finished node does
- * nothing. A row whose deployment cannot be built (a sealed spec this node
- * cannot open) is left alone and picked up whenever that changes; it keeps the
- * fallback in the meantime, which is what the fallback is for.
- *
- * @param {Function} identifiersFor - (name, replica) => Promise<string[]|null>,
- *   injected because building a deployment needs the resolved spec, and this
- *   module must not depend on the provider that resolves it.
- */
-async function backfillComponentIdentifiers(identifiersFor) {
-  if (typeof identifiersFor !== 'function') {
-    throw new Error('appsRepository.backfillComponentIdentifiers: identifiersFor required');
-  }
-  const rows = await dbHelper.findInDatabase(
-    localDb(), localAppsInformation,
-    { componentIdentifiers: { $exists: false } },
-    { projection: { _id: 0, name: 1, replica: 1 } },
-  );
-  if (rows.length === 0) return { backfilled: 0, unresolved: 0 };
-
-  let backfilled = 0;
-  let unresolved = 0;
-  for (const row of rows) {
-    // eslint-disable-next-line no-await-in-loop
-    const identifiers = await identifiersFor(row.name, row.replica ?? null).catch((error) => {
-      log.warn(`appsRepository - could not derive component identifiers for ${row.name}: ${error.message}`);
-      return null;
-    });
-    if (!Array.isArray(identifiers) || identifiers.length === 0) {
-      unresolved += 1;
-      // eslint-disable-next-line no-continue
-      continue;
-    }
-    // eslint-disable-next-line no-await-in-loop
-    await dbHelper.updateOneInDatabase(
-      localDb(), localAppsInformation,
-      { name: nameRegex(row.name), replica: replicaKey(row.replica ?? null) },
-      { $set: { componentIdentifiers: identifiers } },
-      {},
-    );
-    backfilled += 1;
-  }
-  if (unresolved > 0) {
-    log.warn(`appsRepository - ${unresolved} installed row(s) could not state their component identifiers yet`);
-  }
-  if (backfilled > 0) {
-    log.info(`appsRepository - component identifiers recorded for ${backfilled} installed row(s)`);
-  }
-  return { backfilled, unresolved };
 }
 
 async function getInstalledApp(name) {
@@ -794,90 +678,6 @@ async function upsertInstalledIdentity(name, replica, specDoc, componentIdentifi
       componentIdentifiers,
     ),
     { upsert: true },
-  );
-}
-
-/**
- * Every installed row's keys and the facts a move onto the identity reads,
- * without hydrating the specs: a sealed spec that cannot open yet is still a
- * row that may need moving.
- * @returns {Promise<Array<{name: string, replica: string|null, identity: string|null, uuid: string|null, registrationVersion: number|null, hash: string|null, move: object|null}>>}
- */
-async function listInstalledRows() {
-  const docs = await dbHelper.findInDatabase(
-    localDb(), localAppsInformation, {},
-    {
-      projection: {
-        _id: 0, name: 1, replica: 1, identity: 1, uuid: 1, registrationVersion: 1, hash: 1, move: 1,
-      },
-    },
-  );
-  return docs.map((doc) => ({
-    name: doc.name,
-    replica: doc.replica ?? null,
-    identity: doc.identity ?? null,
-    uuid: doc.uuid ?? null,
-    registrationVersion: doc.registrationVersion ?? null,
-    hash: doc.hash ?? null,
-    move: doc.move ?? null,
-  }));
-}
-
-/**
- * Records on one identity's row the uuid its registration minted and the
- * version it was registered with, for a row written before rows carried them.
- * @param {string} name
- * @param {string|null} replica
- * @param {{uuid: string, registrationVersion: number}} registration
- */
-async function setInstalledRegistration(name, replica, { uuid, registrationVersion }) {
-  if (!uuid || !Number.isInteger(registrationVersion)) {
-    throw new Error('appsRepository.setInstalledRegistration: uuid and registrationVersion required');
-  }
-  return dbHelper.updateOneInDatabase(
-    localDb(), localAppsInformation,
-    { name: nameRegex(name), replica: replicaKey(replica) },
-    { $set: { uuid, registrationVersion } },
-    {},
-  );
-}
-
-/**
- * The move of one identity's row onto its identity while it is in progress:
- * the identity it moves to and when it began. Null ends the record.
- * @param {string} name
- * @param {string|null} replica
- * @param {{to: string, since: number}|null} move
- */
-async function setInstalledMove(name, replica, move) {
-  return dbHelper.updateOneInDatabase(
-    localDb(), localAppsInformation,
-    { name: nameRegex(name), replica: replicaKey(replica) },
-    move ? { $set: { move } } : { $unset: { move: '' } },
-    {},
-  );
-}
-
-/**
- * Writes the identity one identity's row names its containers, volumes and
- * network from, with the component identifiers built from it, and ends any
- * move in progress. The one write that changes a stored identity; every other
- * write keeps the one it finds (withStoredIdentity).
- * @param {string} name
- * @param {string|null} replica
- * @param {string} identity
- * @param {string[]} componentIdentifiers
- */
-async function setInstalledIdentity(name, replica, identity, componentIdentifiers) {
-  if (!identity) throw new Error('appsRepository.setInstalledIdentity: identity required');
-  if (!Array.isArray(componentIdentifiers) || componentIdentifiers.length === 0) {
-    throw new Error('appsRepository.setInstalledIdentity: componentIdentifiers required');
-  }
-  return dbHelper.updateOneInDatabase(
-    localDb(), localAppsInformation,
-    { name: nameRegex(name), replica: replicaKey(replica) },
-    { $set: { identity, componentIdentifiers: [...componentIdentifiers] }, $unset: { move: '' } },
-    {},
   );
 }
 
@@ -1556,9 +1356,6 @@ module.exports = {
   listResolvedContentManifestIdentities,
   removeAppInstallingErrorRecords,
   // installed apps
-  prepareInstalledAppsCollection,
-  backfillComponentIdentifiers,
-  componentIdentifierCoverage,
   listComponentIdentifiers,
   getInstalledApp,
   getInstalledAppByIdentity,
@@ -1578,10 +1375,6 @@ module.exports = {
   countInstalledIdentities,
   removeInstalledIdentity,
   upsertInstalledIdentity,
-  listInstalledRows,
-  setInstalledRegistration,
-  setInstalledMove,
-  setInstalledIdentity,
   // messages
   getAppMessage,
   getPermanentMessage,

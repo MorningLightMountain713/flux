@@ -5,6 +5,7 @@ const { untilSucceeds } = require('../utils/untilSucceeds');
 const nodeIdentityMigration = require('../appDatabase/nodeIdentityMigration');
 const containerLabelBackfill = require('../appLifecycle/containerLabelBackfill');
 const appIdentityMove = require('../appLifecycle/appIdentityMove');
+const installedLedger = require('../appLifecycle/installedLedger');
 const retiredSchema = require('./retiredSchema');
 const temporaryPoolSweep = require('../appMessaging/temporaryPoolSweep');
 const appsRepository = require('../appDatabase/appsRepository');
@@ -79,6 +80,14 @@ const migrations = [
     mustSucceed: true,
     description: 'record the block position and chain height of app payments recorded without a position',
     run: () => paymentPositions.backfillPaymentPositions(),
+  },
+  {
+    id: 'installed-ledger',
+    // Before the move onto the identity, which writes the ledger of what it
+    // moves, and before the boot reconcile reads the ledger.
+    before: 'bootReconcileDecided',
+    description: 'write the ledger of every app installed before the node kept one',
+    run: () => installedLedger.adoptInstalledLedgers(),
   },
   {
     id: 'app-identity',

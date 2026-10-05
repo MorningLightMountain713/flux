@@ -147,6 +147,17 @@ describe('MongoStorageProvider', () => {
     expect(indexed).to.include.members([JSON.stringify({ k: 1 }), JSON.stringify({ tags: 1 }), JSON.stringify({ 'nested.k': 1, n: 1 })]);
   });
 
+  it('makes a declared unique set of fields refuse a second record with the same values', async () => {
+    const collection = dbHelper.databaseConnection().db(stores[STORE].database).collection(stores[STORE].collection);
+    await collection.dropIndexes();
+    await provider.ensureIndexes(STORE, [{ fields: ['k', 's'], unique: true }]);
+    const unique = (await collection.listIndexes().toArray()).find((index) => JSON.stringify(index.key) === JSON.stringify({ k: 1, s: 1 }));
+    expect(unique.unique).to.equal(true);
+    await expect(provider.insert(STORE, [{ k: 'a', s: 'x' }])).to.be.rejectedWith(/duplicate key/);
+    await provider.insert(STORE, [{ k: 'a', s: 'other' }]);
+    await collection.dropIndexes();
+  });
+
   it('refuses a store it was not given', async () => {
     await expect(provider.find('nonsense', {})).to.be.rejectedWith(/unknown store/);
   });
