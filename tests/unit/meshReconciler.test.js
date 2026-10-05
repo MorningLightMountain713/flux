@@ -512,6 +512,33 @@ describe('meshReconciler', () => {
       expect(logLines.error.some((m) => m.includes('previous host certificate'))).to.equal(true);
     });
 
+    it('writes the membership it arrived at when it changes, and nothing while it holds', async () => {
+      const membershipLines = () => logLines.info.filter((line) => line.includes('member(s) from'));
+      await meshReconciler.reconcileAllMeshApps();
+      expect(membershipLines()).to.have.length(1);
+      expect(membershipLines()[0]).to.include(`1 member(s) from ${stubs.rows.length} announcement(s)`)
+        .and.include(`[${PEER_OUTPOINT}@203.0.113.7:16240]`)
+        .and.not.include('rejected');
+      expect(meshReconciler.lastPassStatus('myblog').announced).to.equal(stubs.rows.length);
+
+      await meshReconciler.reconcileAllMeshApps();
+      expect(membershipLines(), 'a steady membership writes nothing').to.have.length(1);
+
+      stubs.evaluateCandidates.resolves({ members: [], rejected: [{ outpoint: PEER_OUTPOINT, reason: 'stale-anchor' }] });
+      await meshReconciler.reconcileAllMeshApps();
+      expect(membershipLines()).to.have.length(2);
+      expect(membershipLines()[1]).to.include('0 member(s) from').and.include(`rejected [${PEER_OUTPOINT}: stale-anchor]`);
+
+      await meshReconciler.reconcileAllMeshApps();
+      expect(membershipLines(), 'a held rejection writes nothing either').to.have.length(2);
+
+      // The same members, rejected for another reason: that is a change too.
+      stubs.evaluateCandidates.resolves({ members: [], rejected: [{ outpoint: PEER_OUTPOINT, reason: 'bad-voucher' }] });
+      await meshReconciler.reconcileAllMeshApps();
+      expect(membershipLines()).to.have.length(3);
+      expect(membershipLines()[2]).to.include(`rejected [${PEER_OUTPOINT}: bad-voucher]`);
+    });
+
     it('a second pass with nothing changed rewrites nothing', async () => {
       await meshReconciler.reconcileAllMeshApps();
       const snapApps = stubs.writeSnapshotCalls[0].apps;
