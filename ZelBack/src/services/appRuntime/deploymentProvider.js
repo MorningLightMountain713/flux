@@ -1,6 +1,5 @@
 'use strict';
 
-const appsRepository = require('../appDatabase/appsRepository');
 const appRecords = require('../appDatabase/appRecords');
 const dockerService = require('../dockerService');
 const { appsFolder } = require('../utils/appConstants');
@@ -206,7 +205,7 @@ async function toDeployments(instantiated, opts = {}) {
  * @returns {Promise<object[]>} DeploymentSpec[]
  */
 async function installedDeployments(instantiated) {
-  const installed = new Set(await appsRepository.listInstalledIdentities(instantiated.name));
+  const installed = new Set((await appRecords.installed().keys(instantiated.name)).map((key) => key.replica));
   const deployments = await toDeployments(instantiated);
   return deployments.filter((d) => installed.has(d.replica ?? null));
 }
@@ -248,7 +247,7 @@ async function listInstalledDeployments(installedSpecs = null) {
  *   `unreadableApps`: identity -> app name
  */
 async function listInstalledDeploymentsDetailed(installedSpecs = null) {
-  const installed = installedSpecs ?? await appsRepository.listInstalledApps();
+  const installed = installedSpecs ?? (await appRecords.installed().apps()).map((record) => record.record);
   const deployments = [];
   const unreadableApps = new Map();
   for (const inst of installed) {
@@ -273,7 +272,7 @@ async function listInstalledDeploymentsDetailed(installedSpecs = null) {
  * @returns {Promise<object|null>}
  */
 async function getInstalledDeployment(name) {
-  const inst = await appsRepository.getInstalledApp(name);
+  const inst = (await appRecords.installed().byName(name))?.record;
   if (!inst) return null;
   try {
     const deployments = await toDeployments(inst);
@@ -293,7 +292,7 @@ async function getInstalledDeployment(name) {
  * @returns {Promise<object[]>}
  */
 async function getInstalledDeployments(name) {
-  const inst = await appsRepository.getInstalledApp(name);
+  const inst = (await appRecords.installed().byName(name))?.record;
   if (!inst) return [];
   try {
     const deployments = await installedDeployments(inst);

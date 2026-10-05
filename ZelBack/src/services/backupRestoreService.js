@@ -7,7 +7,7 @@ const verificationHelper = require('./verificationHelper');
 const { sendFile } = require('./utils/fileTransfer');
 const IOUtils = require('./IOUtils');
 const dockerService = require('./dockerService');
-const appsRepository = require('./appDatabase/appsRepository');
+const appRecords = require('./appDatabase/appRecords');
 const { appsFolder } = require('./utils/appConstants');
 const fs = require('fs').promises;
 const { sanitizePath, verifyRealPathOfExistingPath } = require('./utils/pathSecurity');
@@ -108,7 +108,7 @@ async function pathValidation(filepath, appname) {
   // An app volume is mounted at `<appsFolder>/<identifier>` and sanitizePath has
   // already refused any traversal leaving it, so the first segment of the
   // relative path is the volume the request would reach.
-  const installed = await appsRepository.getInstalledApp(appname);
+  const installed = await appRecords.installed().byName(appname);
   if (!volumeDirectoryBelongsToApp(appVolumeDir(filepath), appname, installed?.identity ?? null)) {
     return false;
   }

@@ -6,6 +6,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const domain = require('./fixtures/appDomain');
 const { loadSpecLibrary } = require('./fixtures/fluxSpec');
+const { installedRecord } = require('./fixtures/appRecords');
 const { APP_VOLUME_MOUNT_OPTIONS } = require('../../ZelBack/src/services/utils/appConstants');
 
 chai.use(chaiAsPromised);
@@ -105,8 +106,13 @@ describe('volumeService tests', () => {
       },
       '../../lib/log': logStub,
       '../deviceHelper': deviceHelperStub,
-      '../appDatabase/appRecords': { ledgers: () => ledgersStub },
-      '../appDatabase/appsRepository': appsRepositoryStub,
+      '../appDatabase/appRecords': {
+        ledgers: () => ledgersStub,
+        installed: () => ({
+          byName: async (name) => installedRecord(await appsRepositoryStub.getInstalledApp(name)),
+          keys: async (name) => (await appsRepositoryStub.listInstalledIdentities(name)).map((replica) => ({ name, replica })),
+        }),
+      },
       // The real containerIdentifierFor: this is the forward derivation under
       // test, so a stub would be the test naming the paths it then finds.
       './specLibs': {

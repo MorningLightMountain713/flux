@@ -278,7 +278,7 @@ async function redeployComponent(appName, componentName, options = {}) {
     // Manifest check only, no pull, no disk cost.
     await componentProvisioner.verifyComponentImage(targets[0]);
 
-    const installedForStop = await appsRepository.getInstalledApp(appName);
+    const installedForStop = await appRecords.installed().byName(appName);
 
     for (const deployComp of targets) {
       if (createVolumes) {
@@ -305,7 +305,7 @@ async function redeployComponent(appName, componentName, options = {}) {
       await serviceHelper.delay(config.get('fluxapps.redeploy.composedDelay') * 1000);
 
       // eslint-disable-next-line no-await-in-loop
-      const instantiated = await appsRepository.getInstalledApp(appName);
+      const instantiated = (await appRecords.installed().byName(appName))?.record;
       // eslint-disable-next-line no-await-in-loop
       const freshDeployment = await deploymentProvider.buildDeployment(instantiated, { replica: deployComp.replica ?? null });
       // eslint-disable-next-line no-await-in-loop
@@ -414,7 +414,7 @@ async function redeployApplication(appName, options = {}) {
     // containers are already destroyed; failing here keeps the old version running
     // untouched (degraded at worst — reconnectLinkedApps re-attaches it when the
     // dependency returns).
-    const preTeardownSpec = await appsRepository.getInstalledApp(appName);
+    const preTeardownSpec = (await appRecords.installed().byName(appName))?.record;
     if (!preTeardownSpec) {
       throw new Error(`Application ${appName} not found in database`);
     }
@@ -483,7 +483,7 @@ async function redeployApplication(appName, options = {}) {
       status(`${unitLabel} removed. Awaiting installation...`);
 
       // eslint-disable-next-line no-await-in-loop
-      const instantiated = await appsRepository.getInstalledApp(appName);
+      const instantiated = (await appRecords.installed().byName(appName))?.record;
       if (!instantiated) {
         throw new Error(`Application ${appName} not found in database after removal`);
       }
@@ -2042,7 +2042,7 @@ async function contentBlobServeApi(req, res) {
     activeContentServes += 1;
     try {
       const { appName, locator } = req.params;
-      const installed = await appsRepository.getInstalledApp(appName);
+      const installed = await appRecords.installed().byName(appName);
       if (!installed) {
         res.status(404).end();
         return;
@@ -2165,18 +2165,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
     await appVolumeService.removeOrphanedInjectedContent(oldComp, newComp);
   }
 
-  const wireSpec = registrySpec.serialize();
-  // Per row: an update can add, drop or rename components, and each replica
-  // names its own differently, so each row's identifiers are rebuilt from the
-  // spec being written rather than carried over from the one being replaced.
-  await appsRepository.upsertInstalledApp(appName, wireSpec, async (rowReplica) => {
-    const rowDeployment = await deploymentProvider.buildDeployment(
-      registrySpec, { replica: rowReplica, identity: newDeployment.identity ?? null },
-    );
-    return rowDeployment
-      ? rowDeployment.componentEntries().map(([, comp]) => comp.identifier)
-      : null;
-  });
+  await appRecords.installed().updateRecord(registrySpec);
   log.info(`Database updated for ${appName}`);
 
   // Rebuild THIS identity's fresh view - handing a co-located sibling's view to
@@ -2342,7 +2331,7 @@ async function shutdownPlanResync() {
   }
 
   try {
-    const installedApps = await appsRepository.listInstalledApps();
+    const installedApps = (await appRecords.installed().apps()).map((record) => record.record);
     // One plan per deployed identity: loose keeps the legacy owner:name key,
     // a named replica appends its segment (replica names cannot contain ':').
     const planKey = (owner, name, replica) => (replica != null ? `${owner}:${name}:${replica}` : `${owner}:${name}`);

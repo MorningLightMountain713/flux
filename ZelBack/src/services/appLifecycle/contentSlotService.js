@@ -646,7 +646,7 @@ async function rejudgeManifests(instance, opts = {}, deps = {}) {
  */
 async function receiveManifest(msgObj, deps = {}) {
   const {
-    isInstalledHere = appsRepository.getInstalledApp,
+    isInstalledHere = (name) => appRecords.installed().byName(name),
     rebroadcast = fluxCommunicationMessagesSender.broadcastMessageToAll,
     schedule = scheduleContentApplication,
     take = takeManifest,
@@ -1205,7 +1205,7 @@ async function applyStoredIfBehind(appName, deps = {}) {
  * @returns {Promise<number>} count of apps caught up
  */
 async function applyBehindContentApps(deps = {}) {
-  const { listInstalled = appsRepository.listInstalledApps, applyBehind = applyStoredIfBehind } = deps;
+  const { listInstalled = () => appRecords.installed().apps().then((records) => records.map((record) => record.record)), applyBehind = applyStoredIfBehind } = deps;
   let installed;
   try {
     installed = await listInstalled();
@@ -1511,7 +1511,7 @@ async function submitContentUpdate(body, deps = {}) {
   const {
     getApp = (name) => appRecords.registry().byName(name),
     ownerships = appHistory.ownerships,
-    isInstalledHere = appsRepository.getInstalledApp,
+    isInstalledHere = (name) => appRecords.installed().byName(name),
     openEnvelope = transportHelper.openContentEnvelope,
     processSubmission = processManifestSubmission,
     broadcast = fluxCommunicationMessagesSender.broadcastMessageToAll,

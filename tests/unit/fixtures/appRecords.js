@@ -60,7 +60,9 @@ const INSTALLED_ANSWERS = {
   byIdentity: null,
   instancesOf: [],
   all: [],
+  apps: [],
   names: [],
+  keys: [],
   owed: [],
   legacyMoves: [],
   completeDerivedFields: 0,
@@ -70,6 +72,7 @@ const INSTALLED_ANSWERS = {
 const LEDGER_ANSWERS = {
   byInstance: null,
   byIdentifier: null,
+  instancesOf: [],
   all: [],
   keys: [],
   addComponent: true,
@@ -131,6 +134,37 @@ async function inMemoryLedgers() {
   return { ledgers: install('ledgers', new InstalledLedgers(provider)), provider };
 }
 
+/**
+ * An installed record over a registered record, for a stub to answer with: the
+ * real InstalledSpec when the record is a real InstantiatedSpec, else a
+ * stand-in with the same shape over a plain object.
+ * @param {object|null} record - an InstantiatedSpec, a plain stand-in, or null
+ * @param {{replica?: string|null, owed?: object|null}} [own]
+ * @returns {object|null}
+ */
+function installedRecord(record, { replica = null, owed = null } = {}) {
+  if (!record) return null;
+  const { InstalledSpec, InstantiatedSpec } = specLibrary.loaded();
+  if (record instanceof InstantiatedSpec) return new InstalledSpec({ record, replica, owed });
+  return {
+    record,
+    replica,
+    owed,
+    spec: record.spec,
+    name: record.name,
+    identity: record.identity ?? null,
+    uuid: record.uuid ?? null,
+    hash: record.hash ?? null,
+    height: record.height ?? null,
+    owner: record.owner ?? null,
+    version: record.version ?? null,
+    isEncrypted: record.isEncrypted ?? false,
+    placement: record.placement,
+    registrationVersion: record.registrationVersion ?? null,
+    serialize: () => (typeof record.serialize === 'function' ? record.serialize() : { ...record }),
+  };
+}
+
 module.exports = {
-  stubRegistry, inMemoryRegistry, stubInstalled, inMemoryInstalled, stubLedgers, inMemoryLedgers,
+  stubRegistry, inMemoryRegistry, stubInstalled, inMemoryInstalled, stubLedgers, inMemoryLedgers, installedRecord,
 };

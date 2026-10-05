@@ -36,13 +36,13 @@ describe('peerNotification presence guard', () => {
         pattern.test(source),
         `peerNotification.js requires ${dependency}. An app the node is assigned must be `
         + 'announced whether or not its container happens to be up — see the comment above '
-        + 'listInstalledIdentities. Route the read through appsRepository, or change this '
+        + 'the installed-set read. Route the read through the installed collection, or change this '
         + 'guard on purpose.',
       ).to.equal(false);
     });
   });
 
   it('reads presence from the installed set', () => {
-    expect(source).to.match(/appsRepository\.listInstalledIdentities\(/);
+    expect(source).to.match(/appRecords\.installed\(\)\.keys\(/);
   });
 });

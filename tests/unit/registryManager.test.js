@@ -25,7 +25,7 @@ const {
   loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION,
   v8Spec, v9Spec, sealedV8Spec, sealedV9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
-const { stubRegistry } = require('./fixtures/appRecords');
+const { stubRegistry, stubInstalled, installedRecord } = require('./fixtures/appRecords');
 const { NODE_DOWN_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
 const { departures, OFF_LIST_GRACE_MS } = require('../../ZelBack/src/services/appDatabase/offListDepartures');
 
@@ -1353,7 +1353,7 @@ describe('registryManager tests', () => {
       const listed = await instantiatedSpec(await v8Spec({ name: 'listed' }), { hash: 'h-listed', height: 10 });
       const installed = await instantiatedSpec(await v9Spec({ name: 'installed' }), { hash: 'h-installed', height: 11 });
       stubRegistry().all.resolves([listed]);
-      sinon.stub(appsRepository, 'listInstalledApps').resolves([installed]);
+      stubInstalled().apps.resolves([installedRecord(installed)]);
 
       expect(await registryManager.availableApps(null, null)).to.deep.equal([listed.serialize(), installed.serialize()]);
     });

@@ -24,6 +24,7 @@ const config = require('config');
 
 const log = require('../../lib/log');
 const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const dockerService = require('../dockerService');
 const daemonStatus = require('../daemonService/daemonStatus');
@@ -209,7 +210,7 @@ function lastPassStatus(appName) {
 }
 
 async function gatherMeshApps() {
-  const installed = await appsRepository.listInstalledApps();
+  const installed = (await appRecords.installed().apps()).map((record) => record.record);
   const claimedIdentities = new Set(installed.map((inst) => inst.identity).filter(Boolean));
   const apps = [];
   // eslint-disable-next-line no-restricted-syntax
@@ -782,7 +783,7 @@ function reconcileAllMeshApps() {
  * @returns {Promise<{presentedIp: string, env: string[], dns: string[]}|null>}
  */
 async function prepareComponentMesh(appName, componentName) {
-  const inst = await appsRepository.getInstalledApp(appName);
+  const inst = (await appRecords.installed().byName(appName))?.record;
   if (!inst) return null;
   const view = await resolveInstantiatedSpec(inst);
   if (view?.network?.mesh !== true) return null;

@@ -7,7 +7,7 @@ const messageHelper = require('../messageHelper');
 const dockerService = require('../dockerService');
 const registryManager = require('../appDatabase/registryManager');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const appHistory = require('../appDecisions/appHistory');
 const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
@@ -45,7 +45,9 @@ async function installedApps(req, res) {
       filter = { name: req };
     }
 
-    const installed = await appsRepository.listInstalledApps({ filter });
+    const installed = filter.name
+      ? [await appRecords.installed().byName(filter.name)].filter(Boolean)
+      : await appRecords.installed().apps();
     const apps = installed.map((app) => app.serialize());
     const dataResponse = messageHelper.createDataMessage(apps);
     return res ? res.json(dataResponse) : dataResponse;
@@ -197,7 +199,7 @@ async function listRunningApps(req, res) {
  */
 async function fluxUsage(req, res) {
   try {
-    const totalApps = await appsRepository.countInstalledApps();
+    const totalApps = (await appRecords.installed().names()).length;
     const runningApps = await listRunningApps();
     const totalRunning = runningApps.data ? runningApps.data.length : 0;
 

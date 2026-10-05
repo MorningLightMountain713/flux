@@ -3,6 +3,7 @@
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
+const { installedRecord } = require('./fixtures/appRecords');
 const proxyquire = require('proxyquire').noCallThru();
 const { withHostMutationLock } = require('../../ZelBack/src/services/utils/hostMutationLock');
 
@@ -69,12 +70,14 @@ describe('appNetworkLinker tests', () => {
   function loadLinker() {
     const relationshipResolver = proxyquire('../../ZelBack/src/services/appLifecycle/relationshipResolver', {
       '../appDatabase/appsRepository': appsRepositoryStub,
+      '../appDatabase/appRecords': { installed: () => ({ byName: async (name) => installedRecord(await appsRepositoryStub.getInstalledApp(name)), apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)) }), },
       '../utils/specCutover': specCutoverStub,
       '../dockerService': dockerServiceStub,
       '../../lib/log': logStub,
     });
     return proxyquire('../../ZelBack/src/services/appLifecycle/appNetworkLinker', {
       '../appDatabase/appsRepository': appsRepositoryStub,
+      '../appDatabase/appRecords': { installed: () => ({ byName: async (name) => installedRecord(await appsRepositoryStub.getInstalledApp(name)), apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)) }), },
       '../dockerService': dockerServiceStub,
       './relationshipResolver': relationshipResolver,
       '../../lib/log': logStub,

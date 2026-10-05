@@ -1,12 +1,12 @@
 const chai = require('chai');
 const fs = require('fs');
 const sinon = require('sinon');
+const { stubInstalled } = require('./fixtures/appRecords');
 const backupRestoreService = require('../../ZelBack/src/services/backupRestoreService');
 const IOUtils = require('../../ZelBack/src/services/IOUtils');
 const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
 const { Privilege, authOf } = require('../../ZelBack/src/services/utils/privileges');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
-const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 
 const { expect } = chai;
 
@@ -32,7 +32,7 @@ const OTHER_IDENTITY = `b${'c'.repeat(51)}a`;
 
 describe('backupRestoreService tests', () => {
   beforeEach(() => {
-    sinon.stub(appsRepository, 'getInstalledApp').callsFake(async (name) => (name === 'myapp' ? { identity: IDENTITY } : null));
+    stubInstalled().byName.callsFake(async (name) => (name === 'myapp' ? { identity: IDENTITY } : null));
   });
 
   afterEach(() => {

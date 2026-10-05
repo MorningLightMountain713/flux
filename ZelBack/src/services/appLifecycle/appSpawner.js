@@ -426,7 +426,7 @@ async function trySpawningGlobalApplication() {
     // (not running), and an app is one-or-more containers, so "installed" is the clean
     // per-app unit: a running-container count over-counts multi-component apps and
     // miscounts during the install->settle window.
-    const installedApps = await appsRepository.listInstalledApps();
+    const installedApps = await appRecords.installed().apps();
     if (installedApps.length >= config.get('fluxapps.maxAppsPerNode')) {
       log.info(`trySpawningGlobalApplication - Node at max apps capacity (${installedApps.length}/${config.get('fluxapps.maxAppsPerNode')})`);
       return delayTime;
@@ -560,7 +560,7 @@ async function trySpawningGlobalApplication() {
         // eslint-disable-next-line no-await-in-loop
         const assigned = await deploymentProvider.assignedIdentities(instantiated);
         // eslint-disable-next-line no-await-in-loop
-        const installed = new Set(await appsRepository.listInstalledIdentities(instantiated.name));
+        const installed = new Set((await appRecords.installed().keys(instantiated.name)).map((key) => key.replica));
         owesAnIdentity.set(instantiated.name, !assigned.every((identity) => installed.has(identity ?? null)));
       }
       globalAppNamesLocation = globalAppNamesLocation.filter((c) => (
@@ -858,7 +858,7 @@ async function trySpawningGlobalApplication() {
       return delayTime;
     }
 
-    const installed = new Set(await appsRepository.listInstalledIdentities(instantiated.name));
+    const installed = new Set((await appRecords.installed().keys(instantiated.name)).map((key) => key.replica));
     if (assigned.every((identity) => installed.has(identity ?? null))) {
       log.info(`trySpawningGlobalApplication - Application ${instantiated.name} is already installed`);
       return shortDelayTime;

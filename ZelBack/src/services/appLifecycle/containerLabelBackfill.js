@@ -1,7 +1,7 @@
 'use strict';
 
 const dockerService = require('../dockerService');
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appOperations = require('./appOperations');
 const { getSpecBackend } = require('../utils/specLibs');
@@ -104,7 +104,7 @@ async function resolveContainer(container) {
   const { DeploymentSpec } = await getSpecBackend();
   const identity = DeploymentSpec.identityFromIdentifier(identifier);
 
-  const installed = await appsRepository.getInstalledAppByIdentity(identity);
+  const installed = await appRecords.installed().byIdentity(identity);
   if (!installed) return null;
 
   const deployments = await deploymentProvider.getInstalledDeployments(installed.name);

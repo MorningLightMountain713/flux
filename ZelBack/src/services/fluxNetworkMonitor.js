@@ -25,7 +25,7 @@ const {
 const appQueryService = require('./appQuery/appQueryService');
 const appUninstaller = require('./appLifecycle/appUninstaller');
 const registryManager = require('./appDatabase/registryManager');
-const appsRepository = require('./appDatabase/appsRepository');
+const appRecords = require('./appDatabase/appRecords');
 
 const myCache = cacheManager.ipCache;
 
@@ -145,7 +145,7 @@ async function adjustExternalIP(ip) {
         nodeDosState.setDosMessage('IP changes over the limit allowed, one in 20 hours');
         log.error(nodeDosState.getRawDosMessage());
       }
-      const apps = await appsRepository.listInstalledApps();
+      const apps = (await appRecords.installed().apps()).map((record) => record.record);
       let appsHeld = 0;
       let appsRemoved = 0;
       if (apps.length > 0) {

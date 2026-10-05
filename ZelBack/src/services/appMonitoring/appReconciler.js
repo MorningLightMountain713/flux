@@ -13,7 +13,7 @@ const operationRegistry = require('../utils/operationRegistry');
 const specLibs = require('../utils/specLibs');
 const appInspector = require('../appManagement/appInspector');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appNetworkLinker = require('../appLifecycle/appNetworkLinker');
 const relationshipResolver = require('../appLifecycle/relationshipResolver');
@@ -81,10 +81,10 @@ async function appFor(identifier) {
   // lookup. Taking the identifier apart is the fallback for rows written before
   // that was recorded; info.apps.componentIdentifiers counts how many still need
   // it, and that figure reaching zero fleet-wide is what licenses deleting it.
-  let installed = await appsRepository.getInstalledAppByComponentIdentifier(identifier);
+  let installed = (await appRecords.installedByIdentifier(identifier))?.record;
   if (!installed) {
     const identity = await identityFromIdentifier(identifier);
-    installed = await appsRepository.getInstalledAppByIdentity(identity);
+    installed = (await appRecords.installed().byIdentity(identity))?.record;
   }
   if (installed) return { installed, name: installed.name, owedTeardown: null };
   const owedTeardown = await pendingTeardownStore.teardownForComponent(identifier);
@@ -2228,9 +2228,9 @@ async function drive(ids, state) {
 async function enqueueApp(name) {
   let identifiers = [];
   try {
-    identifiers = await appsRepository.listComponentIdentifiers(name);
+    identifiers = (await appRecords.ledgers().instancesOf(name)).flatMap((ledger) => ledger.identifiers());
     if (identifiers.length === 0) {
-      const inst = await appsRepository.getInstalledApp(name);
+      const inst = (await appRecords.installed().byName(name))?.record;
       // Not installed here: nothing to converge. A row-deleted app mid-removal is
       // driven per component by the uninstaller and replayed at boot from the owed
       // records, neither of which needs this path.
@@ -2257,7 +2257,7 @@ async function enqueueApp(name) {
 async function enqueueAll(reason = 'resync') {
   let installed;
   try {
-    installed = await appsRepository.listInstalledApps();
+    installed = (await appRecords.installed().apps()).map((record) => record.record);
   } catch (error) {
     log.error(`appReconciler - cannot read the installed apps for the ${reason} sweep: ${error.message}`);
     return;
@@ -2344,7 +2344,7 @@ async function enqueueDependents(identifier) {
 async function enqueueAppDependents(appName) {
   let installed;
   try {
-    installed = await appsRepository.listInstalledApps();
+    installed = (await appRecords.installed().apps()).map((record) => record.record);
   } catch (err) {
     log.warn(`appReconciler - enqueueAppDependents ${appName} read failed: ${err.message}`);
     return;

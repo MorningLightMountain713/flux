@@ -866,7 +866,7 @@ async function uninstallApplication(appName, options = {}) {
       departing = { appName, replica: replica ?? null };
     }
 
-    let spec = await appsRepository.getInstalledApp(appName);
+    let spec = (await appRecords.installed().byName(appName))?.record;
     if (!spec) {
       if (!skipGuard) {
         status('Flux App not found');
@@ -874,7 +874,7 @@ async function uninstallApplication(appName, options = {}) {
       }
       spec = await appRecords.registry().byName(appName);
       if (!spec) {
-        const localApps = await appsRepository.listInstalledApps();
+        const localApps = (await appRecords.installed().apps()).map((record) => record.record);
         spec = localApps.find((a) => a.name === appName) || null;
         if (!spec) {
           const latest = await appHistory.latestApplied(appName);
@@ -1025,13 +1025,13 @@ async function uninstallApplication(appName, options = {}) {
     // (name, replica) index caps loose placement at one row, so the all-rows
     // delete is exact for both shapes.
     if (replica != null) {
-      await appsRepository.removeInstalledIdentity(appName, replica);
+      await appRecords.installed().remove(appName, replica);
       await appRecords.ledgers().remove(appName, replica);
     } else {
-      await appsRepository.removeInstalledApp(appName);
+      await appRecords.installed().removeAll(appName);
       await appRecords.ledgers().removeAll(appName);
     }
-    const lastReplica = await appsRepository.countInstalledIdentities(appName) === 0;
+    const lastReplica = (await appRecords.installed().keys(appName)).length === 0;
     if (broadcastRemoval) {
       // An announcement cycle that read the table before this removal's mark still
       // names the app. Waiting for the cycle in flight puts the two on the wire in the
@@ -1059,7 +1059,7 @@ async function uninstallApplication(appName, options = {}) {
       // partially-failed earlier removal left behind, so every reader sees the
       // app as gone with zero filtering. A whole-app removal already deleted
       // every row above.
-      await appsRepository.removeInstalledApp(appName);
+      await appRecords.installed().removeAll(appName);
       await appRecords.ledgers().removeAll(appName);
       // The app is gone for good: nothing reconciles an app with no row, so its
       // removal records have no reader left. Only this full-uninstall path clears
@@ -1277,8 +1277,8 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
   // the store at teardown time (the prelude has already deleted this identity's
   // row); a store that cannot answer keeps them, and the janitor sweep removes a
   // network no installed app owns.
-  const appLeavesNode = replica == null || await appsRepository.countInstalledIdentities(name)
-    .then((count) => count === 0, (e) => {
+  const appLeavesNode = replica == null || await appRecords.installed().keys(name)
+    .then((keys) => keys.length === 0, (e) => {
       log.warn(`teardown ${name}: cannot count installed replicas, keeping the app's shared state: ${e.message}`);
       return false;
     });
@@ -1417,7 +1417,7 @@ async function recoverOwedTeardowns() {
       // eslint-disable-next-line no-await-in-loop
       // Per identity: an owed teardown names one replica, and a co-located
       // sibling being installed says nothing about whether THIS one came back.
-      rowExists = await appsRepository.existsInstalledIdentity(doc.name, doc.replica ?? null);
+      rowExists = (await appRecords.installed().keys(doc.name)).some((key) => key.replica === (doc.replica ?? null));
     } catch (err) {
       rowReadFailed = true;
       log.warn(`Boot recovery: install-row read for ${doc.name} failed, deferring its teardown: ${err.message}`);

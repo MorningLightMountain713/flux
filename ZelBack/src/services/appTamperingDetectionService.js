@@ -13,7 +13,7 @@ const dbHelper = require('./dbHelper');
 const tamperingEventsCollection = config.get('database.local.collections.appTamperingEvents');
 const appTamperingRepository = require('./appDatabase/appTamperingRepository');
 const nodeStartupRepository = require('./appDatabase/nodeStartupRepository');
-const appsRepository = require('./appDatabase/appsRepository');
+const appRecords = require('./appDatabase/appRecords');
 
 // All tamper-feature behaviour (incident rollup, boot identity, severities)
 // deliberately lives inside this service rather than at the emitting call
@@ -250,7 +250,7 @@ async function getAppAttribution(appName) {
   const cached = appAttributionCache.get(appName);
   if (cached && Date.now() - cached.cachedAt < ATTRIBUTION_TTL_MS) return cached;
   try {
-    const app = await appsRepository.getInstalledAppAttribution(appName);
+    const app = await appRecords.installed().byName(appName);
     const attribution = {
       ownerZelid: app?.owner ?? null,
       appHash: app?.hash ?? null,

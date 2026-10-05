@@ -5,6 +5,7 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 
 const { expect } = require('chai');
 const sinon = require('sinon');
+const { installedRecord } = require('./fixtures/appRecords');
 const proxyquire = require('proxyquire');
 // Real capability singleton - un-stubbed in proxyquire, so the module and the test share it.
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
@@ -42,7 +43,7 @@ describe('daemonHealthMonitor tests', () => {
 
     daemonHealthMonitor = proxyquire.noCallThru()('../../ZelBack/src/services/appMonitoring/daemonHealthMonitor', {
       '../../lib/log': logStub,
-      '../appDatabase/appsRepository': appsRepositoryStub,
+      '../appDatabase/appRecords': { installed: () => ({ apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)) }) },
       '../appLifecycle/appUninstaller': appUninstallerStub,
     });
   });
@@ -150,7 +151,7 @@ describe('daemonHealthMonitor tests', () => {
   });
 
   it('removes nothing when no apps are installed', async () => {
-    appsRepositoryStub.listInstalledApps.resolves(null);
+    appsRepositoryStub.listInstalledApps.resolves([]);
     daemonHealthMonitor.start();
 
     await clock.tickAsync(TWO_HOURS);

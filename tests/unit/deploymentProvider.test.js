@@ -6,11 +6,11 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
+const { stubInstalled } = require('./fixtures/appRecords');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const generalService = require('../../ZelBack/src/services/generalService');
 const dockerService = require('../../ZelBack/src/services/dockerService');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
-const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const proxyquire = require('proxyquire').noCallThru();
 const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 
@@ -123,7 +123,7 @@ describe('deploymentProvider tests', () => {
       // must not read and deserialize the same collection a second time — it
       // runs on every admission decision and every spawn cycle. Nothing about
       // the ANSWER changes, so only the read itself can be asserted.
-      const listed = sinon.stub(appsRepository, 'listInstalledApps').resolves([]);
+      const listed = stubInstalled().apps;
 
       const deployments = await deploymentProvider.listInstalledDeployments([]);
 

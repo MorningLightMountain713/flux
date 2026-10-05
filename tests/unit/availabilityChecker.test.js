@@ -13,7 +13,6 @@ const config = require('config');
 
 const availabilityChecker = require('../../ZelBack/src/services/appMonitoring/availabilityChecker');
 const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirmationService');
-const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 // eslint-disable-next-line no-unused-vars
@@ -24,6 +23,7 @@ const networkStateService = require('../../ZelBack/src/services/networkStateServ
 const {
   loadSpecLibrary, V8_SUBMISSION, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const { stubInstalled, installedRecord } = require('./fixtures/appRecords');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. This checker asks each installed app for the host ports it occupies
@@ -105,7 +105,8 @@ describe('availabilityChecker tests', () => {
   }
 
   beforeEach(() => {
-    listInstalledAppsStub = sinon.stub(appsRepository, 'listInstalledApps').resolves([]);
+    listInstalledAppsStub = sinon.stub().resolves([]);
+    stubInstalled().apps.callsFake(async () => (await listInstalledAppsStub()).map((record) => installedRecord(record)));
     buildDeploymentStub = sinon.stub(deploymentProvider, 'buildDeployment');
     // Delegates at call time so per-test overrides of buildDeployment flow
     // through the plural entry the checker uses.

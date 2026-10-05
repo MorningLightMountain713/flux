@@ -11,6 +11,7 @@ const {
   loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION, v1Spec, v9Spec, sealedV8Spec,
   instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const { installedRecord } = require('./fixtures/appRecords');
 const { classifyVolumeFault } = require('../../ZelBack/src/services/appTamperingDetectionService');
 
 // The spec library is real here, not stubbed - see tests/unit/fixtures/fluxSpec.js
@@ -73,7 +74,15 @@ const appTamperingDetectionServiceMock = {
 const crontabAndMountsCleanup = proxyquire('../../ZelBack/src/services/appLifecycle/crontabAndMountsCleanup', {
   crontab: crontabMock,
   '../../lib/log': logMock,
-  '../appDatabase/appsRepository': appsRepositoryMock,
+  '../appDatabase/appRecords': {
+    installed: () => ({ apps: async () => (await appsRepositoryMock.listInstalledApps()).map((record) => installedRecord(record)) }),
+    ledgers: () => ({
+      instancesOf: async (name) => {
+        const identifiers = await appsRepositoryMock.listComponentIdentifiers(name);
+        return [{ identifiers: () => identifiers }];
+      },
+    }),
+  },
   '../appRuntime/deploymentProvider': deploymentProviderMock,
   '../dockerService': dockerServiceMock,
   '../utils/volumeService': volumeServiceMock,

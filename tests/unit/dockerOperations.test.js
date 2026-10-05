@@ -10,6 +10,7 @@ const { asConfig } = require('./fixtures/config');
 const {
   loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec,
 } = require('./fixtures/fluxSpec');
+const { installedRecord } = require('./fixtures/appRecords');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. What stays stubbed is I/O and the actuator: the shell-out behind
@@ -269,7 +270,15 @@ describe('appOperations application lifecycle tests', () => {
       '../fluxNetworkHelper': { getLocalSocketAddress: sinon.stub().resolves('127.0.0.1:16127') },
       '../upnpService': {},
       '../appDatabase/appsRepository': appsRepositoryStub,
-      '../appDatabase/appRecords': { registry: () => registryStub },
+      '../appDatabase/appRecords': {
+        registry: () => registryStub,
+        installed: () => ({
+          apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)),
+          keys: sinon.stub().resolves([]),
+          byName: sinon.stub().resolves(null),
+          names: sinon.stub().resolves([]),
+        }),
+      },
       // checkNodeResourcesReclaiming runs on three redeploy paths and, left
       // real, resolves generalService.nodeTier() — two daemon RPCs.
       '../appRequirements/hwRequirements': {

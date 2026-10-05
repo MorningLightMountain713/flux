@@ -25,7 +25,6 @@ const fluxEventBus = require('../utils/fluxEventBus');
 const operationRegistry = require('../utils/operationRegistry');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const registryManager = require('../appDatabase/registryManager');
-const appsRepository = require('../appDatabase/appsRepository');
 const appRecords = require('../appDatabase/appRecords');
 const residentialNodeDosService = require('../residentialNodeDosService');
 const appEvacuationSafety = require('./appEvacuationSafety');
@@ -368,7 +367,7 @@ async function checkAndGiveUpAnApp(deps = {}) {
     // eslint-disable-next-line no-await-in-loop
     const locations = await registryManager.appLocation(appName);
     // eslint-disable-next-line no-await-in-loop
-    const installed = await appsRepository.getInstalledApp(appName);
+    const installed = await appRecords.installed().byName(appName);
     if (!installed) continue;
 
     const decision = {

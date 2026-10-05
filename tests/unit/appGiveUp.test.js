@@ -9,7 +9,6 @@ const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
-const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const residentialNodeDosService = require('../../ZelBack/src/services/residentialNodeDosService');
 const appEvacuationSafety = require('../../ZelBack/src/services/appLifecycle/appEvacuationSafety');
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
@@ -19,6 +18,7 @@ const peerComponentProbe = require('../../ZelBack/src/services/appLifecycle/peer
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const domain = require('./fixtures/appDomain');
 const { loadSpecLibrary, v9Spec, V9_SUBMISSION } = require('./fixtures/fluxSpec');
+const { stubInstalled, installedRecord } = require('./fixtures/appRecords');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -61,7 +61,7 @@ describe('appGiveUp - handing an app back', () => {
     noteEvacuated = sinon.stub(residentialNodeDosService, 'noteEvacuated');
     sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(LOCAL);
     sinon.stub(registryManager, 'appLocation').resolves([{ ip: LOCAL }, { ip: '5.6.7.8:16127' }]);
-    sinon.stub(appsRepository, 'getInstalledApp').resolves(installedAppOne);
+    stubInstalled().byName.resolves(installedRecord(installedAppOne));
     safety = sinon.stub(appEvacuationSafety, 'canSafelyRemoveApp').resolves(safe);
     uninstall = sinon.stub(appUninstaller, 'uninstallApplication')
       .resolves({ status: appUninstaller.UninstallStatus.REMOVED, reason: null });

@@ -2,7 +2,7 @@
 
 // Resource Query Service - Query functions for app and node resource usage
 const messageHelper = require('../messageHelper');
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const admissionControl = require('../utils/admissionControl');
 const log = require('../../lib/log');
@@ -40,11 +40,14 @@ const log = require('../../lib/log');
 async function appsResources() {
   log.info('Checking appsResources');
   try {
-    // One read of the collection, not two: the deployments are built from these
-    // same specs rather than from a second listing that hydrates every row
-    // again. This runs on every admission decision and every spawn cycle.
-    const { specs: installed, unreadable: unhydrated } = await appsRepository
-      .listInstalledAppsAndUnreadable();
+    // One read of the records: the deployments are built from these same
+    // records rather than from a second listing that reads every one again.
+    // This runs on every admission decision and every spawn cycle. A record
+    // this node holds and cannot read is named by the collection and not read.
+    const records = await appRecords.installed().apps();
+    const installed = records.map((record) => record.record);
+    const readable = new Set(records.map((record) => record.name.toLowerCase()));
+    const unhydrated = (await appRecords.installed().names()).filter((name) => !readable.has(name.toLowerCase()));
     const deployments = await deploymentProvider.listInstalledDeployments(installed);
     // An app whose deployment could not be built (its components are inside a
     // blob this node cannot read) is absent from `deployments`, not zero-sized:

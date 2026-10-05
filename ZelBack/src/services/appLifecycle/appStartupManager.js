@@ -14,6 +14,7 @@ const dockerService = require('../dockerService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const appReconciler = require('../appMonitoring/appReconciler');
 const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const nodeDosState = require('../nodeDosState');
 const migrations = require('../migrations');
 const appUninstaller = require('./appUninstaller');
@@ -71,7 +72,7 @@ async function awaitWithin(work, timeoutMs, reason) {
  */
 async function getInstalledAppNamesFromDb() {
   try {
-    return await appsRepository.listInstalledAppNames();
+    return await appRecords.installed().names();
   } catch (error) {
     log.error(`appStartupManager - Error getting installed apps: ${error.message}`);
     return [];

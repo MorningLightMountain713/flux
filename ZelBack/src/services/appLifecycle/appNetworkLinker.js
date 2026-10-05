@@ -21,7 +21,7 @@
  * spec classes derive from the same edges.
  */
 
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const dockerService = require('../dockerService');
 const { withHostMutationLock } = require('../utils/hostMutationLock');
 const { buildViewsByName } = require('./relationshipResolver');
@@ -65,7 +65,7 @@ async function connectComponentToLinkedApps(componentContainerName, deployment, 
     // The target's network is named from ITS identity: read it off the target's row
     // rather than spelling it from the name this consumer happens to hold.
     // eslint-disable-next-line no-await-in-loop
-    const target = await appsRepository.getInstalledApp(linkedApp);
+    const target = await appRecords.installed().byName(linkedApp);
     const networkName = `fluxDockerNetwork_${target?.identity ?? linkedApp}`;
     try {
       // The linked app's network is a CROSS-APP host resource: its removal runs in
@@ -121,7 +121,7 @@ async function resolveActiveLinkedNetworks(ownerId, linkedNames) {
   // eslint-disable-next-line no-restricted-syntax
   for (const name of linkedNames) {
     // eslint-disable-next-line no-await-in-loop
-    const installed = await appsRepository.getInstalledApp(name);
+    const installed = await appRecords.installed().byName(name);
     if (installed && installed.owner === ownerId) {
       // The target's network is named from ITS identity, read off its own row - the
       // consumer cannot derive it, and must not assume the name spelling.
@@ -222,7 +222,7 @@ async function ensureContainerNetworkMembership(componentIdentifier, desiredNetw
 async function reconnectLinkedApps(appName) {
   let installedApps;
   try {
-    installedApps = await appsRepository.listInstalledApps();
+    installedApps = (await appRecords.installed().apps()).map((record) => record.record);
   } catch (error) {
     log.error(`reconnectLinkedApps: failed to read installed apps for ${appName}: ${error.message}`);
     return;
@@ -285,7 +285,7 @@ async function reconnectLinkedApps(appName) {
 async function reconcileAllAppNetworkLinks() {
   let installedApps;
   try {
-    installedApps = await appsRepository.listInstalledApps();
+    installedApps = (await appRecords.installed().apps()).map((record) => record.record);
   } catch (error) {
     log.error(`reconcileAllAppNetworkLinks: failed to read installed apps: ${error.message}`);
     return;

@@ -3,6 +3,7 @@
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
+const { installedRecord } = require('./fixtures/appRecords');
 const proxyquire = require('proxyquire').noCallThru();
 const { asConfig } = require('./fixtures/config');
 
@@ -79,7 +80,10 @@ describe('relationshipResolver tests', () => {
   function loadResolver(fluxappsOverrides) {
     const stubs = {
       '../appDatabase/appsRepository': appsRepositoryStub,
-      '../appDatabase/appRecords': { registry: () => registryStub },
+      '../appDatabase/appRecords': {
+        registry: () => registryStub,
+        installed: () => ({ byName: async (name) => installedRecord(await appsRepositoryStub.getInstalledApp(name)), apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)) }),
+      },
       '../utils/specCutover': specCutoverStub,
       '../dockerService': dockerServiceStub,
       '../../lib/log': logStub,

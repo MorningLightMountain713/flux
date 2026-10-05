@@ -12,7 +12,7 @@ const { supportedArchitectures } = require('../utils/appConstants');
 const { default: fluxCaching, FluxCacheManager } = require('../utils/cacheManager');
 const policyStore = require('../policyStore');
 const { Privilege, authOf } = require('../utils/privileges');
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 
@@ -774,12 +774,17 @@ function createComplianceSweeper({
  */
 function nodeComplianceDeps() {
   return {
-    listInstalled: () => appsRepository.listInstalledAppsAndUnreadable(),
-    // A row this node holds and cannot read is not a row it does not hold.
+    // A record this node holds and cannot read is not a record it does not hold.
+    listInstalled: async () => {
+      const apps = await appRecords.installed().apps();
+      const readable = new Set(apps.map((record) => record.name.toLowerCase()));
+      const unreadable = (await appRecords.installed().names()).filter((name) => !readable.has(name.toLowerCase()));
+      return { specs: apps.map((record) => record.record), unreadable };
+    },
     readInstalled: async (name) => {
-      const { specs, unreadable } = await appsRepository.listInstalledAppsAndUnreadable({ filter: { name } });
-      if (specs.length) return specs[0];
-      if (unreadable.length) throw new Error(`the installed record of ${name} could not be read`);
+      const record = await appRecords.installed().byName(name);
+      if (record) return record.record;
+      if ((await appRecords.installed().keys(name)).length) throw new Error(`the installed record of ${name} could not be read`);
       return null;
     },
     // Images are spec-level, so every identity's deployment view carries the same set.

@@ -2,6 +2,7 @@
 
 const { expect } = require('chai');
 const sinon = require('sinon');
+const { installedRecord } = require('./fixtures/appRecords');
 const proxyquire = require('proxyquire');
 const { Privilege } = require('../../ZelBack/src/services/utils/privileges');
 
@@ -44,7 +45,7 @@ describe('meshOperatorService', () => {
       reload: sinon.stub().resolves(),
       getInstalledApp: null,
     };
-    stubs.getInstalledApp = sinon.stub().callsFake(async () => stubs.installedApp);
+    stubs.getInstalledApp = sinon.stub().callsFake(async () => installedRecord(stubs.installedApp));
 
     service = proxyquire('../../ZelBack/src/services/appMesh/meshOperatorService', {
       '../../lib/log': {
@@ -54,7 +55,7 @@ describe('meshOperatorService', () => {
       '../generalService': {
         obtainNodeCollateralInformation: sinon.stub().resolves({ txhash: OWN_TX, txindex: 0 }),
       },
-      '../appDatabase/appsRepository': { getInstalledApp: stubs.getInstalledApp },
+      '../appDatabase/appRecords': { installed: () => ({ byName: stubs.getInstalledApp }) },
       '../appRuntime/deploymentProvider': { appNameFromRequest: (name) => name.split('_')[1] || name },
       '../utils/specCutover': { resolveInstantiatedSpec: async (inst) => inst.view },
       '../appMessaging/peerNotification': { checkAndNotifyPeersOfRunningApps: stubs.rebroadcast },

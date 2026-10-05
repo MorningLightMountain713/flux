@@ -2,6 +2,7 @@
 
 const { expect } = require('chai');
 const sinon = require('sinon');
+const { installedRecord } = require('./fixtures/appRecords');
 const proxyquire = require('proxyquire').noCallThru();
 const telemetrySinkCache = require('../../ZelBack/src/services/telemetrySinkCache');
 const appTamperingDetectionService = require('../../ZelBack/src/services/appTamperingDetectionService');
@@ -203,7 +204,20 @@ describe('appUninstaller tests', () => {
         broadcastMessageToAll: broadcastAllStub,
       },
       '../appDatabase/appsRepository': appsRepositoryStub,
-      '../appDatabase/appRecords': { registry: () => registryStub, ledgers: () => ledgersStub },
+      '../appDatabase/appRecords': {
+        registry: () => registryStub,
+        ledgers: () => ledgersStub,
+        installed: () => ({
+          byName: async (name) => installedRecord(await appsRepositoryStub.getInstalledApp(name)),
+          apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)),
+          remove: appsRepositoryStub.removeInstalledIdentity,
+          removeAll: appsRepositoryStub.removeInstalledApp,
+          keys: async (name) => {
+            const count = await appsRepositoryStub.countInstalledIdentities(name);
+            return Array.from({ length: count }, (_, i) => ({ name, replica: `r${i}` }));
+          },
+        }),
+      },
       './relationshipResolver': relationshipResolverStub,
       './pendingTeardownStore': pendingTeardownStoreStub,
       '../appManagement/appsRuntimeState': runtimeStateStub,

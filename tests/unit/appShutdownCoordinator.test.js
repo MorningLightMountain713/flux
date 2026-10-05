@@ -11,6 +11,7 @@ const shutdownPlan = require('../../ZelBack/src/services/appLifecycle/shutdownPl
 const {
   loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const { installedRecord } = require('./fixtures/appRecords');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. The coordinator reads an InstantiatedSpec off the identifier index and
@@ -139,7 +140,7 @@ describe('appShutdownCoordinator', () => {
     };
     coordinator = proxyquire('../../ZelBack/src/services/appLifecycle/appShutdownCoordinator', {
       '../../lib/log': stubs.log,
-      '../appDatabase/appsRepository': stubs.appsRepository,
+      '../appDatabase/appRecords': { installedByIdentifier: async (id) => installedRecord(await stubs.appsRepository.getInstalledAppByComponentIdentifier(id)) },
       '../appRuntime/deploymentProvider': stubs.deploymentProvider,
       '../utils/globalState': stubs.globalState,
       '../utils/fluxShutdowndClient': stubs.fluxShutdowndClient,

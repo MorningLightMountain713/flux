@@ -2,7 +2,7 @@
 
 const log = require('../../lib/log');
 const capabilities = require('../utils/capabilities');
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 
 // A node whose daemon has not been synced for this long removes every app.
@@ -22,7 +22,7 @@ let started = false;
  */
 async function removeAllApps(reason) {
   try {
-    const installedApps = await appsRepository.listInstalledApps();
+    const installedApps = (await appRecords.installed().apps()).map((record) => record.record);
 
     if (!installedApps || installedApps.length === 0) {
       log.info('No apps installed, nothing to remove');
