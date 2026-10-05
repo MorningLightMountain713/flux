@@ -171,6 +171,31 @@ function recordPass(appName, patch) {
   lastPassByApp.set(appName, { ...prior, at: Date.now(), ...patch });
 }
 
+// The membership a pass arrived at, as the facts that decide it: who was
+// accepted, and who was rejected for what.
+function membershipKey(members, rejected) {
+  return JSON.stringify([
+    members.map((member) => `${member.outpoint}@${member.endpoint}`).sort(),
+    rejected.map((row) => `${row.outpoint}: ${row.reason}`).sort(),
+  ]);
+}
+
+/**
+ * Writes the membership a pass arrived at, once per change: a pass whose
+ * members and rejections are those of the previous pass writes nothing.
+ * @param {string} appName
+ * @param {{members: object[], rejected: object[], announced: number}} material
+ */
+function logMembershipChange(appName, material) {
+  const prior = lastPassByApp.get(appName);
+  const key = membershipKey(material.members, material.rejected);
+  if (prior && !prior.error && membershipKey(prior.members ?? [], prior.rejected ?? []) === key) return;
+  const members = material.members.map((member) => `${member.outpoint}@${member.endpoint}`).sort();
+  const rejected = material.rejected.map((row) => `${row.outpoint}: ${row.reason}`).sort();
+  log.info(`meshReconciler - ${appName}: ${members.length} member(s) from ${material.announced} announcement(s) held, this node's included`
+    + ` [${members.join(', ')}]${rejected.length ? `; rejected [${rejected.join(', ')}]` : ''}`);
+}
+
 /**
  * The retained outcome of the app's most recent pass, or null before one has
  * run (or for an app no gather has seen).
@@ -267,6 +292,7 @@ async function reconcileAppMaterial(app, ctx) {
   return {
     members,
     rejected,
+    announced: rows.length,
     meshPort,
     certAction,
     ordinals,
@@ -606,10 +632,12 @@ async function runReconcilePass() {
       app.material = await reconcileAppMaterial(app, ctx);
       // eslint-disable-next-line no-await-in-loop
       app.containers = await gatherContainers(app);
+      logMembershipChange(app.name, app.material);
       recordPass(app.name, {
         error: null,
         meshPort: app.material.meshPort,
         certAction: app.material.certAction,
+        announced: app.material.announced,
         members: app.material.members.map(memberFacts),
         rejected: app.material.rejected,
       });
