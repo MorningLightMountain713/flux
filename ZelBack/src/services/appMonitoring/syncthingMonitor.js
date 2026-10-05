@@ -35,7 +35,6 @@ const {
   folderNeedsUpdate,
 } = require('./syncthingMonitorHelpers');
 const volumeService = require('../utils/volumeService');
-const appTamperingDetectionService = require('../appTamperingDetectionService');
 const mastershipGrantGate = require('../appLifecycle/mastershipGrantGate');
 const syncthingIgnorePolicy = require('../appSystem/syncthingIgnorePolicy');
 const { extractIp, socketAddressesMatch } = require('../utils/socketAddressUtils');
@@ -139,16 +138,6 @@ async function verifyAppFolderMountWithRepair(appId, appFolder, appName, sending
   if (!mountSafety.isSafe && !mountSafety.isMounted) {
     const mountAttempt = await volumeService.ensureAppVolumeMounted(identifier);
     if (mountAttempt.mounted) {
-      // This pass replaces the record when it mounts from somewhere other than
-      // where the record puts it, so a later one cannot re-derive the fact -
-      // it has to be recorded by whichever pass mounted.
-      if (mountAttempt.imageMoved) {
-        await appTamperingDetectionService.recordEvent(
-          appName,
-          'volume_image_moved',
-          `Volume image for ${appId} was found somewhere other than where this node recorded it`,
-        );
-      }
       log.info(`checkAppFolderMounts - ${appId} volume was not mounted; mounted it`);
       mountSafety = await verify();
     }

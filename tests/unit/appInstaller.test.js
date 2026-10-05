@@ -157,7 +157,11 @@ describe('appInstaller tests', () => {
         decryptMessage: sinon.stub().resolves('user:token'),
       },
       '../../lib/log': logStub,
-      '../appDatabase/appRecords': { registry: () => ({ byName: sinon.stub().resolves(null) }) },
+      '../appDatabase/appRecords': {
+        registry: () => ({ byName: sinon.stub().resolves(null) }),
+        installed: () => ({ put: sinon.stub().resolves(), byReplica: sinon.stub().resolves(null) }),
+        ledgers: () => ({ put: sinon.stub().resolves(), setNetwork: sinon.stub().resolves() }),
+      },
       '../appDatabase/appsRepository': {
         existsInstalledApp: sinon.stub().resolves(false),
         existsInstalledIdentity: sinon.stub().resolves(false),
@@ -394,7 +398,14 @@ describe('appInstaller tests', () => {
       const buildDeployment = sinon.stub().resolves(deployment);
       const resolveDeploymentIdentity = sinon.stub().resolves(null);
       const isImageBlocked = sinon.stub().resolves(false);
-      const insertInstalledApp = sinon.stub().resolves({ insertedId: 'id1' });
+      // The two records the install puts before it creates anything: the
+      // read-back is the real record class over the spec being installed.
+      const installedStub = {
+        put: sinon.stub().resolves(),
+        byReplica: sinon.stub().resolves(new flux.InstalledSpec({ record: newappInstantiated, replica: null })),
+      };
+      const ledgersStub = { put: sinon.stub().resolves(), setNetwork: sinon.stub().resolves() };
+      const ensureAppDockerNetwork = sinon.stub().resolves('net');
 
       const appInstallerFresh = proxyquire.noCallThru().load('../../ZelBack/src/services/appLifecycle/appInstaller', {
         config: asConfig(configStub),
@@ -408,7 +419,7 @@ describe('appInstaller tests', () => {
           allowPort: sinon.stub().resolves({ status: true }),
           removeDockerContainerAccessToNonRoutable: sinon.stub().resolves(true),
         },
-        '../appNetwork/appDockerNetwork': { ensureAppDockerNetwork: sinon.stub().resolves('net') },
+        '../appNetwork/appDockerNetwork': { ensureAppDockerNetwork },
         './appUninstaller': { uninstallApplication },
         './pendingTeardownStore': { teardownOwedFor },
         './componentProvisioner': { installComponent },
@@ -430,22 +441,17 @@ describe('appInstaller tests', () => {
         '../appSecurity/imageManager': { isImageBlocked, verifyRepository: sinon.stub().resolves({ verified: true, supportedArchitectures: ['amd64'] }) },
         '../pgpService': { decryptMessage: sinon.stub().resolves('user:token') },
         '../../lib/log': logStub,
-        '../appDatabase/appRecords': { registry: () => ({ byName: sinon.stub().resolves(globalAppInfo) }) },
+        '../appDatabase/appRecords': {
+          registry: () => ({ byName: sinon.stub().resolves(globalAppInfo) }),
+          installed: () => installedStub,
+          ledgers: () => ledgersStub,
+        },
         '../appDatabase/appsRepository': {
-          // exists is false before insert (no stale entry) and true after (insert validated).
-          existsInstalledApp: (() => { const s = sinon.stub().resolves(true); s.onCall(0).resolves(false); s.onCall(1).resolves(false); return s; })(),
-          // Identity-keyed rows: absent before the insert, present for the
-          // post-insert validation read.
-          existsInstalledIdentity: alreadyInstalled
-            ? sinon.stub().resolves(true)
-            : (() => { const s = sinon.stub().resolves(true); s.onCall(0).resolves(false); s.onCall(1).resolves(false); return s; })(),
-          insertInstalledApp,
+          existsInstalledApp: sinon.stub().resolves(alreadyInstalled),
+          existsInstalledIdentity: sinon.stub().resolves(alreadyInstalled),
           removeInstalledApp: sinon.stub().resolves(),
           removeInstalledIdentity: sinon.stub().resolves(),
-          // The read-back row: appsRepository hydrates it into an InstantiatedSpec,
-          // and the installer feeds it straight back to buildDeployment.
           getInstalledApp: sinon.stub().resolves(newappInstantiated),
-          getInstalledIdentity: sinon.stub().resolves(newappInstantiated),
           getTempMessageByName: sinon.stub().resolves(null),
         },
         '../appRuntime/deploymentProvider': {
@@ -476,7 +482,9 @@ describe('appInstaller tests', () => {
         buildDeployment,
         resolveDeploymentIdentity,
         isImageBlocked,
-        insertInstalledApp,
+        installedStub,
+        ledgersStub,
+        ensureAppDockerNetwork,
         checkAppDependencyRequirements,
         connectComponentToLinkedApps,
       };
@@ -586,7 +594,7 @@ describe('appInstaller tests', () => {
       const {
         installer, deployment, installComponent, buildDeployment, resolveDeploymentIdentity,
         checkAppDependencyRequirements, connectComponentToLinkedApps, isImageBlocked,
-        insertInstalledApp, appReconcilerAwaitConvergence,
+        installedStub, ledgersStub, ensureAppDockerNetwork, appReconcilerAwaitConvergence,
       } = loadFresh({ converge: { converged: true, failed: [] } });
 
       const result = await installer.installApplication(newappInstantiated, {});
@@ -613,6 +621,9 @@ describe('appInstaller tests', () => {
       // so run the real construction the stub is standing in for.
       const [built, buildOpts] = buildDeployment.firstCall.args;
       expect(buildOpts).to.have.property('replica', null);
+      // The build after the records are put is from the registered record read
+      // back, not the installed record around it.
+      expect(buildDeployment.lastCall.args[0]).to.equal(newappInstantiated);
       expect(() => flux.DeploymentSpec.fromSpec(built.spec, APPS_FOLDER, { replica: null }))
         .to.not.throw();
 
@@ -641,12 +652,23 @@ describe('appInstaller tests', () => {
       expect(linkedDeployment.appName).to.equal('newapp');
       expect(aliases).to.be.an('array');
 
-      // The stored row is the spec's own serialization, and the identifiers the
-      // reconciler is later asked to converge come from the same deployment.
-      const [dbSpecs, replica, componentIdentifiers] = insertInstalledApp.firstCall.args;
-      expect(dbSpecs).to.deep.equal(newappInstantiated.serialize());
-      expect(replica).to.equal(null);
-      expect(componentIdentifiers).to.deep.equal(['web_newapp']);
+      // The installed record is the spec being installed, as the loose instance;
+      // the ledger starts empty beside it; the network is named in the ledger
+      // before it is created; and the identifiers the reconciler is later
+      // asked to converge come from the same deployment.
+      const [installed] = installedStub.put.firstCall.args;
+      expect(installed).to.be.instanceOf(flux.InstalledSpec);
+      expect(installed.record).to.equal(newappInstantiated);
+      expect(installed.replica).to.equal(null);
+      const [ledger] = ledgersStub.put.firstCall.args;
+      expect(ledger).to.be.instanceOf(flux.InstalledLedger);
+      expect(ledger.serialize()).to.deep.equal({
+        name: 'newapp', replica: null, network: null, components: {},
+      });
+      expect(installedStub.put.calledBefore(ledgersStub.put)).to.equal(true);
+      sinon.assert.calledOnceWithExactly(ledgersStub.setNetwork, 'newapp', null, { name: deployment.networkName });
+      expect(ledgersStub.setNetwork.calledBefore(ensureAppDockerNetwork), 'named before created').to.equal(true);
+      expect(ledgersStub.put.calledBefore(ledgersStub.setNetwork)).to.equal(true);
       expect(deployment.componentEntries().map(([name]) => name)).to.deep.equal(['web']);
       expect(appReconcilerAwaitConvergence.firstCall.args[0]).to.deep.equal(['web_newapp']);
     });

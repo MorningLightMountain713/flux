@@ -17,6 +17,9 @@ describe('installedLedger', () => {
   let stubs;
   let installedLedger;
   let volumeOf;
+  // The host: what is mounted where, what the kernel backs each mount with,
+  // which files exist, and what blkid reads from each.
+  let host;
 
   before(async function loadLibrary() {
     this.timeout(30_000);
@@ -25,12 +28,25 @@ describe('installedLedger', () => {
 
   beforeEach(() => {
     volumeOf = sinon.stub().resolves({ path: '/dat/appvolumes/x', fsUuid: 'uuid-1' });
+    host = {
+      mounted: new Map(), files: new Set(), stamps: new Map(),
+    };
     stubs = {
+      volumeService: {
+        isPathMounted: sinon.stub().callsFake(async (dir) => host.mounted.has(dir)),
+        mountedImagePath: sinon.stub().callsFake(async (dir) => host.mounted.get(dir) ?? null),
+        imageFsUuid: sinon.stub().callsFake(async (file) => host.stamps.get(file) ?? null),
+        getVolumeFilePath: sinon.stub().callsFake(async (named) => {
+          const candidate = `/dat/appvolumes/${named}FLUXFSVOL`;
+          return host.files.has(candidate) ? { path: candidate, conclusive: true, blocked: null } : { path: null, conclusive: true, blocked: null };
+        }),
+      },
+      fs: { access: async (file) => { if (!host.files.has(file)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); } },
       dockerService: {
         appDockerImageDigest: sinon.stub().resolves('sha256:deadbeef'),
         dockerContainerInspect: sinon.stub().resolves(null),
       },
-      appsRuntimeState: { getVolumeImage: sinon.stub().resolves({ path: '/dat/appvolumes/legacy', fsUuid: 'uuid-legacy' }) },
+      appsRuntimeState: { getVolumeImage: sinon.stub().callsFake(async (identifier) => (identifier === 'web_legacy' ? { path: '/dat/appvolumes/legacy', fsUuid: 'uuid-legacy' } : null)) },
       fluxNetworkHelper: { isFirewallActive: sinon.stub().resolves(true) },
       upnpService: { isUPNP: sinon.stub().returns(false) },
       deploymentProvider: { buildDeployment: sinon.stub() },
@@ -39,6 +55,8 @@ describe('installedLedger', () => {
     };
     installedLedger = proxyquire('../../ZelBack/src/services/appLifecycle/installedLedger', {
       '../dockerService': stubs.dockerService,
+      '../utils/volumeService': stubs.volumeService,
+      'node:fs/promises': stubs.fs,
       '../appManagement/appsRuntimeState': stubs.appsRuntimeState,
       '../fluxNetworkHelper': stubs.fluxNetworkHelper,
       '../upnpService': stubs.upnpService,
@@ -134,6 +152,52 @@ describe('installedLedger', () => {
     });
   });
 
+  describe('discoverVolumeImage', () => {
+    const ID = 'web_app';
+    const recorded = { path: '/dat/appvolumes/recorded', fsUuid: 'uuid-recorded' };
+
+    it('takes the file the kernel mounts at the component\'s directory, under either name, with the record\'s stamp when it names that file', async () => {
+      host.mounted.set(`${APPS_FOLDER}${ID}`, '/dat/appvolumes/recorded');
+      expect(await installedLedger.discoverVolumeImage(ID, recorded)).to.deep.equal(recorded);
+      sinon.assert.notCalled(stubs.volumeService.imageFsUuid);
+
+      host.mounted.clear();
+      host.mounted.set(`${APPS_FOLDER}flux${ID}`, '/dat/appvolumes/elsewhere');
+      host.stamps.set('/dat/appvolumes/elsewhere', 'uuid-read');
+      expect(await installedLedger.discoverVolumeImage(ID, recorded)).to.deep.equal({ path: '/dat/appvolumes/elsewhere', fsUuid: 'uuid-read' });
+    });
+
+    it('takes the record when its file is there, reading the stamp the record lacks', async () => {
+      host.files.add(recorded.path);
+      expect(await installedLedger.discoverVolumeImage(ID, recorded)).to.deep.equal(recorded);
+      host.stamps.set(recorded.path, 'uuid-read');
+      expect(await installedLedger.discoverVolumeImage(ID, { path: recorded.path, fsUuid: null })).to.deep.equal({ path: recorded.path, fsUuid: 'uuid-read' });
+      sinon.assert.notCalled(stubs.volumeService.getVolumeFilePath);
+    });
+
+    it('searches by the identifier, then by its 8.x name, when nothing is mounted and the record names nothing there', async () => {
+      host.files.add(`/dat/appvolumes/flux${ID}FLUXFSVOL`);
+      host.stamps.set(`/dat/appvolumes/flux${ID}FLUXFSVOL`, 'uuid-found');
+      expect(await installedLedger.discoverVolumeImage(ID, recorded)).to.deep.equal({ path: `/dat/appvolumes/flux${ID}FLUXFSVOL`, fsUuid: 'uuid-found' });
+      expect(stubs.volumeService.getVolumeFilePath.getCalls().map((c) => c.args[0])).to.deep.equal([ID, `flux${ID}`]);
+
+      host.files.add(`/dat/appvolumes/${ID}FLUXFSVOL`);
+      expect((await installedLedger.discoverVolumeImage(ID, null)).path, 'the identifier\'s own name first').to.equal(`/dat/appvolumes/${ID}FLUXFSVOL`);
+    });
+
+    it('answers null when the host holds nothing, with a stamp it cannot read as null', async () => {
+      expect(await installedLedger.discoverVolumeImage(ID, null)).to.equal(null);
+      host.files.add(`/dat/appvolumes/${ID}FLUXFSVOL`);
+      expect(await installedLedger.discoverVolumeImage(ID, null)).to.deep.equal({ path: `/dat/appvolumes/${ID}FLUXFSVOL`, fsUuid: null });
+    });
+
+    it('looks only at the directories it is given, when given', async () => {
+      host.mounted.set(`${APPS_FOLDER}${ID}`, '/dat/appvolumes/own');
+      host.mounted.set('/elsewhere/dir', '/dat/appvolumes/other');
+      expect((await installedLedger.discoverVolumeImage(ID, null, ['/elsewhere/dir'])).path).to.equal('/dat/appvolumes/other');
+    });
+  });
+
   describe('adoptInstalledLedgers', () => {
     const legacyRow = (spec, extra = {}) => ({
       ...(spec), hash: `h-${spec.name}`, height: 100, replica: null, componentIdentifiers: [`web_${spec.name}`], ...extra,
@@ -145,7 +209,7 @@ describe('installedLedger', () => {
       ));
     }
 
-    it('writes a ledger for every instance without one from the runtime-state volume record, names an identity-less one by its name, and hands over its move', async () => {
+    it('writes a ledger for every instance without one, finding its volume from the runtime-state record, names an identity-less one by its name, and hands over its move', async () => {
       const { installed, provider } = await inMemoryInstalled();
       const { ledgers } = await inMemoryLedgers();
       const v8 = (await v8Spec({ name: 'legacy' })).serialize();
@@ -156,6 +220,9 @@ describe('installedLedger', () => {
       ]);
       await installed.completeDerivedFields();
       buildsRealDeployments();
+      host.files.add('/dat/appvolumes/legacy');
+      host.files.add(`/dat/appvolumes/web_${IDENTITY}FLUXFSVOL`);
+      host.stamps.set(`/dat/appvolumes/web_${IDENTITY}FLUXFSVOL`, 'uuid-found');
 
       const results = await installedLedger.adoptInstalledLedgers();
 
@@ -167,6 +234,10 @@ describe('installedLedger', () => {
       expect(legacyLedger.component('web').identifier).to.equal('web_legacy');
       expect(legacyLedger.component('web').volume).to.include({ file: '/dat/appvolumes/legacy', fsUuid: 'uuid-legacy' });
       sinon.assert.calledWithExactly(stubs.appsRuntimeState.getVolumeImage, 'web_legacy');
+      const movingLedger = await ledgers.byInstance('moving', null);
+      expect(movingLedger.component('web').volume, 'no record: the image found on the disks, with its stamp read').to.include({
+        file: `/dat/appvolumes/web_${IDENTITY}FLUXFSVOL`, fsUuid: 'uuid-found',
+      });
       const moving = await installed.byReplica('moving', null);
       expect(moving.identity).to.equal(IDENTITY);
       expect((await ledgers.byIdentifier(`web_${IDENTITY}`)).name, 'found by the ledger\'s identifier').to.equal('moving');

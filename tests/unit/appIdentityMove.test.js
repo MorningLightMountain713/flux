@@ -122,6 +122,24 @@ describe('appIdentityMove tests', () => {
             components: Object.fromEntries(dep.componentEntries().map(([n, c]) => [n, { identifier: c.identifier }])),
           };
         },
+        // The move's own former-image lookup stands in: the ledger's record, else
+        // the file mounted at the former directory, else the 8.x and bare names.
+        discoverVolumeImage: async (identifier, recorded, dirs) => {
+          // eslint-disable-next-line no-restricted-syntax
+          for (const dir of dirs) {
+            if (mounts.has(dir) && backing.has(dir)) {
+              const path = backing.get(dir);
+              return { path, fsUuid: recorded?.path === path ? recorded.fsUuid : 'uuid-probed' };
+            }
+          }
+          if (recorded && files.has(recorded.path)) return recorded;
+          // eslint-disable-next-line no-restricted-syntax
+          for (const named of [identifier, `flux${identifier}`]) {
+            const candidate = `/vol/${named}FLUXFSVOL`;
+            if (files.has(candidate)) return { path: candidate, fsUuid: 'uuid-probed' };
+          }
+          return null;
+        },
       },
       // The record classes stand in as plain objects: the rows here are not
       // deserializable specs, and what the move writes is what is asserted.
@@ -164,11 +182,7 @@ describe('appIdentityMove tests', () => {
           const candidate = `/vol/${named}FLUXFSVOL`;
           return files.has(candidate) ? { path: candidate, conclusive: true, blocked: null } : { path: null, conclusive: true, blocked: null };
         },
-        recordedVolumeImage: async () => null,
-        recordNewVolumeImage: async (identifier, imagePath, fsUuid) => {
-          record('recordNewVolumeImage', identifier, imagePath, fsUuid);
-          records.set(identifier, { path: imagePath, fsUuid });
-        },
+        recordedVolumeImage: async (identifier) => records.get(identifier) ?? null,
         ensureAppVolumeMounted: async (identifier) => {
           record('ensureAppVolumeMounted', identifier);
           return { mounted: true };
@@ -176,7 +190,6 @@ describe('appIdentityMove tests', () => {
       },
       appsRuntimeState: {
         rekey: async (from, to) => { record('rekey', from, to); return true; },
-        getVolumeImage: async (identifier) => records.get(identifier) ?? null,
       },
       appInspector: { stopAppMonitoring: (identifier, drop) => record('stopAppMonitoring', identifier, drop) },
       syncthingService: {
@@ -421,12 +434,16 @@ describe('appIdentityMove tests', () => {
       expect(calls[umount].slice(1)).to.deep.equal([`${APPS}${NAME}_${NAME}`]);
       expect(calls[mvImage].slice(1)).to.deep.equal([`/vol/flux${NAME}_${NAME}FLUXFSVOL`, `/vol/${newIdentifier()}FLUXFSVOL`]);
       expect(umount, 'unmounted before the image moves').to.be.lessThan(mvImage);
-      expect(calls[indexOf('recordNewVolumeImage')].slice(1)).to.deep.equal([newIdentifier(), `/vol/${newIdentifier()}FLUXFSVOL`, 'uuid-recorded']);
       expect(calls[indexOf('chattr')].slice(1)).to.deep.equal(['-i', `${APPS}${NAME}_${NAME}`]);
       expect(calls[mvDir].slice(1)).to.deep.equal([`${APPS}${NAME}_${NAME}`, `${APPS}${newIdentifier()}`]);
       expect(indexOf('chattr')).to.be.lessThan(mvDir);
+      // The ledger names the image under the identity with the stamp it carries,
+      // and the volume is mounted only once it does.
+      const volumeOf = calls[indexOf('observeLedger')][2];
+      expect(await volumeOf(newIdentifier())).to.deep.equal({ path: `/vol/${newIdentifier()}FLUXFSVOL`, fsUuid: 'uuid-recorded' });
+      expect(await volumeOf('nothing')).to.equal(null);
       expect(calls[indexOf('ensureAppVolumeMounted')].slice(1)).to.deep.equal([newIdentifier()]);
-      expect(indexOf('ensureAppVolumeMounted')).to.be.greaterThan(mvDir);
+      expect(indexOf('ensureAppVolumeMounted')).to.be.greaterThan(indexOf('putLedger'));
       expect(indexOf('cp'), 'nothing is copied').to.equal(-1);
     });
 
@@ -447,22 +464,22 @@ describe('appIdentityMove tests', () => {
         expect(results.moved, c.name).to.have.lengthOf(1);
         expect(indexOf('umount'), `${c.name}: nothing to unmount`).to.equal(-1);
         expect(calls[indexOf('mv')].slice(1), c.name).to.deep.equal([c.from, c.to]);
-        expect(calls[indexOf('recordNewVolumeImage')].slice(1), c.name).to.deep.equal([newIdentifier(), c.to, c.stamp]);
+        // eslint-disable-next-line no-await-in-loop
+        expect(await calls[indexOf('observeLedger')][2](newIdentifier()), c.name).to.deep.equal({ path: c.to, fsUuid: c.stamp });
       }
     });
 
-    it('rekeys the runtime state before the image is recorded, so the record outranks a carried path', async () => {
+    it('rekeys the runtime state before the ledger is written under the identity', async () => {
       seedRunningUnderName();
 
       await appIdentityMove.moveInstalledAppsOntoIdentity();
 
       expect(calls[indexOf('rekey')].slice(1)).to.deep.equal([`${NAME}_${NAME}`, newIdentifier()]);
-      expect(indexOf('rekey')).to.be.lessThan(indexOf('recordNewVolumeImage'));
+      expect(indexOf('rekey')).to.be.lessThan(indexOf('putLedger'));
     });
 
-    it('records and mounts an image already in place without renaming it', async () => {
+    it('names and mounts an image already in place without renaming it', async () => {
       db.set(key(NAME, null), installedRow({ uuid: UUID, registrationVersion: 8 }));
-      records.set(newIdentifier(), { path: `/vol/${newIdentifier()}FLUXFSVOL`, fsUuid: 'u' });
       files.add(`/vol/${newIdentifier()}FLUXFSVOL`);
       files.add(`${APPS}${newIdentifier()}`);
 
@@ -470,8 +487,8 @@ describe('appIdentityMove tests', () => {
 
       expect(results.moved).to.have.lengthOf(1);
       expect(indexOf('mv')).to.equal(-1);
-      expect(calls[indexOf('recordNewVolumeImage')].slice(1)).to.deep.equal([newIdentifier(), `/vol/${newIdentifier()}FLUXFSVOL`, 'u']);
-      expect(indexOf('ensureAppVolumeMounted')).to.be.greaterThan(-1);
+      expect(await calls[indexOf('observeLedger')][2](newIdentifier())).to.deep.equal({ path: `/vol/${newIdentifier()}FLUXFSVOL`, fsUuid: 'uuid-probed' });
+      expect(indexOf('ensureAppVolumeMounted')).to.be.greaterThan(indexOf('putLedger'));
     });
 
     // FluxOS 8.x names a component's container, its directory and its image
@@ -573,7 +590,7 @@ describe('appIdentityMove tests', () => {
       expect(calls[flip].slice(1)).to.deep.equal([NAME, null, IDENTITY]);
       const ledger = indexOf('putLedger');
       expect(calls[ledger].slice(1)).to.deep.equal([NAME, null, { name: `fluxDockerNetwork_${IDENTITY}` }, { [NAME]: { identifier: newIdentifier() } }]);
-      expect(calls[indexOf('observeLedger')][2], 'observed with the volume this node recorded').to.equal(stubs.volumeService.recordedVolumeImage);
+      expect(await calls[indexOf('observeLedger')][2](newIdentifier()), 'observed with the volume the move left').to.deep.equal({ path: `/vol/${newIdentifier()}FLUXFSVOL`, fsUuid: 'uuid-probed' });
       expect(ledger).to.be.greaterThan(flip);
       expect(ledger).to.be.lessThan(indexOf('installComponent'));
       expect(indexOf('end'), 'the move record ends with the ledger').to.be.greaterThan(ledger);

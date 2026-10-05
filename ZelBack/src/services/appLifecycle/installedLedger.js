@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('node:path');
+const fs = require('node:fs/promises');
 
 const log = require('../../lib/log');
 const appRecords = require('../appDatabase/appRecords');
@@ -8,6 +9,7 @@ const appIdentityMoveStore = require('./appIdentityMoveStore');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const dockerService = require('../dockerService');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
+const volumeService = require('../utils/volumeService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const upnpService = require('../upnpService');
 const specLibrary = require('../utils/specLibrary');
@@ -26,6 +28,47 @@ const { appsFolder } = require('../utils/appConstants');
 // the node's own appvolumes directory, otherwise the mount holding it.
 function diskOf(file) {
   return path.basename(path.dirname(file)) === 'appvolumes' ? '/' : path.dirname(file);
+}
+
+async function exists(file) {
+  return fs.access(file).then(() => true, () => false);
+}
+
+/**
+ * The image of a component's volume that the ledger does not yet name, found
+ * as a release before the ledger found it: the file the kernel mounts at one
+ * of the component's directories, else the record given with the stamp it
+ * holds, else the file found by the component's identifier on the disks, then
+ * by its 8.x name. The stamp is the record's when it names the file found,
+ * else read from the image. Null when none is there.
+ *
+ * @param {string} identifier
+ * @param {{path: string, fsUuid: string|null}|null} recorded - the record a
+ *   release before the ledger kept for the component, or the ledger's own
+ * @param {string[]} [dirs] - the directories the volume may be mounted at
+ * @returns {Promise<{path: string, fsUuid: string|null}|null>}
+ */
+async function discoverVolumeImage(identifier, recorded, dirs = [path.join(appsFolder, identifier), path.join(appsFolder, `flux${identifier}`)]) {
+  const stampOf = async (file) => (recorded?.path === file && recorded.fsUuid) || (await volumeService.imageFsUuid(file)) || null;
+  // eslint-disable-next-line no-restricted-syntax
+  for (const dir of dirs) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await volumeService.isPathMounted(dir)) {
+      // eslint-disable-next-line no-await-in-loop
+      const backing = await volumeService.mountedImagePath(dir);
+      // eslint-disable-next-line no-await-in-loop
+      if (backing) return { path: backing, fsUuid: await stampOf(backing) };
+    }
+  }
+  if (recorded && await exists(recorded.path)) return { path: recorded.path, fsUuid: await stampOf(recorded.path) };
+  // eslint-disable-next-line no-restricted-syntax
+  for (const named of [identifier, `flux${identifier}`]) {
+    // eslint-disable-next-line no-await-in-loop
+    const found = await volumeService.getVolumeFilePath(named);
+    // eslint-disable-next-line no-await-in-loop
+    if (found.path) return { path: found.path, fsUuid: await stampOf(found.path) };
+  }
+  return null;
 }
 
 async function meshNameOf(identifier) {
@@ -77,11 +120,11 @@ async function observeLedger(deployment, volumeOf) {
 
 /**
  * Writes the ledger of every installed instance that has none, from what the
- * host holds for it: the volume image from the component's runtime-state
- * document. The move onto the identity an instance's record carries goes to
- * the move's own collection, and an instance whose record states no identity
- * is named by its name. An instance that cannot be adopted is left as it is
- * and logged.
+ * host holds for it: the volume image found once, from the record the
+ * component's runtime-state document kept, the kernel, or the disks. The move
+ * onto the identity an instance's record carries goes to the move's own
+ * collection, and an instance whose record states no identity is named by its
+ * name. An instance that cannot be adopted is left as it is and logged.
  * @returns {Promise<{adopted: Array<{name: string, replica: string|null}>, skipped: Array<{name: string, replica: string|null, reason: string}>}>}
  */
 async function adoptInstalledLedgers() {
@@ -110,7 +153,7 @@ async function adoptInstalledLedgers() {
       // eslint-disable-next-line no-await-in-loop
       const deployment = await deploymentProvider.buildDeployment(registered, { replica: record.replica });
       // eslint-disable-next-line no-await-in-loop
-      const body = await observeLedger(deployment, appsRuntimeState.getVolumeImage);
+      const body = await observeLedger(deployment, async (identifier) => discoverVolumeImage(identifier, await appsRuntimeState.getVolumeImage(identifier)));
       // eslint-disable-next-line no-await-in-loop
       await ledgers.put(new InstalledLedger({ name: record.name, replica: record.replica, ...body }));
       results.adopted.push(key);
@@ -123,4 +166,4 @@ async function adoptInstalledLedgers() {
   return results;
 }
 
-module.exports = { observeLedger, adoptInstalledLedgers };
+module.exports = { observeLedger, discoverVolumeImage, adoptInstalledLedgers };

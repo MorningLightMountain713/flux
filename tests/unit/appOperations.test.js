@@ -34,7 +34,8 @@ const { Privilege } = require('../../ZelBack/src/services/utils/privileges');
 const {
   loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
-const { stubRegistry } = require('./fixtures/appRecords');
+const { stubRegistry, stubLedgers } = require('./fixtures/appRecords');
+const specLibrary = require('../../ZelBack/src/services/utils/specLibrary');
 const domain = require('./fixtures/appDomain');
 const relationshipResolver = require('../../ZelBack/src/services/appLifecycle/relationshipResolver');
 const shutdownPlan = require('../../ZelBack/src/services/appLifecycle/shutdownPlan');
@@ -1698,8 +1699,11 @@ describe('appOperations tests', () => {
     let denyPortsStub;
     let openHostPortsStub;
     let teardownOwedForStub;
+    let ledgers;
 
     function setup({ teardownOwed = false } = {}) {
+      ledgers = stubLedgers();
+      sinon.stub(componentProvisioner, 'portOpenMethods').resolves(['ufw']);
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
       sinon.stub(appsRepository, 'upsertInstalledApp').resolves();
@@ -1804,6 +1808,66 @@ describe('appOperations tests', () => {
       expect(uninstallComponentStub.called, 'an unchanged component must not be torn down').to.be.false;
       expect(denyPortsStub.called, 'and its ports must not move').to.be.false;
       expect(openHostPortsStub.called).to.be.false;
+    });
+
+    // The ledger names each component's ports before any is opened: a kept
+    // port keeps the methods it was opened by, an added one takes the methods
+    // the node opens ports by now.
+    it('records each component\'s ports with their methods before opening the added ones', async () => {
+      setup();
+      const { InstalledLedger } = specLibrary.loaded();
+      ledgers.byInstance.resolves(new InstalledLedger({
+        name: 'myapp',
+        components: {
+          web: {
+            ...InstalledLedger.newBlock({ identifier: 'web_myapp', image: 'img' }),
+            hostPorts: [{ port: 80, opened: ['ufw', 'upnp'] }, { port: 443, opened: ['ufw', 'upnp'] }],
+          },
+        },
+      }));
+      const oldDeployment = await makeDeployment({ hostPorts: [80, 443], storage: 5 });
+      const newDeployment = await makeDeployment({ hostPorts: [443, 8080], storage: 10 });
+
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+
+      sinon.assert.calledOnceWithExactly(ledgers.byInstance, 'myapp', null);
+      sinon.assert.calledOnceWithExactly(ledgers.setComponent, 'myapp', null, 'web', 'hostPorts', [
+        { port: 443, opened: ['ufw', 'upnp'] }, { port: 8080, opened: ['ufw'] },
+      ]);
+      expect(ledgers.setComponent.calledBefore(openHostPortsStub), 'recorded before opened').to.equal(true);
+      sinon.assert.calledOnceWithExactly(openHostPortsStub, [8080], 'myapp', ['ufw']);
+      sinon.assert.notCalled(ledgers.removeComponent);
+    });
+
+    it('records an instance\'s ports as newly opened when it has no ledger to carry them from', async () => {
+      setup();
+      const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
+      const newDeployment = await makeDeployment({ hostPorts: [80, 81], storage: 5 });
+
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+
+      sinon.assert.calledOnceWithExactly(ledgers.setComponent, 'myapp', null, 'web', 'hostPorts', [
+        { port: 80, opened: ['ufw'] }, { port: 81, opened: ['ufw'] },
+      ]);
+    });
+
+    it('drops the block of a component the new spec removes, once it is torn down', async () => {
+      setup();
+      const both = deploymentFor(await specWithComponents('myapp', {
+        web: { ports: { p80: { containerPort: 80, hostPort: 80 } } },
+        db: { ports: { p81: { containerPort: 81, hostPort: 81 } } },
+      }));
+      const webOnly = deploymentFor(await specWithComponents('myapp', {
+        web: { ports: { p80: { containerPort: 80, hostPort: 80 } } },
+      }));
+
+      await appOperations.reconcileComponents('myapp', both, webOnly, registrySpec);
+
+      sinon.assert.calledOnceWithExactly(ledgers.removeComponent, 'myapp', null, 'db');
+      const dbTeardown = uninstallComponentStub.getCalls().find((c) => c.args[0].name === 'db');
+      expect(dbTeardown, 'the leaving component was torn down').to.not.equal(undefined);
+      expect(ledgers.removeComponent.firstCall.calledAfter(dbTeardown), 'the block goes once the component has').to.equal(true);
+      expect(ledgers.setComponent.getCalls().map((c) => c.args[2]), 'only the components that remain have ports recorded').to.deep.equal(['web']);
     });
 
     it('skips the port-open (but still closes) when a cancel teardown is owed', async () => {

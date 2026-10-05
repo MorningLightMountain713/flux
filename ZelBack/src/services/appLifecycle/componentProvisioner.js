@@ -11,7 +11,9 @@
 // to the reconciler directly. installComponent is a pure provisioner: it knows
 // nothing of the reconciler or the operation registry.
 const util = require('util');
+const path = require('node:path');
 const log = require('../../lib/log');
+const appRecords = require('../appDatabase/appRecords');
 const dockerService = require('../dockerService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const upnpService = require('../upnpService');
@@ -27,6 +29,7 @@ const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const pendingTeardownStore = require('./pendingTeardownStore');
 const meshReconciler = require('../appMesh/meshReconciler');
 const { NodeCondition } = require('./nodeConditions');
+const { appsFolder } = require('../utils/appConstants');
 
 const dockerPullStreamPromise = util.promisify(dockerService.dockerPullStream);
 
@@ -104,27 +107,39 @@ async function verifyComponentImage(component) {
 }
 
 /**
- * Open an app's host ports on the firewall (ufw) and the router (UPnP). The same leaf
- * the install path uses, also called by a redeploy's port-delta reconcile to open only
- * the added ports. Host/router state outlives a container, so it is independent of the
- * container lifecycle. Throws on the first port that fails to open or map.
+ * The methods this node opens a host port by: the firewall when it is active,
+ * UPnP when the node maps ports. What the ledger records against each port.
+ * @returns {Promise<Array<'ufw'|'upnp'>>}
+ */
+async function portOpenMethods() {
+  return [
+    ...(await fluxNetworkHelper.isFirewallActive() ? ['ufw'] : []),
+    ...(upnpService.isUPNP() ? ['upnp'] : []),
+  ];
+}
+
+/**
+ * Open an app's host ports by the given methods: the firewall (ufw) and the
+ * router (UPnP). The same leaf the install path uses, also called by a
+ * redeploy's port-delta reconcile to open only the added ports. Host/router
+ * state outlives a container, so it is independent of the container
+ * lifecycle. Throws on the first port that fails to open or map.
  * @param {number[]} ports - host ports to open
  * @param {string} appName - app name (the UPnP mapping description key)
+ * @param {Array<'ufw'|'upnp'>} opened - the methods, from portOpenMethods
  * @param {Function|null} [status] - optional per-port progress callback
  */
-async function openHostPorts(ports, appName, status = null) {
-  const firewallActive = await fluxNetworkHelper.isFirewallActive();
-  const isUPNP = upnpService.isUPNP();
+async function openHostPorts(ports, appName, opened, status = null) {
   // eslint-disable-next-line no-restricted-syntax
   for (const port of (ports || [])) {
-    if (firewallActive) {
+    if (opened.includes('ufw')) {
       // eslint-disable-next-line no-await-in-loop
       const portResponse = await fluxNetworkHelper.allowPort(port);
       if (portResponse.status !== true) {
         throw new Error(`Error: Port ${port} FAILed to open.`);
       }
     }
-    if (isUPNP) {
+    if (opened.includes('upnp')) {
       // eslint-disable-next-line no-await-in-loop
       const mapped = await upnpService.mapUpnpPort(port, `Flux_App_${appName}`);
       if (mapped !== true) {
@@ -136,7 +151,11 @@ async function openHostPorts(ports, appName, status = null) {
 }
 
 /**
- * Install a single app component (pull image, create volume, create + start container).
+ * Install a single app component: its block in the instance's ledger, its
+ * ports, image, volume, certificate and mesh runtime, and the container, left
+ * in Docker `created`. Each thing is recorded in the ledger before the step
+ * that creates it; a redeploy keeps the ports and the volume it does not
+ * recreate.
  * @param {object} component - DeploymentComponent to install
  * @param {object} options - { owner, uuid, onStatus, createVolumes, skipPorts, burstEligible, restartPolicy, extraEnv }
  * @returns {Promise<void>}
@@ -184,16 +203,27 @@ async function installComponent(component, options = {}) {
   }
 
   const id = component.identifier;
-  const { appName } = component;
+  const { appName, replica = null } = component;
 
   const status = (msg) => {
     log.info(msg);
     if (onStatus) onStatus(msg);
   };
 
+  const ledgers = appRecords.ledgers();
+  const entry = (field, value) => ledgers.setComponent(appName, replica, component.name, field, value);
+  const compDir = path.join(appsFolder, id);
+  await ledgers.addComponent(appName, replica, component.name, {
+    identifier: id,
+    image: component.image,
+    syncFolder: component.hasSyncthing() ? { id: component.syncFolderId, path: compDir } : null,
+  });
+
   if (!skipPorts) {
+    const opened = await portOpenMethods();
+    await entry('hostPorts', (component.hostPorts ?? []).map((port) => ({ port, opened })));
     status(`Allowing ${id} ports...`);
-    await openHostPorts(component.hostPorts, appName, status);
+    await openHostPorts(component.hostPorts, appName, opened, status);
   }
 
   const imageOnThisNode = localImageFirst && await dockerService.appDockerImageSize(component.image) > 0;
@@ -220,9 +250,13 @@ async function installComponent(component, options = {}) {
     }
   }
 
+  await entry('image', { reference: component.image, digest: await dockerService.appDockerImageDigest(component.image) });
+
   // Post-pull backstop: a cancel that landed while/after the pull ran (the abort is then a
   // no-op) must not let us build a volume the cancel's teardown is about to rm -rf.
   await throwIfCancelledMidInstall(component);
+
+  await entry('mountSources', (component.mounts ?? []).map((mount) => ({ path: mount.Source, kind: mount.sourceType === 'file' ? 'file' : 'dir' })));
 
   // A stateless component (persistentStorage.sizeGb 0) has no volume to build,
   // so there is also nothing to verify a mount for — verifyAppVolumeMount would
@@ -275,6 +309,7 @@ async function installComponent(component, options = {}) {
       // plumbing defect, not a node condition: fail outright rather than retry.
       throw new Error(`${id} requires a managed backend-TLS cert but has no platform TLS mount`);
     }
+    await entry('tls', { dir: tlsPaths.dir });
     status(`Provisioning backend TLS certificate for ${id}...`);
     try {
       await backendTlsService.provisionCert(appName, component.identity, tlsPaths);
@@ -303,26 +338,31 @@ async function installComponent(component, options = {}) {
       { code: NodeCondition.MESH_UNAVAILABLE },
     );
   }
-  if (mesh) status(`Mesh runtime ready for ${id} at ${mesh.presentedIp}`);
+  if (mesh) {
+    await entry('mesh', { name: mesh.hostname });
+    status(`Mesh runtime ready for ${id} at ${mesh.presentedIp}`);
+  }
 
   // Pre-create backstop: re-check immediately before the container is created. A data
   // (r:/g:) app is provisioned only, so for an install this is the
   // last guard between volume-create and appDockerCreate against a racing cancel.
   await throwIfCancelledMidInstall(component);
+  // Mesh identity: the docker Hostname is the member name (what the app reads to
+  // learn who it is). Its aliases ride alongside the component's own so a mesh
+  // member keeps every ordinary name as well as its member one.
+  const networkAliases = [...new Set([
+    ...(component.networkAliases ?? []),
+    ...(mesh?.aliases ?? []),
+  ])];
+  await entry('aliases', networkAliases);
   status(`Creating ${id}...`);
   await dockerService.appDockerCreate(component, {
     burstEligible,
     restartPolicy,
     extraEnv: mesh ? [...extraEnv, ...mesh.env] : extraEnv,
     ...(mesh && { dns: mesh.dns }),
-    // Mesh identity: the docker Hostname is the member name (what the app reads to
-    // learn who it is). Its aliases ride alongside the component's own so a mesh
-    // member keeps every ordinary name as well as its member one.
     ...(mesh?.hostname && { hostname: mesh.hostname }),
-    networkAliases: [...new Set([
-      ...(component.networkAliases ?? []),
-      ...(mesh?.aliases ?? []),
-    ])],
+    networkAliases,
     owner,
     uuid,
     requiresEncryption,
@@ -342,5 +382,6 @@ async function installComponent(component, options = {}) {
 module.exports = {
   installComponent,
   openHostPorts,
+  portOpenMethods,
   verifyComponentImage,
 };
