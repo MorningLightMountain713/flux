@@ -20,11 +20,16 @@ const STORES = Object.freeze({
     database: config.get('database.appslocal.database'),
     collection: config.get('database.appslocal.collections.appsInformation'),
   }),
+  installedLedgers: Object.freeze({
+    database: config.get('database.appslocal.database'),
+    collection: config.get('database.appslocal.collections.installedLedgers'),
+  }),
 });
 
 let storage = null;
 let appRegistry = null;
 let installedApps = null;
+let installedLedgers = null;
 
 function provider() {
   if (!storage) storage = MongoStorageProvider.create(STORES);
@@ -46,8 +51,7 @@ function registry() {
 }
 
 /**
- * The installed apps: this node's record of each instance it runs and the
- * ledger of what it created for it.
+ * The installed apps: this node's record of each instance it runs.
  * @returns {import('@runonflux/flux-spec-backend').InstalledApps}
  */
 function installed() {
@@ -60,4 +64,31 @@ function installed() {
   return installedApps;
 }
 
-module.exports = { registry, installed, STORES };
+/**
+ * The installed ledgers: what this node created for each instance it runs,
+ * keyed as the installed record is.
+ * @returns {import('@runonflux/flux-spec-backend').InstalledLedgers}
+ */
+function ledgers() {
+  if (!installedLedgers) {
+    const { InstalledLedgers } = specLibrary.loaded();
+    installedLedgers = new InstalledLedgers(provider(), {
+      onUnreadable: (stored, error) => log.warn(`installedLedgers: a stored ledger cannot be read: ${error.message} (name=${stored.name}, replica=${stored.replica ?? null})`),
+    });
+  }
+  return installedLedgers;
+}
+
+/**
+ * The key an installed record and its ledger share, as one string: the name
+ * in any letter case, and the replica.
+ * @param {{name: string, replica: string|null}} instance
+ * @returns {string}
+ */
+function instanceKey({ name, replica }) {
+  return `${String(name).toLowerCase()}\u0000${replica ?? ''}`;
+}
+
+module.exports = {
+  registry, installed, ledgers, instanceKey, STORES,
+};

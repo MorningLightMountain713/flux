@@ -119,6 +119,7 @@ module.exports = {
         appsPlacements: 'zelappsplacements', // when this node took each app it holds, kept through redeploys
         pendingAppTeardowns: 'zelappspendingteardowns', // durable owed-teardown records: the crash-safe handoff between the removal prelude and the deferred destructive teardown
         appIdentityMoves: 'zelappsidentitymoves', // the move of an installed instance onto its identity while it is in progress
+        installedLedgers: 'zelappsinstalledledgers', // per installed instance, what this node created for it, under the names it was created with
         cachedImages: 'cachedimages', // enterprise image cache: owner-pinned docker images (the durable pin the uninstall retention gate + per-fluxId quota consult)
         playgroundSessions: 'playgroundsessions', // node-local, never gossiped: one sealed+signed record per playground session, self-reaping on its retention TTL
       },
