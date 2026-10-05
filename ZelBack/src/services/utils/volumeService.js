@@ -1133,6 +1133,7 @@ module.exports = {
   mountedImagePath,
   recordNewVolumeImage,
   recordVolumeImage,
+  recordedVolumeImage,
   isPathMounted,
   getVolumeFilePath,
   getComponentAppIdsFromVolumeFiles,

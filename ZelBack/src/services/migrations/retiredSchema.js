@@ -24,10 +24,15 @@ const RETIRED_EXPIRY_INDEXES = [
 ];
 
 // Indexes keyed on a field the rows no longer carry, or unique on one the rows
-// now share: a unique one would refuse every row after the first.
+// now share: a unique one would refuse every row after the first. The installed
+// collection's are the ones its records' derived keys replaced.
 const RETIRED_INDEXES = [
   { collection: 'database.appsglobal.collections.appContentManifests', name: 'appName' },
   { collection: 'database.appsglobal.collections.appContentManifests', name: 'identity' },
+  { database: 'database.appslocal.database', collection: 'database.appslocal.collections.appsInformation', name: 'installed app identity' },
+  { database: 'database.appslocal.database', collection: 'database.appslocal.collections.appsInformation', name: 'installed apps by name' },
+  { database: 'database.appslocal.database', collection: 'database.appslocal.collections.appsInformation', name: 'installed apps by app identity' },
+  { database: 'database.appslocal.database', collection: 'database.appslocal.collections.appsInformation', name: 'installed apps by component identifier' },
 ];
 
 /**
@@ -66,8 +71,8 @@ async function dropRetiredSchema() {
     }
   }
 
-  for (const { collection, name } of RETIRED_INDEXES) {
-    const target = appsGlobal.collection(config.get(collection));
+  for (const { database, collection, name } of RETIRED_INDEXES) {
+    const target = connection.db(config.get(database ?? 'database.appsglobal.database')).collection(config.get(collection));
     // eslint-disable-next-line no-await-in-loop
     const indexes = await target.indexes().catch((error) => {
       if (error.codeName === 'NamespaceNotFound') return [];

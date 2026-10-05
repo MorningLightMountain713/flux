@@ -15,6 +15,7 @@ describe('migrations tests', () => {
       nodeIdentityMigration: { migrateNodeIdentity: sinon.stub().resolves({ migrated: [] }) },
       containerLabelBackfill: { backfillContainerLabels: sinon.stub().resolves({ covered: true }) },
       appIdentityMove: { moveInstalledAppsOntoIdentity: sinon.stub().resolves({ moved: [], skipped: [], failed: [] }) },
+      installedLedger: { adoptInstalledLedgers: sinon.stub().resolves({ adopted: [], skipped: [] }) },
       retiredSchema: { dropRetiredSchema: sinon.stub().resolves({ collections: [], indexes: [] }) },
       temporaryPoolSweep: { stampDeadlines: sinon.stub().resolves({ stamped: 0 }) },
       appsRepository: { removeContentManifestsWithoutHash: sinon.stub().resolves(0) },
@@ -25,6 +26,7 @@ describe('migrations tests', () => {
       '../appDatabase/nodeIdentityMigration': stubs.nodeIdentityMigration,
       '../appLifecycle/containerLabelBackfill': stubs.containerLabelBackfill,
       '../appLifecycle/appIdentityMove': stubs.appIdentityMove,
+      '../appLifecycle/installedLedger': stubs.installedLedger,
       './retiredSchema': stubs.retiredSchema,
       '../appMessaging/temporaryPoolSweep': stubs.temporaryPoolSweep,
       '../appDatabase/appsRepository': stubs.appsRepository,
@@ -76,11 +78,15 @@ describe('migrations tests', () => {
       expect(stubs.nodeIdentityMigration.migrateNodeIdentity.called).to.be.false;
     });
 
-    it('moves apps onto their identity before the containers are restamped', async () => {
+    it('adopts the installed ledger, then moves apps onto their identity, then restamps the containers', async () => {
       const results = await migrations.runBefore('bootReconcileDecided');
 
-      expect(results.map((r) => r.id)).to.deep.equal(['app-identity', 'container-labels']);
-      expect(stubs.appIdentityMove.moveInstalledAppsOntoIdentity.calledBefore(stubs.containerLabelBackfill.backfillContainerLabels)).to.be.true;
+      expect(results.map((r) => r.id)).to.deep.equal(['installed-ledger', 'app-identity', 'container-labels']);
+      sinon.assert.callOrder(
+        stubs.installedLedger.adoptInstalledLedgers,
+        stubs.appIdentityMove.moveInstalledAppsOntoIdentity,
+        stubs.containerLabelBackfill.backfillContainerLabels,
+      );
     });
 
     it('backfills payment positions before the scan first reaches the tip', async () => {
@@ -113,7 +119,7 @@ describe('migrations tests', () => {
     it('reports a migration that succeeded', async () => {
       const results = await migrations.runBefore('bootReconcileDecided');
 
-      expect(results).to.deep.equal([{ id: 'app-identity', ok: true }, { id: 'container-labels', ok: true }]);
+      expect(results).to.deep.equal([{ id: 'installed-ledger', ok: true }, { id: 'app-identity', ok: true }, { id: 'container-labels', ok: true }]);
     });
 
     it('runs the rest after one fails', async () => {
@@ -125,11 +131,14 @@ describe('migrations tests', () => {
         '../appDatabase/nodeIdentityMigration': {
           migrateNodeIdentity: async () => { order.push('first'); throw new Error('boom'); },
         },
+        '../appLifecycle/installedLedger': {
+          adoptInstalledLedgers: async () => { order.push('sixth'); },
+        },
         '../appLifecycle/appIdentityMove': {
-          moveInstalledAppsOntoIdentity: async () => { order.push('sixth'); },
+          moveInstalledAppsOntoIdentity: async () => { order.push('seventh'); },
         },
         '../appLifecycle/containerLabelBackfill': {
-          backfillContainerLabels: async () => { order.push('seventh'); },
+          backfillContainerLabels: async () => { order.push('eighth'); },
         },
         './retiredSchema': {
           dropRetiredSchema: async () => { order.push('second'); },
@@ -151,8 +160,8 @@ describe('migrations tests', () => {
 
       const results = await rebuilt.runBefore('localDbPrepared');
 
-      expect(order).to.deep.equal(['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh']);
-      expect(results.map((r) => r.ok)).to.deep.equal([false, true, true, true, true, true, true]);
+      expect(order).to.deep.equal(['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth']);
+      expect(results.map((r) => r.ok)).to.deep.equal([false, true, true, true, true, true, true, true]);
     });
   });
 });

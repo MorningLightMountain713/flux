@@ -20,7 +20,7 @@ const verificationHelperUtils = require('./verificationHelperUtils');
 const messageHelper = require('./messageHelper');
 const dbHelper = require('./dbHelper');
 const nodeIdentityRepository = require('./appDatabase/nodeIdentityRepository');
-const appsRepository = require('./appDatabase/appsRepository');
+const appRecords = require('./appDatabase/appRecords');
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
 const daemonServiceBlockchainRpcs = require('./daemonService/daemonServiceBlockchainRpcs');
 const daemonServiceFluxnodeRpcs = require('./daemonService/daemonServiceFluxnodeRpcs');
@@ -1633,10 +1633,11 @@ async function getFluxInfo(req, res) {
     });
     // Same reason: the two derivations that recover an app from a container name
     // or from image filenames on disk can only be deleted once the fleet reports
-    // every installed row states its components.
-    info.apps.componentIdentifiers = await appsRepository.componentIdentifierCoverage()
+    // every installed instance holds its ledger.
+    info.apps.installedLedger = await appRecords.installed().all()
+      .then((instances) => ({ instances: instances.length, adopted: instances.filter((instance) => instance.hasLedger()).length }))
       .catch((error) => {
-        log.warn(`getFluxInfo - component identifier coverage unavailable: ${error.message}`);
+        log.warn(`getFluxInfo - installed ledger coverage unavailable: ${error.message}`);
         return null;
       });
     const appHashes = await registryManager.getAppHashes();

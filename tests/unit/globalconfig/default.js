@@ -99,6 +99,7 @@ const harnessOverrides = {
       collections: {
         appsInformation: 'zelappsinformation',
         appsRuntimeState: 'zelappsruntimestate',
+        appIdentityMoves: 'zelappsidentitymoves',
         cachedImages: 'cachedimages',
       },
     },

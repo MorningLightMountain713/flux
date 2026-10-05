@@ -7,9 +7,10 @@ const moduleLoader = require('../../../ZelBack/src/lib/moduleLoader');
 const { loadSpecLibrary } = require('./fluxSpec');
 
 /**
- * The app registry a unit test's subject reads: a real AppRegistry held in
- * memory, or a registry whose every operation is a stub. Either is installed as
- * appRecords.registry() until sinon.restore().
+ * The app registry and the installed apps a unit test's subject reads: a real
+ * collection held in memory, or one whose every operation is a stub. Either is
+ * installed as appRecords.registry() or appRecords.installed() until
+ * sinon.restore().
  */
 
 // What each operation answers until a test says otherwise.
@@ -26,10 +27,19 @@ const DEFAULT_ANSWERS = {
   completeDerivedFields: 0,
 };
 
-function install(registry) {
-  if (appRecords.registry.restore) appRecords.registry.restore();
-  sinon.stub(appRecords, 'registry').returns(registry);
-  return registry;
+function install(accessor, collection) {
+  if (appRecords[accessor].restore) appRecords[accessor].restore();
+  sinon.stub(appRecords, accessor).returns(collection);
+  return collection;
+}
+
+function stubbed(CollectionClass, defaults) {
+  const fake = {};
+  for (const method of Object.getOwnPropertyNames(CollectionClass.prototype)) {
+    if (method === 'constructor') continue;
+    fake[method] = sinon.stub().resolves(defaults[method]);
+  }
+  return fake;
 }
 
 /**
@@ -40,13 +50,31 @@ function install(registry) {
  */
 function stubRegistry() {
   if (appRecords.registry.restore) return appRecords.registry();
-  const { AppRegistry } = specLibrary.loaded();
-  const fake = {};
-  for (const method of Object.getOwnPropertyNames(AppRegistry.prototype)) {
-    if (method === 'constructor') continue;
-    fake[method] = sinon.stub().resolves(DEFAULT_ANSWERS[method]);
-  }
-  return install(fake);
+  return install('registry', stubbed(specLibrary.loaded().AppRegistry, DEFAULT_ANSWERS));
+}
+
+// What each installed-apps operation answers until a test says otherwise.
+const INSTALLED_ANSWERS = {
+  byName: null,
+  byReplica: null,
+  byIdentity: null,
+  byIdentifier: null,
+  instancesOf: [],
+  all: [],
+  names: [],
+  owed: [],
+  unadopted: [],
+  completeDerivedFields: 0,
+};
+
+/**
+ * The installed apps with every operation a sinon stub, installed as
+ * appRecords.installed(); calling it again in the same test returns it.
+ * @returns {Object<string, sinon.SinonStub>}
+ */
+function stubInstalled() {
+  if (appRecords.installed.restore) return appRecords.installed();
+  return install('installed', stubbed(specLibrary.loaded().InstalledApps, INSTALLED_ANSWERS));
 }
 
 /**
@@ -57,7 +85,22 @@ function stubRegistry() {
 async function inMemoryRegistry() {
   const { AppRegistry } = await loadSpecLibrary();
   const { InMemoryStorageProvider } = await moduleLoader.importModule('@runonflux/flux-spec-backend/testing');
-  return install(new AppRegistry(new InMemoryStorageProvider()));
+  return install('registry', new AppRegistry(new InMemoryStorageProvider()));
 }
 
-module.exports = { stubRegistry, inMemoryRegistry };
+/**
+ * A real InstalledApps over flux-spec's in-memory store, installed as
+ * appRecords.installed(), with the store beside it so a test can seed a stored
+ * form the collection would not write itself.
+ * @returns {Promise<{installed: import('@runonflux/flux-spec-backend').InstalledApps, provider: object}>}
+ */
+async function inMemoryInstalled() {
+  const { InstalledApps } = await loadSpecLibrary();
+  const { InMemoryStorageProvider } = await moduleLoader.importModule('@runonflux/flux-spec-backend/testing');
+  const provider = new InMemoryStorageProvider();
+  return { installed: install('installed', new InstalledApps(provider)), provider };
+}
+
+module.exports = {
+  stubRegistry, inMemoryRegistry, stubInstalled, inMemoryInstalled,
+};

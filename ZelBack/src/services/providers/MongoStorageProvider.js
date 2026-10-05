@@ -144,7 +144,10 @@ function providerClass() {
     async ensureIndexes(store, indexes) {
       await dbHelper.ensureIndexes(
         this.#collection(store),
-        indexes.map(({ fields }) => ({ key: Object.fromEntries(fields.map((field) => [field, 1])) })),
+        indexes.map(({ fields, unique }) => ({
+          key: Object.fromEntries(fields.map((field) => [field, 1])),
+          ...(unique ? { unique: true } : {}),
+        })),
       );
     }
   };

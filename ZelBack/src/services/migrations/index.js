@@ -4,6 +4,7 @@ const log = require('../../lib/log');
 const nodeIdentityMigration = require('../appDatabase/nodeIdentityMigration');
 const containerLabelBackfill = require('../appLifecycle/containerLabelBackfill');
 const appIdentityMove = require('../appLifecycle/appIdentityMove');
+const installedLedger = require('../appLifecycle/installedLedger');
 const retiredSchema = require('./retiredSchema');
 const temporaryPoolSweep = require('../appMessaging/temporaryPoolSweep');
 const appsRepository = require('../appDatabase/appsRepository');
@@ -71,6 +72,14 @@ const migrations = [
     before: 'explorerSynced',
     description: 'record the block position of app payments recorded without one',
     run: () => paymentPositions.backfillPaymentPositions(),
+  },
+  {
+    id: 'installed-ledger',
+    // Before the move onto the identity, which writes the ledger of what it
+    // moves, and before the boot reconcile reads the ledger.
+    before: 'bootReconcileDecided',
+    description: 'write the ledger of every app installed before the node kept one',
+    run: () => installedLedger.adoptInstalledLedgers(),
   },
   {
     id: 'app-identity',

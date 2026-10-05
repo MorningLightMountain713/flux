@@ -77,7 +77,6 @@ const upnpService = require('./upnpService');
 const syncthingService = require('./syncthingService');
 const pgpService = require('./pgpService');
 const dockerService = require('./dockerService');
-const componentIdentifierResolver = require('./appLifecycle/componentIdentifierResolver');
 const backupRestoreService = require('./backupRestoreService');
 const systemService = require('./systemService');
 const fluxNodeService = require('./fluxNodeService');
@@ -89,8 +88,8 @@ const peerSetStabilityService = require('./peerSetStabilityService');
 const appTamperingDetectionService = require('./appTamperingDetectionService');
 const appsRuntimeState = require('./appManagement/appsRuntimeState');
 const imageCacheStore = require('./appLifecycle/imageCacheStore');
-const appsRepository = require('./appDatabase/appsRepository');
 const appRecords = require('./appDatabase/appRecords');
+const appIdentityMoveStore = require('./appLifecycle/appIdentityMoveStore');
 const imageManager = require('./appSecurity/imageManager');
 const playgroundAudit = require('./appPlayground/playgroundAudit');
 const playgroundService = require('./appPlayground/playgroundService');
@@ -341,18 +340,13 @@ async function startFluxFunctions() {
         // cachedImages (localzelapps): unique index on (fluxId, repotag) so a re-submit
         // can't fork an owner's pin record, plus a repotag lookup for the retention gate
         await imageCacheStore.prepareCollection();
-        // zelappsinformation (localzelapps): one row per deployed identity, unique on
-        // (name, replica). The collection carried no index at all, so one-row-per-app
-        // rested on a racy exists-then-insert; co-located replicas need the key anyway.
-        await appsRepository.prepareInstalledAppsCollection();
-        // Rows written before the identifier index existed. The resolver lives here
-        // rather than in the repository because building a deployment needs the
-        // resolved spec, and the repository must not depend on what resolves it.
-        await appsRepository.backfillComponentIdentifiers(
-          componentIdentifierResolver.resolveComponentIdentifiers,
-        ).catch((error) => {
-          log.error(`Recording component identifiers failed: ${error.message}`);
-        });
+        // The installed apps: the indexes the collection's queries are answered
+        // by, the derived keys of any record stored without them, and the move
+        // records.
+        await appRecords.installed().ensureIndexes();
+        const completedInstalled = await appRecords.installed().completeDerivedFields();
+        log.info(`Installed apps prepared${completedInstalled ? `, ${completedInstalled} record(s) completed` : ''}`);
+        await appIdentityMoveStore.prepareCollection();
         // playgroundsessions (localzelapps): the retention TTL the collection's own
         // comment promises, plus the (callerFingerprint, flagged, observedAt) index
         // the admission-path miner check reads

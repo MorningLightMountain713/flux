@@ -2137,6 +2137,24 @@ async function appDockerImageSize(idOrName) {
 }
 
 /**
+ * The digest the daemon holds an image under, `sha256:…`, or null when the
+ * daemon does not hold the image or holds it without one (an image built or
+ * loaded locally).
+ * @param {string} idOrName
+ * @returns {Promise<string|null>}
+ */
+async function appDockerImageDigest(idOrName) {
+  try {
+    const info = await docker.getImage(idOrName).inspect();
+    const repoDigest = (info.RepoDigests || []).find((entry) => entry.includes('@'));
+    return repoDigest ? repoDigest.slice(repoDigest.indexOf('@') + 1) : null;
+  } catch (error) {
+    log.warn(`appDockerImageDigest - could not inspect ${idOrName}: ${error.message}`);
+    return null;
+  }
+}
+
+/**
  * Sends an explicit unix signal to an app's container (e.g. SIGHUP to reload
  * config after a content slot update). Distinct from appDockerKill, which is a
  * SIGKILL termination: this is a benign in-container reload, so it takes no
@@ -2858,6 +2876,7 @@ module.exports = {
   tagImage,
   dockerImageInspect,
   appDockerImageSize,
+  appDockerImageDigest,
   appDockerKill,
   appDockerRemove,
   appDockerForceRemove,

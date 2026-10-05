@@ -41,6 +41,7 @@ module.exports = {
             "appsInformation": "zelappsinformation",
             "appsRuntimeState": "zelappsruntimestate",
             "pendingAppTeardowns": "zelappspendingteardowns",
+            "appIdentityMoves": "zelappsidentitymoves",
             "cachedImages": "cachedimages",
             "playgroundSessions": "playgroundsessions"
         }

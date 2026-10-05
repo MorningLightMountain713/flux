@@ -88,6 +88,24 @@ describe('retiredSchema', () => {
     expect(droppedIndexes).to.deep.equal([]);
   });
 
+  it('drops the installed collection\'s indexes the records\' derived keys replaced, keeping the collection\'s current ones', async () => {
+    indexesOf.zelappsinformation = [
+      { name: 'installed app identity', key: { name: 1, replica: 1 }, unique: true },
+      { name: 'installed apps by name', key: { name: 1 } },
+      { name: 'installed apps by app identity', key: { identity: 1 } },
+      { name: 'installed apps by component identifier', key: { componentIdentifiers: 1 } },
+      { name: 'nameKey_1_replica_1', key: { nameKey: 1, replica: 1 }, unique: true },
+      { name: 'identifiers_1', key: { identifiers: 1 } },
+    ];
+
+    await retiredSchema.dropRetiredSchema();
+
+    expect(droppedIndexes.sort()).to.deep.equal([
+      'zelappsinformation.installed app identity', 'zelappsinformation.installed apps by app identity',
+      'zelappsinformation.installed apps by component identifier', 'zelappsinformation.installed apps by name',
+    ].sort());
+  });
+
   it('drops the content manifests\' unique indexes by app name and by identity, and the quarantine expiry, keeping the one by identity and hash', async () => {
     indexesOf[CONTENT_MANIFESTS] = [
       { name: 'appName', key: { appName: 1 }, unique: true },
