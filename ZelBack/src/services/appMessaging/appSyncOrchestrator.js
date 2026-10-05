@@ -186,6 +186,9 @@ class AppSyncOrchestrator {
   #manifestSyncComplete = false;
   #ingressSyncComplete = false;
   #stateSyncComplete = false;
+  // A completed sync paused at the authority checkpoint, so later answers do
+  // not pause a second completion behind it.
+  #completionHeld = false;
   #askInFlight = false;
   #askDirty = false;
   #peerDisconnectedHandler = null;
@@ -588,18 +591,42 @@ class AppSyncOrchestrator {
       completions: this.#syncCompletions[syncType].size,
       required: MIN_SYNC_COMPLETIONS,
     });
-    if (Object.values(this.#syncCompletions).every((peers) => peers.size >= MIN_SYNC_COMPLETIONS)) {
-      this.#stateSyncComplete = true;
-      this.#publishStateSyncAuthority();
-      if (this.#syncTimeout) {
-        clearTimeout(this.#syncTimeout);
-        this.#syncTimeout = null;
-      }
-      this.#closeRound('the sync completed');
-      log.info('AppSyncOrchestrator - All state syncs complete');
-      fluxEventBus.publish('ephemeralSync:allComplete', this.#completionCounts());
-      this.#own(this.#evaluate());
+    if (this.#completionHeld) return;
+    if (!Object.values(this.#syncCompletions).every((peers) => peers.size >= MIN_SYNC_COMPLETIONS)) return;
+    if (fluxEventBus.isCheckpointHeld(fluxEventBus.Checkpoint.APPSYNC_BEFORE_AUTHORITATIVE)) {
+      this.#completeStateSyncWhenReleased();
+      return;
     }
+    this.#completeStateSync();
+  }
+
+  /**
+   * Hold a completed sync at the authority checkpoint, and complete it on release.
+   *
+   * Released into a reset or a stop, it completes nothing: the answers it was
+   * holding belong to an attempt that has ended.
+   * @returns {Promise<void>}
+   */
+  async #completeStateSyncWhenReleased() {
+    const attempt = this.#syncCompletions;
+    this.#completionHeld = true;
+    await fluxEventBus.checkpoint(fluxEventBus.Checkpoint.APPSYNC_BEFORE_AUTHORITATIVE);
+    this.#completionHeld = false;
+    if (!this.#started || this.#stateSyncComplete || this.#syncCompletions !== attempt) return;
+    this.#completeStateSync();
+  }
+
+  #completeStateSync() {
+    this.#stateSyncComplete = true;
+    this.#publishStateSyncAuthority();
+    if (this.#syncTimeout) {
+      clearTimeout(this.#syncTimeout);
+      this.#syncTimeout = null;
+    }
+    this.#closeRound('the sync completed');
+    log.info('AppSyncOrchestrator - All state syncs complete');
+    fluxEventBus.publish('ephemeralSync:allComplete', this.#completionCounts());
+    this.#own(this.#evaluate());
   }
 
   // A permanent-plane round that found no askable peer leaves its step incomplete

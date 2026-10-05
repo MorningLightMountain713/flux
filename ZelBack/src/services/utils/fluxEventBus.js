@@ -44,6 +44,9 @@ const Checkpoint = Object.freeze({
   // The spawner has chosen an app to attempt and has not yet judged its instance
   // count; keyed by the app's name. Held, the node attempts nothing for that app.
   SPAWNER_BEFORE_ATTEMPT: 'spawner:beforeAttempt',
+  // A state sync has every answer it needs and the node has not yet become
+  // authoritative from them, so it still refuses to answer a peer's sync.
+  APPSYNC_BEFORE_AUTHORITATIVE: 'appSync:beforeAuthoritative',
 });
 const CHECKPOINT_NAMES = new Set(Object.values(Checkpoint));
 // Holds a key for every key of its checkpoint.
@@ -184,6 +187,13 @@ class FluxEventBus extends EventEmitter {
       this.#parked.push({ name, key, resume });
       this.publish('checkpoint:held', { name, key });
     });
+  }
+
+  // Whether a caller reaching `name` for `key` now would pause there. For a
+  // caller that runs straight through unless held, and so takes the pause only
+  // when there is one to take. Always false when disabled.
+  isCheckpointHeld(name, key) {
+    return this.#enabled && this.#isHeld(name, key);
   }
 
   #isHeld(name, key) {
