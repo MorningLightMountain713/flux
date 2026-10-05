@@ -496,9 +496,9 @@ export async function seedAndInstallMany(env, app, minCount, { timeout = 150000 
   return installed;
 }
 
-// SPAWNER path: seed an app's global spec into EVERY node's globalzelapps DB
-// (collection zelappsinformation — the one trySpawningGlobalApplication aggregates
-// over) so each node's spawner sees it as missing-instances and self-selects. No
+// SPAWNER path: seed an app's global spec into EVERY node's registry collection,
+// in the registry's stored form, so each node's spawner finds it alive, sees it as
+// missing instances and self-selects. No
 // running/installing locations are seeded, so `actual` starts at 0 and the spawner
 // drives real placement + collision-resolution. The app image must be pushed first.
 export async function seedSpawnerApp(env, app) {

@@ -1,5 +1,12 @@
 import { MongoClient } from 'mongodb';
+import { AppRegistry, InstantiatedSpec, REGISTRY_DERIVED_FIELDS } from '@runonflux/flux-spec-backend';
 import { getSubnetConfig } from './subnet-config.js';
+
+// The app registry's stored form of a record: the form FluxOS's registry writes,
+// and the only one its indexed reads find.
+function storedRecord(spec) {
+  return AppRegistry.toStored(InstantiatedSpec.deserialize(spec));
+}
 
 const MONGO_URL = process.env.MONGO_URL || `mongodb://${getSubnetConfig().mongo}:27017`;
 
@@ -398,30 +405,33 @@ export function dbClient(nodeNum) {
       );
     },
 
-    // A COPY, because insertOne stamps _id onto the object it is handed and the
+    // Written in the registry's stored form, built fresh from the spec: the
     // caller's app fixture is reused - seeded on several nodes, and read again to
-    // build the app's next specification. An _id carried into that lands in the
-    // hashed payload and in a later replaceOne, where mongo refuses it outright.
+    // build the app's next specification - and stays as it was.
     async seedGlobalAppSpec(spec) {
       const globalDb = await db('appsGlobal');
-      await globalDb.collection('zelappsinformation').insertOne({ ...spec });
+      await globalDb.collection('zelappsinformation').insertOne(storedRecord(spec));
     },
 
-    // The specification row this node holds for one app. What a replayed
-    // message has to produce on a node that was never given the message.
+    // The specification row this node holds for one app, as the record was
+    // written. What a replayed message has to produce on a node that was never
+    // given the message.
     async globalAppSpec(name) {
       const globalDb = await db('appsGlobal');
-      return globalDb.collection('zelappsinformation').findOne({ name });
+      const stored = await globalDb.collection('zelappsinformation').findOne({ nameKey: name.toLowerCase() }, { projection: { _id: 0 } });
+      if (!stored) return null;
+      for (const field of REGISTRY_DERIVED_FIELDS) delete stored[field];
+      return stored;
     },
 
     // zelappsinformation holds one row per app - the CURRENT specification. An
-    // update replaces it, the way hash sync does when the chain carries a newer
-    // message; inserting a second row leaves the node reading whichever it finds
-    // first.
+    // update replaces it, the way the registry does when the chain carries a
+    // newer message; inserting a second row leaves the node reading whichever it
+    // finds first.
     async replaceGlobalAppSpec(spec) {
       const globalDb = await db('appsGlobal');
       const { _id: _ignored, ...replacement } = spec;
-      await globalDb.collection('zelappsinformation').replaceOne({ name: spec.name }, replacement, { upsert: true });
+      await globalDb.collection('zelappsinformation').replaceOne({ nameKey: spec.name.toLowerCase() }, storedRecord(replacement), { upsert: true });
     },
 
     // One deduplicated tampering incident, as appTamperingRepository.upsertIncident writes it.
