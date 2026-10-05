@@ -14,7 +14,7 @@
  */
 
 const log = require('../../lib/log');
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const globalState = require('../utils/globalState');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
@@ -57,7 +57,7 @@ async function requestGracefulStop(identifier, reconcilerReason) {
   // the minted identity and cannot be taken apart into a name. A row the boot
   // backfill has not resolved yet does not answer, and the local stop below is
   // exactly what such rows get today.
-  const instantiated = await appsRepository.getInstalledAppByComponentIdentifier(identifier);
+  const instantiated = (await appRecords.installedByIdentifier(identifier))?.record;
   if (!instantiated) return false;
   const appName = instantiated.name;
 

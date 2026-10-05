@@ -162,7 +162,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
     if (onStatus) onStatus({ status: 'Checking database...' });
     // Installed state is keyed per identity, so this asks about THIS replica and
     // a co-located sibling's row never masks it.
-    if (await appsRepository.existsInstalledIdentity(appName, replica ?? null)) {
+    if ((await appRecords.installed().keys(appName)).some((key) => key.replica === (replica ?? null))) {
       const subject = replica == null ? `Flux App ${appName}` : `Flux App ${appName} replica ${replica}`;
       log.error(`${subject} already installed`);
       return { status: InstallStatus.SKIPPED, reason: `${subject} already installed` };

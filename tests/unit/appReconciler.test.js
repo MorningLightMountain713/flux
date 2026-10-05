@@ -17,6 +17,7 @@ const {
   sealedV8Spec,
   instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const { installedRecord } = require('./fixtures/appRecords');
 const realDockerService = require('../../ZelBack/src/services/dockerService');
 const { classifyVolumeFault } = require('../../ZelBack/src/services/appTamperingDetectionService');
 
@@ -145,27 +146,30 @@ describe('appReconciler tests', () => {
 
     stubs = {
       log: { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
-      appsRepository: {
+      installed: {
         // The reconciler resolves an app from the APP-IDENTITY segment its
         // container identifier carries, never from a parsed name. The fixtures
         // are apps whose identity was borrowed from their name (everything
         // registered before identities were minted), so the segment IS the name
         // here — which is exactly the case that must keep working.
-        getInstalledAppByIdentity: sinon.stub().callsFake(async () => localInst),
-        // Null by default, so every test below drives the fallback that rows
-        // predating the identifier index still need. The index path has its own
-        // test rather than being the silent default here.
-        getInstalledAppByComponentIdentifier: sinon.stub().resolves(null),
-        // The identifier index the app fan-out reads first: empty by default, so the
-        // fixtures drive the deployment-layer fallback that rows predating it need.
-        listComponentIdentifiers: sinon.stub().resolves([]),
+        byIdentity: sinon.stub().callsFake(async () => localInst),
         // The by-NAME lookup, which is the only thing an app-level key can be
         // resolved by: an app name is neither a component identifier nor an
         // identity, so a sweep of a minted app answers here or nowhere.
-        getInstalledApp: sinon.stub().callsFake(async () => localInst),
+        byName: sinon.stub().callsFake(async () => localInst),
         // Nothing else installed by default, so the cross-app dependent fan-out
         // is inert unless a test states requirers.
-        listInstalledApps: sinon.stub().resolves([]),
+        apps: sinon.stub().resolves([]),
+      },
+      // Null by default, so every test below drives the fallback that rows
+      // predating the ledger still need. The ledger path has its own test
+      // rather than being the silent default here.
+      installedByIdentifier: sinon.stub().resolves(null),
+      // The identifiers the ledger names for an app, which the app fan-out
+      // reads first: empty by default, so the fixtures drive the
+      // deployment-layer fallback that instances without a ledger need.
+      ledgerIdentifiers: sinon.stub().resolves([]),
+      appsRepository: {
       },
       // Nothing owed by default: the owed-teardown record is what still names an
       // app whose row has been deleted, so its absence is "genuinely not here".
@@ -338,6 +342,20 @@ describe('appReconciler tests', () => {
       '../utils/capabilities': stubs.capabilities,
       '../appManagement/appInspector': stubs.appInspector,
       '../appDatabase/appsRepository': stubs.appsRepository,
+      '../appDatabase/appRecords': {
+        installed: () => ({
+          byIdentity: async (identity) => installedRecord(await stubs.installed.byIdentity(identity)),
+          byName: async (name) => installedRecord(await stubs.installed.byName(name)),
+          apps: async () => (await stubs.installed.apps()).map((record) => installedRecord(record)),
+        }),
+        installedByIdentifier: async (identifier) => installedRecord(await stubs.installedByIdentifier(identifier)),
+        ledgers: () => ({
+          instancesOf: async (name) => {
+            const identifiers = await stubs.ledgerIdentifiers(name);
+            return [{ identifiers: () => identifiers }];
+          },
+        }),
+      },
       '../appRuntime/deploymentProvider': stubs.deploymentProvider,
       '../appLifecycle/appVolumeService': stubs.appVolumeService,
       '../utils/volumeService': stubs.volumeService,
@@ -770,7 +788,7 @@ describe('appReconciler tests', () => {
       await installApp(await v9App('app', { www: {} }));
       stubs.dockerService.dockerContainerInspect.resolves(running);
       // listInstalledApps hydrates its rows, so the fan-out walks InstantiatedSpecs.
-      stubs.appsRepository.listInstalledApps.resolves([
+      stubs.installed.apps.resolves([
         await instantiatedSpec(await v9App('requirer', { www: {} })),
       ]);
       stubs.relationshipResolver.edgesOf.callsFake((views, nameLower) => (nameLower === 'requirer'
@@ -781,11 +799,11 @@ describe('appReconciler tests', () => {
 
       // The requirer is held as an APP name, so the fan-out resolves it by name and
       // by the identifier index — never by asking whether a name is an identity.
-      const fannedOut = stubs.appsRepository.listComponentIdentifiers.getCalls()
+      const fannedOut = stubs.ledgerIdentifiers.getCalls()
         .some((c) => c.args[0] === 'requirer');
       expect(fannedOut, 'the requirer app was fanned out to its components').to.be.true;
       expect(
-        stubs.appsRepository.getInstalledAppByIdentity.getCalls().some((c) => c.args[0] === 'requirer'),
+        stubs.installed.byIdentity.getCalls().some((c) => c.args[0] === 'requirer'),
         'an app name must never be looked up as an identity',
       ).to.be.false;
     });
@@ -1050,7 +1068,7 @@ describe('appReconciler tests', () => {
     it('defers (does not drop) the reconcile when the local spec read fails transiently', async () => {
       // a momentary DB read failure must not be mistaken for "not installed" - the
       // reconcile defers and retries rather than silently dropping the recovery
-      stubs.appsRepository.getInstalledAppByIdentity.rejects(new Error('connection reset'));
+      stubs.installed.byIdentity.rejects(new Error('connection reset'));
       await appReconciler.reconcile('www_app'); // must not throw
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
@@ -2494,7 +2512,7 @@ describe('appReconciler tests', () => {
     };
 
     it('sweeps nothing and logs when the installed apps cannot be read', async () => {
-      stubs.appsRepository.listInstalledApps.rejects(new Error('mongo down'));
+      stubs.installed.apps.rejects(new Error('mongo down'));
       const swept = sinon.stub(fluxEventBus, 'publish');
 
       await appReconciler.enqueueAll('test');
@@ -2507,7 +2525,7 @@ describe('appReconciler tests', () => {
 
     it('enqueues an app by name and reconciles every component it expands to', async () => {
       await installSealedV8App('entapp', { c1: {}, c2: {} });
-      stubs.appsRepository.listInstalledApps.resolves([localInst]);
+      stubs.installed.apps.resolves([localInst]);
 
       const started = [];
       stubs.dockerService.appDockerStart.callsFake(async (id) => { started.push(id); });
@@ -2521,7 +2539,7 @@ describe('appReconciler tests', () => {
 
     it('defers an app whose spec cannot be resolved (decrypt fails) - never acts on ciphertext', async () => {
       await installSealedV8App('entapp', { c1: {} });
-      stubs.appsRepository.listInstalledApps.resolves([localInst]);
+      stubs.installed.apps.resolves([localInst]);
       // benchd unavailable: building the deployment for the still-encrypted spec throws
       stubs.deploymentProvider.buildDeployment.rejects(new Error('benchd unavailable'));
 
@@ -2538,10 +2556,10 @@ describe('appReconciler tests', () => {
       const plainApp = await instantiatedSpec(await v9App('plain', { www: {} }));
       const plainDeployment = flux.DeploymentSpec.fromSpec(plainApp.spec, appsFolder, { replica: null });
       // the failing app FIRST: a sweep that died on it would never reach plain
-      stubs.appsRepository.listInstalledApps.resolves([sealedApp, plainApp]);
+      stubs.installed.apps.resolves([sealedApp, plainApp]);
       const byName = { entapp: sealedApp, plain: plainApp };
-      stubs.appsRepository.getInstalledAppByIdentity.callsFake(async (n) => byName[n] ?? null);
-      stubs.appsRepository.getInstalledApp.callsFake(async (n) => byName[n] ?? null);
+      stubs.installed.byIdentity.callsFake(async (n) => byName[n] ?? null);
+      stubs.installed.byName.callsFake(async (n) => byName[n] ?? null);
       stubs.deploymentProvider.buildDeployment.callsFake(async (inst) => {
         if (inst.name === 'entapp') throw new Error('benchd unavailable');
         return plainDeployment;
@@ -2560,18 +2578,18 @@ describe('appReconciler tests', () => {
     // from, which stops resembling the app's name once identities are minted.
     it('resolves the app from the recorded identifiers, without taking the name apart', async () => {
       await installApp(await v9App('minted', { www: {} }));
-      stubs.appsRepository.listInstalledApps.resolves([localInst]);
-      stubs.appsRepository.getInstalledAppByComponentIdentifier.resolves(localInst);
+      stubs.installed.apps.resolves([localInst]);
+      stubs.installedByIdentifier.resolves(localInst);
 
       await appReconciler.enqueueAll('test');
       await flush();
 
       expect(
-        stubs.appsRepository.getInstalledAppByComponentIdentifier.called,
+        stubs.installedByIdentifier.called,
         'the index must be consulted',
       ).to.equal(true);
       expect(
-        stubs.appsRepository.getInstalledAppByIdentity.called,
+        stubs.installed.byIdentity.called,
         'a row that answers the index must not also be looked up by a parsed identity',
       ).to.equal(false);
     });
@@ -2580,7 +2598,7 @@ describe('appReconciler tests', () => {
       // A real v1 spec — the flat form whose single synthesized component IS the app,
       // so its container identifier is the bare name with no component segment.
       await installApp(await v1Spec({ name: 'legacy' }));
-      stubs.appsRepository.listInstalledApps.resolves([localInst]);
+      stubs.installed.apps.resolves([localInst]);
 
       const started = [];
       stubs.dockerService.appDockerStart.callsFake(async (id) => { started.push(id); });
@@ -2599,20 +2617,20 @@ describe('appReconciler tests', () => {
     it('sweeps an app whose identity was MINTED, not borrowed from its name', async () => {
       await installApp(await v9App('minted', { www: {} }), { identity: '933b4b9a0af3' });
       const row = localInst;
-      stubs.appsRepository.listInstalledApps.resolves([localInst]);
+      stubs.installed.apps.resolves([localInst]);
       // What the row actually records for an app installed today.
-      stubs.appsRepository.listComponentIdentifiers.callsFake(
+      stubs.ledgerIdentifiers.callsFake(
         async (name) => (name === 'minted' ? ['www_933b4b9a0af3'] : []),
       );
       // The identity lookup answers an IDENTITY - never a name. This is the fidelity
       // that matters: while it answered to a name too, the sweep looked like it worked.
-      stubs.appsRepository.getInstalledAppByIdentity.callsFake(
+      stubs.installed.byIdentity.callsFake(
         async (identity) => (identity === '933b4b9a0af3' ? row : null),
       );
-      stubs.appsRepository.getInstalledAppByComponentIdentifier.callsFake(
+      stubs.installedByIdentifier.callsFake(
         async (identifier) => (identifier === 'www_933b4b9a0af3' ? row : null),
       );
-      stubs.appsRepository.getInstalledApp.callsFake(
+      stubs.installed.byName.callsFake(
         async (name) => (name === 'minted' ? row : null),
       );
 

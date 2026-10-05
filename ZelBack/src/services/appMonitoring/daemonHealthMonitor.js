@@ -2,7 +2,7 @@
 
 const log = require('../../lib/log');
 const capabilities = require('../utils/capabilities');
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const appUninstaller = require('../appLifecycle/appUninstaller');
 const { BOOT_STEP_RETRY_MS } = require('../utils/untilSucceeds');
 
@@ -25,7 +25,7 @@ let started = false;
 async function removeAllApps(reason) {
   let installedApps;
   try {
-    installedApps = await appsRepository.listInstalledApps();
+    installedApps = (await appRecords.installed().apps()).map((record) => record.record);
   } catch (error) {
     log.error(`Failed to read the installed apps during daemon failure cleanup: ${error.message}`);
     return false;

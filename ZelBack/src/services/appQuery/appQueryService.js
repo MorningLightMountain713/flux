@@ -7,8 +7,7 @@ const messageHelper = require('../messageHelper');
 const dockerService = require('../dockerService');
 const registryManager = require('../appDatabase/registryManager');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
-const appsRepository = require('../appDatabase/appsRepository');
-const appConstants = require('../utils/appConstants');
+const appRecords = require('../appDatabase/appRecords');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appHistory = require('../appDecisions/appHistory');
 const serviceHelper = require('../serviceHelper');
@@ -32,17 +31,6 @@ const nodeSpecs = require('../appRequirements/nodeSpecs');
 const globalAppsMessages = config.get('database.appsglobal.collections.appsMessages');
 
 /**
- * The specifications of the apps installed on this node, from its own table.
- * @param {object} [query] Narrows the read, as a filter on the table.
- * @returns {Promise<object[]>}
- * @throws {Error} When the table cannot be read.
- */
-async function installedAppSpecs(query = {}) {
-  const appsDatabase = dbHelper.databaseConnection().db(config.database.appslocal.database);
-  return dbHelper.findInDatabase(appsDatabase, appConstants.localAppsInformation, query, { projection: { _id: 0 } });
-}
-
-/**
  * The names of the apps installed on this node that the network lists at
  * `socketAddress`: what a node that held that address left there. Rejects
  * when either cannot be read.
@@ -50,7 +38,7 @@ async function installedAppSpecs(query = {}) {
  * @returns {Promise<string[]>}
  */
 async function installedAppsListedAt(socketAddress) {
-  const names = new Set((await installedAppSpecs()).map((app) => app.name));
+  const names = new Set(await appRecords.installed().names());
   return (await registryManager.appsListedAt(socketAddress)).filter((name) => names.has(name));
 }
 
@@ -73,7 +61,9 @@ async function installedApps(req, res) {
       filter = { name: req };
     }
 
-    const installed = await appsRepository.listInstalledApps({ filter });
+    const installed = filter.name
+      ? [await appRecords.installed().byName(filter.name)].filter(Boolean)
+      : await appRecords.installed().apps();
     const apps = installed.map((app) => app.serialize());
     const dataResponse = messageHelper.createDataMessage(apps);
     return res ? res.json(dataResponse) : dataResponse;
@@ -225,7 +215,7 @@ async function listRunningApps(req, res) {
  */
 async function fluxUsage(req, res) {
   try {
-    const totalApps = await appsRepository.countInstalledApps();
+    const totalApps = (await appRecords.installed().names()).length;
     const runningApps = await listRunningApps();
     const totalRunning = runningApps.data ? runningApps.data.length : 0;
 
@@ -836,7 +826,6 @@ async function promotedFolderHoldings(req, res) {
 
 module.exports = {
   fluxUsage,
-  installedAppSpecs,
   installedAppsListedAt,
   publicContainerView,
   installedApps,

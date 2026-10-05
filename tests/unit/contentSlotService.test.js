@@ -7,6 +7,7 @@ const proxyquire = require('proxyquire').noCallThru();
 const {
   loadSpecLibrary, V9_SUBMISSION, sealedV9Spec, decryptedV9Spec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const { installedRecord } = require('./fixtures/appRecords');
 
 const hashOf = (buf) => `sha256:${crypto.createHash('sha256').update(buf).digest('hex')}`;
 // executeCall shape the benchmark channel returns: { status: 'success', data: { status: 'ok', <field> } }
@@ -159,7 +160,10 @@ function load(repo = fakeRepo(), {
   const service = proxyquire('../../ZelBack/src/services/appLifecycle/contentSlotService', {
     '../utils/specLibs': { getSpec: sinon.stub().resolves(specLib) },
     '../appDatabase/appsRepository': repo,
-    '../appDatabase/appRecords': { registry: () => registry },
+    '../appDatabase/appRecords': {
+      registry: () => registry,
+      installed: () => ({ byName: repo.getInstalledApp, apps: async () => (await repo.listInstalledApps()).map((record) => installedRecord(record)) }),
+    },
     '../appDecisions/appHistory': { ownerships },
     '../appDatabase/appSpecHistory': { latestAppliedState },
     '../chainState': { getScannedHeight: async () => 0 },

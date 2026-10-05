@@ -8,7 +8,6 @@ const serviceHelper = require('../serviceHelper');
 const appRecords = require('../appDatabase/appRecords');
 const log = require('../../lib/log');
 const { getSpecBackend } = require('./specLibs');
-const appsRepository = require('../appDatabase/appsRepository');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const {
   appsFolder, appVolumesPath, legacyAppVolumesPath, APP_VOLUME_MOUNT_OPTIONS,
@@ -328,7 +327,7 @@ async function eligibleHostMounts() {
  */
 async function listComponentVolumeMounts(appName, componentName) {
   const { DeploymentSpec } = await getSpecBackend();
-  const installed = await appsRepository.getInstalledApp(appName);
+  const installed = await appRecords.installed().byName(appName);
   if (!installed) return [];
 
   const component = deploymentProvider.componentNameFromRequest(
@@ -339,7 +338,7 @@ async function listComponentVolumeMounts(appName, componentName) {
   // artifacts are named from the app name, which is exactly what fromSpec falls
   // back to, so the same expression covers both.
   const identity = installed.identity ?? appName;
-  const replicas = await appsRepository.listInstalledIdentities(appName);
+  const replicas = (await appRecords.installed().keys(appName)).map((key) => key.replica);
 
   const filesystems = await deviceHelper.listMountedFilesystems();
   // Matched on the mount's own directory name, not on its full path: the apps

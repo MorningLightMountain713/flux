@@ -1011,7 +1011,7 @@ async function getGlobalAppsSpecifications(req, res) {
 async function availableApps(_req, res) {
   try {
     const globalApps = await appRecords.registry().all();
-    const localApps = await appsRepository.listInstalledApps();
+    const localApps = await appRecords.installed().apps();
     const allApps = [...globalApps, ...localApps].map((app) => app.serialize());
 
     if (res) {

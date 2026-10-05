@@ -6,7 +6,7 @@ const config = require('config');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const resourceQueryService = require('../../ZelBack/src/services/appQuery/resourceQueryService');
 const messageHelper = require('../../ZelBack/src/services/messageHelper');
-const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
+const appRecords = require('../../ZelBack/src/services/appDatabase/appRecords');
 const admissionControl = require('../../ZelBack/src/services/utils/admissionControl');
 const { requireMongo } = require('./dbTestHelper');
 const {
@@ -127,9 +127,24 @@ describe('resourceQueryService tests', () => {
      * than because it counted as zero. One test in this file was doing exactly
      * that.
      */
+    // Seeded through the collection, which writes the keys its reads find a
+    // record by; a row the library refuses is stored by hand with those keys,
+    // so the collection finds it and reports it unreadable.
+    async function seedRows(rows) {
+      // eslint-disable-next-line no-restricted-syntax
+      for (const row of rows) {
+        let record = null;
+        try { record = flux.InstantiatedSpec.deserialize(row); } catch { record = null; }
+        // eslint-disable-next-line no-await-in-loop
+        if (record) await appRecords.installed().put(new flux.InstalledSpec({ record }));
+        // eslint-disable-next-line no-await-in-loop
+        else await dbHelper.insertOneToDatabase(database, collection, { ...row, nameKey: String(row.name).toLowerCase(), replica: null, owed: null });
+      }
+    }
+
     async function insertApps(rows) {
-      await dbHelper.insertManyToDatabase(database, collection, rows);
-      const installed = await appsRepository.listInstalledApps();
+      await seedRows(rows);
+      const installed = (await appRecords.installed().apps()).map((record) => record.record);
       expect(
         installed.length,
         'every fixture row must survive the real deserializer - hydrate() drops a refused row silently',
@@ -160,10 +175,10 @@ describe('resourceQueryService tests', () => {
         hdd: 50,
         instances: 3,
       });
-      // Written straight to the collection, bypassing the fixture guard: a spec
-      // version nothing registers is exactly what an unreadable row is.
+      // A spec version nothing registers is exactly what an unreadable row is;
+      // seedRows stores it by hand, under the keys the collection finds it by.
       const bad = { ...good, name: 'UnreadableApp', version: 99 };
-      await dbHelper.insertManyToDatabase(database, collection, [good, bad]);
+      await seedRows([good, bad]);
 
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
 
@@ -636,8 +651,8 @@ describe('resourceQueryService tests', () => {
         instances: 3,
       });
 
-      await dbHelper.insertManyToDatabase(database, collection, [good, malformed]);
-      const installed = await appsRepository.listInstalledApps();
+      await seedRows([good, malformed]);
+      const installed = (await appRecords.installed().apps()).map((record) => record.record);
       expect(installed.map((spec) => spec.name), 'only the well-formed row hydrates')
         .to.deep.equal(['GoodApp']);
 

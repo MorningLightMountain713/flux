@@ -80,6 +80,17 @@ function ledgers() {
 }
 
 /**
+ * The installed record of the instance one of whose containers has an
+ * identifier, found through its ledger; null when no ledger names it.
+ * @param {string} identifier
+ * @returns {Promise<import('@runonflux/flux-spec-backend').InstalledSpec|null>}
+ */
+async function installedByIdentifier(identifier) {
+  const ledger = await ledgers().byIdentifier(identifier);
+  return ledger ? installed().byReplica(ledger.name, ledger.replica, { includeOwed: true }) : null;
+}
+
+/**
  * The key an installed record and its ledger share, as one string: the name
  * in any letter case, and the replica.
  * @param {{name: string, replica: string|null}} instance
@@ -90,5 +101,5 @@ function instanceKey({ name, replica }) {
 }
 
 module.exports = {
-  registry, installed, ledgers, instanceKey, STORES,
+  registry, installed, ledgers, installedByIdentifier, instanceKey, STORES,
 };

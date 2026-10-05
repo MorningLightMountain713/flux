@@ -7,6 +7,7 @@ const { asConfig } = require('./fixtures/config');
 const {
   loadSpecLibrary, v8Spec, v9Spec, sealedV8Spec, sealedV9Spec, instantiatedSpec,
 } = require('./fixtures/fluxSpec');
+const { installedRecord } = require('./fixtures/appRecords');
 const setReconciler = require('../../ZelBack/src/services/appMessaging/setReconciler');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
@@ -19,6 +20,7 @@ let flux;
 describe('appsRepository', () => {
   let appsRepository;
   let registryStub;
+  let installedStub;
   let dbHelperStub;
   let specLibsStub;
   let decisionStoreStub;
@@ -71,6 +73,7 @@ describe('appsRepository', () => {
 
     // The app registry: nothing listed, nothing pinned, unless a test says so.
     registryStub = { byName: sinon.stub().resolves(null), pinned: sinon.stub().resolves([]) };
+    installedStub = { byName: sinon.stub().resolves(null) };
 
     dbHelperStub = {
       databaseConnection: sinon.stub().returns(mockDb),
@@ -142,25 +145,31 @@ describe('appsRepository', () => {
         globalAppsIngressAttestations: 'appingressattestations',
         globalAppsIngressAttestationDigests: 'appingressattestationdigests',
       },
-      './appRecords': { registry: () => registryStub },
+      './appRecords': { registry: () => registryStub, installed: () => installedStub },
     });
   });
 
   afterEach(() => sinon.restore());
 
+  // hydrate is the one door from a stored message's spec document to an
+  // InstantiatedSpec; getAppMessage is the read that goes through it.
   describe('hydration', () => {
+    const messageWith = (doc) => {
+      const { hash, height, ...appSpecifications } = doc;
+      return { hash, height, appSpecifications };
+    };
+
     it('returns null when findOne misses', async () => {
       dbHelperStub.findOneInDatabase.resolves(null);
-      const result = await appsRepository.getInstalledApp('unknown');
-      expect(result).to.be.null;
+      expect(await appsRepository.getAppMessage('unknown')).to.be.null;
     });
 
     it('dispatches to the registered version class and wraps in InstantiatedSpec', async () => {
       const doc = await legacyDoc(await v8Spec({ name: 'example' }), { hash: 'h', height: 100 });
       const deserialize = sinon.spy(flux.FluxAppSpecV8, 'deserialize');
-      dbHelperStub.findOneInDatabase.resolves(doc);
+      dbHelperStub.findOneInDatabase.resolves(messageWith(doc));
 
-      const result = await appsRepository.getInstalledApp('example');
+      const { spec: result } = await appsRepository.getAppMessage('h');
       expect(result).to.be.instanceOf(flux.InstantiatedSpec);
       expect(result.spec).to.be.instanceOf(flux.FluxAppSpecV8);
       expect(result.hash).to.equal('h');
@@ -178,19 +187,18 @@ describe('appsRepository', () => {
       expect(result.expiresAtHeight).to.be.a('number').and.be.greaterThan(100);
     });
 
-    it('returns null and logs when no version class is registered', async () => {
-      const doc = { name: 'phantom', version: 99, hash: 'h', height: 100 };
-      dbHelperStub.findOneInDatabase.resolves(doc);
-      const result = await appsRepository.getInstalledApp('phantom');
-      expect(result).to.be.null;
+    it('returns no spec and logs when no version class is registered', async () => {
+      dbHelperStub.findOneInDatabase.resolves(messageWith({ name: 'phantom', version: 99, hash: 'h', height: 100 }));
+      const { spec } = await appsRepository.getAppMessage('h');
+      expect(spec).to.be.null;
       expect(logStub.warn.calledOnce).to.be.true;
       expect(logStub.warn.firstCall.args[0]).to.include('version 99');
     });
 
     it('hydrates v9 documents through InstantiatedSpec.deserialize', async () => {
       const doc = await modernDoc(await v9Spec({ name: 'modern' }), { hash: 'h', height: 100 });
-      dbHelperStub.findOneInDatabase.resolves(doc);
-      const result = await appsRepository.getInstalledApp('modern');
+      dbHelperStub.findOneInDatabase.resolves(messageWith(doc));
+      const { spec: result } = await appsRepository.getAppMessage('h');
       expect(result).to.not.be.null;
       expect(result.spec).to.be.instanceOf(flux.FluxAppSpecV9);
       expect(result.name).to.equal('modern');
@@ -198,14 +206,11 @@ describe('appsRepository', () => {
       expect(result.registeredAt).to.equal(1_751_628_800);
     });
 
-    // The double this replaced could not hydrate a sealed row at all: it hardcoded
-    // isEncrypted:false and threw outright on a v8 enterprise doc. Both forms are
-    // ordinary stored rows, and encryption is the fact every consumer branches on.
-    it('hydrates a node-sealed v9 row and reports it encrypted', async () => {
+    it('hydrates a node-sealed v9 document and reports it encrypted', async () => {
       const doc = await modernDoc(await sealedV9Spec({ name: 'sealed9' }), { hash: 'hs9', height: 900 });
-      dbHelperStub.findOneInDatabase.resolves(doc);
+      dbHelperStub.findOneInDatabase.resolves(messageWith(doc));
 
-      const result = await appsRepository.getInstalledApp('sealed9');
+      const { spec: result } = await appsRepository.getAppMessage('hs9');
       expect(result.spec).to.be.instanceOf(flux.EncryptedSpecV9);
       expect(result.isEncrypted).to.be.true;
       expect(result.requiresArcane(), 'only an Arcane node can unseal it').to.be.true;
@@ -214,61 +219,40 @@ describe('appsRepository', () => {
       expect(result.resourceTotals()).to.include({ cpu: 0.5, memoryMb: 300 });
     });
 
-    it('hydrates a v8 enterprise row', async () => {
+    it('hydrates a v8 enterprise document', async () => {
       const doc = await legacyDoc(await sealedV8Spec({ name: 'sealed8' }), { hash: 'hs8', height: 800 });
-      dbHelperStub.findOneInDatabase.resolves(doc);
+      dbHelperStub.findOneInDatabase.resolves(messageWith(doc));
 
-      const result = await appsRepository.getInstalledApp('sealed8');
+      const { spec: result } = await appsRepository.getAppMessage('hs8');
       expect(result.spec).to.be.instanceOf(flux.EncryptedSpecV8);
       expect(result.isEncrypted).to.be.true;
       // v8's blob carries no cleartext summary at all: "I cannot tell from here".
       expect(result.resourceTotals()).to.be.null;
     });
 
-    it('takes off each field the collection adds before a sealed spec sees it', async () => {
-      // The document id, the `replica` key, the `componentIdentifiers` index and a
-      // move in progress are this collection's, not part of any spec wire form.
-      const stored = await modernDoc(await sealedV9Spec({ name: 'sealed9' }));
-      const collectionFields = {
-        _id: 'mongo-id', replica: 'r1', componentIdentifiers: ['web_sealed9_r1'], move: { step: 'stopped' },
-      };
-      for (const [field, value] of Object.entries(collectionFields)) {
-        expect(
-          () => flux.InstantiatedSpec.deserialize({ ...stored, [field]: value }),
-          `the real class must refuse ${field}, or this test proves nothing`,
-        ).to.throw(new RegExp(`unexpected fields on doc: ${field}`));
-      }
+    it('takes the document id off before a sealed spec sees it', async () => {
+      const stored = await modernDoc(await sealedV9Spec({ name: 'sealed9' }), { hash: 'hs9', height: 900 });
+      expect(
+        () => flux.InstantiatedSpec.deserialize({ ...stored, _id: 'mongo-id' }),
+        'the real class must refuse _id, or this test proves nothing',
+      ).to.throw(/unexpected fields on doc: _id/);
 
-      dbHelperStub.findOneInDatabase.resolves({ ...stored, ...collectionFields });
-      const result = await appsRepository.getInstalledIdentity('sealed9', 'r1');
+      dbHelperStub.findOneInDatabase.resolves({ ...messageWith(stored), _id: 'mongo-id' });
+      const { spec: result } = await appsRepository.getAppMessage('hs9');
       expect(result).to.not.be.null;
       expect(result.spec).to.be.instanceOf(flux.EncryptedSpecV9);
     });
 
-    // The decider stamps the version of the app's registration on its row; a
-    // sealed row carrying it reads back like any other.
-    it('hydrates a sealed v9 row carrying its registration version', async () => {
+    it('hydrates a sealed v9 document carrying its registration version', async () => {
       const stored = (await instantiatedSpec(await sealedV9Spec({ name: 'regver9' }), {
         hash: 'hrv', height: 900, registeredAt: 1_751_628_800, registrationVersion: 8,
       })).serialize();
       expect(stored.registrationVersion).to.equal(8);
-      dbHelperStub.findOneInDatabase.resolves(stored);
+      dbHelperStub.findOneInDatabase.resolves(messageWith(stored));
 
-      const result = await appsRepository.getInstalledApp('regver9');
+      const { spec: result } = await appsRepository.getAppMessage('hrv');
       expect(result.spec).to.be.instanceOf(flux.EncryptedSpecV9);
       expect(result.registrationVersion).to.equal(8);
-    });
-  });
-
-  describe('case-insensitive name matching', () => {
-    it('uses case-insensitive anchored regex for name lookup', async () => {
-      dbHelperStub.findOneInDatabase.resolves(null);
-      await appsRepository.getInstalledApp('MyApp');
-      const arg = dbHelperStub.findOneInDatabase.firstCall.args[2];
-      expect(arg.name).to.be.instanceOf(RegExp);
-      expect('MYAPP').to.match(arg.name);
-      expect('myapp').to.match(arg.name);
-      expect('MyApp2').to.not.match(arg.name);
     });
   });
 
@@ -280,50 +264,14 @@ describe('appsRepository', () => {
       sinon.assert.notCalled(dbHelperStub.findInDatabase);
     });
 
-    it('falls back to an app this node has installed under the name, ignoring case', async () => {
-      const installed = await legacyDoc(await v8Spec({ name: 'LocalOnly' }), { hash: 'hl', height: 100 });
-      dbHelperStub.findInDatabase.resolves([installed]);
+    it('falls back to an app this node has installed under the name', async () => {
+      const installed = await instantiatedSpec(await v8Spec({ name: 'LocalOnly' }), { hash: 'hl', height: 100 });
+      installedStub.byName.withArgs('localonly').resolves(installedRecord(installed));
       expect(await appsRepository.getApplicationOwner('localonly')).to.equal(installed.owner);
     });
 
     it('answers null when neither the registry nor this node holds the name', async () => {
-      dbHelperStub.findInDatabase.resolves([]);
       expect(await appsRepository.getApplicationOwner('nothing')).to.equal(null);
-    });
-  });
-
-  describe('lean scalar accessors skip hydration', () => {
-    it('getInstalledAppAttribution returns the owner, hash and identity via their projection', async () => {
-      dbHelperStub.findOneInDatabase.resolves({ owner: 'ownerX', hash: 'h1', identity: 'bident' });
-      const result = await appsRepository.getInstalledAppAttribution('app');
-      expect(result).to.deep.equal({ owner: 'ownerX', hash: 'h1', identity: 'bident' });
-      const options = dbHelperStub.findOneInDatabase.firstCall.args[3];
-      expect(options.projection).to.deep.equal({
-        _id: 0, owner: 1, hash: 1, identity: 1,
-      });
-    });
-
-    it('listInstalledAppNames reads names through a name projection', async () => {
-      dbHelperStub.findInDatabase.resolves([{ name: 'AppA' }, { name: 'AppB' }]);
-      const result = await appsRepository.listInstalledAppNames();
-      expect(result).to.deep.equal(['AppA', 'AppB']);
-      const options = dbHelperStub.findInDatabase.firstCall.args[3];
-      expect(options.projection).to.deep.equal({ _id: 0, name: 1 });
-      expect(specLibsStub.getSpecBackend.called).to.be.false;
-    });
-
-    it('listInstalledAppNames keeps an app whose spec would not hydrate', async () => {
-      // The reason this exists rather than listInstalledApps: the boot sweep runs
-      // before the spec-backend bridge is warm, and must not lose apps to it.
-      dbHelperStub.findInDatabase.resolves([{ name: 'AppA', version: 42 }]);
-      expect(await appsRepository.listInstalledAppNames()).to.deep.equal(['AppA']);
-    });
-
-    it('listInstalledAppNames returns one entry per app, not per identity', async () => {
-      dbHelperStub.findInDatabase.resolves([
-        { name: 'AppA' }, { name: 'appa' }, { name: 'AppB' },
-      ]);
-      expect(await appsRepository.listInstalledAppNames()).to.deep.equal(['AppA', 'AppB']);
     });
   });
 

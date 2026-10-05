@@ -11,6 +11,7 @@ const dockerService = require('../../ZelBack/src/services/dockerService');
 const {
   loadSpecLibrary, V9_SUBMISSION, v9Spec, sealedV9Spec, instantiatedSpec,
 } = require('./fixtures/fluxSpec');
+const { installedRecord } = require('./fixtures/appRecords');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. It matters more in this file than in most: the identifiers under test
@@ -79,7 +80,7 @@ describe('componentIdentifierResolver', () => {
       getComponentAppIdsFromVolumeFiles: sinon.stub().resolves({ appIds: [], conclusive: true }),
     };
     return proxyquire.load('../../ZelBack/src/services/appLifecycle/componentIdentifierResolver', {
-      '../appDatabase/appsRepository': { getInstalledApp: stubs.getInstalledApp },
+      '../appDatabase/appRecords': { installed: () => ({ byName: async (name) => installedRecord(await stubs.getInstalledApp(name)) }) },
       '../appRuntime/deploymentProvider': { buildDeployment: stubs.buildDeployment },
       '../utils/volumeService': {
         getComponentAppIdsFromVolumeFiles: stubs.getComponentAppIdsFromVolumeFiles,

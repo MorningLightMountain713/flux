@@ -15,6 +15,7 @@ describe('appStartupManager tests', () => {
   let logStub;
   let dbHelperStub;
   let appsRepositoryStub;
+  let installedStub;
   let dockerServiceStub;
   let fluxNetworkHelperStub;
   let appReconcilerStub;
@@ -37,8 +38,8 @@ describe('appStartupManager tests', () => {
 
     // The installed-apps read is names-only and goes through the repository, so
     // it no longer shares a findInDatabase call sequence with the location reads.
+    installedStub = { names: sinon.stub().resolves([]) };
     appsRepositoryStub = {
-      listInstalledAppNames: sinon.stub().resolves([]),
       appLocationFromEvents: sinon.stub().resolves([]),
       sweepOffListRows: sinon.stub().resolves(0),
     };
@@ -93,6 +94,7 @@ describe('appStartupManager tests', () => {
 
     appUtilities = proxyquire('../../ZelBack/src/services/utils/appUtilities', {
       '../appDatabase/appsRepository': appsRepositoryStub,
+      '../appDatabase/appRecords': { installed: () => installedStub },
       '../../lib/log': logStub,
     });
 
@@ -109,6 +111,7 @@ describe('appStartupManager tests', () => {
       '../nodeDosState': { isNodeDos: sinon.stub().returns(false) },
       '../appMonitoring/appReconciler': appReconcilerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
+      '../appDatabase/appRecords': { installed: () => installedStub },
       './appUninstaller': appUninstallerStub,
       '../utils/globalState': globalStateStub,
       '../appQuery/appQueryService': appQueryServiceStub,
@@ -133,7 +136,7 @@ describe('appStartupManager tests', () => {
       // One installed app whose containers all auto-restarted (nothing stopped):
       // the sweep must still run on such a boot - an orphaned collector's
       // containers are typically running after a reboot.
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppX']);
+      installedStub.names.resolves(['AppX']);
       dockerServiceStub.dockerListContainers.resolves([]);
       fluxNetworkHelperStub.getLocalSocketAddress.resolves('10.0.0.1:16127');
     });
@@ -159,6 +162,7 @@ describe('appStartupManager tests', () => {
         '../nodeDosState': { isNodeDos: sinon.stub().returns(false) },
         '../appMonitoring/appReconciler': appReconcilerStub,
         '../appDatabase/appsRepository': appsRepositoryStub,
+        '../appDatabase/appRecords': { installed: () => installedStub },
         './appUninstaller': appUninstallerStub,
         '../utils/globalState': globalStateStub,
         '../appQuery/appQueryService': appQueryServiceStub,
@@ -183,14 +187,14 @@ describe('appStartupManager tests', () => {
     const REMOVE = { forceKill: true, skipGuard: true, broadcastRemoval: false };
 
     beforeEach(() => {
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA', 'AppB', 'AppC']);
+      installedStub.names.resolves(['AppA', 'AppB', 'AppC']);
       dockerServiceStub.dockerListContainers.resolves(stoppedFluxContainers);
       fluxNetworkHelperStub.getLocalSocketAddress.resolves('10.0.0.1:16127');
     });
 
     it('asks once about this node, never per app, and starts every stopped app while its rows still place it here', async () => {
       dockerServiceStub.dockerListContainers.resolves([{ Names: ['/fluxAppA'], State: 'exited' }]);
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
+      installedStub.names.resolves(['AppA']);
       appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA', ip: '10.0.0.1:16127' }]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
@@ -204,7 +208,7 @@ describe('appStartupManager tests', () => {
     it('removes every installed app, whatever its containers are doing, when no row places this node any more - and broadcasts nothing', async () => {
       // AppA stopped, AppB running: there is no middle ground
       dockerServiceStub.dockerListContainers.resolves([{ Names: ['/fluxAppA'], State: 'exited' }]);
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA', 'AppB']);
+      installedStub.names.resolves(['AppA', 'AppB']);
       appsRepositoryStub.appLocationFromEvents.resolves([]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
@@ -218,7 +222,7 @@ describe('appStartupManager tests', () => {
 
     it('a FluxOS restart whose node was replaced while it was away removes every app though nothing is stopped', async () => {
       dockerServiceStub.dockerListContainers.resolves([]);
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
+      installedStub.names.resolves(['AppA']);
       appsRepositoryStub.appLocationFromEvents.resolves([]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
@@ -232,7 +236,7 @@ describe('appStartupManager tests', () => {
         { Names: ['/fluxAppA'], State: 'exited' },
         { Names: ['/fluxAppB'], State: 'exited' },
       ]);
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA', 'AppB']);
+      installedStub.names.resolves(['AppA', 'AppB']);
       appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA', ip: '10.0.0.1:16127' }]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
@@ -251,7 +255,7 @@ describe('appStartupManager tests', () => {
           Labels: { 'io.runonflux.app': 'AppA', 'io.runonflux.identifier': 'web_26fbf41541f5' },
         },
       ]);
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
+      installedStub.names.resolves(['AppA']);
       appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA' }]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
@@ -264,7 +268,7 @@ describe('appStartupManager tests', () => {
     it('starts the stopped apps without asking when the node has no address to ask about', async () => {
       fluxNetworkHelperStub.getLocalSocketAddress.resolves(null);
       dockerServiceStub.dockerListContainers.resolves([{ Names: ['/fluxAppA'], State: 'exited' }]);
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
+      installedStub.names.resolves(['AppA']);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
 
@@ -275,7 +279,7 @@ describe('appStartupManager tests', () => {
 
     it('records the failure and keeps removing when one uninstall throws', async () => {
       dockerServiceStub.dockerListContainers.resolves([{ Names: ['/fluxAppA'], State: 'exited' }]);
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA', 'AppB']);
+      installedStub.names.resolves(['AppA', 'AppB']);
       appsRepositoryStub.appLocationFromEvents.resolves([]);
       appUninstallerStub.uninstallApplication.callsFake(async (name) => {
         if (name === 'AppA') throw new Error('Remove failed');
@@ -298,7 +302,7 @@ describe('appStartupManager tests', () => {
 
     it('holds every stopped app when the rows cannot be read, and starts them once the check answers placed', async () => {
       dockerServiceStub.dockerListContainers.resolves([{ Names: ['/fluxAppA'], State: 'exited' }]);
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
+      installedStub.names.resolves(['AppA']);
       appsRepositoryStub.appLocationFromEvents.onFirstCall().rejects(new Error('DB error'));
       appsRepositoryStub.appLocationFromEvents.onSecondCall().resolves([{ name: 'AppA' }]);
 
@@ -317,7 +321,7 @@ describe('appStartupManager tests', () => {
 
     it('holds every stopped app when the rows cannot be read, and removes every app once the check answers not placed', async () => {
       dockerServiceStub.dockerListContainers.resolves([{ Names: ['/fluxAppA'], State: 'exited' }]);
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA', 'AppB']);
+      installedStub.names.resolves(['AppA', 'AppB']);
       appsRepositoryStub.appLocationFromEvents.onFirstCall().rejects(new Error('DB error'));
       appsRepositoryStub.appLocationFromEvents.onSecondCall().resolves([]);
 
@@ -335,7 +339,7 @@ describe('appStartupManager tests', () => {
         { Names: ['/fluxSyncApp'], State: 'exited' },
         { Names: ['/fluxNormalApp'], State: 'exited' },
       ]);
-      appsRepositoryStub.listInstalledAppNames.resolves(['SyncApp', 'NormalApp']);
+      installedStub.names.resolves(['SyncApp', 'NormalApp']);
       appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'SyncApp' }, { name: 'NormalApp' }]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
@@ -349,7 +353,7 @@ describe('appStartupManager tests', () => {
         { Names: ['/fluxweb_MixedApp'], State: 'exited' },
         { Names: ['/fluxdb_MixedApp'], State: 'exited' },
       ]);
-      appsRepositoryStub.listInstalledAppNames.resolves(['MixedApp']);
+      installedStub.names.resolves(['MixedApp']);
       appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'MixedApp' }]);
 
       const results = await appStartupManager.reconcileAppsOnBoot();
@@ -361,7 +365,7 @@ describe('appStartupManager tests', () => {
 
   describe('reconcileAppsOnBoot - the placement the boot already decided', () => {
     it('uses the answer handed in and does not ask again', async () => {
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
+      installedStub.names.resolves(['AppA']);
       dockerServiceStub.dockerListContainers.resolves([]);
 
       const results = await appStartupManager.reconcileAppsOnBoot({ placement: { placed: true, removed: [], failed: [] } });
@@ -374,7 +378,7 @@ describe('appStartupManager tests', () => {
     // started and not removed.
     it('holds every stopped app when the boot could not read the rows', async () => {
       dockerServiceStub.dockerListContainers.resolves([{ Names: ['/fluxAppA'], State: 'exited' }]);
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
+      installedStub.names.resolves(['AppA']);
 
       const results = await appStartupManager.reconcileAppsOnBoot({ placement: { placed: null, removed: [], failed: [] } });
 
@@ -385,7 +389,7 @@ describe('appStartupManager tests', () => {
     });
 
     it('starts nothing when the boot decided the network has moved on', async () => {
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
+      installedStub.names.resolves(['AppA']);
 
       const results = await appStartupManager.reconcileAppsOnBoot({ placement: { placed: false, removed: ['AppA'], failed: [] } });
 
@@ -422,6 +426,7 @@ describe('appStartupManager tests', () => {
       '../nodeDosState': { isNodeDos: sinon.stub().returns(false) },
       '../appMonitoring/appReconciler': appReconcilerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
+      '../appDatabase/appRecords': { installed: () => installedStub },
       './appUninstaller': appUninstallerStub,
       '../utils/globalState': globalStateStub,
       '../appQuery/appQueryService': appQueryServiceStub,
@@ -450,7 +455,7 @@ describe('appStartupManager tests', () => {
       bootStart = Date.now();
       clock = sinon.useFakeTimers({ now: bootStart, toFake: ['Date'] });
       fluxNetworkHelperStub.getLocalSocketAddress.resolves('10.0.0.1:16127');
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA', 'AppB']);
+      installedStub.names.resolves(['AppA', 'AppB']);
       appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA', ip: '10.0.0.1:16127' }]);
       appQueryServiceStub.installedApps.resolves({ status: 'success', data: [{ name: 'AppA' }, { name: 'AppB' }] });
       dockerServiceStub.dockerListContainers.resolves([]);
@@ -672,20 +677,20 @@ describe('appStartupManager tests', () => {
     });
 
     it('nothing installed: nothing to decide, and the rows are not even read', async () => {
-      appsRepositoryStub.listInstalledAppNames.resolves([]);
+      installedStub.names.resolves([]);
       expect(await appStartupManager.enforceNodePlacement('boot')).to.deep.equal({ placed: true, removed: [], failed: [] });
       expect(appsRepositoryStub.appLocationFromEvents.called).to.equal(false);
     });
 
     it('rows place this node: every app kept, the caller announces', async () => {
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA', 'AppB']);
+      installedStub.names.resolves(['AppA', 'AppB']);
       appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA' }]);
       expect(await appStartupManager.enforceNodePlacement('return')).to.deep.equal({ placed: true, removed: [], failed: [] });
       expect(appUninstallerStub.uninstallApplication.called).to.equal(false);
     });
 
     it('no rows: every app removed, no broadcast, and the caller announces nothing', async () => {
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA', 'AppB']);
+      installedStub.names.resolves(['AppA', 'AppB']);
       appsRepositoryStub.appLocationFromEvents.resolves([]);
       expect(await appStartupManager.enforceNodePlacement('certificate')).to.deep.equal({ placed: false, removed: ['AppA', 'AppB'], failed: [] });
       expect(appUninstallerStub.uninstallApplication.calledWith('AppA', REMOVE)).to.equal(true);
@@ -693,7 +698,7 @@ describe('appStartupManager tests', () => {
     });
 
     it('a locked-out node removes every app though its rows still stand: the lockout\'s self-uninstall is this branch', async () => {
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
+      installedStub.names.resolves(['AppA']);
       appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA' }]);
       nodeDownStoreStub.lockoutForAddress.resolves({ lockedOut: true, count: 4, liftsAt: 1 });
       expect(await appStartupManager.enforceNodePlacement('certificate')).to.deep.equal({ placed: false, removed: ['AppA'], failed: [] });
@@ -702,7 +707,7 @@ describe('appStartupManager tests', () => {
     });
 
     it('decides nothing on a lookup error, and keeps every app without an address', async () => {
-      appsRepositoryStub.listInstalledAppNames.resolves(['AppA']);
+      installedStub.names.resolves(['AppA']);
       appsRepositoryStub.appLocationFromEvents.rejects(new Error('DB error'));
       expect(await appStartupManager.enforceNodePlacement('boot')).to.deep.equal({ placed: null, removed: [], failed: [] });
       fluxNetworkHelperStub.getLocalSocketAddress.resolves(null);

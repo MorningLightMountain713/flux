@@ -2,6 +2,7 @@
 
 const { expect } = require('chai');
 const sinon = require('sinon');
+const { stubInstalled, installedRecord } = require('./fixtures/appRecords');
 const proxyquire = require('proxyquire');
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
@@ -18,7 +19,6 @@ const fluxNetworkMonitor = require('../../ZelBack/src/services/fluxNetworkMonito
 const nodeDosState = require('../../ZelBack/src/services/nodeDosState');
 const nodeIdentityRepository = require('../../ZelBack/src/services/appDatabase/nodeIdentityRepository');
 const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
-const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const { getSpecBackend } = require('../../ZelBack/src/services/utils/specLibs');
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
 const { requireMongo } = require('./dbTestHelper');
@@ -50,7 +50,7 @@ describe('fluxNetworkMonitor tests', () => {
       // whatever another suite left in the shared database, and the uninstaller
       // is a canary asserted untouched.
       sinon.stub(appQueryService, 'installedApps').resolves({ status: 'success', data: [] });
-      sinon.stub(appsRepository, 'listInstalledApps').resolves([]);
+      stubInstalled().apps.resolves([]);
       uninstallApplication = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
       fluxNetworkHelper.setStoredFluxBenchAllowed('6.2.0');
       fluxNetworkHelper.setLocalSocketAddress('129.3.3.3');
@@ -243,7 +243,7 @@ describe('fluxNetworkMonitor tests', () => {
       let warn;
 
       beforeEach(() => {
-        sinon.stub(appsRepository, 'listInstalledApps').resolves([{ name: 'appx', placement: { staticIp: false } }]);
+        stubInstalled().apps.resolves([installedRecord({ name: 'appx', placement: { staticIp: false } })]);
         sinon.stub(registryManager, 'appLocation').resolves([]);
         sinon.stub(fluxNetworkHelper, 'getCachedLocalSocketAddress').returns('127.0.0.1:16127');
         sinon.stub(fluxNetworkHelper, 'fluxUptime').returns({ status: 'error' });
@@ -349,6 +349,7 @@ describe('fluxNetworkMonitor tests', () => {
       appsRepositoryStub = { listInstalledApps: sinon.stub().resolves(installed) };
       const monitor = proxyquire('../../ZelBack/src/services/fluxNetworkMonitor', {
         './appDatabase/appsRepository': appsRepositoryStub,
+        './appDatabase/appRecords': { installed: () => ({ apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)) }) },
         './appDatabase/registryManager': registryManagerStub,
         './appLifecycle/appUninstaller': appUninstallerStub,
         './geolocationService': geolocationServiceStub,

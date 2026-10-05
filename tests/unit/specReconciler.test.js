@@ -8,11 +8,10 @@ const sinon = require('sinon');
 const {
   loadSpecLibrary, V9_SUBMISSION, v8Spec, v9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
-const { stubRegistry } = require('./fixtures/appRecords');
+const { stubRegistry, stubInstalled, installedRecord } = require('./fixtures/appRecords');
 const specReconciler = require('../../ZelBack/src/services/appLifecycle/specReconciler');
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
 const appOperations = require('../../ZelBack/src/services/appLifecycle/appOperations');
-const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const generalService = require('../../ZelBack/src/services/generalService');
@@ -164,7 +163,7 @@ describe('specReconciler tests', () => {
     sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(LOCAL_IP);
     sinon.stub(capabilities, 'isUp').callsFake((name) => (name === 'appRegistryConsistent' && registryConsistent)
       || (name === 'bootReconcileDecided' && bootDecided));
-    sinon.stub(appsRepository, 'listInstalledApps').resolves(installed);
+    stubInstalled().apps.resolves(installed.map((record) => installedRecord(record)));
     stubRegistry().byNames.resolves(globalRows);
     sinon.stub(registryManager, 'getScannedHeight').resolves(1_000_000);
     // The per-identity diff enumerates this app's containers; no real docker in
@@ -522,17 +521,18 @@ describe('specReconciler tests', () => {
     // A record this node holds and cannot read is not a record saying it is gone.
     it('re-reads one row, telling a row it cannot read from one it does not hold', async () => {
       const row = await specWith({});
-      const listed = sinon.stub(appsRepository, 'listInstalledAppsAndUnreadable');
+      const installedApps = stubInstalled();
       const { readInstalled } = imageManager.nodeComplianceDeps();
 
-      listed.resolves({ specs: [row], unreadable: [] });
+      installedApps.byName.resolves(installedRecord(row));
       expect(await readInstalled('myapp')).to.equal(row);
-      sinon.assert.calledWithExactly(listed, { filter: { name: 'myapp' } });
+      sinon.assert.calledWithExactly(installedApps.byName, 'myapp');
 
-      listed.resolves({ specs: [], unreadable: [] });
+      installedApps.byName.resolves(null);
+      installedApps.keys.resolves([]);
       expect(await readInstalled('myapp')).to.equal(null);
 
-      listed.resolves({ specs: [], unreadable: ['myapp'] });
+      installedApps.keys.resolves([{ name: 'myapp', replica: null }]);
       let refused = null;
       await readInstalled('myapp').catch((error) => { refused = error; });
       expect(refused, 'an unreadable row read as not held').to.be.an('error');
@@ -587,7 +587,7 @@ describe('specReconciler tests', () => {
       // fireAdoption's first act is to re-read the installed row, so these
       // staying untouched across the whole stagger window is what "nothing was
       // scheduled" means.
-      const getInstalled = sinon.stub(appsRepository, 'getInstalledApp').resolves(installedRow);
+      const getInstalled = stubInstalled().byName.resolves(installedRecord(installedRow));
       stubRegistry().byName.resolves(registryRow);
       clock = sinon.useFakeTimers();
 
@@ -603,7 +603,7 @@ describe('specReconciler tests', () => {
       const registryRow = await specWith({ targetIps: { [LOCAL_TARGET]: ['s1'] } }, { cpu: 1 });
       expect(registryRow.hash, 'a real spec change moves the content hash').to.not.equal(installedRow.hash);
       setup({ installed: [installedRow], globalRows: [registryRow] });
-      sinon.stub(appsRepository, 'getInstalledApp').resolves(installedRow);
+      stubInstalled().byName.resolves(installedRecord(installedRow));
       stubRegistry().byName.resolves(registryRow);
       clock = sinon.useFakeTimers();
 
@@ -639,7 +639,7 @@ describe('specReconciler tests', () => {
       const v2 = await specWith(loose, { cpu: 1 });
       const v3 = await specWith(loose, { cpu: 1.5 });
       setup({ installed: [installedRow] });
-      sinon.stub(appsRepository, 'getInstalledApp').resolves(installedRow);
+      stubInstalled().byName.resolves(installedRecord(installedRow));
       const getGlobal = stubRegistry().byName;
       getGlobal.onFirstCall().resolves(v2);
       getGlobal.onSecondCall().resolves(v3);
@@ -661,11 +661,11 @@ describe('specReconciler tests', () => {
       const staleRow = await specWith(loose, { cpu: 0.5 });
       const registryRow = await specWith(loose, { cpu: 1 });
       setup({ installed: [staleRow] });
-      const getInstalled = sinon.stub(appsRepository, 'getInstalledApp');
+      const getInstalled = stubInstalled().byName;
       // The scheduling read sees the stale row; by the time the timer fires,
       // another path (install, reconcile) has already stored the new spec.
-      getInstalled.onFirstCall().resolves(staleRow);
-      getInstalled.resolves(registryRow);
+      getInstalled.onFirstCall().resolves(installedRecord(staleRow));
+      getInstalled.resolves(installedRecord(registryRow));
       stubRegistry().byName.resolves(registryRow);
       clock = sinon.useFakeTimers();
 
@@ -684,7 +684,7 @@ describe('specReconciler tests', () => {
       const update = await specWith(loose, { cpu: 1 });
       const reregistered = await specWith(loose, { cpu: 1.5, uuid: 'd'.repeat(64) });
       setup({ installed: [installedRow] });
-      const getInstalled = sinon.stub(appsRepository, 'getInstalledApp').resolves(installedRow);
+      const getInstalled = stubInstalled().byName.resolves(installedRecord(installedRow));
       const getGlobal = stubRegistry().byName;
       getGlobal.onFirstCall().resolves(update);
       getGlobal.resolves(reregistered);
@@ -707,7 +707,7 @@ describe('specReconciler tests', () => {
       });
       // The deployment view is built for real; this app declares no shutdown
       // feature, so the step keeps the configured 60s.
-      sinon.stub(appsRepository, 'getInstalledApp').resolves(registryRow);
+      stubInstalled().byName.resolves(installedRecord(registryRow));
       const delay = await specReconciler.adoptionDelayMs(registryRow, LOCAL_IP);
       expect(delay).to.equal(60_000);
     });
@@ -721,7 +721,7 @@ describe('specReconciler tests', () => {
       const registryRow = await specWith({
         targetIps: { [LOCAL_TARGET]: ['s2'], [OTHER_TARGET]: ['s1'] },
       }, { preStop: true });
-      sinon.stub(appsRepository, 'getInstalledApp').resolves(registryRow);
+      stubInstalled().byName.resolves(installedRecord(registryRow));
       const delay = await specReconciler.adoptionDelayMs(registryRow, LOCAL_IP);
       expect(delay).to.equal(120_000 + 15_000); // ordinal 1 x (budget + start margin)
     });
@@ -741,8 +741,8 @@ describe('specReconciler tests', () => {
       setup();
       // The exact bytes the store writes: an InstantiatedSpec's serialization.
       const doc = (await specWith({}, { name: 'foreign' })).serialize();
-      const exists = sinon.stub(appsRepository, 'existsInstalledApp').resolves(false);
-      const getInstalled = sinon.stub(appsRepository, 'getInstalledApp');
+      const exists = stubInstalled().keys.resolves([]);
+      const getInstalled = stubInstalled().byName;
       specReconciler.notifySpecStored(doc);
       await new Promise((resolve) => { setImmediate(resolve); });
       expect(exists.calledOnceWith('foreign')).to.equal(true);

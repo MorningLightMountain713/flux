@@ -15,6 +15,7 @@ const { departingApps: realDepartingApps } = require('../../ZelBack/src/services
 const {
   loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const { installedRecord } = require('./fixtures/appRecords');
 
 // Tombstoning teardown: the removal prelude records a durable owed-teardown doc +
 // condemns + deletes the local row, and the deferred worker (runTeardown) stops,
@@ -166,6 +167,17 @@ describe('appUninstaller tombstoning teardown', () => {
       appRecords: {
         registry: () => ({ byName: sinon.stub().callsFake(async () => globalPinnedSpec) }),
         ledgers: () => ({ remove: sinon.stub().resolves(), removeAll: sinon.stub().resolves() }),
+        installed: () => ({
+          byName: async (name) => installedRecord(await stubs.appsRepository.getInstalledApp(name)),
+          apps: async () => [],
+          remove: (...args) => stubs.appsRepository.removeInstalledIdentity(...args),
+          removeAll: (...args) => stubs.appsRepository.removeInstalledApp(...args),
+          keys: async (name) => {
+            if (await stubs.appsRepository.existsInstalledIdentity(name, null)) return [{ name, replica: null }];
+            const count = await stubs.appsRepository.countInstalledIdentities(name);
+            return Array.from({ length: count }, (_, i) => ({ name, replica: `r${i}` }));
+          },
+        }),
       },
       appsRepository: {
         getInstalledApp: sinon.stub().callsFake(async () => installedSpec),

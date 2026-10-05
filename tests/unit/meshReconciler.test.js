@@ -29,6 +29,7 @@ const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
 const {
   loadSpecLibrary, V9_SUBMISSION, v9Spec, v8Spec, instantiatedSpec,
 } = require('./fixtures/fluxSpec');
+const { installedRecord } = require('./fixtures/appRecords');
 const meshIdentityDrift = require('../../ZelBack/src/services/appMesh/meshIdentityDrift');
 
 const APP_UUID = '5db6f53acbbd9b38e949307e96601e573bd6437ddec08707e76a33f771b358ea';
@@ -164,10 +165,13 @@ describe('meshReconciler', () => {
         debug: sinon.stub(),
       },
       '../appDatabase/appsRepository': {
-        listInstalledApps: (...args) => stubs.listInstalledApps(...args),
         appLocationFromEvents: sinon.stub().callsFake(async () => stubs.rows),
-        getInstalledApp: sinon.stub().callsFake(async (name) => stubs.installedApps
-          .find((app) => app.name === name) ?? null),
+      },
+      '../appDatabase/appRecords': {
+        installed: () => ({
+          apps: async (...args) => (await stubs.listInstalledApps(...args)).map((record) => installedRecord(record)),
+          byName: async (name) => installedRecord(stubs.installedApps.find((app) => app.name === name) ?? null),
+        }),
       },
       '../appRuntime/deploymentProvider': {
         getInstalledDeployments: sinon.stub().callsFake(async () => stubs.deployments),

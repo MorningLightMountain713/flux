@@ -10,12 +10,12 @@
 
 const config = require('config');
 const log = require('../../lib/log');
-const dbHelper = require('../dbHelper');
 const dockerService = require('../dockerService');
 const serviceHelper = require('../serviceHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const appReconciler = require('../appMonitoring/appReconciler');
 const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const nodeDosState = require('../nodeDosState');
 const migrations = require('../migrations');
 const appUninstaller = require('./appUninstaller');
@@ -38,7 +38,7 @@ const globalState = require('../utils/globalState');
 const capabilities = require('../utils/capabilities');
 const fluxEventBus = require('../utils/fluxEventBus');
 const nodeConfirmationService = require('../nodeConfirmationService');
-const { localAppsInformation, NODE_DOWN_GRACE_MS } = require('../utils/appConstants');
+const { NODE_DOWN_GRACE_MS } = require('../utils/appConstants');
 const { parseContainerName } = require('../utils/appUtilities');
 const { untilSucceeds, BOOT_STEP_RETRY_MS } = require('../utils/untilSucceeds');
 const nodeDownStore = require('../appMessaging/nodeDownStore');
@@ -75,22 +75,7 @@ async function awaitWithin(work, timeoutMs, reason) {
  * @returns {Promise<Array<string>>}
  */
 async function getInstalledAppNamesFromDb() {
-  return appsRepository.listInstalledAppNames();
-}
-
-/**
- * Get all installed apps from local database
- * @returns {Promise<Array>} Array of installed app specifications
- */
-async function getInstalledAppsFromDb() {
-  const dbopen = dbHelper.databaseConnection();
-  const appsDatabase = dbopen.db(config.database.appslocal.database);
-  const appsQuery = {};
-  const appsProjection = {
-    projection: { _id: 0 },
-  };
-  const apps = await dbHelper.findInDatabase(appsDatabase, localAppsInformation, appsQuery, appsProjection);
-  return apps || [];
+  return appRecords.installed().names();
 }
 
 /**
@@ -135,7 +120,9 @@ async function getStoppedFluxContainers() {
  */
 async function openInstalledAppPorts() {
   try {
-    const { apps, unreadable } = await portManager.appsWithPorts(await getInstalledAppsFromDb());
+    const apps = await portManager.assignedPortsInstalledApps();
+    const opened = new Set(apps.map((app) => app.name.toLowerCase()));
+    const unreadable = (await getInstalledAppNamesFromDb()).filter((name) => !opened.has(name.toLowerCase()));
     if (unreadable.length) log.warn(`appStartupManager - ports of ${unreadable.length} installed app(s) not opened in the firewall: specification unreadable`);
     const ports = apps.flatMap((app) => app.ports).map((port) => serviceHelper.ensureNumber(port));
     if (!ports.length) return;

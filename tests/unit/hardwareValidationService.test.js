@@ -10,6 +10,7 @@ const { asConfig } = require('./fixtures/config');
 const {
   loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const { installedRecord } = require('./fixtures/appRecords');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. Everything this module does arithmetic on comes off real objects: the
@@ -154,7 +155,7 @@ describe('hardwareValidationService tests', () => {
       './appUninstaller': appUninstallerStub,
       '../serviceHelper': serviceHelperStub,
       '../appRuntime/deploymentProvider': deploymentProviderStub,
-      '../appDatabase/appsRepository': appsRepositoryStub,
+      '../appDatabase/appRecords': { installed: () => ({ apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)) }) },
     });
   });
 

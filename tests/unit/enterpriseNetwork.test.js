@@ -2,6 +2,7 @@
 
 const { expect } = require('chai');
 const sinon = require('sinon');
+const { installedRecord } = require('./fixtures/appRecords');
 const proxyquire = require('proxyquire').noCallThru();
 const { asConfig } = require('./fixtures/config');
 
@@ -59,6 +60,11 @@ function loadModule(overrides = {}) {
   };
 
   bundleListeners.length = 0;
+  // The installed apps the sweep judges, as the test states them.
+  const dbHelper = overrides.dbHelper || {
+    databaseConnection: sinon.stub().returns({ db: sinon.stub().returns({}) }),
+    findInDatabase: sinon.stub().resolves([]),
+  };
   const stubs = {
     config: asConfig(overrides.config || defaultConfig),
     './enterpriseConfig': overrides.enterpriseConfig || {
@@ -67,10 +73,7 @@ function loadModule(overrides = {}) {
       getEnterpriseNodesPublicKeys: () => NODE_PUBKEYS,
       getAllowedOwnersForNode: (pubKey) => NODE_OWNER_MAP[pubKey] || [],
     },
-    '../dbHelper': overrides.dbHelper || {
-      databaseConnection: sinon.stub().returns({ db: sinon.stub().returns({}) }),
-      findInDatabase: sinon.stub().resolves([]),
-    },
+    '../appDatabase/appRecords': { installed: () => ({ apps: async () => (await dbHelper.findInDatabase()).map((app) => installedRecord(app)) }) },
     '../fluxNetworkHelper': overrides.fluxNetworkHelper || {
       getFluxNodePublicKey: sinon.stub().resolves('pubA'),
     },

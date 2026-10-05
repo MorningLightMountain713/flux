@@ -13,7 +13,7 @@ const log = require('../../lib/log');
 const messageHelper = require('../messageHelper');
 const verificationHelper = require('../verificationHelper');
 const generalService = require('../generalService');
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const { resolveInstantiatedSpec } = require('../utils/specCutover');
 const peerNotification = require('../appMessaging/peerNotification');
@@ -37,7 +37,7 @@ async function resolveMeshApp(appnameRaw) {
     throw new Error('No application name specified');
   }
   const appName = deploymentProvider.appNameFromRequest(appnameRaw);
-  const inst = await appsRepository.getInstalledApp(appName);
+  const inst = (await appRecords.installed().byName(appName))?.record;
   if (!inst) {
     throw new Error('Application not found');
   }

@@ -1,15 +1,14 @@
 'use strict';
 
 const config = require('config');
-const dbHelper = require('../dbHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
-const appConstants = require('./appConstants');
 const enterpriseConfig = require('./enterpriseConfig');
 const signatureVerifier = require('../signatureVerifier');
 const policyStore = require('../policyStore');
 const capabilities = require('./capabilities');
 const log = require('../../lib/log');
 const appUninstaller = require('../appLifecycle/appUninstaller');
+const appRecords = require('../appDatabase/appRecords');
 
 // This node's own fluxnode pubkey, cached once resolved. The pubkey never
 // changes, so the expensive daemon/benchmark RPC runs only once. Enterprise
@@ -235,15 +234,7 @@ async function cleanupOwnershipViolations() {
   const enterprise = await isEnterpriseNode();
   const allowedOwners = getCachedAllowedOwnersForNode() || [];
 
-  const db = dbHelper.databaseConnection();
-  const appsDatabase = db.db(config.get('database.appslocal.database'));
-  const projection = { projection: { _id: 0, name: 1, owner: 1 } };
-  const apps = await dbHelper.findInDatabase(
-    appsDatabase,
-    appConstants.localAppsInformation,
-    {},
-    projection,
-  );
+  const apps = (await appRecords.installed().apps()).map((record) => ({ name: record.name, owner: record.owner }));
 
   const offenders = apps.filter((app) => (
     enterprise

@@ -31,7 +31,7 @@ describe('containerLabelBackfill tests', () => {
           return name;
         },
       },
-      appsRepository: { getInstalledAppByIdentity: sinon.stub().resolves(null) },
+      installed: { byIdentity: sinon.stub().resolves(null) },
       deploymentProvider: { getInstalledDeployments: sinon.stub().resolves([]) },
       appOperations: { redeployComponent: sinon.stub().resolves() },
       specLibs: {
@@ -49,7 +49,7 @@ describe('containerLabelBackfill tests', () => {
 
     containerLabelBackfill = proxyquire('../../ZelBack/src/services/appLifecycle/containerLabelBackfill', {
       '../dockerService': stubs.dockerService,
-      '../appDatabase/appsRepository': stubs.appsRepository,
+      '../appDatabase/appRecords': { installed: () => stubs.installed },
       '../appRuntime/deploymentProvider': stubs.deploymentProvider,
       './appOperations': stubs.appOperations,
       '../utils/specLibs': stubs.specLibs,
@@ -105,7 +105,7 @@ describe('containerLabelBackfill tests', () => {
 
   describe('resolveContainer', () => {
     it('resolves through the installed row and takes the component name from the deployment', async () => {
-      stubs.appsRepository.getInstalledAppByIdentity.withArgs('App').resolves({ name: 'App' });
+      stubs.installed.byIdentity.withArgs('App').resolves({ name: 'App' });
       stubs.deploymentProvider.getInstalledDeployments.withArgs('App').resolves([
         stubDeployment([{ name: 'www', identifier: 'www_App' }]),
       ]);
@@ -116,7 +116,7 @@ describe('containerLabelBackfill tests', () => {
     });
 
     it('leaves a container no installed app claims alone', async () => {
-      stubs.appsRepository.getInstalledAppByIdentity.resolves(null);
+      stubs.installed.byIdentity.resolves(null);
 
       const target = await containerLabelBackfill.resolveContainer(bare('fluxwww_Gone'));
 
@@ -124,7 +124,7 @@ describe('containerLabelBackfill tests', () => {
     });
 
     it('leaves a container the deployment does not name alone', async () => {
-      stubs.appsRepository.getInstalledAppByIdentity.withArgs('App').resolves({ name: 'App' });
+      stubs.installed.byIdentity.withArgs('App').resolves({ name: 'App' });
       stubs.deploymentProvider.getInstalledDeployments.withArgs('App').resolves([
         stubDeployment([{ name: 'www', identifier: 'www_App' }]),
       ]);
@@ -197,7 +197,7 @@ describe('containerLabelBackfill tests', () => {
 
     it('redeploys an unlabelled component keeping its volume', async () => {
       stubs.dockerService.dockerListContainers.resolves([bare('fluxwww_App')]);
-      stubs.appsRepository.getInstalledAppByIdentity.withArgs('App').resolves({ name: 'App' });
+      stubs.installed.byIdentity.withArgs('App').resolves({ name: 'App' });
       stubs.deploymentProvider.getInstalledDeployments.withArgs('App').resolves([
         stubDeployment([{ name: 'www', identifier: 'www_App' }]),
       ]);
@@ -219,7 +219,7 @@ describe('containerLabelBackfill tests', () => {
       stubs.dockerService.dockerListContainers.resolves([
         bare('fluxwww_App_s1'), bare('fluxwww_App_s2'),
       ]);
-      stubs.appsRepository.getInstalledAppByIdentity.withArgs('App').resolves({ name: 'App' });
+      stubs.installed.byIdentity.withArgs('App').resolves({ name: 'App' });
       stubs.deploymentProvider.getInstalledDeployments.withArgs('App').resolves([
         stubDeployment([{ name: 'www', identifier: 'www_App_s1' }]),
         stubDeployment([{ name: 'www', identifier: 'www_App_s2' }]),
@@ -234,7 +234,7 @@ describe('containerLabelBackfill tests', () => {
       // No app loses uptime for a label. The reboot that ships a release stops
       // everything anyway, and this pass runs before they are started again.
       stubs.dockerService.dockerListContainers.resolves([running('fluxwww_App')]);
-      stubs.appsRepository.getInstalledAppByIdentity.withArgs('App').resolves({ name: 'App' });
+      stubs.installed.byIdentity.withArgs('App').resolves({ name: 'App' });
       stubs.deploymentProvider.getInstalledDeployments.withArgs('App').resolves([
         stubDeployment([{ name: 'www', identifier: 'www_App' }]),
       ]);
@@ -250,7 +250,7 @@ describe('containerLabelBackfill tests', () => {
       stubs.dockerService.dockerListContainers.resolves([
         bare('fluxdb_App'), running('fluxwww_App'),
       ]);
-      stubs.appsRepository.getInstalledAppByIdentity.withArgs('App').resolves({ name: 'App' });
+      stubs.installed.byIdentity.withArgs('App').resolves({ name: 'App' });
       stubs.deploymentProvider.getInstalledDeployments.withArgs('App').resolves([
         stubDeployment([
           { name: 'db', identifier: 'db_App' },
@@ -269,7 +269,7 @@ describe('containerLabelBackfill tests', () => {
 
     it('leaves an unclaimed container alone rather than acting on a guess', async () => {
       stubs.dockerService.dockerListContainers.resolves([bare('fluxwww_Gone')]);
-      stubs.appsRepository.getInstalledAppByIdentity.resolves(null);
+      stubs.installed.byIdentity.resolves(null);
 
       const result = await containerLabelBackfill.backfillContainerLabels();
 
@@ -279,7 +279,7 @@ describe('containerLabelBackfill tests', () => {
 
     it('carries on after one component fails to redeploy', async () => {
       stubs.dockerService.dockerListContainers.resolves([bare('fluxwww_App'), bare('fluxdb_App')]);
-      stubs.appsRepository.getInstalledAppByIdentity.withArgs('App').resolves({ name: 'App' });
+      stubs.installed.byIdentity.withArgs('App').resolves({ name: 'App' });
       stubs.deploymentProvider.getInstalledDeployments.withArgs('App').resolves([
         stubDeployment([
           { name: 'www', identifier: 'www_App' },

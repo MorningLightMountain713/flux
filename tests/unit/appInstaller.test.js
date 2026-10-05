@@ -159,12 +159,10 @@ describe('appInstaller tests', () => {
       '../../lib/log': logStub,
       '../appDatabase/appRecords': {
         registry: () => ({ byName: sinon.stub().resolves(null) }),
-        installed: () => ({ put: sinon.stub().resolves(), byReplica: sinon.stub().resolves(null) }),
+        installed: () => ({ put: sinon.stub().resolves(), byReplica: sinon.stub().resolves(null), keys: sinon.stub().resolves([]) }),
         ledgers: () => ({ put: sinon.stub().resolves(), setNetwork: sinon.stub().resolves() }),
       },
       '../appDatabase/appsRepository': {
-        existsInstalledApp: sinon.stub().resolves(false),
-        existsInstalledIdentity: sinon.stub().resolves(false),
         getTempMessageByName: sinon.stub().resolves(null),
       },
       '../appRuntime/deploymentProvider': {
@@ -403,6 +401,7 @@ describe('appInstaller tests', () => {
       const installedStub = {
         put: sinon.stub().resolves(),
         byReplica: sinon.stub().resolves(new flux.InstalledSpec({ record: newappInstantiated, replica: null })),
+        keys: sinon.stub().resolves(alreadyInstalled ? [{ name: 'newapp', replica: null }] : []),
       };
       const ledgersStub = { put: sinon.stub().resolves(), setNetwork: sinon.stub().resolves() };
       const ensureAppDockerNetwork = sinon.stub().resolves('net');
@@ -447,11 +446,6 @@ describe('appInstaller tests', () => {
           ledgers: () => ledgersStub,
         },
         '../appDatabase/appsRepository': {
-          existsInstalledApp: sinon.stub().resolves(alreadyInstalled),
-          existsInstalledIdentity: sinon.stub().resolves(alreadyInstalled),
-          removeInstalledApp: sinon.stub().resolves(),
-          removeInstalledIdentity: sinon.stub().resolves(),
-          getInstalledApp: sinon.stub().resolves(newappInstantiated),
           getTempMessageByName: sinon.stub().resolves(null),
         },
         '../appRuntime/deploymentProvider': {

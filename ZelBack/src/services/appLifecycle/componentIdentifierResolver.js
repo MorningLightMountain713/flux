@@ -1,6 +1,6 @@
 'use strict';
 
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const dockerService = require('../dockerService');
 const volumeService = require('../utils/volumeService');
@@ -25,7 +25,7 @@ const { getSpecBackend } = require('../utils/specLibs');
  *   list, which would read as "this app has no components".
  */
 async function resolveComponentIdentifiers(name, replica) {
-  const installed = await appsRepository.getInstalledApp(name);
+  const installed = (await appRecords.installed().byName(name))?.record;
   if (!installed) return null;
 
   const deployment = await deploymentProvider

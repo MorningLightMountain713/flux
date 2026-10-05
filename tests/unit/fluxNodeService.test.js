@@ -48,9 +48,7 @@ describe('fluxNodeService — the mesh surface', () => {
       './appMesh/foundingService': {
         founderAsk: stubs.founderAsk,
       },
-      './appDatabase/appsRepository': {
-        getInstalledApp: stubs.getInstalledApp,
-      },
+      './appDatabase/appRecords': { installed: () => ({ byName: stubs.getInstalledApp }) },
     });
   });
 

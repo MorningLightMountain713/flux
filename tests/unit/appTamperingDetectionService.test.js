@@ -147,7 +147,7 @@ describe('appTamperingDetectionService tests', () => {
       './dbHelper': dbHelperStub,
       './appDatabase/appTamperingRepository': tamperingRepositoryStub,
       './appDatabase/nodeStartupRepository': nodeStartupRepositoryStub,
-      './appDatabase/appsRepository': appsRepositoryStub,
+      './appDatabase/appRecords': { installed: () => ({ byName: appsRepositoryStub.getInstalledAppAttribution }) },
       '../lib/log': logStub,
       './generalService': generalServiceStub,
       './daemonService/daemonServiceFluxnodeRpcs': fluxnodeRpcsStub,

@@ -9,6 +9,7 @@ const {
   loadSpecLibrary, V9_SUBMISSION, v1Spec, v8Spec, v9Spec, sealedV9Spec, sealedV8Spec, instantiatedSpec,
   assertAnswers,
 } = require('./fixtures/fluxSpec');
+const { installedRecord } = require('./fixtures/appRecords');
 
 // The real fit rule, not a restatement of it. capacityShortfall and
 // burstHeadroomShortfall are pure and synchronous, so a stub could only
@@ -313,14 +314,15 @@ describe('appSpawner tests', () => {
       '../appMessaging/messageStore': messageStoreStub,
       '../appDatabase/appRecords': {
         registry: () => ({ alive: aliveStub, byName: opts.globalAppInfoStub ?? sinon.stub().resolves(null) }),
+        installed: () => ({
+          apps: async () => (await (opts.installedApps ?? sinon.stub().resolves([]))()).map((record) => installedRecord(record)),
+          // Identities already installed here; empty means the spawn gate still
+          // owes every assigned identity, which is the default fixture state.
+          keys: async (name) => (await (opts.installedIdentities ?? sinon.stub().resolves([]))(name)).map((replica) => ({ name, replica })),
+        }),
       },
       '../appDatabase/appsRepository': {
         countRunningByApp: countRunningByAppStub,
-        existsInstalledApp: sinon.stub().resolves(false),
-        // Identities already installed here; empty means the spawn gate still
-        // owes every assigned identity, which is the default fixture state.
-        listInstalledIdentities: opts.installedIdentities ?? sinon.stub().resolves([]),
-        listInstalledApps: opts.installedApps ?? sinon.stub().resolves([]),
       },
       '../utils/specLibs': {
         // The real backend classes. DeploymentSpec.fromSpec is `identity ??

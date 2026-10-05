@@ -11,6 +11,7 @@ const meshBroadcast = require('../appMesh/meshBroadcast');
 const log = require('../../lib/log');
 const globalState = require('../utils/globalState');
 const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const appReconciler = require('../appMonitoring/appReconciler');
 const { resolveInstantiatedSpec } = require('../utils/specCutover');
 
@@ -217,7 +218,7 @@ async function checkAndNotifyPeersOfRunningApps() {
     // here and peers order it against other nodes' messages, so a stamp taken after
     // the reads below would out-rank a removal that happened while they ran.
     const snapshotAt = Date.now();
-    const installedSpecs = await appsRepository.listInstalledApps();
+    const installedSpecs = (await appRecords.installed().apps()).map((record) => record.record);
 
     // Resolve each installed spec to its cleartext view for component/syncthing
     // introspection. Enterprise (encrypted) apps must be decrypted first — the
@@ -271,7 +272,7 @@ async function checkAndNotifyPeersOfRunningApps() {
         // what the node is assigned, and assignment does not change when a container
         // stops, dies or is rebuilt.
         // eslint-disable-next-line no-await-in-loop
-        const replicas = await appsRepository.listInstalledIdentities(appName);
+        const replicas = (await appRecords.installed().keys(appName)).map((key) => key.replica);
         const identities = (replicas.length > 0 ? replicas : [null])
           .filter((identity) => !globalState.departingApps.has(appName, identity));
         // What we last told the network about ourselves. runningSince originates

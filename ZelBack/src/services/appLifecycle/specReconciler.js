@@ -5,7 +5,6 @@ const config = require('config');
 const serviceHelper = require('../serviceHelper');
 const log = require('../../lib/log');
 const { AsyncLock } = require('../utils/asyncLock');
-const appsRepository = require('../appDatabase/appsRepository');
 const appRecords = require('../appDatabase/appRecords');
 const decisionStore = require('../appDecisions/decisionStore');
 const registryManager = require('../appDatabase/registryManager');
@@ -156,7 +155,7 @@ async function isInstalledApp(installed, registrySpec) {
 }
 
 async function fireAdoption(appName) {
-  const installed = await appsRepository.getInstalledApp(appName);
+  const installed = (await appRecords.installed().byName(appName))?.record;
   if (!installed) return;
   const registrySpec = await appRecords.registry().byName(appName);
   if (!registrySpec || registrySpec.hash === installed.hash) return;
@@ -376,7 +375,7 @@ async function fullConvergence({ reason, atBoot = false } = {}) {
   }
   try {
     if (!await convergenceAllowed({ atBoot })) return;
-    const installedApps = await appsRepository.listInstalledApps();
+    const installedApps = (await appRecords.installed().apps()).map((record) => record.record);
     if (!installedApps.length) return;
     const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
     const globalRows = await appRecords.registry().byNames(installedApps.map((app) => app.name));
@@ -431,7 +430,7 @@ async function requestAppConvergence(appName, { reason, delayMs = 0 } = {}) {
   try {
     if (delayMs) await serviceHelper.delay(delayMs);
     if (!await convergenceAllowed()) return;
-    const installed = await appsRepository.getInstalledApp(appName);
+    const installed = (await appRecords.installed().byName(appName))?.record;
     if (!installed) return;
     const registrySpec = await appRecords.registry().byName(appName);
     const ctx = { localSocketAddr: await fluxNetworkHelper.getLocalSocketAddress() };
@@ -451,7 +450,7 @@ async function requestAppConvergence(appName, { reason, delayMs = 0 } = {}) {
 async function notifySpecStored(specDoc) {
   try {
     if (!specDoc || !specDoc.name) return;
-    const installedHere = await appsRepository.existsInstalledApp(specDoc.name);
+    const installedHere = (await appRecords.installed().keys(specDoc.name)).length > 0;
     if (!installedHere) return;
     await requestAppConvergence(specDoc.name, { reason: 'specStored' });
   } catch (error) {

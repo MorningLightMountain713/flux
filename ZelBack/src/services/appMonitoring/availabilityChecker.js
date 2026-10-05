@@ -10,7 +10,7 @@ const daemonStatus = require('../daemonService/daemonStatus');
 const upnpService = require('../upnpService');
 const networkStateService = require('../networkStateService');
 const fluxHttpTestServer = require('../utils/fluxHttpTestServer');
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const log = require('../../lib/log');
 const { extractIp, extractPort, MAX_PORT } = require('../utils/socketAddressUtils');
@@ -110,7 +110,7 @@ async function runAvailabilityCheckOnce(dosState, portsNotWorking, failedNodesTe
       return timeouts.appError;
     }
 
-    const installedApps = await appsRepository.listInstalledApps();
+    const installedApps = (await appRecords.installed().apps()).map((record) => record.record);
     const appPorts = [];
 
     for (const instantiated of installedApps) {

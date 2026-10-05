@@ -16,7 +16,6 @@ const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
-const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const appDataEntries = require('../../ZelBack/src/services/utils/appDataEntries');
 const appCaches = require('../../ZelBack/src/services/utils/appCaches');
 const contentBlobService = require('../../ZelBack/src/services/appLifecycle/contentBlobService');
@@ -34,7 +33,7 @@ const { Privilege } = require('../../ZelBack/src/services/utils/privileges');
 const {
   loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
-const { stubRegistry, stubLedgers } = require('./fixtures/appRecords');
+const { stubRegistry, stubLedgers, stubInstalled, installedRecord } = require('./fixtures/appRecords');
 const specLibrary = require('../../ZelBack/src/services/utils/specLibrary');
 const domain = require('./fixtures/appDomain');
 const relationshipResolver = require('../../ZelBack/src/services/appLifecycle/relationshipResolver');
@@ -147,7 +146,7 @@ describe('appOperations tests', () => {
       // The installed row hydrates to an InstantiatedSpec; its identity is what
       // the locator was derived for and what keys the artifact store.
       const installed = await instantiatedSpec(await v9Spec(), { identity: `b${'a'.repeat(52)}` });
-      sinon.stub(appsRepository, 'getInstalledApp').resolves(installed);
+      stubInstalled().byName.resolves(installedRecord(installed));
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(await oneComponentDeployment('myapp', 'web'));
       const framed = Buffer.from('cipher');
       const serveBlob = sinon.stub(contentBlobService, 'serveBlob').resolves(framed);
@@ -162,7 +161,7 @@ describe('appOperations tests', () => {
 
     it('returns 404 when the app is not installed on this node', async () => {
       sinon.stub(globalState, 'isArcane').returns(true);
-      sinon.stub(appsRepository, 'getInstalledApp').resolves(null);
+      stubInstalled().byName.resolves(installedRecord(null));
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
       const res = makeRes();
       await appOperations.contentBlobServeApi({ params: { appName: 'ghost', locator: 'loc' } }, res);
@@ -171,7 +170,7 @@ describe('appOperations tests', () => {
 
     it('returns 404 when no local mount matches the requested locator', async () => {
       sinon.stub(globalState, 'isArcane').returns(true);
-      sinon.stub(appsRepository, 'getInstalledApp').resolves(await instantiatedSpec(await v9Spec()));
+      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec())));
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(await oneComponentDeployment('myapp', 'web'));
       sinon.stub(contentBlobService, 'serveBlob').resolves(null);
       const res = makeRes();
@@ -320,7 +319,7 @@ describe('appOperations tests', () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
-      sinon.stub(appsRepository, 'getInstalledApp').resolves(await instantiatedSpec(await v9Spec()));
+      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec())));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' }));
       sinon.stub(hwRequirements, 'checkNodeResourcesReclaiming').resolves();
       sinon.stub(appUninstaller, 'uninstallComponent').resolves();
@@ -464,7 +463,7 @@ describe('appOperations tests', () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
-      sinon.stub(appsRepository, 'getInstalledApp').resolves(await instantiatedSpec(await v9Spec()));
+      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec())));
       const freshDeployment = await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' });
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(freshDeployment);
       sinon.stub(hwRequirements, 'checkNodeResources').resolves();
@@ -500,7 +499,7 @@ describe('appOperations tests', () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
-      sinon.stub(appsRepository, 'getInstalledApp').resolves(await instantiatedSpec(await v9Spec()));
+      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec())));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(
         await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1', shutdown: { gracefulTimeout: 290 } }),
       );
@@ -534,7 +533,7 @@ describe('appOperations tests', () => {
       );
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
-      sinon.stub(appsRepository, 'getInstalledApp').resolves(await instantiatedSpec(await v9Spec()));
+      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec())));
       const checkDeps = sinon.stub(relationshipResolver, 'checkAppDependencyRequirements').rejects(
         Object.assign(new Error("App 'collector' that 'myapp' depends on is not installed on this node. Installation aborted."), { code: 'NETWORK_DEPENDENCY_NOT_READY' }),
       );
@@ -570,9 +569,9 @@ describe('appOperations tests', () => {
 
       it('hands the app back instead of tearing it down to rebuild', async () => {
         sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: 'b'.repeat(64), txindex: 0 });
-        sinon.stub(appsRepository, 'getInstalledApp').resolves(
+        stubInstalled().byName.resolves(installedRecord(
           await instantiatedSpec(await v9Spec({ placement: { targetIps: ['9.9.9.9'] } })),
-        );
+        ));
 
         await appOperations.redeployApplication('myapp', { onStatus: () => {} });
 
@@ -583,9 +582,9 @@ describe('appOperations tests', () => {
 
       it('leaves the app as it is when it cannot read the collateral the spec names nodes by', async () => {
         sinon.stub(generalService, 'obtainNodeCollateralInformation').rejects(new Error('daemon down'));
-        sinon.stub(appsRepository, 'getInstalledApp').resolves(
+        stubInstalled().byName.resolves(installedRecord(
           await instantiatedSpec(await v9Spec({ placement: { targetIps: ['9.9.9.9'], targetOutpoints: [`${'c'.repeat(64)}:0`] } })),
-        );
+        ));
 
         await appOperations.redeployApplication('myapp', { onStatus: () => {} });
 
@@ -601,8 +600,8 @@ describe('appOperations tests', () => {
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
       const installed = await instantiatedSpec(await v9Spec());
-      const getInstalledApp = sinon.stub(appsRepository, 'getInstalledApp');
-      getInstalledApp.onFirstCall().resolves(installed);
+      const getInstalledApp = stubInstalled().byName;
+      getInstalledApp.onFirstCall().resolves(installedRecord(installed));
       getInstalledApp.onSecondCall().resolves(null);
       sinon.stub(relationshipResolver, 'checkAppDependencyRequirements').resolves(true);
       const beginAppStop = sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
@@ -632,8 +631,8 @@ describe('appOperations tests', () => {
       sinon.stub(serviceHelper, 'delay').resolves();
       // First read feeds the pre-teardown check; the post-teardown read returns null so
       // the run settles through the catch without exercising the full reinstall path.
-      const getInstalledApp = sinon.stub(appsRepository, 'getInstalledApp');
-      getInstalledApp.onFirstCall().resolves(await instantiatedSpec(await v9Spec()));
+      const getInstalledApp = stubInstalled().byName;
+      getInstalledApp.onFirstCall().resolves(installedRecord(await instantiatedSpec(await v9Spec())));
       getInstalledApp.onSecondCall().resolves(null);
       sinon.stub(relationshipResolver, 'checkAppDependencyRequirements').resolves(true);
       const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
@@ -651,8 +650,8 @@ describe('appOperations tests', () => {
       );
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       const delay = sinon.stub(serviceHelper, 'delay').resolves();
-      const getInstalledApp = sinon.stub(appsRepository, 'getInstalledApp');
-      getInstalledApp.onFirstCall().resolves(await instantiatedSpec(await v9Spec()));
+      const getInstalledApp = stubInstalled().byName;
+      getInstalledApp.onFirstCall().resolves(installedRecord(await instantiatedSpec(await v9Spec())));
       getInstalledApp.onSecondCall().resolves(null);
       sinon.stub(relationshipResolver, 'checkAppDependencyRequirements').resolves(true);
       sinon.stub(appUninstaller, 'uninstallComponent').resolves();
@@ -747,7 +746,7 @@ describe('appOperations tests', () => {
       sinon.stub(componentProvisioner2, 'installComponent').resolves();
       sinon.stub(hwRequirements, 'checkNodeResourcesReclaiming').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
-      sinon.stub(appsRepository, 'getInstalledApp').resolves(await instantiatedSpec(await v9Spec()));
+      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec())));
       sinon.stub(appUninstaller, 'uninstallComponent').resolves();
       sinon.stub(appReconciler, 'enqueueApp');
       const publish = sinon.stub(fluxEventBus, 'publish');
@@ -1526,7 +1525,7 @@ describe('appOperations tests', () => {
       const mod = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
         'node:fs/promises': fsPromises,
         '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
-        '../appDatabase/appsRepository': { listInstalledApps: sinon.stub().resolves(installed) },
+        '../appDatabase/appRecords': { installed: () => ({ apps: async () => installed.map((record) => installedRecord(record)) }) },
         '../appRuntime/deploymentProvider': providerStub,
         './shutdownPlan': shutdownPlanStub,
         '../utils/fluxShutdowndClient': client,
@@ -1706,7 +1705,7 @@ describe('appOperations tests', () => {
       sinon.stub(componentProvisioner, 'portOpenMethods').resolves(['ufw']);
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
-      sinon.stub(appsRepository, 'upsertInstalledApp').resolves();
+      stubInstalled();
       // freshDeployment = null short-circuits the install loop, telemetry and shutdown-plan
       // blocks, leaving the port close + gated open as the only port effects under test.
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(null);
@@ -1740,10 +1739,8 @@ describe('appOperations tests', () => {
       expect(uninstallComponentStub.calledWith(sinon.match.any, sinon.match({ skipPorts: true })), 'teardown skips ports').to.be.true;
       expect(denyPortsStub.calledOnceWith([80], 'myapp'), 'closes only the dropped port').to.be.true;
       expect(openHostPortsStub.calledOnceWith([8080], 'myapp'), 'opens only the added port').to.be.true;
-      // The row written back is the registry spec's own wire form, produced by the
-      // real serializer rather than a stub returning {}.
-      const [, wireSpec] = appsRepository.upsertInstalledApp.firstCall.args;
-      expect(wireSpec).to.include({ version: 9, name: 'myapp', owner: registrySpec.owner });
+      // The registry record is what every instance's record becomes.
+      sinon.assert.calledOnceWithExactly(stubInstalled().updateRecord, registrySpec);
 
       // The uninstaller stays stubbed: assert the component it was handed carries
       // the two fields the real teardown reads off it (container name, port set).

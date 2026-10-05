@@ -29,7 +29,6 @@
  */
 
 const config = require('config');
-const appsRepository = require('../appDatabase/appsRepository');
 const appRecords = require('../appDatabase/appRecords');
 const { resolveInstantiatedSpec } = require('../utils/specCutover');
 const dockerService = require('../dockerService');
@@ -316,7 +315,7 @@ function appTransitivelyRequires(workload, depNameLower, byName, viewsByName, ho
  * @returns {Promise<Array<object>>} requiring InstantiatedSpecs, cascade-bound
  */
 async function findCascadeWorkloadsRequiring(depName) {
-  const installed = await appsRepository.listInstalledApps();
+  const installed = (await appRecords.installed().apps()).map((record) => record.record);
   if (!installed || !installed.length) {
     return [];
   }
@@ -394,7 +393,7 @@ async function getRequiredDependencyNamesForNode(nodeIdentity) {
  */
 async function findUnrequiredInstalledDependencies(options = {}) {
   const { nodeIdentity } = options;
-  const installed = await appsRepository.listInstalledApps();
+  const installed = (await appRecords.installed().apps()).map((record) => record.record);
   if (!installed || !installed.length) {
     return [];
   }
@@ -463,7 +462,7 @@ async function verifyDependencies(appName, owner, entries) {
       continue;
     }
     // eslint-disable-next-line no-await-in-loop
-    const installed = await appsRepository.getInstalledApp(targetName);
+    const installed = await appRecords.installed().byName(targetName);
     if (!installed) {
       // Transient ordering condition, not a misconfiguration: the dependency
       // may simply not be installed yet. Tagged so callers can defer and

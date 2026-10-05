@@ -5,11 +5,11 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 
 const { expect } = require('chai');
 const sinon = require('sinon');
+const { stubInstalled, installedRecord } = require('./fixtures/appRecords');
 const path = require('node:path');
 
 const IOUtils = require('../../ZelBack/src/services/IOUtils');
 const deviceHelper = require('../../ZelBack/src/services/deviceHelper');
-const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
 const domain = require('./fixtures/appDomain');
 const fs = require('fs').promises;
@@ -62,8 +62,8 @@ describe('IOUtils getVolumeInfo tests', () => {
     // Volume paths are now built FORWARD from the app's stored identity rather
     // than decoded back out of the mount table. These fixtures are pre-mint apps,
     // whose identity is their own name.
-    sinon.stub(appsRepository, 'getInstalledApp').callsFake(async (name) => installedApps.get(name) ?? null);
-    sinon.stub(appsRepository, 'listInstalledIdentities').resolves([null]);
+    stubInstalled().byName.callsFake(async (name) => installedRecord(installedApps.get(name) ?? null));
+    stubInstalled().keys.callsFake(async (name) => [{ name, replica: null }]);
   });
 
   afterEach(() => {

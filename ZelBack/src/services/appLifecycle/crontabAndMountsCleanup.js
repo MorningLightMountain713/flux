@@ -3,7 +3,7 @@
 const util = require('util');
 const systemcrontab = require('crontab');
 const log = require('../../lib/log');
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const dockerService = require('../dockerService');
 const volumeService = require('../utils/volumeService');
@@ -26,9 +26,9 @@ async function getInstalledAppIds() {
   // id later: tampering incidents roll up per app, and an id is not one.
   const installedAppIds = new Map();
 
-  // listInstalledApps throws on a read failure: "cannot enumerate" must surface as
-  // unknown to callers, never as "nothing installed" (which would reap live mounts).
-  const installed = await appsRepository.listInstalledApps();
+  // The read throws on a failure: "cannot enumerate" must surface as unknown to
+  // callers, never as "nothing installed" (which would reap live mounts).
+  const installed = (await appRecords.installed().apps()).map((record) => record.record);
 
   // eslint-disable-next-line no-restricted-syntax
   for (const instantiated of installed) {
@@ -50,15 +50,15 @@ async function getInstalledAppIds() {
         // never a derivation — a boot no longer depends on the benchmark channel
         // answering at this moment.
         // eslint-disable-next-line no-await-in-loop
-        const recorded = await appsRepository.listComponentIdentifiers(instantiated.name);
+        const recorded = (await appRecords.ledgers().instancesOf(instantiated.name)).flatMap((ledger) => ledger.identifiers());
         if (recorded.length > 0) {
-          log.warn(`getInstalledAppIds - could not decrypt ${instantiated.name} (${error.message}); using the components its row recorded`);
+          log.warn(`getInstalledAppIds - could not decrypt ${instantiated.name} (${error.message}); using the components its ledger names`);
           recorded.forEach((id) => installedAppIds.set(dockerService.getAppIdentifier(id), instantiated.name));
         } else {
           // Nothing states them and nothing can derive them here. Saying so is the
           // point: the caller must treat this app as UNKNOWN rather than as having
           // no components, which would unmount a live app and drop its crontab net.
-          log.error(`getInstalledAppIds - ${instantiated.name} could not be decrypted (${error.message}) and its row states no components; its volumes cannot be enumerated this boot`);
+          log.error(`getInstalledAppIds - ${instantiated.name} could not be decrypted (${error.message}) and its ledger names no components; its volumes cannot be enumerated this boot`);
         }
       } else {
         log.warn(`getInstalledAppIds - could not build deployment for ${instantiated.name}: ${error.message}`);

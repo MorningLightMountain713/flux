@@ -17,7 +17,7 @@ const config = require('config');
 const appUninstaller = require('./appUninstaller');
 const serviceHelper = require('../serviceHelper');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const nodeSpecs = require('../appRequirements/nodeSpecs');
 
 const REMOVAL_DELAY = 5000; // 5 seconds between removals
@@ -37,7 +37,7 @@ async function performBootTimeHardwareValidation() {
     log.info('hardwareValidationService - Starting boot-time hardware validation');
 
     // STEP 1: Get all installed apps
-    const installedApps = await appsRepository.listInstalledApps();
+    const installedApps = (await appRecords.installed().apps()).map((record) => record.record);
 
     if (!installedApps || installedApps.length === 0) {
       log.info('hardwareValidationService - No installed apps found');

@@ -9,6 +9,7 @@ const { asConfig } = require('./fixtures/config');
 const {
   loadSpecLibrary, V8_SUBMISSION, v8Spec, v9Spec, sealedV9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const { installedRecord } = require('./fixtures/appRecords');
 const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
 const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
@@ -36,7 +37,7 @@ describe('appQueryService tests', () => {
   let deploymentProviderStub;
   let registryManagerStub;
 
-  let appsRepositoryStub;
+  let installedStub;
   let nodeSpecsStub;
   let logStub;
   let configStub;
@@ -127,9 +128,10 @@ describe('appQueryService tests', () => {
     };
 
 
-    appsRepositoryStub = {
-      listInstalledApps: sinon.stub(),
-      countInstalledApps: sinon.stub(),
+    installedStub = {
+      byName: sinon.stub().resolves(null),
+      apps: sinon.stub().resolves([]),
+      names: sinon.stub().resolves([]),
     };
 
     nodeSpecsStub = { getNodeSpecs: sinon.stub().resolves({ cpuCores: 8, ram: 16_000, ssdStorage: 500 }) };
@@ -150,7 +152,7 @@ describe('appQueryService tests', () => {
       '../dockerService': dockerServiceStub,
       '../appRuntime/deploymentProvider': deploymentProviderStub,
       '../appDatabase/registryManager': registryManagerStub,
-      '../appDatabase/appsRepository': appsRepositoryStub,
+      '../appDatabase/appRecords': { installed: () => installedStub },
       '../appRequirements/nodeSpecs': nodeSpecsStub,
       '../../lib/log': logStub,
       '../utils/specLibs': {
@@ -176,14 +178,14 @@ describe('appQueryService tests', () => {
       ];
       const expected = rows.map((row) => row.serialize());
 
-      appsRepositoryStub.listInstalledApps.resolves(rows);
+      installedStub.apps.resolves(rows.map((row) => installedRecord(row)));
       messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
 
       const result = await appQueryService.installedApps();
 
       expect(result).to.deep.equal({ status: 'success', data: expected });
       expect(result.data.map((doc) => doc.version), 'the list is version-mixed').to.deep.equal([8, 9]);
-      expect(appsRepositoryStub.listInstalledApps.calledOnce).to.be.true;
+      expect(installedStub.apps.calledOnce).to.be.true;
 
       // The repository stays stubbed, so nothing here exercises what the real one
       // returns — assert the rows crossing that boundary answer what production
@@ -207,7 +209,7 @@ describe('appQueryService tests', () => {
         await sealedV9Spec({ name: 'sealedapp' }), { hash: 'hs9', height: 900 },
       );
 
-      appsRepositoryStub.listInstalledApps.resolves([row]);
+      installedStub.apps.resolves([installedRecord(row)]);
       messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
 
       const result = await appQueryService.installedApps();
@@ -237,34 +239,32 @@ describe('appQueryService tests', () => {
         json: sinon.stub(),
       };
 
-      appsRepositoryStub.listInstalledApps.resolves([row]);
+      installedStub.byName.resolves(installedRecord(row));
       messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
 
       await appQueryService.installedApps(req, res);
 
       expect(res.json.calledOnce).to.be.true;
-      expect(appsRepositoryStub.listInstalledApps.firstCall.args[0])
-        .to.deep.equal({ filter: { name: 'appone' } });
+      sinon.assert.calledOnceWithExactly(installedStub.byName, 'appone');
       expect(res.json.firstCall.args[0]).to.deep.equal({ status: 'success', data: [row.serialize()] });
     });
 
     it('should handle string parameter for appname', async () => {
       const row = await instantiatedSpec(await v8Spec({ name: 'appone' }), { hash: 'h1', height: 100 });
 
-      appsRepositoryStub.listInstalledApps.resolves([row]);
+      installedStub.byName.resolves(installedRecord(row));
       messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
 
       const result = await appQueryService.installedApps('appone');
 
       expect(result).to.deep.equal({ status: 'success', data: [row.serialize()] });
-      expect(appsRepositoryStub.listInstalledApps.firstCall.args[0])
-        .to.deep.equal({ filter: { name: 'appone' } });
+      sinon.assert.calledOnceWithExactly(installedStub.byName, 'appone');
     });
 
     it('should return error message on database failure', async () => {
       const error = new Error('Database error');
 
-      appsRepositoryStub.listInstalledApps.rejects(error);
+      installedStub.apps.rejects(error);
       messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'Database error' } });
 
       const result = await appQueryService.installedApps();
@@ -283,12 +283,9 @@ describe('appQueryService tests', () => {
       const res = {
         json: sinon.stub(),
       };
-      const req = {
-        params: { appname: 'appName' },
-        query: {},
-      };
+      const req = { params: {}, query: {} };
 
-      appsRepositoryStub.listInstalledApps.resolves(rows);
+      installedStub.apps.resolves(rows.map((row) => installedRecord(row)));
       messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
 
       await appQueryService.installedApps(req, res);
@@ -303,7 +300,7 @@ describe('appQueryService tests', () => {
       };
       const req = 'appName';
 
-      appsRepositoryStub.listInstalledApps.rejects(error);
+      installedStub.byName.rejects(error);
       messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'Database error' } });
 
       await appQueryService.installedApps(req, res);
@@ -319,7 +316,7 @@ describe('appQueryService tests', () => {
     }));
 
     it('counts installed, running and stopped apps and reports the node specs', async () => {
-      appsRepositoryStub.countInstalledApps.resolves(3);
+      installedStub.names.resolves(['a', 'b', 'c']);
       dockerServiceStub.dockerListContainers.resolves(running('fluxapp1', 'fluxapp2', 'other'));
       messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
       const res = { json: sinon.stub() };
@@ -333,7 +330,7 @@ describe('appQueryService tests', () => {
     });
 
     it('answers a programmatic caller', async () => {
-      appsRepositoryStub.countInstalledApps.resolves(0);
+      installedStub.names.resolves([]);
       dockerServiceStub.dockerListContainers.resolves([]);
       messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
 
@@ -344,7 +341,7 @@ describe('appQueryService tests', () => {
     });
 
     it('counts no running apps when the container list cannot be read', async () => {
-      appsRepositoryStub.countInstalledApps.resolves(1);
+      installedStub.names.resolves(['a']);
       dockerServiceStub.dockerListContainers.rejects(new Error('docker down'));
       messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
       messageHelperStub.createErrorMessage.returns({ status: 'error' });
@@ -356,7 +353,7 @@ describe('appQueryService tests', () => {
     });
 
     it('answers an error when the installed apps cannot be counted', async () => {
-      appsRepositoryStub.countInstalledApps.rejects(new Error('Database error'));
+      installedStub.names.rejects(new Error('Database error'));
       messageHelperStub.createErrorMessage.returns({ status: 'error' });
       const res = { json: sinon.stub() };
 
@@ -745,7 +742,7 @@ describe('appQueryService tests', () => {
           '../dockerService': dockerServiceStub,
           '../appRuntime/deploymentProvider': deploymentProviderStub,
           '../appDatabase/registryManager': registryManagerStub,
-          '../appDatabase/appsRepository': appsRepositoryStub,
+          '../appDatabase/appRecords': { installed: () => installedStub },
           '../../lib/log': logStub,
           '../verificationHelper': verificationHelperStub,
           '../fluxNetworkHelper': fluxNetworkHelperStub,

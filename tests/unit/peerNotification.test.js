@@ -9,6 +9,7 @@ const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const {
   loadSpecLibrary, v9Spec, sealedV8Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const { installedRecord } = require('./fixtures/appRecords');
 const { departingApps } = require('../../ZelBack/src/services/utils/globalState');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
@@ -93,9 +94,13 @@ describe('peerNotification tests', () => {
       bootDrainingIds: sinon.stub().returns(['www_wedged']),
     },
     '../appDatabase/appsRepository': {
-      listInstalledApps: listInstalledAppsStub,
-      listInstalledIdentities: listInstalledIdentitiesStub,
       appLocationFromEvents: getAppLocationStub,
+    },
+    '../appDatabase/appRecords': {
+      installed: () => ({
+        apps: async () => (await listInstalledAppsStub()).map((record) => installedRecord(record)),
+        keys: async (name) => (await listInstalledIdentitiesStub(name)).map((replica) => ({ name, replica })),
+      }),
     },
     '../appMesh/meshBroadcast': {
       meshBroadcastFields: meshFieldsStub,
