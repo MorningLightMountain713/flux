@@ -56,6 +56,11 @@ const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelf
 const appsFolderPath = process.env.FLUX_APPS_FOLDER || path.join(fluxDirPath, 'ZelApps');
 const appsFolder = `${appsFolderPath}/`;
 
+// What a component's mount is checked under: the folder id, which the flags
+// syncthing raises name, for a component that shares a folder; its directory's
+// name for one that shares none.
+const mountKeyOf = (deployComp) => deployComp.syncFolderId ?? deployComp.identifier;
+
 /**
  * Whether syncthing applied a configuration WRITE, and a loud line when it did not.
  *
@@ -204,7 +209,7 @@ async function checkAppFolderMounts(deployments, sendingFolderIds, knownFolderId
       // (v1-3) specs, comp_app for composed (v4+) - so no version branching here.
       // The folder is shared under the id the app's registration fixed; the
       // directory it replicates is named by the identifier.
-      const folderId = deployComp.syncFolderId;
+      const folderId = mountKeyOf(deployComp);
       const appFolder = `${appsFolder}${dockerService.getAppIdentifier(deployComp.identifier)}`;
       // eslint-disable-next-line no-await-in-loop
       const mountSafety = await verifyAppFolderMountWithRepair(
@@ -651,7 +656,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       deployments.forEach((deployment) => {
         // eslint-disable-next-line no-restricted-syntax
         for (const [, deployComp] of deployment.componentEntries()) {
-          carried.add(dockerService.getAppIdentifier(deployComp.identifier));
+          if (deployComp.syncFolderId) carried.add(deployComp.syncFolderId);
         }
       });
       pendingFolderIds
@@ -892,6 +897,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       // eslint-disable-next-line no-restricted-syntax
       for (const deployment of deployments) {
         for (const [, comp] of deployment.componentEntries()) {
+          if (!comp.syncFolderId) continue; // eslint-disable-line no-continue
           componentsByAppId.set(comp.syncFolderId, {
             comp,
             appName: deployment.appName,
@@ -999,7 +1005,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
         // wrote: "nothing was written for this app" and "this app was never
         // reached" are the same silence otherwise.
         for (const [, heldComp] of deployment.componentEntries()) {
-          heldForBusy.push(dockerService.getAppIdentifier(heldComp.identifier));
+          if (heldComp.syncFolderId) heldForBusy.push(heldComp.syncFolderId);
         }
         // eslint-disable-next-line no-continue
         continue;
@@ -1010,7 +1016,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
         // The component whose mount is unsafe is the one held out - its folder
         // has already been demoted and its container held above. Its siblings
         // and every other app are processed normally.
-        if (unsafeFolderIds.has(dockerService.getAppIdentifier(deployComp.identifier))) {
+        if (unsafeFolderIds.has(mountKeyOf(deployComp))) {
           // eslint-disable-next-line no-continue
           continue;
         }
@@ -1037,7 +1043,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       // eslint-disable-next-line no-restricted-syntax
       for (const [, deployComp] of deployment.componentEntries()) {
         if (deployComp.hasSyncthing()) {
-          installedFolderIds.add(dockerService.getAppIdentifier(deployComp.identifier));
+          installedFolderIds.add(deployComp.syncFolderId);
         }
       }
     }

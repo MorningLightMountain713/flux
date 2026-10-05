@@ -115,14 +115,14 @@ describe('componentProvisioner tests', () => {
 
   // Every entry is in the ledger before the step that creates what it names.
   describe('the ledger', () => {
-    it('adds the component\'s block before anything is provisioned, with its identifier, image reference and sync folder', async () => {
+    it('adds the component\'s block before anything is provisioned, with its identifier, image reference, sync folder and aliases', async () => {
       const provisioner = loadProvisioner({ firewallActive: true });
       await provisioner.installComponent(makeComponent(null, {
         hostPorts: [31_000], hasSyncthing: () => true, syncFolderId: 'fluxweb_synchold',
       }), { owner: 'owner1', createVolumes: true });
 
       sinon.assert.calledOnceWithExactly(ledgersStub.addComponent, 'syncholdapp', null, 'web', {
-        identifier: 'web_syncholdapp', image: 'nginx:latest', syncFolder: { id: 'fluxweb_synchold', path: '/apps/web_syncholdapp' },
+        identifier: 'web_syncholdapp', image: 'nginx:latest', syncFolder: { id: 'fluxweb_synchold', path: '/apps/web_syncholdapp' }, aliases: ['web'],
       });
       expect(ledgersStub.addComponent.calledBefore(allowPortStub), 'the block precedes the first port').to.equal(true);
       expect(ledgersStub.addComponent.calledBefore(createAppVolumeStub)).to.equal(true);
@@ -133,7 +133,7 @@ describe('componentProvisioner tests', () => {
       const provisioner = loadProvisioner();
       await provisioner.installComponent(makeComponent(null, { replica: 'r1' }), { owner: 'owner1' });
       sinon.assert.calledOnceWithExactly(ledgersStub.addComponent, 'syncholdapp', 'r1', 'web', {
-        identifier: 'web_syncholdapp', image: 'nginx:latest', syncFolder: null,
+        identifier: 'web_syncholdapp', image: 'nginx:latest', syncFolder: null, aliases: ['web'],
       });
       expect(ledgersStub.setComponent.getCalls().every((c) => c.args[1] === 'r1'), 'every entry is the replica\'s').to.equal(true);
     });

@@ -243,7 +243,7 @@ describe('syncthingMonitor tests', () => {
    * in production, built the same way (same appsFolder). `replica` is stated,
    * never defaulted, exactly as DeploymentSpec.fromSpec demands.
    */
-  async function deploymentFor(appName, compName, overrides = {}, identity = null, registrationVersion = 9) {
+  async function deploymentFor(appName, compName, overrides = {}, identity = null, registrationVersion = 9, names = undefined) {
     // Callers pass content-slot mounts, which only work on the encrypted path,
     // so the envelope is stated for every spec this helper builds.
     const spec = await v9Spec({
@@ -252,7 +252,9 @@ describe('syncthingMonitor tests', () => {
         [compName]: { ...V9_SUBMISSION.components.web, name: compName, ...overrides },
       },
     }, { encrypted: true });
-    return flux.DeploymentSpec.fromSpec(spec, appsFolder, { replica: null, identity, registrationVersion });
+    return flux.DeploymentSpec.fromSpec(spec, appsFolder, {
+      replica: null, identity, registrationVersion, ...(names && { names }),
+    });
   }
 
   before(async function loadLibrary() {
@@ -716,6 +718,55 @@ describe('syncthingMonitor tests', () => {
         expect(configured.some((dir) => dir.endsWith('fluxweb_legacyapp')), 'the folder id is not a directory').to.be.false;
       });
 
+      // The flag syncthing raised names the folder id, and an app registered
+      // before v9 carries its folder under that id: the flag stands until the
+      // mount question is answered, and while the mount is unsafe the component
+      // is the one held out of the pass.
+      it('keeps the flag of a folder an app registered before v9 carries, and holds that component out while its mount is unsafe', async () => {
+        const legacy = await deploymentFor('legacyapp', 'web', { persistentStorage: ACTIVE_STANDBY_STORAGE }, 'ab12cd34ef56', 8);
+        deploymentProviderMock.listInstalledDeployments.resolves([legacy]);
+        syncthingEventsConsumerMock.mountVerifyPendingIds.returns(['fluxweb_legacyapp']);
+        syncthingServiceMock.getConfigFolders.resolves([{ id: 'fluxweb_legacyapp', type: 'sendreceive', path: `${appsFolder}web_ab12cd34ef56` }]);
+        syncthingServiceMock.getConfigDevices.resolves([]);
+        syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+        fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+        syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: false, reason: 'not mounted' });
+        syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, reason: 'not mounted' });
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        sinon.assert.notCalled(syncthingEventsConsumerMock.resolveMountVerify);
+        sinon.assert.calledWithExactly(syncthingServiceMock.adjustConfigFolders, { method: 'patch', config: { type: 'receiveonly' }, id: 'fluxweb_legacyapp' });
+        sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'web_ab12cd34ef56', 'stopped', sinon.match.string);
+        // The pass went on past the hold-out (the device read follows it), and
+        // the held-out component was not configured.
+        sinon.assert.called(syncthingServiceMock.getConfigDevices);
+        sinon.assert.notCalled(syncthingMonitorHelpersMock.ensureStfolderExists);
+      });
+
+      // A component that shares no folder has no folder id: its mount is checked
+      // under its directory's name, and the flag that name can never carry is
+      // resolved.
+      it('checks the mount of a component recorded with no folder under its directory\'s name', async () => {
+        const unshared = await deploymentFor('plainapp', 'web', {}, 'ab12cd34ef56', 9, { web: { syncFolderId: null, aliases: ['web'] } });
+        expect(unshared.getComponent('web').syncFolderId).to.equal(null);
+        expect(unshared.getComponent('web').isStateless, 'a stateful component, with a volume to check').to.be.false;
+        mockState.syncthingAppsFirstRun = true;
+        deploymentProviderMock.listInstalledDeployments.resolves([unshared]);
+        syncthingServiceMock.getConfigFolders.resolves([]);
+        syncthingServiceMock.getConfigDevices.resolves([]);
+        syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+        fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+        syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, reason: 'not mounted' });
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        expect(syncthingFolderStateMachineMock.verifyFolderMountSafety.firstCall.args[0]).to.equal('web_ab12cd34ef56');
+        sinon.assert.calledWith(syncthingEventsConsumerMock.resolveMountVerify, 'web_ab12cd34ef56');
+      });
+
       // The one pass where a fresh install is not yet configured. Its .stignore
       // was seeded at volume creation, and posting ignores for a folder
       // syncthing does not have is not a no-op - it is an error per folder,
@@ -782,6 +833,25 @@ describe('syncthingMonitor tests', () => {
         expect(passes()).to.have.lengthOf(1);
         expect(passes()[0].heldForBusy).to.deep.equal([syncFolderId]);
         expect(passes()[0].wrote, 'a held app contributes nothing to the write').to.not.include(syncFolderId);
+      });
+
+      // An app registered before v9 shares its folders under 8.x names, which
+      // its identifiers are not: what the pass holds back and what the sweep
+      // keeps are both named by the folder id.
+      it('holds back, and keeps from the sweep, the folder of a busy app registered before v9, by its folder id', async () => {
+        const legacy = await deploymentFor('legacyapp', 'web', { persistentStorage: ACTIVE_STANDBY_STORAGE }, 'ab12cd34ef56', 8);
+        deploymentProviderMock.listInstalledDeployments.resolves([legacy]);
+        syncthingServiceMock.getConfigFolders.resolves([{ id: 'fluxweb_legacyapp', type: 'sendreceive', path: `${appsFolder}web_ab12cd34ef56` }]);
+        operationRegistry.acquire('legacyapp', 'backup', 'test');
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        expect(passes()[0].heldForBusy).to.deep.equal(['fluxweb_legacyapp']);
+        const deleted = syncthingServiceMock.adjustConfigFolders.getCalls()
+          .map((call) => call.args[0])
+          .filter((options) => options.method === 'delete');
+        expect(deleted, 'the busy app still owns its folder').to.deep.equal([]);
       });
     });
 
