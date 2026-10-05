@@ -6,6 +6,7 @@ const fs = require('node:fs/promises');
 const log = require('../../lib/log');
 const appRecords = require('../appDatabase/appRecords');
 const appIdentityMoveStore = require('./appIdentityMoveStore');
+const appHistory = require('../appDecisions/appHistory');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const dockerService = require('../dockerService');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
@@ -151,7 +152,9 @@ async function adoptInstalledLedgers() {
         await installed.put(new InstalledSpec({ record: registered, replica: record.replica, owed: record.owed }));
       }
       // eslint-disable-next-line no-await-in-loop
-      const deployment = await deploymentProvider.buildDeployment(registered, { replica: record.replica });
+      const registrationVersion = await appHistory.registrationVersionOf(record.name, registered.uuid) ?? undefined;
+      // eslint-disable-next-line no-await-in-loop
+      const deployment = await deploymentProvider.buildDeployment(registered, { replica: record.replica, registrationVersion });
       // eslint-disable-next-line no-await-in-loop
       const body = await observeLedger(deployment, async (identifier) => discoverVolumeImage(identifier, await appsRuntimeState.getVolumeImage(identifier)));
       // eslint-disable-next-line no-await-in-loop

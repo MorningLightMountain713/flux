@@ -102,7 +102,7 @@ describe('decisionRule', () => {
       const result = await decide([entry({ hash: 'r', height: 100 })]);
       const [d] = result.decisions;
       expect(d).to.include({
-        hash: 'r', name: 'myapp', decision: 'applied', uuid: 'uuid-MyApp-r', identity: 'MyApp', registrationVersion: 8, termStart: 1000, fee: '10', ruleVersion: 3,
+        hash: 'r', name: 'myapp', decision: 'applied', uuid: 'uuid-MyApp-r', identity: 'MyApp', termStart: 1000, fee: '10', ruleVersion: 3,
       });
       expect(result.blocked).to.equal(null);
     });
@@ -214,18 +214,9 @@ describe('decisionRule', () => {
       ]);
       const [, d] = result.decisions;
       expect(d).to.include({
-        decision: 'applied', uuid: 'uuid-MyApp-r', identity: 'MyApp', registrationVersion: 8, termStart: 2000,
+        decision: 'applied', uuid: 'uuid-MyApp-r', identity: 'MyApp', termStart: 2000,
       });
-    });
-
-    it('carries the version its registration was made with, through a later spec version', async () => {
-      const result = await decide([
-        entry({ hash: 'r', height: 100 }),
-        entry({ hash: 'u', type: 'update', height: 200, spec: v9Spec() }),
-      ]);
-      const [r, u] = result.decisions;
-      expect(r.registrationVersion).to.equal(8);
-      expect(u.registrationVersion, 'the registration\'s, not the update\'s').to.equal(8);
+      expect(d, 'a decision states no registration version').to.not.have.property('registrationVersion');
     });
 
     it('keeps the term it supersedes when it was free', async () => {

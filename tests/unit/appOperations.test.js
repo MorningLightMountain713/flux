@@ -41,6 +41,7 @@ const shutdownPlan = require('../../ZelBack/src/services/appLifecycle/shutdownPl
 const componentProvisioner2 = require('../../ZelBack/src/services/appLifecycle/componentProvisioner');
 const appGiveUp = require('../../ZelBack/src/services/appLifecycle/appGiveUp');
 const owedRemovals = require('../../ZelBack/src/services/appLifecycle/owedRemovals');
+const appHistory = require('../../ZelBack/src/services/appDecisions/appHistory');
 const globalCommand = require('../../ZelBack/src/services/appManagement/globalCommand');
 const syncthingFolderStateMachine = require('../../ZelBack/src/services/appMonitoring/syncthingFolderStateMachine');
 const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
@@ -1719,6 +1720,8 @@ describe('appOperations tests', () => {
       denyPortsStub = sinon.stub(appUninstaller, 'denyPorts').resolves();
       openHostPortsStub = sinon.stub(componentProvisioner, 'openHostPorts').resolves();
       teardownOwedForStub = sinon.stub(owedRemovals, 'removalOwedFor').resolves(teardownOwed);
+      // The version the app was registered with, as its registration message states it.
+      sinon.stub(appHistory, 'registrationVersionOf').resolves(9);
     }
 
     /** The ledger naming the component's ports, each opened by both methods. */
@@ -1765,9 +1768,25 @@ describe('appOperations tests', () => {
 
       // The deployment provider stays stubbed too, and this is the seam the update
       // path hands the registry spec through — it has to be one the real provider
-      // could resolve and build from.
-      const [handedRegistrySpec] = deploymentProvider.buildDeployment.firstCall.args;
+      // could resolve and build from. The view is named by the version the
+      // registration message states, so a component the update adds is named right.
+      const [handedRegistrySpec, buildOpts] = deploymentProvider.buildDeployment.firstCall.args;
       expect(deploymentFor(await resolveInstantiatedSpec(handedRegistrySpec)).appName).to.equal('myapp');
+      sinon.assert.calledOnceWithExactly(appHistory.registrationVersionOf, 'myapp', registrySpec.uuid);
+      expect(buildOpts).to.have.property('registrationVersion', 9);
+    });
+
+    // The update's new views, one per identity, are named by the registration
+    // too: a component the update adds takes its folder id from it.
+    it('builds the update\'s new views by the version the registration message states', async () => {
+      setup();
+      deploymentProvider.getInstalledDeployments.resolves([]);
+      deploymentProvider.buildDeployments.resolves([]);
+
+      await appOperations.reconcileApp({ name: 'myapp', uuid: 'u-myapp', identity: 'idmyapp' }, registrySpec);
+
+      sinon.assert.calledOnceWithExactly(appHistory.registrationVersionOf, 'myapp', 'u-myapp');
+      sinon.assert.calledOnceWithExactly(deploymentProvider.buildDeployments, registrySpec, { identity: 'idmyapp', registrationVersion: 9 });
     });
 
     it('routes a graceful component teardown through flux-shutdownd, component-scoped', async () => {

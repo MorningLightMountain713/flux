@@ -395,6 +395,8 @@ describe('appInstaller tests', () => {
       const deployment = flux.DeploymentSpec.fromSpec(newappSpec, APPS_FOLDER, { replica: null });
       const buildDeployment = sinon.stub().resolves(deployment);
       const resolveDeploymentIdentity = sinon.stub().resolves(null);
+      // The version the app was registered with, as its registration message states it.
+      const registrationVersionOf = sinon.stub().resolves(8);
       const isImageBlocked = sinon.stub().resolves(false);
       // The two records the install puts before it creates anything: the
       // read-back is the real record class over the spec being installed.
@@ -454,6 +456,7 @@ describe('appInstaller tests', () => {
           buildDeployment,
           resolveDeploymentIdentity,
         },
+        '../appDecisions/appHistory': { registrationVersionOf },
         '../utils/fluxEventBus': { publish: fluxEventBusPublish },
         '../appMonitoring/appReconciler': { awaitConvergence: appReconcilerAwaitConvergence },
         '../utils/cpuBurstHelper': { getCpuBurstAllowance: sinon.stub().returns(0), isEnterpriseOwner: sinon.stub().returns(false), isCpuBurstSupported: sinon.stub().resolves(false) },
@@ -474,6 +477,7 @@ describe('appInstaller tests', () => {
         abortInstall,
         teardownOwedFor,
         buildDeployment,
+        registrationVersionOf,
         resolveDeploymentIdentity,
         isImageBlocked,
         installedStub,
@@ -586,7 +590,7 @@ describe('appInstaller tests', () => {
     // read each argument back off its stub and call what the real one calls.
     it('hands each stubbed collaborator an object that answers what the real one asks', async () => {
       const {
-        installer, deployment, installComponent, buildDeployment, resolveDeploymentIdentity,
+        installer, deployment, installComponent, buildDeployment, registrationVersionOf, resolveDeploymentIdentity,
         checkAppDependencyRequirements, connectComponentToLinkedApps, isImageBlocked,
         installedStub, ledgersStub, ensureAppDockerNetwork, appReconcilerAwaitConvergence,
       } = loadFresh({ converge: { converged: true, failed: [] } });
@@ -615,6 +619,11 @@ describe('appInstaller tests', () => {
       // so run the real construction the stub is standing in for.
       const [built, buildOpts] = buildDeployment.firstCall.args;
       expect(buildOpts).to.have.property('replica', null);
+      // Every view the install provisions from is named by the version the
+      // registration message states, read once.
+      sinon.assert.calledOnce(registrationVersionOf);
+      expect(buildOpts).to.have.property('registrationVersion', 8);
+      expect(buildDeployment.lastCall.args[1]).to.have.property('registrationVersion', 8);
       // The build after the records are put is from the registered record read
       // back, not the installed record around it.
       expect(buildDeployment.lastCall.args[0]).to.equal(newappInstantiated);

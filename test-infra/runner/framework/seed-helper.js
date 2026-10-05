@@ -170,18 +170,18 @@ export async function buildSeedableApp(opts) {
 
   assertHermeticRepotags(spec, allowExternalRepotag);
   // The row as the decider writes it for a registration: the uuid minted from the
-  // name and the message hash, the identity every container, directory, image
-  // and network of the app is named from, and the version the app was registered
+  // name and the message hash, and the identity every container, directory, image
+  // and network of the app is named from. The version the app was registered
   // with, which fixes its syncthing folder ids and the alias an app registered
-  // before v9 keeps. A row without them builds no deployment view.
+  // before v9 keeps, is the registration message's and rides beside the row.
   const uuid = appUuid(name, hash);
   const identity = appIdentityFromUuid(uuid);
   const specWithMeta = {
-    ...spec, hash, height, uuid, identity, registrationVersion: spec.version,
+    ...spec, hash, height, uuid, identity,
   };
 
   return {
-    spec: specWithMeta, permanentMessage, hashEntry, hash, txid, uuid, identity,
+    spec: specWithMeta, permanentMessage, hashEntry, hash, txid, uuid, identity, registrationVersion: spec.version,
   };
 }
 
@@ -228,17 +228,17 @@ export function syncedContainerData(syncMode, path = '/appdata') {
 export async function buildSeedableUpdate(app, mutate, { height = null } = {}) {
   const ownerKey = appOwnerKey();
 
-  // hash, height, uuid, identity and the registration version are what the seeding
-  // added; the signature and the hash below are taken over the specification
-  // alone, exactly as registration took them.
+  // hash, height, uuid and identity are what the seeding added; the signature
+  // and the hash below are taken over the specification alone, exactly as
+  // registration took them.
   const previousHeight = app.spec.height;
-  const { registrationVersion, uuid, identity } = app.spec;
+  const { uuid, identity } = app.spec;
+  const { registrationVersion } = app;
   const bare = JSON.parse(JSON.stringify(app.spec));
   delete bare.hash;
   delete bare.height;
   delete bare.uuid;
   delete bare.identity;
-  delete bare.registrationVersion;
   // Present if this fixture has already been seeded into mongo, and it belongs
   // to that row rather than to the specification the owner signed.
   delete bare._id;
@@ -262,13 +262,14 @@ export async function buildSeedableUpdate(app, mutate, { height = null } = {}) {
   const txid = fakeTxid();
   const at = height ?? previousHeight + 1;
 
-  // An update's row keeps its registration's uuid, identity and version.
+  // An update's row keeps its registration's uuid and identity, and the app its version.
   return {
     spec: {
-      ...spec, hash, height: at, uuid, identity, registrationVersion,
+      ...spec, hash, height: at, uuid, identity,
     },
     uuid,
     identity,
+    registrationVersion,
     permanentMessage: {
       type, version, appSpecifications: spec, hash, timestamp, signature, txid, height: at, valueSat: 200000000,
     },
@@ -376,8 +377,9 @@ export async function buildSeedableLegacyApp({
   const identity = appIdentityFromUuid(uuid);
   return {
     spec: {
-      ...spec, hash, height, uuid, identity, registrationVersion: spec.version,
+      ...spec, hash, height, uuid, identity,
     },
+    registrationVersion: spec.version,
     permanentMessage,
     hashEntry,
     hash,

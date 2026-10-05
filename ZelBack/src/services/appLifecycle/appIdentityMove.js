@@ -153,17 +153,17 @@ async function putRecord(installed, fields) {
 }
 
 async function registrationOf(installed) {
-  const { uuid, registrationVersion } = installed;
-  if (uuid && Number.isInteger(registrationVersion)) return { uuid, registrationVersion, fromRow: true };
-  const applied = (await appHistory.appliedMessages(installed.name))
-    .find(({ decision }) => decision.hash === installed.hash);
-  if (!applied) return null;
-  const found = {
-    uuid: uuid ?? applied.decision.uuid ?? null,
-    registrationVersion: Number.isInteger(registrationVersion) ? registrationVersion : (applied.decision.registrationVersion ?? null),
-  };
-  if (!found.uuid || !Number.isInteger(found.registrationVersion)) return null;
-  return { ...found, fromRow: false };
+  let { uuid } = installed;
+  const fromRow = Boolean(uuid);
+  if (!uuid) {
+    const applied = (await appHistory.appliedMessages(installed.name))
+      .find(({ decision }) => decision.hash === installed.hash);
+    uuid = applied?.decision.uuid ?? null;
+    if (!uuid) return null;
+  }
+  const registrationVersion = await appHistory.registrationVersionOf(installed.name, uuid);
+  if (!Number.isInteger(registrationVersion)) return null;
+  return { uuid, registrationVersion, fromRow };
 }
 
 /**
@@ -183,9 +183,9 @@ async function planRow(row, { isAppIdentity, appIdentityFromUuid }) {
   if (!installed) return { name, replica, skipped: 'the row cannot be read yet' };
   if (isAppIdentity(installed.identity)) return { name, replica, done: true };
   const registration = await registrationOf(installed);
-  if (!registration) return { name, replica, skipped: 'no applied decision names its uuid' };
+  if (!registration) return { name, replica, skipped: 'no applied registration names its uuid and version' };
   if (!registration.fromRow) {
-    await putRecord(installed, { uuid: registration.uuid, registrationVersion: registration.registrationVersion });
+    await putRecord(installed, { uuid: registration.uuid });
     installed = await appRecords.installed().byReplica(name, replica);
   }
   const to = appIdentityFromUuid(registration.uuid);
@@ -193,7 +193,9 @@ async function planRow(row, { isAppIdentity, appIdentityFromUuid }) {
   if (!token) return { name, replica, skipped: 'held by another operation' };
   try {
     const former = await deploymentProvider.buildDeployment(installed.record, { replica });
-    const next = await deploymentProvider.buildDeployment(installed.record, { replica, identity: to });
+    const next = await deploymentProvider.buildDeployment(installed.record, {
+      replica, identity: to, registrationVersion: registration.registrationVersion,
+    });
     return {
       name, replica, installed, registration, from: installed.identity, to, former, next, token,
     };

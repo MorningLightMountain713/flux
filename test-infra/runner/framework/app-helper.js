@@ -191,10 +191,11 @@ export async function registerAndConfirm(nodeUrl, adminKeypair, spec, nodes, {
   // components (componentIdentifier) the moment the registration is confirmed.
   const uuid = appUuid(spec.name, appHash);
   const app = {
-    spec: { ...spec, hash: appHash, registrationVersion: spec.version },
+    spec: { ...spec, hash: appHash },
     hash: appHash,
     uuid,
     identity: appIdentityFromUuid(uuid),
+    registrationVersion: spec.version,
   };
   return {
     status: 'success', appHash, app, ...confirm,

@@ -243,17 +243,17 @@ export function legacyFolderId(appName, componentName = appName) {
  * registration.
  */
 export function folderIdOf(app, componentName = undefined) {
-  if (!Number.isInteger(app?.spec?.registrationVersion)) {
+  if (!Number.isInteger(app?.registrationVersion)) {
     throw new Error('folderIdOf needs a built app: the folder id is fixed by the version it was registered with');
   }
-  return app.spec.registrationVersion < 9
+  return app.registrationVersion < 9
     ? legacyFolderId(app.spec.name, componentName ?? app.spec.name)
     : componentIdentifier(app, componentName);
 }
 
 /**
- * The syncthing folder id for one component, from the app's registration row on
- * this node: the 8.x name for an app registered before v9, the identifier for a v9
+ * The syncthing folder id for one component, from the app's registration on this
+ * node: the 8.x name for an app registered before v9, the identifier for a v9
  * registration (db-client appFolderId). Null while the node holds no row.
  */
 export async function appSyncthingFolderId(client, appName, componentName, replica = null) {

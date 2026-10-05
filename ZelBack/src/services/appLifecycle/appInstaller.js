@@ -26,6 +26,7 @@ const operationRegistry = require('../utils/operationRegistry');
 const globalState = require('../utils/globalState');
 const capabilities = require('../utils/capabilities');
 const owedRemovals = require('./owedRemovals');
+const appHistory = require('../appDecisions/appHistory');
 const admissionControl = require('../utils/admissionControl');
 const cpuBurstHelper = require('../utils/cpuBurstHelper');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
@@ -205,7 +206,10 @@ async function attemptInstallApplication(instantiated, options = {}) {
       return { status: InstallStatus.REJECTED, reason };
     }
 
-    deployment = await deploymentProvider.buildDeployment(instantiated, { replica });
+    // The version the app was registered with names its components: read once,
+    // from the registration message, for every view this install provisions from.
+    const registrationVersion = await appHistory.registrationVersionOf(appName, instantiated.uuid) ?? undefined;
+    deployment = await deploymentProvider.buildDeployment(instantiated, { replica, registrationVersion });
     // Check resources and reserve them atomically: two concurrent installs of
     // different apps must not both pass before either is accounted (the in-flight
     // double-admit race). The reservation is released once the app is durably in
@@ -297,7 +301,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
     try {
       const freshInst = await appRecords.installed().byReplica(appName, replica ?? null);
       if (!freshInst) throw new Error(`Failed to read back installed spec for ${appName}`);
-      const deployment = await deploymentProvider.buildDeployment(freshInst.record, { replica });
+      const deployment = await deploymentProvider.buildDeployment(freshInst.record, { replica, registrationVersion });
       if (!deployment) throw new Error(`Failed to build deployment for ${appName}`);
 
       // Record this app's telemetry sink (Arcane-only; null/no-op otherwise)

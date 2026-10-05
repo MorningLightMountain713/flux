@@ -160,7 +160,6 @@ function installedRecord(record, { replica = null, owed = null } = {}) {
     version: record.version ?? null,
     isEncrypted: record.isEncrypted ?? false,
     placement: record.placement,
-    registrationVersion: record.registrationVersion ?? null,
     serialize: () => (typeof record.serialize === 'function' ? record.serialize() : { ...record }),
   };
 }

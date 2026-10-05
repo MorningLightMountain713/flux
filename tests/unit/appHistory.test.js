@@ -83,6 +83,30 @@ describe('appHistory', () => {
     expect(await history.currentAppMessages('myapp')).to.deep.equal([]);
   });
 
+  it('answers the version of the message that registered an app: the first applied message of the app with a uuid, or of the app holding the name', async () => {
+    applied = [
+      decision('r1', { type: 'registration', height: 100, uuid: 'first' }),
+      decision('u1', { type: 'update', height: 150, uuid: 'first' }),
+      decision('r2', { type: 'registration', height: 300, uuid: 'second' }),
+      decision('u2', { type: 'update', height: 350, uuid: 'second' }),
+    ];
+    stored = [
+      { hash: 'r1', appSpecifications: { version: 4 } }, { hash: 'u1', appSpecifications: { version: 8 } },
+      { hash: 'r2', appSpecifications: { version: 8 } }, { hash: 'u2', appSpecifications: { version: 9 } },
+    ];
+
+    expect(await history.registrationVersionOf('MyApp'), 'the app holding the name, by its registration').to.equal(8);
+    expect(await history.registrationVersionOf('myapp', 'first'), 'an earlier app of the name, by its uuid').to.equal(4);
+    expect(await history.registrationVersionOf('myapp', 'nobody')).to.equal(null);
+  });
+
+  it('answers no registration version for a name nothing was applied to, or a registration whose message states none', async () => {
+    expect(await history.registrationVersionOf('myapp')).to.equal(null);
+    applied = [decision('r1', { type: 'registration', height: 100, uuid: 'first' })];
+    stored = [{ hash: 'r1', appSpecifications: {} }];
+    expect(await history.registrationVersionOf('myapp')).to.equal(null);
+  });
+
   it('stamps the applied updates with their blocks\' times, asking the daemon only for a record without one', async () => {
     applied = [
       decision('r', { type: 'registration', height: 100 }),

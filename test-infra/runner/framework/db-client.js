@@ -189,19 +189,35 @@ export function dbClient(nodeNum) {
       return replica != null ? `${base}_${replica}` : base;
     },
 
+    // The version the app on this node's registration row was registered with:
+    // the spec version of the first message the decider applied for the row's
+    // uuid, as the node reads it when it names the app's components.
+    async registrationVersion(appName) {
+      const app = await this.getGlobalApp(appName);
+      if (!app) return null;
+      const globalDb = await db('appsGlobal');
+      const registration = await globalDb.collection('appdecisions')
+        .find({ name: appName.toLowerCase(), decision: 'applied', uuid: app.uuid })
+        .sort({ height: 1, txIndex: 1 }).limit(1).toArray();
+      if (!registration.length) {
+        throw new Error(`registrationVersion(${appName}): no applied decision registers the row's app`);
+      }
+      const message = await this.getPermanentMessage(registration[0].hash);
+      const version = message?.appSpecifications?.version;
+      if (!Number.isInteger(version)) {
+        throw new Error(`registrationVersion(${appName}): the registration message states no spec version`);
+      }
+      return version;
+    },
+
     // The syncthing folder id of one component, fixed by the version the app was
     // registered with: an app registered before v9 keeps its 8.x container name,
     // `flux<component>_<name>[_<replica>]`, so that every node running it names the
-    // folder alike; a v9 registration's is its container identifier. Every row
-    // states the version, as the decider writes it and the seed builders mirror it;
-    // one that does not is a broken fixture, not a v9 app.
+    // folder alike; a v9 registration's is its container identifier.
     async appFolderId(appName, componentName, replica = null) {
-      const app = await this.getGlobalApp(appName);
-      if (!app) return null;
-      if (!Number.isInteger(app.registrationVersion)) {
-        throw new Error(`appFolderId(${appName}): the row states no registrationVersion`);
-      }
-      if (app.registrationVersion < 9) {
+      const registrationVersion = await this.registrationVersion(appName);
+      if (registrationVersion === null) return null;
+      if (registrationVersion < 9) {
         const base = `flux${componentName}_${appName}`;
         return replica != null ? `${base}_${replica}` : base;
       }

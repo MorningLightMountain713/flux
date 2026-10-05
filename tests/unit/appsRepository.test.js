@@ -242,18 +242,6 @@ describe('appsRepository', () => {
       expect(result).to.not.be.null;
       expect(result.spec).to.be.instanceOf(flux.EncryptedSpecV9);
     });
-
-    it('hydrates a sealed v9 document carrying its registration version', async () => {
-      const stored = (await instantiatedSpec(await sealedV9Spec({ name: 'regver9' }), {
-        hash: 'hrv', height: 900, registeredAt: 1_751_628_800, registrationVersion: 8,
-      })).serialize();
-      expect(stored.registrationVersion).to.equal(8);
-      dbHelperStub.findOneInDatabase.resolves(messageWith(stored));
-
-      const { spec: result } = await appsRepository.getAppMessage('hrv');
-      expect(result.spec).to.be.instanceOf(flux.EncryptedSpecV9);
-      expect(result.registrationVersion).to.equal(8);
-    });
   });
 
   describe('getApplicationOwner', () => {

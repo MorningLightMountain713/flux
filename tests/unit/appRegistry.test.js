@@ -393,13 +393,6 @@ describe('appRegistry', () => {
       sinon.assert.notCalled(stubs['../appMesh/foundingCommittee'].retract);
     });
 
-    it('writes the version the app was registered with onto its row', async () => {
-      const spec = await v9Spec({ name: 'myapp' });
-      messages = [message('r', spec)];
-      await registry.applyDecided('myapp', [decision('r', { registrationVersion: 8 })]);
-      expect(stubs['./registryManager'].storeGlobalSpec.firstCall.args[0].registrationVersion).to.equal(8);
-    });
-
     it('judges the manifests held for the app by its identity, not its name', async () => {
       const spec = await v9Spec({ name: 'myapp' });
       messages = [message('r', spec)];
