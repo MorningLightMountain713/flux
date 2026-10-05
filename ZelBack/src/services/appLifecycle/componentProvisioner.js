@@ -217,6 +217,7 @@ async function installComponent(component, options = {}) {
     identifier: id,
     image: component.image,
     syncFolder: component.hasSyncthing() ? { id: component.syncFolderId, path: compDir } : null,
+    aliases: component.networkAliases ?? [],
   });
 
   if (!skipPorts) {

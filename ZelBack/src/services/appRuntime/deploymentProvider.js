@@ -75,6 +75,7 @@ async function toDeployment(instantiated, opts = {}) {
   if (!resolved) throw new Error(`Could not resolve spec for ${instantiated.name}`);
 
   const { DeploymentSpec } = await getSpecBackend();
+  const ledger = await appRecords.ledgers().byInstance(instantiated.name, opts.replica);
   // The identity is READ off the row, never recomputed from the name. This and
   // toDeployments are what decide every container name, volume path, network and
   // syncthing folder id on this node, so an app keeps the identity
@@ -93,7 +94,24 @@ async function toDeployment(instantiated, opts = {}) {
     // the aliases its containers keep; a row that states none builds a view with
     // neither.
     registrationVersion: instantiated.registrationVersion ?? undefined,
+    names: recordedNames(ledger),
   });
+}
+
+/**
+ * The names the ledger records for the components the node has started on:
+ * by component, the folder id its data is shared under and the aliases its
+ * container is created with. A deployment built with them names those
+ * components as recorded and leaves the registration to name the rest.
+ * @param {import('@runonflux/flux-spec-backend').InstalledLedger|null} ledger
+ * @returns {Object<string, {syncFolderId: string|null, aliases: string[]}>|undefined}
+ */
+function recordedNames(ledger) {
+  if (!ledger) return undefined;
+  return Object.fromEntries(Object.entries(ledger.components).map(([name, block]) => [name, {
+    syncFolderId: block.syncFolder?.id ?? null,
+    aliases: [...block.aliases],
+  }]));
 }
 
 /**
@@ -174,6 +192,8 @@ async function toDeployments(instantiated, opts = {}) {
   const identities = replicas === null ? [null] : replicas;
 
   const { DeploymentSpec } = await getSpecBackend();
+  const ledgers = new Map((await appRecords.ledgers().instancesOf(instantiated.name))
+    .map((ledger) => [ledger.replica ?? null, ledger]));
   const deployments = [];
   for (const replica of identities) {
     // Same identity read as toDeployment: every identity of one app shares the
@@ -184,6 +204,7 @@ async function toDeployments(instantiated, opts = {}) {
       replica,
       identity: opts.identity ?? instantiated.identity ?? null,
       registrationVersion: instantiated.registrationVersion ?? undefined,
+      names: recordedNames(ledgers.get(replica) ?? null),
     }));
   }
   return deployments;

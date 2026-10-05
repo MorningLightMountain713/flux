@@ -2585,8 +2585,10 @@ describe('appOperations tests', () => {
         sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
         sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(await oneComponentDeployment('bkapp', 'web'));
         // A real InstantiatedSpec: the (unstubbed) buildDeployment behind
-        // componentIdentifiersFor resolves and builds from it for real.
+        // componentIdentifiersFor resolves and builds from it for real, with no
+        // ledger, so the registration names its components.
         stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+        stubLedgers();
         sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
         // The stop is proved against docker, not against the drive's verdict: the
         // converge backstop answers 'provisional' and that is not counted, so

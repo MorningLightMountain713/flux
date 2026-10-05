@@ -6,7 +6,7 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
-const { stubInstalled } = require('./fixtures/appRecords');
+const { stubInstalled, stubLedgers } = require('./fixtures/appRecords');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const generalService = require('../../ZelBack/src/services/generalService');
 const dockerService = require('../../ZelBack/src/services/dockerService');
@@ -229,6 +229,7 @@ describe('deploymentProvider tests', () => {
   // containers, so every lookup keyed on the result misses.
   describe('identity reaches both build paths', () => {
     let provider;
+    let ledgers;
 
     async function specFixture() {
       const { FluxAppSpecV9 } = await specLibs.getSpec();
@@ -262,6 +263,8 @@ describe('deploymentProvider tests', () => {
       provider = proxyquire('../../ZelBack/src/services/appRuntime/deploymentProvider', {
         '../utils/specCutover': { resolveInstantiatedSpec: async () => resolved },
       });
+      // No ledger until a test writes one: the registration names everything.
+      ledgers = stubLedgers();
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('44.55.66.77:16127');
       sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
         txhash: OUTPOINT_TXID, txindex: 0,
@@ -312,6 +315,62 @@ describe('deploymentProvider tests', () => {
 
       expect(fromSet.componentEntries().map(([, c]) => c.identifier))
         .to.deep.equal(single.componentEntries().map(([, c]) => c.identifier));
+    });
+
+    // The names recorded for a component the node has started on are the
+    // deployment's; the registration names only what the node has not.
+    describe('the names a deployment of an installed instance carries', () => {
+      let InstalledLedger;
+      const RECORDED = { id: 'fluxweb_myapp', aliases: ['web', 'web.myapp', 'fluxweb_myapp'] };
+      const row = (registrationVersion) => ({ name: 'myapp', identity: 'a1b2c3d4e5f6', registrationVersion });
+      const ledgerWith = (replica, withBlock) => new InstalledLedger({
+        name: 'myapp',
+        replica,
+        components: withBlock ? {
+          web: InstalledLedger.newBlock({
+            identifier: 'web_a1b2c3d4e5f6', image: 'nginx:latest', syncFolder: { id: RECORDED.id, path: '/x' }, aliases: RECORDED.aliases,
+          }),
+        } : {},
+      });
+
+      beforeEach(async () => {
+        ({ InstalledLedger } = await specLibs.getSpecBackend());
+      });
+
+      it('names a component the ledger holds as recorded, whatever the registration says', async () => {
+        ledgers.instancesOf.resolves([ledgerWith(null, true)]);
+        ledgers.byInstance.resolves(ledgerWith(null, true));
+
+        const [fromSet] = await provider.buildDeployments(row(9));
+        const single = await provider.buildDeployment(row(9), { replica: null });
+
+        for (const web of [fromSet.getComponent('web'), single.getComponent('web')]) {
+          expect(web.syncFolderId).to.equal('fluxweb_myapp');
+          expect(web.networkAliases).to.deep.equal(RECORDED.aliases);
+        }
+        sinon.assert.calledOnceWithExactly(ledgers.instancesOf, 'myapp');
+        sinon.assert.calledOnceWithExactly(ledgers.byInstance, 'myapp', null);
+      });
+
+      it('names a component the ledger holds no block for, and an instance with no ledger, by the registration', async () => {
+        ledgers.byInstance.resolves(ledgerWith(null, false));
+        const noBlock = (await provider.buildDeployment(row(8), { replica: null })).getComponent('web');
+        expect(noBlock.syncFolderId).to.equal('fluxweb_myapp');
+        expect(noBlock.networkAliases).to.include('fluxweb_myapp');
+
+        const [noLedger] = await provider.buildDeployments(row(9));
+        expect(noLedger.getComponent('web').syncFolderId).to.equal('web_a1b2c3d4e5f6');
+      });
+
+      it('reads the ledger of the instance being built, by its replica', async () => {
+        // The loose instance takes nothing from a replica's ledger.
+        ledgers.instancesOf.resolves([ledgerWith('s1', true)]);
+        const [loose] = await provider.buildDeployments(row(9));
+        expect(loose.getComponent('web').syncFolderId).to.equal('web_a1b2c3d4e5f6');
+
+        await provider.buildDeployment(row(9), { replica: 's1' });
+        sinon.assert.calledWith(ledgers.byInstance, 'myapp', 's1');
+      });
     });
   });
 });

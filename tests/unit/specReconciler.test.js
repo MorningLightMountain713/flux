@@ -8,7 +8,9 @@ const sinon = require('sinon');
 const {
   loadSpecLibrary, V9_SUBMISSION, v8Spec, v9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
-const { stubRegistry, stubInstalled, installedRecord } = require('./fixtures/appRecords');
+const {
+  stubRegistry, stubInstalled, stubLedgers, installedRecord,
+} = require('./fixtures/appRecords');
 const specReconciler = require('../../ZelBack/src/services/appLifecycle/specReconciler');
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
 const appOperations = require('../../ZelBack/src/services/appLifecycle/appOperations');
@@ -32,6 +34,10 @@ const appEvacuationSafety = require('../../ZelBack/src/services/appLifecycle/app
 // spec.instances. What stays stubbed is I/O and the actuators — mongo through
 // appsRepository, docker, the uninstaller, the blocklist and reconcileApp.
 describe('specReconciler tests', () => {
+  // Every deployment view here is built for real, from records with no ledger:
+  // the registration names every component.
+  beforeEach(() => { stubLedgers(); });
+
   const LOCAL_IP = '44.55.66.77:16127';
   const LOCAL_TARGET = '44.55.66.77';
   const OTHER_TARGET = '9.9.9.9';
