@@ -571,31 +571,24 @@ async function recordExit(identifier, exitCode) {
  * here. The run facts are this node's evidence that the component has run
  * here, which the recovery gate reads to keep an established component rather
  * than remove it over a rebuild that fails; they are cleared only by remove().
- * The image record is the node's account of its own storage, kept while the
- * volume is.
+ * The volume record is what a release before the installed ledger wrote about
+ * the component's image; the adoption of an instance installed under that
+ * release reads it once, and it is kept until then.
  */
 const SURVIVES_REBUILD = ['hasEverStarted', 'hasSuccessfullyStarted'];
-const SURVIVES_WITH_VOLUME = ['volumeImagePath', 'volumeFsUuid'];
+const LEGACY_VOLUME_RECORD = ['volumeImagePath', 'volumeFsUuid'];
 
 /**
  * Drops the controller state for a component being rebuilt: the operator's stop
  * lock and every controller verdict, because a rebuild is an explicit "make it
- * run". The run facts always survive (SURVIVES_REBUILD).
- *
- * A rebuild that keeps the volume leaves the image on disk and mounted, so the
- * record of which image that is describes something that still exists. Losing
- * it sends the next boot back to searching the disks by filename, and stamps
- * whatever that search turns up as this node's own. A rebuild that recreates
- * the volume records the new image itself, so the old record goes.
+ * run". The run facts and the legacy volume record survive.
  *
  * THROWS rather than reporting a clear it did not make.
  *
  * @param {string} identifier
- * @param {object} [options]
- * @param {boolean} [options.keepVolumeRecord=true] - false when the volume is recreated
  * @throws When the state cannot be read or replaced.
  */
-async function removeControllerState(identifier, { keepVolumeRecord = true } = {}) {
+async function removeControllerState(identifier) {
   const database = collection();
   // Read without the swallow: a document that could not be READ is not a
   // document that is absent, and the difference is the operator stop lock.
@@ -610,7 +603,7 @@ async function removeControllerState(identifier, { keepVolumeRecord = true } = {
   );
   if (!state) return;
   const kept = { identifier, updatedAt: Date.now() };
-  [...SURVIVES_REBUILD, ...(keepVolumeRecord ? SURVIVES_WITH_VOLUME : [])].forEach((field) => {
+  [...SURVIVES_REBUILD, ...LEGACY_VOLUME_RECORD].forEach((field) => {
     if (state[field] !== undefined) kept[field] = state[field];
   });
   await dbHelper.replaceOneInDatabase(database, appsRuntimeState, { identifier }, kept);
@@ -638,33 +631,17 @@ async function remove(identifier) {
 }
 
 /**
- * Records where this node put a component's volume image and the filesystem
- * UUID it stamped that image with.
+ * The volume image a release before the installed ledger recorded for a
+ * component, or null when none was recorded. Read by the adoption of an
+ * instance installed under that release, once.
  *
- * The node chooses the path and the UUID, so this is the node's own account of
- * its storage: what it made, and where. It belongs beside the other facts this
- * node observed about the component rather than on the installed-apps row,
- * which is the owner's signed specification.
- *
- * @param {string} identifier Component identifier or docker app id.
- * @param {string} volumeImagePath Absolute path of the image.
- * @param {string|null} volumeFsUuid Filesystem UUID inside the image.
- */
-async function setVolumeImage(identifier, volumeImagePath, volumeFsUuid) {
-  await setFields(identifier, { volumeImagePath, volumeFsUuid: volumeFsUuid || null });
-}
-
-/**
- * The volume image this node recorded for a component, or null when it has
- * none - every component installed before the record existed.
- *
- * THROWS when the record cannot be read. Null is "this node recorded no
- * image", and a caller acts on that by searching the disks and trusting what
- * it finds; a database that would not answer has not established that, and
+ * THROWS when the record cannot be read. Null is "nothing was recorded", and
+ * the adoption acts on that by searching the disks and trusting what it
+ * finds; a database that would not answer has not established that, and
  * answering null for it hands an unverified image the standing of a recorded
  * one. This does not go through getState for that reason.
  *
- * @param {string} rawIdentifier Component identifier or docker app id.
+ * @param {string} identifier Component identifier or docker app id.
  * @returns {Promise<{path: string, fsUuid: string|null}|null>}
  * @throws When the state cannot be read.
  */
@@ -817,7 +794,6 @@ module.exports = {
   networkHealWaitMs,
   clearNetworkHeal,
   recordExit,
-  setVolumeImage,
   getVolumeImage,
   removeControllerState,
   remove,

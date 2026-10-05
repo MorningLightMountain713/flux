@@ -538,9 +538,8 @@ async function uninstallComponent(component, options = {}) {
   if (removed) {
     // A rebuild is an explicit "make it run", so neither the operator's stop lock nor
     // a stale controller verdict survives it. What the component has proven here does
-    // (appsRuntimeState.removeControllerState), and the image record goes only with
-    // the volume.
-    await appsRuntimeState.removeControllerState(component.identifier, { keepVolumeRecord: !removeVolumes });
+    // (appsRuntimeState.removeControllerState).
+    await appsRuntimeState.removeControllerState(component.identifier);
     if (onComponentRemoved) onComponentRemoved(component.identifier);
   }
 
@@ -1027,8 +1026,10 @@ async function uninstallApplication(appName, options = {}) {
     // delete is exact for both shapes.
     if (replica != null) {
       await appsRepository.removeInstalledIdentity(appName, replica);
+      await appRecords.ledgers().remove(appName, replica);
     } else {
       await appsRepository.removeInstalledApp(appName);
+      await appRecords.ledgers().removeAll(appName);
     }
     const lastReplica = await appsRepository.countInstalledIdentities(appName) === 0;
     if (broadcastRemoval) {
@@ -1059,6 +1060,7 @@ async function uninstallApplication(appName, options = {}) {
       // app as gone with zero filtering. A whole-app removal already deleted
       // every row above.
       await appsRepository.removeInstalledApp(appName);
+      await appRecords.ledgers().removeAll(appName);
       // The app is gone for good: nothing reconciles an app with no row, so its
       // removal records have no reader left. Only this full-uninstall path clears
       // them - a soft removal deletes the row too, but as one step of a redeploy

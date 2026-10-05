@@ -1701,30 +1701,6 @@ describe('appReconciler tests', () => {
       expect(volumeEvents, 'the reinstalled component\'s fault was swallowed').to.have.lengthOf(2);
     });
 
-    // Deleting the image alone records volume_missing. Deleting it and leaving
-    // another where the search reaches would otherwise be the quieter of the
-    // two, which is the wrong way round.
-    it('records an image found somewhere other than where it was recorded', async () => {
-      stubs.volumeService.ensureAppVolumeMounted.resolves({ mounted: true, alreadyMounted: false, imageMoved: true });
-
-      await appReconciler.reconcile('www_app');
-
-      const moved = stubs.appTamperingDetectionService.recordEvent.getCalls()
-        .filter((c) => c.args[1] === 'volume_image_moved');
-      expect(moved).to.have.lengthOf(1);
-      expect(moved[0].args[0]).to.equal('app');
-    });
-
-    it('records nothing when the image is where the record puts it', async () => {
-      stubs.volumeService.ensureAppVolumeMounted.resolves({ mounted: true, alreadyMounted: false, imageMoved: false });
-
-      await appReconciler.reconcile('www_app');
-
-      expect(
-        stubs.appTamperingDetectionService.recordEvent.getCalls().some((c) => c.args[1] === 'volume_image_moved'),
-      ).to.equal(false);
-    });
-
     it('ensures the volume is mounted before actuating a pending data wipe', async () => {
       appReconciler.requestStopAndClearData('www_app', 'test wipe');
       // requestStopAndClearData enqueues its own reconcile; wait for it to land

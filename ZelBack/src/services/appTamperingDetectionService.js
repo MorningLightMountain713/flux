@@ -76,7 +76,6 @@ const EVENT_SEVERITY = {
   // substitution here - both arrive with a fresh UUID. Counted, not scored: a
   // weight would fall on the re-creation too, and adoption makes it fire once
   // regardless, not accumulate.
-  volume_image_moved: 0,
   volume_unreadable: 0,
   recreation_failed: 0,
   volume_host_fault: 0,

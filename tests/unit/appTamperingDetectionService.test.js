@@ -405,13 +405,6 @@ describe('appTamperingDetectionService tests', () => {
         .to.equal(service.EVENT_SEVERITY.volume_missing);
     });
 
-    it('weighs an image that moved at nothing', async () => {
-      await service.recordEvent('myapp', 'volume_image_moved', 'x');
-
-      expect(eventUpserts()[0].update.$setOnInsert.severity).to.equal(0);
-      expect(service.EVENT_SEVERITY.volume_image_moved).to.equal(0);
-    });
-
     it('weighs a host fault at nothing, so a broken disk cannot DOS its operator', async () => {
       await service.recordEvent('myapp', 'volume_host_fault', 'no loop device');
 

@@ -5,7 +5,7 @@ const path = require('node:path');
 const dockerService = require('../dockerService');
 const deviceHelper = require('../deviceHelper');
 const serviceHelper = require('../serviceHelper');
-const appsRuntimeState = require('../appManagement/appsRuntimeState');
+const appRecords = require('../appDatabase/appRecords');
 const log = require('../../lib/log');
 const { getSpecBackend } = require('./specLibs');
 const appsRepository = require('../appDatabase/appsRepository');
@@ -558,68 +558,20 @@ async function mountedImagePath(dirPath) {
 }
 
 /**
- * The image path this node recorded when it created the volume, and the
- * filesystem UUID it gave it.
- *
- * FluxOS chooses where an image goes, so it is the authority on where one is.
- * A search of the filesystem is not: it matches on a filename anything on the
- * node can write, which is why every place something else might write has to
- * be excluded by hand. A recorded path is looked up, and a recorded UUID says
- * the file found there is the one this node made.
- *
- * Lives on the component's runtime-state document, which is node-local and
- * already keyed per component - the grain a volume has. The installed-apps row
- * is the owner's signed specification and holds nothing this node observed.
+ * The image file this node placed a component's volume in, and the filesystem
+ * UUID it stamped it with, from the installed ledger: where the node put the
+ * image, which is the only place it is looked for. Null when the ledger names
+ * no file for the component, or holds no block for its identifier.
  *
  * @param {string} identifier Component identifier or docker app id.
- * @returns {Promise<{path: string, fsUuid: string|null}|null>} Null when this
- *   node recorded no image.
- * @throws When the record cannot be read.
+ * @returns {Promise<{path: string, fsUuid: string|null}|null>}
+ * @throws When the ledger cannot be read.
  */
 async function recordedVolumeImage(identifier) {
-  return appsRuntimeState.getVolumeImage(identifier);
-}
-
-/**
- * Records where this node put a component's image and what it stamped it with.
- *
- * Best effort where nothing is recorded yet: a volume that exists and cannot
- * be written down is still a working volume, and the fallback search still
- * finds it. Failing a mount over the bookkeeping would make the record more
- * load-bearing than the thing it describes.
- *
- * It is NOT best effort where a record already exists and this one supersedes
- * it - see recordNewVolumeImage. A stamp left describing an image that has
- * been replaced refuses the volume that is actually there, for good.
- *
- * @param {string} identifier Component identifier or docker app id.
- * @param {string} volumeFile Absolute path of the image.
- * @param {string|null} fsUuid Filesystem UUID inside the image.
- */
-async function recordVolumeImage(identifier, volumeFile, fsUuid) {
-  await appsRuntimeState.setVolumeImage(identifier, volumeFile, fsUuid).catch((error) => {
-    log.warn(`recordVolumeImage - could not record ${volumeFile} for ${identifier}: ${error.message}`);
-  });
-}
-
-/**
- * Records the image a fresh volume was just created as, and throws when it
- * cannot.
- *
- * Creating a volume reformats it under a new stamp, so any record naming the
- * old one now describes an image that no longer exists. Left there it refuses
- * the new volume at every mount, deferring the app for good and recording a
- * tampering event against the operator on every boot - and nothing repairs it,
- * because nothing else writes this. The install is failed instead, where it
- * still rolls back.
- *
- * @param {string} identifier Component identifier or docker app id.
- * @param {string} volumeFile Absolute path of the image.
- * @param {string} fsUuid Filesystem UUID the image was created with.
- * @throws when the record cannot be written.
- */
-async function recordNewVolumeImage(identifier, volumeFile, fsUuid) {
-  await appsRuntimeState.setVolumeImage(identifier, volumeFile, fsUuid);
+  const ledger = await appRecords.ledgers().byIdentifier(identifier);
+  const volume = ledger?.blockOf(identifier)?.volume;
+  if (!volume?.file) return null;
+  return { path: volume.file, fsUuid: volume.fsUuid };
 }
 
 /**
@@ -835,9 +787,11 @@ async function getComponentAppIdsFromVolumeFiles(appName, identity = null) {
 /**
  * Ensures an app component's data volume is loop-mounted at its app dir - the
  * level-based desired state FluxOS itself owns (a rw mount replays a dirty
- * ext4 journal automatically). Idempotent: a mounted volume is a no-op. Never
- * deletes anything: content found on the bare mountpoint is shadowed by the
- * mount, loudly, so it stays recoverable underneath.
+ * ext4 journal automatically). The image is the file the installed ledger
+ * names and nothing else, checked against the stamp the ledger holds.
+ * Idempotent: a mounted volume is a no-op. Never deletes anything: content
+ * found on the bare mountpoint is shadowed by the mount, loudly, so it stays
+ * recoverable underneath.
  * @param {string} identifier Component identifier (comp_app), app name, or docker app id.
  * @returns {Promise<{mounted: boolean, alreadyMounted?: boolean, reason?: string}>}
  */
@@ -846,65 +800,33 @@ async function ensureAppVolumeMounted(identifier) {
   const mountPoint = path.join(appsFolder, appId);
 
   if (await isPathMounted(mountPoint)) {
-    // The stamp is checked when THIS node mounts the volume, below. One already
-    // mounted is trusted as it is: a mismatch found here could not be acted on -
-    // unmounting a running app's volume destroys its live data - and re-reading
-    // every mounted image's stamp on every pass would blkid every volume on the
-    // node continuously for a check it could not enforce. A mount swapped by
-    // something with host root is what this leaves uncovered, and that is
-    // outside what the stamp defends.
-    //
-    // A node that upgrades with its apps running never has to search for their
-    // images: the loop device names its own backing file, so the path this
-    // node used is readable from the kernel. Taken once, when there is nothing
-    // recorded yet.
-    // A record with a path but no stamp is not a finished record: the check
-    // before a mount is skipped for want of something to compare against, so
-    // the component quietly keeps the behaviour this exists to replace. One
-    // unreadable probe at learn time must not settle that for good, so the
-    // stamp is taken again whenever it is missing.
-    // A record that cannot be read is not a record that is absent: writing one
-    // here would describe the mount by a path nothing confirmed. The volume is
-    // already up, so the bookkeeping waits for a pass that can read it.
-    const known = await recordedVolumeImage(identifier).catch((error) => {
-      log.warn(`ensureAppVolumeMounted - the image recorded for ${appId} could not be read (${error.message}), so nothing is recorded for it now`);
-      return undefined;
-    });
-    if (known !== undefined && (!known || !known.fsUuid)) {
-      // What the mount actually resolves through, whenever the kernel will say:
-      // a recorded path is where an image was put, and a volume re-created
-      // elsewhere leaves that path naming a file this mount does not use.
-      // Stamping that file would harden the record onto data the app is not
-      // running on.
-      // Only what the mount actually resolves through. The kernel not saying
-      // is not permission to stamp the recorded path: a volume mounted from
-      // somewhere else would then get a complete, self-consistent record for a
-      // file the app is not running on, and every later boot would mount that
-      // one and pass the check.
-      const backing = await mountedImagePath(mountPoint);
-      if (backing) {
-        const stamp = await imageFsUuid(backing);
-        if (!known || stamp) await recordVolumeImage(identifier, backing, stamp);
-      }
-    }
     return { mounted: true, alreadyMounted: true };
   }
 
-  const discovered = await getVolumeFilePath(identifier);
-  if (!discovered.path) {
-    return { mounted: false, reason: discovered.conclusive ? 'volume_file_missing' : discovered.blocked };
+  // A ledger that would not read has not said the image is absent, and
+  // reporting it absent is how a database fault becomes a tampering event
+  // against the operator.
+  let recorded;
+  try {
+    recorded = await recordedVolumeImage(identifier);
+  } catch (error) {
+    log.warn(`ensureAppVolumeMounted - the image recorded for ${appId} could not be read (${error.message})`);
+    return { mounted: false, reason: 'record_unreadable' };
   }
-  const volumeFile = discovered.path;
-  // An image somewhere other than where the record puts it, and no way to tell
-  // whether the recorded one is still there: the record would not read, or the
-  // path it names answered something other than "not here". Mounting this one
-  // skips the stamp for want of anything to compare against, and then writes
-  // it down as this node's own - which is the filename search the record
-  // exists to replace, run once and made permanent. The volume defers under
-  // the fault that stopped the question being settled.
-  if (!discovered.recordSettled && (!discovered.recorded || discovered.recorded.path !== volumeFile)) {
-    log.warn(`ensureAppVolumeMounted - ${volumeFile} was found for ${appId} while ${discovered.blocked}, so it is not adopted`);
-    return { mounted: false, reason: discovered.blocked };
+  if (!recorded) {
+    return { mounted: false, reason: 'volume_file_missing' };
+  }
+  const volumeFile = recorded.path;
+  // ENOENT and ENOTDIR both say the image is not there, and say it definitely.
+  // Everything else - the disk answering EIO, a directory that denies the
+  // lookup - has ruled nothing out.
+  const failure = await fs.access(volumeFile).then(() => null).catch((error) => error);
+  if (failure) {
+    if (failure.code === 'ENOENT' || failure.code === 'ENOTDIR') {
+      return { mounted: false, reason: 'volume_file_missing' };
+    }
+    log.warn(`ensureAppVolumeMounted - ${volumeFile} could not be read (${failure.code || failure.message})`);
+    return { mounted: false, reason: 'candidate_path_unreadable' };
   }
 
   // A disk the kernel remounted read-only after an I/O error still holds the
@@ -960,33 +882,18 @@ async function ensureAppVolumeMounted(identifier) {
     log.warn(`ensureAppVolumeMounted - ${mountPoint} is not mounted but holds ${mountPointEntries.length} entries; they were written while unmounted and will be shadowed by the volume`);
   }
 
-  // The stamp is a claim about the image AT the recorded path: that the file
-  // still sitting where this node put one is the one it put there. A file
-  // substituted at that path is refused.
-  //
-  // It says nothing about an image found somewhere else. A volume legitimately
-  // re-created elsewhere, or a record left behind by a release that has since
-  // been rolled back, leaves a path this node no longer uses - and refusing on
-  // that basis would refuse the app's real data for good, with no way back
-  // short of destroying it. So a record that does not describe where the image
-  // actually is, is stale rather than damning: it is replaced below.
-  //
-  // Path-anchored, and that is the boundary: an image deleted at the recorded
-  // path and replaced at another searched location is adopted and recorded as
-  // moved (volume_image_moved, weight 0), not refused as unrecognised (weight
-  // 1) - the two cannot be told apart here. Reaching a searched path other than
-  // the app's own mounted volume takes host-level write access, which can
-  // manipulate mounts directly; the stamp defends against a container-level app
-  // planting a file where the search looks, not against host root.
-  const stamped = discovered.recorded;
-  const atRecordedPath = Boolean(stamped) && stamped.path === volumeFile;
-  if (atRecordedPath && stamped.fsUuid) {
+  // The stamp is the ledger's claim about the file: that the one sitting where
+  // this node put its image is the one it formatted. A file substituted there
+  // is refused. A stamp the ledger does not hold is a volume formatted before
+  // the node kept one, or an install that died before formatting; neither
+  // refuses the mount, and the mount itself refuses anything that is not a
+  // filesystem.
+  if (recorded.fsUuid) {
     const found = await imageFsUuid(volumeFile);
-    // A UUID that cannot be read says nothing either way, and the mount itself
-    // refuses anything that is not a filesystem. Only a positive mismatch is a
-    // refusal here.
-    if (found && found !== stamped.fsUuid) {
-      log.error(`ensureAppVolumeMounted - ${volumeFile} carries ${found}, not the ${stamped.fsUuid} this node created for ${appId}`);
+    // A UUID that cannot be read says nothing either way. Only a positive
+    // mismatch is a refusal here.
+    if (found && found !== recorded.fsUuid) {
+      log.error(`ensureAppVolumeMounted - ${volumeFile} carries ${found}, not the ${recorded.fsUuid} this node created for ${appId}`);
       return { mounted: false, reason: 'volume_image_unrecognised' };
     }
   }
@@ -1030,39 +937,19 @@ async function ensureAppVolumeMounted(identifier) {
     if (kind) {
       return { mounted: false, reason: `mount_host_refused: ${mountRes.error.message}` };
     }
-    // The image holds no filesystem. If this node recorded stamping one at this
-    // path it has been overwritten, which is evidence about the volume. If it
-    // never recorded one, the install died between allocating the file and
-    // formatting it - the node's own unfinished work, not the operator's, so it
-    // is not laid at the image. (A record that would not read returned above, so
-    // no record here means there is none, not that it could not be asked for.)
-    if (stamped) {
+    // The image holds no filesystem. A stamp in the ledger says this node
+    // formatted the file, so it has been overwritten, which is evidence about
+    // the volume. No stamp says the install died between allocating the file
+    // and formatting it - the node's own unfinished work, not the operator's,
+    // so it is not laid at the image.
+    if (recorded.fsUuid) {
       return { mounted: false, reason: `mount_failed: ${mountRes.error.message}` };
     }
     return { mounted: false, reason: `volume_incomplete_install: ${mountRes.error.message}` };
   }
 
   log.info(`ensureAppVolumeMounted - mounted ${volumeFile} at ${mountPoint}`);
-  // An image found by the search is recorded now that it is known to mount, so
-  // the search runs once for it and the lookup answers ever after.
-  // Recorded now that the mount has proved the image real: a first discovery,
-  // a stamp that could not be read last time, or a record naming a path this
-  // node no longer uses. Leaving that last one would send every later boot
-  // back through the filename search this record exists to remove, and hand
-  // the refusal above to whatever turned up at the old path.
-  if (!atRecordedPath || !stamped.fsUuid) {
-    const stamp = await imageFsUuid(volumeFile);
-    if (!atRecordedPath || stamp) await recordVolumeImage(identifier, volumeFile, stamp);
-  }
-  // An image this node recorded a place for, found somewhere else. The stamp
-  // is only a claim about the recorded path, so the one that just mounted was
-  // never compared against it - a volume re-created elsewhere and an image
-  // deleted and replaced elsewhere arrive here identically. Refusing would
-  // refuse the first for good, so the record is replaced and the fact reported
-  // rather than swallowed: deleting the image alone is recorded, and deleting
-  // it and leaving another would otherwise be the quieter of the two.
-  const imageMoved = Boolean(stamped) && stamped.path !== volumeFile;
-  return { mounted: true, alreadyMounted: false, imageMoved };
+  return { mounted: true, alreadyMounted: false };
 }
 
 /**
@@ -1131,8 +1018,6 @@ module.exports = {
   imageFsType,
   imageFsUuid,
   mountedImagePath,
-  recordNewVolumeImage,
-  recordVolumeImage,
   recordedVolumeImage,
   isPathMounted,
   getVolumeFilePath,

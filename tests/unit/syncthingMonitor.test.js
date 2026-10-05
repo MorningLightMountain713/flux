@@ -1079,22 +1079,6 @@ describe('syncthingMonitor tests', () => {
       sinon.assert.calledWith(syncthingEventsConsumerMock.resolveMountVerify, 'fluxweb_gone');
     });
 
-    // Incidents roll up under the app: filed under the component identifier, one app's
-    // events split across two documents and a second app that does not exist is reported.
-    it('files a moved volume image under the app that holds it', async () => {
-      tamperingMock.recordEvent.resetHistory();
-      deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
-      syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
-      syncthingFolderStateMachineMock.verifyFolderMountSafety.onFirstCall().resolves({ isSafe: false, isMounted: false, reason: 'empty_unmounted_directory' });
-      syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: true, isMounted: true });
-      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: true, imageMoved: true });
-
-      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
-      await clock.tickAsync(100);
-
-      sinon.assert.calledWith(tamperingMock.recordEvent, 'testapp', 'volume_image_moved');
-    });
-
     it('resolves a mount-verify flag once that folder verifies safe', async () => {
       // The other half, and the one that proves the assertion above is not
       // vacuous: the same path DOES clear the flag when the question is answered.

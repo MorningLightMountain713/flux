@@ -255,7 +255,7 @@ async function removeFormerContainer(formerComp) {
 /**
  * The backing image of a component's volume under its former identifier: the
  * file the kernel mounts at the former directory when it is mounted, else the
- * image this node recorded, else the image found by its 8.x name, else by its
+ * image the ledger names, else the image found by its 8.x name, else by its
  * bare one. Null when none is there.
  *
  * @param {string} formerIdentifier
@@ -263,40 +263,20 @@ async function removeFormerContainer(formerComp) {
  * @returns {Promise<{path: string, fsUuid: string|null}|null>}
  */
 async function formerImage(formerIdentifier, formerDir) {
-  if (await volumeService.isPathMounted(formerDir)) {
-    const backing = await volumeService.mountedImagePath(formerDir);
-    if (backing) {
-      const recorded = await appsRuntimeState.getVolumeImage(formerIdentifier).catch(() => null);
-      const fsUuid = recorded && recorded.path === backing ? recorded.fsUuid : await volumeService.imageFsUuid(backing);
-      return { path: backing, fsUuid: fsUuid || null };
-    }
-  }
-  const recorded = await appsRuntimeState.getVolumeImage(formerIdentifier);
-  if (recorded && await exists(recorded.path)) return recorded;
-  // eslint-disable-next-line no-restricted-syntax
-  for (const named of [`flux${formerIdentifier}`, formerIdentifier]) {
-    // eslint-disable-next-line no-await-in-loop
-    const found = await volumeService.getVolumeFilePath(named);
-    if (found.path) {
-      // eslint-disable-next-line no-await-in-loop
-      return { path: found.path, fsUuid: (await volumeService.imageFsUuid(found.path)) || null };
-    }
-  }
-  return null;
+  const recorded = await volumeService.recordedVolumeImage(formerIdentifier);
+  return installedLedger.discoverVolumeImage(formerIdentifier, recorded, [formerDir]);
 }
 
 /**
  * Moves a component's volume onto its identity: the former directory is
- * unmounted, the image is renamed beside itself and recorded under the new
- * identifier with the stamp it carries, the directory is renamed, and the
- * volume is mounted at the new path through the one path every mount takes.
- * An image already in place is recorded and mounted without a rename. A
- * volume that will not mount is left for the reconciler, which mounts every
- * volume before it starts an app and reports one that will not.
+ * unmounted, the image is renamed beside itself, and the directory is
+ * renamed. An image already in place is left where it is. The volume is
+ * mounted once the ledger names it, after the record flips.
  *
  * @param {object} formerComp
  * @param {object} comp - the same component of the deployment built under the identity
- * @returns {Promise<{mounted: boolean, reason?: string}>}
+ * @returns {Promise<{path: string, fsUuid: string|null}|null>} the image under the
+ *   identity, with the stamp it carries, or null when none is there
  */
 async function moveVolume(formerComp, comp) {
   const formerDir = await formerDirectory(formerComp.identifier);
@@ -306,14 +286,13 @@ async function moveVolume(formerComp, comp) {
   if (await volumeService.isPathMounted(formerDir)) await run('umount', [formerDir]);
 
   if (!image) {
-    const placed = await appsRuntimeState.getVolumeImage(comp.identifier);
-    if (placed && await exists(placed.path)) image = placed;
+    const placed = await volumeService.getVolumeFilePath(comp.identifier);
+    if (placed.path) image = { path: placed.path, fsUuid: (await volumeService.imageFsUuid(placed.path)) || null };
   }
   if (image) {
     const target = path.join(path.dirname(image.path), `${comp.identifier}FLUXFSVOL`);
     if (image.path !== target) await run('mv', [image.path, target]);
-    const fsUuid = image.fsUuid || await volumeService.imageFsUuid(target);
-    await volumeService.recordNewVolumeImage(comp.identifier, target, fsUuid);
+    image = { path: target, fsUuid: image.fsUuid || (await volumeService.imageFsUuid(target)) || null };
   }
 
   if (await exists(formerDir) && !await exists(dir)) {
@@ -321,10 +300,7 @@ async function moveVolume(formerComp, comp) {
     await run('mv', [formerDir, dir]);
   }
 
-  if (!image) return { mounted: false, reason: 'no image found under the former names' };
-  const mounted = await volumeService.ensureAppVolumeMounted(comp.identifier);
-  if (!mounted.mounted) return { mounted: false, reason: mounted.reason };
-  return { mounted: true };
+  return image;
 }
 
 /**
@@ -401,7 +377,8 @@ async function executePlan(plan) {
     name, replica, registration, from, to, former, next,
   } = plan;
   await appIdentityMoveStore.begin(name, replica, to);
-  let deferred = null;
+  // The image of each volume under the identity, as the move left it.
+  const volumes = new Map();
 
   // eslint-disable-next-line no-restricted-syntax
   for (const [componentName, formerComp] of former.componentEntries()) {
@@ -410,14 +387,11 @@ async function executePlan(plan) {
     await attempt(`stop ${formerComp.identifier}`, () => stopFormerContainer(plan, formerComp));
     // eslint-disable-next-line no-await-in-loop
     await attempt(`remove ${formerComp.identifier}`, () => removeFormerContainer(formerComp));
-    // Before the image is recorded under the new identifier: the record is one
-    // field of this document, and the move's own write outranks a carried one.
     // eslint-disable-next-line no-await-in-loop
     await appsRuntimeState.rekey(formerComp.identifier, comp.identifier);
     if (!formerComp.isStateless) {
       // eslint-disable-next-line no-await-in-loop
-      const volume = await attempt(`move the volume of ${formerComp.identifier}`, () => moveVolume(formerComp, comp));
-      if (!volume.mounted) deferred = `${comp.identifier}: ${volume.reason}`;
+      volumes.set(comp.identifier, await attempt(`move the volume of ${formerComp.identifier}`, () => moveVolume(formerComp, comp)));
     }
     // eslint-disable-next-line no-await-in-loop
     if (comp.hasSyncthing()) await repointFolder(comp);
@@ -429,9 +403,28 @@ async function executePlan(plan) {
   const { InstalledLedger } = specLibrary.loaded();
   await putRecord(plan.installed, { identity: to });
   await appRecords.ledgers().put(new InstalledLedger({
-    name, replica, ...(await installedLedger.observeLedger(next, volumeService.recordedVolumeImage)),
+    name, replica, ...(await installedLedger.observeLedger(next, async (identifier) => volumes.get(identifier) ?? null)),
   }));
   await appIdentityMoveStore.end(name, replica);
+
+  // Mounted now that the ledger names each image, through the one path every
+  // mount takes. A volume that will not mount is left for the reconciler,
+  // which mounts every volume before it starts an app and reports one that
+  // will not.
+  let deferred = null;
+  // eslint-disable-next-line no-restricted-syntax
+  for (const [identifier, image] of volumes) {
+    if (!image) {
+      deferred = `${identifier}: no image found under the former names`;
+      break;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    const mounted = await volumeService.ensureAppVolumeMounted(identifier);
+    if (!mounted.mounted) {
+      deferred = `${identifier}: ${mounted.reason}`;
+      break;
+    }
+  }
   if (deferred) {
     log.warn(`appIdentityMove - ${name} is on its identity; the reconciler mounts and creates its containers (${deferred})`);
   } else {

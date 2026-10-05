@@ -26,6 +26,7 @@ describe('appUninstaller tests', () => {
   let dockerServiceStub;
   let appsRepositoryStub;
   let registryStub;
+  let ledgersStub;
   let fluxShutdowndClientStub;
   let relationshipResolverStub;
   let pendingTeardownStoreStub;
@@ -118,6 +119,7 @@ describe('appUninstaller tests', () => {
     };
 
     registryStub = { byName: sinon.stub().resolves(null) };
+    ledgersStub = { remove: sinon.stub().resolves(), removeAll: sinon.stub().resolves() };
     appsRepositoryStub = {
       getInstalledApp: sinon.stub().resolves(null),
       getAppMessage: sinon.stub().resolves(null),
@@ -201,7 +203,7 @@ describe('appUninstaller tests', () => {
         broadcastMessageToAll: broadcastAllStub,
       },
       '../appDatabase/appsRepository': appsRepositoryStub,
-      '../appDatabase/appRecords': { registry: () => registryStub },
+      '../appDatabase/appRecords': { registry: () => registryStub, ledgers: () => ledgersStub },
       './relationshipResolver': relationshipResolverStub,
       './pendingTeardownStore': pendingTeardownStoreStub,
       '../appManagement/appsRuntimeState': runtimeStateStub,
@@ -340,21 +342,16 @@ describe('appUninstaller tests', () => {
     });
 
     // A redeploy is an explicit "make it run": neither the operator's stop lock nor a
-    // stale controller verdict survives it. A kept volume keeps the record of which
-    // image it is; a removed one takes the record with it.
+    // stale controller verdict survives it. Never remove(): that takes the run facts
+    // too, and a rebuild that then fails would read an established component as one
+    // that never ran.
     describe('the component\'s runtime state', () => {
-      it('keeps the image record when the volume is kept', async () => {
-        await appUninstaller.uninstallComponent(component(), { removeVolumes: false });
-        sinon.assert.calledOnceWithExactly(runtimeStateStub.removeControllerState, 'web_TestApp', { keepVolumeRecord: true });
-        sinon.assert.notCalled(runtimeStateStub.remove);
-      });
-
-      // Never remove(): that takes the run facts too, and a rebuild that then fails
-      // would read an established component as one that never ran.
-      it('drops the image record with a recreated volume, and nothing the component proved', async () => {
-        await appUninstaller.uninstallComponent(component(), { removeVolumes: true });
-        sinon.assert.calledOnceWithExactly(runtimeStateStub.removeControllerState, 'web_TestApp', { keepVolumeRecord: false });
-        sinon.assert.notCalled(runtimeStateStub.remove);
+      [false, true].forEach((removeVolumes) => {
+        it(`clears the controller state and nothing the component proved, volume ${removeVolumes ? 'recreated' : 'kept'}`, async () => {
+          await appUninstaller.uninstallComponent(component(), { removeVolumes });
+          sinon.assert.calledOnceWithExactly(runtimeStateStub.removeControllerState, 'web_TestApp');
+          sinon.assert.notCalled(runtimeStateStub.remove);
+        });
       });
 
       it('has the reconciler forget the component it removed', async () => {
@@ -977,6 +974,8 @@ describe('appUninstaller tests', () => {
 
       sinon.assert.calledWith(appsRepositoryStub.removeInstalledApp, 'pinnedapp');
       sinon.assert.notCalled(appsRepositoryStub.removeInstalledIdentity);
+      sinon.assert.calledWith(ledgersStub.removeAll, 'pinnedapp');
+      sinon.assert.notCalled(ledgersStub.remove);
     });
 
     it("a replica-named removal removes only that identity's row", async () => {
@@ -987,6 +986,8 @@ describe('appUninstaller tests', () => {
 
       sinon.assert.calledWith(appsRepositoryStub.removeInstalledIdentity, 'pinnedapp', 's1');
       sinon.assert.notCalled(appsRepositoryStub.removeInstalledApp);
+      sinon.assert.calledOnceWithExactly(ledgersStub.remove, 'pinnedapp', 's1');
+      sinon.assert.notCalled(ledgersStub.removeAll);
     });
 
     // The cascade is a correctness invariant - a consumer must never outlive

@@ -163,7 +163,10 @@ describe('appUninstaller tombstoning teardown', () => {
         buildDeployment: sinon.stub().callsFake(async () => deployment),
         localIdentities: sinon.stub().resolves([null]),
       },
-      appRecords: { registry: () => ({ byName: sinon.stub().callsFake(async () => globalPinnedSpec) }) },
+      appRecords: {
+        registry: () => ({ byName: sinon.stub().callsFake(async () => globalPinnedSpec) }),
+        ledgers: () => ({ remove: sinon.stub().resolves(), removeAll: sinon.stub().resolves() }),
+      },
       appsRepository: {
         getInstalledApp: sinon.stub().callsFake(async () => installedSpec),
         getAppMessage: sinon.stub().resolves(null),

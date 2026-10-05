@@ -2134,6 +2134,11 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
       );
       // eslint-disable-next-line no-await-in-loop
       await appUninstaller.uninstallComponent(deployComp, { removeVolumes, skipPorts: true, stopHandled });
+      // A component the new spec drops has left the instance; its block goes
+      // with it. One rebuilt or reinstalled keeps its block for the ports and
+      // the volume the reinstall does not recreate.
+      // eslint-disable-next-line no-await-in-loop
+      if (removed.includes(name)) await appRecords.ledgers().removeComponent(appName, oldDeployment.replica ?? null, name);
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(config.get('fluxapps.redeploy.composedDelay') * 1000);
     }
@@ -2211,6 +2216,20 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
     }
   }
 
+  // Each component's ports as the ledger names them, before any is opened: a
+  // port kept from the old spec keeps the methods it was opened by, an added
+  // one takes the methods the node opens ports by now.
+  const opened = await componentProvisioner.portOpenMethods();
+  const replica = newDeployment.replica ?? null;
+  const ledger = await appRecords.ledgers().byInstance(appName, replica);
+  // eslint-disable-next-line no-restricted-syntax
+  for (const [name, comp] of newDeployment.componentEntries()) {
+    const before = ledger?.component(name)?.hostPorts ?? [];
+    const hostPorts = (comp.hostPorts ?? []).map((port) => ({ port, opened: before.find((p) => p.port === port)?.opened ?? opened }));
+    // eslint-disable-next-line no-await-in-loop
+    await appRecords.ledgers().setComponent(appName, replica, name, 'hostPorts', hostPorts);
+  }
+
   // Open the added ports now that the new containers are up. Gate the open on the same
   // teardown-owed signal the install interlock uses: a forced same-name cancel can race
   // this reinstall (force bypasses the per-app gate) — it writes a teardown doc, deletes
@@ -2221,7 +2240,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
     if (await pendingTeardownStore.teardownOwedFor(appName)) {
       log.info(`reconcileComponents: teardown owed for ${appName}; skipping redeploy port-open (${portsToOpen.join(',')})`);
     } else {
-      await componentProvisioner.openHostPorts(portsToOpen, appName);
+      await componentProvisioner.openHostPorts(portsToOpen, appName, opened);
     }
   }
 

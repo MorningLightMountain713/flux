@@ -8,6 +8,7 @@ const serviceHelper = require('../serviceHelper');
 const dockerService = require('../dockerService');
 const messageHelper = require('../messageHelper');
 const volumeService = require('../utils/volumeService');
+const appRecords = require('../appDatabase/appRecords');
 const globalState = require('../utils/globalState');
 const syncthingIgnorePolicy = require('../appSystem/syncthingIgnorePolicy');
 const { withHostMutationLock } = require('../utils/hostMutationLock');
@@ -86,18 +87,24 @@ async function createAppVolume(deployComp, res) {
       // replaced, and peers rank a seed on it. Withdrawn at the first act that cannot
       // be undone: every abort above leaves the volume and its data as they were.
       globalState.folderHoldings?.delete(appId);
+      // The image's file, its disk and its mount directory are this node's
+      // choices, in the ledger before the file exists: a later boot mounts the
+      // file the ledger names and nothing else. The filesystem is stamped with
+      // a UUID this node chooses, in the ledger once the filesystem carries it,
+      // so the boot tells this image from a file left under the same name and
+      // an image never formatted from one overwritten. A ledger that cannot be
+      // written fails the install, since nothing later could find the image.
+      const volumeFsUuid = crypto.randomUUID();
+      const volume = {
+        file: volumeFile, disk: useThisVolume.mount, fsUuid: null, mountDir: appsFolder + appId,
+      };
+      await appRecords.ledgers().setComponent(deployComp.appName, deployComp.replica ?? null, deployComp.name, 'volume', volume);
       await serviceHelper.runCommand('fallocate', { params: ['-l', `${requiredGb}G`, volumeFile], runAsRoot: true });
       emitStatus(res, { status: 'Space allocated' });
 
       emitStatus(res, { status: 'Creating filesystem...' });
-      // The filesystem is stamped with a UUID this node chooses, and the pair is
-      // recorded against the component: a later boot looks the image up by it
-      // rather than searching the disks for a filename, and tells this image from
-      // a file somebody else left under the same name. A record that cannot be
-      // written fails the install, since nothing later could recognise the image.
-      const volumeFsUuid = crypto.randomUUID();
       await serviceHelper.runCommand('mke2fs', { params: ['-t', 'ext4', '-U', volumeFsUuid, volumeFile], runAsRoot: true });
-      await volumeService.recordNewVolumeImage(identifier, volumeFile, volumeFsUuid);
+      await appRecords.ledgers().setComponent(deployComp.appName, deployComp.replica ?? null, deployComp.name, 'volume', { ...volume, fsUuid: volumeFsUuid });
       emitStatus(res, { status: 'Filesystem created' });
 
       emitStatus(res, { status: 'Making directory...' });

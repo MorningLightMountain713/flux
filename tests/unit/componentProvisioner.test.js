@@ -12,6 +12,9 @@ describe('componentProvisioner tests', () => {
   let allowPortStub;
   let mapUpnpPortStub;
   let provisionCertStub;
+  let ledgersStub;
+  let appDockerImageDigestStub;
+  const APPS_FOLDER = '/apps/';
   // The app's identity, carried by every component the library resolves.
   const IDENTITY = `b${'a'.repeat(52)}`;
 
@@ -29,14 +32,19 @@ describe('componentProvisioner tests', () => {
     allowPortStub = sinon.stub().resolves({ status: true });
     mapUpnpPortStub = sinon.stub().resolves(true);
     provisionCertStub = certError ? sinon.stub().rejects(certError) : sinon.stub().resolves();
+    appDockerImageDigestStub = sinon.stub().resolves('sha256:pulled');
+    ledgersStub = { addComponent: sinon.stub().resolves(true), setComponent: sinon.stub().resolves() };
     return proxyquire.load('../../ZelBack/src/services/appLifecycle/componentProvisioner', {
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
       '../dockerService': {
         appDockerCreate: appDockerCreateStub,
         appDockerImageSize: appDockerImageSizeStub,
+        appDockerImageDigest: appDockerImageDigestStub,
         appDockerStart: appDockerStartStub,
         dockerPullStream: sinon.stub(),
       },
+      '../appDatabase/appRecords': { ledgers: () => ledgersStub },
+      '../utils/appConstants': { appsFolder: APPS_FOLDER },
       '../fluxNetworkHelper': { isFirewallActive: sinon.stub().resolves(firewallActive), allowPort: allowPortStub },
       '../upnpService': { isUPNP: sinon.stub().returns(isUPNP), mapUpnpPort: mapUpnpPortStub },
       '../appRequirements/hwRequirements': { systemArchitecture: sinon.stub().resolves('amd64') },
@@ -70,10 +78,17 @@ describe('componentProvisioner tests', () => {
       requiresSyncBeforeStart: () => syncMode === 'syncFirst',
       requiresBackendTls: () => false,
       backendTlsPaths: () => null,
+      hasSyncthing: () => false,
+      syncFolderId: 'web_syncholdapp',
+      networkAliases: ['web'],
       mounts: [],
       ...overrides,
     };
   }
+
+  // The ledger writes of one install, as [field, value] in the order made.
+  const ledgerWrites = () => ledgersStub.setComponent.getCalls().map((c) => c.args.slice(3));
+  const ledgerWrite = (field) => ledgersStub.setComponent.getCalls().find((c) => c.args[3] === field);
 
   // A verify:required component as flux-spec resolves it. backendTlsPaths() is
   // the domain type's own accessor - the runtime never rebuilds these paths, so
@@ -97,6 +112,147 @@ describe('componentProvisioner tests', () => {
     const provisioner = loadProvisioner();
     await provisioner.installComponent(makeComponent(syncMode), { owner: 'owner1', createVolumes });
   }
+
+  // Every entry is in the ledger before the step that creates what it names.
+  describe('the ledger', () => {
+    it('adds the component\'s block before anything is provisioned, with its identifier, image reference and sync folder', async () => {
+      const provisioner = loadProvisioner({ firewallActive: true });
+      await provisioner.installComponent(makeComponent(null, {
+        hostPorts: [31_000], hasSyncthing: () => true, syncFolderId: 'fluxweb_synchold',
+      }), { owner: 'owner1', createVolumes: true });
+
+      sinon.assert.calledOnceWithExactly(ledgersStub.addComponent, 'syncholdapp', null, 'web', {
+        identifier: 'web_syncholdapp', image: 'nginx:latest', syncFolder: { id: 'fluxweb_synchold', path: '/apps/web_syncholdapp' },
+      });
+      expect(ledgersStub.addComponent.calledBefore(allowPortStub), 'the block precedes the first port').to.equal(true);
+      expect(ledgersStub.addComponent.calledBefore(createAppVolumeStub)).to.equal(true);
+      expect(ledgersStub.addComponent.calledBefore(appDockerCreateStub)).to.equal(true);
+    });
+
+    it('names no sync folder for a component without syncthing, and carries the replica of a named instance', async () => {
+      const provisioner = loadProvisioner();
+      await provisioner.installComponent(makeComponent(null, { replica: 'r1' }), { owner: 'owner1' });
+      sinon.assert.calledOnceWithExactly(ledgersStub.addComponent, 'syncholdapp', 'r1', 'web', {
+        identifier: 'web_syncholdapp', image: 'nginx:latest', syncFolder: null,
+      });
+      expect(ledgersStub.setComponent.getCalls().every((c) => c.args[1] === 'r1'), 'every entry is the replica\'s').to.equal(true);
+    });
+
+    it('records each port with the methods that will open it, before it is opened', async () => {
+      const provisioner = loadProvisioner({ firewallActive: true, isUPNP: true });
+      await provisioner.installComponent(makeComponent(null, { hostPorts: [31_000, 31_001] }), { owner: 'owner1' });
+
+      const ports = ledgerWrite('hostPorts');
+      expect(ports.args).to.deep.equal(['syncholdapp', null, 'web', 'hostPorts', [
+        { port: 31_000, opened: ['ufw', 'upnp'] }, { port: 31_001, opened: ['ufw', 'upnp'] },
+      ]]);
+      expect(ports.calledBefore(allowPortStub.firstCall), 'recorded before opened').to.equal(true);
+      expect(ports.calledBefore(mapUpnpPortStub.firstCall)).to.equal(true);
+      sinon.assert.calledTwice(allowPortStub);
+      sinon.assert.calledTwice(mapUpnpPortStub);
+    });
+
+    it('records a port as opened by nothing on a node with no firewall and no UPnP, and opens it by nothing', async () => {
+      const provisioner = loadProvisioner();
+      await provisioner.installComponent(makeComponent(null, { hostPorts: [31_000] }), { owner: 'owner1' });
+      expect(ledgerWrite('hostPorts').args[4]).to.deep.equal([{ port: 31_000, opened: [] }]);
+      sinon.assert.notCalled(allowPortStub);
+      sinon.assert.notCalled(mapUpnpPortStub);
+    });
+
+    it('leaves the ports entry as it is on a redeploy, which opens none', async () => {
+      const provisioner = loadProvisioner({ firewallActive: true });
+      await provisioner.installComponent(makeComponent(null, { hostPorts: [31_000] }), { owner: 'owner1', skipPorts: true });
+      expect(ledgerWrite('hostPorts')).to.equal(undefined);
+      sinon.assert.notCalled(allowPortStub);
+    });
+
+    it('records the image with the digest the daemon holds after the pull, before the volume is built', async () => {
+      const provisioner = loadProvisioner();
+      await provisioner.installComponent(makeComponent(null), { owner: 'owner1', createVolumes: true });
+      const image = ledgerWrite('image');
+      expect(image.args[4]).to.deep.equal({ reference: 'nginx:latest', digest: 'sha256:pulled' });
+      sinon.assert.calledOnceWithExactly(appDockerImageDigestStub, 'nginx:latest');
+      expect(image.calledBefore(createAppVolumeStub.firstCall)).to.equal(true);
+    });
+
+    it('records the mount sources before the volume that holds them is created', async () => {
+      const provisioner = loadProvisioner();
+      await provisioner.installComponent(makeComponent(null, {
+        mounts: [{ Source: '/apps/web_syncholdapp/appdata', sourceType: 'directory' }, { Source: '/apps/web_syncholdapp/conf.toml', sourceType: 'file' }],
+      }), { owner: 'owner1', createVolumes: true });
+      const sources = ledgerWrite('mountSources');
+      expect(sources.args[4]).to.deep.equal([
+        { path: '/apps/web_syncholdapp/appdata', kind: 'dir' }, { path: '/apps/web_syncholdapp/conf.toml', kind: 'file' },
+      ]);
+      expect(sources.calledBefore(createAppVolumeStub.firstCall)).to.equal(true);
+    });
+
+    it('records the TLS directory before the certificate is issued', async () => {
+      const provisioner = loadProvisioner();
+      await provisioner.installComponent(makeTlsComponent(), { owner: 'owner1', createVolumes: true });
+      const tls = ledgerWrite('tls');
+      expect(tls.args[4]).to.deep.equal({ dir: TLS_DIR });
+      expect(tls.calledBefore(provisionCertStub.firstCall)).to.equal(true);
+    });
+
+    it('records the mesh member name once the mesh runtime answers, and the aliases the container is created with, before it is created', async () => {
+      const meshPrepareStub = sinon.stub().resolves({
+        presentedIp: '10.9.0.2', env: ['FLUX_MESH_SELF=web-0'], dns: ['10.9.0.1'], hostname: 'web-0', aliases: ['web', 'web-0'],
+      });
+      const provisioner = loadProvisioner({ meshPrepareStub });
+      await provisioner.installComponent(makeComponent(null, { networkAliases: ['web', 'web.syncholdapp'] }), { owner: 'owner1' });
+
+      const mesh = ledgerWrite('mesh');
+      expect(mesh.args[4]).to.deep.equal({ name: 'web-0' });
+      expect(mesh.calledBefore(appDockerCreateStub.firstCall)).to.equal(true);
+      const aliases = ledgerWrite('aliases');
+      expect(aliases.args[4]).to.deep.equal(['web', 'web.syncholdapp', 'web-0']);
+      expect(aliases.calledBefore(appDockerCreateStub.firstCall)).to.equal(true);
+      expect(appDockerCreateStub.firstCall.args[1].networkAliases, 'created with the aliases recorded').to.deep.equal(['web', 'web.syncholdapp', 'web-0']);
+    });
+
+    it('records no mesh name and no TLS directory for a component that has neither', async () => {
+      const provisioner = loadProvisioner();
+      await provisioner.installComponent(makeComponent(null), { owner: 'owner1' });
+      expect(ledgerWrites().map(([field]) => field)).to.deep.equal(['hostPorts', 'image', 'mountSources', 'aliases']);
+    });
+
+    it('fails the install when an entry cannot be written, before the step that uses it', async () => {
+      const provisioner = loadProvisioner({ firewallActive: true });
+      ledgersStub.setComponent.withArgs('syncholdapp', null, 'web', 'hostPorts').rejects(new Error('ledger down'));
+      let threw = null;
+      await provisioner.installComponent(makeComponent(null, { hostPorts: [31_000] }), { owner: 'owner1' }).catch((e) => { threw = e; });
+      expect(threw.message).to.equal('ledger down');
+      sinon.assert.notCalled(allowPortStub);
+      sinon.assert.notCalled(appDockerCreateStub);
+    });
+  });
+
+  describe('opening host ports', () => {
+    it('names the methods this node opens a port by', async () => {
+      expect(await loadProvisioner({ firewallActive: true, isUPNP: true }).portOpenMethods()).to.deep.equal(['ufw', 'upnp']);
+      expect(await loadProvisioner({ firewallActive: true }).portOpenMethods()).to.deep.equal(['ufw']);
+      expect(await loadProvisioner({ isUPNP: true }).portOpenMethods()).to.deep.equal(['upnp']);
+      expect(await loadProvisioner().portOpenMethods()).to.deep.equal([]);
+    });
+
+    it('opens by the methods it is given, not by what the node answers now', async () => {
+      const provisioner = loadProvisioner({ firewallActive: true, isUPNP: true });
+      await provisioner.openHostPorts([80, 81], 'app', ['upnp']);
+      sinon.assert.notCalled(allowPortStub);
+      sinon.assert.calledTwice(mapUpnpPortStub);
+      sinon.assert.calledWithExactly(mapUpnpPortStub, 81, 'Flux_App_app');
+    });
+
+    it('throws on the first port that fails to open or map', async () => {
+      const provisioner = loadProvisioner();
+      allowPortStub.resolves({ status: false });
+      await provisioner.openHostPorts([80], 'app', ['ufw']).then(() => { throw new Error('opened'); }, (e) => expect(e.message).to.match(/80 FAILed to open/));
+      mapUpnpPortStub.resolves(false);
+      await provisioner.openHostPorts([80], 'app', ['upnp']).then(() => { throw new Error('mapped'); }, (e) => expect(e.message).to.match(/80 FAILed to map/));
+    });
+  });
 
   describe('registry-unreachable local-image fallback (recreate)', () => {
     const transientPullError = () => Object.assign(new Error('dial tcp: connection refused'), { registryErrorClass: 'transient' });
@@ -386,7 +542,7 @@ describe('componentProvisioner tests', () => {
     it('openHostPorts opens each port on ufw and UPnP', async () => {
       const provisioner = loadProvisioner({ firewallActive: true, isUPNP: true });
 
-      await provisioner.openHostPorts([8080, 9090], 'myapp');
+      await provisioner.openHostPorts([8080, 9090], 'myapp', ['ufw', 'upnp']);
 
       expect(allowPortStub.calledWith(8080)).to.be.true;
       expect(allowPortStub.calledWith(9090)).to.be.true;
@@ -400,7 +556,7 @@ describe('componentProvisioner tests', () => {
 
       let threw;
       try {
-        await provisioner.openHostPorts([8080], 'myapp');
+        await provisioner.openHostPorts([8080], 'myapp', ['ufw']);
       } catch (error) {
         threw = error;
       }

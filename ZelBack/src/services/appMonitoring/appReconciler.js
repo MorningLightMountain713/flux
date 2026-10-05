@@ -1381,9 +1381,6 @@ async function reconcile(identifier) {
     return;
   }
   volumeFaultNoted.delete(identifier);
-  if (volumeMount.imageMoved) {
-    await appTamperingDetectionService.recordEvent(mainAppName, 'volume_image_moved', `Volume image for ${identifier} was found somewhere other than where this node recorded it`);
-  }
   if (!volumeMount.alreadyMounted) {
     log.info(`appReconciler - mounted data volume for ${identifier}`);
     fluxEventBus.publish('reconciler:actuated', { identifier, action: 'volumeMounted' });

@@ -153,7 +153,7 @@ describe('appVolumeService.removeOrphanedInjectedContent', () => {
 
 describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', () => {
   const deployComp = {
-    identifier: 'web_testapp', appName: 'testapp', storage: 10, mounts: [],
+    identifier: 'web_testapp', name: 'web', appName: 'testapp', replica: null, storage: 10, mounts: [],
   };
   // placementVolumesInGib's rows: whole GiB, emptiest first.
   const disk = (mount, available) => ({
@@ -164,13 +164,14 @@ describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', 
     disks, condemned = false, teardownOwed = false, recordFails = false, fsStub = null,
   } = {}) {
     const runCommand = sinon.stub().resolves({ error: null });
-    const recordNewVolumeImage = recordFails
+    const setComponent = recordFails
       ? sinon.stub().rejects(new Error('record write failed')) : sinon.stub().resolves();
     const svc = proxyquire('../../ZelBack/src/services/appLifecycle/appVolumeService', {
       config: asConfig({ lockedSystemResources: { extrahdd: 5 } }),
       '../serviceHelper': { ensureString: (x) => x, runCommand },
       '../dockerService': { getAppIdentifier: (id) => `flux${id}` },
-      '../utils/volumeService': { placementVolumesInGib: sinon.stub().resolves(disks), recordNewVolumeImage },
+      '../utils/volumeService': { placementVolumesInGib: sinon.stub().resolves(disks) },
+      '../appDatabase/appRecords': { ledgers: () => ({ setComponent }) },
       '../utils/hostMutationLock': { withHostMutationLock: (fn) => fn() },
       '../appManagement/appsRuntimeState': { isCondemned: sinon.stub().resolves(condemned) },
       './pendingTeardownStore': { teardownOwedFor: sinon.stub().resolves(teardownOwed) },
@@ -178,7 +179,7 @@ describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', 
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
       ...(fsStub ? { 'node:fs/promises': fsStub } : {}),
     });
-    return { svc, runCommand, recordNewVolumeImage };
+    return { svc, runCommand, setComponent };
   }
 
   // [{ cmd, params }] for every runCommand call
@@ -199,16 +200,26 @@ describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', 
     expect(chattrIdx, 'immutable flag set before the mount shadows the bare dir').to.be.lessThan(mountIdx);
   });
 
-  // The UUID is this node's stamp on the image, and the record is what lets a later
-  // boot look the image up and tell it from a file left under the same name.
-  it('formats the image with a UUID of its own and records the image by it', async () => {
-    const { svc, runCommand, recordNewVolumeImage } = load({ disks: [disk('/dat', 500)] });
+  // The file, its disk and its mount directory are the node's choices, in the
+  // ledger before the file exists; the UUID is the node's stamp, in the ledger
+  // once the filesystem carries it.
+  it('names the volume in the ledger before allocating the file, and its stamp once the filesystem is made', async () => {
+    const { svc, runCommand, setComponent } = load({ disks: [disk('/dat', 500)] });
     await svc.createAppVolume(deployComp, null, false);
-    const mke2fs = cmdCalls(runCommand).find((c) => c.cmd === 'mke2fs');
-    const uuid = mke2fs.params[mke2fs.params.indexOf('-U') + 1];
+    const calls = runCommand.getCalls();
+    const fallocate = calls.find((c) => c.args[0] === 'fallocate');
+    const mke2fs = calls.find((c) => c.args[0] === 'mke2fs');
+    const uuid = mke2fs.args[1].params[mke2fs.args[1].params.indexOf('-U') + 1];
     expect(uuid).to.match(/^[0-9a-f-]{36}$/);
-    // The image is named by the docker form and recorded under the identifier.
-    sinon.assert.calledOnceWithExactly(recordNewVolumeImage, 'web_testapp', '/dat/fluxweb_testappFLUXFSVOL', uuid);
+
+    sinon.assert.calledTwice(setComponent);
+    const [placed, stamped] = setComponent.getCalls();
+    expect(placed.args.slice(0, 4)).to.deep.equal(['testapp', null, 'web', 'volume']);
+    expect(placed.args[4]).to.deep.include({ file: '/dat/fluxweb_testappFLUXFSVOL', disk: '/dat', fsUuid: null });
+    expect(placed.args[4].mountDir).to.match(/\/fluxweb_testapp$/);
+    expect(placed.calledBefore(fallocate), 'named before the file exists').to.equal(true);
+    expect(stamped.args[4]).to.deep.equal({ ...placed.args[4], fsUuid: uuid });
+    expect(stamped.calledAfter(mke2fs), 'stamped once the filesystem carries it').to.equal(true);
   });
 
   it('fails the install when the image cannot be recorded', async () => {

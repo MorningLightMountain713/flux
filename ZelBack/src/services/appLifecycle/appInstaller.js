@@ -37,6 +37,7 @@ const log = require('../../lib/log');
 const { Privilege, authOf } = require('../utils/privileges');
 const appsRepository = require('../appDatabase/appsRepository');
 const appRecords = require('../appDatabase/appRecords');
+const specLibrary = require('../utils/specLibrary');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { InstallStatus } = require('./installStatus');
 const config = require('config');
@@ -275,45 +276,28 @@ async function attemptInstallApplication(instantiated, options = {}) {
       throw error;
     }
 
-    await appDockerNetwork.ensureAppDockerNetwork(appName, { onStatus, networkName: deployment.networkName });
-
     log.info(`Initiating Flux App ${appName} installation...`);
     if (onStatus) onStatus({ status: `Initiating Flux App ${appName} installation...` });
 
-    const dbSpecs = instantiated.serialize();
-
-    // This identity's row. A stale row for the SAME identity is replaced (the
-    // old registration-cleanup case); a co-located sibling's row is a different
-    // key entirely and is never touched.
-    if (await appsRepository.existsInstalledIdentity(appName, replica ?? null)) {
-      log.warn(`Found existing database entry for ${appName} during registration. Cleaning up stale entry.`);
-      await appsRepository.removeInstalledIdentity(appName, replica ?? null);
-      log.info(`Stale database entry for ${appName} removed. Proceeding with fresh insert.`);
-    }
-
-    // Recorded with the row so the reconciler can find this app from a container
-    // identifier without taking the identifier apart.
-    const componentIdentifiers = deployment.componentEntries().map(([, comp]) => comp.identifier);
-    const insertResult = await appsRepository.insertInstalledApp(
-      dbSpecs, replica ?? null, componentIdentifiers,
-    );
-    if (!insertResult) {
-      throw new Error(`CRITICAL: Failed to create database entry for ${appName}. Database insert returned undefined - likely duplicate key error or database failure. Aborting installation to prevent orphaned Docker containers.`);
-    }
+    // This identity's records: the spec this node runs, and the ledger of
+    // what it creates for it, empty until each step writes what it is about
+    // to create. A stale pair for the SAME identity is replaced; a co-located
+    // sibling's is a different key entirely and is never touched.
+    const { InstalledSpec, InstalledLedger } = specLibrary.loaded();
+    await appRecords.installed().put(new InstalledSpec({ record: instantiated, replica: replica ?? null }));
+    await appRecords.ledgers().put(new InstalledLedger({ name: appName, replica: replica ?? null }));
     log.info(`Database entry created for ${appName} BEFORE Docker container creation`);
     // Now counted by appsResources (it is in the DB); drop the pending reservation
     // so it is not double-counted. The finally releases it on any earlier failure.
     admissionControl.release(appName);
 
-    try {
-      if (!await appsRepository.existsInstalledIdentity(appName, replica ?? null)) {
-        throw new Error(`Database entry validation failed for ${appName}. Entry was inserted but disappeared before Docker container creation. Possible race condition or database corruption detected.`);
-      }
-      log.info(`Database entry validated for ${appName} before Docker container creation`);
+    await appRecords.ledgers().setNetwork(appName, replica ?? null, { name: deployment.networkName });
+    await appDockerNetwork.ensureAppDockerNetwork(appName, { onStatus, networkName: deployment.networkName });
 
-      const freshInst = await appsRepository.getInstalledIdentity(appName, replica ?? null);
+    try {
+      const freshInst = await appRecords.installed().byReplica(appName, replica ?? null);
       if (!freshInst) throw new Error(`Failed to read back installed spec for ${appName}`);
-      const deployment = await deploymentProvider.buildDeployment(freshInst, { replica });
+      const deployment = await deploymentProvider.buildDeployment(freshInst.record, { replica });
       if (!deployment) throw new Error(`Failed to build deployment for ${appName}`);
 
       // Record this app's telemetry sink (Arcane-only; null/no-op otherwise)
@@ -439,8 +423,8 @@ async function attemptInstallApplication(instantiated, options = {}) {
     log.info(`Flux App ${appName} successfully installed and launched`);
     if (onStatus) onStatus({ status: `Flux App ${appName} successfully installed and launched` });
 
-    // Broadcast this node's running apps now that the app is durably in the DB
-    // (insertInstalledApp ran above): checkAndNotifyPeersOfRunningApps builds its
+    // Broadcast this node's running apps now that the app is durably in the DB:
+    // checkAndNotifyPeersOfRunningApps builds its
     // snapshot from the installed-app records, so the just-installed app is
     // included in its own announcement. It never throws (it catches internally),
     // so running it here is safe.
@@ -518,7 +502,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
     if (controllerRegistered) globalState.installingApps.delete(appName);
     // Safety net for every pre-insert failure/early-return path: a reserved-but-
     // not-installed app must never leak its pending resources. Idempotent with the
-    // explicit release after insertInstalledApp.
+    // explicit release after the records are put.
     admissionControl.release(appName);
   }
   // Hand off to the reconciler and await convergence: it starts/holds each
