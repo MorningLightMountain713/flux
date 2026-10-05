@@ -25,7 +25,7 @@ const { isImageBlocked } = require('../appSecurity/imageManager');
 const operationRegistry = require('../utils/operationRegistry');
 const globalState = require('../utils/globalState');
 const capabilities = require('../utils/capabilities');
-const pendingTeardownStore = require('./pendingTeardownStore');
+const owedRemovals = require('./owedRemovals');
 const admissionControl = require('../utils/admissionControl');
 const cpuBurstHelper = require('../utils/cpuBurstHelper');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
@@ -170,12 +170,12 @@ async function attemptInstallApplication(instantiated, options = {}) {
 
     // Install-side interlock (cancel-vs-install): refuse to adopt a name while a teardown
     // of it is still owed. A forced cancel runs its teardown in the background — its
-    // prelude already deleted the local row (so the check above misses it) while the
-    // detached umount + rm -rf of the volume keep running. Starting now would create a
-    // fresh volume that teardown promptly rm -rf's. Defer; the spawner retries once the
-    // teardown clears its doc. teardownOwedFor fails CLOSED, so a read blip defers rather
-    // than races a live teardown — the safe direction here.
-    if (await pendingTeardownStore.teardownOwedFor(appName)) {
+    // records are marked owed, which the hosted-instance check above leaves out, while
+    // the detached umount + rm -rf of the volume keep running. Starting now would create
+    // a fresh volume that teardown promptly rm -rf's. Defer; the spawner retries once the
+    // teardown takes the records. removalOwedFor fails CLOSED, so a read blip defers
+    // rather than races a live teardown — the safe direction here.
+    if (await owedRemovals.removalOwedFor(appName)) {
       log.warn(`Flux App ${appName} is still being torn down; deferring installation until teardown completes`);
       return { status: InstallStatus.DEFERRED, reason: `Flux App ${appName} is still being torn down; deferring installation` };
     }
@@ -397,12 +397,12 @@ async function attemptInstallApplication(instantiated, options = {}) {
       // peers count it as a real install failure for that hash. Suppress the store +
       // broadcast on the same cancel signals the outer catch defers on — installAborted
       // latches the instant the cancel fires (so it is observable here), with the
-      // owed-teardown doc as a fail-closed fallback. A linked dependency vanishing
+      // owed mark as a fail-closed fallback. A linked dependency vanishing
       // mid-install (NETWORK_DEPENDENCY_NOT_READY) is likewise transient, not a real
       // failure, so it is suppressed too. A genuine failure (no cancel) still
       // broadcasts. Always rethrow so the outer catch runs its classification.
       const cancelInFlight = globalState.installAborted(appName)
-        || await pendingTeardownStore.teardownOwedFor(appName);
+        || await owedRemovals.removalOwedFor(appName);
       // A transient-class registry failure (unreachable/rate-limited/5xx, tagged at
       // the pull/verify source) is a node condition too: peers must not count it as
       // the app failing - only a permanent verdict on the image is network knowledge.
@@ -444,10 +444,10 @@ async function attemptInstallApplication(instantiated, options = {}) {
     // stranding a pinned enterprise app. Defer instead — and do NOT run our own
     // teardown: the in-flight cancel already owns it, so a second uninstall would race
     // it. installAborted latches the instant the cancel fires (so a fast detached
-    // teardown cannot out-race it clear), with the owed-teardown doc as a fail-closed
+    // teardown cannot out-race it clear), with the owed mark as a fail-closed
     // fallback.
     const cancelInFlight = globalState.installAborted(appName)
-      || await pendingTeardownStore.teardownOwedFor(appName);
+      || await owedRemovals.removalOwedFor(appName);
     if (cancelInFlight) {
       log.warn(`Install of ${appName} deferred: a concurrent cancel/removal owns its teardown`);
       return { status: InstallStatus.DEFERRED, reason: `A concurrent cancel/removal owns ${appName}'s teardown` };
@@ -519,8 +519,8 @@ async function attemptInstallApplication(instantiated, options = {}) {
     // then refuses to start them, so they never converge — and owns their teardown.
     // Classify that as a deferral, not a 7-day-poisoning rollback (and skip our own
     // teardown, which would race the cancel's). The install's controller is already
-    // cleared by the finally above, so the durable owed-teardown doc is the signal.
-    if (await pendingTeardownStore.teardownOwedFor(appName)) {
+    // cleared by the finally above, so the durable owed mark is the signal.
+    if (await owedRemovals.removalOwedFor(appName)) {
       log.warn(`Convergence of ${appName} aborted by a concurrent cancel/removal; deferring`);
       return { status: InstallStatus.DEFERRED, reason: `A concurrent cancel/removal owns ${appName}'s teardown` };
     }

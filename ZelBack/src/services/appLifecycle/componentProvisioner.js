@@ -26,7 +26,7 @@ const backendTlsService = require('./backendTlsService');
 const volumeService = require('../utils/volumeService');
 const telemetryIdentityService = require('../telemetryIdentityService');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
-const pendingTeardownStore = require('./pendingTeardownStore');
+const owedRemovals = require('./owedRemovals');
 const meshReconciler = require('../appMesh/meshReconciler');
 const { NodeCondition } = require('./nodeConditions');
 const { appsFolder } = require('../utils/appConstants');
@@ -40,16 +40,16 @@ const supportedArchitectures = ['amd64', 'arm64'];
  * this closes the gaps AFTER it — before the volume is created and again before the
  * container is created — so an install can never build a volume/container that a
  * concurrent cancel's teardown is about to rm -rf. A cancel/removal of this app condemns
- * its components and writes a durable owed-teardown doc the moment its prelude runs.
- * teardownOwedFor is the robust signal (the install cannot erase it) and fails CLOSED
+ * its components and marks its records owed the moment its prelude runs.
+ * removalOwedFor is the robust signal (the install cannot erase it) and fails CLOSED
  * (a read blip aborts rather than races a live rm -rf); isCondemned is a fail-OPEN
  * secondary (a blip returns false, never a spurious abort). Read-only and idempotent: a
- * no-op on every normal install (this app's own teardown cleared its doc at finish, and
- * the install passed the teardown-owed interlock at entry).
+ * no-op on every normal install (this app's own teardown took its records at finish, and
+ * the install passed the owed interlock at entry).
  * @param {object} component deployment component being provisioned
  */
 async function throwIfCancelledMidInstall(component) {
-  const owed = await pendingTeardownStore.teardownOwedFor(component.appName);
+  const owed = await owedRemovals.removalOwedFor(component.appName);
   if (owed || await appsRuntimeState.isCondemned(component.identifier)) {
     throw new Error(`Install of ${component.identifier} aborted: a removal/cancel of ${component.appName} arrived mid-install`);
   }

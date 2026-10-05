@@ -56,7 +56,7 @@ describe('componentProvisioner tests', () => {
       '../utils/volumeService': { verifyAppVolumeMount: sinon.stub().resolves() },
       '../telemetryIdentityService': { onComponentCreated: sinon.stub().resolves() },
       '../appManagement/appsRuntimeState': { isCondemned: isCondemnedStub || sinon.stub().resolves(false) },
-      './pendingTeardownStore': { teardownOwedFor: sinon.stub().resolves(teardownOwed) },
+      './owedRemovals': { removalOwedFor: sinon.stub().resolves(teardownOwed) },
       '../appMesh/meshReconciler': { prepareComponentMesh: meshPrepareStub || sinon.stub().resolves(null) },
       util: { promisify: () => async () => { if (pullError) throw pullError; return 'pulled'; } },
     });
@@ -485,7 +485,7 @@ describe('componentProvisioner tests', () => {
         '../utils/volumeService': {},
         '../telemetryIdentityService': {},
         '../appManagement/appsRuntimeState': { isCondemned: sinon.stub().resolves(false) },
-        './pendingTeardownStore': { teardownOwedFor: sinon.stub().resolves(false) },
+        './owedRemovals': { removalOwedFor: sinon.stub().resolves(false) },
         '../appMesh/meshReconciler': {},
         util: { promisify: () => async () => 'pulled' },
       });

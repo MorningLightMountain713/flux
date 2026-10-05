@@ -138,7 +138,7 @@ describe('appInstaller tests', () => {
       './appUninstaller': {
         uninstallApplication: sinon.stub().resolves(),
       },
-      './pendingTeardownStore': { teardownOwedFor: sinon.stub().resolves(false) },
+      './owedRemovals': { removalOwedFor: sinon.stub().resolves(false) },
       '../fluxCommunicationMessagesSender': {
         broadcastMessageToOutgoing: sinon.stub().resolves(),
         broadcastMessageToIncoming: sinon.stub().resolves(),
@@ -420,7 +420,7 @@ describe('appInstaller tests', () => {
         },
         '../appNetwork/appDockerNetwork': { ensureAppDockerNetwork },
         './appUninstaller': { uninstallApplication },
-        './pendingTeardownStore': { teardownOwedFor },
+        './owedRemovals': { removalOwedFor: teardownOwedFor },
         './componentProvisioner': { installComponent },
         '../utils/globalState': {
           installingApps: new Map(), installAborted: sinon.stub().returns(installAborted), abortInstall, runningAppsCache: new Set(), isArcane: sinon.stub().returns(false),

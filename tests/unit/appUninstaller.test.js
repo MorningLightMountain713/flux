@@ -25,9 +25,12 @@ describe('appUninstaller tests', () => {
   let globalStateStub;
   let broadcastAllStub;
   let dockerServiceStub;
-  let appsRepositoryStub;
+  let installedStub;
   let registryStub;
   let ledgersStub;
+  let fluxNetworkHelperStub;
+  let upnpServiceStub;
+  let syncthingMonitorHelpersStub;
   let fluxShutdowndClientStub;
   let relationshipResolverStub;
   let pendingTeardownStoreStub;
@@ -100,12 +103,14 @@ describe('appUninstaller tests', () => {
       appDockerStop: sinon.stub().resolves(),
       appDockerKill: sinon.stub().resolves(),
       appDockerRemove: sinon.stub().resolves(),
+      appDockerForceRemove: sinon.stub().resolves(),
       // container gone after a successful remove: the teardown reclaims host storage
       getDockerContainer: sinon.stub().resolves(null),
       appDockerImageRemove: sinon.stub().resolves(),
       dockerListContainers: sinon.stub().resolves([]),
       forceRemoveFluxAppDockerNetwork: sinon.stub().resolves(),
       removeFluxAppDockerNetwork: sinon.stub().resolves(),
+      clearFluxRemovedContainers: sinon.stub(),
       getAppIdentifier: sinon.stub().returns('testapp'),
       getBaseAppName: sinon.stub().callsFake((id) => id),
     };
@@ -120,16 +125,18 @@ describe('appUninstaller tests', () => {
     };
 
     registryStub = { byName: sinon.stub().resolves(null) };
-    ledgersStub = { remove: sinon.stub().resolves(), removeAll: sinon.stub().resolves() };
-    appsRepositoryStub = {
-      getInstalledApp: sinon.stub().resolves(null),
-      getAppMessage: sinon.stub().resolves(null),
-      listAppMessagesByName: sinon.stub().resolves([]),
-      removeInstalledApp: sinon.stub().resolves(),
-      removeInstalledIdentity: sinon.stub().resolves(),
-      countInstalledIdentities: sinon.stub().resolves(0),
-      listInstalledApps: sinon.stub().resolves([]),
+    // Nothing installed until a test says otherwise, and no ledger for what is.
+    installedStub = {
+      byName: sinon.stub().resolves(null),
+      byReplica: sinon.stub().resolves(null),
+      instancesOf: sinon.stub().resolves([]),
+      apps: sinon.stub().resolves([]),
+      keys: sinon.stub().resolves([]),
+      owed: sinon.stub().resolves([]),
+      markOwed: sinon.stub().resolves(),
+      remove: sinon.stub().resolves(),
     };
+    ledgersStub = { byInstance: sinon.stub().resolves(null), remove: sinon.stub().resolves() };
 
     relationshipResolverStub = {
       isPureFollowerApp: sinon.stub().resolves(false),
@@ -138,10 +145,10 @@ describe('appUninstaller tests', () => {
     };
 
     pendingTeardownStoreStub = {
-      writeTeardown: sinon.stub().resolves(),
+      readAllTeardowns: sinon.stub().resolves([]),
+      getTeardown: sinon.stub().resolves(null),
       clearTeardown: sinon.stub().resolves(),
-      teardownOwedFor: sinon.stub().resolves(false),
-      listTeardowns: sinon.stub().resolves([]),
+      bumpAttempts: sinon.stub().resolves(),
     };
 
     mastershipGrantGateStub = {
@@ -149,12 +156,19 @@ describe('appUninstaller tests', () => {
     };
     meshOrdinalsStub = { releaseOrdinal: sinon.stub().resolves() };
     contentStoreStub = { removeApp: sinon.stub().resolves() };
+    fluxNetworkHelperStub = {
+      closeConnection: sinon.stub().resolves(),
+      isFirewallActive: sinon.stub().resolves(false),
+      allowPort: sinon.stub().resolves(true),
+      deleteAllowPortRule: sinon.stub().resolves(),
+      getLocalSocketAddress: sinon.stub().resolves('7.7.7.7:16127'),
+      getFluxNodePublicKey: sinon.stub().resolves('nodepubkey'),
+    };
+    upnpServiceStub = { removeMapUpnpPort: sinon.stub().resolves(), isUPNP: sinon.stub().returns(false) };
+    syncthingMonitorHelpersStub = { removeSyncthingFolder: sinon.stub().resolves() };
 
     runCommandStub = sinon.stub().resolves({ error: null, stdout: '', stderr: '' });
-    volumeServiceStub = {
-      getVolumeFilePath: sinon.stub().resolves({ path: '/tmp/flux-test-volume', conclusive: true }),
-      isPathMounted: sinon.stub().resolves(false),
-    };
+    volumeServiceStub = { isPathMounted: sinon.stub().resolves(false) };
     appUninstaller = proxyquire('../../ZelBack/src/services/appLifecycle/appUninstaller', {
       config: asConfig(configStub),
       '../verificationHelper': verificationHelperStub,
@@ -167,8 +181,7 @@ describe('appUninstaller tests', () => {
         runCommand: runCommandStub,
       },
       '../dockerService': dockerServiceStub,
-      // Required by appUninstaller and previously left real: getVolumeFilePath and
-      // isPathMounted run through the real serviceHelper and spawn processes.
+      // isPathMounted runs through the real serviceHelper and spawns a process.
       '../utils/volumeService': volumeServiceStub,
       // Left real, this reads the developer's own crontab.
       crontab: { load: (cb) => cb(null, null) },
@@ -184,17 +197,8 @@ describe('appUninstaller tests', () => {
       './imageCacheRetention': {
         shouldRetainImage: sinon.stub().resolves(false),
       },
-      '../upnpService': {
-        removeMapUpnpPort: sinon.stub().resolves(),
-        isUPNP: sinon.stub().returns(false),
-      },
-      '../fluxNetworkHelper': {
-        closeConnection: sinon.stub().resolves(),
-        isFirewallActive: sinon.stub().resolves(false),
-        allowPort: sinon.stub().resolves(true),
-        getLocalSocketAddress: sinon.stub().resolves('7.7.7.7:16127'),
-        getFluxNodePublicKey: sinon.stub().resolves('nodepubkey'),
-      },
+      '../upnpService': upnpServiceStub,
+      '../fluxNetworkHelper': fluxNetworkHelperStub,
       '../generalService': {
         obtainNodeCollateralInformation: sinon.stub().resolves({ txhash: 'txh', txindex: 0 }),
       },
@@ -203,21 +207,13 @@ describe('appUninstaller tests', () => {
         broadcastMessageToIncoming: sinon.stub().resolves(),
         broadcastMessageToAll: broadcastAllStub,
       },
-      '../appDatabase/appsRepository': appsRepositoryStub,
       '../appDatabase/appRecords': {
         registry: () => registryStub,
         ledgers: () => ledgersStub,
-        installed: () => ({
-          byName: async (name) => installedRecord(await appsRepositoryStub.getInstalledApp(name)),
-          apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)),
-          remove: appsRepositoryStub.removeInstalledIdentity,
-          removeAll: appsRepositoryStub.removeInstalledApp,
-          keys: async (name) => {
-            const count = await appsRepositoryStub.countInstalledIdentities(name);
-            return Array.from({ length: count }, (_, i) => ({ name, replica: `r${i}` }));
-          },
-        }),
+        installed: () => installedStub,
+        instanceKey: ({ name, replica }) => `${String(name).toLowerCase()}\u0000${replica ?? ''}`,
       },
+      '../appMonitoring/syncthingMonitorHelpers': syncthingMonitorHelpersStub,
       './relationshipResolver': relationshipResolverStub,
       './pendingTeardownStore': pendingTeardownStoreStub,
       '../appManagement/appsRuntimeState': runtimeStateStub,
@@ -234,13 +230,51 @@ describe('appUninstaller tests', () => {
       '../appMesh/meshOrdinals': meshOrdinalsStub,
       './contentStore': contentStoreStub,
       '../appMesh/meshReconciler': { removeAppMesh: sinon.stub().resolves() },
-      '../appDecisions/appHistory': { latestApplied: sinon.stub().resolves(null) },
     });
   });
 
   afterEach(() => {
     sinon.restore();
   });
+
+  /** A teardown's target: the records' facts and one block per component the ledger names. */
+  const target = (doc) => ({
+    name: doc.name,
+    replica: doc.replica ?? null,
+    owner: doc.owner ?? null,
+    identity: doc.identity ?? null,
+    networkName: doc.networkName ?? null,
+    components: doc.components.map((c) => ({
+      componentName: c.label,
+      identifier: c.identifier,
+      image: { reference: c.image ?? null, digest: null },
+      hostPorts: (c.ports || []).map((port) => ({ port, opened: [] })),
+      volume: c.volume ?? null,
+      mountSources: [],
+      syncFolder: null,
+      aliases: [],
+      mesh: null,
+      tls: null,
+    })),
+    owed: {
+      since: 1, reason: doc.reason ?? null, force: Boolean(doc.forceKill), broadcast: false, budgetSeconds: doc.shutdownBudgetSeconds ?? 0, attempts: 0,
+    },
+    source: 'record',
+  });
+
+  /** A ledger stand-in holding the given blocks. */
+  const ledgerOf = (components, network = { name: 'fluxDockerNetwork_TestApp' }) => ({
+    network,
+    components,
+    component: (name) => components[name] ?? null,
+    identifiers: () => Object.values(components).map((block) => block.identifier),
+  });
+
+  /** The instances this node hosts of any app asked for: one per replica named. */
+  const hosting = (spec, replicas = [null]) => {
+    installedStub.instancesOf.callsFake(async (name) => replicas.map((replica) => installedRecord(spec(name), { replica })));
+    installedStub.byReplica.callsFake(async (name, replica) => installedRecord(spec(name), { replica }));
+  };
 
   describe('removeAppLocallyApi', () => {
     it('refuses a missing appname by name, rather than dereferencing it', async () => {
@@ -387,10 +421,52 @@ describe('appUninstaller tests', () => {
       });
     });
 
+    // What goes with the component is what the ledger names for it: its ports
+    // by the methods they were opened with, its folder by its id, its image file.
+    describe('what the ledger names for the component', () => {
+      const imageRemovals = () => runCommandStub.getCalls()
+        .filter((c) => c.args[0] === 'rm' && String(c.args[1].params[1]).endsWith('FLUXFSVOL'))
+        .map((c) => c.args[1].params[1]);
+
+      it('tears down the ports, the folder and the image file the block names', async () => {
+        ledgersStub.byInstance.resolves(ledgerOf({
+          web: {
+            identifier: 'web_TestApp',
+            image: { reference: 'img', digest: null },
+            hostPorts: [{ port: 31_001, opened: ['upnp'] }, { port: 31_002, opened: ['ufw'] }],
+            volume: {
+              file: '/dat/fluxweb_TestAppFLUXFSVOL', disk: '/dat', fsUuid: 'u', mountDir: '/x/web_TestApp',
+            },
+            mountSources: [],
+            syncFolder: { id: 'fluxweb_TestApp', path: '/x/web_TestApp' },
+            aliases: [],
+            mesh: null,
+            tls: null,
+          },
+        }));
+
+        await appUninstaller.uninstallComponent(component(), { removeVolumes: true });
+
+        sinon.assert.calledOnceWithExactly(ledgersStub.byInstance, 'TestApp', null);
+        sinon.assert.calledOnceWithExactly(upnpServiceStub.removeMapUpnpPort, 31_001, 'Flux_App_TestApp');
+        sinon.assert.calledOnceWithExactly(fluxNetworkHelperStub.deleteAllowPortRule, 31_002);
+        sinon.assert.calledOnceWithExactly(syncthingMonitorHelpersStub.removeSyncthingFolder, 'fluxweb_TestApp');
+        expect(imageRemovals()).to.deep.equal(['/dat/fluxweb_TestAppFLUXFSVOL']);
+      });
+
+      it('removes no port and no image file when the ledger names no block for it', async () => {
+        await appUninstaller.uninstallComponent(component(), { removeVolumes: true });
+
+        sinon.assert.notCalled(upnpServiceStub.removeMapUpnpPort);
+        sinon.assert.notCalled(fluxNetworkHelperStub.deleteAllowPortRule);
+        expect(imageRemovals()).to.deep.equal([]);
+        sinon.assert.calledWithMatch(logStub.warn, /names no block/);
+      });
+    });
+
     it('a true removal releases the grant - a removed app must not shield its term', async () => {
       fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'complete' });
-      await appUninstaller.runTeardown({
-        key: 'myapp',
+      await appUninstaller.runTeardown(target({
         name: 'myapp',
         networkName: 'myapp',
         forceKill: false,
@@ -398,10 +474,8 @@ describe('appUninstaller tests', () => {
         reason: 'user-cancel',
         shutdownBudgetSeconds: 30,
         identity: 'ab12cd34ef56',
-        components: [{
-          identifier: 'web_myapp', appId: 'fluxweb_myapp', label: 'web', ports: [],
-        }],
-      });
+        components: [{ identifier: 'web_myapp', label: 'web', ports: [] }],
+      }));
       sinon.assert.calledOnceWithExactly(
         mastershipGrantGateStub.onComponentTeardown, 'web_myapp', 'ab12cd34ef56',
       );
@@ -434,9 +508,8 @@ describe('appUninstaller tests', () => {
     });
   });
 
-  describe('the teardown removes the image the search found', () => {
-    const teardown = () => appUninstaller.runTeardown({
-      key: 'myapp',
+  describe('the teardown removes the image file the ledger names', () => {
+    const teardown = (volume) => appUninstaller.runTeardown(target({
       name: 'myapp',
       networkName: 'myapp',
       forceKill: false,
@@ -444,9 +517,9 @@ describe('appUninstaller tests', () => {
       reason: 'user-cancel',
       shutdownBudgetSeconds: 30,
       components: [{
-        identifier: 'web_myapp', appId: 'fluxweb_myapp', label: 'web', ports: [],
+        identifier: 'web_myapp', label: 'web', ports: [], volume,
       }],
-    });
+    }));
     const imageRemovals = () => runCommandStub.getCalls()
       .filter((c) => c.args[0] === 'rm' && String(c.args[1].params[1]).endsWith('FLUXFSVOL'));
 
@@ -454,18 +527,25 @@ describe('appUninstaller tests', () => {
       fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'complete' });
     });
 
-    it('removes the image wherever the search found it', async () => {
-      volumeServiceStub.getVolumeFilePath.resolves({ path: '/mnt/data2/fluxweb_myappFLUXFSVOL', conclusive: true });
-      await teardown();
-      sinon.assert.calledWith(volumeServiceStub.getVolumeFilePath, 'web_myapp');
+    it('removes the file the ledger names, and looks nowhere else', async () => {
+      await teardown({
+        file: '/mnt/data2/fluxweb_myappFLUXFSVOL', disk: '/mnt/data2', fsUuid: 'u', mountDir: '/x/web_myapp',
+      });
       expect(imageRemovals().map((c) => c.args[1].params)).to.deep.equal([['-rf', '/mnt/data2/fluxweb_myappFLUXFSVOL']]);
     });
 
-    it('says the image is left on disk when the search could not look everywhere', async () => {
-      volumeServiceStub.getVolumeFilePath.resolves({ path: null, conclusive: false, blocked: 'mount_table_unreadable' });
-      await teardown();
+    it('says the image is left on disk when the ledger names a volume with no file', async () => {
+      await teardown({
+        file: null, disk: null, fsUuid: null, mountDir: '/x/web_myapp',
+      });
       expect(imageRemovals()).to.deep.equal([]);
       sinon.assert.calledWithMatch(logStub.warn, /could not be located and is left on disk/);
+    });
+
+    it('looks for no image for a stateless component', async () => {
+      await teardown(null);
+      expect(imageRemovals()).to.deep.equal([]);
+      sinon.assert.neverCalledWithMatch(logStub.warn, /left on disk/);
     });
   });
 
@@ -511,8 +591,6 @@ describe('appUninstaller tests', () => {
 
     it('skipGuard still barges past a NON-remove lease (install cleanup / force past a redeploy)', async () => {
       operationRegistry.acquire('anyapp', 'install', 'the-install');
-      appsRepositoryStub.getInstalledApp.resolves(null);
-      registryStub.byName.resolves(null);
       try {
         const result = await appUninstaller.uninstallApplication('anyapp', { forceKill: true, skipGuard: true });
         // it proceeds past the install lease (does not defer); the app is simply not found here
@@ -520,6 +598,24 @@ describe('appUninstaller tests', () => {
       } finally {
         operationRegistry.clear();
       }
+    });
+
+    // A removal whose prelude marked the instance and then died before its
+    // teardown leaves an owed instance; the next removal finds it.
+    it('finds an instance already marked owed, by name and by replica', async () => {
+      const owedMark = {
+        since: 1, reason: null, force: true, broadcast: false, budgetSeconds: 0, attempts: 0,
+      };
+      installedStub.instancesOf.callsFake(async (name, opts) => (opts?.includeOwed ? [installedRecord({ name, owner: '1own' }, { owed: owedMark })] : []));
+      installedStub.byReplica.callsFake(async (name, replica, opts) => (opts?.includeOwed ? installedRecord({ name, owner: '1own' }, { replica, owed: owedMark }) : null));
+
+      const whole = await appUninstaller.uninstallApplication('owedapp', { forceKill: true, background: true });
+      const one = await appUninstaller.uninstallApplication('owedreplica', { forceKill: true, background: true, replica: 's1' });
+
+      expect(whole.status).to.equal(appUninstaller.UninstallStatus.REMOVED);
+      expect(one.status).to.equal(appUninstaller.UninstallStatus.REMOVED);
+      sinon.assert.calledWith(installedStub.markOwed, 'owedapp', null);
+      sinon.assert.calledWith(installedStub.markOwed, 'owedreplica', 's1');
     });
 
     it('operatorForce defers when a remove lease is held but nothing is draining to escalate', async () => {
@@ -545,14 +641,13 @@ describe('appUninstaller tests', () => {
 
     beforeEach(() => {
       realDepartingApps.clear();
-      appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
+      hosting(spec);
       broadcast = broadcastAllStub;
       markedDuring = null;
-      const record = async (name, replica) => {
+      // Read at the removal's durable write: the instance marked owed.
+      installedStub.markOwed.callsFake(async (name, replica) => {
         markedDuring = { app: realDepartingApps.has(name), replica: replica ? realDepartingApps.has(name, replica) : null };
-      };
-      appsRepositoryStub.removeInstalledApp.callsFake(async (name) => record(name, null));
-      appsRepositoryStub.removeInstalledIdentity.callsFake(async (name, replica) => record(name, replica));
+      });
     });
 
     afterEach(() => {
@@ -585,7 +680,6 @@ describe('appUninstaller tests', () => {
     });
 
     it('hands back only the replica a replica removal names', async () => {
-      appsRepositoryStub.countInstalledIdentities.resolves(1); // a sibling stays
       await appUninstaller.uninstallApplication('pinned', {
         forceKill: true, broadcastRemoval: true, background: true, replica: 's1',
       });
@@ -600,7 +694,7 @@ describe('appUninstaller tests', () => {
     });
 
     it('clears the mark when the removal fails', async () => {
-      appsRepositoryStub.removeInstalledApp.rejects(new Error('db down'));
+      installedStub.markOwed.rejects(new Error('db down'));
       const result = await appUninstaller.uninstallApplication('broken', { forceKill: true, broadcastRemoval: true, background: true });
       expect(result.status).to.equal(appUninstaller.UninstallStatus.FAILED);
       expect(realDepartingApps.has('broken'), 'a failed removal kept the app unclaimed').to.equal(false);
@@ -637,6 +731,17 @@ describe('appUninstaller tests', () => {
         new Promise((resolve) => { setTimeout(() => resolve('waited'), 40); }),
       ]);
       expect(outcome, 'a silent removal queued behind an announcement it cannot contradict').to.equal('removed');
+    });
+  });
+
+  describe('denyPorts closes each port by the methods it was opened with', () => {
+    it('asks the firewall for a ufw-opened port, the router for a upnp-opened one, both for both, neither for none', async () => {
+      await appUninstaller.denyPorts([
+        { port: 1, opened: ['ufw'] }, { port: 2, opened: ['upnp'] }, { port: 3, opened: ['ufw', 'upnp'] }, { port: 4, opened: [] },
+      ], 'app');
+
+      expect(fluxNetworkHelperStub.deleteAllowPortRule.args.map(([port]) => port)).to.deep.equal([1, 3]);
+      expect(upnpServiceStub.removeMapUpnpPort.args).to.deep.equal([[2, 'Flux_App_app'], [3, 'Flux_App_app']]);
     });
   });
 
@@ -696,7 +801,7 @@ describe('appUninstaller tests', () => {
 
     it('passes the persisted reason + force to beginAppStop', async () => {
       fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'rejected_pipeline_active' });
-      await appUninstaller.runTeardown(doc());
+      await appUninstaller.runTeardown(target(doc()));
       expect(fluxShutdowndClientStub.beginAppStop.calledOnce).to.equal(true);
       const [owner, name, reason, opts] = fluxShutdowndClientStub.beginAppStop.firstCall.args;
       expect(owner).to.equal('1own');
@@ -710,14 +815,14 @@ describe('appUninstaller tests', () => {
 
     it('scopes the daemon stop to the teardown doc identity (a scale-down never drains the sibling)', async () => {
       fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'rejected_pipeline_active' });
-      await appUninstaller.runTeardown({ ...doc(), key: 'myapp_s2', replica: 's2' });
+      await appUninstaller.runTeardown(target({ ...doc(), replica: 's2' }));
       const opts = fluxShutdowndClientStub.beginAppStop.firstCall.args[3];
       expect(opts.replica).to.equal('s2');
     });
 
     it('defers (no local stop, no remove) when a node-wide shutdown owns the stop', async () => {
       fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'rejected_pipeline_active' });
-      await appUninstaller.runTeardown(doc());
+      await appUninstaller.runTeardown(target(doc()));
       expect(dockerServiceStub.appDockerStop.called).to.equal(false);
       expect(dockerServiceStub.appDockerKill.called).to.equal(false);
       expect(dockerServiceStub.appDockerRemove.called).to.equal(false);
@@ -726,7 +831,7 @@ describe('appUninstaller tests', () => {
     it('stops locally (appDockerStop, never kill) when the daemon is absent (non-Arcane)', async () => {
       fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'not_arcane' });
       // the host teardown after the stop loop touches unmocked deps; the stop loop runs first.
-      await appUninstaller.runTeardown(doc()).catch(() => {});
+      await appUninstaller.runTeardown(target(doc())).catch(() => {});
       // The BARE identifier: dockerService owns physical naming and prefixes it
       // itself, so handing it the already-prefixed appId asks for fluxfluxweb_myapp.
       expect(dockerServiceStub.appDockerStop.calledWith('web_myapp')).to.equal(true);
@@ -735,7 +840,7 @@ describe('appUninstaller tests', () => {
 
     it('skips the local stop when the daemon already drained it (Arcane)', async () => {
       fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'complete' });
-      await appUninstaller.runTeardown(doc()).catch(() => {});
+      await appUninstaller.runTeardown(target(doc())).catch(() => {});
       expect(dockerServiceStub.appDockerStop.called).to.equal(false);
       expect(dockerServiceStub.appDockerKill.called).to.equal(false);
     });
@@ -749,7 +854,7 @@ describe('appUninstaller tests', () => {
     // the BARE identifier, and this pins that contract on the docker seam itself.
     it('hands docker the bare identifier, never the flux-prefixed physical name', async () => {
       fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'not_arcane' });
-      await appUninstaller.runTeardown(doc()).catch(() => {});
+      await appUninstaller.runTeardown(target(doc())).catch(() => {});
 
       const passed = []
         .concat(dockerServiceStub.appDockerStop.args.map((a) => a[0]))
@@ -762,7 +867,7 @@ describe('appUninstaller tests', () => {
 
     it('force-disconnects endpoints and removes the network even on a graceful teardown (no leak)', async () => {
       fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'complete' });
-      await appUninstaller.runTeardown(doc()).catch(() => {});
+      await appUninstaller.runTeardown(target(doc())).catch(() => {});
       // the teardown record carries the resolved network name; removal takes it as the
       // option, so a record that outlives the row still names the right network
       expect(dockerServiceStub.forceRemoveFluxAppDockerNetwork.calledWith(
@@ -773,7 +878,7 @@ describe('appUninstaller tests', () => {
 
     describe('what a replica teardown leaves for a sibling', () => {
       const replicaDoc = () => ({
-        ...doc(), key: 'myapp_s2', replica: 's2', identity: 'bident',
+        ...doc(), replica: 's2', identity: 'bident',
       });
       let deleteSink;
       let forgetApp;
@@ -788,9 +893,9 @@ describe('appUninstaller tests', () => {
       });
 
       it('keeps the app\'s network, telemetry sink and content store while a sibling replica stays', async () => {
-        appsRepositoryStub.countInstalledIdentities.resolves(1);
+        installedStub.instancesOf.resolves([installedRecord({ name: 'myapp', owner: '1own' }, { replica: 's1' })]);
 
-        await appUninstaller.runTeardown(replicaDoc()).catch(() => {});
+        await appUninstaller.runTeardown(target(replicaDoc())).catch(() => {});
 
         sinon.assert.notCalled(dockerServiceStub.forceRemoveFluxAppDockerNetwork);
         sinon.assert.notCalled(deleteSink);
@@ -798,10 +903,14 @@ describe('appUninstaller tests', () => {
         sinon.assert.notCalled(contentStoreStub.removeApp);
       });
 
+      // The instance being removed is marked owed and still stored: it is not a
+      // sibling that stays.
       it('removes them with the last replica', async () => {
-        appsRepositoryStub.countInstalledIdentities.resolves(0);
+        installedStub.instancesOf.callsFake(async (name, opts) => (opts?.includeOwed
+          ? [installedRecord({ name, owner: '1own' }, { replica: 's2', owed: target(replicaDoc()).owed })]
+          : []));
 
-        await appUninstaller.runTeardown(replicaDoc()).catch(() => {});
+        await appUninstaller.runTeardown(target(replicaDoc())).catch(() => {});
 
         sinon.assert.calledWith(dockerServiceStub.forceRemoveFluxAppDockerNetwork, null, { networkName: 'fluxDockerNetwork_myapp' });
         sinon.assert.calledWith(deleteSink, 'myapp');
@@ -810,21 +919,12 @@ describe('appUninstaller tests', () => {
       });
 
       it('keeps them when the store cannot say whether a sibling stays', async () => {
-        appsRepositoryStub.countInstalledIdentities.rejects(new Error('mongo down'));
+        installedStub.instancesOf.rejects(new Error('mongo down'));
 
-        await appUninstaller.runTeardown(replicaDoc()).catch(() => {});
+        await appUninstaller.runTeardown(target(replicaDoc())).catch(() => {});
 
         sinon.assert.notCalled(dockerServiceStub.forceRemoveFluxAppDockerNetwork);
         sinon.assert.notCalled(contentStoreStub.removeApp);
-      });
-
-      it('removes them on a whole-app teardown without asking the store', async () => {
-        appsRepositoryStub.countInstalledIdentities.resolves(1);
-
-        await appUninstaller.runTeardown({ ...doc(), identity: 'bident' }).catch(() => {});
-
-        sinon.assert.calledWith(dockerServiceStub.forceRemoveFluxAppDockerNetwork, null, { networkName: 'fluxDockerNetwork_myapp' });
-        sinon.assert.calledOnceWithExactly(contentStoreStub.removeApp, 'bident');
       });
     });
 
@@ -834,8 +934,8 @@ describe('appUninstaller tests', () => {
       fluxShutdowndClientStub.beginAppStop.onFirstCall().returns(new Promise((resolve) => { releaseStop = resolve; }));
       fluxShutdowndClientStub.beginAppStop.onSecondCall().resolves({ outcome: 'not_arcane' });
 
-      const first = appUninstaller.runTeardown(doc()).catch(() => {});
-      await appUninstaller.runTeardown(doc()); // same key -> single-flight bail, returns at once
+      const first = appUninstaller.runTeardown(target(doc())).catch(() => {});
+      await appUninstaller.runTeardown(target(doc())); // same key -> single-flight bail, returns at once
 
       expect(fluxShutdowndClientStub.beginAppStop.callCount, 'the second teardown must not start a second stop').to.equal(1);
       releaseStop({ outcome: 'not_arcane' });
@@ -847,7 +947,7 @@ describe('appUninstaller tests', () => {
       // A graceful teardown in flight, held at the drain, registers its escalation.
       let releaseStop;
       fluxShutdowndClientStub.beginAppStop.onFirstCall().returns(new Promise((resolve) => { releaseStop = resolve; }));
-      const draining = appUninstaller.runTeardown(doc()).catch(() => {});
+      const draining = appUninstaller.runTeardown(target(doc())).catch(() => {});
       await settle();
 
       // The in-flight teardown holds its remove lease; an operator force-remove of the
@@ -946,62 +1046,55 @@ describe('appUninstaller tests', () => {
       operationRegistry.clear();
     });
 
-    it('graceful removal of a follower uninstalls its requiring workload FIRST (teardown record order proves it)', async () => {
+    it('graceful removal of a follower uninstalls its requiring workload FIRST (the order of the owed marks proves it)', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
-      appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
+      hosting(spec);
       relationshipResolverStub.findCascadeWorkloadsRequiring.withArgs('collector').resolves([spec('workload')]);
 
       await appUninstaller.uninstallApplication('collector', { forceKill: false, background: true });
 
       expect(infoLogged('Reverse dependency cascade: uninstalling workload workload'), 'cascade announced').to.equal(true);
       expect(warnLogged('APP REMOVAL TRIGGERED: workload'), 'nested workload removal ran').to.equal(true);
-      // The workload's teardown record must be written before the collector's own.
-      const keys = pendingTeardownStoreStub.writeTeardown.getCalls().map((c) => c.args[0].key);
-      expect(keys.indexOf('workload'), 'workload record exists').to.be.at.least(0);
+      // The workload's instance is marked owed before the collector's own.
+      const keys = installedStub.markOwed.getCalls().map((c) => c.args[0]);
+      expect(keys.indexOf('workload'), 'workload marked owed').to.be.at.least(0);
       expect(keys.indexOf('workload')).to.be.lessThan(keys.indexOf('collector'));
     });
 
     it('defers the follower teardown when a requiring workload is mid-operation (DEFERRED)', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
-      appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
+      hosting(spec);
       relationshipResolverStub.findCascadeWorkloadsRequiring.withArgs('collector').resolves([spec('workload')]);
       // the requiring workload holds a redeploy lease, so its removal DEFERS
       operationRegistry.acquire('workload', 'redeploy', 'the-redeploy');
       try {
         const result = await appUninstaller.uninstallApplication('collector', { forceKill: false, background: true });
         expect(result.status, 'the follower teardown must defer while its consumer is mid-operation').to.equal(appUninstaller.UninstallStatus.DEFERRED);
-        const keys = pendingTeardownStoreStub.writeTeardown.getCalls().map((c) => c.args[0].key);
+        const keys = installedStub.markOwed.getCalls().map((c) => c.args[0]);
         expect(keys.indexOf('collector'), 'the follower must NOT have started tearing down').to.equal(-1);
       } finally {
         operationRegistry.clear();
       }
     });
 
-    it('a removal that names no replica removes ALL identity rows - pinned included', async () => {
-      appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
-      // The fleet condition: a pinned app's rows carry replica 's1', so a
-      // {replica: null} delete matches none of them, the app stays
-      // "installed" forever, and the tampering detector resurrects it.
-      appsRepositoryStub.countInstalledIdentities.resolves(1);
+    it('a removal that names no replica marks every instance owed - pinned included', async () => {
+      // A pinned app's instances carry replica names: a removal of the app
+      // takes each of them, not a loose instance it never had.
+      hosting(spec, ['s1', 's2']);
 
       await appUninstaller.uninstallApplication('pinnedapp', { forceKill: true, background: true });
 
-      sinon.assert.calledWith(appsRepositoryStub.removeInstalledApp, 'pinnedapp');
-      sinon.assert.notCalled(appsRepositoryStub.removeInstalledIdentity);
-      sinon.assert.calledWith(ledgersStub.removeAll, 'pinnedapp');
-      sinon.assert.notCalled(ledgersStub.remove);
+      expect(installedStub.markOwed.getCalls().map((c) => c.args.slice(0, 2))).to.deep.equal([['pinnedapp', 's1'], ['pinnedapp', 's2']]);
+      sinon.assert.notCalled(installedStub.byReplica);
     });
 
-    it("a replica-named removal removes only that identity's row", async () => {
-      appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
-      appsRepositoryStub.countInstalledIdentities.resolves(1); // a sibling stays
+    it('a replica-named removal marks only that instance owed', async () => {
+      hosting(spec, ['s1', 's2']);
 
       await appUninstaller.uninstallApplication('pinnedapp', { forceKill: true, background: true, replica: 's1' });
 
-      sinon.assert.calledWith(appsRepositoryStub.removeInstalledIdentity, 'pinnedapp', 's1');
-      sinon.assert.notCalled(appsRepositoryStub.removeInstalledApp);
-      sinon.assert.calledOnceWithExactly(ledgersStub.remove, 'pinnedapp', 's1');
-      sinon.assert.notCalled(ledgersStub.removeAll);
+      sinon.assert.calledOnce(installedStub.markOwed);
+      sinon.assert.calledWith(installedStub.markOwed, 'pinnedapp', 's1');
     });
 
     // The cascade is a correctness invariant - a consumer must never outlive
@@ -1010,13 +1103,13 @@ describe('appUninstaller tests', () => {
     // consumer-first like any cascade, but killed rather than drained.
     it('a force-kill cascades too, and the force propagates to the consumers', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
-      appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
+      hosting(spec);
       relationshipResolverStub.findCascadeWorkloadsRequiring.withArgs('collector').resolves([spec('workload')]);
 
       await appUninstaller.uninstallApplication('collector', { forceKill: true, background: true });
 
       expect(warnLogged('APP REMOVAL TRIGGERED: workload | forceKill=true'), 'the consumer is removed in the same manner').to.equal(true);
-      const keys = pendingTeardownStoreStub.writeTeardown.getCalls().map((c) => c.args[0].key);
+      const keys = installedStub.markOwed.getCalls().map((c) => c.args[0]);
       expect(keys.indexOf('workload'), 'consumer-first ordering holds under force').to.be.at.least(0);
       expect(keys.indexOf('workload')).to.be.lessThan(keys.indexOf('collector'));
     });
@@ -1026,14 +1119,14 @@ describe('appUninstaller tests', () => {
     // the defer rule belongs to graceful removals only.
     it('a forced cascade does not defer on a mid-operation consumer', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
-      appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
+      hosting(spec);
       relationshipResolverStub.findCascadeWorkloadsRequiring.withArgs('collector').resolves([spec('workload')]);
       operationRegistry.acquire('workload', 'redeploy', 'the-redeploy');
       try {
         const result = await appUninstaller.uninstallApplication('collector', { forceKill: true, background: true });
 
         expect(result.status, 'the dependency comes down under force').to.not.equal(appUninstaller.UninstallStatus.DEFERRED);
-        const keys = pendingTeardownStoreStub.writeTeardown.getCalls().map((c) => c.args[0].key);
+        const keys = installedStub.markOwed.getCalls().map((c) => c.args[0]);
         expect(keys.indexOf('collector'), 'the dependency teardown proceeded').to.be.at.least(0);
       } finally {
         operationRegistry.clear();
@@ -1046,7 +1139,7 @@ describe('appUninstaller tests', () => {
     // so explicitly, and everyone else keeps the invariant by default.
     it('a caller stating cascade:false skips the cascade', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
-      appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
+      hosting(spec);
 
       await appUninstaller.uninstallApplication('collector', { forceKill: true, background: true, cascade: false });
 
@@ -1057,7 +1150,7 @@ describe('appUninstaller tests', () => {
     // consumer depends on has gone, so there is nothing to cascade.
     it('a replica-scoped removal never cascades', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
-      appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
+      hosting(spec);
 
       await appUninstaller.uninstallApplication('collector', { forceKill: false, background: true, replica: 's1' });
 
@@ -1065,7 +1158,7 @@ describe('appUninstaller tests', () => {
     });
 
     it('does not cascade with the lifecycle toggle off (default)', async () => {
-      appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
+      hosting(spec);
 
       await appUninstaller.uninstallApplication('collector', { forceKill: false, background: true });
 
@@ -1074,7 +1167,7 @@ describe('appUninstaller tests', () => {
 
     it('a graceful workload removal triggers the deferred orphan sweep', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
-      appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
+      hosting(spec);
       relationshipResolverStub.isPureFollowerApp.resolves(false);
 
       const result = await appUninstaller.uninstallApplication('workload', { forceKill: false, background: true });
@@ -1086,7 +1179,7 @@ describe('appUninstaller tests', () => {
 
     it('a force-kill of a follower does NOT trigger the sweep', async () => {
       configStub.fluxapps.manageCollectorLifecycle = true;
-      appsRepositoryStub.getInstalledApp.callsFake(async (name) => spec(name));
+      hosting(spec);
       relationshipResolverStub.isPureFollowerApp.resolves(true);
 
       await appUninstaller.uninstallApplication('collector', { forceKill: true, skipGuard: true, background: true });

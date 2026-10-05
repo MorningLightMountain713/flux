@@ -59,7 +59,7 @@ const appCaches = require('../utils/appCaches');
 const fluxEventBus = require('../utils/fluxEventBus');
 const appUninstaller = require('./appUninstaller');
 const componentProvisioner = require('./componentProvisioner');
-const pendingTeardownStore = require('./pendingTeardownStore');
+const owedRemovals = require('./owedRemovals');
 const shutdownPlan = require('./shutdownPlan');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const appNetworkLinker = require('./appNetworkLinker');
@@ -2115,6 +2115,11 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   const newPorts = collectHostPorts(newDeployment);
   const portsToClose = [...oldPorts].filter((port) => !newPorts.has(port));
   const portsToOpen = [...newPorts].filter((port) => !oldPorts.has(port));
+  // The ledger names each port with the methods it was opened by, which is
+  // what closing one and recording a kept one read.
+  const replica = newDeployment.replica ?? null;
+  const ledger = await appRecords.ledgers().byInstance(appName, replica);
+  const recordedPorts = Object.values(ledger?.components ?? {}).flatMap((block) => block.hostPorts ?? []);
 
   const toUninstall = [...removed, ...recreateVolume, ...keepVolume];
   if (toUninstall.length > 0) {
@@ -2148,7 +2153,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   // so closing is always safe, and doing it here means a failed reinstall can't leak them
   // (the reconciler reopens survivors' ports on recovery but never sweeps a stale deny).
   if (portsToClose.length) {
-    await appUninstaller.denyPorts(portsToClose, appName);
+    await appUninstaller.denyPorts(recordedPorts.filter((entry) => portsToClose.includes(entry.port)), appName);
   }
 
   // A kept-volume component keeps its old mount sources, so injected content the
@@ -2209,8 +2214,6 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   // port kept from the old spec keeps the methods it was opened by, an added
   // one takes the methods the node opens ports by now.
   const opened = await componentProvisioner.portOpenMethods();
-  const replica = newDeployment.replica ?? null;
-  const ledger = await appRecords.ledgers().byInstance(appName, replica);
   // eslint-disable-next-line no-restricted-syntax
   for (const [name, comp] of newDeployment.componentEntries()) {
     const before = ledger?.component(name)?.hostPorts ?? [];
@@ -2226,7 +2229,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   // app that is gone (there is no periodic deny-sweep). The close above always ran
   // (closing is safe); only the open is gated.
   if (portsToOpen.length) {
-    if (await pendingTeardownStore.teardownOwedFor(appName)) {
+    if (await owedRemovals.removalOwedFor(appName)) {
       log.info(`reconcileComponents: teardown owed for ${appName}; skipping redeploy port-open (${portsToOpen.join(',')})`);
     } else {
       await componentProvisioner.openHostPorts(portsToOpen, appName, opened);

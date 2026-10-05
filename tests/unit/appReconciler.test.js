@@ -171,8 +171,8 @@ describe('appReconciler tests', () => {
       ledgerIdentifiers: sinon.stub().resolves([]),
       appsRepository: {
       },
-      // Nothing owed by default: the owed-teardown record is what still names an
-      // app whose row has been deleted, so its absence is "genuinely not here".
+      // Nothing owed by default: an owed-teardown record a release before the
+      // ledger left is the last thing that can still name a component.
       pendingTeardownStore: {
         teardownForComponent: sinon.stub().resolves(null),
       },
@@ -344,11 +344,17 @@ describe('appReconciler tests', () => {
       '../appDatabase/appsRepository': stubs.appsRepository,
       '../appDatabase/appRecords': {
         installed: () => ({
-          byIdentity: async (identity) => installedRecord(await stubs.installed.byIdentity(identity)),
+          byIdentity: async (identity, opts) => {
+            const answer = await stubs.installed.byIdentity(identity, opts);
+            return answer && answer.record ? answer : installedRecord(answer);
+          },
           byName: async (name) => installedRecord(await stubs.installed.byName(name)),
           apps: async () => (await stubs.installed.apps()).map((record) => installedRecord(record)),
         }),
-        installedByIdentifier: async (identifier) => installedRecord(await stubs.installedByIdentifier(identifier)),
+        installedByIdentifier: async (identifier) => {
+          const answer = await stubs.installedByIdentifier(identifier);
+          return answer && answer.record ? answer : installedRecord(answer);
+        },
         ledgers: () => ({
           instancesOf: async (name) => {
             const identifiers = await stubs.ledgerIdentifiers(name);
@@ -986,17 +992,18 @@ describe('appReconciler tests', () => {
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
     });
 
-    // The new desired state: a row-deleted component that still has an owed teardown is
-    // NOT uninstalled - it is mid-removal (desired = gone). The reconciler drives the
-    // teardown to completion, and once it converges it does NOT retry.
-    it('drives an owed teardown to completion and does not retry once converged (desired = gone)', async () => {
+    // A component whose instance is marked owed is NOT uninstalled - it is mid-removal
+    // (desired = gone). The reconciler drives the teardown to completion, and once it
+    // converges it does NOT retry.
+    it('drives an owed instance\'s teardown to completion and does not retry once converged (desired = gone)', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
       installNothing();
-      stubs.pendingTeardownStore.teardownForComponent.resolves({ key: 'app', name: 'app' });
+      stubs.installedByIdentifier.resolves(installedRecord({ name: 'app', owner: 'o' }, { replica: 'r1', owed: { since: 1, reason: null, force: false, broadcast: true, budgetSeconds: 0, attempts: 0 } }));
       stubs.appUninstaller.driveOwedTeardown.resolves({ status: 'removed', attempts: 0 });
 
       await appReconciler.reconcile('www_app');
-      expect(stubs.appUninstaller.driveOwedTeardown.calledOnceWith('app')).to.be.true;
+      expect(stubs.appUninstaller.driveOwedTeardown.calledOnceWith({ name: 'app', replica: 'r1' }), 'driven by the instance the ledger names').to.be.true;
+      expect(stubs.pendingTeardownStore.teardownForComponent.called, 'an instance that is here is not looked for in the legacy records').to.be.false;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       clock.tick(60 * 60 * 1000); // an hour: a converged removal must not re-drive
       await new Promise((resolve) => { setImmediate(() => { setImmediate(resolve); }); });
@@ -1004,12 +1011,29 @@ describe('appReconciler tests', () => {
       clock.restore();
     });
 
-    // A replica-targeted removal keys its own record `<app>_<replica>` so siblings can be
-    // torn down independently, and that key is NOT derivable from the component identifier.
-    // Driving by an app name matches no record, so the reconciler reads "nothing owed",
-    // declares the component gone, and the containers and volume sit there until the next
-    // boot re-drives the record.
-    it('drives a replica-targeted teardown by the record key, not by the app name', async () => {
+    // An instance the node wrote no ledger for is found through its identity;
+    // marked owed, its teardown is driven like any other.
+    it('drives the owed teardown of an instance with no ledger, found by its identity', async () => {
+      installNothing();
+      const owedMark = {
+        since: 1, reason: null, force: false, broadcast: true, budgetSeconds: 0, attempts: 0,
+      };
+      stubs.installed.byIdentity.callsFake(async (identity, opts) => (opts?.includeOwed
+        ? installedRecord({ name: 'app', owner: 'o', identity }, { owed: owedMark })
+        : null));
+      stubs.appUninstaller.driveOwedTeardown.resolves({ status: 'removed', attempts: 0 });
+
+      await appReconciler.reconcile('www_app');
+
+      expect(stubs.installedByIdentifier.calledOnceWith('www_app'), 'the ledger was asked first').to.be.true;
+      expect(stubs.appUninstaller.driveOwedTeardown.calledOnceWith({ name: 'app', replica: null })).to.be.true;
+      expect(stubs.dockerService.appDockerStart.called).to.be.false;
+    });
+
+    // An owed-teardown record a release before the ledger left still names a
+    // component until its teardown clears it; it is driven by its own key, which
+    // a replica-targeted removal of that release made `<app>_<replica>`.
+    it('drives a teardown a release before the ledger left by that record\'s key', async () => {
       installNothing();
       stubs.pendingTeardownStore.teardownForComponent.resolves({ key: 'app_r1', name: 'app' });
       stubs.appUninstaller.driveOwedTeardown.resolves({ status: 'removed', attempts: 0 });
@@ -1018,8 +1042,8 @@ describe('appReconciler tests', () => {
 
       expect(stubs.pendingTeardownStore.teardownForComponent.calledOnceWith('www_App_r1')).to.be.true;
       expect(
-        stubs.appUninstaller.driveOwedTeardown.calledOnceWith('app_r1'),
-        'must drive the replica record by its own key - an app name finds nothing',
+        stubs.appUninstaller.driveOwedTeardown.calledOnceWith({ legacyKey: 'app_r1' }),
+        'must drive the record by its own key',
       ).to.be.true;
     });
 
@@ -1029,7 +1053,7 @@ describe('appReconciler tests', () => {
     it('retries an owed teardown with backoff when it has not converged (attempt count paces it)', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
       installNothing();
-      stubs.pendingTeardownStore.teardownForComponent.resolves({ key: 'app', name: 'app' });
+      stubs.installedByIdentifier.resolves(installedRecord({ name: 'app', owner: 'o' }, { owed: { since: 1, reason: null, force: false, broadcast: true, budgetSeconds: 0, attempts: 0 } }));
       stubs.appUninstaller.driveOwedTeardown.resolves({ status: 'deferred', attempts: 1 });
 
       await appReconciler.reconcile('www_app');

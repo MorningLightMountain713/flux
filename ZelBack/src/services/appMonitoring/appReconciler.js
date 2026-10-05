@@ -62,33 +62,35 @@ async function replicaFromIdentifier(identifier) {
  * reconcile and handed to everything below, so no two steps of one pass can
  * disagree about whose container they are acting on.
  *
- * Two stores, in the order a component's own lifetime visits them:
- *   - the installed row, which STATES the identity its containers were named
- *     from, for as long as the app is installed here;
- *   - the owed-teardown record, written by the removal prelude BEFORE it
- *     deletes that row, and therefore the only thing left that still names a
- *     component the reconciler must drive to gone.
+ * The installed record, through the ledger that names the container, for as
+ * long as the instance is here: hosted, or marked owed by a removal, in which
+ * case the record is what still names a component the reconciler must drive
+ * to gone. An owed-teardown record a release before the ledger left names a
+ * component the same way until its teardown clears it.
  *
  * Neither is a guess. A component in neither belongs to no app this node knows
  * about: there is nothing to enforce for it and no app-level lease to find,
  * because a lease is only ever taken by an operation on an app with one of
- * these two records.
+ * these records.
  *
  * @returns {Promise<{installed: object|null, name: string|null, owedTeardown: object|null}>}
+ *   owedTeardown: the reference driveOwedTeardown takes, when a removal is owed
  */
 async function appFor(identifier) {
-  // The row states the identifiers its own containers are named by, so this is a
-  // lookup. Taking the identifier apart is the fallback for rows written before
-  // that was recorded; info.apps.componentIdentifiers counts how many still need
-  // it, and that figure reaching zero fleet-wide is what licenses deleting it.
-  let installed = (await appRecords.installedByIdentifier(identifier))?.record;
+  // The ledger names the identifiers the instance's containers are named by, so
+  // this is a lookup. Taking the identifier apart is the fallback for an
+  // instance whose ledger the node never wrote; info.apps.installedLedger counts
+  // how many still need it, and that figure reaching zero fleet-wide is what
+  // licenses deleting it.
+  let installed = await appRecords.installedByIdentifier(identifier);
   if (!installed) {
     const identity = await identityFromIdentifier(identifier);
-    installed = (await appRecords.installed().byIdentity(identity))?.record;
+    installed = await appRecords.installed().byIdentity(identity, { includeOwed: true });
   }
-  if (installed) return { installed, name: installed.name, owedTeardown: null };
-  const owedTeardown = await pendingTeardownStore.teardownForComponent(identifier);
-  return { installed: null, name: owedTeardown?.name ?? null, owedTeardown };
+  if (installed?.owed) return { installed: null, name: installed.name, owedTeardown: { name: installed.name, replica: installed.replica } };
+  if (installed) return { installed: installed.record, name: installed.name, owedTeardown: null };
+  const legacy = await pendingTeardownStore.teardownForComponent(identifier);
+  return { installed: null, name: legacy?.name ?? null, owedTeardown: legacy ? { legacyKey: legacy.key } : null };
 }
 
 // The single, level-based actuator for app containers. Every trigger (docker
@@ -1240,20 +1242,19 @@ async function reconcile(identifier) {
     return;
   }
   if (!spec) {
-    // The local install row is gone. Before concluding "not installed", check the OTHER
-    // durable desired state: GONE. Every permanent removal writes an owed-teardown record
-    // (+ condemn stamps) BEFORE deleting the row, so a row-deleted component that still
-    // has an owed record is not "uninstalled" - it is mid-removal, and its desired state
-    // is fully gone. Drive the (idempotent) teardown to completion here, retrying with
+    // No hosted instance holds this component. Before concluding "not installed", check
+    // the OTHER durable desired state: GONE. Every permanent removal marks the instance
+    // owed (+ condemn stamps) before anything is torn down, so a component whose instance
+    // is marked owed is not "uninstalled" - it is mid-removal, and its desired state is
+    // fully gone. Drive the (idempotent) teardown to completion here, retrying with
     // backoff on a partial pass. This makes removal a converged desired state rather than
     // a one-shot job re-driven only at the next boot.
     //
-    // Driven by the record's OWN key, which appFor found by this component's
-    // identifier. The key is the app name only for a loose removal; a
-    // replica-targeted one keys `<app>_<replica>`, so a name would silently
-    // match nothing and leave the teardown to the next boot.
+    // Driven by the instance appFor found through this component's identifier: a
+    // replica-targeted removal marks that instance alone, so the name alone would
+    // not say which.
     const removal = app.owedTeardown
-      ? await appUninstaller.driveOwedTeardown(app.owedTeardown.key)
+      ? await appUninstaller.driveOwedTeardown(app.owedTeardown)
       : { status: 'none', attempts: 0 };
     if (removal.status === 'removed') {
       silentHoldSince.delete(identifier);

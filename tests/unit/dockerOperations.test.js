@@ -402,7 +402,7 @@ describe('appOperations application lifecycle tests', () => {
         connectComponentToLinkedApps: sinon.stub().resolves(),
       },
       './contentBlobService': { serveBlob: sinon.stub().resolves(null) },
-      './pendingTeardownStore': { teardownOwedFor: sinon.stub().resolves(false) },
+      './owedRemovals': { removalOwedFor: sinon.stub().resolves(false) },
     });
   });
 

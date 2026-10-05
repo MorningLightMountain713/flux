@@ -17,9 +17,7 @@ const config = require('config');
 const upnpService = require('../upnpService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
-const appsRepository = require('../appDatabase/appsRepository');
 const appRecords = require('../appDatabase/appRecords');
-const appHistory = require('../appDecisions/appHistory');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const generalService = require('../generalService');
 const mastershipGrantGate = require('./mastershipGrantGate');
@@ -34,6 +32,7 @@ const fluxEventBus = require('../utils/fluxEventBus');
 const { Privilege, authOf } = require('../utils/privileges');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const pendingTeardownStore = require('./pendingTeardownStore');
+const installedLedger = require('./installedLedger');
 const meshReconciler = require('../appMesh/meshReconciler');
 const meshOrdinals = require('../appMesh/meshOrdinals');
 const imageCacheRetention = require('./imageCacheRetention');
@@ -256,13 +255,13 @@ async function cleanupVolumePath(volumepath, options = {}) {
 }
 
 /**
- * Deny a set of host ports on the firewall (ufw) and the router (UPnP) — leaf host
- * mutations on the shared firewall ruleset / IGD session, so the deferred teardown
- * worker calls this from inside the node-wide hostMutationLock; pass the bare port list
- * so the worker can deny ports off the durable teardown descriptor without a live
- * deployComp. Also used by a redeploy's port-delta reconcile to close only the removed
- * ports. Progress goes through onStatus — the API handler owns the response stream.
- * @param {number[]} ports - host ports to deny
+ * Deny host ports as the ledger says they were opened: on the firewall (ufw)
+ * and the router (UPnP), each port by its own methods. Leaf host mutations on
+ * the shared firewall ruleset / IGD session, so the deferred teardown calls
+ * this from inside the node-wide hostMutationLock. Also used by a redeploy's
+ * port-delta reconcile to close only the removed ports. Progress goes through
+ * onStatus — the API handler owns the response stream.
+ * @param {Array<{port: number, opened: Array<'ufw'|'upnp'>}>} ports
  * @param {string} appName - app name (the UPnP mapping description key)
  * @param {object} [options]
  * @param {string} [options.entityName] - label for progress messages (defaults to appName)
@@ -276,32 +275,18 @@ async function denyPorts(ports, appName, options = {}) {
   };
 
   status(`Denying ${entityName} ports...`);
-  const firewallActive = await fluxNetworkHelper.isFirewallActive();
-  const isUPNP = upnpService.isUPNP();
   // eslint-disable-next-line no-restricted-syntax
-  for (const port of (ports || [])) {
-    if (firewallActive) {
+  for (const { port, opened } of (ports || [])) {
+    if (opened.includes('ufw')) {
       // eslint-disable-next-line no-await-in-loop
       await fluxNetworkHelper.deleteAllowPortRule(port);
     }
-    if (isUPNP) {
+    if (opened.includes('upnp')) {
       // eslint-disable-next-line no-await-in-loop
       await upnpService.removeMapUpnpPort(port, `Flux_App_${appName}`);
     }
   }
   status(`Ports of ${entityName} denied`);
-}
-
-/**
- * Close a component's full host-port set — the normal teardown path.
- * @param {object} deployComp - DeploymentComponent (carries appName + hostPorts)
- * @param {object} [options]
- * @param {string} [options.entityName] - label for progress messages (defaults to the app name)
- * @param {Function|null} [options.onStatus] - progress callback
- */
-async function cleanupDeploymentPorts(deployComp, options = {}) {
-  const { entityName = deployComp.appName, onStatus = null } = options;
-  await denyPorts(deployComp.hostPorts, deployComp.appName, { entityName, onStatus });
 }
 
 /**
@@ -369,9 +354,10 @@ async function reclaimUnusedImages(images, status) {
  * this instance's authority and releases the term; a volume-preserving
  * teardown holds it.
  *
- * `c` is a plain descriptor rather than a DeploymentComponent so the
- * crash-recovered removal path (whose spec may be gone) and the live rebuild
- * flows share it: { identifier, appId, appName, label, ports }.
+ * `c` is a plain descriptor rather than a DeploymentComponent, so the owed
+ * removal path and the live rebuild flows share it: what the ledger names for
+ * the component - its ports with the methods they were opened by, its volume,
+ * its sync folder - beside its identifier, app and label.
  *
  * Returns { removed }. When the container survives the remove (or a
  * transition never settles), destructive cleanup is SKIPPED — a volume rm
@@ -380,7 +366,8 @@ async function reclaimUnusedImages(images, status) {
  * as removed: the host residue is retried by the owed record, never by
  * holding the component hostage.
  *
- * @param {{identifier: string, appId: string, appName: string, label: string, ports: number[]}} c
+ * @param {{identifier: string, appId: string, appName: string, identity: string|null, label: string,
+ *   ports: Array<{port: number, opened: string[]}>, volume: object|null, syncFolder: {id: string, path: string}|null}} c
  * @param {object} [opts]
  * @param {boolean} [opts.forceKill=false] - docker kill + force-remove instead of stop + remove
  * @param {boolean} [opts.removeVolumes=false] - tear down volumes, syncthing, crontab (and release the grant)
@@ -471,12 +458,16 @@ async function teardownComponentCore(c, opts = {}) {
       await denyPorts(c.ports, c.appName, { entityName: c.label, onStatus });
     }
     if (removeVolumes) {
-      await stopSyncthingAndCleanup(c.identifier, c.appId);
+      await stopSyncthingAndCleanup(c.syncFolder?.id ?? c.identifier, c.appId);
       await unmountVolume(c.appId, { entityName: c.label, onStatus });
       const dataRemoved = await cleanupAppData(c.appId, { entityName: c.label, onStatus });
       await cleanupCrontab(c.appId, { onStatus });
-      const discovered = await volumeService.getVolumeFilePath(c.identifier);
-      const volumeRemoved = await cleanupVolumePath(discovered.path, { entityName: c.label, onStatus, conclusive: discovered.conclusive });
+      // The image file is where the ledger says the node put it, and nowhere
+      // else is looked. A volume named with no file is one the node recorded
+      // no file for, and the one chance to say an image may be on disk.
+      const volumeRemoved = await cleanupVolumePath(c.volume?.file ?? null, {
+        entityName: c.label, onStatus, conclusive: !c.volume || Boolean(c.volume.file),
+      });
       // Residue that did not throw is still residue: the record stays owed and retries it.
       if (!dataRemoved || !volumeRemoved) cleanupFailed = true;
     }
@@ -522,9 +513,21 @@ async function uninstallComponent(component, options = {}) {
   const appId = dockerService.getAppIdentifier(component.identifier);
   const label = componentName === appName ? appName : `component ${componentName} of ${appName}`;
 
+  // What the ledger names for the component is what goes: its ports by the
+  // methods they were opened with, its folder by its id, its image file.
+  const ledger = await appRecords.ledgers().byInstance(appName, component.replica ?? null);
+  const block = ledger?.component(componentName) ?? null;
+  if (!block) log.warn(`uninstall ${component.identifier}: the ledger names no block for it; no port, folder or image file is removed`);
   const { removed } = await teardownComponentCore(
     {
-      identifier: component.identifier, appId, appName, identity: component.identity, label, ports: component.hostPorts || [],
+      identifier: component.identifier,
+      appId,
+      appName,
+      identity: component.identity,
+      label,
+      ports: block?.hostPorts ?? [],
+      volume: block?.volume ?? null,
+      syncFolder: block?.syncFolder ?? null,
     },
     {
       forceKill: options.forceKill || false,
@@ -809,10 +812,10 @@ async function uninstallApplication(appName, options = {}) {
   // token stays null on the deferred early-return (an own-checked no-op), and two
   // same-app skipGuard removes that share one slot can never clobber a later lease.
   let removeToken = null;
-  // Hoisted: the durable teardown record (set once the prelude persists it) + whether the
-  // deferred teardown has started — so the catch can drive a committed-but-interrupted
-  // teardown in-process without re-driving one that already began.
-  let teardownDoc = null;
+  // Hoisted: the instances this call marked owed + whether the deferred teardown
+  // has started — so the catch can drive a committed-but-interrupted teardown
+  // in-process without re-driving one that already began.
+  const marked = [];
   let teardownStarted = false;
   // What this call marked as departing, and nothing else, so the finally releases
   // only its own mark.
@@ -866,30 +869,17 @@ async function uninstallApplication(appName, options = {}) {
       departing = { appName, replica: replica ?? null };
     }
 
-    let spec = (await appRecords.installed().byName(appName))?.record;
-    if (!spec) {
-      if (!skipGuard) {
-        status('Flux App not found');
-        return { status: UninstallStatus.SKIPPED, reason: 'Flux App not found' };
-      }
-      spec = await appRecords.registry().byName(appName);
-      if (!spec) {
-        const localApps = (await appRecords.installed().apps()).map((record) => record.record);
-        spec = localApps.find((a) => a.name === appName) || null;
-        if (!spec) {
-          const latest = await appHistory.latestApplied(appName);
-          if (latest) {
-            const result = await appsRepository.getAppMessage(latest.decision.hash);
-            if (result) ({ spec } = result);
-          }
-        }
-      }
-    }
-
-    if (!spec) {
+    // The instances this removal targets, each with the ledger of what the node
+    // created for it. A replica name targets that instance alone; omitted, the
+    // whole app leaves this node.
+    const instances = replica !== undefined
+      ? [await appRecords.installed().byReplica(appName, replica, { includeOwed: true })].filter(Boolean)
+      : await appRecords.installed().instancesOf(appName, { includeOwed: true });
+    if (instances.length === 0) {
       status('Flux App not found');
       return { status: UninstallStatus.SKIPPED, reason: 'Flux App not found' };
     }
+    const spec = instances[0].record;
 
     // onRemove cascade: before tearing this app down, uninstall every
     // installed app whose edges declare it must not outlive this one (cascade
@@ -913,91 +903,53 @@ async function uninstallApplication(appName, options = {}) {
       }
     }
 
-    // Capture each component's teardown descriptors off the normalized deployment. The
-    // durable record below carries everything the deferred worker needs, so the local
-    // install row can be deleted up front (every reader then sees the app as gone). An
-    // app whose deployment can't be built falls back to one best-effort descriptor.
-    // A replica-targeted removal captures THAT identity's view (qualified
-    // identifiers), so the teardown touches only its containers and volumes. A
-    // whole-app removal captures every identity this node owes
-    // (deploymentProvider.localIdentities: assigned replicas, or the ones
-    // actually present when the spec no longer targets this node).
-    let deployments = [];
-    try {
-      const identities = replica !== undefined ? [replica] : await deploymentProvider.localIdentities(spec);
-      // eslint-disable-next-line no-restricted-syntax
-      for (const identity of identities) {
-        // eslint-disable-next-line no-await-in-loop
-        const deployment = await deploymentProvider.buildDeployment(spec, { replica: identity });
-        if (deployment) deployments.push(deployment);
-      }
-    } catch (err) {
-      log.warn(`uninstall ${appName}: deployment build failed (${err.message}); using best-effort descriptor`);
-      deployments = [];
-    }
-    const components = [];
+    // What the teardown removes is what each instance's ledger names. The stop
+    // budget the daemon is given comes from the deployment while the spec is
+    // readable here; a spec that cannot be read gives the stop no budget.
+    const targets = [];
     // eslint-disable-next-line no-restricted-syntax
-    for (const deployment of deployments) {
-      // eslint-disable-next-line no-restricted-syntax
-      for (const [, c] of deployment.componentEntries({ reverse: true })) {
-        components.push({
-          identifier: c.identifier,
-          appId: dockerService.getAppIdentifier(c.identifier),
-          componentName: c.name,
-          label: c.name === appName ? appName : `component ${c.name} of ${appName}`,
-          ports: c.hostPorts || [],
-          image: c.image || null,
-        });
+    for (const instance of instances) {
+      // eslint-disable-next-line no-await-in-loop
+      const ledger = await appRecords.ledgers().byInstance(appName, instance.replica);
+      if (!ledger) log.error(`uninstall ${appName}${instance.replica ? ` (${instance.replica})` : ''}: the ledger is missing; the record goes and nothing it created is removed`);
+      let budgetSeconds = 0;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const deployment = await deploymentProvider.buildDeployment(instance.record, { replica: instance.replica });
+        if (deployment) budgetSeconds = shutdownPlan.appShutdownBudgetSeconds(deployment);
+      } catch (err) {
+        log.warn(`uninstall ${appName}: deployment build failed (${err.message}); the stop gets no budget`);
       }
-    }
-    if (components.length === 0) {
-      components.push({
-        identifier: appName, appId: dockerService.getAppIdentifier(appName), componentName: appName, label: appName, ports: [], image: null,
-      });
+      targets.push(teardownTarget(instance, ledger, {
+        since: Date.now(), reason, force: forceKill, broadcast: broadcastRemoval, budgetSeconds, attempts: 0,
+      }));
     }
 
-    // The durable owed-teardown record — the crash-safe handoff to the deferred worker.
-    // A replica-targeted removal keys its own record so a sibling's teardown can
-    // coexist; `name` stays the app for the owed-teardown install gate.
-    teardownDoc = {
-      key: replica != null ? `${appName}_${replica}` : appName,
-      name: appName,
-      replica: replica ?? null,
-      // Named from the identity, like the network itself. Recorded on the teardown so a
-      // removal that outlives the row still knows which network to take with it.
-      networkName: `fluxDockerNetwork_${spec.identity ?? appName}`,
-      forceKill,
-      broadcastRemoval,
-      owner: spec.owner,
-      // The registration identity, for mesh teardown (a mesh app's namespace,
-      // units and material are keyed on it; null for pre-identity installs).
-      identity: spec.identity ?? null,
-      // The stop reason + budget the deferred teardown hands flux-shutdownd. Persisted
-      // because the authoritative spec may be gone by teardown time.
-      reason,
-      shutdownBudgetSeconds: deployments[0] ? shutdownPlan.appShutdownBudgetSeconds(deployments[0]) : 0,
-      createdAt: Date.now(),
-      attempts: 0,
-      components,
-    };
-
-    // The removal prelude — fast and durable, order load-bearing.
-    // Persist the owed-teardown record FIRST and fail CLOSED: once the local install row
-    // is gone (below) this record is the SOLE record of the cleanup owed, so a write
-    // failure must abort the removal (it throws to the catch) before any row delete.
-    await pendingTeardownStore.writeTeardown(teardownDoc);
+    // The removal prelude — fast and durable, order load-bearing. Each instance
+    // is marked owed FIRST, fail CLOSED: the record and its ledger stay until the
+    // teardown finishes, so a mark that could not be written aborts the removal
+    // (it throws to the catch) before anything is condemned.
+    // eslint-disable-next-line no-restricted-syntax
+    for (const target of targets) {
+      // eslint-disable-next-line no-await-in-loop
+      await appRecords.installed().markOwed(appName, target.replica, target.owed);
+      marked.push(target);
+    }
     // Condemn every component (durable): the reconciler stands it down and never restarts
-    // it, boot recovery re-stamps it, and the worker reads it as safe to destroy. The
+    // it, boot recovery re-stamps it, and the teardown reads it as safe to destroy. The
     // runtime-state row (carrying the stamp) is dropped LAST, by the teardown itself.
     // eslint-disable-next-line no-restricted-syntax
-    for (const c of components) {
-      // eslint-disable-next-line no-await-in-loop
-      await appsRuntimeState.setCondemned(c.identifier, true, { force: forceKill });
+    for (const target of targets) {
+      // eslint-disable-next-line no-restricted-syntax
+      for (const c of target.components) {
+        // eslint-disable-next-line no-await-in-loop
+        await appsRuntimeState.setCondemned(c.identifier, true, { force: forceKill });
+      }
     }
     // A concurrent install of this same app may be mid-flight (its image pull). Abort it
-    // now that the owed-teardown doc + condemned stamps are durable: the install's pull
-    // rejects, its catch sees installAborted/teardownOwedFor and classifies the unwind as
-    // a deferral (not a 7-day-poisoning failure), and its own rollback converges
+    // now that the owed marks + condemned stamps are durable: the install's pull rejects,
+    // its catch sees installAborted/removalOwedFor and classifies the unwind as a
+    // deferral (not a 7-day-poisoning failure), and its own rollback converges
     // idempotently with this teardown. No-op when no install is in flight.
     globalState.abortInstall(appName);
 
@@ -1014,24 +966,10 @@ async function uninstallApplication(appName, options = {}) {
     // removal clears it. (An old peer receiving the replica-tagged appremoved
     // clears its whole collapsed row; the sibling's next presence broadcast
     // recreates it within a cycle.)
-    // This identity's row goes first, so what remains IS the sibling set — read
-    // from the store rather than probed from docker, where an unreachable
-    // daemon would read as "no siblings" and delete a running sibling's row.
-    //
-    // No replica named = the WHOLE app leaves this node, and its rows may be
-    // pinned identities (replica 's1', ...): a {replica: null} delete matches
-    // none of them, the app reads as installed forever, and the tampering
-    // detector then resurrects the removed containers. The unique
-    // (name, replica) index caps loose placement at one row, so the all-rows
-    // delete is exact for both shapes.
-    if (replica != null) {
-      await appRecords.installed().remove(appName, replica);
-      await appRecords.ledgers().remove(appName, replica);
-    } else {
-      await appRecords.installed().removeAll(appName);
-      await appRecords.ledgers().removeAll(appName);
-    }
-    const lastReplica = (await appRecords.installed().keys(appName)).length === 0;
+    // The instances still hosted are the ones not marked owed — read from the
+    // store rather than probed from docker, where an unreachable daemon would
+    // read as "no siblings" and clear a running sibling.
+    const lastReplica = (await appRecords.installed().instancesOf(appName)).length === 0;
     if (broadcastRemoval) {
       // An announcement cycle that read the table before this removal's mark still
       // names the app. Waiting for the cycle in flight puts the two on the wire in the
@@ -1054,23 +992,6 @@ async function uninstallApplication(appName, options = {}) {
         log.warn(`${appName} removed without announcing it - this node's own address is unknown, so peers hold its location row until it expires`);
       }
     }
-    if (lastReplica && replica != null) {
-      // Belt-and-braces after a replica-scoped delete: clears any row a
-      // partially-failed earlier removal left behind, so every reader sees the
-      // app as gone with zero filtering. A whole-app removal already deleted
-      // every row above.
-      await appRecords.installed().removeAll(appName);
-      await appRecords.ledgers().removeAll(appName);
-      // The app is gone for good: nothing reconciles an app with no row, so its
-      // removal records have no reader left. Only this full-uninstall path clears
-      // them - a soft removal deletes the row too, but as one step of a redeploy
-      // whose containers are coming straight back, and its records are exactly
-      // what stops a teardown that fails part way being read as tampering.
-      // A sibling replica keeps the row, so the records keep the reader that
-      // makes them worth holding: only the last identity's removal clears them.
-      dockerService.clearFluxRemovedContainers(components.map((c) => c.appId));
-      status('Database cleaned');
-    }
 
     // Drive the deferred destructive teardown. A background removal (cancel/expiry) fires
     // it and returns now; a foreground removal (redeploy/rollback/REST) awaits it.
@@ -1082,12 +1003,12 @@ async function uninstallApplication(appName, options = {}) {
       // releases when the teardown finishes.
       const heldToken = removeToken;
       removeToken = null;
-      runTeardown(teardownDoc)
+      runTeardowns(targets)
         .catch((e) => log.error(`Deferred teardown of ${appName} failed: ${e.message}`))
         .finally(() => operationRegistry.release(appName, heldToken));
       status(`Removal queued: Flux App ${appName} condemned; teardown deferred`);
     } else {
-      await runTeardown(teardownDoc, { onStatus });
+      await runTeardowns(targets, { onStatus });
       status(`Removal step done. Result: Flux App ${appName} was successfully removed`);
     }
 
@@ -1106,11 +1027,10 @@ async function uninstallApplication(appName, options = {}) {
   } catch (error) {
     log.error(`Error removing app ${appName}: ${error.message}`);
     status(`Error: ${error.message}`);
-    // If the owed-teardown record was already persisted (the removal is committed — the
-    // local row may already be gone) and the teardown never started, drive it in-process
-    // rather than leaving an orphan until the next boot recovery.
-    if (teardownDoc && !teardownStarted) {
-      runTeardown(teardownDoc).catch((e) => log.error(`Recovery teardown of ${appName} failed: ${e.message}`));
+    // If an instance was already marked owed (the removal is committed) and the teardown
+    // never started, drive it in-process rather than leaving it until the next boot recovery.
+    if (marked.length && !teardownStarted) {
+      runTeardowns(marked).catch((e) => log.error(`Recovery teardown of ${appName} failed: ${e.message}`));
     }
     return { status: UninstallStatus.FAILED, reason: error.message };
   } finally {
@@ -1120,67 +1040,160 @@ async function uninstallApplication(appName, options = {}) {
 }
 
 /**
- * The deferred destructive teardown. Reads a durable owed-teardown record (from the
- * removal prelude, or replayed by boot recovery) and tears the app down for good:
- * graceful stop OUTSIDE the node-wide lock (an unbounded wait must never serialize the
- * lock), then container removal + host cleanup + the cross-app network removal under
- * ONE hostMutationLock per app, then drops the condemned stamps and clears the record
- * LAST. Each component is isolated so one failure never abandons its siblings; the
- * record is cleared only when every stamp dropped, so anything left is re-driven by
- * boot recovery.
- *
+ * What one instance's teardown removes, as a plain descriptor: the records it
+ * belongs to, and every component block the ledger holds. Built from the
+ * records at removal and whenever the reconciler re-drives an owed instance.
+ * @param {object} instance - the InstalledSpec
+ * @param {object|null} ledger - the InstalledLedger, or null when the node never wrote one
+ * @param {object} owed - the owed mark
+ */
+function teardownTarget(instance, ledger, owed) {
+  return {
+    name: instance.name,
+    replica: instance.replica,
+    owner: instance.owner,
+    identity: instance.identity,
+    networkName: ledger?.network?.name ?? null,
+    components: ledger
+      ? Object.entries(ledger.components).map(([componentName, block]) => ({ componentName, ...block }))
+      : [],
+    owed,
+    source: 'record',
+  };
+}
+
+/**
+ * The same descriptor from an owed-teardown record a release before the
+ * ledger left: its components as that release captured them, each volume
+ * image found once as the adoption finds one, each port as the node opens
+ * ports now.
  * @param {object} doc - a pendingAppTeardowns record
+ */
+async function legacyTarget(doc) {
+  const opened = [
+    ...(await fluxNetworkHelper.isFirewallActive() ? ['ufw'] : []),
+    ...(upnpService.isUPNP() ? ['upnp'] : []),
+  ];
+  const components = [];
+  // eslint-disable-next-line no-restricted-syntax
+  for (const c of doc.components || []) {
+    // eslint-disable-next-line no-await-in-loop
+    const image = await installedLedger.discoverVolumeImage(c.identifier, null);
+    components.push({
+      componentName: c.componentName,
+      identifier: c.identifier,
+      image: { reference: c.image ?? null, digest: null },
+      hostPorts: (c.ports || []).map((port) => ({ port, opened })),
+      volume: image ? {
+        file: image.path, disk: null, fsUuid: image.fsUuid, mountDir: appsFolder + c.identifier,
+      } : null,
+      syncFolder: { id: c.identifier, path: appsFolder + c.identifier },
+      aliases: [],
+      mesh: null,
+      tls: null,
+    });
+  }
+  return {
+    name: doc.name,
+    replica: doc.replica ?? null,
+    owner: doc.owner ?? null,
+    identity: doc.identity ?? null,
+    networkName: doc.networkName ?? null,
+    components,
+    owed: {
+      since: doc.createdAt ?? 0,
+      reason: doc.reason ?? null,
+      force: Boolean(doc.forceKill),
+      broadcast: Boolean(doc.broadcastRemoval),
+      budgetSeconds: doc.shutdownBudgetSeconds || 0,
+      attempts: doc.attempts || 0,
+    },
+    source: 'legacy',
+    legacyKey: doc.key,
+  };
+}
+
+const targetKey = (target) => (target.source === 'legacy' ? `legacy:${target.legacyKey}` : appRecords.instanceKey(target));
+
+/**
+ * The deferred destructive teardown of one instance, single-flight: a second
+ * concurrent teardown of the same instance would double stop/remove/rm-rf and
+ * race the owed mark, so it is skipped.
+ * @param {object} target - from teardownTarget or legacyTarget
  * @param {object} [opts]
  * @param {Function|null} [opts.onStatus] - progress callback (the foreground REST path)
  */
-async function runTeardown(doc, opts = {}) {
-  const { key, name } = doc;
-  // Single-flight per app: refuse a second concurrent destructive teardown of the
-  // same app (it would double stop/remove/rm-rf and race the crash-recovery record).
+async function runTeardown(target, opts = {}) {
+  const key = targetKey(target);
   if (teardownsInProgress.has(key)) {
-    log.warn(`runTeardown: a teardown of ${name} is already in progress; skipping the concurrent one`);
+    log.warn(`runTeardown: a teardown of ${target.name} is already in progress; skipping the concurrent one`);
     return;
   }
   teardownsInProgress.add(key);
   try {
-    await executeTeardown(doc, opts);
+    await executeTeardown(target, opts);
   } finally {
     teardownsInProgress.delete(key);
   }
 }
 
+async function runTeardowns(targets, opts = {}) {
+  // eslint-disable-next-line no-restricted-syntax
+  for (const target of targets) {
+    // eslint-disable-next-line no-await-in-loop
+    await runTeardown(target, opts);
+  }
+}
+
 /**
- * Drive an app's OWED teardown one step toward completion — the reconciler's
- * converge-to-gone actuator. "Gone" is a durable desired state: an owed-teardown record
- * (written by every permanent removal before it deletes the local row) says this app
- * must be fully torn down. Rather than that record only being re-driven at the next boot,
- * the reconciler calls this on every pass over a row-deleted component and drives the
- * (idempotent, single-flight) teardown until the record clears. Returns a verdict:
+ * The teardown still owed for an instance, or an owed-teardown record a
+ * release before the ledger left; null when none is owed.
+ * @param {{name: string, replica: string|null}|{legacyKey: string}} ref
+ */
+async function owedTarget(ref) {
+  if (ref.legacyKey) {
+    const doc = await pendingTeardownStore.getTeardown(ref.legacyKey);
+    return doc ? legacyTarget(doc) : null;
+  }
+  const instance = await appRecords.installed().byReplica(ref.name, ref.replica, { includeOwed: true });
+  if (!instance?.owed) return null;
+  const ledger = await appRecords.ledgers().byInstance(ref.name, ref.replica);
+  return teardownTarget(instance, ledger, instance.owed);
+}
+
+/**
+ * Drive an instance's OWED teardown one step toward completion — the reconciler's
+ * converge-to-gone actuator. "Gone" is a durable desired state: the owed mark on the
+ * record (written by every permanent removal before anything is condemned) says this
+ * instance must be fully torn down. Rather than that mark only being re-driven at the
+ * next boot, the reconciler calls this on every pass over a condemned component and
+ * drives the (idempotent, single-flight) teardown until the records go. Returns a verdict:
  *   'none'     - nothing owed; the caller treats the component as genuinely uninstalled.
- *   'removed'  - the owed record cleared; the app is fully gone (converged).
+ *   'removed'  - the records went; the instance is fully gone (converged).
  *   'deferred' - a teardown is already in flight, or this pass left work owed; the caller
  *                retries with backoff (attempts drives the pacing).
  *
- * Takes the RECORD KEY, which is the app name only for a loose removal — a replica-targeted
- * one keys its own record `<app>_<replica>` so siblings can be torn down independently. A
- * caller holding a component rather than a key resolves it with
- * pendingTeardownStore.teardownForComponent.
- * @param {string} key
+ * Takes the instance's name and replica, or the key of an owed-teardown record a
+ * release before the ledger left. A caller holding a component resolves either
+ * through the reconciler's appFor.
+ * @param {{name: string, replica: string|null}|{legacyKey: string}} ref
  * @returns {Promise<{ status: 'none'|'removed'|'deferred', attempts: number }>}
  */
-async function driveOwedTeardown(key) {
-  const doc = await pendingTeardownStore.getTeardown(key);
-  if (!doc) return { status: 'none', attempts: 0 };
-  // A teardown of this app is already running (the removal prelude's initial drive, or a
-  // sibling reconcile pass). Let it finish; a quick retry observes its result.
-  if (teardownsInProgress.has(key)) return { status: 'deferred', attempts: doc.attempts || 0 };
-  await runTeardown(doc);
-  // runTeardown clears the owed record ONLY when the app is fully gone; a surviving record
+async function driveOwedTeardown(ref) {
+  const target = await owedTarget(ref);
+  if (!target) return { status: 'none', attempts: 0 };
+  // A teardown of this instance is already running (the removal prelude's initial drive,
+  // or a sibling reconcile pass). Let it finish; a quick retry observes its result.
+  if (teardownsInProgress.has(targetKey(target))) return { status: 'deferred', attempts: target.owed.attempts };
+  await runTeardown(target);
+  // runTeardown takes the records ONLY when the instance is fully gone; a surviving mark
   // means this pass left work owed (a survivor, a host-cleanup blip) - pace the retry.
-  const remaining = await pendingTeardownStore.getTeardown(key);
+  const remaining = await owedTarget(ref);
   if (!remaining) return { status: 'removed', attempts: 0 };
-  await pendingTeardownStore.bumpAttempts(key);
-  return { status: 'deferred', attempts: (remaining.attempts || 0) + 1 };
+  const attempts = remaining.owed.attempts + 1;
+  if (remaining.source === 'legacy') await pendingTeardownStore.bumpAttempts(remaining.legacyKey);
+  else await appRecords.installed().markOwed(remaining.name, remaining.replica, { ...remaining.owed, attempts });
+  return { status: 'deferred', attempts };
 }
 
 // A component's destructive teardown (remove + host cleanup) holds the component
@@ -1206,15 +1219,45 @@ async function acquireRemovingLease(dockerName, identifier) {
   }
 }
 
-async function executeTeardown(doc, { onStatus = null } = {}) {
+/**
+ * The instance is fully gone: its records go, or the owed-teardown record a
+ * release before the ledger left is cleared. Once no instance of the app
+ * remains, the app is gone for good: nothing reconciles an app with no record,
+ * so its removal records have no reader left; a sibling keeps them.
+ */
+async function finishTeardown(target, status) {
+  if (target.source === 'legacy') {
+    await pendingTeardownStore.clearTeardown(target.legacyKey);
+  } else {
+    await appRecords.installed().remove(target.name, target.replica);
+    await appRecords.ledgers().remove(target.name, target.replica);
+  }
+  const remaining = await appRecords.installed().keys(target.name, { includeOwed: true });
+  if (remaining.length === 0) {
+    dockerService.clearFluxRemovedContainers(target.components.map((c) => c.identifier));
+    status('Database cleaned');
+  }
+}
+
+/**
+ * The deferred destructive teardown of one instance. Reads what its ledger names
+ * (through the target built from it) and tears the instance down for good:
+ * graceful stop OUTSIDE the node-wide lock (an unbounded wait must never serialize the
+ * lock), then container removal + host cleanup + the cross-app network removal under
+ * ONE hostMutationLock per app, then drops the condemned stamps and takes the records
+ * LAST. Each component is isolated so one failure never abandons its siblings; the
+ * records are taken only when every stamp dropped, so anything left is re-driven by
+ * the reconciler and by boot recovery.
+ *
+ * @param {object} target - from teardownTarget or legacyTarget
+ * @param {object} [opts]
+ * @param {Function|null} [opts.onStatus] - progress callback (the foreground REST path)
+ */
+async function executeTeardown(target, { onStatus = null } = {}) {
   const {
-    key, name, networkName, forceKill, owner, components, reason, shutdownBudgetSeconds, identity,
-  } = doc;
-  // The identity this teardown owns: a replica name scopes the daemon stop to
-  // exactly its containers (a scale-down must not drain the sibling); null is
-  // the whole-app stop (loose, and full removals of pre-qualification installs).
-  const replica = doc.replica ?? null;
-  const list = components || [];
+    name, replica, owner, identity, networkName, components: list, owed,
+  } = target;
+  const forceKill = owed.force;
   const status = (msg) => { log.info(msg); if (onStatus) onStatus(msg); };
 
   // Route the stop through flux-shutdownd first: on Arcane it owns every app stop (a
@@ -1222,8 +1265,8 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
   // non-Arcane node, or when the daemon is unreachable, beginAppStop short-circuits and
   // the local stop does the work. A node-wide shutdown owning the node defers this
   // teardown to boot recovery (the node drain stops the app as it goes down).
-  const stopReason = reason || fluxShutdowndClient.SHUTDOWN_REASON.TTL_EXPIRED;
-  const budgetSeconds = forceKill ? 0 : (shutdownBudgetSeconds || 0);
+  const stopReason = owed.reason || fluxShutdowndClient.SHUTDOWN_REASON.TTL_EXPIRED;
+  const budgetSeconds = forceKill ? 0 : (owed.budgetSeconds || 0);
   const stopDeadline = Math.floor(Date.now() / 1000) + budgetSeconds;
   // While this graceful drain is in flight, let an operator's explicit force-remove
   // preempt it: the escalation force-stops the app via the daemon, resolving the
@@ -1256,10 +1299,10 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
     for (const c of list) {
       if (forceKill) {
         // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerKill(c.identifier).catch((e) => log.warn(`kill ${c.appId}: ${e.message}`));
+        await dockerService.appDockerKill(c.identifier).catch((e) => log.warn(`kill ${c.identifier}: ${e.message}`));
       } else {
         // eslint-disable-next-line no-await-in-loop
-        await dockerService.appDockerStop(c.identifier).catch((e) => log.warn(`stop ${c.appId}: ${e.message}`));
+        await dockerService.appDockerStop(c.identifier).catch((e) => log.warn(`stop ${c.identifier}: ${e.message}`));
       }
     }
   }
@@ -1273,28 +1316,35 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
   status(`Removing ${name} container(s) and host state...`);
   // The app's network, telemetry sink and content store are shared by every
   // replica of the app here, so they go only when this teardown takes the app
-  // off the node: a whole-app teardown, or the last replica leaving. Read from
-  // the store at teardown time (the prelude has already deleted this identity's
-  // row); a store that cannot answer keeps them, and the janitor sweep removes a
-  // network no installed app owns.
-  const appLeavesNode = replica == null || await appRecords.installed().keys(name)
-    .then((keys) => keys.length === 0, (e) => {
-      log.warn(`teardown ${name}: cannot count installed replicas, keeping the app's shared state: ${e.message}`);
+  // off the node: when no instance of it is still hosted (the ones being
+  // removed are marked owed and do not count). A store that cannot answer
+  // keeps them, and the janitor sweep removes a network no installed app owns.
+  const appLeavesNode = await appRecords.installed().instancesOf(name)
+    .then((hosted) => hosted.length === 0, (e) => {
+      log.warn(`teardown ${name}: cannot read the hosted instances, keeping the app's shared state: ${e.message}`);
       return false;
     });
-  // A component whose container is still present after the remove blocks clearing the owed
-  // record: destroying its volume under a live container would corrupt it, so the core skips
-  // the cleanup and we leave the teardown for boot recovery (which re-checks the container is gone).
+  // A component whose container is still present after the remove blocks taking the
+  // records: destroying its volume under a live container would corrupt it, so the core
+  // skips the cleanup and we leave the teardown owed (the reconciler re-checks the container is gone).
   let containerSurvived = false;
   let residueOwed = false;
   const survivedComponents = new Set();
   await withHostMutationLock(async () => {
     // eslint-disable-next-line no-restricted-syntax
     for (const c of list) {
+      const label = c.componentName === name ? name : `component ${c.componentName} of ${name}`;
       // eslint-disable-next-line no-await-in-loop
       const { removed, cleanupFailed } = await teardownComponentCore(
         {
-          identifier: c.identifier, appId: c.appId, appName: name, identity, label: c.label, ports: c.ports,
+          identifier: c.identifier,
+          appId: c.identifier,
+          appName: name,
+          identity,
+          label,
+          ports: c.hostPorts ?? [],
+          volume: c.volume ?? null,
+          syncFolder: c.syncFolder ?? null,
         },
         {
           forceKill, removeVolumes: true, stopHandled: true, onStatus,
@@ -1305,19 +1355,19 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
         survivedComponents.add(c.identifier);
       } else if (cleanupFailed) {
         // The container went, so the component is NOT held hostage — but host
-        // residue is still on disk and only the owed record will retry it.
+        // residue is still on disk and only the owed mark will retry it.
         residueOwed = true;
       }
     }
     // Reclaim the app's images (reference-gated) — an image-store mutation, so under the lock.
-    await reclaimUnusedImages(list.map((c) => c.image), status);
+    await reclaimUnusedImages(list.map((c) => c.image?.reference), status);
     status('Cleaning up docker network...');
     // Force-disconnect any remaining endpoints before removing the network. The app's
     // own containers are already gone by here; the only endpoints left are foreign
     // consumers that linked to this app, and a plain removal fails on them ("active
     // endpoints"). A linked consumer stops desiring this departed network on its next
     // reconcile, so disconnecting it here is safe regardless of the teardown mode.
-    if (appLeavesNode) {
+    if (appLeavesNode && networkName) {
       await dockerService.forceRemoveFluxAppDockerNetwork(null, { networkName }).catch((e) => log.error(`network removal ${networkName}: ${e.message}`));
     }
     // Mesh teardown: units, namespace, transport port, material. Keyed on the
@@ -1354,15 +1404,15 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
   if (identity && appLeavesNode) await contentStore.removeApp(identity).catch((e) => log.warn(`content store removal ${name}: ${e.message}`));
 
   // FINISH — drop every component's runtime state (incl. the condemned stamp), then
-  // clear the durable record, but ONLY when every stamp dropped: a surviving stamp
-  // keeps the record so boot recovery re-drives (never orphan a condemned component).
+  // take the records, but ONLY when every stamp dropped: a surviving stamp keeps the
+  // owed mark so the teardown is re-driven (never orphan a condemned component).
   let allDropped = true;
   // eslint-disable-next-line no-restricted-syntax
   for (const c of list) {
     if (survivedComponents.has(c.identifier)) {
       // Its container still exists (or a transition never settled): keep the condemn
       // stamp + runtime state so the reconciler keeps refusing it and we never un-condemn
-      // a live container. The owed record re-drives it at boot recovery.
+      // a live container. The owed mark re-drives it.
       allDropped = false;
       // eslint-disable-next-line no-continue
       continue;
@@ -1373,16 +1423,16 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
     if (onComponentRemoved) onComponentRemoved(c.identifier);
   }
   if (allDropped && !containerSurvived && !residueOwed) {
-    await pendingTeardownStore.clearTeardown(key);
+    await finishTeardown(target, status);
   } else {
     // eslint-disable-next-line no-nested-ternary
     const why = containerSurvived ? 'a container survived removal'
       : (residueOwed ? 'host cleanup failed and its residue is still on disk'
         : 'a condemned stamp did not drop');
-    log.warn(`Teardown of ${name}: ${why}; keeping the teardown record owed`);
+    log.warn(`Teardown of ${name}: ${why}; keeping the teardown owed`);
     // Hand the still-owed teardown back to the reconciler to CONVERGE (drive + retry with
-    // backoff) instead of abandoning it until the next boot. Each component's null-spec
-    // reconcile pass re-drives the owed record via driveOwedTeardown; single-flight and
+    // backoff) instead of abandoning it until the next boot. Each component's owed
+    // reconcile pass re-drives the teardown via driveOwedTeardown; single-flight and
     // the idempotent teardown make the fan-out safe.
     // eslint-disable-next-line no-restricted-syntax
     for (const c of list) {
@@ -1392,61 +1442,50 @@ async function executeTeardown(doc, { onStatus = null } = {}) {
 }
 
 /**
- * Boot recovery: replay every owed teardown that survived a crash. Runs at boot
- * BEFORE the reconciler starts — synchronously re-condemns every component (so the
- * reconciler refuses to start them from cycle 0), then drives the teardowns in the
- * background. Guards: if the app's local row is BACK (a re-install beat recovery) the
- * record is dropped and the components un-condemned with NO teardown (never rm -rf a
- * live re-install's volume); if the row read is UNREADABLE (transient) the record is
- * left for the next boot rather than tearing down on a guess.
+ * Boot recovery: replay every owed teardown that survived a crash — each instance
+ * marked owed, and each owed-teardown record a release before the ledger left. Runs
+ * at boot BEFORE the reconciler starts: synchronously re-condemns every component (so
+ * the reconciler refuses to start them from cycle 0), then hands them to the
+ * reconciler to converge. An instance whose ledger names no component has nothing
+ * for the reconciler to drive by, so its teardown runs here and takes the records. A
+ * read that fails leaves the instances for the next boot rather than tearing down
+ * on a guess.
  *
  * @returns {Promise<void>}
  */
 async function recoverOwedTeardowns() {
-  await pendingTeardownStore.prepareCollection();
-  const owed = await pendingTeardownStore.readAllTeardowns();
-  if (!owed.length) return;
-  log.info(`Boot recovery: ${owed.length} owed teardown(s) to replay`);
+  let owedInstances = [];
+  try {
+    owedInstances = await appRecords.installed().owed();
+  } catch (err) {
+    log.warn(`Boot recovery: the owed instances could not be read, deferring their teardowns: ${err.message}`);
+  }
+  const legacyDocs = await pendingTeardownStore.readAllTeardowns();
+  if (!owedInstances.length && !legacyDocs.length) return;
+  log.info(`Boot recovery: ${owedInstances.length + legacyDocs.length} owed teardown(s) to replay`);
 
-  const toDrain = [];
+  const toDrive = [];
   // eslint-disable-next-line no-restricted-syntax
-  for (const doc of owed) {
-    let rowExists = false;
-    let rowReadFailed = false;
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      // Per identity: an owed teardown names one replica, and a co-located
-      // sibling being installed says nothing about whether THIS one came back.
-      rowExists = (await appRecords.installed().keys(doc.name)).some((key) => key.replica === (doc.replica ?? null));
-    } catch (err) {
-      rowReadFailed = true;
-      log.warn(`Boot recovery: install-row read for ${doc.name} failed, deferring its teardown: ${err.message}`);
-    }
-    if (rowReadFailed) {
-      // leave the record; never tear down on an unreadable row
-      // eslint-disable-next-line no-continue
-      continue;
-    }
-    if (rowExists) {
-      // a re-install beat recovery: drop the record + un-condemn, do NOT tear down
-      log.warn(`Boot recovery: ${doc.name} is re-installed; dropping its stale teardown record without teardown`);
-      // eslint-disable-next-line no-restricted-syntax
-      for (const c of (doc.components || [])) {
-        // eslint-disable-next-line no-await-in-loop
-        await appsRuntimeState.setCondemned(c.identifier, false);
-      }
-      // eslint-disable-next-line no-await-in-loop
-      await pendingTeardownStore.clearTeardown(doc.key);
-      // eslint-disable-next-line no-continue
-      continue;
-    }
-    // re-condemn synchronously so the reconciler refuses these from cycle 0
+  for (const instance of owedInstances) {
+    // eslint-disable-next-line no-await-in-loop
+    const ledger = await appRecords.ledgers().byInstance(instance.name, instance.replica);
+    const identifiers = ledger?.identifiers() ?? [];
     // eslint-disable-next-line no-restricted-syntax
-    for (const c of (doc.components || [])) {
+    for (const identifier of identifiers) {
       // eslint-disable-next-line no-await-in-loop
-      await appsRuntimeState.setCondemned(c.identifier, true, { force: doc.forceKill });
+      await appsRuntimeState.setCondemned(identifier, true, { force: instance.owed.force });
     }
-    toDrain.push(doc);
+    toDrive.push({ identifiers, target: identifiers.length ? null : teardownTarget(instance, ledger, instance.owed) });
+  }
+  // eslint-disable-next-line no-restricted-syntax
+  for (const doc of legacyDocs) {
+    const identifiers = (doc.components || []).map((c) => c.identifier);
+    // eslint-disable-next-line no-restricted-syntax
+    for (const identifier of identifiers) {
+      // eslint-disable-next-line no-await-in-loop
+      await appsRuntimeState.setCondemned(identifier, true, { force: doc.forceKill });
+    }
+    toDrive.push({ identifiers, target: null });
   }
 
   // Hand the owed teardowns to the reconciler to CONVERGE — it drives each to completion
@@ -1454,8 +1493,9 @@ async function recoverOwedTeardowns() {
   // abandons a partial failure until the NEXT boot. The synchronous re-condemn above keeps
   // the run-state path off these components until the boot gate opens and these enqueues
   // (held in bootPending until then) drain into the reconciler's owed-teardown path.
-  toDrain.forEach((doc) => {
-    (doc.components || []).forEach((c) => reconcilerQueue.enqueueComponent(c.identifier));
+  toDrive.forEach(({ identifiers, target }) => {
+    identifiers.forEach((identifier) => reconcilerQueue.enqueueComponent(identifier));
+    if (target) runTeardown(target).catch((e) => log.error(`Boot recovery teardown of ${target.name} failed: ${e.message}`));
   });
 }
 
@@ -1539,7 +1579,6 @@ module.exports = {
   UninstallStatus,
   uninstallApplication,
   uninstallComponent,
-  cleanupDeploymentPorts,
   denyPorts,
   removeAppLocallyApi,
   setOnComponentRemoved,

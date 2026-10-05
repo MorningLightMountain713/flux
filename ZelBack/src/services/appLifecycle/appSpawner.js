@@ -83,7 +83,7 @@ const appInstaller = require('./appInstaller');
 const specReconciler = require('./specReconciler');
 const relationshipResolver = require('./relationshipResolver');
 const { NodeCondition } = require('./nodeConditions');
-const pendingTeardownStore = require('./pendingTeardownStore');
+const owedRemovals = require('./owedRemovals');
 const fluxEventBus = require('../utils/fluxEventBus');
 
 let appsCountAvailableToInstallOnMyNode = 0;
@@ -729,7 +729,7 @@ async function trySpawningGlobalApplication() {
           // still draining, so re-selecting would race the removal (the port probe
           // hits the draining docker-proxy and reads the port as busy). Reconsidered
           // once the teardown clears.
-          if (await pendingTeardownStore.teardownOwedFor(c.instantiated.name)) {
+          if (await owedRemovals.removalOwedFor(c.instantiated.name)) {
             return false;
           }
           try {
