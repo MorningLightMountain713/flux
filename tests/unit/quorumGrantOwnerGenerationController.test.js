@@ -2,10 +2,10 @@
 
 const { expect } = require('chai');
 const sinon = require('sinon');
+const { stubRegistry } = require('./fixtures/appRecords');
 
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
-const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/fluxCommunicationMessagesSender');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
 const ownerGenerationRecord = require('../../ZelBack/src/services/quorumGrant/ownerGenerationRecord');
@@ -59,7 +59,7 @@ describe('quorumGrant ownerGenerationController', () => {
   beforeEach(() => {
     sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
     sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('203.0.113.5:16127');
-    sinon.stub(appsRepository, 'getGlobalAppInfoByIdentity').callsFake(async (identity) => (identity === IDENTITY ? { name: 'myapp', owner: OWNER } : null));
+    stubRegistry().byIdentity.callsFake(async (identity) => (identity === IDENTITY ? { name: 'myapp', owner: OWNER } : null));
     sinon.stub(messageStore, 'standingGeneration').resolves({ record: null, aside: false });
     sinon.stub(messageStore, 'getGrantGenerationRecord').resolves(null);
     sinon.stub(messageStore, 'heldGenerationRecords').resolves([]);

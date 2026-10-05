@@ -30,6 +30,7 @@ const {
   extractIp, extractPort, ipsMatch,
 } = require('../utils/socketAddressUtils');
 const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const appSpecHistory = require('../appDatabase/appSpecHistory');
 const appDataEntries = require('../utils/appDataEntries');
 const ingressAttestationService = require('../appMessaging/ingressAttestationService');
@@ -848,7 +849,7 @@ async function applyPermissionsFix(appname, appId) {
  */
 async function componentIdentifiersFor(appname) {
   if (appname.includes('_')) return [appname];
-  const instantiated = await appsRepository.getGlobalAppInfo(appname);
+  const instantiated = await appRecords.registry().byName(appname);
   if (!instantiated) {
     throw new Error('Application not found');
   }
@@ -1811,7 +1812,7 @@ async function updateAppGlobaly(params) {
   // The app the update is judged against: the one the list carries under the
   // name, or the one that last held it, so an expired app is renewed on what it
   // held.
-  const appInfo = (await appsRepository.getGlobalAppInfo(spec.name)) ?? (await appSpecHistory.latestAppliedState(spec.name));
+  const appInfo = (await appRecords.registry().byName(spec.name)) ?? (await appSpecHistory.latestAppliedState(spec.name));
   if (!appInfo) {
     throw new Error('Flux App update received but application to update does not exist!');
   }

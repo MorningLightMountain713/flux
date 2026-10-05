@@ -47,8 +47,7 @@ describe('appJanitor tests', () => {
   });
 
   /**
-   * A real global-registry row: an InstantiatedSpec, which is what
-   * appsRepository.listGlobalAppInfo() resolves. Its isExpired(tipBlockTime,
+   * A real global-registry row: an InstantiatedSpec. Its isExpired(tipBlockTime,
    * currentHeight) adapts the two numbers appJanitor has into the
    * {state},{clock} pair the inner spec wants - the adaptation the sweep
    * depends on and a literal cannot have.
@@ -105,8 +104,6 @@ describe('appJanitor tests', () => {
     fluxEventBusStub = { publish: sinon.stub() };
     appsRepositoryStub = {
       appLocationFromEvents: sinon.stub().resolves([]),
-      listGlobalAppInfo: sinon.stub().resolves([]),
-      removeGlobalAppInfo: sinon.stub().resolves(),
       removeAppInstallingErrorRecords: sinon.stub().resolves(),
     };
     contentSlotServiceStub = { reapDisplacedManifests: sinon.stub().resolves({ reaped: 0, orphans: [] }) };

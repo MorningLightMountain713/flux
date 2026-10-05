@@ -3,7 +3,6 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const config = require('config');
-const { ObjectId } = require('mongodb');
 const proxyquire = require('proxyquire');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const { Privilege, authOf } = require('../../ZelBack/src/services/utils/privileges');
@@ -12,6 +11,7 @@ const registryManager = require('../../ZelBack/src/services/appDatabase/registry
 const messageHelper = require('../../ZelBack/src/services/messageHelper');
 const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
+const appRecords = require('../../ZelBack/src/services/appDatabase/appRecords');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/fluxCommunicationMessagesSender');
@@ -25,6 +25,7 @@ const {
   loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION,
   v8Spec, v9Spec, sealedV8Spec, sealedV9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const { stubRegistry } = require('./fixtures/appRecords');
 const { NODE_DOWN_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
 const { departures, OFF_LIST_GRACE_MS } = require('../../ZelBack/src/services/appDatabase/offListDepartures');
 
@@ -59,8 +60,8 @@ describe('registryManager tests', () => {
   });
 
   /**
-   * What `appsRepository.getGlobalAppInfo` hands the module: a real
-   * InstantiatedSpec. Only the mongo read is stubbed.
+   * What the registry's `byName` hands the module: a real InstantiatedSpec.
+   * Only the registry read is stubbed.
    *
    * It is built through the STORED doc, so the object under test is what a node
    * would rebuild from its own row rather than one this file kept a reference to.
@@ -84,26 +85,21 @@ describe('registryManager tests', () => {
       if (spec.version < 9) delete doc.registeredAt;
       stored = flux.InstantiatedSpec.deserialize(doc);
     }
-    sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(stored);
+    stubRegistry().byName.resolves(stored);
     return stored;
   }
 
   describe('appsRepository.getApplicationOwner tests', () => {
     beforeEach(async () => {
       const collection = config.database.appsglobal.collections.appsInformation;
-      const insertApp = {
-        _id: new ObjectId('6147045cd774409b374d253d'),
-        name: 'TestApp',
-        description: 'Test application',
-        owner: '196GJWyLxzAw3MirTT7Bqs2iGpUQio29GH',
-      };
-
       try {
         await database.collection(collection).drop();
       } catch (err) {
         // Collection doesn't exist
       }
-      await dbHelper.insertOneToDatabase(database, collection, insertApp);
+      await appRecords.registry().put(await instantiatedSpec(
+        await v8Spec({ name: 'TestApp', owner: '196GJWyLxzAw3MirTT7Bqs2iGpUQio29GH' }), { hash: 'h-testapp', height: 1 },
+      ));
     });
 
     it('should return application owner if app exists in database', async () => {
@@ -1179,7 +1175,7 @@ describe('registryManager tests', () => {
     it('appConvertApi refuses an unprivileged caller before reading the app', async () => {
       sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 1000 } });
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(false);
-      const getInfo = sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(null);
+      const getInfo = stubRegistry().byName.resolves(null);
       const res = { json: sinon.fake((param) => param) };
 
       await registryManager.appConvertApi({ params: { appname: 'convertme' }, query: {}, headers: {} }, res);
@@ -1217,10 +1213,10 @@ describe('registryManager tests', () => {
     });
   });
 
-  // The row seeded here is a real STORED spec, not a hand-assembled document:
-  // this check reads the live registry entry back through hydrate, and the hash
-  // branch below then asks that entry two questions (`expiresAtHeight` and
-  // `serialize`) that only the real InstantiatedSpec can answer.
+  // The record seeded here is a real one, written through the registry: this
+  // check reads it back through the registry, and the hash branch below then
+  // asks it two questions (`expiresAtHeight` and `serialize`) that only the real
+  // InstantiatedSpec can answer.
   describe('checkApplicationRegistrationNameConflicts tests', () => {
     const EXISTING_HEIGHT = 1_700_000;
     // v8's `expire` of 88000 blocks from EXISTING_HEIGHT, as the real class
@@ -1234,15 +1230,13 @@ describe('registryManager tests', () => {
         { hash: 'testhash123', height: EXISTING_HEIGHT },
       );
       existingExpiresAt = stored.expiresAtHeight;
-      const doc = stored.serialize();
-      delete doc.registeredAt; // a v1-v8 row carries none
 
       try {
         await database.collection(collection).drop();
       } catch (err) {
         // Collection doesn't exist
       }
-      await dbHelper.insertOneToDatabase(database, collection, doc);
+      await appRecords.registry().put(stored);
     });
 
     it('should throw error if app name already exists', async () => {
@@ -1336,10 +1330,38 @@ describe('registryManager tests', () => {
     });
   });
 
-  // These write and read the real globalAppsInformation rows, so the docs are
-  // real stored forms: what a confirmed spec actually leaves in mongo, produced
-  // by InstantiatedSpec.serialize rather than assembled by hand.
-  describe('the registry row of an app, by its identity', () => {
+  describe('the v1 list routes', () => {
+    it('getGlobalAppsSpecifications asks the registry for the records matching the hash, owner and name given, and serves each as registered', async () => {
+      const app = await instantiatedSpec(await v8Spec({ name: 'listed' }), { hash: 'h-listed', height: 10 });
+      const registry = stubRegistry();
+      registry.find.resolves([app]);
+      const res = { json: sinon.fake((param) => param) };
+
+      await registryManager.getGlobalAppsSpecifications({ params: { appname: 'Listed' }, query: { owner: app.owner } }, res);
+
+      sinon.assert.calledOnceWithExactly(registry.find, { hash: undefined, owner: app.owner, name: 'Listed' });
+      expect(res.json.firstCall.args[0].data).to.deep.equal([app.serialize()]);
+    });
+
+    it('getGlobalAppsSpecifications asks for every record when nothing is given', async () => {
+      const registry = stubRegistry();
+      await registryManager.getGlobalAppsSpecifications({ params: {}, query: {} }, { json: sinon.fake((param) => param) });
+      sinon.assert.calledOnceWithExactly(registry.find, { hash: undefined, owner: undefined, name: undefined });
+    });
+
+    it('availableApps serves every registry record and every app installed here, each as registered', async () => {
+      const listed = await instantiatedSpec(await v8Spec({ name: 'listed' }), { hash: 'h-listed', height: 10 });
+      const installed = await instantiatedSpec(await v9Spec({ name: 'installed' }), { hash: 'h-installed', height: 11 });
+      stubRegistry().all.resolves([listed]);
+      sinon.stub(appsRepository, 'listInstalledApps').resolves([installed]);
+
+      expect(await registryManager.availableApps(null, null)).to.deep.equal([listed.serialize(), installed.serialize()]);
+    });
+  });
+
+  // These write and read the real registry collection, through the registry
+  // over this node's Mongo adapter.
+  describe('the registry record of an app, by its identity', () => {
     const collection = () => database.collection(config.database.appsglobal.collections.appsInformation);
 
     beforeEach(async () => {
@@ -1349,13 +1371,14 @@ describe('registryManager tests', () => {
     it('answers the app with that identity, never another app whose name matches the string', async () => {
       const app = await instantiatedSpec(await v8Spec({ name: 'myapp' }), { hash: 'h', identity: 'ab12cd34ef56' });
       const namedLikeIt = await instantiatedSpec(await v8Spec({ name: 'ab12cd34ef56', owner: '1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2' }), { hash: 'h2', identity: 'ab12cd34ef56x' });
-      await collection().insertMany([app.serialize(), namedLikeIt.serialize()]);
+      await appRecords.registry().put(app);
+      await appRecords.registry().put(namedLikeIt);
 
-      expect((await appsRepository.getGlobalAppInfoByIdentity('ab12cd34ef56')).name).to.equal('myapp');
+      expect((await appRecords.registry().byIdentity('ab12cd34ef56')).name).to.equal('myapp');
       expect(app.owner, 'the decoy has another owner').to.not.equal(namedLikeIt.owner);
-      expect(await appsRepository.getGlobalAppOwnerByIdentity('ab12cd34ef56')).to.equal(app.owner);
-      expect(await appsRepository.getGlobalAppInfoByIdentity('AB12CD34EF56')).to.equal(null);
-      expect(await appsRepository.getGlobalAppOwnerByIdentity(null)).to.equal(null);
+      expect((await appRecords.registry().byIdentity('ab12cd34ef56')).owner).to.equal(app.owner);
+      expect(await appRecords.registry().byIdentity('AB12CD34EF56')).to.equal(null);
+      expect(await appRecords.registry().byIdentity(null)).to.equal(null);
     });
   });
 
@@ -1939,33 +1962,31 @@ describe('registryManager tests', () => {
       registryManager.setOnSpecStored(null);
     });
 
-    /** The stored document for an app at a given chain position. */
-    async function storedDoc(name, { hash, height }) {
-      return (await instantiatedSpec(await v9Spec({ name }), { hash, height })).serialize();
+    /** The record of an app at a given chain position. */
+    async function storedRecord(name, { hash, height }) {
+      return instantiatedSpec(await v9Spec({ name }), { hash, height });
     }
 
     /**
-     * `replaceGlobalAppRow` is stubbed here — it is the mongo write — so nothing
-     * in this suite reads the row back. What the real one does with the document
-     * is key it by `name` and store it verbatim; what reads it back is hydrate,
-     * on the next boot, through InstantiatedSpec.deserialize. So assert the
-     * property the repository reads and that the deserializer accepts the doc:
-     * that pair is what the stub would otherwise be hiding.
+     * The registry's `put` is stubbed here, so nothing in this suite reads the
+     * record back. The registry keys a record on its name and stores its
+     * serialized form, which InstantiatedSpec.deserialize reads back on the next
+     * boot: assert that pair, which the stub would otherwise hide.
      */
-    function assertStorable(doc, name) {
-      expect(doc.name, 'the repository keys the row on name').to.equal(name);
-      const rehydrated = flux.InstantiatedSpec.deserialize(doc);
+    function assertStorable(record, name) {
+      expect(record.name, 'the registry keys the record on its name').to.equal(name);
+      const rehydrated = flux.InstantiatedSpec.deserialize(record.serialize());
       expect(rehydrated.spec).to.be.instanceOf(flux.FluxAppSpecV9);
       expect(rehydrated.name).to.equal(name);
       return rehydrated;
     }
 
-    it('fires the hook with the stored spec after a row is written', async () => {
-      const upsert = sinon.stub(appsRepository, 'replaceGlobalAppRow').resolves();
+    it('fires the hook with the stored record after it is written', async () => {
+      const upsert = stubRegistry().put;
       const hook = sinon.stub();
       registryManager.setOnSpecStored(hook);
 
-      const spec = await storedDoc('hookapp', { hash: 'h1', height: 100 });
+      const spec = await storedRecord('hookapp', { hash: 'h1', height: 100 });
       await registryManager.storeGlobalSpec(spec);
 
       sinon.assert.calledOnce(upsert);
@@ -1984,18 +2005,18 @@ describe('registryManager tests', () => {
     });
 
     it('a throwing hook does not break the store', async () => {
-      const upsert = sinon.stub(appsRepository, 'replaceGlobalAppRow').resolves();
+      const upsert = stubRegistry().put;
       registryManager.setOnSpecStored(() => { throw new Error('hook boom'); });
 
-      await registryManager.storeGlobalSpec(await storedDoc('safeapp', { hash: 'h', height: 1 }));
+      await registryManager.storeGlobalSpec(await storedRecord('safeapp', { hash: 'h', height: 1 }));
       sinon.assert.calledOnce(upsert); // stored despite the throwing hook
     });
 
     it('does not fire when no hook is registered', async () => {
       registryManager.setOnSpecStored(null);
-      const upsert = sinon.stub(appsRepository, 'replaceGlobalAppRow').resolves();
+      const upsert = stubRegistry().put;
 
-      await registryManager.storeGlobalSpec(await storedDoc('nohook', { hash: 'h', height: 1 }));
+      await registryManager.storeGlobalSpec(await storedRecord('nohook', { hash: 'h', height: 1 }));
 
       sinon.assert.calledOnce(upsert); // store still happened, just no hook
     });
@@ -2007,8 +2028,6 @@ describe('registryManager tests', () => {
     it('resolves the entry it just stored and maps the components off the cleartext view', async () => {
       const sealed = await sealedV9Spec({ name: 'meshapp' });
       const stored = await registryHolds(sealed, { hash: 'hm', height: 2_500_000, identity: 'ab12cd34ef56' });
-      const doc = stored.serialize();
-      sinon.stub(appsRepository, 'replaceGlobalAppRow').resolves();
       // The resolver decrypts through the benchmark channel, so it stays
       // stubbed — and it hands back what the real one hands back for a sealed
       // app: a DecryptedCanonicalSpec, never a raw serializable spec.
@@ -2016,7 +2035,7 @@ describe('registryManager tests', () => {
       const resolve = sinon.stub(specCutover, 'resolveInstantiatedSpec').resolves(view);
       const applyComponentView = sinon.stub(foundingCommittee, 'applyComponentView').resolves();
 
-      await registryManager.storeGlobalSpec(doc);
+      await registryManager.storeGlobalSpec(stored);
 
       // Stubbing the resolver hides whether the entry we hand it is usable. The
       // real one branches on `isEncrypted`, then calls `createProvider()` on the
@@ -2035,7 +2054,7 @@ describe('registryManager tests', () => {
       expect(mapped.identity).to.equal('ab12cd34ef56');
       expect(mapped.height).to.equal(2_500_000);
       expect(Object.keys(mapped.components)).to.deep.equal(['web']);
-      expect(doc, 'the stored row itself carries none').to.not.have.property('components');
+      expect(stored.serialize(), 'the stored record itself carries none').to.not.have.property('components');
     });
   });
 });

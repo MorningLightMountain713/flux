@@ -16,6 +16,7 @@ const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonSta
 const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 const appSubmission = require('../../ZelBack/src/services/appRequirements/appSubmission');
 const { loadSpecLibrary, v9Spec } = require('./fixtures/fluxSpec');
+const { stubRegistry } = require('./fixtures/appRecords');
 
 // The update route's wiring of a carried manifest: what the submission door
 // returns rides in the one message the route gossips. Everything the route
@@ -46,7 +47,7 @@ describe('updateAppGlobaly and the manifest an update carries', () => {
       '../utils/specLibs': { ...specLibs, assertUpdateInvariants: sinon.stub().resolves() },
     });
     sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 2_600_000 } });
-    sinon.stub(appsRepository, 'getGlobalAppInfo').resolves({ spec, owner: spec.owner, identity: IDENTITY });
+    stubRegistry().byName.resolves({ spec, owner: spec.owner, identity: IDENTITY });
     sinon.stub(appsRepository, 'getTempMessage').resolves({ hash: 'outbound-hash' });
     sinon.stub(placementFeasibility, 'checkPlacementFeasibility').resolves(null);
     sinon.stub(appEventVerifier, 'deserializeTempMessage').resolves({ requiresArcaneAttestation: () => false });

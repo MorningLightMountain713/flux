@@ -1,7 +1,7 @@
 'use strict';
 
 const daemonStatus = require('../daemonService/daemonStatus');
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const appHistory = require('../appDecisions/appHistory');
 const { getSpecPolicy } = require('../utils/specLibs');
 const { buildPricingEngine } = require('./buildPricingEngine');
@@ -180,7 +180,7 @@ async function onChainDisplayPrice(spec, { termCost }) {
   // is an update, so price it through priceUpdate (with the unused-time credit)
   // exactly as updateFee will. Otherwise it's a registration and prices via
   // price().
-  const existing = await appsRepository.getGlobalAppInfo(spec.name);
+  const existing = await appRecords.registry().byName(spec.name);
   if (existing) {
     return onChainDisplayUpdatePrice(spec, existing, daemonHeight, termCost);
   }

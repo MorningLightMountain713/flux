@@ -163,9 +163,9 @@ describe('appUninstaller tombstoning teardown', () => {
         buildDeployment: sinon.stub().callsFake(async () => deployment),
         localIdentities: sinon.stub().resolves([null]),
       },
+      appRecords: { registry: () => ({ byName: sinon.stub().callsFake(async () => globalPinnedSpec) }) },
       appsRepository: {
         getInstalledApp: sinon.stub().callsFake(async () => installedSpec),
-        getGlobalAppInfo: sinon.stub().callsFake(async () => globalPinnedSpec),
         getAppMessage: sinon.stub().resolves(null),
         existsInstalledApp: sinon.stub().resolves(false),
         // Rows are identity-keyed: the removal drops THIS identity's row, then
@@ -244,6 +244,7 @@ describe('appUninstaller tombstoning teardown', () => {
       '../fluxNetworkHelper': stubs.fluxNetworkHelper,
       '../fluxCommunicationMessagesSender': stubs.fluxCommunicationMessagesSender,
       '../appDatabase/appsRepository': stubs.appsRepository,
+      '../appDatabase/appRecords': stubs.appRecords,
       '../appRuntime/deploymentProvider': stubs.deploymentProvider,
       '../appMonitoring/syncthingMonitorHelpers': stubs.syncthingMonitorHelpers,
       '../utils/volumeService': stubs.volumeService,

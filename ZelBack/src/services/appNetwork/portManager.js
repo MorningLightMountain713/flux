@@ -12,7 +12,7 @@ const serviceHelper = require('../serviceHelper');
 const messageHelper = require('../messageHelper');
 const fluxHttpTestServer = require('../utils/fluxHttpTestServer');
 const fluxUdpTestServer = require('../utils/fluxUdpTestServer');
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const meshPortAllocator = require('../appMesh/meshPortAllocator');
 const meshReconciler = require('../appMesh/meshReconciler');
 const peerNotification = require('../appMessaging/peerNotification');
@@ -95,8 +95,7 @@ async function assignedPortsInstalledApps() {
 async function assignedPortsGlobalApps(appNames) {
   if (!appNames || appNames.length === 0) return [];
 
-  const appsQuery = appNames.map((app) => ({ name: app }));
-  const globalApps = await appsRepository.listGlobalAppInfo({ filter: { $or: appsQuery } });
+  const globalApps = await appRecords.registry().byNames(appNames);
   const apps = [];
   for (const inst of globalApps) {
     try {

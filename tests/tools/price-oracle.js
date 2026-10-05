@@ -35,6 +35,7 @@ const sinon = require('sinon');
 const dbHelper = require(REPO + '/ZelBack/src/services/dbHelper');
 const daemonStatus = require(REPO + '/ZelBack/src/services/daemonService/daemonStatus');
 const appsRepository = require(REPO + '/ZelBack/src/services/appDatabase/appsRepository');
+const appRecords = require(REPO + '/ZelBack/src/services/appDatabase/appRecords');
 const priceOracleState = require(REPO + '/ZelBack/src/services/pricing/priceOracleState');
 const axios = require('axios');
 const { resolveSpec } = require(REPO + '/ZelBack/src/services/utils/specCutover');
@@ -166,8 +167,8 @@ async function main() {
     }
 
     // No prior registration on chain: registration-shaped quotes.
-    appsRepository.getGlobalAppInfo.restore?.();
-    sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(null);
+    appRecords.registry.restore?.();
+    sinon.stub(appRecords, 'registry').returns({ byName: sinon.stub().resolves(null) });
     appsRepository.listAppMessagesByName.restore?.();
     sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
     dbHelper.findOneInDatabase.restore?.();
@@ -205,19 +206,21 @@ async function main() {
     const prevSpec = prior ? await resolveSpec(prior) : null;
     const row = { name: label, version: 9, kind: 'v9' };
 
-    appsRepository.getGlobalAppInfo.restore?.();
+    appRecords.registry.restore?.();
     dbHelper.findOneInDatabase.restore?.();
     appsRepository.listAppMessagesByName.restore?.();
     sinon.stub(appsRepository, 'listAppMessagesByName').resolves([]);
     sinon.stub(dbHelper, 'findOneInDatabase').resolves(prior);
-    sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(prior ? {
-      name: doc.name,
-      spec: prevSpec,
-      height: PREV_HEIGHT,
-      registeredAt: Math.floor(FIXED_NOW / 1000) - 1000,
-      isEncrypted: false,
-      version: 9,
-    } : null);
+    sinon.stub(appRecords, 'registry').returns({
+      byName: sinon.stub().resolves(prior ? {
+        name: doc.name,
+        spec: prevSpec,
+        height: PREV_HEIGHT,
+        registeredAt: Math.floor(FIXED_NOW / 1000) - 1000,
+        isEncrypted: false,
+        version: 9,
+      } : null),
+    });
 
     for (const [key, call] of [
       ['onChain', () => appSpecHelpers.getAppFluxOnChainPrice(doc)],

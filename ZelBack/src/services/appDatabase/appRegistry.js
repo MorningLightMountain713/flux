@@ -10,6 +10,7 @@ const fluxEventBus = require('../utils/fluxEventBus');
 const { getSpecBackend } = require('../utils/specLibs');
 const { compareChainOrder } = require('../utils/chainOrder');
 const appsRepository = require('./appsRepository');
+const appRecords = require('./appRecords');
 const registryManager = require('./registryManager');
 const contentSlotService = require('../appLifecycle/contentSlotService');
 const foundingCommittee = require('../appMesh/foundingCommittee');
@@ -44,7 +45,6 @@ const { lookupBlockTime } = require('../appMessaging/confirmedMessageStore');
  */
 
 const globalAppsMessages = config.get('database.appsglobal.collections.appsMessages');
-const globalAppsInformation = config.get('database.appsglobal.collections.appsInformation');
 
 const CAPABILITY = 'appRegistryConsistent';
 const OWNER = 'appRegistry';
@@ -63,10 +63,6 @@ const removedListeners = [];
 
 function globalDb() {
   return dbHelper.databaseConnection().db(config.get('database.appsglobal.database'));
-}
-
-function nameRegex(name) {
-  return new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
 }
 
 /**
@@ -140,10 +136,6 @@ async function rowsFor(applied) {
   return { rows, carried };
 }
 
-async function liveRow(name) {
-  return dbHelper.findOneInDatabase(globalDb(), globalAppsInformation, { name: nameRegex(name) }, { projection: { _id: 0 } });
-}
-
 /**
  * Writes a row whose spec changed, or that is new, and runs its effects. The
  * manifest the row's message carries is kept first: a component the new spec
@@ -151,20 +143,19 @@ async function liveRow(name) {
  * against the new row: those held before the app was listed are resolved, peers
  * are asked for what this node lacks, and a running instance is brought to the
  * manifest the app now stands on.
- * @param {object} row - the serialized InstantiatedSpec
  * @param {object} instance - the InstantiatedSpec the row stands on
  * @param {?object} carried - the manifest the row's message carries, or null
  */
-async function writeWithEffects(row, instance, carried) {
-  await registryManager.storeGlobalSpec(row);
+async function writeWithEffects(instance, carried) {
+  await registryManager.storeGlobalSpec(instance);
   if (carried) {
     await contentSlotService.storeCarriedManifest(instance, carried)
-      .catch((e) => log.warn(`contentSlot: storing the manifest ${row.name}'s update carries failed - ${e.message ?? e}`));
+      .catch((e) => log.warn(`contentSlot: storing the manifest ${instance.name}'s update carries failed - ${e.message ?? e}`));
   }
-  fluxEventBus.publish('app:specStored', { name: row.name, hash: row.hash });
+  fluxEventBus.publish('app:specStored', { name: instance.name, hash: instance.hash });
   setImmediate(() => contentSlotService.rejudgeManifests(instance, { specChanged: true })
-    .catch((e) => log.warn(`contentSlot: judging ${row.name}'s manifests after its row write failed - ${e.message ?? e}`)));
-  await appsRepository.removeAppInstallingErrorRecords(row.name);
+    .catch((e) => log.warn(`contentSlot: judging ${instance.name}'s manifests after its row write failed - ${e.message ?? e}`)));
+  await appsRepository.removeAppInstallingErrorRecords(instance.name);
 }
 
 /**
@@ -183,7 +174,7 @@ async function forgetApp(identity) {
  * @param {{name: string, identity: string}} row - the row leaving
  */
 async function removeRow({ name, identity }) {
-  await appsRepository.removeGlobalAppInfo(name);
+  await appRecords.registry().remove(name);
   await appsRepository.removeAppInstallingErrorRecords(name);
   await forgetApp(identity);
   listed.delete(name.toLowerCase());
@@ -200,35 +191,34 @@ async function removeRow({ name, identity }) {
  * @returns {Promise<'added'|'changed'|'restamped'|'removed'|null>}
  */
 async function settle(name, instance, carried = null) {
-  const live = await liveRow(name);
+  const live = await appRecords.registry().byName(name);
   if (!instance) {
     if (!live) return null;
     await removeRow(live);
     return 'removed';
   }
-  const row = instance.serialize();
   let outcome = null;
-  if (!live || live.hash !== row.hash || live.name !== row.name) {
+  if (!live || live.hash !== instance.hash || live.name !== instance.name) {
     // Another app under the name keeps nothing this one founded; the same app
     // gone back to an earlier spec keeps only what that spec founded.
-    if (live && live.identity !== row.identity) await forgetApp(live.identity);
-    else if (live && row.height < live.height) await foundingCommittee.retract(row.identity, row.height);
-    await writeWithEffects(row, instance, carried);
+    if (live && live.identity !== instance.identity) await forgetApp(live.identity);
+    else if (live && instance.height < live.height) await foundingCommittee.retract(instance.identity, instance.height);
+    await writeWithEffects(instance, carried);
     // A new owner: what this node stands on for each role follows from the
     // new row, the holder hears it, and the records a peer holds are asked for.
-    if (live && live.owner !== row.owner) {
-      setImmediate(() => messageStore.rejudgeGenerationRecords(row.identity)
-        .catch((e) => log.warn(`grantgeneration: rejudge after the owner change of ${row.name} failed - ${e.message ?? e}`)));
+    if (live && live.owner !== instance.owner) {
+      setImmediate(() => messageStore.rejudgeGenerationRecords(instance.identity)
+        .catch((e) => log.warn(`grantgeneration: rejudge after the owner change of ${instance.name} failed - ${e.message ?? e}`)));
     }
     outcome = live ? 'changed' : 'added';
-  } else if (live.uuid !== row.uuid || live.identity !== row.identity || live.registeredAt !== row.registeredAt) {
-    await appsRepository.replaceGlobalAppRow(row);
+  } else if (live.uuid !== instance.uuid || live.identity !== instance.identity || live.registeredAt !== instance.registeredAt) {
+    await appRecords.registry().put(instance);
     outcome = 'restamped';
   }
   listed.set(name, instance);
   // Updates that reached this node before their app existed are judged now
   // that the row they are judged against does.
-  if (outcome === 'added') await processPendingUpdates(row.name);
+  if (outcome === 'added') await processPendingUpdates(instance.name);
   return outcome;
 }
 
@@ -262,8 +252,8 @@ async function reconcile({ unpositioned = 0 } = {}) {
   if (!capabilities.isUp('explorerSynced')) return;
   const counts = await chainState.exclusive(async () => {
     const { rows, carried } = await rowsFor(await decisionStore.latestApplied());
-    const live = await dbHelper.findInDatabase(globalDb(), globalAppsInformation, {}, { projection: { _id: 0, name: 1 } });
-    const names = new Set([...rows.keys(), ...live.map((row) => row.name.toLowerCase())]);
+    const live = await appRecords.registry().names();
+    const names = new Set([...rows.keys(), ...live.map((n) => n.toLowerCase())]);
     const tally = {};
     for (const name of names) {
       // eslint-disable-next-line no-await-in-loop

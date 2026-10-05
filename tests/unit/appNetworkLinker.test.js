@@ -85,7 +85,6 @@ describe('appNetworkLinker tests', () => {
     appsRepositoryStub = {
       getInstalledApp: sinon.stub(),
       listInstalledApps: sinon.stub(),
-      listGlobalAppInfo: sinon.stub(),
     };
     specCutoverStub = {
       resolveInstantiatedSpec: sinon.stub().callsFake(async (app) => (app.isEncrypted ? null : app.spec)),

@@ -102,6 +102,7 @@ const appsRuntimeState = require('./appManagement/appsRuntimeState');
 const appPlacements = require('./appManagement/appPlacements');
 const imageCacheStore = require('./appLifecycle/imageCacheStore');
 const appsRepository = require('./appDatabase/appsRepository');
+const appRecords = require('./appDatabase/appRecords');
 const imageManager = require('./appSecurity/imageManager');
 const playgroundAudit = require('./appPlayground/playgroundAudit');
 const playgroundService = require('./appPlayground/playgroundService');
@@ -247,15 +248,17 @@ async function prepareDatabaseSchema() {
   ]);
   await dbHelper.ensureNewestAppMessageIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appsMessages')));
   await decisionStore.prepareCollection();
-  // The registry (appRegistry writes it): one row per listed app.
+  // The app registry: one row per listed app. Its own indexes answer its
+  // queries; `name` serves completeDerivedFields' rewrite of a row stored
+  // without the derived fields.
   await dbHelper.ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appsInformation')), [
     { key: { name: 1 }, name: 'query for getting zelapp based on zelapp specs name' },
-    { key: { owner: 1 }, name: 'query for getting zelapp based on zelapp specs owner' },
     { key: { repotag: 1 }, name: 'query for getting zelapp based on image' },
     { key: { height: 1 }, name: 'query for getting zelapp based on last height update' },
-    { key: { hash: 1 }, name: 'query for getting zelapp based on last hash' },
-    { key: { identity: 1 }, name: 'query for getting zelapp based on its identity' },
   ]);
+  await appRecords.registry().ensureIndexes();
+  const completed = await appRecords.registry().completeDerivedFields();
+  log.info(`App registry prepared${completed ? `, ${completed} record(s) completed` : ''}`);
   await dbHelper.ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appStateEvents')), [
     { key: { expireAt: 1 }, expireAfterSeconds: 0 },
     { key: { ip: 1, type: 1, dedupKey: 1 }, unique: true, recover: dbHelper.dedupeByKey },

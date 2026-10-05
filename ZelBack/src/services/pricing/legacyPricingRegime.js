@@ -3,7 +3,7 @@
 const config = require('config');
 const axios = require('axios');
 const daemonStatus = require('../daemonService/daemonStatus');
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const appHistory = require('../appDecisions/appHistory');
 const { resolveInstantiatedSpec } = require('../utils/specCutover');
 const { getSpec } = require('../utils/specLibs');
@@ -158,7 +158,7 @@ async function fluxUsdRate() {
  * under the name.
  */
 async function listedPredecessor(name) {
-  const row = await appsRepository.getGlobalAppInfo(name);
+  const row = await appRecords.registry().byName(name);
   if (!row) return null;
   return { spec: await resolveInstantiatedSpec(row), height: row.height };
 }
@@ -189,7 +189,7 @@ async function engineFor({ quote = false, name = null } = {}) {
  */
 async function checkLegacyFreeUpdate(spec, daemonHeight) {
   const { checkLegacyFreeUpdate: rule } = await getSpec();
-  const instantiated = await appsRepository.getGlobalAppInfo(spec.name);
+  const instantiated = await appRecords.registry().byName(spec.name);
   // Only this app's applied updates count against the allowance: a refused one
   // never happened, and an earlier app of the name is another app.
   const applied = instantiated ? await appHistory.currentAppMessages(spec.name) : [];

@@ -14,6 +14,7 @@
 // it, and neither is required here.
 
 const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const { getSpec } = require('../utils/specLibs');
 
 /** The manifest a stored row carries, as it travels. */
@@ -47,7 +48,7 @@ async function namedManifestOf(app) {
  * @returns {Promise<{app: ?object, row: ?object, aside: boolean, rows: object[]}>}
  */
 async function standingManifest(identity, deps = {}) {
-  const { getApp = appsRepository.getGlobalAppInfoByIdentity, getRows = appsRepository.getContentManifests } = deps;
+  const { getApp = (id) => appRecords.registry().byIdentity(id), getRows = appsRepository.getContentManifests } = deps;
   const app = await getApp(identity);
   const rows = await getRows(identity);
   if (!app) {

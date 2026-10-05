@@ -6,7 +6,7 @@ const proxyquire = require('proxyquire').noCallThru();
 const { capabilityStub } = require('./fixtures/capabilityStub');
 const realImageManager = require('../../ZelBack/src/services/appSecurity/imageManager');
 const {
-  loadSpecLibrary, V9_SUBMISSION, v9Spec, sealedV9Spec, sealedV8Spec, instantiatedSpec,
+  loadSpecLibrary, V9_SUBMISSION, v1Spec, v8Spec, v9Spec, sealedV9Spec, sealedV8Spec, instantiatedSpec,
   assertAnswers,
 } = require('./fixtures/fluxSpec');
 
@@ -52,7 +52,8 @@ describe('appSpawner tests', () => {
   let capabilitiesStub;
   let registryManagerStub;
   let deploymentFromSpecStub;
-  let findUnderProvisionedStub;
+  let aliveStub;
+  let countRunningByAppStub;
   let delayStub;
   let daemonSyncStub;
   let ensureProvidersRegisteredStub;
@@ -130,7 +131,7 @@ describe('appSpawner tests', () => {
   }
 
   /**
-   * A real InstantiatedSpec — what findUnderProvisionedApps hands the spawner and
+   * A real InstantiatedSpec — what underProvisionedApps hands the spawner and
    * what every gate below reads: name, owner, hash, identity, placement,
    * requiresArcane(), resourceTotals(), isEncrypted.
    *
@@ -170,12 +171,18 @@ describe('appSpawner tests', () => {
     });
   }
 
+  /**
+   * A candidate as underProvisionedApps hands one on: the record, the instances
+   * running and the instances it asks for. The spec states the target, so a
+   * `required` that disagrees with the spec's `instances` is refused here.
+   */
   async function makeCandidate(overrides = {}) {
-    return {
-      instantiated: await realInstantiated(overrides),
-      actual: overrides.actual ?? 0,
-      required: overrides.required ?? 3,
-    };
+    const instantiated = await realInstantiated(overrides);
+    const required = instantiated.spec.instances;
+    if (overrides.required !== undefined && overrides.required !== required) {
+      throw new Error(`makeCandidate: required ${overrides.required} disagrees with the spec's instances ${required}`);
+    }
+    return { instantiated, actual: overrides.actual ?? 0, required };
   }
 
   function buildModule(opts = {}) {
@@ -198,7 +205,10 @@ describe('appSpawner tests', () => {
     deploymentFromSpecStub = sinon.stub().callsFake(
       (spec, folder, options) => flux.DeploymentSpec.fromSpec(spec, folder, options),
     );
-    findUnderProvisionedStub = sinon.stub().resolves(opts.candidates || []);
+    // The registry's alive list and the running counts, from the candidates a test states.
+    const candidates = opts.candidates || [];
+    aliveStub = sinon.stub().resolves(candidates.map((candidate) => candidate.instantiated));
+    countRunningByAppStub = sinon.stub().resolves(new Map(candidates.map((candidate) => [candidate.instantiated.name.toLowerCase(), candidate.actual])));
     delayStub = sinon.stub();
     delayStub.onFirstCall().resolves();
     delayStub.onSecondCall().rejects(new Error('break recursion'));
@@ -301,9 +311,11 @@ describe('appSpawner tests', () => {
       // Unstubbed it reached the real database, threw on a null connection, and
       // took the fleet-wide clear down with it before it was ever broadcast.
       '../appMessaging/messageStore': messageStoreStub,
+      '../appDatabase/appRecords': {
+        registry: () => ({ alive: aliveStub, byName: opts.globalAppInfoStub ?? sinon.stub().resolves(null) }),
+      },
       '../appDatabase/appsRepository': {
-        findUnderProvisionedApps: findUnderProvisionedStub,
-        getGlobalAppInfo: opts.globalAppInfoStub ?? sinon.stub().resolves(null),
+        countRunningByApp: countRunningByAppStub,
         existsInstalledApp: sinon.stub().resolves(false),
         // Identities already installed here; empty means the spawn gate still
         // owes every assigned identity, which is the default fixture state.
@@ -314,8 +326,7 @@ describe('appSpawner tests', () => {
         // The real backend classes. DeploymentSpec.fromSpec is `identity ??
         // appName`, so a caller that omits the identity produces a view named
         // from the app's NAME — which is what every port/ownership comparison
-        // then reads. notifySpecStored hydrates the raw stored doc through the
-        // real InstantiatedSpec.deserialize, so its gate reads a real Placement.
+        // then reads.
         getSpecBackend: sinon.stub().resolves({
           DeploymentSpec: { fromSpec: deploymentFromSpecStub },
           InstantiatedSpec: flux.InstantiatedSpec,
@@ -461,13 +472,15 @@ describe('appSpawner tests', () => {
       expect(appSpawner.trySpawningGlobalApplication).to.be.a('function');
     });
 
-    it('should call findUnderProvisionedApps with current height and timestamp', async () => {
+    it('asks the registry for the apps alive past the spawn allowance at the current height and time', async () => {
       await appSpawner.trySpawningGlobalApplication();
-      expect(findUnderProvisionedStub.calledOnce).to.be.true;
-      const [height, nowSeconds] = findUnderProvisionedStub.firstCall.args;
-      expect(height).to.equal(2_555_563);
-      expect(nowSeconds).to.be.a('number');
-      expect(nowSeconds).to.be.closeTo(Math.floor(Date.now() / 1000), 2);
+      expect(aliveStub.calledOnce).to.be.true;
+      const [clock] = aliveStub.firstCall.args;
+      expect(clock.height).to.equal(2_555_563);
+      expect(clock.time).to.be.a('number');
+      expect(clock.time).to.be.closeTo(Math.floor(Date.now() / 1000), 2);
+      expect(clock.marginBlocks).to.equal(100);
+      expect(clock.marginSeconds).to.equal(100 * 30);
     });
 
     it('should return delay when no candidates found', async () => {
@@ -482,7 +495,7 @@ describe('appSpawner tests', () => {
       const result = await appSpawner.trySpawningGlobalApplication();
       expect(result).to.be.a('number');
       expect(freezeStub.args).to.deep.equal([[MY_ADDR]]);
-      expect(findUnderProvisionedStub.callCount).to.equal(0);
+      expect(aliveStub.callCount).to.equal(0);
       expect(logStub.info.args.some((a) => a[0]?.includes?.('placement freeze'))).to.be.true;
     });
 
@@ -509,7 +522,7 @@ describe('appSpawner tests', () => {
       expect(logStub.info.args.some((a) => a[0]?.includes?.('Network policy not yet obtained'))).to.equal(true);
       // The candidate finder is the first thing the pass reaches past the gate, so it
       // not being asked is the evidence the pass stopped here.
-      expect(findUnderProvisionedStub.called, 'the pass walked on past a shut gate').to.equal(false);
+      expect(aliveStub.called, 'the pass walked on past a shut gate').to.equal(false);
       expect(delay).to.be.a('number');
     });
 
@@ -519,7 +532,7 @@ describe('appSpawner tests', () => {
 
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
 
-      expect(findUnderProvisionedStub.called).to.equal(true);
+      expect(aliveStub.called).to.equal(true);
     });
   });
 
@@ -1256,7 +1269,7 @@ describe('appSpawner tests', () => {
       capabilitiesStub.set('spawnerReady', true);
       await waitForLoopExits(1);
 
-      expect(findUnderProvisionedStub.callCount).to.equal(3);
+      expect(aliveStub.callCount).to.equal(3);
     });
 
     it('registers crypto providers before the first spawn cycle', async () => {
@@ -1273,7 +1286,7 @@ describe('appSpawner tests', () => {
 
       expect(ensureProvidersRegisteredStub.calledOnce).to.be.true;
       // the first encrypted-app decrypt must never beat registration
-      expect(ensureProvidersRegisteredStub.calledBefore(findUnderProvisionedStub)).to.be.true;
+      expect(ensureProvidersRegisteredStub.calledBefore(aliveStub)).to.be.true;
     });
 
     it('should exit loop when spawnerPaused set mid-iteration', async () => {
@@ -1288,7 +1301,7 @@ describe('appSpawner tests', () => {
       capabilitiesStub.set('spawnerReady', true);
       await waitForLoopExits(1);
 
-      expect(findUnderProvisionedStub.callCount).to.equal(1);
+      expect(aliveStub.callCount).to.equal(1);
       expect(logStub.info.calledWith('Spawn loop exited (paused)')).to.be.true;
     });
 
@@ -1313,7 +1326,7 @@ describe('appSpawner tests', () => {
         (c) => c.args[0] === 'Spawn loop exited (paused)',
       );
       expect(exitLogs).to.have.lengthOf(1);
-      expect(findUnderProvisionedStub.callCount).to.equal(3);
+      expect(aliveStub.callCount).to.equal(3);
     });
 
     it('should restart the loop when spawnerReady comes back up after a pause', async () => {
@@ -1333,12 +1346,12 @@ describe('appSpawner tests', () => {
       capabilitiesStub.set('spawnerReady', true);
       await waitForLoopExits(1);
 
-      expect(findUnderProvisionedStub.callCount).to.equal(2);
+      expect(aliveStub.callCount).to.equal(2);
 
       capabilitiesStub.set('spawnerReady', true);
       await waitForLoopExits(2);
 
-      expect(findUnderProvisionedStub.callCount).to.be.gte(4);
+      expect(aliveStub.callCount).to.be.gte(4);
     });
 
     it('should return delay value from trySpawningGlobalApplication not recurse', async () => {
@@ -1907,6 +1920,54 @@ describe('appSpawner tests', () => {
     });
   });
 
+  describe('underProvisionedApps', () => {
+    it('lists an app running fewer instances than it asks for, with the counts, and leaves one at target', async () => {
+      buildModule();
+      const short = await realInstantiated({ name: 'shortapp', hash: 'h1', instances: 3 });
+      const full = await realInstantiated({ name: 'fullapp', hash: 'h2', instances: 2 });
+      // A legacy name in mixed case: the running counts are keyed lower-case.
+      const legacy = await instantiatedSpec(await v8Spec({ name: 'MixedCase', instances: 3 }), { hash: 'h3' });
+      aliveStub.resolves([short, full, legacy]);
+      countRunningByAppStub.resolves(new Map([['shortapp', 1], ['fullapp', 2], ['mixedcase', 3]]));
+
+      const result = await appSpawner.underProvisionedApps(2_555_000, 1_716_000_000);
+
+      expect(result).to.have.lengthOf(1);
+      expect(result[0].instantiated).to.equal(short);
+      expect(result[0].actual).to.equal(1);
+      expect(result[0].required).to.equal(3);
+    });
+
+    it('counts an app with no running instance as fully under-provisioned', async () => {
+      buildModule();
+      aliveStub.resolves([await realInstantiated({ name: 'ghost', hash: 'h', instances: 2 })]);
+      countRunningByAppStub.resolves(new Map());
+
+      const [candidate] = await appSpawner.underProvisionedApps(2_555_000, 1_716_000_000);
+      expect(candidate.actual).to.equal(0);
+      expect(candidate.required).to.equal(2);
+    });
+
+    it('takes the target from the spec: a v1 app, whose stored form states no instances, asks for three by its class', async () => {
+      buildModule();
+      const v1 = await instantiatedSpec(await v1Spec({ name: 'noinstances' }), { hash: 'h' });
+      expect(v1.serialize(), 'a v1 row carries no instances').to.not.have.property('instances');
+      aliveStub.resolves([v1]);
+      countRunningByAppStub.resolves(new Map([['noinstances', 2]]));
+
+      const [candidate] = await appSpawner.underProvisionedApps(2_555_000, 1_716_000_000);
+      expect(candidate.required).to.equal(3);
+    });
+
+    it('asks for the apps alive past the spawn allowance: newMinBlocksAllowance blocks, and thirty seconds a block', async () => {
+      buildModule();
+      await appSpawner.underProvisionedApps(2_555_000, 1_716_000_000);
+      sinon.assert.calledOnceWithExactly(aliveStub, {
+        height: 2_555_000, time: 1_716_000_000, marginBlocks: 100, marginSeconds: 3000,
+      });
+    });
+  });
+
   describe('notifySpecStored - spec-stored wake gate', () => {
 
     afterEach(() => {
@@ -1947,21 +2008,16 @@ describe('appSpawner tests', () => {
     }
 
     /**
-     * The raw stored doc for a real spec — exactly what globalAppsInformation
-     * holds and what notifySpecStored hydrates through the real
-     * InstantiatedSpec.deserialize. The gate's every read (placement.mode(),
-     * placement.isPinnedTo, spec.instances, owner) is answered by real objects,
-     * so a doc that would not deserialize cannot pass here.
+     * The record of a real spec, as the registry owner hands it to
+     * notifySpecStored. The gate's every read (placement.mode(),
+     * placement.isPinnedTo, spec.instances, owner) is answered by real objects.
      */
-    const passingSpec = async (overrides = {}) => {
-      const instantiated = await realInstantiated({
-        name: 'edingoa',
-        hash: 'wake1',
-        instances: overrides.instances ?? 1,
-        placement: { targetIps: overrides.targetIps ?? [MY_ADDR] },
-      });
-      return instantiated.serialize();
-    };
+    const passingSpec = async (overrides = {}) => realInstantiated({
+      name: 'edingoa',
+      hash: 'wake1',
+      instances: overrides.instances ?? 1,
+      placement: { targetIps: overrides.targetIps ?? [MY_ADDR] },
+    });
 
     it('wakes for an enterprise-owned app pinned to this node with pins <= instances', async () => {
       buildModule({ getCachedEnterpriseIdentity: true, isEnterpriseAppOwner: () => true });
@@ -2027,10 +2083,8 @@ describe('appSpawner tests', () => {
       expect(woke()).to.equal(false);
     });
 
-    it('does not throw — and does not wake — on a doc the real deserializer rejects', async () => {
-      // The gate hydrates through the real InstantiatedSpec.deserialize, so a
-      // malformed doc raises there. It must stay best-effort: the spec-store
-      // path calls this and nothing may escape into it.
+    it('does not throw, and does not wake, on a record whose placement it cannot read', async () => {
+      // Best-effort: the spec-store path calls this and nothing may escape into it.
       buildModule({ getCachedEnterpriseIdentity: true, isEnterpriseAppOwner: () => true });
       await primeNodeAddr();
       await appSpawner.notifySpecStored({ version: 9, name: 'edingoa' });
@@ -2051,15 +2105,15 @@ describe('appSpawner tests', () => {
 
       appSpawner.initialize();
       capabilitiesStub.set('spawnerReady', true);
-      await waitUntil(() => findUnderProvisionedStub.callCount === 1 && delayCalls === 1);
+      await waitUntil(() => aliveStub.callCount === 1 && delayCalls === 1);
 
       // Causality guard: the first delay never resolves on its own, so the loop is parked
       // at exactly one scan. Only the wake can advance it.
-      expect(findUnderProvisionedStub.callCount).to.equal(1);
+      expect(aliveStub.callCount).to.equal(1);
       await appSpawner.notifySpecStored(await passingSpec());
       await waitForLoopExits(1);
 
-      expect(findUnderProvisionedStub.callCount).to.equal(2);
+      expect(aliveStub.callCount).to.equal(2);
     });
 
     it('leaves the idle cadence intact when no relevant spec is stored', async () => {
@@ -2078,7 +2132,7 @@ describe('appSpawner tests', () => {
       await waitForLoopExits(1);
 
       expect(delayCalls).to.equal(1);
-      expect(findUnderProvisionedStub.callCount).to.equal(1);
+      expect(aliveStub.callCount).to.equal(1);
     });
   });
 
@@ -2102,16 +2156,16 @@ describe('appSpawner tests', () => {
     it('latches a wake that fires mid-cycle and skips the next idle delay', async () => {
       buildModule({ getCachedEnterpriseIdentity: true, isEnterpriseAppOwner: () => true });
 
-      // The stored doc for a real spec pinned to this node, built up front so the
+      // The record of a real spec pinned to this node, built up front so the
       // wake below is a plain call rather than spec construction inside the cycle.
-      const storedDoc = (await realInstantiated({
+      const storedRecord = await realInstantiated({
         name: 'edingoa', hash: 'wake2', instances: 1, placement: { targetIps: [MY_ADDR] },
-      })).serialize();
+      });
 
       const events = []; // ordered record of 'cycleN' and 'delay'
       let cycle = 0;
-      findUnderProvisionedStub.resetBehavior();
-      findUnderProvisionedStub.callsFake(async () => {
+      aliveStub.resetBehavior();
+      aliveStub.callsFake(async () => {
         cycle += 1;
         events.push(`cycle${cycle}`);
         if (cycle === 1) {
@@ -2120,7 +2174,7 @@ describe('appSpawner tests', () => {
           // resolves and wakeIdleLoop latches wakePending BEFORE cycle 1 returns - the latch
           // must then skip cycle 1's park. The cycle has already cached this node's address,
           // so the pin-match passes.
-          await appSpawner.notifySpecStored(storedDoc);
+          await appSpawner.notifySpecStored(storedRecord);
         }
         return [];
       });
@@ -2178,7 +2232,7 @@ describe('appSpawner tests', () => {
       .some((c) => typeof c.args[0] === 'string' && c.args[0].includes(substr));
     // The blocklist may name the candidate's owner, which the fixture decides.
     const draw = async (blocklistFor) => {
-      const candidate = await makeCandidate({ name: 'orbitapp', hash: HASH, required: 1 });
+      const candidate = await makeCandidate({ name: 'orbitapp', hash: HASH, instances: 1, required: 1 });
       const blocklist = typeof blocklistFor === 'function' ? blocklistFor(candidate.instantiated) : blocklistFor;
       buildModule({ candidates: [candidate], blocklist });
       await appSpawner.trySpawningGlobalApplication().catch(() => {});

@@ -8,6 +8,7 @@ const sinon = require('sinon');
 const {
   loadSpecLibrary, V9_SUBMISSION, v8Spec, v9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const { stubRegistry } = require('./fixtures/appRecords');
 const specReconciler = require('../../ZelBack/src/services/appLifecycle/specReconciler');
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
 const appOperations = require('../../ZelBack/src/services/appLifecycle/appOperations');
@@ -164,7 +165,7 @@ describe('specReconciler tests', () => {
     sinon.stub(capabilities, 'isUp').callsFake((name) => (name === 'appRegistryConsistent' && registryConsistent)
       || (name === 'bootReconcileDecided' && bootDecided));
     sinon.stub(appsRepository, 'listInstalledApps').resolves(installed);
-    sinon.stub(appsRepository, 'listGlobalAppInfo').resolves(globalRows);
+    stubRegistry().byNames.resolves(globalRows);
     sinon.stub(registryManager, 'getScannedHeight').resolves(1_000_000);
     // The per-identity diff enumerates this app's containers; no real docker in
     // unit tests (and none of these fixtures have containers).
@@ -587,7 +588,7 @@ describe('specReconciler tests', () => {
       // staying untouched across the whole stagger window is what "nothing was
       // scheduled" means.
       const getInstalled = sinon.stub(appsRepository, 'getInstalledApp').resolves(installedRow);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(registryRow);
+      stubRegistry().byName.resolves(registryRow);
       clock = sinon.useFakeTimers();
 
       await specReconciler.requestFullConvergence({ reason: 'test' });
@@ -603,7 +604,7 @@ describe('specReconciler tests', () => {
       expect(registryRow.hash, 'a real spec change moves the content hash').to.not.equal(installedRow.hash);
       setup({ installed: [installedRow], globalRows: [registryRow] });
       sinon.stub(appsRepository, 'getInstalledApp').resolves(installedRow);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(registryRow);
+      stubRegistry().byName.resolves(registryRow);
       clock = sinon.useFakeTimers();
 
       await specReconciler.requestFullConvergence({ reason: 'test' });
@@ -639,7 +640,7 @@ describe('specReconciler tests', () => {
       const v3 = await specWith(loose, { cpu: 1.5 });
       setup({ installed: [installedRow] });
       sinon.stub(appsRepository, 'getInstalledApp').resolves(installedRow);
-      const getGlobal = sinon.stub(appsRepository, 'getGlobalAppInfo');
+      const getGlobal = stubRegistry().byName;
       getGlobal.onFirstCall().resolves(v2);
       getGlobal.onSecondCall().resolves(v3);
       getGlobal.resolves(v3);
@@ -665,7 +666,7 @@ describe('specReconciler tests', () => {
       // another path (install, reconcile) has already stored the new spec.
       getInstalled.onFirstCall().resolves(staleRow);
       getInstalled.resolves(registryRow);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(registryRow);
+      stubRegistry().byName.resolves(registryRow);
       clock = sinon.useFakeTimers();
 
       await specReconciler.requestAppConvergence('myapp', { reason: 'test' });
@@ -684,7 +685,7 @@ describe('specReconciler tests', () => {
       const reregistered = await specWith(loose, { cpu: 1.5, uuid: 'd'.repeat(64) });
       setup({ installed: [installedRow] });
       const getInstalled = sinon.stub(appsRepository, 'getInstalledApp').resolves(installedRow);
-      const getGlobal = sinon.stub(appsRepository, 'getGlobalAppInfo');
+      const getGlobal = stubRegistry().byName;
       getGlobal.onFirstCall().resolves(update);
       getGlobal.resolves(reregistered);
       clock = sinon.useFakeTimers();

@@ -1,200 +1,153 @@
 'use strict';
 
+process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
+
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
-const sinon = require('sinon');
-const proxyquire = require('proxyquire').noCallThru();
+const config = require('config');
+
+const dbHelper = require('../../ZelBack/src/services/dbHelper');
+const specLibrary = require('../../ZelBack/src/services/utils/specLibrary');
+const MongoStorageProvider = require('../../ZelBack/src/services/providers/MongoStorageProvider');
+const { requireMongo } = require('./dbTestHelper');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
 
+// The adapter is held to the port's own meaning of a query, queryMatches, over
+// the same records: the value shapes the record collections hold - scalars,
+// arrays of scalars, nested objects, null, absent - under every operator.
 describe('MongoStorageProvider', () => {
-  let dbHelperStub;
-  let specLibsStub;
-  let mongoStorageProvider;
-  let fakeClient;
-  let fakeDb;
-  let fakeCollection;
+  const STORE = 'records';
+  const stores = {
+    [STORE]: { database: config.get('database.appsglobal.database'), collection: 'storageprovidertest' },
+  };
 
-  class MockStorageProviderBase {
-    constructor() {
-      if (new.target === MockStorageProviderBase) {
-        throw new Error('abstract');
-      }
+  const records = [
+    {
+      k: 'a', n: 1, s: 'x', tags: ['x', 'y'], nested: { k: 'v', n: 2 }, nul: null,
+    },
+    {
+      k: 'b', n: 5, s: 'y', tags: [], nested: { k: 'w' },
+    },
+    {
+      k: 'c', n: 10, s: 'z', tags: ['z'], nul: 'set',
+    },
+    { k: 'd', tags: ['x'], nested: { n: 7 } },
+    { k: 'e', n: null, s: 'x' },
+  ];
+
+  const queries = [
+    {},
+    { k: 'a' }, { k: 'none' }, { n: 5 }, { s: 'x' },
+    { tags: 'x' }, { tags: 'y' }, { tags: 'none' }, { tags: ['x', 'y'] }, { tags: [] },
+    { 'nested.k': 'v' }, { 'nested.n': 7 }, { 'nested.missing': 'v' }, { 'k.deeper': 'v' },
+    { nul: null }, { n: null }, { missing: null },
+    { k: { in: ['a', 'c'] } }, { k: { in: [] } }, { tags: { in: ['z', 'y'] } }, { n: { in: [1, 10] } },
+    { nul: { in: [null] } }, { n: { in: [5, null] } }, { missing: { in: [null] } },
+    { k: { ne: 'a' } }, { tags: { ne: 'x' } }, { n: { ne: 5 } }, { nul: { ne: null } }, { n: { ne: null } }, { missing: { ne: 1 } },
+    { nul: { exists: true } }, { nul: { exists: false } }, { n: { exists: true } }, { n: { exists: false } },
+    { 'nested.k': { exists: true } }, { 'nested.n': { exists: false } }, { missing: { exists: false } },
+    { n: { gt: 1 } }, { n: { gte: 5 } }, { n: { lt: 10 } }, { n: { lte: 1 } }, { n: { gt: 1, lt: 10 } }, { n: { gte: 10, lte: 10 } },
+    { s: { gt: 'x' } }, { s: { lte: 'x' } }, { 'nested.n': { gt: 2 } }, { missing: { lt: 10 } },
+    { n: { in: [1, 5], ne: 5 } }, { n: { exists: true, gt: 1 } },
+    { or: [{ k: 'a' }, { n: 5 }] }, { or: [{ k: 'none' }, { n: 99 }] }, { or: [] }, { or: [{ tags: 'x' }, { 'nested.k': 'w' }], n: { gt: 1 } },
+    { k: 'a', or: [{ n: 1 }] }, { k: 'b', or: [{ n: 1 }] },
+  ];
+
+  let provider;
+  let queryMatches;
+
+  before(async function setUp() {
+    await requireMongo.call(this);
+    ({ queryMatches } = specLibrary.loaded());
+    provider = MongoStorageProvider.create(stores);
+  });
+
+  beforeEach(async () => {
+    await provider.remove(STORE, {});
+    await provider.insert(STORE, records);
+  });
+
+  const keys = (found) => found.map((r) => r.k).sort();
+
+  it('answers every query as queryMatches does over the same records', async () => {
+    const answers = [];
+    for (const query of queries) {
+      const expected = keys(records.filter((r) => queryMatches(r, query)));
+      // eslint-disable-next-line no-await-in-loop
+      const found = await provider.find(STORE, query);
+      expect(keys(found), JSON.stringify(query)).to.deep.equal(expected);
+      // eslint-disable-next-line no-await-in-loop
+      expect(await provider.count(STORE, query), `count ${JSON.stringify(query)}`).to.equal(expected.length);
+      answers.push(expected.length);
     }
-  }
-
-  beforeEach(() => {
-    fakeCollection = {
-      replaceOne: sinon.stub().resolves({}),
-      deleteOne: sinon.stub().resolves({}),
-    };
-    fakeDb = { collection: sinon.stub().returns(fakeCollection) };
-    fakeClient = { db: sinon.stub().returns(fakeDb) };
-
-    dbHelperStub = {
-      databaseConnection: sinon.stub().returns(fakeClient),
-      findInDatabase: sinon.stub().resolves([{ name: 'a' }, { name: 'b' }]),
-      findOneInDatabase: sinon.stub().resolves({ name: 'one' }),
-      replaceOneInDatabase: sinon.stub().resolves({}),
-      removeDocumentsFromCollection: sinon.stub().resolves({}),
-    };
-
-    specLibsStub = {
-      getSpecBackend: sinon.stub().resolves({ StorageProvider: MockStorageProviderBase }),
-    };
-
-    mongoStorageProvider = proxyquire(
-      '../../ZelBack/src/services/providers/MongoStorageProvider',
-      {
-        '../dbHelper': dbHelperStub,
-        '../utils/specLibs': specLibsStub,
-      },
-    );
+    // The queries tell the records apart: some match all, some none, some a part.
+    expect(answers).to.include(records.length);
+    expect(answers).to.include(0);
+    expect(answers.some((n) => n > 0 && n < records.length)).to.equal(true);
   });
 
-  afterEach(() => {
-    sinon.restore();
+  it('returns a record without the document id, and leaves the caller\'s records without one', async () => {
+    for (const record of records) expect(record).to.not.have.property('_id');
+    const [found] = await provider.find(STORE, { k: 'a' });
+    expect(found).to.deep.equal(records[0]);
+    expect(await provider.findOne(STORE, { k: 'a' })).to.deep.equal(records[0]);
+    expect(await provider.findOne(STORE, { k: 'none' })).to.equal(null);
   });
 
-  describe('create()', () => {
-    it('returns an instance of the StorageProvider base', async () => {
-      const provider = await mongoStorageProvider.create();
-      expect(provider).to.be.instanceOf(MockStorageProviderBase);
-    });
-
-    it('loads the base class lazily via specLibs', async () => {
-      expect(specLibsStub.getSpecBackend.called).to.be.false;
-      await mongoStorageProvider.create();
-      expect(specLibsStub.getSpecBackend.calledOnce).to.be.true;
-    });
+  it('returns only the fields asked for, those the record has', async () => {
+    const found = await provider.find(STORE, {}, { fields: ['k', 'n'], sort: { k: 1 } });
+    expect(found).to.deep.equal([
+      { k: 'a', n: 1 }, { k: 'b', n: 5 }, { k: 'c', n: 10 }, { k: 'd' }, { k: 'e', n: null },
+    ]);
   });
 
-  describe('default store map', () => {
-    it('maps appSpecs to globalzelapps.zelappsinformation', () => {
-      expect(mongoStorageProvider.DEFAULT_STORE_MAP.appSpecs).to.deep.equal({
-        database: 'globalzelapps',
-        collection: 'zelappsinformation',
-      });
-    });
-
-    it('maps tempAppMessages to globalzelapps.zelappstemporarymessages', () => {
-      expect(mongoStorageProvider.DEFAULT_STORE_MAP.tempAppMessages).to.deep.equal({
-        database: 'globalzelapps',
-        collection: 'zelappstemporarymessages',
-      });
-    });
-
-    it('maps chainMessages to chainparams.chainmessages', () => {
-      expect(mongoStorageProvider.DEFAULT_STORE_MAP.chainMessages).to.deep.equal({
-        database: 'chainparams',
-        collection: 'chainmessages',
-      });
-    });
-
-    it('is frozen', () => {
-      expect(Object.isFrozen(mongoStorageProvider.DEFAULT_STORE_MAP)).to.be.true;
-    });
+  it('sorts and limits', async () => {
+    expect(keys(await provider.find(STORE, {}, { sort: { k: -1 }, limit: 2 }))).to.deep.equal(['d', 'e']);
+    expect((await provider.find(STORE, {}, { sort: { k: -1 } })).map((r) => r.k)).to.deep.equal(['e', 'd', 'c', 'b', 'a']);
+    expect((await provider.findOne(STORE, { s: 'x' }, { sort: { k: -1 } })).k).to.equal('e');
   });
 
-  describe('get()', () => {
-    it('resolves the store map and delegates to dbHelper.findOneInDatabase', async () => {
-      const provider = await mongoStorageProvider.create();
-      const result = await provider.get('appSpecs', { name: 'foo' });
-
-      expect(fakeClient.db.calledOnceWith('globalzelapps')).to.be.true;
-      expect(dbHelperStub.findOneInDatabase.calledOnceWith(
-        fakeDb, 'zelappsinformation', { name: 'foo' },
-      )).to.be.true;
-      expect(result).to.deep.equal({ name: 'one' });
-    });
-
-    it('throws on unknown logical store', async () => {
-      const provider = await mongoStorageProvider.create();
-      await expect(provider.get('nonsense', {})).to.be.rejectedWith(/Unknown logical store/);
-    });
-
-    it('throws when no MongoDB connection is available', async () => {
-      dbHelperStub.databaseConnection.returns(null);
-      const provider = await mongoStorageProvider.create();
-      await expect(provider.get('appSpecs', { name: 'x' }))
-        .to.be.rejectedWith(/No MongoDB connection/);
-    });
+  it('refuses a condition that mixes an operator with another key', async () => {
+    expect(() => MongoStorageProvider.toFilter({ n: { gt: 1, regex: 'x' } })).to.throw(/mixes operators/);
   });
 
-  describe('put()', () => {
-    it('uses replaceOneInDatabase with upsert to prevent ghost fields', async () => {
-      const provider = await mongoStorageProvider.create();
-      await provider.put('appSpecs', { name: 'foo' }, { name: 'foo', value: 42 });
-
-      expect(dbHelperStub.replaceOneInDatabase.calledOnce).to.be.true;
-      const [db, collection, filter, doc, options] = dbHelperStub.replaceOneInDatabase.firstCall.args;
-      expect(db).to.equal(fakeDb);
-      expect(collection).to.equal('zelappsinformation');
-      expect(filter).to.deep.equal({ name: 'foo' });
-      expect(doc).to.deep.equal({ name: 'foo', value: 42 });
-      expect(options).to.deep.equal({ upsert: true });
-    });
+  it('replaces the record a query names, adding it on upsert alone', async () => {
+    await provider.replace(STORE, { k: 'a' }, { k: 'a', n: 100 });
+    expect(await provider.findOne(STORE, { k: 'a' })).to.deep.equal({ k: 'a', n: 100 });
+    await provider.replace(STORE, { k: 'new' }, { k: 'new', n: 1 });
+    expect(await provider.findOne(STORE, { k: 'new' })).to.equal(null);
+    await provider.replace(STORE, { k: 'new' }, { k: 'new', n: 1 }, { upsert: true });
+    expect(await provider.findOne(STORE, { k: 'new' })).to.deep.equal({ k: 'new', n: 1 });
+    expect(await provider.count(STORE, {})).to.equal(records.length + 1);
   });
 
-  describe('list()', () => {
-    it('delegates to dbHelper.findInDatabase with the resolved collection', async () => {
-      const provider = await mongoStorageProvider.create();
-      const result = await provider.list('appMessages', { hash: 'abc' });
-
-      expect(dbHelperStub.findInDatabase.calledOnceWith(
-        fakeDb, 'zelappsmessages', { hash: 'abc' },
-      )).to.be.true;
-      expect(result).to.deep.equal([{ name: 'a' }, { name: 'b' }]);
-    });
-
-    it('passes an empty query when none is provided', async () => {
-      const provider = await mongoStorageProvider.create();
-      await provider.list('appMessages');
-      const [, , query] = dbHelperStub.findInDatabase.firstCall.args;
-      expect(query).to.deep.equal({});
-    });
+  it('sets and unsets fields on every record a query names', async () => {
+    await provider.update(STORE, { tags: 'x' }, { set: { marked: true }, unset: ['nested'] });
+    expect(keys(await provider.find(STORE, { marked: true }))).to.deep.equal(['a', 'd']);
+    expect(keys(await provider.find(STORE, { nested: { exists: true } }))).to.deep.equal(['b']);
+    await provider.update(STORE, { k: 'b' }, { unset: ['nested'] });
+    expect(keys(await provider.find(STORE, { nested: { exists: true } }))).to.deep.equal([]);
+    await provider.update(STORE, { k: 'b' }, {});
+    expect(await provider.count(STORE, {})).to.equal(records.length);
   });
 
-  describe('remove()', () => {
-    it('delegates to dbHelper.removeDocumentsFromCollection with the key', async () => {
-      const provider = await mongoStorageProvider.create();
-      await provider.remove('appSpecs', { name: 'gone' });
-
-      expect(dbHelperStub.removeDocumentsFromCollection.calledOnce).to.be.true;
-      const [db, collection, key] = dbHelperStub.removeDocumentsFromCollection.firstCall.args;
-      expect(db).to.equal(fakeDb);
-      expect(collection).to.equal('zelappsinformation');
-      expect(key).to.deep.equal({ name: 'gone' });
-    });
+  it('removes every record a query names', async () => {
+    await provider.remove(STORE, { s: 'x' });
+    expect(keys(await provider.find(STORE, {}))).to.deep.equal(['b', 'c', 'd']);
   });
 
-  describe('options', () => {
-    it('always uses dbHelper.databaseConnection for the client', async () => {
-      const provider = await mongoStorageProvider.create();
-      await provider.get('appSpecs', { name: 'x' });
+  it('creates an index for each declared set of fields, and again without complaint', async () => {
+    const collection = dbHelper.databaseConnection().db(stores[STORE].database).collection(stores[STORE].collection);
+    await collection.dropIndexes();
+    await provider.ensureIndexes(STORE, [{ fields: ['k'] }, { fields: ['tags'] }, { fields: ['nested.k', 'n'] }]);
+    await provider.ensureIndexes(STORE, [{ fields: ['k'] }, { fields: ['tags'] }, { fields: ['nested.k', 'n'] }]);
+    const indexed = (await collection.listIndexes().toArray()).map((index) => JSON.stringify(index.key));
+    expect(indexed).to.include.members([JSON.stringify({ k: 1 }), JSON.stringify({ tags: 1 }), JSON.stringify({ 'nested.k': 1, n: 1 })]);
+  });
 
-      expect(fakeClient.db.calledWith('globalzelapps')).to.be.true;
-      expect(dbHelperStub.databaseConnection.called).to.be.true;
-    });
-
-    it('accepts a custom store map override', async () => {
-      const customMap = {
-        testStore: { database: 'testdb', collection: 'testcol' },
-      };
-      const provider = await mongoStorageProvider.create({ storeMap: customMap });
-      await provider.get('testStore', { id: 1 });
-
-      expect(fakeClient.db.calledOnceWith('testdb')).to.be.true;
-      expect(dbHelperStub.findOneInDatabase.calledOnceWith(fakeDb, 'testcol', { id: 1 })).to.be.true;
-    });
-
-    it('rejects logical stores not in the custom map', async () => {
-      const customMap = { onlyStore: { database: 'x', collection: 'y' } };
-      const provider = await mongoStorageProvider.create({ storeMap: customMap });
-
-      await expect(provider.get('appSpecs', {}))
-        .to.be.rejectedWith(/Unknown logical store: "appSpecs"/);
-    });
+  it('refuses a store it was not given', async () => {
+    await expect(provider.find('nonsense', {})).to.be.rejectedWith(/unknown store/);
   });
 });

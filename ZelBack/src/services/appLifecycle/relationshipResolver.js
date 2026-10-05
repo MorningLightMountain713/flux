@@ -30,6 +30,7 @@
 
 const config = require('config');
 const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const { resolveInstantiatedSpec } = require('../utils/specCutover');
 const dockerService = require('../dockerService');
 const { NodeCondition } = require('./nodeConditions');
@@ -357,11 +358,7 @@ async function getRequiredDependencyNamesForNode(nodeIdentity) {
   if (!ip && !outpoint && !operator) {
     return new Set();
   }
-  const globalApps = await appsRepository.listGlobalAppInfo();
-  const assigned = (globalApps || []).filter((app) => app && app.placement
-    && app.placement.isPinnedTo({
-      ip, outpoint, operator,
-    }));
+  const assigned = await appRecords.registry().pinnedTo({ ip, outpoint, operator });
   const { viewsByName, complete } = await buildViewsByName(assigned);
   if (!complete) {
     // An assigned encrypted consumer's spec is unreadable here (its key isn't

@@ -2,10 +2,10 @@
 
 const { expect } = require('chai');
 const sinon = require('sinon');
+const { stubRegistry } = require('./fixtures/appRecords');
 
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
-const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const appHistory = require('../../ZelBack/src/services/appDecisions/appHistory');
 const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCommittee');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
@@ -104,7 +104,7 @@ describe('quorumGrant ownerGenerationRecord', () => {
       });
       sinon.stub(dbHelper, 'findInDatabase').callsFake(async (database, collection, query) => rows
         .filter((r) => r.type === query.type && r.identity === query.identity && r.role === query.role));
-      sinon.stub(appsRepository, 'getGlobalAppInfoByIdentity').callsFake(async () => app);
+      stubRegistry().byIdentity.callsFake(async () => app);
       sinon.stub(appHistory, 'ownerships').callsFake(async () => owners);
       sinon.stub(foundingCommittee, 'materializeGeneration').resolves(true);
     });
@@ -162,7 +162,7 @@ describe('quorumGrant ownerGenerationRecord', () => {
 
     it('resolves the owners from the applied history of the app the record names', async () => {
       await stored(await signedRecord());
-      sinon.assert.calledWith(appsRepository.getGlobalAppInfoByIdentity, 'myapp');
+      sinon.assert.calledWith(stubRegistry().byIdentity, 'myapp');
       sinon.assert.calledWith(appHistory.ownerships, 'myapp');
     });
 
@@ -176,7 +176,7 @@ describe('quorumGrant ownerGenerationRecord', () => {
       await stored(await signedRecord({ generation: 0 }));
       await stored(await signedRecord({ role: 'Bad Role' }));
       expect(writes).to.have.length(0);
-      expect(appsRepository.getGlobalAppInfoByIdentity.called).to.equal(false);
+      expect(stubRegistry().byIdentity.called).to.equal(false);
     });
 
     it('a replay of a held record writes nothing new and notifies again, so listeners must be idempotent', async () => {

@@ -1,6 +1,7 @@
 'use strict';
 
 const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const dockerService = require('../dockerService');
 const { appsFolder } = require('../utils/appConstants');
 const { getSpecBackend } = require('../utils/specLibs');
@@ -352,7 +353,7 @@ function componentNameFromRequest(appname, component, componentNames) {
  */
 async function resolveRequestTargets(appname, opts = {}) {
   const { replica = null } = opts;
-  const instantiated = await appsRepository.getGlobalAppInfo(appNameFromRequest(appname));
+  const instantiated = await appRecords.registry().byName(appNameFromRequest(appname));
   if (!instantiated) {
     throw new Error('Application not found');
   }

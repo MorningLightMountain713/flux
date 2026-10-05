@@ -36,6 +36,7 @@ const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const log = require('../../lib/log');
 const { Privilege, authOf } = require('../utils/privileges');
 const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { InstallStatus } = require('./installStatus');
 const config = require('config');
@@ -604,7 +605,7 @@ async function installApplicationAPI(req, res) {
       return;
     }
 
-    const instantiated = await appsRepository.getGlobalAppInfo(appname);
+    const instantiated = await appRecords.registry().byName(appname);
     if (!instantiated) {
       throw new Error(`Application Specifications of ${appname} not found`);
     }

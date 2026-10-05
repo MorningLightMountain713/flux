@@ -34,6 +34,7 @@ const { Privilege } = require('../../ZelBack/src/services/utils/privileges');
 const {
   loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const { stubRegistry } = require('./fixtures/appRecords');
 const domain = require('./fixtures/appDomain');
 const relationshipResolver = require('../../ZelBack/src/services/appLifecycle/relationshipResolver');
 const shutdownPlan = require('../../ZelBack/src/services/appLifecycle/shutdownPlan');
@@ -1860,7 +1861,7 @@ describe('appOperations tests', () => {
     async function restoreStubs(appName, deployment) {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: appName })));
+      stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: appName })));
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       sinon.stub(appReconciler, 'observedContainerState').resolves({
         reachable: true, exists: true, running: false, indeterminate: false,
@@ -2033,7 +2034,7 @@ describe('appOperations tests', () => {
     it('holds the component whose data could not be cleared, in those words', async () => {
       const deployment = await oneComponentDeployment('myapp', 'web');
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'myapp' })));
+      stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'myapp' })));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       sinon.stub(appReconciler, 'observedContainerState').resolves({
@@ -2122,7 +2123,7 @@ describe('appOperations tests', () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(composed);
       copyIs(true);
       const pauseFolder = sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves('held');
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+      stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(composed);
       sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       // The stop is proved against docker, not against the drive's verdict: the
@@ -2164,7 +2165,7 @@ describe('appOperations tests', () => {
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
       const deployment = await oneComponentDeployment('bkapp', 'comp1');
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+      stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       // The gate stands for two reads, and the container is up for exactly as long.
@@ -2230,7 +2231,7 @@ describe('appOperations tests', () => {
           },
         }));
         sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(composed);
-        sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+        stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
         sinon.stub(deploymentProvider, 'buildDeployment').resolves(composed);
         sinon.stub(syncthingFolderStateMachine, 'probeFolderSyncCompletion').resolves(probe);
         sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves('held');
@@ -2330,7 +2331,7 @@ describe('appOperations tests', () => {
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
       const deployment = await oneComponentDeployment('bkapp', 'comp1');
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+      stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
       // drive() awaits convergence but ANSWERS whether it happened. A component
       // that ran out the converge backstop comes back unconverged, and archiving
@@ -2371,7 +2372,7 @@ describe('appOperations tests', () => {
       // somewhere else, which is what it did on the first attempt.
       const deployment = await oneComponentDeployment('bkapp', 'comp1');
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+      stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
       sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
       sinon.stub(IOUtils, 'checkFileExists').resolves(false);
@@ -2406,7 +2407,7 @@ describe('appOperations tests', () => {
       const deployment = await oneComponentDeployment('bkapp', 'comp1');
       expect(deployment.getComponent('comp1').hasSyncthing()).to.be.false;
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+      stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       // The stop is proved against docker, not against the drive's verdict: the
@@ -2453,7 +2454,7 @@ describe('appOperations tests', () => {
       expect(composed.getComponent('web').hasActiveStandbySyncthing(), 'fixture must be activeStandby').to.be.true;
       expect(composed.getComponent('worker').hasActiveStandbySyncthing()).to.be.false;
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(composed);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+      stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(composed);
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       // The stop is proved against docker, not against the drive's verdict: the
@@ -2517,7 +2518,7 @@ describe('appOperations tests', () => {
         sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(await oneComponentDeployment('bkapp', 'web'));
         // A real InstantiatedSpec: the (unstubbed) buildDeployment behind
         // componentIdentifiersFor resolves and builds from it for real.
-        sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+        stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
         sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
         // The stop is proved against docker, not against the drive's verdict: the
         // converge backstop answers 'provisional' and that is not counted, so

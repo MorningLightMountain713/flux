@@ -17,6 +17,7 @@ const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonSta
 const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 const appSubmission = require('../../ZelBack/src/services/appRequirements/appSubmission');
 const { loadSpecLibrary, v9Spec } = require('./fixtures/fluxSpec');
+const { stubRegistry } = require('./fixtures/appRecords');
 
 // The update route and the app it judges an update against: the one the list
 // carries under the name, or, when it carries none, the one that last held it.
@@ -26,7 +27,7 @@ describe('updateAppGlobaly and the app an update is judged against', () => {
   const IDENTITY = `b${'a'.repeat(52)}`;
   let appOperations;
   let spec;
-  let getGlobalAppInfo;
+  let byName;
   let latestAppliedState;
 
   before(async function loadLibrary() {
@@ -45,7 +46,7 @@ describe('updateAppGlobaly and the app an update is judged against', () => {
       '../utils/specLibs': { ...specLibs, assertUpdateInvariants: sinon.stub().resolves() },
     });
     sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 2_600_000 } });
-    getGlobalAppInfo = sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(null);
+    byName = stubRegistry().byName.resolves(null);
     latestAppliedState = sinon.stub(appSpecHistory, 'latestAppliedState').resolves(null);
     sinon.stub(appsRepository, 'getTempMessage').resolves({ hash: 'outbound-hash' });
     sinon.stub(placementFeasibility, 'checkPlacementFeasibility').resolves(null);
@@ -67,7 +68,7 @@ describe('updateAppGlobaly and the app an update is judged against', () => {
 
   it('judges an update of a listed app against its row and never reads the history', async () => {
     const listed = { spec, owner: spec.owner, identity: IDENTITY };
-    getGlobalAppInfo.resolves(listed);
+    byName.resolves(listed);
 
     expect(await appOperations.updateAppGlobaly(params())).to.equal('outbound-hash');
 

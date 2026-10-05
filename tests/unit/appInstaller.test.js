@@ -157,8 +157,8 @@ describe('appInstaller tests', () => {
         decryptMessage: sinon.stub().resolves('user:token'),
       },
       '../../lib/log': logStub,
+      '../appDatabase/appRecords': { registry: () => ({ byName: sinon.stub().resolves(null) }) },
       '../appDatabase/appsRepository': {
-        getGlobalAppInfo: sinon.stub().resolves(null),
         existsInstalledApp: sinon.stub().resolves(false),
         existsInstalledIdentity: sinon.stub().resolves(false),
         getTempMessageByName: sinon.stub().resolves(null),
@@ -430,8 +430,8 @@ describe('appInstaller tests', () => {
         '../appSecurity/imageManager': { isImageBlocked, verifyRepository: sinon.stub().resolves({ verified: true, supportedArchitectures: ['amd64'] }) },
         '../pgpService': { decryptMessage: sinon.stub().resolves('user:token') },
         '../../lib/log': logStub,
+        '../appDatabase/appRecords': { registry: () => ({ byName: sinon.stub().resolves(globalAppInfo) }) },
         '../appDatabase/appsRepository': {
-          getGlobalAppInfo: sinon.stub().resolves(globalAppInfo),
           // exists is false before insert (no stale entry) and true after (insert validated).
           existsInstalledApp: (() => { const s = sinon.stub().resolves(true); s.onCall(0).resolves(false); s.onCall(1).resolves(false); return s; })(),
           // Identity-keyed rows: absent before the insert, present for the

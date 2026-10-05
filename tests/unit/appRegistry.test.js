@@ -10,6 +10,7 @@ const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const {
   loadSpecLibrary, v8Spec, v9Spec, instantiatedSpec,
 } = require('./fixtures/fluxSpec');
+const { inMemoryRegistry } = require('./fixtures/appRecords');
 
 // The spec library is real: every row and message below is one the library
 // builds, so expiry is the library's rule and not a stub that agrees with
@@ -24,7 +25,8 @@ describe('appRegistry', () => {
   const LONG_EXPIRED_AT = 1_751_628_800;
 
   let registry;
-  let rows;
+  // The app registry the module reads and writes, held in memory.
+  let mem;
   let messages;
   let stubs;
 
@@ -54,18 +56,23 @@ describe('appRegistry', () => {
     };
   }
 
-  beforeEach(() => {
-    rows = [];
+  /** Stores rows in the registry as a node would hold them. */
+  async function seed(docs) {
+    const flux = await loadSpecLibrary();
+    for (const doc of docs) await mem.put(flux.InstantiatedSpec.deserialize(doc)); // eslint-disable-line no-await-in-loop
+    mem.put.resetHistory();
+  }
+
+  beforeEach(async () => {
+    mem = await inMemoryRegistry();
+    sinon.spy(mem, 'put');
+    sinon.spy(mem, 'remove');
     messages = [];
     capabilities.resetForTests();
     stubs = {
       '../dbHelper': {
         databaseConnection: () => ({ db: () => ({}) }),
-        findInDatabase: sinon.stub().callsFake(async (_db, collection, query) => {
-          if (collection === 'zelappsmessages') return messages.filter((m) => query.hash.$in.includes(m.hash));
-          return rows;
-        }),
-        findOneInDatabase: sinon.stub().callsFake(async (_db, _collection, query) => rows.find((row) => query.name.test(row.name)) ?? null),
+        findInDatabase: sinon.stub().callsFake(async (_db, _collection, query) => messages.filter((m) => query.hash.$in.includes(m.hash))),
       },
       '../chainState': {
         getScannedHeight: sinon.stub().resolves(SCANNED_HEIGHT),
@@ -75,8 +82,6 @@ describe('appRegistry', () => {
       },
       '../appMessaging/confirmedMessageStore': { lookupBlockTime: sinon.stub().resolves(NOW) },
       './appsRepository': {
-        replaceGlobalAppRow: sinon.stub().resolves(),
-        removeGlobalAppInfo: sinon.stub().resolves(),
         removeAppInstallingErrorRecords: sinon.stub().resolves(),
         removeContentManifests: sinon.stub().resolves(),
       },
@@ -114,7 +119,7 @@ describe('appRegistry', () => {
     stubs['../appDecisions/decisionStore'].latestApplied.resolves(applied);
     capabilities.setForTests(['explorerSynced', 'appMessagesSynced'], true);
     await registry.reconcile();
-    stubs['./appsRepository'].removeGlobalAppInfo.resetHistory();
+    mem.remove.resetHistory();
     stubs['./appsRepository'].removeAppInstallingErrorRecords.resetHistory();
   }
 
@@ -131,7 +136,7 @@ describe('appRegistry', () => {
       await registry.blockScanned({ height: SCANNED_HEIGHT + 3, time: NOW + 91 });
       await new Promise((resolve) => { setImmediate(resolve); });
 
-      sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeGlobalAppInfo, 'deadapp');
+      sinon.assert.calledOnceWithExactly(mem.remove, 'deadapp');
       sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeAppInstallingErrorRecords, 'deadapp');
       sinon.assert.calledOnceWithExactly(removed, 'deadapp');
     });
@@ -140,10 +145,10 @@ describe('appRegistry', () => {
       await listed([{ name: 'deadapp', spec: await v9Spec({ name: 'deadapp' }), fields: { termStart: NOW - 30 * 86_400 + 60 } }]);
 
       await registry.blockScanned({ height: SCANNED_HEIGHT + 1_000_000, time: NOW + 60 });
-      sinon.assert.notCalled(stubs['./appsRepository'].removeGlobalAppInfo);
+      sinon.assert.notCalled(mem.remove);
 
       await registry.blockScanned({ height: SCANNED_HEIGHT + 1_000_001, time: NOW + 61 });
-      sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeGlobalAppInfo, 'deadapp');
+      sinon.assert.calledOnceWithExactly(mem.remove, 'deadapp');
     });
 
     it('ends a v1-v8 term at the block height it runs to, whatever the block time', async () => {
@@ -151,10 +156,10 @@ describe('appRegistry', () => {
       await listed([{ name: 'deadapp', spec: await v8Spec({ name: 'deadapp' }), fields: { height: SCANNED_HEIGHT - 87_999 } }]);
 
       await registry.blockScanned({ height: SCANNED_HEIGHT, time: NOW + 10 ** 9 });
-      sinon.assert.notCalled(stubs['./appsRepository'].removeGlobalAppInfo);
+      sinon.assert.notCalled(mem.remove);
 
       await registry.blockScanned({ height: SCANNED_HEIGHT + 1, time: NOW });
-      sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeGlobalAppInfo, 'deadapp');
+      sinon.assert.calledOnceWithExactly(mem.remove, 'deadapp');
     });
 
     it('stretches a pre-fork term that crosses the PON fork: its blocks after the fork are 30 s, not 2 min', async () => {
@@ -166,10 +171,10 @@ describe('appRegistry', () => {
       await listed([{ name: 'crossing', spec: await v8Spec({ name: 'crossing' }), fields: { height: PON - 10_000 } }]);
 
       await registry.blockScanned({ height: PON + 78_000, time: NOW });
-      sinon.assert.notCalled(stubs['./appsRepository'].removeGlobalAppInfo);
+      sinon.assert.notCalled(mem.remove);
 
       await registry.blockScanned({ height: PON + 312_000, time: NOW });
-      sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeGlobalAppInfo, 'crossing');
+      sinon.assert.calledOnceWithExactly(mem.remove, 'crossing');
     });
 
     it('keeps a row it cannot judge and drops every other ended row', async () => {
@@ -178,11 +183,11 @@ describe('appRegistry', () => {
         { name: 'unjudgeable', spec: bad, fields: { termStart: null } },
         { name: 'deadapp', spec: await v9Spec({ name: 'deadapp' }), fields: { termStart: NOW - 30 * 86_400 } },
       ]);
-      sinon.assert.calledWithMatch(stubs['./registryManager'].storeGlobalSpec, { name: 'unjudgeable' });
+      expect(stubs['./registryManager'].storeGlobalSpec.getCalls().map((call) => call.args[0].name)).to.include('unjudgeable');
 
       await registry.blockScanned({ height: SCANNED_HEIGHT + 1, time: NOW + 1 });
 
-      sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeGlobalAppInfo, 'deadapp');
+      sinon.assert.calledOnceWithExactly(mem.remove, 'deadapp');
     });
 
     it('drops nothing while the list is not consistent', async () => {
@@ -191,7 +196,7 @@ describe('appRegistry', () => {
 
       await registry.blockScanned({ height: SCANNED_HEIGHT + 1, time: NOW + 61 });
 
-      sinon.assert.notCalled(stubs['./appsRepository'].removeGlobalAppInfo);
+      sinon.assert.notCalled(mem.remove);
     });
   });
 
@@ -234,8 +239,10 @@ describe('appRegistry', () => {
 
       const store = stubs['./registryManager'].storeGlobalSpec;
       sinon.assert.calledOnce(store);
-      const [row] = store.firstCall.args;
-      expect(row).to.include({
+      const [record] = store.firstCall.args;
+      expect({
+        name: record.name, hash: record.hash, height: record.height, uuid: record.uuid, identity: record.identity,
+      }).to.deep.equal({
         name: 'MyApp', hash: 'r', height: 990_000, uuid: 'uuid-r', identity: 'MyApp',
       });
       sinon.assert.calledWithMatch(stubs['../utils/fluxEventBus'].publish, 'app:specStored', { name: 'MyApp', hash: 'r' });
@@ -255,7 +262,7 @@ describe('appRegistry', () => {
       const spec = await v8Spec({ name: 'MyApp' });
       const carried = { appName: 'MyApp', identity: 'MyApp', version: 2, slots: { sealed: { ciphertext: 'c' } } };
       messages = [message('u', spec, { contentManifest: carried }), message('r', spec)];
-      rows = [{ ...(await instantiatedSpec(spec, { hash: 'r', height: 980_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }];
+      await seed([{ ...(await instantiatedSpec(spec, { hash: 'r', height: 980_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }]);
       const order = [];
       const contentSlotService = stubs['../appLifecycle/contentSlotService'];
       contentSlotService.storeCarriedManifest.callsFake(async () => order.push('manifest'));
@@ -271,7 +278,7 @@ describe('appRegistry', () => {
       expect(order.slice(0, 2)).to.deep.equal(['manifest', 'app:specStored']);
 
       contentSlotService.storeCarriedManifest.resetHistory();
-      rows = [{ ...(await instantiatedSpec(spec, { hash: 'u', height: 985_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }];
+      await seed([{ ...(await instantiatedSpec(spec, { hash: 'u', height: 985_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }]);
       await registry.applyDecided('myapp', [decision('r', { uuid: 'uuid-r', height: 990_000 })]);
       sinon.assert.notCalled(contentSlotService.storeCarriedManifest);
     });
@@ -291,7 +298,7 @@ describe('appRegistry', () => {
     it('moves its row to a later applied message, and replays nothing', async () => {
       const spec = await v8Spec({ name: 'MyApp' });
       messages = [message('u', spec)];
-      rows = [{ ...(await instantiatedSpec(spec, { hash: 'r', height: 980_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }];
+      await seed([{ ...(await instantiatedSpec(spec, { hash: 'r', height: 980_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }]);
 
       await registry.applyDecided('myapp', [decision('u', { uuid: 'uuid-r' })]);
 
@@ -304,7 +311,7 @@ describe('appRegistry', () => {
       const seller = await v8Spec({ name: 'MyApp' });
       const buyer = await v8Spec({ name: 'MyApp', owner: '1F1tAaz5x1HUXrCNLbtMDqcw6o5GNn4xqX' });
       messages = [message('t', buyer), message('u', seller)];
-      rows = [{ ...(await instantiatedSpec(seller, { hash: 'r', height: 980_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }];
+      await seed([{ ...(await instantiatedSpec(seller, { hash: 'r', height: 980_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }]);
 
       await registry.applyDecided('myapp', [decision('u', { uuid: 'uuid-r' })]);
       await new Promise((resolve) => { setImmediate(resolve); });
@@ -318,12 +325,13 @@ describe('appRegistry', () => {
     it('restamps a row whose message is unchanged without running any effect', async () => {
       const spec = await v8Spec({ name: 'MyApp' });
       messages = [message('r', spec)];
-      rows = [(await instantiatedSpec(spec, { hash: 'r', height: 990_000 })).serialize()];
+      await seed([(await instantiatedSpec(spec, { hash: 'r', height: 990_000 })).serialize()]);
 
       await registry.applyDecided('myapp', [decision('r')]);
 
-      sinon.assert.calledOnce(stubs['./appsRepository'].replaceGlobalAppRow);
-      expect(stubs['./appsRepository'].replaceGlobalAppRow.firstCall.args[0]).to.include({ uuid: 'uuid-r', identity: 'MyApp' });
+      sinon.assert.calledOnce(mem.put);
+      expect(mem.put.firstCall.args[0].uuid).to.equal('uuid-r');
+      expect(mem.put.firstCall.args[0].identity).to.equal('MyApp');
       sinon.assert.notCalled(stubs['./registryManager'].storeGlobalSpec);
       sinon.assert.notCalled(stubs['../utils/fluxEventBus'].publish);
     });
@@ -341,23 +349,23 @@ describe('appRegistry', () => {
     it('reads this run\'s decision over a stored one for the same message', async () => {
       const spec = await v8Spec({ name: 'MyApp' });
       messages = [message('r', spec)];
-      rows = [(await instantiatedSpec(spec, { hash: 'r', height: 990_000 })).serialize()];
+      await seed([(await instantiatedSpec(spec, { hash: 'r', height: 990_000 })).serialize()]);
       stubs['../appDecisions/decisionStore'].appliedFor.resolves([decision('r')]);
 
       // The message is refused on this run: the name has no applied message.
       await registry.applyDecided('myapp', [decision('r', { decision: 'refused', reason: 'unauthorized' })]);
 
-      sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeGlobalAppInfo, 'MyApp');
+      sinon.assert.calledOnceWithExactly(mem.remove, 'MyApp');
     });
 
     it('loses its row when its latest applied app has expired', async () => {
       const spec = await v9Spec({ name: 'myapp' });
       messages = [message('r', spec)];
-      rows = [(await instantiatedSpec(spec, { hash: 'r', registeredAt: LONG_EXPIRED_AT })).serialize()];
+      await seed([(await instantiatedSpec(spec, { hash: 'r', registeredAt: LONG_EXPIRED_AT })).serialize()]);
 
       await registry.applyDecided('myapp', [decision('r', { termStart: LONG_EXPIRED_AT })]);
 
-      sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeGlobalAppInfo, 'myapp');
+      sinon.assert.calledOnceWithExactly(mem.remove, 'myapp');
       sinon.assert.notCalled(stubs['./registryManager'].storeGlobalSpec);
     });
   });
@@ -376,7 +384,7 @@ describe('appRegistry', () => {
     it('is forgotten when another app takes the name, and the displaced app\'s manifests are left to the reaper', async () => {
       const spec = await v9Spec({ name: 'myapp' });
       messages = [message('new', spec)];
-      rows = [{ ...(await instantiatedSpec(spec, { hash: 'old', height: 980_000 })).serialize(), identity: 'aaaaaaaaaaaa' }];
+      await seed([{ ...(await instantiatedSpec(spec, { hash: 'old', height: 980_000 })).serialize(), identity: 'aaaaaaaaaaaa' }]);
 
       await registry.applyDecided('myapp', [decision('new', { identity: 'bbbbbbbbbbbb', height: 990_000 })]);
 
@@ -408,12 +416,12 @@ describe('appRegistry', () => {
     it('is wound back when the app goes back to an earlier spec, and left alone when it moves forward', async () => {
       const spec = await v9Spec({ name: 'myapp' });
       messages = [message('earlier', spec), message('later', spec)];
-      rows = [{ ...(await instantiatedSpec(spec, { hash: 'refused-later', height: 995_000 })).serialize(), identity: 'aaaaaaaaaaaa' }];
+      await seed([{ ...(await instantiatedSpec(spec, { hash: 'refused-later', height: 995_000 })).serialize(), identity: 'aaaaaaaaaaaa' }]);
 
       await registry.applyDecided('myapp', [decision('earlier', { identity: 'aaaaaaaaaaaa', height: 990_000 })]);
       sinon.assert.calledOnceWithExactly(stubs['../appMesh/foundingCommittee'].retract, 'aaaaaaaaaaaa', 990_000);
 
-      rows = [{ ...(await instantiatedSpec(spec, { hash: 'earlier', height: 990_000 })).serialize(), identity: 'aaaaaaaaaaaa' }];
+      await seed([{ ...(await instantiatedSpec(spec, { hash: 'earlier', height: 990_000 })).serialize(), identity: 'aaaaaaaaaaaa' }]);
       await registry.applyDecided('myapp', [decision('later', { identity: 'aaaaaaaaaaaa', height: 999_000 })]);
       sinon.assert.calledOnce(stubs['../appMesh/foundingCommittee'].retract);
       sinon.assert.notCalled(stubs['../appMesh/foundingCommittee'].forget);
@@ -424,14 +432,14 @@ describe('appRegistry', () => {
     it('writes every row the decisions stand for, removes every row they do not, and raises the capability', async () => {
       const spec = await v8Spec({ name: 'MyApp' });
       messages = [message('r', spec)];
-      rows = [(await instantiatedSpec(await v8Spec({ name: 'claimcalc' }), { hash: 'old' })).serialize()];
+      await seed([(await instantiatedSpec(await v8Spec({ name: 'claimcalc' }), { hash: 'old' })).serialize()]);
       stubs['../appDecisions/decisionStore'].latestApplied.resolves(new Map([['myapp', decision('r')]]));
       capabilities.setForTests(['explorerSynced', 'appMessagesSynced'], true);
 
       await registry.reconcile();
 
       expect(stubs['./registryManager'].storeGlobalSpec.firstCall.args[0].name).to.equal('MyApp');
-      sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeGlobalAppInfo, 'claimcalc');
+      sinon.assert.calledOnceWithExactly(mem.remove, 'claimcalc');
       sinon.assert.calledOnce(stubs['../chainState'].exclusive);
       expect(capabilities.isUp('appRegistryConsistent')).to.equal(true);
     });
@@ -462,13 +470,13 @@ describe('appRegistry', () => {
 
   describe('reconcile before the scan has caught up', () => {
     it('writes and removes nothing, and leaves the capability down', async () => {
-      rows = [(await instantiatedSpec(await v8Spec({ name: 'recent' }), { hash: 'r' })).serialize()];
+      await seed([(await instantiatedSpec(await v8Spec({ name: 'recent' }), { hash: 'r' })).serialize()]);
       capabilities.setForTests('appMessagesSynced', true);
 
       await registry.reconcile();
 
       sinon.assert.notCalled(stubs['../appDecisions/decisionStore'].latestApplied);
-      sinon.assert.notCalled(stubs['./appsRepository'].removeGlobalAppInfo);
+      sinon.assert.notCalled(mem.remove);
       expect(capabilities.isUp('appRegistryConsistent')).to.equal(false);
     });
   });
