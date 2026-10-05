@@ -30,6 +30,8 @@ const verificationHelperUtils = proxyquire(
 const { signMessage } = require('../../ZelBack/src/services/verificationHelper');
 const { requireMongo } = require('./dbTestHelper');
 const { asConfig } = require('./fixtures/config');
+const { v8Spec, instantiatedSpec } = require('./fixtures/fluxSpec');
+const appRecords = require('../../ZelBack/src/services/appDatabase/appRecords');
 
 const insertUsers = [
   {
@@ -58,12 +60,12 @@ const insertUsers = [
   },
 ];
 
-const insertApp = {
-  _id: new ObjectId('6147045cd774409b374d253d'),
-  name: 'PolkadotNode',
-  description: 'Polkadot is a heterogeneous multi-chain interchange.',
-  owner: '1KPKzyp9VyB9ouAA4spZ48x8g32sxLVK6W',
-};
+/** Lists PolkadotNode in the registry, owned by the first logged-in user. */
+async function listPolkadotNode() {
+  await appRecords.registry().put(await instantiatedSpec(
+    await v8Spec({ name: 'PolkadotNode', owner: '1KPKzyp9VyB9ouAA4spZ48x8g32sxLVK6W' }), { hash: 'h-polkadot', height: 1 },
+  ));
+}
 
 describe('verificationHelperUtils tests', () => {
   before(requireMongo);
@@ -595,7 +597,7 @@ describe('verificationHelperUtils tests', () => {
       } catch (err) {
         console.log('Collection not found.');
       }
-      await dbHelper.insertOneToDatabase(databaseGlobal, collectionApps, insertApp);
+      await listPolkadotNode();
     });
 
     it('should return true when requested by the app owner', async () => {
@@ -701,7 +703,7 @@ describe('verificationHelperUtils tests', () => {
       } catch (err) {
         console.log('Collection not found.');
       }
-      await dbHelper.insertOneToDatabase(databaseGlobal, collectionApps, insertApp);
+      await listPolkadotNode();
     });
 
     // Shares this block's fixtures deliberately: the same identities, run through

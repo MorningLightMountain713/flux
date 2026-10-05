@@ -4,13 +4,13 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
-const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/fluxCommunicationMessagesSender');
 const transportCryptoProvider = require('../../ZelBack/src/services/providers/FluxOSTransportProvider');
 const {
   loadSpecLibrary, V8_SUBMISSION, v8Spec, v9Spec, sealedV8Spec, instantiatedSpec,
 } = require('./fixtures/fluxSpec');
+const { stubRegistry } = require('./fixtures/appRecords');
 const moduleLoader = require('../../ZelBack/src/lib/moduleLoader');
 
 // Orchestration tests for registryManager.convertApplicationSpecification.
@@ -29,7 +29,7 @@ const moduleLoader = require('../../ZelBack/src/lib/moduleLoader');
 // SPEC_VIEW_INFO and the AAD built from the app name and the returned timestamp
 // — stronger than reading them back off a stub.
 //
-// What stays stubbed is I/O: the mongo read behind getGlobalAppInfo, and the
+// What stays stubbed is I/O: the registry read, and the
 // signed HTTP fetch behind a legacy F_S_ENV storage reference.
 
 let flux;
@@ -51,13 +51,13 @@ describe('appConvert (registryManager) tests', () => {
   afterEach(() => sinon.restore());
 
   /**
-   * What `appsRepository.getGlobalAppInfo` hands the module: a real
+   * What `stubRegistry().byName` hands the module: a real
    * InstantiatedSpec over a real stored spec. Only the mongo read is stubbed.
    * @returns {Promise<object>} the InstantiatedSpec the stub will return
    */
   async function registryHolds(spec, { height = 1_700_000 } = {}) {
     const held = await instantiatedSpec(spec, { height });
-    sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(held);
+    stubRegistry().byName.resolves(held);
     return held;
   }
 
@@ -130,7 +130,7 @@ describe('appConvert (registryManager) tests', () => {
 
     // Guard on the stubbed repository. It is the producer here, so the risk is
     // the opposite way round: convert reads five PROPERTIES off whatever
-    // getGlobalAppInfo returns and never calls a method on it, so what has to be
+    // the registry returns and never calls a method on it, so what has to be
     // asserted is that the real InstantiatedSpec answers those five. Any of them
     // renamed in flux-spec and convert reads `undefined` — encrypting nothing,
     // converting at height undefined — with no error anywhere.
@@ -308,7 +308,7 @@ describe('appConvert (registryManager) tests', () => {
   });
 
   it('rejects an unknown app', async () => {
-    sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(null);
+    stubRegistry().byName.resolves(null);
 
     let threw;
     try {

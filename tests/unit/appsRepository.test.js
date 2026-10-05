@@ -5,8 +5,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { asConfig } = require('./fixtures/config');
 const {
-  loadSpecLibrary, v1Spec, v8Spec, v9Spec, sealedV8Spec, sealedV9Spec,
-  instantiatedSpec, assertAnswers,
+  loadSpecLibrary, v8Spec, v9Spec, sealedV8Spec, sealedV9Spec, instantiatedSpec,
 } = require('./fixtures/fluxSpec');
 const setReconciler = require('../../ZelBack/src/services/appMessaging/setReconciler');
 
@@ -19,6 +18,7 @@ let flux;
 
 describe('appsRepository', () => {
   let appsRepository;
+  let registryStub;
   let dbHelperStub;
   let specLibsStub;
   let decisionStoreStub;
@@ -51,13 +51,6 @@ describe('appsRepository', () => {
     return (await instantiatedSpec(spec, { hash, height, registeredAt })).serialize();
   }
 
-  /**
-   * A real FluxAppSpecV1 — the only stored form that carries no `instances` at
-   * all (v1 predates the field and the class hardcodes 3), which is the row
-   * findUnderProvisionedApps' `?? 3` default exists for. Built from the shared v8
-   * fixture's own single component, so it is the same app in the flat v1 shape.
-   */
-
   beforeEach(() => {
     // countRunningByApp reads the event log directly off the collection handle:
     // resolveAddressMoves does a find, the count pipeline an aggregate.
@@ -75,6 +68,9 @@ describe('appsRepository', () => {
       }),
     };
     mockDb = { db: sinon.stub().returns({ collection: sinon.stub().returns(eventCollection) }) };
+
+    // The app registry: nothing listed, nothing pinned, unless a test says so.
+    registryStub = { byName: sinon.stub().resolves(null), pinned: sinon.stub().resolves([]) };
 
     dbHelperStub = {
       databaseConnection: sinon.stub().returns(mockDb),
@@ -146,9 +142,7 @@ describe('appsRepository', () => {
         globalAppsIngressAttestations: 'appingressattestations',
         globalAppsIngressAttestationDigests: 'appingressattestationdigests',
       },
-      './appsMaintenance': {
-        expireHeightExpr: sinon.stub().returns({ $add: ['$height', '$expire'] }),
-      },
+      './appRecords': { registry: () => registryStub },
     });
   });
 
@@ -157,7 +151,7 @@ describe('appsRepository', () => {
   describe('hydration', () => {
     it('returns null when findOne misses', async () => {
       dbHelperStub.findOneInDatabase.resolves(null);
-      const result = await appsRepository.getGlobalAppInfo('unknown');
+      const result = await appsRepository.getInstalledApp('unknown');
       expect(result).to.be.null;
     });
 
@@ -166,7 +160,7 @@ describe('appsRepository', () => {
       const deserialize = sinon.spy(flux.FluxAppSpecV8, 'deserialize');
       dbHelperStub.findOneInDatabase.resolves(doc);
 
-      const result = await appsRepository.getGlobalAppInfo('example');
+      const result = await appsRepository.getInstalledApp('example');
       expect(result).to.be.instanceOf(flux.InstantiatedSpec);
       expect(result.spec).to.be.instanceOf(flux.FluxAppSpecV8);
       expect(result.hash).to.equal('h');
@@ -179,15 +173,15 @@ describe('appsRepository', () => {
       delete specFields.hash;
       delete specFields.height;
       expect(deserialize.firstCall.args[0]).to.deep.equal(specFields);
-      // assertNoNameConflicts reads both off this object, and only the real class
-      // derives the second — a legacy app's expiry is height + expire over the fork.
+      // Only the real class derives the second: a legacy app's expiry is
+      // height + expire over the fork.
       expect(result.expiresAtHeight).to.be.a('number').and.be.greaterThan(100);
     });
 
     it('returns null and logs when no version class is registered', async () => {
       const doc = { name: 'phantom', version: 99, hash: 'h', height: 100 };
       dbHelperStub.findOneInDatabase.resolves(doc);
-      const result = await appsRepository.getGlobalAppInfo('phantom');
+      const result = await appsRepository.getInstalledApp('phantom');
       expect(result).to.be.null;
       expect(logStub.warn.calledOnce).to.be.true;
       expect(logStub.warn.firstCall.args[0]).to.include('version 99');
@@ -196,7 +190,7 @@ describe('appsRepository', () => {
     it('hydrates v9 documents through InstantiatedSpec.deserialize', async () => {
       const doc = await modernDoc(await v9Spec({ name: 'modern' }), { hash: 'h', height: 100 });
       dbHelperStub.findOneInDatabase.resolves(doc);
-      const result = await appsRepository.getGlobalAppInfo('modern');
+      const result = await appsRepository.getInstalledApp('modern');
       expect(result).to.not.be.null;
       expect(result.spec).to.be.instanceOf(flux.FluxAppSpecV9);
       expect(result.name).to.equal('modern');
@@ -211,7 +205,7 @@ describe('appsRepository', () => {
       const doc = await modernDoc(await sealedV9Spec({ name: 'sealed9' }), { hash: 'hs9', height: 900 });
       dbHelperStub.findOneInDatabase.resolves(doc);
 
-      const result = await appsRepository.getGlobalAppInfo('sealed9');
+      const result = await appsRepository.getInstalledApp('sealed9');
       expect(result.spec).to.be.instanceOf(flux.EncryptedSpecV9);
       expect(result.isEncrypted).to.be.true;
       expect(result.requiresArcane(), 'only an Arcane node can unseal it').to.be.true;
@@ -224,7 +218,7 @@ describe('appsRepository', () => {
       const doc = await legacyDoc(await sealedV8Spec({ name: 'sealed8' }), { hash: 'hs8', height: 800 });
       dbHelperStub.findOneInDatabase.resolves(doc);
 
-      const result = await appsRepository.getGlobalAppInfo('sealed8');
+      const result = await appsRepository.getInstalledApp('sealed8');
       expect(result.spec).to.be.instanceOf(flux.EncryptedSpecV8);
       expect(result.isEncrypted).to.be.true;
       // v8's blob carries no cleartext summary at all: "I cannot tell from here".
@@ -260,7 +254,7 @@ describe('appsRepository', () => {
       expect(stored.registrationVersion).to.equal(8);
       dbHelperStub.findOneInDatabase.resolves(stored);
 
-      const result = await appsRepository.getGlobalAppInfo('regver9');
+      const result = await appsRepository.getInstalledApp('regver9');
       expect(result.spec).to.be.instanceOf(flux.EncryptedSpecV9);
       expect(result.registrationVersion).to.equal(8);
     });
@@ -269,7 +263,7 @@ describe('appsRepository', () => {
   describe('case-insensitive name matching', () => {
     it('uses case-insensitive anchored regex for name lookup', async () => {
       dbHelperStub.findOneInDatabase.resolves(null);
-      await appsRepository.getGlobalAppInfo('MyApp');
+      await appsRepository.getInstalledApp('MyApp');
       const arg = dbHelperStub.findOneInDatabase.firstCall.args[2];
       expect(arg.name).to.be.instanceOf(RegExp);
       expect('MYAPP').to.match(arg.name);
@@ -279,36 +273,26 @@ describe('appsRepository', () => {
   });
 
   describe('getApplicationOwner', () => {
-    it('answers the registry row\'s owner without reading the installed list', async () => {
-      dbHelperStub.findOneInDatabase.resolves({ owner: 'ownerX' });
+    it('answers the registry record\'s owner without reading the installed list', async () => {
+      registryStub.byName.resolves({ owner: 'ownerX' });
       expect(await appsRepository.getApplicationOwner('app')).to.equal('ownerX');
+      sinon.assert.calledOnceWithExactly(registryStub.byName, 'app');
       sinon.assert.notCalled(dbHelperStub.findInDatabase);
     });
 
     it('falls back to an app this node has installed under the name, ignoring case', async () => {
-      dbHelperStub.findOneInDatabase.resolves(null);
       const installed = await legacyDoc(await v8Spec({ name: 'LocalOnly' }), { hash: 'hl', height: 100 });
       dbHelperStub.findInDatabase.resolves([installed]);
       expect(await appsRepository.getApplicationOwner('localonly')).to.equal(installed.owner);
     });
 
     it('answers null when neither the registry nor this node holds the name', async () => {
-      dbHelperStub.findOneInDatabase.resolves(null);
       dbHelperStub.findInDatabase.resolves([]);
       expect(await appsRepository.getApplicationOwner('nothing')).to.equal(null);
     });
   });
 
   describe('lean scalar accessors skip hydration', () => {
-    it('getGlobalAppOwner returns just the owner via an owner projection', async () => {
-      dbHelperStub.findOneInDatabase.resolves({ owner: 'ownerX' });
-      const result = await appsRepository.getGlobalAppOwner('app');
-      expect(result).to.equal('ownerX');
-      const options = dbHelperStub.findOneInDatabase.firstCall.args[3];
-      expect(options.projection).to.deep.equal({ _id: 0, owner: 1 });
-      expect(specLibsStub.getSpec.called).to.be.false;
-    });
-
     it('getInstalledAppAttribution returns the owner, hash and identity via their projection', async () => {
       dbHelperStub.findOneInDatabase.resolves({ owner: 'ownerX', hash: 'h1', identity: 'bident' });
       const result = await appsRepository.getInstalledAppAttribution('app');
@@ -317,25 +301,6 @@ describe('appsRepository', () => {
       expect(options.projection).to.deep.equal({
         _id: 0, owner: 1, hash: 1, identity: 1,
       });
-    });
-
-    it('getGlobalAppOwner returns null when the app is absent', async () => {
-      dbHelperStub.findOneInDatabase.resolves(null);
-      expect(await appsRepository.getGlobalAppOwner('missing')).to.be.null;
-    });
-
-    it('getGlobalAppHeight returns the numeric height via a height projection', async () => {
-      dbHelperStub.findOneInDatabase.resolves({ height: 1234 });
-      const result = await appsRepository.getGlobalAppHeight('app');
-      expect(result).to.equal(1234);
-      const options = dbHelperStub.findOneInDatabase.firstCall.args[3];
-      expect(options.projection).to.deep.equal({ _id: 0, height: 1 });
-      expect(specLibsStub.getSpec.called).to.be.false;
-    });
-
-    it('getGlobalAppHeight returns null when the app is absent', async () => {
-      dbHelperStub.findOneInDatabase.resolves(null);
-      expect(await appsRepository.getGlobalAppHeight('missing')).to.be.null;
     });
 
     it('listInstalledAppNames reads names through a name projection', async () => {
@@ -363,34 +328,6 @@ describe('appsRepository', () => {
   });
 
   describe('writes', () => {
-    it('replaceGlobalAppRow replaces the row the name holds in any letter case, or inserts one', async () => {
-      dbHelperStub.replaceOneInDatabase.resolves({ matchedCount: 1 });
-      const row = {
-        name: 'MyApp', version: 9, hash: 'h', height: 1, uuid: 'f'.repeat(64), identity: 'ffffffffffff',
-      };
-      await appsRepository.replaceGlobalAppRow(row);
-      const [, , query, doc, options] = dbHelperStub.replaceOneInDatabase.firstCall.args;
-      expect('myapp').to.match(query.name);
-      expect('MYAPP').to.match(query.name);
-      expect('myapp2').to.not.match(query.name);
-      expect(doc).to.deep.equal(row);
-      expect(options).to.deep.equal({ upsert: true });
-    });
-
-    it('replaceGlobalAppRow refuses a row without a name', async () => {
-      let thrown = null;
-      try { await appsRepository.replaceGlobalAppRow({ version: 7 }); } catch (error) { thrown = error; }
-      expect(thrown.message).to.match(/name required/);
-    });
-
-    it('removeGlobalAppInfo issues case-insensitive delete', async () => {
-      dbHelperStub.removeDocumentsFromCollection.resolves({ deletedCount: 1 });
-      await appsRepository.removeGlobalAppInfo('ByeApp');
-      const query = dbHelperStub.removeDocumentsFromCollection.firstCall.args[2];
-      expect('BYEAPP').to.match(query.name);
-      expect('byeapp').to.match(query.name);
-    });
-
     it('upsertAppInstallingErrorLocations upserts each record on its identity', async () => {
       const records = [
         { name: 'AppA', hash: 'h1', ip: '1.1.1.1:16127', error: 'boom' },
@@ -426,37 +363,6 @@ describe('appsRepository', () => {
     });
   });
 
-  describe('list accessors', () => {
-    it('listGlobalAppInfo hydrates every document into InstantiatedSpec', async () => {
-      // Two rows of different vintages, because the list is version-mixed in
-      // production and one deserializer standing in for both would hide it.
-      dbHelperStub.findInDatabase.resolves([
-        await legacyDoc(await v8Spec({ name: 'appa' }), { hash: 'h1', height: 10 }),
-        await modernDoc(await v9Spec({ name: 'appb' }), { hash: 'h2', height: 20 }),
-      ]);
-
-      const result = await appsRepository.listGlobalAppInfo();
-      expect(result).to.have.length(2);
-      expect(result[0].spec).to.be.instanceOf(flux.FluxAppSpecV8);
-      expect(result[0].name).to.equal('appa');
-      expect(result[0].hash).to.equal('h1');
-      expect(result[1].spec).to.be.instanceOf(flux.FluxAppSpecV9);
-      expect(result[1].name).to.equal('appb');
-      expect(result[1].hash).to.equal('h2');
-    });
-
-    it('listGlobalAppInfo drops docs whose version class is missing', async () => {
-      dbHelperStub.findInDatabase.resolves([
-        await legacyDoc(await v8Spec({ name: 'appa' }), { hash: 'h1', height: 10 }),
-        { name: 'appb', version: 42, hash: 'h2', height: 20 }, // no class registered
-      ]);
-
-      const result = await appsRepository.listGlobalAppInfo();
-      expect(result).to.have.length(1);
-      expect(result[0].name).to.equal('appa');
-    });
-  });
-
   describe('getAppMessage', () => {
     it('returns null when the hash is not found', async () => {
       dbHelperStub.findOneInDatabase.resolves(null);
@@ -485,140 +391,34 @@ describe('appsRepository', () => {
     });
   });
 
-  describe('findUnderProvisionedApps', () => {
-    it('returns nothing when no app is alive', async () => {
-      dbHelperStub.aggregateInDatabase.resolves([]);
-      const result = await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000);
-      expect(result).to.deep.equal([]);
-    });
-
-    it('flags an app running fewer replicas than it wants', async () => {
-      const doc = await legacyDoc(await v8Spec({ name: 'testApp', instances: 3 }));
-      dbHelperStub.aggregateInDatabase.resolves([doc]);
-      runningCounts = [{ _id: 'testApp', count: 1 }];
-
-      const result = await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000);
-
-      expect(result).to.have.lengthOf(1);
-      expect(result[0].instantiated.name).to.equal('testApp');
-      expect(result[0].actual).to.equal(1);
-      expect(result[0].required).to.equal(3);
-
-      // The spawner is this query's only consumer, and it is not in this suite —
-      // so nothing else here exercises what it does with a candidate. It sizes
-      // one, screens it for Arcane, reads its dependency edges and filters on its
-      // placement, so assert the object can answer all of that. The double this
-      // replaced answered none of it, and the suite was green regardless.
-      assertAnswers(result[0].instantiated, ['resourceTotals', 'requiresArcane', 'linkedAppNames', 'serialize']);
-      expect(result[0].instantiated.spec.placement, 'the spawner filters candidates on it').to.exist;
-      expect(result[0].instantiated.hash, 'and caches its spawn attempts by it').to.equal('h1');
-    });
-
-    it('counts no replica running a spec of an earlier app of the name', async () => {
-      dbHelperStub.aggregateInDatabase.resolves([await legacyDoc(await v8Spec({ name: 'testApp', instances: 3 }))]);
+  describe('countRunningByApp', () => {
+    it('counts the running instances of each app by lower-cased name, leaving out those running an earlier app of the name', async () => {
+      runningCounts = [{ _id: 'TestApp', count: 2 }];
       decisionStoreStub.earlierAppsHashes.resolves(['earlierhash']);
 
-      await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000);
+      const counts = await appsRepository.countRunningByApp();
 
+      expect([...counts]).to.deep.equal([['testapp', 2]]);
       const countPipeline = eventCollection.aggregate.getCalls()
         .map((call) => call.args[0])
         .find((pipeline) => pipeline.some((stage) => stage.$group && stage.$group._id === '$_v2Filtered.apps.name'));
       expect(countPipeline.some((stage) => stage.$match?.['_v2Filtered.apps.hash']?.$nin?.includes('earlierhash'))).to.equal(true);
     });
+  });
 
-    it('leaves an app alone once it is at target', async () => {
-      dbHelperStub.aggregateInDatabase.resolves([await legacyDoc(await v8Spec({ name: 'testApp', instances: 3 }))]);
-      runningCounts = [{ _id: 'testApp', count: 3 }];
+  describe('listLiveV7Secrets', () => {
+    it('reads the v7 apps among those the registry says are pinned, and their component secrets', async () => {
+      const v7 = {
+        name: 'SevenApp', owner: 'owner7', version: 7, spec: { getComponentSecrets: () => [{ componentName: 'web', secrets: 'pgp-blob' }] },
+      };
+      const v8 = {
+        name: 'EightApp', owner: 'owner8', version: 8, spec: { getComponentSecrets: () => { throw new Error('never read'); } },
+      };
+      registryStub.pinned.resolves([v8, v7]);
 
-      expect(await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000)).to.deep.equal([]);
-    });
-
-    // The count is keyed off the announced name; app names are matched
-    // case-insensitively everywhere else, and a miss here reads as zero instances
-    // and spawns a replica that is already running.
-    it('matches the running count to the spec name case-insensitively', async () => {
-      dbHelperStub.aggregateInDatabase.resolves([await legacyDoc(await v8Spec({ name: 'TestApp', instances: 3 }))]);
-      runningCounts = [{ _id: 'testapp', count: 3 }];
-
-      expect(await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000)).to.deep.equal([]);
-    });
-
-    it('treats an app with no running replicas as fully under-provisioned', async () => {
-      dbHelperStub.aggregateInDatabase.resolves([await legacyDoc(await v8Spec({ name: 'ghost', instances: 2 }))]);
-      runningCounts = [];
-
-      const result = await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000);
-      expect(result).to.have.lengthOf(1);
-      expect(result[0].actual).to.equal(0);
-      expect(result[0].required).to.equal(2);
-    });
-
-    it('defaults the target to 3 when the spec does not say', async () => {
-      // A real v1 row, the only stored form with no `instances` at all — the
-      // reason the default exists. Every later version states one, and the real
-      // library refuses a v2+ row that omits it.
-      const doc = await legacyDoc(await v1Spec({ name: 'noinstances' }));
-      expect(doc, 'a v1 row carries no instances').to.not.have.property('instances');
-      dbHelperStub.aggregateInDatabase.resolves([doc]);
-      runningCounts = [{ _id: 'noinstances', count: 2 }];
-
-      const result = await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000);
-      expect(result).to.have.lengthOf(1);
-      expect(result[0].required).to.equal(3);
-    });
-
-    it('skips docs that fail hydration', async () => {
-      const good = await legacyDoc(await v8Spec({ name: 'goodApp', instances: 3 }), { hash: 'h1', height: 100 });
-      const bad = { version: 99, name: 'badApp', owner: 'o2', hash: 'h2', height: 100, instances: 3 };
-      dbHelperStub.aggregateInDatabase.resolves([good, bad]);
-      runningCounts = [];
-
-      const result = await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000);
-      expect(result).to.have.lengthOf(1);
-      expect(result[0].instantiated.name).to.equal('goodApp');
-    });
-
-    // Encrypted specs bind their cleartext metadata into the AAD, so a doc decorated
-    // with anything the query added fails to decrypt. Counting outside the pipeline
-    // means the doc reaches hydrate exactly as stored.
-    it('hands hydrate the stored doc, undecorated', async () => {
-      const doc = await modernDoc(await sealedV9Spec({ name: 'testapp' }), { hash: 'h1', height: 2_550_000 });
-      const storedKeys = Object.keys(doc).sort();
-      expect(
-        () => flux.InstantiatedSpec.deserialize({ ...doc, _isAlive: true }),
-        'a decorated sealed doc must be refused, or this test proves nothing',
-      ).to.throw(/unexpected fields/);
-      dbHelperStub.aggregateInDatabase.resolves([doc]);
-      runningCounts = [];
-
-      const result = await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000);
-
-      const pipeline = dbHelperStub.aggregateInDatabase.firstCall.args[2];
-      // no join, and nothing left of the aliveness check
-      expect(pipeline.some((stage) => stage.$lookup)).to.be.false;
-      expect(pipeline.filter((stage) => stage.$unset).map((stage) => stage.$unset)).to.deep.include('_isAlive');
-      expect(Object.keys(doc).sort(), 'nothing above hydrate may decorate the stored doc').to.deep.equal(storedKeys);
-      // and the proof that matters: the real deserializer accepted it. A decorated
-      // doc would have been refused and the app would simply have vanished here.
-      expect(result).to.have.lengthOf(1);
-      expect(result[0].instantiated.isEncrypted).to.be.true;
-    });
-
-    it('does not count instances inside the spec query', async () => {
-      dbHelperStub.aggregateInDatabase.resolves([]);
-      await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000);
-      const pipeline = dbHelperStub.aggregateInDatabase.firstCall.args[2];
-      expect(pipeline.some((stage) => stage.$lookup)).to.be.false;
-      expect(JSON.stringify(pipeline)).to.not.include('zelappslocation');
-    });
-
-    it('should pass currentHeight and nowSeconds into the pipeline', async () => {
-      dbHelperStub.aggregateInDatabase.resolves([]);
-      await appsRepository.findUnderProvisionedApps(2_555_000, 1_716_000_000);
-      expect(dbHelperStub.aggregateInDatabase.calledOnce).to.be.true;
-      const pipeline = dbHelperStub.aggregateInDatabase.firstCall.args[2];
-      expect(pipeline).to.be.an('array');
-      expect(pipeline.length).to.be.gte(3);
+      expect(await appsRepository.listLiveV7Secrets()).to.deep.equal([{
+        appName: 'SevenApp', owner: 'owner7', componentName: 'web', secrets: 'pgp-blob',
+      }]);
     });
   });
 

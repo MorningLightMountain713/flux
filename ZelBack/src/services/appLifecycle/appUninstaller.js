@@ -18,6 +18,7 @@ const upnpService = require('../upnpService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const appHistory = require('../appDecisions/appHistory');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const generalService = require('../generalService');
@@ -582,7 +583,7 @@ async function uninstallComponent(component, options = {}) {
  */
 async function clearSpawnThrottleForPinnedReinstall(appName, { forceKill, background }) {
   if (forceKill || background) return;
-  const globalSpec = await appsRepository.getGlobalAppInfo(appName);
+  const globalSpec = await appRecords.registry().byName(appName);
   const placement = globalSpec && globalSpec.placement;
   if (!placement || !placement.hasTargets()) return;
   const localSocketAddress = await fluxNetworkHelper.getLocalSocketAddress();
@@ -872,11 +873,10 @@ async function uninstallApplication(appName, options = {}) {
         status('Flux App not found');
         return { status: UninstallStatus.SKIPPED, reason: 'Flux App not found' };
       }
-      spec = await appsRepository.getGlobalAppInfo(appName);
+      spec = await appRecords.registry().byName(appName);
       if (!spec) {
-        const globalApps = await appsRepository.listGlobalAppInfo();
         const localApps = await appsRepository.listInstalledApps();
-        spec = [...globalApps, ...localApps].find((a) => a.name === appName) || null;
+        spec = localApps.find((a) => a.name === appName) || null;
         if (!spec) {
           const latest = await appHistory.latestApplied(appName);
           if (latest) {

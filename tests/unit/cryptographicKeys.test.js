@@ -14,10 +14,10 @@ const globalState = require('../../ZelBack/src/services/utils/globalState');
 const transportHelper = require('../../ZelBack/src/services/utils/transportHelper');
 const contentBlobService = require('../../ZelBack/src/services/appLifecycle/contentBlobService');
 const specLibs = require('../../ZelBack/src/services/utils/specLibs');
-const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const signatureVerifier = require('../../ZelBack/src/services/signatureVerifier');
 const appEventVerifier = require('../../ZelBack/src/services/appMessaging/appEventVerifier');
 const { loadSpecLibrary } = require('./fixtures/fluxSpec');
+const { stubRegistry } = require('./fixtures/appRecords');
 
 describe('cryptographicKeys tests', () => {
   let req;
@@ -478,7 +478,7 @@ describe('cryptographicKeys tests', () => {
     // so the signature payload and the identity are the ones every node builds.
     const stubRoute = ({ listed = null } = {}) => {
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-      sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(listed);
+      stubRegistry().byName.resolves(listed);
       sinon.stub(specLibs, 'getSpec').resolves(flux);
       sinon.stub(transportHelper, 'openContentEnvelope').resolves(Buffer.from(JSON.stringify({ contentHash: HASH })));
       sinon.stub(contentBlobService, 'deriveLocator').resolves('derived-locator');
@@ -639,7 +639,7 @@ describe('cryptographicKeys tests', () => {
       await cryptographicKeys.getBlobLocator(req, res);
 
       expect(answer().status).to.equal('error');
-      sinon.assert.notCalled(appsRepository.getGlobalAppInfo);
+      sinon.assert.notCalled(stubRegistry().byName);
     });
   });
 });

@@ -12,6 +12,7 @@ const { expect } = chai;
 describe('relationshipResolver tests', () => {
   let relationshipResolver;
   let appsRepositoryStub;
+  let registryStub;
   let specCutoverStub;
   let dockerServiceStub;
   let logStub;
@@ -78,6 +79,7 @@ describe('relationshipResolver tests', () => {
   function loadResolver(fluxappsOverrides) {
     const stubs = {
       '../appDatabase/appsRepository': appsRepositoryStub,
+      '../appDatabase/appRecords': { registry: () => registryStub },
       '../utils/specCutover': specCutoverStub,
       '../dockerService': dockerServiceStub,
       '../../lib/log': logStub,
@@ -89,10 +91,10 @@ describe('relationshipResolver tests', () => {
   }
 
   beforeEach(() => {
+    registryStub = { pinnedTo: sinon.stub().resolves([]) };
     appsRepositoryStub = {
       getInstalledApp: sinon.stub(),
       listInstalledApps: sinon.stub(),
-      listGlobalAppInfo: sinon.stub(),
     };
     specCutoverStub = {
       // Resolves an app to its readable view: a cleartext app is readable as
@@ -421,14 +423,13 @@ describe('relationshipResolver tests', () => {
       };
     }
 
-    it('computes the closure over global apps whose placement targets this node', async () => {
-      appsRepositoryStub.listGlobalAppInfo.resolves([
+    it('computes the closure over the global apps the registry says are pinned to this node', async () => {
+      registryStub.pinnedTo.resolves([
         instSpec({ name: 'game', dependencies: linkedTo('collector'), placement: placementStub(true) }),
         follower({ name: 'collector', placement: placementStub(true) }),
-        instSpec({ name: 'elsewhere', dependencies: linkedTo('othercol'), placement: placementStub(false) }),
-        follower({ name: 'othercol', placement: placementStub(false) }),
       ]);
       const required = await relationshipResolver.getRequiredDependencyNamesForNode({ ip: '7.7.7.7:16127' });
+      sinon.assert.calledOnceWithExactly(registryStub.pinnedTo, { ip: '7.7.7.7:16127', outpoint: undefined, operator: undefined });
       expect(required.has('collector')).to.equal(true);
       expect(required.has('othercol')).to.equal(false);
     });
@@ -436,7 +437,7 @@ describe('relationshipResolver tests', () => {
     it('returns an empty set when no node identity is known', async () => {
       const required = await relationshipResolver.getRequiredDependencyNamesForNode({});
       expect(required.size).to.equal(0);
-      sinon.assert.notCalled(appsRepositoryStub.listGlobalAppInfo);
+      sinon.assert.notCalled(registryStub.pinnedTo);
     });
   });
 
@@ -581,7 +582,7 @@ describe('relationshipResolver tests', () => {
 
     it('refuses the required-set (falls back to not suppressing) when an assigned app is undecryptable', async () => {
       const enc = instSpec({ name: 'game', encrypted: true, placement: { hasTargets: () => true, matchesTarget: () => true, isPinnedTo: () => true } });
-      appsRepositoryStub.listGlobalAppInfo.resolves([enc]);
+      registryStub.pinnedTo.resolves([enc]);
       specCutoverStub.resolveInstantiatedSpec.withArgs(enc).resolves(null);
       await expect(relationshipResolver.getRequiredDependencyNamesForNode({ ip: '7.7.7.7:16127' })).to.be.rejected;
     });

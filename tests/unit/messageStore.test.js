@@ -22,12 +22,13 @@ describe('messageStore tests', () => {
   let messageStore;
   let dbHelperStub;
   let appsRepositoryStub;
+  let registryStub;
   let appEventVerifierStub;
   let logStub;
   let configStub;
   let registryManagerStub;
   let assertVersionActivatedStub;
-  // What getGlobalAppInfo / getStateBeforeHeight really return: an InstantiatedSpec,
+  // What the registry's byName / getStateBeforeHeight really return: an InstantiatedSpec,
   // a stored spec plus its chain state. messageStore reads .owner and .spec off it.
   let priorState;
 
@@ -101,6 +102,7 @@ describe('messageStore tests', () => {
       config: asConfig(configStub),
       '../dbHelper': dbHelperStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
+      '../appDatabase/appRecords': { registry: () => registryStub },
       './appEventVerifier': appEventVerifierStub,
       './messageVerifier': { checkAndRequestApp: sinon.stub().resolves() },
       '../utils/specCutover': { ensureProvidersRegistered: sinon.stub().resolves() },
@@ -164,10 +166,10 @@ describe('messageStore tests', () => {
       countInDatabase: sinon.stub(),
     };
 
+    registryStub = { byName: sinon.stub().resolves(priorState), byIdentity: sinon.stub().resolves(null) };
     appsRepositoryStub = {
       getPermanentMessage: sinon.stub(),
       getTempMessage: sinon.stub(),
-      getGlobalAppInfo: sinon.stub().resolves(priorState),
     };
 
     appEventVerifierStub = {
@@ -427,7 +429,7 @@ describe('messageStore tests', () => {
 
         await messageStore.storeAppTemporaryMessage(updateMessage());
 
-        sinon.assert.calledOnceWithExactly(appsRepositoryStub.getGlobalAppInfo, 'test');
+        sinon.assert.calledOnceWithExactly(registryStub.byName, 'test');
         sinon.assert.notCalled(stubs['../appDatabase/appSpecHistory'].getStateBeforeHeight);
 
         // The authorization gate stays stubbed, so nothing here exercises what it
@@ -455,7 +457,7 @@ describe('messageStore tests', () => {
         sinon.assert.calledOnceWithExactly(
           stubs['../appDatabase/appSpecHistory'].getStateBeforeHeight, 'test', 500,
         );
-        sinon.assert.notCalled(appsRepositoryStub.getGlobalAppInfo);
+        sinon.assert.notCalled(registryStub.byName);
       });
 
       // A name the list no longer carries is judged against the app that last
@@ -464,7 +466,7 @@ describe('messageStore tests', () => {
       it('reads the app that last held the name when the list carries none, and takes the renewal', async () => {
         const stubs = buildProxyquireStubs();
         dbHelperStub.findOneInDatabase.resolves(null);
-        appsRepositoryStub.getGlobalAppInfo.resolves(null);
+        registryStub.byName.resolves(null);
         stubs['../appDatabase/appSpecHistory'].latestAppliedState.resolves(priorState);
         messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', stubs);
 
@@ -480,7 +482,7 @@ describe('messageStore tests', () => {
       it('queues the update when no app of that name is listed or was ever applied', async () => {
         const stubs = buildProxyquireStubs();
         dbHelperStub.findOneInDatabase.resolves(null);
-        appsRepositoryStub.getGlobalAppInfo.resolves(null);
+        registryStub.byName.resolves(null);
         messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', stubs);
 
         const result = await messageStore.storeAppTemporaryMessage(updateMessage());

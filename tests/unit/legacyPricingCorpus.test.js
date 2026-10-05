@@ -175,9 +175,7 @@ describe('the early-update credit, over every update on chain', function corpus(
       '../daemonService/daemonStatus': {
         isDaemonSynced: () => ({ data: { synced: true, height: UPDATE_HEIGHT } }),
       },
-      '../appDatabase/appsRepository': {
-        getGlobalAppInfo: async () => ({ height: PREV_HEIGHT, name: 'app' }),
-      },
+      '../appDatabase/appRecords': { registry: () => ({ byName: async () => ({ height: PREV_HEIGHT, name: 'app' }) }) },
     });
 
     it('the charged fee and the displayed price credit the same fraction', async () => {
@@ -199,7 +197,7 @@ describe('the early-update credit, over every update on chain', function corpus(
         '../daemonService/daemonStatus': {
           isDaemonSynced: () => ({ data: { synced: true, height: UPDATE_HEIGHT } }),
         },
-        '../appDatabase/appsRepository': { getGlobalAppInfo: async () => null },
+        '../appDatabase/appRecords': { registry: () => ({ byName: async () => null }) },
       });
       const displayGross = Number(await noPrevious.onChainDisplayPrice(APP));
       const feeGross = Number(await noPrevious.registrationFee(APP, UPDATE_HEIGHT));

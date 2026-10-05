@@ -37,8 +37,8 @@ function mockDeployment(spec) {
 }
 
 function makeStubs() {
-  const appsRepositoryStub = {
-    listGlobalAppInfo: sinon.stub().resolves([]),
+  const registryStub = {
+    byNames: sinon.stub().resolves([]),
   };
 
   const deploymentProviderStub = {
@@ -59,7 +59,7 @@ function makeStubs() {
     signMessage: sinon.stub().resolves('test-signature'),
   };
 
-  return { appsRepositoryStub, deploymentProviderStub, verificationHelperStub };
+  return { registryStub, deploymentProviderStub, verificationHelperStub };
 }
 
 function buildProxyquireMap(stubs, overrides = {}) {
@@ -83,7 +83,7 @@ function buildProxyquireMap(stubs, overrides = {}) {
     }),
     axios: overrides.axios || { post: sinon.stub().resolves({ data: { status: 'success' } }) },
     '../dbHelper': {},
-    '../appDatabase/appsRepository': stubs.appsRepositoryStub,
+    '../appDatabase/appRecords': { registry: () => stubs.registryStub },
     '../appRuntime/deploymentProvider': stubs.deploymentProviderStub,
     '../utils/appConstants': {
       localAppsInformation: 'zelappsinformation',
@@ -216,7 +216,7 @@ describe('portManager tests', () => {
       stubs.deploymentProviderStub.listInstalledDeployments.resolves([
         { name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [36_020] },
       ].map(mockDeployment));
-      stubs.appsRepositoryStub.listGlobalAppInfo.resolves([
+      stubs.registryStub.byNames.resolves([
         { name: 'myapp', identity: 'a1b2c3d4e5f6', version: 3, ports: [36_020, 36_021] },
       ]);
 

@@ -6,6 +6,7 @@ const log = require('../../lib/log');
 const daemonStatus = require('../daemonService/daemonStatus');
 const benchmarkService = require('../benchmarkService');
 const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const appEventVerifier = require('./appEventVerifier');
 const registryManager = require('../appDatabase/registryManager');
 const foundingCommittee = require('../appMesh/foundingCommittee');
@@ -228,7 +229,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
       // height rather than the tip).
       previousState = isAppRequested
         ? await getStateBeforeHeight(appEvent.spec.name, block)
-        : (await appsRepository.getGlobalAppInfo(appEvent.spec.name)) ?? (await latestAppliedState(appEvent.spec.name));
+        : (await appRecords.registry().byName(appEvent.spec.name)) ?? (await latestAppliedState(appEvent.spec.name));
       if (!previousState) {
         log.info(`Queueing update for ${appEvent.spec.name} - no app of that name is listed or was applied`);
         globalState.queuePendingUpdate(appEvent.spec.name, message, block);
@@ -1023,7 +1024,7 @@ async function handleGrantGenerationEvent({ message, envelope }) {
     // this was — a record that never arrived and one dropped for a missing
     // spec are indistinguishable from outside, and the ambiguity cost two
     // fleet runs. publish() is a no-op outside the harness.
-    const app = await appsRepository.getGlobalAppInfoByIdentity(message.identity);
+    const app = await appRecords.registry().byIdentity(message.identity);
     const owners = app ? await appHistory.ownerships(app.name) : [];
     const dropped = (reason) => fluxEventBus.publish('quorumGrant:generationRecordDropped', {
       identity: message.identity, role: message.role, generation: message.generation, reason,
@@ -1110,7 +1111,7 @@ async function handleGrantGenerationEvent({ message, envelope }) {
  * @returns {Promise<{record: ?object, aside: boolean, ownership: ?{owner: string, from: number, transferred: boolean}}>}
  */
 async function standingGeneration(identity, role) {
-  const app = await appsRepository.getGlobalAppInfoByIdentity(identity);
+  const app = await appRecords.registry().byIdentity(identity);
   if (!app) return { record: null, aside: false, ownership: null };
   const owners = await appHistory.ownerships(app.name);
   const listed = owners.length ? owners[owners.length - 1] : null;

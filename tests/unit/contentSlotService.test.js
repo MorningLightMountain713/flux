@@ -84,7 +84,7 @@ function cleartextSpec(components) {
 }
 
 /**
- * The sealed EncryptedSpecV9 the REGISTRY hands back — `getGlobalAppInfo().spec`
+ * The sealed EncryptedSpecV9 the REGISTRY hands back — `byName().spec`
  * for an encrypted app, which every content-slot app is. Only its public metadata
  * (name/owner/instances/version) is readable; verifyManifest has to decrypt it
  * itself before it can see a single declared slot.
@@ -113,8 +113,6 @@ const identifierOf = (dep, name = 'web') => dep.componentEntries()
 // suite, not here.
 function fakeRepo(overrides = {}) {
   return {
-    getGlobalAppInfo: sinon.stub().resolves(null),
-    getGlobalAppInfoByIdentity: sinon.stub().resolves(null),
     getInstalledApp: sinon.stub().resolves(null),
     getContentManifests: sinon.stub().resolves([]),
     getContentManifest: sinon.stub().resolves(null),
@@ -140,7 +138,18 @@ function specLibNamespace() {
   return { ...flux, assertValidContentManifest: sinon.spy(flux.assertValidContentManifest) };
 }
 
+// The app registry the service reads apps from: nothing is listed unless a
+// test says so.
+function fakeRegistry(overrides = {}) {
+  return {
+    byName: sinon.stub().resolves(null),
+    byIdentity: sinon.stub().resolves(null),
+    ...overrides,
+  };
+}
+
 function load(repo = fakeRepo(), {
+  registry = fakeRegistry(),
   standing = async () => ({ app: null, row: null, aside: false, rows: [] }),
   ownerships = async () => [],
   latestAppliedState = async () => null,
@@ -150,6 +159,7 @@ function load(repo = fakeRepo(), {
   const service = proxyquire('../../ZelBack/src/services/appLifecycle/contentSlotService', {
     '../utils/specLibs': { getSpec: sinon.stub().resolves(specLib) },
     '../appDatabase/appsRepository': repo,
+    '../appDatabase/appRecords': { registry: () => registry },
     '../appDecisions/appHistory': { ownerships },
     '../appDatabase/appSpecHistory': { latestAppliedState },
     '../chainState': { getScannedHeight: async () => 0 },
@@ -2186,7 +2196,7 @@ describe('contentSlotService', () => {
 
     it('serves the manifest the app the registry lists under the name stands on, read by its identity', async () => {
       const standing = sinon.stub().resolves({ row: storedRow(2, {}) });
-      const { service } = load(fakeRepo({ getGlobalAppInfo: sinon.stub().resolves({ name: APP, identity: IDENTITY }) }), { standing });
+      const { service } = load(fakeRepo(), { registry: fakeRegistry({ byName: sinon.stub().resolves({ name: APP, identity: IDENTITY }) }), standing });
       const r = res();
       await service.getContentManifestApi({ params: { appname: APP } }, r);
       sinon.assert.calledOnceWithExactly(standing, IDENTITY);
@@ -2194,7 +2204,7 @@ describe('contentSlotService', () => {
     });
 
     it('answers 404 when nothing stands', async () => {
-      const { service } = load(fakeRepo({ getGlobalAppInfo: sinon.stub().resolves({ name: APP, identity: IDENTITY }) }), { standing: async () => ({ row: null }) });
+      const { service } = load(fakeRepo(), { registry: fakeRegistry({ byName: sinon.stub().resolves({ name: APP, identity: IDENTITY }) }), standing: async () => ({ row: null }) });
       const r = res();
       await service.getContentManifestApi({ params: { appname: APP } }, r);
       sinon.assert.calledWith(r.status, 404);
@@ -2204,11 +2214,11 @@ describe('contentSlotService', () => {
       const rows = [storedRow(1, {}), storedRow(2, {}), { ...storedRow(3, {}), signer: null }];
       const standing = sinon.stub().resolves({ row: rows[1], rows });
       const repo = fakeRepo({
-        getGlobalAppInfo: sinon.stub().resolves({ name: APP, identity: IDENTITY }),
         getContentManifests: sinon.stub().resolves(rows),
         carriedManifestRanks: sinon.stub().resolves([{ version: 3, ownedFrom: 2_400_000 }]),
       });
-      const { service } = load(repo, { standing, ownerships: async () => [{ owner: OWNER, from: 2_400_000 }] });
+      const registry = fakeRegistry({ byName: sinon.stub().resolves({ name: APP, identity: IDENTITY }) });
+      const { service } = load(repo, { registry, standing, ownerships: async () => [{ owner: OWNER, from: 2_400_000 }] });
       const r = res();
       await service.getContentManifestsApi({ params: { appname: APP } }, r);
       const { data } = r.json.firstCall.args[0];
@@ -2224,7 +2234,6 @@ describe('contentSlotService', () => {
       const standing = sinon.stub().resolves({ app: null, row: null, aside: false, rows });
       const latestAppliedState = sinon.stub().resolves({ name: APP, identity: IDENTITY, owner: OWNER });
       const repo = fakeRepo({
-        getGlobalAppInfo: sinon.stub().resolves(null),
         getContentManifests: sinon.stub().resolves(rows),
       });
       const { service } = load(repo, { standing, ownerships: async () => [{ owner: OWNER, from: 2_400_000 }], latestAppliedState });
@@ -2241,7 +2250,7 @@ describe('contentSlotService', () => {
 
     it('answers 404 for a name no app is listed under or ever held', async () => {
       const latestAppliedState = sinon.stub().resolves(null);
-      const { service } = load(fakeRepo({ getGlobalAppInfo: sinon.stub().resolves(null) }), { latestAppliedState });
+      const { service } = load(fakeRepo(), { latestAppliedState });
       const r = res();
       await service.getContentManifestsApi({ params: { appname: APP } }, r);
       sinon.assert.calledOnceWithExactly(latestAppliedState, APP);

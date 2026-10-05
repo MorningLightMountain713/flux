@@ -90,6 +90,7 @@ const appTamperingDetectionService = require('./appTamperingDetectionService');
 const appsRuntimeState = require('./appManagement/appsRuntimeState');
 const imageCacheStore = require('./appLifecycle/imageCacheStore');
 const appsRepository = require('./appDatabase/appsRepository');
+const appRecords = require('./appDatabase/appRecords');
 const imageManager = require('./appSecurity/imageManager');
 const playgroundAudit = require('./appPlayground/playgroundAudit');
 const playgroundService = require('./appPlayground/playgroundService');
@@ -392,6 +393,11 @@ async function startFluxFunctions() {
           { key: { 'appSpecifications.nodes': 1 }, name: 'query for getting app message based on nodes' },
         ]);
         await decisionStore.prepareCollection();
+        // The app registry: the indexes its queries are answered by, and the
+        // derived fields of any record stored without them.
+        await appRecords.registry().ensureIndexes();
+        const completed = await appRecords.registry().completeDerivedFields();
+        log.info(`App registry prepared${completed ? `, ${completed} record(s) completed` : ''}`);
         await ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appStateEvents')), [
           { key: { expireAt: 1 }, expireAfterSeconds: 0 },
           { key: { ip: 1, type: 1, dedupKey: 1 }, unique: true, recover: dedupeByKey },

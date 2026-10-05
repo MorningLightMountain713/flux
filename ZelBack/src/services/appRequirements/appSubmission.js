@@ -21,6 +21,7 @@ const {
 const { ensureProvidersRegistered, resolveInstantiatedSpec } = require('../utils/specCutover');
 const transportHelper = require('../utils/transportHelper');
 const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const appHistory = require('../appDecisions/appHistory');
 const appSpecHistory = require('../appDatabase/appSpecHistory');
 const entitlementsState = require('../entitlementsState');
@@ -416,7 +417,7 @@ async function validateAppUpdate(appSpecification, meta = {}) {
   // held the name, so an expired app is renewed on what it held. An enterprise
   // app's stored spec is sealed and the invariants compare cleartext, so
   // resolve it first.
-  const appInfo = (await appsRepository.getGlobalAppInfo(spec.name)) ?? (await appSpecHistory.latestAppliedState(spec.name));
+  const appInfo = (await appRecords.registry().byName(spec.name)) ?? (await appSpecHistory.latestAppliedState(spec.name));
   if (!appInfo) {
     throw new Error(`Flux App ${spec.name} does not exist and cannot be updated`);
   }

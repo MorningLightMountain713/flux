@@ -3,6 +3,7 @@
 const config = require('config');
 const dbHelper = require('../dbHelper');
 const appsRepository = require('./appsRepository');
+const appRecords = require('./appRecords');
 const decisionStore = require('../appDecisions/decisionStore');
 const foundingCommittee = require('../appMesh/foundingCommittee');
 const log = require('../../lib/log');
@@ -35,41 +36,41 @@ let onSpecStored = null;
 /**
  * Register the spec-stored control hook. Single-slot (last wins), matching the
  * setOn* idiom used by appInstaller/appReconciler/appUninstaller.
- * @param {(specDoc: object) => void} callback
+ * @param {(record: object) => void} callback - handed the InstantiatedSpec stored
  */
 function setOnSpecStored(callback) {
   onSpecStored = callback;
 }
 
 /**
- * Fire the spec-stored hook with the committed spec doc. Best-effort: a throwing
+ * Fire the spec-stored hook with the record stored. Best-effort: a throwing
  * hook is logged and swallowed so it can never break the spec-store path.
- * @param {object} specDoc - the spec doc just written to globalAppsInformation
+ * @param {object} record - the InstantiatedSpec just stored
  */
-function emitSpecStored(specDoc) {
+function emitSpecStored(record) {
   if (!onSpecStored) return;
   try {
-    onSpecStored(specDoc);
+    onSpecStored(record);
   } catch (error) {
     log.error(`emitSpecStored callback error: ${error.message}`);
   }
 }
 
 /**
- * Writes a registry row whose spec changed, then runs the effects every such
+ * Writes a registry record whose spec changed, then runs the effects every such
  * write carries: the founding anchor and component view, and the spawner wake.
  * Called by the registry owner (appRegistry) alone.
- * @param {object} specDoc - the serialized row
+ * @param {object} record - the InstantiatedSpec
  * @returns {Promise<void>}
  */
-async function storeGlobalSpec(specDoc) {
-  await appsRepository.replaceGlobalAppRow(specDoc);
+async function storeGlobalSpec(record) {
+  await appRecords.registry().put(record);
   // Referee-side founding state derives from public metadata alone (name,
   // height, version), so every node records the anchor, encrypted specs
   // included; the component mapping is host-side and follows below.
-  await foundingCommittee.recordAnchor(specDoc);
-  await materializeFoundingView(specDoc);
-  emitSpecStored(specDoc);
+  await foundingCommittee.recordAnchor(record.serialize());
+  await materializeFoundingView(record);
+  emitSpecStored(record);
 }
 
 /**
@@ -80,20 +81,18 @@ async function storeGlobalSpec(specDoc) {
  * design and not a gap: only hosts answer founder asks, and only hosts
  * can. No-throw — a failed resolution never fails a spec store.
  */
-async function materializeFoundingView(specDoc) {
+async function materializeFoundingView(record) {
   try {
-    const instantiated = await appsRepository.getGlobalAppInfo(specDoc.name);
-    if (!instantiated) return;
-    const view = await specCutover.resolveInstantiatedSpec(instantiated);
+    const view = await specCutover.resolveInstantiatedSpec(record);
     if (!view) return;
     await foundingCommittee.applyComponentView({
-      identity: specDoc.identity,
-      height: specDoc.height,
+      identity: record.identity,
+      height: record.height,
       network: view.network,
       components: view.components,
     });
   } catch (error) {
-    log.warn(`materializeFoundingView - ${specDoc?.name}: ${error.message}`);
+    log.warn(`materializeFoundingView - ${record?.name}: ${error.message}`);
   }
 }
 
@@ -577,7 +576,7 @@ async function getAppInstallingLocation(req, res) {
 async function getApplicationSpecification(appname, opts = {}) {
   const { recipientPubkeyBase64, enterpriseKey } = opts;
 
-  const instantiated = await appsRepository.getGlobalAppInfo(appname);
+  const instantiated = await appRecords.registry().byName(appname);
   if (!instantiated) {
     throw new Error(`Application: ${appname} not found`);
   }
@@ -726,7 +725,7 @@ function regionUnresolvedMessage(u) {
 async function convertApplicationSpecification(appname, opts = {}) {
   const { recipientPubkeyBase64 } = opts;
 
-  const instantiated = await appsRepository.getGlobalAppInfo(appname);
+  const instantiated = await appRecords.registry().byName(appname);
   if (!instantiated) {
     throw new Error(`Application: ${appname} not found`);
   }
@@ -911,7 +910,7 @@ async function getApplicationComponentNamesAPI(req, res) {
       return res.json(messageHelper.errUnauthorizedMessage());
     }
 
-    const instantiated = await appsRepository.getGlobalAppInfo(mainAppName);
+    const instantiated = await appRecords.registry().byName(mainAppName);
     if (!instantiated) {
       throw new Error(`Application: ${mainAppName} not found`);
     }
@@ -986,23 +985,10 @@ async function getApplicationOwnerAPI(req, res) {
  */
 async function getGlobalAppsSpecifications(req, res) {
   try {
-    const filter = {};
-    let { hash } = req.params;
-    hash = hash || req.query.hash;
-    let { owner } = req.params;
-    owner = owner || req.query.owner;
-    let { appname } = req.params;
-    appname = appname || req.query.appname;
-    if (hash) {
-      filter.hash = hash;
-    }
-    if (owner) {
-      filter.owner = owner;
-    }
-    if (appname) {
-      filter.name = appname;
-    }
-    const apps = await appsRepository.listGlobalAppInfo({ filter });
+    const hash = req.params.hash || req.query.hash || undefined;
+    const owner = req.params.owner || req.query.owner || undefined;
+    const name = req.params.appname || req.query.appname || undefined;
+    const apps = await appRecords.registry().find({ hash, owner, name });
     const results = apps.map((app) => app.serialize());
     const resultsResponse = messageHelper.createDataMessage(results);
     res.json(resultsResponse);
@@ -1024,7 +1010,7 @@ async function getGlobalAppsSpecifications(req, res) {
  */
 async function availableApps(_req, res) {
   try {
-    const globalApps = await appsRepository.listGlobalAppInfo();
+    const globalApps = await appRecords.registry().all();
     const localApps = await appsRepository.listInstalledApps();
     const allApps = [...globalApps, ...localApps].map((app) => app.serialize());
 
@@ -1052,7 +1038,7 @@ async function availableApps(_req, res) {
  */
 async function checkApplicationRegistrationNameConflicts(appSpecFormatted, hash) {
   const dbopen = dbHelper.databaseConnection();
-  const existingApp = await appsRepository.getGlobalAppInfo(appSpecFormatted.name);
+  const existingApp = await appRecords.registry().byName(appSpecFormatted.name);
 
   if (existingApp) {
     if (hash) {

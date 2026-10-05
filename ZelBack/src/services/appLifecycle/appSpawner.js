@@ -59,6 +59,7 @@ const resourceQueryService = require('../appQuery/resourceQueryService');
 const messageStore = require('../appMessaging/messageStore');
 const registryManager = require('../appDatabase/registryManager');
 const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const nodeDownStore = require('../appMessaging/nodeDownStore');
 const imageManager = require('../appSecurity/imageManager');
 const hwRequirements = require('../appRequirements/hwRequirements');
@@ -284,6 +285,30 @@ async function broadcastInstallingCleared(name, ip, replica = null) {
   await fluxCommunicationMessagesSender.broadcastMessageToAll(message);
 }
 
+
+/**
+ * The listed apps running fewer instances than they ask for, with the counts:
+ * every app whose term runs past the spawn allowance beyond the given chain
+ * position, less those at or above target. Running counts come from the event
+ * log, by name in any letter case.
+ * @param {number} currentHeight
+ * @param {number} nowSeconds
+ * @returns {Promise<Array<{instantiated: object, actual: number, required: number}>>}
+ */
+async function underProvisionedApps(currentHeight, nowSeconds) {
+  const marginBlocks = config.get('fluxapps.newMinBlocksAllowance');
+  const [alive, runningByApp] = await Promise.all([
+    appRecords.registry().alive({
+      height: currentHeight, time: nowSeconds, marginBlocks, marginSeconds: marginBlocks * 30,
+    }),
+    appsRepository.countRunningByApp(),
+  ]);
+  return alive.flatMap((instantiated) => {
+    const actual = runningByApp.get(instantiated.name.toLowerCase()) || 0;
+    const required = instantiated.spec.instances;
+    return actual >= required ? [] : [{ instantiated, actual, required }];
+  });
+}
 /**
  * Try spawning a global application that needs more instances
  * This is the main function that continuously checks for applications that need more instances
@@ -412,7 +437,7 @@ async function trySpawningGlobalApplication() {
     const nowSeconds = Math.floor(Date.now() / 1000);
 
     log.info('trySpawningGlobalApplication - Checking for apps that are missing instances on the network.');
-    let globalAppNamesLocation = await appsRepository.findUnderProvisionedApps(currentHeight, nowSeconds);
+    let globalAppNamesLocation = await underProvisionedApps(currentHeight, nowSeconds);
     const numberOfGlobalApps = globalAppNamesLocation.length;
     // A due deferred entry must be processed even when nothing is missing instances:
     // a parked contender's app can reach target while it waits, and only its second
@@ -803,7 +828,7 @@ async function trySpawningGlobalApplication() {
 
     const instantiated = selectedCandidate
       ? selectedCandidate.instantiated
-      : await appsRepository.getGlobalAppInfo(appToRun);
+      : await appRecords.registry().byName(appToRun);
     if (!instantiated) {
       throw new Error(`trySpawningGlobalApplication - Specifications for application ${appToRun} were not found!`);
     }
@@ -1641,11 +1666,9 @@ function wakeIdleLoop() {
  * Placement domain methods, never raw doc fields.
  * @param {object} specDoc - spec doc just committed to globalAppsInformation
  */
-async function notifySpecStored(specDoc) {
+async function notifySpecStored(instantiated) {
   try {
-    if (!specDoc || globalState.spawnerPaused) return;
-    const { InstantiatedSpec } = await getSpecBackend();
-    const instantiated = InstantiatedSpec.deserialize(specDoc);
+    if (!instantiated || globalState.spawnerPaused) return;
     const { placement } = instantiated;
     // Pinned to THIS node (by IP - the conservative subset; an outpoint/operator-only
     // pin simply rides the normal cadence). lastKnownLocalSocketAddr is null until the
@@ -1656,12 +1679,11 @@ async function notifySpecStored(specDoc) {
     // one node), so any pinned spec targeting this node wakes the loop. A candidate
     // spec races other candidates, so it wakes only for the contention-free
     // enterprise case: enterprise node, enterprise-owned app, pin set no larger
-    // than required instances (the instances default mirrors the global
-    // aggregation's $ifNull: ['$instances', 3]).
+    // than required instances.
     if (placement.mode() !== 'pinned') {
       if (enterpriseNetwork.getCachedEnterpriseIdentity() !== true) return;
       if (!enterpriseNetwork.isEnterpriseAppOwner(instantiated.owner)) return;
-      if (!isSoleRequiredInstaller(placement, instantiated.spec.instances ?? 3)) return;
+      if (!isSoleRequiredInstaller(placement, instantiated.spec.instances)) return;
     }
     log.info(`notifySpecStored - ${instantiated.name} is pinned to this node and contention-free; waking spawn loop`);
     wakeIdleLoop();
@@ -1673,6 +1695,7 @@ async function notifySpecStored(specDoc) {
 module.exports = {
   initialize,
   trySpawningGlobalApplication,
+  underProvisionedApps,
   isSoleRequiredInstaller,
   isPinnedContended,
   notifySpecStored,

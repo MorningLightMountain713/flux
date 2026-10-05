@@ -107,75 +107,6 @@ async function repairNanInAppsMessagesDb() {
 }
 
 /**
- * Returns an aggregation expression that computes the actual expiration block
- * for a given (height, expire) pair, applying the PON fork rate adjustment.
- *
- * Pre-fork the chain runs at 1x. Post-fork (height >= daemonPONFork) it runs
- * 4x faster. Apps registered before the fork whose original expiration straddles
- * the fork have their post-fork tail multiplied by 4 so they get the same
- * wall-clock lifetime they paid for.
- *
- * Mirrors the spec-side isExpired logic (consumed by the specReconciler's
- * expiry rung and appJanitor's registry-expiry sweep) so the count comparison
- * and the rebuild stay consistent.
- *
- * @param {string} heightField mongo field reference, e.g. '$height'
- * @param {string} expireField mongo field reference, e.g. '$expire'
- * @returns {object} mongo aggregation expression
- */
-function expireHeightExpr(heightField, expireField) {
-  const PON_FORK = config.get('fluxapps.daemonPONFork');
-  const PRE_FORK_DEFAULT_EXPIRE = config.get('fluxapps.blocksLasting');
-  const POST_FORK_DEFAULT_EXPIRE = PRE_FORK_DEFAULT_EXPIRE * 4;
-
-  return {
-    $let: {
-      vars: {
-        h: heightField,
-        e: {
-          $ifNull: [
-            expireField,
-            {
-              $cond: {
-                if: { $gte: [heightField, PON_FORK] },
-                then: POST_FORK_DEFAULT_EXPIRE,
-                else: PRE_FORK_DEFAULT_EXPIRE,
-              },
-            },
-          ],
-        },
-      },
-      in: {
-        $cond: {
-          if: { $gte: ['$$h', PON_FORK] },
-          // post-fork registration: straightforward
-          then: { $add: ['$$h', '$$e'] },
-          // pre-fork registration: if expiration crosses the fork, multiply
-          // the post-fork tail by 4 to preserve wall-clock lifetime
-          else: {
-            $cond: {
-              if: { $gt: [{ $add: ['$$h', '$$e'] }, PON_FORK] },
-              then: {
-                $add: [
-                  PON_FORK,
-                  {
-                    $multiply: [
-                      { $subtract: [{ $add: ['$$h', '$$e'] }, PON_FORK] },
-                      4,
-                    ],
-                  },
-                ],
-              },
-              else: { $add: ['$$h', '$$e'] },
-            },
-          },
-        },
-      },
-    },
-  };
-}
-
-/**
  *
  * @param {string} command
  * @returns {Promise<void>}
@@ -212,6 +143,5 @@ if (require.main === module) {
 }
 
 module.exports = {
-  expireHeightExpr,
   repairNanInAppsMessagesDb,
 };

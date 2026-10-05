@@ -3,7 +3,7 @@
 const config = require('config');
 const fluxCommunicationUtils = require('./fluxCommunicationUtils');
 const messageHelper = require('./messageHelper');
-const appsRepository = require('./appDatabase/appsRepository');
+const appRecords = require('./appDatabase/appRecords');
 const log = require('../lib/log');
 
 /**
@@ -26,16 +26,11 @@ async function getEnterpriseList() {
     // v7: nodes field - array of IPs that can run the app, that should be able to decode the app.
     // each component now has secrets possibility - env variables field that gets encrypted by the IPs pgps
     // each component now has  repoauth username:token or auth token. - encrypted field for pulling private docker image
-    const globalApps = await appsRepository.listGlobalAppNodes(); // v7+ apps with their target node lists
-    const globalAppsScoped = globalApps.filter((app) => app.nodes.length); // only enterprise apps
-    const isAlreadyEnterprised = {}; // ip/collateral: points
-    globalAppsScoped.forEach((app) => {
-      app.nodes.forEach((node) => {
-        if (isAlreadyEnterprised[node]) {
-          isAlreadyEnterprised[node] += 1;
-        } else {
-          isAlreadyEnterprised[node] = 1;
-        }
+    const pinnedApps = await appRecords.registry().pinned();
+    const isAlreadyEnterprised = {}; // ip or collateral outpoint: apps pinned to it
+    pinnedApps.forEach((app) => {
+      [...app.placement.targetIps, ...app.placement.targetOutpoints].forEach((node) => {
+        isAlreadyEnterprised[node] = (isAlreadyEnterprised[node] ?? 0) + 1;
       });
     });
     const currentTime = Date.now();

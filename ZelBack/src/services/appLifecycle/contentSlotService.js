@@ -15,6 +15,7 @@ const dockerService = require('../dockerService');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const appHistory = require('../appDecisions/appHistory');
 const appSpecHistory = require('../appDatabase/appSpecHistory');
 const chainState = require('../chainState');
@@ -370,7 +371,7 @@ async function signerOf(plaintext, app, deps = {}) {
  */
 async function takeManifest(gossipManifest, opts = {}, deps = {}) {
   const {
-    getApp = appsRepository.getGlobalAppInfoByIdentity,
+    getApp = (identity) => appRecords.registry().byIdentity(identity),
     getRow = appsRepository.getContentManifest,
     put = appsRepository.putContentManifest,
     ownerships, verify, provider,
@@ -454,7 +455,7 @@ async function openStandingManifest(identity, deps = {}) {
  */
 async function resolveHeldManifests(identity, deps = {}) {
   const {
-    getApp = appsRepository.getGlobalAppInfoByIdentity,
+    getApp = (identity) => appRecords.registry().byIdentity(identity),
     getRows = appsRepository.getContentManifests,
     resolve = appsRepository.resolveContentManifest,
     drop = appsRepository.deleteContentManifest,
@@ -743,7 +744,7 @@ async function getContentManifestApi(req, res) {
       res.json(messageHelper.createErrorMessage('appname is required'));
       return;
     }
-    const app = await appsRepository.getGlobalAppInfo(appname);
+    const app = await appRecords.registry().byName(appname);
     const { row } = app ? await standingManifest(app.identity) : { row: null };
     if (!row) {
       res.status(404).json(messageHelper.createErrorMessage(`No content manifest for ${appname}`));
@@ -772,7 +773,7 @@ async function getContentManifestsApi(req, res) {
       res.json(messageHelper.createErrorMessage('appname is required'));
       return;
     }
-    const app = (await appsRepository.getGlobalAppInfo(appname)) ?? (await appSpecHistory.latestAppliedState(appname));
+    const app = (await appRecords.registry().byName(appname)) ?? (await appSpecHistory.latestAppliedState(appname));
     if (!app) {
       res.status(404).json(messageHelper.createErrorMessage(`No app ${appname} is listed or was applied`));
       return;
@@ -1328,7 +1329,7 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
   if (!declaresSlots) return;
 
   const {
-    getApp = appsRepository.getGlobalAppInfo,
+    getApp = (name) => appRecords.registry().byName(name),
     standing = standingManifest,
     getPeers = listAppPeers,
     refresh = refreshManifests,
@@ -1508,7 +1509,7 @@ async function reconcileSlots(plaintextManifest, ctx, deps = {}) {
  */
 async function submitContentUpdate(body, deps = {}) {
   const {
-    getApp = appsRepository.getGlobalAppInfo,
+    getApp = (name) => appRecords.registry().byName(name),
     ownerships = appHistory.ownerships,
     isInstalledHere = appsRepository.getInstalledApp,
     openEnvelope = transportHelper.openContentEnvelope,

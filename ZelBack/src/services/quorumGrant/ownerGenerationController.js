@@ -4,7 +4,7 @@ const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const messageStore = require('../appMessaging/messageStore');
 const ownerGenerationRecord = require('./ownerGenerationRecord');
@@ -59,7 +59,7 @@ async function submit(req, res) {
       return res.status(400).json(messageHelper.createErrorMessage('malformed generation record'));
     }
 
-    const app = await appsRepository.getGlobalAppInfoByIdentity(record.identity);
+    const app = await appRecords.registry().byIdentity(record.identity);
     if (!app) {
       return res.status(404).json(messageHelper.createErrorMessage('the registry lists no app with that identity'));
     }

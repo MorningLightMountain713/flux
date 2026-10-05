@@ -12,7 +12,7 @@ const globalState = require('../utils/globalState');
 const transportHelper = require('../utils/transportHelper');
 const contentBlobService = require('../appLifecycle/contentBlobService');
 const specLibs = require('../utils/specLibs');
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const signatureVerifier = require('../signatureVerifier');
 const appEventVerifier = require('./appEventVerifier');
 
@@ -151,7 +151,7 @@ async function getTransportPublicKey(req, res) {
  * @returns {Promise<string>} the identity
  */
 async function identityProvenBy(callerZelid, appName, registration) {
-  const listed = await appsRepository.getGlobalAppInfo(appName);
+  const listed = await appRecords.registry().byName(appName);
   if (listed) {
     if (!signatureVerifier.sameSigningIdentity(listed.owner, callerZelid)) {
       throw new Error(`${appName} is listed under another owner`);

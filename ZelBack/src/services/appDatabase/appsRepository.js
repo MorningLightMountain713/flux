@@ -5,10 +5,8 @@ const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const setReconciler = require('../appMessaging/setReconciler');
-const MongoStorageProvider = require('../providers/MongoStorageProvider');
-const { expireHeightExpr } = require('./appsMaintenance');
+const appRecords = require('./appRecords');
 const {
-  globalAppsInformation,
   localAppsInformation,
   globalAppsMessages,
   globalAppsTempMessages,
@@ -18,7 +16,6 @@ const {
   globalAppsIngressAttestations,
   globalAppsIngressAttestationDigests,
   globalAppStateEvents,
-  appsHashesCollection,
   RUNNING_EXPIRY_MS,
   NODE_DOWN_GRACE_MS,
 } = require('../utils/appConstants');
@@ -28,15 +25,6 @@ const decisionStore = require('../appDecisions/decisionStore');
 // The content manifests a node holds, one row per manifest. Not in appConstants
 // because only the content-manifest plane touches it.
 const { appContentManifests } = config.get('database.appsglobal.collections');
-
-let storageProviderInstance;
-
-async function storageProvider() {
-  if (!storageProviderInstance) {
-    storageProviderInstance = await MongoStorageProvider.create();
-  }
-  return storageProviderInstance;
-}
 
 function nameRegex(name) {
   return new RegExp(`^${name}$`, 'i');
@@ -63,10 +51,6 @@ async function hydrate(doc) {
   }
 }
 
-function chainDb() {
-  return dbHelper.databaseConnection().db(config.get('database.daemon.database'));
-}
-
 function globalDb() {
   return dbHelper.databaseConnection().db(config.get('database.appsglobal.database'));
 }
@@ -75,183 +59,19 @@ function localDb() {
   return dbHelper.databaseConnection().db(config.get('database.appslocal.database'));
 }
 
-// ── Spawner Queries ──────────────────────────────────────────────────
-
-async function findUnderProvisionedApps(currentHeight, nowSeconds) {
-  const minBlocksAllowance = config.get('fluxapps.newMinBlocksAllowance');
-  const minTimeAllowance = minBlocksAllowance * 30;
-
-  const pipeline = [
-    {
-      $addFields: {
-        _isAlive: {
-          $cond: {
-            if: { $gte: ['$version', 9] },
-            then: { $gt: [{ $add: ['$registeredAt', '$ttl'] }, nowSeconds + minTimeAllowance] },
-            else: {
-              $gt: [
-                expireHeightExpr('$height', '$expire'),
-                currentHeight + minBlocksAllowance,
-              ],
-            },
-          },
-        },
-      },
-    },
-    { $match: { _isAlive: true } },
-    { $unset: '_isAlive' },
-    { $sort: { name: 1 } },
-  ];
-
-  const database = globalDb();
-  // The instance count comes from the event log, not from a join against the
-  // materialized locations collection. That collection only gained and updated rows,
-  // so an app a node quietly stopped kept counting toward its target for up to the
-  // running TTL and the spawner would not replace it — measured live on three apps.
-  const [alive, runningByApp] = await Promise.all([
-    dbHelper.aggregateInDatabase(database, globalAppsInformation, pipeline),
-    countRunningByApp(),
-  ]);
-
-  const candidates = [];
-  for (const doc of alive) {
-    const actual = runningByApp.get(String(doc.name).toLowerCase()) || 0;
-    const required = doc.instances ?? 3;
-    if (actual >= required) continue;
-    // hydrate only the shortfall: the doc must reach hydrate byte-identical to
-    // storage (encrypted specs bind their cleartext metadata into the AAD, and
-    // deserialize rejects foreign fields), so nothing above may decorate it.
-    // eslint-disable-next-line no-await-in-loop
-    const instantiated = await hydrate(doc);
-    if (instantiated) {
-      candidates.push({ instantiated, actual, required });
-    }
-  }
-  return candidates;
-}
-
-// ── Global App Specs (globalAppsInformation) ───────────────────────
-
-async function getGlobalAppInfo(name) {
-  const doc = await dbHelper.findOneInDatabase(
-    globalDb(), globalAppsInformation,
-    { name: nameRegex(name) },
-    { projection: { _id: 0 } },
-  );
-  return hydrate(doc);
-}
-
-async function getGlobalAppOwner(name) {
-  const doc = await dbHelper.findOneInDatabase(
-    globalDb(), globalAppsInformation,
-    { name: nameRegex(name) },
-    { projection: { _id: 0, owner: 1 } },
-  );
-  return doc ? doc.owner : null;
-}
-
 /**
- * The owner of an app by name: the registry row's, else that of an app this node
- * has installed under the name (case-insensitive). Null when neither holds it.
+ * The owner of an app by name: the registry record's, else that of an app this
+ * node has installed under the name (case-insensitive). Null when neither holds it.
  * @param {string} name
  * @returns {Promise<string|null>}
  */
 async function getApplicationOwner(name) {
-  const owner = await getGlobalAppOwner(name);
-  if (owner) return owner;
+  const listed = await appRecords.registry().byName(name);
+  if (listed) return listed.owner;
   // eslint-disable-next-line no-use-before-define
   const installed = await listInstalledApps();
   const app = installed.find((spec) => spec.name.toLowerCase() === name.toLowerCase());
   return app ? app.owner : null;
-}
-
-/**
- * The registry row of the app with an identity, or null when the list holds no
- * such app. Exact match: an identity is minted, never typed.
- * @param {string} identity
- * @returns {Promise<object|null>} InstantiatedSpec
- */
-async function getGlobalAppInfoByIdentity(identity) {
-  if (!identity) return null;
-  const doc = await dbHelper.findOneInDatabase(
-    globalDb(), globalAppsInformation,
-    { identity },
-    { projection: { _id: 0 } },
-  );
-  return hydrate(doc);
-}
-
-/**
- * The owner of the app with an identity, or null when the list holds no such app.
- * @param {string} identity
- * @returns {Promise<string|null>}
- */
-async function getGlobalAppOwnerByIdentity(identity) {
-  if (!identity) return null;
-  const doc = await dbHelper.findOneInDatabase(
-    globalDb(), globalAppsInformation,
-    { identity },
-    { projection: { _id: 0, owner: 1 } },
-  );
-  return doc ? doc.owner : null;
-}
-
-async function getGlobalAppHeight(name) {
-  const doc = await dbHelper.findOneInDatabase(
-    globalDb(), globalAppsInformation,
-    { name: nameRegex(name) },
-    { projection: { _id: 0, height: 1 } },
-  );
-  return doc && typeof doc.height === 'number' ? doc.height : null;
-}
-
-async function existsGlobalApp(name) {
-  const doc = await dbHelper.findOneInDatabase(
-    globalDb(), globalAppsInformation,
-    { name: nameRegex(name) },
-    { projection: { _id: 0, name: 1 } },
-  );
-  return !!doc;
-}
-
-async function listGlobalAppInfo({ filter = {}, sort } = {}) {
-  const options = { projection: { _id: 0 } };
-  if (sort) options.sort = sort;
-  const docs = await dbHelper.findInDatabase(
-    globalDb(), globalAppsInformation, filter, options,
-  );
-  const specs = [];
-  for (const doc of docs) {
-    // eslint-disable-next-line no-await-in-loop
-    const spec = await hydrate(doc);
-    if (spec) specs.push(spec);
-  }
-  return specs;
-}
-
-async function listGlobalAppNodes() {
-  const docs = await dbHelper.findInDatabase(
-    globalDb(), globalAppsInformation,
-    { version: { $gte: 7 } },
-    { projection: { _id: 0, name: 1, nodes: 1 } },
-  );
-  return docs.map((doc) => ({ name: doc.name, nodes: doc.nodes || [] }));
-}
-
-/**
- * Writes a name's registry row, replacing the row the name holds in any letter
- * case. Only the registry owner (appRegistry) writes rows.
- * @param {object} row - a serialized InstantiatedSpec
- */
-async function replaceGlobalAppRow(row) {
-  if (!row || !row.name) throw new Error('appsRepository.replaceGlobalAppRow: row.name required');
-  return dbHelper.replaceOneInDatabase(globalDb(), globalAppsInformation, { name: nameRegex(row.name) }, row, { upsert: true });
-}
-
-async function removeGlobalAppInfo(name) {
-  return dbHelper.removeDocumentsFromCollection(
-    globalDb(), globalAppsInformation, { name: nameRegex(name) },
-  );
 }
 
 // Both the location rows and the archived broadcasts: leaving the broadcasts
@@ -1662,47 +1482,10 @@ async function removeInstallingLocation(appName, ip) {
   );
 }
 
-// ── Name Conflict Check ────────────────────────────────────────────
-
-async function assertNoNameConflicts(appName, options = {}) {
-  const { hash = null } = options;
-
-  const existingApp = await getGlobalAppInfo(appName);
-  if (existingApp) {
-    if (hash) {
-      const result = await dbHelper.findOneInDatabase(
-        chainDb(), appsHashesCollection,
-        { hash },
-        { projection: { _id: 0, txid: 1, hash: 1, height: 1 } },
-      );
-      if (!result) {
-        throw new Error(`Flux App ${appName} already registered. Flux App has to be registered under different name. Hash not found in collection.`);
-      }
-      if (existingApp.height <= result.height) {
-        if (existingApp.expiresAtHeight >= result.height) {
-          throw new Error(`Flux App ${appName} already registered. Flux App has to be registered under different name. Hash is not older than our current app.`);
-        } else {
-          log.warn(`Flux App ${appName} active specifications are outdated. Will be cleaned on next expiration`);
-        }
-      }
-    } else {
-      throw new Error(`Flux App ${appName} already registered. Flux App has to be registered under different name.`);
-    }
-  }
-
-  const appExists = (await existsGlobalApp(appName)) || (await existsInstalledApp(appName));
-  if (appExists) {
-    throw new Error(`Flux App ${appName} already assigned to local application. Flux App has to be registered under different name.`);
-  }
-  return true;
-}
-
 // ── V7 Secrets Queries ─────────────────────────────────────────────
 
 async function listLiveV7Secrets() {
-  const apps = await listGlobalAppInfo({
-    filter: { version: 7, nodes: { $exists: true, $ne: [] } },
-  });
+  const apps = (await appRecords.registry().pinned()).filter((inst) => inst.version === 7);
   const results = [];
   for (const inst of apps) {
     for (const { componentName, secrets } of inst.spec.getComponentSecrets()) {
@@ -1758,18 +1541,7 @@ async function listHistoricalV7Secrets(before = null) {
 module.exports = {
   sweepOffListRows,
   hydrate,
-  storageProvider,
-  // spawner
-  findUnderProvisionedApps,
-  // global specs
-  getGlobalAppInfo,
   getApplicationOwner,
-  getGlobalAppOwner,
-  getGlobalAppInfoByIdentity,
-  getGlobalAppOwnerByIdentity,
-  getGlobalAppHeight,
-  existsGlobalApp,
-  listGlobalAppInfo,
   getContentManifests,
   getContentManifest,
   putContentManifest,
@@ -1782,9 +1554,6 @@ module.exports = {
   listContentManifestRanks,
   listContentManifestBroadcasts,
   listResolvedContentManifestIdentities,
-  listGlobalAppNodes,
-  removeGlobalAppInfo,
-  replaceGlobalAppRow,
   removeAppInstallingErrorRecords,
   // installed apps
   prepareInstalledAppsCollection,
@@ -1834,7 +1603,6 @@ module.exports = {
   countRunningByApp,
   removeInstallingLocation,
   // conflict checks
-  assertNoNameConflicts,
   // secrets
   listLiveV7Secrets,
   listHistoricalV7Secrets,

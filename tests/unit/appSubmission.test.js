@@ -65,6 +65,7 @@ describe('appSubmission tests', () => {
       '../appPlacement/placementFeasibility': stubs.placementFeasibility,
       '../daemonService/daemonStatus': stubs.daemonStatus,
       '../appDatabase/appsRepository': stubs.appsRepository,
+      '../appDatabase/appRecords': { registry: () => stubs.registry },
       '../appDecisions/appHistory': stubs.appHistory,
       '../appDatabase/appSpecHistory': stubs.appSpecHistory,
       '../utils/enterpriseNetwork': stubs.enterpriseNetwork,
@@ -116,9 +117,8 @@ describe('appSubmission tests', () => {
       },
       registryManager: { checkApplicationRegistrationNameConflicts: sinon.stub().resolves() },
       daemonStatus: { isDaemonSynced: sinon.stub().returns({ data: { synced: true, height: 100 } }) },
-      appsRepository: {
-        getGlobalAppInfo: sinon.stub().resolves(null),
-      },
+      appsRepository: {},
+      registry: { byName: sinon.stub().resolves(null) },
       appHistory: { latestApplied: sinon.stub().resolves(null) },
       appSpecHistory: { latestAppliedState: sinon.stub().resolves(null) },
       enterpriseNetwork: { isEnterpriseAppOwner: sinon.stub().returns(true) },
@@ -626,7 +626,7 @@ describe('appSubmission tests', () => {
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
       stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
-      stubs.appsRepository.getGlobalAppInfo.resolves({ spec: v9Spec() });
+      stubs.registry.byName.resolves({ spec: v9Spec() });
       const lockErr = new Error('referral is registration-locked and cannot change');
       stubs.specLibs.assertUpdateInvariants.rejects(lockErr);
 
@@ -646,7 +646,7 @@ describe('appSubmission tests', () => {
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
       stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
-      stubs.appsRepository.getGlobalAppInfo.resolves(null);
+      stubs.registry.byName.resolves(null);
       stubs.appSpecHistory.latestAppliedState.resolves(held);
       const lockErr = new Error('referral is registration-locked and cannot change');
       stubs.specLibs.assertUpdateInvariants.rejects(lockErr);
@@ -667,7 +667,7 @@ describe('appSubmission tests', () => {
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
       stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
-      stubs.appsRepository.getGlobalAppInfo.resolves(null);
+      stubs.registry.byName.resolves(null);
 
       try {
         await appSubmission.validateAppUpdate({ version: 9 }, {});
@@ -694,7 +694,7 @@ describe('appSubmission tests', () => {
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 8 });
       stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(updateSpec);
-      stubs.appsRepository.getGlobalAppInfo.resolves({ spec: previousSpec });
+      stubs.registry.byName.resolves({ spec: previousSpec });
 
       try {
         await appSubmission.validateAppUpdate({ version: 8 }, {});
@@ -719,7 +719,7 @@ describe('appSubmission tests', () => {
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
       stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
-      stubs.appsRepository.getGlobalAppInfo.resolves({ spec: previous });
+      stubs.registry.byName.resolves({ spec: previous });
 
       await appSubmission.validateAppUpdate({ version: 9 }, {});
 
@@ -736,7 +736,7 @@ describe('appSubmission tests', () => {
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
       stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(spec);
-      stubs.appsRepository.getGlobalAppInfo.resolves({ spec: v9Spec() });
+      stubs.registry.byName.resolves({ spec: v9Spec() });
       stubs.placementFeasibility.checkPlacementFeasibility
         .rejects(new Error('App x requests 5 instances but only 2 eligible nodes exist'));
 

@@ -26,6 +26,7 @@ const operationRegistry = require('../utils/operationRegistry');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const registryManager = require('../appDatabase/registryManager');
 const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const residentialNodeDosService = require('../residentialNodeDosService');
 const appEvacuationSafety = require('./appEvacuationSafety');
 const appUninstaller = require('./appUninstaller');
@@ -402,7 +403,7 @@ async function checkAndGiveUpAnApp(deps = {}) {
     const safety = await appEvacuationSafety.canSafelyRemoveApp(appName, {
       appLocation: registryManager.appLocation,
       getApplicationGlobalSpecifications: async (name) => {
-        const row = await appsRepository.getGlobalAppInfo(name);
+        const row = await appRecords.registry().byName(name);
         return row ? row.spec : null;
       },
       getInstalledDeployment: deploymentProvider.getInstalledDeployment,

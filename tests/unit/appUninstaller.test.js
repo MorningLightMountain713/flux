@@ -25,6 +25,7 @@ describe('appUninstaller tests', () => {
   let broadcastAllStub;
   let dockerServiceStub;
   let appsRepositoryStub;
+  let registryStub;
   let fluxShutdowndClientStub;
   let relationshipResolverStub;
   let pendingTeardownStoreStub;
@@ -116,17 +117,15 @@ describe('appUninstaller tests', () => {
       deleteAppPlanBestEffort: sinon.stub().resolves(),
     };
 
+    registryStub = { byName: sinon.stub().resolves(null) };
     appsRepositoryStub = {
       getInstalledApp: sinon.stub().resolves(null),
-      getGlobalAppInfo: sinon.stub().resolves(null),
       getAppMessage: sinon.stub().resolves(null),
       listAppMessagesByName: sinon.stub().resolves([]),
       removeInstalledApp: sinon.stub().resolves(),
       removeInstalledIdentity: sinon.stub().resolves(),
       countInstalledIdentities: sinon.stub().resolves(0),
       listInstalledApps: sinon.stub().resolves([]),
-      listGlobalAppInfo: sinon.stub().resolves([]),
-      removeGlobalAppInfo: sinon.stub().resolves(),
     };
 
     relationshipResolverStub = {
@@ -202,6 +201,7 @@ describe('appUninstaller tests', () => {
         broadcastMessageToAll: broadcastAllStub,
       },
       '../appDatabase/appsRepository': appsRepositoryStub,
+      '../appDatabase/appRecords': { registry: () => registryStub },
       './relationshipResolver': relationshipResolverStub,
       './pendingTeardownStore': pendingTeardownStoreStub,
       '../appManagement/appsRuntimeState': runtimeStateStub,
@@ -501,7 +501,7 @@ describe('appUninstaller tests', () => {
     it('skipGuard still barges past a NON-remove lease (install cleanup / force past a redeploy)', async () => {
       operationRegistry.acquire('anyapp', 'install', 'the-install');
       appsRepositoryStub.getInstalledApp.resolves(null);
-      appsRepositoryStub.getGlobalAppInfo.resolves(null);
+      registryStub.byName.resolves(null);
       try {
         const result = await appUninstaller.uninstallApplication('anyapp', { forceKill: true, skipGuard: true });
         // it proceeds past the install lease (does not defer); the app is simply not found here
@@ -864,7 +864,7 @@ describe('appUninstaller tests', () => {
     });
 
     it('clears the throttle for a foreground non-force removal of an app pinned to this node', async () => {
-      appsRepositoryStub.getGlobalAppInfo.resolves(pinnedSpec());
+      registryStub.byName.resolves(pinnedSpec());
       globalStateStub.trySpawningGlobalAppCache = new Map([['pinhash', '']]);
 
       await appUninstaller.clearSpawnThrottleForPinnedReinstall('pinApp', { forceKill: false, background: false });
@@ -873,27 +873,27 @@ describe('appUninstaller tests', () => {
     });
 
     it('does NOT clear (and does not even look up) for a force removal', async () => {
-      appsRepositoryStub.getGlobalAppInfo.resolves(pinnedSpec());
+      registryStub.byName.resolves(pinnedSpec());
       globalStateStub.trySpawningGlobalAppCache = new Map([['pinhash', '']]);
 
       await appUninstaller.clearSpawnThrottleForPinnedReinstall('pinApp', { forceKill: true, background: false });
 
       expect(globalStateStub.trySpawningGlobalAppCache.has('pinhash')).to.equal(true);
-      expect(appsRepositoryStub.getGlobalAppInfo.called).to.equal(false);
+      expect(registryStub.byName.called).to.equal(false);
     });
 
     it('does NOT clear (and does not even look up) for a background removal (expiry/cancel)', async () => {
-      appsRepositoryStub.getGlobalAppInfo.resolves(pinnedSpec());
+      registryStub.byName.resolves(pinnedSpec());
       globalStateStub.trySpawningGlobalAppCache = new Map([['pinhash', '']]);
 
       await appUninstaller.clearSpawnThrottleForPinnedReinstall('pinApp', { forceKill: false, background: true });
 
       expect(globalStateStub.trySpawningGlobalAppCache.has('pinhash')).to.equal(true);
-      expect(appsRepositoryStub.getGlobalAppInfo.called).to.equal(false);
+      expect(registryStub.byName.called).to.equal(false);
     });
 
     it('does NOT clear when the app is not pinned to this node', async () => {
-      appsRepositoryStub.getGlobalAppInfo.resolves(pinnedSpec(false)); // matchesTarget -> false
+      registryStub.byName.resolves(pinnedSpec(false)); // matchesTarget -> false
       globalStateStub.trySpawningGlobalAppCache = new Map([['pinhash', '']]);
 
       await appUninstaller.clearSpawnThrottleForPinnedReinstall('pinApp', { forceKill: false, background: false });
@@ -902,7 +902,7 @@ describe('appUninstaller tests', () => {
     });
 
     it('does NOT clear for an unpinned app (no placement targets)', async () => {
-      appsRepositoryStub.getGlobalAppInfo.resolves(pinnedSpec(true, false)); // hasTargets -> false
+      registryStub.byName.resolves(pinnedSpec(true, false)); // hasTargets -> false
       globalStateStub.trySpawningGlobalAppCache = new Map([['pinhash', '']]);
 
       await appUninstaller.clearSpawnThrottleForPinnedReinstall('pinApp', { forceKill: false, background: false });
@@ -911,7 +911,7 @@ describe('appUninstaller tests', () => {
     });
 
     it('is a no-op when the app is no longer globally registered', async () => {
-      appsRepositoryStub.getGlobalAppInfo.resolves(null);
+      registryStub.byName.resolves(null);
       globalStateStub.trySpawningGlobalAppCache = new Map([['pinhash', '']]);
 
       await appUninstaller.clearSpawnThrottleForPinnedReinstall('gone', { forceKill: false, background: false });

@@ -11,7 +11,6 @@ const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const appController = require('../../ZelBack/src/services/appManagement/appController');
 const globalCommand = require('../../ZelBack/src/services/appManagement/globalCommand');
 const dockerService = require('../../ZelBack/src/services/dockerService');
-const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
 const reconcilerQueue = require('../../ZelBack/src/services/appMonitoring/reconcilerQueue');
 const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
@@ -25,6 +24,7 @@ const { requireMongo } = require('./dbTestHelper');
 const {
   loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION, v1Spec, v8Spec, v9Spec, instantiatedSpec,
 } = require('./fixtures/fluxSpec');
+const { stubRegistry } = require('./fixtures/appRecords');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 
 // The spec library is REAL here, and so is the whole resolution chain beneath
@@ -39,8 +39,7 @@ const verificationHelper = require('../../ZelBack/src/services/verificationHelpe
 // down. With the real class, the identifier follows the app's stored identity —
 // so the two genuinely differ, and an assertion on one is not the other.
 //
-// What stays stubbed is I/O and durable state: the mongo read behind
-// getGlobalAppInfo, the docker calls, this node's socket address and collateral
+// What stays stubbed is I/O and durable state: the registry read, the docker calls, this node's socket address and collateral
 // outpoint (daemon/benchmark reads), and the runtime-state writes whose ORDER
 // against the reconciler enqueue is what several of these tests assert.
 
@@ -131,7 +130,7 @@ describe('appController tests', () => {
 
   /** The one mongo read these handlers make, on the way into the real resolver. */
   function registryHolds(instantiated) {
-    return sinon.stub(appsRepository, 'getGlobalAppInfo').resolves(instantiated);
+    return stubRegistry().byName.resolves(instantiated);
   }
 
   /**

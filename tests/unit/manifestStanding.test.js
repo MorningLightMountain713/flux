@@ -20,10 +20,10 @@ function row({
   };
 }
 
-function load(repo = {}) {
+function load({ byIdentity = sinon.stub().resolves(null), ...repo } = {}) {
   return proxyquire('../../ZelBack/src/services/appLifecycle/manifestStanding', {
+    '../appDatabase/appRecords': { registry: () => ({ byIdentity }) },
     '../appDatabase/appsRepository': {
-      getGlobalAppInfoByIdentity: sinon.stub().resolves(null),
       getContentManifests: sinon.stub().resolves([]),
       carriedManifestRanks: sinon.stub().resolves([]),
       listResolvedContentManifests: sinon.stub().resolves([]),
@@ -51,7 +51,7 @@ describe('manifestStanding', () => {
         row({ hash: 'buyer1', version: 1, ownedFrom: 200 }),
         row({ hash: 'buyer2', version: 2, ownedFrom: 200 }),
       ];
-      const svc = load({ getGlobalAppInfoByIdentity: sinon.stub().resolves(listed(BUYER)), getContentManifests: sinon.stub().resolves(rows) });
+      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER)), getContentManifests: sinon.stub().resolves(rows) });
       const { row: standing, aside } = await svc.standingManifest(IDENTITY);
       expect(standing.hash).to.equal('buyer2');
       expect(aside).to.equal(false);
@@ -62,7 +62,7 @@ describe('manifestStanding', () => {
         row({ hash: 'first9', version: 9, ownedFrom: 50 }),
         row({ hash: 'second1', version: 1, ownedFrom: 200 }),
       ];
-      const svc = load({ getGlobalAppInfoByIdentity: sinon.stub().resolves(listed(BUYER)), getContentManifests: sinon.stub().resolves(rows) });
+      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER)), getContentManifests: sinon.stub().resolves(rows) });
       const { row: standing } = await svc.standingManifest(IDENTITY);
       expect(standing.hash, 'version 1 of the later ownership, over version 9 of the earlier').to.equal('second1');
     });
@@ -72,14 +72,14 @@ describe('manifestStanding', () => {
         row({ hash: 'named', version: 3, ownedFrom: 100, signer: SELLER }),
         row({ hash: 'racing', version: 4, ownedFrom: 100, signer: SELLER }),
       ];
-      const svc = load({ getGlobalAppInfoByIdentity: sinon.stub().resolves(listed(BUYER, { manifest: 'named' })), getContentManifests: sinon.stub().resolves(rows) });
+      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER, { manifest: 'named' })), getContentManifests: sinon.stub().resolves(rows) });
       const { row: standing } = await svc.standingManifest(IDENTITY);
       expect(standing.hash, 'the named one, though the racing one ranks higher').to.equal('named');
     });
 
     it('stands on nothing, aside, when the spec names a manifest this node lacks', async () => {
       const rows = [row({ hash: 'racing', version: 4, ownedFrom: 100, signer: SELLER })];
-      const svc = load({ getGlobalAppInfoByIdentity: sinon.stub().resolves(listed(BUYER, { manifest: 'named' })), getContentManifests: sinon.stub().resolves(rows) });
+      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER, { manifest: 'named' })), getContentManifests: sinon.stub().resolves(rows) });
       const out = await svc.standingManifest(IDENTITY);
       expect(out.row).to.equal(null);
       expect(out.aside).to.equal(true);
@@ -88,15 +88,15 @@ describe('manifestStanding', () => {
     it('stands on nothing, not aside, when no row is valid and the spec names none; the seller\'s row stands again if the row returns to the seller', async () => {
       const rows = [row({ hash: 'seller7', version: 7, ownedFrom: 100, signer: SELLER })];
       const getContentManifests = sinon.stub().resolves(rows);
-      const asBuyer = load({ getGlobalAppInfoByIdentity: sinon.stub().resolves(listed(BUYER)), getContentManifests });
+      const asBuyer = load({ byIdentity: sinon.stub().resolves(listed(BUYER)), getContentManifests });
       expect(await asBuyer.standingManifest(IDENTITY)).to.include({ row: null, aside: false });
-      const backToSeller = load({ getGlobalAppInfoByIdentity: sinon.stub().resolves(listed(SELLER)), getContentManifests });
+      const backToSeller = load({ byIdentity: sinon.stub().resolves(listed(SELLER)), getContentManifests });
       expect((await backToSeller.standingManifest(IDENTITY)).row.hash).to.equal('seller7');
     });
 
     it('ignores rows held unresolved, and stands on nothing for an app not listed', async () => {
       const rows = [row({ hash: 'held', version: 1, ownedFrom: 200, signer: null })];
-      const svc = load({ getGlobalAppInfoByIdentity: sinon.stub().resolves(listed(BUYER)), getContentManifests: sinon.stub().resolves(rows) });
+      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER)), getContentManifests: sinon.stub().resolves(rows) });
       expect((await svc.standingManifest(IDENTITY)).row).to.equal(null);
       const unlisted = load({ getContentManifests: sinon.stub().resolves([row({ hash: 'x', version: 1, ownedFrom: 0 })]) });
       expect(await unlisted.standingManifest(IDENTITY)).to.include({ app: null, row: null, aside: false });
@@ -104,7 +104,7 @@ describe('manifestStanding', () => {
 
     it('does not stand on a row held unresolved though the spec names its hash: nothing stands, aside, until the row write resolves it', async () => {
       const rows = [row({ hash: 'named', version: 1, ownedFrom: 200, signer: null })];
-      const svc = load({ getGlobalAppInfoByIdentity: sinon.stub().resolves(listed(BUYER, { manifest: 'named' })), getContentManifests: sinon.stub().resolves(rows) });
+      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER, { manifest: 'named' })), getContentManifests: sinon.stub().resolves(rows) });
       expect(await svc.standingManifest(IDENTITY)).to.include({ row: null, aside: true });
     });
 
@@ -113,10 +113,10 @@ describe('manifestStanding', () => {
       const decrypt = sinon.stub().resolves({ content: null });
       const sealed = { sealed: true, createProvider: async () => ({}), decrypt };
       const app = { name: 'myapp', identity: IDENTITY, owner: BUYER, spec: sealed };
-      const own = load({ getGlobalAppInfoByIdentity: sinon.stub().resolves(app), getContentManifests: sinon.stub().resolves([row({ hash: 'b1', version: 1, ownedFrom: 200 })]) });
+      const own = load({ byIdentity: sinon.stub().resolves(app), getContentManifests: sinon.stub().resolves([row({ hash: 'b1', version: 1, ownedFrom: 200 })]) });
       expect((await own.standingManifest(IDENTITY)).row.hash).to.equal('b1');
       sinon.assert.notCalled(decrypt);
-      const other = load({ getGlobalAppInfoByIdentity: sinon.stub().resolves(app), getContentManifests: sinon.stub().resolves([row({ hash: 's1', version: 1, ownedFrom: 100, signer: SELLER })]) });
+      const other = load({ byIdentity: sinon.stub().resolves(app), getContentManifests: sinon.stub().resolves([row({ hash: 's1', version: 1, ownedFrom: 100, signer: SELLER })]) });
       await other.standingManifest(IDENTITY);
       sinon.assert.calledOnce(decrypt);
     });

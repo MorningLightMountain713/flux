@@ -251,8 +251,8 @@ describe('pricingRegime', () => {
         '../daemonService/daemonStatus': {
           isDaemonSynced: () => ({ data: { synced: true, height: HEIGHT } }),
         },
+        '../appDatabase/appRecords': { registry: () => ({ byName: sinon.stub().resolves(null) }) },
         '../appDatabase/appsRepository': {
-          getGlobalAppInfo: sinon.stub().resolves(null),
           listAppMessagesByName: sinon.stub().resolves([]),
           getPreviousPermanentMessage: sinon.stub().resolves(null),
         },

@@ -6,6 +6,7 @@ const serviceHelper = require('../serviceHelper');
 const log = require('../../lib/log');
 const { AsyncLock } = require('../utils/asyncLock');
 const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const decisionStore = require('../appDecisions/decisionStore');
 const registryManager = require('../appDatabase/registryManager');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
@@ -157,7 +158,7 @@ async function isInstalledApp(installed, registrySpec) {
 async function fireAdoption(appName) {
   const installed = await appsRepository.getInstalledApp(appName);
   if (!installed) return;
-  const registrySpec = await appsRepository.getGlobalAppInfo(appName);
+  const registrySpec = await appRecords.registry().byName(appName);
   if (!registrySpec || registrySpec.hash === installed.hash) return;
   if (!await isInstalledApp(installed, registrySpec)) return;
   await appOperations.reconcileApp(installed, registrySpec);
@@ -297,7 +298,7 @@ async function convergeApp(installed, registrySpec, ctx) {
       const safety = await appEvacuationSafety.canSafelyRemoveApp(installed.name, {
         appLocation: registryManager.appLocation,
         getApplicationGlobalSpecifications: async (name) => {
-          const row = await appsRepository.getGlobalAppInfo(name);
+          const row = await appRecords.registry().byName(name);
           return row ? row.spec : null;
         },
         getInstalledDeployment: deploymentProvider.getInstalledDeployment,
@@ -378,10 +379,7 @@ async function fullConvergence({ reason, atBoot = false } = {}) {
     const installedApps = await appsRepository.listInstalledApps();
     if (!installedApps.length) return;
     const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
-    // Matched by name in any letter case, as getGlobalAppInfo matches one app.
-    const globalRows = await appsRepository.listGlobalAppInfo({
-      filter: { name: { $in: installedApps.map((app) => new RegExp(`^${app.name}$`, 'i')) } },
-    });
+    const globalRows = await appRecords.registry().byNames(installedApps.map((app) => app.name));
     const globalByName = new Map(globalRows.map((spec) => [spec.name.toLowerCase(), spec]));
     const ctx = { localSocketAddr };
     const outcomes = { removed: 0, 'adoption-scheduled': 0, converged: 0, skipped: 0 };
@@ -435,7 +433,7 @@ async function requestAppConvergence(appName, { reason, delayMs = 0 } = {}) {
     if (!await convergenceAllowed()) return;
     const installed = await appsRepository.getInstalledApp(appName);
     if (!installed) return;
-    const registrySpec = await appsRepository.getGlobalAppInfo(appName);
+    const registrySpec = await appRecords.registry().byName(appName);
     const ctx = { localSocketAddr: await fluxNetworkHelper.getLocalSocketAddress() };
     const outcome = await convergeApp(installed, registrySpec, ctx);
     if (outcome !== 'converged') log.info(`specReconciler(${reason}): ${appName} -> ${outcome}`);
