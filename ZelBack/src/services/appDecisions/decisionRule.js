@@ -59,7 +59,6 @@ function decisionFor(entry, name, fields) {
     fee: null,
     uuid: null,
     identity: null,
-    registrationVersion: null,
     termStart: null,
     ruleVersion: RULE_VERSION,
     ...fields,
@@ -205,7 +204,6 @@ async function decideOne(entries, i, name, judge) {
       fee: String(fee),
       uuid,
       identity: judge.identityFor(spec, uuid),
-      registrationVersion: spec.version,
       termStart: record.blockTime ?? null,
     });
   }
@@ -247,7 +245,6 @@ async function decideOne(entries, i, name, judge) {
     fee: String(fee),
     uuid: predecessor.decision.uuid,
     identity: predecessor.decision.identity,
-    registrationVersion: predecessor.decision.registrationVersion ?? null,
     // A free update bought no time, so it keeps the term it supersedes.
     termStart: fee === 0n ? predecessor.decision.termStart : blockTime,
   });

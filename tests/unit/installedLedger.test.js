@@ -6,7 +6,9 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire');
 
-const { loadSpecLibrary, v8Spec, v9Spec, instantiatedSpec } = require('./fixtures/fluxSpec');
+const {
+  loadSpecLibrary, V9_SUBMISSION, v8Spec, v9Spec, instantiatedSpec,
+} = require('./fixtures/fluxSpec');
 const { inMemoryInstalled, inMemoryLedgers } = require('./fixtures/appRecords');
 
 const APPS_FOLDER = '/dat/var/lib/fluxos/flux-apps/';
@@ -50,6 +52,8 @@ describe('installedLedger', () => {
       fluxNetworkHelper: { isFirewallActive: sinon.stub().resolves(true) },
       upnpService: { isUPNP: sinon.stub().returns(false) },
       deploymentProvider: { buildDeployment: sinon.stub() },
+      // The version each app was registered with, as its registration message states it.
+      appHistory: { registrationVersionOf: sinon.stub().resolves(8) },
       moveStore: { begin: sinon.stub().resolves() },
       log: { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
     };
@@ -61,6 +65,7 @@ describe('installedLedger', () => {
       '../fluxNetworkHelper': stubs.fluxNetworkHelper,
       '../upnpService': stubs.upnpService,
       '../appRuntime/deploymentProvider': stubs.deploymentProvider,
+      '../appDecisions/appHistory': stubs.appHistory,
       './appIdentityMoveStore': stubs.moveStore,
       '../utils/appConstants': { appsFolder: APPS_FOLDER },
       '../../lib/log': stubs.log,
@@ -204,10 +209,54 @@ describe('installedLedger', () => {
     });
 
     function buildsRealDeployments() {
-      stubs.deploymentProvider.buildDeployment.callsFake(async (record, { replica }) => flux.DeploymentSpec.fromSpec(
-        record.spec, APPS_FOLDER, { replica, identity: record.identity },
+      stubs.deploymentProvider.buildDeployment.callsFake(async (record, { replica, registrationVersion }) => flux.DeploymentSpec.fromSpec(
+        record.spec, APPS_FOLDER, { replica, identity: record.identity, registrationVersion },
       ));
     }
+
+    /** A v9 app whose one component shares its data: the folder it is named under is the registration's. */
+    const syncedSpec = async (name) => (await v9Spec({
+      name,
+      components: {
+        web: {
+          ...V9_SUBMISSION.components.web,
+          persistentStorage: { sizeGb: 5, mounts: { '/data': { source: 'data', destination: '/data' } }, sync: { mode: 'activeStandby' } },
+        },
+      },
+    })).serialize();
+
+    it('names the ledger it writes by the version the registration message states, read for the record\'s app', async () => {
+      const { installed, provider } = await inMemoryInstalled();
+      const { ledgers } = await inMemoryLedgers();
+      const synced = await syncedSpec('shared');
+      await provider.insert(installed.constructor.STORE, [legacyRow(synced, { identity: IDENTITY, uuid: 'u-shared' })]);
+      await installed.completeDerivedFields();
+      buildsRealDeployments();
+
+      const results = await installedLedger.adoptInstalledLedgers();
+
+      expect(results.adopted).to.deep.equal([{ name: 'shared', replica: null }]);
+      sinon.assert.calledOnceWithExactly(stubs.appHistory.registrationVersionOf, 'shared', 'u-shared');
+      const ledger = await ledgers.byInstance('shared', null);
+      expect(ledger.component('web').syncFolder.id, 'the 8.x name, as a registration before v9 fixes it').to.equal('fluxweb_shared');
+    });
+
+    it('leaves an instance no applied message registers as it is, and says so', async () => {
+      const { installed, provider } = await inMemoryInstalled();
+      const { ledgers } = await inMemoryLedgers();
+      const synced = await syncedSpec('orphan');
+      await provider.insert(installed.constructor.STORE, [legacyRow(synced, { identity: IDENTITY })]);
+      await installed.completeDerivedFields();
+      buildsRealDeployments();
+      stubs.appHistory.registrationVersionOf.resolves(null);
+
+      const results = await installedLedger.adoptInstalledLedgers();
+
+      expect(results.adopted).to.deep.equal([]);
+      expect(results.skipped.map((s) => s.name)).to.deep.equal(['orphan']);
+      expect(await ledgers.byInstance('orphan', null)).to.equal(null);
+      sinon.assert.calledWithMatch(stubs.log.warn, /orphan not adopted/);
+    });
 
     it('writes a ledger for every instance without one, finding its volume from the runtime-state record, names an identity-less one by its name, and hands over its move', async () => {
       const { installed, provider } = await inMemoryInstalled();

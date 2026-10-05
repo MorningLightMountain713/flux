@@ -60,6 +60,7 @@ const fluxEventBus = require('../utils/fluxEventBus');
 const appUninstaller = require('./appUninstaller');
 const componentProvisioner = require('./componentProvisioner');
 const owedRemovals = require('./owedRemovals');
+const appHistory = require('../appDecisions/appHistory');
 const shutdownPlan = require('./shutdownPlan');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const appNetworkLinker = require('./appNetworkLinker');
@@ -2175,7 +2176,12 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
 
   // Rebuild THIS identity's fresh view - handing a co-located sibling's view to
   // the reinstalls below would apply its ports/env to the wrong containers.
-  const freshDeployment = await deploymentProvider.buildDeployment(registrySpec, { replica: newDeployment.replica ?? null, identity: newDeployment.identity ?? null });
+  const freshDeployment = await deploymentProvider.buildDeployment(registrySpec, {
+    replica: newDeployment.replica ?? null,
+    identity: newDeployment.identity ?? null,
+    // A component the update adds is named by the registration.
+    registrationVersion: await appHistory.registrationVersionOf(appName, registrySpec.uuid) ?? undefined,
+  });
   await hwRequirements.checkNodeResourcesReclaiming(freshDeployment);
 
   // Re-seed telemetry routing from the updated spec. A sink change (key
@@ -2270,7 +2276,10 @@ async function reconcileApp(installed, registrySpec) {
   // app was installed with, or the diff's new side spells <component>_<appName>
   // and matches nothing (no component ever redeploys, and the row's identifier
   // list is rewritten wrong).
-  const newDeployments = await deploymentProvider.buildDeployments(registrySpec, { identity: installed.identity ?? null });
+  const newDeployments = await deploymentProvider.buildDeployments(registrySpec, {
+    identity: installed.identity ?? null,
+    registrationVersion: await appHistory.registrationVersionOf(installed.name, installed.uuid) ?? undefined,
+  });
   if (oldDeployments.length === 0 || newDeployments.length === 0) return;
 
   if (operationRegistry.isHeld(installed.name)) {

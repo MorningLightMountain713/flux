@@ -13,7 +13,7 @@ describe('appSpecHistory tests', () => {
     return {
       message: { hash, contentHash: null, appSpecifications: { name: 'myapp', owner: fields.owner ?? 'ownerA' } },
       decision: {
-        hash, height: fields.height ?? 150, termStart: 1_700_000_000, uuid: `uuid-${hash}`, identity: 'myapp', registrationVersion: 4,
+        hash, height: fields.height ?? 150, termStart: 1_700_000_000, uuid: `uuid-${hash}`, identity: 'myapp',
       },
     };
   }
@@ -75,7 +75,7 @@ describe('appSpecHistory tests', () => {
       const result = await appSpecHistory.latestAppliedState('myapp');
 
       expect(result).to.include({
-        hash: 'last', height: 900, registeredAt: 1_700_000_000, uuid: 'uuid-last', identity: 'myapp', owner: 'ownerB', registrationVersion: 4,
+        hash: 'last', height: 900, registeredAt: 1_700_000_000, uuid: 'uuid-last', identity: 'myapp', owner: 'ownerB',
       });
       sinon.assert.calledOnceWithExactly(appHistoryStub.latestApplied, 'myapp');
     });

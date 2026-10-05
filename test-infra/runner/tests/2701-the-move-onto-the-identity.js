@@ -181,11 +181,12 @@ describe('the move onto the identity at the first start of the new code', functi
     formerVolumeFiles.forEach((f) => expect(remaining, `${f} still there`).to.not.include(f));
   });
 
-  it('the row names the identity and the registration it came from', async function () {
+  it('the row names the identity and the registration it came from, and no version', async function () {
     const row = await db.getLocalApp(appName);
     expect(row.identity).to.equal(app.identity);
     expect(row.uuid).to.equal(app.uuid);
-    expect(row.registrationVersion).to.equal(8);
+    expect(row).to.not.have.property('registrationVersion');
+    expect(await db.registrationVersion(appName), 'the registration message states it').to.equal(8);
   });
 
   it('the former name still answers on the app network, as an alias of the moved container', async function () {

@@ -55,6 +55,25 @@ async function currentAppMessages(name) {
 }
 
 /**
+ * The version of the message that registered an app: the spec version of the
+ * first applied message of the app with a uuid, or of the app that holds the
+ * name when none is given. It fixes the syncthing folder ids and the kept
+ * alias the node names the app's components with. Null when no applied
+ * message registers the app.
+ * @param {string} name - in any letter case
+ * @param {string|null} [uuid] - the app's, when the caller holds one
+ * @returns {Promise<number|null>}
+ */
+async function registrationVersionOf(name, uuid = null) {
+  const applied = await appliedMessages(name);
+  if (applied.length === 0) return null;
+  const app = uuid ?? applied[applied.length - 1].decision.uuid;
+  const registration = applied.find(({ decision }) => decision.uuid === app);
+  const version = registration?.message?.appSpecifications?.version;
+  return Number.isInteger(version) ? version : null;
+}
+
+/**
  * The latest applied message for a name.
  * @param {string} name - in any letter case
  * @param {{type?: 'registration'|'update', before?: number}} [filter] - only
@@ -109,5 +128,6 @@ module.exports = {
   appliedUpdateEvents,
   ownerships,
   currentAppMessages,
+  registrationVersionOf,
   latestApplied,
 };

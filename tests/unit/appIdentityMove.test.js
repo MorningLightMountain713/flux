@@ -67,7 +67,7 @@ describe('appIdentityMove tests', () => {
   function installedRow(overrides = {}) {
     const name = overrides.name ?? NAME;
     return {
-      name, replica: null, identity: name, hash: 'h1', owner: 'owner', version: 8, uuid: null, registrationVersion: null, ...overrides,
+      name, replica: null, identity: name, hash: 'h1', owner: 'owner', version: 8, uuid: null, ...overrides,
     };
   }
 
@@ -150,7 +150,11 @@ describe('appIdentityMove tests', () => {
           InstantiatedSpec: { deserialize: (doc) => ({ ...doc }) },
         }),
       },
-      appHistory: { appliedMessages: sinon.stub().resolves([{ message: {}, decision: { hash: 'h1', uuid: UUID, registrationVersion: 8 } }]) },
+      appHistory: {
+        appliedMessages: sinon.stub().resolves([{ message: {}, decision: { hash: 'h1', uuid: UUID } }]),
+        // The version the app was registered with, as its registration message states it.
+        registrationVersionOf: sinon.stub().resolves(8),
+      },
       deploymentProvider: {
         buildDeployment: async (installed, opts) => {
           record('buildDeployment', installed.identity, opts);
@@ -273,7 +277,7 @@ describe('appIdentityMove tests', () => {
 
   describe('which rows move', () => {
     it('leaves a row already on its identity alone', async () => {
-      db.set(key(NAME, null), installedRow({ identity: IDENTITY, uuid: UUID, registrationVersion: 8 }));
+      db.set(key(NAME, null), installedRow({ identity: IDENTITY, uuid: UUID }));
 
       const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
 
@@ -283,7 +287,7 @@ describe('appIdentityMove tests', () => {
       expect(indexOf('byReplica')).to.equal(-1);
     });
 
-    it('reads the uuid and version off the applied decision of the row\'s message and records them on the row', async () => {
+    it('reads the uuid off the applied decision of the row\'s message and records it on the row', async () => {
       seedRunningUnderName();
 
       const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
@@ -291,12 +295,38 @@ describe('appIdentityMove tests', () => {
       expect(results.moved).to.deep.equal([{ name: NAME, replica: null, to: IDENTITY }]);
       expect(calls[indexOf('put')].slice(1, 4), 'the record carries them before anything is planned').to.deep.equal([NAME, null, NAME]);
       expect(indexOf('put')).to.be.lessThan(indexOf('buildDeployment'));
-      expect(db.get(key(NAME, null))).to.include({ uuid: UUID, registrationVersion: 8 });
+      expect(db.get(key(NAME, null))).to.include({ uuid: UUID });
+      expect(db.get(key(NAME, null)), 'the row carries no registration version').to.not.have.property('registrationVersion');
       expect(flux.isAppIdentity(IDENTITY)).to.equal(true);
     });
 
-    it('takes them off the row when it carries them', async () => {
-      seedRunningUnderName(NAME, { uuid: UUID, registrationVersion: 8 });
+    // The names under the identity are fixed by the version the app was
+    // registered with, which the registration message states and no row holds.
+    it('names the view under the identity by the version the registration message states', async () => {
+      seedRunningUnderName(NAME, { uuid: UUID });
+
+      await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      sinon.assert.calledWith(stubs.appHistory.registrationVersionOf, NAME, UUID);
+      const next = calls.filter((call) => call[0] === 'buildDeployment').find((call) => call[2].identity === IDENTITY);
+      expect(next, 'the view under the identity').to.not.equal(undefined);
+      expect(next[2].registrationVersion).to.equal(8);
+      const former = calls.filter((call) => call[0] === 'buildDeployment').find((call) => call[2].identity === undefined);
+      expect(former[2], 'the view under the name reads what exists').to.not.have.property('registrationVersion');
+    });
+
+    it('skips a row whose app no applied message registers, touching nothing', async () => {
+      seedRunningUnderName(NAME, { uuid: UUID });
+      stubs.appHistory.registrationVersionOf.resolves(null);
+
+      const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(results.skipped).to.deep.equal([{ name: NAME, replica: null, reason: 'no applied registration names its uuid and version' }]);
+      expect(containers.has(`flux${NAME}_${NAME}`), 'the container is left').to.equal(true);
+    });
+
+    it('takes the uuid off the row when it carries it', async () => {
+      seedRunningUnderName(NAME, { uuid: UUID });
 
       const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
 
@@ -308,18 +338,18 @@ describe('appIdentityMove tests', () => {
 
     it('skips a row whose message no applied decision names, touching nothing', async () => {
       seedRunningUnderName();
-      stubs.appHistory.appliedMessages.resolves([{ message: {}, decision: { hash: 'other', uuid: UUID, registrationVersion: 8 } }]);
+      stubs.appHistory.appliedMessages.resolves([{ message: {}, decision: { hash: 'other', uuid: UUID } }]);
 
       const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
 
-      expect(results.skipped).to.deep.equal([{ name: NAME, replica: null, reason: 'no applied decision names its uuid' }]);
+      expect(results.skipped).to.deep.equal([{ name: NAME, replica: null, reason: 'no applied registration names its uuid and version' }]);
       expect(containers.has(`flux${NAME}_${NAME}`), 'the container is left').to.equal(true);
       expect(db.get(key(NAME, null)).identity).to.equal(NAME);
       expect(operationRegistry.isHeld(NAME)).to.equal(false);
     });
 
     it('refuses an app another operation holds, and holds nothing itself afterwards', async () => {
-      seedRunningUnderName(NAME, { uuid: UUID, registrationVersion: 8 });
+      seedRunningUnderName(NAME, { uuid: UUID });
       const token = operationRegistry.acquire(NAME, 'install', 'test');
 
       const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
@@ -331,7 +361,7 @@ describe('appIdentityMove tests', () => {
     });
 
     it('releases the lease of a row whose deployment cannot be built, and skips it', async () => {
-      seedRunningUnderName(NAME, { uuid: UUID, registrationVersion: 8 });
+      seedRunningUnderName(NAME, { uuid: UUID });
       stubs.deploymentProvider.buildDeployment = async () => { throw new Error('sealed spec cannot open'); };
 
       const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
@@ -341,14 +371,14 @@ describe('appIdentityMove tests', () => {
     });
 
     it('moves each replica\'s row on its own', async () => {
-      db.set(key(NAME, 'r1'), installedRow({ replica: 'r1', uuid: UUID, registrationVersion: 8 }));
+      db.set(key(NAME, 'r1'), installedRow({ replica: 'r1', uuid: UUID }));
       stubs.compOpts({ stateless: true, syncthing: false });
 
       const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
 
       expect(results.moved).to.deep.equal([{ name: NAME, replica: 'r1', to: IDENTITY }]);
       expect(calls[indexOf('buildDeployment')].slice(1)).to.deep.equal([NAME, { replica: 'r1' }]);
-      expect(calls[indexOf('buildDeployment', (id, o) => o.identity)].slice(1)).to.deep.equal([NAME, { replica: 'r1', identity: IDENTITY }]);
+      expect(calls[indexOf('buildDeployment', (id, o) => o.identity)].slice(1)).to.deep.equal([NAME, { replica: 'r1', identity: IDENTITY, registrationVersion: 8 }]);
     });
   });
 
@@ -457,7 +487,7 @@ describe('appIdentityMove tests', () => {
       for (const c of cases) {
         db.clear(); files.clear(); records.clear(); calls = []; containers.clear(); mounts.clear();
         appIdentityMove.resetForTests();
-        db.set(key(NAME, null), installedRow({ uuid: UUID, registrationVersion: 8 }));
+        db.set(key(NAME, null), installedRow({ uuid: UUID }));
         c.setup();
         // eslint-disable-next-line no-await-in-loop
         const results = await appIdentityMove.moveInstalledAppsOntoIdentity();
@@ -479,7 +509,7 @@ describe('appIdentityMove tests', () => {
     });
 
     it('names and mounts an image already in place without renaming it', async () => {
-      db.set(key(NAME, null), installedRow({ uuid: UUID, registrationVersion: 8 }));
+      db.set(key(NAME, null), installedRow({ uuid: UUID }));
       files.add(`/vol/${newIdentifier()}FLUXFSVOL`);
       files.add(`${APPS}${newIdentifier()}`);
 

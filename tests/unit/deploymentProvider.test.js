@@ -289,8 +289,8 @@ describe('deploymentProvider tests', () => {
       expect(ids).to.deep.equal(['web_myapp']);
     });
 
-    it('hands the view the version the row says the app was registered with, which fixes its folder id and its kept alias', async () => {
-      const [before] = await provider.buildDeployments({ name: 'myapp', identity: 'a1b2c3d4e5f6', registrationVersion: 8 });
+    it('hands the view the version the caller states the app was registered with, which fixes its folder id and its kept alias', async () => {
+      const [before] = await provider.buildDeployments({ name: 'myapp', identity: 'a1b2c3d4e5f6' }, { registrationVersion: 8 });
       const web = before.getComponent('web');
       expect(web.syncFolderId).to.equal('fluxweb_myapp');
       expect(web.networkAliases).to.include('fluxweb_myapp');
@@ -322,7 +322,7 @@ describe('deploymentProvider tests', () => {
     describe('the names a deployment of an installed instance carries', () => {
       let InstalledLedger;
       const RECORDED = { id: 'fluxweb_myapp', aliases: ['web', 'web.myapp', 'fluxweb_myapp'] };
-      const row = (registrationVersion) => ({ name: 'myapp', identity: 'a1b2c3d4e5f6', registrationVersion });
+      const row = () => ({ name: 'myapp', identity: 'a1b2c3d4e5f6' });
       const ledgerWith = (replica, withBlock) => new InstalledLedger({
         name: 'myapp',
         replica,
@@ -341,8 +341,8 @@ describe('deploymentProvider tests', () => {
         ledgers.instancesOf.resolves([ledgerWith(null, true)]);
         ledgers.byInstance.resolves(ledgerWith(null, true));
 
-        const [fromSet] = await provider.buildDeployments(row(9));
-        const single = await provider.buildDeployment(row(9), { replica: null });
+        const [fromSet] = await provider.buildDeployments(row(), { registrationVersion: 9 });
+        const single = await provider.buildDeployment(row(), { replica: null, registrationVersion: 9 });
 
         for (const web of [fromSet.getComponent('web'), single.getComponent('web')]) {
           expect(web.syncFolderId).to.equal('fluxweb_myapp');
@@ -354,21 +354,27 @@ describe('deploymentProvider tests', () => {
 
       it('names a component the ledger holds no block for, and an instance with no ledger, by the registration', async () => {
         ledgers.byInstance.resolves(ledgerWith(null, false));
-        const noBlock = (await provider.buildDeployment(row(8), { replica: null })).getComponent('web');
+        const noBlock = (await provider.buildDeployment(row(), { replica: null, registrationVersion: 8 })).getComponent('web');
         expect(noBlock.syncFolderId).to.equal('fluxweb_myapp');
         expect(noBlock.networkAliases).to.include('fluxweb_myapp');
 
-        const [noLedger] = await provider.buildDeployments(row(9));
+        const [noLedger] = await provider.buildDeployments(row(), { registrationVersion: 9 });
         expect(noLedger.getComponent('web').syncFolderId).to.equal('web_a1b2c3d4e5f6');
+      });
+
+      it('holds no folder id for a component the ledger does not hold when a reader states no version', async () => {
+        ledgers.byInstance.resolves(ledgerWith(null, false));
+        const unstarted = (await provider.buildDeployment(row(), { replica: null })).getComponent('web');
+        expect(unstarted.syncFolderId).to.equal(null);
       });
 
       it('reads the ledger of the instance being built, by its replica', async () => {
         // The loose instance takes nothing from a replica's ledger.
         ledgers.instancesOf.resolves([ledgerWith('s1', true)]);
-        const [loose] = await provider.buildDeployments(row(9));
+        const [loose] = await provider.buildDeployments(row(), { registrationVersion: 9 });
         expect(loose.getComponent('web').syncFolderId).to.equal('web_a1b2c3d4e5f6');
 
-        await provider.buildDeployment(row(9), { replica: 's1' });
+        await provider.buildDeployment(row(), { replica: 's1' });
         sinon.assert.calledWith(ledgers.byInstance, 'myapp', 's1');
       });
     });

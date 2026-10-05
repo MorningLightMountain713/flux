@@ -65,6 +65,9 @@ async function resolveRuntimeSpec(instantiated) {
  *   (named placement) or null (loose). REQUIRED - a caller that means every
  *   identity iterates buildDeployments; one that cannot say which identity it
  *   means must not receive an arbitrary one.
+ * @param {number} [opts.registrationVersion] - the version the app was
+ *   registered with, stated by a caller that provisions (it names a component
+ *   the ledger does not hold yet); a reader leaves it out
  * @returns {Promise<object>} DeploymentSpec
  */
 async function toDeployment(instantiated, opts = {}) {
@@ -90,10 +93,10 @@ async function toDeployment(instantiated, opts = {}) {
     // update hands in the installed row's — the app keeps the identity it was
     // installed with for as long as it is installed.
     identity: opts.identity ?? instantiated.identity ?? null,
-    // The version the app was registered with fixes its syncthing folder ids and
-    // the aliases its containers keep; a row that states none builds a view with
-    // neither.
-    registrationVersion: instantiated.registrationVersion ?? undefined,
+    // The version the app was registered with names a component the ledger
+    // does not hold yet: a caller that provisions states it, read from the
+    // app's registration message; a reader states none and takes the ledger's.
+    registrationVersion: opts.registrationVersion,
     names: recordedNames(ledger),
   });
 }
@@ -203,7 +206,7 @@ async function toDeployments(instantiated, opts = {}) {
     deployments.push(DeploymentSpec.fromSpec(resolved, appsFolder, {
       replica,
       identity: opts.identity ?? instantiated.identity ?? null,
-      registrationVersion: instantiated.registrationVersion ?? undefined,
+      registrationVersion: opts.registrationVersion,
       names: recordedNames(ledgers.get(replica) ?? null),
     }));
   }
