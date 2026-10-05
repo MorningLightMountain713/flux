@@ -439,8 +439,8 @@ describe('appSpawner tests', () => {
         ),
         getRequiredDependencyNamesForNode: opts.getRequiredDependencyNamesForNode ?? sinon.stub().resolves(new Set()),
       },
-      './pendingTeardownStore': {
-        teardownOwedFor: opts.teardownOwedFor ?? sinon.stub().resolves(false),
+      './owedRemovals': {
+        removalOwedFor: opts.teardownOwedFor ?? sinon.stub().resolves(false),
       },
     });
   }

@@ -13,7 +13,7 @@ const globalState = require('../utils/globalState');
 const syncthingIgnorePolicy = require('../appSystem/syncthingIgnorePolicy');
 const { withHostMutationLock } = require('../utils/hostMutationLock');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
-const pendingTeardownStore = require('./pendingTeardownStore');
+const owedRemovals = require('./owedRemovals');
 const log = require('../../lib/log');
 
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
@@ -80,7 +80,7 @@ async function createAppVolume(deployComp, res) {
     // the teardown holds the lock across — so the lock's no-unbounded-wait rule holds;
     // createAppVolume's only caller is a bare call, so it never nests the lock.
     await withHostMutationLock(async () => {
-      if (await appsRuntimeState.isCondemned(identifier) || await pendingTeardownStore.teardownOwedFor(deployComp.appName)) {
+      if (await appsRuntimeState.isCondemned(identifier) || await owedRemovals.removalOwedFor(deployComp.appName)) {
         throw new Error(`createAppVolume of ${identifier} aborted: a removal/cancel of ${deployComp.appName} arrived before volume creation`);
       }
       // This node's published claim about the folder describes the volume being

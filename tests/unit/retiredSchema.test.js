@@ -14,12 +14,14 @@ const TEMP_MESSAGES = config.get('database.appsglobal.collections.appsTemporaryM
 
 describe('retiredSchema', () => {
   let collectionsPresent;
+  let documentsIn;
   let indexesOf;
   let droppedCollections;
   let droppedIndexes;
 
   beforeEach(() => {
     collectionsPresent = new Set();
+    documentsIn = {};
     indexesOf = {};
     droppedCollections = [];
     droppedIndexes = [];
@@ -27,6 +29,7 @@ describe('retiredSchema', () => {
       listCollections: ({ name }) => ({ toArray: async () => (collectionsPresent.has(name) ? [{ name }] : []) }),
       collection: (name) => ({
         collectionName: name,
+        countDocuments: async () => documentsIn[name] ?? 0,
         drop: async () => { droppedCollections.push(name); },
         indexes: async () => {
           if (!indexesOf[name]) {
@@ -62,6 +65,21 @@ describe('retiredSchema', () => {
     await retiredSchema.dropRetiredSchema();
 
     expect(droppedCollections).to.deep.equal(['zelappslocation']);
+  });
+
+  it('drops a collection nothing writes once it holds no document, and keeps it while one is left', async () => {
+    collectionsPresent.add('zelappspendingteardowns');
+    documentsIn.zelappspendingteardowns = 1;
+
+    await retiredSchema.dropRetiredSchema();
+
+    expect(droppedCollections, 'a record is still to be driven to its end').to.deep.equal([]);
+
+    documentsIn.zelappspendingteardowns = 0;
+    const dropped = await retiredSchema.dropRetiredSchema();
+
+    expect(droppedCollections).to.deep.equal(['zelappspendingteardowns']);
+    expect(dropped.collections).to.deep.equal(['zelappspendingteardowns']);
   });
 
   it('drops a retired expiry index, and keeps the current plain index of the same name', async () => {

@@ -12,6 +12,12 @@ const RETIRED_COLLECTIONS = [
   { database: 'database.appsglobal.database', name: 'zelappslocation' },
 ];
 
+// Collections nothing writes any more, read until each record a release
+// before this one left has been driven to its end: dropped once empty.
+const RETIRED_WHEN_EMPTY = [
+  { database: 'database.appslocal.database', name: 'zelappspendingteardowns' },
+];
+
 // Expiry indexes replaced by an `expireAt` expiry, or on the temporary pool by
 // the chain's sweep. Matched by name AND expiry, because a plain index of the
 // same name is part of the current schema.
@@ -49,6 +55,18 @@ async function dropRetiredSchema() {
     // eslint-disable-next-line no-await-in-loop
     const present = await db.listCollections({ name }, { nameOnly: true }).toArray();
     if (present.length) {
+      // eslint-disable-next-line no-await-in-loop
+      await db.collection(name).drop();
+      dropped.collections.push(name);
+    }
+  }
+
+  for (const { database, name } of RETIRED_WHEN_EMPTY) {
+    const db = connection.db(config.get(database));
+    // eslint-disable-next-line no-await-in-loop
+    const present = await db.listCollections({ name }, { nameOnly: true }).toArray();
+    // eslint-disable-next-line no-await-in-loop
+    if (present.length && await db.collection(name).countDocuments() === 0) {
       // eslint-disable-next-line no-await-in-loop
       await db.collection(name).drop();
       dropped.collections.push(name);

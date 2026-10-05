@@ -40,7 +40,7 @@ const relationshipResolver = require('../../ZelBack/src/services/appLifecycle/re
 const shutdownPlan = require('../../ZelBack/src/services/appLifecycle/shutdownPlan');
 const componentProvisioner2 = require('../../ZelBack/src/services/appLifecycle/componentProvisioner');
 const appGiveUp = require('../../ZelBack/src/services/appLifecycle/appGiveUp');
-const pendingTeardownStore = require('../../ZelBack/src/services/appLifecycle/pendingTeardownStore');
+const owedRemovals = require('../../ZelBack/src/services/appLifecycle/owedRemovals');
 const globalCommand = require('../../ZelBack/src/services/appManagement/globalCommand');
 const syncthingFolderStateMachine = require('../../ZelBack/src/services/appMonitoring/syncthingFolderStateMachine');
 const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
@@ -1718,8 +1718,22 @@ describe('appOperations tests', () => {
       uninstallComponentStub = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
       denyPortsStub = sinon.stub(appUninstaller, 'denyPorts').resolves();
       openHostPortsStub = sinon.stub(componentProvisioner, 'openHostPorts').resolves();
-      teardownOwedForStub = sinon.stub(pendingTeardownStore, 'teardownOwedFor').resolves(teardownOwed);
+      teardownOwedForStub = sinon.stub(owedRemovals, 'removalOwedFor').resolves(teardownOwed);
     }
+
+    /** The ledger naming the component's ports, each opened by both methods. */
+    const ledgerNaming = (ports) => {
+      const { InstalledLedger } = specLibrary.loaded();
+      return new InstalledLedger({
+        name: 'myapp',
+        components: {
+          web: {
+            ...InstalledLedger.newBlock({ identifier: 'web_myapp', image: 'img' }),
+            hostPorts: ports.map((port) => ({ port, opened: ['ufw', 'upnp'] })),
+          },
+        },
+      });
+    };
 
     /** The registry side of a reconcile is an InstantiatedSpec (a hydrated row). */
     let registrySpec;
@@ -1730,6 +1744,7 @@ describe('appOperations tests', () => {
 
     it('closes only the dropped ports, opens only the added ones, and skips ports in the loops', async () => {
       setup();
+      ledgers.byInstance.resolves(ledgerNaming([80, 443]));
       // old: 80,443 ; new: 443,8080 -> drop 80, add 8080, keep 443.
       const oldDeployment = await makeDeployment({ hostPorts: [80, 443], storage: 5 });
       const newDeployment = await makeDeployment({ hostPorts: [443, 8080], storage: 10 });
@@ -1737,7 +1752,7 @@ describe('appOperations tests', () => {
       await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
 
       expect(uninstallComponentStub.calledWith(sinon.match.any, sinon.match({ skipPorts: true })), 'teardown skips ports').to.be.true;
-      expect(denyPortsStub.calledOnceWith([80], 'myapp'), 'closes only the dropped port').to.be.true;
+      expect(denyPortsStub.calledOnceWith([{ port: 80, opened: ['ufw', 'upnp'] }], 'myapp'), 'closes only the dropped port, by the methods it was opened with').to.be.true;
       expect(openHostPortsStub.calledOnceWith([8080], 'myapp'), 'opens only the added port').to.be.true;
       // The registry record is what every instance's record becomes.
       sinon.assert.calledOnceWithExactly(stubInstalled().updateRecord, registrySpec);
@@ -1812,16 +1827,7 @@ describe('appOperations tests', () => {
     // the node opens ports by now.
     it('records each component\'s ports with their methods before opening the added ones', async () => {
       setup();
-      const { InstalledLedger } = specLibrary.loaded();
-      ledgers.byInstance.resolves(new InstalledLedger({
-        name: 'myapp',
-        components: {
-          web: {
-            ...InstalledLedger.newBlock({ identifier: 'web_myapp', image: 'img' }),
-            hostPorts: [{ port: 80, opened: ['ufw', 'upnp'] }, { port: 443, opened: ['ufw', 'upnp'] }],
-          },
-        },
-      }));
+      ledgers.byInstance.resolves(ledgerNaming([80, 443]));
       const oldDeployment = await makeDeployment({ hostPorts: [80, 443], storage: 5 });
       const newDeployment = await makeDeployment({ hostPorts: [443, 8080], storage: 10 });
 
@@ -1869,6 +1875,7 @@ describe('appOperations tests', () => {
 
     it('skips the port-open (but still closes) when a cancel teardown is owed', async () => {
       setup({ teardownOwed: true });
+      ledgers.byInstance.resolves(ledgerNaming([80, 443]));
       const oldDeployment = await makeDeployment({ hostPorts: [80, 443], storage: 5 });
       const newDeployment = await makeDeployment({ hostPorts: [443, 8080], storage: 10 });
 
@@ -1876,7 +1883,7 @@ describe('appOperations tests', () => {
 
       expect(teardownOwedForStub.calledWith('myapp')).to.be.true;
       expect(openHostPortsStub.called, 'a raced cancel must skip the port-open (no orphaned rules)').to.be.false;
-      expect(denyPortsStub.calledOnceWith([80], 'myapp'), 'closing removed ports is always safe and still runs').to.be.true;
+      expect(denyPortsStub.calledOnceWith([{ port: 80, opened: ['ufw', 'upnp'] }], 'myapp'), 'closing removed ports is always safe and still runs').to.be.true;
     });
   });
 

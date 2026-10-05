@@ -17,16 +17,16 @@ const {
 } = require('./fixtures/fluxSpec');
 const { installedRecord } = require('./fixtures/appRecords');
 
-// Tombstoning teardown: the removal prelude records a durable owed-teardown doc +
-// condemns + deletes the local row, and the deferred worker (runTeardown) stops,
-// removes, tears down the host state, and clears the record LAST. The order is
-// load-bearing (see the adversarial-gate checklist).
+// Tombstoning teardown: the removal prelude marks each instance's record owed +
+// condemns, and the deferred worker (runTeardown) stops, removes, tears down what
+// the ledger names, and takes the records LAST. The order is load-bearing (see
+// the adversarial-gate checklist).
 //
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
-// for why. The prelude reads an InstantiatedSpec (owner, identity, placement) and
-// projects the durable record off a DeploymentSpec, so those are the two real
-// classes below; what stays stubbed is I/O and FluxOS policy (docker, mongo, the
-// firewall, flux-shutdownd, the registry).
+// for why. The prelude reads an InstalledSpec (owner, identity, placement) and the
+// teardown reads an InstalledLedger built from a DeploymentSpec, so those are the
+// real classes below; what stays stubbed is I/O and FluxOS policy (docker, mongo,
+// the firewall, flux-shutdownd, the registry).
 
 describe('appUninstaller tombstoning teardown', () => {
   let appUninstaller;
@@ -78,35 +78,48 @@ describe('appUninstaller tombstoning teardown', () => {
   const onlyComponent = () => deployment.componentEntries()[0][1];
 
   /**
-   * The durable owed-teardown record exactly as the prelude writes it — every
-   * field projected off the real DeploymentSpec / InstantiatedSpec rather than
-   * spelled out, so an identifier, network name, host-port set or image the
-   * library would not produce cannot appear in a fixture.
+   * The ledger the install wrote for a deployment — every block projected off the
+   * real DeploymentSpec rather than spelled out, so an identifier, host-port set or
+   * image the library would not produce cannot appear in a fixture.
    */
-  const teardownDocFor = (dep, overrides = {}) => ({
-    key: dep.appName,
+  const ledgerFor = (dep, blockOverrides = {}) => new flux.InstalledLedger({
     name: dep.appName,
-    replica: dep.replica,
-    networkName: dep.networkName,
-    forceKill: false,
-    owner: installedSpec.owner,
-    identity: installedSpec.identity,
-    reason: null,
-    shutdownBudgetSeconds: shutdownPlan.appShutdownBudgetSeconds(dep),
-    createdAt: Date.now(),
-    attempts: 0,
-    components: dep.componentEntries({ reverse: true }).map(([, c]) => ({
-      identifier: c.identifier,
-      // dockerService.getAppIdentifier is the identity stub below, as in production
-      // for an already-prefixed identifier.
-      appId: c.identifier,
-      componentName: c.name,
-      label: c.name === dep.appName ? dep.appName : `component ${c.name} of ${dep.appName}`,
-      ports: c.hostPorts,
-      image: c.image,
-    })),
-    ...overrides,
+    replica: dep.replica ?? null,
+    network: { name: dep.networkName },
+    components: Object.fromEntries(dep.componentEntries().map(([name, c]) => [name, {
+      ...flux.InstalledLedger.newBlock({ identifier: c.identifier, image: c.image }),
+      hostPorts: c.hostPorts.map((port) => ({ port, opened: ['ufw'] })),
+      ...blockOverrides,
+    }])),
   });
+
+  /** The owed mark the prelude writes, with the real shutdown planner's budget. */
+  const owedFor = (dep, overrides = {}) => ({
+    since: 1, reason: null, force: false, broadcast: false, budgetSeconds: shutdownPlan.appShutdownBudgetSeconds(dep), attempts: 0, ...overrides,
+  });
+
+  /** The teardown's target: the records' facts and the ledger's blocks. */
+  const targetFor = (dep, { owed = {}, block = {}, ...overrides } = {}) => {
+    const ledger = ledgerFor(dep, block);
+    return {
+      name: dep.appName,
+      replica: dep.replica ?? null,
+      owner: installedSpec.owner,
+      identity: installedSpec.identity,
+      networkName: ledger.network.name,
+      components: Object.entries(ledger.components).map(([componentName, b]) => ({ componentName, ...b })),
+      owed: owedFor(dep, owed),
+      source: 'record',
+      ...overrides,
+    };
+  };
+
+  // This node's records: one installed record per instance, marked owed by the
+  // prelude and taken by the teardown, and its ledger beside it.
+  let records;
+  let ledgers;
+  const recordKey = (name, replica) => `${name.toLowerCase()}\u0000${replica ?? ''}`;
+  const installedAt = (name, replica, owedOrNull) => installedRecord(installedSpec, { replica, owed: owedOrNull });
 
   beforeEach(async () => {
     const spec = await v9App('app', { web: {} });
@@ -127,13 +140,41 @@ describe('appUninstaller tombstoning teardown', () => {
     // subprocesses nor stall the timing-sensitive lease-release assertion.
     sinon.stub(serviceHelper, 'runCommand').resolves({ error: null, stdout: '', stderr: '' });
     const fakeCrontab = { jobs: () => [], remove: () => {}, save: () => {} };
+    records = new Map([[recordKey('app', null), { replica: null, owed: null }]]);
+    ledgers = new Map([[recordKey('app', null), ledgerFor(deployment)]]);
+    const installed = (name, replica) => {
+      const entry = records.get(recordKey(name, replica));
+      return entry ? installedAt(name, replica, entry.owed) : null;
+    };
+
     stubs = {
       log: { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
+      installedApps: {
+        byReplica: sinon.stub().callsFake(async (name, replica, { includeOwed = false } = {}) => {
+          const found = installed(name, replica);
+          return found && (includeOwed || !found.owed) ? found : null;
+        }),
+        instancesOf: sinon.stub().callsFake(async (name, { includeOwed = false } = {}) => [...records.entries()]
+          .filter(([key]) => key.startsWith(`${name.toLowerCase()}\u0000`))
+          .map(([, entry]) => installedAt(name, entry.replica, entry.owed))
+          .filter((found) => includeOwed || !found.owed)),
+        keys: sinon.stub().callsFake(async (name) => [...records.entries()]
+          .filter(([key]) => key.startsWith(`${name.toLowerCase()}\u0000`))
+          .map(([, entry]) => ({ name, replica: entry.replica }))),
+        owed: sinon.stub().callsFake(async () => [...records.entries()].filter(([, entry]) => entry.owed).map(([, entry]) => installedAt('app', entry.replica, entry.owed))),
+        markOwed: sinon.stub().callsFake(async (name, replica, owed) => { records.get(recordKey(name, replica)).owed = owed; }),
+        remove: sinon.stub().callsFake(async (name, replica) => { records.delete(recordKey(name, replica)); }),
+      },
+      installedLedgers: {
+        byInstance: sinon.stub().callsFake(async (name, replica) => ledgers.get(recordKey(name, replica)) ?? null),
+        remove: sinon.stub().callsFake(async (name, replica) => { ledgers.delete(recordKey(name, replica)); }),
+      },
       dockerService: {
         appDockerStop: sinon.stub().resolves(),
         appDockerKill: sinon.stub().resolves(),
         appDockerRemove: sinon.stub().resolves(),
         appDockerForceRemove: sinon.stub().resolves(),
+        clearFluxRemovedContainers: sinon.stub(),
         // container gone after a successful remove: the teardown reclaims host storage
         getDockerContainer: sinon.stub().resolves(null),
         appDockerImageRemove: sinon.stub().resolves(),
@@ -149,53 +190,23 @@ describe('appUninstaller tombstoning teardown', () => {
         getState: sinon.stub().resolves(null),
       },
       pendingTeardownStore: {
-        writeTeardown: sinon.stub().resolves(),
         readAllTeardowns: sinon.stub().resolves([]),
         clearTeardown: sinon.stub().resolves(),
-        prepareCollection: sinon.stub().resolves(),
         getTeardown: sinon.stub().resolves(null),
         bumpAttempts: sinon.stub().resolves(),
       },
+      installedLedger: { discoverVolumeImage: sinon.stub().resolves(null) },
       // Hands back the REAL DeploymentSpec built for the installed app — the same
       // class the real provider projects. Identifiers, host ports, images, the
       // network name and the shutdown budget are all the library's answers.
       deploymentProvider: {
-        getInstalledDeployment: sinon.stub().callsFake(async () => deployment),
         buildDeployment: sinon.stub().callsFake(async () => deployment),
-        localIdentities: sinon.stub().resolves([null]),
       },
       appRecords: {
         registry: () => ({ byName: sinon.stub().callsFake(async () => globalPinnedSpec) }),
-        ledgers: () => ({ remove: sinon.stub().resolves(), removeAll: sinon.stub().resolves() }),
-        installed: () => ({
-          byName: async (name) => installedRecord(await stubs.appsRepository.getInstalledApp(name)),
-          apps: async () => [],
-          remove: (...args) => stubs.appsRepository.removeInstalledIdentity(...args),
-          removeAll: (...args) => stubs.appsRepository.removeInstalledApp(...args),
-          keys: async (name) => {
-            if (await stubs.appsRepository.existsInstalledIdentity(name, null)) return [{ name, replica: null }];
-            const count = await stubs.appsRepository.countInstalledIdentities(name);
-            return Array.from({ length: count }, (_, i) => ({ name, replica: `r${i}` }));
-          },
-        }),
-      },
-      appsRepository: {
-        getInstalledApp: sinon.stub().callsFake(async () => installedSpec),
-        getAppMessage: sinon.stub().resolves(null),
-        existsInstalledApp: sinon.stub().resolves(false),
-        // Rows are identity-keyed: the removal drops THIS identity's row, then
-        // the remaining count decides whether the app has left the node.
-        existsInstalledIdentity: sinon.stub().resolves(false),
-        removeInstalledIdentity: sinon.stub().resolves(),
-        countInstalledIdentities: sinon.stub().resolves(0),
-        removeInstalledApp: sinon.stub().resolves(),
-      },
-      dbHelper: {
-        databaseConnection: () => ({ db: () => ({}) }),
-        findOneAndDeleteInDatabase: sinon.stub().resolves(),
-        findInDatabase: sinon.stub().resolves([]),
-        findOneInDatabase: sinon.stub().resolves(null),
-        removeDocumentsFromCollection: sinon.stub().resolves(),
+        ledgers: () => stubs.installedLedgers,
+        installed: () => stubs.installedApps,
+        instanceKey: ({ name, replica }) => recordKey(name, replica),
       },
       fluxNetworkHelper: {
         getLocalSocketAddress: sinon.stub().resolves('198.18.0.1:16127'),
@@ -211,7 +222,6 @@ describe('appUninstaller tombstoning teardown', () => {
         // "volume NOT unmounted under a live container" guard below can only ever
         // pass, whatever the production code does.
         isPathMounted: sinon.stub().resolves(true),
-        getVolumeFilePath: sinon.stub().resolves({ path: null, conclusive: true }),
       },
       appSwapPoolService: { reconcile: sinon.stub().resolves() },
       telemetrySinkCache: { deleteSink: sinon.stub(), hasAnyTelemetryApps: sinon.stub().returns(false) },
@@ -246,10 +256,6 @@ describe('appUninstaller tombstoning teardown', () => {
     appUninstaller = proxyquire('../../ZelBack/src/services/appLifecycle/appUninstaller', {
       config: asConfig({
         fluxapps: { manageCollectorLifecycle: false },
-        database: {
-          appslocal: { database: 'localapps', collections: { appsInformation: 'zelappsinformation', pendingAppTeardowns: 'zelappspendingteardowns' } },
-          appsglobal: { database: 'globalapps', collections: { appsInformation: 'zelappsinformation', appsMessages: 'zelappsmessages' } },
-        },
       }),
       crontab: { load: (cb) => cb(null, fakeCrontab) },
       '../../lib/log': stubs.log,
@@ -258,8 +264,8 @@ describe('appUninstaller tombstoning teardown', () => {
       '../upnpService': stubs.upnpService,
       '../fluxNetworkHelper': stubs.fluxNetworkHelper,
       '../fluxCommunicationMessagesSender': stubs.fluxCommunicationMessagesSender,
-      '../appDatabase/appsRepository': stubs.appsRepository,
       '../appDatabase/appRecords': stubs.appRecords,
+      './installedLedger': stubs.installedLedger,
       '../appRuntime/deploymentProvider': stubs.deploymentProvider,
       '../appMonitoring/syncthingMonitorHelpers': stubs.syncthingMonitorHelpers,
       '../utils/volumeService': stubs.volumeService,
@@ -279,12 +285,15 @@ describe('appUninstaller tombstoning teardown', () => {
   afterEach(() => sinon.restore());
 
   describe('runTeardown (the deferred worker)', () => {
-    // The durable record the prelude persisted, projected off the real deployment.
-    const doc = (overrides = {}) => teardownDocFor(deployment, overrides);
+    // The target the prelude built: the records' facts and the ledger's blocks.
+    const target = (opts) => targetFor(deployment, opts);
 
-    it('stops, then removes, then drops runtime state LAST, then clears the durable record', async () => {
+    // A teardown runs only for an instance the prelude marked owed.
+    beforeEach(() => { records.get(recordKey('app', null)).owed = owedFor(deployment); });
+
+    it('stops, then removes, then drops runtime state LAST, then takes the records', async () => {
       const { appDockerStop, appDockerRemove } = stubs.dockerService;
-      await appUninstaller.runTeardown(doc());
+      await appUninstaller.runTeardown(target());
       // Addressed by the identifier the real DeploymentSpec minted, not a string
       // the fixture invented.
       expect(
@@ -294,11 +303,14 @@ describe('appUninstaller tombstoning teardown', () => {
       expect(stubs.dockerService.appDockerKill.called, 'no kill on a graceful teardown').to.be.false;
       expect(appDockerRemove.calledOnce, 'container removed').to.be.true;
       expect(stubs.appsRuntimeState.remove.calledOnce, 'runtime state dropped').to.be.true;
-      expect(stubs.pendingTeardownStore.clearTeardown.calledOnce, 'durable record cleared').to.be.true;
-      // ORDER (load-bearing): stop -> remove -> drop runtime state (condemned) -> clear record
+      expect(stubs.installedApps.remove.calledOnceWith('app', null), 'the installed record taken').to.be.true;
+      expect(stubs.installedLedgers.remove.calledOnceWith('app', null), 'its ledger taken with it').to.be.true;
+      expect(records.size, 'no record left').to.equal(0);
+      expect(ledgers.size, 'no ledger left').to.equal(0);
+      // ORDER (load-bearing): stop -> remove -> drop runtime state (condemned) -> take the records
       expect(appDockerStop.calledBefore(appDockerRemove)).to.be.true;
       expect(appDockerRemove.calledBefore(stubs.appsRuntimeState.remove)).to.be.true;
-      expect(stubs.appsRuntimeState.remove.calledBefore(stubs.pendingTeardownStore.clearTeardown)).to.be.true;
+      expect(stubs.appsRuntimeState.remove.calledBefore(stubs.installedApps.remove)).to.be.true;
       // Host storage IS reclaimed once the container is confirmed gone — the
       // positive half of the "never unmount under a live container" guard below,
       // without which that guard could pass on a teardown that never unmounts at all.
@@ -306,97 +318,107 @@ describe('appUninstaller tombstoning teardown', () => {
         serviceHelper.runCommand.getCalls().some((c) => c.args[0] === 'umount'),
         'volume unmounted once the container is confirmed gone',
       ).to.be.true;
+      // The app has left the node: nothing reconciles an app with no record.
+      expect(stubs.dockerService.clearFluxRemovedContainers.calledOnceWith([onlyComponent().identifier])).to.be.true;
     });
 
     it('removes the whole-app docker network (force-disconnecting any endpoints first)', async () => {
-      await appUninstaller.runTeardown(doc());
+      await appUninstaller.runTeardown(target());
       // Even a graceful teardown force-removes: any endpoints left are foreign linked
       // consumers, and a plain removal would leak the network on "active endpoints".
-      // the record carries the resolved network name; removal takes it as the option,
-      // so a teardown that outlives the row still takes the right network with it
-      // the network name is the real DeploymentSpec's, derived from the app
-      // identity — not a string spelled out here
+      // The target carries the network name the ledger holds; removal takes it as
+      // the option. The name is the real DeploymentSpec's, derived from the app
+      // identity, not a string spelled out here.
       expect(stubs.dockerService.forceRemoveFluxAppDockerNetwork.calledOnceWith(
         null, { networkName: deployment.networkName },
       )).to.be.true;
       expect(stubs.dockerService.removeFluxAppDockerNetwork.called).to.be.false;
     });
 
-    it('does NOT clear the durable record if a condemned stamp failed to drop (boot recovery re-drives)', async () => {
-      stubs.appsRuntimeState.remove.resolves(false);
-      await appUninstaller.runTeardown(doc());
-      expect(stubs.pendingTeardownStore.clearTeardown.called).to.be.false;
+    // The network, like the telemetry sink and the content store, is the app's,
+    // shared by every instance of it here: it goes when no instance is still
+    // hosted. The instance being removed is marked owed and does not count.
+    it('keeps the network while a sibling instance is still hosted, and the removal records with it', async () => {
+      records.set(recordKey('app', 's2'), { replica: 's2', owed: null });
+      await appUninstaller.runTeardown(target());
+      expect(stubs.dockerService.forceRemoveFluxAppDockerNetwork.called, 'the sibling still uses the network').to.be.false;
+      expect(stubs.installedApps.remove.calledOnceWith('app', null), 'the instance itself goes').to.be.true;
+      expect(stubs.dockerService.clearFluxRemovedContainers.called, 'the sibling keeps the reader of the removal records').to.be.false;
     });
 
-    // The docstring on teardownComponentCore promises "the host residue is
-    // retried by the owed record, never by holding the component hostage". It
-    // was not: `removed` was set to true BEFORE the destructive cleanup, so a
-    // throw from unmount / appdata / crontab / volume-file removal still
-    // reported removed, the caller saw no survivor, and clearTeardown dropped
-    // the record. The mount, the appdata directory, the crontab entry and the
-    // FLUXFSVOL file were then never retried — not by the reconciler, not at
-    // boot.
-    it('keeps the durable record when host cleanup fails after the container is gone', async () => {
+    it('does NOT take the records if a condemned stamp failed to drop (the owed mark re-drives)', async () => {
+      stubs.appsRuntimeState.remove.resolves(false);
+      await appUninstaller.runTeardown(target());
+      expect(stubs.installedApps.remove.called).to.be.false;
+      expect(stubs.installedLedgers.remove.called).to.be.false;
+    });
+
+    // A throw from unmount / appdata / crontab / volume-file removal after the
+    // container is gone leaves residue on disk: the mount, the appdata directory,
+    // the crontab entry, the FLUXFSVOL file. The records stay owed so it is
+    // retried, by the reconciler and at boot, and the component is not held
+    // hostage for it.
+    it('keeps the records when host cleanup fails after the container is gone', async () => {
       stubs.volumeService.isPathMounted.rejects(new Error('/proc/self/mountinfo unreadable'));
 
-      await appUninstaller.runTeardown(doc());
+      await appUninstaller.runTeardown(target());
 
-      expect(stubs.pendingTeardownStore.clearTeardown.called, 'residue is still on disk').to.be.false;
-      // And NOT by holding the component hostage: its runtime state still drops,
-      // which is the half the docstring gets right.
+      expect(stubs.installedApps.remove.called, 'residue is still on disk').to.be.false;
+      // And NOT by holding the component hostage: its runtime state still drops.
       expect(stubs.appsRuntimeState.remove.called, 'the component is not held hostage').to.be.true;
     });
 
-    // A removal that did not happen is residue, as a throw is: the record stays owed so it
+    // A removal that did not happen is residue, as a throw is: the records stay owed so it
     // is retried, and the stream does not report the data cleaned.
     [
       ['the app data', (c) => c.args[0] === 'rm' && !String(c.args[1].params[1]).endsWith('FLUXFSVOL')],
       ['the volume image', (c) => c.args[0] === 'rm' && String(c.args[1].params[1]).endsWith('FLUXFSVOL')],
     ].forEach(([what, isThatRemoval]) => {
-      it(`keeps the durable record when removing ${what} fails`, async () => {
-        stubs.volumeService.getVolumeFilePath.resolves({ path: '/dat/fluxweb_appFLUXFSVOL', conclusive: true });
+      it(`keeps the records when removing ${what} fails`, async () => {
+        // The image file is where the ledger says the node put it.
+        const block = { volume: { file: '/dat/fluxweb_appFLUXFSVOL', disk: '/dat', fsUuid: 'u', mountDir: `${appsFolder}${onlyComponent().identifier}` } };
         serviceHelper.runCommand.callsFake(async (cmd, opts) => (
           isThatRemoval({ args: [cmd, opts] }) ? { error: new Error('rm: cannot remove: Device or resource busy') } : { error: null, stdout: '', stderr: '' }
         ));
         const statuses = [];
 
-        await appUninstaller.runTeardown(doc(), { onStatus: (msg) => statuses.push(msg) });
+        await appUninstaller.runTeardown(target({ block }), { onStatus: (msg) => statuses.push(msg) });
 
         expect(serviceHelper.runCommand.getCalls().some((c) => isThatRemoval(c)), 'the removal was never attempted').to.be.true;
-        expect(stubs.pendingTeardownStore.clearTeardown.called, 'residue is still on disk').to.be.false;
+        expect(stubs.installedApps.remove.called, 'residue is still on disk').to.be.false;
         expect(statuses.some((msg) => /\bcleaned\b/.test(msg) && !/Database/.test(msg) && (what === 'the app data' ? /^Data of/.test(msg) : /^Volume of/.test(msg))), 'reported cleaned when it was not').to.be.false;
       });
     });
 
-    it('never reclaims host storage (nor clears the record) while the container survives the remove', async () => {
+    it('never reclaims host storage (nor takes the records) while the container survives the remove', async () => {
       // A concurrent re-create (or a failed remove) leaves the container present. Destroying
       // its volume now would corrupt a live container, so the teardown must skip the
       // destructive cleanup and stay owed for retry.
       stubs.dockerService.getDockerContainer.resolves({ id: 'still-running' });
-      await appUninstaller.runTeardown(doc());
+      await appUninstaller.runTeardown(target());
       expect(stubs.dockerService.appDockerRemove.calledOnce, 'remove attempted').to.be.true;
       const umountCalled = serviceHelper.runCommand.getCalls().some((c) => c.args[0] === 'umount');
       expect(umountCalled, 'volume NOT unmounted under a live container').to.be.false;
-      expect(stubs.pendingTeardownStore.clearTeardown.called, 'record kept owed for retry').to.be.false;
+      expect(stubs.installedApps.remove.called, 'records kept owed for retry').to.be.false;
     });
 
     it('force teardown kills + force-removes the container and force-removes the network', async () => {
-      await appUninstaller.runTeardown(doc({ forceKill: true }));
+      await appUninstaller.runTeardown(target({ owed: { force: true } }));
       expect(stubs.dockerService.appDockerKill.calledOnce).to.be.true;
       expect(stubs.dockerService.appDockerStop.called).to.be.false;
       expect(stubs.dockerService.appDockerForceRemove.calledOnce).to.be.true;
       expect(stubs.dockerService.forceRemoveFluxAppDockerNetwork.calledOnce).to.be.true;
     });
 
-    // Defect 1: a teardown must not tear a container down while a reconcile start holds the
+    // A teardown must not tear a container down while a reconcile start holds the
     // component 'removing' key. It WAITS (bounded) for the start to settle — the acquire
     // succeeding is the signal — then removes, rather than deferring to boot recovery.
     it('waits for an in-flight start (removing key busy) to settle, then removes', async () => {
       stubs.operationRegistry.acquire.onFirstCall().returns(null).onSecondCall().returns('tok');
-      await appUninstaller.runTeardown(doc());
+      await appUninstaller.runTeardown(target());
       expect(stubs.operationRegistry.acquire.callCount, 'polled the removing lease until the start cleared').to.be.at.least(2);
       expect(stubs.dockerService.appDockerRemove.calledOnce, 'removed once the lease cleared').to.be.true;
-      expect(stubs.pendingTeardownStore.clearTeardown.calledOnce, 'teardown completed, not owed').to.be.true;
+      expect(stubs.installedApps.remove.calledOnce, 'teardown completed, not owed').to.be.true;
     });
 
     // A start that completed in the gap before we took the lease leaves the container
@@ -404,12 +426,12 @@ describe('appUninstaller tombstoning teardown', () => {
     // already elapsed) rather than 409-looping to boot recovery — and the teardown completes.
     it('force-escalates and completes when a start left the container running', async () => {
       stubs.dockerService.getDockerContainer.onFirstCall().resolves({ id: 'running-from-gap' }).onSecondCall().resolves(null);
-      await appUninstaller.runTeardown(doc());
+      await appUninstaller.runTeardown(target());
       expect(stubs.dockerService.appDockerRemove.calledOnce, 'non-force remove attempted first').to.be.true;
       expect(stubs.dockerService.appDockerForceRemove.calledOnce, 'escalated to a force remove').to.be.true;
       expect(stubs.dockerService.appDockerRemove.calledBefore(stubs.dockerService.appDockerForceRemove)).to.be.true;
       expect(stubs.appsRuntimeState.remove.called, 'runtime state dropped — component fully torn down').to.be.true;
-      expect(stubs.pendingTeardownStore.clearTeardown.calledOnce, 'record cleared, not owed').to.be.true;
+      expect(stubs.installedApps.remove.calledOnce, 'records taken, not owed').to.be.true;
     });
 
     // A component whose container cannot be removed (even the force escalation fails) must
@@ -418,10 +440,10 @@ describe('appUninstaller tombstoning teardown', () => {
     // runtime state, and must stay owed.
     it('keeps a surviving component condemned (does not drop its runtime state) and owed', async () => {
       stubs.dockerService.getDockerContainer.resolves({ id: 'stuck' }); // never gone, even after force
-      await appUninstaller.runTeardown(doc());
+      await appUninstaller.runTeardown(target());
       expect(stubs.dockerService.appDockerForceRemove.called, 'escalation attempted').to.be.true;
       expect(stubs.appsRuntimeState.remove.called, 'must NOT drop runtime state — that would un-condemn a live container').to.be.false;
-      expect(stubs.pendingTeardownStore.clearTeardown.called, 'kept owed for boot recovery').to.be.false;
+      expect(stubs.installedApps.remove.called, 'kept owed for boot recovery').to.be.false;
       // and it hands the still-owed teardown to the reconciler to converge (retry with
       // backoff), rather than abandoning it until the next boot.
       expect(stubs.reconcilerQueue.enqueueComponent.calledWith(onlyComponent().identifier), 'enqueued the survivor for the reconciler to re-drive').to.be.true;
@@ -429,61 +451,51 @@ describe('appUninstaller tombstoning teardown', () => {
   });
 
   describe('uninstallApplication (the removal prelude)', () => {
-    it('records the owed-teardown doc BEFORE deleting the local row, condemns, and awaits teardown (foreground)', async () => {
+    it('marks the instance owed BEFORE condemning, condemns what the ledger names, and awaits the teardown (foreground)', async () => {
       const res = await appUninstaller.uninstallApplication('app', { broadcastRemoval: true });
       expect(res.status).to.equal(appUninstaller.UninstallStatus.REMOVED);
-      expect(stubs.pendingTeardownStore.writeTeardown.calledOnce, 'doc written').to.be.true;
+      expect(stubs.installedApps.markOwed.calledOnce, 'the instance marked owed').to.be.true;
       expect(stubs.appsRuntimeState.setCondemned.calledWith(onlyComponent().identifier, true), 'component condemned').to.be.true;
-      expect(stubs.appsRepository.removeInstalledApp.calledOnce, 'local row deleted').to.be.true;
-      // ORDER (load-bearing): durable doc persisted BEFORE the row is deleted
-      expect(stubs.pendingTeardownStore.writeTeardown.calledBefore(stubs.appsRepository.removeInstalledApp)).to.be.true;
+      // ORDER (load-bearing): the durable mark BEFORE anything is condemned
+      expect(stubs.installedApps.markOwed.calledBefore(stubs.appsRuntimeState.setCondemned)).to.be.true;
       // foreground (background:false default) actually runs the destructive teardown
       expect(stubs.dockerService.appDockerRemove.called).to.be.true;
       // the prelude aborts any in-flight install of the same app (cancel-vs-install)
       expect(stubs.globalState.abortInstall.calledWith('app'), 'in-flight install aborted').to.be.true;
 
-      // The record the prelude persisted is projected off the REAL deployment: the
-      // component identifiers, host ports and images are the library's, and the
-      // stop budget is the real shutdown planner's answer over that deployment.
-      // Nothing here is a number written twice.
-      const [written] = stubs.pendingTeardownStore.writeTeardown.firstCall.args;
-      expect(written).to.deep.include({
-        key: 'app',
-        name: 'app',
-        networkName: deployment.networkName,
-        owner: installedSpec.owner,
-        identity: installedSpec.identity,
-        shutdownBudgetSeconds: shutdownPlan.appShutdownBudgetSeconds(deployment),
+      // The mark names the removal: why, how, whether announced, and the stop
+      // budget the daemon is given, the real shutdown planner's answer over the
+      // real deployment. Nothing here is a number written twice.
+      const [name, replica, mark] = stubs.installedApps.markOwed.firstCall.args;
+      expect([name, replica]).to.deep.equal(['app', null]);
+      expect(mark).to.deep.include({
+        reason: null, force: false, broadcast: true, budgetSeconds: shutdownPlan.appShutdownBudgetSeconds(deployment), attempts: 0,
       });
-      expect(written.components.map((c) => c.identifier))
-        .to.deep.equal(deployment.componentEntries({ reverse: true }).map(([, c]) => c.identifier));
-      expect(written.components.map((c) => c.ports))
-        .to.deep.equal(deployment.componentEntries({ reverse: true }).map(([, c]) => c.hostPorts));
+      expect(mark.since).to.be.a('number');
 
-      // The two collaborators that stay stubbed and receive the spec: the real
-      // deploymentProvider reads name/identity off the row and resolves its
-      // cleartext through isEncrypted/spec, so the object handed over must answer
-      // all four — and must actually project to the same deployment.
-      const [handedForIdentities] = stubs.deploymentProvider.localIdentities.firstCall.args;
-      const [handedForBuild, buildOpts] = stubs.deploymentProvider.buildDeployment.firstCall.args;
-      for (const handed of [handedForIdentities, handedForBuild]) {
-        expect(handed.name).to.equal('app');
-        expect(handed.identity).to.equal(null);
-        expect(handed.isEncrypted).to.equal(false);
-        expect(handed.spec, 'the row must carry a resolvable spec').to.be.an('object');
-      }
-      // buildDeployment is contractually given an explicit identity — the real one
-      // throws without it.
-      expect(buildOpts).to.have.property('replica', null);
-      // The real provider resolves the row's cleartext and then asks its Placement
+      // The deployment is built from the instance's record: the real provider
+      // reads name/identity off it and resolves its cleartext through
+      // isEncrypted/spec, so the object handed over must answer all four — and
+      // must actually project to the same deployment.
+      const [handed, buildOpts] = stubs.deploymentProvider.buildDeployment.firstCall.args;
+      expect(handed.name).to.equal('app');
+      expect(handed.identity).to.equal(null);
+      expect(handed.isEncrypted).to.equal(false);
+      expect(handed.spec, 'the record must carry a resolvable spec').to.be.an('object');
+      expect(buildOpts).to.deep.equal({ replica: null });
+      // The real provider resolves the record's cleartext and then asks its Placement
       // which replicas this node runs — placement.mode() is the first thing
       // resolveLocalReplicas calls, so the resolved spec has to answer it.
-      assertAnswers(handedForBuild.spec.placement, ['mode', 'hasTargets']);
+      assertAnswers(handed.spec.placement, ['mode', 'hasTargets']);
       expect(
-        deploymentFor(handedForBuild.spec, { identity: handedForBuild.identity })
+        deploymentFor(handed.spec, { identity: handed.identity })
           .componentEntries().map(([, c]) => c.identifier),
         'what was handed over really does project to this deployment',
       ).to.deep.equal(deployment.componentEntries().map(([, c]) => c.identifier));
+
+      // The teardown took both records.
+      expect(records.size, 'the installed record is gone').to.equal(0);
+      expect(ledgers.size, 'and its ledger').to.equal(0);
 
       // The spawn-throttle clear ran against a REAL Placement: hasTargets() and
       // isPinnedTo() answered for a v9 candidate placement naming this node's
@@ -509,12 +521,24 @@ describe('appUninstaller tombstoning teardown', () => {
       ).to.be.true;
     });
 
-    it('fails CLOSED: a doc-persist failure aborts the removal WITHOUT deleting the local row', async () => {
-      stubs.pendingTeardownStore.writeTeardown.rejects(new Error('db down'));
+    it('fails CLOSED: a mark that cannot be written aborts the removal before anything is condemned', async () => {
+      stubs.installedApps.markOwed.rejects(new Error('db down'));
       const res = await appUninstaller.uninstallApplication('app', { broadcastRemoval: true });
       expect(res.status).to.equal(appUninstaller.UninstallStatus.FAILED);
-      expect(stubs.dbHelper.findOneAndDeleteInDatabase.called, 'row must NOT be deleted with no durable record').to.be.false;
+      expect(stubs.appsRuntimeState.setCondemned.called, 'nothing condemned without the durable mark').to.be.false;
       expect(stubs.dockerService.appDockerRemove.called, 'nothing torn down').to.be.false;
+      expect(records.size, 'the record stays').to.equal(1);
+      expect(ledgers.size, 'and its ledger').to.equal(1);
+    });
+
+    // A removal whose prelude marked the instance and then died before its
+    // teardown leaves an owed instance; a second removal finds it, it does not
+    // read it as absent.
+    it('removes an instance already marked owed rather than skipping it', async () => {
+      records.get(recordKey('app', null)).owed = owedFor(deployment);
+      const res = await appUninstaller.uninstallApplication('app', { broadcastRemoval: true });
+      expect(res.status).to.equal(appUninstaller.UninstallStatus.REMOVED);
+      expect(records.size).to.equal(0);
     });
 
     it('broadcasts fluxappremoved fire-and-forget (never blocks the prelude on the broadcast)', async () => {
@@ -545,69 +569,150 @@ describe('appUninstaller tombstoning teardown', () => {
     });
   });
 
-  describe('recoverOwedTeardowns (boot recovery)', () => {
-    // The record a crashed removal left behind — the same projection off the real
-    // deployment the prelude writes.
-    const owedDoc = () => teardownDocFor(deployment);
+  // The owed-teardown record a release before the ledger wrote for a removal
+  // whose teardown it did not finish: driven once through this teardown, then
+  // cleared.
+  const legacyDoc = () => ({
+    key: 'old',
+    name: 'old',
+    replica: null,
+    networkName: 'fluxDockerNetwork_old',
+    forceKill: false,
+    broadcastRemoval: true,
+    owner: '1own',
+    identity: null,
+    reason: 'user-cancel',
+    shutdownBudgetSeconds: 30,
+    createdAt: 1,
+    attempts: 0,
+    components: [{
+      identifier: 'web_old', appId: 'web_old', componentName: 'web', label: 'old', ports: [31_001], image: 'nginx:1',
+    }],
+  });
 
-    it('re-condemns owed components then hands them to the reconciler to converge (not a one-shot boot drive)', async () => {
-      stubs.pendingTeardownStore.readAllTeardowns.resolves([owedDoc()]);
-      stubs.appsRepository.existsInstalledIdentity.resolves(false);
+  describe('recoverOwedTeardowns (boot recovery)', () => {
+    const settled = async (done) => {
+      for (let i = 0; i < 200 && !done(); i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => { setImmediate(resolve); });
+      }
+    };
+
+    it('re-condemns every component an owed instance\'s ledger names, then hands them to the reconciler to converge', async () => {
+      records.get(recordKey('app', null)).owed = owedFor(deployment);
       await appUninstaller.recoverOwedTeardowns();
       expect(stubs.appsRuntimeState.setCondemned.calledWith(onlyComponent().identifier, true)).to.be.true;
-      // Boot recovery no longer drives the teardown directly (a partial would be abandoned
+      // Boot recovery does not drive the teardown directly (a partial would be abandoned
       // until the NEXT boot); it enqueues the components so the reconciler converges them.
       expect(stubs.reconcilerQueue.enqueueComponent.calledWith(onlyComponent().identifier), 'enqueued for the reconciler to drive').to.be.true;
       await new Promise((r) => { setImmediate(r); });
       expect(stubs.dockerService.appDockerStop.called, 'no direct boot-time teardown drive').to.be.false;
+      expect(records.size, 'the records stay until the reconciler drives the teardown').to.equal(1);
     });
 
-    it('un-condemns + drops the record without teardown when the app is re-installed (row is back)', async () => {
-      stubs.pendingTeardownStore.readAllTeardowns.resolves([owedDoc()]);
-      stubs.appsRepository.existsInstalledIdentity.resolves(true); // re-installed
+    // An owed instance whose ledger names no component gives the reconciler
+    // nothing to drive by, so its teardown runs here and takes the records.
+    it('drives the teardown of an owed instance the node wrote no ledger for, and takes its record', async () => {
+      records.get(recordKey('app', null)).owed = owedFor(deployment);
+      ledgers.delete(recordKey('app', null));
       await appUninstaller.recoverOwedTeardowns();
-      expect(stubs.appsRuntimeState.setCondemned.calledWith(onlyComponent().identifier, false), 'un-condemned').to.be.true;
-      expect(stubs.pendingTeardownStore.clearTeardown.calledOnceWith('app')).to.be.true;
-      await new Promise((r) => { setImmediate(r); });
-      expect(stubs.dockerService.appDockerRemove.called, 'never tear down a re-installed app').to.be.false;
+      await settled(() => records.size === 0);
+      expect(stubs.installedApps.remove.calledOnceWith('app', null), 'the record taken').to.be.true;
+      expect(stubs.reconcilerQueue.enqueueComponent.called, 'nothing for the reconciler to drive by').to.be.false;
+      expect(stubs.appsRuntimeState.setCondemned.called, 'nothing to condemn').to.be.false;
     });
 
-    it('defers (no teardown, keeps the record) when the install-row read fails transiently', async () => {
-      stubs.pendingTeardownStore.readAllTeardowns.resolves([owedDoc()]);
-      stubs.appsRepository.existsInstalledIdentity.rejects(new Error('db blip'));
+    it('leaves the owed instances for the next boot when they cannot be read', async () => {
+      records.get(recordKey('app', null)).owed = owedFor(deployment);
+      stubs.installedApps.owed.rejects(new Error('db blip'));
       await appUninstaller.recoverOwedTeardowns();
-      expect(stubs.appsRuntimeState.setCondemned.calledWith(onlyComponent().identifier, true), 'must not condemn on a guess').to.be.false;
-      expect(stubs.pendingTeardownStore.clearTeardown.called, 'record kept for next boot').to.be.false;
+      expect(stubs.appsRuntimeState.setCondemned.called, 'must not condemn on a guess').to.be.false;
+      expect(stubs.reconcilerQueue.enqueueComponent.called).to.be.false;
       await new Promise((r) => { setImmediate(r); });
       expect(stubs.dockerService.appDockerRemove.called).to.be.false;
+      expect(records.size, 'the record kept for the next boot').to.equal(1);
+    });
+
+    it('re-condemns the components of an owed-teardown record a release before the ledger left, and enqueues them', async () => {
+      stubs.pendingTeardownStore.readAllTeardowns.resolves([legacyDoc()]);
+      await appUninstaller.recoverOwedTeardowns();
+      expect(stubs.appsRuntimeState.setCondemned.calledOnceWith('web_old', true, { force: false })).to.be.true;
+      expect(stubs.reconcilerQueue.enqueueComponent.calledOnceWith('web_old')).to.be.true;
+      await new Promise((r) => { setImmediate(r); });
+      expect(stubs.dockerService.appDockerStop.called, 'no direct boot-time teardown drive').to.be.false;
+      expect(stubs.pendingTeardownStore.clearTeardown.called, 'the record stays until its teardown finishes').to.be.false;
     });
   });
 
   describe('driveOwedTeardown (the reconciler converge-to-gone actuator)', () => {
-    const owedDoc = () => teardownDocFor(deployment);
+    const ref = { name: 'app', replica: null };
 
-    it('returns none when nothing is owed (the component is genuinely uninstalled)', async () => {
-      stubs.pendingTeardownStore.getTeardown.resolves(null);
-      const verdict = await appUninstaller.driveOwedTeardown('app');
+    it('returns none for an instance that is hosted, not owed', async () => {
+      const verdict = await appUninstaller.driveOwedTeardown(ref);
       expect(verdict.status).to.equal('none');
       expect(stubs.dockerService.appDockerRemove.called, 'no teardown driven').to.be.false;
     });
 
-    it('drives the teardown and returns removed once the owed record clears', async () => {
-      // owed on entry; cleared after the (idempotent) teardown runs
-      stubs.pendingTeardownStore.getTeardown.onFirstCall().resolves(owedDoc()).onSecondCall().resolves(null);
-      const verdict = await appUninstaller.driveOwedTeardown('app');
+    it('drives the teardown and returns removed once the records go', async () => {
+      records.get(recordKey('app', null)).owed = owedFor(deployment);
+      const verdict = await appUninstaller.driveOwedTeardown(ref);
       expect(stubs.dockerService.appDockerRemove.called, 'teardown driven').to.be.true;
       expect(verdict.status).to.equal('removed');
+      expect(records.size).to.equal(0);
     });
 
-    it('returns deferred and bumps the attempt count when the teardown did not converge', async () => {
+    it('returns deferred and counts the pass on the mark when the teardown did not converge', async () => {
+      records.get(recordKey('app', null)).owed = owedFor(deployment);
       // still owed after the pass (a survivor) -> deferred, pace the next attempt
-      stubs.pendingTeardownStore.getTeardown.resolves(owedDoc());
-      const verdict = await appUninstaller.driveOwedTeardown('app');
+      stubs.dockerService.getDockerContainer.resolves({ id: 'survivor' });
+      const verdict = await appUninstaller.driveOwedTeardown(ref);
       expect(verdict.status).to.equal('deferred');
-      expect(stubs.pendingTeardownStore.bumpAttempts.calledOnceWith('app'), 'attempt count bumped for backoff').to.be.true;
       expect(verdict.attempts).to.equal(1);
+      expect(stubs.installedApps.markOwed.lastCall.args, 'the pass counted on the mark').to.deep.equal(['app', null, { ...owedFor(deployment), attempts: 1 }]);
+      expect(records.get(recordKey('app', null)).owed.attempts).to.equal(1);
+    });
+
+    describe('an owed-teardown record a release before the ledger left', () => {
+      beforeEach(() => {
+        stubs.pendingTeardownStore.getTeardown.callsFake(async (key) => (
+          key === 'old' && !stubs.pendingTeardownStore.clearTeardown.called ? legacyDoc() : null
+        ));
+      });
+
+      it('tears down what the record names, each port as the node opens ports now and the image found once, then clears it', async () => {
+        stubs.fluxNetworkHelper.isFirewallActive.resolves(true);
+        stubs.installedLedger.discoverVolumeImage.resolves({ path: '/dat/fluxweb_oldFLUXFSVOL', fsUuid: 'u' });
+
+        const verdict = await appUninstaller.driveOwedTeardown({ legacyKey: 'old' });
+
+        expect(verdict.status).to.equal('removed');
+        expect(stubs.dockerService.appDockerRemove.calledOnceWith('web_old')).to.be.true;
+        expect(stubs.fluxNetworkHelper.deleteAllowPortRule.calledOnceWith(31_001), 'closed on the firewall the node runs').to.be.true;
+        expect(stubs.upnpService.removeMapUpnpPort.called, 'no UPnP here').to.be.false;
+        expect(stubs.installedLedger.discoverVolumeImage.calledOnceWith('web_old', null)).to.be.true;
+        expect(
+          serviceHelper.runCommand.getCalls().filter((c) => c.args[0] === 'rm').map((c) => c.args[1].params[1]),
+          'the image found is the file removed',
+        ).to.include('/dat/fluxweb_oldFLUXFSVOL');
+        expect(stubs.dockerService.forceRemoveFluxAppDockerNetwork.calledOnceWith(null, { networkName: 'fluxDockerNetwork_old' })).to.be.true;
+        expect(stubs.pendingTeardownStore.clearTeardown.calledOnceWith('old')).to.be.true;
+        expect(stubs.installedApps.remove.called, 'no installed record to take').to.be.false;
+      });
+
+      it('returns deferred and counts the pass on the record when the teardown did not converge', async () => {
+        stubs.dockerService.getDockerContainer.resolves({ id: 'survivor' });
+        const verdict = await appUninstaller.driveOwedTeardown({ legacyKey: 'old' });
+        expect(verdict.status).to.equal('deferred');
+        expect(stubs.pendingTeardownStore.bumpAttempts.calledOnceWith('old'), 'attempt count bumped for backoff').to.be.true;
+        expect(verdict.attempts).to.equal(1);
+        expect(stubs.pendingTeardownStore.clearTeardown.called).to.be.false;
+      });
+
+      it('returns none once the record is cleared', async () => {
+        const verdict = await appUninstaller.driveOwedTeardown({ legacyKey: 'gone' });
+        expect(verdict.status).to.equal('none');
+        expect(stubs.dockerService.appDockerRemove.called).to.be.false;
+      });
     });
   });
 });
