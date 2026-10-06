@@ -31,7 +31,7 @@ const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSen
 // be stale except the list itself.
 //
 // "Counter", not "owner": an owner in this codebase is the FluxID an app belongs
-// to (io.runonflux.owner, ownerZelid, appownerabove), and one word for two things
+// to (ownerZelid, appownerabove), and one word for two things
 // in one call stack is how a reader ends up applying the wrong one.
 //
 // The pool is NOT filtered by tier or capability. A counter counts; it does not

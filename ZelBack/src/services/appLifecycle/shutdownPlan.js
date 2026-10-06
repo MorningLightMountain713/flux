@@ -81,10 +81,10 @@ function buildPorts(deployComp) {
  * The full shutdown plan for one deployment of an app, pushed to flux-shutdownd
  * at deploy time. `spec_hash` is the AppEvent message hash (provenance) used as
  * the daemon's idempotency / drift-detection key — recomputable cheaply at
- * resync without decryption. `replica` is required-and-nullable: always present,
- * null for loose placement — the daemon keys its plan store per identity, so a
- * co-located pair holds one plan per replica (their effective host ports
- * differ).
+ * resync without decryption. The daemon keys its plan store by the app's
+ * identity, and by the replica for a named one, so a co-located pair holds one
+ * plan per replica (their effective host ports differ). `replica` is
+ * required-and-nullable: always present, null for loose placement.
  *
  * @param {object} instantiated - an InstantiatedSpec
  * @param {object} deployment - a DeploymentSpec (one identity's view)
@@ -112,7 +112,7 @@ function buildShutdownPlan(instantiated, deployment) {
   }
   return {
     app_name: deployment.appName,
-    owner_flux_id: instantiated.owner,
+    identity: deployment.identity,
     replica: deployment.replica ?? null,
     spec_hash: instantiated.hash,
     shutdown_budget_app_wide_s: budget,
@@ -121,8 +121,21 @@ function buildShutdownPlan(instantiated, deployment) {
   };
 }
 
+/**
+ * The identity flux-shutdownd knows an app by: the one stamped on every
+ * container of the app as a label, which for an app installed before
+ * identities were minted is its name.
+ * @param {{identity?: ?string, name: string}} app - a row, an installed record
+ *   or a teardown target
+ * @returns {string}
+ */
+function daemonIdentity({ identity, name }) {
+  return identity ?? name;
+}
+
 module.exports = {
   buildShutdownPlan,
+  daemonIdentity,
   appShutdownBudgetSeconds,
   appRequiresDaemonShutdown,
 };

@@ -156,8 +156,10 @@ async function dockerTerminalHandler(socket) {
         abandonSetup('Container not found.');
         return;
       }
-      // Whose container it is, is the owner stamped on it when it was created:
-      // nothing is read out of the text of its name.
+      // Which app the container belongs to is the identity stamped on it, and
+      // who owns that app is read from the app's record: nothing is read out
+      // of the text of a name, and from the block a sale applies in, a shell
+      // opens for the buyer and not for the seller.
       //
       // Through verifyPrivilege like every other caller, so this shell carries a
       // privilege a sweep can find. Reaching the verifier directly is what once
@@ -165,7 +167,7 @@ async function dockerTerminalHandler(socket) {
       const authorized = await verificationHelper.verifyPrivilege(
         Privilege.APP_OWNER_OR_FLUX_TEAM,
         zelidauth,
-        { owner: managed.owner },
+        { identity: managed.identity },
       );
       if (authorized !== true) {
         abandonSetup('Not authorized.');

@@ -19,6 +19,10 @@ const {
 // not asserted onto a literal.
 let flux;
 
+// An identity a registration minted: what the app's containers carry, and never
+// the app's name.
+const IDENTITY = `b${'a'.repeat(52)}`;
+
 // ── Component roles ───────────────────────────────────────────────────
 // Each role is a sparse override merged over the fixture's real v9 component.
 // The values are the schema's: drain.timeout has a 120s floor (FDM's polling
@@ -111,13 +115,14 @@ describe('shutdownPlan', () => {
         worker: PLAIN,
         web: { ...GRACEFUL, dependsOn: { worker: { condition: 'started' } } },
       });
-      const deployment = deploymentFor(spec);
-      const instantiated = await instantiatedSpec(spec);
+      const deployment = deploymentFor(spec, { identity: IDENTITY });
+      const instantiated = await instantiatedSpec(spec, { identity: IDENTITY });
 
       const plan = shutdownPlan.buildShutdownPlan(instantiated, deployment);
 
       expect(plan.app_name).to.equal('myapp');
-      expect(plan.owner_flux_id).to.equal(V9_SUBMISSION.owner);
+      expect(plan.identity, 'the plan is keyed by the identity the app\'s containers carry').to.equal(IDENTITY);
+      expect(plan, 'the plan names no owner').to.not.have.property('owner_flux_id');
       expect(plan.spec_hash).to.equal(instantiated.hash);
       expect(plan.startup_order).to.deep.equal(['worker', 'web']);
       // worker: 0+0+10, web: 180+30+60 → 280
@@ -143,7 +148,15 @@ describe('shutdownPlan', () => {
       expect(plan.replica).to.equal(null);
     });
 
-    it('carries the deployment identity: a named replica keys its own plan', async () => {
+    it('keys the plan of an app with no identity minted by its name, as its containers carry it', async () => {
+      const spec = await specFor({ web: GRACEFUL });
+
+      const plan = shutdownPlan.buildShutdownPlan(await instantiatedSpec(spec), deploymentFor(spec));
+
+      expect(plan.identity).to.equal('myapp');
+    });
+
+    it('carries the deployment\'s replica: a named replica keys its own plan', async () => {
       // A named replica exists because the app is PINNED — the assignment map is
       // where replica names live, and the deployment view is resolved for one of
       // them. Asking for a replica of a loose app would be a fiction.
@@ -173,7 +186,7 @@ describe('shutdownPlan', () => {
       expect(deployment.appName, 'buildShutdownPlan reads deployment.appName').to.be.a('string');
       expect(deployment.startupOrder, 'buildShutdownPlan spreads deployment.startupOrder').to.be.an('array');
       expect(deployment, 'replica is required-and-nullable, so it must be present').to.have.property('replica');
-      expect(instantiated.owner, 'buildShutdownPlan reads instantiated.owner').to.be.a('string');
+      expect(deployment.identity, 'buildShutdownPlan reads deployment.identity').to.be.a('string');
       expect(instantiated.hash, 'buildShutdownPlan reads instantiated.hash').to.be.a('string');
 
       // and per component, the four fields the plan is assembled from
@@ -183,6 +196,26 @@ describe('shutdownPlan', () => {
         expect(component, 'shutdownBudgetSeconds reads comp.preStop').to.have.property('preStop');
         expect(component, 'maxDrainTimeoutSeconds reads comp.loadBalancing').to.have.property('loadBalancing');
         expect(component.ports, 'buildPorts iterates comp.ports').to.be.an('object');
+      }
+    });
+  });
+
+  describe('daemonIdentity', () => {
+    it('is the identity of an app that has one', () => {
+      expect(shutdownPlan.daemonIdentity({ identity: IDENTITY, name: 'myapp' })).to.equal(IDENTITY);
+    });
+
+    it('is the name of an app with no identity minted', () => {
+      expect(shutdownPlan.daemonIdentity({ identity: null, name: 'myapp' })).to.equal('myapp');
+      expect(shutdownPlan.daemonIdentity({ name: 'myapp' })).to.equal('myapp');
+    });
+
+    it('answers for a real installed record what its deployment answers', async () => {
+      const spec = await specFor({ web: GRACEFUL });
+      for (const identity of [IDENTITY, null]) {
+        // eslint-disable-next-line no-await-in-loop
+        const instantiated = await instantiatedSpec(spec, { identity });
+        expect(shutdownPlan.daemonIdentity(instantiated)).to.equal(deploymentFor(spec, { identity }).identity);
       }
     });
   });

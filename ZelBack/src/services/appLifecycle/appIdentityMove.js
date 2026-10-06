@@ -220,7 +220,7 @@ async function stopFormerContainer(plan, formerComp) {
     if (await dockerService.getDockerContainer(name)) {
       stopAppMonitoring(formerComp.identifier, true);
       // eslint-disable-next-line no-await-in-loop
-      const handled = await appOperations.requestComponentDaemonStop(plan.installed.owner, plan.name, plan.replica, formerComp);
+      const handled = await appOperations.requestComponentDaemonStop(shutdownPlan.daemonIdentity(plan.installed), plan.name, plan.replica, formerComp);
       // eslint-disable-next-line no-await-in-loop
       if (!handled) await dockerService.appDockerStop(name);
     }
@@ -353,7 +353,6 @@ async function recreate(name, replica, uuid) {
       localImageFirst: true,
       allowLocalImageFallback: true,
       specVersion: installed.version,
-      owner: installed.owner,
       uuid,
       requiresEncryption,
     });

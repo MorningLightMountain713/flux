@@ -204,19 +204,19 @@ const COMPONENT_STOP_BUSY_DELAY_MS = 5000;
  * IS the contract for a component declaring nothing — and the only executor
  * on legacy nodes, where declared-contract components cannot be placed.
  *
- * @param {string} owner
+ * @param {string} identity - the identity the daemon knows the app by
  * @param {string} appName
  * @param {string|null} replica
  * @param {object} deployComp - a DeploymentComponent
  * @returns {Promise<boolean>} the stop already landed
  */
-async function requestComponentDaemonStop(owner, appName, replica, deployComp) {
+async function requestComponentDaemonStop(identity, appName, replica, deployComp) {
   if (!deployComp.requiresDaemonShutdown()) return false;
   for (let attempt = 0; attempt < COMPONENT_STOP_BUSY_RETRIES; attempt += 1) {
     const deadline = Math.floor(Date.now() / 1000) + deployComp.shutdownBudgetSeconds();
     // eslint-disable-next-line no-await-in-loop
     const stop = await fluxShutdowndClient.beginAppStop(
-      owner,
+      identity,
       appName,
       fluxShutdowndClient.SHUTDOWN_REASON.REDEPLOY,
       {
@@ -279,8 +279,6 @@ async function redeployComponent(appName, componentName, options = {}) {
     // Manifest check only, no pull, no disk cost.
     await componentProvisioner.verifyComponentImage(targets[0]);
 
-    const installedForStop = await appRecords.installed().byName(appName);
-
     for (const deployComp of targets) {
       if (createVolumes) {
         log.warn(`REMOVAL REASON: ${operation} initiated - ${deployComp.identifier} (redeployComponent)`);
@@ -289,7 +287,7 @@ async function redeployComponent(appName, componentName, options = {}) {
       // component-scoped; everything else takes the teardown's local stop.
       // eslint-disable-next-line no-await-in-loop
       const stopHandled = await requestComponentDaemonStop(
-        installedForStop?.owner, appName, deployComp.replica ?? null, deployComp,
+        shutdownPlan.daemonIdentity({ identity: deployComp.identity, name: appName }), appName, deployComp.replica ?? null, deployComp,
       );
       // Same-spec redeploy: the port set is identical, so leave the app's ufw/UPnP rules
       // in place across the teardown+reinstall (no firewall flap, no ~1s/port UPnP re-map).
@@ -318,7 +316,6 @@ async function redeployComponent(appName, componentName, options = {}) {
         createVolumes,
         skipPorts: true,
         specVersion: instantiated.version,
-        owner: instantiated.owner,
         uuid: instantiated.uuid,
         requiresEncryption: shutdownPlan.appRequiresDaemonShutdown(freshDeployment),
       });
@@ -451,7 +448,7 @@ async function redeployApplication(appName, options = {}) {
       const budgetSeconds = shutdownPlan.appShutdownBudgetSeconds(deployment);
       // eslint-disable-next-line no-await-in-loop
       const stop = await fluxShutdowndClient.beginAppStop(
-        preTeardownSpec.owner,
+        deployment.identity,
         appName,
         fluxShutdowndClient.SHUTDOWN_REASON.REDEPLOY,
         { force: false, deadline: Math.floor(Date.now() / 1000) + budgetSeconds, replica: deployment.replica ?? null },
@@ -512,7 +509,6 @@ async function redeployApplication(appName, options = {}) {
           createVolumes,
           skipPorts: true,
           specVersion: instantiated.version,
-          owner: instantiated.owner,
           uuid: instantiated.uuid,
           requiresEncryption,
         });
@@ -2071,21 +2067,16 @@ async function contentBlobServeApi(req, res) {
  * to the spec the registry lists: the components the update drops are removed,
  * the ones it adds are installed, and a kept one is recreated when it changed.
  *
- * A container carries its app's owner as a label docker fixes at create, and
- * the shutdown daemon keys its plan on the same owner. So an update that names
- * another owner recreates every kept component's container, keeping its
- * volume: the old one is stopped under the owner it was created for, the new
- * one is stamped with the owner the spec names now, and the daemon's plan
- * moves with it.
+ * An update that only names another owner changes no component, so it
+ * recreates nothing: a sale restarts nothing. Nothing on a container says who
+ * owns its app.
  *
  * @param {string} appName
  * @param {object} oldDeployment - the installed view of this identity
  * @param {object} newDeployment - the listed spec's view of it
  * @param {object} registrySpec - the listed row
- * @param {string} [installedOwner] - the owner the app was installed with
  */
-async function reconcileComponents(appName, oldDeployment, newDeployment, registrySpec, installedOwner = registrySpec.owner) {
-  const ownerChanged = installedOwner !== registrySpec.owner;
+async function reconcileComponents(appName, oldDeployment, newDeployment, registrySpec) {
   const oldNames = new Set(Object.keys(oldDeployment.components));
   const newNames = new Set(Object.keys(newDeployment.components));
 
@@ -2100,7 +2091,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   for (const name of kept) {
     const oldComp = oldDeployment.getComponent(name);
     const newComp = newDeployment.getComponent(name);
-    if (oldComp.equals(newComp) && !ownerChanged) {
+    if (oldComp.equals(newComp)) {
       log.info(`Component ${name} of ${appName} unchanged, skipping`);
     } else if (oldComp.storage === newComp.storage) {
       keepVolume.push(name);
@@ -2155,7 +2146,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
       // teardown's local stop.
       // eslint-disable-next-line no-await-in-loop
       const stopHandled = await requestComponentDaemonStop(
-        installedOwner, appName, oldDeployment.replica ?? null, deployComp,
+        oldDeployment.identity, appName, oldDeployment.replica ?? null, deployComp,
       );
       // eslint-disable-next-line no-await-in-loop
       await appUninstaller.uninstallComponent(deployComp, { removeVolumes, skipPorts: true, stopHandled });
@@ -2227,7 +2218,6 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
         createVolumes,
         skipPorts: true,
         specVersion: registrySpec.version,
-        owner: registrySpec.owner,
         requiresEncryption,
       });
       // eslint-disable-next-line no-await-in-loop
@@ -2284,12 +2274,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
         log.warn(`flux-shutdownd plan handoff skipped: ${error.message}`);
       }
     } else {
-      await fluxShutdowndClient.deleteAppPlanBestEffort(freshDeployment.appName, registrySpec.owner, freshDeployment.replica ?? null);
-    }
-    // The plan the daemon holds under the owner the app was installed with
-    // names containers that no longer exist.
-    if (ownerChanged) {
-      await fluxShutdowndClient.deleteAppPlanBestEffort(freshDeployment.appName, installedOwner, freshDeployment.replica ?? null);
+      await fluxShutdowndClient.deleteAppPlanBestEffort(freshDeployment.identity, freshDeployment.replica ?? null);
     }
   }
 }
@@ -2327,7 +2312,7 @@ async function reconcileApp(installed, registrySpec) {
       const newDeployment = newByReplica.get(oldDeployment.replica ?? null);
       if (!newDeployment) continue;
       // eslint-disable-next-line no-await-in-loop
-      await reconcileComponents(installed.name, oldDeployment, newDeployment, registrySpec, installed.owner);
+      await reconcileComponents(installed.name, oldDeployment, newDeployment, registrySpec);
     }
     log.info(`Application ${installed.name} reconciliation complete`);
   } catch (error) {
@@ -2368,10 +2353,10 @@ async function shutdownPlanResync() {
 
   try {
     const installedApps = (await appRecords.installed().apps()).map((record) => record.record);
-    // One plan per deployed identity: loose keeps the legacy owner:name key,
-    // a named replica appends its segment (replica names cannot contain ':').
-    const planKey = (owner, name, replica) => (replica != null ? `${owner}:${name}:${replica}` : `${owner}:${name}`);
-    const stored = new Map(summaries.map((s) => [planKey(s.owner_flux_id, s.app_name, s.replica ?? null), s]));
+    // One plan per deployment, as the daemon keys them: the app's identity, and
+    // a named replica's segment after it (neither can contain ':').
+    const planKey = (identity, replica) => (replica != null ? `${identity}:${replica}` : identity);
+    const stored = new Map(summaries.map((s) => [planKey(s.identity, s.replica ?? null), s]));
     const live = new Set();
     let pushed = 0;
     let deleted = 0;
@@ -2380,7 +2365,7 @@ async function shutdownPlanResync() {
       // Couldn't evaluate the app: keep every plan it holds rather than orphan them.
       const keepAllStored = () => {
         for (const [key, s] of stored) {
-          if (s.app_name === installed.name && s.owner_flux_id === installed.owner) live.add(key);
+          if (s.identity === shutdownPlan.daemonIdentity(installed)) live.add(key);
         }
       };
       let deployments;
@@ -2393,7 +2378,7 @@ async function shutdownPlanResync() {
         continue;
       }
       for (const deployment of deployments) {
-        const key = planKey(installed.owner, installed.name, deployment.replica ?? null);
+        const key = planKey(deployment.identity, deployment.replica ?? null);
         const summary = stored.get(key);
         // A stored plan whose hash still matches: the identity is graceful (it has
         // a plan) and its spec is unchanged — keep it live, nothing to push.
@@ -2422,7 +2407,7 @@ async function shutdownPlanResync() {
     for (const [key, summary] of stored) {
       if (live.has(key)) continue;
       // eslint-disable-next-line no-await-in-loop
-      await fluxShutdowndClient.deleteAppPlanBestEffort(summary.app_name, summary.owner_flux_id, summary.replica ?? null);
+      await fluxShutdowndClient.deleteAppPlanBestEffort(summary.identity, summary.replica ?? null);
       deleted += 1;
     }
 

@@ -106,7 +106,7 @@ async function recreateMissingContainers(componentIdentifier, instantiated, { ab
       throw new Error(`Cannot recreate ${componentIdentifier} without creating (reformatting) its data volume: the volume for ${mainAppName} could not be verified as mounted`);
     }
     await componentProvisioner.installComponent(deployComp, {
-      createVolumes: !volumeMounted, owner: instantiated.owner, requiresEncryption, abortSignal, allowLocalImageFallback: true,
+      createVolumes: !volumeMounted, requiresEncryption, abortSignal, allowLocalImageFallback: true,
     });
   }
 

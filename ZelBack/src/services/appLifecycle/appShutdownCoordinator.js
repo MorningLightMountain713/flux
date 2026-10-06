@@ -98,7 +98,7 @@ async function requestGracefulStop(identifier, reconcilerReason) {
   // first await, so the gate is set before we return and suppresses the reconciler's
   // subsequent passes. A component stop seeds no gate: its siblings keep running.
   const drain = fluxShutdowndClient
-    .beginAppStop(instantiated.owner, appName, reason, options)
+    .beginAppStop(shutdownPlan.daemonIdentity(instantiated), appName, reason, options)
     .then((res) => {
       inFlight.delete(key);
       if (res.outcome === 'unreachable' || res.outcome === 'timeout') {

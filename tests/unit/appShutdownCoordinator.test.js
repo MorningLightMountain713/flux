@@ -172,7 +172,10 @@ describe('appShutdownCoordinator', () => {
 
     const result = await coordinator.requestGracefulStop(identifier, 'operatorStopped');
     expect(result).to.equal(true);
-    expect(stubs.fluxShutdowndClient.beginAppStop.calledWith(inst.owner, 'myapp2')).to.equal(true);
+    expect(
+      stubs.fluxShutdowndClient.beginAppStop.firstCall.args.slice(0, 2),
+      'the daemon is asked by the identity the app\'s containers carry',
+    ).to.deep.equal(['5df148117fa5', 'myapp2']);
   });
 
   it('returns false for an app not in the local database', async () => {
@@ -182,8 +185,8 @@ describe('appShutdownCoordinator', () => {
     expect(stubs.fluxShutdowndClient.beginAppStop.called).to.equal(false);
   });
 
-  it('routes a graceful stop to the daemon (owner/app/reason) and returns true', async () => {
-    const { inst, deployment } = apps.get('myapp');
+  it('routes a graceful stop to the daemon (identity/app/reason) and returns true', async () => {
+    const { deployment } = apps.get('myapp');
     // Freeze the clock so the deadline is asserted exactly rather than within a
     // fudge window. The specs are built above — the library never runs under
     // fake timers.
@@ -191,9 +194,8 @@ describe('appShutdownCoordinator', () => {
     const res = await coordinator.requestGracefulStop(idOf('myapp'), 'condemned');
     expect(res).to.equal(true);
     expect(stubs.fluxShutdowndClient.beginAppStop.calledOnce).to.equal(true);
-    const [owner, app, reason, opts] = stubs.fluxShutdowndClient.beginAppStop.firstCall.args;
-    // the owner is the row's real FluxID, not a placeholder
-    expect(owner).to.equal(inst.owner);
+    const [identity, app, reason, opts] = stubs.fluxShutdowndClient.beginAppStop.firstCall.args;
+    expect(identity, 'an app with no identity minted is known to the daemon by its name').to.equal('myapp');
     expect(app).to.equal('myapp');
     expect(reason).to.equal('eviction'); // condemned -> eviction
     expect(opts.force).to.equal(false);

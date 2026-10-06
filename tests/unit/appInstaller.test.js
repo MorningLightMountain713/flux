@@ -643,9 +643,9 @@ describe('appInstaller tests', () => {
         'toDockerNanoCpus', 'toDockerMemoryBytes',
       ]);
       expect(component.identifier).to.equal('web_newapp');
-      // installComponent refuses a blank owner outright — a stamped-empty
-      // runonflux.owner label silently breaks drain/preStop at node shutdown.
-      expect(componentOpts.owner).to.equal(newappInstantiated.owner);
+      // Nothing on a container says who owns its app, so the create step is
+      // handed no owner.
+      expect(componentOpts).to.not.have.property('owner');
 
       // appNetworkLinker.connectComponentToLinkedApps reads the deployment's links
       // and its app name for the deferral it raises when one has vanished.

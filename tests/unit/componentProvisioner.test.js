@@ -110,7 +110,7 @@ describe('componentProvisioner tests', () => {
 
   async function installWith(syncMode, createVolumes) {
     const provisioner = loadProvisioner();
-    await provisioner.installComponent(makeComponent(syncMode), { owner: 'owner1', createVolumes });
+    await provisioner.installComponent(makeComponent(syncMode), { createVolumes });
   }
 
   // Every entry is in the ledger before the step that creates what it names.
@@ -119,7 +119,7 @@ describe('componentProvisioner tests', () => {
       const provisioner = loadProvisioner({ firewallActive: true });
       await provisioner.installComponent(makeComponent(null, {
         hostPorts: [31_000], hasSyncthing: () => true, syncFolderId: 'fluxweb_synchold',
-      }), { owner: 'owner1', createVolumes: true });
+      }), { createVolumes: true });
 
       sinon.assert.calledOnceWithExactly(ledgersStub.addComponent, 'syncholdapp', null, 'web', {
         identifier: 'web_syncholdapp', image: 'nginx:latest', syncFolder: { id: 'fluxweb_synchold', path: '/apps/web_syncholdapp' }, aliases: ['web'],
@@ -131,7 +131,7 @@ describe('componentProvisioner tests', () => {
 
     it('names no sync folder for a component without syncthing, and carries the replica of a named instance', async () => {
       const provisioner = loadProvisioner();
-      await provisioner.installComponent(makeComponent(null, { replica: 'r1' }), { owner: 'owner1' });
+      await provisioner.installComponent(makeComponent(null, { replica: 'r1' }));
       sinon.assert.calledOnceWithExactly(ledgersStub.addComponent, 'syncholdapp', 'r1', 'web', {
         identifier: 'web_syncholdapp', image: 'nginx:latest', syncFolder: null, aliases: ['web'],
       });
@@ -140,7 +140,7 @@ describe('componentProvisioner tests', () => {
 
     it('records each port with the methods that will open it, before it is opened', async () => {
       const provisioner = loadProvisioner({ firewallActive: true, isUPNP: true });
-      await provisioner.installComponent(makeComponent(null, { hostPorts: [31_000, 31_001] }), { owner: 'owner1' });
+      await provisioner.installComponent(makeComponent(null, { hostPorts: [31_000, 31_001] }));
 
       const ports = ledgerWrite('hostPorts');
       expect(ports.args).to.deep.equal(['syncholdapp', null, 'web', 'hostPorts', [
@@ -154,7 +154,7 @@ describe('componentProvisioner tests', () => {
 
     it('records a port as opened by nothing on a node with no firewall and no UPnP, and opens it by nothing', async () => {
       const provisioner = loadProvisioner();
-      await provisioner.installComponent(makeComponent(null, { hostPorts: [31_000] }), { owner: 'owner1' });
+      await provisioner.installComponent(makeComponent(null, { hostPorts: [31_000] }));
       expect(ledgerWrite('hostPorts').args[4]).to.deep.equal([{ port: 31_000, opened: [] }]);
       sinon.assert.notCalled(allowPortStub);
       sinon.assert.notCalled(mapUpnpPortStub);
@@ -162,14 +162,14 @@ describe('componentProvisioner tests', () => {
 
     it('leaves the ports entry as it is on a redeploy, which opens none', async () => {
       const provisioner = loadProvisioner({ firewallActive: true });
-      await provisioner.installComponent(makeComponent(null, { hostPorts: [31_000] }), { owner: 'owner1', skipPorts: true });
+      await provisioner.installComponent(makeComponent(null, { hostPorts: [31_000] }), { skipPorts: true });
       expect(ledgerWrite('hostPorts')).to.equal(undefined);
       sinon.assert.notCalled(allowPortStub);
     });
 
     it('records the image with the digest the daemon holds after the pull, before the volume is built', async () => {
       const provisioner = loadProvisioner();
-      await provisioner.installComponent(makeComponent(null), { owner: 'owner1', createVolumes: true });
+      await provisioner.installComponent(makeComponent(null), { createVolumes: true });
       const image = ledgerWrite('image');
       expect(image.args[4]).to.deep.equal({ reference: 'nginx:latest', digest: 'sha256:pulled' });
       sinon.assert.calledOnceWithExactly(appDockerImageDigestStub, 'nginx:latest');
@@ -180,7 +180,7 @@ describe('componentProvisioner tests', () => {
       const provisioner = loadProvisioner();
       await provisioner.installComponent(makeComponent(null, {
         mounts: [{ Source: '/apps/web_syncholdapp/appdata', sourceType: 'directory' }, { Source: '/apps/web_syncholdapp/conf.toml', sourceType: 'file' }],
-      }), { owner: 'owner1', createVolumes: true });
+      }), { createVolumes: true });
       const sources = ledgerWrite('mountSources');
       expect(sources.args[4]).to.deep.equal([
         { path: '/apps/web_syncholdapp/appdata', kind: 'dir' }, { path: '/apps/web_syncholdapp/conf.toml', kind: 'file' },
@@ -190,7 +190,7 @@ describe('componentProvisioner tests', () => {
 
     it('records the TLS directory before the certificate is issued', async () => {
       const provisioner = loadProvisioner();
-      await provisioner.installComponent(makeTlsComponent(), { owner: 'owner1', createVolumes: true });
+      await provisioner.installComponent(makeTlsComponent(), { createVolumes: true });
       const tls = ledgerWrite('tls');
       expect(tls.args[4]).to.deep.equal({ dir: TLS_DIR });
       expect(tls.calledBefore(provisionCertStub.firstCall)).to.equal(true);
@@ -201,7 +201,7 @@ describe('componentProvisioner tests', () => {
         presentedIp: '10.9.0.2', env: ['FLUX_MESH_SELF=web-0'], dns: ['10.9.0.1'], hostname: 'web-0', aliases: ['web', 'web-0'],
       });
       const provisioner = loadProvisioner({ meshPrepareStub });
-      await provisioner.installComponent(makeComponent(null, { networkAliases: ['web', 'web.syncholdapp'] }), { owner: 'owner1' });
+      await provisioner.installComponent(makeComponent(null, { networkAliases: ['web', 'web.syncholdapp'] }));
 
       const mesh = ledgerWrite('mesh');
       expect(mesh.args[4]).to.deep.equal({ name: 'web-0' });
@@ -214,7 +214,7 @@ describe('componentProvisioner tests', () => {
 
     it('records no mesh name and no TLS directory for a component that has neither', async () => {
       const provisioner = loadProvisioner();
-      await provisioner.installComponent(makeComponent(null), { owner: 'owner1' });
+      await provisioner.installComponent(makeComponent(null));
       expect(ledgerWrites().map(([field]) => field)).to.deep.equal(['hostPorts', 'image', 'mountSources', 'aliases']);
     });
 
@@ -222,7 +222,7 @@ describe('componentProvisioner tests', () => {
       const provisioner = loadProvisioner({ firewallActive: true });
       ledgersStub.setComponent.withArgs('syncholdapp', null, 'web', 'hostPorts').rejects(new Error('ledger down'));
       let threw = null;
-      await provisioner.installComponent(makeComponent(null, { hostPorts: [31_000] }), { owner: 'owner1' }).catch((e) => { threw = e; });
+      await provisioner.installComponent(makeComponent(null, { hostPorts: [31_000] })).catch((e) => { threw = e; });
       expect(threw.message).to.equal('ledger down');
       sinon.assert.notCalled(allowPortStub);
       sinon.assert.notCalled(appDockerCreateStub);
@@ -260,7 +260,7 @@ describe('componentProvisioner tests', () => {
     it('creates from the local image when the pull fails transient and the image is on disk', async () => {
       const provisioner = loadProvisioner({ pullError: transientPullError() });
       appDockerImageSizeStub.resolves(5e8); // image present locally
-      await provisioner.installComponent(makeComponent(null), { owner: 'owner1', allowLocalImageFallback: true });
+      await provisioner.installComponent(makeComponent(null), { allowLocalImageFallback: true });
       sinon.assert.calledOnce(appDockerCreateStub);
     });
 
@@ -268,7 +268,7 @@ describe('componentProvisioner tests', () => {
       const provisioner = loadProvisioner({ pullError: transientPullError() });
       appDockerImageSizeStub.resolves(0);
       try {
-        await provisioner.installComponent(makeComponent(null), { owner: 'owner1', allowLocalImageFallback: true });
+        await provisioner.installComponent(makeComponent(null), { allowLocalImageFallback: true });
         expect.fail('should have thrown');
       } catch (err) {
         expect(err.message).to.include('connection refused');
@@ -280,7 +280,7 @@ describe('componentProvisioner tests', () => {
       const provisioner = loadProvisioner({ pullError: new Error('manifest unknown') });
       appDockerImageSizeStub.resolves(5e8);
       try {
-        await provisioner.installComponent(makeComponent(null), { owner: 'owner1', allowLocalImageFallback: true });
+        await provisioner.installComponent(makeComponent(null), { allowLocalImageFallback: true });
         expect.fail('should have thrown');
       } catch (err) {
         expect(err.message).to.include('manifest unknown');
@@ -292,7 +292,7 @@ describe('componentProvisioner tests', () => {
       const provisioner = loadProvisioner({ pullError: transientPullError() });
       appDockerImageSizeStub.resolves(5e8);
       try {
-        await provisioner.installComponent(makeComponent(null), { owner: 'owner1' });
+        await provisioner.installComponent(makeComponent(null));
         expect.fail('should have thrown');
       } catch (err) {
         expect(err.registryErrorClass).to.equal('transient');
@@ -305,7 +305,7 @@ describe('componentProvisioner tests', () => {
     it('neither verifies nor pulls when the image is on the daemon', async () => {
       const provisioner = loadProvisioner({ pullError: new Error('registry must not be asked') });
       appDockerImageSizeStub.resolves(5e8);
-      await provisioner.installComponent(makeComponent(null), { owner: 'owner1', localImageFirst: true });
+      await provisioner.installComponent(makeComponent(null), { localImageFirst: true });
       sinon.assert.calledOnce(appDockerCreateStub);
     });
 
@@ -313,7 +313,7 @@ describe('componentProvisioner tests', () => {
       const provisioner = loadProvisioner({ pullError: new Error('manifest unknown') });
       appDockerImageSizeStub.resolves(0);
       try {
-        await provisioner.installComponent(makeComponent(null), { owner: 'owner1', localImageFirst: true });
+        await provisioner.installComponent(makeComponent(null), { localImageFirst: true });
         expect.fail('should have thrown');
       } catch (err) {
         expect(err.message).to.include('manifest unknown');
@@ -325,7 +325,7 @@ describe('componentProvisioner tests', () => {
       const provisioner = loadProvisioner({ pullError: new Error('manifest unknown') });
       appDockerImageSizeStub.resolves(5e8);
       try {
-        await provisioner.installComponent(makeComponent(null), { owner: 'owner1' });
+        await provisioner.installComponent(makeComponent(null));
         expect.fail('should have thrown');
       } catch (err) {
         expect(err.message).to.include('manifest unknown');
@@ -334,20 +334,17 @@ describe('componentProvisioner tests', () => {
     });
   });
 
-  describe('owner guard', () => {
-    const component = { identifier: 'web_testapp', appName: 'testapp' };
-
-    it('rejects a real install missing the owner', async () => {
+  describe('what the create step is handed', () => {
+    it('carries the app instance\'s uuid and nothing that says who owns the app', async () => {
       const provisioner = loadProvisioner();
-      let threw;
-      try {
-        await provisioner.installComponent(component, { createVolumes: false });
-        threw = null;
-      } catch (error) {
-        threw = error;
-      }
-      expect(threw).to.be.an('error');
-      expect(threw.message).to.contain('owner required');
+      const uuid = 'ab'.repeat(32);
+
+      await provisioner.installComponent(makeComponent(null), { uuid });
+
+      sinon.assert.calledOnce(appDockerCreateStub);
+      const [, options] = appDockerCreateStub.firstCall.args;
+      expect(options.uuid).to.equal(uuid);
+      expect(options).to.not.have.property('owner');
     });
   });
 
@@ -377,7 +374,7 @@ describe('componentProvisioner tests', () => {
       const provisioner = loadProvisioner();
       await provisioner.installComponent(
         makeComponent('sync', { isStateless: true }),
-        { owner: 'owner1', createVolumes: true },
+        { createVolumes: true },
       );
       expect(createAppVolumeStub.called, 'no volume for a stateless component').to.be.false;
     });
@@ -387,7 +384,7 @@ describe('componentProvisioner tests', () => {
       appDockerImageSizeStub.resolves(5e9); // 5GB on disk, over the 2GB rootFs budget
       const component = makeComponent(null, { imageFitsRootFs: () => false });
       try {
-        await provisioner.installComponent(component, { owner: 'owner1', createVolumes: true });
+        await provisioner.installComponent(component, { createVolumes: true });
         expect.fail('Should have thrown');
       } catch (err) {
         expect(err.message).to.include('rootFsGb');
@@ -406,7 +403,7 @@ describe('componentProvisioner tests', () => {
   describe('backend-TLS certificate provisioning', () => {
     it('writes the cert into the materialized mount source before the container is created', async () => {
       const provisioner = loadProvisioner();
-      await provisioner.installComponent(makeTlsComponent(), { owner: 'owner1', createVolumes: true });
+      await provisioner.installComponent(makeTlsComponent(), { createVolumes: true });
 
       expect(provisionCertStub.calledOnce).to.be.true;
       const [appName, identity, tlsPaths] = provisionCertStub.firstCall.args;
@@ -422,7 +419,7 @@ describe('componentProvisioner tests', () => {
 
     it('provisions nothing for a component that does not use platform-verified TLS', async () => {
       const provisioner = loadProvisioner();
-      await provisioner.installComponent(makeComponent(null), { owner: 'owner1', createVolumes: true });
+      await provisioner.installComponent(makeComponent(null), { createVolumes: true });
 
       expect(provisionCertStub.called).to.be.false;
       sinon.assert.calledOnce(appDockerCreateStub);
@@ -434,7 +431,7 @@ describe('componentProvisioner tests', () => {
       // BACKEND_TLS_UNAVAILABLE tells appInstaller to defer rather than blame the app.
       const provisioner = loadProvisioner({ certError: new Error('signer unreachable') });
       try {
-        await provisioner.installComponent(makeTlsComponent(), { owner: 'owner1', createVolumes: true });
+        await provisioner.installComponent(makeTlsComponent(), { createVolumes: true });
         expect.fail('should have thrown');
       } catch (err) {
         expect(err.code).to.equal('BACKEND_TLS_UNAVAILABLE');
@@ -450,7 +447,7 @@ describe('componentProvisioner tests', () => {
       try {
         await provisioner.installComponent(
           makeTlsComponent({ backendTlsPaths: () => null }),
-          { owner: 'owner1', createVolumes: true },
+          { createVolumes: true },
         );
         expect.fail('should have thrown');
       } catch (err) {
@@ -507,7 +504,7 @@ describe('componentProvisioner tests', () => {
     async function tryInstall(provisioner) {
       let threw = null;
       try {
-        await provisioner.installComponent(makeComponent('sync'), { owner: 'owner1', createVolumes: true });
+        await provisioner.installComponent(makeComponent('sync'), { createVolumes: true });
       } catch (error) {
         threw = error;
       }
@@ -568,7 +565,7 @@ describe('componentProvisioner tests', () => {
       const provisioner = loadProvisioner({ firewallActive: true });
       const component = makeComponent('none', { hostPorts: [8080] });
 
-      await provisioner.installComponent(component, { owner: 'owner1', createVolumes: false });
+      await provisioner.installComponent(component, { createVolumes: false });
 
       expect(allowPortStub.calledWith(8080), 'a normal install opens its ports').to.be.true;
     });
@@ -577,7 +574,7 @@ describe('componentProvisioner tests', () => {
       const provisioner = loadProvisioner({ firewallActive: true, isUPNP: true });
       const component = makeComponent('none', { hostPorts: [8080] });
 
-      await provisioner.installComponent(component, { owner: 'owner1', createVolumes: false, skipPorts: true });
+      await provisioner.installComponent(component, { createVolumes: false, skipPorts: true });
 
       expect(allowPortStub.called, 'skipPorts must not touch ufw').to.be.false;
       expect(mapUpnpPortStub.called, 'skipPorts must not touch UPnP').to.be.false;
@@ -595,7 +592,7 @@ describe('componentProvisioner tests', () => {
           dns: ['169.254.43.53', '8.8.8.8', '1.1.1.1'],
         }),
       });
-      await provisioner.installComponent(makeComponent(null), { owner: 'owner1', extraEnv: ['X=1'] });
+      await provisioner.installComponent(makeComponent(null), { extraEnv: ['X=1'] });
       const options = appDockerCreateStub.firstCall.args[1];
       expect(options.extraEnv).to.deep.equal([
         'X=1', 'FLUX_MESH_APP=syncholdapp', 'FLUX_MESH_SELF=web-aaaa1111', 'FLUX_MESH_SELF_IP=10.127.0.1',
@@ -605,7 +602,7 @@ describe('componentProvisioner tests', () => {
 
     it('a non-mesh component is created without a dns override', async () => {
       const provisioner = loadProvisioner();
-      await provisioner.installComponent(makeComponent(null), { owner: 'owner1' });
+      await provisioner.installComponent(makeComponent(null));
       const options = appDockerCreateStub.firstCall.args[1];
       expect(options).to.not.have.property('dns');
     });
@@ -616,7 +613,7 @@ describe('componentProvisioner tests', () => {
       });
       let threw = null;
       try {
-        await provisioner.installComponent(makeComponent(null), { owner: 'owner1' });
+        await provisioner.installComponent(makeComponent(null));
       } catch (error) {
         threw = error;
       }

@@ -410,7 +410,6 @@ describe('dockerService tests', () => {
   describe('getManagedContainer (a container and what its labels say of it)', () => {
     const IDENTITY = 'b7kq2mzr4xw6hvtn3ycd5jfa8slpegu9';
     const IDENTIFIER = `web_${IDENTITY}`;
-    const OWNER = '1KPKzyp9VyB9ouAA4spZ48x8g32sxLVK6W';
 
     // A container as the node creates it: named by its identifier and carrying
     // the identity labels the one create step stamps.
@@ -421,19 +420,34 @@ describe('dockerService tests', () => {
         Names: [`/${IDENTIFIER}`],
         Labels: identityLabels({
           appName: 'myapp', name: 'web', identifier: IDENTIFIER, identity: IDENTITY,
-        }, { owner: OWNER }),
+        }),
         ...overrides,
       };
     }
 
-    it('answers the handle, the identifier and the owner stamped on the container of that name', async () => {
+    it('answers the handle, the identifier and the identity stamped on the container of that name, and no owner', async () => {
       stubListing([await stamped()]);
 
       const found = await dockerService.getManagedContainer(IDENTIFIER);
 
       expect(found.container.id).to.equal(FIXTURE_ID);
       expect(found.identifier).to.equal(IDENTIFIER);
-      expect(found.owner).to.equal(OWNER);
+      expect(found.identity).to.equal(IDENTITY);
+      expect(found).to.have.all.keys('container', 'identifier', 'identity');
+    });
+
+    it('answers the app\'s name as the identity of a container of an app with none minted', async () => {
+      const { identityLabels } = await specLibs.getSpecBackend();
+      stubListing([await stamped({
+        Names: ['/web_myapp'],
+        Labels: identityLabels({
+          appName: 'myapp', name: 'web', identifier: 'web_myapp', identity: null,
+        }),
+      })]);
+
+      const found = await dockerService.getManagedContainer('web_myapp');
+
+      expect(found.identity).to.equal('myapp');
     });
 
     it('answers null for a name no container has', async () => {
@@ -442,7 +456,7 @@ describe('dockerService tests', () => {
     });
 
     it('answers null for a container of the exact name that carries no identifier label: it is not one of ours', async () => {
-      stubListing([await stamped({ Labels: { 'com.example.owner': OWNER } })]);
+      stubListing([await stamped({ Labels: { 'com.example.app': 'myapp' } })]);
       expect(await dockerService.getManagedContainer(IDENTIFIER)).to.equal(null);
     });
 
@@ -451,7 +465,7 @@ describe('dockerService tests', () => {
       expect(await dockerService.getManagedContainer(IDENTIFIER)).to.equal(null);
     });
 
-    it('reads the owner off the label and nothing off the name', async () => {
+    it('reads the identity off the label and nothing off the name', async () => {
       // The name carries another app's name in the app's place; the labels are
       // what was stamped at create, and they are what answers.
       stubListing([await stamped({ Names: ['/web_someoneelse'] })]);
@@ -459,7 +473,7 @@ describe('dockerService tests', () => {
       const found = await dockerService.getManagedContainer('web_someoneelse');
 
       expect(found.identifier).to.equal(IDENTIFIER);
-      expect(found.owner).to.equal(OWNER);
+      expect(found.identity).to.equal(IDENTITY);
     });
   });
 
@@ -1884,6 +1898,22 @@ describe('dockerService tests', () => {
       expect(actualConfig.Hostname).to.equal('website');
       expect(actualConfig.HostConfig.NanoCPUs).to.equal(800_000_000);
       expect(actualConfig.HostConfig.Memory).to.equal(1_887_436_800);
+    });
+
+    // A label is fixed for the container's life, so the labels say which app
+    // and component the container is and never who owns the app.
+    it('stamps the labels the library makes for the component and its uuid, and none that names an owner', async () => {
+      const { identityLabels } = await specLibs.getSpecBackend();
+      const uuid = 'ab'.repeat(32);
+      const owner = '1KPKzyp9VyB9ouAA4spZ48x8g32sxLVK6W';
+      const deployComp = makeDeployComp({ identity: 'b7kq2mzr4xw6hvtn3ycd5jfa8slpegu9' });
+
+      await dockerService.appDockerCreate(deployComp, { uuid, owner });
+
+      const { Labels } = dockerStub.firstCall.args[0];
+      expect(Labels).to.include(identityLabels(deployComp, { uuid }));
+      expect(Labels['io.runonflux.uuid']).to.equal(uuid);
+      expect(Object.values(Labels)).to.not.include(owner);
     });
 
     // The log a read is sized against and the log the daemon is told to keep are

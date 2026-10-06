@@ -4,19 +4,35 @@ const { EventEmitter } = require('events');
 const proxyquire = require('proxyquire');
 const LogFrameDecoder = require('../../ZelBack/src/services/utils/logFrameDecoder');
 const { Privilege } = require('../../ZelBack/src/services/utils/privileges');
+const { loadSpecLibrary } = require('./fixtures/fluxSpec');
 
 const { expect } = chai;
 
 describe('appLogsHandler tests', () => {
+  let flux;
   let verifyPrivilege;
   let getDockerContainer;
   let getManagedContainer;
   let appLogsHandler;
 
   // A caller names a container by its docker name, which is its identifier; the
-  // labels stamped on it when it was created say whose it is.
+  // labels stamped on it when it was created say which app it belongs to.
   const IDENTITY = 'b7kq2mzr4xw6hvtn3ycd5jfa8slpegu9';
-  const OWNER = '1KPKzyp9VyB9ouAA4spZ48x8g32sxLVK6W';
+
+  before(async function loadLibrary() {
+    this.timeout(30_000);
+    flux = await loadSpecLibrary();
+  });
+
+  // What dockerService answers for a container the node made under a name: the
+  // handle, and the identifier and identity read off the labels the library
+  // stamps.
+  const managed = (container, identifier) => {
+    const labels = flux.identityLabels({
+      appName: 'myapp', name: 'comp', identifier, identity: IDENTITY,
+    });
+    return { container, identifier: labels[flux.LABEL_KEYS.IDENTIFIER], identity: labels[flux.LABEL_KEYS.IDENTITY] };
+  };
 
   // How often a caller was checked for a signed session, the check every
   // subscribe that is not refused outright begins with.
@@ -88,11 +104,10 @@ describe('appLogsHandler tests', () => {
     container = { id: 'abc123', logs: sinon.stub().resolves(logStream) };
     verifyPrivilege = sinon.stub().resolves(true);
     getDockerContainer = sinon.stub().resolves(container);
-    // The container docker holds under the name asked for, as the node made it:
-    // labelled with its identifier and its owner.
+    // The container docker holds under the name asked for, as the node made it.
     getManagedContainer = sinon.stub().callsFake(async (name) => {
       const found = await getDockerContainer(name);
-      return found ? { container: found, identifier: name, owner: OWNER } : null;
+      return found ? managed(found, name) : null;
     });
     appLogsHandler = proxyquire('../../ZelBack/src/lib/socketIoHandlers/appLogsHandler', {
       '../../services/verificationHelper': { verifyPrivilege },
@@ -156,19 +171,19 @@ describe('appLogsHandler tests', () => {
       sinon.assert.notCalled(getManagedContainer);
     });
 
-    it('asks for a signed session first, then checks the caller against the owner stamped on the container', async () => {
+    it('asks for a signed session first, then checks the caller against the app whose identity is stamped on the container', async () => {
       const socket = makeSocket('s1', makeNamespace());
       appLogsHandler(socket);
 
       await subscribe(socket, `component_${IDENTITY}`);
 
       sinon.assert.calledWithExactly(verifyPrivilege.firstCall, Privilege.USER, 'zelidauth');
-      sinon.assert.calledWithExactly(verifyPrivilege.secondCall, Privilege.APP_OWNER_OR_FLUX_TEAM, 'zelidauth', { owner: OWNER });
+      sinon.assert.calledWithExactly(verifyPrivilege.secondCall, Privilege.APP_OWNER_OR_FLUX_TEAM, 'zelidauth', { identity: IDENTITY });
       expect(verifyPrivilege.callCount).to.equal(2);
       sinon.assert.calledOnceWithExactly(getManagedContainer, `component_${IDENTITY}`);
     });
 
-    it('refuses a signed-in caller the owner stamped on the container does not admit, and opens no feed', async () => {
+    it('refuses a signed-in caller who does not own the app the container belongs to, and opens no feed', async () => {
       verifyPrivilege.withArgs(Privilege.APP_OWNER_OR_FLUX_TEAM).resolves(false);
       const socket = makeSocket('s1', makeNamespace());
       appLogsHandler(socket);

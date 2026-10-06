@@ -60,10 +60,13 @@ const insertUsers = [
   },
 ];
 
-/** Lists PolkadotNode in the registry, owned by the first logged-in user. */
-async function listPolkadotNode() {
+// The identity PolkadotNode's registration minted: what its containers carry.
+const POLKADOT_IDENTITY = `b${'a'.repeat(52)}`;
+
+/** Lists PolkadotNode in the registry under its identity, owned by the app owner unless told otherwise. */
+async function listPolkadotNode(owner = '1KPKzyp9VyB9ouAA4spZ48x8g32sxLVK6W') {
   await appRecords.registry().put(await instantiatedSpec(
-    await v8Spec({ name: 'PolkadotNode', owner: '1KPKzyp9VyB9ouAA4spZ48x8g32sxLVK6W' }), { hash: 'h-polkadot', height: 1 },
+    await v8Spec({ name: 'PolkadotNode', owner }), { hash: 'h-polkadot', height: 1, identity: POLKADOT_IDENTITY },
   ));
 }
 
@@ -760,9 +763,10 @@ describe('verificationHelperUtils tests', () => {
       expect(await verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(headers.zelidauth, 'PolkadotNode')).to.be.false;
     });
 
-    // The owner a caller already holds, a container's owner label, answers in
-    // the app name's place: no record is read, so no app need be named.
-    describe('for an owner the caller holds', () => {
+    // An app given by its identity, as a container's identity label gives it,
+    // answers in the app name's place: its owner is the one its record names
+    // now.
+    describe('for an app given by its identity', () => {
       const ownerSession = {
         zelid: '1KPKzyp9VyB9ouAA4spZ48x8g32sxLVK6W',
         loginPhrase: '1644935889016mtmbo4uah32tvvwrmzg4j8qzv04ba8g8n56cevn6b',
@@ -773,34 +777,69 @@ describe('verificationHelperUtils tests', () => {
         loginPhrase: '1623904359736pja76q7y68deb4264olbml6o8gyhot2yvj5oevgv9k2',
         signature: 'H4lWS4PcrR1tMo8RCLzeYYrd042tsJC9PteIKZvn091ZAYE4K9ydfri8M1KKWe905NHdS4LPPsClqvA4nY/G+II=',
       };
-      const anotherOwner = '1E1NSwDHtvCziYP4CtgiDMcgvgZL64PhkR';
+      const userSession = {
+        zelid: '1E1NSwDHtvCziYP4CtgiDMcgvgZL64PhkR',
+        loginPhrase: '162797868130153vt9r89dzjjjfg6kf34ntf1d8aa5zqlk04j3zy8z40ni',
+        signature: 'IIwyGekXKejWRCnBKMb5Zn2ufi5ylnl3r/wmonoTDm7QCUoe5vZL0SXIwqxO7F8U3Q+kUJapRS2xlUe53KNmC9k=',
+      };
+      // An app the regular user owns, and an identity no record holds.
+      const USERS_APP_IDENTITY = `b${'c'.repeat(52)}`;
+      const UNHELD_IDENTITY = `b${'d'.repeat(52)}`;
 
-      it('true for the session of the owner given, with no app named', async () => {
-        expect(await verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(ownerSession, undefined, ownerSession.zelid)).to.be.true;
+      beforeEach(async () => {
+        await appRecords.registry().put(await instantiatedSpec(
+          await v8Spec({ name: 'UsersApp', owner: userSession.zelid }), { hash: 'h-usersapp', height: 1, identity: USERS_APP_IDENTITY },
+        ));
       });
 
-      it('false for a session that is not the owner given', async () => {
-        expect(await verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(ownerSession, undefined, anotherOwner)).to.be.false;
+      it('true for the session of the app\'s owner, with no app named', async () => {
+        expect(await verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(ownerSession, undefined, POLKADOT_IDENTITY)).to.be.true;
       });
 
-      it('answers by the owner given and not by the record of an app named beside it', async () => {
-        // The listed owner of PolkadotNode is this session's; the container's
-        // label names another, and the label is what was asked about.
-        expect(await verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(ownerSession, 'PolkadotNode', anotherOwner)).to.be.false;
+      it('false for a session that is not the app\'s owner', async () => {
+        expect(await verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(userSession, undefined, POLKADOT_IDENTITY)).to.be.false;
       });
 
-      it('true for the flux team whoever the owner given is', async () => {
-        expect(await verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(teamSession, undefined, anotherOwner)).to.be.true;
+      it('false for an identity no record holds', async () => {
+        expect(await verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(ownerSession, undefined, UNHELD_IDENTITY)).to.be.false;
       });
 
-      it('false with neither an app nor an owner to answer for', async () => {
+      it('answers by the identity and not by an app named beside it', async () => {
+        // The listed owner of PolkadotNode is this session's; the identity
+        // names another owner's app, and the identity is what was asked about.
+        expect(await verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(ownerSession, 'PolkadotNode', USERS_APP_IDENTITY)).to.be.false;
+      });
+
+      it('follows a sale: the buyer is admitted and the seller refused once the record names the buyer', async () => {
+        await listPolkadotNode(userSession.zelid);
+
+        expect(await verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(userSession, undefined, POLKADOT_IDENTITY)).to.be.true;
+        expect(await verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(ownerSession, undefined, POLKADOT_IDENTITY)).to.be.false;
+      });
+
+      it('true for the flux team whoever owns the app', async () => {
+        expect(await verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(teamSession, undefined, USERS_APP_IDENTITY)).to.be.true;
+      });
+
+      it('false with neither an app nor an identity to answer for', async () => {
         expect(await verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(teamSession, undefined, '')).to.be.false;
       });
 
-      it('verifyAppOwnerSession: true for the session of the owner given, false for another, and false for the flux team', async () => {
-        expect(await verificationHelperUtils.verifyAppOwnerSession(ownerSession, undefined, ownerSession.zelid)).to.be.true;
-        expect(await verificationHelperUtils.verifyAppOwnerSession(ownerSession, undefined, anotherOwner)).to.be.false;
-        expect(await verificationHelperUtils.verifyAppOwnerSession(teamSession, undefined, anotherOwner)).to.be.false;
+      // A missing name reads as the text `undefined`, which is a name an app can
+      // be registered under: its owner is not thereby the owner of no app.
+      it('verifyAppOwnerSession: false with neither, for the owner of an app registered under the text a missing name reads as', async () => {
+        await appRecords.registry().put(await instantiatedSpec(
+          await v8Spec({ name: 'undefined', owner: ownerSession.zelid }), { hash: 'h-undefined', height: 1 },
+        ));
+        expect(await verificationHelperUtils.verifyAppOwnerSession(ownerSession, 'undefined'), 'the app is listed under that name').to.be.true;
+
+        expect(await verificationHelperUtils.verifyAppOwnerSession(ownerSession)).to.be.false;
+      });
+
+      it('verifyAppOwnerSession: true for the session of the app\'s owner, false for another, and false for the flux team', async () => {
+        expect(await verificationHelperUtils.verifyAppOwnerSession(ownerSession, undefined, POLKADOT_IDENTITY)).to.be.true;
+        expect(await verificationHelperUtils.verifyAppOwnerSession(ownerSession, undefined, USERS_APP_IDENTITY)).to.be.false;
+        expect(await verificationHelperUtils.verifyAppOwnerSession(teamSession, undefined, POLKADOT_IDENTITY)).to.be.false;
         expect(await verificationHelperUtils.verifyAppOwnerSession(ownerSession, undefined, '')).to.be.false;
       });
     });

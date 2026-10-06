@@ -58,6 +58,10 @@ const verificationHelper = require('../../ZelBack/src/services/verificationHelpe
 // docker, the syncthing API, the resource gate.
 let flux;
 
+// An identity a registration minted: what the app's containers carry, and never
+// the app's name.
+const IDENTITY = `b${'a'.repeat(52)}`;
+
 describe('appOperations tests', () => {
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
@@ -494,7 +498,7 @@ describe('appOperations tests', () => {
       const deployment = await oneComponentDeployment('myapp', 'frontend', {
         image: 'myrepo/app:v1',
         shutdown: { gracefulTimeout: 290 },
-      });
+      }, { identity: IDENTITY });
       const deployComp = deployment.getComponent('frontend');
       expect(deployComp.requiresDaemonShutdown(), 'a declared shutdown IS the graceful contract').to.be.true;
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
@@ -514,9 +518,33 @@ describe('appOperations tests', () => {
       await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
 
       expect(beginAppStop.calledOnce, 'the daemon owns the graceful stop').to.be.true;
-      const opts = beginAppStop.firstCall.args[3];
+      const [identity, name, , opts] = beginAppStop.firstCall.args;
+      expect(identity, 'the daemon is asked by the identity the component\'s container carries').to.equal(IDENTITY);
+      expect(name).to.equal('myapp');
       expect(opts.component).to.equal('frontend');
       expect(uninstallComponent.calledWith(deployComp, sinon.match({ stopHandled: true })), 'the teardown must not stop again').to.be.true;
+    });
+
+    it('asks the daemon by the app\'s name for a component of an app with no identity minted', async () => {
+      const deployment = await oneComponentDeployment('myapp', 'frontend', {
+        image: 'myrepo/app:v1',
+        shutdown: { gracefulTimeout: 290 },
+      });
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
+      sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
+      sinon.stub(serviceHelper, 'delay').resolves();
+      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec())));
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
+      sinon.stub(hwRequirements, 'checkNodeResourcesReclaiming').resolves();
+      const beginAppStop = sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
+      sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+      sinon.stub(componentProvisioner, 'installComponent').resolves();
+      sinon.stub(appReconciler, 'enqueueApp');
+
+      await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
+
+      sinon.assert.calledOnce(beginAppStop);
+      expect(beginAppStop.firstCall.args[0], 'its containers carry the name where an identity goes').to.equal('myapp');
     });
   });
 
@@ -595,12 +623,12 @@ describe('appOperations tests', () => {
     });
 
     it('routes the identity stop through flux-shutdownd before teardown (reason: redeploy)', async () => {
-      const deployment = await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' });
+      const deployment = await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' }, { identity: IDENTITY });
       const deployComp = deployment.getComponent('frontend');
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
-      const installed = await instantiatedSpec(await v9Spec());
+      const installed = await instantiatedSpec(await v9Spec(), { identity: IDENTITY });
       const getInstalledApp = stubInstalled().byName;
       getInstalledApp.onFirstCall().resolves(installedRecord(installed));
       getInstalledApp.onSecondCall().resolves(null);
@@ -613,8 +641,8 @@ describe('appOperations tests', () => {
       await appOperations.redeployApplication('myapp', { onStatus: () => {} });
 
       expect(beginAppStop.calledOnce, 'the daemon owns the stop').to.be.true;
-      const [owner, name, reason, opts] = beginAppStop.firstCall.args;
-      expect(owner).to.equal(installed.owner);
+      const [identity, name, reason, opts] = beginAppStop.firstCall.args;
+      expect(identity, 'the daemon is asked by the identity the app\'s containers carry').to.equal(IDENTITY);
       expect(name).to.equal('myapp');
       expect(reason).to.equal(fluxShutdowndClient.SHUTDOWN_REASON.REDEPLOY);
       expect(opts.replica).to.equal(null);
@@ -1488,11 +1516,12 @@ describe('appOperations tests', () => {
     // stored plans both carry.
     const HASH_OLD = 'a'.repeat(64);
     const HASH_NEW = 'b'.repeat(64);
-    const OWNER = V9_SUBMISSION.owner;
+    // The identity of an app whose plan the daemon holds and this node no longer runs.
+    const GONE = `b${'c'.repeat(52)}`;
 
     /** A real InstantiatedSpec — what listInstalledApps hydrates each row into. */
-    async function installedRow(name, hash) {
-      return instantiatedSpec(await v9Spec({ name }), { hash });
+    async function installedRow(name, hash, identity = IDENTITY) {
+      return instantiatedSpec(await v9Spec({ name }), { hash, identity });
     }
 
     async function loadWith({
@@ -1509,7 +1538,7 @@ describe('appOperations tests', () => {
       const fsPromises = {
         access: arcane ? sinon.stub().resolves() : sinon.stub().rejects(new Error('ENOENT')),
       };
-      const built = deployment ?? await oneComponentDeployment('app1', 'web');
+      const built = deployment ?? await oneComponentDeployment('app1', 'web', {}, { identity: IDENTITY });
       // Records what the resync hands the (stubbed) provider, so a test can prove
       // the real provider could have built a deployment from it.
       const buildDeploymentsSpy = sinon.stub();
@@ -1532,6 +1561,7 @@ describe('appOperations tests', () => {
       const shutdownPlanStub = {
         buildShutdownPlan: sinon.stub().callsFake((inst, dep) => ({ app_name: inst.name, replica: dep.replica ?? null })),
         appRequiresDaemonShutdown: sinon.stub().returns(requires),
+        daemonIdentity: shutdownPlan.daemonIdentity,
       };
       const mod = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
         'node:fs/promises': fsPromises,
@@ -1552,13 +1582,13 @@ describe('appOperations tests', () => {
       } = await loadWith({
         installed: [await installedRow('app1', HASH_NEW)],
         plans: [
-          { app_name: 'app1', owner_flux_id: OWNER, spec_hash: HASH_OLD },
-          { app_name: 'gone', owner_flux_id: OWNER, spec_hash: 'c'.repeat(64) },
+          { app_name: 'app1', identity: IDENTITY, spec_hash: HASH_OLD },
+          { app_name: 'gone', identity: GONE, spec_hash: 'c'.repeat(64) },
         ],
       });
       await mod.shutdownPlanResync();
       expect(client.upsertAppPlanBestEffort.calledOnce).to.be.true;
-      expect(client.deleteAppPlanBestEffort.calledOnceWith('gone', OWNER)).to.be.true;
+      sinon.assert.calledOnceWithExactly(client.deleteAppPlanBestEffort, GONE, null);
 
       // The provider is stubbed, so nothing else proves the installed row it was
       // handed is one the real provider could resolve and build a deployment from.
@@ -1567,18 +1597,42 @@ describe('appOperations tests', () => {
       expect(rebuilt.appName).to.equal('app1');
 
       // shutdownPlan is stubbed too; both of its entry points walk the deployment's
-      // components, and buildShutdownPlan reads owner/hash off the installed row.
+      // components, and buildShutdownPlan reads the hash off the installed row and
+      // the identity off the deployment.
       assertAnswers(shutdownPlanStub.appRequiresDaemonShutdown.firstCall.args[0], ['componentEntries']);
       const [planRow, planDeployment] = shutdownPlanStub.buildShutdownPlan.firstCall.args;
       assertAnswers(planDeployment, ['componentEntries']);
-      expect(planRow.owner).to.equal(OWNER);
       expect(planRow.hash).to.equal(HASH_NEW);
+      expect(planDeployment.identity).to.equal(IDENTITY);
     });
 
     it('leaves a plan untouched when its hash already matches', async () => {
       const { mod, client } = await loadWith({
         installed: [await installedRow('app1', HASH_NEW)],
-        plans: [{ app_name: 'app1', owner_flux_id: OWNER, spec_hash: HASH_NEW }],
+        plans: [{ app_name: 'app1', identity: IDENTITY, spec_hash: HASH_NEW }],
+      });
+      await mod.shutdownPlanResync();
+      expect(client.upsertAppPlanBestEffort.called).to.be.false;
+      expect(client.deleteAppPlanBestEffort.called).to.be.false;
+    });
+
+    it('matches a stored plan by the app\'s identity, not by its name', async () => {
+      // The daemon holds a plan for an earlier app of the same name: this node's
+      // app is another identity, so its own plan is pushed and that one goes.
+      const { mod, client } = await loadWith({
+        installed: [await installedRow('app1', HASH_NEW)],
+        plans: [{ app_name: 'app1', identity: GONE, spec_hash: HASH_NEW }],
+      });
+      await mod.shutdownPlanResync();
+      expect(client.upsertAppPlanBestEffort.calledOnce).to.be.true;
+      sinon.assert.calledOnceWithExactly(client.deleteAppPlanBestEffort, GONE, null);
+    });
+
+    it('keeps the plan of an app with no identity minted under its name', async () => {
+      const { mod, client } = await loadWith({
+        installed: [await installedRow('app1', HASH_NEW, null)],
+        plans: [{ app_name: 'app1', identity: 'app1', spec_hash: HASH_NEW }],
+        deployment: await oneComponentDeployment('app1', 'web'),
       });
       await mod.shutdownPlanResync();
       expect(client.upsertAppPlanBestEffort.called).to.be.false;
@@ -1597,12 +1651,12 @@ describe('appOperations tests', () => {
       // removed, never re-pushed.
       const { mod, client } = await loadWith({
         installed: [await installedRow('app1', HASH_NEW)],
-        plans: [{ app_name: 'app1', owner_flux_id: OWNER, spec_hash: HASH_OLD }],
+        plans: [{ app_name: 'app1', identity: IDENTITY, spec_hash: HASH_OLD }],
         requires: false,
       });
       await mod.shutdownPlanResync();
       expect(client.upsertAppPlanBestEffort.called).to.be.false;
-      expect(client.deleteAppPlanBestEffort.calledOnceWith('app1', OWNER)).to.be.true;
+      sinon.assert.calledOnceWithExactly(client.deleteAppPlanBestEffort, IDENTITY, null);
     });
 
     it('pushes no plan for a non-requiring installed app with no stored plan', async () => {
@@ -1621,19 +1675,19 @@ describe('appOperations tests', () => {
         installed: [await installedRow('app1', HASH_NEW)],
         plans: [
           {
-            app_name: 'app1', owner_flux_id: OWNER, replica: 's1', spec_hash: HASH_OLD,
+            app_name: 'app1', identity: IDENTITY, replica: 's1', spec_hash: HASH_OLD,
           },
           {
-            app_name: 'app1', owner_flux_id: OWNER, replica: 's2', spec_hash: HASH_OLD,
+            app_name: 'app1', identity: IDENTITY, replica: 's2', spec_hash: HASH_OLD,
           },
         ],
-        deployments: [await oneComponentDeployment('app1', 'web', {}, { replica: 's1' })],
+        deployments: [await oneComponentDeployment('app1', 'web', {}, { replica: 's1', identity: IDENTITY })],
       });
       await mod.shutdownPlanResync();
       expect(client.upsertAppPlanBestEffort.calledOnce).to.be.true;
       expect(client.upsertAppPlanBestEffort.firstCall.args[0].replica).to.equal('s1');
-      // s2 is no longer assigned here: its plan is an orphan, deleted by identity.
-      expect(client.deleteAppPlanBestEffort.calledOnceWith('app1', OWNER, 's2')).to.be.true;
+      // s2 is no longer assigned here: its plan is an orphan, deleted by its key.
+      sinon.assert.calledOnceWithExactly(client.deleteAppPlanBestEffort, IDENTITY, 's2');
     });
 
     it('a matching hash keeps each replica plan without a re-push', async () => {
@@ -1641,15 +1695,15 @@ describe('appOperations tests', () => {
         installed: [await installedRow('app1', HASH_NEW)],
         plans: [
           {
-            app_name: 'app1', owner_flux_id: OWNER, replica: 's1', spec_hash: HASH_NEW,
+            app_name: 'app1', identity: IDENTITY, replica: 's1', spec_hash: HASH_NEW,
           },
           {
-            app_name: 'app1', owner_flux_id: OWNER, replica: 's2', spec_hash: HASH_NEW,
+            app_name: 'app1', identity: IDENTITY, replica: 's2', spec_hash: HASH_NEW,
           },
         ],
         deployments: [
-          await oneComponentDeployment('app1', 'web', {}, { replica: 's1' }),
-          await oneComponentDeployment('app1', 'web', {}, { replica: 's2' }),
+          await oneComponentDeployment('app1', 'web', {}, { replica: 's1', identity: IDENTITY }),
+          await oneComponentDeployment('app1', 'web', {}, { replica: 's2', identity: IDENTITY }),
         ],
       });
       await mod.shutdownPlanResync();
@@ -1662,10 +1716,10 @@ describe('appOperations tests', () => {
         installed: [await installedRow('app1', HASH_NEW)],
         plans: [
           {
-            app_name: 'app1', owner_flux_id: OWNER, replica: 's1', spec_hash: HASH_OLD,
+            app_name: 'app1', identity: IDENTITY, replica: 's1', spec_hash: HASH_OLD,
           },
           {
-            app_name: 'app1', owner_flux_id: OWNER, replica: 's2', spec_hash: HASH_OLD,
+            app_name: 'app1', identity: IDENTITY, replica: 's2', spec_hash: HASH_OLD,
           },
         ],
         buildThrows: true,
@@ -1675,6 +1729,29 @@ describe('appOperations tests', () => {
       // a live one.
       expect(client.deleteAppPlanBestEffort.called).to.be.false;
       expect(client.upsertAppPlanBestEffort.called).to.be.false;
+    });
+
+    it('keeps them by the app\'s identity: a plan held for another app of the same name still goes', async () => {
+      const { mod, client } = await loadWith({
+        installed: [await installedRow('app1', HASH_NEW)],
+        plans: [
+          { app_name: 'app1', identity: IDENTITY, spec_hash: HASH_OLD },
+          { app_name: 'app1', identity: GONE, spec_hash: HASH_OLD },
+        ],
+        buildThrows: true,
+      });
+      await mod.shutdownPlanResync();
+      sinon.assert.calledOnceWithExactly(client.deleteAppPlanBestEffort, GONE, null);
+    });
+
+    it('keeps the stored plans of an unbuildable app with no identity minted, held under its name', async () => {
+      const { mod, client } = await loadWith({
+        installed: [await installedRow('app1', HASH_NEW, null)],
+        plans: [{ app_name: 'app1', identity: 'app1', spec_hash: HASH_OLD }],
+        buildThrows: true,
+      });
+      await mod.shutdownPlanResync();
+      expect(client.deleteAppPlanBestEffort.called).to.be.false;
     });
   });
 
@@ -1804,18 +1881,18 @@ describe('appOperations tests', () => {
       const beginAppStop = sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
       // Same volume size, changed component -> keepVolume, and a declared shutdown
       // contract on both sides.
-      const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful: true });
+      const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful: true }, { identity: IDENTITY });
       const newDeployment = await makeDeployment({
         hostPorts: [80], storage: 5, graceful: true, cpu: 0.7,
-      });
+      }, { identity: IDENTITY });
       expect(oldDeployment.getComponent('web').requiresDaemonShutdown()).to.be.true;
       expect(oldDeployment.getComponent('web').equals(newDeployment.getComponent('web')), 'the component must read as changed').to.be.false;
 
       await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
 
       expect(beginAppStop.calledOnce, 'the daemon owns the graceful stop').to.be.true;
-      const [owner, app, reason, opts] = beginAppStop.firstCall.args;
-      expect(owner).to.equal(registrySpec.owner);
+      const [identity, app, reason, opts] = beginAppStop.firstCall.args;
+      expect(identity, 'the daemon is asked by the identity the old container carries').to.equal(IDENTITY);
       expect(app).to.equal('myapp');
       expect(reason).to.equal(fluxShutdowndClient.SHUTDOWN_REASON.REDEPLOY);
       expect(opts.component).to.equal('web');
@@ -1851,124 +1928,89 @@ describe('appOperations tests', () => {
       expect(openHostPortsStub.called).to.be.false;
     });
 
-    // A container carries its app's owner as a label docker fixes at create,
-    // and the shutdown daemon keys its plan on the same owner. An update that
-    // names another owner therefore recreates the container of every component
-    // it keeps, changed or not.
-    describe('an update that names another owner', () => {
+    describe('the shutdown daemon\'s plan after an update', () => {
+      async function reconcile(oldShape, newShape, depOpts = {}) {
+        setup();
+        sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
+        sinon.stub(fluxShutdowndClient, 'upsertAppPlanBestEffort').resolves();
+        sinon.stub(fluxShutdowndClient, 'deleteAppPlanBestEffort').resolves();
+        sinon.stub(componentProvisioner, 'installComponent').resolves();
+        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5, ...oldShape }, { identity: IDENTITY, ...depOpts });
+        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, ...newShape }, { identity: IDENTITY, ...depOpts });
+        deploymentProvider.buildDeployment.resolves(newDeployment);
+
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+      }
+
+      it('is pushed under the app\'s identity for an app that stops through the daemon, and none is deleted', async () => {
+        await reconcile({ graceful: true }, { graceful: true, cpu: 0.7 });
+
+        sinon.assert.calledOnce(fluxShutdowndClient.upsertAppPlanBestEffort);
+        expect(fluxShutdowndClient.upsertAppPlanBestEffort.firstCall.args[0]).to.include({ identity: IDENTITY, replica: null });
+        sinon.assert.notCalled(fluxShutdowndClient.deleteAppPlanBestEffort);
+      });
+
+      it('is deleted by the app\'s identity when the update drops every graceful feature', async () => {
+        await reconcile({ graceful: true }, {});
+
+        sinon.assert.notCalled(fluxShutdowndClient.upsertAppPlanBestEffort);
+        sinon.assert.calledOnceWithExactly(fluxShutdowndClient.deleteAppPlanBestEffort, IDENTITY, null);
+      });
+
+      it('is deleted for the named replica the update reconciled, and no other', async () => {
+        await reconcile({ graceful: true }, {}, { replica: 's1' });
+
+        sinon.assert.calledOnceWithExactly(fluxShutdowndClient.deleteAppPlanBestEffort, IDENTITY, 's1');
+      });
+    });
+
+    // Nothing on a container says who owns its app, and the shutdown daemon
+    // knows the app by its identity: a sale changes no component, so it
+    // restarts nothing.
+    describe('an update that only names another owner', () => {
       const SELLER = '1SellerOfTheAppxxxxxxxxxxxxxxxxxxxx';
       let installComponent;
 
-      // The reinstall loop runs against the listed spec's own view.
-      function withReinstall(freshDeployment) {
-        deploymentProvider.buildDeployment.resolves(freshDeployment);
+      // The adoption of the update on a node that installed the app under the seller.
+      async function adoptSale({ graceful = false } = {}) {
+        setup();
+        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful }, { identity: IDENTITY });
+        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful }, { identity: IDENTITY });
+        deploymentProvider.buildDeployment.resolves(newDeployment);
+        deploymentProvider.getInstalledDeployments.resolves([oldDeployment]);
+        deploymentProvider.buildDeployments.resolves([newDeployment]);
         installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
+        sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
         sinon.stub(fluxShutdowndClient, 'upsertAppPlanBestEffort').resolves();
         sinon.stub(fluxShutdowndClient, 'deleteAppPlanBestEffort').resolves();
+        sinon.stub(appReconciler, 'enqueueApp');
+        expect(registrySpec.owner, 'the fixture names two owners').to.not.equal(SELLER);
+
+        await appOperations.reconcileApp({
+          name: 'myapp', uuid: 'u-myapp', identity: IDENTITY, owner: SELLER,
+        }, registrySpec);
       }
 
-      it('recreates a component whose own settings did not change, keeping its volume, stamped with the owner the spec names now', async () => {
-        setup();
-        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
-        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
-        expect(oldDeployment.getComponent('web').equals(newDeployment.getComponent('web')), 'the component must read as unchanged').to.be.true;
-        withReinstall(newDeployment);
+      it('recreates no container, and the installed record takes the buyer', async () => {
+        await adoptSale();
 
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, SELLER);
-
-        sinon.assert.calledOnceWithExactly(uninstallComponentStub, oldDeployment.getComponent('web'), sinon.match({ removeVolumes: false, skipPorts: true }));
-        sinon.assert.calledOnce(installComponent);
-        const [reinstalled, options] = installComponent.firstCall.args;
-        expect(reinstalled.identifier).to.equal('web_myapp');
-        expect(options).to.include({ createVolumes: false, skipPorts: true, owner: registrySpec.owner });
-        expect(options.owner, 'the fixture must name two owners').to.not.equal(SELLER);
+        sinon.assert.calledOnceWithExactly(stubInstalled().updateRecord, registrySpec);
+        sinon.assert.notCalled(uninstallComponentStub);
+        sinon.assert.notCalled(installComponent);
         expect(denyPortsStub.called, 'its ports do not move').to.be.false;
         expect(openHostPortsStub.called).to.be.false;
       });
 
-      it('leaves that component alone when the owner is the one it was installed with', async () => {
-        setup();
-        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
-        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
-        withReinstall(newDeployment);
+      it('stops nothing through the daemon, whose plan stays under the app\'s identity', async () => {
+        await adoptSale({ graceful: true });
 
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, registrySpec.owner);
-
+        sinon.assert.notCalled(fluxShutdowndClient.beginAppStop);
         sinon.assert.notCalled(uninstallComponentStub);
-        sinon.assert.notCalled(installComponent);
-      });
-
-      it('stops the old container through the daemon under the owner it was created for', async () => {
-        setup();
-        const beginAppStop = sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
-        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful: true });
-        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful: true });
-        withReinstall(newDeployment);
-
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, SELLER);
-
-        sinon.assert.calledOnce(beginAppStop);
-        expect(beginAppStop.firstCall.args[0], 'the daemon holds the plan and the container under the seller').to.equal(SELLER);
-      });
-
-      it('moves the daemon\'s plan: the buyer\'s is pushed and the one held under the seller is deleted', async () => {
-        setup();
-        sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
-        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful: true });
-        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful: true });
-        withReinstall(newDeployment);
-
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, SELLER);
-
         sinon.assert.calledOnce(fluxShutdowndClient.upsertAppPlanBestEffort);
-        expect(fluxShutdowndClient.upsertAppPlanBestEffort.firstCall.args[0].owner_flux_id).to.equal(registrySpec.owner);
-        sinon.assert.calledOnceWithExactly(fluxShutdowndClient.deleteAppPlanBestEffort, 'myapp', SELLER, null);
-      });
-
-      it('deletes no plan under another owner when the owner did not change', async () => {
-        setup();
-        sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
-        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful: true });
-        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful: true, cpu: 0.7 });
-        withReinstall(newDeployment);
-
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
-
-        sinon.assert.calledOnce(fluxShutdowndClient.upsertAppPlanBestEffort);
+        const [plan] = fluxShutdowndClient.upsertAppPlanBestEffort.firstCall.args;
+        expect(plan).to.include({ identity: IDENTITY, replica: null });
+        expect(plan, 'the plan names no owner').to.not.have.property('owner_flux_id');
         sinon.assert.notCalled(fluxShutdowndClient.deleteAppPlanBestEffort);
-      });
-
-      it('is told the owner the app was installed with by the adoption of the update', async () => {
-        setup();
-        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
-        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
-        withReinstall(newDeployment);
-        deploymentProvider.getInstalledDeployments.resolves([oldDeployment]);
-        deploymentProvider.buildDeployments.resolves([newDeployment]);
-        sinon.stub(appReconciler, 'enqueueApp');
-
-        await appOperations.reconcileApp({
-          name: 'myapp', uuid: 'u-myapp', identity: 'idmyapp', owner: SELLER,
-        }, registrySpec);
-
-        sinon.assert.calledOnce(uninstallComponentStub);
-        expect(installComponent.firstCall.args[1].owner).to.equal(registrySpec.owner);
-      });
-
-      it('adopts an update of the same owner without recreating what did not change', async () => {
-        setup();
-        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
-        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
-        withReinstall(newDeployment);
-        deploymentProvider.getInstalledDeployments.resolves([oldDeployment]);
-        deploymentProvider.buildDeployments.resolves([newDeployment]);
-        sinon.stub(appReconciler, 'enqueueApp');
-
-        await appOperations.reconcileApp({
-          name: 'myapp', uuid: 'u-myapp', identity: 'idmyapp', owner: registrySpec.owner,
-        }, registrySpec);
-
-        sinon.assert.notCalled(uninstallComponentStub);
       });
     });
 

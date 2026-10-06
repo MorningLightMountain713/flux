@@ -48,7 +48,7 @@ describe('drainServer tests', () => {
   describe('handleRequest', () => {
     it('marks the app draining and triggers a rebroadcast on drain_app', () => {
       const response = call('drain_app', {
-        app_name: 'myapp', component_name: 'web', owner_flux_id: '1abc', reason: 'reboot', deadline: futureDeadline(600),
+        app_name: 'myapp', component_name: 'web', identity: 'idmyapp', reason: 'reboot', deadline: futureDeadline(600),
       }, 7);
 
       expect(response).to.deep.equal({ jsonrpc: '2.0', id: 7, result: { ok: true } });
