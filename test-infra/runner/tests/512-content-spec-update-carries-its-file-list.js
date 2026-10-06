@@ -119,6 +119,10 @@ describe('a spec update that adds a slot carries the file list for it', function
           // The cut-off node keeps its daemon and is not to degrade on its peer
           // count: a degraded node is a different subject.
           appSyncDegradedThreshold: 0,
+          // A node fills a slot an update adds when it adopts the update, and
+          // adoptions are staggered: kept inside the waits below.
+          adoptionStaggerStepMs: 5000,
+          adoptionStaggerWindowMs: 10000,
           minOutgoing: 2,
           minIncoming: 1,
         },

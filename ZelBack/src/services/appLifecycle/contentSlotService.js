@@ -609,23 +609,27 @@ async function reapDisplacedManifests(deps = {}) {
  * The row of an app was written: what this node stands on follows from what it
  * holds and the new row. Rows held before the app was listed are judged now;
  * when the spec changed, peers and FluxDrive are asked for the manifests they
- * hold, so a node that lacks the one the new spec names takes it; and an
- * installed, running app whose content is not the standing manifest's is
- * brought to it.
+ * hold, so a node that lacks the one the new spec names takes it. A node that
+ * runs the app at the listed spec brings a running instance whose content is
+ * not the standing manifest's to it. A node that runs it at an earlier spec
+ * touches nothing running: it brings the files the listed spec declares into
+ * its store, and they reach its containers when it adopts the update.
  *
  * @param {object} instance - the InstantiatedSpec the row stands on
  * @param {object} [opts] - { specChanged?: boolean }
- * @param {object} [deps] - { resolveHeld?, refresh?, applyBehind?, standing? }
+ * @param {object} [deps] - { resolveHeld?, refresh?, applyBehind?, standing?, prefetch? }
  */
 async function rejudgeManifests(instance, opts = {}, deps = {}) {
   const {
     resolveHeld = resolveHeldManifests, refresh = refreshManifests, applyBehind = applyStoredIfBehind, standing = standingManifest,
+    prefetch = prefetchListedContent,
   } = deps;
   const { identity, name: appName } = instance;
   await resolveHeld(identity, deps);
   if (opts.specChanged) await refresh(appName, identity, deps);
   const { row } = await standing(identity, deps);
   fluxEventBus.publish('content:manifestsRejudged', { appName, identity, standing: row ? row.version : null });
+  await prefetch(instance, deps);
   await applyBehind(appName, deps);
 }
 
@@ -830,7 +834,7 @@ async function reactSafely(fn) {
  * @param {object} deployment - DeploymentSpec for the app, whose identity keys every blob
  * @param {object} manifest - plaintext manifest (slot -> { hash })
  * @param {object} ctx - { appName, peers }
- * @param {object} deps
+ * @param {object} deps - with `takes`, which components' slots are written: every one by default
  * @returns {Promise<Array<{comp: object, mount: object, bytes: Buffer}>>}
  */
 async function stageAndApplySlots(deployment, manifest, ctx, deps = {}) {
@@ -839,11 +843,13 @@ async function stageAndApplySlots(deployment, manifest, ctx, deps = {}) {
     resolve = contentBlobService.resolveBlob,
     benchmark, fluxDrive, peerFetch = contentBlobService.fetchBlobFromPeer,
     writeFile = fs.writeFile, rename = fs.rename, applyPerms = defaultInjectedPerms,
+    takes = () => true,
   } = deps;
 
   // 1. Stage every slot — resolve + verify to a buffer before touching disk.
   const staged = [];
   for (const [, comp] of deployment.componentEntries()) {
+    if (!takes(comp)) continue;
     for (const mount of comp.contentSlotMounts()) {
       const entry = manifest.slots[mount.slot];
       if (!entry || !entry.hash) throw new Error(`contentSlot: manifest has no hash for declared slot "${mount.slot}"`);
@@ -879,6 +885,42 @@ async function stageAndApplySlots(deployment, manifest, ctx, deps = {}) {
   return staged;
 }
 
+/**
+ * Fires one reaction per component for slot content just written under its
+ * running container: restart subsumes signal subsumes none. A reaction that
+ * fails rolls nothing back.
+ *
+ * @param {Array<{comp: object, mount: object}>} staged - the slots written, of running components
+ * @param {object} manifest - the manifest they were written from
+ * @param {object} ctx - { appName }
+ * @param {object} deps - { signal?, restart? }
+ */
+async function reactToWritten(staged, manifest, ctx, deps = {}) {
+  const { signal = dockerService.appDockerSignal, restart = dockerService.appDockerRestart } = deps;
+  const reactionsByComp = new Map();
+  for (const { comp, mount } of staged) {
+    if (!reactionsByComp.has(comp)) reactionsByComp.set(comp, []);
+    reactionsByComp.get(comp).push(mount.onUpdate);
+  }
+  for (const [comp, reactions] of reactionsByComp) {
+    let reaction;
+    if (reactions.some((r) => r && r.action === 'restart')) {
+      // eslint-disable-next-line no-await-in-loop
+      await reactSafely(() => restart(comp.identifier));
+      reaction = 'restart';
+    } else {
+      const signals = [...new Set(reactions.filter((r) => r && r.action === 'signal').map((r) => r.signal))];
+      for (const sig of signals) {
+        // eslint-disable-next-line no-await-in-loop
+        await reactSafely(() => signal(comp.identifier, sig));
+      }
+      // null reactions self-watch (atomic delivery is torn-safe) — no action.
+      reaction = signals.length ? 'signal' : 'none';
+    }
+    fluxEventBus.publish('content:slotApplied', { appName: ctx.appName, version: manifest.version, reaction });
+  }
+}
+
 // Per-app latch, by the installed app's identity: the highest manifest version
 // this process has applied. A version
 // is applied at most once per node — the submitter's own POST apply and a peer's
@@ -904,10 +946,7 @@ const lastAppliedHash = new Map();
  * @param {object} deps
  */
 async function applyManifest(deployment, manifest, ctx, deps = {}) {
-  const {
-    signal = dockerService.appDockerSignal, restart = dockerService.appDockerRestart,
-    recordApplied = appsRepository.markContentManifestApplied,
-  } = deps;
+  const { recordApplied = appsRepository.markContentManifestApplied } = deps;
   const { contentManifestHash } = await getSpec();
   const hash = contentManifestHash(manifest);
 
@@ -932,29 +971,7 @@ async function applyManifest(deployment, manifest, ctx, deps = {}) {
     throw error;
   }
 
-  // 3. One reaction per affected component — restart subsumes signal subsumes null.
-  const reactionsByComp = new Map();
-  for (const { comp, mount } of staged) {
-    if (!reactionsByComp.has(comp)) reactionsByComp.set(comp, []);
-    reactionsByComp.get(comp).push(mount.onUpdate);
-  }
-  for (const [comp, reactions] of reactionsByComp) {
-    let reaction;
-    if (reactions.some((r) => r && r.action === 'restart')) {
-      // eslint-disable-next-line no-await-in-loop
-      await reactSafely(() => restart(comp.identifier));
-      reaction = 'restart';
-    } else {
-      const signals = [...new Set(reactions.filter((r) => r && r.action === 'signal').map((r) => r.signal))];
-      for (const sig of signals) {
-        // eslint-disable-next-line no-await-in-loop
-        await reactSafely(() => signal(comp.identifier, sig));
-      }
-      // null reactions self-watch (atomic delivery is torn-safe) — no action.
-      reaction = signals.length ? 'signal' : 'none';
-    }
-    fluxEventBus.publish('content:slotApplied', { appName: ctx.appName, version: manifest.version, reaction });
-  }
+  await reactToWritten(staged, manifest, ctx, deps);
 
   // Durably record what this node delivered to the running container, AFTER the write +
   // reaction — so a crash mid-apply leaves the mark where it was and the next check
@@ -1072,7 +1089,9 @@ async function scheduleContentApplication(manifest, spec, deps = {}) {
 
   // Apply now, re-checking the app is still installed here (discard if it expired mid-window),
   // that this manifest is still the one the app stands on (a newer one, or a row write that
-  // stopped validating this one, supersedes a timer armed for it), and that it is actually up.
+  // stopped validating this one, supersedes a timer armed for it), that this node runs the
+  // app at the spec the registry lists (the adoption of an update delivers the content of
+  // one it has yet to adopt), and that it is actually up.
   // An installed record says only that this node owns the app — during an install it exists
   // while the component's volume is still being made, so writing the slot then lands on a
   // path that isn't mounted yet. Whatever we skip here is delivered by the two paths that own
@@ -1084,9 +1103,13 @@ async function scheduleContentApplication(manifest, spec, deps = {}) {
   const runApply = async () => {
     const deployment = await getDeployment(appName);
     if (!deployment) return;
-    const { row } = await standing(deployment.identity, deps);
+    const { app, row } = await standing(deployment.identity, deps);
     if (!row || row.hash !== hash) {
       fluxEventBus.publish('content:slotApplySkipped', { appName, version: manifest.version, reason: 'not_standing' });
+      return;
+    }
+    if (!(await runsListedSpec(appName, app, deps))) {
+      fluxEventBus.publish('content:slotApplySkipped', { appName, version: manifest.version, reason: 'spec_not_adopted' });
       return;
     }
     if (!(await componentsRunning(deployment, applyDeps))) return;
@@ -1133,24 +1156,49 @@ async function scheduleContentApplication(manifest, spec, deps = {}) {
   }
 }
 
+/**
+ * Whether a component's container is running. One that is absent is not.
+ * @param {object} comp - DeploymentComponent
+ * @param {object} deps - { inspect? }
+ * @returns {Promise<boolean>}
+ */
+async function componentRunning(comp, deps = {}) {
+  const { inspect = dockerService.dockerContainerInspect } = deps;
+  try {
+    const info = await inspect(comp.identifier);
+    return Boolean(info && info.State && info.State.Running);
+  } catch (error) {
+    return false;
+  }
+}
+
 /** True only when every content-bearing component of the deployment has a running
  *  container. A stopped or absent one means the app isn't up, so applying content would
  *  fire a reaction that wrongly (re)starts it — leave that to the start path, which stages
  *  the current content before the container comes up. */
 async function contentComponentsRunning(deployment, deps = {}) {
-  const { inspect = dockerService.dockerContainerInspect } = deps;
   for (const [, comp] of deployment.componentEntries()) {
     if (!comp.hasContentSlots()) continue;
-    let info;
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      info = await inspect(comp.identifier);
-    } catch (error) {
-      return false; // container absent
-    }
-    if (!info || !info.State || !info.State.Running) return false;
+    // eslint-disable-next-line no-await-in-loop
+    if (!(await componentRunning(comp, deps))) return false;
   }
   return true;
+}
+
+/**
+ * Whether this node runs an app at the spec the registry lists. Between the row
+ * write of an update and this node's adoption of it, the node's containers are
+ * those of the earlier spec while the manifest the app stands on is the listed
+ * spec's: a slot the update adds has no mount in them.
+ *
+ * @param {string} appName
+ * @param {object} app - the registry row the app stands on
+ * @param {object} deps - { installedHash? }
+ * @returns {Promise<boolean>}
+ */
+async function runsListedSpec(appName, app, deps = {}) {
+  const { installedHash = async (name) => (await appRecords.installed().byName(name))?.hash ?? null } = deps;
+  return (await installedHash(appName)) === app.hash;
 }
 
 /**
@@ -1162,8 +1210,8 @@ async function contentComponentsRunning(deployment, deps = {}) {
  * sit in the store unapplied and the container would serve other content until
  * it restarts. The decision is the standing row against the row marked applied,
  * never the mutable on-disk bytes a container may have changed. No-op unless the
- * app is installed here with content slots, its container is running, and the
- * standing manifest is not the applied one. Honors the manifest rollout
+ * app is installed here with content slots at the spec the registry lists, its
+ * container is running, and the standing manifest is not the applied one. Honors the manifest rollout
  * (scheduleContentApplication → applyManifest, which marks the row applied).
  *
  * @param {string} appName
@@ -1187,6 +1235,7 @@ async function applyStoredIfBehind(appName, deps = {}) {
   const { app, row } = await standing(deployment.identity, deps);
   if (!app || !row) return false;
   if (row.applied) return false; // already delivered
+  if (!(await runsListedSpec(appName, app, deps))) return false; // the adoption of the listed spec delivers it
   if (!(await componentsRunning(deployment, deps))) return false; // stopped — the start path provisions it
 
   const plaintext = await openManifestSlots(manifestOf(row), { encrypted: app.isEncrypted }, { provider });
@@ -1307,36 +1356,24 @@ async function reconcileBootContent(appName, deps = {}) {
 }
 
 /**
- * Provision a slot app's content at INSTALL time, before its container starts: get
- * the latest manifest (this node's store, else catch-up from up to 3 running peers,
- * else the FluxDrive deep backstop for the first-install / no-peer cold start) and
- * stage + write every declared slot — NO reaction (the container isn't running yet; it
- * reads the content on first start). This is the install-hold: it THROWS when no
- * manifest is reachable, so the install defers and retries rather than starting with
- * empty or stale slots (an app is not installable without its content). A no-op for an
- * app that declares no slots. Mirrors provisionContentBlobs; the difference is a slot's
- * hash comes from the manifest, not the signed spec. Publishes
- * content:slotsProvisioned once every slot is staged (hash-verified) and written —
- * the slot-path counterpart of the blob path's content:blobProvisioned.
+ * The manifest an app stands on, covering every slot a deployment declares: one
+ * short of a declared slot counts as none. With nothing standing, or one short,
+ * the nodes running the app and FluxDrive are asked and it is judged again.
+ * Throws when there is still none, so a caller about to create or replace a
+ * container holds instead of starting one on empty or stale slots.
  *
- * @param {object} deployment - DeploymentSpec for the app being installed
+ * @param {object} deployment - DeploymentSpec, whose identity is the app's
  * @param {object} ctx - { appName, peers? }
- * @param {object} deps
+ * @param {object} deps - { getApp?, standing?, getPeers?, refresh?, provider? }
+ * @returns {Promise<{row: object, plaintext: object, peers: string[]}>}
  */
-async function provisionContentSlots(deployment, ctx, deps = {}) {
-  // An app with no slots touches neither the DB nor the network — check first.
-  const declaresSlots = deployment.componentEntries().some(([, comp]) => comp.hasContentSlots());
-  if (!declaresSlots) return;
-
+async function coveringManifest(deployment, ctx, deps = {}) {
   const {
     getApp = (name) => appRecords.registry().byName(name),
     standing = standingManifest,
     getPeers = listAppPeers,
     refresh = refreshManifests,
-    stageApply = stageAndApplySlots,
-    recordApplied = appsRepository.markContentManifestApplied,
     provider,
-    ...resolveDeps
   } = deps;
   const { appName } = ctx;
 
@@ -1349,10 +1386,6 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
 
   const peers = ctx.peers || (await getPeers(appName));
 
-  // The manifest the app stands on, covering every slot the deployment declares: one
-  // short of a declared slot counts as none. Nothing standing, or one short ⇒ ask the
-  // nodes running the app and FluxDrive, then judge again. Still nothing ⇒ throw, so
-  // the install holds rather than serving empty slots.
   const declared = deployment.componentEntries().flatMap(([, comp]) => comp.contentSlotMounts().map((m) => m.slot));
   const covers = (plaintext) => declared.every((slot) => plaintext.slots && plaintext.slots[slot] && plaintext.slots[slot].hash);
   const standingPlaintext = async () => {
@@ -1367,22 +1400,202 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
     current = await standingPlaintext();
   }
   if (!current) {
-    throw new Error(`contentSlot: no manifest covering every declared slot is available to provision ${appName} - holding install until content is present`);
+    throw new Error(`contentSlot: no manifest covering every declared slot is available for ${appName} - holding until content is present`);
   }
-  const { row, plaintext } = current;
+  return { ...current, peers };
+}
 
-  await stageApply(deployment, plaintext, { appName, peers }, resolveDeps);
-  // Mark the manifest just staged as the one delivered, so the steady-state "am I
-  // behind?" check (applyStoredIfBehind) does not re-apply this same content to the
-  // now-running container WITH a reaction — install content is provisioned before
-  // the container starts and must not fire an onUpdate reaction. Best-effort, like
-  // applyManifest's own mark: a miss only costs one spurious reaction, never lost content.
+/**
+ * Brings every content file a deployment declares into this node's store,
+ * hash-verified, and writes nothing to any mount: the blobs its spec names and
+ * the slots of the manifest the app stands on, each from the store, else a node
+ * running the app, else FluxDrive. Throws when one cannot be had, so a caller
+ * about to replace a running container leaves it running.
+ *
+ * @param {object} deployment - DeploymentSpec, whose identity keys every blob
+ * @param {object} ctx - { appName, peers? }
+ * @param {object} deps - coveringManifest's, plus { resolve?, benchmark?, fluxDrive?, peerFetch? }
+ * @returns {Promise<number>} how many files the deployment declares
+ */
+async function stageContent(deployment, ctx, deps = {}) {
+  const {
+    resolve = contentBlobService.resolveBlob, getPeers = listAppPeers,
+    benchmark, fluxDrive, peerFetch = contentBlobService.fetchBlobFromPeer,
+  } = deps;
+  const { appName } = ctx;
+  const comps = deployment.componentEntries().map(([, comp]) => comp);
+  const hashes = new Set(comps.flatMap((comp) => comp.contentBlobMounts().map((mount) => mount.hash)));
+  const declaresSlots = comps.some((comp) => comp.hasContentSlots());
+  if (hashes.size === 0 && !declaresSlots) return 0;
+
+  const peers = ctx.peers || (await getPeers(appName));
+  if (declaresSlots) {
+    const { plaintext } = await coveringManifest(deployment, { appName, peers }, deps);
+    for (const comp of comps) {
+      for (const mount of comp.contentSlotMounts()) hashes.add(plaintext.slots[mount.slot].hash);
+    }
+  }
+  for (const contentHash of hashes) {
+    // eslint-disable-next-line no-await-in-loop
+    await resolve(
+      {
+        appName, identity: deployment.identity, contentHash, peers,
+      },
+      { benchmark, fluxDrive, peerFetch },
+    );
+  }
+  fluxEventBus.publish('content:staged', { appName, files: hashes.size });
+  return hashes.size;
+}
+
+/**
+ * The row of an app this node runs at an earlier spec was written: the files
+ * the listed spec declares are brought into this node's store, so that its
+ * adoption of the update finds them there. Nothing running is touched.
+ * Best-effort: the adoption stages the same files itself and holds while one is
+ * missing.
+ *
+ * @param {object} instance - the InstantiatedSpec the row stands on
+ * @param {object} deps - { getInstalled?, buildDeployments?, registrationVersionOf?, stage? }
+ * @returns {Promise<boolean>} whether the listed spec's content is in the store
+ */
+async function prefetchListedContent(instance, deps = {}) {
+  const {
+    getInstalled = (name) => appRecords.installed().byName(name),
+    buildDeployments = deploymentProvider.buildDeployments,
+    registrationVersionOf = appHistory.registrationVersionOf,
+    stage = stageContent,
+  } = deps;
+  const { name: appName } = instance;
+  const installed = await getInstalled(appName);
+  if (!installed || installed.hash === instance.hash) return false;
+  const identity = installed.identity ?? null;
+  const { uuid } = installed;
   try {
-    await recordApplied(identity, row.hash);
+    // The listed spec's view of each identity this node runs, named as the
+    // adoption names it: by the identity the app was installed with.
+    const deployments = await buildDeployments(instance, {
+      identity,
+      registrationVersion: await registrationVersionOf(appName, uuid) ?? undefined,
+    });
+    // eslint-disable-next-line no-restricted-syntax
+    for (const deployment of deployments) {
+      // eslint-disable-next-line no-await-in-loop
+      await stage(deployment, { appName }, deps);
+    }
+    return true;
+  } catch (error) {
+    log.warn(`contentSlot: the content ${appName}'s update declares is not in the store yet - ${error.message ?? error}`);
+    return false;
+  }
+}
+
+/**
+ * Write a slot app's content onto its mount sources: the manifest the app
+ * stands on (coveringManifest), every declared slot staged and written. It
+ * THROWS when no covering manifest is reachable, so an install or an adoption
+ * holds and retries rather than starting a container on empty or stale slots
+ * (an app is not installable without its content). A no-op for an app that
+ * declares no slots.
+ *
+ * A component whose container is not running takes the content with no
+ * reaction: it reads it when it starts, as every component of an install does
+ * and every component an update recreates. A component whose container is
+ * running takes it only when the manifest is not the one this node last
+ * delivered, and then gets the reaction its slots declare: the component an
+ * update leaves as it is, under a manifest the update changed.
+ *
+ * Publishes content:slotsProvisioned once every slot is staged (hash-verified)
+ * and written — the slot-path counterpart of the blob path's
+ * content:blobProvisioned.
+ *
+ * @param {object} deployment - DeploymentSpec for the app
+ * @param {object} ctx - { appName, peers? }
+ * @param {object} deps
+ */
+async function provisionContentSlots(deployment, ctx, deps = {}) {
+  // An app with no slots touches neither the DB nor the network — check first.
+  const declaresSlots = deployment.componentEntries().some(([, comp]) => comp.hasContentSlots());
+  if (!declaresSlots) return;
+
+  const {
+    stageApply = stageAndApplySlots,
+    recordApplied = appsRepository.markContentManifestApplied,
+    ...resolveDeps
+  } = deps;
+  const { appName } = ctx;
+
+  const { row, plaintext, peers } = await coveringManifest(deployment, ctx, deps);
+
+  const running = new Set();
+  // eslint-disable-next-line no-restricted-syntax
+  for (const [, comp] of deployment.componentEntries()) {
+    // eslint-disable-next-line no-await-in-loop
+    if (comp.hasContentSlots() && await componentRunning(comp, resolveDeps)) running.add(comp);
+  }
+  const delivered = row.applied === true;
+  const takes = (comp) => !(delivered && running.has(comp));
+
+  const staged = (await stageApply(deployment, plaintext, { appName, peers }, { ...resolveDeps, takes })) ?? [];
+  await reactToWritten(staged.filter(({ comp }) => running.has(comp)), plaintext, { appName }, resolveDeps);
+  // Mark the manifest just written as the one delivered, so the steady-state "am I
+  // behind?" check (applyStoredIfBehind) does not apply this same content again to
+  // the containers once they run. Best-effort, like applyManifest's own mark: a
+  // miss only costs one spurious reaction, never lost content.
+  try {
+    await recordApplied(deployment.identity, row.hash);
   } catch (error) {
     log.warn(`contentSlot: failed to record provisioned version ${plaintext.version} for ${appName} - ${error.message ?? error}`);
   }
   fluxEventBus.publish('content:slotsProvisioned', { appName, version: plaintext.version });
+}
+
+// Injected content is written root-owned 0644, the platform default for declared
+// content (mirrors DeploymentSpec resolveMountPerms). Mode bits are ownership
+// hygiene, not enforcement: a root container writes through any mode, and real
+// read-only intent is the mount's readOnly bind flag.
+async function writeInjectedContent(source, bytes) {
+  await fs.writeFile(source, bytes);
+  await fs.chmod(source, 0o644);
+}
+
+/**
+ * Writes the content a deployment declares onto its mount sources before its
+ * containers start: the blobs its spec names, then the slots of the manifest
+ * the app stands on. Each is resolved from this node's store, else a node
+ * running the app, else FluxDrive, and hash-verified. Throws when any is
+ * missing: an app is not startable without its content, at an install or at the
+ * adoption of an update. A no-op for a deployment that declares none.
+ *
+ * @param {object} deployment - DeploymentSpec
+ * @param {object} ctx - { appName, onStatus? }
+ * @param {object} deps - { getLocations?, provisionBlobs?, provisionSlots? }
+ */
+async function provisionContent(deployment, ctx, deps = {}) {
+  const {
+    getLocations = (appName2) => appsRepository.appLocationFromEvents({ appname: appName2 }),
+    provisionBlobs = contentBlobService.provisionContentBlobs,
+    provisionSlots = provisionContentSlots,
+  } = deps;
+  const { appName, onStatus = null } = ctx;
+  const hasBlobs = deployment.componentEntries().some(([, comp]) => comp.hasContentBlobs());
+  const hasSlots = deployment.componentEntries().some(([, comp]) => comp.hasContentSlots());
+  if (!hasBlobs && !hasSlots) return;
+
+  if (onStatus) onStatus({ status: 'Provisioning content...' });
+  // Locations are normalized ip:port, usable directly as peer URLs; shuffled so
+  // nodes provisioning at once do not all ask the same peer first.
+  const peers = ((await getLocations(appName)) || []).map((loc) => loc.ip).filter(Boolean);
+  for (let i = peers.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [peers[i], peers[j]] = [peers[j], peers[i]];
+  }
+  if (hasBlobs) {
+    await provisionBlobs(deployment, { appName, peers }, { writeFile: writeInjectedContent, peerFetch: contentBlobService.fetchBlobFromPeer });
+  }
+  if (hasSlots) {
+    await provisionSlots(deployment, { appName, peers }, { peerFetch: contentBlobService.fetchBlobFromPeer });
+  }
 }
 
 /**
@@ -1685,6 +1898,9 @@ module.exports = {
   contentComponentsRunning,
   reconcileBootContent,
   provisionContentSlots,
+  provisionContent,
+  stageContent,
+  prefetchListedContent,
   listAppPeers,
   fetchManifestsFromPeer,
   refreshManifests,

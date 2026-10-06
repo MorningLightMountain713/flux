@@ -3,6 +3,9 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const crypto = require('node:crypto');
+const fsPromises = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
 const proxyquire = require('proxyquire').noCallThru();
 const {
   loadSpecLibrary, V9_SUBMISSION, sealedV9Spec, decryptedV9Spec, assertAnswers,
@@ -24,6 +27,10 @@ const APP = 'app';
 const IDENTITY = `b${'a'.repeat(52)}`;
 const OWNER = V9_SUBMISSION.owner;
 const APPS_FOLDER = '/dat/var/lib/fluxos/flux-apps';
+// The hash of the spec the registry lists the app at, and of an earlier one a
+// node that has yet to adopt the listed spec still runs.
+const SPEC_HASH = 'c'.repeat(64);
+const EARLIER_SPEC_HASH = 'd'.repeat(64);
 
 // The spec library is REAL here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. What stays stubbed is I/O and FluxOS policy: the registry, the event bus,
@@ -1016,6 +1023,174 @@ describe('contentSlotService', () => {
       });
       sinon.assert.notCalled(refresh);
     });
+
+    it('brings the listed spec\'s files into the store once the manifests are judged, before any running instance is looked at', async () => {
+      const { service } = load();
+      const order = [];
+      const instance = { name: APP, identity: IDENTITY, hash: SPEC_HASH };
+      await service.rejudgeManifests(instance, { specChanged: true }, {
+        resolveHeld: async () => { order.push('resolveHeld'); },
+        refresh: async () => { order.push('refresh'); },
+        standing: async () => { order.push('standing'); return { row: null }; },
+        prefetch: async (given) => { order.push('prefetch'); expect(given).to.equal(instance); },
+        applyBehind: async () => { order.push('applyBehind'); },
+      });
+      expect(order).to.deep.equal(['resolveHeld', 'refresh', 'standing', 'prefetch', 'applyBehind']);
+    });
+  });
+
+  // The row of an app was written with another spec. A node running the app has
+  // yet to adopt it: its containers are the earlier spec's, and nothing running
+  // is touched.
+  describe('prefetchListedContent (the row write on a node that runs the app at an earlier spec)', () => {
+    const listed = () => ({ name: APP, identity: IDENTITY, hash: SPEC_HASH });
+    const installedAt = (hash) => ({
+      name: APP, identity: IDENTITY, uuid: 'uuid-app', hash,
+    });
+    let slotDeployment;
+    before(async () => { slotDeployment = await deploymentOf(webWith(slotMount('app-config'))); });
+
+    function prefetchDeps(overrides = {}) {
+      return {
+        getInstalled: async () => installedAt(EARLIER_SPEC_HASH),
+        buildDeployments: sinon.stub().resolves([slotDeployment]),
+        registrationVersionOf: sinon.stub().resolves(9),
+        stage: sinon.stub().resolves(1),
+        ...overrides,
+      };
+    }
+
+    it('stages the content of each deployment the listed spec gives this node, named by the identity and the registration it was installed with', async () => {
+      const { service } = load();
+      const deps = prefetchDeps();
+      const instance = listed();
+
+      expect(await service.prefetchListedContent(instance, deps)).to.equal(true);
+
+      sinon.assert.calledOnceWithExactly(deps.registrationVersionOf, APP, 'uuid-app');
+      sinon.assert.calledOnceWithExactly(deps.buildDeployments, instance, { identity: IDENTITY, registrationVersion: 9 });
+      sinon.assert.calledOnce(deps.stage);
+      expect(deps.stage.firstCall.args[0]).to.equal(slotDeployment);
+      expect(deps.stage.firstCall.args[1]).to.deep.equal({ appName: APP });
+    });
+
+    it('names the deployments of an app installed before identities were minted as its install does: by none', async () => {
+      const { service } = load();
+      const deps = prefetchDeps({ getInstalled: async () => ({ ...installedAt(EARLIER_SPEC_HASH), identity: null }) });
+      const instance = listed();
+
+      await service.prefetchListedContent(instance, deps);
+
+      sinon.assert.calledOnceWithExactly(deps.buildDeployments, instance, { identity: null, registrationVersion: 9 });
+    });
+
+    it('does nothing on a node that does not run the app', async () => {
+      const { service } = load();
+      const deps = prefetchDeps({ getInstalled: async () => null });
+      expect(await service.prefetchListedContent(listed(), deps)).to.equal(false);
+      sinon.assert.notCalled(deps.buildDeployments);
+      sinon.assert.notCalled(deps.stage);
+    });
+
+    it('does nothing on a node that already runs the app at the listed spec', async () => {
+      const { service } = load();
+      const deps = prefetchDeps({ getInstalled: async () => installedAt(SPEC_HASH) });
+      expect(await service.prefetchListedContent(listed(), deps)).to.equal(false);
+      sinon.assert.notCalled(deps.stage);
+    });
+
+    it('fails nothing when a file cannot be had yet: the adoption stages it again and holds', async () => {
+      const { service } = load();
+      const deps = prefetchDeps({ stage: sinon.stub().rejects(new Error('contentBlob: no source for sha256:x')) });
+      expect(await service.prefetchListedContent(listed(), deps)).to.equal(false);
+    });
+
+    it('reads the app this node runs off its installed record', async () => {
+      const getInstalledApp = sinon.stub().resolves(installedAt(EARLIER_SPEC_HASH));
+      const { service } = load(fakeRepo({ getInstalledApp }));
+      const deps = prefetchDeps();
+      delete deps.getInstalled;
+      expect(await service.prefetchListedContent(listed(), deps)).to.equal(true);
+      sinon.assert.calledWith(getInstalledApp, APP);
+    });
+  });
+
+  describe('stageContent (a deployment\'s files into the store, nothing written to a mount)', () => {
+    const BLOB = Buffer.from('a blob the spec names');
+    const BLOB_HASH = hashOf(BLOB);
+    const info = () => ({
+      owner: OWNER, isEncrypted: true, spec: slotSpecSealed, identity: IDENTITY,
+    });
+    const standsOn = (row) => async () => ({ app: info(), row });
+    let slotAndBlobDeployment;
+    let plainDeployment;
+
+    before(async () => {
+      slotAndBlobDeployment = await deploymentOf({
+        web: component('web', [slotMount('app-config')]),
+        worker: component('worker', [blobMount('seed', BLOB_HASH)], { hostPort: 31_001 }),
+      });
+      plainDeployment = await deploymentOf(webWith());
+    });
+
+    function stageDeps(overrides = {}) {
+      return {
+        getApp: async () => info(),
+        standing: standsOn(storedRow(2, manifest().slots)),
+        refresh: sinon.stub().resolves(0),
+        resolve: sinon.stub().resolves(CFG),
+        provider: fakeProvider(),
+        ...overrides,
+      };
+    }
+
+    it('resolves every blob the spec names and every slot of the standing manifest, by the deployment\'s identity, and says how many', async () => {
+      const { service, bus } = load();
+      const deps = stageDeps();
+
+      expect(await service.stageContent(slotAndBlobDeployment, { appName: APP, peers: ['p1'] }, deps)).to.equal(2);
+
+      expect(deps.resolve.getCalls().map((call) => call.args[0])).to.have.deep.members([
+        {
+          appName: APP, identity: IDENTITY, contentHash: BLOB_HASH, peers: ['p1'],
+        },
+        {
+          appName: APP, identity: IDENTITY, contentHash: CFG_HASH, peers: ['p1'],
+        },
+      ]);
+      sinon.assert.calledWith(bus.publish, 'content:staged', { appName: APP, files: 2 });
+    });
+
+    it('asks the nodes running the app for its peers when none is given', async () => {
+      const { service } = load();
+      const deps = stageDeps({ getPeers: sinon.stub().resolves(['p9']) });
+      await service.stageContent(slotAndBlobDeployment, { appName: APP }, deps);
+      sinon.assert.calledOnceWithExactly(deps.getPeers, APP);
+      expect(deps.resolve.firstCall.args[0].peers).to.deep.equal(['p9']);
+    });
+
+    it('throws when a file cannot be had, so the caller leaves what is running as it is', async () => {
+      const { service } = load();
+      const deps = stageDeps({ resolve: sinon.stub().rejects(new Error('contentBlob: no source for sha256:x')) });
+      await expectReject(service.stageContent(slotAndBlobDeployment, { appName: APP, peers: [] }, deps), /no source/);
+    });
+
+    it('throws when no manifest covers every declared slot, having asked, and resolves no slot', async () => {
+      const { service } = load();
+      const deps = stageDeps({ standing: standsOn(null) });
+      await expectReject(service.stageContent(slotAndBlobDeployment, { appName: APP, peers: [] }, deps), /covering every declared slot/);
+      sinon.assert.calledOnce(deps.refresh);
+      expect(deps.resolve.getCalls().map((call) => call.args[0].contentHash)).to.not.include(CFG_HASH);
+    });
+
+    it('is a no-op for a deployment that declares no content, asking nobody', async () => {
+      const { service } = load();
+      const deps = stageDeps({ getApp: sinon.spy(), getPeers: sinon.spy() });
+      expect(await service.stageContent(plainDeployment, { appName: APP }, deps)).to.equal(0);
+      sinon.assert.notCalled(deps.resolve);
+      sinon.assert.notCalled(deps.getApp);
+      sinon.assert.notCalled(deps.getPeers);
+    });
   });
 
   describe('submitContentUpdate', () => {
@@ -1506,8 +1681,10 @@ describe('contentSlotService', () => {
       spec = slotSpecSealed;
       tenInstanceSpec = await sealedSpec(webWith(slotMount('app-config')), { instances: 10 });
     });
-    // The app stands on the manifest being scheduled, unless a test says otherwise.
-    const standsOn = (m) => async () => ({ row: { hash: flux.contentManifestHash(m) } });
+    // The app stands on the manifest being scheduled, and this node runs it at
+    // the spec the registry lists, unless a test says otherwise.
+    const standsOn = (m) => async () => ({ app: { hash: SPEC_HASH }, row: { hash: flux.contentManifestHash(m) } });
+    const adopted = async () => SPEC_HASH;
     const ANY = { appName: APP, slots: {} };
 
     it('applies via the installed deployment and the app\'s running peers', async () => {
@@ -1516,7 +1693,7 @@ describe('contentSlotService', () => {
       await service.scheduleContentApplication(
         ANY, spec,
         {
-          getDeployment: async () => dep, getPeers: async () => ['1.2.3.4:16127'], apply, inspect: up, standing: standsOn(ANY),
+          getDeployment: async () => dep, getPeers: async () => ['1.2.3.4:16127'], apply, inspect: up, installedHash: adopted, standing: standsOn(ANY),
         },
       );
       sinon.assert.calledOnce(apply);
@@ -1527,12 +1704,28 @@ describe('contentSlotService', () => {
       assertAnswers(apply.firstCall.args[0], ['componentEntries']);
     });
 
+    // Between an update's row write and this node's adoption of it, the node's
+    // containers are those of the earlier spec: the listed spec's content
+    // reaches them at the adoption.
+    it('applies nothing on a node that runs the app at an earlier spec than the registry lists', async () => {
+      const { service, bus } = load();
+      const apply = sinon.spy();
+      await service.scheduleContentApplication(
+        ANY, spec,
+        {
+          getDeployment: async () => dep, getPeers: async () => [], apply, inspect: up, standing: standsOn(ANY), installedHash: async () => EARLIER_SPEC_HASH,
+        },
+      );
+      sinon.assert.notCalled(apply);
+      sinon.assert.calledWithMatch(bus.publish, 'content:slotApplySkipped', { appName: APP, reason: 'spec_not_adopted' });
+    });
+
     it('does nothing when the app is not installed here', async () => {
       const { service } = load();
       const apply = sinon.spy();
       await service.scheduleContentApplication(
         ANY, spec,
-        { getDeployment: async () => null, apply, inspect: up, standing: standsOn(ANY) },
+        { getDeployment: async () => null, apply, inspect: up, installedHash: adopted, standing: standsOn(ANY) },
       );
       sinon.assert.notCalled(apply);
     });
@@ -1563,7 +1756,7 @@ describe('contentSlotService', () => {
           getDeployment: async () => dep,
           getPeers: async () => [],
           apply,
-          standing: standsOn(ANY),
+          installedHash: adopted, standing: standsOn(ANY),
           inspect: async () => { throw new Error('No such container: web_app'); },
         },
       );
@@ -1579,7 +1772,7 @@ describe('contentSlotService', () => {
           getDeployment: async () => dep,
           getPeers: async () => [],
           apply,
-          standing: standsOn(ANY),
+          installedHash: adopted, standing: standsOn(ANY),
           inspect: async () => ({ State: { Running: false } }),
         },
       );
@@ -1612,7 +1805,7 @@ describe('contentSlotService', () => {
       inspect: up,
       now: sched.now,
       setTimer: sched.setTimer,
-      standing: standsOn(m),
+      installedHash: adopted, standing: standsOn(m),
       ...over,
     });
 
@@ -1783,13 +1976,14 @@ describe('contentSlotService', () => {
     let slotDeployment;
     before(async () => { slotDeployment = await deploymentOf(webWith(slotMount('app-config'))); });
     const app = () => ({
-      name: APP, owner: OWNER, isEncrypted: true, spec: slotSpecSealed, identity: IDENTITY,
+      name: APP, owner: OWNER, isEncrypted: true, spec: slotSpecSealed, identity: IDENTITY, hash: SPEC_HASH,
     });
 
     function baseDeps(overrides = {}) {
       return {
         standing: async () => ({ app: app(), row: storedRow(2, manifest().slots) }),
         getDeployment: async () => slotDeployment,
+        installedHash: async () => SPEC_HASH,
         componentsRunning: async () => true,
         schedule: sinon.spy(),
         provider: fakeProvider(),
@@ -1831,6 +2025,24 @@ describe('contentSlotService', () => {
       const deps = baseDeps({ componentsRunning: async () => false });
       expect(await service.applyStoredIfBehind(APP, deps)).to.equal(false);
       sinon.assert.notCalled(deps.schedule);
+    });
+
+    it('is a no-op on a node that runs the app at an earlier spec than the registry lists: its adoption delivers the content', async () => {
+      const { service } = load();
+      const deps = baseDeps({ installedHash: async () => EARLIER_SPEC_HASH });
+      expect(await service.applyStoredIfBehind(APP, deps)).to.equal(false);
+      sinon.assert.notCalled(deps.schedule);
+    });
+
+    it('reads the spec this node runs off its installed record', async () => {
+      const getInstalledApp = sinon.stub().resolves({ hash: EARLIER_SPEC_HASH });
+      const { service } = load(fakeRepo({ getInstalledApp }));
+      const deps = baseDeps();
+      delete deps.installedHash;
+      expect(await service.applyStoredIfBehind(APP, deps)).to.equal(false);
+      sinon.assert.calledWith(getInstalledApp, APP);
+      getInstalledApp.resolves({ hash: SPEC_HASH });
+      expect(await service.applyStoredIfBehind(APP, deps)).to.equal(true);
     });
 
     it('is a no-op when the app is not installed here, or nothing stands', async () => {
@@ -1883,7 +2095,7 @@ describe('contentSlotService', () => {
 
     // A cleartext slot app: its manifests travel with plaintext slots.
     const app = () => ({
-      name: APP, owner: OWNER, isEncrypted: false, spec: slotSpec, identity: IDENTITY,
+      name: APP, owner: OWNER, isEncrypted: false, spec: slotSpec, identity: IDENTITY, hash: SPEC_HASH,
     });
     const standsOn = (m, extra = {}) => async () => ({
       app: app(),
@@ -2037,6 +2249,7 @@ describe('contentSlotService', () => {
       await service.reconcileBootContent(APP, {
         getDeployment: async () => slotDeployment,
         standing: standsOn(manifest({ version: 3, rollout: { strategy: 'immediate' } })),
+        installedHash: async () => SPEC_HASH,
         componentsRunning: async () => true,
         provision,
         schedule,
@@ -2180,7 +2393,7 @@ describe('contentSlotService', () => {
         service.provisionContentSlots(slotDeployment, { appName: APP, peers: [] }, {
           getApp: async () => info, standing: standsOn(null), refresh: async () => 0, stageApply,
         }),
-        /holding install until content is present/,
+        /holding until content is present/,
       );
       sinon.assert.notCalled(stageApply);
     });
@@ -2192,6 +2405,198 @@ describe('contentSlotService', () => {
       await service.provisionContentSlots(noSlotDeployment, { appName: APP }, { getApp, stageApply });
       sinon.assert.notCalled(stageApply);
       sinon.assert.notCalled(getApp);
+    });
+
+    // An update recreates one component and leaves another running. The one
+    // recreated reads its slots when the reconciler starts it; the one left
+    // running has them changed underneath it.
+    describe('which components take the content, and which are told', () => {
+      let pair;
+      let webSource;
+      let workerSource;
+      let written;
+      let restart;
+      let signal;
+
+      before(async () => {
+        pair = await deploymentOf({
+          web: component('web', [slotMount('app-config', { onUpdate: RESTART })]),
+          worker: component('worker', [slotMount('tls-cert', { onUpdate: SIGHUP })], { hostPort: 31_001 }),
+        });
+        webSource = mountSource(pair, 'app-config');
+        workerSource = mountSource(pair, 'tls-cert');
+      });
+
+      const bothSlots = () => ({ 'app-config': { hash: CFG_HASH }, 'tls-cert': { hash: CFG_HASH } });
+      // The real stage and write, onto a disk that records what was written.
+      function provisionDeps(row, runningComponents) {
+        written = [];
+        restart = sinon.stub().resolves();
+        signal = sinon.stub().resolves();
+        return {
+          getApp: async () => info,
+          standing: standsOn(row),
+          recordApplied: sinon.spy(),
+          provider: fakeProvider(),
+          resolve: async () => CFG,
+          writeFile: async (file) => { written.push(file); },
+          rename: async () => {},
+          applyPerms: async () => {},
+          inspect: async (identifier) => ({ State: { Running: runningComponents.includes(identifier) } }),
+          restart,
+          signal,
+        };
+      }
+
+      it('writes every slot and tells no component when none is running: an install, and every component an update recreates', async () => {
+        const { service } = load();
+        const deps = provisionDeps(storedRow(2, bothSlots()), []);
+
+        await service.provisionContentSlots(pair, { appName: APP, peers: [] }, deps);
+
+        expect(written).to.have.members([webSource, workerSource]);
+        sinon.assert.notCalled(restart);
+        sinon.assert.notCalled(signal);
+        sinon.assert.calledOnceWithExactly(deps.recordApplied, IDENTITY, 'h2');
+      });
+
+      it('gives a component left running under a manifest not yet delivered the content and the reaction its slot declares, and the one not running the content alone', async () => {
+        const { service } = load();
+        const deps = provisionDeps(storedRow(2, bothSlots()), [identifierOf(pair, 'worker')]);
+
+        await service.provisionContentSlots(pair, { appName: APP, peers: [] }, deps);
+
+        expect(written).to.have.members([webSource, workerSource]);
+        sinon.assert.calledOnceWithExactly(signal, identifierOf(pair, 'worker'), 'SIGHUP');
+        sinon.assert.notCalled(restart);
+      });
+
+      it('restarts a running component whose slot declares a restart', async () => {
+        const { service } = load();
+        const deps = provisionDeps(storedRow(2, bothSlots()), [identifierOf(pair, 'web')]);
+
+        await service.provisionContentSlots(pair, { appName: APP, peers: [] }, deps);
+
+        sinon.assert.calledOnceWithExactly(restart, identifierOf(pair, 'web'));
+        sinon.assert.notCalled(signal);
+      });
+
+      it('leaves a running component already on the delivered manifest as it is, and still fills the one not running', async () => {
+        const { service } = load();
+        const deps = provisionDeps(storedRow(2, bothSlots(), { applied: true }), [identifierOf(pair, 'worker')]);
+
+        await service.provisionContentSlots(pair, { appName: APP, peers: [] }, deps);
+
+        expect(written).to.deep.equal([webSource]);
+        sinon.assert.notCalled(restart);
+        sinon.assert.notCalled(signal);
+      });
+
+      it('counts a component with no container as not running', async () => {
+        const { service } = load();
+        const deps = provisionDeps(storedRow(2, bothSlots(), { applied: true }), []);
+        deps.inspect = async () => { throw new Error('no such container'); };
+
+        await service.provisionContentSlots(pair, { appName: APP, peers: [] }, deps);
+
+        expect(written).to.have.members([webSource, workerSource]);
+      });
+    });
+  });
+
+  describe('provisionContent (a deployment\'s blobs and slots, before its containers start)', () => {
+    const BLOB_HASH = hashOf(Buffer.from('a blob the spec names'));
+    let slotAndBlobDeployment;
+    let blobOnlyDeployment;
+    let slotOnlyDeployment;
+    let plainDeployment;
+
+    before(async () => {
+      slotAndBlobDeployment = await deploymentOf({
+        web: component('web', [slotMount('app-config')]),
+        worker: component('worker', [blobMount('seed', BLOB_HASH)], { hostPort: 31_001 }),
+      });
+      blobOnlyDeployment = await deploymentOf(webWith(blobMount('seed', BLOB_HASH)));
+      slotOnlyDeployment = await deploymentOf(webWith(slotMount('app-config')));
+      plainDeployment = await deploymentOf(webWith());
+    });
+
+    function contentDeps(overrides = {}) {
+      return {
+        getLocations: sinon.stub().resolves([{ ip: '10.0.0.1:16127' }, { ip: '10.0.0.2:16127' }, { ip: null }]),
+        provisionBlobs: sinon.stub().resolves(),
+        provisionSlots: sinon.stub().resolves(),
+        ...overrides,
+      };
+    }
+
+    it('writes the blobs, then the slots, asking the nodes that run the app, and says so', async () => {
+      const { service } = load();
+      const deps = contentDeps();
+      const onStatus = sinon.spy();
+
+      await service.provisionContent(slotAndBlobDeployment, { appName: APP, onStatus }, deps);
+
+      sinon.assert.calledOnceWithExactly(deps.getLocations, APP);
+      sinon.assert.calledOnce(deps.provisionBlobs);
+      sinon.assert.calledOnce(deps.provisionSlots);
+      expect(deps.provisionBlobs.calledBefore(deps.provisionSlots)).to.equal(true);
+      for (const provision of [deps.provisionBlobs, deps.provisionSlots]) {
+        const [deployment, ctx, handed] = provision.firstCall.args;
+        expect(deployment).to.equal(slotAndBlobDeployment);
+        expect(ctx.appName).to.equal(APP);
+        expect(ctx.peers).to.have.members(['10.0.0.1:16127', '10.0.0.2:16127']);
+        expect(handed.peerFetch).to.be.a('function');
+      }
+      expect(deps.provisionBlobs.firstCall.args[2].writeFile, 'a blob is written by the service').to.be.a('function');
+      sinon.assert.calledOnceWithExactly(onStatus, { status: 'Provisioning content...' });
+    });
+
+    it('provisions only what the deployment declares', async () => {
+      const { service } = load();
+      const blobs = contentDeps();
+      await service.provisionContent(blobOnlyDeployment, { appName: APP }, blobs);
+      sinon.assert.calledOnce(blobs.provisionBlobs);
+      sinon.assert.notCalled(blobs.provisionSlots);
+
+      const slots = contentDeps();
+      await service.provisionContent(slotOnlyDeployment, { appName: APP }, slots);
+      sinon.assert.calledOnce(slots.provisionSlots);
+      sinon.assert.notCalled(slots.provisionBlobs);
+    });
+
+    it('writes a blob onto its source readable by the container and writable by its owner alone', async () => {
+      const { service } = load();
+      const deps = contentDeps();
+      await service.provisionContent(blobOnlyDeployment, { appName: APP }, deps);
+      const { writeFile } = deps.provisionBlobs.firstCall.args[2];
+      const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'flux-content-'));
+      try {
+        const source = path.join(dir, 'seed');
+        await writeFile(source, Buffer.from('seeded'));
+        expect(await fsPromises.readFile(source, 'utf8')).to.equal('seeded');
+        // eslint-disable-next-line no-bitwise
+        expect((await fsPromises.stat(source)).mode & 0o777).to.equal(0o644);
+      } finally {
+        await fsPromises.rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('is a no-op for a deployment that declares no content, asking nobody', async () => {
+      const { service } = load();
+      const deps = contentDeps();
+      const onStatus = sinon.spy();
+      await service.provisionContent(plainDeployment, { appName: APP, onStatus }, deps);
+      sinon.assert.notCalled(deps.getLocations);
+      sinon.assert.notCalled(deps.provisionBlobs);
+      sinon.assert.notCalled(deps.provisionSlots);
+      sinon.assert.notCalled(onStatus);
+    });
+
+    it('throws what a provision throws, so nothing starts on missing content', async () => {
+      const { service } = load();
+      const deps = contentDeps({ provisionSlots: sinon.stub().rejects(new Error('contentSlot: no manifest covering every declared slot')) });
+      await expectReject(service.provisionContent(slotAndBlobDeployment, { appName: APP }, deps), /covering every declared slot/);
     });
   });
 
