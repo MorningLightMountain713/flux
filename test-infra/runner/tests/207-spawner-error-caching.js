@@ -5,6 +5,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { nodeKey } from '../framework/keys.js';
 import { buildAppSpec, registerAndConfirm } from '../framework/app-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
+import { seedSpawnerApp } from '../framework/reconciler-suite.js';
 import { pushBrokenImage, pushImage } from '../framework/registry-helper.js';
 import { advanceBlock, advanceBlocks, startTicker, stopTicker } from '../framework/daemon-control.js';
 import {
@@ -180,15 +181,7 @@ describe('Spawner error caching: network-wide error skip', function () {
       }
     }
 
-    for (let n = 1; n <= env.nodeCount; n += 1) {
-      const dc = dbClient(n);
-      // eslint-disable-next-line no-await-in-loop
-      await dc.seedGlobalAppSpec(app.spec);
-      // eslint-disable-next-line no-await-in-loop
-      await dc.seedPermanentMessage(app.permanentMessage);
-      // eslint-disable-next-line no-await-in-loop
-      await dc.seedAppHash(app.hash, app.permanentMessage.height, true);
-    }
+    await seedSpawnerApp(env, app);
   });
 
   after(async function () {

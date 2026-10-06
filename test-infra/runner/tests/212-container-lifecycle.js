@@ -11,8 +11,8 @@ import {
   requireAppContainerName,
 } from '../framework/container.js';
 import { startTicker, advanceBlock } from '../framework/daemon-control.js';
-import { dbClient } from '../framework/db-client.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
+import { seedSpawnerApp } from '../framework/reconciler-suite.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import {
   waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
@@ -56,12 +56,7 @@ async function seedAndWaitForInstall(env, appName) {
     }],
   });
 
-  for (let i = 1; i <= env.nodeCount; i++) {
-    const dc = dbClient(i);
-    await dc.seedGlobalAppSpec(app.spec);
-    await dc.seedPermanentMessage(app.permanentMessage);
-    await dc.seedAppHash(app.hash, app.permanentMessage.height, true);
-  }
+  await seedSpawnerApp(env, app);
 
   const installed = await Promise.any(
     env.clients.map(async (c, i) => {

@@ -70,6 +70,7 @@ describe('an app volume is the image this node made, not the one under its name'
 
     await pushImage(name, 'v1');
     const app = await buildSeedableApp({
+      pinnedTo: [0],
       name,
       compose: [{
         name,

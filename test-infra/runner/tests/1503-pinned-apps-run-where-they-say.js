@@ -4,9 +4,8 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
-import { bootAndPeer } from '../framework/reconciler-suite.js';
+import { bootAndPeer, seedSpawnerApp, seedSpecUpdate } from '../framework/reconciler-suite.js';
 import { buildSeedableApp, buildSeedableUpdate, nodeOutpoint } from '../framework/seed-helper.js';
-import { dbClient } from '../framework/db-client.js';
 import { fluxTeamKey } from '../framework/keys.js';
 import { authenticate } from '../auth.js';
 import { waitFor, waitForBootSettled, waitForAppRemoved } from '../framework/wait.js';
@@ -89,7 +88,6 @@ describe('a pinned app runs where its spec says', function () {
     it('honours a pin written as a socket address', async function () {
       this.timeout(300000);
       const app = await buildSeedableApp({
-        env,
         name: `pinbyip${Date.now()}`,
         instances: 1,
         nodes: [`${subnet.nodeIp(PINNED_INDEX + 1)}:16127`],
@@ -112,7 +110,6 @@ describe('a pinned app runs where its spec says', function () {
       // The named node's verdict is the whole test - the unnamed node's answer was already
       // correct when the bug was live.
       const app = await buildSeedableApp({
-        env,
         name: `pinbyoutpoint${Date.now()}`,
         instances: 1,
         nodes: [nodeOutpoint(PINNED_INDEX)],
@@ -141,7 +138,6 @@ describe('a pinned app runs where its spec says', function () {
       // the filter, which IS the verdict, and the two above are additionally deferred as
       // non-enterprise apps on an Arcane node, so they stay short throughout.
       const app = await buildSeedableApp({
-        env,
         name: `unpinned${Date.now()}`,
         instances: env.clients.length,
         nodes: [],
@@ -169,7 +165,6 @@ describe('a pinned app runs where its spec says', function () {
       // reason non_enterprise_on_arcane - which delays the install rather than
       // preventing it.)
       const app = await buildSeedableApp({
-        env,
         name: `landspin${Date.now()}`,
         instances: 1,
         nodes: [nodeOutpoint(PINNED_INDEX)],
@@ -217,7 +212,6 @@ describe('a pinned app runs where its spec says', function () {
     it('refuses to install a v8 pinned app on a node the pin does not name', async function () {
       this.timeout(300000);
       const app = await buildSeedableApp({
-        env,
         name: `gateip${Date.now()}`,
         instances: 1,
         nodes: [`${subnet.nodeIp(PINNED_INDEX + 1)}:16127`],
@@ -231,7 +225,6 @@ describe('a pinned app runs where its spec says', function () {
     it('refuses on an outpoint pin too', async function () {
       this.timeout(300000);
       const app = await buildSeedableApp({
-        env,
         name: `gateoutpoint${Date.now()}`,
         instances: 1,
         nodes: [nodeOutpoint(PINNED_INDEX)],
@@ -245,7 +238,6 @@ describe('a pinned app runs where its spec says', function () {
     it('does not refuse the node the pin names', async function () {
       this.timeout(300000);
       const app = await buildSeedableApp({
-        env,
         name: `gateallowed${Date.now()}`,
         instances: 1,
         nodes: [nodeOutpoint(PINNED_INDEX)],
@@ -272,7 +264,6 @@ describe('a pinned app runs where its spec says', function () {
     it('removes it and withdraws the location its peers hold', async function () {
       this.timeout(600000);
       const app = await buildSeedableApp({
-        env,
         name: `repin${Date.now()}`,
         instances: env.clients.length,
         nodes: [],
@@ -317,12 +308,7 @@ describe('a pinned app runs where its spec says', function () {
         spec.nodes = [nodeOutpoint(PINNED_INDEX)];
       });
       expect(repinned.hash, 'a re-pin that hashes the same is not a change').to.not.equal(app.hash);
-      await Promise.all(env.clients.map(async (_, i) => {
-        const dc = dbClient(i + 1);
-        await dc.replaceGlobalAppSpec(repinned.spec);
-        await dc.seedPermanentMessage(repinned.permanentMessage);
-        await dc.seedAppHash(repinned.hash, repinned.permanentMessage.height, true);
-      }));
+      await seedSpecUpdate(env, repinned, env.clients.map((_, i) => i));
 
       // READ AS AN EVENT, NOT FROM /apps/installedapps - that endpoint is served through
       // apicache for 30 seconds, and the wait above populated it with a list containing this
@@ -347,22 +333,9 @@ describe('a pinned app runs where its spec says', function () {
 });
 
 /**
- * Put a built app on every node's global tables.
- *
- * seedGlobalSpec is not exported by reconciler-suite, and installOnNodes - which is -
- * installs as well as seeds, which is the opposite of what the candidacy tests want: they
- * need the fleet to KNOW about an app it has not been told to install.
+ * Give every node a built app. The candidacy tests need the fleet to KNOW about an app it
+ * has not been told to install, and installOnNodes installs as well.
  */
 async function seedToFleet(env, app) {
-  const indices = env.clients.map((_, i) => i);
-  await Promise.all(indices.map(async (i) => {
-    const dc = dbClient(i + 1);
-    await dc.seedGlobalAppSpec(app.spec);
-    await dc.seedPermanentMessage(app.permanentMessage);
-    await dc.seedAppHash(app.hash, app.permanentMessage.height, true);
-  }));
-  // No wait: the three writes above are awaited, so the rows are durable by the time this
-  // returns, and the spawner reads the global table on its next pass. A poll for "some app
-  // exists" would be satisfied by an app a previous test seeded, which is worse than no
-  // poll at all.
+  await seedSpawnerApp(env, app);
 }

@@ -39,7 +39,7 @@ describe('backup on a legacy node stops through docker and comes back', function
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1 });
     client = env.clients[NODE_IDX];
     await pushTestApp(appName);
-    const app = await buildSeedableTestApp({ name: appName, exitCode: 0 });
+    const app = await buildSeedableTestApp({ name: appName, exitCode: 0, pinnedTo: [NODE_IDX] });
     await installOnNodes(env, app, [NODE_IDX]);
     await waitForUp(client, appName, 'app running before backup');
   });

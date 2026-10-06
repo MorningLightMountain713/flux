@@ -241,7 +241,7 @@ describe('otlp telemetry: the identity socket carries the resolved agent endpoin
   it('announces nothing for an app without telemetry (the scoping gate)', async function () {
     this.timeout(180000);
     await pushTestApp(PLAIN);
-    const plain = await buildSeedableTestApp({ name: PLAIN });
+    const plain = await buildSeedableTestApp({ name: PLAIN, pinnedTo: [installedIndex] });
     await installOnNodes(env, plain, [installedIndex]);
 
     // The announce (if any) fires during install (create/start); the install

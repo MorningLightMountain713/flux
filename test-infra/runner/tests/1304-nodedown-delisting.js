@@ -109,6 +109,7 @@ describe('a delisted node is negated by every other node\'s own derivation, with
     this.timeout(300000);
     await pushImage(appName, 'v1');
     const app = await buildSeedableApp({
+      pinnedTo: [SUBJECT, CO_HOLDER],
       name: appName,
       instances: INSTANCES,
       compose: [{

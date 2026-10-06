@@ -1,5 +1,4 @@
 // fleet: 6
-import { createHash, randomBytes } from 'node:crypto';
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
@@ -10,9 +9,7 @@ import {
   bootAndPeer, seedSpawnerApp, waitForInstanceCount,
 } from '../framework/reconciler-suite.js';
 import { waitFor } from '../framework/wait.js';
-import { appOwnerKey } from '../framework/keys.js';
 import { assignPorts } from '../framework/port-allocator.js';
-import { signBtcMessage } from '../auth.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // Region pins, end to end, on a fleet whose regions the location table actually
@@ -84,46 +81,6 @@ function gateSpec({ name, instances = 3, geolocation = [] }) {
   // spec built for one app here carries the same port.
   assignPorts(spec.compose, name);
   return spec;
-}
-
-// buildSeedableApp signs the spec it builds and takes no geolocation, so a
-// placement-pinned seed has to be signed here. Same message construction as
-// seed-helper's: type + version + spec + timestamp signed by the app owner,
-// hashed with the signature appended, and the spec's own copy carries the hash
-// and height the seeded collections are keyed on.
-async function pinGeolocation(app, geolocation) {
-  const ownerKey = appOwnerKey();
-  const { height } = app.spec;
-  // hash and height are appended AFTER signing, so strip them back off; the
-  // remaining keys keep the order the signed JSON depends on
-  const spec = { ...app.spec };
-  delete spec.hash;
-  delete spec.height;
-  spec.geolocation = geolocation;
-  const type = 'fluxappregister';
-  const version = 1;
-  const timestamp = Date.now();
-  const signature = await signBtcMessage(type + version + JSON.stringify(spec) + timestamp, ownerKey.privkey);
-  const messageHash = createHash('sha256')
-    .update(type + version + JSON.stringify(spec) + timestamp + signature)
-    .digest('hex');
-  const txid = randomBytes(32).toString('hex');
-  return {
-    spec: { ...spec, hash: messageHash, height },
-    permanentMessage: {
-      type,
-      version,
-      appSpecifications: spec,
-      hash: messageHash,
-      timestamp,
-      signature,
-      txid,
-      height,
-      valueSat: 200000000,
-    },
-    hash: messageHash,
-    txid,
-  };
 }
 
 describe('placement honours region pins on proof from the shared table', function () {
@@ -363,9 +320,9 @@ describe('placement honours region pins on proof from the shared table', functio
     const appName = `e2eregionpin${Date.now()}`;
     await pushTestApp(appName);
     const app = await buildSeedableSyncthingApp({
-      name: appName, syncMode: 'activeStandby', instances: inRegionA.length,
+      name: appName, syncMode: 'activeStandby', instances: inRegionA.length, geolocation: [allowRegion(regionA)],
     });
-    await seedSpawnerApp(env, await pinGeolocation(app, [allowRegion(regionA)]));
+    await seedSpawnerApp(env, app);
 
     // The pinned region holds exactly this many nodes, so convergence to the
     // requested count leaves no choice about WHICH nodes: the placed set must
@@ -381,17 +338,17 @@ describe('placement honours region pins on proof from the shared table', functio
     const unknownRegionNodes = indicesInOrg(DOMAINS - 1);
     const appName = `e2eregiondeny${Date.now()}`;
     await pushTestApp(appName);
-    const app = await buildSeedableSyncthingApp({
-      name: appName, syncMode: 'activeStandby', instances: 3,
-    });
     // allowed across the whole fleet's continent, denied in organisation 1's
     // region. The continent is what leaves every organisation a candidate: the
     // split gives each of them a different country, so a country allow would
     // decide the outcome before the deny ever applied.
-    await seedSpawnerApp(env, await pinGeolocation(app, [
-      `ac${fleetContinent}`,
-      denyRegion(regionB),
-    ]));
+    const app = await buildSeedableSyncthingApp({
+      name: appName,
+      syncMode: 'activeStandby',
+      instances: 3,
+      geolocation: [`ac${fleetContinent}`, denyRegion(regionB)],
+    });
+    await seedSpawnerApp(env, app);
 
     const placed = await waitForInstanceCount(env, appName, 3, { timeout: 150000, stableMs: 15000 });
     expect(placed.length).to.equal(3);

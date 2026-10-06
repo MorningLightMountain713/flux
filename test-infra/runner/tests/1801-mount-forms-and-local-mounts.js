@@ -131,6 +131,7 @@ describe('mount forms on a replicated volume, and the directory a spec keeps loc
 
     await pushImage(appName, 'v1');
     const app = await buildSeedableSyncthingApp({
+      pinnedTo: nodes,
       name: appName,
       syncMode: 'syncFirst',
       extraMounts: [

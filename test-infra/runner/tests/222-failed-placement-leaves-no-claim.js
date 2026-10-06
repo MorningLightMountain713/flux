@@ -75,7 +75,6 @@ describe('a failed placement tells the network it gave the app up', function () 
     const app = await buildSeedableApp({
       name: appName,
       instances: INSTANCES,
-      env,
       compose: [{
         name: appName,
         description: 'an app whose container cannot start',

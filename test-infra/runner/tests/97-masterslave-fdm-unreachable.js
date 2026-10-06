@@ -74,7 +74,7 @@ describe('masterSlave election while FDM is unreachable', function () {
     await resetFdm();
     await resetSyncState();
     await pushImage(appName, 'v1');
-    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
+    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby', pinnedTo: placementOrder });
 
     // FDM goes silent BEFORE the app is placed, so no election cycle in this
     // suite ever sees an answer. Starting the outage after placement would race

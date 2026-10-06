@@ -72,14 +72,14 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', f
   // rolls the newcomer back.
   async function installGraceful(name, port) {
     await pushTestApp(name);
-    const app = await buildSeedableGracefulV8App({ name, gracefulSec: GRACEFUL_S, exitCode: 0, port });
+    const app = await buildSeedableGracefulV8App({ name, gracefulSec: GRACEFUL_S, exitCode: 0, port, pinnedTo: [NODE_IDX] });
     await installOnNodes(env, app, [NODE_IDX]);
     await waitForUp(client, name, `${name} running before stop`);
   }
 
   async function installPlain(name, port) {
     await pushTestApp(name);
-    const app = await buildSeedableTestApp({ name, exitCode: 0 });
+    const app = await buildSeedableTestApp({ name, exitCode: 0, pinnedTo: [NODE_IDX] });
     await installOnNodes(env, app, [NODE_IDX]);
     await waitForUp(client, name, `${name} running before stop`);
   }

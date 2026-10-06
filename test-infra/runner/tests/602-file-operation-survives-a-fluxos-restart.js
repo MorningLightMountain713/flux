@@ -83,6 +83,7 @@ describe('a file operation survives a FluxOS restart', function () {
 
     await pushImage(appName, 'v1');
     const app = await buildSeedableApp({
+      pinnedTo: [0],
       name: appName,
       compose: [{
         name: appName,

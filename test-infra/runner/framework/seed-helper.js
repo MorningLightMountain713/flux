@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,9 +9,6 @@ import { REGISTRY_REPO_HOST } from './subnet-config.js';
 import { assertHermeticRepotags } from './app-helper.js';
 import { appIdentityFromUuid, appUuid } from '@runonflux/flux-spec';
 import { allocatePortFor, assignPorts } from './port-allocator.js';
-import chainStart from './chain-start.cjs';
-
-const { DEFAULT_INITIAL_HEIGHT } = chainStart;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const deterministicList = JSON.parse(
@@ -37,16 +34,12 @@ function sha256(data) {
   return createHash('sha256').update(data).digest('hex');
 }
 
-function fakeTxid() {
-  return randomBytes(32).toString('hex');
-}
-
 // Every option this builder reads. An option outside this set is a fixture
 // describing an app it did not build, so it is refused here rather than dropped.
 const SEEDABLE_APP_OPTIONS = new Set([
-  'name', 'compose', 'env', 'height', 'instances', 'owner', 'staticip',
+  'name', 'compose', 'instances', 'owner', 'staticip',
   'enterprise', 'expire', 'allowExternalRepotag', 'allowPortReuse',
-  'nodes',
+  'nodes', 'pinnedTo', 'geolocation',
 ]);
 
 export async function buildSeedableApp(opts) {
@@ -57,18 +50,6 @@ export async function buildSeedableApp(opts) {
   const {
   name,
   compose = null,
-  // Seeded RELATIVE TO THE CHAIN THIS SUITE IS ON, never to a literal. An app is
-  // seeded `expire` blocks before it expires, so a height pinned to some older
-  // chain start seeds an app that is already long expired at the fleet's first
-  // block: the spawner filters it out of every candidate list and
-  // expireGlobalApplications deletes it outright.
-  //
-  // Pass `env` and it follows that suite's chain, including one that opted out
-  // via createTestEnv({ initialHeight }) - which is the whole reason that
-  // parameter exists, and the reason a bare constant here would go stale again
-  // the first time somebody uses it.
-  env = null,
-  height = (env?.initialHeight ?? DEFAULT_INITIAL_HEIGHT) + 10,
   instances = 3,
   owner = null,
   staticip = false,
@@ -88,7 +69,17 @@ export async function buildSeedableApp(opts) {
   // different one. Nothing rejects that - the node simply decides the app is
   // obsolete and reinstalls it forever.
   nodes = [],
+  // The same pin, by node index: the nodes the app runs on and nowhere else.
+  // Every node learns of an app the network has, so a suite that installs on
+  // chosen nodes names them here, and the pin keeps the rest of the fleet off it.
+  pinnedTo = null,
+  // Where the app may and may not be placed, in the spec's own entries.
+  geolocation = [],
   } = opts;
+  if (pinnedTo && nodes.length) {
+    throw new Error(`buildSeedableApp: ${name} names its nodes twice, by pinnedTo and by nodes`);
+  }
+  const targets = pinnedTo ? pinnedTo.map(nodeOutpoint) : nodes;
   const ownerKey = appOwnerKey();
   const appOwner = owner ?? ownerKey.zelid;
 
@@ -117,9 +108,9 @@ export async function buildSeedableApp(opts) {
     }],
     instances,
     contacts: [],
-    geolocation: [],
+    geolocation,
     expire,
-    nodes,
+    nodes: targets,
     staticip,
     enterprise,
   };
@@ -144,44 +135,35 @@ export async function buildSeedableApp(opts) {
 
   const messageContent = type + version + JSON.stringify(spec) + timestamp + signature;
   const hash = sha256(messageContent);
-  const txid = fakeTxid();
 
-  const permanentMessage = {
+  // The message as its owner signed it: what a node is handed. The chain
+  // carries its payment, and every record of the app is the node's own.
+  const message = {
     type,
     version,
     appSpecifications: spec,
     hash,
     timestamp,
     signature,
-    txid,
-    height,
-    valueSat: 200000000,
-  };
-
-  const hashEntry = {
-    hash,
-    txid,
-    height,
-    value: 200000000,
-    message: true,
-    messageNotFound: false,
-    createdAt: new Date(),
   };
 
   assertHermeticRepotags(spec, allowExternalRepotag);
-  // The row as the decider writes it for a registration: the uuid minted from the
-  // name and the message hash, and the identity every container, directory, image
-  // and network of the app is named from. The version the app was registered
-  // with, which fixes its syncthing folder ids and the alias an app registered
-  // before v9 keeps, is the registration message's and rides beside the row.
+  // The app as its registration makes it: the uuid minted from the name and the
+  // message hash, and the identity every container, directory, image and network
+  // of the app is named from. The version the app is registered with fixes its
+  // syncthing folder ids and the alias an app registered before v9 keeps.
   const uuid = appUuid(name, hash);
   const identity = appIdentityFromUuid(uuid);
-  const specWithMeta = {
-    ...spec, hash, height, uuid, identity,
-  };
 
   return {
-    spec: specWithMeta, permanentMessage, hashEntry, hash, txid, uuid, identity, registrationVersion: spec.version,
+    spec: {
+      ...spec, hash, uuid, identity,
+    },
+    message,
+    hash,
+    uuid,
+    identity,
+    registrationVersion: spec.version,
   };
 }
 
@@ -222,26 +204,20 @@ export function syncedContainerData(syncMode, path = '/appdata') {
  *
  * @param {object} app - what buildSeedableApp returned
  * @param {(spec: object) => void} mutate - changes the copy in place
- * @param {{height?: number}} opts - the block the update lands on
  * @returns {Promise<object>} the same shape buildSeedableApp returns
  */
-export async function buildSeedableUpdate(app, mutate, { height = null } = {}) {
+export async function buildSeedableUpdate(app, mutate) {
   const ownerKey = appOwnerKey();
 
-  // hash, height, uuid and identity are what the seeding added; the signature
-  // and the hash below are taken over the specification alone, exactly as
+  // hash, uuid and identity are what the registration made; the signature and
+  // the hash below are taken over the specification alone, exactly as
   // registration took them.
-  const previousHeight = app.spec.height;
   const { uuid, identity } = app.spec;
   const { registrationVersion } = app;
   const bare = JSON.parse(JSON.stringify(app.spec));
   delete bare.hash;
-  delete bare.height;
   delete bare.uuid;
   delete bare.identity;
-  // Present if this fixture has already been seeded into mongo, and it belongs
-  // to that row rather than to the specification the owner signed.
-  delete bare._id;
   const before = JSON.stringify(bare);
 
   const spec = JSON.parse(before);
@@ -259,25 +235,19 @@ export async function buildSeedableUpdate(app, mutate, { height = null } = {}) {
   const signature = await signBtcMessage(payload, ownerKey.privkey);
 
   const hash = sha256(type + version + JSON.stringify(spec) + timestamp + signature);
-  const txid = fakeTxid();
-  const at = height ?? previousHeight + 1;
 
-  // An update's row keeps its registration's uuid and identity, and the app its version.
+  // An updated app keeps its registration's uuid, identity and version.
   return {
     spec: {
-      ...spec, hash, height: at, uuid, identity,
+      ...spec, hash, uuid, identity,
     },
+    message: {
+      type, version, appSpecifications: spec, hash, timestamp, signature,
+    },
+    hash,
     uuid,
     identity,
     registrationVersion,
-    permanentMessage: {
-      type, version, appSpecifications: spec, hash, timestamp, signature, txid, height: at, valueSat: 200000000,
-    },
-    hashEntry: {
-      hash, txid, height: at, value: 200000000, message: true, messageNotFound: false, createdAt: new Date(),
-    },
-    hash,
-    txid,
   };
 }
 
@@ -303,11 +273,6 @@ export async function buildSeedableLegacyApp({
   name,
   version = 3,
   containerData = '/appdata',
-  // Chain-relative, same as buildSeedableApp above and for the same reason its
-  // comment gives: a literal height seeds an app already expired on any suite
-  // whose chain starts later, and assertAliveOnThisChain refuses it.
-  env = null,
-  height = (env?.initialHeight ?? DEFAULT_INITIAL_HEIGHT) + 10,
   // A version 3 specification names its instance count, and the network has
   // never accepted fewer than three.
   instances = 3,
@@ -348,44 +313,26 @@ export async function buildSeedableLegacyApp({
 
   const messageContent = type + messageVersion + JSON.stringify(spec) + timestamp + signature;
   const hash = sha256(messageContent);
-  const txid = fakeTxid();
-
-  const permanentMessage = {
-    type,
-    version: messageVersion,
-    appSpecifications: spec,
-    hash,
-    timestamp,
-    signature,
-    txid,
-    height,
-    valueSat: 200000000,
-  };
-
-  const hashEntry = {
-    hash,
-    txid,
-    height,
-    value: 200000000,
-    message: true,
-    messageNotFound: false,
-    createdAt: new Date(),
-  };
 
   assertHermeticRepotags(spec, allowExternalRepotag);
   const uuid = appUuid(name, hash);
   const identity = appIdentityFromUuid(uuid);
   return {
     spec: {
-      ...spec, hash, height, uuid, identity,
+      ...spec, hash, uuid, identity,
     },
-    registrationVersion: spec.version,
-    permanentMessage,
-    hashEntry,
+    message: {
+      type,
+      version: messageVersion,
+      appSpecifications: spec,
+      hash,
+      timestamp,
+      signature,
+    },
     hash,
-    txid,
     uuid,
     identity,
+    registrationVersion: spec.version,
   };
 }
 
@@ -651,65 +598,6 @@ export async function buildSeedableIndexRefApp({
     ];
 
   return buildSeedableApp({ name, compose, ...rest });
-}
-
-// The running set is a derivation over the app state event log, so seeding a
-// location means asserting the event the derivation reads - there is no
-// materialized row to write, and writing one would be seeding a shape nothing
-// consults.
-export function buildRunningState({ appName, nodeIps, hash, broadcastedAt = null }) {
-  const ts = broadcastedAt ?? Date.now();
-
-  const stateEvents = nodeIps.map((ip) => ({
-    type: 'apprunning',
-    ip,
-    dedupKey: 'v2',
-    broadcastedAt: new Date(ts),
-    expireAt: new Date(ts + 125 * 60 * 1000),
-    receivedAt: new Date(ts),
-    data: {
-      apps: [{ name: appName, hash, runningSince: ts - 60000 }],
-      ip,
-      broadcastedAt: ts,
-    },
-  }));
-
-  return { stateEvents };
-}
-
-export async function seedAppOnAllNodes(dbClients, {
-  name, compose, height, instances, env,
-} = {}) {
-  const app = await buildSeedableApp({
-    name, compose, height, instances, env,
-  });
-
-  const seedPromises = dbClients.map(async (dbc) => {
-    await dbc.seedGlobalAppSpec(app.spec);
-    await dbc.seedPermanentMessage(app.permanentMessage);
-    await dbc.seedAppHash(app.hash, app.permanentMessage.height, true);
-  });
-  await Promise.all(seedPromises);
-
-  return app;
-}
-
-export async function seedAppWithRunningState(dbClients, nodeIps, {
-  name, compose, height, instances, env,
-} = {}) {
-  const app = await seedAppOnAllNodes(dbClients, {
-    name, compose, height, instances, env,
-  });
-  const state = buildRunningState({ appName: name, nodeIps, hash: app.hash });
-
-  const seedPromises = dbClients.map(async (dbc) => {
-    for (const evt of state.stateEvents) {
-      await dbc.seedAppStateEvent(evt);
-    }
-  });
-  await Promise.all(seedPromises);
-
-  return { ...app, stateEvents: state.stateEvents };
 }
 
 /**

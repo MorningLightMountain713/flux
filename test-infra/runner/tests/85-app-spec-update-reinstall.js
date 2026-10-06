@@ -67,7 +67,7 @@ describe('an app whose specification changed is reinstalled at the new specifica
 
     await pushImage(appName, 'v1');
     app = await buildSeedableApp({
-      env,
+      pinnedTo: [0],
       name: appName,
       instances: 1,
       compose: [{

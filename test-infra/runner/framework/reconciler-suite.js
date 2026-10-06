@@ -1,14 +1,17 @@
 // Shared bootstrap for the reconciler integration suites. bootAndPeer brings a
 // fleet to the peered/ticking state. Two deployment interfaces are available and
 // shared by all suites:
-//   - SPAWNER path: seedAndInstall / seedAndInstallMany / seedSimpleApp — seed the
-//     global spec and let the spawner self-select nodes (exercises real placement).
-//   - TARGETED path: installOnNodes — install on specific chosen nodes via the
+//   - SPAWNER path: seedAndInstall / seedAndInstallMany / seedSimpleApp — give the
+//     fleet the app and let the spawner self-select nodes (exercises real placement).
+//   - TARGETED path: installOnNodes — install an app pinned to chosen nodes via each
 //     node's installapplocally endpoint (deterministic, fast, you pick the nodes).
 import { pushImage, pushTestApp } from './registry-helper.js';
 import { startTicker, advanceBlock } from './daemon-control.js';
 import { dbClient } from './db-client.js';
-import { buildSeedableApp, buildSeedableSyncthingApp, buildSeedableTestApp } from './seed-helper.js';
+import { deliverAppMessage } from './app-delivery.js';
+import {
+  buildSeedableApp, buildSeedableSyncthingApp, buildSeedableTestApp, nodeOutpoint,
+} from './seed-helper.js';
 import { authenticate } from '../auth.js';
 import { fluxTeamKey } from './keys.js';
 import {
@@ -75,68 +78,49 @@ export async function seedSyncScopedData(env, name, index) {
   }).catch(() => {});
 }
 
-// Seed a pre-built app's global spec into the given nodes' DBs (so a local install
-// can resolve it).
-// A seeded app must still be alive on the chain the fleet is about to run. This
-// is the funnel every global seed passes through, and it is the only place that
-// holds BOTH the app and the env, so it is where the two are checked against
-// each other rather than trusted to have been built consistently.
-//
-// Getting this wrong is silent and expensive: the spawner drops an expired app
-// from every candidate list (so spawner suites spin their whole budget and time
-// out rather than failing), and expireGlobalApplications deletes it outright on
-// any node that restarts. That is a harness fault that presents as a product
-// one, in the most expensive possible shape.
-function assertAliveOnThisChain(env, app) {
-  const seededAt = app.permanentMessage.height;
-  const expiresAt = seededAt + (app.spec.expire ?? 22000);
-  if (expiresAt <= env.initialHeight) {
-    throw new Error(
-      `seeded app ${app.spec.name} expires at block ${expiresAt}, at or below this suite's `
-      + `chain start (${env.initialHeight}) - it is already expired before the fleet processes `
-      + 'its first block. Seed relative to the chain rather than to a literal: '
-      + 'buildSeedableApp({ env, ... }).',
-    );
-  }
-}
-
-// Exported for suites whose scenario needs NON-holder nodes to know the app too:
-// production nodes hold every global spec via message sync, and anything verified
-// against the spec (the owner-generation record) is silently dropped by a node the
-// targeted-install shortcut left specless.
+// Give the named nodes a pre-built app: its payment is mined and each node is
+// handed the registration, which it stores, decides and lists as it does any app
+// the network has. Every other node learns of the app from its peers.
 export async function seedGlobalSpec(env, app, indices) {
-  assertAliveOnThisChain(env, app);
-  await Promise.all(indices.map(async (i) => {
-    const dc = dbClient(i + 1);
-    await dc.seedGlobalAppSpec(app.spec);
-    await dc.seedPermanentMessage(app.permanentMessage);
-    await dc.seedAppHash(app.hash, app.permanentMessage.height, true);
-  }));
+  await deliverAppMessage(env, app.message, indices);
 }
 
 // The chain now carries a newer specification for an app these nodes already
-// hold. Written the way hash sync writes it: the app's row REPLACED, the new
-// permanent message and hash appended beside the old ones. The periodic reinstall
-// pass compares the two hashes and acts.
-//
-// A suite that seeds the row without the message and hash gets a node that sees
-// the change and cannot verify it.
+// hold: the update's payment is mined and each node is handed the update, which
+// it applies over the app's row. The periodic reinstall pass compares the hash
+// installed with the hash the row now carries and acts.
 export async function seedSpecUpdate(env, updated, indices) {
-  await Promise.all(indices.map(async (i) => {
-    const dc = dbClient(i + 1);
-    await dc.replaceGlobalAppSpec(updated.spec);
-    await dc.seedPermanentMessage(updated.permanentMessage);
-    await dc.seedAppHash(updated.hash, updated.permanentMessage.height, true);
-  }));
+  await deliverAppMessage(env, updated.message, indices);
+}
+
+// A fixture installed on chosen nodes names them in its spec. Every node learns
+// of an app the network has, and the pin is what keeps the rest of the fleet
+// from placing it. A specification version that names no nodes carries no pin,
+// and the fleet places its remaining instances.
+function assertPinnedTo(app, indices) {
+  if (!Array.isArray(app.spec.nodes)) return;
+  const subnet = getSubnetConfig();
+  const named = new Set(app.spec.nodes);
+  const unnamed = indices.filter((i) => {
+    const ip = subnet.nodeIp(i + 1);
+    return !named.has(nodeOutpoint(i)) && !named.has(ip) && !named.has(`${ip}:16127`);
+  });
+  if (unnamed.length) {
+    throw new Error(
+      `installOnNodes: ${app.spec.name} is installed on node(s) ${unnamed.join(', ')} its spec does not name; `
+      + 'build it with pinnedTo naming every node it is installed on',
+    );
+  }
 }
 
 // TARGETED deployment: install a pre-built app on exactly the given node indices
 // via each node's installapplocally endpoint (real install: pull + create + start
 // + syncthing config). Deterministic and fast — no spawner-placement timing. Auth
-// as the flux team (adminandfluxteam) since these are seeded global specs.
-// Returns the indices it installed on.
+// as the flux team (adminandfluxteam). The app is pinned to the nodes it is
+// installed on. Returns the indices it installed on.
 export async function installOnNodes(env, app, indices, { timeout = 120000 } = {}) {
-  // A seeded row and a direct install both need the global app table to be
+  assertPinnedTo(app, indices);
+  // A delivered app and a direct install both need the global app table to be
   // past its boot rebuild, which drops the table and reinserts it from stored
   // messages. hashSync:complete is published when that rebuild is done;
   // boot:settled says nothing about it.
@@ -154,8 +138,8 @@ export async function installOnNodes(env, app, indices, { timeout = 120000 } = {
     const auth = await authenticate(client.url, teamKey);
     // WHAT THIS PROMISES IS THAT THE NODE HOLDS THE APP, not that this call is what put it
     // there, so the app:installed event decides and the response body never does. A node's
-    // own spawner goes after any app short of instances - which is every app a suite seeds
-    // and then installs - so it can be installing this one already and refuse the explicit
+    // own spawner goes after any app short of instances that names it - which is every app a
+    // suite delivers and then installs - so it can be installing this one already and refuse the explicit
     // call, or have finished and answer "already installed". Both keep the promise by the
     // other route.
     //
@@ -463,12 +447,9 @@ export async function redialAndPeer(env, indices, markers, { minPeers = 1 } = {}
   )));
 }
 
-// Seed a pre-built app (buildSeedableApp / buildSeedableSyncthingApp) into every
-// node's DB and wait until it installs on some node; resolves that node index.
+// Give every node a pre-built app (buildSeedableApp / buildSeedableSyncthingApp)
+// and wait until it installs on some node; resolves that node index.
 export async function seedAndInstall(env, app, { timeout = 120000 } = {}) {
-  // Through the guarded funnel, never inlined: seedGlobalSpec is the one place
-  // that checks the app is alive on this suite's chain, and a seed that skips
-  // it fails twenty minutes later as a spawner timeout instead of now.
   await seedGlobalSpec(env, app, Array.from({ length: env.nodeCount }, (_, i) => i));
   return Promise.any(env.clients.map(async (c, i) => {
     await waitForAppInstalled(c, app.spec.name, timeout);
@@ -476,11 +457,10 @@ export async function seedAndInstall(env, app, { timeout = 120000 } = {}) {
   }));
 }
 
-// Seed a pre-built app into every node and wait until at least `minCount` nodes
+// Give every node a pre-built app and wait until at least `minCount` nodes
 // install it; resolves the sorted list of those node indices. Used by the
 // multi-node gates (g: election needs >= 2 holders).
 export async function seedAndInstallMany(env, app, minCount, { timeout = 150000 } = {}) {
-  // Through the guarded funnel, never inlined - same contract as seedAndInstall.
   await seedGlobalSpec(env, app, Array.from({ length: env.nodeCount }, (_, i) => i));
   const installed = [];
   await Promise.all(env.clients.map(async (c, i) => {
@@ -496,11 +476,10 @@ export async function seedAndInstallMany(env, app, minCount, { timeout = 150000 
   return installed;
 }
 
-// SPAWNER path: seed an app's global spec into EVERY node's registry collection,
-// in the registry's stored form, so each node's spawner finds it alive, sees it as
-// missing instances and self-selects. No
-// running/installing locations are seeded, so `actual` starts at 0 and the spawner
-// drives real placement + collision-resolution. The app image must be pushed first.
+// SPAWNER path: give EVERY node the app, so each node's spawner finds it alive,
+// sees it as missing instances and self-selects. No node runs or is installing
+// it, so `actual` starts at 0 and the spawner drives real placement +
+// collision-resolution. The app image must be pushed first.
 export async function seedSpawnerApp(env, app) {
   const all = env.clients.map((_, i) => i);
   await seedGlobalSpec(env, app, all);
@@ -621,7 +600,10 @@ export async function seedSyncthingApp(env, {
     throw new Error(`seedSyncthingApp: unknown option(s) ${unknown.join(', ')}; a sync mode is syncMode`);
   }
   await pushImage(name, 'v1');
-  const app = await buildSeedableSyncthingApp({ name, syncMode, extraMounts, hdd });
+  const peerIndex = forceNonLeader ? (index === 0 ? env.clients.length - 1 : 0) : null;
+  const app = await buildSeedableSyncthingApp({
+    name, syncMode, extraMounts, hdd, pinnedTo: peerIndex === null ? [index] : [peerIndex, index],
+  });
   const identifier = componentIdentifier(app);
   // The install-settled signal is mode-dependent: decider modes (activeStandby/
   // syncFirst) run the first-run clean-install reset (dataCleared) before any
@@ -629,7 +611,6 @@ export async function seedSyncthingApp(env, {
   // starts, so dataCleared never fires for it.
   const settleAction = syncMode === 'sync' ? 'firstStart' : 'dataCleared';
 
-  const peerIndex = forceNonLeader ? (index === 0 ? env.clients.length - 1 : 0) : null;
   if (forceNonLeader) {
     // run the app on a real peer first: it becomes the syncthing leader, starts, and
     // gossips its running location. Wait until the subject node receives that

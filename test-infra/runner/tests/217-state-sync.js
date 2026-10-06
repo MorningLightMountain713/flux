@@ -5,7 +5,8 @@ import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { dbClient } from '../framework/db-client.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
-import { startTicker, advanceBlock, queueAppTx } from '../framework/daemon-control.js';
+import { startTicker, advanceBlock } from '../framework/daemon-control.js';
+import { seedGlobalSpec } from '../framework/reconciler-suite.js';
 import {
   waitFor,
   waitForAppInstalled,
@@ -63,16 +64,9 @@ describe('State sync: app running state (0x21)', function () {
         repoauth: '',
       }],
     });
-    for (let i = 1; i <= 10; i++) {
-      const dc = dbClient(i);
-      await dc.seedGlobalAppSpec(app.spec);
-      await dc.seedPermanentMessage(app.permanentMessage);
-      await dc.seedAppHash(app.hash, app.permanentMessage.height, true);
-    }
-
-    // Put hash in a block so late-joiner's explorer finds it
-    await queueAppTx(app.hash);
-    await advanceBlock();
+    // The chain carries the payment, where a late joiner's explorer finds it,
+    // and the ten nodes hold the message.
+    await seedGlobalSpec(env, app, initial);
 
     // Wait for spawner to install on at least one node
     await Promise.any(
@@ -115,7 +109,6 @@ describe('State sync: hash resolution', function () {
     await bootAndPeer(env, initial);
     await waitForOrchestratorState(env.clients[0], 'READY', 120000);
 
-    // Seed permanent message on all 10 nodes (but NOT the spec — that comes from hash resolution)
     await pushImage(appName, 'v1');
     const app = await buildSeedableApp({
       name: appName,
@@ -133,15 +126,9 @@ describe('State sync: hash resolution', function () {
         repoauth: '',
       }],
     });
-    for (let i = 1; i <= 10; i++) {
-      const dc = dbClient(i);
-      await dc.seedPermanentMessage(app.permanentMessage);
-      await dc.seedAppHash(app.hash, app.permanentMessage.height, true);
-    }
-
-    // Put hash in a block so late-joiner's explorer finds it
-    await queueAppTx(app.hash);
-    await advanceBlock();
+    // The chain carries the payment, where a late joiner's explorer finds it,
+    // and the ten nodes hold the message it resolves the hash to.
+    await seedGlobalSpec(env, app, Array.from({ length: 10 }, (_, i) => i));
   });
 
   after(async function () {
@@ -206,11 +193,9 @@ describe('State sync: 3-peer ephemeral sync', function () {
       }],
     });
 
+    await seedGlobalSpec(env, app, Array.from({ length: 10 }, (_, i) => i));
     for (let i = 1; i <= 10; i++) {
       const dc = dbClient(i);
-      await dc.seedGlobalAppSpec(app.spec);
-      await dc.seedPermanentMessage(app.permanentMessage);
-      await dc.seedAppHash(app.hash, app.permanentMessage.height, true);
       // Seed running locations on each source node so they have ephemeral data to sync.
       // Distinct fake in-/24 app-location IPs (.100+ avoids gateway/.1, services/.2-.7,
       // and node IPs/.10+); must stay in the FluxOS-accepted base or sync drops them.
@@ -221,9 +206,6 @@ describe('State sync: 3-peer ephemeral sync', function () {
         broadcastedAt: Date.now(),
       });
     }
-
-    await queueAppTx(app.hash);
-    await advanceBlock();
 
     // Wait for running broadcast to propagate
     await Promise.any(
@@ -375,11 +357,9 @@ describe('State sync: failed sync peer is replaced', function () {
       }],
     });
 
+    await seedGlobalSpec(env, app, SOURCES);
     for (const i of SOURCES) {
       const dc = dbClient(i + 1);
-      await dc.seedGlobalAppSpec(app.spec);
-      await dc.seedPermanentMessage(app.permanentMessage);
-      await dc.seedAppHash(app.hash, app.permanentMessage.height, true);
       await dc.seedAppLocation({
         name: appName,
         ip: `${subnet.base}.${101 + i}:16127`,
@@ -388,8 +368,6 @@ describe('State sync: failed sync peer is replaced', function () {
       });
     }
 
-    await queueAppTx(app.hash);
-    await advanceBlock();
     // A seeded location is a row in the source's event log, not a broadcast, so
     // each source is asked for the location it derives rather than listened to.
     await Promise.all(clients.map((c) => waitFor(async () => {

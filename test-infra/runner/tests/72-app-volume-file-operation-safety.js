@@ -85,6 +85,7 @@ describe('app volume file operations - safety and recovery', function () {
 
     await pushImage(appName, 'v1');
     const app = await buildSeedableApp({
+      pinnedTo: [0],
       name: appName,
       compose: [{
         name: appName,

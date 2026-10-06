@@ -81,7 +81,7 @@ describe('a log poll answers at once and loses nothing between polls', function 
 
     await pushTestApp(appName, 'v1');
     const app = await buildSeedableApp({
-      env,
+      pinnedTo: [0],
       name: appName,
       compose: [{
         name: component,

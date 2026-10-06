@@ -71,7 +71,7 @@ async function chooseFreshCellApp(membership, stem) {
   for (let i = 0; i < 400; i += 1) {
     const name = `${stem}${i.toString(36)}`;
     // eslint-disable-next-line no-await-in-loop
-    const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
+    const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby', pinnedTo: HOLDERS });
     const granting = committeeOf(membership, app, 0);
     const reRolled = committeeOf(membership, app, 1);
     const shared = [...granting.members].filter((cell) => reRolled.members.has(cell));

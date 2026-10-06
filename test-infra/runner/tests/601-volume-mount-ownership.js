@@ -74,6 +74,7 @@ async function isUp(client, appName) {
 async function installPlainApp(env, name, index) {
   await pushImage(name, 'v1');
   const app = await buildSeedableApp({
+    pinnedTo: [index],
     name,
     compose: [{
       name,
@@ -141,6 +142,7 @@ describe('FluxOS-owned volume mounting (no crontab) + inert unmounted app dirs',
 
     await pushImage(entName, 'v1');
     const entApp = await buildSeedableEnterpriseApp({
+      pinnedTo: [4],
       name: entName,
       compose: [{
         name: entName,

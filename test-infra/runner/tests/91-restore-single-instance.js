@@ -100,6 +100,7 @@ describe('a restore with no peer to fall back on', function () {
       await pushImage(app, 'v1');
       // eslint-disable-next-line no-await-in-loop
       const spec = await buildSeedableApp({
+        pinnedTo: [0],
         name: app,
         instances: 1,
         compose: [component(app, data)],

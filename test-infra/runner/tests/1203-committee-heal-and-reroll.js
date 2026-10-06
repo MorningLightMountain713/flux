@@ -141,7 +141,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
 
     name = `e2eheal${Date.now()}`;
     await pushImage(name, 'v1');
-    app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
+    app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby', pinnedTo: HOLDERS });
     const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, HOLDERS);
     // Every node must know the app, not just its holders: the outsider

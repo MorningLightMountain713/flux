@@ -56,7 +56,7 @@ describe('app removal converges to fully gone via the reconciler', function () {
   // respawn it - the test then observes ONLY the teardown convergence, not re-placement.
   async function installLocalOnly(name) {
     await pushTestApp(name);
-    const app = await buildSeedableTestApp({ name, exitCode: 0 });
+    const app = await buildSeedableTestApp({ name, exitCode: 0, pinnedTo: [NODE_IDX] });
     await installOnNodes(env, app, [NODE_IDX]);
     await waitForUp(client, name, `${name} running before removal`);
     await dbClient(NODE_IDX + 1).deleteGlobalAppSpec(name);

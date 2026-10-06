@@ -51,7 +51,7 @@ describe('reconciler enforces masterSlave g: election', function () {
     await resetFdm();
     await resetSyncState();
     await pushImage(appName, 'v1');
-    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
+    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby', pinnedTo: [0, 1] });
     identifier = componentIdentifier(app);
     // targeted install on two specific nodes — deterministic g: holders
     const installAfters = [0, 1].map((i) => env.clients[i].getLastEventId());

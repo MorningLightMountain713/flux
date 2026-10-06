@@ -72,7 +72,7 @@ describe('one unmountable app does not block g: election node-wide', function ()
 
     // the g: app, on the same node as the jammer plus one peer to fail over to
     await pushImage(gName, 'v1');
-    const gApp = await buildSeedableSyncthingApp({ name: gName, syncMode: 'activeStandby' });
+    const gApp = await buildSeedableSyncthingApp({ name: gName, syncMode: 'activeStandby', pinnedTo: [0, 1] });
     gIdentifier = componentIdentifier(gApp);
     const installAfters = [0, 1].map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, gApp, [0, 1]);
@@ -89,6 +89,7 @@ describe('one unmountable app does not block g: election node-wide', function ()
     // the jammer: a plain app sharing node 0
     await pushImage(jamName, 'v1');
     const jamApp = await buildSeedableApp({
+      pinnedTo: [0],
       name: jamName,
       compose: [{
         name: jamName,

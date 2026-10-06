@@ -111,11 +111,11 @@ describe('reconciler cold start - fresh multi-node placement, no seeded source',
     await resetSyncState();
     await pushImage(rApp, 'v1');
     await pushImage(gApp, 'v1');
-    const rSpec = await buildSeedableSyncthingApp({ name: rApp, syncMode: 'syncFirst' });
-    const gSpec = await buildSeedableSyncthingApp({ name: gApp, syncMode: 'activeStandby' });
+    const rSpec = await buildSeedableSyncthingApp({ name: rApp, syncMode: 'syncFirst', pinnedTo: holders });
+    const gSpec = await buildSeedableSyncthingApp({ name: gApp, syncMode: 'activeStandby', pinnedTo: holders });
 
     await pushImage(claimApp, 'v1');
-    const claimSpec = await buildSeedableSyncthingApp({ name: claimApp, syncMode: 'syncFirst' });
+    const claimSpec = await buildSeedableSyncthingApp({ name: claimApp, syncMode: 'syncFirst', pinnedTo: holders });
 
     // The folder id the registration fixes, from the built spec: this runs before
     // install, when there is no row to ask.
@@ -215,7 +215,7 @@ describe('reconciler cold start - fresh multi-node placement, no seeded source',
     expect(silenced, 'the fixture needs a third holder to silence').to.not.equal(undefined);
 
     await pushImage(splitApp, 'v1');
-    const splitSpec = await buildSeedableSyncthingApp({ name: splitApp, syncMode: 'syncFirst' });
+    const splitSpec = await buildSeedableSyncthingApp({ name: splitApp, syncMode: 'syncFirst', pinnedTo: holders });
     const folder = folderIdOf(splitSpec);
     await pinColdStart(holders, folder);
     await pinHolding(claimHolder, folder, claimBytes);

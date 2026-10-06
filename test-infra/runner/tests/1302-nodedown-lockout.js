@@ -132,6 +132,7 @@ describe('node-down placement freeze and lockout end to end', function () {
     this.timeout(300000);
     await pushImage(appName, 'v1');
     const app = await buildSeedableApp({
+      pinnedTo: [SUBJECT, CO_HOLDER],
       name: appName,
       compose: [{
         name: appName,

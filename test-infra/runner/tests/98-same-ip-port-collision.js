@@ -67,13 +67,15 @@ describe('a port another Flux node at this address holds', function () {
   let siblingIp;
   dumpLogsOnFailure(() => env);
 
-  // An app wanting one named port, for either deployment path.
+  // An app wanting one named port, for either deployment path: pinned to the
+  // nodes a targeted install names, or left to the spawner.
   // The whole suite rests on two apps wanting one port, which is exactly what
   // buildSeedableApp refuses by default. Said out loud, once, here.
-  const appWanting = async (name, port) => {
+  const appWanting = async (name, port, pinnedTo = null) => {
     await pushImage(name, 'v1');
     return buildSeedableApp({
       name,
+      pinnedTo,
       allowPortReuse: true,
       compose: [{
         name,
@@ -113,7 +115,7 @@ describe('a port another Flux node at this address holds', function () {
     this.timeout(300000);
     // Targeted rather than spawned: the sibling test below has to know which
     // node holds the port, and the spawner picks its own.
-    const app = await appWanting('heldportapp', HELD_PORT);
+    const app = await appWanting('heldportapp', HELD_PORT, [1]);
     await installOnNodes(env, app, [1]);
 
     // A POST carrying operator auth. The endpoint answers a Fluxnode that signed

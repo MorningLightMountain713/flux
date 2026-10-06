@@ -110,7 +110,7 @@ describe('a grantor restarts, and its promises outlive the process', function ()
 
     name = `e2edrain${Date.now()}`;
     await pushImage(name, 'v1');
-    app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
+    app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby', pinnedTo: HOLDERS });
     const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, HOLDERS);
     await Promise.all(HOLDERS.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));

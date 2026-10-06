@@ -29,7 +29,7 @@ describe('reconnect sweep covers enterprise apps (encrypted at rest)', function 
     env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
     await bootAndPeer(env);
     await pushImage(appName, 'v1');
-    const app = await buildSeedableEnterpriseApp({ name: appName });
+    const app = await buildSeedableEnterpriseApp({ name: appName, pinnedTo: [0] });
     await installOnNodes(env, app, [0]);
     identifier = componentIdentifier(app);
   });

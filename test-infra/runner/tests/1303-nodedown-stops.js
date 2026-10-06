@@ -113,6 +113,7 @@ describe('node-down: the map of stops end to end', function () {
   async function reseatSubject(suffix) {
     const name = `${appName}${suffix}`;
     const app = await buildSeedableApp({
+      pinnedTo: [SUBJECT],
       name,
       instances: INSTANCES,
       compose: [{
@@ -215,6 +216,7 @@ describe('node-down: the map of stops end to end', function () {
     this.timeout(300000);
     await pushImage(appName, 'v1');
     const app = await buildSeedableApp({
+      pinnedTo: [SUBJECT, CO_HOLDER],
       name: appName,
       instances: INSTANCES,
       compose: [{

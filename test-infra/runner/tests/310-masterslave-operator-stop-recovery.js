@@ -80,7 +80,7 @@ describe('masterSlave recovery after an operator stop', function () {
     await resetFdm();
     await resetSyncState();
     await pushImage(appName, 'v1');
-    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
+    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby', pinnedTo: [0, 1] });
     identifier = componentIdentifier(app);
 
     const installAfters = [0, 1].map((i) => env.clients[i].getLastEventId());

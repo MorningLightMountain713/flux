@@ -80,7 +80,7 @@ describe('a mount directory a specification update adds is writable by the app\'
     [holder] = env.clients;
     await pushTestApp(appName, 'v1', 'testapp', { user: APP_USER });
     app = await buildSeedableApp({
-      env,
+      pinnedTo: [0],
       name: appName,
       instances: 1,
       compose: [{
