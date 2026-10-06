@@ -33,7 +33,9 @@ const { Privilege } = require('../../ZelBack/src/services/utils/privileges');
 const {
   loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
-const { stubRegistry, stubLedgers, stubInstalled, installedRecord } = require('./fixtures/appRecords');
+const {
+  stubRegistry, stubLedgers, inMemoryLedgers, stubInstalled, installedRecord,
+} = require('./fixtures/appRecords');
 const specLibrary = require('../../ZelBack/src/services/utils/specLibrary');
 const domain = require('./fixtures/appDomain');
 const relationshipResolver = require('../../ZelBack/src/services/appLifecycle/relationshipResolver');
@@ -822,6 +824,20 @@ describe('appOperations tests', () => {
     });
   });
 
+  // The active-standby component of an installed app registered before v9, as
+  // the deployment view built over its ledger names it: its directory by its
+  // identifier, its syncthing folder by the 8.x container name.
+  const STANDBY_IDENTIFIER = `web_${IDENTITY}`;
+  const STANDBY_FOLDER_ID = 'fluxweb_primaryapp';
+  async function standbyComponent() {
+    const spec = await specWithComponents('primaryapp', {
+      web: { persistentStorage: { sizeGb: 5, mounts: { '/data': { source: 'data', destination: '/data' } }, sync: { mode: 'activeStandby' } } },
+    });
+    const comp = deploymentFor(spec, { identity: IDENTITY, names: { web: { syncFolderId: STANDBY_FOLDER_ID, aliases: [] } } }).getComponent('web');
+    expect([comp.identifier, comp.syncFolderId], 'the fixture names the directory and the folder apart').to.deep.equal([STANDBY_IDENTIFIER, STANDBY_FOLDER_ID]);
+    return comp;
+  }
+
   describe('promoteApplicationToPrimary announces the decision', () => {
     it('publishes the decision and counts it, once this node is committing to it', async () => {
       sinon.stub(appReconciler, 'getControllerDesired').returns(null);
@@ -831,12 +847,12 @@ describe('appOperations tests', () => {
       const publish = sinon.stub(fluxEventBus, 'publish');
       const count = sinon.stub(fluxEventBus, 'count');
 
-      await appOperations.promoteApplicationToPrimary('primaryapp', 'primaryapp_fid');
+      await appOperations.promoteApplicationToPrimary(await standbyComponent());
 
       expect(publish.getCalls().filter((c) => c.args[0] === 'masterSlave:started').map((c) => c.args[1]))
-        .to.deep.equal([{ identifier: 'primaryapp' }]);
+        .to.deep.equal([{ identifier: STANDBY_IDENTIFIER }]);
       // The cadence around the decision is a TALLY, not a stream.
-      sinon.assert.calledWithExactly(count, 'masterSlave:decision', 'primaryapp', 'started');
+      sinon.assert.calledWithExactly(count, 'masterSlave:decision', STANDBY_IDENTIFIER, 'started');
     });
 
     // Development publishes at the top of the function; this tree has an
@@ -847,10 +863,74 @@ describe('appOperations tests', () => {
       const publish = sinon.stub(fluxEventBus, 'publish');
       const count = sinon.stub(fluxEventBus, 'count');
 
-      await appOperations.promoteApplicationToPrimary('primaryapp', 'primaryapp_fid');
+      await appOperations.promoteApplicationToPrimary(await standbyComponent());
 
       expect(publish.getCalls().filter((c) => c.args[0] === 'masterSlave:started')).to.have.lengthOf(0);
       expect(count.called).to.equal(false);
+    });
+  });
+
+  // The component's directory and its syncthing folder are two names: for an
+  // app registered before v9 the folder's id is the 8.x container name.
+  describe('promoteApplicationToPrimary cycles the component\'s syncthing folder', () => {
+    const DIRECTORY = STANDBY_IDENTIFIER;
+    const FOLDER_ID = STANDBY_FOLDER_ID;
+    let adjust;
+    let desired;
+
+    // Syncthing's folders, the type of each as the last change left it.
+    function syncthingHolds(folders) {
+      const held = folders.map((folder) => ({ ...folder }));
+      sinon.stub(syncthingService, 'getConfigFolders').callsFake(async () => held.map((folder) => ({ ...folder })));
+      adjust = sinon.stub(syncthingService, 'adjustConfigFolders').callsFake(async ({ id, config }) => {
+        Object.assign(held.find((folder) => folder.id === id), config);
+      });
+    }
+
+    beforeEach(() => {
+      sinon.stub(appReconciler, 'getControllerDesired').returns(null);
+      desired = sinon.stub(appReconciler, 'setControllerDesired');
+      sinon.stub(fluxEventBus, 'publish');
+      sinon.stub(fluxEventBus, 'count');
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
+      sinon.stub(serviceHelper, 'runCommand').resolves({ error: null });
+    });
+
+    it('takes the folder to receiveonly and back to sendreceive by its id, fixes the directory between, and hands the start to the reconciler', async () => {
+      syncthingHolds([
+        { id: FOLDER_ID, path: `${appsFolder}${DIRECTORY}`, type: 'sendreceive' },
+        // Another folder whose directory is named as the first one's id is.
+        { id: 'other', path: `${appsFolder}${FOLDER_ID}`, type: 'sendreceive' },
+      ]);
+
+      await appOperations.promoteApplicationToPrimary(await standbyComponent());
+
+      expect(adjust.getCalls().map((call) => call.args[0])).to.deep.equal([
+        { method: 'patch', config: { type: 'receiveonly' }, id: FOLDER_ID },
+        { method: 'patch', config: { type: 'sendreceive' }, id: FOLDER_ID },
+      ]);
+      sinon.assert.calledWith(serviceHelper.runCommand, 'chmod', sinon.match({ params: ['-R', '777', `${appsFolder}${DIRECTORY}`] }));
+      expect(adjust.firstCall.calledBefore(serviceHelper.runCommand.firstCall), 'quiesced before the fix').to.equal(true);
+      sinon.assert.calledOnceWithExactly(desired, STANDBY_IDENTIFIER, 'running', sinon.match.string);
+    });
+
+    it('leaves a folder already of the type asked for as it is', async () => {
+      syncthingHolds([{ id: FOLDER_ID, path: `${appsFolder}${DIRECTORY}`, type: 'receiveonly' }]);
+
+      await appOperations.promoteApplicationToPrimary(await standbyComponent());
+
+      expect(adjust.getCalls().map((call) => call.args[0])).to.deep.equal([
+        { method: 'patch', config: { type: 'sendreceive' }, id: FOLDER_ID },
+      ]);
+    });
+
+    it('does not become primary on a folder syncthing does not hold under that id, whatever its directories are called', async () => {
+      syncthingHolds([{ id: 'other', path: `${appsFolder}${FOLDER_ID}`, type: 'receiveonly' }]);
+
+      await appOperations.promoteApplicationToPrimary(await standbyComponent());
+
+      sinon.assert.notCalled(adjust);
+      sinon.assert.notCalled(desired);
     });
   });
 
@@ -2112,7 +2192,11 @@ describe('appOperations tests', () => {
   describe('runRestoreTask rules', () => {
 
     let reported;
-    beforeEach(() => { reported = []; });
+    let InstalledLedger;
+    beforeEach(() => {
+      reported = [];
+      ({ InstalledLedger } = specLibrary.loaded());
+    });
     const runRestore = (appName, restore, type, opts) => appOperations
       .runRestoreTask(appName, restore, type, 'auth', (line) => reported.push(String(line)), opts)
       .then(() => null, (error) => error);
@@ -2136,10 +2220,28 @@ describe('appOperations tests', () => {
       const pause = sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves('held');
       const peers = sinon.stub(globalCommand, 'executeAppGlobalCommand').resolves();
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('10.0.0.1:16127');
+      // What the node recorded when it installed the app: a block per component,
+      // a synced one with the folder its data is shared under.
+      const { ledgers } = await inMemoryLedgers();
+      await ledgers.put(new InstalledLedger({
+        name: appName,
+        components: Object.fromEntries(deployment.componentEntries().map(([name, comp]) => [name, InstalledLedger.newBlock({
+          identifier: `${name}_${appName}`,
+          image: 'img',
+          syncFolder: comp.hasSyncthing() ? { id: comp.syncFolderId, path: `/apps/${name}_${appName}` } : null,
+        })])),
+      }));
       return {
-        drive, restoreAppData, inspect, removeFile, pause, peers,
+        drive, restoreAppData, inspect, removeFile, pause, peers, ledgers,
       };
     }
+
+    /** The ledger of an instance whose one synced component shares its data under a folder id. */
+    const ledgerSharing = (appName, replica, identifier, folderId) => new InstalledLedger({
+      name: appName,
+      replica,
+      components: { web: InstalledLedger.newBlock({ identifier, image: 'img', syncFolder: { id: folderId, path: `/apps/${identifier}` } }) },
+    });
     // Each component on its own host port, as the spec requires of siblings.
     const syncedApp = async (appName, modes) => deploymentFor(await specWithComponents(appName, Object.fromEntries(
       Object.entries(modes).map(([name, mode], i) => [name, {
@@ -2223,11 +2325,14 @@ describe('appOperations tests', () => {
       expect(held).to.deep.equal(['web_bkapp']);
     });
 
-    it('marks the restored synced folder by the volume\'s identifier, the app\'s identity and replica', async () => {
-      await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'syncFirst' }));
+    // The folder a restored volume is shared under is the one the installed
+    // ledger records for the volume's component, replica by replica.
+    it('marks the restored synced folder of a named replica by the folder id the ledger records for it', async () => {
+      const { ledgers } = await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'syncFirst' }));
       volumeService.listComponentVolumeMounts.callsFake(async (app, comp) => [
         { replica: 's1', mount: `/vol/${comp}`, identifier: `${comp}_bident_s1` },
       ]);
+      await ledgers.put(ledgerSharing('bkapp', 's1', 'web_bident_s1', 'web_bident_s1'));
       const setSyncedMark = sinon.stub(appCaches, 'setSyncedMark').resolves();
 
       const failure = await runRestore('bkapp', [{ component: 'web', restore: true }], 'local');
@@ -2235,6 +2340,59 @@ describe('appOperations tests', () => {
       expect(failure, `the restore must complete: ${failure?.message}`).to.equal(null);
       const marked = setSyncedMark.getCalls().filter((call) => call.args[2]?.restarted === true).map((call) => call.args[1]);
       expect(marked).to.deep.equal(['web_bident_s1']);
+    });
+
+    it('marks the restored synced folder of an app registered before v9 by its 8.x folder id, not by its directory\'s name', async () => {
+      const { ledgers } = await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'syncFirst' }));
+      volumeService.listComponentVolumeMounts.callsFake(async (app, comp) => [
+        { replica: null, mount: `/vol/${comp}`, identifier: `${comp}_bident` },
+      ]);
+      await ledgers.put(ledgerSharing('bkapp', null, 'web_bident', 'fluxweb_bkapp'));
+      const setSyncedMark = sinon.stub(appCaches, 'setSyncedMark').resolves();
+
+      const failure = await runRestore('bkapp', [{ component: 'web', restore: true }], 'local');
+
+      expect(failure, `the restore must complete: ${failure?.message}`).to.equal(null);
+      const marked = setSyncedMark.getCalls().filter((call) => call.args[2]?.restarted === true).map((call) => call.args[1]);
+      expect(marked).to.deep.equal(['fluxweb_bkapp']);
+    });
+
+    it('refuses to clear a synced volume whose folder the ledger does not record, with its data intact', async () => {
+      const { ledgers, restoreAppData } = await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'syncFirst' }));
+      await ledgers.remove('bkapp', null);
+
+      const failure = await runRestore('bkapp', [{ component: 'web', restore: true }], 'local');
+
+      expect(failure?.message).to.match(/Refused: no syncthing folder is recorded for web_bkapp/);
+      sinon.assert.notCalled(restoreAppData);
+    });
+
+    // A clear that fails on a synced component leaves a directory that is
+    // neither copy, shared with every peer: its folder is demoted so the peers
+    // are never offered it. For an app registered before v9 the folder's id is
+    // the 8.x name and its directory is named by the identifier.
+    it('demotes the folder of a half-cleared synced component by the id the ledger records, and holds it stopped', async () => {
+      const { ledgers, restoreAppData } = await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'syncFirst' }));
+      volumeService.listComponentVolumeMounts.callsFake(async (app, comp) => [
+        { replica: null, mount: `/vol/${comp}`, identifier: `${comp}_bident` },
+      ]);
+      await ledgers.put(ledgerSharing('bkapp', null, 'web_bident', 'fluxweb_bkapp'));
+      restoreAppData.resolves({ status: false, error: 'could not clear /vol/web before unpacking' });
+      sinon.stub(syncthingService, 'getConfigFolders').resolves([
+        { id: 'fluxweb_bkapp', path: `${appsFolder}web_bident`, type: 'sendreceive' },
+        // Another folder whose directory is named as the first one's id is.
+        { id: 'other', path: `${appsFolder}fluxweb_bkapp`, type: 'sendreceive' },
+      ]);
+      const adjust = sinon.stub(syncthingService, 'adjustConfigFolders').resolves();
+      const setSyncedMark = sinon.stub(appCaches, 'setSyncedMark').resolves();
+      const hold = sinon.stub(appReconciler, 'setControllerDesired');
+
+      const failure = await runRestore('bkapp', [{ component: 'web', restore: true }], 'local');
+
+      expect(failure?.message).to.match(/could not clear/);
+      sinon.assert.calledOnceWithExactly(adjust, { method: 'patch', config: { type: 'receiveonly' }, id: 'fluxweb_bkapp' });
+      sinon.assert.calledOnceWithExactly(setSyncedMark, sinon.match.any, 'fluxweb_bkapp', { restarted: false, numberOfExecutions: 0 });
+      sinon.assert.calledWith(hold, 'web_bident', 'stopped');
     });
 
     it('restarts the peers of a component every instance runs, and never redeploys them', async () => {

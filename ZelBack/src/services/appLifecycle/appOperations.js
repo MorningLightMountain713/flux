@@ -737,8 +737,22 @@ function messageReporter(res) {
 }
 
 /**
- * Helper function to change syncthing folder type
- * @param {string} folderId - Syncthing folder ID (e.g., appId)
+ * The syncthing folder a component's data is shared under, as the installed
+ * ledger records it: the folder's id and its directory. Null for a component
+ * that shares none, and for one this node holds no ledger of.
+ * @param {string} identifier - the component's container identifier
+ * @returns {Promise<{id: string, path: string}|null>}
+ */
+async function recordedSyncFolder(identifier) {
+  const ledger = await appRecords.ledgers().byIdentifier(identifier);
+  return ledger?.blockOf(identifier)?.syncFolder ?? null;
+}
+
+/**
+ * Changes the type of a syncthing folder.
+ * @param {string} folderId - the folder's id, as the installed ledger records
+ *   it. For an app registered before v9 it is not the name of the component's
+ *   directory.
  * @param {string} folderType - 'receiveonly' or 'sendreceive'
  * @returns {Promise<boolean>} - true if successful, false otherwise
  */
@@ -757,13 +771,10 @@ async function changeSyncthingFolderType(folderId, folderType) {
       return false;
     }
 
-    // Find the folder by path
-    // Syncthing syncs the entire appId folder (includes all subdirectories)
-    const folderPath = `${appsFolder}${folderId}`;
-    const folder = folders.find((f) => f.path === folderPath);
+    const folder = folders.find((f) => f.id === folderId);
 
     if (!folder) {
-      log.error(`Syncthing folder not found for path: ${folderPath}`);
+      log.error(`Syncthing folder ${folderId} not found`);
       return false;
     }
 
@@ -992,18 +1003,25 @@ async function stopApplication(appname, onWait) {
 }
 
 /**
- * Helper function to restart app with permissions fix workflow for new primary
- * This is specifically for g: mode apps becoming primary
- * @param {string} appname - App name
- * @param {string} appId - Application ID for syncthing folder
+ * Makes this node the primary of an active-standby component: its data is
+ * re-owned with its syncthing folder held receiveonly, the folder goes back to
+ * sendreceive, and the start is handed to the reconciler.
+ *
+ * The component names both things the workflow touches: its directory, named
+ * by its identifier, and its syncthing folder, under the id the installed
+ * ledger records, which for an app registered before v9 is another name.
+ * @param {object} comp - the DeploymentComponent of an installed deployment
  * @returns {Promise<void>}
  */
-async function promoteApplicationToPrimary(appname, appId) {
+async function promoteApplicationToPrimary(comp) {
+  const { identifier } = comp;
   try {
+    const directory = dockerService.getAppIdentifier(identifier);
+    const folderId = comp.syncFolderId;
     // Idempotence backstop for every promote path: a promotion already in effect
     // is the reconciler's to enforce; re-running the workflow would only re-chmod
     // the tree and cycle the syncthing folder mode.
-    if (appReconciler.getControllerDesired(appname) === 'running') return;
+    if (appReconciler.getControllerDesired(identifier) === 'running') return;
 
     // A fact: this node has decided to become primary and is committing to it.
     // Published AFTER the idempotence backstop above, not before it as
@@ -1014,38 +1032,38 @@ async function promoteApplicationToPrimary(appname, appId) {
     // considered promotion twenty times a minute would drown the stream, and
     // what a reader wants from it is the number. See the rule at the top of
     // fluxEventBus.js.
-    fluxEventBus.publish('masterSlave:started', { identifier: appname });
-    fluxEventBus.count('masterSlave:decision', appname, 'started');
+    fluxEventBus.publish('masterSlave:started', { identifier });
+    fluxEventBus.count('masterSlave:decision', identifier, 'started');
 
-    log.info(`Promoting ${appname} to primary (permissions fix + syncthing folder cycle)`);
+    log.info(`Promoting ${identifier} to primary (permissions fix + syncthing folder cycle)`);
 
     // Quiesce inbound replication while the fix runs: receiveonly stops syncthing
     // overwriting the data we are about to re-own.
-    const toReceiveOnly = await changeSyncthingFolderType(appId, 'receiveonly');
+    const toReceiveOnly = await changeSyncthingFolderType(folderId, 'receiveonly');
     if (!toReceiveOnly) {
-      log.warn(`Failed to change syncthing folder to receiveonly for ${appname}, continuing anyway...`);
+      log.warn(`Failed to change syncthing folder to receiveonly for ${identifier}, continuing anyway...`);
     }
 
     // Re-own the persistent container data before the app starts writing to it.
-    const permissionsApplied = await applyPermissionsFix(appname, appId);
+    const permissionsApplied = await applyPermissionsFix(identifier, directory);
     if (!permissionsApplied) {
-      log.error(`Failed to apply permissions fix for ${appname}, aborting container start`);
+      log.error(`Failed to apply permissions fix for ${identifier}, aborting container start`);
       return;
     }
 
     // Restore two-way sync now the data is fixed; a primary must be sendreceive.
-    const toSendReceive = await changeSyncthingFolderType(appId, 'sendreceive');
+    const toSendReceive = await changeSyncthingFolderType(folderId, 'sendreceive');
     if (!toSendReceive) {
-      log.error(`Failed to change syncthing folder to sendreceive for ${appname}, aborting container start - cannot become primary without sendreceive mode`);
+      log.error(`Failed to change syncthing folder to sendreceive for ${identifier}, aborting container start - cannot become primary without sendreceive mode`);
       return;
     }
 
     // Hand the run-state decision to the reconciler (the single container actuator);
     // permissions are already fixed at this point. Its desired-state transition
     // line is the workflow's success marker.
-    appReconciler.setControllerDesired(appname, 'running', 'masterSlave primary (synced)');
+    appReconciler.setControllerDesired(identifier, 'running', 'masterSlave primary (synced)');
   } catch (error) {
-    log.error(`Error in promoteApplicationToPrimary for ${appname}: ${error.message}`);
+    log.error(`Error in promoteApplicationToPrimary for ${identifier}: ${error.message}`);
     // Do not start the app if there was an error in the workflow
   }
 }
@@ -1423,24 +1441,13 @@ async function appendRestoreTask(req, res) {
 }
 
 /**
- * The syncthing folder of a restored volume. For a v9 registration the folder
- * id is the volume's own identifier, the app's identity and replica; for an
- * earlier one it is the component's 8.x name, which no replica qualifies.
- * @param {object} comp the component the volume belongs to
- * @param {{identifier: string}} volume
- * @returns {string}
- */
-function folderIdOfVolume(comp, volume) {
-  return comp.syncFolderId === comp.identifier ? volume.identifier : comp.syncFolderId;
-}
-
-/**
  * A restore that failed after clearing a component's appdata leaves that
  * directory neither copy. The component is held stopped, its synced folder
  * demoted to receiveonly so the partial copy is never offered to the peers, and
  * the rest of the app restarts on data the restore never touched.
  * @param {string} appname
- * @param {Array<{identifier: string, folderId: string, synced: boolean}>} swaps components whose clear began
+ * @param {Array<{identifier: string, folderId: ?string, synced: boolean}>} swaps components whose clear
+ *   began, each synced one with the id of its syncthing folder as the installed ledger records it
  */
 async function holdPartialRestore(appname, swaps) {
   for (const swap of swaps) {
@@ -1649,16 +1656,22 @@ async function runRestoreTask(appname, restore, type, zelidauth, report, { force
         report(`Replacing ${volume.forWhich} component data from the backup archive...\n`);
         // eslint-disable-next-line no-await-in-loop
         await serviceHelper.delay(2 * 1000);
-        swapsInFlight.push({ identifier: volume.identifier, folderId: folderIdOfVolume(target.comp, volume), synced: target.synced });
+        // Read before the clear: a synced volume whose folder cannot be named
+        // could not be kept from its peers if the unpack then failed.
+        // eslint-disable-next-line no-await-in-loop
+        const folder = target.synced ? await recordedSyncFolder(volume.identifier) : null;
+        if (target.synced && !folder) {
+          throw new Error(`Refused: no syncthing folder is recorded for ${volume.identifier}`);
+        }
+        swapsInFlight.push({ identifier: volume.identifier, folderId: folder?.id ?? null, synced: target.synced });
         // eslint-disable-next-line no-await-in-loop
         const tarStatus = await appDataEntries.restoreAppData(volume.mount, volume.archivePath, target.comp);
         if (tarStatus.status === false) {
           throw new Error(`Error: Failed to restore ${volume.forWhich} from its archive, ${tarStatus.error}`);
         }
         if (target.synced) {
-          const appId = folderIdOfVolume(target.comp, volume);
           // eslint-disable-next-line no-await-in-loop
-          await appCaches.setSyncedMark(appCaches.receiveOnlySyncthingAppsCache, appId, {
+          await appCaches.setSyncedMark(appCaches.receiveOnlySyncthingAppsCache, folder.id, {
             restarted: true,
             numberOfExecutionsRequired: 4,
             numberOfExecutions: 10,
@@ -2813,7 +2826,7 @@ async function coordinateActiveStandbyApps() {
                     log.info(`activeStandby: not starting component:${identifier} at index 0 - a peer is already running it`);
                     fluxEventBus.publish('activeStandby:decided', { identifier, action: 'peerProbeBlocked', index });
                   } else {
-                    promoteApplicationToPrimary(identifier, appId);
+                    promoteApplicationToPrimary(activeStandbyComp);
                     log.info(`activeStandby: starting docker component:${identifier} index: ${index}`);
                     fluxEventBus.publish('activeStandby:decided', { identifier, action: 'primaryPromoted', index });
                   }
@@ -2852,7 +2865,7 @@ async function coordinateActiveStandbyApps() {
                   }
                   // Previous master is not running, determine next primary
                   if (index === 0) {
-                    promoteApplicationToPrimary(identifier, appId);
+                    promoteApplicationToPrimary(activeStandbyComp);
                     log.info(`activeStandby: starting docker component:${identifier} index: ${index}`);
                   } else {
                     const previousMasterIndex = runningAppList.findIndex((x) => ipsMatch(x.ip, activePrimaryByIdentifier.get(identifier)));
@@ -2872,7 +2885,7 @@ async function coordinateActiveStandbyApps() {
                       // eslint-disable-next-line no-await-in-loop
                       const lowerNodeRunning = await peerRunningComponent('lower');
                       if (!lowerNodeRunning) {
-                        promoteApplicationToPrimary(identifier, appId);
+                        promoteApplicationToPrimary(activeStandbyComp);
                         log.info(`activeStandby: starting docker component:${identifier} index: ${index}`);
                       }
                     } else {
@@ -2885,7 +2898,7 @@ async function coordinateActiveStandbyApps() {
                   // eslint-disable-next-line no-await-in-loop
                   const lowerNodeRunning = await peerRunningComponent('lower');
                   if (!lowerNodeRunning) {
-                    promoteApplicationToPrimary(identifier, appId);
+                    promoteApplicationToPrimary(activeStandbyComp);
                     log.info(`activeStandby: starting docker component:${identifier} index: ${index} that was scheduled to start at ${scheduledPrimaryStart.get(identifier).toString()}`);
                     scheduledPrimaryStart.delete(identifier);
                   } else {
@@ -2946,7 +2959,7 @@ async function coordinateActiveStandbyApps() {
                 }
 
                 if (isReady) {
-                  promoteApplicationToPrimary(identifier, appId);
+                  promoteApplicationToPrimary(activeStandbyComp);
                   log.info(`activeStandby: starting docker component:${identifier}`);
                 } else {
                   log.info(`activeStandby: app:${appName} is registered as primary on FDM but not ready yet (syncthing not synced), skipping start for this cycle`);
