@@ -60,6 +60,7 @@ let scannedBlock = null;
 const listed = new Map();
 
 const removedListeners = [];
+const ownerChangedListeners = [];
 
 function globalDb() {
   return dbHelper.databaseConnection().db(config.get('database.appsglobal.database'));
@@ -211,6 +212,10 @@ async function settle(name, instance, carried = null) {
     if (live && live.owner !== instance.owner) {
       setImmediate(() => messageStore.rejudgeGenerationRecords(instance.identity)
         .catch((e) => log.warn(`grantgeneration: rejudge after the owner change of ${instance.name} failed - ${e.message ?? e}`)));
+      ownerChangedListeners.forEach((fn) => setImmediate(() => {
+        Promise.resolve(fn({ name: instance.name, identity: instance.identity }))
+          .catch((error) => log.error(`appRegistry - an owner-change listener failed for ${instance.name}: ${error.message}`));
+      }));
     }
     outcome = live ? 'changed' : 'added';
   } else if (live.uuid !== instance.uuid || live.identity !== instance.identity || live.registeredAt !== instance.registeredAt) {
@@ -299,6 +304,16 @@ function onRemoved(fn) {
 }
 
 /**
+ * Registers `fn({ name, identity })`, called after the row of a listed app is
+ * written naming another owner, outside the chain-state lock. The row already
+ * names the new owner when it runs.
+ * @param {(app: {name: string, identity: string}) => (void|Promise<void>)} fn
+ */
+function onOwnerChanged(fn) {
+  ownerChangedListeners.push(fn);
+}
+
+/**
  * Starts owning the registry: rows follow the decider, a full pass reconciles
  * them all, and a rewind lowers `appRegistryConsistent` until the next one.
  */
@@ -318,6 +333,7 @@ module.exports = {
   applyDecided,
   blockScanned,
   onRemoved,
+  onOwnerChanged,
   reconcile,
   start,
 };

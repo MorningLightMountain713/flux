@@ -1,7 +1,7 @@
 const chai = require('chai');
 const sinon = require('sinon');
 const { EventEmitter } = require('events');
-const proxyquire = require('proxyquire');
+const proxyquire = require('proxyquire').noCallThru();
 const LogFrameDecoder = require('../../ZelBack/src/services/utils/logFrameDecoder');
 const { Privilege } = require('../../ZelBack/src/services/utils/privileges');
 const { loadSpecLibrary } = require('./fixtures/fluxSpec');
@@ -40,6 +40,10 @@ describe('appLogsHandler tests', () => {
   let logStream;
   let container;
   let emitted;
+  // The sessions open on the app: each subscription the handler recorded, with
+  // the way it is given up when its caller stops passing the owner check and
+  // the way it is forgotten.
+  let tracked;
 
   function frame(text, streamId = 1) {
     const body = Buffer.from(text, 'utf8');
@@ -109,9 +113,18 @@ describe('appLogsHandler tests', () => {
       const found = await getDockerContainer(name);
       return found ? managed(found, name) : null;
     });
+    tracked = [];
+    const track = (identity, zelidauth, revoke) => {
+      const entry = {
+        identity, zelidauth, revoke, untrack: sinon.stub(),
+      };
+      tracked.push(entry);
+      return entry.untrack;
+    };
     appLogsHandler = proxyquire('../../ZelBack/src/lib/socketIoHandlers/appLogsHandler', {
       '../../services/verificationHelper': { verifyPrivilege },
       '../../services/dockerService': { getManagedContainer },
+      './ownerSessions': { track },
     });
   });
 
@@ -205,6 +218,142 @@ describe('appLogsHandler tests', () => {
       expect(socket.emit.calledWith('error', 'Container not found.')).to.be.true;
       expect(socket.emit.callCount, 'the caller is told one thing, that the container is not there').to.equal(1);
       expect(appLogsHandler.feeds.size).to.equal(0);
+    });
+  });
+
+  // A sale restarts nothing, so a log stream its seller follows is still open
+  // when the app is the buyer's. The owner check a subscription passed is put to
+  // it again when the app's owner changes.
+  describe('a subscription open when the app\'s owner changes', () => {
+    it('is held among the sessions open on the app, by the identity on the container and its caller, once the caller passed the owner check', async () => {
+      const socket = makeSocket('s1', makeNamespace());
+      appLogsHandler(socket);
+
+      await subscribe(socket);
+
+      expect(tracked.map(({ identity, zelidauth }) => ({ identity, zelidauth }))).to.deep.equal([{ identity: IDENTITY, zelidauth: 'zelidauth' }]);
+      sinon.assert.notCalled(tracked[0].untrack);
+    });
+
+    it('is not held for a caller the owner check refused', async () => {
+      verifyPrivilege.withArgs(Privilege.APP_OWNER_OR_FLUX_TEAM).resolves(false);
+      const socket = makeSocket('s1', makeNamespace());
+      appLogsHandler(socket);
+
+      await subscribe(socket);
+
+      expect(tracked).to.deep.equal([]);
+    });
+
+    it('is given up, its client told, and its feed closed with its last viewer, when its caller no longer passes', async () => {
+      const socket = makeSocket('s1', makeNamespace());
+      appLogsHandler(socket);
+      await subscribe(socket);
+      socket.emit.resetHistory();
+
+      tracked[0].revoke();
+
+      sinon.assert.calledOnceWithExactly(socket.emit, 'error', 'Not authorized.', 'abc123');
+      expect(socket.rooms.size, 'the connection is still in the container\'s room').to.equal(0);
+      expect(appLogsHandler.feeds.has('abc123')).to.equal(false);
+      expect(logStream.destroy.called).to.equal(true);
+      sinon.assert.called(tracked[0].untrack);
+    });
+
+    it('leaves the feed to a viewer who still passes', async () => {
+      const nsp = makeNamespace();
+      const seller = makeSocket('s1', nsp);
+      const buyer = makeSocket('s2', nsp);
+      appLogsHandler(seller); appLogsHandler(buyer);
+      await subscribe(seller, `comp_${IDENTITY}`, 'seller');
+      await subscribe(buyer, `comp_${IDENTITY}`, 'buyer');
+
+      tracked.find((entry) => entry.zelidauth === 'seller').revoke();
+
+      expect(appLogsHandler.feeds.get('abc123').subscribers.size).to.equal(1);
+      expect(buyer.rooms.size).to.equal(1);
+      expect(seller.rooms.size).to.equal(0);
+      expect(logStream.destroy.called).to.equal(false);
+    });
+
+    it('is forgotten when the viewer unsubscribes', async () => {
+      const socket = makeSocket('s1', makeNamespace());
+      appLogsHandler(socket);
+      await subscribe(socket);
+
+      await socket.fire('unsubscribe');
+
+      sinon.assert.called(tracked[0].untrack);
+    });
+
+    it('is forgotten when the viewer disconnects', async () => {
+      const socket = makeSocket('s1', makeNamespace());
+      appLogsHandler(socket);
+      await subscribe(socket);
+
+      await socket.fire('disconnect');
+
+      sinon.assert.called(tracked[0].untrack);
+    });
+
+    it('is forgotten when the container\'s stream ends', async () => {
+      const socket = makeSocket('s1', makeNamespace());
+      appLogsHandler(socket);
+      await subscribe(socket);
+
+      logStream.emit('end');
+
+      sinon.assert.called(tracked[0].untrack);
+    });
+
+    it('is forgotten for a pass that ended holding no subscription: the connection already followed the container', async () => {
+      const socket = makeSocket('s1', makeNamespace());
+      appLogsHandler(socket);
+      await subscribe(socket);
+      await subscribe(socket);
+
+      expect(tracked).to.have.lengthOf(2);
+      sinon.assert.notCalled(tracked[0].untrack);
+      sinon.assert.calledOnce(tracked[1].untrack);
+    });
+
+    it('stands a pass down that is withdrawn while its stream is opening: no feed is left and the client is not told it subscribed', async () => {
+      let releaseLogs;
+      container.logs.returns(new Promise((resolve) => { releaseLogs = resolve; }));
+      const socket = makeSocket('s1', makeNamespace());
+      appLogsHandler(socket);
+
+      const pending = subscribe(socket);
+      await until(() => container.logs.called);
+      tracked[0].revoke();
+      releaseLogs(logStream);
+      await pending;
+
+      expect(socket.emit.calledWith('subscribed')).to.equal(false);
+      expect(socket.emit.calledWith('error', 'Not authorized.')).to.equal(true);
+      expect(appLogsHandler.feeds.has('abc123')).to.equal(false);
+      expect(logStream.destroy.called).to.equal(true);
+      sinon.assert.called(tracked[0].untrack);
+    });
+
+    it('gives nothing up for a pass another subscribe has since taken the container from', async () => {
+      const socket = makeSocket('s1', makeNamespace());
+      appLogsHandler(socket);
+      await subscribe(socket);
+      // The stream ends and the connection follows the container again: the
+      // first pass's record is dead and the second holds the container.
+      logStream.emit('end');
+      logStream = new EventEmitter();
+      logStream.destroy = sinon.stub();
+      container.logs.resolves(logStream);
+      await subscribe(socket);
+      socket.emit.resetHistory();
+
+      tracked[0].revoke();
+
+      expect(appLogsHandler.feeds.has('abc123'), 'the later subscription lost its feed').to.equal(true);
+      expect(socket.rooms.size).to.equal(1);
+      sinon.assert.notCalled(socket.emit);
     });
   });
 

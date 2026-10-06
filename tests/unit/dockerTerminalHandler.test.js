@@ -4,7 +4,7 @@ const chai = require('chai');
 const sinon = require('sinon');
 
 const { Privilege } = require('../../ZelBack/src/services/utils/privileges');
-const proxyquire = require('proxyquire');
+const proxyquire = require('proxyquire').noCallThru();
 const { loadSpecLibrary } = require('./fixtures/fluxSpec');
 
 const { expect } = chai;
@@ -16,6 +16,12 @@ describe('dockerTerminalHandler tests', () => {
   let getDockerContainer;
   let getManagedContainer;
   let dockerTerminalHandler;
+  // The sessions open on the app: what the handler recorded, the way each is
+  // closed when its caller stops passing the owner check, and how it is forgotten.
+  let track;
+  let untrack;
+  let revoke;
+  let revokes;
 
   // A caller names a container by its docker name, which is its identifier; the
   // labels stamped on it when it was created say which app it belongs to.
@@ -73,10 +79,19 @@ describe('dockerTerminalHandler tests', () => {
       const container = await getDockerContainer(name);
       return container ? managed(container, name) : null;
     });
+    untrack = sinon.stub();
+    revoke = null;
+    revokes = [];
+    track = sinon.stub().callsFake((identity, zelidauth, close) => {
+      revoke = close;
+      revokes.push(close);
+      return untrack;
+    });
     dockerTerminalHandler = proxyquire('../../ZelBack/src/lib/socketIoHandlers/dockerTerminalHandler', {
       '../../services/analyticsService': { trackTerminalSession },
       '../../services/verificationHelper': { verifyPrivilege },
       '../../services/dockerService': { getManagedContainer },
+      './ownerSessions': { track },
     });
   });
 
@@ -194,6 +209,126 @@ describe('dockerTerminalHandler tests', () => {
     await socket.fire('exec', 'zelidauth', 'whatever-the-caller-typed', 'sh', '', 'root');
 
     expect(sessionsOfType('open')[0].args[1]).to.equal(`comp_${IDENTITY}_replica2`);
+  });
+
+  // A sale restarts nothing, so a terminal its seller holds open is still there
+  // when the app is the buyer's. The owner check a session passed is put to it
+  // again when the app's owner changes.
+  describe('a terminal open when the app\'s owner changes', () => {
+    const workingShell = () => {
+      const stream = { on: sinon.stub(), destroy: sinon.stub(), write: sinon.stub() };
+      const execInstance = { start: sinon.stub().callsFake((options, cb) => cb(null, stream)), resize: sinon.stub() };
+      getDockerContainer.resolves({ exec: (cmd, cb) => cb(null, execInstance) });
+      return { stream, execInstance };
+    };
+
+    it('is held among the sessions open on the app, by the identity on the container and its caller, once the caller passed the owner check', async () => {
+      workingShell();
+      const socket = makeSocket();
+      dockerTerminalHandler(socket);
+      await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
+
+      sinon.assert.calledOnceWithExactly(track, IDENTITY, 'zelidauth', sinon.match.func);
+      expect(verifyPrivilege.secondCall.calledBefore(track.firstCall), 'held only once the owner check has answered').to.equal(true);
+    });
+
+    it('is not held for a caller the owner check refused', async () => {
+      verifyPrivilege.withArgs(Privilege.APP_OWNER_OR_FLUX_TEAM).resolves(false);
+      const socket = makeSocket();
+      dockerTerminalHandler(socket);
+      await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
+
+      sinon.assert.notCalled(track);
+    });
+
+    it('is closed, its client told, and the connection free to ask again, when its caller no longer passes', async () => {
+      const { stream } = workingShell();
+      const socket = makeSocket();
+      dockerTerminalHandler(socket);
+      await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
+      socket.emit.resetHistory();
+
+      revoke();
+
+      sinon.assert.calledOnce(stream.destroy);
+      sinon.assert.calledOnceWithExactly(socket.emit, 'error', 'Not authorized.');
+      expect(sessionsOfType('close')).to.have.lengthOf(1);
+      sinon.assert.calledOnce(untrack);
+      // A keystroke after the close reaches no shell.
+      await socket.fire('cmd', 'x');
+      sinon.assert.notCalled(stream.write);
+      // The connection holds no terminal, so a new ask is answered on its merits.
+      socket.emit.resetHistory();
+      await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
+      expect(socket.emit.calledWith('error', 'This connection already has a terminal.')).to.equal(false);
+    });
+
+    it('is forgotten when its client leaves, and closing it afterwards does nothing', async () => {
+      const { stream } = workingShell();
+      const socket = makeSocket();
+      dockerTerminalHandler(socket);
+      await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
+
+      socket.connected = false;
+      await socket.fire('disconnect');
+      sinon.assert.calledOnce(untrack);
+
+      socket.emit.resetHistory();
+      revoke();
+      sinon.assert.calledOnce(stream.destroy);
+    });
+
+    it('closes nothing for a setup that already ended, whose connection has since opened another terminal', async () => {
+      // The first setup fails once it is held; the second, on the same
+      // connection, opens. A close still on its way to the first finds it over.
+      getDockerContainer.resolves({ exec: (cmd, cb) => cb(new Error('container is not running'), null) });
+      const socket = makeSocket();
+      dockerTerminalHandler(socket);
+      await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
+      const { stream } = workingShell();
+      await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
+      expect(revokes).to.have.lengthOf(2);
+      socket.emit.resetHistory();
+
+      revokes[0]();
+
+      sinon.assert.notCalled(stream.destroy);
+      sinon.assert.notCalled(socket.emit);
+      await socket.fire('cmd', 'x');
+      sinon.assert.calledOnceWithExactly(stream.write, 'x');
+    });
+
+    it('starts no exec for a setup withdrawn while docker was creating it', async () => {
+      const execInstance = { start: sinon.stub(), resize: sinon.stub() };
+      let created;
+      getDockerContainer.resolves({ exec: (cmd, cb) => { created = cb; } });
+      const socket = makeSocket();
+      dockerTerminalHandler(socket);
+      await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
+
+      revoke();
+      created(null, execInstance);
+
+      sinon.assert.notCalled(execInstance.start);
+    });
+
+    it('attaches no stream for a setup withdrawn while docker was starting the exec, and destroys the one it is handed', async () => {
+      const stream = { on: sinon.stub(), destroy: sinon.stub(), write: sinon.stub() };
+      let started;
+      const execInstance = { start: (options, cb) => { started = cb; }, resize: sinon.stub() };
+      getDockerContainer.resolves({ exec: (cmd, cb) => cb(null, execInstance) });
+      const socket = makeSocket();
+      dockerTerminalHandler(socket);
+      await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
+
+      revoke();
+      started(null, stream);
+
+      sinon.assert.calledOnce(stream.destroy);
+      sinon.assert.notCalled(stream.on);
+      await socket.fire('cmd', 'x');
+      sinon.assert.notCalled(stream.write);
+    });
   });
 
   // Every argument arrives as whatever the client serialised: this is a socket
