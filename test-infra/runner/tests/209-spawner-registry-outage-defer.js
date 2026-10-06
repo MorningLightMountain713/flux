@@ -5,8 +5,7 @@ import { buildSeedableApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { assertNoEvent, waitFor } from '../framework/wait.js';
 import { getAppContainerStatus, pauseHostContainer, unpauseHostContainer } from '../framework/container.js';
-import { bootAndPeer } from '../framework/reconciler-suite.js';
-import { dbClient } from '../framework/db-client.js';
+import { bootAndPeer, seedSpawnerApp } from '../framework/reconciler-suite.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
 // A registry outage during a fresh install is a NODE condition, not a verdict on
@@ -64,15 +63,7 @@ describe('Spawner: a registry outage during install defers, never fails or broad
         repoauth: '',
       }],
     });
-    for (let i = 1; i <= env.nodeCount; i += 1) {
-      const dc = dbClient(i);
-      // eslint-disable-next-line no-await-in-loop
-      await dc.seedGlobalAppSpec(app.spec);
-      // eslint-disable-next-line no-await-in-loop
-      await dc.seedPermanentMessage(app.permanentMessage);
-      // eslint-disable-next-line no-await-in-loop
-      await dc.seedAppHash(app.hash, app.permanentMessage.height, true);
-    }
+    await seedSpawnerApp(env, app);
   });
 
   after(async function () {

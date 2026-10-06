@@ -6,6 +6,7 @@ import { pushImage } from '../framework/registry-helper.js';
 import { dbClient } from '../framework/db-client.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
+import { seedGlobalSpec } from '../framework/reconciler-suite.js';
 import {
   startTicker, advanceBlock, advanceBlocks, queueAppTx,
 } from '../framework/daemon-control.js';
@@ -50,14 +51,7 @@ describe('Signed sync completes on late-joining node', function () {
         cpu: 0.1, ram: 100, hdd: 1, repoauth: '',
       }],
     });
-    for (let i = 1; i <= 10; i++) {
-      const dc = dbClient(i);
-      await dc.seedGlobalAppSpec(app.spec);
-      await dc.seedPermanentMessage(app.permanentMessage);
-      await dc.seedAppHash(app.hash, app.permanentMessage.height, true);
-    }
-    await queueAppTx(app.hash);
-    await advanceBlock();
+    await seedGlobalSpec(env, app, initial);
     await Promise.any(
       env.clients.slice(0, 10).map((c) => waitForAppInstalled(c, appName, 120000)),
     );
@@ -131,12 +125,13 @@ describe('Ephemeral connections resolve hashes via stub peers', function () {
       }],
     });
 
-    const dc0 = dbClient(1);
-    await dc0.seedAppHash(app.hash, app.permanentMessage.height, false);
-
+    // The stub peers hold the message; the chain then carries its payment, and
+    // a node that records it has to fetch the message it is missing.
     for (const [, stub] of env.stubPeerClients) {
-      await stub.loadMessage(app.permanentMessage);
+      await stub.loadMessage(app.message);
     }
+    const dc0 = dbClient(1);
+    await queueAppTx(app.hash);
 
     await advanceBlocks(3);
 

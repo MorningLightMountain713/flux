@@ -133,7 +133,7 @@ describe('masterlease proof: a listed node\'s claim without the committee\'s sig
 
     name = `e2eproof${Date.now()}`;
     await pushImage(name, 'v1');
-    app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby' });
+    app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby', pinnedTo: HOLDERS });
     const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, HOLDERS);
     await seedGlobalSpec(env, app, REAL.filter((i) => !HOLDERS.includes(i)));

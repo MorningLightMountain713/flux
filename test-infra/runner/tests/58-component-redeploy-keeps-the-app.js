@@ -134,7 +134,7 @@ describe('a component redeploy replaces that component and leaves the app alone'
       repoauth: '',
     });
     app = await buildSeedableApp({
-      env,
+      pinnedTo: [0],
       name: appName,
       compose: [component(subject), component(sibling)],
     });

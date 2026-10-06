@@ -79,6 +79,7 @@ describe('a backup refuses to archive a copy that is not there', function () {
 
     await pushImage(appName, 'v1');
     const app = await buildSeedableApp({
+      pinnedTo: [0],
       name: appName,
       instances: 1,
       compose: [{

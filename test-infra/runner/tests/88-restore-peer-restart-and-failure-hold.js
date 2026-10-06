@@ -91,9 +91,9 @@ describe('a restore restarts the other instances and never rebuilds them', funct
     // r: runs on every instance, which is the shape that makes the peers' own
     // containers stale after a restore
     await pushImage(appName, 'v1');
-    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'syncFirst' });
-    identifier = componentIdentifier(app);
     const nodes = [0, 1, 2];
+    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'syncFirst', pinnedTo: nodes });
+    identifier = componentIdentifier(app);
     const installAfters = nodes.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, nodes);
     await Promise.all(nodes.map(async (i, k) => {

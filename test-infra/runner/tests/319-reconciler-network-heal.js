@@ -114,6 +114,7 @@ describe('reconciler network-detach heal', function () {
     // guard counts detached containers per node).
     await pushImage(stormName, 'v1');
     stormApp = await buildSeedableApp({
+      pinnedTo: [idx],
       name: stormName,
       compose: stormComps.map((comp, i) => ({
         name: comp,
@@ -140,6 +141,7 @@ describe('reconciler network-detach heal', function () {
     // The restart-mid-heal app, pinned to the same node.
     await pushImage(restartName, 'v1');
     const restartApp = await buildSeedableApp({
+      pinnedTo: [idx],
       name: restartName,
       compose: [{
         name: restartName,
@@ -165,6 +167,7 @@ describe('reconciler network-detach heal', function () {
     // container present but not running, network gone underneath it.
     await pushImage(stopName, 'v1');
     const stopApp = await buildSeedableApp({
+      pinnedTo: [idx],
       name: stopName,
       compose: [{
         name: stopName,

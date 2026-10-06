@@ -3,8 +3,8 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
-import { dbClient } from '../framework/db-client.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
+import { seedSpawnerApp } from '../framework/reconciler-suite.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import {
   startTicker, advanceBlock, setNodeStatus, clearAllNodeStatus,
@@ -117,7 +117,6 @@ async function seedAndWaitForInstall(env, appName) {
     instances: env.nodeCount,
     // Seeded relative to THIS fleet's chain rather than a literal, so the app is
     // not already expired at the fleet's first block.
-    env,
     compose: [{
       name: appName,
       description: 'test container',
@@ -135,12 +134,7 @@ async function seedAndWaitForInstall(env, appName) {
     }],
   });
 
-  for (let i = 1; i <= env.nodeCount; i++) {
-    const dc = dbClient(i);
-    await dc.seedGlobalAppSpec(app.spec);
-    await dc.seedPermanentMessage(app.permanentMessage);
-    await dc.seedAppHash(app.hash, app.permanentMessage.height, true);
-  }
+  await seedSpawnerApp(env, app);
   return app;
 }
 

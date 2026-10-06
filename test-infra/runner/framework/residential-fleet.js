@@ -13,7 +13,7 @@ import {
   waitForExplorerReady, waitForOrchestratorStarted, waitForOrchestratorState,
   waitForPeerThreshold, waitFor,
 } from './wait.js';
-import { waitForLocationTable } from './reconciler-suite.js';
+import { waitForLocationTable, seedSpawnerApp } from './reconciler-suite.js';
 import {
   derivedTurnMs, giveUpPassMs, harnessBlockCostMs, loadSharedConfig,
 } from './coupled-knobs.js';
@@ -145,12 +145,7 @@ export async function seedApp(env, appName, { instances = 3, syncMode = null } =
       repoauth: '',
     }],
   });
-  for (let i = 1; i <= env.nodeCount; i++) {
-    const dc = dbClient(i);
-    await dc.seedGlobalAppSpec(app.spec);
-    await dc.seedPermanentMessage(app.permanentMessage);
-    await dc.seedAppHash(app.hash, app.permanentMessage.height, true);
-  }
+  await seedSpawnerApp(env, app);
   return app;
 }
 

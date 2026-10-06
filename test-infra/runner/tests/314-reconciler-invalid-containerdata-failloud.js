@@ -39,6 +39,7 @@ describe('install rejects a non-primary-sync (invalid) containerData', function 
   it('rejects install of a [plain|g] spec (g: on a non-primary mount)', async function () {
     this.timeout(120000);
     const app = await buildSeedableMixedMountApp({
+      pinnedTo: [0],
       name: appName, syncMode: 'activeStandby', plainPath: '/data', syncPath: '/db',
     });
     let err;

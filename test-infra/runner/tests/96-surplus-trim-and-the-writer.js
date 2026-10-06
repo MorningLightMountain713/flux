@@ -117,6 +117,7 @@ describe('a surplus copy that is also the writer', function () {
     // land in the same instant, the ranking falls through to its ip tiebreak,
     // and "the newest" stops meaning anything a test can steer.
     app = await buildSeedableSyncthingApp({
+      pinnedTo: PLACEMENT_ORDER,
       name: appName, syncMode: 'activeStandby', instances: 3,
     });
     identifier = componentIdentifier(app);

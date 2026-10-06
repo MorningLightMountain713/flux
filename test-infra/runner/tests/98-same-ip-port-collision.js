@@ -61,13 +61,15 @@ const LONE_DISSENT_PORT = 31125; // test 5: installs, one peer dissenting
 
 const STUB_PEERS = [2, 3, 4];
 
-// An app wanting one named port, for either deployment path.
+// An app wanting one named port, for either deployment path: pinned to the
+// nodes a targeted install names, or left to the spawner.
 // The whole suite rests on two apps wanting one port, which is exactly what
 // buildSeedableApp refuses by default. Said out loud, once, here.
-const appWanting = async (name, port) => {
+const appWanting = async (name, port, pinnedTo = null) => {
   await pushImage(name, 'v1');
   return buildSeedableApp({
     name,
+    pinnedTo,
     allowPortReuse: true,
     compose: [{
       name,
@@ -110,8 +112,9 @@ describe('a port another Flux node at this address holds', function () {
 
   it('reports the ports the node has installed', async function () {
     this.timeout(300000);
-    // Targeted rather than spawned, so the node that answers is the one asked.
-    const app = await appWanting('heldportapp', HELD_PORT);
+    // Targeted rather than spawned: the sibling test below has to know which
+    // node holds the port, and the spawner picks its own.
+    const app = await appWanting('heldportapp', HELD_PORT, [1]);
     await installOnNodes(env, app, [1]);
 
     // A POST carrying operator auth. The endpoint answers a Fluxnode that signed
@@ -350,7 +353,7 @@ describe('a port another Flux node at this address holds, asked by a node that s
       hookCtx: this, nodes: 5, deferredNodes: 1, stubPeers: SHARED_STUB_PEERS, configuredIp: { [ASKER + 1]: siblingIp },
     });
     await bootAndPeer(env);
-    await installOnNodes(env, await appWanting('heldportapp', HELD_PORT), [SIBLING]);
+    await installOnNodes(env, await appWanting('heldportapp', HELD_PORT, [SIBLING]), [SIBLING]);
     await setNodeAddress(subnet.nodeIp(ASKER + 1), `${siblingIp}:${SIBLING_API_PORT}`, { scope: 'all' });
     await env.startNode(ASKER);
     await waitFor(async () => (await dbClient(ASKER + 1).ownAddressRecord())?.socketAddress === `${siblingIp}:${SIBLING_API_PORT}`, {

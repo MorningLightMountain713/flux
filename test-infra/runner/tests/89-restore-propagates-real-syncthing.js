@@ -65,9 +65,9 @@ describe('a restore reaches the other instances through syncthing', function () 
     })));
 
     await pushImage(appName, 'v1');
-    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'syncFirst' });
-    identifier = componentIdentifier(app);
     const nodes = [0, 1];
+    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'syncFirst', pinnedTo: nodes });
+    identifier = componentIdentifier(app);
     const installAfters = nodes.map((i) => env.clients[i].getLastEventId());
     await installOnNodes(env, app, nodes);
     await Promise.all(nodes.map(async (i, k) => {

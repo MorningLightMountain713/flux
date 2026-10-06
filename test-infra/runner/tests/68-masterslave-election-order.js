@@ -125,9 +125,10 @@ describe('primary election under a divergent placement order', function () {
     .some((e) => e.event === 'syncthing:folderWritable' && e.data?.folder === folderOf(appName) && e.id > from[k]));
 
   // Built ahead of placement where a test needs the identifier first, to hold a
-  // checkpoint before the install.
+  // checkpoint before the install. Pinned to every holder: each order places on
+  // the same nodes.
   const build = async (appName) => {
-    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby' });
+    const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby', pinnedTo: placementOrder });
     built.set(appName, app);
     return app;
   };
@@ -383,7 +384,7 @@ describe('primary election under a divergent placement order', function () {
     // and hides every disagreement between them. Placed one at a time the seed is
     // index 1, and with only two holders there is no third opinion to fall back on:
     // whatever the pair decides is the answer.
-    const app = await buildSeedableSyncthingApp({ name: pairApp, syncMode: 'activeStandby' });
+    const app = await buildSeedableSyncthingApp({ name: pairApp, syncMode: 'activeStandby', pinnedTo: [0, 1] });
     built.set(pairApp, app);
     await pushImage(pairApp, 'v1');
     const pair = [0, 1];

@@ -39,7 +39,7 @@ describe('install handles component index-ref mounts', function () {
 
   it('accepts a valid sibling index-ref (1 -> 0): installs, no invalidSpec', async function () {
     this.timeout(120000);
-    const ok = await buildSeedableIndexRefApp({ name: okName, selfRef: false, syncMode: 'activeStandby' });
+    const ok = await buildSeedableIndexRefApp({ name: okName, selfRef: false, syncMode: 'activeStandby', pinnedTo: [0] });
     await installOnNodes(env, ok, [0]);
     await assertNoEvent(
       env.clients[0], 'reconciler:actuated',
@@ -49,7 +49,7 @@ describe('install handles component index-ref mounts', function () {
 
   it('rejects an invalid self-ref (index 0 -> 0) at install', async function () {
     this.timeout(120000);
-    const bad = await buildSeedableIndexRefApp({ name: badName, selfRef: true, syncMode: 'activeStandby' });
+    const bad = await buildSeedableIndexRefApp({ name: badName, selfRef: true, syncMode: 'activeStandby', pinnedTo: [1] });
     let err;
     try {
       await installOnNodes(env, bad, [1]);

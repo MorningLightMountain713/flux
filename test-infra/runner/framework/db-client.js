@@ -1,12 +1,6 @@
 import { MongoClient } from 'mongodb';
-import { AppRegistry, InstantiatedSpec, REGISTRY_DERIVED_FIELDS } from '@runonflux/flux-spec-backend';
+import { REGISTRY_DERIVED_FIELDS } from '@runonflux/flux-spec-backend';
 import { getSubnetConfig } from './subnet-config.js';
-
-// The app registry's stored form of a record: the form FluxOS's registry writes,
-// and the only one its indexed reads find.
-function storedRecord(spec) {
-  return AppRegistry.toStored(InstantiatedSpec.deserialize(spec));
-}
 
 const MONGO_URL = process.env.MONGO_URL || `mongodb://${getSubnetConfig().mongo}:27017`;
 
@@ -450,20 +444,6 @@ export function dbClient(nodeNum) {
       );
     },
 
-    async seedAppHash(hash, height, resolved = false) {
-      const explorerDb = await db('explorer');
-      await explorerDb.collection('zelappshashes').insertOne({
-        hash,
-        height,
-        txid: hash,
-        txIndex: 0,
-        value: 200000000,
-        message: resolved,
-        messageNotFound: false,
-        createdAt: new Date(),
-      });
-    },
-
     // The node's record of an app payment, including its position in the block.
     async appHashRecord(hash) {
       const explorerDb = await db('explorer');
@@ -529,14 +509,6 @@ export function dbClient(nodeNum) {
       );
     },
 
-    // Written in the registry's stored form, built fresh from the spec: the
-    // caller's app fixture is reused - seeded on several nodes, and read again to
-    // build the app's next specification - and stays as it was.
-    async seedGlobalAppSpec(spec) {
-      const globalDb = await db('appsGlobal');
-      await globalDb.collection('zelappsinformation').insertOne(storedRecord(spec));
-    },
-
     // The specification row this node holds for one app, as the record was
     // written. What a replayed message has to produce on a node that was never
     // given the message.
@@ -555,16 +527,6 @@ export function dbClient(nodeNum) {
           _id: 0, name: 1, hash: 1, height: 1,
         },
       }).toArray();
-    },
-
-    // zelappsinformation holds one row per app - the CURRENT specification. An
-    // update replaces it, the way the registry does when the chain carries a
-    // newer message; inserting a second row leaves the node reading whichever it
-    // finds first.
-    async replaceGlobalAppSpec(spec) {
-      const globalDb = await db('appsGlobal');
-      const { _id: _ignored, ...replacement } = spec;
-      await globalDb.collection('zelappsinformation').replaceOne({ nameKey: spec.name.toLowerCase() }, storedRecord(replacement), { upsert: true });
     },
 
     // One deduplicated tampering incident, as appTamperingRepository.upsertIncident writes it.
@@ -675,11 +637,6 @@ export function dbClient(nodeNum) {
     async deleteGlobalAppSpec(name) {
       const globalDb = await db('appsGlobal');
       await globalDb.collection('zelappsinformation').deleteOne({ name });
-    },
-
-    async seedPermanentMessage(msg) {
-      const globalDb = await db('appsGlobal');
-      await globalDb.collection('zelappsmessages').insertOne({ ...msg });
     },
 
     async seedPermanentMessages(msgs) {

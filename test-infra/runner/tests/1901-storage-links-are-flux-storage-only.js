@@ -28,6 +28,7 @@ import { buildAppSpec, registerApp, registerAndConfirm } from '../framework/app-
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { execInContainer, getAppContainerId } from '../framework/container.js';
 import { dbClient } from '../framework/db-client.js';
+import { seedGlobalSpec } from '../framework/reconciler-suite.js';
 import { REGISTRY_REPO_HOST, STORAGE_HOST } from '../framework/subnet-config.js';
 import { startTicker, advanceBlock } from '../framework/daemon-control.js';
 import {
@@ -213,25 +214,20 @@ describe('1901 a storage link addresses Flux storage or nothing', function suite
     it('validates on a node replaying it, whatever its link says', async function test() {
       this.timeout(300000);
 
-      // Seeded on one node only: it is the message the fleet already holds, and
+      // Handed to one node only: it is the message the fleet already holds, and
       // it carries a link no live submission would be allowed to make.
       const appName = `e2estorreplay${Date.now()}`;
       const app = await buildSeedableApp({
         name: appName,
-        env,
         instances: 1,
         compose: composeWith(appName, ['F_S_ENV=https://legacy.example.com/env']),
       });
-      const holder = dbClient(1);
-      await holder.seedGlobalAppSpec(app.spec);
-      await holder.seedPermanentMessage(app.permanentMessage);
-      await holder.seedAppHash(app.hash, app.permanentMessage.height, true);
+      // Every node learns the hash from the chain, and every node but the one
+      // handed the message has to go and get it, which is the path that
+      // validates it as a replay.
+      await seedGlobalSpec(env, app, [0]);
 
-      // Every other node learns the hash from the chain and has to go and get
-      // the message, which is the path that validates it as a replay.
-      await advanceBlock(app.hash);
-
-      // Any node but the one that was seeded: which of them picks the message up
+      // Any node but the one handed the message: which of them picks it up
       // is the fleet's business, but a node holding this specification without
       // having been given it can only have validated it as a replay. Read from
       // the store rather than over the API, because the store is where accepting
@@ -244,7 +240,7 @@ describe('1901 a storage link addresses Flux storage or nothing', function suite
 
       await waitFor(
         async () => (await heldBy()).length > 0,
-        { timeout: 180000, interval: 5000, label: 'a node that was not seeded stored the spec' },
+        { timeout: 180000, interval: 5000, label: 'a node that was not handed the message stored the spec' },
       );
 
       const [stored] = await heldBy();

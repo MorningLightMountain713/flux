@@ -94,6 +94,7 @@ describe('a restore acts on the components it was asked for, by their own folder
       repoauth: '',
     });
     const app = await buildSeedableApp({
+      pinnedTo: [0],
       name: appName,
       compose: [component(compA), component(compB)],
     });

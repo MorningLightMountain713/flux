@@ -136,7 +136,7 @@ describe('an app log stream loses nothing and is shared between viewers', functi
 
     await pushTestApp(appName, 'v1');
     const app = await buildSeedableApp({
-      env,
+      pinnedTo: [0],
       name: appName,
       compose: [component, secondComponent, blobComponent].map((name) => ({
         name,
