@@ -5,10 +5,12 @@ const sinon = require('sinon');
 
 const { Privilege } = require('../../ZelBack/src/services/utils/privileges');
 const proxyquire = require('proxyquire');
+const { loadSpecLibrary } = require('./fixtures/fluxSpec');
 
 const { expect } = chai;
 
 describe('dockerTerminalHandler tests', () => {
+  let flux;
   let trackTerminalSession;
   let verifyPrivilege;
   let getDockerContainer;
@@ -16,9 +18,23 @@ describe('dockerTerminalHandler tests', () => {
   let dockerTerminalHandler;
 
   // A caller names a container by its docker name, which is its identifier; the
-  // labels stamped on it when it was created say whose it is.
+  // labels stamped on it when it was created say which app it belongs to.
   const IDENTITY = 'b7kq2mzr4xw6hvtn3ycd5jfa8slpegu9';
-  const OWNER = '1KPKzyp9VyB9ouAA4spZ48x8g32sxLVK6W';
+
+  before(async function loadLibrary() {
+    this.timeout(30_000);
+    flux = await loadSpecLibrary();
+  });
+
+  // What dockerService answers for a container the node made under a name: the
+  // handle, and the identifier and identity read off the labels the library
+  // stamps.
+  const managed = (container, identifier) => {
+    const labels = flux.identityLabels({
+      appName: 'myapp', name: 'comp', identifier, identity: IDENTITY,
+    });
+    return { container, identifier: labels[flux.LABEL_KEYS.IDENTIFIER], identity: labels[flux.LABEL_KEYS.IDENTITY] };
+  };
 
   // How often a caller was checked for a signed session, the check every setup
   // begins with.
@@ -52,11 +68,10 @@ describe('dockerTerminalHandler tests', () => {
     trackTerminalSession = sinon.stub();
     verifyPrivilege = sinon.stub().resolves(true);
     getDockerContainer = sinon.stub().resolves({ exec: sinon.stub() });
-    // The container docker holds under the name asked for, as the node made it:
-    // labelled with its identifier and its owner.
+    // The container docker holds under the name asked for, as the node made it.
     getManagedContainer = sinon.stub().callsFake(async (name) => {
       const container = await getDockerContainer(name);
-      return container ? { container, identifier: name, owner: OWNER } : null;
+      return container ? managed(container, name) : null;
     });
     dockerTerminalHandler = proxyquire('../../ZelBack/src/lib/socketIoHandlers/dockerTerminalHandler', {
       '../../services/analyticsService': { trackTerminalSession },
@@ -127,12 +142,12 @@ describe('dockerTerminalHandler tests', () => {
 
     // Through verifyPrivilege, carrying the privilege it needs, so a search for
     // who may open a shell in a customer's container finds this one too. The
-    // app is given by the owner stamped on the container, not by a name.
+    // app is given by the identity stamped on the container, not by a name.
     sinon.assert.calledWithExactly(
       verifyPrivilege.secondCall,
       Privilege.APP_OWNER_OR_FLUX_TEAM,
       'zelidauth',
-      { owner: OWNER },
+      { identity: IDENTITY },
     );
     expect(verifyPrivilege.callCount).to.equal(2);
   });
@@ -157,7 +172,7 @@ describe('dockerTerminalHandler tests', () => {
     sinon.assert.calledOnceWithExactly(getManagedContainer, `comp_${IDENTITY}`);
   });
 
-  it('refuses a signed-in caller the owner stamped on the container does not admit, and opens nothing', async () => {
+  it('refuses a signed-in caller who does not own the app the container belongs to, and opens nothing', async () => {
     verifyPrivilege.withArgs(Privilege.APP_OWNER_OR_FLUX_TEAM).resolves(false);
     const exec = sinon.stub();
     getDockerContainer.resolves({ exec });
@@ -173,11 +188,7 @@ describe('dockerTerminalHandler tests', () => {
   it('records the session against the identifier the container is labelled with, not the name it was asked for by', async () => {
     const stream = { on: sinon.stub(), destroy: sinon.stub(), write: sinon.stub() };
     const execInstance = { start: (options, cb) => cb(null, stream), resize: sinon.stub() };
-    getManagedContainer.resolves({
-      container: { exec: (cmd, cb) => cb(null, execInstance) },
-      identifier: `comp_${IDENTITY}_replica2`,
-      owner: OWNER,
-    });
+    getManagedContainer.resolves(managed({ exec: (cmd, cb) => cb(null, execInstance) }, `comp_${IDENTITY}_replica2`));
     const socket = makeSocket();
     dockerTerminalHandler(socket);
     await socket.fire('exec', 'zelidauth', 'whatever-the-caller-typed', 'sh', '', 'root');

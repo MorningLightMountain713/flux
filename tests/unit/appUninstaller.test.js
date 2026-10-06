@@ -241,7 +241,6 @@ describe('appUninstaller tests', () => {
   const target = (doc) => ({
     name: doc.name,
     replica: doc.replica ?? null,
-    owner: doc.owner ?? null,
     identity: doc.identity ?? null,
     networkName: doc.networkName ?? null,
     components: doc.components.map((c) => ({
@@ -470,7 +469,6 @@ describe('appUninstaller tests', () => {
         name: 'myapp',
         networkName: 'myapp',
         forceKill: false,
-        owner: '1own',
         reason: 'user-cancel',
         shutdownBudgetSeconds: 30,
         identity: 'ab12cd34ef56',
@@ -513,7 +511,6 @@ describe('appUninstaller tests', () => {
       name: 'myapp',
       networkName: 'myapp',
       forceKill: false,
-      owner: '1own',
       reason: 'user-cancel',
       shutdownBudgetSeconds: 30,
       components: [{
@@ -791,7 +788,6 @@ describe('appUninstaller tests', () => {
       name: 'myapp',
       networkName: 'fluxDockerNetwork_myapp',
       forceKill: false,
-      owner: '1own',
       reason: 'user-cancel',
       shutdownBudgetSeconds: 30,
       components: [{
@@ -799,18 +795,24 @@ describe('appUninstaller tests', () => {
       }],
     });
 
-    it('passes the persisted reason + force to beginAppStop', async () => {
+    it('names the app to the daemon by its identity, and passes the persisted reason + force to beginAppStop', async () => {
       fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'rejected_pipeline_active' });
-      await appUninstaller.runTeardown(target(doc()));
+      await appUninstaller.runTeardown(target({ ...doc(), identity: 'bident' }));
       expect(fluxShutdowndClientStub.beginAppStop.calledOnce).to.equal(true);
-      const [owner, name, reason, opts] = fluxShutdowndClientStub.beginAppStop.firstCall.args;
-      expect(owner).to.equal('1own');
+      const [identity, name, reason, opts] = fluxShutdowndClientStub.beginAppStop.firstCall.args;
+      expect(identity).to.equal('bident');
       expect(name).to.equal('myapp');
       expect(reason).to.equal('user-cancel');
       expect(opts.force).to.equal(false);
       // A doc with no replica is a whole-app stop: replica must arrive as
       // definite null, never undefined.
       expect(opts.replica).to.equal(null);
+    });
+
+    it('names an app with no identity minted to the daemon by its name', async () => {
+      fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'rejected_pipeline_active' });
+      await appUninstaller.runTeardown(target(doc()));
+      expect(fluxShutdowndClientStub.beginAppStop.firstCall.args.slice(0, 2)).to.deep.equal(['myapp', 'myapp']);
     });
 
     it('scopes the daemon stop to the teardown doc identity (a scale-down never drains the sibling)', async () => {
@@ -918,6 +920,20 @@ describe('appUninstaller tests', () => {
         sinon.assert.calledOnceWithExactly(contentStoreStub.removeApp, 'bident');
       });
 
+      it('deletes the daemon\'s plan of the replica it tore down, by the app\'s identity', async () => {
+        installedStub.instancesOf.resolves([installedRecord({ name: 'myapp', owner: '1own' }, { replica: 's1' })]);
+
+        await appUninstaller.runTeardown(target(replicaDoc())).catch(() => {});
+
+        sinon.assert.calledOnceWithExactly(fluxShutdowndClientStub.deleteAppPlanBestEffort, 'bident', 's2');
+      });
+
+      it('deletes the plan of an app with no identity minted under its name', async () => {
+        await appUninstaller.runTeardown(target({ ...doc(), replica: 's2' })).catch(() => {});
+
+        sinon.assert.calledOnceWithExactly(fluxShutdowndClientStub.deleteAppPlanBestEffort, 'myapp', 's2');
+      });
+
       it('keeps them when the store cannot say whether a sibling stays', async () => {
         installedStub.instancesOf.rejects(new Error('mongo down'));
 
@@ -947,7 +963,7 @@ describe('appUninstaller tests', () => {
       // A graceful teardown in flight, held at the drain, registers its escalation.
       let releaseStop;
       fluxShutdowndClientStub.beginAppStop.onFirstCall().returns(new Promise((resolve) => { releaseStop = resolve; }));
-      const draining = appUninstaller.runTeardown(target(doc())).catch(() => {});
+      const draining = appUninstaller.runTeardown(target({ ...doc(), identity: 'bident' })).catch(() => {});
       await settle();
 
       // The in-flight teardown holds its remove lease; an operator force-remove of the
@@ -956,7 +972,7 @@ describe('appUninstaller tests', () => {
       const result = await appUninstaller.uninstallApplication('myapp', { forceKill: true, skipGuard: true, operatorForce: true });
       operationRegistry.clear();
 
-      expect(fluxShutdowndClientStub.forceAppStop.calledWith('1own', 'myapp'), 'escalated the drain via the daemon').to.equal(true);
+      sinon.assert.calledOnceWithExactly(fluxShutdowndClientStub.forceAppStop, 'bident', null);
       expect(result.status).to.equal(appUninstaller.UninstallStatus.REMOVED);
 
       releaseStop({ outcome: 'forced' });

@@ -1051,7 +1051,6 @@ function teardownTarget(instance, ledger, owed) {
   return {
     name: instance.name,
     replica: instance.replica,
-    owner: instance.owner,
     identity: instance.identity,
     networkName: ledger?.network?.name ?? null,
     components: ledger
@@ -1096,7 +1095,6 @@ async function legacyTarget(doc) {
   return {
     name: doc.name,
     replica: doc.replica ?? null,
-    owner: doc.owner ?? null,
     identity: doc.identity ?? null,
     networkName: doc.networkName ?? null,
     components,
@@ -1255,8 +1253,10 @@ async function finishTeardown(target, status) {
  */
 async function executeTeardown(target, { onStatus = null } = {}) {
   const {
-    name, replica, owner, identity, networkName, components: list, owed,
+    name, replica, identity, networkName, components: list, owed,
   } = target;
+  // The identity the daemon knows the app by: its plan and its containers.
+  const daemonIdentity = shutdownPlan.daemonIdentity(target);
   const forceKill = owed.force;
   const status = (msg) => { log.info(msg); if (onStatus) onStatus(msg); };
 
@@ -1274,10 +1274,10 @@ async function executeTeardown(target, { onStatus = null } = {}) {
   // forceful teardown has nothing to escalate.
   if (!forceKill) {
     teardownEscalations.set(name, () => {
-      fluxShutdowndClient.forceAppStop(owner, name, replica).catch((e) => log.warn(`forceAppStop ${name}: ${e.message}`));
+      fluxShutdowndClient.forceAppStop(daemonIdentity, replica).catch((e) => log.warn(`forceAppStop ${name}: ${e.message}`));
     });
   }
-  const stop = await fluxShutdowndClient.beginAppStop(owner, name, stopReason, {
+  const stop = await fluxShutdowndClient.beginAppStop(daemonIdentity, name, stopReason, {
     force: Boolean(forceKill),
     deadline: stopDeadline,
     replica,
@@ -1394,10 +1394,10 @@ async function executeTeardown(target, { onStatus = null } = {}) {
       await telemetryConfigService.remove().catch((e) => log.warn(`telemetry config remove: ${e.message}`));
     }
   }
-  // Scoped to the identity this teardown owns: plans key owner:app[:replica],
+  // Scoped to the deployment this teardown owns: plans key identity[:replica],
   // so an untagged delete would look for a loose plan this app never had and
   // leave the departing replica's plan orphaned on the daemon.
-  if (owner) await fluxShutdowndClient.deleteAppPlanBestEffort(name, owner, replica);
+  await fluxShutdowndClient.deleteAppPlanBestEffort(daemonIdentity, replica);
   // Drop the app's content-artifact store (the peer-served declared blobs). A
   // re-driven teardown just re-runs the no-op; a re-install refills it as
   // provisioning resolves the blobs.

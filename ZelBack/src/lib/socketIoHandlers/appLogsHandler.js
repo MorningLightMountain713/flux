@@ -519,14 +519,16 @@ async function appLogsHandler(socket) {
         return;
       }
 
-      // Whose container it is, is the owner stamped on it when it was created:
-      // nothing is read out of the text of its name. Through verifyPrivilege
-      // like every other caller, so this stream carries a privilege a sweep can
-      // find.
+      // Which app the container belongs to is the identity stamped on it, and
+      // who owns that app is read from the app's record: nothing is read out
+      // of the text of a name, and from the block a sale applies in, a stream
+      // opens for the buyer and not for the seller. Through verifyPrivilege
+      // like every other caller, so this stream carries a privilege a sweep
+      // can find.
       const authorized = await verificationHelper.verifyPrivilege(
         Privilege.APP_OWNER_OR_FLUX_TEAM,
         zelidauth,
-        { owner: managed.owner },
+        { identity: managed.identity },
       );
       if (authorized !== true) {
         socket.emit('error', 'Not authorized.', nameOrId);

@@ -72,8 +72,8 @@ describe('appsRepository', () => {
     mockDb = { db: sinon.stub().returns({ collection: sinon.stub().returns(eventCollection) }) };
 
     // The app registry: nothing listed, nothing pinned, unless a test says so.
-    registryStub = { byName: sinon.stub().resolves(null), pinned: sinon.stub().resolves([]) };
-    installedStub = { byName: sinon.stub().resolves(null) };
+    registryStub = { byName: sinon.stub().resolves(null), byIdentity: sinon.stub().resolves(null), pinned: sinon.stub().resolves([]) };
+    installedStub = { byName: sinon.stub().resolves(null), byIdentity: sinon.stub().resolves(null) };
 
     dbHelperStub = {
       databaseConnection: sinon.stub().returns(mockDb),
@@ -260,6 +260,36 @@ describe('appsRepository', () => {
 
     it('answers null when neither the registry nor this node holds the name', async () => {
       expect(await appsRepository.getApplicationOwner('nothing')).to.equal(null);
+    });
+  });
+
+  describe('getApplicationOwnerByIdentity', () => {
+    let IDENTITY;
+
+    before(() => { IDENTITY = flux.appIdentityFromUuid('ab'.repeat(32)); });
+
+    it('answers the registry record\'s owner without reading the installed list', async () => {
+      registryStub.byIdentity.resolves({ owner: 'ownerX' });
+      expect(await appsRepository.getApplicationOwnerByIdentity(IDENTITY)).to.equal('ownerX');
+      sinon.assert.calledOnceWithExactly(registryStub.byIdentity, IDENTITY);
+      sinon.assert.notCalled(installedStub.byIdentity);
+    });
+
+    it('falls back to the app this node has installed with the identity', async () => {
+      const installed = await instantiatedSpec(await v8Spec({ name: 'LocalOnly' }), { hash: 'hl', height: 100, identity: IDENTITY });
+      installedStub.byIdentity.withArgs(IDENTITY).resolves(installedRecord(installed));
+      expect(await appsRepository.getApplicationOwnerByIdentity(IDENTITY)).to.equal(installed.owner);
+    });
+
+    it('answers null for an identity neither holds, and reads no app by name', async () => {
+      registryStub.byName.resolves({ owner: 'ownerOfTheName' });
+      expect(await appsRepository.getApplicationOwnerByIdentity(IDENTITY)).to.equal(null);
+      sinon.assert.notCalled(registryStub.byName);
+    });
+
+    it('reads a value that is not in an identity\'s form as the name of an app with no identity minted', async () => {
+      registryStub.byName.withArgs('legacyapp').resolves({ owner: 'ownerOfTheName' });
+      expect(await appsRepository.getApplicationOwnerByIdentity('legacyapp')).to.equal('ownerOfTheName');
     });
   });
 

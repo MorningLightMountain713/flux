@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
+const { daemonIdentity } = require('../../ZelBack/src/services/appLifecycle/shutdownPlan');
 const { loadSpecLibrary } = require('./fixtures/fluxSpec');
 
 const APPS = '/apps/';
@@ -212,7 +213,7 @@ describe('appIdentityMove tests', () => {
       },
       appNetworkLinker: { connectComponentToLinkedApps: async (identifier, dep, aliases) => { record('connectComponentToLinkedApps', identifier, aliases); } },
       appOperations: { requestComponentDaemonStop: sinon.stub().resolves(false) },
-      shutdownPlan: { appRequiresDaemonShutdown: sinon.stub().returns(false), buildShutdownPlan: sinon.stub().returns({ plan: true }) },
+      shutdownPlan: { appRequiresDaemonShutdown: sinon.stub().returns(false), buildShutdownPlan: sinon.stub().returns({ plan: true }), daemonIdentity },
       fluxShutdowndClient: { upsertAppPlanBestEffort: sinon.stub().resolves() },
       serviceHelper: {
         runCommand: async (command, { params }) => {
@@ -412,7 +413,10 @@ describe('appIdentityMove tests', () => {
 
       await appIdentityMove.moveInstalledAppsOntoIdentity();
 
-      expect(stubs.appOperations.requestComponentDaemonStop.firstCall.args.slice(0, 3)).to.deep.equal(['owner', NAME, null]);
+      expect(
+        stubs.appOperations.requestComponentDaemonStop.firstCall.args.slice(0, 3),
+        'the daemon is asked by the identity the former container carries, which is the name',
+      ).to.deep.equal([NAME, NAME, null]);
       expect(indexOf('appDockerStop')).to.equal(-1);
       expect(indexOf('appDockerRemove')).to.be.greaterThan(-1);
     });
@@ -635,8 +639,9 @@ describe('appIdentityMove tests', () => {
       const [, identifier, options, heldDuring] = calls[indexOf('installComponent')];
       expect(identifier).to.equal(newIdentifier());
       expect(options).to.deep.include({
-        createVolumes: false, skipPorts: true, localImageFirst: true, allowLocalImageFallback: true, owner: 'owner', uuid: UUID, specVersion: 8,
+        createVolumes: false, skipPorts: true, localImageFirst: true, allowLocalImageFallback: true, uuid: UUID, specVersion: 8,
       });
+      expect(options, 'nothing on a container says who owns its app').to.not.have.property('owner');
       expect(heldDuring, 'the app is leased while its containers are recreated').to.equal(true);
       expect(calls[indexOf('buildDeployment', (id, o) => id === IDENTITY && !o.identity)].slice(1), 'the recreate builds from the row the identity is on').to.deep.equal([IDENTITY, { replica: null }]);
       expect(calls[indexOf('connectComponentToLinkedApps')].slice(1)).to.deep.equal([newIdentifier(), [`${NAME}.${NAME}`]]);

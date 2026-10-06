@@ -123,20 +123,20 @@ async function upsertAppPlan(plan) {
 }
 
 /**
- * Remove one identity's shutdown plan on uninstall. `replica` is
- * required-and-nullable on the wire: always sent, null for loose placement
- * (the legacy whole-app key).
- * @param {string} appName
- * @param {string} ownerFluxId
+ * Remove the shutdown plan of one deployment of an app on uninstall. The daemon
+ * knows an app by its identity, the one stamped on every container of the app
+ * as a label. `replica` is required-and-nullable on the wire: always sent, null
+ * for loose placement.
+ * @param {string} identity - the app's identity
  * @param {string|null} replica
  */
-async function deleteAppPlan(appName, ownerFluxId, replica = null) {
-  return callRpc('delete_app_plan', { app_name: appName, owner_flux_id: ownerFluxId, replica });
+async function deleteAppPlan(identity, replica = null) {
+  return callRpc('delete_app_plan', { identity, replica });
 }
 
 /**
  * List the plan summaries the daemon currently holds, for resync-on-boot.
- * @returns {Promise<Array<{app_name: string, owner_flux_id: string, replica: string|null, spec_hash: string}>>}
+ * @returns {Promise<Array<{app_name: string, identity: string, replica: string|null, spec_hash: string}>>}
  */
 async function listAppPlans() {
   return callRpc('list_app_plans', {});
@@ -157,11 +157,11 @@ async function upsertAppPlanBestEffort(plan) {
 /**
  * Best-effort wrapper for uninstall.
  */
-async function deleteAppPlanBestEffort(appName, ownerFluxId, replica = null) {
+async function deleteAppPlanBestEffort(identity, replica = null) {
   try {
-    await deleteAppPlan(appName, ownerFluxId, replica);
+    await deleteAppPlan(identity, replica);
   } catch (error) {
-    log.warn(`flux-shutdownd deleteAppPlan(${appName}) failed: ${error.message}`);
+    log.warn(`flux-shutdownd deleteAppPlan(${identity}) failed: ${error.message}`);
   }
 }
 
@@ -184,7 +184,7 @@ function isTimeout(err) {
  *   complete | deadline | superseded  — the daemon's end-state;
  *   rejected_pipeline_active          — a node-wide shutdown owns the node;
  *   component_busy                    — an uncovered component-scoped run of the
- *                                       same identity is in flight; retry shortly;
+ *                                       same deployment is in flight; retry shortly;
  *   unreachable | timeout             — daemon absent/down, or no reply in time;
  *   not_arcane                        — no daemon here (short-circuit, no socket).
  *
@@ -193,16 +193,18 @@ function isTimeout(err) {
  * The gate is app-scoped even for a replica-scoped stop — drain STATE is
  * app-wide by design; only the stop's container set narrows.
  *
- * @param {string} ownerFluxId
- * @param {string} appName
+ * @param {string} identity - the app's identity: which containers the daemon
+ *   stops, and which plan it stops them by
+ * @param {string} appName - the app's name, which the stopping gate here is
+ *   keyed by and the daemon's drain-socket messages for this stop carry
  * @param {string} reason one of SHUTDOWN_REASON
  * @param {{force?: boolean, deadline: number, replica?: string|null}} opts
  *   deadline is an absolute unix time (s); replica is required-and-nullable on
- *   the wire — a name stops exactly that identity's containers, null stops the
+ *   the wire — a name stops exactly that replica's containers, null stops the
  *   whole app (loose, and every whole-app path)
  * @returns {Promise<{outcome: string}>}
  */
-async function beginAppStop(ownerFluxId, appName, reason, {
+async function beginAppStop(identity, appName, reason, {
   force = false, deadline, replica = null, component = null,
 } = {}) {
   // Non-Arcane nodes have no daemon socket: short-circuit before opening anything
@@ -225,7 +227,7 @@ async function beginAppStop(ownerFluxId, appName, reason, {
     const res = await callRpc(
       'begin_app_stop',
       {
-        owner_flux_id: ownerFluxId, app_name: appName, replica, component, reason, force, deadline,
+        identity, app_name: appName, replica, component, reason, force, deadline,
       },
       { timeoutMs },
     );
@@ -260,16 +262,15 @@ async function beginAppStop(ownerFluxId, appName, reason, {
  *   unreachable       — daemon absent/down;
  *   not_arcane        — no daemon here (short-circuit).
  *
- * @param {string} ownerFluxId
- * @param {string} appName
- * @param {string|null} [replica] - escalate exactly this identity's drain; null
+ * @param {string} identity - the app's identity
+ * @param {string|null} [replica] - escalate exactly this replica's drain; null
  *   escalates the whole app's
  * @returns {Promise<{outcome: string}>}
  */
-async function forceAppStop(ownerFluxId, appName, replica = null) {
+async function forceAppStop(identity, replica = null) {
   if (!globalState.isArcane()) return { outcome: 'not_arcane' };
   try {
-    const res = await callRpc('force_app_stop', { owner_flux_id: ownerFluxId, app_name: appName, replica });
+    const res = await callRpc('force_app_stop', { identity, replica });
     return { outcome: res.end_state };
   } catch {
     return { outcome: 'unreachable' };

@@ -19,6 +19,7 @@ const { Privilege, APP_SCOPED, authOf } = require('../../ZelBack/src/services/ut
 const zelidauth = 'zelid=testing1&loginPhrase=testing2&signature=testing3';
 const req = { headers: { zelidauth } };
 const appName = 'myTestAppName';
+const identity = `b${'a'.repeat(52)}`;
 
 describe('verificationHelper tests', () => {
   describe('verifyPrivilege tests', () => {
@@ -49,27 +50,26 @@ describe('verificationHelper tests', () => {
       });
     });
 
-    // A caller that holds the app's owner already, read off a container's owner
+    // A caller that holds the app's identity, read off a container's identity
     // label, hands it over in the app name's place: the verifier is given the
-    // owner and no name to read a record by.
+    // identity and no name.
     table.filter(([, , scoped]) => scoped).forEach(([privilege, verifier]) => {
-      it(`${privilege} is answered by ${verifier} for an owner the caller holds`, async () => {
+      it(`${privilege} is answered by ${verifier} for an app given by its identity`, async () => {
         const stub = sinon.stub(verificationHelperUtils, verifier).resolves(true);
-        const owner = '1KPKzyp9VyB9ouAA4spZ48x8g32sxLVK6W';
 
-        expect(await verifyPrivilege(privilege, authOf(req), { owner })).to.be.true;
+        expect(await verifyPrivilege(privilege, authOf(req), { identity })).to.be.true;
 
-        sinon.assert.calledOnceWithExactly(stub, zelidauth, undefined, owner);
+        sinon.assert.calledOnceWithExactly(stub, zelidauth, undefined, identity);
       });
     });
 
-    it('refuses an owner for a privilege that resolves an identity', async () => {
-      await expect(verifyPrivilege(Privilege.NODE_OPERATOR, authOf(req), { owner: '1KPKzyp9VyB9ouAA4spZ48x8g32sxLVK6W' }))
-        .to.be.rejectedWith(TypeError, 'reads no app name');
+    it('refuses an app\'s identity for a privilege that reads no app', async () => {
+      await expect(verifyPrivilege(Privilege.NODE_OPERATOR, authOf(req), { identity }))
+        .to.be.rejectedWith(TypeError, 'reads no app');
     });
 
-    it('refuses an app that is both named and given by its owner', async () => {
-      await expect(verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName, owner: '1KPKzyp9VyB9ouAA4spZ48x8g32sxLVK6W' }))
+    it('refuses an app given both by its name and by its identity', async () => {
+      await expect(verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName, identity }))
         .to.be.rejectedWith(TypeError, 'never both');
     });
 
@@ -117,9 +117,9 @@ describe('verificationHelper tests', () => {
 
     // The nit that started this: a privilege resolving an identity was being
     // handed an app name it discarded, which read as app-scoped and was not.
-    it('refuses an app name for a privilege that resolves an identity', async () => {
+    it('refuses an app name for a privilege that reads no app', async () => {
       await expect(verifyPrivilege(Privilege.NODE_OPERATOR, authOf(req), { appName }))
-        .to.be.rejectedWith(TypeError, 'reads no app name');
+        .to.be.rejectedWith(TypeError, 'reads no app');
     });
   });
 

@@ -157,7 +157,7 @@ async function openHostPorts(ports, appName, opened, status = null) {
  * that creates it; a redeploy keeps the ports and the volume it does not
  * recreate.
  * @param {object} component - DeploymentComponent to install
- * @param {object} options - { owner, uuid, onStatus, createVolumes, skipPorts, burstEligible, restartPolicy, extraEnv }
+ * @param {object} options - { uuid, onStatus, createVolumes, skipPorts, burstEligible, restartPolicy, extraEnv }
  * @returns {Promise<void>}
  */
 async function installComponent(component, options = {}) {
@@ -184,23 +184,14 @@ async function installComponent(component, options = {}) {
   // the move stays inside the boot's window. An image not on the daemon is
   // verified and pulled as any install's is.
   const localImageFirst = options.localImageFirst || false;
-  const { owner } = options;
-  // Which app INSTANCE this container belongs to. Unlike owner this is NOT
-  // load-bearing yet and is absent for every app registered before identities
-  // were minted, so it is stamped empty rather than refused.
+  // Which app INSTANCE this container belongs to. It is absent for every app
+  // registered before identities were minted, so it is stamped empty rather
+  // than refused.
   const { uuid } = options;
   // App-wide: does any component use a graceful-shutdown feature? Gates the
-  // per-container budget labels (identity labels are always stamped). Travels on
-  // the same channel as owner — computed once per app by the orchestrator.
+  // per-container budget labels (identity labels are always stamped), computed
+  // once per app by the orchestrator.
   const requiresEncryption = options.requiresEncryption || false;
-
-  // owner is load-bearing: flux-shutdownd keys each app's shutdown plan on it,
-  // so a blank runonflux.owner label silently breaks drain/preStop at node
-  // shutdown. Refuse rather than stamp an empty owner. Test installs are
-  // ephemeral and carry no plan, so they are exempt.
-  if (!owner) {
-    throw new Error(`installComponent: owner required for ${component.identifier}`);
-  }
 
   const id = component.identifier;
   const { appName, replica = null } = component;
@@ -364,7 +355,6 @@ async function installComponent(component, options = {}) {
     ...(mesh && { dns: mesh.dns }),
     ...(mesh?.hostname && { hostname: mesh.hostname }),
     networkAliases,
-    owner,
     uuid,
     requiresEncryption,
     measuredImageSizeBytes,

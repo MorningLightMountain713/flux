@@ -276,13 +276,11 @@ describe('containerHealthMonitor tests', () => {
       expect(opts.createVolumes).to.be.true;
     });
 
-    it('forwards the app owner to the create path (load-bearing shutdown label)', async () => {
+    it('hands the create path nothing that says who owns the app', async () => {
       await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
+      sinon.assert.calledOnce(componentProvisionerStub.installComponent);
       const [, opts] = componentProvisionerStub.installComponent.firstCall.args;
-      // Read off the real InstantiatedSpec, which reads it off the spec — the
-      // owner is a real P2PKH address, because the library rejects anything else.
-      expect(opts.owner).to.equal(instantiated.owner);
-      expect(opts.owner).to.equal('1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm');
+      expect(opts).to.not.have.property('owner');
     });
 
     it('recomputes the graceful-shutdown gate and forwards it, so a recreate keeps its budget labels', async () => {

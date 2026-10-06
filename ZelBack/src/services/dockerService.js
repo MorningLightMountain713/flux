@@ -365,15 +365,16 @@ async function getDockerContainer(identifier, options = {}) {
 
 /**
  * A container FluxOS manages, with what its labels say of it: the handle, the
- * identifier it is known by and the owner stamped on it when it was created.
- * Null for a name no container has, and for a container that carries no
- * identifier label, which is not one of ours to answer for.
+ * identifier it is known by and the identity of the app it belongs to. Null for
+ * a name no container has, and for a container that carries no identifier
+ * label, which is not one of ours to answer for.
  *
- * The app a container belongs to and who owns it are read here, off the
- * container, and never out of the text of its name.
+ * The app a container belongs to is read here, off the container, and never
+ * out of the text of its name. Who owns that app is not on the container: a
+ * sale changes it, and the app's record for the identity answers.
  *
  * @param {string} name the container's docker name
- * @returns {Promise<{container: object, identifier: string, owner: (string|undefined)}|null>}
+ * @returns {Promise<{container: object, identifier: string, identity: (string|undefined)}|null>}
  */
 async function getManagedContainer(name) {
   const entry = await containerEntryByName(name);
@@ -384,7 +385,7 @@ async function getManagedContainer(name) {
   return {
     container: docker.getContainer(entry.Id),
     identifier,
-    owner: readLabel(entry.Labels, LABEL_KEYS.OWNER),
+    identity: readLabel(entry.Labels, LABEL_KEYS.IDENTITY),
   };
 }
 
@@ -1136,7 +1137,6 @@ function isFluxOwnedContainer({ labels, name }, { LABEL_KEYS: labelKeys, readLab
  * @param {string} [options.restartPolicy] docker restart policy name; defaults to 'no'
  * @param {string[]} [options.extraEnv] env entries appended to the component's own
  * @param {number} [options.measuredImageSizeBytes] on-disk image size, for the writable-layer cap
- * @param {string} [options.owner] FluxID stamped as runonflux.owner
  * @param {boolean} [options.requiresEncryption] stamp the shutdown-budget labels
  * @param {object} [options.labels] extra container labels merged over the standard set
  * @param {boolean} [options.publishPorts] bind the component's ports on the host; default true
@@ -1232,10 +1232,9 @@ async function appDockerCreate(deployComp, options = {}) {
   // Identity goes on every flux container at this single create chokepoint so
   // flux-shutdownd can enumerate and stop any app. Budget labels (drain/preStop/
   // graceful timing) are added only for apps that use a graceful feature; a plain
-  // app drains on the daemon's defaults. owner is provenance threaded in from
-  // the orchestrator (it is not on DeploymentComponent).
+  // app drains on the daemon's defaults. Nothing stamped says who owns the app:
+  // a label is fixed for the container's life and a sale changes the owner.
   const identity = identityLabels(deployComp, {
-    owner: options.owner || null,
     uuid: options.uuid || null,
   });
   const budgetLabels = options.requiresEncryption

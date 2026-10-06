@@ -98,7 +98,7 @@ describe('fluxShutdowndClient', () => {
   describe('beginAppStop', () => {
     it('short-circuits to not_arcane without opening a socket or touching the gate', async () => {
       const { client, netStub, globalStateStub } = load({ isArcane: false });
-      const res = await client.beginAppStop('1own', 'app', 'ttl-expired', { deadline: futureDeadline() });
+      const res = await client.beginAppStop('bident', 'app', 'ttl-expired', { deadline: futureDeadline() });
       expect(res).to.deep.equal({ outcome: 'not_arcane' });
       expect(netStub.createConnection.called).to.equal(false);
       expect(globalStateStub.setAppShutdownPipelineState.called).to.equal(false);
@@ -107,7 +107,7 @@ describe('fluxShutdowndClient', () => {
     it('seeds the stopping LB gate synchronously, before the first await', () => {
       const { client, globalStateStub } = load();
       const deadline = futureDeadline();
-      client.beginAppStop('1own', 'app', 'ttl-expired', { deadline }); // not awaited
+      client.beginAppStop('bident', 'app', 'ttl-expired', { deadline }); // not awaited
       expect(globalStateStub.setAppShutdownPipelineState.calledOnce).to.equal(true);
       const [name, state, expiresAt] = globalStateStub.setAppShutdownPipelineState.firstCall.args;
       expect(name).to.equal('app');
@@ -117,17 +117,31 @@ describe('fluxShutdowndClient', () => {
 
     it('returns the daemon end_state (complete)', async () => {
       const { client, sockets } = load();
-      const p = client.beginAppStop('1own', 'app', 'ttl-expired', { deadline: futureDeadline() });
+      const p = client.beginAppStop('bident', 'app', 'ttl-expired', { deadline: futureDeadline() });
       sockets[0].emit('connect');
       sockets[0].emit('data', Buffer.from(okLine({ end_state: 'complete' })));
       expect(await p).to.deep.equal({ outcome: 'complete' });
     });
 
-    it('always sends replica on the wire: null for a whole-app stop, the name for one identity', async () => {
+    it('names the app to the daemon by its identity, and carries its name beside it', async () => {
+      const { client, sockets } = load();
+      const deadline = futureDeadline();
+      const p = client.beginAppStop('bident', 'app', 'ttl-expired', { deadline });
+      sockets[0].emit('connect');
+      const request = JSON.parse(sockets[0].write.firstCall.args[0]);
+      expect(request.method).to.equal('begin_app_stop');
+      expect(request.params).to.deep.equal({
+        identity: 'bident', app_name: 'app', replica: null, component: null, reason: 'ttl-expired', force: false, deadline,
+      });
+      sockets[0].emit('data', Buffer.from(okLine({ end_state: 'complete' })));
+      await p;
+    });
+
+    it('always sends replica on the wire: null for a whole-app stop, the name for one replica', async () => {
       for (const [opts, wire] of [[{}, null], [{ replica: 's1' }, 's1']]) {
         const { client, sockets } = load();
         // eslint-disable-next-line no-await-in-loop
-        const p = client.beginAppStop('1own', 'app', 'ttl-expired', { deadline: futureDeadline(), ...opts });
+        const p = client.beginAppStop('bident', 'app', 'ttl-expired', { deadline: futureDeadline(), ...opts });
         sockets[0].emit('connect');
         const request = JSON.parse(sockets[0].write.firstCall.args[0]);
         expect(request.params.replica).to.equal(wire);
@@ -141,7 +155,7 @@ describe('fluxShutdowndClient', () => {
       for (const endState of ['deadline', 'superseded']) {
         const { client, sockets } = load();
         // eslint-disable-next-line no-await-in-loop
-        const p = client.beginAppStop('1own', 'app', 'eviction', { deadline: futureDeadline() });
+        const p = client.beginAppStop('bident', 'app', 'eviction', { deadline: futureDeadline() });
         sockets[0].emit('connect');
         sockets[0].emit('data', Buffer.from(okLine({ end_state: endState })));
         // eslint-disable-next-line no-await-in-loop
@@ -151,7 +165,7 @@ describe('fluxShutdowndClient', () => {
 
     it('maps a node-pipeline-active reject to rejected_pipeline_active', async () => {
       const { client, sockets } = load();
-      const p = client.beginAppStop('1own', 'app', 'redeploy', { deadline: futureDeadline() });
+      const p = client.beginAppStop('bident', 'app', 'redeploy', { deadline: futureDeadline() });
       sockets[0].emit('connect');
       sockets[0].emit('data', Buffer.from(errLine(-32_010, 'node-pipeline-active')));
       expect(await p).to.deep.equal({ outcome: 'rejected_pipeline_active' });
@@ -161,7 +175,7 @@ describe('fluxShutdowndClient', () => {
       for (const [opts, wire] of [[{}, null], [{ component: 'web' }, 'web']]) {
         const { client, sockets } = load();
         // eslint-disable-next-line no-await-in-loop
-        const p = client.beginAppStop('1own', 'app', 'redeploy', { deadline: futureDeadline(), ...opts });
+        const p = client.beginAppStop('bident', 'app', 'redeploy', { deadline: futureDeadline(), ...opts });
         sockets[0].emit('connect');
         const request = JSON.parse(sockets[0].write.firstCall.args[0]);
         expect(request.params.component).to.equal(wire);
@@ -176,7 +190,7 @@ describe('fluxShutdowndClient', () => {
       // component swap the app keeps running and the update flow owns the
       // component through its operation lease.
       const { client, globalStateStub, sockets } = load();
-      const p = client.beginAppStop('1own', 'app', 'redeploy', { deadline: futureDeadline(), component: 'web' });
+      const p = client.beginAppStop('bident', 'app', 'redeploy', { deadline: futureDeadline(), component: 'web' });
       sockets[0].emit('connect');
       sockets[0].emit('data', Buffer.from(okLine({ end_state: 'complete' })));
       await p;
@@ -185,7 +199,7 @@ describe('fluxShutdowndClient', () => {
 
     it('maps a component-stop-busy reject to component_busy', async () => {
       const { client, sockets } = load();
-      const p = client.beginAppStop('1own', 'app', 'redeploy', { deadline: futureDeadline(), component: 'web' });
+      const p = client.beginAppStop('bident', 'app', 'redeploy', { deadline: futureDeadline(), component: 'web' });
       sockets[0].emit('connect');
       sockets[0].emit('data', Buffer.from(errLine(-32_011, 'component-stop-busy')));
       expect(await p).to.deep.equal({ outcome: 'component_busy' });
@@ -194,7 +208,7 @@ describe('fluxShutdowndClient', () => {
     it('a completed stop leaves the gate to the drain socket: the daemon ends the stop there, in order, and this reply cannot be ordered against it', async () => {
       for (const endState of ['complete', 'deadline', 'superseded', 'forced']) {
         const { client, sockets, globalStateStub } = load();
-        const p = client.beginAppStop('1own', 'app', 'ttl-expired', { deadline: futureDeadline() });
+        const p = client.beginAppStop('bident', 'app', 'ttl-expired', { deadline: futureDeadline() });
         sockets[0].emit('connect');
         sockets[0].emit('data', Buffer.from(okLine({ end_state: endState, stop_id: 7 })));
         // eslint-disable-next-line no-await-in-loop
@@ -205,7 +219,7 @@ describe('fluxShutdowndClient', () => {
 
     it('rejected_pipeline_active keeps the gate: the node-wide pipeline owns the stop', async () => {
       const { client, sockets, globalStateStub } = load();
-      const p = client.beginAppStop('1own', 'app', 'ttl-expired', { deadline: futureDeadline() });
+      const p = client.beginAppStop('bident', 'app', 'ttl-expired', { deadline: futureDeadline() });
       sockets[0].emit('connect');
       sockets[0].emit('data', Buffer.from(errLine(-32_010, 'node pipeline active')));
       const res = await p;
@@ -219,7 +233,7 @@ describe('fluxShutdowndClient', () => {
       // reconciler withholds the next install's first start for COMPLETION_SLACK_MS
       // and the app is announced "stopping" (1102/1106 on chud, 2026-09-07).
       const { client, sockets, globalStateStub } = load();
-      const p = client.beginAppStop('1own', 'app', 'ttl-expired', { deadline: futureDeadline() });
+      const p = client.beginAppStop('bident', 'app', 'ttl-expired', { deadline: futureDeadline() });
       const enoent = Object.assign(new Error('connect ENOENT /run/flux-shutdownd/daemon.sock'), { code: 'ENOENT' });
       sockets[0].emit('error', enoent);
       expect(await p).to.deep.equal({ outcome: 'unreachable' });
@@ -229,7 +243,7 @@ describe('fluxShutdowndClient', () => {
 
     it('a component-scoped stop that cannot reach the daemon clears nothing: it seeded nothing', async () => {
       const { client, sockets, globalStateStub } = load();
-      const p = client.beginAppStop('1own', 'app', 'ttl-expired', { deadline: futureDeadline(), component: 'web' });
+      const p = client.beginAppStop('bident', 'app', 'ttl-expired', { deadline: futureDeadline(), component: 'web' });
       sockets[0].emit('error', Object.assign(new Error('connect ENOENT'), { code: 'ENOENT' }));
       expect(await p).to.deep.equal({ outcome: 'unreachable' });
       expect(globalStateStub.setAppShutdownPipelineState.called).to.equal(false);
@@ -238,7 +252,7 @@ describe('fluxShutdowndClient', () => {
 
     it('maps a socket error to unreachable', async () => {
       const { client, sockets } = load();
-      const p = client.beginAppStop('1own', 'app', 'user-cancel', { deadline: futureDeadline() });
+      const p = client.beginAppStop('bident', 'app', 'user-cancel', { deadline: futureDeadline() });
       const enoent = new Error('connect ENOENT');
       enoent.code = 'ENOENT';
       sockets[0].emit('error', enoent);
@@ -249,7 +263,7 @@ describe('fluxShutdowndClient', () => {
       const clock = sinon.useFakeTimers();
       try {
         const { client, sockets } = load();
-        const p = client.beginAppStop('1own', 'app', 'manual', { deadline: 0 }); // deadline 0 -> timeout = slack
+        const p = client.beginAppStop('bident', 'app', 'manual', { deadline: 0 }); // deadline 0 -> timeout = slack
         sockets[0].emit('connect');
         await clock.tickAsync(120_001); // past COMPLETION_SLACK_MS
         expect(await p).to.deep.equal({ outcome: 'timeout' });
@@ -260,7 +274,7 @@ describe('fluxShutdowndClient', () => {
 
     it('never rejects, even on a malformed daemon reply', async () => {
       const { client, sockets } = load();
-      const p = client.beginAppStop('1own', 'app', 'ttl-expired', { deadline: futureDeadline() });
+      const p = client.beginAppStop('bident', 'app', 'ttl-expired', { deadline: futureDeadline() });
       sockets[0].emit('connect');
       sockets[0].emit('data', Buffer.from('not json\n'));
       expect(await p).to.deep.equal({ outcome: 'unreachable' });
@@ -270,14 +284,14 @@ describe('fluxShutdowndClient', () => {
   describe('forceAppStop', () => {
     it('short-circuits to not_arcane without opening a socket', async () => {
       const { client, netStub } = load({ isArcane: false });
-      const res = await client.forceAppStop('1own', 'app');
+      const res = await client.forceAppStop('bident');
       expect(res).to.deep.equal({ outcome: 'not_arcane' });
       expect(netStub.createConnection.called).to.equal(false);
     });
 
     it('maps the daemon end_state to the outcome (forced)', async () => {
       const { client, sockets } = load();
-      const p = client.forceAppStop('1own', 'app');
+      const p = client.forceAppStop('bident');
       sockets[0].emit('connect');
       sockets[0].emit('data', Buffer.from(okLine({ end_state: 'forced' })));
       expect(await p).to.deep.equal({ outcome: 'forced' });
@@ -285,7 +299,7 @@ describe('fluxShutdowndClient', () => {
 
     it('reports no_run when nothing was draining', async () => {
       const { client, sockets } = load();
-      const p = client.forceAppStop('1own', 'app');
+      const p = client.forceAppStop('bident');
       sockets[0].emit('connect');
       sockets[0].emit('data', Buffer.from(okLine({ end_state: 'no_run' })));
       expect(await p).to.deep.equal({ outcome: 'no_run' });
@@ -293,25 +307,51 @@ describe('fluxShutdowndClient', () => {
 
     it('returns unreachable when the socket errors', async () => {
       const { client, sockets } = load();
-      const p = client.forceAppStop('1own', 'app');
+      const p = client.forceAppStop('bident');
       sockets[0].emit('error', new Error('ECONNREFUSED'));
       expect(await p).to.deep.equal({ outcome: 'unreachable' });
+    });
+
+    it('names the app by its identity and always sends replica: null escalates the whole app\'s drain, a name that replica\'s', async () => {
+      for (const [args, wire] of [[['bident'], null], [['bident', 's2'], 's2']]) {
+        const { client, sockets } = load();
+        // eslint-disable-next-line no-await-in-loop
+        const p = client.forceAppStop(...args);
+        sockets[0].emit('connect');
+        const request = JSON.parse(sockets[0].write.firstCall.args[0]);
+        expect(request.method).to.equal('force_app_stop');
+        expect(request.params).to.deep.equal({ identity: 'bident', replica: wire });
+        sockets[0].emit('data', Buffer.from(okLine({ end_state: 'forced' })));
+        // eslint-disable-next-line no-await-in-loop
+        await p;
+      }
     });
   });
 
   describe('deleteAppPlan', () => {
-    it('always sends replica: null deletes the legacy whole-app key, a name its identity', async () => {
-      for (const [args, wire] of [[['app', '1own'], null], [['app', '1own', 's2'], 's2']]) {
+    it('names the app by its identity and always sends replica: null deletes the loose deployment\'s plan, a name that replica\'s', async () => {
+      for (const [args, wire] of [[['bident'], null], [['bident', 's2'], 's2']]) {
         const { client, sockets } = load();
         // eslint-disable-next-line no-await-in-loop
         const p = client.deleteAppPlan(...args);
         sockets[0].emit('connect');
         const request = JSON.parse(sockets[0].write.firstCall.args[0]);
-        expect(request.params).to.deep.equal({ app_name: 'app', owner_flux_id: '1own', replica: wire });
+        expect(request.method).to.equal('delete_app_plan');
+        expect(request.params).to.deep.equal({ identity: 'bident', replica: wire });
         sockets[0].emit('data', Buffer.from(okLine({ deleted: true })));
         // eslint-disable-next-line no-await-in-loop
         await p;
       }
+    });
+
+    it('the best-effort form deletes the same plan and swallows a daemon that cannot be reached', async () => {
+      const { client, sockets } = load();
+      const p = client.deleteAppPlanBestEffort('bident', 's2');
+      sockets[0].emit('connect');
+      const request = JSON.parse(sockets[0].write.firstCall.args[0]);
+      expect(request.params).to.deep.equal({ identity: 'bident', replica: 's2' });
+      sockets[0].emit('error', new Error('ECONNREFUSED'));
+      await p;
     });
   });
 });

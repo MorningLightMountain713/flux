@@ -65,6 +65,26 @@ async function getApplicationOwner(name) {
   return installed ? installed.owner : null;
 }
 
+/**
+ * The owner of the app an identity names: the registry record's, else that of
+ * the app this node has installed with the identity. Null when neither holds
+ * it. The identity is the one a container carries as a label, so it is fixed
+ * for the app's life, and the owner read here is the app's owner now.
+ *
+ * An app with no identity minted carries its name where an identity goes, and
+ * a name is never in an identity's form: such a value is read as the name.
+ * @param {string} identity
+ * @returns {Promise<string|null>}
+ */
+async function getApplicationOwnerByIdentity(identity) {
+  const listed = await appRecords.registry().byIdentity(identity);
+  if (listed) return listed.owner;
+  const installed = await appRecords.installed().byIdentity(identity);
+  if (installed) return installed.owner;
+  const { isAppIdentity } = await getSpecBackend();
+  return isAppIdentity(identity) ? null : getApplicationOwner(identity);
+}
+
 // Both the location rows and the archived broadcasts: leaving the broadcasts
 // would let message sync redistribute error records for an app that no longer
 // exists in the registry.
@@ -933,6 +953,7 @@ module.exports = {
   sweepOffListRows,
   hydrate,
   getApplicationOwner,
+  getApplicationOwnerByIdentity,
   getContentManifests,
   getContentManifest,
   putContentManifest,

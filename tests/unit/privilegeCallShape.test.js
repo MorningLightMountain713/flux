@@ -91,7 +91,7 @@ describe('privilege call shape', () => {
     expect(wrong).to.deep.equal([]);
   });
 
-  it('carries an app only as { appName } or as { owner }, and only where one is read', () => {
+  it('carries an app only as { appName } or as { identity }, and only where one is read', () => {
     const wrong = [];
     sites.forEach(({ where, args, text }) => {
       const first = args[0];
@@ -107,15 +107,16 @@ describe('privilege call shape', () => {
         const keys = third.properties
           .filter((prop) => prop.type === 'Property' && !prop.computed)
           .map((prop) => (prop.key.type === 'Identifier' ? prop.key.name : prop.key.value));
-        // An app is named, or its owner is given where the caller holds it (a
-        // container's owner label): one or the other, under exactly these keys.
-        const named = keys.filter((key) => key !== 'appName' && key !== 'owner');
-        if (named.length) wrong.push(`${where}  app passed as ${named.join(', ')}, not appName or owner`);
-        if (keys.includes('appName') && keys.includes('owner')) wrong.push(`${where}  names the app and gives its owner`);
+        // An app is given by its name, or by its identity where the caller
+        // holds one (a container's identity label): one or the other, under
+        // exactly these keys.
+        const named = keys.filter((key) => key !== 'appName' && key !== 'identity');
+        if (named.length) wrong.push(`${where}  app passed as ${named.join(', ')}, not appName or identity`);
+        if (keys.includes('appName') && keys.includes('identity')) wrong.push(`${where}  gives the app by its name and by its identity`);
         if (!keys.length) wrong.push(`${where}  third argument names nothing`);
       }
-      if (member && !SCOPED.has(member) && third) wrong.push(`${where}  ${member} reads no app name`);
-      if (member && SCOPED.has(member) && !third) wrong.push(`${where}  ${member} needs an app name`);
+      if (member && !SCOPED.has(member) && third) wrong.push(`${where}  ${member} reads no app`);
+      if (member && SCOPED.has(member) && !third) wrong.push(`${where}  ${member} needs an app`);
     });
     expect(wrong).to.deep.equal([]);
   });
