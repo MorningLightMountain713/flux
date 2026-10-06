@@ -3,9 +3,7 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer, installedInstanceIndices } from '../framework/reconciler-suite.js';
-import {
-  deployContentApp, updateContentApp, assertManifestSynced, assertContentApplied,
-} from '../framework/content-helper.js';
+import { deployContentApp, updateContentApp, assertContentApplied } from '../framework/content-helper.js';
 import { handAppMessage } from '../framework/app-delivery.js';
 import { blobHash } from '../framework/content-crypto-v9.js';
 import { askFluxDrivePending, getFluxDriveManifest, resetFluxDrive } from '../framework/fluxdrive-control.js';
@@ -75,6 +73,21 @@ describe('a spec update that adds a slot carries the file list for it', function
       return Boolean(held);
     }, { timeout: 60000, interval: 1000, label: `node ${client.num} holds the update ${hash.slice(0, 12)} in its pool` });
     return held;
+  }
+
+  // Which list a node holds is its ownership height and its version together:
+  // versions count within an ownership, and a registration's list is signed
+  // before its height exists, so the number alone names no list.
+  const isList = (row, list) => Boolean(row) && row.ownedFrom === list.ownedFrom && row.version === list.version;
+
+  async function standOn(indices, list) {
+    const rows = await Promise.all(indices.map((i) => dbClients[i].getContentManifest(name).catch(() => null)));
+    return rows.every((row) => isList(row, list));
+  }
+
+  async function haveDelivered(indices, list) {
+    const rows = await Promise.all(indices.map((i) => dbClients[i].getAppliedContentManifest(name).catch(() => null)));
+    return rows.every((row) => isList(row, list));
   }
 
   async function slotBytes(index, slot) {
@@ -153,27 +166,28 @@ describe('a spec update that adds a slot carries the file list for it', function
     });
     expect(update.status, `update: ${JSON.stringify(update.data)}`).to.equal('success');
     const hash = update.data;
+    const list = update.manifest;
+    expect(list.ownedFrom, 'the list is signed under the listed ownership').to.be.greaterThan(0);
 
     // A node that only heard of the update holds the list with it.
     const held = await heldInPool(env.clients[1], hash);
     expect(held.contentManifest, 'the update\'s message carries its file list').to.be.an('object');
-    expect(held.contentManifest.version).to.equal(2);
+    expect(isList(held.contentManifest, list), 'the list held with the update is the one submitted').to.equal(true);
 
     // Not the app's manifest yet: the update has not applied.
-    const before = await dbClients[1].getAppliedContentManifest(name);
-    expect(before.version, 'the list takes effect when the update applies, not before').to.equal(1);
+    expect(await standOn([1], list), 'the list takes effect when the update applies, not before').to.equal(false);
 
     await queueAppTx(hash);
     await advanceBlocks(3);
 
     await waitFor(
-      async () => (await assertManifestSynced(dbClients, name, 2)).synced,
+      () => standOn(everyNode, list),
       { timeout: 180000, interval: 2000, label: 'every node stands on the list the update carried' },
     );
     await waitForSlotOn(everyNode, EXTRA, EXTRA_BYTES);
     await waitForSlotOn(everyNode, CONF, CONF_BYTES);
     await waitFor(
-      async () => (await assertContentApplied(dbClients, name, 2)).applied,
+      () => haveDelivered(everyNode, list),
       { timeout: 120000, interval: 2000, label: 'every node delivered the list the update carried' },
     );
   });
@@ -196,25 +210,25 @@ describe('a spec update that adds a slot carries the file list for it', function
     });
     expect(update.status, `update: ${JSON.stringify(update.data)}`).to.equal('success');
     const hash = update.data;
+    const list = update.manifest;
 
     const held = await heldInPool(env.clients[1], hash);
-    expect(held.contentManifest.version, 'the fleet holds the list with the update').to.equal(3);
+    expect(isList(held.contentManifest, list), 'the fleet holds the list with the update').to.equal(true);
 
     await queueAppTx(hash);
     await advanceBlocks(3);
 
     // The majority applies the update with its list, and FluxDrive, told so by the
     // nodes, serves the owner's copy.
-    const majority = MAJORITY.map((i) => dbClients[i]);
     await waitFor(
-      async () => (await assertManifestSynced(majority, name, 3)).synced,
+      () => standOn(MAJORITY, list),
       { timeout: 180000, interval: 2000, label: 'the majority stands on the list the update carried' },
     );
     await askFluxDrivePending();
-    await waitFor(
-      async () => (await getFluxDriveManifest(name)).version === 3,
-      { timeout: 60000, interval: 2000, label: 'FluxDrive serves the owner\'s copy of the list' },
-    );
+    await waitFor(async () => {
+      const served = await getFluxDriveManifest(name);
+      return isList({ ownedFrom: Number(served.manifest?.ownedFrom ?? 0), version: Number(served.version) }, list);
+    }, { timeout: 60000, interval: 2000, label: 'FluxDrive serves the owner\'s copy of the list' });
 
     // The cut-off node has seen the payment and has no message for it: no node
     // that holds one can be reached.
@@ -222,8 +236,7 @@ describe('a spec update that adds a slot carries the file list for it', function
       const { status, data } = await handed.request('GET', `/v2/apps/messages/${hash}/decision`);
       return status === 200 && data.data.decision === 'undecided';
     }, { timeout: 120000, interval: 2000, label: `node ${HANDED} has recorded the payment and holds no message for it` });
-    const stale = await dbClients[HANDED].getContentManifest(name);
-    expect(stale.version, `node ${HANDED} stands on the list before this update's`).to.equal(2);
+    expect(await standOn([HANDED], list), `node ${HANDED} does not stand on this update's list`).to.equal(false);
 
     // The genuine update, as the fleet holds it, with the list taken off.
     await handAppMessage(env, {
@@ -241,7 +254,7 @@ describe('a spec update that adds a slot carries the file list for it', function
     // Still cut off from every node that holds the list: FluxDrive is where it
     // comes from.
     await waitFor(
-      async () => (await assertManifestSynced([dbClients[HANDED]], name, 3)).synced,
+      () => standOn([HANDED], list),
       { timeout: 240000, interval: 3000, label: `node ${HANDED} stands on the list it was not handed` },
     );
 
@@ -251,7 +264,7 @@ describe('a spec update that adds a slot carries the file list for it', function
     const everyNode = env.clients.map((_, i) => i);
     await waitForSlotOn(everyNode, MORE, MORE_BYTES);
     await waitFor(
-      async () => (await assertContentApplied(dbClients, name, 3)).applied,
+      () => haveDelivered(everyNode, list),
       { timeout: 180000, interval: 2000, label: 'every node delivered the list' },
     );
   });
