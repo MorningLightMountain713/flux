@@ -11,8 +11,8 @@
 // belongs to the election/reconciler designs, with evidence).
 const log = require('../../lib/log');
 const syncthingService = require('../syncthingService');
+const appRecords = require('../appDatabase/appRecords');
 const { isPathMounted, nudgeFolderDevices } = require('./syncthingFolderStateMachine');
-const { appsFolder } = require('../utils/appConstants');
 const {
   HEALTH_NUDGE_THRESHOLD_MS,
   HEALTH_WARNING_THRESHOLD_MS,
@@ -144,10 +144,14 @@ async function monitorFolderHealth(params) {
     for (const folderConfig of foldersConfiguration) {
       const folderId = folderConfig.id;
 
-      // Skip folders whose mounts are not ready
-      const folderPath = `${appsFolder}${folderId}`;
+      // Skip folders whose mounts are not ready. A folder's directory is the
+      // one the installed ledger records for it: for an app registered before
+      // v9 it is not named by the folder's id.
       // eslint-disable-next-line no-await-in-loop
-      const isMounted = await isPathMounted(folderPath);
+      const ledger = await appRecords.ledgers().bySyncFolderId(folderId);
+      const folderPath = ledger?.blockOfSyncFolder(folderId)?.syncFolder.path ?? null;
+      // eslint-disable-next-line no-await-in-loop
+      const isMounted = folderPath ? await isPathMounted(folderPath) : null;
       if (isMounted === false) {
         // Check if folder exists but not mounted (unmounted loop device)
         try {
