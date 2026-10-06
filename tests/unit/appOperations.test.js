@@ -52,6 +52,8 @@ const { resolveInstantiatedSpec } = require('../../ZelBack/src/services/utils/sp
 const volumeService = require('../../ZelBack/src/services/utils/volumeService');
 const IOUtils = require('../../ZelBack/src/services/IOUtils');
 const syncthingMonitorHelpers = require('../../ZelBack/src/services/appMonitoring/syncthingMonitorHelpers');
+const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
+const contentSlotService = require('../../ZelBack/src/services/appLifecycle/contentSlotService');
 const proxyquireStrict = require('proxyquire').noCallThru();
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 
@@ -1867,9 +1869,17 @@ describe('appOperations tests', () => {
     let openHostPortsStub;
     let teardownOwedForStub;
     let ledgers;
+    let stageContentStub;
+    let provisionContentStub;
+    let ensureSourcesStub;
 
     function setup({ teardownOwed = false } = {}) {
       ledgers = stubLedgers();
+      // The content service and the host's filesystem: every file is to be had,
+      // and every mount source can be made.
+      stageContentStub = sinon.stub(contentSlotService, 'stageContent').resolves(0);
+      provisionContentStub = sinon.stub(contentSlotService, 'provisionContent').resolves();
+      ensureSourcesStub = sinon.stub(appVolumeService, 'ensureMountSourcesExist').resolves(false);
       sinon.stub(componentProvisioner, 'portOpenMethods').resolves(['ufw']);
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
@@ -2006,6 +2016,139 @@ describe('appOperations tests', () => {
       expect(uninstallComponentStub.called, 'an unchanged component must not be torn down').to.be.false;
       expect(denyPortsStub.called, 'and its ports must not move').to.be.false;
       expect(openHostPortsStub.called).to.be.false;
+    });
+
+    // An update that changes what content the app declares. The files reach the
+    // node's store before anything is torn down, and its containers before
+    // anything is started.
+    describe('the content the listed spec declares', () => {
+      let installComponent;
+
+      async function update(oldShape, newShape) {
+        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5, ...oldShape }, { identity: IDENTITY });
+        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, ...newShape }, { identity: IDENTITY });
+        deploymentProvider.buildDeployment.resolves(newDeployment);
+        installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
+        return { oldDeployment, newDeployment };
+      }
+
+      it('is staged into the store before any component is torn down', async () => {
+        setup();
+        const { oldDeployment, newDeployment } = await update({}, { cpu: 0.7 });
+
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+
+        sinon.assert.calledOnceWithExactly(stageContentStub, newDeployment, { appName: 'myapp' });
+        sinon.assert.calledOnce(uninstallComponentStub);
+        expect(stageContentStub.calledBefore(uninstallComponentStub)).to.equal(true);
+      });
+
+      it('leaves the old version as it is when a file cannot be had: nothing torn down, the installed record unchanged', async () => {
+        setup();
+        const { oldDeployment, newDeployment } = await update({}, { cpu: 0.7 });
+        stageContentStub.rejects(new Error('contentBlob: no source for sha256:x'));
+
+        const failure = await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec).then(() => null, (error) => error);
+
+        expect(failure?.message).to.match(/no source/);
+        sinon.assert.notCalled(uninstallComponentStub);
+        sinon.assert.notCalled(stubInstalled().updateRecord);
+        sinon.assert.notCalled(installComponent);
+        sinon.assert.notCalled(provisionContentStub);
+      });
+
+      it('is written for the fresh deployment once its containers are created', async () => {
+        setup();
+        const { oldDeployment, newDeployment } = await update({}, { cpu: 0.7 });
+
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+
+        sinon.assert.calledOnceWithExactly(provisionContentStub, newDeployment, { appName: 'myapp' });
+        expect(provisionContentStub.calledAfter(installComponent)).to.equal(true);
+      });
+
+      it('is written for an update that recreates nothing, for the component it leaves running', async () => {
+        setup();
+        const { oldDeployment, newDeployment } = await update({}, {});
+
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+
+        sinon.assert.notCalled(installComponent);
+        sinon.assert.calledOnceWithExactly(provisionContentStub, newDeployment, { appName: 'myapp' });
+      });
+
+      it('fails the adoption when it cannot be written', async () => {
+        setup();
+        const { oldDeployment, newDeployment } = await update({}, { cpu: 0.7 });
+        provisionContentStub.rejects(new Error('contentSlot: no manifest covering every declared slot'));
+
+        const failure = await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec).then(() => null, (error) => error);
+
+        expect(failure?.message).to.match(/covering every declared slot/);
+      });
+    });
+
+    // A kept volume holds the sources the old spec's mounts had: one a mount
+    // the update adds has to be made before docker is asked to bind it.
+    describe('a component reinstalled on the volume it had', () => {
+      let installComponent;
+
+      async function update(oldShape, newShape) {
+        const oldDeployment = await makeDeployment({ hostPorts: [80], ...oldShape }, { identity: IDENTITY });
+        const newDeployment = await makeDeployment({ hostPorts: [80], ...newShape }, { identity: IDENTITY });
+        deploymentProvider.buildDeployment.resolves(newDeployment);
+        installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+        return newDeployment.getComponent('web');
+      }
+
+      it('has its mount sources made before its container is created', async () => {
+        setup();
+        const scan = sinon.stub(syncthingMonitorHelpers, 'requestFolderScan').resolves();
+
+        const comp = await update({ storage: 5 }, { storage: 5, cpu: 0.7 });
+
+        sinon.assert.calledOnceWithExactly(ensureSourcesStub, comp);
+        expect(ensureSourcesStub.calledBefore(installComponent)).to.equal(true);
+        expect(installComponent.firstCall.args[1].createVolumes, 'the fixture keeps the volume').to.equal(false);
+        sinon.assert.notCalled(scan);
+      });
+
+      it('has its syncthing folder scanned when making them changed its ignore set', async () => {
+        setup();
+        ensureSourcesStub.resolves(true);
+        const scan = sinon.stub(syncthingMonitorHelpers, 'requestFolderScan').resolves();
+
+        const comp = await update({ storage: 5 }, { storage: 5, cpu: 0.7 });
+
+        sinon.assert.calledOnceWithExactly(scan, comp.syncFolderId);
+      });
+
+      it('makes none for a component whose volume is rebuilt: the fresh volume makes its own', async () => {
+        setup();
+
+        await update({ storage: 5 }, { storage: 10 });
+
+        expect(installComponent.firstCall.args[1].createVolumes, 'the fixture rebuilds the volume').to.equal(true);
+        sinon.assert.notCalled(ensureSourcesStub);
+      });
+
+      it('makes none for a component that has no volume', async () => {
+        setup();
+        const stateless = (cpu) => oneComponentDeployment('myapp', 'web', {
+          cpu, ports: { p80: { containerPort: 80, hostPort: 80 } }, persistentStorage: { sizeGb: 0 },
+        }, { identity: IDENTITY });
+        const oldDeployment = await stateless(0.5);
+        const newDeployment = await stateless(0.7);
+        expect(newDeployment.getComponent('web').isStateless, 'the fixture is stateless').to.equal(true);
+        deploymentProvider.buildDeployment.resolves(newDeployment);
+        installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
+
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+
+        sinon.assert.calledOnce(installComponent);
+        sinon.assert.notCalled(ensureSourcesStub);
+      });
     });
 
     describe('the shutdown daemon\'s plan after an update', () => {

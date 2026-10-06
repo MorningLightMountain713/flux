@@ -3,7 +3,6 @@
 // path is used for dynamic requires in the file
 // eslint-disable-next-line no-unused-vars
 const path = require('path');
-const fsPromises = require('node:fs/promises');
 const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const appNetworkLinker = require('./appNetworkLinker');
@@ -14,7 +13,6 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 const appUninstaller = require('./appUninstaller');
 const componentProvisioner = require('./componentProvisioner');
 const { NodeCondition, isNodeCondition } = require('./nodeConditions');
-const contentBlobService = require('./contentBlobService');
 const contentSlotService = require('./contentSlotService');
 const appReconciler = require('../appMonitoring/appReconciler');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
@@ -36,21 +34,11 @@ const shutdownPlan = require('./shutdownPlan');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const log = require('../../lib/log');
 const { Privilege, authOf } = require('../utils/privileges');
-const appsRepository = require('../appDatabase/appsRepository');
 const appRecords = require('../appDatabase/appRecords');
 const specLibrary = require('../utils/specLibrary');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { InstallStatus } = require('./installStatus');
 const config = require('config');
-
-// Write injected content to a mount source as root-owned 0644 — the platform
-// default for declared content (mirrors DeploymentSpec resolveMountPerms). Mode
-// bits are ownership hygiene, not enforcement: a root container writes through
-// any mode, and real read-only intent is the mount's readOnly bind flag.
-async function writeInjectedContent(source, bytes) {
-  await fsPromises.writeFile(source, bytes);
-  await fsPromises.chmod(source, 0o644);
-}
 
 let onInstallComplete = null;
 function setOnInstallComplete(callback) {
@@ -349,33 +337,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
       // the install (the reconciler retries) rather than starting on empty/stale
       // content. Blobs take their hash from the signed spec; slots take theirs from
       // the latest owner-signed manifest (this node's store, else a running peer).
-      const hasBlobs = deployment.componentEntries().some(([, c]) => c.hasContentBlobs());
-      const hasSlots = deployment.componentEntries().some(([, c]) => c.hasContentSlots());
-      if (hasBlobs || hasSlots) {
-        if (onStatus) onStatus({ status: 'Provisioning content...' });
-        // Locations are normalized ip:port, usable directly as peer URLs; shuffle
-        // so installing nodes don't all hit the same peer first (herd-safety).
-        const locations = await appsRepository.appLocationFromEvents({ appname: appName });
-        const peers = locations.map((loc) => loc.ip).filter(Boolean);
-        for (let i = peers.length - 1; i > 0; i -= 1) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [peers[i], peers[j]] = [peers[j], peers[i]];
-        }
-        if (hasBlobs) {
-          await contentBlobService.provisionContentBlobs(
-            deployment,
-            { appName, peers },
-            { writeFile: writeInjectedContent, peerFetch: contentBlobService.fetchBlobFromPeer },
-          );
-        }
-        if (hasSlots) {
-          await contentSlotService.provisionContentSlots(
-            deployment,
-            { appName, peers },
-            { peerFetch: contentBlobService.fetchBlobFromPeer },
-          );
-        }
-      }
+      await contentSlotService.provisionContent(deployment, { appName, onStatus });
 
       // Hand the full shutdown plan to flux-shutdownd (best-effort; Arcane-only
       // — the socket is absent elsewhere and the call no-ops). Only graceful apps

@@ -74,6 +74,7 @@ const {
 } = require('../appRequirements/appSubmission');
 const globalState = require('../utils/globalState');
 const contentBlobService = require('./contentBlobService');
+const contentSlotService = require('./contentSlotService');
 const operationRegistry = require('../utils/operationRegistry');
 const { Privilege, authOf } = require('../utils/privileges');
 const syncthingService = require('../syncthingService');
@@ -2123,6 +2124,12 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
     if (newComp) await componentProvisioner.verifyComponentImage(newComp);
   }
 
+  // And every content file the listed spec declares is in this node's store
+  // before anything is torn down: a file that cannot be had yet aborts here with
+  // the old version running, and the adoption is tried again while the installed
+  // spec is not the listed one. No container is created to start on an empty slot.
+  await contentSlotService.stageContent(newDeployment, { appName });
+
   // Port delta over the whole app: move only the ufw/UPnP rules that actually change.
   // Close ports the new spec dropped (old−new), open ports it added (new−old), and leave
   // every unchanged port's mapping in place — no firewall flap, no ~1s/port UPnP re-map.
@@ -2226,6 +2233,14 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
       if (!deployComp) continue;
       const createVolumes = recreateVolume.includes(name) || added.includes(name);
       log.info(`Installing ${deployComp.identifier} (${createVolumes ? 'with' : 'without'} volumes)...`);
+      if (!createVolumes && !deployComp.isStateless) {
+        // A kept volume holds the sources the old spec's mounts had. A mount the
+        // new spec adds has none, and docker refuses a bind whose source is absent.
+        // eslint-disable-next-line no-await-in-loop
+        const stignoreChanged = await appVolumeService.ensureMountSourcesExist(deployComp);
+        // eslint-disable-next-line no-await-in-loop
+        if (stignoreChanged) await syncthingMonitorHelpers.requestFolderScan(deployComp.syncFolderId);
+      }
       // eslint-disable-next-line no-await-in-loop
       await componentProvisioner.installComponent(deployComp, {
         createVolumes,
@@ -2237,6 +2252,12 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
       await serviceHelper.delay(config.get('fluxapps.redeploy.composedDelay') * 1000);
     }
   }
+
+  // The content the listed spec declares is written before the reconciler starts
+  // anything this pass created, and the manifest is marked delivered then: a
+  // component just created reads it when it starts, one left running under a
+  // manifest the update changed gets the reaction its slots declare.
+  if (freshDeployment) await contentSlotService.provisionContent(freshDeployment, { appName });
 
   // Each component's ports as the ledger names them, before any is opened: a
   // port kept from the old spec keeps the methods it was opened by, an added
