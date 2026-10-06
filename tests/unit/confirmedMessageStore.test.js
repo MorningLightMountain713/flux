@@ -155,6 +155,20 @@ describe('confirmedMessageStore', () => {
     expect(result.stored.map(({ event }) => event.hash)).to.deep.equal([message.hash]);
   });
 
+  // An attestation sits outside the message hash, so one added to a cleartext
+  // message leaves its hash as it is.
+  it('does not store a cleartext v9 message that carries an attestation', async () => {
+    const message = { ...await domain.paidTempMessage({ version: 2 }), arcaneAttestation: 'attached-on-the-way' };
+    pay(message);
+
+    const result = await store.storeConfirmedMessages([message]);
+
+    expect(result.refused.map(({ hash }) => hash)).to.deep.equal([message.hash]);
+    expect(result.refused[0].reason).to.match(/carries no arcane attestation/);
+    expect(inserted).to.deep.equal([]);
+    expect(resolvedOps).to.deep.equal([]);
+  });
+
   it('reports a message already stored, and marks its payment resolved', async () => {
     const message = await domain.paidTempMessage({ version: 1 });
     pay(message);
