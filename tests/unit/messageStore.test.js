@@ -38,17 +38,23 @@ describe('messageStore tests', () => {
     flux = await loadSpecLibrary();
   });
 
+  // A signature of the length a v9 message hash reads: 65 bytes.
+  const SIGNATURE = Buffer.alloc(65, 7).toString('base64');
+
   /**
    * The event class deserializeTempMessage really returns for an envelope
    * version 1 message. Legacy events never require an arcane attestation, and
    * that is a property of the class rather than of a flag a double can set.
+   * It states the hash its contents make, as a genuine message does, unless a
+   * test names another.
    */
-  function legacyEvent(message, spec) {
+  function legacyEvent(message, spec, { hash } = {}) {
+    const [signedForm] = spec.allSerializations?.() ?? [spec.toCanonical()];
     return new flux.AppEventLegacy({
       originalType: message.type,
       spec,
       version: message.version,
-      hash: message.hash,
+      hash: hash ?? flux.computeMessageHash(message.type, message.version, signedForm, message.timestamp, message.signature),
       timestamp: message.timestamp,
       signature: message.signature,
     });
@@ -58,19 +64,25 @@ describe('messageStore tests', () => {
    * The event class deserializeTempMessage really returns for an envelope
    * version 2 message. A cleartext spec is reconciled against the signed
    * contentHash by the constructor; a sealed one carries the hash of the
-   * cleartext that was sealed, and is reconciled only on decrypt.
+   * cleartext that was sealed, and is reconciled only on decrypt. It states
+   * the hash its contents make, as a genuine message does, unless a test names
+   * another.
    */
-  function signedEvent(message, spec, { contentHash, arcaneAttestation } = {}) {
+  function signedEvent(message, spec, { contentHash, arcaneAttestation, hash } = {}) {
+    const signedContentHash = contentHash ?? spec.contentHash();
+    // registration always buys TTL; the class refuses anything else
+    const extend = message.type === 'fluxappregister' ? true : (message.extend ?? false);
     return new flux.SignedAppEvent({
       type: message.type,
       spec,
       version: message.version,
-      contentHash: contentHash ?? spec.contentHash(),
+      contentHash: signedContentHash,
       timestamp: message.timestamp,
-      // registration always buys TTL; the class refuses anything else
-      extend: message.type === 'fluxappregister' ? true : (message.extend ?? false),
+      extend,
       signature: message.signature,
-      hash: message.hash,
+      hash: hash ?? flux.computeMessageHashV2(
+        message.type, message.version, signedContentHash, message.timestamp, extend, message.signature,
+      ),
       arcaneAttestation,
       contentManifest: message.contentManifest ?? null,
     });
@@ -301,7 +313,7 @@ describe('messageStore tests', () => {
         appSpecifications: { name: 'test' },
         hash: 'hash123',
         timestamp: Date.now(),
-        signature: 'sig123',
+        signature: SIGNATURE,
       };
       appsRepositoryStub.getPermanentMessage.resolves(null);
       appsRepositoryStub.getTempMessage.resolves(null);
@@ -362,9 +374,10 @@ describe('messageStore tests', () => {
 
       const result = await messageStore.storeAppTemporaryMessage(message, { furtherVerification: false });
 
+      const event = await appEventVerifierStub.deserializeTempMessage.firstCall.returnValue;
       expect(result.rebroadcast).to.equal(false);
       expect(result.promotion).to.deep.equal({
-        hash: 'hash123',
+        hash: event.hash,
         txid: 'txid123',
         height: 500,
         value: 10_000,
@@ -433,11 +446,13 @@ describe('messageStore tests', () => {
         sinon.assert.notCalled(stubs['../appDatabase/appSpecHistory'].getStateBeforeHeight);
 
         // The authorization gate stays stubbed, so nothing here exercises what it
-        // does with what it is handed. The real one calls verifyHash() on the
-        // event and reads the prior owner off the state, so check both can answer
-        // — a delegation could otherwise disappear with this suite still green.
+        // does with what it is handed. The real one reads the renewal off the
+        // event and the prior owner off the state, so check both can answer — a
+        // delegation could otherwise disappear with this suite still green. The
+        // intake has checked the hash by then, and says so.
         const [handed] = stubs['./appEventVerifier'].authorize.firstCall.args;
-        assertAnswers(handed.appEvent, ['verifyHash', 'assessRenewal']);
+        assertAnswers(handed.appEvent, ['assessRenewal']);
+        expect(handed.verifyHash, 'the gate is told the hash is checked').to.equal(false);
         expect(handed.previousState.owner, 'the owner the update is judged against')
           .to.equal(priorState.spec.owner);
       });
@@ -549,7 +564,7 @@ describe('messageStore tests', () => {
         appSpecifications: { name: 'enc-app', cipher: 'xxx' },
         hash: 'enchash',
         timestamp: Date.now(),
-        signature: 'sig',
+        signature: SIGNATURE,
       };
 
       function buildWithSystemSecure(secure) {
@@ -649,7 +664,7 @@ describe('messageStore tests', () => {
         appSpecifications: { name: 'clear-app', owner: 'owner1', version: 9 },
         hash: 'clearhash',
         timestamp: Date.now(),
-        signature: 'sig',
+        signature: SIGNATURE,
       };
 
       beforeEach(() => {
@@ -697,7 +712,7 @@ describe('messageStore tests', () => {
         const cleartext = await v9Spec({ name: 'sealed-app' });
         appEventVerifierStub.deserializeTempMessage.resolves(signedEvent(
           {
-            type: 'fluxappregister', version: 2, hash: 'sealedhash', timestamp: Date.now(), signature: 'sig',
+            type: 'fluxappregister', version: 2, hash: 'sealedhash', timestamp: Date.now(), signature: SIGNATURE,
           },
           sealed,
           { contentHash: cleartext.contentHash(), arcaneAttestation: 'att-sig' },
@@ -726,7 +741,7 @@ describe('messageStore tests', () => {
         const cleartext = await v9Spec({ name: 'sealed-app' });
         appEventVerifierStub.deserializeTempMessage.resolves(signedEvent(
           {
-            type: 'fluxappregister', version: 2, hash: 'sealedhash', timestamp: Date.now(), signature: 'sig',
+            type: 'fluxappregister', version: 2, hash: 'sealedhash', timestamp: Date.now(), signature: SIGNATURE,
           },
           sealed,
           { contentHash: cleartext.contentHash(), arcaneAttestation: 'att-sig' },
@@ -781,7 +796,7 @@ describe('messageStore tests', () => {
         appSpecifications: { name: 'enc-app', cipher: 'xxx' },
         hash: 'enchash',
         timestamp: Date.now(),
-        signature: 'sig',
+        signature: SIGNATURE,
       };
 
       function buildSecure() {
@@ -906,6 +921,117 @@ describe('messageStore tests', () => {
           expect(err).to.be.instanceOf(TypeError);
           expect(err.message).to.include('is not a function');
         }
+      });
+    });
+
+    // A message is the contents that hash to the hash it states. For anything
+    // else the intake reads nothing, opens nothing and judges nothing.
+    describe('the contents are checked against the stated hash first', () => {
+      const ANOTHER_HASH = 'f'.repeat(64);
+      const sealedMessage = {
+        type: 'fluxappregister',
+        version: 1,
+        appSpecifications: { name: 'enc-app', cipher: 'xxx' },
+        hash: 'enchash',
+        timestamp: Date.now(),
+        signature: 'sig',
+      };
+      let stubs;
+      let decrypt;
+
+      beforeEach(() => {
+        appsRepositoryStub.getPermanentMessage.resolves(null);
+        appsRepositoryStub.getTempMessage.resolves(null);
+        dbHelperStub.databaseConnection.returns({ db: sinon.stub().returns('database') });
+        dbHelperStub.findOneInDatabase.resolves(null);
+        dbHelperStub.insertOneToDatabase.resolves();
+        decrypt = sinon.spy(flux.EncryptedSpecV8.prototype, 'decrypt');
+        // A node that can open a sealed spec.
+        stubs = buildProxyquireStubs({
+          '../benchmarkService': { isSystemSecure: sinon.stub().resolves(true) },
+          '../utils/specLibs': {
+            getSpec: sinon.stub().callsFake(async () => flux),
+            assertVersionActivated: sinon.stub(),
+          },
+        });
+        messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', stubs);
+      });
+
+      it('reads, opens and judges a sealed message that hashes to it', async () => {
+        appEventVerifierStub.deserializeTempMessage.resolves(
+          legacyEvent(sealedMessage, await sealedV8Spec({ name: 'enc-app' })),
+        );
+
+        const result = await messageStore.storeAppTemporaryMessage(sealedMessage);
+
+        expect(result, `unexpected: ${result && result.message}`).to.deep.equal({ rebroadcast: true });
+        sinon.assert.calledOnce(appsRepositoryStub.getPermanentMessage);
+        sinon.assert.calledOnce(appsRepositoryStub.getTempMessage);
+        sinon.assert.calledOnce(dbHelperStub.findOneInDatabase);
+        sinon.assert.calledOnce(decrypt);
+        sinon.assert.calledOnce(appEventVerifierStub.authorize);
+        sinon.assert.calledOnce(dbHelperStub.insertOneToDatabase);
+      });
+
+      it('refuses a sealed message that does not, having read and opened nothing', async () => {
+        appEventVerifierStub.deserializeTempMessage.resolves(
+          legacyEvent(sealedMessage, await sealedV8Spec({ name: 'enc-app' }), { hash: ANOTHER_HASH }),
+        );
+
+        const result = await messageStore.storeAppTemporaryMessage(sealedMessage);
+
+        expect(result).to.be.instanceOf(Error);
+        expect(result.message).to.equal('Invalid Flux App hash received');
+        sinon.assert.notCalled(appsRepositoryStub.getPermanentMessage);
+        sinon.assert.notCalled(appsRepositoryStub.getTempMessage);
+        sinon.assert.notCalled(dbHelperStub.findOneInDatabase);
+        sinon.assert.notCalled(decrypt);
+        sinon.assert.notCalled(appEventVerifierStub.authorize);
+        sinon.assert.notCalled(dbHelperStub.insertOneToDatabase);
+      });
+
+      it('refuses a v9 message that does not, before its version, its name or its signer is judged', async () => {
+        const message = {
+          type: 'fluxappregister',
+          version: 2,
+          appSpecifications: { name: 'clear-app', owner: 'owner1', version: 9 },
+          hash: 'clearhash',
+          timestamp: Date.now(),
+          signature: SIGNATURE,
+        };
+        appEventVerifierStub.deserializeTempMessage.resolves(
+          signedEvent(message, await v9Spec({ name: 'clear-app' }), { hash: ANOTHER_HASH }),
+        );
+
+        const result = await messageStore.storeAppTemporaryMessage(message);
+
+        expect(result).to.be.instanceOf(Error);
+        expect(result.message).to.equal('Invalid Flux App hash received');
+        sinon.assert.notCalled(stubs['../utils/specLibs'].assertVersionActivated);
+        sinon.assert.notCalled(registryManagerStub.checkApplicationRegistrationNameConflicts);
+        sinon.assert.notCalled(appEventVerifierStub.authorize);
+        sinon.assert.notCalled(dbHelperStub.insertOneToDatabase);
+      });
+
+      it('holds no update that does not, for an app this node has yet to list', async () => {
+        const update = {
+          type: 'fluxappupdate',
+          version: 1,
+          appSpecifications: { name: 'test', owner: 'owner1', version: 6 },
+          hash: 'hash123',
+          timestamp: Date.now(),
+          signature: 'sig123',
+        };
+        registryStub.byName.resolves(null);
+        appEventVerifierStub.deserializeTempMessage.resolves(
+          legacyEvent(update, await v8Spec({ name: 'test' }), { hash: ANOTHER_HASH }),
+        );
+
+        const result = await messageStore.storeAppTemporaryMessage(update);
+
+        expect(result).to.be.instanceOf(Error);
+        expect(result.message).to.equal('Invalid Flux App hash received');
+        sinon.assert.notCalled(stubs['../utils/globalState'].queuePendingUpdate);
       });
     });
   });

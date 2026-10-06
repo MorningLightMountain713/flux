@@ -127,6 +127,12 @@ async function storeAppTemporaryMessage(message, options = {}) {
     return new Error(`Invalid Flux App message: ${err.message}`);
   }
 
+  // A message is the contents that hash to the hash it states: nothing is
+  // read, opened or judged for anything else.
+  if (!appEvent.verifyHash().valid) {
+    return new Error('Invalid Flux App hash received');
+  }
+
   const appMessage = await appsRepository.getPermanentMessage(appEvent.hash);
   if (appMessage) {
     return false;
@@ -250,6 +256,7 @@ async function storeAppTemporaryMessage(message, options = {}) {
       appEvent,
       previousState,
       daemonHeight: block,
+      verifyHash: false,
       // The same flag that decides which state this is judged against decides
       // which door it came in by: requested means the node is catching up on
       // something the network already accepted, anything else is live traffic
