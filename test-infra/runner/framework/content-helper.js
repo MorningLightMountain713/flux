@@ -232,6 +232,104 @@ export async function updateEncryptedV9App(nodeUrl, opts) {
 }
 
 /**
+ * Update a v9 content app's SPEC with its content (POST /apps/appupdate, multipart):
+ * a signed fluxappupdate carrying the full new submission spec and one sealed content
+ * envelope - deployContentApp's update sibling. A spec that declares slots carries the
+ * file list covering every one of them: the manifest is signed for the listed app under
+ * its listed ownership, at the version the node says comes next, and its FluxDrive
+ * writes name the update's message, so FluxDrive holds them until the nodes answer
+ * that the update applied. The manifest rides in the update's message.
+ *
+ * A slot entry is { name, destination, bytes } (new or rotated: bytes attached and
+ * owner-signed) or { name, destination, hash } (kept from the standing manifest).
+ *
+ * @param {string} nodeUrl
+ * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?, placement?,
+ *   assignment?, contentSlots: [{ name, destination, bytes | hash, onUpdate?, atomic? }],
+ *   version?, ownerKey?, timestamp? }
+ * @returns {Promise<object>} the /apps/appupdate response (its data is the update's
+ *   message hash) + { contentHash, appName, manifest }
+ */
+export async function updateContentApp(nodeUrl, opts) {
+  const ownerKey = opts.ownerKey || appOwnerKey();
+  const owner = opts.owner || ownerKey.zelid;
+  const { name } = opts;
+  const timestamp = opts.timestamp || Date.now();
+  const contentSlots = opts.contentSlots || [];
+
+  const submissionSpec = tk.buildV9ContentSpec({
+    name,
+    owner,
+    image: opts.image,
+    instances: opts.instances,
+    ttl: opts.ttl,
+    components: opts.components,
+    placement: opts.placement,
+    assignment: opts.assignment,
+    contentSlots: contentSlots.map((s) => ({
+      name: s.name, destination: s.destination, source: s.source, onUpdate: s.onUpdate, atomic: s.atomic, uid: s.uid, gid: s.gid, mode: s.mode,
+    })),
+  });
+
+  const transportPubB64 = await fetchTransportPubKey(nodeUrl, name, owner);
+  const { specField, contentHash } = await tk.buildSignedRegistration({
+    submissionSpec, ownerKey, transportPubB64, timestamp, type: 'fluxappupdate',
+  });
+
+  const blobs = {};
+  const slotMap = {};
+  for (const s of contentSlots) {
+    const h = s.bytes ? tk.blobHash(s.bytes) : s.hash;
+    if (s.bytes) blobs[h] = s.bytes;
+    slotMap[s.name] = { hash: h };
+  }
+
+  const standing = await manifestStanding(nodeUrl, name);
+  const { identity } = standing;
+  const version = opts.version ?? standing.nextVersion;
+  const messageHash = tk.registrationMessageHash(specField);
+  const locatorFor = (h) => benchCrypto.locatorFor({ identity, contentHash: h });
+  const ownerSigs = await tk.buildOwnerSigs({
+    hashes: Object.keys(blobs), identity, ownerKey, timestamp, locatorFor,
+  });
+
+  let manifest;
+  let manifestPutSig;
+  let reconcileSig;
+  if (contentSlots.length) {
+    manifest = await tk.buildOwnerSignedManifest({
+      appName: name, identity, version, ownedFrom: standing.ownership.from, slots: slotMap, ownerKey, timestamp,
+    });
+    manifestPutSig = await tk.manifestPutSig({
+      identity, version, timestamp, pendingMessageHash: messageHash, ownerKey,
+    });
+    reconcileSig = await tk.reconcileSig({
+      identity, source: 'slot', version, keptLocators: Object.values(slotMap).map((s) => locatorFor(s.hash)), pendingMessageHash: messageHash, ownerKey,
+    });
+  }
+
+  const envelope = await tk.buildContentEnvelope({
+    blobs, manifest, manifestPutSig, reconcileSig, appName: name, transportPubB64, ref: contentHash, timestamp,
+  });
+
+  const auth = await authenticate(nodeUrl, ownerKey);
+  const form = new FormData();
+  form.append('spec', JSON.stringify(specField));
+  form.append('ownerSigs', JSON.stringify(ownerSigs));
+  form.append('content', new Blob([JSON.stringify(envelope)], { type: 'application/json' }), 'content.json');
+
+  const res = await fetch(`${nodeUrl}/apps/appupdate`, {
+    method: 'POST',
+    headers: { zelidauth: auth.zelidauth },
+    body: form,
+  });
+  const data = await res.json();
+  return {
+    ...data, contentHash, appName: name, manifest,
+  };
+}
+
+/**
  * Push a standalone content-slot update (POST /apps/contentupdate): a new manifest
  * version with new slot bytes, sealed as one HPKE content envelope (AAD ref
  * manifest:v<version>) with the owner-signed manifest + the FluxDrive dual-sigs.
