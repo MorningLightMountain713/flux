@@ -8,7 +8,7 @@
  * app, and flux-shutdownd knows the app by its identity, which a sale keeps.
  * Who may open a terminal or a log stream on the app's containers is read from
  * the app's record, so once the sale has applied they open for the buyer and
- * not for the seller.
+ * not for the seller, and one the seller holds open is closed.
  *
  * The seller and the buyer each hold a signed session throughout, so every
  * refusal here is the owner check's and never the session check's.
@@ -97,6 +97,56 @@ function openTerminal(client, zelidauth, nameOrId) {
   });
 }
 
+// A session kept open: `opened` resolves once the node has opened it, and
+// `refused` with the error the node later sends on it.
+function hold(socket, openedOn, start) {
+  const held = { close: () => socket.close() };
+  held.refused = new Promise((resolve) => { socket.on('error', (message) => resolve(String(message))); });
+  held.opened = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${openedOn}: the session never opened`)), SOCKET_TIMEOUT_MS);
+    socket.once(openedOn, () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    socket.once('connect_error', (err) => {
+      clearTimeout(timer);
+      reject(new Error(`connect_error ${err.message}`));
+    });
+    held.refused.then((message) => {
+      clearTimeout(timer);
+      reject(new Error(`refused before it opened: ${message}`));
+    });
+  });
+  socket.on('connect', start);
+  return held;
+}
+
+function holdLogStream(client, zelidauth, nameOrId) {
+  const socket = io(`${client.url}/applogs`, {
+    transports: ['websocket'], reconnection: false, timeout: SOCKET_TIMEOUT_MS,
+  });
+  return hold(socket, 'subscribed', () => socket.emit('subscribe', zelidauth, nameOrId));
+}
+
+function holdTerminal(client, zelidauth, nameOrId) {
+  const socket = io(`${client.url}/terminal`, {
+    transports: ['websocket'], reconnection: false, timeout: SOCKET_TIMEOUT_MS,
+  });
+  let typer = null;
+  const held = hold(socket, 'show', () => {
+    socket.emit('exec', zelidauth, nameOrId, '/bin/test-app', '', '');
+    typer = setInterval(() => socket.emit('cmd', 'x'), 100);
+  });
+  const stopTyping = () => clearInterval(typer);
+  held.opened.then(stopTyping, stopTyping);
+  const { close } = held;
+  held.close = () => {
+    stopTyping();
+    close();
+  };
+  return held;
+}
+
 describe('an app sold while it runs is restarted by nothing, and its terminal and log stream pass to the buyer', function () {
   let env;
   let client;
@@ -110,6 +160,10 @@ describe('an app sold while it runs is restarted by nothing, and its terminal an
   // What the node ran, and what the daemon held, before the sale.
   let containerBefore;
   let plansBefore;
+  // The terminal and the log stream the seller opens before the sale and never
+  // closes.
+  let sellersTerminal;
+  let sellersLogStream;
 
   const appName = `e2esale${Date.now()}`;
 
@@ -178,6 +232,8 @@ describe('an app sold while it runs is restarted by nothing, and its terminal an
 
   after(async function () {
     this.timeout(60000);
+    sellersTerminal?.close();
+    sellersLogStream?.close();
     await env?.teardown();
   });
 
@@ -189,6 +245,11 @@ describe('an app sold while it runs is restarted by nothing, and its terminal an
 
     expect((await openLogStream(client, buyer.zelidauth, identifier)).error, 'a log stream for a user who is not the owner').to.match(/Not authorized/);
     expect((await openTerminal(client, buyer.zelidauth, identifier)).error, 'a terminal for a user who is not the owner').to.match(/Not authorized/);
+
+    sellersLogStream = holdLogStream(client, seller.zelidauth, identifier);
+    sellersTerminal = holdTerminal(client, seller.zelidauth, identifier);
+    await sellersLogStream.opened;
+    await sellersTerminal.opened;
   });
 
   it('adopts the sale: the node\'s records name the buyer', async function () {
@@ -219,6 +280,14 @@ describe('an app sold while it runs is restarted by nothing, and its terminal an
     expect((await localSpec()).owner, 'the installed record names the buyer').to.equal(buyerKey().zelid);
     const listed = await client.getAppSpecs(appName);
     expect(listed.data?.owner, 'the registry names the buyer').to.equal(buyerKey().zelid);
+  });
+
+  it('closes the terminal and the log stream the seller held open', async function () {
+    this.timeout(60000);
+    const within = (ms) => new Promise((resolve) => { setTimeout(() => resolve('nothing was sent on the session'), ms); });
+
+    expect(await Promise.race([sellersLogStream.refused, within(30000)]), 'the seller\'s log stream').to.match(/Not authorized/);
+    expect(await Promise.race([sellersTerminal.refused, within(30000)]), 'the seller\'s terminal').to.match(/Not authorized/);
   });
 
   it('restarts nothing: the container is the one that was running, and nothing was stopped through the daemon', async function () {

@@ -324,6 +324,25 @@ describe('appRegistry', () => {
       sinon.assert.calledOnceWithExactly(stubs['../appMessaging/messageStore'].rejudgeGenerationRecords, 'MyApp');
     });
 
+    it('tells the owner-change listeners of a row written naming another owner, once it names them, and of no other write', async () => {
+      const seller = await v8Spec({ name: 'MyApp' });
+      const buyer = await v8Spec({ name: 'MyApp', owner: '1F1tAaz5x1HUXrCNLbtMDqcw6o5GNn4xqX' });
+      messages = [message('t', buyer), message('u', seller)];
+      await seed([{ ...(await instantiatedSpec(seller, { hash: 'r', height: 980_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }]);
+      const heard = [];
+      registry.onOwnerChanged(async (app) => {
+        heard.push({ ...app, ownerOnTheRow: stubs['./registryManager'].storeGlobalSpec.lastCall.args[0].owner });
+      });
+
+      await registry.applyDecided('myapp', [decision('u', { uuid: 'uuid-r' })]);
+      await new Promise((resolve) => { setImmediate(resolve); });
+      expect(heard, 'an update by the same owner').to.deep.equal([]);
+
+      await registry.applyDecided('myapp', [decision('t', { uuid: 'uuid-r' })]);
+      await new Promise((resolve) => { setImmediate(resolve); });
+      expect(heard).to.deep.equal([{ name: 'MyApp', identity: 'MyApp', ownerOnTheRow: '1F1tAaz5x1HUXrCNLbtMDqcw6o5GNn4xqX' }]);
+    });
+
     it('restamps a row whose message is unchanged without running any effect', async () => {
       const spec = await v8Spec({ name: 'MyApp' });
       messages = [message('r', spec)];

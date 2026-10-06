@@ -4,6 +4,7 @@ const verificationHelper = require('../../services/verificationHelper');
 const { Privilege } = require('../../services/utils/privileges');
 const dockerService = require('../../services/dockerService');
 const LogFrameDecoder = require('../../services/utils/logFrameDecoder');
+const ownerSessions = require('./ownerSessions');
 
 const log = require('../log');
 
@@ -376,6 +377,7 @@ async function appLogsHandler(socket) {
     // given its slot up is free to follow a second container while a room it
     // never left still delivers the first one's lines into that pane.
     socket.leave(roomFor(containerId));
+    if (entry && entry.untrack) entry.untrack();
     const feed = feeds.get(containerId);
     if (!feed) return;
     if (entry) feed.subscribers.delete(entry);
@@ -478,10 +480,14 @@ async function appLogsHandler(socket) {
       // forget it - guarded by identity, because a later pass may have taken
       // this container over and its record is not this one's to remove.
       forget: () => {
+        if (mine.untrack) mine.untrack();
         if (mine.containerId && following.get(mine.containerId) === mine) {
           following.delete(mine.containerId);
         }
       },
+      // Forgets the subscription among the sessions open on the app, once it
+      // is over.
+      untrack: null,
     };
     pending.add(mine);
 
@@ -534,6 +540,16 @@ async function appLogsHandler(socket) {
         socket.emit('error', 'Not authorized.', nameOrId);
         return;
       }
+      // The answer holds for as long as the app's owner does: when the owner
+      // changes the subscription is put to the same check again, and given up
+      // here if its caller no longer passes. A pass still opening its stream
+      // stands down as it does for an unsubscribe; one whose container a later
+      // pass has taken holds nothing to give up.
+      mine.untrack = ownerSessions.track(managed.identity, zelidauth, () => {
+        if (!mine.containerId || following.get(mine.containerId) !== mine) return;
+        leave(mine.containerId);
+        socket.emit('error', 'Not authorized.', mine.containerId);
+      });
       const { container } = managed;
 
       // The client may have gone, or given this subscription up, while the
@@ -623,6 +639,8 @@ async function appLogsHandler(socket) {
       drop();
     } finally {
       pending.delete(mine);
+      // A pass that ended holding no subscription has no session to recheck.
+      if (mine.untrack && !(mine.feed && mine.feed.subscribers.has(mine))) mine.untrack();
     }
   });
 }

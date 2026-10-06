@@ -6,6 +6,7 @@ const dockerService = require('../../services/dockerService');
 const serviceHelper = require('../../services/serviceHelper');
 const ingressCapture = require('../../services/utils/ingressCapture');
 const { trackTerminalSession } = require('../../services/analyticsService');
+const ownerSessions = require('./ownerSessions');
 
 const log = require('../log');
 
@@ -37,6 +38,12 @@ async function dockerTerminalHandler(socket) {
     stream: null,
     // What a close has to be able to say, recorded at the moment the open was.
     opened: null,
+    // The setup in progress or the terminal it made, as against one that was
+    // given up: a docker callback still in flight for a setup that ended reads
+    // this to learn that its exec and its stream are nobody's.
+    attempt: null,
+    // Forgets the session among those open on the app, once it is over.
+    untrack: null,
   };
   let clientGone = false;
 
@@ -45,6 +52,10 @@ async function dockerTerminalHandler(socket) {
   // and the callback runs it again once there is one. Neither pass can record
   // a second close, because the first clears what a close is made from.
   const closeSession = () => {
+    if (session.untrack) {
+      session.untrack();
+      session.untrack = null;
+    }
     if (session.stream) {
       session.stream.destroy();
       session.stream = null;
@@ -90,6 +101,7 @@ async function dockerTerminalHandler(socket) {
   const abandonSetup = (message) => {
     closeSession();
     session.exec = null;
+    session.attempt = null;
     session.claimed = false;
     if (message) socket.emit('error', message);
   };
@@ -120,6 +132,8 @@ async function dockerTerminalHandler(socket) {
       return;
     }
     session.claimed = true;
+    const attempt = {};
+    session.attempt = attempt;
 
     // Wraps a callback that runs outside this listener's try/catch. The dockerode
     // and stream callbacks below are called by libraries, not by socket.io, so
@@ -173,6 +187,12 @@ async function dockerTerminalHandler(socket) {
         abandonSetup('Not authorized.');
         return;
       }
+      // The answer holds for as long as the app's owner does: when the owner
+      // changes the session is put to the same check again, and closed here if
+      // its caller no longer passes.
+      session.untrack = ownerSessions.track(managed.identity, zelidauth, () => {
+        if (session.attempt === attempt) abandonSetup('Not authorized.');
+      });
       const { container } = managed;
       // The session is recorded against the container's identifier, replica
       // segment included: two co-located siblings' sessions are two targets.
@@ -201,6 +221,8 @@ async function dockerTerminalHandler(socket) {
         User: dockerUser,
       };
       container.exec(cmd, guard('exec create', (err, exec) => {
+        // The setup was given up while docker was answering: nothing is started.
+        if (session.attempt !== attempt) return;
         // dockerode passes back a null exec when the daemon rejects the exec
         // create (most commonly the container is not running - state created or
         // exited). Without this the code below dereferences null and the
@@ -222,6 +244,12 @@ async function dockerTerminalHandler(socket) {
         };
         /* eslint-disable no-shadow */
         exec.start(options, guard('exec start', (err, stream) => {
+          // The setup was given up while the exec was starting: its stream is
+          // nobody's, and nothing else would ever destroy it.
+          if (session.attempt !== attempt) {
+            if (stream) stream.destroy();
+            return;
+          }
           // Same check as above: on failure stream can be null, and the
           // stream.on(...) below would throw out of a library callback.
           if (err || !stream) {

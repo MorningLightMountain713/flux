@@ -35,6 +35,7 @@ const containerEventBridge = require('./appMonitoring/containerEventBridge');
 const appReconciler = require('./appMonitoring/appReconciler');
 const appOperations = require('./appLifecycle/appOperations');
 const specReconciler = require('./appLifecycle/specReconciler');
+const ownerSessions = require('../lib/socketIoHandlers/ownerSessions');
 const appShutdownCoordinator = require('./appLifecycle/appShutdownCoordinator');
 const appSpawner = require('./appLifecycle/appSpawner');
 const registryManager = require('./appDatabase/registryManager');
@@ -687,6 +688,9 @@ async function startFluxFunctions() {
         });
         // An app leaving the list is removed from this node at once.
         appRegistry.onRemoved((name) => specReconciler.requestAppConvergence(name, { reason: 'left the registry' }));
+        // A sale restarts nothing, so a terminal or a log stream its seller
+        // holds open is put to the owner check again when the row changes hands.
+        appRegistry.onOwnerChanged(({ identity }) => ownerSessions.recheck(identity));
         log.info('App Spawner initialized');
 
         fluxNetworkHelper.adjustFirewall();
