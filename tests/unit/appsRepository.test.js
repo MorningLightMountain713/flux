@@ -144,6 +144,8 @@ describe('appsRepository', () => {
         globalAppsTempMessages: 'zelappstemporarymessages',
         globalAppsIngressAttestations: 'appingressattestations',
         globalAppsIngressAttestationDigests: 'appingressattestationdigests',
+        globalAppsInstallingErrorsLocations: 'appsinstallingerrorslocations',
+        globalAppsInstallingErrorsBroadcasts: 'appsinstallingerrorsbroadcasts',
       },
       './appRecords': { registry: () => registryStub, installed: () => installedStub },
     });
@@ -260,6 +262,28 @@ describe('appsRepository', () => {
 
     it('answers null when neither the registry nor this node holds the name', async () => {
       expect(await appsRepository.getApplicationOwner('nothing')).to.equal(null);
+    });
+  });
+
+  describe('removeAppInstallingErrorRecords', () => {
+    const deletions = () => dbHelperStub.removeDocumentsFromCollection.getCalls().map((call) => call.args.slice(1));
+
+    it('deletes every report about the name, the location rows and the archived broadcasts', async () => {
+      await appsRepository.removeAppInstallingErrorRecords('myapp');
+
+      expect(deletions()).to.deep.equal([
+        ['appsinstallingerrorslocations', { name: 'myapp' }],
+        ['appsinstallingerrorsbroadcasts', { 'data.name': 'myapp' }],
+      ]);
+    });
+
+    it('with a hash to keep, deletes only the reports about the name\'s other specs', async () => {
+      await appsRepository.removeAppInstallingErrorRecords('myapp', { keepHash: 'h2' });
+
+      expect(deletions()).to.deep.equal([
+        ['appsinstallingerrorslocations', { name: 'myapp', hash: { $ne: 'h2' } }],
+        ['appsinstallingerrorsbroadcasts', { 'data.name': 'myapp', 'data.hash': { $ne: 'h2' } }],
+      ]);
     });
   });
 
