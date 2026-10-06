@@ -114,6 +114,7 @@ const LABEL_APP = 'io.runonflux.app';
 const LABEL_COMPONENT = 'io.runonflux.component';
 const LABEL_REPLICA = 'io.runonflux.replica';
 const LABEL_IDENTIFIER = 'io.runonflux.identifier';
+const LABEL_IDENTITY = 'io.runonflux.identity';
 
 // THE READ CAN FAIL, AND SAYS SO. `2>/dev/null || echo ""` gave a broken docker
 // exec the same answer as a node with no containers on it - an empty list - so
@@ -126,7 +127,8 @@ export async function listAppContainers(container, { all = false } = {}) {
   const flag = all ? ' -a' : '';
   const fields = ['{{.Names}}', '{{.Status}}', '{{.Image}}',
     `{{.Label "${LABEL_APP}"}}`, `{{.Label "${LABEL_COMPONENT}"}}`,
-    `{{.Label "${LABEL_REPLICA}"}}`, `{{.Label "${LABEL_IDENTIFIER}"}}`].join('\t');
+    `{{.Label "${LABEL_REPLICA}"}}`, `{{.Label "${LABEL_IDENTIFIER}"}}`,
+    `{{.Label "${LABEL_IDENTITY}"}}`].join('\t');
   const { stdout, stderr, exitCode } = await execInContainer(container,
     `docker ps${flag} --format '${fields}'`,
   );
@@ -136,10 +138,10 @@ export async function listAppContainers(container, { all = false } = {}) {
   return stdout.trim().split('\n')
     .filter((line) => line && !line.includes('NAMES'))
     .map((line) => {
-      const [name, status, image, app, component, replica, identifier] = line.split('\t');
+      const [name, status, image, app, component, replica, identifier, identity] = line.split('\t');
       return {
         name, status, image, app: app || null, component: component || null,
-        replica: replica || null, identifier: identifier || null,
+        replica: replica || null, identifier: identifier || null, identity: identity || null,
       };
     })
     .filter((c) => c.name);
@@ -224,6 +226,16 @@ export async function appComponentIdentifier(container, appName, componentName, 
   const match = containers.find((c) => isAppContainer(c, appName, replica)
     && (componentName == null || c.component === componentName));
   return match?.identifier ?? null;
+}
+
+/**
+ * The identity an app's containers on this node carry, read off their label:
+ * what the shutdown daemon knows the app by, and keys its plans with. Null when
+ * the node holds no container of the app.
+ */
+export async function appIdentity(container, appName) {
+  const containers = await listAppContainers(container, { all: true });
+  return containers.find((c) => isAppContainer(c, appName, null))?.identity ?? null;
 }
 
 /**

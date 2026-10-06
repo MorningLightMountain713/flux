@@ -35,8 +35,6 @@ const NODES = 5;
 const NODE_IDX = 0; // install + drive every scenario on node 0
 const GRACEFUL_S = 3;
 
-const owner = appOwnerKey().zelid;
-
 describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', function () {
   let env;
   let client;
@@ -75,6 +73,7 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', f
     const app = await buildSeedableGracefulV8App({ name, gracefulSec: GRACEFUL_S, exitCode: 0, port, pinnedTo: [NODE_IDX] });
     await installOnNodes(env, app, [NODE_IDX]);
     await waitForUp(client, name, `${name} running before stop`);
+    return app;
   }
 
   async function installPlain(name, port) {
@@ -91,17 +90,19 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', f
   it('graceful app expiry drains via the daemon, then removes (no local kill)', async function () {
     this.timeout(180000);
     const name = `gsexpiry${Date.now()}`;
-    await installGraceful(name, 31111);
+    const app = await installGraceful(name, 31111);
 
-    // a graceful app gets a plan pushed at install time (survives control.reset)
+    // a graceful app gets a plan pushed at install time (survives control.reset),
+    // keyed by the app's identity
     const state = await control.getState();
-    expect(state.plans).to.include(`${owner}:${name}`);
+    expect(state.plans).to.include(app.identity);
 
     await control.reset();
     const auth = await ownerAuth();
     await client.removeApp(name, { zelidauth: auth.zelidauth });
 
     const call = await waitForShutdowndCall(control, (c) => c.method === 'begin_app_stop' && c.app === name);
+    expect(call.identity, 'the daemon is asked by the identity the containers carry').to.equal(app.identity);
     expect(call.reason).to.equal('ttl-expired');
     expect(call.force).to.equal(false);
     const now = Math.floor(Date.now() / 1000);
@@ -198,7 +199,7 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', f
   it('operator force preempts an in-flight drain; a non-operator removal does not', async function () {
     this.timeout(240000);
     const name = `gspreempt${Date.now()}`;
-    await installGraceful(name, 31117);
+    const app = await installGraceful(name, 31117);
     await control.reset();
     // hold the drain open so it is genuinely in-flight
     await control.setBehavior(name, 'hang');
@@ -210,12 +211,12 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', f
 
     // a second NON-operator (non-force) removal must defer, never escalate
     await client.removeApp(name, { zelidauth: auth.zelidauth }).catch(() => {});
-    await assertNoShutdowndCall(control, (c) => c.method === 'force_app_stop' && c.app === name, 4000);
+    await assertNoShutdowndCall(control, (c) => c.method === 'force_app_stop' && c.identity === app.identity, 4000);
 
     // the operator force-remove escalates the in-flight drain via force_app_stop
     await client.removeApp(name, { force: true, zelidauth: auth.zelidauth });
-    const forced = await waitForShutdowndCall(control, (c) => c.method === 'force_app_stop' && c.app === name);
-    expect(forced.app).to.equal(name);
+    const forced = await waitForShutdowndCall(control, (c) => c.method === 'force_app_stop' && c.identity === app.identity);
+    expect(forced.replica).to.equal(null);
 
     await draining.catch(() => {}); // the hung begin_app_stop resolves 'forced'
     expect(await isRemoved(name)).to.equal(true);
