@@ -8,6 +8,7 @@ import { appOwnerKey } from './keys.js';
 import { REGISTRY_REPO_HOST } from './subnet-config.js';
 import { assertHermeticRepotags } from './app-helper.js';
 import { appIdentityFromUuid, appUuid } from '@runonflux/flux-spec';
+import { deserializeSpec } from '@runonflux/flux-spec-backend';
 import { allocatePortFor, assignPorts } from './port-allocator.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -28,6 +29,19 @@ export function nodeOutpoint(index) {
   const node = deterministicList[index];
   if (!node) throw new Error(`nodeOutpoint: no node at index ${index}`);
   return `${node.txhash}:${node.outidx}`;
+}
+
+/**
+ * A specification in the spelling its version's messages are signed in: the
+ * fields the version has, in the library's order. A node hashes the forms the
+ * library knows, so a message whose hash is over any other spelling of the same
+ * specification is refused as one whose contents do not hash to its hash.
+ * @param {object} spec
+ * @returns {object}
+ */
+function signedSpelling(spec) {
+  const parsed = deserializeSpec(spec);
+  return typeof parsed.allSerializations === 'function' ? parsed.allSerializations()[0] : parsed.toCanonical();
 }
 
 function sha256(data) {
@@ -83,7 +97,7 @@ export async function buildSeedableApp(opts) {
   const ownerKey = appOwnerKey();
   const appOwner = owner ?? ownerKey.zelid;
 
-  const spec = {
+  const draft = {
     version: 8,
     name,
     description: `Seeded test app ${name}`,
@@ -118,14 +132,15 @@ export async function buildSeedableApp(opts) {
   // Components copied before anything is written into them: assignPorts sets the
   // allocated port on the component it is given, and a caller that reuses the array
   // it passed in would get a port stamped into its own object.
-  spec.compose = spec.compose.map((component) => ({ ...component }));
+  draft.compose = draft.compose.map((component) => ({ ...component }));
 
   // Before the signature and the hash, never after: both are taken over
   // JSON.stringify(spec), so a port added later leaves the app carrying a hash
   // of a specification that no longer exists. An enterprise app has an empty
   // compose here - its components are already inside the blob, ported by
   // buildSeedableEnterpriseApp before it encrypted them.
-  if (spec.compose.length) assignPorts(spec.compose, name, { allowPortReuse });
+  if (draft.compose.length) assignPorts(draft.compose, name, { allowPortReuse });
+  const spec = signedSpelling(draft);
 
   const type = 'fluxappregister';
   const version = 1;
@@ -220,9 +235,10 @@ export async function buildSeedableUpdate(app, mutate) {
   delete bare.identity;
   const before = JSON.stringify(bare);
 
-  const spec = JSON.parse(before);
-  spec.compose = (spec.compose ?? []).map((component) => ({ ...component }));
-  mutate(spec);
+  const draft = JSON.parse(before);
+  draft.compose = (draft.compose ?? []).map((component) => ({ ...component }));
+  mutate(draft);
+  const spec = signedSpelling(draft);
 
   if (JSON.stringify(spec) === before) {
     throw new Error(`buildSeedableUpdate: mutate left ${spec.name} unchanged, so its hash is unchanged and the node has nothing to notice`);
@@ -281,10 +297,7 @@ export async function buildSeedableLegacyApp({
   const ownerKey = appOwnerKey();
   const appOwner = owner ?? ownerKey.zelid;
 
-  // The fields of a version 3 specification, in an order its messages are
-  // signed in: the node hashes the forms the library knows, and a spec spelt
-  // any other way is a message whose contents do not hash to its hash.
-  const spec = {
+  const spec = signedSpelling({
     version: 3,
     name,
     description: `Seeded legacy test app ${name}`,
@@ -304,7 +317,7 @@ export async function buildSeedableLegacyApp({
     hdd: 1,
     tiered: false,
     instances,
-  };
+  });
 
   const type = 'fluxappregister';
   const messageVersion = 1;
