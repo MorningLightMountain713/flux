@@ -53,24 +53,36 @@ async function applied(client, message, name, timeout) {
 }
 
 /**
- * Gives a fleet an app message the way the network does: its payment is mined
- * and each of the given nodes is handed the message. Resolves once every one
- * of them has applied it; a node that refuses the message, or decides against
- * it, fails the call with the node's own reason. Every other node learns of
- * the message from its peers, in its own time.
+ * Hands each of the given nodes a message whose payment the chain already
+ * carries. Resolves once every one of them has applied it; a node that refuses
+ * the message, or decides against it, fails the call with the node's own reason.
  *
  * @param {object} env - the test environment
- * @param {object} message - a fixture's `message`: a registration or an update, as signed
+ * @param {object} message - the message as signed
  * @param {number[]} indices - the nodes to hand it to; an index with no node is passed over
- * @param {{valueSat?: number, timeout?: number}} [options] - what the payment is
- *   worth when not the stub chain's default, and how long each node is given
+ * @param {{timeout?: number}} [options] - how long each node is given
  */
-export async function deliverAppMessage(env, message, indices, { valueSat, timeout = 120000 } = {}) {
+export async function handAppMessage(env, message, indices, { timeout = 120000 } = {}) {
   const clients = indices.map((i) => env.clients[i]).filter(Boolean);
   const { name } = message.appSpecifications;
-  await pay(message, valueSat);
   await Promise.all(clients.map(async (client) => {
     await hand(client, message, name, timeout);
     await applied(client, message, name, timeout);
   }));
+}
+
+/**
+ * Gives a fleet an app message the way the network does: its payment is mined
+ * and each of the given nodes is handed the message. Every other node learns of
+ * the message from its peers, in its own time.
+ *
+ * @param {object} env - the test environment
+ * @param {object} message - a fixture's `message`: a registration or an update, as signed
+ * @param {number[]} indices - the nodes to hand it to
+ * @param {{valueSat?: number, timeout?: number}} [options] - what the payment is
+ *   worth when not the stub chain's default, and how long each node is given
+ */
+export async function deliverAppMessage(env, message, indices, { valueSat, timeout = 120000 } = {}) {
+  await pay(message, valueSat);
+  await handAppMessage(env, message, indices, { timeout });
 }
