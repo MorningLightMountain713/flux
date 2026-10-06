@@ -297,6 +297,18 @@ export function componentIdentifier(app, componentName = undefined) {
   return `${componentName ?? app.spec.name}_${app.identity}`;
 }
 
+/**
+ * The name a REQUEST states for a component of a built app, `<component>_<app>`.
+ * A route takes names: a container identifier carries the app's identity in
+ * that place, which is not a name and resolves to no app.
+ */
+export function componentRequestName(app, componentName = undefined) {
+  if (typeof app?.spec?.name !== 'string') {
+    throw new Error('componentRequestName needs a built app: the request names the component and the app');
+  }
+  return `${componentName ?? app.spec.name}_${app.spec.name}`;
+}
+
 export async function appComponentIdentifiers(container, appName) {
   const containers = await listAppContainers(container, { all: true });
   return containers.filter((c) => isAppContainer(c, appName, null))

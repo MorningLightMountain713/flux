@@ -39,7 +39,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
-import { componentIdentifier, listAppContainers } from '../framework/container.js';
+import { componentIdentifier, componentRequestName, listAppContainers } from '../framework/container.js';
 import { waitFor } from '../framework/wait.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 import { authenticate } from '../auth.js';
@@ -53,6 +53,7 @@ describe('a log poll answers at once and loses nothing between polls', function 
   const appName = `e2elogpoll${Date.now()}`;
   const component = `${appName}a`;
   let identifier;
+  let requestName;
   let holder;
   let auth;
 
@@ -67,7 +68,7 @@ describe('a log poll answers at once and loses nothing between polls', function 
 
   async function poll(cursor) {
     const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
-    const body = await holder.getAuthed(`/apps/applogpolling/${identifier}/100${query}`, auth.zelidauth);
+    const body = await holder.getAuthed(`/apps/applogpolling/${requestName}/100${query}`, auth.zelidauth);
     expect(body.status, `applogpolling refused: ${JSON.stringify(body).slice(0, 300)}`).to.equal('success');
     return body;
   }
@@ -107,6 +108,7 @@ describe('a log poll answers at once and loses nothing between polls', function 
     });
 
     identifier = componentIdentifier(app, component);
+    requestName = componentRequestName(app, component);
     await installOnNodes(env, app, [0]);
     await waitFor(
       async () => {
@@ -251,7 +253,7 @@ describe('a log poll answers at once and loses nothing between polls', function 
     this.timeout(60000);
 
     const since = new Date(Date.now() - 60000).toISOString();
-    const body = await holder.getAuthed(`/apps/applogpolling/${identifier}/5/${since}`, auth.zelidauth);
+    const body = await holder.getAuthed(`/apps/applogpolling/${requestName}/5/${since}`, auth.zelidauth);
 
     expect(body.status, `applogpolling refused: ${JSON.stringify(body).slice(0, 300)}`).to.equal('success');
     expect(body.logs.length, 'a since filter that ignores its line count returns the whole minute').to.be.at.most(5);
@@ -264,8 +266,8 @@ describe('a log poll answers at once and loses nothing between polls', function 
   it('does not truncate a reader asking for every line', async function () {
     this.timeout(60000);
 
-    const tail = await holder.getAuthed(`/apps/applogpolling/${identifier}/5`, auth.zelidauth);
-    const all = await holder.getAuthed(`/apps/applogpolling/${identifier}/all`, auth.zelidauth);
+    const tail = await holder.getAuthed(`/apps/applogpolling/${requestName}/5`, auth.zelidauth);
+    const all = await holder.getAuthed(`/apps/applogpolling/${requestName}/all`, auth.zelidauth);
 
     expect(all.status, `applogpolling refused: ${JSON.stringify(all).slice(0, 300)}`).to.equal('success');
     const newest = Math.max(...all.logs.map(lineNumber).filter((n) => n !== null));
