@@ -59,19 +59,19 @@ describe('an app log stream loses nothing and is shared between viewers', functi
 
   const appName = `e2elogstream${Date.now()}`;
   const component = `${appName}a`;
+  // The container's own name, which a socket is given, and the name a route is
+  // given for the same component, `<component>_<app>`.
   let identifier;
   let requestName;
   // A second component, because one connection following several containers is
   // part of the contract and a single-component app cannot exercise it.
   const secondComponent = `${appName}b`;
   let secondIdentifier;
-  let secondRequestName;
   // A third, which writes the line no reader can hold. Its own container because
   // every other test here watches one whose entire output is its numbered lines,
   // and a megabyte arriving every few seconds is not that.
   const blobComponent = `${appName}c`;
   let blobIdentifier;
-  let blobRequestName;
   let holder;
   let auth;
 
@@ -84,7 +84,7 @@ describe('an app log stream loses nothing and is shared between viewers', functi
    * A viewer. Collects every line and every control message it is sent, so a
    * test asserts on what actually arrived rather than on a single event.
    */
-  function watch(nameOrId = requestName, zelidauth = auth.zelidauth) {
+  function watch(nameOrId = identifier, zelidauth = auth.zelidauth) {
     const socket = io(`${holder.url}/applogs`, {
       transports: ['websocket'],
       reconnection: false,
@@ -169,8 +169,6 @@ describe('an app log stream loses nothing and is shared between viewers', functi
     secondIdentifier = componentIdentifier(app, secondComponent);
     blobIdentifier = componentIdentifier(app, blobComponent);
     requestName = componentRequestName(app, component);
-    secondRequestName = componentRequestName(app, secondComponent);
-    blobRequestName = componentRequestName(app, blobComponent);
     await installOnNodes(env, app, [0]);
     await waitFor(
       async () => {
@@ -193,7 +191,7 @@ describe('an app log stream loses nothing and is shared between viewers', functi
   it('refuses a viewer that is not the app owner, without opening a stream', async function () {
     this.timeout(60000);
 
-    const viewer = watch(requestName, 'zelid=nobody&signature=nonsense&loginPhrase=nonsense');
+    const viewer = watch(identifier, 'zelid=nobody&signature=nonsense&loginPhrase=nonsense');
     const outcome = await viewer.ready.then(() => null, (err) => err);
     expect(outcome, 'an unauthorised viewer was subscribed').to.be.an('error');
     expect(outcome.message).to.match(/Not authorized/);
@@ -283,7 +281,7 @@ describe('an app log stream loses nothing and is shared between viewers', functi
     // A unit test cuts a line the author framed. This is docker framing it - the
     // blob crosses eighty of docker's own 16KB frames, and what the reader is
     // given back has to be one line of them and not eighty.
-    const viewer = watch(blobRequestName);
+    const viewer = watch(blobIdentifier);
     await viewer.ready;
 
     await waitFor(
@@ -559,8 +557,8 @@ describe('an app log stream loses nothing and is shared between viewers', functi
         });
       });
 
-      socket.emit('subscribe', auth.zelidauth, requestName);
-      socket.emit('subscribe', auth.zelidauth, secondRequestName);
+      socket.emit('subscribe', auth.zelidauth, identifier);
+      socket.emit('subscribe', auth.zelidauth, secondIdentifier);
 
       await waitFor(
         async () => subscribed.length + errors.length >= 2,
@@ -602,7 +600,7 @@ describe('an app log stream loses nothing and is shared between viewers', functi
       // Given up by name rather than by disconnecting, so the other one is
       // proved to survive it.
       const kept = byContainer.get(keptId).length;
-      socket.emit('unsubscribe', secondRequestName);
+      socket.emit('unsubscribe', secondIdentifier);
       await new Promise((resolve) => { setTimeout(resolve, 1500); });
       const leftSettled = byContainer.get(leftId).length;
 
@@ -649,7 +647,7 @@ describe('an app log stream loses nothing and is shared between viewers', functi
     // holding.
     const reopened = [];
     second.socket.on('subscribed', (payload) => reopened.push(payload.container));
-    second.socket.emit('subscribe', auth.zelidauth, requestName);
+    second.socket.emit('subscribe', auth.zelidauth, identifier);
     await waitFor(
       async () => reopened.length === 1,
       { timeout: 30000, interval: 200, label: 'the other viewer reopened the container' },
@@ -658,7 +656,7 @@ describe('an app log stream loses nothing and is shared between viewers', functi
     const answers = [];
     first.socket.on('subscribed', (payload) => answers.push(payload.container));
     first.errors.length = 0;
-    first.socket.emit('subscribe', auth.zelidauth, requestName);
+    first.socket.emit('subscribe', auth.zelidauth, identifier);
 
     await waitFor(
       async () => answers.length + first.errors.length >= 1,
