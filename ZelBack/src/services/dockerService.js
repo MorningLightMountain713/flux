@@ -190,6 +190,25 @@ function containerAppName({ labels, name }, labelKeys) {
 }
 
 /**
+ * The component a container is, as its bare identifier: the exact join key
+ * against a DeploymentSpec.
+ *
+ * The identifier label states it outright and is the authority. The name is the
+ * fallback for a container created before the labels shipped, whose name
+ * carries the 8.x prefix getBaseAppName takes off.
+ *
+ * @param {{labels: object|undefined, name: string|undefined}} container
+ * @param {{LABEL_KEYS: object, readLabel: Function}} labelSchema the label schema and its reader
+ * @returns {string|null} the identifier, or null when the container states none
+ */
+function containerIdentifier({ labels, name }, { LABEL_KEYS: labelKeys, readLabel }) {
+  const labelled = readLabel(labels, labelKeys.IDENTIFIER);
+  if (labelled) return labelled;
+  if (!name) return null;
+  return getBaseAppName(name.startsWith('/') ? name.slice(1) : name);
+}
+
+/**
  * Generates an app docker name based on app name
  *
  * @param {string} appName
@@ -2913,6 +2932,7 @@ module.exports = {
   getBaseAppName,
   isManagedContainer,
   containerAppName,
+  containerIdentifier,
   getDockerContainer,
   getDockerContainerHandle,
   getFluxDockerNetworks,

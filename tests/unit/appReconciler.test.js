@@ -234,6 +234,7 @@ describe('appReconciler tests', () => {
           const us = bare.indexOf('_');
           return us === -1 ? bare : bare.slice(us + 1);
         },
+        containerIdentifier: realDockerService.containerIdentifier,
         // Default: a benign, attached container (not detached), so the network-detach
         // heal stays dormant unless a test opts in.
         classifyContainerNetworkAttachment: sinon.stub().returns({
@@ -246,7 +247,6 @@ describe('appReconciler tests', () => {
         dockerNetworkId: sinon.stub().resolves(null),
         getAppIdentifier: (id) => `flux${id}`,
         getAppDockerNameIdentifier: (id) => `/flux${id}`,
-        getBaseAppName: (id) => (id.startsWith('flux') ? id.slice(4) : id),
       },
       capabilities: capabilityStub({ bootReconcileDecided: true }),
       globalState: {

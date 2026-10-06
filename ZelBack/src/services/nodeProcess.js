@@ -13,6 +13,7 @@ const globalState = require('./utils/globalState');
 const nodeDosState = require('./nodeDosState');
 const requestHistoryStore = require('./utils/requestHistory');
 const dockerService = require('./dockerService');
+const { getSpecBackend } = require('./utils/specLibs');
 const { startFlushTimer } = require('./analyticsService');
 const { AppSyncOrchestrator } = require('./appMessaging/appSyncOrchestrator');
 const { peerManager } = require('./utils/FluxPeerManager');
@@ -254,7 +255,8 @@ async function handleSigterm() {
   try {
     let containers = await dockerService.dockerListContainers(false);
     containers = containers || [];
-    containers = containers.filter((c) => c.Names[0].slice(1, 4) === 'zel' || c.Names[0].slice(1, 5) === 'flux');
+    const { LABEL_KEYS } = await getSpecBackend();
+    containers = containers.filter((c) => dockerService.isManagedContainer({ labels: c.Labels, name: c.Names?.[0] }, LABEL_KEYS));
 
     if (containers.length > 0) {
       log.info(`Gracefully stopping ${containers.length} Flux app containers...`);

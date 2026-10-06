@@ -3,6 +3,8 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const dockerService = require('../../ZelBack/src/services/dockerService');
+const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 
 const CLOSE_CODES = Object.freeze({ SHUTTING_DOWN: 4001, RESTARTING: 4002 });
 
@@ -42,7 +44,9 @@ describe('nodeProcess', () => {
         dockerListContainers: stubs.dockerListContainers,
         appDockerStop: stubs.appDockerStop,
         appDockerKill: stubs.appDockerKill,
+        isManagedContainer: dockerService.isManagedContainer,
       },
+      './utils/specLibs': { getSpecBackend: specLibs.getSpecBackend },
       './analyticsService': { startFlushTimer: stubs.startFlushTimer },
       './appMessaging/appSyncOrchestrator': { AppSyncOrchestrator: { writeShutdownReason: stubs.writeShutdownReason } },
       './utils/FluxPeerManager': { peerManager: { closeAllForStop: stubs.closeAllForStop } },
@@ -157,15 +161,21 @@ describe('nodeProcess', () => {
       });
 
       it('announces SHUTTING_DOWN and stops every Flux app container, and nothing else', async () => {
+        const { LABEL_KEYS } = await specLibs.getSpecBackend();
         stubs.dockerListContainers.resolves([
-          { Names: ['/fluxweb_app1'] }, { Names: ['/zelold_app2'] }, { Names: ['/postgres'] },
+          // named by its identifier and carrying the identifier label
+          { Names: ['/web_bq3identity'], Labels: { [LABEL_KEYS.IDENTIFIER]: 'web_bq3identity' } },
+          // made before the labels shipped: the 8.x prefix is all that marks them
+          { Names: ['/fluxweb_app1'] }, { Names: ['/zelold_app2'] },
+          // not an app
+          { Names: ['/postgres'], Labels: {} },
         ]);
 
         await nodeProcess.handleSigterm();
 
         sinon.assert.calledOnceWithExactly(stubs.writeShutdownReason, 'sigterm');
         expect(stubs.closeAllForStop.firstCall.args[0]).to.equal(CLOSE_CODES.SHUTTING_DOWN);
-        expect(stubs.appDockerStop.args).to.deep.equal([['fluxweb_app1', 9], ['zelold_app2', 9]]);
+        expect(stubs.appDockerStop.args).to.deep.equal([['web_bq3identity', 9], ['fluxweb_app1', 9], ['zelold_app2', 9]]);
         sinon.assert.calledOnceWithExactly(exit, 0);
       });
 

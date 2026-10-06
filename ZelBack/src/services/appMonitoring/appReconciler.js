@@ -2096,17 +2096,10 @@ async function componentIdsOf(installed) {
   containers.forEach((container) => {
     const row = { labels: container.Labels, name: container.Names && container.Names[0] };
     if (!wanted.has(dockerService.containerAppName(row, LABEL_KEYS))) return;
-    // The identifier label IS the bare form this returns - the exact join key
-    // against a DeploymentSpec. A container created before the labels shipped
-    // carries none, and its name is the only source left; getBaseAppName is the
-    // conversion, made at this boundary because this producer knows it holds a
-    // docker name and the queue it feeds cannot.
-    const labelled = readLabel(container.Labels, LABEL_KEYS.IDENTIFIER);
-    if (labelled) {
-      ids.push(labelled);
-      return;
-    }
-    if (row.name) ids.push(dockerService.getBaseAppName(row.name.replace(/^\//, '')));
+    // The bare identifier is the exact join key against a DeploymentSpec, and
+    // the form the queue this feeds holds.
+    const identifier = dockerService.containerIdentifier(row, { LABEL_KEYS, readLabel });
+    if (identifier) ids.push(identifier);
   });
   return ids;
 }
