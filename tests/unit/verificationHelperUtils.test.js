@@ -760,6 +760,50 @@ describe('verificationHelperUtils tests', () => {
       expect(await verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(headers.zelidauth, 'PolkadotNode')).to.be.false;
     });
 
+    // The owner a caller already holds, a container's owner label, answers in
+    // the app name's place: no record is read, so no app need be named.
+    describe('for an owner the caller holds', () => {
+      const ownerSession = {
+        zelid: '1KPKzyp9VyB9ouAA4spZ48x8g32sxLVK6W',
+        loginPhrase: '1644935889016mtmbo4uah32tvvwrmzg4j8qzv04ba8g8n56cevn6b',
+        signature: 'H7xcWjpSt8jiAaPbkUsfY3ZutJJmI35MWkGsgWBj/fJHfk7ZKRoggzigdaESLGMDMb2MHlxAapr1sMYDbJkL/H4=',
+      };
+      const teamSession = {
+        zelid: '1NH9BP155Rp3HSf5ef6NpUbE8JcyLRruAM',
+        loginPhrase: '1623904359736pja76q7y68deb4264olbml6o8gyhot2yvj5oevgv9k2',
+        signature: 'H4lWS4PcrR1tMo8RCLzeYYrd042tsJC9PteIKZvn091ZAYE4K9ydfri8M1KKWe905NHdS4LPPsClqvA4nY/G+II=',
+      };
+      const anotherOwner = '1E1NSwDHtvCziYP4CtgiDMcgvgZL64PhkR';
+
+      it('true for the session of the owner given, with no app named', async () => {
+        expect(await verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(ownerSession, undefined, ownerSession.zelid)).to.be.true;
+      });
+
+      it('false for a session that is not the owner given', async () => {
+        expect(await verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(ownerSession, undefined, anotherOwner)).to.be.false;
+      });
+
+      it('answers by the owner given and not by the record of an app named beside it', async () => {
+        // The listed owner of PolkadotNode is this session's; the container's
+        // label names another, and the label is what was asked about.
+        expect(await verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(ownerSession, 'PolkadotNode', anotherOwner)).to.be.false;
+      });
+
+      it('true for the flux team whoever the owner given is', async () => {
+        expect(await verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(teamSession, undefined, anotherOwner)).to.be.true;
+      });
+
+      it('false with neither an app nor an owner to answer for', async () => {
+        expect(await verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(teamSession, undefined, '')).to.be.false;
+      });
+
+      it('verifyAppOwnerSession: true for the session of the owner given, false for another, and false for the flux team', async () => {
+        expect(await verificationHelperUtils.verifyAppOwnerSession(ownerSession, undefined, ownerSession.zelid)).to.be.true;
+        expect(await verificationHelperUtils.verifyAppOwnerSession(ownerSession, undefined, anotherOwner)).to.be.false;
+        expect(await verificationHelperUtils.verifyAppOwnerSession(teamSession, undefined, anotherOwner)).to.be.false;
+        expect(await verificationHelperUtils.verifyAppOwnerSession(ownerSession, undefined, '')).to.be.false;
+      });
+    });
   });
 
   describe('fluxSupportTeamZelids tests', () => {

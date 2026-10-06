@@ -2066,7 +2066,26 @@ async function contentBlobServeApi(req, res) {
   }
 }
 
-async function reconcileComponents(appName, oldDeployment, newDeployment, registrySpec) {
+/**
+ * Brings one installed identity of an app from the spec it was installed with
+ * to the spec the registry lists: the components the update drops are removed,
+ * the ones it adds are installed, and a kept one is recreated when it changed.
+ *
+ * A container carries its app's owner as a label docker fixes at create, and
+ * the shutdown daemon keys its plan on the same owner. So an update that names
+ * another owner recreates every kept component's container, keeping its
+ * volume: the old one is stopped under the owner it was created for, the new
+ * one is stamped with the owner the spec names now, and the daemon's plan
+ * moves with it.
+ *
+ * @param {string} appName
+ * @param {object} oldDeployment - the installed view of this identity
+ * @param {object} newDeployment - the listed spec's view of it
+ * @param {object} registrySpec - the listed row
+ * @param {string} [installedOwner] - the owner the app was installed with
+ */
+async function reconcileComponents(appName, oldDeployment, newDeployment, registrySpec, installedOwner = registrySpec.owner) {
+  const ownerChanged = installedOwner !== registrySpec.owner;
   const oldNames = new Set(Object.keys(oldDeployment.components));
   const newNames = new Set(Object.keys(newDeployment.components));
 
@@ -2081,7 +2100,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   for (const name of kept) {
     const oldComp = oldDeployment.getComponent(name);
     const newComp = newDeployment.getComponent(name);
-    if (oldComp.equals(newComp)) {
+    if (oldComp.equals(newComp) && !ownerChanged) {
       log.info(`Component ${name} of ${appName} unchanged, skipping`);
     } else if (oldComp.storage === newComp.storage) {
       keepVolume.push(name);
@@ -2136,7 +2155,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
       // teardown's local stop.
       // eslint-disable-next-line no-await-in-loop
       const stopHandled = await requestComponentDaemonStop(
-        registrySpec.owner, appName, oldDeployment.replica ?? null, deployComp,
+        installedOwner, appName, oldDeployment.replica ?? null, deployComp,
       );
       // eslint-disable-next-line no-await-in-loop
       await appUninstaller.uninstallComponent(deployComp, { removeVolumes, skipPorts: true, stopHandled });
@@ -2267,6 +2286,11 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
     } else {
       await fluxShutdowndClient.deleteAppPlanBestEffort(freshDeployment.appName, registrySpec.owner, freshDeployment.replica ?? null);
     }
+    // The plan the daemon holds under the owner the app was installed with
+    // names containers that no longer exist.
+    if (ownerChanged) {
+      await fluxShutdowndClient.deleteAppPlanBestEffort(freshDeployment.appName, installedOwner, freshDeployment.replica ?? null);
+    }
   }
 }
 
@@ -2303,7 +2327,7 @@ async function reconcileApp(installed, registrySpec) {
       const newDeployment = newByReplica.get(oldDeployment.replica ?? null);
       if (!newDeployment) continue;
       // eslint-disable-next-line no-await-in-loop
-      await reconcileComponents(installed.name, oldDeployment, newDeployment, registrySpec);
+      await reconcileComponents(installed.name, oldDeployment, newDeployment, registrySpec, installed.owner);
     }
     log.info(`Application ${installed.name} reconciliation complete`);
   } catch (error) {
