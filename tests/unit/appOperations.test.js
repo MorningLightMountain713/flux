@@ -1851,6 +1851,127 @@ describe('appOperations tests', () => {
       expect(openHostPortsStub.called).to.be.false;
     });
 
+    // A container carries its app's owner as a label docker fixes at create,
+    // and the shutdown daemon keys its plan on the same owner. An update that
+    // names another owner therefore recreates the container of every component
+    // it keeps, changed or not.
+    describe('an update that names another owner', () => {
+      const SELLER = '1SellerOfTheAppxxxxxxxxxxxxxxxxxxxx';
+      let installComponent;
+
+      // The reinstall loop runs against the listed spec's own view.
+      function withReinstall(freshDeployment) {
+        deploymentProvider.buildDeployment.resolves(freshDeployment);
+        installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
+        sinon.stub(fluxShutdowndClient, 'upsertAppPlanBestEffort').resolves();
+        sinon.stub(fluxShutdowndClient, 'deleteAppPlanBestEffort').resolves();
+      }
+
+      it('recreates a component whose own settings did not change, keeping its volume, stamped with the owner the spec names now', async () => {
+        setup();
+        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
+        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
+        expect(oldDeployment.getComponent('web').equals(newDeployment.getComponent('web')), 'the component must read as unchanged').to.be.true;
+        withReinstall(newDeployment);
+
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, SELLER);
+
+        sinon.assert.calledOnceWithExactly(uninstallComponentStub, oldDeployment.getComponent('web'), sinon.match({ removeVolumes: false, skipPorts: true }));
+        sinon.assert.calledOnce(installComponent);
+        const [reinstalled, options] = installComponent.firstCall.args;
+        expect(reinstalled.identifier).to.equal('web_myapp');
+        expect(options).to.include({ createVolumes: false, skipPorts: true, owner: registrySpec.owner });
+        expect(options.owner, 'the fixture must name two owners').to.not.equal(SELLER);
+        expect(denyPortsStub.called, 'its ports do not move').to.be.false;
+        expect(openHostPortsStub.called).to.be.false;
+      });
+
+      it('leaves that component alone when the owner is the one it was installed with', async () => {
+        setup();
+        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
+        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
+        withReinstall(newDeployment);
+
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, registrySpec.owner);
+
+        sinon.assert.notCalled(uninstallComponentStub);
+        sinon.assert.notCalled(installComponent);
+      });
+
+      it('stops the old container through the daemon under the owner it was created for', async () => {
+        setup();
+        const beginAppStop = sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
+        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful: true });
+        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful: true });
+        withReinstall(newDeployment);
+
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, SELLER);
+
+        sinon.assert.calledOnce(beginAppStop);
+        expect(beginAppStop.firstCall.args[0], 'the daemon holds the plan and the container under the seller').to.equal(SELLER);
+      });
+
+      it('moves the daemon\'s plan: the buyer\'s is pushed and the one held under the seller is deleted', async () => {
+        setup();
+        sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
+        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful: true });
+        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful: true });
+        withReinstall(newDeployment);
+
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, SELLER);
+
+        sinon.assert.calledOnce(fluxShutdowndClient.upsertAppPlanBestEffort);
+        expect(fluxShutdowndClient.upsertAppPlanBestEffort.firstCall.args[0].owner_flux_id).to.equal(registrySpec.owner);
+        sinon.assert.calledOnceWithExactly(fluxShutdowndClient.deleteAppPlanBestEffort, 'myapp', SELLER, null);
+      });
+
+      it('deletes no plan under another owner when the owner did not change', async () => {
+        setup();
+        sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
+        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful: true });
+        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful: true, cpu: 0.7 });
+        withReinstall(newDeployment);
+
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+
+        sinon.assert.calledOnce(fluxShutdowndClient.upsertAppPlanBestEffort);
+        sinon.assert.notCalled(fluxShutdowndClient.deleteAppPlanBestEffort);
+      });
+
+      it('is told the owner the app was installed with by the adoption of the update', async () => {
+        setup();
+        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
+        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
+        withReinstall(newDeployment);
+        deploymentProvider.getInstalledDeployments.resolves([oldDeployment]);
+        deploymentProvider.buildDeployments.resolves([newDeployment]);
+        sinon.stub(appReconciler, 'enqueueApp');
+
+        await appOperations.reconcileApp({
+          name: 'myapp', uuid: 'u-myapp', identity: 'idmyapp', owner: SELLER,
+        }, registrySpec);
+
+        sinon.assert.calledOnce(uninstallComponentStub);
+        expect(installComponent.firstCall.args[1].owner).to.equal(registrySpec.owner);
+      });
+
+      it('adopts an update of the same owner without recreating what did not change', async () => {
+        setup();
+        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
+        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
+        withReinstall(newDeployment);
+        deploymentProvider.getInstalledDeployments.resolves([oldDeployment]);
+        deploymentProvider.buildDeployments.resolves([newDeployment]);
+        sinon.stub(appReconciler, 'enqueueApp');
+
+        await appOperations.reconcileApp({
+          name: 'myapp', uuid: 'u-myapp', identity: 'idmyapp', owner: registrySpec.owner,
+        }, registrySpec);
+
+        sinon.assert.notCalled(uninstallComponentStub);
+      });
+    });
+
     // The ledger names each component's ports before any is opened: a kept
     // port keeps the methods it was opened by, an added one takes the methods
     // the node opens ports by now.

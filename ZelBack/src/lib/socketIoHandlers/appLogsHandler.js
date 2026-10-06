@@ -485,8 +485,6 @@ async function appLogsHandler(socket) {
     };
     pending.add(mine);
 
-    const mainAppName = nameOrId.split('_')[1] || nameOrId;
-
     // Gives up what this pass took, and only while the entry is still this
     // pass's. A pass abandoned mid-setup can be overtaken by a later subscribe
     // for the same container: releasing then would take the room and the feed
@@ -498,34 +496,43 @@ async function appLogsHandler(socket) {
     };
 
     try {
-      // Authorise BEFORE touching docker: the lookup below is a remote-controlled
-      // operation on an attacker-supplied name, and must not be reachable by an
-      // unauthenticated caller. Through verifyPrivilege like every other caller,
-      // so this stream carries a privilege a sweep can find.
+      // A signed session BEFORE touching docker: the lookup below is a
+      // remote-controlled operation on an attacker-supplied name, and must not
+      // be reachable by an unauthenticated caller.
+      const signedIn = await verificationHelper.verifyPrivilege(Privilege.USER, zelidauth);
+      if (signedIn !== true) {
+        socket.emit('error', 'Not authorized.', nameOrId);
+        return;
+      }
+
+      // The container the caller named, with what its labels say of it. It
+      // answers null for an absent container and for one that is not ours; the
+      // catch is for the other failure - an unreachable daemon - which reaches
+      // the client as the same "not found". Log the cause so they are
+      // distinguishable.
+      const managed = await dockerService.getManagedContainer(nameOrId).catch((error) => {
+        log.error(`appLogsHandler: container lookup failed for ${nameOrId}: ${error.message}`);
+        return null;
+      });
+      if (!managed) {
+        socket.emit('error', 'Container not found.', nameOrId);
+        return;
+      }
+
+      // Whose container it is, is the owner stamped on it when it was created:
+      // nothing is read out of the text of its name. Through verifyPrivilege
+      // like every other caller, so this stream carries a privilege a sweep can
+      // find.
       const authorized = await verificationHelper.verifyPrivilege(
         Privilege.APP_OWNER_OR_FLUX_TEAM,
         zelidauth,
-        { appName: mainAppName },
+        { owner: managed.owner },
       );
       if (authorized !== true) {
         socket.emit('error', 'Not authorized.', nameOrId);
         return;
       }
-
-      // getDockerContainer answers null for an absent container; the catch is for
-      // the other failure - an unreachable daemon - which reaches the client as the
-      // same "not found". Log the cause so the two are distinguishable. This
-      // replaced getDockerContainerByIdOrName, which this tree does not export:
-      // the call threw synchronously, before the promise the catch is attached to
-      // existed, so every subscribe failed for every container.
-      const container = await dockerService.getDockerContainer(nameOrId).catch((error) => {
-        log.error(`appLogsHandler: container lookup failed for ${nameOrId}: ${error.message}`);
-        return null;
-      });
-      if (!container) {
-        socket.emit('error', 'Container not found.', nameOrId);
-        return;
-      }
+      const { container } = managed;
 
       // The client may have gone, or given this subscription up, while the
       // awaits above ran. Nothing is held yet, so there is nothing to release.

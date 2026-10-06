@@ -407,6 +407,62 @@ describe('dockerService tests', () => {
     });
   });
 
+  describe('getManagedContainer (a container and what its labels say of it)', () => {
+    const IDENTITY = 'b7kq2mzr4xw6hvtn3ycd5jfa8slpegu9';
+    const IDENTIFIER = `web_${IDENTITY}`;
+    const OWNER = '1KPKzyp9VyB9ouAA4spZ48x8g32sxLVK6W';
+
+    // A container as the node creates it: named by its identifier and carrying
+    // the identity labels the one create step stamps.
+    async function stamped(overrides = {}) {
+      const { identityLabels } = await specLibs.getSpecBackend();
+      return {
+        Id: FIXTURE_ID,
+        Names: [`/${IDENTIFIER}`],
+        Labels: identityLabels({
+          appName: 'myapp', name: 'web', identifier: IDENTIFIER, identity: IDENTITY,
+        }, { owner: OWNER }),
+        ...overrides,
+      };
+    }
+
+    it('answers the handle, the identifier and the owner stamped on the container of that name', async () => {
+      stubListing([await stamped()]);
+
+      const found = await dockerService.getManagedContainer(IDENTIFIER);
+
+      expect(found.container.id).to.equal(FIXTURE_ID);
+      expect(found.identifier).to.equal(IDENTIFIER);
+      expect(found.owner).to.equal(OWNER);
+    });
+
+    it('answers null for a name no container has', async () => {
+      stubListing([]);
+      expect(await dockerService.getManagedContainer(IDENTIFIER)).to.equal(null);
+    });
+
+    it('answers null for a container of the exact name that carries no identifier label: it is not one of ours', async () => {
+      stubListing([await stamped({ Labels: { 'com.example.owner': OWNER } })]);
+      expect(await dockerService.getManagedContainer(IDENTIFIER)).to.equal(null);
+    });
+
+    it('lets the exact name decide, not the filter: a longer name does not answer', async () => {
+      stubListing([await stamped({ Names: [`/${IDENTIFIER}extra`] })]);
+      expect(await dockerService.getManagedContainer(IDENTIFIER)).to.equal(null);
+    });
+
+    it('reads the owner off the label and nothing off the name', async () => {
+      // The name carries another app's name in the app's place; the labels are
+      // what was stamped at create, and they are what answers.
+      stubListing([await stamped({ Names: ['/web_someoneelse'] })]);
+
+      const found = await dockerService.getManagedContainer('web_someoneelse');
+
+      expect(found.identifier).to.equal(IDENTIFIER);
+      expect(found.owner).to.equal(OWNER);
+    });
+  });
+
   describe('dockerContainerInspect tests', () => {
     it('resolves the name to its container and returns what docker reports', async () => {
       // What this owns is the resolution and the hand-back. Asserting the shape

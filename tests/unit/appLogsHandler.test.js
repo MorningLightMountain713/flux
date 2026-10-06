@@ -3,13 +3,24 @@ const sinon = require('sinon');
 const { EventEmitter } = require('events');
 const proxyquire = require('proxyquire');
 const LogFrameDecoder = require('../../ZelBack/src/services/utils/logFrameDecoder');
+const { Privilege } = require('../../ZelBack/src/services/utils/privileges');
 
 const { expect } = chai;
 
 describe('appLogsHandler tests', () => {
   let verifyPrivilege;
   let getDockerContainer;
+  let getManagedContainer;
   let appLogsHandler;
+
+  // A caller names a container by its docker name, which is its identifier; the
+  // labels stamped on it when it was created say whose it is.
+  const IDENTITY = 'b7kq2mzr4xw6hvtn3ycd5jfa8slpegu9';
+  const OWNER = '1KPKzyp9VyB9ouAA4spZ48x8g32sxLVK6W';
+
+  // How often a caller was checked for a signed session, the check every
+  // subscribe that is not refused outright begins with.
+  const sessionChecks = () => verifyPrivilege.getCalls().filter((call) => call.args[0] === Privilege.USER).length;
   let logStream;
   let container;
   let emitted;
@@ -77,9 +88,15 @@ describe('appLogsHandler tests', () => {
     container = { id: 'abc123', logs: sinon.stub().resolves(logStream) };
     verifyPrivilege = sinon.stub().resolves(true);
     getDockerContainer = sinon.stub().resolves(container);
+    // The container docker holds under the name asked for, as the node made it:
+    // labelled with its identifier and its owner.
+    getManagedContainer = sinon.stub().callsFake(async (name) => {
+      const found = await getDockerContainer(name);
+      return found ? { container: found, identifier: name, owner: OWNER } : null;
+    });
     appLogsHandler = proxyquire('../../ZelBack/src/lib/socketIoHandlers/appLogsHandler', {
       '../../services/verificationHelper': { verifyPrivilege },
-      '../../services/dockerService': { getDockerContainer },
+      '../../services/dockerService': { getManagedContainer },
     });
   });
 
@@ -89,7 +106,7 @@ describe('appLogsHandler tests', () => {
     sinon.restore();
   });
 
-  async function subscribe(socket, name = 'fluxcomp_myapp', auth = 'zelidauth') {
+  async function subscribe(socket, name = `comp_${IDENTITY}`, auth = 'zelidauth') {
     await socket.fire('subscribe', auth, name);
   }
 
@@ -119,7 +136,7 @@ describe('appLogsHandler tests', () => {
       const socket = makeSocket('s1', makeNamespace());
       appLogsHandler(socket);
 
-      await socket.fire('subscribe', { evil: true }, 'fluxcomp_myapp');
+      await socket.fire('subscribe', { evil: true }, `comp_${IDENTITY}`);
 
       expect(socket.emit.calledWith('error', 'Not authorized.')).to.be.true;
       expect(verifyPrivilege.called).to.be.false;
@@ -135,16 +152,32 @@ describe('appLogsHandler tests', () => {
       await subscribe(socket);
 
       expect(socket.emit.calledWith('error', 'Not authorized.')).to.be.true;
-      expect(getDockerContainer.called).to.be.false;
+      sinon.assert.calledOnceWithExactly(verifyPrivilege, Privilege.USER, 'zelidauth');
+      sinon.assert.notCalled(getManagedContainer);
     });
 
-    it('asks for the privilege by the app name, not the component name', async () => {
+    it('asks for a signed session first, then checks the caller against the owner stamped on the container', async () => {
       const socket = makeSocket('s1', makeNamespace());
       appLogsHandler(socket);
 
-      await subscribe(socket, 'fluxcomponent_myapp');
+      await subscribe(socket, `component_${IDENTITY}`);
 
-      expect(verifyPrivilege.firstCall.args[2]).to.deep.equal({ appName: 'myapp' });
+      sinon.assert.calledWithExactly(verifyPrivilege.firstCall, Privilege.USER, 'zelidauth');
+      sinon.assert.calledWithExactly(verifyPrivilege.secondCall, Privilege.APP_OWNER_OR_FLUX_TEAM, 'zelidauth', { owner: OWNER });
+      expect(verifyPrivilege.callCount).to.equal(2);
+      sinon.assert.calledOnceWithExactly(getManagedContainer, `component_${IDENTITY}`);
+    });
+
+    it('refuses a signed-in caller the owner stamped on the container does not admit, and opens no feed', async () => {
+      verifyPrivilege.withArgs(Privilege.APP_OWNER_OR_FLUX_TEAM).resolves(false);
+      const socket = makeSocket('s1', makeNamespace());
+      appLogsHandler(socket);
+
+      await subscribe(socket, `component_${IDENTITY}`);
+
+      expect(socket.emit.calledWith('error', 'Not authorized.', `component_${IDENTITY}`)).to.be.true;
+      sinon.assert.notCalled(container.logs);
+      expect(appLogsHandler.feeds.size).to.equal(0);
     });
 
     it('answers a container that is not there rather than opening a feed', async () => {
@@ -155,6 +188,7 @@ describe('appLogsHandler tests', () => {
       await subscribe(socket, 'nope');
 
       expect(socket.emit.calledWith('error', 'Container not found.')).to.be.true;
+      expect(socket.emit.callCount, 'the caller is told one thing, that the container is not there').to.equal(1);
       expect(appLogsHandler.feeds.size).to.equal(0);
     });
   });
@@ -282,7 +316,7 @@ describe('appLogsHandler tests', () => {
       await subscribe(socket);
 
       getDockerContainer.resolves({ id: 'def456', logs: sinon.stub().resolves(second) });
-      await subscribe(socket, 'fluxother_app2');
+      await subscribe(socket, `other_${IDENTITY}`);
 
       expect(socket.emit.calledWith('subscribed', { container: 'abc123' })).to.be.true;
       expect(socket.emit.calledWith('subscribed', { container: 'def456' })).to.be.true;
@@ -317,12 +351,12 @@ describe('appLogsHandler tests', () => {
 
       for (let i = 0; i < appLogsHandler.MAX_FOLLOWED; i += 1) {
         // eslint-disable-next-line no-await-in-loop
-        await subscribe(socket, `flux${i}_myapp`);
+        await subscribe(socket, `c${i}_${IDENTITY}`);
       }
       expect(appLogsHandler.feeds.size).to.equal(appLogsHandler.MAX_FOLLOWED);
       const verifications = verifyPrivilege.callCount;
 
-      await subscribe(socket, 'fluxover_myapp');
+      await subscribe(socket, `over_${IDENTITY}`);
 
       expect(socket.emit.calledWith('error', `This connection already follows ${appLogsHandler.MAX_FOLLOWED} containers.`)).to.be.true;
       expect(appLogsHandler.feeds.size).to.equal(appLogsHandler.MAX_FOLLOWED);
@@ -336,15 +370,15 @@ describe('appLogsHandler tests', () => {
       appLogsHandler(socket);
 
       getDockerContainer.resolves(null);
-      await subscribe(socket, 'fluxa_myapp');
-      expect(socket.emit.calledWith('error', 'Container not found.', 'fluxa_myapp')).to.be.true;
+      await subscribe(socket, `a_${IDENTITY}`);
+      expect(socket.emit.calledWith('error', 'Container not found.', `a_${IDENTITY}`)).to.be.true;
 
       verifyPrivilege.resolves(false);
-      await subscribe(socket, 'fluxb_myapp');
-      expect(socket.emit.calledWith('error', 'Not authorized.', 'fluxb_myapp')).to.be.true;
+      await subscribe(socket, `b_${IDENTITY}`);
+      expect(socket.emit.calledWith('error', 'Not authorized.', `b_${IDENTITY}`)).to.be.true;
 
-      await socket.fire('subscribe', 12_345, 'fluxc_myapp');
-      expect(socket.emit.calledWith('error', 'Not authorized.', 'fluxc_myapp')).to.be.true;
+      await socket.fire('subscribe', 12_345, `c_${IDENTITY}`);
+      expect(socket.emit.calledWith('error', 'Not authorized.', `c_${IDENTITY}`)).to.be.true;
     });
 
     it('does not call a container subscribed while its stream is still opening', async () => {
@@ -394,11 +428,11 @@ describe('appLogsHandler tests', () => {
 
       const burst = 60;
       await Promise.all(
-        Array.from({ length: burst }, (_, i) => socket.fire('subscribe', 'zelidauth', `flux${i}_myapp`)),
+        Array.from({ length: burst }, (_, i) => socket.fire('subscribe', 'zelidauth', `c${i}_${IDENTITY}`)),
       );
 
       expect(
-        verifyPrivilege.callCount,
+        sessionChecks(),
         'a burst of subscribes each cost a signature verification before being refused',
       ).to.be.at.most(appLogsHandler.MAX_FOLLOWED);
       expect(appLogsHandler.feeds.size).to.equal(appLogsHandler.MAX_FOLLOWED);
@@ -417,7 +451,7 @@ describe('appLogsHandler tests', () => {
       getDockerContainer.callsFake(async (name) => ({
         id: `container-${name}`,
         logs: sinon.stub().callsFake(() => {
-          if (name === 'flux0_myapp') {
+          if (name === `c0_${IDENTITY}`) {
             opening = true;
             // Never settles: this pass holds its container for the rest of the test.
             return new Promise(() => {});
@@ -428,12 +462,12 @@ describe('appLogsHandler tests', () => {
         }),
       }));
 
-      subscribe(socket, 'flux0_myapp');
+      subscribe(socket, `c0_${IDENTITY}`);
       await until(() => opening);
 
       for (let i = 1; i < appLogsHandler.MAX_FOLLOWED; i += 1) {
         // eslint-disable-next-line no-await-in-loop
-        await subscribe(socket, `flux${i}_myapp`);
+        await subscribe(socket, `c${i}_${IDENTITY}`);
       }
 
       expect(
@@ -451,9 +485,9 @@ describe('appLogsHandler tests', () => {
       appLogsHandler(socket);
       await subscribe(socket);
       getDockerContainer.resolves({ id: 'def456', logs: sinon.stub().resolves(second) });
-      await subscribe(socket, 'fluxother_app2');
+      await subscribe(socket, `other_${IDENTITY}`);
 
-      await socket.fire('unsubscribe', 'fluxother_app2');
+      await socket.fire('unsubscribe', `other_${IDENTITY}`);
 
       expect([...appLogsHandler.feeds.keys()], 'the named container was left, the other kept').to.deep.equal(['abc123']);
       expect([...socket.rooms]).to.deep.equal(['applogs:abc123']);
@@ -480,8 +514,8 @@ describe('appLogsHandler tests', () => {
         return stream;
       };
       const byName = {
-        fluxa_myapp: { id: 'containerA', logs: sinon.stub().callsFake(async () => newStream()) },
-        fluxb_myapp: { id: 'containerB', logs: sinon.stub().callsFake(async () => newStream()) },
+        [`a_${IDENTITY}`]: { id: 'containerA', logs: sinon.stub().callsFake(async () => newStream()) },
+        [`b_${IDENTITY}`]: { id: 'containerB', logs: sinon.stub().callsFake(async () => newStream()) },
       };
       getDockerContainer.callsFake(async (name) => byName[name]);
       return streams;
@@ -496,8 +530,8 @@ describe('appLogsHandler tests', () => {
       // round trip after it is asked, and a claim taken only once it has
       // answered is one that two subscribes arriving together both look past.
       await Promise.all([
-        socket.fire('subscribe', 'zelidauth', 'fluxa_myapp'),
-        socket.fire('subscribe', 'zelidauth', 'fluxb_myapp'),
+        socket.fire('subscribe', 'zelidauth', `a_${IDENTITY}`),
+        socket.fire('subscribe', 'zelidauth', `b_${IDENTITY}`),
       ]);
 
       expect([...appLogsHandler.feeds.keys()]).to.deep.equal(['containerA', 'containerB']);
@@ -521,8 +555,8 @@ describe('appLogsHandler tests', () => {
       appLogsHandler(socket);
 
       await Promise.all([
-        socket.fire('subscribe', 'zelidauth', 'fluxa_myapp'),
-        socket.fire('subscribe', 'zelidauth', 'fluxa_myapp'),
+        socket.fire('subscribe', 'zelidauth', `a_${IDENTITY}`),
+        socket.fire('subscribe', 'zelidauth', `a_${IDENTITY}`),
       ]);
 
       expect([...appLogsHandler.feeds.keys()]).to.deep.equal(['containerA']);
@@ -587,8 +621,8 @@ describe('appLogsHandler tests', () => {
     const answerDaemon = () => resolvers.splice(0).forEach((resolve) => resolve(newStream()));
 
     const bothSubscribe = (first, second) => Promise.all([
-      first.fire('subscribe', 'zelidauth', 'fluxcomp_myapp'),
-      second.fire('subscribe', 'zelidauth', 'fluxcomp_myapp'),
+      first.fire('subscribe', 'zelidauth', `comp_${IDENTITY}`),
+      second.fire('subscribe', 'zelidauth', `comp_${IDENTITY}`),
     ]);
 
     beforeEach(() => {
@@ -645,7 +679,7 @@ describe('appLogsHandler tests', () => {
 
       const late = makeSocket('s3', nsp);
       appLogsHandler(late);
-      const alone = late.fire('subscribe', 'zelidauth', 'fluxcomp_myapp');
+      const alone = late.fire('subscribe', 'zelidauth', `comp_${IDENTITY}`);
       await until(() => resolvers.length > 0);
       answerDaemon();
       await alone;
@@ -696,7 +730,7 @@ describe('appLogsHandler tests', () => {
       container.logs = sinon.stub().callsFake(() => new Promise((resolve) => { resolvers.push(resolve); }));
       const late = makeSocket('s3', nsp);
       appLogsHandler(late);
-      const alone = late.fire('subscribe', 'zelidauth', 'fluxcomp_myapp');
+      const alone = late.fire('subscribe', 'zelidauth', `comp_${IDENTITY}`);
       await until(() => resolvers.length > 0);
       answerDaemon();
       await alone;
@@ -1012,7 +1046,7 @@ describe('appLogsHandler tests', () => {
       expect(appLogsHandler.feeds.has('abc123'), 'the container stopped and the feed closed with it').to.be.false;
 
       getDockerContainer.resolves({ id: 'def456', logs: sinon.stub().resolves(freshStream()) });
-      await subscribe(socket, 'fluxother_app2');
+      await subscribe(socket, `other_${IDENTITY}`);
 
       expect(
         socket.emit.getCalls().filter((call) => call.args[0] === 'error'),
@@ -1052,7 +1086,7 @@ describe('appLogsHandler tests', () => {
       }));
       for (let i = 0; i < appLogsHandler.MAX_FOLLOWED; i += 1) {
         // eslint-disable-next-line no-await-in-loop
-        await subscribe(socket, `flux${i}_myapp`);
+        await subscribe(socket, `c${i}_${IDENTITY}`);
       }
 
       expect(

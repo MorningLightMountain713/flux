@@ -237,14 +237,17 @@ async function verifyNodeOperatorOrFluxTeamSession(zelidauth) {
 /**
  * Verifies app owner session
  * @param {string|object} zelidauth - the value of the zelidauth header
+ * @param {string} [appName] - the app, whose owner is read from its record
+ * @param {string} [owner] - the app's owner as the caller already holds it, a
+ *   container's owner label; the record is not read when it is given
  *
  * @returns {Promise<boolean>}
  */
-async function verifyAppOwnerSession(zelidauth, appName) {
-  if (!zelidauth || !appName) return false;
+async function verifyAppOwnerSession(zelidauth, appName, owner = null) {
+  if (!zelidauth || (!appName && !owner)) return false;
   const auth = serviceHelper.ensureObject(zelidauth);
   if (!auth.zelid || !auth.signature || !auth.loginPhrase) return false;
-  const ownerFluxID = await appsRepository.getApplicationOwner(appName);
+  const ownerFluxID = owner ?? await appsRepository.getApplicationOwner(appName);
   if (auth.zelid !== ownerFluxID) return false;
 
   const db = dbHelper.databaseConnection();
@@ -303,14 +306,16 @@ async function verifyAppOwnerSession(zelidauth, appName) {
  * fleet, and exposed with the operator's zelid rather than with their machine.
  *
  * @param {string|object} zelidauth - the value of the zelidauth header
- * @param {string} appName
+ * @param {string} [appName] - the app, whose owner is read from its record
+ * @param {string} [owner] - the app's owner as the caller already holds it, a
+ *   container's owner label; the record is not read when it is given
  * @returns {Promise<boolean>} authorized
  */
-async function verifyAppOwnerOrFluxTeamSession(zelidauth, appName) {
-  if (!zelidauth || !appName) return false;
+async function verifyAppOwnerOrFluxTeamSession(zelidauth, appName, owner = null) {
+  if (!zelidauth || (!appName && !owner)) return false;
   const auth = serviceHelper.ensureObject(zelidauth);
   if (!auth.zelid || !auth.signature || !auth.loginPhrase) return false;
-  const ownerFluxID = await appsRepository.getApplicationOwner(appName);
+  const ownerFluxID = owner ?? await appsRepository.getApplicationOwner(appName);
   if (auth.zelid !== ownerFluxID && auth.zelid !== config.get('fluxTeamFluxID') && !isFluxSupportTeamZelid(auth.zelid)) return false;
 
   const db = dbHelper.databaseConnection();

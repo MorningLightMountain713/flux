@@ -44,9 +44,33 @@ describe('verificationHelper tests', () => {
           : await verifyPrivilege(privilege, authOf(req));
 
         expect(result).to.be.true;
-        if (scoped) sinon.assert.calledOnceWithExactly(stub, zelidauth, appName);
+        if (scoped) sinon.assert.calledOnceWithExactly(stub, zelidauth, appName, undefined);
         else sinon.assert.calledOnceWithExactly(stub, zelidauth);
       });
+    });
+
+    // A caller that holds the app's owner already, read off a container's owner
+    // label, hands it over in the app name's place: the verifier is given the
+    // owner and no name to read a record by.
+    table.filter(([, , scoped]) => scoped).forEach(([privilege, verifier]) => {
+      it(`${privilege} is answered by ${verifier} for an owner the caller holds`, async () => {
+        const stub = sinon.stub(verificationHelperUtils, verifier).resolves(true);
+        const owner = '1KPKzyp9VyB9ouAA4spZ48x8g32sxLVK6W';
+
+        expect(await verifyPrivilege(privilege, authOf(req), { owner })).to.be.true;
+
+        sinon.assert.calledOnceWithExactly(stub, zelidauth, undefined, owner);
+      });
+    });
+
+    it('refuses an owner for a privilege that resolves an identity', async () => {
+      await expect(verifyPrivilege(Privilege.NODE_OPERATOR, authOf(req), { owner: '1KPKzyp9VyB9ouAA4spZ48x8g32sxLVK6W' }))
+        .to.be.rejectedWith(TypeError, 'reads no app name');
+    });
+
+    it('refuses an app that is both named and given by its owner', async () => {
+      await expect(verifyPrivilege(Privilege.APP_OWNER_OR_FLUX_TEAM, authOf(req), { appName, owner: '1KPKzyp9VyB9ouAA4spZ48x8g32sxLVK6W' }))
+        .to.be.rejectedWith(TypeError, 'never both');
     });
 
     // The table above is only exhaustive if it names every privilege there is.

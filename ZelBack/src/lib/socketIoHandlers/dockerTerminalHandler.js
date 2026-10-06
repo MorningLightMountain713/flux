@@ -99,7 +99,7 @@ async function dockerTerminalHandler(socket) {
     // arguments are whatever an unauthenticated client serialised, and nothing
     // upstream makes them strings the way node's http parser does for a header.
     //
-    // nameOrId is split to name the app below, and a throw in an async socket.io
+    // nameOrId is handed to docker below, and a throw in an async socket.io
     // listener is a rejection nobody handles - it reached apiServer's
     // uncaughtException handler and exited the node.
     //
@@ -134,17 +134,30 @@ async function dockerTerminalHandler(socket) {
       }
     };
 
-    const mainAppName = nameOrId.split('_')[1] || nameOrId;
-    // The container name IS the identity, replica segment included. Taking it
-    // apart into component and app so analytics could rebuild
-    // `${component}_${appName}` dropped that segment, reporting two co-located
-    // siblings' sessions under one target.
-    const terminalTarget = nameOrId.replace(/^flux/, '');
-
     try {
-      // Authorise BEFORE touching Docker: the lookup below is a remote-controlled
-      // operation on an attacker-supplied name, and must not be reachable by an
-      // unauthenticated caller.
+      // A signed session BEFORE touching Docker: the lookup below is a
+      // remote-controlled operation on an attacker-supplied name, and must not
+      // be reachable by an unauthenticated caller.
+      const signedIn = await verificationHelper.verifyPrivilege(Privilege.USER, zelidauth);
+      if (signedIn !== true) {
+        abandonSetup('Not authorized.');
+        return;
+      }
+      // The container the caller named, with what its labels say of it. It
+      // answers null for an absent container and for one that is not ours; the
+      // catch is for the other failure - an unreachable daemon - which reaches
+      // the client as the same "not found". Log the cause so they are
+      // distinguishable.
+      const managed = await dockerService.getManagedContainer(nameOrId).catch((error) => {
+        log.error(`dockerTerminalHandler: container lookup failed for ${nameOrId}: ${error.message}`);
+        return null;
+      });
+      if (!managed) {
+        abandonSetup('Container not found.');
+        return;
+      }
+      // Whose container it is, is the owner stamped on it when it was created:
+      // nothing is read out of the text of its name.
       //
       // Through verifyPrivilege like every other caller, so this shell carries a
       // privilege a sweep can find. Reaching the verifier directly is what once
@@ -152,23 +165,16 @@ async function dockerTerminalHandler(socket) {
       const authorized = await verificationHelper.verifyPrivilege(
         Privilege.APP_OWNER_OR_FLUX_TEAM,
         zelidauth,
-        { appName: mainAppName },
+        { owner: managed.owner },
       );
       if (authorized !== true) {
         abandonSetup('Not authorized.');
         return;
       }
-      // getDockerContainer answers null for an absent container; the catch is for the
-      // other failure - an unreachable daemon - which reaches the client as the same
-      // "not found". Log the cause so the two are distinguishable.
-      const container = await dockerService.getDockerContainer(nameOrId).catch((error) => {
-        log.error(`dockerTerminalHandler: container lookup failed for ${nameOrId}: ${error.message}`);
-        return null;
-      });
-      if (!container) {
-        abandonSetup('Container not found.');
-        return;
-      }
+      const { container } = managed;
+      // The session is recorded against the container's identifier, replica
+      // segment included: two co-located siblings' sessions are two targets.
+      const terminalTarget = managed.identifier;
 
       // The client may have gone away during the awaits above - do not create an
       // exec nobody is attached to, and do not record a session that never

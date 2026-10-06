@@ -309,6 +309,23 @@ async function dockerListImages() {
 }
 
 /**
+ * Docker's list entry for the ONE container with this name, or undefined.
+ * The name filter narrows what comes back and the exact comparison decides.
+ *
+ * @param {string} identifier container name (app/component identifier)
+ * @returns {Promise<object|undefined>}
+ */
+async function containerEntryByName(identifier) {
+  const dockerName = getAppDockerNameIdentifier(identifier);
+  const containers = await docker.listContainers({
+    all: true,
+    filters: JSON.stringify({ name: [getAppIdentifier(identifier)] }),
+    abortSignal: deadline(PROBE_TIMEOUT_MS),
+  });
+  return containers.find((container) => container.Names[0] === dockerName);
+}
+
+/**
  * The dockerode handle for ONE container, or null when there is none.
  *
  * Not found is a query result, not an error: an app is removed or redeployed
@@ -340,16 +357,35 @@ async function getDockerContainer(identifier, options = {}) {
     });
     match = containers.find((container) => container.Id === identifier);
   } else {
-    const dockerName = getAppDockerNameIdentifier(identifier);
-    const containers = await docker.listContainers({
-      all: true,
-      filters: JSON.stringify({ name: [getAppIdentifier(identifier)] }),
-      abortSignal: deadline(PROBE_TIMEOUT_MS),
-    });
-    match = containers.find((container) => container.Names[0] === dockerName);
+    match = await containerEntryByName(identifier);
   }
   if (!match) return null;
   return docker.getContainer(match.Id);
+}
+
+/**
+ * A container FluxOS manages, with what its labels say of it: the handle, the
+ * identifier it is known by and the owner stamped on it when it was created.
+ * Null for a name no container has, and for a container that carries no
+ * identifier label, which is not one of ours to answer for.
+ *
+ * The app a container belongs to and who owns it are read here, off the
+ * container, and never out of the text of its name.
+ *
+ * @param {string} name the container's docker name
+ * @returns {Promise<{container: object, identifier: string, owner: (string|undefined)}|null>}
+ */
+async function getManagedContainer(name) {
+  const entry = await containerEntryByName(name);
+  if (!entry) return null;
+  const { LABEL_KEYS, readLabel } = await getSpecBackend();
+  const identifier = readLabel(entry.Labels, LABEL_KEYS.IDENTIFIER);
+  if (!identifier) return null;
+  return {
+    container: docker.getContainer(entry.Id),
+    identifier,
+    owner: readLabel(entry.Labels, LABEL_KEYS.OWNER),
+  };
 }
 
 /**
@@ -2934,6 +2970,7 @@ module.exports = {
   containerAppName,
   containerIdentifier,
   getDockerContainer,
+  getManagedContainer,
   getDockerContainerHandle,
   getFluxDockerNetworks,
   dockerListNetworksByLabel,

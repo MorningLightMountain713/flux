@@ -12,7 +12,17 @@ describe('dockerTerminalHandler tests', () => {
   let trackTerminalSession;
   let verifyPrivilege;
   let getDockerContainer;
+  let getManagedContainer;
   let dockerTerminalHandler;
+
+  // A caller names a container by its docker name, which is its identifier; the
+  // labels stamped on it when it was created say whose it is.
+  const IDENTITY = 'b7kq2mzr4xw6hvtn3ycd5jfa8slpegu9';
+  const OWNER = '1KPKzyp9VyB9ouAA4spZ48x8g32sxLVK6W';
+
+  // How often a caller was checked for a signed session, the check every setup
+  // begins with.
+  const sessionChecks = () => verifyPrivilege.getCalls().filter((call) => call.args[0] === Privilege.USER).length;
 
   // Minimal stand-in for a socket.io socket. `fire` returns the listener's own
   // promise so a test can hold the handler mid-flight and interleave a
@@ -42,10 +52,16 @@ describe('dockerTerminalHandler tests', () => {
     trackTerminalSession = sinon.stub();
     verifyPrivilege = sinon.stub().resolves(true);
     getDockerContainer = sinon.stub().resolves({ exec: sinon.stub() });
+    // The container docker holds under the name asked for, as the node made it:
+    // labelled with its identifier and its owner.
+    getManagedContainer = sinon.stub().callsFake(async (name) => {
+      const container = await getDockerContainer(name);
+      return container ? { container, identifier: name, owner: OWNER } : null;
+    });
     dockerTerminalHandler = proxyquire('../../ZelBack/src/lib/socketIoHandlers/dockerTerminalHandler', {
       '../../services/analyticsService': { trackTerminalSession },
       '../../services/verificationHelper': { verifyPrivilege },
-      '../../services/dockerService': { getDockerContainer },
+      '../../services/dockerService': { getManagedContainer },
     });
   });
 
@@ -59,7 +75,7 @@ describe('dockerTerminalHandler tests', () => {
     verifyPrivilege.returns(new Promise((resolve) => { releaseAuth = resolve; }));
 
     dockerTerminalHandler(socket);
-    const exec = socket.fire('exec', 'zelidauth', 'fluxcomp_myapp', 'sh', '', 'root');
+    const exec = socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
 
     // The client closes the tab while authorisation is still in flight. socket.io
     // emits 'disconnect' exactly once, so by the time the awaits below finish
@@ -83,20 +99,19 @@ describe('dockerTerminalHandler tests', () => {
 
     const socket = makeSocket();
     dockerTerminalHandler(socket);
-    await socket.fire('exec', 'zelidauth', 'fluxcomp_myapp', 'sh', '', 'root');
+    await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
 
-    // The container name IS the analytics target, replica segment and all - only
-    // the flux prefix comes off. Reporting a decomposed `${component}_${appName}`
-    // instead merged two co-located siblings' sessions under one target.
+    // The container's identifier is the analytics target, replica segment and
+    // all: two co-located siblings' sessions are two targets.
     expect(sessionsOfType('open')).to.have.lengthOf(1);
-    expect(sessionsOfType('open')[0].args[1]).to.equal('comp_myapp');
+    expect(sessionsOfType('open')[0].args[1]).to.equal(`comp_${IDENTITY}`);
     expect(sessionsOfType('close')).to.have.lengthOf(0);
 
     socket.connected = false;
     await socket.fire('disconnect');
 
     expect(sessionsOfType('close')).to.have.lengthOf(1);
-    expect(sessionsOfType('close')[0].args[1]).to.equal('comp_myapp');
+    expect(sessionsOfType('close')[0].args[1]).to.equal(`comp_${IDENTITY}`);
     expect(stream.destroy.calledOnce).to.be.true;
   });
 
@@ -108,16 +123,66 @@ describe('dockerTerminalHandler tests', () => {
   it('authorises a session with the check that refuses the node operator', async () => {
     const socket = makeSocket();
     dockerTerminalHandler(socket);
-    await socket.fire('exec', 'zelidauth', 'fluxcomp_myapp', 'sh', '', 'root');
+    await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
 
     // Through verifyPrivilege, carrying the privilege it needs, so a search for
-    // who may open a shell in a customer's container finds this one too.
-    sinon.assert.calledOnceWithExactly(
-      verifyPrivilege,
+    // who may open a shell in a customer's container finds this one too. The
+    // app is given by the owner stamped on the container, not by a name.
+    sinon.assert.calledWithExactly(
+      verifyPrivilege.secondCall,
       Privilege.APP_OWNER_OR_FLUX_TEAM,
       'zelidauth',
-      { appName: 'myapp' },
+      { owner: OWNER },
     );
+    expect(verifyPrivilege.callCount).to.equal(2);
+  });
+
+  it('asks for a signed session before docker is asked anything, and asks docker nothing for a caller without one', async () => {
+    verifyPrivilege.withArgs(Privilege.USER).resolves(false);
+    const socket = makeSocket();
+    dockerTerminalHandler(socket);
+    await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
+
+    sinon.assert.calledOnceWithExactly(verifyPrivilege, Privilege.USER, 'zelidauth');
+    sinon.assert.notCalled(getManagedContainer);
+    expect(socket.emit.calledWith('error', 'Not authorized.')).to.equal(true);
+    expect(sessionsOfType('open')).to.have.lengthOf(0);
+  });
+
+  it('finds the container by the name the caller gave, as docker holds it', async () => {
+    const socket = makeSocket();
+    dockerTerminalHandler(socket);
+    await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
+
+    sinon.assert.calledOnceWithExactly(getManagedContainer, `comp_${IDENTITY}`);
+  });
+
+  it('refuses a signed-in caller the owner stamped on the container does not admit, and opens nothing', async () => {
+    verifyPrivilege.withArgs(Privilege.APP_OWNER_OR_FLUX_TEAM).resolves(false);
+    const exec = sinon.stub();
+    getDockerContainer.resolves({ exec });
+    const socket = makeSocket();
+    dockerTerminalHandler(socket);
+    await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
+
+    expect(socket.emit.calledWith('error', 'Not authorized.')).to.equal(true);
+    sinon.assert.notCalled(exec);
+    expect(sessionsOfType('open')).to.have.lengthOf(0);
+  });
+
+  it('records the session against the identifier the container is labelled with, not the name it was asked for by', async () => {
+    const stream = { on: sinon.stub(), destroy: sinon.stub(), write: sinon.stub() };
+    const execInstance = { start: (options, cb) => cb(null, stream), resize: sinon.stub() };
+    getManagedContainer.resolves({
+      container: { exec: (cmd, cb) => cb(null, execInstance) },
+      identifier: `comp_${IDENTITY}_replica2`,
+      owner: OWNER,
+    });
+    const socket = makeSocket();
+    dockerTerminalHandler(socket);
+    await socket.fire('exec', 'zelidauth', 'whatever-the-caller-typed', 'sh', '', 'root');
+
+    expect(sessionsOfType('open')[0].args[1]).to.equal(`comp_${IDENTITY}_replica2`);
   });
 
   // Every argument arrives as whatever the client serialised: this is a socket
@@ -157,8 +222,8 @@ describe('dockerTerminalHandler tests', () => {
       const socket = makeSocket();
       dockerTerminalHandler(socket);
 
-      await socket.fire('exec', 'zelidauth', 'fluxcomp_myapp', 'sh', '', 'root');
-      await socket.fire('exec', 'zelidauth', 'fluxcomp_myapp', 'sh', '', 'root');
+      await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
+      await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
 
       ['cmd', 'resize', 'disconnect'].forEach((event) => {
         expect(socket.listenerCount(event), `${event} accumulated on the socket`).to.equal(1);
@@ -169,13 +234,13 @@ describe('dockerTerminalHandler tests', () => {
       workingShell();
       const socket = makeSocket();
       dockerTerminalHandler(socket);
-      await socket.fire('exec', 'zelidauth', 'fluxcomp_myapp', 'sh', '', 'root');
+      await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
       socket.emit.resetHistory();
 
-      await socket.fire('exec', 'zelidauth', 'fluxcomp_myapp', 'sh', '', 'root');
+      await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
 
       sinon.assert.calledOnceWithExactly(socket.emit, 'error', 'This connection already has a terminal.');
-      expect(verifyPrivilege.callCount, 'the refused message still reached docker').to.equal(1);
+      expect(sessionChecks(), 'the refused message still reached docker').to.equal(1);
       expect(sessionsOfType('open')).to.have.lengthOf(1);
     });
 
@@ -186,15 +251,15 @@ describe('dockerTerminalHandler tests', () => {
       getDockerContainer.resolves(null);
       const socket = makeSocket();
       dockerTerminalHandler(socket);
-      await socket.fire('exec', 'zelidauth', 'fluxcomp_myapp', 'sh', '', 'root');
+      await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
       sinon.assert.calledOnceWithExactly(socket.emit, 'error', 'Container not found.');
 
       workingShell();
       socket.emit.resetHistory();
-      await socket.fire('exec', 'zelidauth', 'fluxcomp_myapp', 'sh', '', 'root');
+      await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
 
       sinon.assert.notCalled(socket.emit);
-      expect(verifyPrivilege.callCount, 'the retry was refused a terminal it did not have').to.equal(2);
+      expect(sessionChecks(), 'the retry was refused a terminal it did not have').to.equal(2);
       expect(sessionsOfType('open')).to.have.lengthOf(1);
     });
 
@@ -205,7 +270,7 @@ describe('dockerTerminalHandler tests', () => {
       const socket = makeSocket();
       dockerTerminalHandler(socket);
 
-      await socket.fire('exec', 'zelidauth', 'fluxcomp_myapp', 'sh', '', 'root');
+      await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
 
       sinon.assert.calledOnceWithExactly(socket.emit, 'error', 'Error opening a terminal. Is the container running?');
       expect(sessionsOfType('open')).to.have.lengthOf(1);
@@ -228,7 +293,7 @@ describe('dockerTerminalHandler tests', () => {
       const { stream, execInstance } = workingShell();
       const socket = makeSocket();
       dockerTerminalHandler(socket);
-      await socket.fire('exec', 'zelidauth', 'fluxcomp_myapp', 'sh', '', 'root');
+      await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
 
       await socket.fire('cmd', 'ls\n');
       await socket.fire('resize', { rows: 10, cols: 20 });
@@ -251,7 +316,7 @@ describe('dockerTerminalHandler tests', () => {
       verifyPrivilege.returns(new Promise((resolve) => { releaseAuth = resolve; }));
 
       dockerTerminalHandler(socket);
-      const exec = socket.fire('exec', 'zelidauth', 'fluxcomp_myapp', 'sh', '', 'root');
+      const exec = socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
       socket.connected = false;
       await socket.fire('disconnect');
       releaseAuth(true);
@@ -274,7 +339,7 @@ describe('dockerTerminalHandler tests', () => {
       dockerTerminalHandler(socket);
       // Runs as far as exec.start and stops there, which is where the stream
       // this test is about does not exist yet.
-      await socket.fire('exec', 'zelidauth', 'fluxcomp_myapp', 'sh', '', 'root');
+      await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
 
       socket.connected = false;
       await socket.fire('disconnect');
@@ -291,7 +356,7 @@ describe('dockerTerminalHandler tests', () => {
       { what: 'no container at all', args: ['zelidauth'], answer: 'No container specified.' },
       { what: 'a container that is a number', args: ['zelidauth', 12_345], answer: 'No container specified.' },
       { what: 'a container that is an object', args: ['zelidauth', { name: 'x' }], answer: 'No container specified.' },
-      { what: 'an auth that is an object', args: [{ zelidauth: 'x' }, 'fluxcomp_myapp'], answer: 'Not authorized.' },
+      { what: 'an auth that is an object', args: [{ zelidauth: 'x' }, `comp_${IDENTITY}`], answer: 'Not authorized.' },
     ];
 
     malformed.forEach(({ what, args, answer }) => {
@@ -313,9 +378,9 @@ describe('dockerTerminalHandler tests', () => {
       const socket = makeSocket();
       dockerTerminalHandler(socket);
 
-      await socket.fire('exec', 'zelidauth', 'fluxcomp_myapp', 'sh', '', 'root');
+      await socket.fire('exec', 'zelidauth', `comp_${IDENTITY}`, 'sh', '', 'root');
 
-      expect(verifyPrivilege.calledOnce).to.equal(true);
+      expect(sessionChecks()).to.equal(1);
     });
   });
 });

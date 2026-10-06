@@ -22,8 +22,8 @@ const DISPATCH = Object.freeze({
   [Privilege.NODE_OPERATOR]: (auth) => verificationHelperUtils.verifyNodeOperatorSession(auth),
   [Privilege.FLUX_TEAM]: (auth) => verificationHelperUtils.verifyFluxTeamSession(auth),
   [Privilege.NODE_OPERATOR_OR_FLUX_TEAM]: (auth) => verificationHelperUtils.verifyNodeOperatorOrFluxTeamSession(auth),
-  [Privilege.APP_OWNER]: (auth, appName) => verificationHelperUtils.verifyAppOwnerSession(auth, appName),
-  [Privilege.APP_OWNER_OR_FLUX_TEAM]: (auth, appName) => verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(auth, appName),
+  [Privilege.APP_OWNER]: (auth, appName, owner) => verificationHelperUtils.verifyAppOwnerSession(auth, appName, owner),
+  [Privilege.APP_OWNER_OR_FLUX_TEAM]: (auth, appName, owner) => verificationHelperUtils.verifyAppOwnerOrFluxTeamSession(auth, appName, owner),
 });
 
 /**
@@ -35,7 +35,9 @@ const DISPATCH = Object.freeze({
  *
  * @param {string} privilege - a Privilege member
  * @param {string} zelidauth - the value of the zelidauth header
- * @param {{appName?: string}} [options] - carried by, and only by, an app-scoped privilege
+ * @param {{appName?: string, owner?: string}} [options] - carried by, and only by, an
+ *   app-scoped privilege: the app's name, whose owner is read from its record, or
+ *   the owner itself where the caller holds it, read off a container's owner label
  * @returns {Promise<boolean>} authorized
  */
 async function verifyPrivilege(privilege, zelidauth, options = {}) {
@@ -52,12 +54,15 @@ async function verifyPrivilege(privilege, zelidauth, options = {}) {
     throw new TypeError('verifyPrivilege: takes the zelidauth header value, not the request');
   }
   const scoped = APP_SCOPED.includes(privilege);
-  if (!scoped && 'appName' in options) {
+  if (!scoped && ('appName' in options || 'owner' in options)) {
     throw new TypeError(`verifyPrivilege: ${privilege} resolves an identity and reads no app name`);
+  }
+  if ('appName' in options && 'owner' in options) {
+    throw new TypeError('verifyPrivilege: an app is named or its owner is given, never both');
   }
 
   try {
-    return await DISPATCH[privilege](zelidauth, options.appName);
+    return await DISPATCH[privilege](zelidauth, options.appName, options.owner);
   } catch (error) {
     log.error(error);
     return false;

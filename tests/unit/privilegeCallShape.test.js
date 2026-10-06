@@ -91,7 +91,7 @@ describe('privilege call shape', () => {
     expect(wrong).to.deep.equal([]);
   });
 
-  it('carries an app name only as { appName }, and only where one is read', () => {
+  it('carries an app only as { appName } or as { owner }, and only where one is read', () => {
     const wrong = [];
     sites.forEach(({ where, args, text }) => {
       const first = args[0];
@@ -107,8 +107,11 @@ describe('privilege call shape', () => {
         const keys = third.properties
           .filter((prop) => prop.type === 'Property' && !prop.computed)
           .map((prop) => (prop.key.type === 'Identifier' ? prop.key.name : prop.key.value));
-        const named = keys.filter((key) => key !== 'appName');
-        if (named.length) wrong.push(`${where}  app name passed as ${named.join(', ')}, not appName`);
+        // An app is named, or its owner is given where the caller holds it (a
+        // container's owner label): one or the other, under exactly these keys.
+        const named = keys.filter((key) => key !== 'appName' && key !== 'owner');
+        if (named.length) wrong.push(`${where}  app passed as ${named.join(', ')}, not appName or owner`);
+        if (keys.includes('appName') && keys.includes('owner')) wrong.push(`${where}  names the app and gives its owner`);
         if (!keys.length) wrong.push(`${where}  third argument names nothing`);
       }
       if (member && !SCOPED.has(member) && third) wrong.push(`${where}  ${member} reads no app name`);
