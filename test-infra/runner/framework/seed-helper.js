@@ -252,7 +252,7 @@ export async function buildSeedableUpdate(app, mutate) {
 }
 
 /**
- * A seedable LEGACY app - version <= 3, which has no compose array at all: the
+ * A seedable LEGACY app - version 3, which has no compose array at all: the
  * one component's fields sit flat on the specification itself.
  *
  * That shape is why a restore of such an app used to throw before it did
@@ -271,20 +271,21 @@ export async function buildSeedableUpdate(app, mutate) {
  */
 export async function buildSeedableLegacyApp({
   name,
-  version = 3,
   containerData = '/appdata',
   // A version 3 specification names its instance count, and the network has
   // never accepted fewer than three.
   instances = 3,
   owner = null,
-  expire = 22000,
   allowExternalRepotag = false,
 }) {
   const ownerKey = appOwnerKey();
   const appOwner = owner ?? ownerKey.zelid;
 
+  // The fields of a version 3 specification, in an order its messages are
+  // signed in: the node hashes the forms the library knows, and a spec spelt
+  // any other way is a message whose contents do not hash to its hash.
   const spec = {
-    version,
+    version: 3,
     name,
     description: `Seeded legacy test app ${name}`,
     owner: appOwner,
@@ -301,8 +302,8 @@ export async function buildSeedableLegacyApp({
     cpu: 0.1,
     ram: 100,
     hdd: 1,
+    tiered: false,
     instances,
-    expire,
   };
 
   const type = 'fluxappregister';
