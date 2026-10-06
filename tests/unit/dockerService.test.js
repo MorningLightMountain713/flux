@@ -187,6 +187,34 @@ describe('dockerService tests', () => {
     });
   });
 
+  describe('containerIdentifier tests', () => {
+    const schema = {
+      LABEL_KEYS: { IDENTIFIER: 'io.runonflux.identifier' },
+      readLabel: (labels, key) => (labels ? labels[key] : undefined),
+    };
+
+    it('reads the identifier label of a container named by its identifier', () => {
+      expect(dockerService.containerIdentifier(
+        { labels: { 'io.runonflux.identifier': 'web_bq3identity' }, name: '/web_bq3identity' }, schema,
+      )).to.equal('web_bq3identity');
+    });
+
+    it('takes the label over the name, so a component named flux* keeps its name', () => {
+      expect(dockerService.containerIdentifier(
+        { labels: { 'io.runonflux.identifier': 'fluxproxy_bq3identity' }, name: '/fluxproxy_bq3identity' }, schema,
+      )).to.equal('fluxproxy_bq3identity');
+    });
+
+    it('takes the 8.x prefix off the name of a container that carries no label', () => {
+      expect(dockerService.containerIdentifier({ labels: {}, name: '/fluxwww_MyApp' }, schema)).to.equal('www_MyApp');
+      expect(dockerService.containerIdentifier({ labels: undefined, name: '/zelwww_MyApp' }, schema)).to.equal('www_MyApp');
+    });
+
+    it('returns null when the container carries no label and states no name', () => {
+      expect(dockerService.containerIdentifier({ labels: {}, name: undefined }, schema)).to.be.null;
+    });
+  });
+
   describe('isFluxOwnedContainer tests', () => {
     let schema;
 

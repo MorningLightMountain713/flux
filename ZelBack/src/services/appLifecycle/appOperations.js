@@ -36,7 +36,7 @@ const appDataEntries = require('../utils/appDataEntries');
 const ingressAttestationService = require('../appMessaging/ingressAttestationService');
 const registryManager = require('../appDatabase/registryManager');
 const https = require('https');
-const { getSpec, assertUpdateInvariants } = require('../utils/specLibs');
+const { getSpec, getSpecBackend, assertUpdateInvariants } = require('../utils/specLibs');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const placementFeasibility = require('../appPlacement/placementFeasibility');
 const messageVerifier = require('../appMessaging/messageVerifier');
@@ -2502,7 +2502,10 @@ async function coordinateActiveStandbyApps() {
     // judgement this path exists to make.
     const liveness = peerFolderLiveness.createPeerFolderLiveness();
 
-    const runningAppsNames = runningContainers.map((app) => app.Names[0].slice(5));
+    const { LABEL_KEYS, readLabel } = await getSpecBackend();
+    const runningAppsNames = runningContainers.map((container) => dockerService.containerIdentifier(
+      { labels: container.Labels, name: container.Names?.[0] }, { LABEL_KEYS, readLabel },
+    ));
     const agent = new https.Agent({ rejectUnauthorized: false });
     const axiosOptions = { timeout: 10_000, httpsAgent: agent };
 

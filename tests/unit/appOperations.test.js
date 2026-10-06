@@ -1166,6 +1166,15 @@ describe('appOperations tests', () => {
       return deploymentFor(spec);
     }
 
+    /**
+     * A running container as the node creates it: named by its component's
+     * identifier and stamped with the identity labels the library makes.
+     */
+    async function runningContainerOf(deployComp) {
+      const { identityLabels } = await loadSpecLibrary();
+      return { Names: [`/${deployComp.identifier}`], Labels: identityLabels(deployComp) };
+    }
+
     beforeEach(() => {
       globalStateRef = globalState;
       operationRegistry.clear();
@@ -1224,16 +1233,16 @@ describe('appOperations tests', () => {
       // can't be sinon-stubbed on the module object; proxyquire (callThru) overrides just that
       // one dependency while every other dep (delay, axiosGet, getLocalSocketAddress, docker,
       // deploymentProvider) is object-accessed and so is controlled by the sinon stubs below.
-      // The active-standby component is currently running on THIS node.
-      const listRunningContainers = sinon.stub().resolves([{ Names: [`/flux${identifier}`] }]);
-      const appOps = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
-        '../appQuery/appQueryService': { ...appQueryService, listRunningContainers },
-      });
-
       const mixed = await mixedGDeployment('n8napp', 'n8n');
       expect(mixed.componentEntries()[0][0], 'the plain sibling comes first, so the walk must pass it').to.equal('db');
       expect(mixed.getComponent('n8n').identifier).to.equal(identifier);
       deploymentProviderStub.resolves([mixed]);
+
+      // The active-standby component is currently running on THIS node.
+      const listRunningContainers = sinon.stub().resolves([await runningContainerOf(mixed.getComponent('n8n'))]);
+      const appOps = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
+        '../appQuery/appQueryService': { ...appQueryService, listRunningContainers },
+      });
 
       // FDM reports the primary lives on a DIFFERENT node -> this node is a standby.
       sinon.stub(serviceHelper, 'axiosGet').resolves({ data: { status: 'success', data: { ips: ['203.0.113.99'] } } });
@@ -1261,12 +1270,13 @@ describe('appOperations tests', () => {
       // IP-granular ipsMatch must still recognise this node as the primary, so it must NOT stop
       // its own running container. (Port-sensitive matching would wrongly stop it.)
       const identifier = 'n8n_n8napp';
-      const listRunningContainers = sinon.stub().resolves([{ Names: [`/flux${identifier}`] }]);
+      const deployment = await gDeployment('n8napp', identifier);
+      const listRunningContainers = sinon.stub().resolves([await runningContainerOf(deployment.getComponent('n8n'))]);
       const appOps = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
         '../appQuery/appQueryService': { ...appQueryService, listRunningContainers },
       });
 
-      deploymentProviderStub.resolves([await gDeployment('n8napp', identifier)]);
+      deploymentProviderStub.resolves([deployment]);
 
       // FDM names THIS node as primary, returned as a bare IP (production format).
       sinon.stub(serviceHelper, 'axiosGet').resolves({ data: { status: 'success', data: { ips: ['192.168.1.5'] } } });
