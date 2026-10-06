@@ -8,7 +8,7 @@ import { pushImage } from '../framework/registry-helper.js';
 import { queueAppTx, advanceBlock, advanceBlocks } from '../framework/daemon-control.js';
 import { waitFor } from '../framework/wait.js';
 import {
-  appContainersFor, getAppContainerStatus, killAppContainer, execInContainer,
+  appContainersFor, appIdentity, getAppContainerStatus, killAppContainer, execInContainer,
 } from '../framework/container.js';
 import { shutdowndControl, waitForShutdowndCall } from '../framework/shutdownd-control.js';
 import { dbClient, closeDb } from '../framework/db-client.js';
@@ -323,13 +323,15 @@ describe('replica co-location: two named replicas of one app on one node, separa
 
   it('holds one shutdown plan per identity on the daemon', async function () {
     this.timeout(120000);
-    // The daemon keys plans owner:app[:replica]. Two plans for one app on one
+    // The daemon keys plans <identity>[:<replica>]. Two plans for one app on one
     // node is the co-location shape; one plan would mean a sibling's drain
     // budget and component order were silently applied to both.
+    const identity = await appIdentity(host.container, appName);
+    expect(identity, `${appName} identity label`).to.be.a('string');
     await waitFor(
       async () => {
         const { plans } = await shutdownd.getState();
-        const mine = plans.filter((k) => k.includes(`:${appName}`));
+        const mine = plans.filter((k) => k.startsWith(`${identity}:`));
         return mine.length === 2 && mine.every((k) => /:(s1|s2)$/.test(k));
       },
       { timeout: 90000, interval: 3000, label: `${appName} two per-identity plans on the daemon` },
@@ -435,11 +437,12 @@ describe('replica co-location: two named replicas of one app on one node, separa
     const localRows = await dbClient(host.num).getLocalApps(appName);
     expect(localRows.map((r) => r.replica)).to.deep.equal(['s1']);
 
+    const identity = await appIdentity(host.container, appName);
     await waitFor(
       async () => {
         const { plans } = await shutdownd.getState();
-        const mine = plans.filter((k) => k.includes(`:${appName}`));
-        return mine.length === 1 && mine[0].endsWith(':s1');
+        const mine = plans.filter((k) => k.startsWith(`${identity}:`));
+        return mine.length === 1 && mine[0] === `${identity}:s1`;
       },
       { timeout: 120000, interval: 3000, label: `${appName} only s1's plan remains` },
     );

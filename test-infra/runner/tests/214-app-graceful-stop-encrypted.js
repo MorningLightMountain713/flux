@@ -12,7 +12,7 @@ import { pushTestApp } from '../framework/registry-helper.js';
 import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { dbClient } from '../framework/db-client.js';
 import { waitForAppInstalled, waitForDown, waitForAppFullyGone } from '../framework/wait.js';
-import { isAppFullyGone, appComponentIdentifiers } from '../framework/container.js';
+import { isAppFullyGone, appComponentIdentifiers, appIdentity } from '../framework/container.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { shutdowndControl, waitForShutdowndCall } from '../framework/shutdownd-control.js';
 
@@ -105,9 +105,12 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (encrypt
     const identifiers = await appComponentIdentifiers(client.container, name);
     expect(identifiers, `${name} component identifiers while installed`).to.not.be.empty;
 
-    // decrypt → shutdown field → plan pushed at install time
+    // decrypt → shutdown field → plan pushed at install time, keyed by the
+    // identity the app's containers carry
+    const identity = await appIdentity(client.container, name);
+    expect(identity, `${name} identity label while installed`).to.be.a('string');
     const state = await control.getState();
-    expect(state.plans).to.include(`${owner}:${name}`);
+    expect(state.plans).to.include(identity);
     await control.reset();
 
     // Drop the global spec on EVERY node FIRST so the spawner can't respawn this

@@ -45,42 +45,44 @@ const RPC_INVALID_PARAMS = -32602;
 //   hang       -> never reply; register as draining so force_app_stop can resolve it
 const STOP_END_STATES = { complete: 'complete', deadline: 'deadline', superseded: 'superseded' };
 
-const plans = new Map(); // `${owner}:${app}[:${replica}]` -> plan
-const callLog = []; // { method, owner, app, replica, reason, force, deadline, ts, seq }
+const plans = new Map(); // `${identity}[:${replica}]` -> plan
+const callLog = []; // { method, identity, app, replica, reason, force, deadline, ts, seq }
 const draining = new Map(); // plan key -> { socket, id } for a hung begin_app_stop
 const behavior = { default: 'complete', perApp: new Map() };
 let seq = 0;
 let refused = false;
 let socketServer = null;
 
-// A plan/stop addresses ONE deployed identity. A named replica appends its name;
-// loose placement (null) keeps the bare whole-app key. `:` cannot appear in an
-// owner, app, or replica name, so the key is unambiguous.
-const planKey = (owner, app, replica) => (replica == null ? `${owner}:${app}` : `${owner}:${app}:${replica}`);
+// A plan or a stop addresses one deployment of an app, as the daemon keys it:
+// by the app's identity, with a named replica's name after it. Loose placement
+// (null) keeps the bare identity. `:` cannot appear in an identity or a replica
+// name, so the key is unambiguous.
+const planKey = (identity, replica) => (replica == null ? identity : `${identity}:${replica}`);
 const modeFor = (app) => behavior.perApp.get(app) || behavior.default;
 const logCall = (entry) => { callLog.push({ ...entry, ts: Date.now(), seq: seq += 1 }); };
 
-// Stop the app's containers on the inner dockerd. componentIdentityLabels stamps
-// io.runonflux.app on EVERY flux container (graceful or not — the label schema is
-// flux-spec's LABEL_KEYS, namespace included), so this selector covers plain and
-// graceful apps. A replica name narrows the set to that identity's containers via
-// io.runonflux.replica — co-located siblings share the app label, so stopping by
-// app alone would take the sibling down with it. A null replica means the whole
-// app, which is what every whole-app path (expiry, cancel, node drain) wants.
-// Best-effort: a missing docker CLI (e.g. local protocol tests) or an
-// already-stopped container is not fatal — but say so, because a selector that
+// Stop the app's containers on the inner dockerd, selected as the daemon selects
+// them: by the identity FluxOS stamps on EVERY container it creates as
+// io.runonflux.identity (graceful or not — the label schema is flux-spec's
+// LABEL_KEYS, namespace included), which for an app with no identity minted is
+// its name. A replica name narrows the set to that replica's containers via
+// io.runonflux.replica — co-located siblings share the identity label, so
+// stopping by identity alone would take the sibling down with it. A null replica
+// means the whole app, which is what every whole-app path (expiry, cancel, node
+// drain) wants. Best-effort: a missing docker CLI (e.g. local protocol tests) or
+// an already-stopped container is not fatal — but say so, because a selector that
 // silently matches nothing while replying 'complete' reads as a product mystery
 // from the FluxOS side.
-function dockerStopApp(app, replica, component) {
+function dockerStopApp(identity, replica, component) {
   return new Promise((resolve) => {
-    const filters = ['--filter', `label=io.runonflux.app=${app}`];
+    const filters = ['--filter', `label=io.runonflux.identity=${identity}`];
     if (replica != null) filters.push('--filter', `label=io.runonflux.replica=${replica}`);
     if (component != null) filters.push('--filter', `label=io.runonflux.component=${component}`);
     execFile('docker', ['ps', '-q', ...filters], (err, stdout) => {
       if (err) { resolve(0); return; }
       const ids = stdout.split('\n').map((s) => s.trim()).filter(Boolean);
       if (ids.length === 0) {
-        console.log(`shutdownd-mock: stop ${app}${replica == null ? '' : `/${replica}`}${component == null ? '' : ` component ${component}`} matched 0 running containers`);
+        console.log(`shutdownd-mock: stop ${identity}${replica == null ? '' : `/${replica}`}${component == null ? '' : ` component ${component}`} matched 0 running containers`);
         resolve(0);
         return;
       }
@@ -125,25 +127,27 @@ function replyError(socket, id, code, message) {
 }
 
 async function handleBeginAppStop(socket, id, params) {
+  // The identity selects the containers and the plan; the name is what FluxOS
+  // keys the app's stopping state by, and the drain messages below carry it.
   const {
-    owner_flux_id: owner, app_name: app, replica = null, component = null, reason, force, deadline,
+    identity, app_name: app, replica = null, component = null, reason, force, deadline,
   } = params || {};
   logCall({
-    method: 'begin_app_stop', owner, app, replica, component, reason, force: Boolean(force), deadline,
+    method: 'begin_app_stop', identity, app, replica, component, reason, force: Boolean(force), deadline,
   });
-  if (!owner || !app) { replyError(socket, id, RPC_INVALID_PARAMS, 'invalid params: missing owner/app'); return; }
+  if (!identity || !app) { replyError(socket, id, RPC_INVALID_PARAMS, 'invalid params: missing identity/app_name'); return; }
   if (!VALID_REASONS.has(reason)) { replyError(socket, id, RPC_INVALID_PARAMS, `invalid reason: ${reason}`); return; }
 
   stopSeq += 1;
   const stopId = stopSeq;
   const stateParams = {
-    app_name: app, component_name: component ?? '', owner_flux_id: owner, reason, deadline, stop_id: stopId,
+    app_name: app, component_name: component ?? '', identity, reason, deadline, stop_id: stopId,
   };
   // A forceful stop (operator force teardown) is a zero-budget kill: always stop and
   // report complete, regardless of the configured drain behaviour.
   if (force) {
     if (component == null) await drainCall('stop_app', stateParams);
-    await dockerStopApp(app, replica, component);
+    await dockerStopApp(identity, replica, component);
     if (component == null) await drainCall('app_stop_done', { app_name: app, stop_id: stopId, end_state: 'complete' });
     reply(socket, id, { end_state: 'complete', stop_id: stopId });
     return;
@@ -154,13 +158,13 @@ async function handleBeginAppStop(socket, id, params) {
   if (mode === 'hang') {
     // Genuine in-flight drain: hold the reply open so an operator force-remove can
     // preempt it via force_app_stop (which resolves this same connection). Keyed per
-    // identity, so a force aimed at one replica cannot resolve its sibling's run.
-    draining.set(planKey(owner, app, replica), { socket, id });
+    // deployment, so a force aimed at one replica cannot resolve its sibling's run.
+    draining.set(planKey(identity, replica), { socket, id });
     return;
   }
   const endState = STOP_END_STATES[mode] || 'complete';
   if (component == null) await drainCall('stop_app', stateParams);
-  await dockerStopApp(app, replica, component);
+  await dockerStopApp(identity, replica, component);
   // superseded: the node-wide pipeline owns the app from here and re-drains it —
   // no done, exactly as the daemon sends none.
   if (component == null && endState !== 'superseded') {
@@ -170,18 +174,18 @@ async function handleBeginAppStop(socket, id, params) {
 }
 
 async function handleForceAppStop(socket, id, params) {
-  const { owner_flux_id: owner, app_name: app, replica = null } = params || {};
-  logCall({ method: 'force_app_stop', owner, app, replica });
-  if (!owner || !app) { replyError(socket, id, RPC_INVALID_PARAMS, 'invalid params: missing owner/app'); return; }
+  const { identity, replica = null } = params || {};
+  logCall({ method: 'force_app_stop', identity, replica });
+  if (!identity) { replyError(socket, id, RPC_INVALID_PARAMS, 'invalid params: missing identity'); return; }
 
-  const key = planKey(owner, app, replica);
+  const key = planKey(identity, replica);
   const pending = draining.get(key);
   if (!pending) { reply(socket, id, { end_state: 'no_run' }); return; }
 
   // Escalate the in-flight drain: force-stop the containers, then resolve BOTH the
   // hung begin_app_stop connection and this force_app_stop with 'forced' — mirroring
   // the daemon's shared done-watch where both awaiters see the same end-state.
-  await dockerStopApp(app, replica);
+  await dockerStopApp(identity, replica);
   draining.delete(key);
   reply(pending.socket, pending.id, { end_state: 'forced' });
   reply(socket, id, { end_state: 'forced' });
@@ -199,30 +203,30 @@ function dispatch(socket, line) {
   switch (method) {
     case 'upsert_app_plan': {
       const plan = params && params.plan;
-      if (!plan || !plan.app_name || !plan.owner_flux_id) { replyError(socket, id, RPC_INVALID_PARAMS, 'invalid params: bad plan'); break; }
+      if (!plan || !plan.app_name || !plan.identity) { replyError(socket, id, RPC_INVALID_PARAMS, 'invalid params: bad plan'); break; }
       const replica = plan.replica == null ? null : plan.replica;
-      const k = planKey(plan.owner_flux_id, plan.app_name, replica);
+      const k = planKey(plan.identity, replica);
       const replaced = plans.has(k);
       plans.set(k, plan);
-      logCall({ method, owner: plan.owner_flux_id, app: plan.app_name, replica });
+      logCall({ method, identity: plan.identity, app: plan.app_name, replica });
       reply(socket, id, { ok: true, replaced_existing: replaced });
       break;
     }
     case 'delete_app_plan': {
-      const { app_name: app, owner_flux_id: owner, replica = null } = params || {};
-      const k = planKey(owner, app, replica);
+      const { identity, replica = null } = params || {};
+      const k = planKey(identity, replica);
       const existed = plans.delete(k);
-      logCall({ method, owner, app, replica });
+      logCall({ method, identity, replica });
       reply(socket, id, { ok: true, existed });
       break;
     }
     case 'list_app_plans': {
       // The real daemon returns a bare array of summaries (not wrapped). `replica`
       // is required-and-nullable on the summary: the resync side reconciles per
-      // identity and cannot tell siblings apart without it.
+      // deployment and cannot tell siblings apart without it.
       const summaries = [...plans.values()].map((p) => ({
         app_name: p.app_name,
-        owner_flux_id: p.owner_flux_id,
+        identity: p.identity,
         replica: p.replica == null ? null : p.replica,
         spec_hash: p.spec_hash,
       }));
