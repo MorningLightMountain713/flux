@@ -85,15 +85,21 @@ async function getApplicationOwnerByIdentity(identity) {
   return isAppIdentity(identity) ? null : getApplicationOwner(identity);
 }
 
-// Both the location rows and the archived broadcasts: leaving the broadcasts
-// would let message sync redistribute error records for an app that no longer
-// exists in the registry.
-async function removeAppInstallingErrorRecords(name) {
+/**
+ * Deletes the install-error records nodes reported for a name: every one, or
+ * with `keepHash` only those about the name's other specs, which leaves the
+ * reports about the spec that hash names. Both the location rows and the
+ * archived broadcasts: leaving the broadcasts would let message sync
+ * redistribute error records for an app that no longer exists in the registry.
+ * @param {string} name
+ * @param {{keepHash?: ?string}} [options]
+ */
+async function removeAppInstallingErrorRecords(name, { keepHash = null } = {}) {
   await dbHelper.removeDocumentsFromCollection(
-    globalDb(), globalAppsInstallingErrorsLocations, { name },
+    globalDb(), globalAppsInstallingErrorsLocations, { name, ...(keepHash && { hash: { $ne: keepHash } }) },
   );
   await dbHelper.removeDocumentsFromCollection(
-    globalDb(), globalAppsInstallingErrorsBroadcasts, { 'data.name': name },
+    globalDb(), globalAppsInstallingErrorsBroadcasts, { 'data.name': name, ...(keepHash && { 'data.hash': { $ne: keepHash } }) },
   );
 }
 

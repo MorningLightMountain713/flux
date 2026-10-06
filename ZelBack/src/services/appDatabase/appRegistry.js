@@ -141,7 +141,10 @@ async function rowsFor(applied) {
  * recreates finds the slot it adds filled. Then the app's manifests are judged
  * against the new row: those held before the app was listed are resolved, peers
  * are asked for what this node lacks, and a running instance is brought to the
- * manifest the app now stands on.
+ * manifest the app now stands on. The install errors nodes reported about the
+ * name's other specs are deleted; those about the spec the row now stands on
+ * are kept, so a node that learns the app after others failed to install it
+ * does not try what they already reported.
  * @param {object} instance - the InstantiatedSpec the row stands on
  * @param {?object} carried - the manifest the row's message carries, or null
  */
@@ -154,7 +157,7 @@ async function writeWithEffects(instance, carried) {
   fluxEventBus.publish('app:specStored', { name: instance.name, hash: instance.hash });
   setImmediate(() => contentSlotService.rejudgeManifests(instance, { specChanged: true })
     .catch((e) => log.warn(`contentSlot: judging ${instance.name}'s manifests after its row write failed - ${e.message ?? e}`)));
-  await appsRepository.removeAppInstallingErrorRecords(instance.name);
+  await appsRepository.removeAppInstallingErrorRecords(instance.name, { keepHash: instance.hash });
 }
 
 /**

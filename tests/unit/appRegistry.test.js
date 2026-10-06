@@ -253,7 +253,9 @@ describe('appRegistry', () => {
       sinon.assert.calledOnce(rejudgeManifests);
       expect(rejudgeManifests.firstCall.args[0].name).to.equal('MyApp');
       expect(rejudgeManifests.firstCall.args[1]).to.deep.equal({ specChanged: true });
-      sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeAppInstallingErrorRecords, 'MyApp');
+      // The install errors reported about the name's other specs go; those about
+      // the spec the row now stands on are kept.
+      sinon.assert.calledOnceWithExactly(stubs['./appsRepository'].removeAppInstallingErrorRecords, 'MyApp', { keepHash: 'r' });
       // Updates held ahead of the registration are judged now that it exists.
       sinon.assert.calledOnceWithExactly(stubs['../appMessaging/messageStore'].processPendingUpdates, 'MyApp');
     });
