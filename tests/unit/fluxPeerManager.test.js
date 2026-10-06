@@ -22,14 +22,19 @@ const log = require('../../ZelBack/src/lib/log');
 /**
  * Creates a mock WebSocket object suitable for FluxPeerSocket tests.
  * Extends EventEmitter so on/removeListener/emit work natively.
+ *
+ * `recording: false` gives the socket methods that record nothing, for a test
+ * that makes a thousand sockets and reads none of them: a recording stub costs
+ * about a fifth of a millisecond to create, and a socket has four.
  */
-function createMockWs(ip = '192.168.1.1') {
+function createMockWs(ip = '192.168.1.1', { recording = true } = {}) {
   const ws = new EventEmitter();
   ws.readyState = WebSocket.OPEN;
-  ws.ping = sinon.stub();
-  ws.send = sinon.stub();
-  ws.close = sinon.stub();
-  ws.terminate = sinon.stub();
+  const method = () => (recording ? sinon.stub() : () => {});
+  ws.ping = method();
+  ws.send = method();
+  ws.close = method();
+  ws.terminate = method();
   ws.onclose = null;
   ws.onerror = null;
   ws.onmessage = null;
@@ -2451,14 +2456,17 @@ describe('FluxPeerManager tests', () => {
       // Fill buffer beyond capacity
       for (let i = 0; i < 1005; i += 1) {
         const ip = `10.0.${Math.floor(i / 256)}.${i % 256}`;
-        const ws = createMockWs(ip);
+        const ws = createMockWs(ip, { recording: false });
         manager.add(ws, ip, '16127', { source: PEER_SOURCE.RANDOM });
       }
 
       const history = manager.getHistory();
       expect(history).to.have.lengthOf(1000);
-      // Oldest should be event 6 (index 5), newest should be event 1005 (index 1004)
-      expect(history[0].timestamp).to.be.lessThan(history[999].timestamp);
+      // The oldest kept is the 6th add (index 5) and the newest the 1005th
+      // (index 1004), in the order they were made.
+      expect(history[0].ip).to.equal('10.0.0.5');
+      expect(history[999].ip).to.equal('10.0.3.236');
+      expect(history[0].timestamp).to.be.at.most(history[999].timestamp);
     });
 
     it('should return empty array when no events', () => {
