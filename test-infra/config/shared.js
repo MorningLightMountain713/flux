@@ -76,6 +76,7 @@ module.exports = {
     coingeckoBaseUrl: 'http://31.200.0.6:3000',
   },
   mongodb: { signingKeyBaseUrl: 'http://31.200.0.6:3000' },
+  marketplace: { apiBaseUrl: 'http://31.200.0.6:3000' },
   // the stub serves iplocation.bin.gz, so harness nodes exercise the real
   // table reader rather than skipping it. Its default artifact puts the whole
   // harness range in ONE organisation, which is the single-fault-domain
