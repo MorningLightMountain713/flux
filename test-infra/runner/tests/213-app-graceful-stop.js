@@ -76,7 +76,7 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', f
     return app;
   }
 
-  async function installPlain(name, port) {
+  async function installPlain(name) {
     await pushTestApp(name);
     const app = await buildSeedableTestApp({ name, exitCode: 0, pinnedTo: [NODE_IDX] });
     await installOnNodes(env, app, [NODE_IDX]);
@@ -168,7 +168,7 @@ describe('per-app graceful stop routes through flux-shutdownd on Arcane (v8)', f
   it('plain app on Arcane still routes the stop through the daemon', async function () {
     this.timeout(180000);
     const name = `gsplain${Date.now()}`;
-    await installPlain(name, 31115);
+    await installPlain(name);
     await control.reset();
 
     const auth = await ownerAuth();

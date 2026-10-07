@@ -4,7 +4,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
-import { appSyncthingFolderId, componentIdentifier, getAppContainerStatus } from '../framework/container.js';
+import { appSyncthingFolderId, getAppContainerStatus } from '../framework/container.js';
 import { resetFdm } from '../framework/fdm-control.js';
 import { resetSyncState, getSyncthingState, severPeerSync } from '../framework/syncthing-control.js';
 import { waitFor } from '../framework/wait.js';

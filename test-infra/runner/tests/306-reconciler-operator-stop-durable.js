@@ -4,7 +4,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey, nodeKey } from '../framework/keys.js';
-import { componentIdentifier, getAppContainerStatus } from '../framework/container.js';
+import { getAppContainerStatus } from '../framework/container.js';
 import {
   waitFor, waitForReconcileActuated, assertNoEvent, waitForOperatorIntent, waitForBootSettled,
 } from '../framework/wait.js';

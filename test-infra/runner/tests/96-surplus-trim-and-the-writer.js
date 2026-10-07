@@ -5,7 +5,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
-import { componentIdentifier, execInContainer, folderIdOf } from '../framework/container.js';
+import { execInContainer, folderIdOf } from '../framework/container.js';
 import {
   bootAndPeer, placeGAppInOrder, electionOrder, installedInstanceIndices,
 } from '../framework/reconciler-suite.js';
@@ -81,7 +81,6 @@ describe('a surplus copy that is also the writer', function () {
   let appName;
   let held;
   let folder;
-  let identifier;
   let order;
   dumpLogsOnFailure(() => env);
 
@@ -120,7 +119,6 @@ describe('a surplus copy that is also the writer', function () {
       pinnedTo: PLACEMENT_ORDER,
       name: appName, syncMode: 'activeStandby', instances: 3,
     });
-    identifier = componentIdentifier(app);
     folder = folderIdOf(app);
     // The writer is the seed, the newest copy. FDM names it before any copy is
     // placed, so no other holder starts the writer: each reads another node off
