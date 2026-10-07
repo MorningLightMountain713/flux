@@ -64,6 +64,7 @@ const resourceQueryService = require('./appQuery/resourceQueryService');
 const appQueryService = require('./appQuery/appQueryService');
 const containerLabelBackfill = require('./appLifecycle/containerLabelBackfill');
 const registryManager = require('./appDatabase/registryManager');
+const fluxEventBus = require('./utils/fluxEventBus');
 
 // Where this node's checkout is, named once. Every command below that reads or
 // writes the repository is told it, rather than inheriting whatever directory
@@ -1171,6 +1172,7 @@ async function readFluxLog(level, { tail = null, since = null, grep = null } = {
     // Bound the journal read server-side too; the per-record check below
     // still applies (file mode has no such pre-filter).
     if (since) params.push('--since', `@${Math.floor(since.getTime() / 1000)}`);
+    fluxEventBus.count('log:journalRead', 'journalctl', since ? 'sinceBound' : 'unbounded');
     const { stdout, error } = await serviceHelper.runCommand('journalctl', { params });
     if (error) throw error;
     rawLines = stdout.split('\n').filter(Boolean).map((entry) => {
