@@ -25,14 +25,14 @@ describe('Peering', function () {
 
   describe('discovery', function () {
     it('should wait for daemon sync before discovering', async function () {
-      expect(env.nodeHasLog(0, 'Daemon Sync status')).to.equal(true);
+      expect(env.clients[0].getEventBuffer().some((e) => e.event === 'daemon:polled')).to.equal(true);
     });
 
     it('should find its own place on the node list', async function () {
       // The reconciler derives duties only for a node that resolved its own
-      // outpoint on the list — a reconcile pass IS the evidence the old
-      // 'Discovery: index' line used to carry.
-      expect(env.nodeHasLog(0, 'ringReconciler pass')).to.equal(true);
+      // outpoint on the list: a completed pass is the evidence.
+      const passes = (await env.clients[0].getTestCounters())['ringReconciler:pass'] ?? {};
+      expect(Object.values(passes).reduce((a, b) => a + b, 0)).to.be.greaterThan(0);
     });
 
     it('should hold peers on node 0', async function () {
