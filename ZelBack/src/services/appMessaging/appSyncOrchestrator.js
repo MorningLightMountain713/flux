@@ -285,6 +285,7 @@ class AppSyncOrchestrator {
     if (prevState === newState) return;
     this.#state = newState;
     fluxEventBus.publish('orchestrator:stateChanged', { from: prevState, to: newState });
+    fluxEventBus.count('orchestrator:transition', prevState, newState);
     if (prevState === STATES.READY && newState !== STATES.READY) {
       capabilities.claim('spawnerReady', 'appSyncOrchestrator').lower(`orchestrator ${newState}`);
     }

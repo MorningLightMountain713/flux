@@ -14,6 +14,7 @@ import {
 import { waitFor } from '../framework/wait.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { dbClient } from '../framework/db-client.js';
+import { countersInside, orchestratorEntries, orchestratorTransitions } from '../framework/node-counters.js';
 
 // The silent-staleness gap: change-only manifest gossip is fire-once, and the boot/recovery
 // reconcile only re-arms when a node DEGRADES (drops below the peer floor). A node held in a
@@ -127,10 +128,12 @@ describe('steady-state manifest backstop converges a silently-stale node', funct
     );
     const backstopAfter = node.getLastEventId();
     // Both degrade paths a partition could trip must stay silent for the whole episode:
-    // the peer-count path ('Degraded, pausing spawner') and the message-capability path
-    // ('Readiness lost (message capability)'). Neither may fire — that IS "never degrades".
-    const degradedBefore = env.nodeLogCount(N, 'Degraded, pausing spawner');
-    const readinessLostBefore = env.nodeLogCount(N, 'Readiness lost (message capability)');
+    // the peer-count path (into DEGRADED) and the message-capability path (READY to
+    // SYNCING). Neither may fire — that IS "never degrades". Read from inside the node's
+    // container, which crosses the partition.
+    const before = await countersInside(node);
+    const degradedBefore = orchestratorEntries(before, 'DEGRADED');
+    const readinessLostBefore = orchestratorTransitions(before, 'READY', 'SYNCING');
 
     // Partial partition: node N sits in the minority {3,4}, severed from the majority {0,1,2}
     // but still daemon-confirmed and above the (disabled) degrade floor. With the degrade
@@ -153,8 +156,9 @@ describe('steady-state manifest backstop converges a silently-stale node', funct
     const isoRow = await dbClients[N].getContentManifest(name);
     expect(isoRow.version, `node ${N} register diverged at v2`).to.equal(2);
     expect((await dbClients[N].getAppliedContentManifest(name))?.version, `node ${N} still serving v2`).to.equal(2);
-    expect(env.nodeLogCount(N, 'Degraded, pausing spawner'), `node ${N} never degraded (peer count)`).to.equal(degradedBefore);
-    expect(env.nodeLogCount(N, 'Readiness lost (message capability)'), `node ${N} never lost readiness`).to.equal(readinessLostBefore);
+    const during = await countersInside(node);
+    expect(orchestratorEntries(during, 'DEGRADED'), `node ${N} never degraded (peer count)`).to.equal(degradedBefore);
+    expect(orchestratorTransitions(during, 'READY', 'SYNCING'), `node ${N} never lost readiness`).to.equal(readinessLostBefore);
 
     // Heal. Node N re-peers but — never having degraded — runs no boot/recovery resync. Only
     // the steady-state refresh (block-cadence, READY-gated) can converge it now. The refresh is
@@ -183,7 +187,8 @@ describe('steady-state manifest backstop converges a silently-stale node', funct
     }
 
     // And it converged without ever degrading — the whole point of the backstop.
-    expect(env.nodeLogCount(N, 'Degraded, pausing spawner'), `node ${N} never degraded across the episode`).to.equal(degradedBefore);
-    expect(env.nodeLogCount(N, 'Readiness lost (message capability)'), `node ${N} never lost readiness across the episode`).to.equal(readinessLostBefore);
+    const after = await countersInside(node);
+    expect(orchestratorEntries(after, 'DEGRADED'), `node ${N} never degraded across the episode`).to.equal(degradedBefore);
+    expect(orchestratorTransitions(after, 'READY', 'SYNCING'), `node ${N} never lost readiness across the episode`).to.equal(readinessLostBefore);
   });
 });
