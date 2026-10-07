@@ -9,6 +9,7 @@ import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { waitFor } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
+import { waitForRecordRefutedOnEverySurvivor } from '../framework/nodedown-helper.js';
 import { loadSharedConfig } from '../framework/coupled-knobs.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
@@ -233,13 +234,13 @@ describe('node-down certificates end to end', function () {
     expect(row.data?.certificate?.subject).to.equal(subjectOutpoint);
   });
 
-  it('a return past the grace: the subject removes its app and never refutes, its record stands, and it re-holds the fleet by its own dials', async function () {
+  it('a return past the grace: the subject removes its app and announces none, its alive record refutes its certificate, and it re-holds the fleet by its own dials', async function () {
     this.timeout(1200000);
     // The rows went at since + G (R4), and the return rule reads the same
     // clock (R5): a node whose certificate stands with since + G passed has
-    // been replaced by the network and removes everything, announcing
-    // nothing — an announce would put its rows back on every survivor. Past
-    // the grace by construction, not by the preceding tests' durations.
+    // been replaced by the network and removes everything, announcing no
+    // app — an app announcement would put its rows back on every survivor.
+    // Past the grace by construction, not by the preceding tests' durations.
     const [row] = await dbClient(WITNESS + 1).getNodeDownRecords(subjectOutpoint);
     const graceEnd = new Date(row.since).getTime() + NODE_DOWN_GRACE_MS + PAST_GRACE_MARGIN_MS;
     await sleep(Math.max(0, graceEnd - Date.now()));
@@ -262,16 +263,14 @@ describe('node-down certificates end to end', function () {
       return (outbound.data ?? []).length + (inbound.data ?? []).length >= 2;
     }, { timeout: 240000, interval: 5000, label: 'subject re-held by the fleet' });
 
-    // Held and app-less, the subject has had every chance to announce, and an
-    // empty announcement is never broadcast: the record stands unrefuted on
-    // every survivor and the subject never returns to the location view.
+    // The subject's alive record, sent on its return, refutes the certificate
+    // on every survivor; it carries no app, so the subject never returns to
+    // the location view. Held and app-less, the subject has had every chance
+    // to announce an app, and an empty announcement is never broadcast.
+    await waitForRecordRefutedOnEverySurvivor(survivors, subjectOutpoint, 'the alive record refutes the certificate on every survivor');
     await sleep(PAST_GRACE_MARGIN_MS);
-    const states = await Promise.all(survivors.map(
-      (i) => dbClient(i + 1).getNodeDownRecordState(subjectOutpoint),
-    ));
-    expect(states.every((state) => state === 'standing'), `the record is never refuted: ${JSON.stringify(states)}`).to.equal(true);
     const ips = await locationsSeenBy(WITNESS);
-    expect(ips.some((ip) => ipMatches(ip, subjectIp())), 'the subject never refutes').to.equal(false);
+    expect(ips.some((ip) => ipMatches(ip, subjectIp())), 'the subject announces no app').to.equal(false);
     expect(ips.some((ip) => ipMatches(ip, coHolderIp())), 'the co-holder stands').to.equal(true);
   });
 });
