@@ -131,10 +131,15 @@ describe('Ephemeral connections resolve hashes via stub peers', function () {
       await stub.loadMessage(app.message);
     }
     const dc0 = dbClient(1);
+    const before = await dc0.hashCounts();
     await queueAppTx(app.hash);
 
     await advanceBlocks(3);
 
+    // The payment has to be on node 0's record before "nothing missing" can
+    // mean anything: a node that has not seen the block has nothing missing.
+    await waitFor(async () => (await dc0.hashCounts()).total > before.total,
+      { timeout: 120000, interval: 3000, label: 'the payment recorded on node 0' });
     await waitFor(async () => {
       const counts = await dc0.hashCounts();
       return counts.missing === 0;
