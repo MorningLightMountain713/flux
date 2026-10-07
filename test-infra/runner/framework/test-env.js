@@ -54,11 +54,11 @@ import { fluxTeamKey, nodeKey } from './keys.js';
 // pins and the key the stub signs with from drifting apart.
 import policySigning from '../../external-http-stub/policy-signing.js';
 import chainStart from './chain-start.cjs';
+import { statelessRegex } from './log-reader.js';
 import { assertCoupledRatios, loadSharedConfig } from './coupled-knobs.js';
 import { startSyncedDataKeeper } from './synced-data-keeper.js';
 import { assertFluxSpecVendorCurrent, NODE_IMAGE, IMAGE_TAG } from './flux-spec-vendor.js';
 import { assertNodeConfigsCurrent } from './node-configs.js';
-import { statelessRegex } from './log-reader.js';
 import {
   bootArtifact, ensureIpLocationSnapshot, snapshotEntrypoint, SNAPSHOT_MOUNT,
 } from './mongo-snapshot.js';
@@ -141,8 +141,7 @@ function createLogCollector() {
   // Each entry is { t, line }: t is the capture wall-clock (ISO), line is the raw
   // log text. The container's own log lines carry no timestamp, so we stamp at
   // capture time (near-realtime off the stream). hasLine/countPattern match the
-  // raw text; getLines prepends t so inter-line gaps reveal timing (e.g. the
-  // monitor cycle interval between successive "sync status" lines).
+  // raw text; getLines prepends t so inter-line gaps reveal timing in a dump.
   const entries = [];
   const push = (line) => entries.push({ t: new Date().toISOString(), line });
 
