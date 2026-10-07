@@ -472,11 +472,12 @@ describe('app volume file operations - a peer that does not play fair', function
     // at, which bounds what it wrote and is produced by no other failure of this
     // transfer. A node with no ceiling at all would take the whole 48MiB offer,
     // load nothing out of it, recover through the registry, and satisfy every
-    // assertion above - only this line tells a ceiling that fired from one that
-    // never existed.
-    await waitFor(
-      () => env.nodeHasLog(0, new RegExp(`could not provide the file operation image: sent more than ${ceilingBytes} bytes`)),
-      { timeout: 30000, interval: 1000, label: `node 0 refusing the archive at ${ceilingBytes} bytes` },
+    // assertion above - only this refusal tells a ceiling that fired from one
+    // that never existed.
+    await env.clients[0].waitForEvent(
+      'fileoperation:imageRefused',
+      (d) => d.code === 'PEER_IMAGE_CEILING' && d.ceiling === ceilingBytes,
+      30000,
     );
   });
 
