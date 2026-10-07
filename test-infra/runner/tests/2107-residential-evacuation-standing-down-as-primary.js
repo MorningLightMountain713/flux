@@ -220,10 +220,10 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     // going STALE, not one that never existed.
     await electMaster('lockedapp', subnet.nodeIp(TARGET));
 
-    await seedApp(env, 'lockedapp', { instances: 5, syncMode: 'activeStandby' });
+    const lockedApp = await seedApp(env, 'lockedapp', { instances: 5, syncMode: 'activeStandby' });
     const lockedContainer = await dbClient(TARGET).appContainerName('lockedapp', 'lockedapp');
-    await setSynced({ folder: 'fluxlockedapp_lockedapp' });
-    await setPeerHasData({ folder: 'fluxlockedapp_lockedapp' });
+    await setSynced({ folder: folderIdOf(lockedApp, 'lockedapp') });
+    await setPeerHasData({ folder: folderIdOf(lockedApp, 'lockedapp') });
     await advanceBlocks(3);
     await waitFor(async () => (await locationsOf(env, 'lockedapp')).length >= 5,
       { timeout: 300000, label: 'lockedapp reaches its instance count across the fleet' });
