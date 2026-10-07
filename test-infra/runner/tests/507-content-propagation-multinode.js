@@ -12,6 +12,7 @@ import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitForAppInstalled, waitFor } from '../framework/wait.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { dbClient } from '../framework/db-client.js';
+import { countersInside, orchestratorEntries } from '../framework/node-counters.js';
 
 // Multi-node content propagation: the slot-manifest register is a permanent latest-wins
 // value that must converge to the same version on every node by TWO complementary paths,
@@ -258,7 +259,9 @@ describe('content propagation across a multi-node fleet', function () {
     const isolated = [7, 8, 9];
     const connected = [0, 1, 2, 3, 4, 5, 6];
     const reconciledAfterIds = isolated.map((i) => env.clients[i].getLastEventId());
-    const degradedBefore = isolated.map((i) => env.nodeLogCount(i, 'Degraded, pausing spawner'));
+    const degradedBefore = await Promise.all(isolated.map(
+      async (i) => orchestratorEntries(await countersInside(env.clients[i]), 'DEGRADED'),
+    ));
     for (const i of isolated) {
       await env.disconnectNode(i);
     }
@@ -283,11 +286,13 @@ describe('content propagation across a multi-node fleet', function () {
     // hit zero, via pong timeout on all eight of its sockets). Healing any earlier
     // leaves surviving sockets holding the count above the degraded threshold, and
     // a node that never degrades never re-arms the resync. The gate reads each
-    // node's own transition off the docker log stream — the one channel that
-    // crosses a partition — against a pre-partition count so only THIS partition's
-    // transition satisfies it.
+    // node's own transition count from inside its container — a read that
+    // crosses the partition — against a pre-partition count so only THIS
+    // partition's transition satisfies it.
     await waitFor(
-      () => isolated.every((i, k) => env.nodeLogCount(i, 'Degraded, pausing spawner') > degradedBefore[k]),
+      async () => (await Promise.all(isolated.map(
+        async (i, k) => orchestratorEntries(await countersInside(env.clients[i]), 'DEGRADED') > degradedBefore[k],
+      ))).every(Boolean),
       { timeout: 60000, interval: 1000, label: 'all isolated nodes DEGRADED' },
     );
 

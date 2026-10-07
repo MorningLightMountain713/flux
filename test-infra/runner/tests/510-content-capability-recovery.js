@@ -12,6 +12,7 @@ import {
 import { waitFor, waitForOrchestratorState, waitForNodeStatus } from '../framework/wait.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { dbClient } from '../framework/db-client.js';
+import { countersInside, orchestratorEntries } from '../framework/node-counters.js';
 
 // A node that degrades AND loses daemon confirmation must still reconcile its content-manifest
 // register on recovery. FluxOS drops every peer on losing confirmation and dials again only
@@ -117,18 +118,18 @@ describe('content manifest recovery through a message-capability round-trip', fu
 
     // Read before the disturbance: losing confirmation drops every peer, so the
     // degrade lands with step 1, and the partition below keeps it there.
-    const degradedBefore = env.nodeLogCount(N, 'Degraded, pausing spawner');
+    const degradedBefore = orchestratorEntries(await countersInside(node), 'DEGRADED');
 
     // 1. Drop capability FIRST (reachable-but-unconfirmed → messageCapable false, app kept).
     await setNodeStatus(node.ip, 'EXPIRED');
     await waitForNodeStatus(node, (d) => d.confirmed === false, 30000, { afterId: cursor });
 
     // 2. Then partition it: with no peers it degrades (resetting the manifest latch) and
-    //    misses the coming v3. Degrade gated on the node's own docker log, the one channel
-    //    that crosses a partition.
+    //    misses the coming v3. Degrade gated on the node's own counters, read from
+    //    inside its container: the read crosses the partition.
     await env.disconnectNode(N);
     await waitFor(
-      () => env.nodeLogCount(N, 'Degraded, pausing spawner') > degradedBefore,
+      async () => orchestratorEntries(await countersInside(node), 'DEGRADED') > degradedBefore,
       { timeout: 60000, interval: 1000, label: `node ${N} DEGRADED` },
     );
 
