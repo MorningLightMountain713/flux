@@ -238,6 +238,7 @@ export function nodeClient(nodeNum) {
         'daemon:listAnchored',
         'daemon:ownStatus',
         'daemon:polled',
+        'daemon:stale',
         'daemon:recovered',
         'daemon:reorg',
         'daemon:resync',
