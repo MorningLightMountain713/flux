@@ -384,6 +384,7 @@ export function nodeClient(nodeNum) {
         'primaryRole:standDownGiven',
         'primaryRole:returned',
         'shutdown:paused',
+        'capability:changed',
         'system:packages-checked',
         'system:apt-command',
         'spawner:blocked',

@@ -2,6 +2,7 @@
 
 const { EventEmitter } = require('events');
 const log = require('../../lib/log');
+const fluxEventBus = require('./fluxEventBus');
 
 /**
  * What this node can do right now, and why not when it cannot.
@@ -133,6 +134,8 @@ function settle(name, reason) {
   const firstUp = next === STATE.UP && !entry.everUp;
   if (next === STATE.UP) entry.everUp = true;
   emitter.emit('transition', record);
+  // The transition on the bus: what a reader outside the node waits on.
+  fluxEventBus.publish('capability:changed', record);
   if (firstUp) emitter.emit(`${name}:first-up`, record);
 
   for (const dependent of dependentsOf(name)) {
