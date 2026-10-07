@@ -119,7 +119,7 @@ describe('steady-state manifest backstop converges a silently-stale node', funct
     const node = env.clients[N];
     const MAJORITY = [0, 1, 2];
     const MINORITY = [3, 4];
-    // Baseline: node N has DELIVERED v2 to its container (appliedVersion 2), so a later v3
+    // Baseline: node N has DELIVERED v2 to its container (the applied row is v2), so a later v3
     // apply is unambiguous.
     await waitFor(
       async () => (await assertContentApplied([dbClients[N]], name, 2)).applied,
@@ -152,7 +152,7 @@ describe('steady-state manifest backstop converges a silently-stale node', funct
     // and it never degraded — nothing has re-armed a reconcile.
     const isoRow = await dbClients[N].getContentManifest(name);
     expect(isoRow.version, `node ${N} register diverged at v2`).to.equal(2);
-    expect(isoRow.appliedVersion, `node ${N} still serving v2`).to.equal(2);
+    expect((await dbClients[N].getAppliedContentManifest(name))?.version, `node ${N} still serving v2`).to.equal(2);
     expect(env.nodeLogCount(N, 'Degraded, pausing spawner'), `node ${N} never degraded (peer count)`).to.equal(degradedBefore);
     expect(env.nodeLogCount(N, 'Readiness lost (message capability)'), `node ${N} never lost readiness`).to.equal(readinessLostBefore);
 
@@ -174,7 +174,7 @@ describe('steady-state manifest backstop converges a silently-stale node', funct
       await waitFor(
         async () => {
           const row = await dbClients[N].getContentManifest(name);
-          return row && row.version === 3 && row.appliedVersion === 3;
+          return row?.version === 3 && (await dbClients[N].getAppliedContentManifest(name))?.version === 3;
         },
         { timeout: 90000, interval: 2000, label: `node ${N} converged register + delivered to v3` },
       );

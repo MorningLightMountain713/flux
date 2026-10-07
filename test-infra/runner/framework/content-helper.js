@@ -435,9 +435,9 @@ export async function assertManifestSynced(dbClients, appName, version) {
 /**
  * Assert every node has DELIVERED content up to `version` — the running-container half of
  * convergence, distinct from assertManifestSynced (which only checks the known register
- * version). Reads the node-local `appliedVersion` annotation on each appcontentmanifests
- * row; the gap `version > appliedVersion` is exactly what the steady-state backstop closes
- * (a node whose register caught up but whose container is still serving the old content).
+ * version). Reads the row the node marks `applied`, the one delivered to the container;
+ * a register ahead of it is exactly the gap the steady-state backstop closes (a node whose
+ * register caught up but whose container is still serving the old content).
  */
 export async function assertContentApplied(dbClients, appName, version) {
   const rows = await Promise.all(dbClients.map((dbc) => dbc.getAppliedContentManifest(appName).catch(() => null)));
