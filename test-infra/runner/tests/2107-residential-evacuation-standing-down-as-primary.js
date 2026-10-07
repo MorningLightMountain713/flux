@@ -10,6 +10,7 @@ import { setPeerHasData, setSynced } from '../framework/syncthing-control.js';
 import { sleepUnlessInfraDead } from '../framework/infra-death.js';
 import { electMaster, startFdmOutage, endFdmOutage } from '../framework/fdm-control.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
+import { componentIdentifier, folderIdOf } from '../framework/container.js';
 import { loadSharedConfig } from '../framework/coupled-knobs.js';
 import {
   subnet, TARGET, SECOND_TARGET, bootResidentialFleet, seedApp, returnToService,
@@ -74,16 +75,17 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     // peer is already running.
     await electMaster('primaryapp', subnet.nodeIp(TARGET));
 
-    await seedApp(env, 'primaryapp', { instances: 5, syncMode: 'activeStandby' });
+    const primaryApp = await seedApp(env, 'primaryapp', { instances: 5, syncMode: 'activeStandby' });
+    const primaryIdentifier = componentIdentifier(primaryApp, 'primaryapp');
     const primaryContainer = await dbClient(TARGET).appContainerName('primaryapp', 'primaryapp');
-    await setSynced({ folder: 'fluxprimaryapp_primaryapp' });
-    await setPeerHasData({ folder: 'fluxprimaryapp_primaryapp' });
+    await setSynced({ folder: folderIdOf(primaryApp, 'primaryapp') });
+    await setPeerHasData({ folder: folderIdOf(primaryApp, 'primaryapp') });
     await advanceBlocks(3);
     await waitFor(async () => (await locationsOf(env, 'primaryapp')).length >= 5,
       { timeout: 300000, label: 'primaryapp reaches its instance count across the fleet' });
     // Only the node running the activeStandby component is the writer, so only it can be
     // asked to stand down.
-    await waitFor(async () => (await runningComponents(env, TARGET)).includes('fluxprimaryapp_primaryapp'),
+    await waitFor(async () => (await runningComponents(env, TARGET)).includes(primaryContainer),
       { timeout: 300000, label: 'the elected primary is running the activeStandby component' });
 
     // And the component has to be RUNNING here before the drain starts: the gate asks
@@ -136,7 +138,7 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     // "stopped" while the node is still writing.
     const desired = await env.clients[TARGET - 1].waitForEvent(
       'reconciler:desiredChanged',
-      (d) => d.identifier === 'primaryapp_primaryapp' && d.state === 'stopped',
+      (d) => d.identifier === primaryIdentifier && d.state === 'stopped',
       180000,
       // ANCHORED ON THE VERDICT, because the stand-down is what this transition
       // has to have been caused by. The install stops the component too, with

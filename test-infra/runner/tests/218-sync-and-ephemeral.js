@@ -140,7 +140,10 @@ describe('Ephemeral connections resolve hashes via stub peers', function () {
       return counts.missing === 0;
     }, { timeout: 120000, interval: 3000, label: 'hash resolved via ephemeral connection' });
 
-    expect(env.nodeHasLog(0, /Ephemeral round/)).to.be.true;
+    // Nobody is a standing peer of a stub, so the message leaves a stub over an
+    // ephemeral connection and nothing else; whichever real node opened it
+    // serves the rest on ordinary rounds.
+    expect(realIndices.some((i) => env.nodeHasLog(i, /Ephemeral round/)), 'a real node opened an ephemeral round').to.be.true;
 
     let totalServed = 0;
     for (const [, stub] of env.stubPeerClients) {

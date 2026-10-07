@@ -11,6 +11,7 @@ import {
 } from '../framework/wait.js';
 import { setNoPeerData, setPeerHasData, setSynced } from '../framework/syncthing-control.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
+import { componentIdentifier, folderIdOf } from '../framework/container.js';
 import {
   subnet, TARGET, TABLE_DECIDED, VETOING, bootResidentialFleet, seedApp, whenGone,
   returnToService, elapseSettleWindow, departureWaitMs,

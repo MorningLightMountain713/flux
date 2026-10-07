@@ -14,6 +14,7 @@ import {
   waitForDaemonReady,
   waitForNodeStatus,
   waitForOrchestratorState,
+  waitForAppSpecStored,
 } from '../framework/wait.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { fluxTeamKey } from '../framework/keys.js';
@@ -142,6 +143,9 @@ describe('State sync: hash resolution', function () {
     await waitForDaemonReady(client);
     await waitForNodeStatus(client, (d) => d.confirmed === true, 30000);
     await waitForOrchestratorState(client, 'READY', 120000);
+    // A hash still missing at READY is fetched and decided after it; the row
+    // the route reads lands with the decision.
+    await waitForAppSpecStored(client, appName, 60000);
 
     const dc = dbClient(11);
     const counts = await dc.hashCounts();
