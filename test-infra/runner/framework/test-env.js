@@ -56,7 +56,6 @@ import chainStart from './chain-start.cjs';
 import { assertCoupledRatios, loadSharedConfig } from './coupled-knobs.js';
 import { assertFluxSpecVendorCurrent, NODE_IMAGE, IMAGE_TAG } from './flux-spec-vendor.js';
 import { assertNodeConfigsCurrent } from './node-configs.js';
-import { statelessRegex } from './log-reader.js';
 import {
   bootArtifact, ensureIpLocationSnapshot, snapshotEntrypoint, SNAPSHOT_MOUNT,
 } from './mongo-snapshot.js';
@@ -158,9 +157,8 @@ async function describeUnansweredBoot(container, logCollector, error) {
 function createLogCollector() {
   // Each entry is { t, line }: t is the capture wall-clock (ISO), line is the raw
   // log text. The container's own log lines carry no timestamp, so we stamp at
-  // capture time (near-realtime off the stream). hasLine/countPattern match the
-  // raw text; getLines prepends t so inter-line gaps reveal timing (e.g. the
-  // monitor cycle interval between successive "sync status" lines).
+  // capture time (near-realtime off the stream). getLines prepends t so
+  // inter-line gaps reveal timing in a dump.
   const entries = [];
   const push = (line) => entries.push({ t: new Date().toISOString(), line });
 
@@ -221,18 +219,6 @@ function createLogCollector() {
   // Record a line that did not come off the container's stream - the harness saying
   // something about the capture itself, so a gap in the log explains itself in the dump.
   consumer.note = (line) => push(line);
-
-  // Both match line by line, so the regex must not carry state between lines — see
-  // statelessRegex.
-  consumer.hasLine = (pattern) => {
-    const regex = statelessRegex(pattern);
-    return entries.some((e) => regex.test(e.line));
-  };
-
-  consumer.countPattern = (pattern) => {
-    const regex = statelessRegex(pattern);
-    return entries.filter((e) => regex.test(e.line)).length;
-  };
 
   consumer.getLines = () => entries.map((e) => `${e.t} ${e.line}`);
 
@@ -2661,16 +2647,9 @@ async function _buildEnv(
       }
     },
 
-    nodeHasLog(index, pattern) {
-      assertCollectorSeesFluxos('nodeHasLog');
-      return fluxNodes[index].logCollector.hasLine(pattern);
-    },
-
-    nodeLogCount(index, pattern) {
-      assertCollectorSeesFluxos('nodeLogCount');
-      return fluxNodes[index].logCollector.countPattern(pattern);
-    },
-
+    // A node's captured log, for a suite whose subject is the log itself. Every
+    // other suite reads bus events, counters or checkpoints: a log line is not a
+    // contract.
     nodeLogLines(index) {
       assertCollectorSeesFluxos('nodeLogLines');
       return fluxNodes[index].logCollector.getLines();

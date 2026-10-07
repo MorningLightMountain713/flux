@@ -62,7 +62,8 @@ export async function transferApp(nodeUrl, adminKeypair, app, nodes, {
     return sold({ status: 'success', appHash: updateHash, contentHash: submitted.contentHash, ...confirm }, updateHash);
   }
 
-  const { hash, ...spec } = app.spec;
+  const spec = { ...app.spec };
+  delete spec.hash;
   const result = await registerAndConfirm(nodeUrl, adminKeypair, { ...spec, owner: buyer.zelid }, nodes, {
     ...confirmOpts, type: 'fluxappupdate', signerKey: sellerKey,
   });
