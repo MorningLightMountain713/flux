@@ -109,11 +109,10 @@ describe('content propagation across a multi-node fleet', function () {
       name, slots: [{ name: 'conf', bytes: Buffer.from('prop config v2') }],
     });
     expect(up.status, JSON.stringify(up)).to.equal('success');
-    // Versions count within the owner's ownership: the first manifest signed
-    // after the registration is 1 (the registration's list is signed before its
-    // height exists and sits outside the count).
+    // Versions count within the owner's ownership, and the registration's list
+    // is the original owner's version 1, so the first update is 2.
     const pushed = up.data.version;
-    expect(pushed).to.equal(1);
+    expect(pushed).to.equal(2);
 
     await env.clients[0].waitForEvent(
       'content:contentUpdateApplied',
