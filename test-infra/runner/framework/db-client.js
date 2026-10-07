@@ -130,8 +130,10 @@ export function dbClient(nodeNum) {
         .filter((row) => new Date(row.expireAt).getTime() > now);
       if (!rows.length) return 'none';
       const newest = rows.reduce((a, b) => (new Date(b.broadcastedAt) > new Date(a.broadcastedAt) ? b : a));
+      // The node's own reading: an app announcement or the subject's alive record,
+      // stamped at or after the certificate, refutes it.
       const refutation = await events.findOne({
-        type: 'apprunning', outpoint: subject, broadcastedAt: { $gte: new Date(newest.broadcastedAt) },
+        type: { $in: ['apprunning', 'nodealive'] }, outpoint: subject, broadcastedAt: { $gte: new Date(newest.broadcastedAt) },
       });
       return refutation ? 'refuted' : 'standing';
     },
