@@ -3,7 +3,7 @@ import { describe, it, before, after, afterEach } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import {
-  waitForDaemonReady, waitForNodeStatus, waitForMessageCapabilityChanged, waitFor,
+  waitForDaemonReady, waitForNodeStatus, waitForMessageCapabilityChanged,
 } from '../framework/wait.js';
 import {
   advanceBlock, enableRpcFailure, disableAllRpcFailure,
@@ -119,11 +119,9 @@ describe('Confirmation service: RPC failure windows', function () {
 
   it('should detect daemon stale beyond stale window', async function () {
     this.timeout(30000);
+    const mark = env.clients[0].getLastEventId();
     await enableRpcFailure(env.clients[0].ip);
-    await waitFor(
-      () => env.nodeHasLog(0, 'Daemon unreachable for') && env.nodeHasLog(0, 'stale'),
-      { timeout: 20000, interval: 2000, label: 'daemon stale detection' },
-    );
+    await env.clients[0].waitForEvent('daemon:stale', () => true, 20000, { afterId: mark });
   });
 
   it('should lose confirmation beyond expired window', async function () {

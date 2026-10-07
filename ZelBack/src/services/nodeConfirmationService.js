@@ -197,6 +197,7 @@ async function reconcile(previous, statusObserved) {
     if (elapsed > DAEMON_STALE_MS && !daemonStale) {
       daemonStale = true;
       log.warn(`nodeConfirmationService - Daemon unreachable for ${Math.round(elapsed / 60_000)} minutes, stale`);
+      fluxEventBus.publish('daemon:stale', { elapsedMs: elapsed });
       for (const cb of daemonStaleListeners) {
         try { cb(); } catch (e) { log.error(e); }
       }
