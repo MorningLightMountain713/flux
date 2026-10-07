@@ -328,21 +328,11 @@ export async function waitForHashSyncComplete(node, timeout = 120_000, opts) {
   return node.waitForEvent('hashSync:complete', () => true, timeout, opts);
 }
 
-// Boot anchor for log-asserting suites: the boot:settled EVENT is the
-// behavioural bound, but it is published one statement BEFORE the settle log
-// line is written (appStartupManager's finally block), and the SSE push beats
-// the docker log pipeline (container stdout → dockerd → attach stream →
-// collector) by tens of ms. Awaiting the settle LINE as well gives a pipeline
-// sync point: the log stream is FIFO, so once that line has arrived every line
-// written before it has too — instant nodeHasLog asserts (including absence
-// asserts) made after this anchor are race-free. Call it from a block's
-// before() so every test in the block is order-independent.
-export async function waitForBootSettledAndLogged(env, index = 0, { timeout = 50000 } = {}) {
-  await waitForBootSettled(env.clients[index], timeout);
-  await waitFor(
-    () => env.nodeHasLog(index, 'Boot container state settled'),
-    { timeout: 10000, interval: 250, label: 'settled log line' },
-  );
+// What the boot decided: boot:settled carries the branch the boot manager took
+// (`decision`: reconciled, locationsExpired, daemonTimeout, notConfirmed, dos,
+// syncTimeout, notPlaced) and whether this was the node's first boot.
+export async function bootDecision(env, index = 0, { timeout = 50000 } = {}) {
+  return (await waitForBootSettled(env.clients[index], timeout)).data;
 }
 
 export async function waitForPeersBelowThreshold(node, timeout = 30000, opts) {
