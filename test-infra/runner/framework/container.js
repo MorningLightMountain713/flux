@@ -361,21 +361,26 @@ export async function getAppContainerExitCode(container, appName, componentName)
  * can't observe a false "already ready".
  */
 export async function restartDockerd(container, { readyTimeoutMs = 40000, interval = 500 } = {}) {
+  // Returns on the NEW daemon: a different dockerd pid whose API answers. The
+  // old daemon keeps answering `docker info` for seconds after its SIGTERM while
+  // it shuts down, so a down-then-up read of the API alone returns into the gap.
+  const before = (await execInContainer(container, 'pidof dockerd || true')).stdout.trim();
   await execInContainer(container, 'kill $(pidof dockerd) 2>/dev/null || true');
   const start = Date.now();
-  let sawDown = false;
   while (Date.now() - start < readyTimeoutMs) {
     // an infra death voids the run - don't spend the budget proving it
     throwIfInfraDead();
     // eslint-disable-next-line no-await-in-loop
-    const r = await execInContainer(container, 'docker info > /dev/null 2>&1');
-    const up = r.exitCode === 0;
-    if (!up) sawDown = true;
-    if (sawDown && up) return;
+    const pid = (await execInContainer(container, 'pidof dockerd || true')).stdout.trim();
+    if (pid !== '' && pid !== before) {
+      // eslint-disable-next-line no-await-in-loop
+      const r = await execInContainer(container, 'docker info > /dev/null 2>&1');
+      if (r.exitCode === 0) return;
+    }
     // eslint-disable-next-line no-await-in-loop
     await sleepUnlessInfraDead(interval);
   }
-  throw new Error(`restartDockerd: dockerd did not cycle down and back up within ${readyTimeoutMs}ms`);
+  throw new Error(`restartDockerd: no new dockerd answered within ${readyTimeoutMs}ms`);
 }
 
 /**

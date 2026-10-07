@@ -50,7 +50,7 @@ describe('deliberate stop during an event-stream outage neither wedges nor flaps
     // stop immediately - dockerd is back, the stream very likely is not yet
     const auth = await authenticate(client.url, appOwnerKey());
     const stopRes = await client.getAuthed(`/apps/appstop/${appName}`, auth.zelidauth);
-    expect(stopRes.status).to.equal('success');
+    expect(stopRes.status, JSON.stringify(stopRes)).to.equal('success');
     // The interleaving this suite exists to catch puts the wrong start BEFORE the
     // container goes down, so an assertion anchored after waitForDown has already
     // stepped past it. Anchor on the intent instead - the id survives the stream
