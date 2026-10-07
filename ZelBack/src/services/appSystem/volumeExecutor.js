@@ -495,7 +495,7 @@ async function receivePeerArchive(body, destination) {
 
   const watchdog = setInterval(function noticeSilence() {
     if (stalled === taken) {
-      stopWith(new Error(`sent nothing for ${PEER_IMAGE_STALL_MS}ms`));
+      stopWith(Object.assign(new Error(`sent nothing for ${PEER_IMAGE_STALL_MS}ms`), { code: 'PEER_IMAGE_STALLED' }));
       return;
     }
     stalled = taken;
@@ -505,7 +505,9 @@ async function receivePeerArchive(body, destination) {
   body.on('data', function count(chunk) {
     taken += chunk.length;
     if (taken > PEER_IMAGE_MAX_BYTES) {
-      stopWith(new Error(`sent more than ${PEER_IMAGE_MAX_BYTES} bytes`));
+      stopWith(Object.assign(new Error(`sent more than ${PEER_IMAGE_MAX_BYTES} bytes`), {
+        code: 'PEER_IMAGE_CEILING', ceiling: PEER_IMAGE_MAX_BYTES,
+      }));
     }
   });
 
@@ -701,6 +703,9 @@ async function fetchImageFromPeer(expected) {
       log.warn(`volumeExecutor - ${socketAddress} sent ${loaded.ids.length} image(s), none of them ${expected}`);
     } catch (error) {
       log.warn(`volumeExecutor - ${socketAddress} could not provide the file operation image: ${error.message}`);
+      fluxEventBus.publish('fileoperation:imageRefused', {
+        peer: socketAddress, code: error.code ?? null, ceiling: error.ceiling ?? null,
+      });
     } finally {
       // Whatever ended the transfer, the directory and the partial file in it
       // go: a peer that dies mid-archive must not leave this node accumulating

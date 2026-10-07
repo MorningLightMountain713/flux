@@ -258,6 +258,7 @@ export function nodeClient(nodeNum) {
         'app:announcing',
         'fileoperation:imageAcquired',
         'fileoperation:imageDiscarded',
+        'fileoperation:imageRefused',
         'quorumGrant:askRefused',
         'quorumGrant:assess',
         'quorumGrant:founded',
