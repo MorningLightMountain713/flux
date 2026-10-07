@@ -289,9 +289,17 @@ describe('a surplus copy that is also the writer', function () {
     await electMaster(appName, newestIp);
 
     // Positive control. Without it a later "the writer never stopped" assertion
-    // passes on a component that was never running in the first place.
-    await waitFor(async () => (await runningComponents(env, newestIndex)).includes(folder),
-      { timeout: 180000, interval: 3000, label: 'the newest copy is running the writer' });
+    // passes on a component that was never running in the first place. A timeout
+    // names what the node listed, so a name the node builds differently is told
+    // apart from a writer that never started.
+    let listed = [];
+    await waitFor(async () => {
+      listed = await runningComponents(env, newestIndex);
+      return listed.includes(folder);
+    }, { timeout: 180000, interval: 3000, label: 'the newest copy is running the writer' })
+      .catch((error) => {
+        throw new Error(`${error.message}\n    wanted ${folder}; node ${newestIndex} listed ${JSON.stringify(listed)}`);
+      });
 
     shape = { newestIndex, nextIndex };
     return shape;
