@@ -443,7 +443,7 @@ describe('a node that restored STALE policy catches up before it acts', function
     // The gate is downstream of that. A node acting on the stale bundle would have got
     // here while still at seq 4; this one could not, because restoring does not confirm.
     await waitFor(
-      () => env.nodeLogCount(0, 'Checking for apps that are missing instances') > 0,
+      async () => ((await env.clients[0].getTestCounters())['spawner:pass'] ?? 0) > 0,
       { timeout: 150000, interval: 3000, label: 'node 0 to get past the policy gate' },
     );
     expect(await heldSeq(0), 'and it is current when it does').to.equal((await stubState(env)).policySeq);
@@ -606,7 +606,7 @@ describe('a node whose source answered with something that did not verify', func
     // never install anything again - a failure that is invisible in the database and only
     // shows here.
     await waitFor(
-      () => env.nodeLogCount(0, 'Checking for apps that are missing instances') > 0,
+      async () => ((await env.clients[0].getTestCounters())['spawner:pass'] ?? 0) > 0,
       { timeout: 180000, interval: 3000, label: 'node 0 to get past the policy gate' },
     );
   });
