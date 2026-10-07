@@ -68,7 +68,6 @@ const resourceQueryService = require('./appQuery/resourceQueryService');
 const appQueryService = require('./appQuery/appQueryService');
 const containerLabelBackfill = require('./appLifecycle/containerLabelBackfill');
 const registryManager = require('./appDatabase/registryManager');
-const fluxEventBus = require('./utils/fluxEventBus');
 
 /**
  * What an endpoint that updates FluxOS's own code answers on this node type, or
