@@ -30,13 +30,12 @@ import { execInContainer, getAppContainerId } from '../framework/container.js';
 import { dbClient } from '../framework/db-client.js';
 import { seedGlobalSpec } from '../framework/reconciler-suite.js';
 import { REGISTRY_REPO_HOST, STORAGE_HOST } from '../framework/subnet-config.js';
-import { startTicker, advanceBlock } from '../framework/daemon-control.js';
 import {
   stageStoragePayload, stageStorageRedirect, storageUrl,
   storageRequests, resetStorageRequests,
 } from '../framework/external-http-control.js';
 import {
-  waitFor, waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
+  waitFor, waitForBlockProcessed,
   waitForAppInstalled, waitForAppSpecStored,
 } from '../framework/wait.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';

@@ -1,11 +1,10 @@
 // The fleet, app seeding and pacing the residential-evacuation suites share.
-import { describe, it, before, after } from 'mocha';
 import { createTestEnv } from './test-env.js';
 import { dbClient } from './db-client.js';
 import { pushTestApp } from './registry-helper.js';
 import { buildSeedableApp, syncedContainerData } from './seed-helper.js';
 import { getSubnetConfig, REGISTRY_REPO_HOST } from './subnet-config.js';
-import { advanceBlock, driveUntil, startTicker, setSystemSecure } from './daemon-control.js';
+import { advanceBlock, startTicker, setSystemSecure } from './daemon-control.js';
 import {
   waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed, waitForExplorerReady, waitForOrchestratorStarted, waitForOrchestratorState, waitForPeerThreshold, waitFor,
 } from './wait.js';

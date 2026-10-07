@@ -11,7 +11,7 @@ import {
 import { setNoPeerData, setPeerHasData, setSynced } from '../framework/syncthing-control.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 import {
-  subnet, DEPARTURE_WAIT_MS, seedApp, whenGone, returnToService, elapseSettleWindow, TARGET, locationsOf, TABLE_DECIDED, VETOING, SECOND_TARGET, bootResidentialFleet,
+  subnet, DEPARTURE_WAIT_MS, seedApp, whenGone, returnToService, elapseSettleWindow, TARGET, locationsOf, TABLE_DECIDED, VETOING, bootResidentialFleet,
 } from '../framework/residential-evacuation.js';
 
 describe('Residential node evacuation', function () {
