@@ -19,6 +19,7 @@ const { CLOSE_CODES } = require('../utils/FluxPeerSocket');
 const { appSyncEvents, EVENTS } = require('../utils/appSyncEvents');
 const { HASH_EXPIRY_BLOCKS, HASH_RETRY_BACKOFF } = require('../utils/appConstants');
 const log = require('../../lib/log');
+const fluxEventBus = require('../utils/fluxEventBus');
 const { invalidMessages } = require('../invalidMessages');
 const { Privilege, authOf } = require('../utils/privileges');
 
@@ -402,6 +403,7 @@ async function syncMissingHashes(options = {}) {
   }
 
   syncRunning = true;
+  fluxEventBus.count('hashSync:run');
   try {
     const db = dbHelper.databaseConnection();
     const daemonDb = db.db(config.get('database.daemon.database'));
