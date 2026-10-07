@@ -19,8 +19,9 @@ import {
 import {
   waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent,
 } from '../framework/wait.js';
-import { getState, advanceBlocks, stopTicker } from '../framework/daemon-control.js';
-import { authenticate, signBtcMessage } from '../auth.js';
+import { advanceBlocks, stopTicker } from '../framework/daemon-control.js';
+import { authenticate } from '../auth.js';
+import { postGenerationRecord } from '../framework/generation-record.js';
 import { appOwnerKey } from '../framework/keys.js';
 
 // The walk the nodes run, so the suite deals the same committees they do.
@@ -171,20 +172,10 @@ describe('record-deaf master: after the heal every certificate the partition for
     .filter((e) => e.event === 'nodedown:stored' && e.id > afterId)
     .map((e) => e.data?.subject));
 
-  async function submitRerollAt(i) {
-    const owner = appOwnerKey();
-    const { currentHeight } = await getState();
-    const at = Date.now();
-    const canonical = `fluxgrantgeneration:${app.identity}|master|1|${currentHeight}|${at}`;
-    const signature = await signBtcMessage(canonical, owner.privkey);
-    const res = await fetch(`${env.clients[i].url}/apps/grantgeneration`, {
-      method: 'POST',
-      headers: { zelidauth: ownerAuthFar, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        identity: app.identity, role: 'master', generation: 1, height: currentHeight, at, signature,
-      }),
+  function submitRerollAt(i) {
+    return postGenerationRecord(env.clients[i].url, {
+      name, identity: app.identity, role: 'master', generation: 1, ownerKey: appOwnerKey(), auth: ownerAuthFar,
     });
-    return { status: res.status, body: await res.text(), height: currentHeight };
   }
 
   before(async function () {

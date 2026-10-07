@@ -15,9 +15,10 @@ import {
 } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
-import { getState, advanceBlock, stopTicker, startTicker } from '../framework/daemon-control.js';
+import { advanceBlock, stopTicker, startTicker } from '../framework/daemon-control.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
-import { authenticate, signBtcMessage } from '../auth.js';
+import { authenticate } from '../auth.js';
+import { postGenerationRecord } from '../framework/generation-record.js';
 import { appOwnerKey } from '../framework/keys.js';
 
 // Tier one and tier two against a real fleet. A referee that answers
@@ -329,18 +330,9 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     }, { timeout: 300000, interval: 10000, label: 'a settled host holds the grant' });
   });
 
-  async function submitReroll(generation) {
-    const owner = appOwnerKey();
-    const { currentHeight } = await getState();
-    const at = Date.now();
-    const canonical = `fluxgrantgeneration:${app.identity}|master|${generation}|${currentHeight}|${at}`;
-    const signature = await signBtcMessage(canonical, owner.privkey);
-    return fetch(`${env.clients[0].url}/apps/grantgeneration`, {
-      method: 'POST',
-      headers: { zelidauth: ownerAuth0, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        identity: app.identity, role: 'master', generation, height: currentHeight, at, signature,
-      }),
+  function submitReroll(generation) {
+    return postGenerationRecord(env.clients[0].url, {
+      name, identity: app.identity, role: 'master', generation, ownerKey: appOwnerKey(), auth: ownerAuth0,
     });
   }
 
@@ -379,8 +371,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       env.clients[i], componentIdentifier(app), 'settledStopped', 90000, { afterId: markers[i] },
     )));
     const submitted = await submitReroll(1);
-    const submittedBody = await submitted.text();
-    expect(submitted.status, submittedBody).to.equal(200);
+    expect(submitted.status, submitted.body).to.equal(200);
 
     // The record reaches every holder (its own event on each node), the
     // salted walk deals a fresh committee, and the stopped world restarts
@@ -451,8 +442,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
 
       // the re-roll lands under the running master; every holder stores it
       const submitted = await submitReroll(2);
-      const submittedBody = await submitted.text();
-      expect(submitted.status, submittedBody).to.equal(200);
+      expect(submitted.status, submitted.body).to.equal(200);
       await Promise.all(hosts.map((i) => env.clients[i].waitForEvent(
         'quorumGrant:generationRecord',
         (d) => d.identity === app.identity && d.role === 'master' && d.generation === 2,

@@ -21,9 +21,10 @@ import {
 import {
   waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent,
 } from '../framework/wait.js';
-import { getState, advanceBlocks, stopTicker } from '../framework/daemon-control.js';
+import { advanceBlocks, stopTicker } from '../framework/daemon-control.js';
 import { electMaster, resetFdm, getFdmState } from '../framework/fdm-control.js';
-import { authenticate, signBtcMessage } from '../auth.js';
+import { authenticate } from '../auth.js';
+import { postGenerationRecord } from '../framework/generation-record.js';
 import { appOwnerKey } from '../framework/keys.js';
 
 const require = createRequire(import.meta.url);
@@ -108,20 +109,10 @@ describe('mastership authority: FluxOS keeps the app up and FDM never decides th
     return HOLDERS.filter((_, k) => statuses[k] && statuses[k].status.startsWith('Up'));
   };
 
-  async function submitReroll(generation) {
-    const owner = appOwnerKey();
-    const { currentHeight } = await getState();
-    const at = Date.now();
-    const canonical = `fluxgrantgeneration:${app.identity}|master|${generation}|${currentHeight}|${at}`;
-    const signature = await signBtcMessage(canonical, owner.privkey);
-    const res = await fetch(`${env.clients[0].url}/apps/grantgeneration`, {
-      method: 'POST',
-      headers: { zelidauth: ownerAuth0, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        identity: app.identity, role: 'master', generation, height: currentHeight, at, signature,
-      }),
+  function submitReroll(generation) {
+    return postGenerationRecord(env.clients[0].url, {
+      name, identity: app.identity, role: 'master', generation, ownerKey: appOwnerKey(), auth: ownerAuth0,
     });
-    return { status: res.status, body: await res.text() };
   }
 
   before(async function () {
