@@ -231,6 +231,7 @@ export function nodeClient(nodeNum) {
         // answer once its location record could be read
         'boot:appUnconfirmed',
         'boot:appConfirmed',
+        'discovery:started',
         'confirmation:changed',
         'daemon:deltaApplied',
         'daemon:deltaRefused',

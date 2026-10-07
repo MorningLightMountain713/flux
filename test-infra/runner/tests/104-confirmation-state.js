@@ -4,7 +4,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { setNodeStatus, clearNodeStatus } from '../framework/daemon-control.js';
 import {
-  waitForDaemonReady, waitForDaemonPolled, waitForNodeStatus, waitFor,
+  waitForDaemonReady, waitForDaemonPolled, waitForNodeStatus,
 } from '../framework/wait.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 
@@ -32,12 +32,7 @@ describe('Confirmation state: confirmed boot', function () {
 
   it('should start peer discovery', async function () {
     this.timeout(15000);
-    // discovery starts in the same instant the confirmation event fires —
-    // poll for the line instead of racing the docker log pipeline
-    await waitFor(
-      () => env.nodeHasLog(0, 'Flux Discovery started'),
-      { timeout: 10000, interval: 250, label: 'discovery started log' },
-    );
+    await env.clients[0].waitForEvent('discovery:started', () => true, 10000);
   });
 });
 
@@ -67,13 +62,13 @@ describe('Confirmation state: unconfirmed boot', function () {
 
   it('should not start peer discovery', async function () {
     this.timeout(40000);
-    // an absence can't be polled for — give a wrongly-started discovery line a
-    // full daemon poll cycle (periodic, ~5s) past the unconfirmed observation
-    // to traverse the log pipeline, THEN assert absence. confirmation:changed
-    // cannot pace this: it only fires on state CHANGES, and the state holds.
+    // An absence is read a full daemon poll cycle past the unconfirmed
+    // observation: the later poll is the canary that the stream is live.
+    // confirmation:changed cannot pace this: it only fires on state CHANGES,
+    // and the state holds.
     const seen = await waitForNodeStatus(env.clients[0], (d) => d.confirmed === false, 20000);
     await waitForDaemonPolled(env.clients[0], () => true, 30000, { afterId: seen.id });
-    expect(env.nodeHasLog(0, 'Flux Discovery started')).to.equal(false);
+    expect(env.clients[0].getEventBuffer().some((e) => e.event === 'discovery:started')).to.equal(false);
   });
 
   it('should not connect any peers', async function () {
