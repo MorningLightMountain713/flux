@@ -551,6 +551,7 @@ async function respondWithTempMessages(peer, sinceTimestamp = 0) {
       }
     }
     log.info(`respondWithTempMessages - Sending final ${batch.length} to ${peer.key} (total: ${total + batch.length})`);
+    fluxEventBus.count('sync:answered', peer.key);
     await sendSignedMessage({ type: 'fluxapptempsync', version: 1, messages: batch, done: true }, peer, { awaitDrain: true });
   } catch (error) {
     log.error(error);
@@ -604,6 +605,7 @@ async function streamBatchedSync(peer, { sinceTimestamp, collectionName, validit
       }
     }
     log.info(`${label} - Sending final ${batch.length} to ${peer.key} (total: ${total + batch.length})`);
+    fluxEventBus.count('sync:answered', peer.key);
     await sendSignedMessage({ type: messageType, messages: batch, done: true }, peer, { awaitDrain: true });
   } catch (error) {
     log.error(error);

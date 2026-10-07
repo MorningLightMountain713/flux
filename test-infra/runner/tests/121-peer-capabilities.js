@@ -26,6 +26,15 @@ const REAL_NODES = [0, 1, 2, 3];
 
 let env;
 
+// A node's sync counters, summed over the peers a predicate picks: `sync:answered`
+// counts the syncs it finished answering, per peer; `sync:refused` the requests it
+// refused, per peer and reason.
+function syncTally(counters, name, pickPeer, reason = null) {
+  return Object.entries(counters[name] ?? {})
+    .filter(([peer]) => pickPeer(peer))
+    .reduce((total, [, value]) => total + (reason ? (value[reason] ?? 0) : value), 0);
+}
+
 describe('Peer capabilities', function () {
 
   before(async function () {
@@ -153,10 +162,9 @@ describe('Peer capabilities', function () {
     it('is accepted when one fleet node asks another', async function () {
       this.timeout(60000);
       const stubIps = [MODERN_STUB, LEGACY_STUB].map((i) => env.stubPeerClients.get(i).ip);
-      const answeredAFleetNode = REAL_NODES.some((i) => env.nodeLogLines(i).some(
-        (line) => line.includes('Sending final')
-          && !stubIps.some((ip) => line.includes(ip)),
-      ));
+      const answeredAFleetNode = (await Promise.all(REAL_NODES.map(async (i) => syncTally(
+        await env.clients[i].getTestCounters(), 'sync:answered', (peer) => !stubIps.some((ip) => peer.includes(ip)),
+      )))).some((count) => count > 0);
 
       expect(answeredAFleetNode, 'no fleet node answered another fleet node').to.equal(true);
     });
@@ -206,20 +214,22 @@ describe('Peer capabilities', function () {
       const target = REAL_NODES.find((i) => pull.peer.includes(cfg.nodeIp(i + 1)));
       expect(target, `reconnect pull aimed at ${pull.peer}, which is no fleet node`).to.not.equal(undefined);
 
-      const linesFrom = (needle) => env.nodeLogLines(target)
-        .filter((line) => line.includes(needle) && line.includes(askerIp)).length;
-      const answeredBefore = linesFrom('Sending final');
-      const refusedBefore = linesFrom('rejected: bad signature');
+      const fromAsker = (peer) => peer.includes(askerIp);
+      const answered = async () => syncTally(await env.clients[target].getTestCounters(), 'sync:answered', fromAsker);
+      const refused = async () => syncTally(
+        await env.clients[target].getTestCounters(), 'sync:refused', fromAsker, 'badSignature',
+      );
+      const answeredBefore = await answered();
+      const refusedBefore = await refused();
 
       // THE EVENT SAYS THE REQUEST LEFT, NOT THAT IT LANDED. The verdict is the
       // peer's, taken after the frame crosses the wire, so reading the refusal
       // count the moment the event fires reads it before it could exist.
-      await waitFor(() => linesFrom('Sending final') > answeredBefore
-        || linesFrom('rejected: bad signature') > refusedBefore,
-      { timeout: 120000, label: `node ${target} acted on the reconnect pull from ${askerIp}` });
+      await waitFor(async () => (await answered()) > answeredBefore || (await refused()) > refusedBefore,
+        { timeout: 120000, label: `node ${target} acted on the reconnect pull from ${askerIp}` });
 
-      expect(linesFrom('rejected: bad signature'), 'the reconnect pull was refused').to.equal(refusedBefore);
-      expect(linesFrom('Sending final')).to.be.greaterThan(answeredBefore);
+      expect(await refused(), 'the reconnect pull was refused').to.equal(refusedBefore);
+      expect(await answered()).to.be.greaterThan(answeredBefore);
     });
 
     it('refuses a peer whose signature contradicts its own advertisement', async function () {
@@ -229,10 +239,9 @@ describe('Peer capabilities', function () {
       // suite exists to catch. Only a refusal of the stub that contradicted
       // itself says the rule fired for the stated reason.
       const stubIps = [MODERN_STUB, LEGACY_STUB].map((i) => env.stubPeerClients.get(i).ip);
-      const refusedTheStub = REAL_NODES.some((i) => env.nodeLogLines(i).some(
-        (line) => line.includes('rejected: bad signature')
-          && stubIps.some((ip) => line.includes(ip)),
-      ));
+      const refusedTheStub = (await Promise.all(REAL_NODES.map(async (i) => syncTally(
+        await env.clients[i].getTestCounters(), 'sync:refused', (peer) => stubIps.some((ip) => peer.includes(ip)), 'badSignature',
+      )))).some((count) => count > 0);
 
       expect(refusedTheStub, 'no node refused the contradicting stub').to.equal(true);
     });

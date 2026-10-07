@@ -1493,6 +1493,7 @@ async function verifySyncRequest(peer, decoded) {
   const verified = verificationHelper.verifyMessage(msg, pubkey, signature);
   if (!verified) {
     log.warn(`Sync request from ${peer.key} rejected: bad signature`);
+    fluxEventBus.count('sync:refused', peer.key, 'badSignature');
     return false;
   }
   return true;
