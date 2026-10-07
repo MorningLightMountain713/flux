@@ -10,7 +10,6 @@ import {
 } from '../framework/wait.js';
 import { setNoPeerData, setPeerHasData, setSynced } from '../framework/syncthing-control.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
-import { componentIdentifier, folderIdOf } from '../framework/container.js';
 import {
   subnet, DEPARTURE_WAIT_MS, seedApp, whenGone, returnToService, elapseSettleWindow, TARGET, locationsOf, TABLE_DECIDED, VETOING, SECOND_TARGET, bootResidentialFleet,
 } from '../framework/residential-evacuation.js';
