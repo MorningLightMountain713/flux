@@ -23,6 +23,8 @@ const EXPLORER = ['explorerSynced'];
 // Pricing, entitlement and submission read the live row for name conflicts,
 // update authority and the update quote.
 const PRICING = ['appRegistryConsistent', 'explorerSynced', 'chainStateConsistent'];
+// The quorum grant journal and the founding records live in the local database.
+const LOCAL_DB = ['localDbPrepared'];
 
 // Why a route reads no capability.
 const NONE = Object.freeze({
@@ -282,27 +284,27 @@ module.exports = [
   // originate from the asker's registered address; the handler declines any
   // committee this node does not sit on. Nothing consumes grants yet — the
   // surface ships inert ahead of its consumers, per the unified plan.
-  { method: 'post', path: '/flux/quorumgrant/probe', none: NONE.PEER, handler: 'quorumGrant/grantorController#probe' },
-  { method: 'post', path: '/flux/quorumgrant/prepare', none: NONE.PEER, handler: 'quorumGrant/grantorController#prepare' },
-  { method: 'post', path: '/flux/quorumgrant/accept', none: NONE.PEER, handler: 'quorumGrant/grantorController#accept' },
-  { method: 'post', path: '/flux/quorumgrant/renew', none: NONE.PEER, handler: 'quorumGrant/grantorController#renew' },
-  { method: 'post', path: '/flux/quorumgrant/release', none: NONE.PEER, handler: 'quorumGrant/grantorController#release' },
+  { method: 'post', path: '/flux/quorumgrant/probe', needs: LOCAL_DB, handler: 'quorumGrant/grantorController#probe' },
+  { method: 'post', path: '/flux/quorumgrant/prepare', needs: LOCAL_DB, handler: 'quorumGrant/grantorController#prepare' },
+  { method: 'post', path: '/flux/quorumgrant/accept', needs: LOCAL_DB, handler: 'quorumGrant/grantorController#accept' },
+  { method: 'post', path: '/flux/quorumgrant/renew', needs: LOCAL_DB, handler: 'quorumGrant/grantorController#renew' },
+  { method: 'post', path: '/flux/quorumgrant/release', needs: LOCAL_DB, handler: 'quorumGrant/grantorController#release' },
   // Reclaim an ordinal register by node-down certificate: the ask carries
   // the certificate, the grantor verifies it and marks the row released.
-  { method: 'post', path: '/flux/quorumgrant/vacate', none: NONE.PEER, handler: 'quorumGrant/grantorController#vacate' },
+  { method: 'post', path: '/flux/quorumgrant/vacate', needs: LOCAL_DB, handler: 'quorumGrant/grantorController#vacate' },
   // The holder's single-seat committee heal: the recorded grantee proposes
   // remove-dark-add-next-in-walk; the reply carries this grantor's SIGNED
   // acceptance, and a quorum of those is the roster.
-  { method: 'post', path: '/flux/quorumgrant/roster', none: NONE.PEER, handler: 'quorumGrant/grantorController#roster' },
+  { method: 'post', path: '/flux/quorumgrant/roster', needs: LOCAL_DB, handler: 'quorumGrant/grantorController#roster' },
 
   // The register is public fact (epoch, grantee) — an unauthenticated read,
   // served even during the grantor's rejoin drain.
-  { method: 'get', path: '/flux/quorumgrant/record', none: NONE.PEER, handler: 'quorumGrant/grantorController#record' },
+  { method: 'get', path: '/flux/quorumgrant/record', needs: LOCAL_DB, handler: 'quorumGrant/grantorController#record' },
   { method: 'get', path: '/flux/quorumgrant/committee', none: NONE.PEER, handler: 'quorumGrant/grantorController#committee' },
   // The founding basis this node photographed for one app anchor — a routing
   // aid for photo-less hosts; every grantor still verifies asks against its
   // own photo, so this read carries no trust. Unauthenticated like record.
-  { method: 'get', path: '/flux/quorumgrant/foundingbasis', none: NONE.PEER, handler: 'quorumGrant/grantorController#foundingBasis' },
+  { method: 'get', path: '/flux/quorumgrant/foundingbasis', needs: LOCAL_DB, handler: 'quorumGrant/grantorController#foundingBasis' },
   // Owner-facing: the generation re-roll. The read tells the owner the
   // standing generation; the submission takes an owner-signed record for
   // exactly the next one, broadcasts it, and stores it here first. The
