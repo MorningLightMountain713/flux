@@ -344,43 +344,6 @@ async function resolveBlob(req, deps) {
 }
 
 /**
- * Provision every content-blob mount of a deployment at install: resolve the blob
- * (peers-first, FluxDrive backstop, hash-verified) and write the plaintext to its
- * host source path. Throws if any declared mount cannot be resolved — an app is
- * not installable without its declared content. The deployment exposes the
- * content mounts via its domain accessor (DeploymentComponent.contentBlobMounts).
- *
- * @param {object} deployment - DeploymentSpec, whose identity keys every blob
- * @param {object} ctx - { appName, peers }
- * @param {object} deps - { resolve?, writeFile, benchmark?, fluxDrive?, peerFetch }
- */
-async function provisionContentBlobs(deployment, ctx, deps) {
-  const { appName, peers = [] } = ctx;
-  const {
-    resolve = resolveBlob, writeFile, benchmark, fluxDrive, peerFetch,
-  } = deps || {};
-
-  for (const [, comp] of deployment.componentEntries()) {
-    for (const { source, hash } of comp.contentBlobMounts()) {
-      let plaintext;
-      try {
-        plaintext = await resolve(
-          {
-            appName, identity: deployment.identity, contentHash: hash, peers,
-          },
-          { benchmark, fluxDrive, peerFetch },
-        );
-      } catch (error) {
-        fluxEventBus.publish('content:blobProvisionFailed', { appName, hash });
-        throw error;
-      }
-      await writeFile(source, plaintext);
-      fluxEventBus.publish('content:blobProvisioned', { appName, hash });
-    }
-  }
-}
-
-/**
  * Serve a content blob to a peer (the peers-first source): find which of this
  * app's stored artifact blobs derives to the requested locator and return its
  * framed ciphertext verbatim. The store holds exactly what this node fetched
@@ -448,7 +411,6 @@ module.exports = {
   signReconcile,
   decryptAndVerifyBlob,
   resolveBlob,
-  provisionContentBlobs,
   serveBlob,
   fetchBlobFromPeer,
   specContentHashes,

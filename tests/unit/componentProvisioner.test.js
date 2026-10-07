@@ -14,6 +14,8 @@ describe('componentProvisioner tests', () => {
   let provisionCertStub;
   let ledgersStub;
   let appDockerImageDigestStub;
+  let verifyAppVolumeMountStub;
+  let provisionComponentContentStub;
   const APPS_FOLDER = '/apps/';
   // The app's identity, carried by every component the library resolves.
   const IDENTITY = `b${'a'.repeat(52)}`;
@@ -33,6 +35,8 @@ describe('componentProvisioner tests', () => {
     mapUpnpPortStub = sinon.stub().resolves(true);
     provisionCertStub = certError ? sinon.stub().rejects(certError) : sinon.stub().resolves();
     appDockerImageDigestStub = sinon.stub().resolves('sha256:pulled');
+    verifyAppVolumeMountStub = sinon.stub().resolves();
+    provisionComponentContentStub = sinon.stub().resolves();
     ledgersStub = { addComponent: sinon.stub().resolves(true), setComponent: sinon.stub().resolves() };
     return proxyquire.load('../../ZelBack/src/services/appLifecycle/componentProvisioner', {
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
@@ -53,7 +57,8 @@ describe('componentProvisioner tests', () => {
       './appVolumeService': { createAppVolume: createAppVolumeStub },
       './appSwapPoolService': { reconcile: sinon.stub().resolves() },
       './backendTlsService': { provisionCert: provisionCertStub },
-      '../utils/volumeService': { verifyAppVolumeMount: sinon.stub().resolves() },
+      '../utils/volumeService': { verifyAppVolumeMount: verifyAppVolumeMountStub },
+      './contentSlotService': { provisionComponentContent: provisionComponentContentStub },
       '../telemetryIdentityService': { onComponentCreated: sinon.stub().resolves() },
       '../appManagement/appsRuntimeState': { isCondemned: isCondemnedStub || sinon.stub().resolves(false) },
       './owedRemovals': { removalOwedFor: sinon.stub().resolves(teardownOwed) },
@@ -78,6 +83,8 @@ describe('componentProvisioner tests', () => {
       requiresSyncBeforeStart: () => syncMode === 'syncFirst',
       requiresBackendTls: () => false,
       backendTlsPaths: () => null,
+      hasContentBlobs: () => false,
+      hasContentSlots: () => false,
       hasSyncthing: () => false,
       syncFolderId: 'web_syncholdapp',
       networkAliases: ['web'],
@@ -394,6 +401,66 @@ describe('componentProvisioner tests', () => {
         expect(err.message).to.include('should not have passed registration');
       }
       expect(appDockerStartStub.called).to.be.false;
+    });
+  });
+
+  // installComponent is the only path to appDockerCreate, so writing the
+  // component's content here is what covers every path that creates a container:
+  // an install, a redeploy, a rebuild that wiped the volume, an update's adoption
+  // and a health recreate.
+  describe('the component\'s content', () => {
+    const contentComponent = (overrides = {}) => makeComponent(null, { hasContentSlots: () => true, ...overrides });
+
+    it('is written after the volume is verified and before the container is created, for the component and its app', async () => {
+      const provisioner = loadProvisioner();
+      const component = contentComponent();
+
+      await provisioner.installComponent(component, { createVolumes: true });
+
+      sinon.assert.calledOnceWithExactly(provisionComponentContentStub, component, { appName: 'syncholdapp' });
+      expect(createAppVolumeStub.calledBefore(provisionComponentContentStub), 'after the volume that holds the sources').to.be.true;
+      expect(verifyAppVolumeMountStub.calledBefore(provisionComponentContentStub), 'after the volume is verified mounted').to.be.true;
+      expect(provisionComponentContentStub.calledBefore(appDockerCreateStub), 'before the container exists').to.be.true;
+      sinon.assert.calledOnce(appDockerCreateStub);
+    });
+
+    it('is written onto the volume a component keeps as well', async () => {
+      const provisioner = loadProvisioner();
+
+      await provisioner.installComponent(contentComponent(), { createVolumes: false });
+
+      sinon.assert.calledOnce(provisionComponentContentStub);
+      sinon.assert.notCalled(createAppVolumeStub);
+      sinon.assert.calledOnce(appDockerCreateStub);
+    });
+
+    it('is asked for a component that declares blobs alone', async () => {
+      const provisioner = loadProvisioner();
+
+      await provisioner.installComponent(contentComponent({ hasContentSlots: () => false, hasContentBlobs: () => true }), { createVolumes: true });
+
+      sinon.assert.calledOnce(provisionComponentContentStub);
+    });
+
+    it('creates no container when a file cannot be had', async () => {
+      const provisioner = loadProvisioner();
+      provisionComponentContentStub.rejects(new Error('contentBlob: no source for sha256:x'));
+
+      let failure = null;
+      try {
+        await provisioner.installComponent(contentComponent(), { createVolumes: true });
+      } catch (error) {
+        failure = error;
+      }
+
+      expect(failure?.message).to.include('no source');
+      sinon.assert.notCalled(appDockerCreateStub);
+    });
+
+    it('is not asked for a component that declares none', async () => {
+      await installWith(null, true);
+      sinon.assert.notCalled(provisionComponentContentStub);
+      sinon.assert.calledOnce(appDockerCreateStub);
     });
   });
 

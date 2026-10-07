@@ -187,7 +187,7 @@ describe('appInstaller tests', () => {
       './relationshipResolver': {
         checkAppDependencyRequirements: sinon.stub().resolves(),
       },
-      './contentSlotService': { provisionContent: sinon.stub().resolves() },
+      './contentSlotService': { provisionContentSlots: sinon.stub().resolves() },
       // Reaches generalService's daemon RPCs and writes real files.
       '../telemetryConfigService': { ensureNode: sinon.stub().resolves() },
       '../telemetrySinkCache': { extractSink: sinon.stub().returns(null), setSink: sinon.stub() },
@@ -372,7 +372,7 @@ describe('appInstaller tests', () => {
       const installComponent = installComponentError
         ? sinon.stub().rejects(installComponentError)
         : sinon.stub().resolves();
-      const provisionContent = sinon.stub().resolves();
+      const provisionContentSlots = sinon.stub().resolves();
       const abortInstall = sinon.stub();
       const teardownOwedFor = sinon.stub();
       if (Array.isArray(teardownOwed)) {
@@ -450,7 +450,7 @@ describe('appInstaller tests', () => {
           resolveDeploymentIdentity,
         },
         '../appDecisions/appHistory': { registrationVersionOf },
-        './contentSlotService': { provisionContent },
+        './contentSlotService': { provisionContentSlots },
         '../utils/fluxEventBus': { publish: fluxEventBusPublish },
         '../appMonitoring/appReconciler': { awaitConvergence: appReconcilerAwaitConvergence },
         '../utils/cpuBurstHelper': { getCpuBurstAllowance: sinon.stub().returns(0), isEnterpriseOwner: sinon.stub().returns(false), isCpuBurstSupported: sinon.stub().resolves(false) },
@@ -468,7 +468,7 @@ describe('appInstaller tests', () => {
         broadcastMessageToAll,
         storeAppInstallingErrorMessage,
         installComponent,
-        provisionContent,
+        provisionContentSlots,
         abortInstall,
         teardownOwedFor,
         buildDeployment,
@@ -587,7 +587,7 @@ describe('appInstaller tests', () => {
       const {
         installer, deployment, installComponent, buildDeployment, registrationVersionOf, resolveDeploymentIdentity,
         checkAppDependencyRequirements, connectComponentToLinkedApps, isImageBlocked,
-        installedStub, ledgersStub, ensureAppDockerNetwork, appReconcilerAwaitConvergence, provisionContent,
+        installedStub, ledgersStub, ensureAppDockerNetwork, appReconcilerAwaitConvergence, provisionContentSlots,
       } = loadFresh({ converge: { converged: true, failed: [] } });
 
       const result = await installer.installApplication(newappInstantiated, {});
@@ -642,15 +642,15 @@ describe('appInstaller tests', () => {
       // handed no owner.
       expect(componentOpts).to.not.have.property('owner');
 
-      // The content the deployment declares is written once its containers are
-      // created and before the reconciler is asked to start them; the content
-      // service walks the deployment's components for their blobs and slots.
-      sinon.assert.calledOnce(provisionContent);
-      const [provisioned, contentCtx] = provisionContent.firstCall.args;
+      // Every component took its content at its create step. The manifest the
+      // app stands on is recorded delivered once the containers are created and
+      // before the reconciler is asked to start them, naming them all as created.
+      sinon.assert.calledOnce(provisionContentSlots);
+      const [provisioned, contentCtx] = provisionContentSlots.firstCall.args;
       assertAnswers(provisioned, ['componentEntries']);
-      expect(contentCtx.appName).to.equal('newapp');
-      expect(provisionContent.calledAfter(installComponent), 'content is written onto sources the create step made').to.equal(true);
-      expect(provisionContent.calledBefore(appReconcilerAwaitConvergence), 'and before anything is started').to.equal(true);
+      expect(contentCtx).to.deep.equal({ appName: 'newapp', created: ['web'] });
+      expect(provisionContentSlots.calledAfter(installComponent), 'after the create step').to.equal(true);
+      expect(provisionContentSlots.calledBefore(appReconcilerAwaitConvergence), 'and before anything is started').to.equal(true);
 
       // appNetworkLinker.connectComponentToLinkedApps reads the deployment's links
       // and its app name for the deferral it raises when one has vanished.
