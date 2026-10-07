@@ -137,18 +137,15 @@ describe('content manifest sync: cold-boot in-band reconcile off the ephemeral p
     expect(complete.data.indexesReceived).to.be.at.least(1);
     expect(complete.data.fetched).to.be.at.least(1);
 
-    // The register converges to confirmed:true by either ordering — the design is
-    // order-independent: spec-first stores the fetched body confirmed directly,
-    // manifest-first quarantines then promotes on spec-confirm. Every accepted
-    // store flows through the one storeManifest helper, whose single publish site
-    // emits manifestStored{appName, version, confirmed} — so confirmed:true at v1
-    // is observable in both orderings. afterId omitted: it may already be buffered.
-    await deferredClient.waitForEvent(
-      'content:manifestStored',
-      (d) => d.appName === appName && d.version === 1 && d.resolved === true,
-      150000,
-    );
-    const row = await dbClient(DEFERRED + 1).getContentManifest(appName);
+    // The register converges to a SIGNED v1 row by either ordering: spec-first
+    // stores the fetched body with its signer resolved, manifest-first keeps it
+    // with no signer and resolves it when the registration applies. The row, not
+    // an event, is what both orderings share.
+    let row;
+    await waitFor(async () => {
+      row = await dbClient(DEFERRED + 1).getContentManifest(appName);
+      return !!(row && row.version === 1 && row.signer !== null);
+    }, { timeout: 150000, interval: 3000, label: 'the deferred node holds a signed v1 manifest' });
     expect(row.data.appName).to.equal(appName);
     expect(row.version).to.equal(1);
     expect(row.signer, 'resolved to the owner who signed it').to.be.a('string');

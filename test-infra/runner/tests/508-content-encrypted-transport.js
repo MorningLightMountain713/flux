@@ -147,8 +147,8 @@ describe('content encrypted transport (HPKE capstone): open, seal-at-rest, multi
     let row;
     await waitFor(async () => {
       row = await dbc.getContentManifest(sealApp);
-      return !!(row && row.data && row.data.manifest && row.confirmed !== false);
-    }, { timeout: 30000, interval: 1000, label: 'confirmed sealed manifest v1' });
+      return !!(row && row.data && row.data.manifest && row.signer !== null);
+    }, { timeout: 30000, interval: 1000, label: 'signed sealed manifest v1' });
     const v1Slots = row.data.manifest.slots;
     expect(v1Slots, 'manifest slots').to.have.property('sealed');
     expect(JSON.stringify(v1Slots), 'no plaintext hash in sealed slots').to.not.include('sha256:');
