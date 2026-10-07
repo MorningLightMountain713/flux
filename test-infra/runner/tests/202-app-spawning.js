@@ -5,7 +5,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { nodeKey } from '../framework/keys.js';
 import { buildAppSpec, registerAndConfirm } from '../framework/app-helper.js';
 import { startTicker, advanceBlock } from '../framework/daemon-control.js';
-import { waitForDaemonReady, waitForBlockProcessed, waitFor, waitForAppInstalled, waitForAppSpecStored, waitForNodeStatus } from '../framework/wait.js';
+import { waitForDaemonReady, waitForBlockProcessed, waitForAppInstalled, waitForAppSpecStored, waitForNodeStatus } from '../framework/wait.js';
 
 let env;
 
@@ -58,14 +58,10 @@ describe('App spawning', function () {
   describe('spawner decision', function () {
     it('should reach the install decision on at least one node', async function () {
       this.timeout(180000);
-      const decided = await waitFor(async () => {
-        for (let i = 0; i < env.clients.length; i++) {
-          if (env.nodeHasLog(i, `${appName}.*selected`)
-            || env.nodeHasLog(i, 'Found.*apps.*missing instances')) return true;
-        }
-        return false;
-      }, { timeout: 170000, interval: 10000, label: 'spawner install decision' });
-      expect(decided).to.equal(true);
+      // A node's spawner judged the app a candidate to install.
+      await Promise.any(env.clients.map((c) => c.waitForEvent(
+        'spawner:candidacy', (d) => d.name === appName && d.candidate === true, 170000,
+      )));
     });
 
     it('should install the registered app on at least one node', async function () {
