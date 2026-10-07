@@ -1292,7 +1292,7 @@ describe('AppSyncOrchestrator', () => {
         completeAllTypes(3);
         await clock.tickAsync(0);
         sinon.assert.calledOnceWithExactly(fluxEventBus.checkpoint, fluxEventBus.Checkpoint.APPSYNC_BEFORE_AUTHORITATIVE);
-        expect(globalStateStub.appStateAuthoritative, 'authoritative while held').to.equal(false);
+        expect(answersPeers(), 'authoritative while held').to.equal(false);
 
         // A fourth peer answering while held is recorded, and pauses nothing more.
         completeAllTypes(4);
@@ -1302,7 +1302,7 @@ describe('AppSyncOrchestrator', () => {
 
         release();
         await clock.tickAsync(0);
-        expect(globalStateStub.appStateAuthoritative).to.equal(true);
+        expect(answersPeers()).to.equal(true);
         expect(allComplete()).to.have.lengthOf(1);
         await orchestrator.stop();
       });
@@ -1312,7 +1312,7 @@ describe('AppSyncOrchestrator', () => {
         getEligibleSyncPeersStub = sinon.stub().returns(peers);
         const orchestrator = makeOrchestrator();
         orchestrator.start(defaultBootContext);
-        blockEmitter.emit('blocksProcessed', 2555000);
+        blockEmitter.emit('blocksProcessed', 2_555_000);
         await clock.tickAsync(0);
         peerEmitter.emit('peerThresholdReached', 12);
         await clock.tickAsync(0);
@@ -1325,7 +1325,7 @@ describe('AppSyncOrchestrator', () => {
 
         release();
         await clock.tickAsync(0);
-        expect(globalStateStub.appStateAuthoritative, 'a reset attempt completed on release').to.equal(false);
+        expect(answersPeers(), 'a reset attempt completed on release').to.equal(false);
         expect(allComplete()).to.have.lengthOf(0);
         await orchestrator.stop();
       });
@@ -1343,7 +1343,7 @@ describe('AppSyncOrchestrator', () => {
         await orchestrator.stop();
         release();
         await clock.tickAsync(0);
-        expect(globalStateStub.appStateAuthoritative, 'a stopped orchestrator completed on release').to.equal(false);
+        expect(answersPeers(), 'a stopped orchestrator completed on release').to.equal(false);
         expect(allComplete()).to.have.lengthOf(0);
       });
     });
