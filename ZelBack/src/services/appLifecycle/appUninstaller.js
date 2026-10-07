@@ -70,12 +70,14 @@ function setOnComponentRemoved(callback) {
 }
 
 /**
- * Stop Syncthing app and clean up cache
- * @param {string} monitoredName - Monitored app name
+ * Removes a component's syncthing folder by the id the ledger records for it
+ * and clears what this node said about the folder.
+ * @param {string|null} folderId - the component's syncthing folder id; null when
+ *   the ledger records none, so no folder is removed
  * @param {string} appId - Application ID
  * @returns {Promise<void>}
  */
-async function stopSyncthingAndCleanup(monitoredName, appId) {
+async function stopSyncthingAndCleanup(folderId, appId) {
   // Hard removal - the data is going, so what this node says about it goes first
   // and unconditionally. Stopping syncthing can fail; the volume is deleted either
   // way, and state describing it must not outlive it on the strength of that.
@@ -90,7 +92,7 @@ async function stopSyncthingAndCleanup(monitoredName, appId) {
   // place.
   globalState.folderHoldings?.delete(appId);
   try {
-    await syncthingMonitorHelpers.removeSyncthingFolder(monitoredName);
+    if (folderId) await syncthingMonitorHelpers.removeSyncthingFolder(folderId);
 
     // The folder and its data are going, so the cache entry must go with them:
     // a stale mark would make the next install of this name read as already-synced
@@ -458,7 +460,7 @@ async function teardownComponentCore(c, opts = {}) {
       await denyPorts(c.ports, c.appName, { entityName: c.label, onStatus });
     }
     if (removeVolumes) {
-      await stopSyncthingAndCleanup(c.syncFolder?.id ?? c.identifier, c.appId);
+      await stopSyncthingAndCleanup(c.syncFolder?.id ?? null, c.appId);
       await unmountVolume(c.appId, { entityName: c.label, onStatus });
       const dataRemoved = await cleanupAppData(c.appId, { entityName: c.label, onStatus });
       await cleanupCrontab(c.appId, { onStatus });

@@ -453,11 +453,12 @@ describe('appUninstaller tests', () => {
         expect(imageRemovals()).to.deep.equal(['/dat/fluxweb_TestAppFLUXFSVOL']);
       });
 
-      it('removes no port and no image file when the ledger names no block for it', async () => {
+      it('removes no port, no folder and no image file when the ledger names no block for it', async () => {
         await appUninstaller.uninstallComponent(component(), { removeVolumes: true });
 
         sinon.assert.notCalled(upnpServiceStub.removeMapUpnpPort);
         sinon.assert.notCalled(fluxNetworkHelperStub.deleteAllowPortRule);
+        sinon.assert.notCalled(syncthingMonitorHelpersStub.removeSyncthingFolder);
         expect(imageRemovals()).to.deep.equal([]);
         sinon.assert.calledWithMatch(logStub.warn, /names no block/);
       });

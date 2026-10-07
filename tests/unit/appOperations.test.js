@@ -1633,6 +1633,114 @@ describe('appOperations tests', () => {
       expect(decisions, 'an election decision was made on silence').to.deep.equal([]);
     });
 
+    // Readiness without a synced mark is read off syncthing's folder list by the
+    // id the ledger records, never by the directory a name would build.
+    describe('the readiness fallback when no synced mark is held', () => {
+      // An app registered before v9: the folder id is its 8.x name, the
+      // directory the component's identifier, so a match by one cannot pass
+      // for a match by the other.
+      const APP = 'appr';
+      const identifier = 'web_appr';
+      const FOLDER_ID = 'fluxweb_appr';
+      let appLocation;
+      let appOps;
+
+      beforeEach(async () => {
+        const deployment = deploymentFor(await specWithComponents(APP, { web: { persistentStorage: AS_STORAGE } }), { registrationVersion: 8 });
+        expect(deployment.getComponent('web').syncFolderId, 'the premise').to.equal(FOLDER_ID);
+        deploymentProviderStub.resolves([deployment]);
+        sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.5:16137');
+        // FDM names no primary and the component is not running here: the pass
+        // reaches the election, whose first act after readiness is to ask where
+        // the app runs. That ask is the observation point, and it ends the pass.
+        sinon.stub(serviceHelper, 'axiosGet').resolves({ data: { status: 'success', data: { ips: [] } } });
+        appLocation = sinon.stub(registryManager, 'appLocation').rejects(new Error('observed: readiness passed'));
+        sinon.stub(log, 'error');
+        appOps = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
+          '../appQuery/appQueryService': { ...appQueryService, listRunningContainers: sinon.stub().resolves([]) },
+        });
+      });
+
+      it('treats a folder syncthing lists as sendreceive under the recorded id as ready', async () => {
+        sinon.stub(syncthingService, 'getConfigFolders').resolves([
+          { id: FOLDER_ID, path: `${appsFolder}${identifier}`, type: 'sendreceive' },
+        ]);
+
+        await appOps.coordinateActiveStandbyApps();
+
+        sinon.assert.calledOnceWithExactly(appLocation, APP);
+      });
+
+      it('does not treat a sendreceive folder at the component\'s directory as ready when its id is not the recorded one', async () => {
+        sinon.stub(syncthingService, 'getConfigFolders').resolves([
+          { id: identifier, path: `${appsFolder}${identifier}`, type: 'sendreceive' },
+        ]);
+
+        await appOps.coordinateActiveStandbyApps();
+
+        sinon.assert.notCalled(appLocation);
+      });
+
+      it('does not treat the recorded folder as ready while it is still receiveonly', async () => {
+        sinon.stub(syncthingService, 'getConfigFolders').resolves([
+          { id: FOLDER_ID, path: `${appsFolder}${identifier}`, type: 'receiveonly' },
+        ]);
+
+        await appOps.coordinateActiveStandbyApps();
+
+        sinon.assert.notCalled(appLocation);
+      });
+
+      // FDM already names this node as the primary and the component is not
+      // running here: the same readiness decides whether the promotion starts,
+      // whose first act is to announce itself.
+      describe('when FDM names this node as the primary', () => {
+        let publish;
+
+        beforeEach(() => {
+          serviceHelper.axiosGet.resolves({ data: { status: 'success', data: { ips: ['192.168.1.5'] } } });
+          publish = sinon.stub(fluxEventBus, 'publish');
+          // The promotion's later steps touch syncthing, the volume and the
+          // reconciler; none of them is the subject here.
+          sinon.stub(syncthingService, 'adjustConfigFolders').resolves({ status: 'success', data: {} });
+          sinon.stub(serviceHelper, 'runCommand').resolves({ error: null, stdout: '', stderr: '' });
+          sinon.stub(appReconciler, 'setControllerDesired').resolves();
+        });
+
+        const started = () => publish.getCalls().filter((c) => c.args[0] === 'masterSlave:started' && c.args[1]?.identifier === identifier);
+
+        it('starts the promotion when syncthing lists the recorded folder as sendreceive', async () => {
+          sinon.stub(syncthingService, 'getConfigFolders').resolves([
+            { id: FOLDER_ID, path: `${appsFolder}${identifier}`, type: 'sendreceive' },
+          ]);
+
+          await appOps.coordinateActiveStandbyApps();
+
+          expect(started()).to.have.lengthOf(1);
+        });
+
+        it('starts nothing when only a folder at the component\'s directory is sendreceive, under another id', async () => {
+          sinon.stub(syncthingService, 'getConfigFolders').resolves([
+            { id: identifier, path: `${appsFolder}${identifier}`, type: 'sendreceive' },
+          ]);
+
+          await appOps.coordinateActiveStandbyApps();
+
+          expect(started()).to.have.lengthOf(0);
+        });
+
+        it('starts nothing while the recorded folder is still receiveonly', async () => {
+          sinon.stub(syncthingService, 'getConfigFolders').resolves([
+            { id: FOLDER_ID, path: `${appsFolder}${identifier}`, type: 'receiveonly' },
+          ]);
+
+          await appOps.coordinateActiveStandbyApps();
+
+          expect(started()).to.have.lengthOf(0);
+        });
+      });
+    });
+
     it('is driven by an interval at the configured cadence, not by re-arming itself', async () => {
       // The loop used to re-arm only from its own finally, so a pass that never settled
       // stopped election on the node permanently until FluxOS restarted.
@@ -2503,7 +2611,7 @@ describe('appOperations tests', () => {
       components: { web: InstalledLedger.newBlock({ identifier, image: 'img', syncFolder: { id: folderId, path: `/apps/${identifier}` } }) },
     });
     // Each component on its own host port, as the spec requires of siblings.
-    const syncedApp = async (appName, modes) => deploymentFor(await specWithComponents(appName, Object.fromEntries(
+    const syncedApp = async (appName, modes, depOpts = {}) => deploymentFor(await specWithComponents(appName, Object.fromEntries(
       Object.entries(modes).map(([name, mode], i) => [name, {
         ports: { http: { containerPort: 8080, hostPort: 31_000 + i } },
         persistentStorage: {
@@ -2512,7 +2620,7 @@ describe('appOperations tests', () => {
           sync: { mode },
         },
       }]),
-    )));
+    )), depOpts);
 
     it('refuses a component the app does not have before holding or stopping anything', async () => {
       const { drive, pause } = await restoreStubs('myapp', await oneComponentDeployment('myapp', 'web'));
@@ -2602,8 +2710,8 @@ describe('appOperations tests', () => {
       expect(marked).to.deep.equal(['web_bident_s1']);
     });
 
-    it('marks the restored synced folder of an app registered before v9 by its 8.x folder id, not by its directory\'s name', async () => {
-      const { ledgers } = await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'syncFirst' }));
+    it('holds and marks the restored synced folder of an app registered before v9 by its 8.x folder id, not by its directory\'s name', async () => {
+      const { ledgers, pause } = await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'syncFirst' }, { registrationVersion: 8 }));
       volumeService.listComponentVolumeMounts.callsFake(async (app, comp) => [
         { replica: null, mount: `/vol/${comp}`, identifier: `${comp}_bident` },
       ]);
@@ -2613,6 +2721,7 @@ describe('appOperations tests', () => {
       const failure = await runRestore('bkapp', [{ component: 'web', restore: true }], 'local');
 
       expect(failure, `the restore must complete: ${failure?.message}`).to.equal(null);
+      expect(pause.getCalls().map((call) => call.args.slice(0, 2))).to.deep.equal([['fluxweb_bkapp', true], ['fluxweb_bkapp', false]]);
       const marked = setSyncedMark.getCalls().filter((call) => call.args[2]?.restarted === true).map((call) => call.args[1]);
       expect(marked).to.deep.equal(['fluxweb_bkapp']);
     });
@@ -2779,11 +2888,11 @@ describe('appOperations tests', () => {
         : { status: { isSynced: false, globalBytes: 100, inSyncBytes: 40, syncPercentage: 40 }, reason: 'ok' },
     );
 
-    it('removes the syncthing folder per synced component identifier, never by bare app name', async () => {
+    it('holds and gives back the synced component\'s folder by the id the ledger records, never by its directory\'s name', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
-      // Composed app: folders are registered as flux<component>_<app>, so the
-      // removal must target component identifiers - flux<app> matches nothing.
+      // An app registered before v9: the folder id is the 8.x name while the
+      // directory is the component's identifier, so the two cannot be confused.
       // Real components: `web` declares sync, `worker` does not — hasSyncthing()
       // is derived from persistentStorage.sync, never set independently.
       const composed = deploymentFor(await specWithComponents('bkapp', {
@@ -2795,8 +2904,9 @@ describe('appOperations tests', () => {
           },
         },
         worker: { ports: { rpc: { containerPort: 9000, hostPort: 31_001 } } },
-      }));
+      }), { registrationVersion: 8 });
       expect(composed.getComponent('web').hasSyncthing()).to.be.true;
+      expect(composed.getComponent('web').syncFolderId, 'the premise: an id that is not the directory').to.equal('fluxweb_bkapp');
       expect(composed.getComponent('worker').hasSyncthing()).to.be.false;
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(composed);
       copyIs(true);
@@ -2821,13 +2931,13 @@ describe('appOperations tests', () => {
       await pending;
       clock.restore();
 
-      expect(pauseFolder.calledWith('web_bkapp', true), 'the synced component folder must be paused').to.be.true;
-      expect(pauseFolder.calledWith('worker_bkapp', true), 'unsynced components must be untouched').to.be.false;
-      expect(pauseFolder.calledWith('bkapp', true), 'the bare app name matches no composed folder').to.be.false;
+      expect(pauseFolder.calledWith('fluxweb_bkapp', true), 'the synced component folder must be paused by its id').to.be.true;
+      expect(pauseFolder.calledWith('web_bkapp', true), 'never by its directory\'s name').to.be.false;
+      expect(pauseFolder.calledWith('fluxworker_bkapp', true), 'unsynced components must be untouched').to.be.false;
       // This backup FAILED - archiveAppData answers ENOSPC above - and the folder is
       // still given back. Pausing without this would be worse than the removal it
       // replaced, because nothing else would ever resume it.
-      expect(pauseFolder.calledWith('web_bkapp', false), 'a failed backup must resume what it paused').to.be.true;
+      expect(pauseFolder.calledWith('fluxweb_bkapp', false), 'a failed backup must resume what it paused').to.be.true;
     });
 
     // The completeness gate reads the deployment's synced components. The

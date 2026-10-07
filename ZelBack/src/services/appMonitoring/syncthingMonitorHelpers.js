@@ -6,7 +6,6 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
-const dockerService = require('../dockerService');
 const syncthingService = require('../syncthingService');
 const { ConfigMethod } = require('../utils/syncthingConstants');
 const volumeService = require('../utils/volumeService');
@@ -263,10 +262,6 @@ function folderNeedsUpdate(existingFolder, newFolder) {
   );
 }
 
-const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
-const appsFolderPath = process.env.FLUX_APPS_FOLDER || path.join(fluxDirPath, 'ZelApps');
-const appsFolder = `${appsFolderPath}/`;
-
 /**
  * @param {function(string): void} [report] - told what the removal is doing
  * @param {string|object} status
@@ -295,7 +290,8 @@ function emitFolderStatus(report, status) {
  * and needs to know it is unprotected; a caller resuming is usually in a catch,
  * where throwing would replace the error that brought it there.
  *
- * @param {string} appComponentName - component identifier (flat app name for v1-3 specs)
+ * @param {string|null} folderId - the component's syncthing folder id as the
+ *   installed ledger records it; null for a component that shares none
  * @param {boolean} paused - the state to leave the folder in
  * @param {function(string): void} [report] - told what happened
  * @returns {Promise<'held'|'resumed'|'absent'|'failed'>} 'held' or 'resumed' when
@@ -303,85 +299,62 @@ function emitFolderStatus(report, status) {
  *   nothing replicating to hold still; 'failed' when the folder may be live and
  *   unheld
  */
-async function setSyncthingFolderPaused(appComponentName, paused, report) {
+async function setSyncthingFolderPaused(folderId, paused, report) {
   const verb = paused ? 'pause' : 'resume';
   try {
-    const appId = dockerService.getAppIdentifier(appComponentName);
-    const folder = `${appsFolder + appId}`;
+    if (!folderId) return 'absent';
     const allSyncthingFolders = await syncthingService.getConfigFolders();
     if (!Array.isArray(allSyncthingFolders)) return 'failed';
 
-    const match = allSyncthingFolders.find(
-      (f) => f.path === folder || f.path.includes(`${folder}/`),
-    );
+    const match = allSyncthingFolders.find((f) => f.id === folderId);
     if (!match) {
       // Nothing configured is not a failure to pause - there is no sync to
       // stop - but a resume that finds nothing means the folder went while the
       // operation held it, which the caller cannot fix and should see.
-      if (!paused) emitFolderStatus(report, { status: `Syncthing folder for ${appComponentName} is gone; nothing to resume` });
+      if (!paused) emitFolderStatus(report, { status: `Syncthing folder ${folderId} is gone; nothing to resume` });
       return 'absent';
     }
 
     await syncthingService.adjustConfigFolders({
-      method: ConfigMethod.PATCH, config: { paused }, id: match.id,
+      method: ConfigMethod.PATCH, config: { paused }, id: folderId,
     });
-    emitFolderStatus(report, { status: `Syncthing ${paused ? 'paused' : 'resumed'} for ${appComponentName}` });
+    emitFolderStatus(report, { status: `Syncthing ${paused ? 'paused' : 'resumed'} for ${folderId}` });
     return paused ? 'held' : 'resumed';
   } catch (error) {
-    log.error(`setSyncthingFolderPaused - could not ${verb} ${appComponentName}: ${error.message}`);
-    emitFolderStatus(report, { status: `Syncthing could not be ${paused ? 'paused' : 'resumed'} for ${appComponentName}` });
+    log.error(`setSyncthingFolderPaused - could not ${verb} ${folderId}: ${error.message}`);
+    emitFolderStatus(report, { status: `Syncthing could not be ${paused ? 'paused' : 'resumed'} for ${folderId}` });
     return 'failed';
   }
 }
 
 /**
- * Remove a component's syncthing folder registration (config-plane only — the
- * on-disk volume is untouched; the monitor re-adds the folder while the spec
- * still declares sync). Folders are registered per component as
- * flux<identifier>, so composed apps must be removed component by component —
- * the bare app name matches nothing for them.
+ * Remove a component's syncthing folder registration by the id the installed
+ * ledger records for it (config-plane only: the on-disk volume is untouched;
+ * the monitor re-adds the folder while the spec still declares sync). A folder
+ * syncthing does not list is already gone, and nothing is reported.
  *
- * @param {string} appComponentName - component identifier (flat app name for v1-3 specs)
+ * @param {string} folderId - the component's syncthing folder id
  * @param {function(string): void} [report] - told what the removal is doing
  */
-async function removeSyncthingFolder(appComponentName, report) {
+async function removeSyncthingFolder(folderId, report) {
   try {
-    const identifier = appComponentName;
-    const appId = dockerService.getAppIdentifier(identifier);
-    const folder = `${appsFolder + appId}`;
     // getConfigFolders answers the rows, or throws; a failed read leaves through
     // the catch below.
     const allSyncthingFolders = await syncthingService.getConfigFolders();
-    if (!Array.isArray(allSyncthingFolders)) {
+    if (!Array.isArray(allSyncthingFolders)) return;
+    const folder = allSyncthingFolders.find((f) => f.id === folderId);
+    if (!folder) return;
+    // Only a removal syncthing accepted is reported as one. A delete is
+    // idempotent, so a folder already gone answers rather than throws.
+    try {
+      await syncthingService.adjustConfigFolders({ method: ConfigMethod.DELETE, id: folderId });
+    } catch (error) {
+      log.error(`removeSyncthingFolder - failed to remove folder ${folderId}: ${error.message}`);
+      emitFolderStatus(report, { status: `Syncthing folder ${folder.path} could not be removed` });
       return;
     }
-    let folderId = null;
-    for (const syncthingFolder of allSyncthingFolders) {
-      if (syncthingFolder.path === folder || syncthingFolder.path.includes(`${folder}/`)) {
-        folderId = syncthingFolder.id;
-      }
-      if (folderId) {
-        // Only a removal syncthing accepted is reported as one. A delete is
-        // idempotent, so a folder already gone answers rather than throws.
-        let removed = true;
-        try {
-          // eslint-disable-next-line no-await-in-loop
-          await syncthingService.adjustConfigFolders({ method: ConfigMethod.DELETE, id: folderId });
-        } catch (error) {
-          log.error(`removeSyncthingFolder - failed to remove folder ${folderId}: ${error.message}`);
-          emitFolderStatus(report, { status: `Syncthing folder ${syncthingFolder.path} could not be removed` });
-          removed = false;
-        }
-        if (!removed) {
-          folderId = null;
-          // eslint-disable-next-line no-continue
-          continue;
-        }
-        emitFolderStatus(report, { status: `Stopping syncthing on folder ${syncthingFolder.path}...` });
-        emitFolderStatus(report, { status: 'Syncthing adjusted' });
-      }
-      folderId = null;
-    }
+    emitFolderStatus(report, { status: `Stopping syncthing on folder ${folder.path}...` });
+    emitFolderStatus(report, { status: 'Syncthing adjusted' });
   } catch (error) {
     log.error(error);
   }

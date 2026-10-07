@@ -341,50 +341,130 @@ describe('syncthingMonitorHelpers tests', () => {
     });
   });
 
-  describe('removeSyncthingFolder', () => {
-    // the module derives the same base at load time
-    const appsBase = `${process.env.FLUX_APPS_FOLDER || path.join(process.env.HOME, 'zelflux', 'ZelApps')}/`;
+  // An app registered before v9: its folder id is its 8.x name while its
+  // directory is the component's identifier, so a lookup by directory finds
+  // nothing and only the id the ledger records finds the folder.
+  const appsBase = `${process.env.FLUX_APPS_FOLDER || path.join(process.env.HOME, 'zelflux', 'ZelApps')}/`;
+  // Another app's folder is listed first, so the first row is never the one.
+  const beforeV9 = () => [
+    { id: 'fluxdb_other', path: `${appsBase}db_otherident`, type: 'sendreceive' },
+    { id: 'fluxweb_app', path: `${appsBase}web_bident`, type: 'sendreceive' },
+  ];
 
-    it('removes a composed component folder matched by its identifier-derived path', async () => {
+  describe('setSyncthingFolderPaused', () => {
+    it('pauses the folder with the id the ledger records, by that id, and says so', async () => {
+      sandbox.stub(syncthingService, 'getConfigFolders').resolves(beforeV9());
+      const adjust = sandbox.stub(syncthingService, 'adjustConfigFolders').resolves({ status: 'success', data: {} });
+      const emitted = [];
+
+      expect(await helpers.setSyncthingFolderPaused('fluxweb_app', true, (line) => emitted.push(String(line)))).to.equal('held');
+
+      sinon.assert.calledOnceWithExactly(adjust, { method: 'patch', config: { paused: true }, id: 'fluxweb_app' });
+      expect(emitted.some((line) => line.includes('paused') && line.includes('fluxweb_app'))).to.equal(true);
+    });
+
+    it('resumes it by the same id', async () => {
+      sandbox.stub(syncthingService, 'getConfigFolders').resolves(beforeV9());
+      const adjust = sandbox.stub(syncthingService, 'adjustConfigFolders').resolves({ status: 'success', data: {} });
+
+      expect(await helpers.setSyncthingFolderPaused('fluxweb_app', false)).to.equal('resumed');
+
+      sinon.assert.calledOnceWithExactly(adjust, { method: 'patch', config: { paused: false }, id: 'fluxweb_app' });
+    });
+
+    it('does not find the folder by its directory\'s name', async () => {
+      sandbox.stub(syncthingService, 'getConfigFolders').resolves(beforeV9());
+      const adjust = sandbox.stub(syncthingService, 'adjustConfigFolders').resolves({ status: 'success', data: {} });
+
+      expect(await helpers.setSyncthingFolderPaused('web_bident', true)).to.equal('absent');
+
+      sinon.assert.notCalled(adjust);
+    });
+
+    it('answers absent for a folder syncthing does not list, and says so only on a resume', async () => {
+      sandbox.stub(syncthingService, 'getConfigFolders').resolves(beforeV9());
+      const adjust = sandbox.stub(syncthingService, 'adjustConfigFolders').resolves({ status: 'success', data: {} });
+      const emitted = [];
+
+      expect(await helpers.setSyncthingFolderPaused('fluxdb_app', true, (line) => emitted.push(String(line)))).to.equal('absent');
+      expect(emitted, 'nothing to hold still is not reported').to.deep.equal([]);
+      expect(await helpers.setSyncthingFolderPaused('fluxdb_app', false, (line) => emitted.push(String(line)))).to.equal('absent');
+      expect(emitted.some((line) => line.includes('fluxdb_app') && line.includes('gone')), 'a folder gone while held is reported').to.equal(true);
+      sinon.assert.notCalled(adjust);
+    });
+
+    it('answers absent for a component that shares no folder, asking syncthing nothing', async () => {
+      const list = sandbox.stub(syncthingService, 'getConfigFolders').resolves(beforeV9());
+
+      expect(await helpers.setSyncthingFolderPaused(null, true)).to.equal('absent');
+
+      sinon.assert.notCalled(list);
+    });
+
+    it('answers failed when syncthing cannot list its folders, and when it refuses the change', async () => {
+      const list = sandbox.stub(syncthingService, 'getConfigFolders').resolves('not a list');
+      const adjust = sandbox.stub(syncthingService, 'adjustConfigFolders').rejects(new Error('connect ECONNREFUSED 127.0.0.1:8384'));
+      const emitted = [];
+
+      expect(await helpers.setSyncthingFolderPaused('fluxweb_app', true, (line) => emitted.push(String(line)))).to.equal('failed');
+      sinon.assert.notCalled(adjust);
+
+      list.resolves(beforeV9());
+      expect(await helpers.setSyncthingFolderPaused('fluxweb_app', true, (line) => emitted.push(String(line)))).to.equal('failed');
+      expect(emitted.some((line) => line.includes('could not be paused'))).to.equal(true);
+    });
+  });
+
+  describe('removeSyncthingFolder', () => {
+    it('removes the folder with the id the ledger records, whose directory is the component\'s identifier for a v9 registration', async () => {
       // getConfigFolders answers the rows themselves; the envelope goes back on
       // only in the Api half.
       sandbox.stub(syncthingService, 'getConfigFolders')
-        .resolves([{ id: 'fluxweb_app', path: `${appsBase}web_app` }]);
+        .resolves([{ id: 'db_otherident', path: `${appsBase}db_otherident` }, { id: 'web_bident', path: `${appsBase}web_bident` }]);
       const adjust = sandbox.stub(syncthingService, 'adjustConfigFolders').resolves({ status: 'success', data: {} });
-      sandbox.stub(syncthingService, 'getConfigRestartRequired').resolves({ status: 'success', data: { requiresRestart: false } });
+      const emitted = [];
 
-      await helpers.removeSyncthingFolder('web_app');
+      await helpers.removeSyncthingFolder('web_bident', (line) => emitted.push(String(line)));
 
+      sinon.assert.calledOnceWithExactly(adjust, { method: 'delete', id: 'web_bident' });
+      expect(emitted.some((line) => line.includes('Syncthing adjusted'))).to.be.true;
+    });
+
+    it('removes the folder of an app registered before v9 by its 8.x id, which its directory\'s name does not find', async () => {
+      sandbox.stub(syncthingService, 'getConfigFolders').resolves(beforeV9());
+      const adjust = sandbox.stub(syncthingService, 'adjustConfigFolders').resolves({ status: 'success', data: {} });
+
+      await helpers.removeSyncthingFolder('web_bident');
+      sinon.assert.notCalled(adjust);
+
+      await helpers.removeSyncthingFolder('fluxweb_app');
       sinon.assert.calledOnceWithExactly(adjust, { method: 'delete', id: 'fluxweb_app' });
     });
 
     // Only a removal syncthing accepted is reported as one - an uninstall
     // otherwise claims a folder deregistered that syncthing still holds.
     it('does not report a removal syncthing refused', async () => {
-      sandbox.stub(syncthingService, 'getConfigFolders')
-        .resolves([{ id: 'fluxweb_app', path: `${appsBase}web_app` }]);
+      sandbox.stub(syncthingService, 'getConfigFolders').resolves(beforeV9());
       const adjust = sandbox.stub(syncthingService, 'adjustConfigFolders')
         .rejects(Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:8384'), { code: 'ECONNREFUSED' }));
       const emitted = [];
 
-      await helpers.removeSyncthingFolder('web_app', (line) => emitted.push(String(line)));
+      await helpers.removeSyncthingFolder('fluxweb_app', (line) => emitted.push(String(line)));
 
       sinon.assert.calledOnceWithExactly(adjust, { method: 'delete', id: 'fluxweb_app' });
       expect(emitted.some((line) => line.includes('Syncthing adjusted')), `a refused removal was reported as done: ${JSON.stringify(emitted)}`).to.be.false;
       expect(emitted.some((line) => line.includes('could not be removed')), 'and the caller is told').to.be.true;
     });
 
-    it('does not match a composed folder by the bare app name', async () => {
-      // getConfigFolders answers the rows themselves; the envelope goes back on
-      // only in the Api half.
-      sandbox.stub(syncthingService, 'getConfigFolders')
-        .resolves([{ id: 'fluxweb_app', path: `${appsBase}web_app` }]);
+    it('removes nothing, and reports nothing, for an id syncthing does not list', async () => {
+      sandbox.stub(syncthingService, 'getConfigFolders').resolves(beforeV9());
       const adjust = sandbox.stub(syncthingService, 'adjustConfigFolders').resolves({ status: 'success', data: {} });
-      sandbox.stub(syncthingService, 'getConfigRestartRequired').resolves({ status: 'success', data: { requiresRestart: false } });
+      const emitted = [];
 
-      await helpers.removeSyncthingFolder('app');
+      await helpers.removeSyncthingFolder('fluxdb_app', (line) => emitted.push(String(line)));
 
       sinon.assert.notCalled(adjust);
+      expect(emitted).to.deep.equal([]);
     });
   });
 
