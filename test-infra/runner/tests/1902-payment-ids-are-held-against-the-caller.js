@@ -19,9 +19,8 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 // One node, because the relay is node-local: an id issued here is answered here and
 // collected here, and nothing about it is gossiped.
 
-const RATE_PER_SEC = 5;
-// Paced under the issuance rate so the refusals below are the occupancy limit and not
-// the rate limit. The two answer the same status with different messages, and a test
+// Paced under the issuance rate (five a second) so the refusals below are the
+// occupancy limit and not the rate limit. The two answer the same status with different messages, and a test
 // that cannot tell them apart passes on either.
 const PACE_MS = 350;
 const MAX_PENDING_PER_IP = 10;

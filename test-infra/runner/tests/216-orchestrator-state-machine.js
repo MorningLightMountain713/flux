@@ -2,12 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import {
-  waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
-  waitForExplorerReady, waitForOrchestratorStarted, waitForOrchestratorState,
-  waitForPeerThreshold, waitForPeersBelowThreshold,
-  waitForSpawnerResumed, waitForSpawnerPaused, waitFor, assertNoEvent,
-} from '../framework/wait.js';
+import { waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed, waitForExplorerReady, waitForOrchestratorStarted, waitForOrchestratorState, waitForPeerThreshold, waitForPeersBelowThreshold, waitForSpawnerResumed, waitForSpawnerPaused, assertNoEvent } from '../framework/wait.js';
 import {
   advanceBlock, advanceBlocks, startTicker, stopTicker,
   clearAllNodeStatus, setNodeStatus,

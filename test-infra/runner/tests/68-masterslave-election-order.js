@@ -6,7 +6,7 @@ import { pushImage } from '../framework/registry-helper.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
-import { appSyncthingFolderId, componentIdentifier, getAppContainerStatus } from '../framework/container.js';
+import { appSyncthingFolderId, getAppContainerStatus } from '../framework/container.js';
 import { electMaster, clearMaster, resetFdm } from '../framework/fdm-control.js';
 import {
   setSynced, setPeerHasData, resetSyncState, setFolderPatchDelay, getSyncthingState,

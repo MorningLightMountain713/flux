@@ -4,7 +4,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
-import { appSyncthingFolderId, componentIdentifier, getAppContainerStatus } from '../framework/container.js';
+import { appSyncthingFolderId, getAppContainerStatus } from '../framework/container.js';
 import { resetFdm, startFdmOutage, endFdmOutage } from '../framework/fdm-control.js';
 import { resetSyncState } from '../framework/syncthing-control.js';
 import { waitFor } from '../framework/wait.js';
@@ -42,8 +42,6 @@ describe('masterSlave election while FDM is unreachable', function () {
   let env;
   dumpLogsOnFailure(() => env);
   const appName = `e2efdmout${Date.now()}`;
-  // The folder id is read off a holder's container once the app is placed.
-  let folder;
   const holders = [0, 1];
   // Seed placed second, so it carries the later runningSince and lands at index 1.
   const placementOrder = [1, 0];
@@ -85,7 +83,8 @@ describe('masterSlave election while FDM is unreachable', function () {
     await placeGAppInOrder(env, app, {
       placementOrder,
     });
-    folder = await appSyncthingFolderId(env.clients[holders[0]], appName, appName);
+    // The first holder carries the app's container once it is placed.
+    await appSyncthingFolderId(env.clients[holders[0]], appName, appName);
   });
 
   after(async function () {

@@ -1,7 +1,7 @@
 // fleet: 10
 import { describe, it, before, after } from 'mocha';
 import { createTestEnv } from '../framework/test-env.js';
-import { componentIdentifier, getAppContainerStatus, killAppContainer, removeAppImage } from '../framework/container.js';
+import { getAppContainerStatus, killAppContainer, removeAppImage } from '../framework/container.js';
 import { waitFor, waitForReconcileActuated } from '../framework/wait.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';

@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { componentIdentifier, getAppContainerStatus } from '../framework/container.js';
+import { getAppContainerStatus } from '../framework/container.js';
 import { waitFor, waitForReconcileActuated, waitForBootSettled } from '../framework/wait.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
 import { enableRpcFailure, disableRpcFailure } from '../framework/daemon-control.js';
