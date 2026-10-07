@@ -112,6 +112,13 @@ describe('a node that cannot answer a state sync declines it', function () {
 
     await env.startDiscovery(BOOTED);
     await env.clients[0].waitForEvent('peers:added', (d) => d.total >= 2, 120000);
+    // THE DECLINERS STAY SHORT OF AUTHORITY FOR THE WHOLE DESCRIBE. A decline
+    // means "not yet": a real node that completes its own sync answers the next
+    // ask, and the answerer's join would complete theirs first. Held at the
+    // authority checkpoint, they decline until the fleet is torn down, so the
+    // answerer is the only node that can ever be credited. Node 0 is not held:
+    // its completion is what the tests read.
+    await Promise.all(BOOTED.filter((i) => i !== 0).map((i) => env.clients[i].holdCheckpoint('appSync:beforeAuthoritative')));
   });
 
   after(async function () {
