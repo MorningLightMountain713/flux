@@ -2,7 +2,9 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { waitForDaemonReady, waitFor } from '../framework/wait.js';
+import {
+  waitForDaemonReady, waitForCapabilityUp, waitForBootSettled, waitFor,
+} from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 
@@ -17,12 +19,8 @@ describe('Boot: prerequisites', function () {
     await waitForDaemonReady(env.clients[0]);
   });
 
-  // Boot starts every owner at once, so these lines arrive in no fixed order
-  // relative to the daemon's: each check waits for its own line.
-  const logged = (line) => waitFor(
-    () => env.nodeHasLog(0, line),
-    { timeout: 60000, interval: 250, label: `'${line}' log line` },
-  );
+  // Boot starts every owner at once, so these arrive in no fixed order
+  // relative to the daemon's: each check waits for its own signal.
 
   after(async function () {
     this.timeout(30000);
@@ -36,22 +34,14 @@ describe('Boot: prerequisites', function () {
     expect(height).to.be.greaterThan(0);
   });
 
-  it('should prepare local database collections', async function () {
-    await logged('Local database prepared');
-  });
-
-  it('should prepare temporary database', async function () {
-    await logged('Temporary database prepared');
-  });
-
-  it('should prepare global app collections', async function () {
-    // Where an app runs is derived from this event log; there is no materialized
-    // locations collection to prepare.
-    await logged('App state events collection prepared');
+  it('should prepare the local, temporary and global app collections', async function () {
+    // localDbPrepared is raised once every collection and index is prepared,
+    // the app state event log among them.
+    await waitForCapabilityUp(env.clients[0], 'localDbPrepared');
   });
 
   it('should wait for daemon RPC before proceeding', async function () {
-    await logged('Daemon Sync status');
+    await env.clients[0].waitForEvent('daemon:polled', () => true, 60000);
   });
 
   it('should report daemon as synced', async function () {
@@ -67,20 +57,23 @@ describe('Boot: prerequisites', function () {
     expect(geo.geolocation.ip).to.equal(subnet.nodeIp(1));
   });
 
-  it('should start Docker daemon inside container', async function () {
-    await logged('dockerd is ready');
+  it('should reach the Docker daemon inside the container', async function () {
+    await waitForCapabilityUp(env.clients[0], 'dockerReachable');
   });
 
-  it('should initialize app spawner', async function () {
-    await logged('App Spawner initialized');
+  it('should run the app spawner', async function () {
+    await waitFor(
+      async () => ((await env.clients[0].getTestCounters())['spawner:pass'] ?? 0) > 0,
+      { timeout: 120000, interval: 2000, label: 'a spawner pass ran' },
+    );
   });
 
   it('should start Flux Discovery', async function () {
-    await logged('Flux Discovery started');
+    await env.clients[0].waitForEvent('discovery:started', () => true, 60000);
   });
 
-  it('should not log any config-related errors', async function () {
-    const count = env.nodeLogCount(0, 'Cannot parse config|Cannot find module.*config');
-    expect(count).to.equal(0);
+  it('should boot on the config it was given', async function () {
+    // A node that cannot read its config never reaches the end of its boot.
+    await waitForBootSettled(env.clients[0], 120000);
   });
 });

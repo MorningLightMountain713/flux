@@ -317,6 +317,12 @@ export async function waitForPeerThreshold(node, timeout = 120000, opts) {
   return node.waitForEvent('peers:thresholdReached', () => true, timeout, opts);
 }
 
+// A capability reaching up, read off the bus: a client's buffer holds every
+// transition the node published since boot.
+export async function waitForCapabilityUp(node, name, timeout = 60000, opts) {
+  return node.waitForEvent('capability:changed', (d) => d.name === name && d.to === 'up', timeout, opts);
+}
+
 export async function waitForBootSettled(node, timeout = 120000, opts) {
   return node.waitForEvent('boot:settled', () => true, timeout, opts);
 }

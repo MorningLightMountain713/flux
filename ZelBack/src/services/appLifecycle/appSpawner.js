@@ -437,6 +437,7 @@ async function trySpawningGlobalApplication() {
     const nowSeconds = Math.floor(Date.now() / 1000);
 
     log.info('trySpawningGlobalApplication - Checking for apps that are missing instances on the network.');
+    fluxEventBus.count('spawner:pass');
     let globalAppNamesLocation = await underProvisionedApps(currentHeight, nowSeconds);
     const numberOfGlobalApps = globalAppNamesLocation.length;
     // A due deferred entry must be processed even when nothing is missing instances:
