@@ -2,6 +2,7 @@
 
 const { expect } = require('chai');
 const sinon = require('sinon');
+const config = require('config');
 const secp256k1 = require('secp256k1');
 const bs58check = require('bs58check').default;
 
@@ -1105,6 +1106,76 @@ describe('quorumGrant grantorController', () => {
       expect(emptyRes.statusCode).to.equal(200);
       expect(emptyRes.body.data.promisedEpoch).to.equal(0);
       expect(emptyRes.body.data.accepted).to.equal(null);
+    });
+  });
+
+  describe('the committee read', () => {
+    const KEY = 'ab12cd34ef56/master';
+    const twelve = () => Array.from({ length: 12 }, (_, i) => ({
+      txhash: String(i + 1).padStart(64, '0'), outidx: 0, pubkey: `owner-${i + 1}`, ip: `10.${i + 1}.0.1:16127`,
+    }));
+    const outpoint = (node) => `${node.txhash}:${node.outidx}`;
+
+    beforeEach(() => {
+      sinon.stub(networkStateService, 'membershipFingerprint').returns(FINGERPRINT);
+      networkStateService.membershipAt.returns(twelve());
+    });
+
+    it('answers the walk\'s committee for a held key at a generation, over the membership held now', async () => {
+      const res = fakeRes();
+      await grantorController.committee({ params: {}, query: { key: KEY, generation: '1' } }, res);
+      expect(res.statusCode).to.equal(200);
+      const size = config.get('fluxapps.quorumGrantHeldCommitteeSize');
+      const expected = selectCommittee(twelve(), rosterOverlay.walkKeyFor(KEY, 1), { size });
+      expect(expected.refusal).to.equal(null);
+      expect(res.body.data.members.map((m) => m.outpoint)).to.deep.equal(expected.members.map(outpoint));
+      expect(res.body.data.members[0].ip).to.equal(expected.members[0].ip);
+      expect(res.body.data).to.include({
+        key: KEY, generation: 1, fingerprint: FINGERPRINT, size, quorum: expected.quorum, refusal: null,
+      });
+      expect(networkStateService.membershipAt.calledWith(FINGERPRINT)).to.equal(true);
+    });
+
+    it('reads generation 0 when none is given, and the key from the path', async () => {
+      const res = fakeRes();
+      await grantorController.committee({ params: { key: KEY }, query: {} }, res);
+      expect(res.statusCode).to.equal(200);
+      const expected = selectCommittee(twelve(), rosterOverlay.walkKeyFor(KEY, 0), { size: config.get('fluxapps.quorumGrantHeldCommitteeSize') });
+      expect(res.body.data.generation).to.equal(0);
+      expect(res.body.data.members.map((m) => m.outpoint)).to.deep.equal(expected.members.map(outpoint));
+    });
+
+    it('refuses a row id, a founder row and a malformed generation', async () => {
+      const row = fakeRes();
+      await grantorController.committee({ params: {}, query: { key: `${KEY}@1` } }, row);
+      expect(row.statusCode).to.equal(400);
+      expect(row.body.data.message).to.equal('malformed key');
+      const founder = fakeRes();
+      await grantorController.committee({ params: {}, query: { key: 'ab12cd34ef56/founder-0123456789abcdef@0' } }, founder);
+      expect(founder.statusCode).to.equal(400);
+      expect(founder.body.data.message).to.equal('malformed key');
+      const generation = fakeRes();
+      await grantorController.committee({ params: {}, query: { key: KEY, generation: '-1' } }, generation);
+      expect(generation.statusCode).to.equal(400);
+      expect(generation.body.data.message).to.equal('malformed generation');
+      expect(networkStateService.membershipAt.called).to.equal(false);
+    });
+
+    it('answers 503 while this node holds no membership view', async () => {
+      networkStateService.membershipFingerprint.returns(null);
+      const res = fakeRes();
+      await grantorController.committee({ params: {}, query: { key: KEY } }, res);
+      expect(res.statusCode).to.equal(503);
+      expect(networkStateService.membershipAt.called).to.equal(false);
+    });
+
+    it('carries the walk\'s refusal when the membership cannot seat a committee', async () => {
+      networkStateService.membershipAt.returns(twelve().slice(0, 2));
+      const res = fakeRes();
+      await grantorController.committee({ params: {}, query: { key: KEY } }, res);
+      expect(res.statusCode).to.equal(200);
+      expect(res.body.data.refusal).to.be.a('string');
+      expect(res.body.data.members).to.deep.equal([]);
     });
   });
 

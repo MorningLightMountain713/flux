@@ -26,7 +26,7 @@ import { appOwnerKey } from '../framework/keys.js';
 
 // The walk the nodes run, so the suite deals the same committees they do.
 const require = createRequire(import.meta.url);
-const { selectCommittee } = require('../../../ZelBack/src/services/utils/committeeSelector.js');
+import { committeeFor } from '../framework/committee.js';
 
 // A re-roll under a running master whose whole side MISSED the record. The
 // master's node and every cell of its granting committee are partitioned from
@@ -68,25 +68,21 @@ const LOCATION_TTL_S = Math.ceil((PRODUCTION.locationTtlS * HELD_TTL_MS) / PRODU
 const DRAIN_BLOCKS = 3;
 const RENEW_MS = 10000;
 
-const outpointOf = (node) => `${node.txhash}:${node.outidx}`;
-// rosterOverlay.walkKeyFor, over the grant key `<identity>/<role>`
-const walkKeyFor = (key, generation) => `quorumgrant|${key}@${generation}`;
 
-// The committee the walk seats for a BUILT app: the key carries the identity its
-// registration mints, so a candidate name is judged only once its app is built.
-function committeeOf(membership, app, generation) {
-  const dealt = selectCommittee(membership, walkKeyFor(`${app.identity}/master`, generation), { size: COMMITTEE_SIZE });
-  expect(dealt.refusal, `the walk seats a committee for ${app.spec.name} at generation ${generation}`).to.equal(null);
-  return { members: new Set(dealt.members.map(outpointOf)), quorum: dealt.quorum };
+// The committee the walk seats for a BUILT app, read from a node: the key
+// carries the identity its registration mints, so a candidate name is judged
+// only once its app is built.
+function committeeOf(nodeUrl, app, generation) {
+  return committeeFor(nodeUrl, `${app.identity}/master`, generation);
 }
 
-async function chooseDeafableApp(membership, stem, holderOutpoints) {
+async function chooseDeafableApp(nodeUrl, stem, holderOutpoints) {
   for (let i = 0; i < 2000; i += 1) {
     const name = `${stem}${i.toString(36)}`;
     // eslint-disable-next-line no-await-in-loop
     const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby', pinnedTo: HOLDERS });
-    const granting = committeeOf(membership, app, 0);
-    const reRolled = committeeOf(membership, app, 1);
+    // eslint-disable-next-line no-await-in-loop
+    const [granting, reRolled] = await Promise.all([committeeOf(nodeUrl, app, 0), committeeOf(nodeUrl, app, 1)]);
     if (holderOutpoints.filter((holder) => granting.members.has(holder)).length > 1) continue;
     const shared = [...granting.members].filter((cell) => reRolled.members.has(cell));
     if (shared.length > granting.quorum - 2) continue;
@@ -218,7 +214,7 @@ describe('record-deaf master: after the heal every certificate the partition for
       const status = await env.clients[i].getNodeStatus();
       outpoints[i] = `${status.data.txhash}:${status.data.outidx}`;
     }
-    ({ name, app, ...walk } = await chooseDeafableApp(membership, `e2edeaf${Date.now()}`, HOLDERS.map((i) => outpoints[i])));
+    ({ name, app, ...walk } = await chooseDeafableApp(env.clients[0].url, `e2edeaf${Date.now()}`, HOLDERS.map((i) => outpoints[i])));
 
     await pushImage(name, 'v1');
     installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());

@@ -1,7 +1,6 @@
 // fleet: 16
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
-import { createRequire } from 'node:module';
 import { createTestEnv } from '../framework/test-env.js';
 import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
 import {
@@ -27,8 +26,7 @@ import { authenticate } from '../auth.js';
 import { postGenerationRecord } from '../framework/generation-record.js';
 import { appOwnerKey } from '../framework/keys.js';
 
-const require = createRequire(import.meta.url);
-const { selectCommittee } = require('../../../ZelBack/src/services/utils/committeeSelector.js');
+import { committeeFor } from '../framework/committee.js';
 
 // FluxOS is the sole mastership authority. Two properties, on a real fleet:
 //   1. A re-roll under a running master keeps the app up even when one new
@@ -44,25 +42,21 @@ const COMMITTEE_SIZE = 9;
 const HELD_TTL_MS = 90000;
 const DRAIN_BLOCKS = 3;
 
-const outpointOf = (node) => `${node.txhash}:${node.outidx}`;
-// rosterOverlay.walkKeyFor, over the grant key `<identity>/<role>`
-const walkKeyFor = (key, generation) => `quorumgrant|${key}@${generation}`;
 
-// The committee the walk seats for a BUILT app: the key carries the identity its
-// registration mints, so a candidate name is judged only once its app is built.
-function committeeOf(membership, app, generation) {
-  const dealt = selectCommittee(membership, walkKeyFor(`${app.identity}/master`, generation), { size: COMMITTEE_SIZE });
-  expect(dealt.refusal, `the walk seats a committee for ${app.spec.name} at generation ${generation}`).to.equal(null);
-  return { members: new Set(dealt.members.map(outpointOf)), quorum: dealt.quorum };
+// The committee the walk seats for a BUILT app, read from a node: the key
+// carries the identity its registration mints, so a candidate name is judged
+// only once its app is built.
+function committeeOf(nodeUrl, app, generation) {
+  return committeeFor(nodeUrl, `${app.identity}/master`, generation);
 }
 
-async function chooseFreshCellApp(membership, stem) {
+async function chooseFreshCellApp(nodeUrl, stem) {
   for (let i = 0; i < 400; i += 1) {
     const name = `${stem}${i.toString(36)}`;
     // eslint-disable-next-line no-await-in-loop
     const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby', pinnedTo: HOLDERS });
-    const granting = committeeOf(membership, app, 0);
-    const reRolled = committeeOf(membership, app, 1);
+    // eslint-disable-next-line no-await-in-loop
+    const [granting, reRolled] = await Promise.all([committeeOf(nodeUrl, app, 0), committeeOf(nodeUrl, app, 1)]);
     const shared = [...granting.members].filter((cell) => reRolled.members.has(cell));
     if (shared.length <= granting.quorum - 2) return { name, app, granting, reRolled };
   }
@@ -147,7 +141,7 @@ describe('mastership authority: FluxOS keeps the app up and FDM never decides th
     const listed = await fetch(`${env.clients[0].url}/daemon/viewdeterministicfluxnodelist`, { signal: AbortSignal.timeout(10000) });
     const membership = (await listed.json())?.data;
     expect(membership, 'the deterministic list is the whole fleet').to.have.lengthOf(NODES);
-    ({ name, app, ...walk } = await chooseFreshCellApp(membership, `e2eauth${Date.now()}`));
+    ({ name, app, ...walk } = await chooseFreshCellApp(env.clients[0].url, `e2eauth${Date.now()}`));
 
     await pushImage(name, 'v1');
     const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
