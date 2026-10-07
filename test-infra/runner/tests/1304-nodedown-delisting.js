@@ -4,7 +4,7 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
-import { bootAndPeer, installOnNodes, seedGlobalSpec } from '../framework/reconciler-suite.js';
+import { bootAndPeer, placeOnNodes } from '../framework/reconciler-suite.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { waitFor } from '../framework/wait.js';
@@ -108,8 +108,9 @@ describe('a delisted node is negated by every other node\'s own derivation, with
   it('installs the app on the subject and a co-holder, visible fleet-wide', async function () {
     this.timeout(300000);
     await pushImage(appName, 'v1');
+    // Unpinned: the subject and the co-holder are its first holders, and a
+    // replacement may later land on any member.
     const app = await buildSeedableApp({
-      pinnedTo: [SUBJECT, CO_HOLDER],
       name: appName,
       instances: INSTANCES,
       compose: [{
@@ -127,9 +128,7 @@ describe('a delisted node is negated by every other node\'s own derivation, with
         repoauth: '',
       }],
     });
-    await seedGlobalSpec(env, app, env.clients.map((_, i) => i)
-      .filter((i) => i !== SUBJECT && i !== CO_HOLDER));
-    await installOnNodes(env, app, [SUBJECT, CO_HOLDER], { timeout: 180000 });
+    await placeOnNodes(env, app, [SUBJECT, CO_HOLDER], { timeout: 180000 });
 
     await waitFor(async () => {
       const ips = await locationsSeenBy(WITNESS);

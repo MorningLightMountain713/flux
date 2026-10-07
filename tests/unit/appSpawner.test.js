@@ -389,6 +389,8 @@ describe('appSpawner tests', () => {
       },
       '../utils/fluxEventBus': {
         publish: eventBusPublishStub,
+        checkpoint: opts.checkpointStub ?? sinon.stub().resolves(),
+        Checkpoint: { SPAWNER_BEFORE_ATTEMPT: 'spawner:beforeAttempt' },
         // The harness tally. Absent from this map it was undefined, and the
         // no-candidates pass threw on it - only ever seen in a full-suite run,
         // because standalone these tests supply candidates.
@@ -615,6 +617,20 @@ describe('appSpawner tests', () => {
       await appSpawner.trySpawningGlobalApplication().catch(() => {});
       expect(logStub.warn.args.some((a) => a[0]?.includes?.('network-wide install failures; skipping'))).to.be.true;
       expect(registryManagerStub.storeAppInstallingMessage.called, 'never proceeds to announce/install').to.be.false;
+    });
+
+    it('pauses at the spawner checkpoint, keyed by the chosen app, before judging its instance count', async () => {
+      let resume;
+      const checkpointStub = sinon.stub().callsFake(() => new Promise((resolve) => { resume = resolve; }));
+      const candidate = await makeCandidate();
+      buildModule({ candidates: [candidate], checkpointStub });
+      const pass = appSpawner.trySpawningGlobalApplication().catch(() => {});
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(checkpointStub.calledOnceWith('spawner:beforeAttempt', candidate.instantiated.name)).to.equal(true);
+      expect(registryManagerStub.appLocation.called, 'the instance count is judged only past the checkpoint').to.equal(false);
+      resume();
+      await pass;
+      expect(registryManagerStub.appLocation.called).to.equal(true);
     });
 
     it('should filter out an app that is mid-teardown (teardown-aware selection)', async () => {

@@ -41,6 +41,9 @@ const RING_BUFFER_SIZE = 1024;
 const Checkpoint = Object.freeze({
   // A state-sync attempt's budget has run out and the attempt is still open.
   APPSYNC_BEFORE_BUDGET_SPENT: 'appSync:beforeBudgetSpent',
+  // The spawner has chosen an app to attempt and has not yet judged its instance
+  // count; keyed by the app's name. Held, the node attempts nothing for that app.
+  SPAWNER_BEFORE_ATTEMPT: 'spawner:beforeAttempt',
 });
 const CHECKPOINT_NAMES = new Set(Object.values(Checkpoint));
 // Holds a key for every key of its checkpoint.

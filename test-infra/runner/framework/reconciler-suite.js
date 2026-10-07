@@ -118,6 +118,56 @@ function assertPinnedTo(app, indices) {
 // + syncthing config). Deterministic and fast — no spawner-placement timing. Auth
 // as the flux team (adminandfluxteam). The app is pinned to the nodes it is
 // installed on. Returns the indices it installed on.
+/**
+ * Hold every node's spawner at its attempt on this app, except the nodes named:
+ * a held node chooses the app and then waits, so the nodes left free place it.
+ * Release with releaseSpawnerHolds.
+ */
+export async function holdSpawnerExcept(env, appName, indices) {
+  const free = new Set(indices);
+  await Promise.all(env.clients.map(async (client, i) => {
+    if (!free.has(i)) await client.holdCheckpoint('spawner:beforeAttempt', appName);
+  }));
+}
+
+/** Release every node's spawner for this app; a released node judges the app afresh. */
+export async function releaseSpawnerHolds(env, appName, indices = env.clients.map((_, i) => i)) {
+  await Promise.all(indices.map((i) => env.clients[i].releaseCheckpoint('spawner:beforeAttempt', appName)));
+}
+
+/**
+ * Place an UNPINNED app on the nodes named, and nowhere else: every other node's
+ * spawner is held at its attempt while the app is delivered and installed, and
+ * released once the named nodes hold it, so it judges the instance count filled.
+ * The app stays free to be placed anywhere later, which a pinned fixture is not.
+ */
+export async function placeOnNodes(env, app, indices, { timeout = 120000 } = {}) {
+  if (app.spec.pinTargets?.length) {
+    throw new Error(`placeOnNodes needs an unpinned app: ${app.spec.name} is pinned`);
+  }
+  await holdSpawnerExcept(env, app.spec.name, indices);
+  try {
+    await Promise.all(indices.map((i) => waitForHashSyncComplete(env.clients[i])));
+    await seedGlobalSpec(env, app, env.clients.map((_, i) => i));
+    const teamKey = fluxTeamKey();
+    await Promise.all(indices.map(async (i) => {
+      const client = env.clients[i];
+      await waitForBootSettled(client);
+      const auth = await authenticate(client.url, teamKey);
+      const mark = client.getLastEventId();
+      const body = await client.installAppLocally(app.spec.name, auth.zelidauth);
+      try {
+        await waitForInstallSettled(client, app.spec.name, timeout, { afterId: mark });
+      } catch (error) {
+        throw new Error(`node ${i} does not hold ${app.spec.name}: ${error.message} :: ${body.slice(-400)}`);
+      }
+    }));
+  } finally {
+    await releaseSpawnerHolds(env, app.spec.name);
+  }
+  return indices;
+}
+
 export async function installOnNodes(env, app, indices, { timeout = 120000 } = {}) {
   assertPinnedTo(app, indices);
   // A delivered app and a direct install both need the global app table to be
@@ -225,52 +275,62 @@ export async function placeGAppInOrder(env, app, {
     },
   )));
 
-  for (const i of placementOrder) {
-    const installAfter = env.clients[i].getLastEventId();
-    // eslint-disable-next-line no-await-in-loop
-    await installOnNodes(env, app, [i]);
-    // Wait out the sync layer's first-run reset before writing disk data, or the
-    // reset deletes it - a folder pinned synced later must hold what its index claims.
-    // eslint-disable-next-line no-await-in-loop
-    await waitForReconcileActuated(env.clients[i], identifier, 'dataCleared', 60000, { afterId: installAfter });
-    // eslint-disable-next-line no-await-in-loop
-    await seedSyncScopedData(env, app.spec.name, i);
+  // THE ORDER IS HELD, NOT RACED: every holder's spawner waits at its attempt on
+  // this app until its turn, so the runningSince stamps follow placementOrder
+  // whatever the fleet's own spawners would have done.
+  await holdSpawnerExcept(env, app.spec.name, []);
+  try {
+    for (const i of placementOrder) {
+      const installAfter = env.clients[i].getLastEventId();
+      // eslint-disable-next-line no-await-in-loop
+      await releaseSpawnerHolds(env, app.spec.name, [i]);
+      // eslint-disable-next-line no-await-in-loop
+      await installOnNodes(env, app, [i]);
+      // Wait out the sync layer's first-run reset before writing disk data, or the
+      // reset deletes it - a folder pinned synced later must hold what its index claims.
+      // eslint-disable-next-line no-await-in-loop
+      await waitForReconcileActuated(env.clients[i], identifier, 'dataCleared', 60000, { afterId: installAfter });
+      // eslint-disable-next-line no-await-in-loop
+      await seedSyncScopedData(env, app.spec.name, i);
 
-    // WAITED FOR, not slept past. The ordering these placements exist to create
-    // is the runningSince stamps, and a fixed gap produces it only while every
-    // install finishes inside the gap. Under a parallel gate they do not: suite
-    // 96 lost a run to a holder that registered after the next one had already
-    // been placed, so "the newest copy" named a different node than the fixture
-    // had arranged and the suite refused on its own precondition.
-    //
-    // THE STAMP is the fact the order is ranked on, not the record carrying it.
-    // A location present without a runningSince sorts as the MOST SENIOR holder
-    // - electionOrder puts holders carrying none first - so a holder waited for
-    // on presence alone can be placed last and still rank oldest, handing "the
-    // newest copy" to whoever was placed before it. Observed exactly that: the
-    // three containers started 11:32:55, 11:33:44, 11:34:39 in the order asked
-    // for, and the suite still refused on its own precondition because the last
-    // one's record had arrived without its stamp.
-    //
-    // Waiting for the stamp makes the order what the caller asked for at any
-    // speed. The gap below stays: it separates two stamps that would otherwise
-    // land in the same millisecond and fall through to the ip tiebreak.
-    // eslint-disable-next-line no-await-in-loop
-    await waitFor(async () => {
-      const res = await env.clients[i].getAppLocations(app.spec.name);
-      if (res?.status !== 'success' || !Array.isArray(res.data)) return false;
-      const mine = getSubnetConfig().nodeIp(i + 1);
-      return res.data.some(
-        (location) => location.ip.split(':')[0] === mine && location.runningSince,
-      );
-    }, {
-      timeout: 120000,
-      interval: 1000,
-      label: `holder ${i} registered WITH a runningSince before the next is placed`,
-    });
+      // WAITED FOR, not slept past. The ordering these placements exist to create
+      // is the runningSince stamps, and a fixed gap produces it only while every
+      // install finishes inside the gap. Under a parallel gate they do not: suite
+      // 96 lost a run to a holder that registered after the next one had already
+      // been placed, so "the newest copy" named a different node than the fixture
+      // had arranged and the suite refused on its own precondition.
+      //
+      // THE STAMP is the fact the order is ranked on, not the record carrying it.
+      // A location present without a runningSince sorts as the MOST SENIOR holder
+      // - electionOrder puts holders carrying none first - so a holder waited for
+      // on presence alone can be placed last and still rank oldest, handing "the
+      // newest copy" to whoever was placed before it. Observed exactly that: the
+      // three containers started 11:32:55, 11:33:44, 11:34:39 in the order asked
+      // for, and the suite still refused on its own precondition because the last
+      // one's record had arrived without its stamp.
+      //
+      // Waiting for the stamp makes the order what the caller asked for at any
+      // speed. The gap below stays: it separates two stamps that would otherwise
+      // land in the same millisecond and fall through to the ip tiebreak.
+      // eslint-disable-next-line no-await-in-loop
+      await waitFor(async () => {
+        const res = await env.clients[i].getAppLocations(app.spec.name);
+        if (res?.status !== 'success' || !Array.isArray(res.data)) return false;
+        const mine = getSubnetConfig().nodeIp(i + 1);
+        return res.data.some(
+          (location) => location.ip.split(':')[0] === mine && location.runningSince,
+        );
+      }, {
+        timeout: 120000,
+        interval: 1000,
+        label: `holder ${i} registered WITH a runningSince before the next is placed`,
+      });
 
-    // eslint-disable-next-line no-await-in-loop
-    await sleepUnlessInfraDead(gapMs);
+      // eslint-disable-next-line no-await-in-loop
+      await sleepUnlessInfraDead(gapMs);
+    }
+  } finally {
+    await releaseSpawnerHolds(env, app.spec.name);
   }
   return placementOrder;
 }

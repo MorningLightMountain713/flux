@@ -791,6 +791,7 @@ async function trySpawningGlobalApplication() {
       minInstances = selectedCandidate.required;
 
       log.info(`trySpawningGlobalApplication - Application ${appToRun} selected to try to spawn. Reported as been running in ${selectedCandidate.actual} instances and ${selectedCandidate.required} are required.`);
+      await fluxEventBus.checkpoint(fluxEventBus.Checkpoint.SPAWNER_BEFORE_ATTEMPT, appToRun);
       runningAppList = await registryManager.appLocation(appToRun);
       installingAppList = await registryManager.appInstallingLocation(appToRun);
       if (runningAppList.length + installingAppList.length >= minInstances) {
