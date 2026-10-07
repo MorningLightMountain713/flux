@@ -650,7 +650,8 @@ async function handleRpc(handlers, server, req, res) {
   });
   if (requestJournal.length > MAX_JOURNAL_SIZE) requestJournal.shift();
 
-  if (rpcFailures.has(cleanIp)) {
+  // fluxd loading its block index; fluxbenchd is a separate process and keeps answering.
+  if (server === 'fluxd' && rpcFailures.has(cleanIp)) {
     return res.json({ result: null, error: { code: -28, message: 'Loading block index...' }, id });
   }
 
