@@ -1881,6 +1881,7 @@ function startDiscovery() {
     },
     peerManager,
   });
+  fluxEventBus.publish('discovery:started', {});
 }
 
 async function startDiscoveryApi(req, res) {

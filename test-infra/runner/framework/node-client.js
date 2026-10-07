@@ -220,6 +220,7 @@ export function nodeClient(nodeNum) {
         'masterSlave:started',
         'stream:gap',
         'boot:settled',
+        'discovery:started',
         'confirmation:changed',
         'daemon:deltaApplied',
         'daemon:deltaRefused',
