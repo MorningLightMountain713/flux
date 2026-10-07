@@ -61,6 +61,7 @@ describe('appSpawner tests', () => {
   let hwRequirementsStub;
   let messageStoreStub;
   let portManagerStub;
+  let eventBusPublishStub;
 
   function createConfigStub(overrides = {}) {
     return {
@@ -245,6 +246,7 @@ describe('appSpawner tests', () => {
     messageStoreStub = {
       storeAppInstallingMessage: sinon.stub().resolves(true),
     };
+    eventBusPublishStub = sinon.stub();
     portManagerStub = {
       ensureApplicationPortsNotUsed: sinon.stub().resolves(),
       // The real function answers {ok, reason, port}; `true` satisfied the
@@ -386,7 +388,7 @@ describe('appSpawner tests', () => {
         assignedIdentities: opts.assignedIdentitiesStub ?? sinon.stub().resolves([null]),
       },
       '../utils/fluxEventBus': {
-        publish: sinon.stub(),
+        publish: eventBusPublishStub,
         // The harness tally. Absent from this map it was undefined, and the
         // no-candidates pass threw on it - only ever seen in a full-suite run,
         // because standalone these tests supply candidates.
@@ -1170,6 +1172,35 @@ describe('appSpawner tests', () => {
       // installApplication reads requiresArcane() and serialize() off the row.
       const [installed] = installStub.firstCall.args;
       assertAnswers(installed, ['requiresArcane', 'serialize', 'resourceTotals']);
+    });
+
+    // The siblings' own record of what they hold comes before anything read back
+    // from the network: a port a sibling holds is answered as a deferral, never
+    // raised as an abort by the broadcast view of the same fact.
+    it('asks the siblings at this address before reading the network\'s port view, so a port a sibling holds defers rather than aborts', async () => {
+      buildModule({
+        candidates: [await makeCandidate()],
+        siblingHoldingPort: { port: 31_111, address: '10.0.0.9:16137' },
+      });
+      portManagerStub.ensureApplicationPortsNotUsed.rejects(new Error('Flux App x port 31111 already used with different application. Installation aborted.'));
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      sinon.assert.calledOnce(portManagerStub.siblingHoldingPort);
+      sinon.assert.notCalled(portManagerStub.ensureApplicationPortsNotUsed);
+      const deferred = eventBusPublishStub.getCalls().filter((c) => c.args[0] === 'spawner:deferred').map((c) => c.args[1]);
+      expect(deferred).to.have.lengthOf(1);
+      expect(deferred[0]).to.include({ reason: 'sibling_holds_port', port: 31_111, address: '10.0.0.9:16137' });
+    });
+
+    it('reads the network\'s port view once no sibling holds a port', async () => {
+      buildModule({ candidates: [await makeCandidate()] });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      sinon.assert.calledOnce(portManagerStub.siblingHoldingPort);
+      sinon.assert.called(portManagerStub.ensureApplicationPortsNotUsed);
+      expect(portManagerStub.siblingHoldingPort.calledBefore(portManagerStub.ensureApplicationPortsNotUsed), 'the siblings first').to.equal(true);
     });
 
     it('retracts its own installing record when the install DEFERS (so the next cycle is not self-locked)', async () => {

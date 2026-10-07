@@ -980,28 +980,12 @@ async function trySpawningGlobalApplication() {
     }
 
     // ensure ports unused
-    // Get apps running specifically on this IP
-    const appsRunningAtOurIp = await registryManager.getRunningAppIpList(localIp);
-    const runningAppsNames = appsRunningAtOurIp.map((app) => app.name);
-
-    // eslint-disable-next-line no-restricted-syntax
-    for (const identityDeployment of deployments) {
-      // eslint-disable-next-line no-await-in-loop
-      await portManager.ensureApplicationPortsNotUsed(identityDeployment, runningAppsNames);
-    }
-
-    // The check above reads a sibling's ports from the specifications the
-    // network broadcasts, so it sees only what has been reported as RUNNING. A
-    // sibling that has installed an application and not started it, or is still
-    // installing it, appears nowhere in that list and holds the router's forward
-    // regardless. Ask the other Flux nodes at this address directly, here rather
-    // than during the port test, so a refusal costs no firewall rule and no port
-    // mapping to unwind.
     //
-    // Not because an enterprise application hides its ports. It seals them, and
-    // a node running ArcaneOS opens them - assignedPortsGlobalApps decrypts. On
-    // a node that is not running ArcaneOS it cannot, and there this ask is the
-    // only thing that sees a sealed neighbour's ports at all.
+    // The other Flux nodes at this address are asked first which ports they
+    // hold: their own record of what is installed, started or not, sealed or
+    // not, and the only thing that sees a sealed neighbour's ports on a node
+    // that is not running ArcaneOS. Asked here rather than during the port
+    // test, so a refusal costs no firewall rule and no port mapping to unwind.
     //
     // Answered rather than raised, and handled exactly as an unreachable port is
     // below: this node cannot host this app, which is an ordinary answer and not
@@ -1026,6 +1010,18 @@ async function trySpawningGlobalApplication() {
         address: sibling.address,
       });
       return shortDelayTime;
+    }
+
+    // Then this node's own installed apps, and the ports the network reports
+    // running at this address: what a sibling that could not be asked still
+    // shows through what it broadcasts.
+    const appsRunningAtOurIp = await registryManager.getRunningAppIpList(localIp);
+    const runningAppsNames = appsRunningAtOurIp.map((app) => app.name);
+
+    // eslint-disable-next-line no-restricted-syntax
+    for (const identityDeployment of deployments) {
+      // eslint-disable-next-line no-await-in-loop
+      await portManager.ensureApplicationPortsNotUsed(identityDeployment, runningAppsNames);
     }
 
     // Note: User-blocked port check happens earlier (line ~353) before Docker Hub calls
