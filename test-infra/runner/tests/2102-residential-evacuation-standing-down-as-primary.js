@@ -11,6 +11,7 @@ import { setPeerHasData, setSynced } from '../framework/syncthing-control.js';
 import { sleepUnlessInfraDead } from '../framework/infra-death.js';
 import { electMaster, startFdmOutage, endFdmOutage } from '../framework/fdm-control.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
+import { componentIdentifier, folderIdOf } from '../framework/container.js';
 import { loadSharedConfig } from '../framework/coupled-knobs.js';
 import {
   subnet, DEPARTURE_WAIT_MS, seedApp, returnToService, elapseSettleWindow, runningComponents, TARGET, locationsOf, SECOND_TARGET, bootResidentialFleet,
@@ -50,10 +51,11 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     await returnToService(env, TARGET);
 
     const seededAfter = env.clients[TARGET - 1].getLastEventId();
-    await seedApp(env, 'primaryapp', { instances: 5, syncMode: 'activeStandby' });
+    const primaryApp = await seedApp(env, 'primaryapp', { instances: 5, syncMode: 'activeStandby' });
+    const primaryIdentifier = componentIdentifier(primaryApp, 'primaryapp');
     const primaryContainer = await dbClient(TARGET).appContainerName('primaryapp', 'primaryapp');
-    await setSynced({ folder: 'fluxprimaryapp_primaryapp' });
-    await setPeerHasData({ folder: 'fluxprimaryapp_primaryapp' });
+    await setSynced({ folder: folderIdOf(primaryApp, 'primaryapp') });
+    await setPeerHasData({ folder: folderIdOf(primaryApp, 'primaryapp') });
     await advanceBlocks(3);
     await waitFor(async () => (await locationsOf(env, 'primaryapp')).length >= 5,
       { timeout: 300000, label: 'primaryapp reaches its instance count across the fleet' });
@@ -62,7 +64,7 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     // mount-safety guard keeps it receiveonly and the election never starts the
     // writer here. The spawner's install writes nothing, and the sync layer's
     // first-run reset clears local appdata, so the seed goes after that reset.
-    await waitForReconcileActuated(env.clients[TARGET - 1], 'primaryapp_primaryapp', 'dataCleared', 120_000,
+    await waitForReconcileActuated(env.clients[TARGET - 1], primaryIdentifier, 'dataCleared', 120_000,
       { afterId: seededAfter });
     await seedSyncScopedData(env, 'primaryapp', TARGET - 1);
 
@@ -116,7 +118,7 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     // "stopped" while the node is still writing.
     const desired = await env.clients[TARGET - 1].waitForEvent(
       'reconciler:desiredChanged',
-      (d) => d.identifier === 'primaryapp_primaryapp' && d.state === 'stopped',
+      (d) => d.identifier === primaryIdentifier && d.state === 'stopped',
       180000,
       // ANCHORED ON THE VERDICT, because the stand-down is what this transition
       // has to have been caused by. The install stops the component too, with
