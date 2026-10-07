@@ -118,10 +118,11 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
       { afterId: beforeIds[i] },
     )));
 
-    // The hold is durable in the register: a row at version 1 with no signer.
+    // The hold is durable in the register: a row at version 1 with no signer. Read
+    // by the identity the origin minted: these nodes do not list the app yet.
     for (const i of [0, 1, 3, 4]) {
       // eslint-disable-next-line no-await-in-loop
-      const row = await dbClients[i].getContentManifest(appName);
+      const row = await dbClients[i].getContentManifestByIdentity(stored.data.identity);
       expect(row, `node ${i} holds the manifest for the app it does not yet list`).to.exist;
       expect(row.version).to.equal(1);
       expect(row.signer, 'held unresolved until the registration applies').to.equal(null);
