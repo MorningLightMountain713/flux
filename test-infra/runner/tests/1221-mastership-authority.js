@@ -27,6 +27,7 @@ import { postGenerationRecord } from '../framework/generation-record.js';
 import { appOwnerKey } from '../framework/keys.js';
 
 import { committeeFor } from '../framework/committee.js';
+import { readGrantRecord } from '../framework/grant-record.js';
 
 // FluxOS is the sole mastership authority. Two properties, on a real fleet:
 //   1. A re-roll under a running master keeps the app up even when one new
@@ -75,14 +76,7 @@ describe('mastership authority: FluxOS keeps the app up and FDM never decides th
   const label = (i) => `node-${env.clients[i].num} (${env.clients[i].ip})`;
   const indexOf = (outpoint) => Number(Object.keys(outpoints).find((i) => outpoints[i] === outpoint));
 
-  async function readCell(i) {
-    try {
-      const res = await fetch(`${env.clients[i].url}/flux/quorumgrant/record?key=${encodeURIComponent(key())}`, { signal: AbortSignal.timeout(5000) });
-      return (await res.json())?.data ?? null;
-    } catch {
-      return null;
-    }
-  }
+  const readCell = (i) => readGrantRecord(env.clients[i].url, key());
 
   async function quorumVerdict(quorum) {
     const cells = await Promise.all(env.clients.map((_, i) => readCell(i)));

@@ -19,6 +19,7 @@ import {
   waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent,
 } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
+import { readGrantRecord } from '../framework/grant-record.js';
 
 // A published masterlease record is a claim; the granting committee's signed
 // term acceptances are its proof, verified at every node's intake against the
@@ -45,18 +46,7 @@ describe('masterlease proof: a listed node\'s claim without the committee\'s sig
   const key = () => `${app.identity}/master`;
   const label = (i) => `node-${env.clients[i].num} (${env.clients[i].ip})`;
 
-  async function readCell(i) {
-    try {
-      const res = await fetch(
-        `${env.clients[i].url}/flux/quorumgrant/record?key=${encodeURIComponent(key())}`,
-        { signal: AbortSignal.timeout(5000) },
-      );
-      const body = await res.json();
-      return body?.data ?? null;
-    } catch {
-      return null;
-    }
-  }
+  const readCell = (i) => readGrantRecord(env.clients[i].url, key());
 
   async function quorumVerdict() {
     const cells = await Promise.all(REAL.map((i) => readCell(i)));

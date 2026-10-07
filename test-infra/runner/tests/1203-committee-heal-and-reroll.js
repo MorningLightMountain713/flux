@@ -20,6 +20,7 @@ import { getSubnetConfig } from '../framework/subnet-config.js';
 import { authenticate } from '../auth.js';
 import { postGenerationRecord } from '../framework/generation-record.js';
 import { appOwnerKey } from '../framework/keys.js';
+import { readGrantRecord } from '../framework/grant-record.js';
 
 // Tier one and tier two against a real fleet. A referee that answers
 // nobody for a full term is voted off by the committee itself: the holder
@@ -58,22 +59,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     return [...new Set(found)].sort((a, b) => a - b);
   }
 
-  async function readCell(clientIndex) {
-    try {
-      // A paused node still accepts the TCP connect and then never answers, so
-      // an unbounded read hangs for undici's ~300s default and stalls the whole
-      // verdict on one frozen node. Silence is a non-answer; the quorum
-      // arithmetic already tolerates missing cells.
-      const res = await fetch(
-        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${app.identity}/master`)}`,
-        { signal: AbortSignal.timeout(5000) },
-      );
-      const body = await res.json();
-      return body?.data ?? null;
-    } catch {
-      return null;
-    }
-  }
+  const readCell = (clientIndex) => readGrantRecord(env.clients[clientIndex].url, `${app.identity}/master`);
 
   async function quorumVerdict() {
     const cells = await Promise.all(env.clients.map((_, i) => readCell(i)));
