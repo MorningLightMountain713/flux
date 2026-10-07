@@ -302,10 +302,10 @@ describe('content encrypted transport (HPKE capstone): open, seal-at-rest, multi
     // dependsOn ordering: the reconciler holds web at awaitingDependency until dep is
     // running, so dep's firstStart precedes web's (event ids are monotonic). Both are
     // fresh-install first starts, so match 'firstStart'.
-    // An identifier's second segment is the app's minted identity, which this
-    // suite cannot spell - match the component by SHAPE inside the afterId
-    // window (only capApp installs in it), the 901/902 pattern.
-    const startMatch = (comp) => (d) => new RegExp(`^${comp}_[0-9a-f]{12}$`).test(d.identifier) && d.action === 'firstStart';
+    // An identifier's second segment is the identity the registration minted,
+    // read off the node that installed the app.
+    const capIdentity = await dbClient(installedIndex + 1).identityOf(capApp);
+    const startMatch = (comp) => (d) => d.identifier === `${comp}_${capIdentity}` && d.action === 'firstStart';
     const depStart = await node.waitForEvent('reconciler:actuated', startMatch('dep'), 120000, { afterId: afterInstall });
     const webStart = await node.waitForEvent('reconciler:actuated', startMatch('web'), 120000, { afterId: afterInstall });
     expect(depStart.id, 'dep must start before web (dependsOn)').to.be.lessThan(webStart.id);
