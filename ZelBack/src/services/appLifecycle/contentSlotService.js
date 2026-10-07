@@ -493,7 +493,13 @@ async function resolveHeldManifests(identity, deps = {}) {
 /** The IPs of nodes currently running an app, for peers-first content resolution. */
 async function listAppPeers(appName) {
   const locations = await appsRepository.appLocationFromEvents({ appname: appName });
-  return (locations || []).map((l) => l.ip).filter(Boolean);
+  const peers = (locations || []).map((l) => l.ip).filter(Boolean);
+  // Shuffled, so nodes asking at once do not all ask the same peer first.
+  for (let i = peers.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [peers[i], peers[j]] = [peers[j], peers[i]];
+  }
+  return peers;
 }
 
 /**
@@ -824,6 +830,28 @@ async function reactSafely(fn) {
 }
 
 /**
+ * Writes one slot's bytes onto its mount source by its delivery mechanism:
+ * atomic:true temp+rename inside the managed dir, atomic:false in-place
+ * overwrite of the single-file bind.
+ *
+ * @param {object} mount - a contentSlotMounts() entry
+ * @param {Buffer} bytes
+ * @param {object} deps - { writeFile?, rename?, applyPerms? }
+ */
+async function writeSlot(mount, bytes, deps = {}) {
+  const { writeFile = fs.writeFile, rename = fs.rename, applyPerms = defaultInjectedPerms } = deps;
+  if (mount.atomic) {
+    const tmp = `${mount.source}.flux-content-tmp`;
+    await writeFile(tmp, bytes);
+    await applyPerms(tmp, mount);
+    await rename(tmp, mount.source); // atomic swap within the managed dir
+  } else {
+    await writeFile(mount.source, bytes); // in-place overwrite of the single-file bind
+    await applyPerms(mount.source, mount);
+  }
+}
+
+/**
  * Stage every declared slot (resolve peers-first by locator, decrypt + hash-verify
  * into memory) and, only if ALL staged, write each by its delivery mechanism —
  * atomic:true temp+rename inside the managed dir, atomic:false in-place overwrite.
@@ -842,7 +870,7 @@ async function stageAndApplySlots(deployment, manifest, ctx, deps = {}) {
   const {
     resolve = contentBlobService.resolveBlob,
     benchmark, fluxDrive, peerFetch = contentBlobService.fetchBlobFromPeer,
-    writeFile = fs.writeFile, rename = fs.rename, applyPerms = defaultInjectedPerms,
+    writeFile, rename, applyPerms,
     takes = () => true,
   } = deps;
 
@@ -866,20 +894,8 @@ async function stageAndApplySlots(deployment, manifest, ctx, deps = {}) {
 
   // 2. Write each staged slot by its delivery mechanism.
   for (const { mount, bytes } of staged) {
-    if (mount.atomic) {
-      const tmp = `${mount.source}.flux-content-tmp`;
-      // eslint-disable-next-line no-await-in-loop
-      await writeFile(tmp, bytes);
-      // eslint-disable-next-line no-await-in-loop
-      await applyPerms(tmp, mount);
-      // eslint-disable-next-line no-await-in-loop
-      await rename(tmp, mount.source); // atomic swap within the managed dir
-    } else {
-      // eslint-disable-next-line no-await-in-loop
-      await writeFile(mount.source, bytes); // in-place overwrite of the single-file bind
-      // eslint-disable-next-line no-await-in-loop
-      await applyPerms(mount.source, mount);
-    }
+    // eslint-disable-next-line no-await-in-loop
+    await writeSlot(mount, bytes, { writeFile, rename, applyPerms });
   }
 
   return staged;
@@ -1355,19 +1371,22 @@ async function reconcileBootContent(appName, deps = {}) {
   fluxEventBus.publish('content:bootReconcile', { appName, version: manifest && manifest.version });
 }
 
+/** The slot names a set of components declare. */
+const declaredSlots = (components) => components.flatMap((comp) => comp.contentSlotMounts().map((mount) => mount.slot));
+
 /**
- * The manifest an app stands on, covering every slot a deployment declares: one
- * short of a declared slot counts as none. With nothing standing, or one short,
- * the nodes running the app and FluxDrive are asked and it is judged again.
- * Throws when there is still none, so a caller about to create or replace a
- * container holds instead of starting one on empty or stale slots.
+ * The manifest an app stands on, covering every slot named: one short of a
+ * named slot counts as none. With nothing standing, or one short, the nodes
+ * running the app and FluxDrive are asked and it is judged again. Throws when
+ * there is still none, so a caller about to create or replace a container
+ * holds instead of starting one on empty or stale slots.
  *
- * @param {object} deployment - DeploymentSpec, whose identity is the app's
+ * @param {object} content - { identity: the app's, slots: the slot names to cover }
  * @param {object} ctx - { appName, peers? }
  * @param {object} deps - { getApp?, standing?, getPeers?, refresh?, provider? }
  * @returns {Promise<{row: object, plaintext: object, peers: string[]}>}
  */
-async function coveringManifest(deployment, ctx, deps = {}) {
+async function coveringManifest(content, ctx, deps = {}) {
   const {
     getApp = (name) => appRecords.registry().byName(name),
     standing = standingManifest,
@@ -1379,15 +1398,14 @@ async function coveringManifest(deployment, ctx, deps = {}) {
 
   const info = await getApp(appName);
   if (!info) throw new Error(`contentSlot: cannot provision ${appName} - app info not found`);
-  if (info.identity !== deployment.identity) {
+  if (info.identity !== content.identity) {
     throw new Error(`contentSlot: cannot provision ${appName} - the registry lists another registration of the name`);
   }
   const { isEncrypted: encrypted, identity } = info;
 
   const peers = ctx.peers || (await getPeers(appName));
 
-  const declared = deployment.componentEntries().flatMap(([, comp]) => comp.contentSlotMounts().map((m) => m.slot));
-  const covers = (plaintext) => declared.every((slot) => plaintext.slots && plaintext.slots[slot] && plaintext.slots[slot].hash);
+  const covers = (plaintext) => content.slots.every((slot) => plaintext.slots && plaintext.slots[slot] && plaintext.slots[slot].hash);
   const standingPlaintext = async () => {
     const { row } = await standing(identity, deps);
     if (!row) return null;
@@ -1430,7 +1448,7 @@ async function stageContent(deployment, ctx, deps = {}) {
 
   const peers = ctx.peers || (await getPeers(appName));
   if (declaresSlots) {
-    const { plaintext } = await coveringManifest(deployment, { appName, peers }, deps);
+    const { plaintext } = await coveringManifest({ identity: deployment.identity, slots: declaredSlots(comps) }, { appName, peers }, deps);
     for (const comp of comps) {
       for (const mount of comp.contentSlotMounts()) hashes.add(plaintext.slots[mount.slot].hash);
     }
@@ -1498,24 +1516,26 @@ async function prefetchListedContent(instance, deps = {}) {
  * (an app is not installable without its content). A no-op for an app that
  * declares no slots.
  *
- * A component whose container is not running takes the content with no
- * reaction: it reads it when it starts, as every component of an install does
- * and every component an update recreates. A component whose container is
- * running takes it only when the manifest is not the one this node last
- * delivered, and then gets the reaction its slots declare: the component an
- * update leaves as it is, under a manifest the update changed.
+ * A component this pass created (ctx.created, by name) took its content at its
+ * create step and is not written again. Any other component whose container is
+ * not running takes the content with no reaction: it reads it when it starts.
+ * A component whose container is running takes it only when the manifest is
+ * not the one this node last delivered, and then gets the reaction its slots
+ * declare: the component an update leaves as it is, under a manifest the
+ * update changed.
  *
  * Publishes content:slotsProvisioned once every slot is staged (hash-verified)
  * and written — the slot-path counterpart of the blob path's
  * content:blobProvisioned.
  *
  * @param {object} deployment - DeploymentSpec for the app
- * @param {object} ctx - { appName, peers? }
+ * @param {object} ctx - { appName, peers?, created? }
  * @param {object} deps
  */
 async function provisionContentSlots(deployment, ctx, deps = {}) {
   // An app with no slots touches neither the DB nor the network — check first.
-  const declaresSlots = deployment.componentEntries().some(([, comp]) => comp.hasContentSlots());
+  const comps = deployment.componentEntries().map(([, comp]) => comp);
+  const declaresSlots = comps.some((comp) => comp.hasContentSlots());
   if (!declaresSlots) return;
 
   const {
@@ -1523,18 +1543,19 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
     recordApplied = appsRepository.markContentManifestApplied,
     ...resolveDeps
   } = deps;
-  const { appName } = ctx;
+  const { appName, created = [] } = ctx;
 
-  const { row, plaintext, peers } = await coveringManifest(deployment, ctx, deps);
+  const { row, plaintext, peers } = await coveringManifest({ identity: deployment.identity, slots: declaredSlots(comps) }, ctx, deps);
 
   const running = new Set();
   // eslint-disable-next-line no-restricted-syntax
-  for (const [, comp] of deployment.componentEntries()) {
+  for (const comp of comps) {
     // eslint-disable-next-line no-await-in-loop
     if (comp.hasContentSlots() && await componentRunning(comp, resolveDeps)) running.add(comp);
   }
+  const fresh = new Set(created);
   const delivered = row.applied === true;
-  const takes = (comp) => !(delivered && running.has(comp));
+  const takes = (comp) => !fresh.has(comp.name) && !(delivered && running.has(comp));
 
   const staged = (await stageApply(deployment, plaintext, { appName, peers }, { ...resolveDeps, takes })) ?? [];
   await reactToWritten(staged.filter(({ comp }) => running.has(comp)), plaintext, { appName }, resolveDeps);
@@ -1554,48 +1575,109 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
 // content (mirrors DeploymentSpec resolveMountPerms). Mode bits are ownership
 // hygiene, not enforcement: a root container writes through any mode, and real
 // read-only intent is the mount's readOnly bind flag.
-async function writeInjectedContent(source, bytes) {
-  await fs.writeFile(source, bytes);
-  await fs.chmod(source, 0o644);
+async function writeInjectedContent(source, bytes, deps = {}) {
+  const { writeFile = fs.writeFile, chmod = fs.chmod } = deps;
+  await writeFile(source, bytes);
+  await chmod(source, 0o644);
 }
 
 /**
- * Writes the content a deployment declares onto its mount sources before its
- * containers start: the blobs its spec names, then the slots of the manifest
- * the app stands on. Each is resolved from this node's store, else a node
- * running the app, else FluxDrive, and hash-verified. Throws when any is
- * missing: an app is not startable without its content, at an install or at the
- * adoption of an update. A no-op for a deployment that declares none.
+ * Every file one component's container reads at its first start, resolved
+ * into memory and hash-verified: the blobs its spec names and its slots from
+ * the manifest the app stands on, each from this node's store, else a node
+ * running the app, else FluxDrive. Throws when one cannot be had.
  *
- * @param {object} deployment - DeploymentSpec
- * @param {object} ctx - { appName, onStatus? }
- * @param {object} deps - { getLocations?, provisionBlobs?, provisionSlots? }
+ * @param {object} component - DeploymentComponent, whose identity is the app's
+ * @param {object} ctx - { appName, peers? }
+ * @param {object} deps - coveringManifest's, plus { resolve?, benchmark?, fluxDrive?, peerFetch? }
+ * @returns {Promise<Array<{ kind: 'blob'|'slot', mount: object, hash: string, bytes: Buffer }>>}
  */
-async function provisionContent(deployment, ctx, deps = {}) {
+async function resolveComponentContent(component, ctx, deps = {}) {
   const {
-    getLocations = (appName2) => appsRepository.appLocationFromEvents({ appname: appName2 }),
-    provisionBlobs = contentBlobService.provisionContentBlobs,
-    provisionSlots = provisionContentSlots,
+    resolve = contentBlobService.resolveBlob, getPeers = listAppPeers,
+    benchmark, fluxDrive, peerFetch = contentBlobService.fetchBlobFromPeer,
   } = deps;
-  const { appName, onStatus = null } = ctx;
-  const hasBlobs = deployment.componentEntries().some(([, comp]) => comp.hasContentBlobs());
-  const hasSlots = deployment.componentEntries().some(([, comp]) => comp.hasContentSlots());
-  if (!hasBlobs && !hasSlots) return;
+  const { appName } = ctx;
+  const blobs = component.contentBlobMounts();
+  const slots = component.contentSlotMounts();
+  if (blobs.length === 0 && slots.length === 0) return [];
 
-  if (onStatus) onStatus({ status: 'Provisioning content...' });
-  // Locations are normalized ip:port, usable directly as peer URLs; shuffled so
-  // nodes provisioning at once do not all ask the same peer first.
-  const peers = ((await getLocations(appName)) || []).map((loc) => loc.ip).filter(Boolean);
-  for (let i = peers.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [peers[i], peers[j]] = [peers[j], peers[i]];
+  const peers = ctx.peers || (await getPeers(appName));
+  const files = blobs.map((mount) => ({ kind: 'blob', mount, hash: mount.hash }));
+  if (slots.length > 0) {
+    const { plaintext } = await coveringManifest(
+      { identity: component.identity, slots: slots.map((mount) => mount.slot) },
+      { appName, peers },
+      deps,
+    );
+    for (const mount of slots) files.push({ kind: 'slot', mount, hash: plaintext.slots[mount.slot].hash });
   }
-  if (hasBlobs) {
-    await provisionBlobs(deployment, { appName, peers }, { writeFile: writeInjectedContent, peerFetch: contentBlobService.fetchBlobFromPeer });
+  for (const file of files) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      file.bytes = await resolve(
+        {
+          appName, identity: component.identity, contentHash: file.hash, peers,
+        },
+        { benchmark, fluxDrive, peerFetch },
+      );
+    } catch (error) {
+      fluxEventBus.publish('content:blobProvisionFailed', { appName, hash: file.hash });
+      throw error;
+    }
   }
-  if (hasSlots) {
-    await provisionSlots(deployment, { appName, peers }, { peerFetch: contentBlobService.fetchBlobFromPeer });
+  return files;
+}
+
+/**
+ * Brings every file one component's container reads at its first start into
+ * this node's store, hash-verified, and writes nothing to any mount. Throws
+ * when one cannot be had, so a caller about to replace the container leaves
+ * it running.
+ *
+ * @param {object} component - DeploymentComponent
+ * @param {object} ctx - { appName, peers? }
+ * @param {object} deps - resolveComponentContent's
+ * @returns {Promise<number>} how many files the component declares
+ */
+async function stageComponentContent(component, ctx, deps = {}) {
+  const files = await resolveComponentContent(component, ctx, deps);
+  fluxEventBus.publish('content:staged', { appName: ctx.appName, identifier: component.identifier, files: files.length });
+  return files.length;
+}
+
+/**
+ * Writes one component's content onto its mount sources before its container
+ * is created: the blobs its spec names, then its slots from the manifest the
+ * app stands on, every one resolved and hash-verified before the first write.
+ * No reaction: the container does not exist. Throws when a file cannot be had,
+ * with nothing written, so no container is created on an empty or stale source
+ * and the caller retries. A no-op for a component that declares no content.
+ *
+ * @param {object} component - DeploymentComponent
+ * @param {object} ctx - { appName, peers? }
+ * @param {object} deps - resolveComponentContent's, plus { writeFile?, chmod?, rename?, applyPerms? }
+ */
+async function provisionComponentContent(component, ctx, deps = {}) {
+  const {
+    writeFile, chmod, rename, applyPerms,
+  } = deps;
+  const files = await resolveComponentContent(component, ctx, deps);
+  if (files.length === 0) return;
+  const { appName } = ctx;
+  for (const {
+    kind, mount, hash, bytes,
+  } of files) {
+    if (kind === 'blob') {
+      // eslint-disable-next-line no-await-in-loop
+      await writeInjectedContent(mount.source, bytes, { writeFile, chmod });
+      fluxEventBus.publish('content:blobProvisioned', { appName, hash });
+    } else {
+      // eslint-disable-next-line no-await-in-loop
+      await writeSlot(mount, bytes, { writeFile, rename, applyPerms });
+    }
   }
+  fluxEventBus.publish('content:componentProvisioned', { appName, identifier: component.identifier, files: files.length });
 }
 
 /**
@@ -1898,7 +1980,8 @@ module.exports = {
   contentComponentsRunning,
   reconcileBootContent,
   provisionContentSlots,
-  provisionContent,
+  provisionComponentContent,
+  stageComponentContent,
   stageContent,
   prefetchListedContent,
   listAppPeers,

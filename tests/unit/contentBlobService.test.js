@@ -9,7 +9,7 @@ const {
 } = require('./fixtures/fluxSpec');
 
 const {
-  encryptAndUploadBlob, encryptAndUploadBlobs, decryptAndVerifyBlob, resolveBlob, provisionContentBlobs,
+  encryptAndUploadBlob, encryptAndUploadBlobs, decryptAndVerifyBlob, resolveBlob,
   serveBlob, fetchBlobFromPeer, maxBlobBytes, maxFramedBlobBytes,
 } = contentBlobService;
 
@@ -22,7 +22,6 @@ const APP = V9_SUBMISSION.name;
 // The app's identity: what keys every locator, every blob key and this node's
 // artifact store.
 const IDENTITY = `b${'a'.repeat(52)}`;
-const APPS_FOLDER = '/dat/var/lib/fluxos/flux-apps';
 
 const hashOf = (buf) => `sha256:${crypto.createHash('sha256').update(buf).digest('hex')}`;
 // executeCall shape: { status: 'success', data: { status: 'ok', <field> } }
@@ -31,7 +30,6 @@ const ok = (obj) => ({ status: 'success', data: { status: 'ok', ...obj } });
 // The spec library is REAL here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. What stays stubbed is I/O: the FluxDrive uploader, the benchmark channel,
 // peer HTTP, and the on-disk artifact store.
-let flux;
 
 // ── Real spec fixtures ────────────────────────────────────────────────────
 //
@@ -141,7 +139,7 @@ describe('contentBlobService', () => {
   before(async function loadLibrary() {
     // The first fromSubmission compiles the ajv schemas.
     this.timeout(30_000);
-    flux = await loadSpecLibrary();
+    await loadSpecLibrary();
   });
 
   describe('encryptAndUploadBlob', () => {
@@ -532,95 +530,6 @@ describe('contentBlobService', () => {
         {
           benchmark: makeBenchmark(), peerFetch: async () => null, fluxDrive: noFluxDrive, store: memStore(),
         },
-      ), /no source/);
-    });
-  });
-
-  describe('provisionContentBlobs', () => {
-    const cfg = Buffer.from('config bytes');
-    const seed = Buffer.from('seed bytes');
-    const hCfg = hashOf(cfg);
-    const hSeed = hashOf(seed);
-
-    // A real DeploymentSpec — the projection appInstaller hands this function.
-    // The mount's HOST path and its hash both come from flux-spec (compDir +
-    // mount source, and the signed contentRef), never from a literal here.
-    let deployment;
-    let mounts; // [{ source, hash }] as flux-spec derived them
-
-    before(async function buildDeployment() {
-      this.timeout(30_000);
-      const decrypted = await decryptedV9Spec({
-        components: {
-          web: component('web', [blobMount('config', hCfg), blobMount('seed', hSeed)]),
-          // A second component declaring no content: contentBlobMounts() is empty
-          // and the loop must skip it rather than fail on it.
-          db: component('db', [], { hostPort: 31_001, containerPort: 5432 }),
-        },
-      });
-      deployment = flux.DeploymentSpec.fromSpec(decrypted, APPS_FOLDER, { replica: null, identity: IDENTITY });
-      mounts = deployment.componentEntries().flatMap(([, comp]) => comp.contentBlobMounts());
-    });
-
-    it('resolves and writes every content-blob mount, in order', async () => {
-      const writes = [];
-      const resolved = [];
-      const resolve = async (req) => { resolved.push(req); return Buffer.from(`plain:${req.contentHash}`); };
-      await provisionContentBlobs(
-        deployment,
-        { appName: APP, peers: ['p1'] },
-        { resolve, writeFile: async (s, b) => writes.push({ source: s, body: b }) },
-      );
-
-      expect(mounts.length).to.equal(2);
-      expect(writes.map((w) => w.source)).to.deep.equal(mounts.map((m) => m.source));
-      expect(writes[0].body.toString()).to.equal(`plain:${mounts[0].hash}`);
-      // The write target is the resolved HOST path under the apps folder, not the
-      // in-container destination the spec declares.
-      expect(writes[0].source.startsWith(`${APPS_FOLDER}/`)).to.equal(true);
-      expect(writes[0].source).to.not.equal('/etc/app/config');
-
-      // resolveBlob stays stubbed, so nothing here exercises what it does with the
-      // request it is handed. The real one keys the benchmark locator/key derivation
-      // AND the AEAD AAD on contentHash, and reads appName/identity/peers — so assert
-      // the handed request actually carries them.
-      expect(resolved.map((r) => r.contentHash)).to.deep.equal(mounts.map((m) => m.hash));
-      expect(resolved[0]).to.include({ appName: APP, identity: IDENTITY });
-      expect(resolved[0].peers).to.deep.equal(['p1']);
-    });
-
-    it('feeds the real resolver: the spec-derived hash verifies against the stored ciphertext', async () => {
-      // The hash comes off the real DeploymentSpec and goes into the real
-      // resolveBlob, whose AAD is Buffer.from(contentHash) — a hash that does not
-      // survive the projection byte-for-byte cannot decrypt. Only I/O is faked:
-      // the benchmark channel, the peer fetch, and the artifact store.
-      const bytesFor = new Map([[hCfg, cfg], [hSeed, seed]]);
-      const store = memStore();
-      const writes = [];
-      const resolve = (req, deps) => resolveBlob(req, {
-        ...deps,
-        benchmark: makeBenchmark(),
-        peerFetch: async () => aeadEncrypt(KEY, bytesFor.get(req.contentHash), Buffer.from(req.contentHash)),
-        fluxDrive: { fetchBlobByLocator: async () => null },
-        store,
-      });
-
-      await provisionContentBlobs(
-        deployment,
-        { appName: APP, peers: ['p1'] },
-        { resolve, writeFile: async (s, b) => writes.push({ source: s, body: b }) },
-      );
-
-      expect(writes.map((w) => w.body.toString())).to.deep.equal([cfg.toString(), seed.toString()]);
-      expect(store.puts.map((p) => p.hash)).to.deep.equal(mounts.map((m) => m.hash));
-    });
-
-    it('propagates a resolve failure (app not installable without its content)', async () => {
-      const resolve = async () => { throw new Error(`contentBlob: no source for ${hCfg}`); };
-      await expectReject(provisionContentBlobs(
-        deployment,
-        { appName: APP, peers: [] },
-        { resolve, writeFile: async () => {} },
       ), /no source/);
     });
   });

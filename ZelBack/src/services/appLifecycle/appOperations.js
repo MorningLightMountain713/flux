@@ -280,6 +280,15 @@ async function redeployComponent(appName, componentName, options = {}) {
     // Manifest check only, no pull, no disk cost.
     await componentProvisioner.verifyComponentImage(targets[0]);
 
+    // And every file its container reads at its first start is in this node's
+    // store, so a file that cannot be had refuses the operation here with the
+    // old version running: the create step writes it onto the sources the
+    // teardown leaves or the rebuild makes.
+    for (const deployComp of targets) {
+      // eslint-disable-next-line no-await-in-loop
+      await contentSlotService.stageComponentContent(deployComp, { appName });
+    }
+
     for (const deployComp of targets) {
       if (createVolumes) {
         log.warn(`REMOVAL REASON: ${operation} initiated - ${deployComp.identifier} (redeployComponent)`);
@@ -406,6 +415,15 @@ async function redeployApplication(appName, options = {}) {
     for (const [, deployComp] of deployments[0].componentEntries()) {
       // eslint-disable-next-line no-await-in-loop
       await componentProvisioner.verifyComponentImage(deployComp);
+    }
+
+    // And every content file the app declares is in this node's store, so a
+    // file that cannot be had refuses the operation here with the old version
+    // running: each create step writes its component's files onto the sources
+    // the teardown leaves or the rebuild makes.
+    for (const deployment of deployments) {
+      // eslint-disable-next-line no-await-in-loop
+      await contentSlotService.stageContent(deployment, { appName });
     }
 
     // Pre-flight: verify every shareWith dependency is still installed BEFORE tearing
@@ -2226,6 +2244,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   }
 
   const toInstall = [...keepVolume, ...recreateVolume, ...added];
+  const created = [];
   if (freshDeployment && toInstall.length > 0) {
     const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(freshDeployment);
     for (const name of toInstall) {
@@ -2248,16 +2267,18 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
         specVersion: registrySpec.version,
         requiresEncryption,
       });
+      created.push(name);
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(config.get('fluxapps.redeploy.composedDelay') * 1000);
     }
   }
 
-  // The content the listed spec declares is written before the reconciler starts
-  // anything this pass created, and the manifest is marked delivered then: a
-  // component just created reads it when it starts, one left running under a
-  // manifest the update changed gets the reaction its slots declare.
-  if (freshDeployment) await contentSlotService.provisionContent(freshDeployment, { appName });
+  // The manifest the app stands on reaches the components this pass left in
+  // place before the reconciler starts anything, and is marked delivered then:
+  // a component left running under a manifest the update changed gets the
+  // reaction its slots declare. A component this pass created took its content
+  // at its create step.
+  if (freshDeployment) await contentSlotService.provisionContentSlots(freshDeployment, { appName, created });
 
   // Each component's ports as the ledger names them, before any is opened: a
   // port kept from the old spec keeps the methods it was opened by, an added

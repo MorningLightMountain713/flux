@@ -23,6 +23,7 @@ const registryCredentialHelper = require('../utils/registryCredentialHelper');
 const appVolumeService = require('./appVolumeService');
 const appSwapPoolService = require('./appSwapPoolService');
 const backendTlsService = require('./backendTlsService');
+const contentSlotService = require('./contentSlotService');
 const volumeService = require('../utils/volumeService');
 const telemetryIdentityService = require('../telemetryIdentityService');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
@@ -259,6 +260,17 @@ async function installComponent(component, options = {}) {
     status(`Verifying volume mount for ${id}...`);
     await volumeService.verifyAppVolumeMount(id);
     status(`Volume mount verified for ${id}`);
+  }
+
+  // The component's content is on its mount sources before docker creates the
+  // container: the blobs its spec names and its slots from the manifest the app
+  // stands on, from this node's store, else a node running the app, else
+  // FluxDrive. A file that cannot be had throws here, so no container is
+  // created on an empty or stale source, whichever path is creating it: an
+  // install, a redeploy, a rebuild, an update's adoption or a health recreate.
+  if (component.hasContentBlobs() || component.hasContentSlots()) {
+    status(`Writing ${id} content...`);
+    await contentSlotService.provisionComponentContent(component, { appName });
   }
 
   // Ensure the dedicated app-swap pool covers all installed apps' swap before the

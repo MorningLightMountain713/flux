@@ -330,14 +330,12 @@ async function attemptInstallApplication(instantiated, options = {}) {
         );
       }
 
-      // Provision declared content — blobs and slots — onto the now-created mount
-      // sources before the reconciler starts the containers. Each is resolved
-      // peers-first by locator (FluxDrive is the backstop) and hash-verified. A
-      // content app is not installable without its content, so a failure here aborts
-      // the install (the reconciler retries) rather than starting on empty/stale
-      // content. Blobs take their hash from the signed spec; slots take theirs from
-      // the latest owner-signed manifest (this node's store, else a running peer).
-      await contentSlotService.provisionContent(deployment, { appName, onStatus });
+      // The manifest the app stands on is recorded delivered before the
+      // reconciler starts anything: every component took its content at its
+      // create step, so nothing is written here.
+      await contentSlotService.provisionContentSlots(deployment, {
+        appName, created: deployment.componentEntries().map(([name]) => name),
+      });
 
       // Hand the full shutdown plan to flux-shutdownd (best-effort; Arcane-only
       // — the socket is absent elsewhere and the call no-ops). Only graceful apps

@@ -458,6 +458,48 @@ describe('appOperations tests', () => {
       expect(operationRegistry.isHeld('myapp')).to.be.false;
     });
 
+    // The content pre-flight sits beside the image one: the create step writes
+    // the component's content, so a file that cannot be had refuses the redeploy
+    // with the old version running.
+    it('brings the component\'s content into the store before tearing anything down', async () => {
+      const deployment = await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' });
+      const deployComp = deployment.getComponent('frontend');
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
+      sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
+      const stage = sinon.stub(contentSlotService, 'stageComponentContent').resolves(1);
+      sinon.stub(serviceHelper, 'delay').resolves();
+      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec())));
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' }));
+      sinon.stub(hwRequirements, 'checkNodeResourcesReclaiming').resolves();
+      const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+      sinon.stub(componentProvisioner, 'installComponent').resolves();
+      sinon.stub(appReconciler, 'enqueueApp');
+
+      await appOperations.redeployComponent('myapp', 'frontend', { onStatus: () => {} });
+
+      sinon.assert.calledOnceWithExactly(stage, deployComp, { appName: 'myapp' });
+      sinon.assert.calledOnce(uninstallComponent);
+      expect(stage.calledBefore(uninstallComponent), 'staged before the teardown').to.be.true;
+    });
+
+    it('tears nothing down when a file cannot be had, and tells the caller', async () => {
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' }));
+      sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
+      sinon.stub(contentSlotService, 'stageComponentContent').rejects(new Error('contentBlob: no source for sha256:x'));
+      const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+      const installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
+      const enqueue = sinon.stub(appReconciler, 'enqueueApp');
+      const messages = [];
+
+      await appOperations.redeployComponent('myapp', 'frontend', { onStatus: (msg) => messages.push(msg) });
+
+      sinon.assert.notCalled(uninstallComponent);
+      sinon.assert.notCalled(installComponent);
+      const failure = messages.find((msg) => msg && msg.status === 'error');
+      expect(failure?.data?.message).to.include('no source');
+      expect(enqueue.calledOnceWith('myapp')).to.be.true;
+      expect(operationRegistry.isHeld('myapp')).to.be.false;
+    });
 
     // A same-spec redeploy reinstalls the identical component, so its port set never
     // changes. Both the teardown and the reinstall must leave the app's ufw/UPnP rules
@@ -656,6 +698,44 @@ describe('appOperations tests', () => {
       assertAnswers(budgetSeconds.firstCall.args[0], ['componentEntries']);
     });
 
+    it('brings every content file the app declares into the store before tearing anything down', async () => {
+      const deployment = await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' });
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
+      sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
+      const stage = sinon.stub(contentSlotService, 'stageContent').resolves(2);
+      sinon.stub(serviceHelper, 'delay').resolves();
+      const getInstalledApp = stubInstalled().byName;
+      getInstalledApp.onFirstCall().resolves(installedRecord(await instantiatedSpec(await v9Spec())));
+      getInstalledApp.onSecondCall().resolves(null);
+      sinon.stub(relationshipResolver, 'checkAppDependencyRequirements').resolves(true);
+      const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+      sinon.stub(appReconciler, 'enqueueApp');
+
+      await appOperations.redeployApplication('myapp', { onStatus: () => {} });
+
+      sinon.assert.calledOnceWithExactly(stage, deployment, { appName: 'myapp' });
+      sinon.assert.calledOnce(uninstallComponent);
+      expect(stage.calledBefore(uninstallComponent), 'staged before the teardown').to.be.true;
+    });
+
+    it('tears nothing down when a content file cannot be had, and tells the caller', async () => {
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' }));
+      sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
+      sinon.stub(contentSlotService, 'stageContent').rejects(new Error('contentBlob: no source for sha256:x'));
+      const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+      const uninstallApplication = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      const enqueue = sinon.stub(appReconciler, 'enqueueApp');
+      const messages = [];
+
+      await appOperations.redeployApplication('myapp', { onStatus: (msg) => messages.push(msg) });
+
+      sinon.assert.notCalled(uninstallComponent);
+      sinon.assert.notCalled(uninstallApplication);
+      expect(messages.find((msg) => msg && msg.status === 'error')?.data?.message).to.include('no source');
+      expect(enqueue.calledOnceWith('myapp')).to.be.true;
+      expect(operationRegistry.isHeld('myapp')).to.be.false;
+    });
+
     it('proceeds to teardown when every dependency is satisfied', async () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(
         await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' }),
@@ -757,6 +837,43 @@ describe('appOperations tests', () => {
       await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
 
       expect(operationRegistry.isHeld('myapp'), 'the rebuild lease must release on error').to.be.false;
+    });
+
+    it('brings the component\'s content into the store before its volume is destroyed', async () => {
+      const deployment = await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' });
+      const deployComp = deployment.getComponent('frontend');
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
+      sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
+      const stage = sinon.stub(contentSlotService, 'stageComponentContent').resolves(1);
+      sinon.stub(serviceHelper, 'delay').resolves();
+      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec())));
+      sinon.stub(deploymentProvider, 'buildDeployment').resolves(await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' }));
+      sinon.stub(hwRequirements, 'checkNodeResourcesReclaiming').resolves();
+      const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+      const installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
+      sinon.stub(appReconciler, 'enqueueApp');
+
+      await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: () => {} });
+
+      sinon.assert.calledOnceWithExactly(stage, deployComp, { appName: 'myapp' });
+      expect(uninstallComponent.calledOnceWith(deployComp, sinon.match({ removeVolumes: true }))).to.be.true;
+      expect(stage.calledBefore(uninstallComponent), 'staged before the volume goes').to.be.true;
+      expect(installComponent.calledOnceWith(deployComp, sinon.match({ createVolumes: true }))).to.be.true;
+    });
+
+    it('destroys no volume when a file cannot be had', async () => {
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' }));
+      sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
+      sinon.stub(contentSlotService, 'stageComponentContent').rejects(new Error('contentBlob: no source for sha256:x'));
+      const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+      sinon.stub(appReconciler, 'enqueueApp');
+      const messages = [];
+
+      await appOperations.redeployComponent('myapp', 'frontend', { createVolumes: true, onStatus: (msg) => messages.push(msg) });
+
+      sinon.assert.notCalled(uninstallComponent);
+      expect(messages.find((msg) => msg && msg.status === 'error')?.data?.message).to.include('no source');
+      expect(operationRegistry.isHeld('myapp')).to.be.false;
     });
   });
 
@@ -1870,7 +1987,7 @@ describe('appOperations tests', () => {
     let teardownOwedForStub;
     let ledgers;
     let stageContentStub;
-    let provisionContentStub;
+    let provisionContentSlotsStub;
     let ensureSourcesStub;
 
     function setup({ teardownOwed = false } = {}) {
@@ -1878,7 +1995,7 @@ describe('appOperations tests', () => {
       // The content service and the host's filesystem: every file is to be had,
       // and every mount source can be made.
       stageContentStub = sinon.stub(contentSlotService, 'stageContent').resolves(0);
-      provisionContentStub = sinon.stub(contentSlotService, 'provisionContent').resolves();
+      provisionContentSlotsStub = sinon.stub(contentSlotService, 'provisionContentSlots').resolves();
       ensureSourcesStub = sinon.stub(appVolumeService, 'ensureMountSourcesExist').resolves(false);
       sinon.stub(componentProvisioner, 'portOpenMethods').resolves(['ufw']);
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
@@ -2054,33 +2171,33 @@ describe('appOperations tests', () => {
         sinon.assert.notCalled(uninstallComponentStub);
         sinon.assert.notCalled(stubInstalled().updateRecord);
         sinon.assert.notCalled(installComponent);
-        sinon.assert.notCalled(provisionContentStub);
+        sinon.assert.notCalled(provisionContentSlotsStub);
       });
 
-      it('is written for the fresh deployment once its containers are created', async () => {
+      it('is delivered to the fresh deployment once its containers are created, naming the component this pass created', async () => {
         setup();
         const { oldDeployment, newDeployment } = await update({}, { cpu: 0.7 });
 
         await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
 
-        sinon.assert.calledOnceWithExactly(provisionContentStub, newDeployment, { appName: 'myapp' });
-        expect(provisionContentStub.calledAfter(installComponent)).to.equal(true);
+        sinon.assert.calledOnceWithExactly(provisionContentSlotsStub, newDeployment, { appName: 'myapp', created: ['web'] });
+        expect(provisionContentSlotsStub.calledAfter(installComponent)).to.equal(true);
       });
 
-      it('is written for an update that recreates nothing, for the component it leaves running', async () => {
+      it('is delivered to the component an update that recreates nothing leaves running', async () => {
         setup();
         const { oldDeployment, newDeployment } = await update({}, {});
 
         await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
 
         sinon.assert.notCalled(installComponent);
-        sinon.assert.calledOnceWithExactly(provisionContentStub, newDeployment, { appName: 'myapp' });
+        sinon.assert.calledOnceWithExactly(provisionContentSlotsStub, newDeployment, { appName: 'myapp', created: [] });
       });
 
       it('fails the adoption when it cannot be written', async () => {
         setup();
         const { oldDeployment, newDeployment } = await update({}, { cpu: 0.7 });
-        provisionContentStub.rejects(new Error('contentSlot: no manifest covering every declared slot'));
+        provisionContentSlotsStub.rejects(new Error('contentSlot: no manifest covering every declared slot'));
 
         const failure = await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec).then(() => null, (error) => error);
 
