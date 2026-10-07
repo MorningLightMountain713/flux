@@ -5,7 +5,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
-import { execInContainer, folderIdOf } from '../framework/container.js';
+import { execInContainer, folderIdOf, requireAppContainerName } from '../framework/container.js';
 import {
   bootAndPeer, placeGAppInOrder, electionOrder, installedInstanceIndices,
 } from '../framework/reconciler-suite.js';
@@ -289,25 +289,26 @@ describe('a surplus copy that is also the writer', function () {
     await electMaster(appName, newestIp);
 
     // Positive control. Without it a later "the writer never stopped" assertion
-    // passes on a component that was never running in the first place. A timeout
-    // names what the node listed, so a name the node builds differently is told
-    // apart from a writer that never started.
+    // passes on a component that was never running in the first place. The
+    // container is named as the node names it: the syncthing folder id (`folder`)
+    // is a different name. A timeout names what the node listed.
+    const writerContainer = await requireAppContainerName(env.clients[newestIndex].container, appName, appName);
     let listed = [];
     await waitFor(async () => {
       listed = await runningComponents(env, newestIndex);
-      return listed.includes(folder);
+      return listed.includes(writerContainer);
     }, { timeout: 180000, interval: 3000, label: 'the newest copy is running the writer' })
       .catch((error) => {
-        throw new Error(`${error.message}\n    wanted ${folder}; node ${newestIndex} listed ${JSON.stringify(listed)}`);
+        throw new Error(`${error.message}\n    wanted ${writerContainer}; node ${newestIndex} listed ${JSON.stringify(listed)}`);
       });
 
-    shape = { newestIndex, nextIndex };
+    shape = { newestIndex, nextIndex, writerContainer };
     return shape;
   };
 
   it('trims nothing while it cannot confirm the newest copy is the writer', async function () {
     this.timeout(900000);
-    const { newestIndex, nextIndex } = await establishShape();
+    const { newestIndex, nextIndex, writerContainer } = await establishShape();
 
     // The second-newest may act ONLY on a POSITIVE confirmation that the newest
     // is running the writer. Every node ranks the same shared order, but "who is
@@ -385,7 +386,7 @@ describe('a surplus copy that is also the writer', function () {
       expect(
         await runningComponents(env, newestIndex),
         'the writer stopped while its peer could not see it',
-      ).to.include(folder);
+      ).to.include(writerContainer);
     } finally {
       await env.healPartition([nextIndex], [newestIndex]).catch(() => {});
       // healPartition's own comment makes this the caller's job - it drops the
@@ -400,7 +401,7 @@ describe('a surplus copy that is also the writer', function () {
 
   it('leaves the writer in place and trims the next copy instead', async function () {
     this.timeout(900000);
-    const { newestIndex, nextIndex } = await establishShape();
+    const { newestIndex, nextIndex, writerContainer } = await establishShape();
 
     // WAIT FOR THE FACT THE DECISION READS. The trim is allowed only when
     // peerComponentState confirms the newest copy holds the writer, and it asks
@@ -466,7 +467,7 @@ describe('a surplus copy that is also the writer', function () {
     expect(
       await runningComponents(env, newestIndex),
       'the writer was stopped in order to trim the surplus',
-    ).to.include(folder);
+    ).to.include(writerContainer);
 
     const stillInstalled = await installedInstanceIndices(env, appName);
     expect(stillInstalled, 'the writer left instead of the copy behind it').to.include(newestIndex);
