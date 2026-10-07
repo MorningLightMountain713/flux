@@ -234,7 +234,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       // the proof where it lives, from the master's own synced copy.
       let publishedEntry = null;
       await waitFor(async () => {
-        const roster = await dbClient(masterIndex + 1).getMasterleaseRoster(name, 'master');
+        const roster = await dbClient(masterIndex + 1).getMasterleaseRoster(app.identity, 'master');
         publishedEntry = (roster?.chain ?? [])
           .find((e) => e.remove === outpoints[refereeIndex]) ?? null;
         return publishedEntry !== null;

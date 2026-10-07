@@ -286,7 +286,7 @@ describe('relay renewal and the partitioned app island', function () {
           && e.data.key === `${app.identity}/master`));
       expect(winner, 'a survivor holds the granted event').to.not.equal(undefined);
       await env.clients[winner].waitForEvent(
-        'quorumGrant:fenceRaised', (d) => d.app === name, 15000, { afterId: survivorAfters.get(winner) },
+        'quorumGrant:fenceRaised', (d) => d.app === app.identity, 15000, { afterId: survivorAfters.get(winner) },
       ).catch(() => {
         throw new Error('the fence against the deposed master did not stand with the grant');
       });
@@ -338,7 +338,7 @@ describe('relay renewal and the partitioned app island', function () {
     // replicating forever. The event can only fire through the attestation
     // path, so it proves the whole raise→attest→lift cycle.
     await env.clients[winner].waitForEvent(
-      'quorumGrant:fenceLifted', (d) => d.app === name, 240000, { afterId: survivorAfters.get(winner) },
+      'quorumGrant:fenceLifted', (d) => d.app === app.identity, 240000, { afterId: survivorAfters.get(winner) },
     ).catch((err) => {
       // rethrown with the verdict the timeout MEANS, keeping the wait's own
       // diagnostics (stream state) — a dead event stream and a fence that
