@@ -223,6 +223,10 @@ describe('the location table survives restarts and refuses bad publications', fu
   // answers again. The container, its mongo databases and its artifact cache all
   // survive, so the fresh process redoes exactly the startup a node does after
   // `systemctl restart fluxos`: adopt what is stored, then refresh conditionally.
+  // How many times a node published an event, across its restarts: the client's
+  // buffer outlives the process.
+  const seen = (index, name) => env.clients[index].getEventBuffer().filter((e) => e.event === name).length;
+
   const restartAndSettle = async (index, { generated = null, timeout = 240000 } = {}) => {
     const markers = env.clients.map((client) => client.getLastEventId());
     await restartFluxos(env.clients[index].container);
@@ -346,7 +350,7 @@ describe('the location table survives restarts and refuses bad publications', fu
       expect(Object.keys(tree.continents).length,
         'the baseline split keeps the whole fleet on one continent').to.equal(1);
       expect(tree.continents[fleetContinent].nodes).to.equal(env.nodeCount);
-      expect(env.nodeLogCount(index, /ipLocationStore - baseline installed/),
+      expect(seen(index, 'ipLocation:baselineInstalled'),
         `node ${index} ingested the baseline exactly once`).to.equal(1);
     });
   });
@@ -354,16 +358,15 @@ describe('the location table survives restarts and refuses bad publications', fu
   it('adopts the stored baseline across a FluxOS restart, without downloading or ingesting it again', async function () {
     this.timeout(300000);
     const beforeRestart = await fetchCounts();
-    expect(env.nodeLogCount(REFRESH_NODE, /ipLocationStore - baseline installed/),
+    expect(seen(REFRESH_NODE, 'ipLocation:baselineInstalled'),
       'the node ingested the baseline exactly once, at boot').to.equal(1);
 
     await restartAndSettle(REFRESH_NODE);
 
     // The ingest marker names the baseline the row collection already holds, so
     // the fresh process serves it without walking two million rows to arrive
-    // back where it started. Awaited rather than asserted: the node answers HTTP
-    // over a shorter pipeline than its logs travel.
-    await waitFor(() => env.nodeHasLog(REFRESH_NODE, /ipLocationStore - adopted the stored baseline/), {
+    // back where it started.
+    await waitFor(() => seen(REFRESH_NODE, 'ipLocation:baselineAdopted') >= 1, {
       timeout: 30000, interval: 500, label: 'the restarted node adopted what it already had',
     });
 
@@ -382,7 +385,7 @@ describe('the location table survives restarts and refuses bad publications', fu
     // statement than the 304 it replaces and the reason this is asserted on total rather
     // than on any single outcome.
     await waitFor(
-      () => env.nodeHasLog(REFRESH_NODE, /ipLocationSync - iplocation table restored from cache|ipLocationStore - adopted the stored baseline/),
+      () => seen(REFRESH_NODE, 'ipLocation:baselineAdopted') + seen(REFRESH_NODE, 'ipLocation:baselineInstalled') >= 2,
       { timeout: 180000, interval: 2000, label: 'the restarted node settles on the copy it already had' },
     );
     const afterRestart = await fetchCounts();
@@ -391,7 +394,7 @@ describe('the location table survives restarts and refuses bad publications', fu
     expect(afterRestart.ok, 'and never downloads the artifact a second time').to.equal(beforeRestart.ok);
     // asserted after the node has settled: it decided against fetching before any ingest
     // could start, so from here the restart is finished with the table for good
-    expect(env.nodeLogCount(REFRESH_NODE, /ipLocationStore - baseline installed/),
+    expect(seen(REFRESH_NODE, 'ipLocation:baselineInstalled'),
       'and ingested nothing a second time').to.equal(1);
   });
 
@@ -424,7 +427,7 @@ describe('the location table survives restarts and refuses bad publications', fu
     expect(answer.tableGenerated, 'still the baseline it ingested at boot').to.equal(baselineGenerated);
     expect(answer.domainCount, 'and still that baseline\'s fault domains').to.equal(BASELINE_DOMAINS);
     expect(answer.candidateCount).to.equal(env.nodeCount);
-    expect(env.nodeLogCount(REJECT_NODE, /ipLocationStore - baseline installed/),
+    expect(seen(REJECT_NODE, 'ipLocation:baselineInstalled'),
       'nothing was ingested over the good table').to.equal(1);
   });
 
@@ -473,7 +476,7 @@ describe('the location table survives restarts and refuses bad publications', fu
     expect(answer.tableAvailable, 'the node still has a table').to.equal(true);
     expect(answer.tableGenerated, 'still the baseline it ingested at boot').to.equal(baselineGenerated);
     expect(answer.domainCount, 'the forged table never reached placement').to.equal(BASELINE_DOMAINS);
-    expect(env.nodeLogCount(REJECT_NODE, /ipLocationStore - baseline installed/),
+    expect(seen(REJECT_NODE, 'ipLocation:baselineInstalled'),
       'nothing was ingested over the good table').to.equal(1);
   });
 
@@ -507,7 +510,7 @@ describe('the location table survives restarts and refuses bad publications', fu
     expect(answer.tableGenerated, 'still the baseline it ingested at boot').to.equal(baselineGenerated);
     expect(answer.domainCount, `the original split, not the truncated artifact's ${BELOW_FLOOR_DOMAINS}`)
       .to.equal(BASELINE_DOMAINS);
-    expect(env.nodeLogCount(FLOOR_NODE, /ipLocationStore - baseline installed/),
+    expect(seen(FLOOR_NODE, 'ipLocation:baselineInstalled'),
       'nothing was ingested over the good table').to.equal(1);
   });
 
@@ -545,10 +548,10 @@ describe('the location table survives restarts and refuses bad publications', fu
     expect(counts.missing, 'and it did not go asking for something the bundle does not name').to.equal(0);
     // its second restart, and its second adopt: the rows outlive the process
     // whether or not the publisher is there to confirm them
-    await waitFor(() => env.nodeLogCount(REFRESH_NODE, /ipLocationStore - adopted the stored baseline/) === 2, {
+    await waitFor(() => seen(REFRESH_NODE, 'ipLocation:baselineAdopted') === 2, {
       timeout: 30000, interval: 500, label: 'the node adopted its stored rows on this restart as well',
     });
-    expect(env.nodeLogCount(REFRESH_NODE, /ipLocationStore - baseline installed/),
+    expect(seen(REFRESH_NODE, 'ipLocation:baselineInstalled'),
       'and still holds the one ingest it ever did').to.equal(1);
 
     const answer = await tableAnswer(env.clients[REFRESH_NODE], 5);

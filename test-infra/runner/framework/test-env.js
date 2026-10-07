@@ -1467,8 +1467,7 @@ export async function createTestEnv({
     // boot's own.
     await startInfraDeathWatch(env);
     await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, mergedOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, pm2Nodes, pausedSyncthingNodes, { ...sharedKeys, ...collateralOf }, networkShapes, globalIpv6, dnsRecords, firewall, collateralOf, syncthingFaults, configuredIp, nodeImageTags, freezableDockerRoot, symlinkedAppsFolder, arcane, shutdownd, telemetryd, fluxosJournal, arcaneHost, dnsd, zmqTopics, nodeZmqTopics, { perNodeZmq, seedPolicyGrant, ipLocationSeeded }, stubCapabilities);
-    // A node whose FluxOS logs to its journal is one nodeLogCount cannot read.
-    if (env.ipLocationSnapshot && !fluxosJournal) await assertIpLocationSnapshotAdopted(env);
+    if (env.ipLocationSnapshot) await assertIpLocationSnapshotAdopted(env);
     return env;
   } catch (err) {
     // Boot failed: the env owns everything started so far. The shared teardown
@@ -1497,9 +1496,6 @@ function mergeConfigs(base, override) {
   return result;
 }
 
-const SNAPSHOT_ADOPTED = /ipLocationStore - adopted the stored baseline/;
-const TABLE_LOADED = /ipLocationStore - baseline installed/;
-
 /**
  * Every started node on the main image adopted the IP location table its database holds
  * and loaded none. A node that loads it anyway pays the cost the snapshot removes, and
@@ -1508,21 +1504,18 @@ const TABLE_LOADED = /ipLocationStore - baseline installed/;
  */
 async function assertIpLocationSnapshotAdopted(env) {
   const booted = env.containers.fluxNodes
-    .map((node, index) => ({ node, index }))
-    .filter(({ node }) => node.container && node.logCollector && node.imageTag === IMAGE_TAG);
+    .map((node, index) => ({ node, index, client: env.clients[index] }))
+    .filter(({ node, client }) => node.container && client && node.imageTag === IMAGE_TAG);
+  const published = (client, name) => client.getEventBuffer().some((e) => e.event === name);
   try {
-    await waitFor(() => booted.every(({ node }) => node.logCollector.countPattern(SNAPSHOT_ADOPTED) > 0), {
+    await waitFor(() => booted.every(({ client }) => published(client, 'ipLocation:baselineAdopted')), {
       timeout: 60000, interval: 1000, label: 'every node adopted the IP location table from the mongo snapshot',
     });
   } catch (error) {
-    const missing = booted.filter(({ node }) => node.logCollector.countPattern(SNAPSHOT_ADOPTED) === 0);
-    const said = missing.map(({ node, index }) => {
-      const lines = node.logCollector.getLines().filter((line) => /ipLocation/.test(line)).slice(-5);
-      return `node ${index}: ${lines.length ? lines.join(' | ') : 'no ipLocation line at all'}`;
-    });
-    throw new Error(`${error.message}\n${said.join('\n')}`);
+    const missing = booted.filter(({ client }) => !published(client, 'ipLocation:baselineAdopted')).map(({ index }) => index);
+    throw new Error(`${error.message}: node(s) ${missing.join(', ')}`);
   }
-  const loaded = booted.filter(({ node }) => node.logCollector.countPattern(TABLE_LOADED) > 0).map(({ index }) => index);
+  const loaded = booted.filter(({ client }) => published(client, 'ipLocation:baselineInstalled')).map(({ index }) => index);
   if (loaded.length) {
     throw new Error(`createTestEnv: node(s) ${loaded.join(', ')} loaded the IP location table although the mongo snapshot holds it`);
   }
