@@ -40,11 +40,20 @@ describe('Policy: a grant a reorg removes from the chain is gone from every node
   it('a reorg below the grant replaces its block: every node refuses mesh again', async function () {
     this.timeout(300000);
     const before = await getState();
+    const beforeReorg = env.clients.map((c) => c.getLastEventId());
     // the new branch forks under the grant's block and reaches the same tip height
     const reorg = await reorgChain({ forkHeight: grantHeight - 1, newHeight: before.currentHeight });
     // each node processes the new tip; the block at the grant's height on the
     // new branch carries no policy message
     await Promise.all(env.clients.map((c) => waitForBlockProcessed(c, (d) => d.height >= reorg.newTip.height, 120000)));
+    // A reorg rewinds the chain state and takes the registry down with it; a
+    // route refuses while it is inconsistent, which is not the policy's answer.
+    await Promise.all(env.clients.map((c, i) => c.waitForEvent(
+      'capability:changed',
+      (d) => d.name === 'appRegistryConsistent' && d.to === 'up',
+      120000,
+      { afterId: beforeReorg[i] },
+    )));
     for (const [i, client] of env.clients.entries()) {
       // eslint-disable-next-line no-await-in-loop
       expectRefused(await register(client, { mesh: true }), 'mesh', `node ${i} after the reorg`);

@@ -1,8 +1,10 @@
 'use strict';
 
 const { expect } = require('chai');
+const sinon = require('sinon');
 
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
+const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 
 const { STATE } = capabilities;
 
@@ -164,6 +166,17 @@ describe('capabilities tests', () => {
       expect(calls).to.equal(1);
       capabilities.onFirstUp('mongoReachable', () => { calls += 1; });
       expect(calls).to.equal(2);
+    });
+
+    it('publishes each transition on the bus as capability:changed', () => {
+      const publish = sinon.stub(fluxEventBus, 'publish');
+      try {
+        capabilities.setForTests('explorerSynced', true);
+        const changed = publish.getCalls().filter((c) => c.args[0] === 'capability:changed').map((c) => c.args[1]);
+        expect(changed.map((r) => [r.name, r.from, r.to])).to.deep.include(['explorerSynced', 'down', 'up']);
+      } finally {
+        publish.restore();
+      }
     });
 
     it('reports each transition to onTransition until unsubscribed', () => {

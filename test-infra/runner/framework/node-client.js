@@ -327,6 +327,7 @@ export function nodeClient(nodeNum) {
         'syncthing:holderExcluded',
         'syncthing:passComplete',
         'checkpoint:held',
+        'capability:changed',
         'system:packages-checked',
         'system:apt-command',
         'spawner:blocked',
