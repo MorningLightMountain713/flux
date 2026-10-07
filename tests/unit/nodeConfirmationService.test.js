@@ -704,6 +704,23 @@ describe('nodeConfirmationService', () => {
       expect(publishStub.getCall(publishStub.callCount - 1).args[0]).to.equal('daemon:ownStatus');
     });
 
+    it('should announce a lost confirmation before the capability it drives moves', async () => {
+      setupConfirmed();
+      await service.start();
+      publishStub.resetHistory();
+      let announcedWhenLowered = null;
+      const unsubscribe = capabilities.onDown('nodeConfirmed', () => {
+        announcedWhenLowered = publishedAs('confirmation:changed').length;
+      });
+      try {
+        await service.applyPushedStatus(pushed({ status: 'EXPIRED', tier: 'CUMULUS' }));
+      } finally {
+        unsubscribe();
+      }
+      expect(announcedWhenLowered, 'the capability was lowered').to.not.equal(null);
+      expect(announcedWhenLowered, 'the cause was published first').to.equal(1);
+    });
+
     it('should announce nothing from an RPC poll, which carries no topic message', async () => {
       setupConfirmed();
       await service.start();

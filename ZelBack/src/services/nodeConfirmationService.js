@@ -206,18 +206,22 @@ async function reconcile(previous, statusObserved) {
     if (daemonConfirmed && hasConfirmationExpired(elapsed)) {
       daemonConfirmed = false;
       log.warn('nodeConfirmationService - Confirmation expired on chain while the daemon was unreachable');
-      publishConfirmed(false, 'confirmation expired on chain while the daemon was unreachable');
+      // The cause is published before the capability moves: everything the
+      // capability drives is a consequence of it.
       fluxEventBus.publish('confirmation:changed', { confirmed: false });
+      publishConfirmed(false, 'confirmation expired on chain while the daemon was unreachable');
     }
   }
 
   if (statusObserved) {
-    publishConfirmed(daemonConfirmed, daemonConfirmed ? 'daemon reports this node confirmed' : 'daemon reports this node not confirmed');
+    // The cause is published before the capability moves: everything the
+    // capability drives is a consequence of it.
     if (prevDaemonConfirmed !== daemonConfirmed) {
       const direction = daemonConfirmed ? 'gained' : 'lost';
       log.info(`nodeConfirmationService - Confirmation ${direction}`);
       fluxEventBus.publish('confirmation:changed', { confirmed: daemonConfirmed });
     }
+    publishConfirmed(daemonConfirmed, daemonConfirmed ? 'daemon reports this node confirmed' : 'daemon reports this node not confirmed');
   }
 
   if (!daemonConfirmed) {
