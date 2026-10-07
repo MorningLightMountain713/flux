@@ -26,6 +26,10 @@ export function splitRecords(text) {
 
 export const recordLabel = (record) => record.split('\n')[0].split(' ')[1];
 
+// A record the logger wrote. The info and debug downloads also serve a sink's raw
+// non-NDJSON lines (a unit's own stdout) verbatim, untimestamped and unlabelled.
+export const isLogged = (record) => RECORD_START.test(record);
+
 // A record's own line. Two downloads compare records by it: a raw stdout line
 // folds into whichever record precedes it in each, which differs between them.
 export const firstLine = (record) => record.split('\n')[0];

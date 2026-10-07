@@ -9,7 +9,7 @@ import { execInContainer } from '../framework/container.js';
 import { authenticate } from '../auth.js';
 import { fluxTeamKey } from '../framework/keys.js';
 import {
-  NDJSON_PREFIX, ISO_TIME, splitRecords, recordLabel, renderedHead, hasRecord, errorRecordFor, swapCase, firstLine,
+  NDJSON_PREFIX, ISO_TIME, splitRecords, recordLabel, renderedHead, hasRecord, errorRecordFor, swapCase, firstLine, isLogged,
 } from '../framework/log-records.js';
 
 // FluxOS logging, journald half (suite 803 covers the file-sink half): the
@@ -158,6 +158,8 @@ describe('fluxos logging: journald sink under a real systemd unit', function () 
       // eslint-disable-next-line no-await-in-loop
       const records = splitRecords(await fetchText(path));
       for (const record of records) {
+        // the unit's raw stdout rides the info download unlabelled; warn serves none
+        if (label === 'INFO' && !isLogged(record)) continue; // eslint-disable-line no-continue
         expect(recordLabel(record), `${path}: ${firstLine(record)}`).to.equal(label);
       }
       const served = new Set(records.map(firstLine));
@@ -196,7 +198,7 @@ describe('fluxos logging: journald sink under a real systemd unit', function () 
     expect(tailed.length).to.be.greaterThan(0).and.at.most(100);
     const infos = new Set(splitRecords(await fetchText('/flux/infolog')).map(firstLine));
     for (const record of tailed) {
-      expect(recordLabel(record)).to.equal('INFO');
+      if (isLogged(record)) expect(recordLabel(record)).to.equal('INFO');
       expect(infos.has(firstLine(record)), firstLine(record)).to.equal(true);
     }
   });
