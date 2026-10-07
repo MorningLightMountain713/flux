@@ -16,7 +16,7 @@ const THIRD = `${'c'.repeat(64)}:1`;
 // and the release. The register is faked behind the seam it registers into.
 function load(register = {}) {
   const seam = {
-    probeOrdinal: sinon.stub().resolves({ decided: true, holder: null }),
+    probeOrdinal: sinon.stub().resolves({ decided: true, holder: null, named: [] }),
     askOrdinal: sinon.stub().resolves({ answer: 'yes' }),
     releaseOrdinal: sinon.stub().resolves({ released: true }),
     ordinalHolders: sinon.stub().resolves(new Map()),
@@ -34,7 +34,7 @@ function load(register = {}) {
 
 // A register answering per ordinal: held[k] = holder outpoint, or absent = free.
 function probes(held) {
-  return sinon.stub().callsFake(async (app, k) => ({ decided: true, holder: held[k] ?? null }));
+  return sinon.stub().callsFake(async (app, k) => ({ decided: true, holder: held[k] ?? null, named: held[k] ? [held[k]] : [] }));
 }
 
 describe('meshOrdinals', () => {
@@ -81,7 +81,7 @@ describe('meshOrdinals', () => {
 
     it('an undecided probe is a wait, and nothing past it is asked', async () => {
       const { meshOrdinals, seam } = load({
-        probeOrdinal: sinon.stub().resolves({ decided: false, holder: null }),
+        probeOrdinal: sinon.stub().resolves({ decided: false, holder: null, named: [] }),
       });
       expect(await meshOrdinals.claimOrdinal('app', 3)).to.deep.equal({ state: 'wait', reason: 'undecided' });
       expect(seam.askOrdinal.callCount).to.equal(0);
@@ -114,6 +114,31 @@ describe('meshOrdinals', () => {
       expect(await meshOrdinals.claimOrdinal('app', 3)).to.deep.equal({ state: 'granted', ordinal: 0 });
       expect(seam.vacateOrdinal.args).to.deep.equal([['app', 0, OTHER]]);
       expect(seam.askOrdinal.args).to.deep.equal([['app', 0]]);
+    });
+
+    // A cell whose node was down missed a write: no quorum names the dead
+    // holder, its rows still hold a founding off, and this node's own stale
+    // row is its own to found over.
+    it('vacates every other holder a cell names when no quorum names one, then founds', async () => {
+      const { meshOrdinals, seam } = load({
+        probeOrdinal: sinon.stub().resolves({ decided: true, holder: null, named: [OTHER, ME] }),
+        vacateOrdinal: sinon.stub().resolves({ vacated: true }),
+      });
+      expect(await meshOrdinals.claimOrdinal('app', 1)).to.deep.equal({ state: 'granted', ordinal: 0 });
+      expect(seam.vacateOrdinal.args).to.deep.equal([['app', 0, OTHER]]);
+      expect(seam.askOrdinal.args).to.deep.equal([['app', 0]]);
+    });
+
+    it('a row naming a holder the register will not vacate keeps the ordinal held', async () => {
+      const { meshOrdinals, seam } = load({
+        probeOrdinal: probes({}),
+      });
+      seam.probeOrdinal.callsFake(async (app, k) => (k === 0
+        ? { decided: true, holder: null, named: [OTHER] }
+        : { decided: true, holder: null, named: [] }));
+      expect(await meshOrdinals.claimOrdinal('app', 2)).to.deep.equal({ state: 'granted', ordinal: 1 });
+      expect(seam.vacateOrdinal.args).to.deep.equal([['app', 0, OTHER]]);
+      expect(seam.askOrdinal.args).to.deep.equal([['app', 1]]);
     });
 
     it('a vacate the register refuses leaves the ordinal held, and the scan moves on', async () => {
@@ -169,7 +194,7 @@ describe('meshOrdinals', () => {
     it('after a return, the record\'s answer is probed once; a quorum naming another holder makes this node a standby', async () => {
       const { meshOrdinals, seam } = load({
         ordinalHolders: sinon.stub().resolves(new Map([[1, ME]])),
-        probeOrdinal: sinon.stub().resolves({ decided: true, holder: OTHER }),
+        probeOrdinal: sinon.stub().resolves({ decided: true, holder: OTHER, named: [OTHER] }),
       });
       meshOrdinals.noteReturnFromUnreachability();
       expect(await meshOrdinals.ownOrdinal('app')).to.equal(null);
@@ -179,7 +204,7 @@ describe('meshOrdinals', () => {
     it('a quorum confirming this node restores the name, and the probe is not repeated until the next return', async () => {
       const { meshOrdinals, seam } = load({
         ordinalHolders: sinon.stub().resolves(new Map([[1, ME]])),
-        probeOrdinal: sinon.stub().resolves({ decided: true, holder: ME }),
+        probeOrdinal: sinon.stub().resolves({ decided: true, holder: ME, named: [ME] }),
       });
       meshOrdinals.noteReturnFromUnreachability();
       expect(await meshOrdinals.ownOrdinal('app')).to.equal(1);
@@ -193,7 +218,7 @@ describe('meshOrdinals', () => {
     it('an undecided probe after a return keeps the node a standby, and asks again next pass', async () => {
       const { meshOrdinals, seam } = load({
         ordinalHolders: sinon.stub().resolves(new Map([[1, ME]])),
-        probeOrdinal: sinon.stub().resolves({ decided: false, holder: null }),
+        probeOrdinal: sinon.stub().resolves({ decided: false, holder: null, named: [] }),
       });
       meshOrdinals.noteReturnFromUnreachability();
       expect(await meshOrdinals.ownOrdinal('app')).to.equal(null);

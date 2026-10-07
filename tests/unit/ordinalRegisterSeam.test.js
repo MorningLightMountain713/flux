@@ -17,7 +17,7 @@ describe('ordinalRegisterSeam', () => {
   });
 
   it('unwired, every answer is the closed one: probe undecided, ask waits, release refused, no holders', async () => {
-    expect(await seam.probeOrdinal('app', 0)).to.deep.equal({ decided: false, holder: null });
+    expect(await seam.probeOrdinal('app', 0)).to.deep.equal({ decided: false, holder: null, named: [] });
     expect(await seam.askOrdinal('app', 0)).to.deep.equal({ answer: 'wait', reason: 'unwired' });
     expect(await seam.releaseOrdinal('app', 0)).to.deep.equal({ released: false, reason: 'unwired' });
     expect(await seam.ordinalHolders('app')).to.deep.equal(new Map());

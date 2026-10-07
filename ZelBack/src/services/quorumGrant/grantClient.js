@@ -1701,9 +1701,14 @@ class Holder {
  * its row attached, `accepted: null` when nothing was ever accepted there. A
  * reply with no row attached is not an answer.
  *
+ * `named` is every grantee an answering cell holds on an unreleased row. A
+ * cell whose node was down misses a write, so a holder can be named on fewer
+ * cells than a quorum and still hold a founding off: those are the rows a
+ * vacate must reach.
+ *
  * @param {Array<object>} replies
  * @param {number} quorum
- * @returns {{decided: boolean, holder: string|null, epoch: number}}
+ * @returns {{decided: boolean, holder: string|null, named: string[], epoch: number}}
  */
 function oneshotQuorumFold(replies, quorum) {
   const answered = replies.filter((reply) => reply && (reply.ok === true || reply.accepted !== undefined));
@@ -1719,6 +1724,7 @@ function oneshotQuorumFold(replies, quorum) {
   return {
     decided: answered.length >= quorum,
     holder: named ? named[0] : null,
+    named: [...counts.keys()],
     epoch,
   };
 }
@@ -1729,13 +1735,13 @@ function oneshotQuorumFold(replies, quorum) {
  *
  * @param {string} key
  * @param {object} committee {members, quorum, fingerprint, generation}
- * @returns {Promise<{decided: boolean, holder: string|null, epoch: number}>}
+ * @returns {Promise<{decided: boolean, holder: string|null, named: string[], epoch: number}>}
  */
 async function probeOneshot(key, committee) {
   const identity = await selfIdentity();
-  if (!identity) return { decided: false, holder: null, epoch: 0 };
+  if (!identity) return { decided: false, holder: null, named: [], epoch: 0 };
   const signed = await signedAskFor('probe', key, 'oneshot', 1, identity, committee);
-  if (!signed) return { decided: false, holder: null, epoch: 0 };
+  if (!signed) return { decided: false, holder: null, named: [], epoch: 0 };
   const replies = await askCommittee(committee.members, 'probe', signed.ask, signed.signature);
   return oneshotQuorumFold([...replies.values()], committee.quorum);
 }

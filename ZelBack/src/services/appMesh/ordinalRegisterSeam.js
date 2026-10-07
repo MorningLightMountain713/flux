@@ -9,7 +9,8 @@
 // never found, release or name anything.
 //
 // Contract:
-//   probeOrdinal(identity, ordinal)   -> {decided, holder}   a quorum read; burns no epoch
+//   probeOrdinal(identity, ordinal)   -> {decided, holder, named}   a quorum read; burns no epoch;
+//                                       named is every holder an answering cell's live row names
 //   askOrdinal(identity, ordinal)     -> {answer: 'yes'} | {answer: 'no', holder} | {answer: 'wait', retryAfterMs?, reason?}
 //                                       'yes' is durable: asking again answers yes from the record
 //   releaseOrdinal(identity, ordinal) -> {released, reason?}   grantee-signed; only the holder's own node
@@ -23,7 +24,7 @@
 const CONTRACT = Object.freeze(['probeOrdinal', 'askOrdinal', 'releaseOrdinal', 'ordinalHolders', 'vacateOrdinal']);
 
 const closed = Object.freeze({
-  probeOrdinal: async () => ({ decided: false, holder: null }),
+  probeOrdinal: async () => ({ decided: false, holder: null, named: [] }),
   askOrdinal: async () => ({ answer: 'wait', reason: 'unwired' }),
   releaseOrdinal: async () => ({ released: false, reason: 'unwired' }),
   ordinalHolders: async () => new Map(),
