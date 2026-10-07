@@ -1209,7 +1209,7 @@ async function resumeBackupSync(syncedComponents, report) {
   // eslint-disable-next-line no-restricted-syntax
   for (const comp of syncedComponents) {
     // eslint-disable-next-line no-await-in-loop
-    await syncthingMonitorHelpers.setSyncthingFolderPaused(comp.identifier, false, report);
+    await syncthingMonitorHelpers.setSyncthingFolderPaused(comp.syncFolderId, false, report);
   }
 }
 /**
@@ -1311,7 +1311,7 @@ async function runBackupTask(appname, backup, force, report) {
         // cannot complete, the app keeps running and silently stops being
         // replicated. Given back on every exit, including the catch.
         // eslint-disable-next-line no-await-in-loop
-        const held = await syncthingMonitorHelpers.setSyncthingFolderPaused(comp.identifier, true, report);
+        const held = await syncthingMonitorHelpers.setSyncthingFolderPaused(comp.syncFolderId, true, report);
         if (held === 'held') pausedSynced.push(comp);
         // An unheld folder is still pulling, so the archive would be taken over
         // data that moves underneath it.
@@ -1587,7 +1587,7 @@ async function runRestoreTask(appname, restore, type, zelidauth, report, { force
       report(`Pausing syncthing for ${appname}\n`);
       for (const { comp } of syncedTargets) {
         // eslint-disable-next-line no-await-in-loop
-        const held = await syncthingMonitorHelpers.setSyncthingFolderPaused(comp.identifier, true, report);
+        const held = await syncthingMonitorHelpers.setSyncthingFolderPaused(comp.syncFolderId, true, report);
         if (held === 'held') pausedSynced.push(comp);
         if (held === 'failed') {
           throw new Error(`Refused: ${comp.identifier} could not be held still, so clearing its data would propagate the deletions to the other instances`);
@@ -2751,11 +2751,9 @@ async function coordinateActiveStandbyApps() {
                     // eslint-disable-next-line no-await-in-loop
                     const allSyncthingFolders = await syncthingService.getConfigFolders();
                     if (Array.isArray(allSyncthingFolders)) {
-                      // Syncthing syncs the entire appId folder (includes all subdirectories)
-                      const folder = `${appsFolder}${appId}`;
                       // eslint-disable-next-line no-restricted-syntax
                       for (const syncthingFolder of allSyncthingFolders) {
-                        if (syncthingFolder.path === folder && syncthingFolder.type === 'sendreceive') {
+                        if (syncthingFolder.id === folderId && syncthingFolder.type === 'sendreceive') {
                           log.info(`activeStandby: app:${appName} folder is already in sendreceive mode, treating as ready`);
                           isReady = true;
                           break;
@@ -2984,11 +2982,9 @@ async function coordinateActiveStandbyApps() {
                     // eslint-disable-next-line no-await-in-loop
                     const allSyncthingFolders = await syncthingService.getConfigFolders();
                     if (Array.isArray(allSyncthingFolders)) {
-                      // Syncthing syncs the entire appId folder (includes all subdirectories)
-                      const folder = `${appsFolder}${appId}`;
                       // eslint-disable-next-line no-restricted-syntax
                       for (const syncthingFolder of allSyncthingFolders) {
-                        if (syncthingFolder.path === folder && syncthingFolder.type === 'sendreceive') {
+                        if (syncthingFolder.id === folderId && syncthingFolder.type === 'sendreceive') {
                           log.info(`activeStandby: app:${appName} folder is already in sendreceive mode, treating as ready`);
                           isReady = true;
                           break;
