@@ -367,6 +367,7 @@ async function ephemeralHashRound(hashes, force, currentHeight) {
   }
 
   log.info(`syncMissingHashes - Ephemeral round: attempting ${targets.length} connections: ${targets.join(', ')}`);
+  fluxEventBus.publish('hashSync:ephemeralRound', { targets: targets.length, hashes: hashes.length });
   const connections = await Promise.all(targets.map((t) => openEphemeralConnection(t)));
   const peers = connections.filter(Boolean);
   if (peers.length === 0) {
