@@ -801,9 +801,9 @@ describe('meshReconciler', () => {
   // identity drift recreates its container under the ordinal it now holds.
   describe('the standby re-scan', () => {
     const standbyContainer = () => {
+      stubs.meshNames = { web: `web-${OWN_NODE_ID}` };
       stubs.containerInspect = {
         State: { Pid: 4242 },
-        Config: { Env: [`FLUX_MESH_SELF=web-${OWN_NODE_ID}`] },
         NetworkSettings: { Networks: { [NETWORK_NAME]: { IPAddress: '172.23.4.5' } } },
       };
     };
