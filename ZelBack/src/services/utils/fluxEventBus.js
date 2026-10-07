@@ -125,6 +125,9 @@ const Checkpoint = Object.freeze({
   // Boot has read the location record of an app it held unconfirmed, and has not
   // yet released the app or acted on the answer. Keyed by app name.
   BOOT_BEFORE_LOCATION_DECISION: 'boot:beforeLocationDecision',
+  // The spawner has chosen an app to attempt and has not yet judged its instance
+  // count; keyed by the app's name. Held, the node attempts nothing for that app.
+  SPAWNER_BEFORE_ATTEMPT: 'spawner:beforeAttempt',
 });
 const CHECKPOINT_NAMES = new Set(Object.values(Checkpoint));
 // Holds a key for every key of its checkpoint.
