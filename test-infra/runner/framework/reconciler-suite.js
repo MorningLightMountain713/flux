@@ -125,14 +125,19 @@ function assertPinnedTo(app, indices) {
  */
 export async function holdSpawnerExcept(env, appName, indices) {
   const free = new Set(indices);
-  await Promise.all(env.clients.map(async (client, i) => {
-    if (!free.has(i)) await client.holdCheckpoint('spawner:beforeAttempt', appName);
+  await Promise.all(spawnerNodes(env).map(async (i) => {
+    if (!free.has(i)) await env.clients[i].holdCheckpoint('spawner:beforeAttempt', appName);
   }));
 }
 
 /** Release every node's spawner for this app; a released node judges the app afresh. */
-export async function releaseSpawnerHolds(env, appName, indices = env.clients.map((_, i) => i)) {
+export async function releaseSpawnerHolds(env, appName, indices = spawnerNodes(env)) {
   await Promise.all(indices.map((i) => env.clients[i].releaseCheckpoint('spawner:beforeAttempt', appName)));
+}
+
+/** The indices that run a spawner: a stub peer or a node not yet booted has no client. */
+function spawnerNodes(env) {
+  return env.clients.map((client, i) => (client ? i : -1)).filter((i) => i >= 0);
 }
 
 /**
