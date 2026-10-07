@@ -1480,8 +1480,9 @@ async function _buildEnv(
     .withStaticIp(networkName, MONGO_IP)
     .withWaitStrategy(new TcpPollWaitStrategy(MONGO_IP, 27017));
   // Built by the main node image's code; a node booted on another image is not
-  // asked to adopt it (see the adoption check in createTestEnv).
-  const seededArtifact = ipLocationSeeded ? bootArtifact(locationTable) : null;
+  // asked to adopt it (see the adoption check in createTestEnv). A fleet of no
+  // nodes has nothing to adopt it.
+  const seededArtifact = ipLocationSeeded && nodes > 0 ? bootArtifact(locationTable) : null;
   if (seededArtifact) {
     const tarPath = await ensureIpLocationSnapshot({
       nodes, artifact: seededArtifact, nodeImage: nodeImageRef(IMAGE_TAG), mongoImage: MONGO_IMAGE, mongoArgs: MONGO_ARGS,
