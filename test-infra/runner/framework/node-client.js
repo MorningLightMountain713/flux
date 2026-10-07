@@ -229,6 +229,8 @@ export function nodeClient(nodeNum) {
         'daemon:polled',
         'daemon:stale',
         'hashSync:ephemeralRound',
+        'ipLocation:baselineInstalled',
+        'ipLocation:baselineAdopted',
         'daemon:recovered',
         'daemon:reorg',
         'daemon:resync',

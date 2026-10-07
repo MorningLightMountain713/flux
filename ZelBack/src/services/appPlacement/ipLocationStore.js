@@ -38,6 +38,7 @@ const zlib = require('node:zlib');
 const util = require('node:util');
 const config = require('config');
 const log = require('../../lib/log');
+const fluxEventBus = require('../utils/fluxEventBus');
 const dbHelper = require('../dbHelper');
 const cidrUtils = require('../utils/cidrUtils');
 const { bareIp } = require('../utils/socketAddressUtils');
@@ -492,6 +493,7 @@ async function setArtifact(bytes) {
   networkClassByOrg = parsed.orgClasses;
   await writeIngestMarker(database, parsed);
   log.info(`ipLocationStore - baseline installed: ${parsed.rowCount} ranges, generated ${parsed.header.generated}`);
+  fluxEventBus.publish('ipLocation:baselineInstalled', { rows: parsed.rowCount, generated: parsed.header.generated });
   return { generated: status.generated, rowCount: status.rowCount };
 }
 
@@ -519,6 +521,7 @@ async function adoptPersistedStatus() {
   regionCodeByName = new Map(Object.entries(marker.regionNames ?? {}));
   networkClassByOrg = new Map(Object.entries(marker.orgClasses ?? {}));
   log.info(`ipLocationStore - adopted the stored baseline: ${status.rowCount} ranges, generated ${status.generated}`);
+  fluxEventBus.publish('ipLocation:baselineAdopted', { rows: status.rowCount, generated: status.generated });
   return true;
 }
 
