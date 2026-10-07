@@ -172,10 +172,10 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     await returnToService(env, TARGET);
 
     const seededAfter = env.clients[TARGET - 1].getLastEventId();
-    await seedApp(env, 'lockedapp', { instances: 5, syncMode: 'activeStandby' });
+    const lockedApp = await seedApp(env, 'lockedapp', { instances: 5, syncMode: 'activeStandby' });
     const lockedContainer = await dbClient(TARGET).appContainerName('lockedapp', 'lockedapp');
-    await setSynced({ folder: 'fluxlockedapp_lockedapp' });
-    await setPeerHasData({ folder: 'fluxlockedapp_lockedapp' });
+    await setSynced({ folder: folderIdOf(lockedApp, 'lockedapp') });
+    await setPeerHasData({ folder: folderIdOf(lockedApp, 'lockedapp') });
     await advanceBlocks(3);
     await waitFor(async () => (await locationsOf(env, 'lockedapp')).length >= 5,
       { timeout: 300000, label: 'lockedapp reaches its instance count across the fleet' });
@@ -183,7 +183,7 @@ describe('Residential node evacuation: standing down as the elected primary', fu
     // A folder pinned synced must hold on disk what its index claims, or the
     // mount-safety guard keeps it receiveonly and the election never starts the
     // writer here; the seed goes after the sync layer's first-run reset.
-    await waitForReconcileActuated(env.clients[TARGET - 1], 'lockedapp_lockedapp', 'dataCleared', 120_000,
+    await waitForReconcileActuated(env.clients[TARGET - 1], componentIdentifier(lockedApp, 'lockedapp'), 'dataCleared', 120_000,
       { afterId: seededAfter });
     await seedSyncScopedData(env, 'lockedapp', TARGET - 1);
 
