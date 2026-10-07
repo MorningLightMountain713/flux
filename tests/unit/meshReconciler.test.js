@@ -812,7 +812,7 @@ describe('meshReconciler', () => {
       standbyContainer();
       stubs.claim = { state: 'granted', ordinal: 1 };
       await meshReconciler.reconcileAllMeshApps();
-      expect(stubs.claims.map((args) => args[0])).to.deep.equal(['myblog']);
+      expect(stubs.claims.map((args) => args[0])).to.deep.equal([IDENTITY]);
       expect(meshReconciler.lastPassStatus('myblog').ownSlot).to.equal(1);
       expect(meshReconciler.lastPassStatus('myblog').identityDrift).to.deep.equal([{
         identifier: `web_${IDENTITY}`, component: 'web', is: `web-${OWN_NODE_ID}`, wants: 'web-1',
