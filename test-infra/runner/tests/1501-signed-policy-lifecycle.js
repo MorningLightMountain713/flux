@@ -719,7 +719,7 @@ describe('bundles a node must refuse', function () {
     );
     const owners = await node.get('/flux/enterpriseappowners');
     expect(owners.status, 'the reader answers unknown, never an empty list').to.equal('error');
-    expect(owners.data.message).to.include('not yet obtained');
+    expect(owners.data.message, 'a held bundle with a bad map is its own answer').to.include('no valid enterprise node map');
     // And a privilege that cannot be checked is refused rather than waved through.
     const response = await verify(policySpec({
       name: `unknownpin${Date.now()}`,
