@@ -1985,6 +1985,7 @@ async function _buildEnv(
       // One stub serves every region/index (a %i-free template leaves the URL as-is).
       fdm: { regions: [{ name: 'STUB', baseUrlTemplate: `http://${FDM_IP}:16130` }] },
       mongodb: { signingKeyBaseUrl: `http://${EXTERNAL_STUB_IP}:3000` },
+      marketplace: { apiBaseUrl: `http://${EXTERNAL_STUB_IP}:3000` },
       upnp: { gatewayUrl: `http://${EXTERNAL_STUB_IP}:3000/upnp/device.xml` },
       // Every base URL a node fetches from belongs here, not just in
       // config/shared.js: a run claims its own /24, so an address baked into the

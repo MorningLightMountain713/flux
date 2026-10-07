@@ -101,6 +101,9 @@ const state = {
   // nothing at all.
   moduleMinimumVersions: { syncthing: imageSyncthingVersion(), docker: '26.1.2' },
   marketplaceApps: [],
+  // The v2 marketplace's templates. Empty by default - a suite that submits a
+  // marketplace app puts its template in through the control port.
+  marketplaceTemplates: [],
   // null serves the error envelope, which is what a node meets when the stats
   // service is unreachable and is the state its config fallback exists for; a
   // suite that wants real tiers posts them to /usd-prices.
@@ -433,6 +436,19 @@ app.get('/marketplace/listapps', (req, res) => {
 
 app.get('/marketplace/listdevapps', (req, res) => {
   res.json({ status: 'success', data: state.marketplaceApps });
+});
+
+// The v2 marketplace API: every template, and one template at one version.
+app.get('/api/v2/marketplace/templates/all', (req, res) => {
+  res.json({ status: 'success', data: state.marketplaceTemplates });
+});
+
+app.get('/api/v2/marketplace/template/:uuid/:version', (req, res) => {
+  const template = state.marketplaceTemplates.find(
+    (t) => t.uuid === req.params.uuid && String(t.templateVersion) === req.params.version,
+  );
+  if (!template) return res.status(404).json({ status: 'error', data: { message: 'template not found' } });
+  return res.json({ status: 'success', data: template });
 });
 
 // Stats: per-spec USD pricing.
@@ -808,6 +824,11 @@ control.post('/fiat-rates', (req, res) => {
   res.json({ ok: true });
 });
 
+control.post('/marketplace-templates', (req, res) => {
+  state.marketplaceTemplates = Array.isArray(req.body?.templates) ? req.body.templates : [];
+  res.json({ ok: true, count: state.marketplaceTemplates.length });
+});
+
 control.post('/reset', (req, res) => {
   state.blocklist = [];
   state.blockedRepositories = [];
@@ -821,6 +842,7 @@ control.post('/reset', (req, res) => {
   serveIpLocation(buildIpLocationArtifact(1));
   state.moduleMinimumVersions = { syncthing: imageSyncthingVersion(), docker: '26.1.2' };
   state.marketplaceApps = [];
+  state.marketplaceTemplates = [];
   state.appSpecsUsdPrice = null;
   state.usdPerBtc = 100000;
   state.btcPerFlux = 0.000002;
