@@ -155,9 +155,12 @@ describe('content manifest recovery through a message-capability round-trip', fu
     // Capability returns while the node is still peerless (discovery only just resumed), so
     // the capability-gain sync round finds no peers. The evidence-based latch keeps the
     // manifest INCOMPLETE through that round; when peers reconnect the resync reconciles it
-    // for real (fetched >= 1) and the node reaches READY. The old vacuous latch would mark the
-    // peerless round "done" and leave the register permanently stale at v2.
-    await node.waitForEvent('content:manifestReconciled', (d) => d.fetched >= 1, 180000, { afterId: cursor });
+    // against their indexes and the node reaches READY. A vacuous latch would mark the
+    // peerless round "done" and leave the register permanently stale at v2. A peer whose
+    // socket to this node outlived the partition delivers the v3 gossip on the heal, before
+    // the reconcile runs, so the reconcile may have nothing left to fetch; the register at v3
+    // below is the proof.
+    await node.waitForEvent('content:manifestReconciled', (d) => d.peers >= 1, 180000, { afterId: cursor });
     await waitForOrchestratorState(node, 'READY', 120000, { afterId: cursor });
 
     // Real state: node N's register caught up to v3 (stuck at v2 under the wedge).
