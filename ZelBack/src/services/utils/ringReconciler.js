@@ -4,6 +4,7 @@ const { OUTBOUND_FLOOR, M_OWNERS } = require('./peerRings');
 const { DIAL_PLAN } = require('./flapLadder');
 
 const log = require('../../lib/log');
+const fluxEventBus = require('./fluxEventBus');
 
 // The rings maintenance loop: reconcile, do not discover.
 // duties(me) is a pure function of the committed list, so there is nothing to
@@ -320,6 +321,7 @@ class RingReconciler {
     }
 
     log.debug(`ringReconciler pass (${reason}): ${this.#duties.size} duties, ${this.#topups.size} topups, outbound standing ${this.#outboundStanding()}`);
+    fluxEventBus.count('ringReconciler:pass', reason);
   }
 
   /** Observability: duty and top-up states by outpoint. */
