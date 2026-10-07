@@ -520,6 +520,27 @@ describe('contentSlotService', () => {
       );
     });
 
+    it('counts the registration\'s list within the original ownership: the owner\'s first update is 2, and only for them', async () => {
+      const { service } = load();
+      const uploader = makeUploader();
+      const registered = storedRow(1, {}, { ownedFrom: 0 });
+      const held = { getRows: async () => [registered], standing: async () => ({ row: registered }) };
+      const out = await service.processManifestSubmission(
+        baseInput({ original: true, manifest: manifest({ version: 2 }) }),
+        baseDeps({ uploader, ...held }),
+      );
+      expect(out.slots).to.have.property('sealed');
+      await expectReject(
+        service.processManifestSubmission(baseInput({ original: true, manifest: manifest({ version: 1 }) }), baseDeps(held)),
+        /must be 2 within this ownership/,
+      );
+      // A later owner's count starts at 1: the registration's list is not theirs.
+      await expectReject(
+        service.processManifestSubmission(baseInput({ manifest: manifest({ version: 2 }) }), baseDeps(held)),
+        /must be 1 within this ownership/,
+      );
+    });
+
     it('rejects a version jump past the successor', async () => {
       const { service } = load();
       await expectReject(

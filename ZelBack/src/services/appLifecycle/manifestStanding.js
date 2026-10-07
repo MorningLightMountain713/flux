@@ -80,16 +80,18 @@ async function standingManifest(identity, deps = {}) {
 /**
  * The highest version signed within one ownership, among the rows this node
  * holds and the manifests held in the pool with the app's waiting updates. A
- * submission takes the number after it.
+ * submission takes the number after it. The app's original ownership also
+ * counts the registration's list, signed at height 0 before the height existed.
  * @param {string} identity
- * @param {{owner: string, from: number}} ownership
+ * @param {{owner: string, from: number, original?: boolean}} ownership
  * @param {object} [deps] - { getRows?, pendingRanks? }
  * @returns {Promise<number>} 0 when nothing is signed under the ownership
  */
 async function highestVersionInOwnership(identity, ownership, deps = {}) {
   const { getRows = appsRepository.getContentManifests, pendingRanks = appsRepository.carriedManifestRanks } = deps;
-  const rows = (await getRows(identity)).filter((row) => row.signer === ownership.owner && row.ownedFrom === ownership.from);
-  const pending = (await pendingRanks(identity)).filter((rank) => rank.ownedFrom === ownership.from);
+  const within = (ownedFrom) => ownedFrom === ownership.from || (ownership.original === true && ownedFrom === 0);
+  const rows = (await getRows(identity)).filter((row) => row.signer === ownership.owner && within(row.ownedFrom));
+  const pending = (await pendingRanks(identity)).filter((rank) => within(rank.ownedFrom));
   return Math.max(0, ...rows.map((row) => row.version), ...pending.map((rank) => rank.version));
 }
 
