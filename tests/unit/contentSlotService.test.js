@@ -2829,6 +2829,24 @@ describe('contentSlotService', () => {
       sinon.assert.calledWith(r.status, 404);
     });
 
+    it('numbers the original owner\'s next version after the registration\'s list, and a later owner\'s from 1', async () => {
+      const registered = storedRow(1, {}, { ownedFrom: 0 });
+      const standing = sinon.stub().resolves({ row: registered, rows: [registered] });
+      const repo = fakeRepo({
+        getContentManifests: sinon.stub().resolves([registered]),
+        carriedManifestRanks: sinon.stub().resolves([]),
+      });
+      const registry = fakeRegistry({ byName: sinon.stub().resolves({ name: APP, identity: IDENTITY }) });
+      const original = load(repo, { registry, standing, ownerships: async () => [{ owner: OWNER, from: 2_400_000 }] });
+      const r1 = res();
+      await original.service.getContentManifestsApi({ params: { appname: APP } }, r1);
+      expect(r1.json.firstCall.args[0].data.nextVersion, 'the registration\'s list is the original owner\'s version 1').to.equal(2);
+      const sold = load(repo, { registry, standing, ownerships: async () => [{ owner: OWNER, from: 2_400_000 }, { owner: '1buyer', from: 2_500_000 }] });
+      const r2 = res();
+      await sold.service.getContentManifestsApi({ params: { appname: APP } }, r2);
+      expect(r2.json.firstCall.args[0].data.nextVersion, 'a later owner starts at 1').to.equal(1);
+    });
+
     it('serves every resolved manifest held, the standing one, the listed ownership and the next version to sign', async () => {
       const rows = [storedRow(1, {}), storedRow(2, {}), { ...storedRow(3, {}), signer: null }];
       const standing = sinon.stub().resolves({ row: rows[1], rows });
