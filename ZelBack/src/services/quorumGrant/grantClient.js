@@ -787,12 +787,16 @@ async function acquireOnce(key, mode, ttlMs, identity, committee, options) {
     return { granted: false, reason: 'no prepare quorum', highestEpoch: prepared.highestEpoch };
   }
 
-  // Adoption: a recorded value is the answer, not an opponent.
-  if (mode === 'oneshot' && prepared.adopt) {
-    if (prepared.adopt.grantee !== identity.outpoint) {
-      return { granted: false, founder: prepared.adopt.grantee };
+  // Adoption: a recorded founding is the answer, not an opponent — and a
+  // founding is a QUORUM of unreleased rows naming one grantee. A single
+  // cell's row is not a holder: the accept below founds over it on the free
+  // cells, and that cell refuses it (formal/ordinal-register, free-or-mine).
+  // Our own founding on a quorum, learned again, falls through and re-accepts.
+  if (mode === 'oneshot') {
+    const named = oneshotQuorumFold([...prepareReplies.values()], quorum).holder;
+    if (named && named !== identity.outpoint) {
+      return { granted: false, founder: named };
     }
-    // our own earlier founding, learned again — fall through and re-accept
   }
 
   const acceptSigned = await signedAskFor('accept', key, mode, epoch, identity, committee, {

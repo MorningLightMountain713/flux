@@ -544,6 +544,26 @@ describe('quorumGrant grantClient', () => {
       expect(outcome.founder).to.equal('other:0');
     });
 
+    it('founds over a single cell that holds another founder: one row is not a founding', async () => {
+      const foreignCommittee = selectCommittee(membership, 'quorumgrant|myapp/founder', { size: 9 });
+      const [split] = foreignCommittee.members;
+      registers.get(split.ip.split(':')[0]).set(FOUNDER_KEY, {
+        promisedEpoch: 1,
+        accepted: {
+          epoch: 1, grantee: 'other:0', mode: 'oneshot', expiresAt: null, released: false,
+        },
+      });
+      const outcome = await grantClient.acquire(FOUNDER_KEY, holderOptions({ mode: 'oneshot' }));
+      expect(outcome.granted).to.equal(true);
+      expect(outcome.founder).to.equal(SELF);
+      // the split cell keeps its row and the quorum names this node
+      expect(registers.get(split.ip.split(':')[0]).get(FOUNDER_KEY).accepted.grantee).to.equal('other:0');
+      const verdict = await grantClient.probeOneshot(FOUNDER_KEY, {
+        members: foreignCommittee.members, quorum: foreignCommittee.quorum, fingerprint, generation: 0,
+      });
+      expect(verdict.holder).to.equal(SELF);
+    });
+
     it('oneshot asks carry the founding record basis, not the current list', async () => {
       const photoFp = 'a'.repeat(64);
       foundingCommittee.refereeCommittee.resolves({
