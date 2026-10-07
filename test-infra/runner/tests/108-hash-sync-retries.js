@@ -154,14 +154,16 @@ describe('Hash sync: retry timer cancelled during DEGRADED', function () {
     }
     await waitForOrchestratorState(env.clients[0], 'DEGRADED', 30000);
 
-    // Counted by run STARTS: a run in flight at the transition still logs its
-    // own ending lines afterwards, and only a retry begins another.
-    const countAtDegraded = env.nodeLogCount(0, 'syncMissingHashes - Found');
+    // Counted by run STARTS: a run in flight at the transition still ends
+    // afterwards, and only a retry begins another.
+    const runs = async () => (await env.clients[0].getTestCounters())['hashSync:run'] ?? 0;
+    const countAtDegraded = await runs();
+    expect(countAtDegraded, 'the node ran a hash sync before degrading').to.be.greaterThan(0);
 
     // Longer than the largest retry wait
     await new Promise((r) => { setTimeout(r, HASH_SYNC_RETRY_MAX_MS + 5000); });
 
-    const countAfterWait = env.nodeLogCount(0, 'syncMissingHashes - Found');
+    const countAfterWait = await runs();
     expect(countAfterWait).to.equal(countAtDegraded,
       'hash sync retry should not fire during DEGRADED');
   });
@@ -295,9 +297,8 @@ describe('Hash sync: block-timer retry with unresolvable hash', function () {
     // so checkHashRetry fires
     await advanceBlocks(12);
     await waitFor(
-      () => env.nodeHasLog(0, 'Hash retry'),
-      { timeout: 30000, interval: 2000, label: 'hash retry log' },
+      async () => ((await env.clients[0].getTestCounters())['hashSync:retry']?.missingRemain ?? 0) > 0,
+      { timeout: 30000, interval: 2000, label: 'a hash retry ran with the hash still missing' },
     );
-    expect(env.nodeHasLog(0, 'Hash retry')).to.equal(true);
   });
 });

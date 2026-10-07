@@ -415,6 +415,7 @@ async function syncMissingHashes(options = {}) {
   }
 
   syncRunning = true;
+  fluxEventBus.count('hashSync:run');
   try {
     const db = dbHelper.databaseConnection();
     const daemonDb = db.db(config.get('database.daemon.database'));
