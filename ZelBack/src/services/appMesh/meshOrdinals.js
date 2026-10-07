@@ -52,25 +52,35 @@ async function claimOrdinal(identity, instances) {
   const space = cap(instances);
   if (space === 0) return { state: CLAIM.STANDBY, ordinal: null };
   const me = await ownOutpoint();
-  const holders = [];
+  const probes = [];
   for (let ordinal = 0; ordinal < space; ordinal += 1) {
     // eslint-disable-next-line no-await-in-loop
     const probe = await seam.probeOrdinal(identity, ordinal);
     if (!probe.decided) return { state: CLAIM.WAIT, reason: 'undecided' };
     if (probe.holder === me) return { state: CLAIM.GRANTED, ordinal };
-    holders.push(probe.holder);
+    probes.push(probe);
   }
   for (let ordinal = 0; ordinal < space; ordinal += 1) {
-    if (holders[ordinal] !== null) {
-      // A held ordinal whose holder the network has certified down and no
-      // longer places is reclaimed here, by the node that needs the name, on
-      // its own pass: the register judges the vacate at the derivation's
-      // placement-dead edge (NODE_DOWN_SCENARIOS.md R9), so nothing here
-      // counts a grace or reads a certificate. A refusal is a held ordinal.
+    // The holders to vacate: the one a quorum names, or, when none is named,
+    // every other node a cell's live row names - a cell whose node was down
+    // missed a write, and those rows still hold a founding off. A holder the
+    // network has certified down and no longer places is reclaimed here, by
+    // the node that needs the name, on its own pass: the register judges the
+    // vacate at the derivation's placement-dead edge (NODE_DOWN_SCENARIOS.md
+    // R9), so nothing here counts a grace or reads a certificate. A refusal
+    // leaves the ordinal held.
+    const { holder, named } = probes[ordinal];
+    const others = holder !== null ? [holder] : named.filter((n) => n !== me);
+    let held = false;
+    for (const other of others) {
       // eslint-disable-next-line no-await-in-loop
-      const gone = await seam.vacateOrdinal(identity, ordinal, holders[ordinal]);
-      if (!gone.vacated) continue; // eslint-disable-line no-continue
+      const gone = await seam.vacateOrdinal(identity, ordinal, other);
+      if (!gone.vacated) {
+        held = true;
+        break;
+      }
     }
+    if (held) continue; // eslint-disable-line no-continue
     // eslint-disable-next-line no-await-in-loop
     const ask = await seam.askOrdinal(identity, ordinal);
     if (ask.answer === 'yes') return { state: CLAIM.GRANTED, ordinal };

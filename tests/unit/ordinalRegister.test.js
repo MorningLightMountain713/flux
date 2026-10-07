@@ -63,7 +63,7 @@ describe('quorumGrant ordinalRegister', () => {
     sinon.stub(messageStore, 'getMasterleaseRecordsByGrantee').resolves([]);
     sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: SELF_TXHASH, txindex: 0 });
     sinon.stub(daemonStatus, 'isDaemonSynced').returns({ status: 'success', data: { synced: true } });
-    sinon.stub(grantClient, 'probeOneshot').resolves({ decided: true, holder: null, epoch: 0 });
+    sinon.stub(grantClient, 'probeOneshot').resolves({ decided: true, holder: null, named: [], epoch: 0 });
     sinon.stub(grantClient, 'acquire').resolves({ granted: true, founder: SELF });
     sinon.stub(grantClient, 'releaseOneshot').resolves(true);
     sinon.stub(grantClient, 'vacateOneshot').resolves(true);
@@ -105,15 +105,15 @@ describe('quorumGrant ordinalRegister', () => {
 
   describe('probeOrdinal', () => {
     it('is the quorum verdict, and undecided without a basis', async () => {
-      grantClient.probeOneshot.resolves({ decided: true, holder: OTHER, epoch: 4 });
-      expect(await ordinalRegister.probeOrdinal('myapp', 0)).to.deep.equal({ decided: true, holder: OTHER });
+      grantClient.probeOneshot.resolves({ decided: true, holder: OTHER, named: [OTHER], epoch: 4 });
+      expect(await ordinalRegister.probeOrdinal('myapp', 0)).to.deep.equal({ decided: true, holder: OTHER, named: [OTHER] });
       expect(grantClient.probeOneshot.firstCall.args[0]).to.equal(`myapp/ordinal-0@${RUNG}`);
       // the fold's undecided is the seam's undecided: a quorum that did not
       // answer is never "free"
-      grantClient.probeOneshot.resolves({ decided: false, holder: null, epoch: 0 });
-      expect(await ordinalRegister.probeOrdinal('myapp', 0)).to.deep.equal({ decided: false, holder: null });
+      grantClient.probeOneshot.resolves({ decided: false, holder: null, named: [], epoch: 0 });
+      expect(await ordinalRegister.probeOrdinal('myapp', 0)).to.deep.equal({ decided: false, holder: null, named: [] });
       foundingCommittee.appWorld.resolves(null);
-      expect(await ordinalRegister.probeOrdinal('myapp', 0)).to.deep.equal({ decided: false, holder: null });
+      expect(await ordinalRegister.probeOrdinal('myapp', 0)).to.deep.equal({ decided: false, holder: null, named: [] });
     });
   });
 
@@ -164,7 +164,7 @@ describe('quorumGrant ordinalRegister', () => {
 
   describe('releaseOrdinal', () => {
     it('releases the row the register names as this node\'s, then publishes it released', async () => {
-      grantClient.probeOneshot.resolves({ decided: true, holder: SELF, epoch: 3 });
+      grantClient.probeOneshot.resolves({ decided: true, holder: SELF, named: [SELF], epoch: 3 });
       expect(await ordinalRegister.releaseOrdinal('myapp', 2)).to.deep.equal({ released: true });
       expect(grantClient.releaseOneshot.calledOnceWith(`myapp/ordinal-2@${RUNG}`, sinon.match.object, 3)).to.equal(true);
       const published = masterleasePublisher.publishMasterlease.firstCall.args[0];
@@ -176,16 +176,16 @@ describe('quorumGrant ordinalRegister', () => {
 
     it('is a no-op success on a free row, a refusal on another\'s, undecided without a quorum', async () => {
       expect(await ordinalRegister.releaseOrdinal('myapp', 2)).to.deep.equal({ released: true });
-      grantClient.probeOneshot.resolves({ decided: true, holder: OTHER, epoch: 3 });
+      grantClient.probeOneshot.resolves({ decided: true, holder: OTHER, named: [OTHER], epoch: 3 });
       expect(await ordinalRegister.releaseOrdinal('myapp', 2)).to.deep.equal({ released: false, reason: `held by ${OTHER}` });
-      grantClient.probeOneshot.resolves({ decided: false, holder: null, epoch: 0 });
+      grantClient.probeOneshot.resolves({ decided: false, holder: null, named: [], epoch: 0 });
       expect(await ordinalRegister.releaseOrdinal('myapp', 2)).to.deep.equal({ released: false, reason: 'no quorum answered' });
       expect(grantClient.releaseOneshot.called).to.equal(false);
       expect(masterleasePublisher.publishMasterlease.called).to.equal(false);
     });
 
     it('publishes nothing when the release reached no quorum', async () => {
-      grantClient.probeOneshot.resolves({ decided: true, holder: SELF, epoch: 3 });
+      grantClient.probeOneshot.resolves({ decided: true, holder: SELF, named: [SELF], epoch: 3 });
       grantClient.releaseOneshot.resolves(false);
       expect(await ordinalRegister.releaseOrdinal('myapp', 2)).to.deep.equal({ released: false, reason: 'no release quorum' });
       expect(masterleasePublisher.publishMasterlease.called).to.equal(false);
@@ -224,7 +224,8 @@ describe('quorumGrant ordinalRegister', () => {
 
     it('vacates a certified holder the derivation no longer places, carrying the certificate, and publishes its row released', async () => {
       downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5000 });
-      grantClient.probeOneshot.resolves({ decided: true, holder: OTHER, epoch: 2 });
+      grantClient.probeOneshot.onCall(0).resolves({ decided: true, holder: OTHER, named: [OTHER], epoch: 2 });
+      grantClient.probeOneshot.onCall(1).resolves({ decided: true, holder: null, named: [], epoch: 0 });
       expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: true });
       expect(downCertificates.standingCertificateFor.calledOnceWith(OTHER)).to.equal(true);
       expect(grantClient.vacateOneshot.calledOnce).to.equal(true);
@@ -251,34 +252,54 @@ describe('quorumGrant ordinalRegister', () => {
       expect(events).to.deep.equal([]);
     });
 
-    it('a vacate without a quorum publishes nothing', async () => {
+    it('a vacate that leaves a cell naming the holder publishes nothing and is not a vacate', async () => {
       downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5000 });
-      grantClient.probeOneshot.resolves({ decided: true, holder: OTHER, epoch: 2 });
+      grantClient.probeOneshot.resolves({ decided: true, holder: OTHER, named: [OTHER], epoch: 2 });
       grantClient.vacateOneshot.resolves(false);
-      expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: false, reason: 'no vacate quorum' });
+      expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: false, reason: 'a cell still names the holder' });
       expect(masterleasePublisher.publishMasterlease.called).to.equal(false);
       expect(events).to.deep.equal([]);
     });
 
     it("the register's own word decides: another holder vacates nothing, a free row needs no vacate, undecided waits", async () => {
       downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5000 });
-      grantClient.probeOneshot.resolves({ decided: true, holder: THIRD, epoch: 3 });
+      grantClient.probeOneshot.resolves({ decided: true, holder: THIRD, named: [THIRD], epoch: 3 });
       expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: false, reason: `held by ${THIRD}` });
-      grantClient.probeOneshot.resolves({ decided: true, holder: null, epoch: 0 });
+      grantClient.probeOneshot.resolves({ decided: true, holder: null, named: [], epoch: 0 });
       expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: true });
-      grantClient.probeOneshot.resolves({ decided: false, holder: null, epoch: 0 });
+      grantClient.probeOneshot.resolves({ decided: false, holder: null, named: [], epoch: 0 });
       expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: false, reason: 'no quorum answered' });
       expect(grantClient.vacateOneshot.called).to.equal(false);
     });
 
     it('a holder no longer on the node list is not placed; an unresolvable membership fails closed', async () => {
       downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5000 });
-      grantClient.probeOneshot.resolves({ decided: true, holder: OTHER, epoch: 2 });
+      grantClient.probeOneshot.onCall(0).resolves({ decided: true, holder: OTHER, named: [OTHER], epoch: 2 });
+      grantClient.probeOneshot.onCall(1).resolves({ decided: true, holder: null, named: [], epoch: 0 });
       networkStateService.membershipAt.returns([{ txhash: SELF_TXHASH, outidx: 0, ip: '10.0.0.5:16127' }]);
       expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: true });
       networkStateService.membershipAt.returns(null);
       expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: false, reason: 'membership unavailable' });
       expect(grantClient.vacateOneshot.calledOnce).to.equal(true);
+    });
+
+    // A cell whose node was down missed a write: the dead holder is named on
+    // fewer cells than a quorum, and its rows still hold a founding off.
+    it('vacates a certified holder that no quorum names, from every cell that still names it', async () => {
+      downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5000 });
+      grantClient.probeOneshot.onCall(0).resolves({ decided: true, holder: null, named: [OTHER, SELF], epoch: 3 });
+      grantClient.probeOneshot.onCall(1).resolves({ decided: true, holder: null, named: [SELF], epoch: 2 });
+      grantClient.vacateOneshot.resolves(false);
+      expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: true });
+      expect(grantClient.vacateOneshot.calledOnce, 'the vacate was asked without a quorum naming the holder').to.equal(true);
+      expect(masterleasePublisher.publishMasterlease.called, 'fewer than a quorum released: no record').to.equal(false);
+    });
+
+    it('a holder no cell names needs no vacate', async () => {
+      downCertificates.standingCertificateFor.resolves({ ...CERT, broadcastedAt: 5000 });
+      grantClient.probeOneshot.resolves({ decided: true, holder: null, named: [SELF], epoch: 2 });
+      expect(await ordinalRegister.vacateOrdinal('myapp', 1, OTHER)).to.deep.equal({ vacated: true });
+      expect(grantClient.vacateOneshot.called).to.equal(false);
     });
 
     it('a malformed holder is refused without a read', async () => {

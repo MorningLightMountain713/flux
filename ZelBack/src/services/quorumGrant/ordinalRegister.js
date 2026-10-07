@@ -141,14 +141,15 @@ async function publishRow(key, grantee, epoch, basis, released) {
 // the seam's four calls
 
 /**
- * A quorum read: {decided, holder}. Burns no epoch. Undecided when no basis
- * exists yet or a quorum did not answer — the scan waits, never assumes free.
+ * A quorum read: {decided, holder, named}. Burns no epoch. Undecided when no
+ * basis exists yet or a quorum did not answer — the scan waits, never assumes
+ * free. `named` is every holder an answering cell's live row names.
  */
 async function probeOrdinal(identity, ordinal) {
   const basis = await basisFor(identity);
-  if (!basis) return { decided: false, holder: null };
+  if (!basis) return { decided: false, holder: null, named: [] };
   const verdict = await grantClient.probeOneshot(keyFor(identity, ordinal, basis.rung), basis.committee);
-  return { decided: verdict.decided, holder: verdict.holder };
+  return { decided: verdict.decided, holder: verdict.holder, named: verdict.named };
 }
 
 /**
@@ -290,22 +291,26 @@ async function vacateOrdinal(identity, ordinal, holder) {
   const key = keyFor(identity, ordinal, basis.rung);
   const verdict = await grantClient.probeOneshot(key, basis.committee);
   if (!verdict.decided) return { vacated: false, reason: 'no quorum answered' };
-  if (verdict.holder === null) return { vacated: true };
-  if (verdict.holder !== holder) return { vacated: false, reason: `held by ${verdict.holder}` };
+  if (verdict.holder !== null && verdict.holder !== holder) return { vacated: false, reason: `held by ${verdict.holder}` };
+  if (!verdict.named.includes(holder)) return { vacated: true };
 
-  // the store decorates its answer with the row's broadcastedAt; the referees
-  // verify the certificate as gossiped
+  // Each cell releases only a row naming the certificate's subject, so the
+  // vacate goes to every cell whether or not a quorum names the holder: a
+  // cell whose node was down missed a write, and the holder's rows on the
+  // rest still hold a founding off.
+  // The store decorates its answer with the row's broadcastedAt; the
+  // referees verify the certificate as gossiped.
   const certificate = { ...standing };
   delete certificate.broadcastedAt;
-  const ok = await grantClient.vacateOneshot(key, basis.committee, certificate);
-  if (!ok) {
-    log.info(`ordinalRegister - vacate of ${key} for ${holder} reached no quorum`);
-    return { vacated: false, reason: 'no vacate quorum' };
+  if (await grantClient.vacateOneshot(key, basis.committee, certificate)) {
+    await publishRow(key, holder, verdict.epoch, basis, true);
+    fluxEventBus.publish('quorumGrant:ordinalVacated', { identity, ordinal, holder });
+    log.info(`ordinalRegister - ${key} vacated: certificate about ${holder}`);
   }
-  await publishRow(key, holder, verdict.epoch, basis, true);
-  fluxEventBus.publish('quorumGrant:ordinalVacated', { identity, ordinal, holder });
-  log.info(`ordinalRegister - ${key} vacated: certificate about ${holder}`);
-  return { vacated: true };
+  const after = await grantClient.probeOneshot(key, basis.committee);
+  if (after.decided && !after.named.includes(holder)) return { vacated: true };
+  log.info(`ordinalRegister - vacate of ${key} for ${holder} left a cell naming it`);
+  return { vacated: false, reason: 'a cell still names the holder' };
 }
 
 /** The seam's provider: the full contract, registered at wiring. */

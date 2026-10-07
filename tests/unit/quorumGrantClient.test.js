@@ -1122,7 +1122,7 @@ describe('quorumGrant grantClient', () => {
 
     it('an unfounded ordinal probes decided with no holder; a founded one names its holder', async () => {
       let verdict = await grantClient.probeOneshot(ORDINAL, founding());
-      expect(verdict).to.deep.equal({ decided: true, holder: null, epoch: 0 });
+      expect(verdict).to.deep.equal({ decided: true, holder: null, named: [], epoch: 0 });
       const outcome = await grantClient.acquire(ORDINAL, { mode: 'oneshot', committee: founding() });
       expect(outcome.granted).to.equal(true);
       verdict = await grantClient.probeOneshot(ORDINAL, founding());
@@ -1137,6 +1137,8 @@ describe('quorumGrant grantClient', () => {
       expect(grantClient.oneshotQuorumFold([row('a:0'), { ok: true, accepted: null }, { ok: true, accepted: null }], 2).holder).to.equal(null);
       expect(grantClient.oneshotQuorumFold([row('a:0', true), row('a:0', true), row('a:0')], 2).holder).to.equal(null);
       expect(grantClient.oneshotQuorumFold([row('a:0')], 2).decided).to.equal(false);
+      // every holder a live row names, quorum or not: the rows a vacate must reach
+      expect(grantClient.oneshotQuorumFold([row('a:0'), row('b:0'), row('c:0', true)], 2).named).to.deep.equal(['a:0', 'b:0']);
     });
 
     it('a promise with no accepted row reads free, and the next founding completes', async () => {
@@ -1147,7 +1149,7 @@ describe('quorumGrant grantClient', () => {
       expect(stranded.granted).to.equal(false);
       refuseAccept = false;
       const verdict = await grantClient.probeOneshot(ORDINAL, founding());
-      expect(verdict).to.deep.equal({ decided: true, holder: null, epoch: 0 });
+      expect(verdict).to.deep.equal({ decided: true, holder: null, named: [], epoch: 0 });
       const outcome = await grantClient.acquire(ORDINAL, { mode: 'oneshot', committee: founding() });
       expect(outcome.granted).to.equal(true);
       expect((await grantClient.probeOneshot(ORDINAL, founding())).holder).to.equal(SELF);
@@ -1156,7 +1158,7 @@ describe('quorumGrant grantClient', () => {
     it('a refusal carrying the cell\'s row is an answer; one carrying nothing is not', () => {
       const promisedEmpty = { ok: false, code: 'superseded', promisedEpoch: 3, accepted: null };
       const promisedHeld = { ok: false, code: 'superseded', promisedEpoch: 3, accepted: { epoch: 2, grantee: 'a:0', mode: 'oneshot' } };
-      expect(grantClient.oneshotQuorumFold([promisedEmpty, promisedEmpty], 2)).to.deep.equal({ decided: true, holder: null, epoch: 0 });
+      expect(grantClient.oneshotQuorumFold([promisedEmpty, promisedEmpty], 2)).to.deep.equal({ decided: true, holder: null, named: [], epoch: 0 });
       expect(grantClient.oneshotQuorumFold([promisedHeld, promisedHeld, promisedEmpty], 2).holder).to.equal('a:0');
       expect(grantClient.oneshotQuorumFold([{ ok: false, code: 'unavailable' }, promisedEmpty], 2).decided).to.equal(false);
     });
@@ -1174,7 +1176,7 @@ describe('quorumGrant grantClient', () => {
       const { epoch } = await grantClient.probeOneshot(ORDINAL, founding());
       expect(await grantClient.releaseOneshot(ORDINAL, founding(), epoch)).to.equal(true);
       const verdict = await grantClient.probeOneshot(ORDINAL, founding());
-      expect(verdict).to.deep.include({ decided: true, holder: null });
+      expect(verdict).to.deep.include({ decided: true, holder: null, named: [] });
       const again = await grantClient.acquire(ORDINAL, { mode: 'oneshot', committee: founding() });
       expect(again.granted).to.equal(true);
     });
