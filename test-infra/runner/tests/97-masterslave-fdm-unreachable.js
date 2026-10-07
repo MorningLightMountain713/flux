@@ -50,7 +50,10 @@ describe('masterSlave election while FDM is unreachable', function () {
     holders.map((i) => isUp(env.clients[i], appName)),
   )).filter(Boolean).length;
 
-  const someHolderStoodDown = () => holders.some((i) => env.nodeHasLog(i, 'All FDM services failed'));
+  // A holder's pass found every FDM unreachable and skipped primary selection.
+  const someHolderStoodDown = async () => (await Promise.all(holders.map(
+    (i) => env.clients[i].getDecisionCount('masterSlave:decision', appName, 'fdmUnreachable'),
+  ))).some((count) => count > 0);
 
   before(async function () {
     this.timeout(600000);
