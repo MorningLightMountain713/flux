@@ -106,32 +106,36 @@ describe('content propagation across a multi-node fleet', function () {
     // back, so node 0 emits only the apply, the other nine emit only the receive.
     const afterIds = env.clients.map((c) => c.getLastEventId());
     const up = await pushContentUpdate(env.clients[0].url, {
-      name, version: 2, slots: [{ name: 'conf', bytes: Buffer.from('prop config v2') }],
+      name, slots: [{ name: 'conf', bytes: Buffer.from('prop config v2') }],
     });
     expect(up.status, JSON.stringify(up)).to.equal('success');
-    expect(up.data.version).to.equal(2);
+    // Versions count within the owner's ownership: the first manifest signed
+    // after the registration is 1 (the registration's list is signed before its
+    // height exists and sits outside the count).
+    const pushed = up.data.version;
+    expect(pushed).to.equal(1);
 
     await env.clients[0].waitForEvent(
       'content:contentUpdateApplied',
-      (d) => d.appName === name && d.version === 2,
+      (d) => d.appName === name && d.version === pushed,
       90000,
       { afterId: afterIds[0] },
     );
     await Promise.all(env.clients.slice(1).map((c, i) => c.waitForEvent(
       'content:manifestReceived',
-      (d) => d.appName === name && d.version === 2,
+      (d) => d.appName === name && d.version === pushed,
       120000,
       { afterId: afterIds[i + 1] },
     )));
 
     // Real state: every node's appcontentmanifests register converged to v2.
     await waitFor(
-      async () => (await assertManifestSynced(dbClients, name, 2)).synced,
-      { timeout: 90000, interval: 2000, label: `all ${env.nodeCount} rows at v2` },
+      async () => (await assertManifestSynced(dbClients, name, pushed)).synced,
+      { timeout: 90000, interval: 2000, label: `all ${env.nodeCount} rows at the pushed version` },
     );
-    const { versions } = await assertManifestSynced(dbClients, name, 2);
+    const { versions } = await assertManifestSynced(dbClients, name, pushed);
     expect(versions).to.have.lengthOf(env.nodeCount);
-    expect(versions.every((v) => v === 2)).to.equal(true);
+    expect(versions.every((v) => v === pushed)).to.equal(true);
   });
 
   it('fetches each blob body once per missing holder: serves are bounded by requester attempts, not peers x bodies', async function () {
@@ -240,12 +244,12 @@ describe('content propagation across a multi-node fleet', function () {
     await Promise.any(env.clients.map((c, i) => waitForAppInstalled(c, name, 220000).then(() => i)));
     await waitForSpecEverywhere(env, name);
 
-    await pushContentUpdate(env.clients[0].url, {
-      name, version: 2, slots: [{ name: 'conf', bytes: Buffer.from('diverge v2') }],
-    });
+    const lower = (await pushContentUpdate(env.clients[0].url, {
+      name, slots: [{ name: 'conf', bytes: Buffer.from('diverge v2') }],
+    })).data.version;
     await waitFor(
-      async () => (await assertManifestSynced(dbClients, name, 2)).synced,
-      { timeout: 120000, interval: 2000, label: 'whole fleet at v2 pre-partition' },
+      async () => (await assertManifestSynced(dbClients, name, lower)).synced,
+      { timeout: 120000, interval: 2000, label: 'whole fleet at the lower version pre-partition' },
     );
 
     // Partition: isolate the last three nodes from the docker network entirely. The
@@ -261,19 +265,19 @@ describe('content propagation across a multi-node fleet', function () {
     }
 
     // Push v3 on the connected side only — it can't reach the isolated nodes.
-    await pushContentUpdate(env.clients[0].url, {
-      name, version: 3, slots: [{ name: 'conf', bytes: Buffer.from('diverge v3') }],
-    });
+    const higher = (await pushContentUpdate(env.clients[0].url, {
+      name, slots: [{ name: 'conf', bytes: Buffer.from('diverge v3') }],
+    })).data.version;
     const dbConnected = connected.map((i) => dbClients[i]);
     await waitFor(
-      async () => (await assertManifestSynced(dbConnected, name, 3)).synced,
-      { timeout: 120000, interval: 2000, label: 'connected side at v3' },
+      async () => (await assertManifestSynced(dbConnected, name, higher)).synced,
+      { timeout: 120000, interval: 2000, label: 'connected side at the higher version' },
     );
 
     // Divergence proven: the isolated side is stuck at v2 (it missed the v3 gossip).
     for (const i of isolated) {
       const row = await dbClients[i].getContentManifest(name);
-      expect(row && row.version, `isolated node ${i} still at v2`).to.equal(2);
+      expect(row && row.version, `isolated node ${i} still at the lower version`).to.equal(lower);
     }
 
     // Hold the partition until every isolated node has itself DEGRADED (peer count
@@ -308,10 +312,10 @@ describe('content propagation across a multi-node fleet', function () {
     // Real state: the isolated side's appcontentmanifests register caught up to v3.
     const dbIsolated = isolated.map((i) => dbClients[i]);
     await waitFor(
-      async () => (await assertManifestSynced(dbIsolated, name, 3)).synced,
-      { timeout: 150000, interval: 3000, label: 'isolated side converged to v3' },
+      async () => (await assertManifestSynced(dbIsolated, name, higher)).synced,
+      { timeout: 150000, interval: 3000, label: 'isolated side converged to the higher version' },
     );
-    const { versions } = await assertManifestSynced(dbClients, name, 3);
-    expect(versions.every((v) => v === 3)).to.equal(true);
+    const { versions } = await assertManifestSynced(dbClients, name, higher);
+    expect(versions.every((v) => v === higher)).to.equal(true);
   });
 });
