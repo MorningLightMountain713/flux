@@ -2701,6 +2701,7 @@ async function coordinateActiveStandbyApps() {
 
         if (!fdmOk) {
           log.warn(`activeStandby: All FDM services failed for app:${appName}, skipping primary selection for this cycle`);
+          fluxEventBus.count('masterSlave:decision', appName, 'fdmUnreachable');
           // eslint-disable-next-line no-continue
           continue;
         }
