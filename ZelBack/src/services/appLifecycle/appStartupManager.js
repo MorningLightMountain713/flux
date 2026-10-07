@@ -541,6 +541,8 @@ async function tidyPlacementsOnBoot() {
 
 async function manageAppsOnBoot(bootContext) {
   capabilities.claim('bootReconcileDecided', 'appStartupManager').starting('deciding what this node keeps');
+  // What the boot decided, published with boot:settled.
+  let decision = 'reconciled';
   try {
     await tidyPlacementsOnBoot();
     // ahead of every container start, so no slice in use can be empty here
@@ -559,6 +561,7 @@ async function manageAppsOnBoot(bootContext) {
       if (locationsExpired) {
         log.info(`appStartupManager - Locations expired (downtime ${Math.round(bootContext.downtimeMs / 1000)}s, cleanShutdown=${bootContext.cleanShutdown}), removing all apps`);
         await removeAllApps('Locations expired');
+        decision = 'locationsExpired';
         return;
       }
     }
@@ -571,6 +574,7 @@ async function manageAppsOnBoot(bootContext) {
       if (error.message === 'daemon_timeout') {
         log.error(`appStartupManager - Daemon not ready after ${DAEMON_TIMEOUT_MS / 1000}s, removing all apps`);
         await removeAllApps('Daemon unavailable');
+        decision = 'daemonTimeout';
         return;
       }
       throw error;
@@ -580,6 +584,7 @@ async function manageAppsOnBoot(bootContext) {
     if (!nodeConfirmationService.isConfirmed()) {
       log.info('appStartupManager - Node not confirmed, removing all apps');
       await removeAllApps('Node not confirmed');
+      decision = 'notConfirmed';
       return;
     }
 
@@ -591,6 +596,7 @@ async function manageAppsOnBoot(bootContext) {
     if (nodeDosState.isNodeDos()) {
       log.error('appStartupManager - Node is in DOS state, removing all apps');
       await removeAllApps('Node DOS');
+      decision = 'dos';
       return;
     }
 
@@ -601,6 +607,7 @@ async function manageAppsOnBoot(bootContext) {
       if (error.message === 'sync_timeout') {
         log.error(`appStartupManager - DB not ready after ${SYNC_TIMEOUT_MS / 1000}s, removing all apps`);
         await removeAllApps('Sync timeout');
+        decision = 'syncTimeout';
         return;
       }
       throw error;
@@ -632,6 +639,7 @@ async function manageAppsOnBoot(bootContext) {
     const placement = statePulled ? await enforceNodePlacement('boot') : await placementByClock(bootContext);
     if (placement.placed === false) {
       log.info(`appStartupManager - the network has moved on from this node; ${placement.removed.length} app(s) removed, nothing to start`);
+      decision = 'notPlaced';
       return;
     }
 
@@ -656,7 +664,7 @@ async function manageAppsOnBoot(bootContext) {
     await reconcileAppsOnBoot({ placement });
   } finally {
     capabilities.claim('bootReconcileDecided', 'appStartupManager').raise('boot reconcile has decided what this node keeps');
-    fluxEventBus.publish('boot:settled', {});
+    fluxEventBus.publish('boot:settled', { decision, firstBoot: bootContext.firstBoot === true });
     log.info('appStartupManager - Boot container state settled');
   }
 }
