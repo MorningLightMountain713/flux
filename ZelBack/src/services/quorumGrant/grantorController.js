@@ -52,6 +52,8 @@ const log = require('../../lib/log');
 const KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\/[a-zA-Z0-9-]{1,64}(@\d{1,10})?$/;
 // register rows additionally carry a founder round's generation suffix
 const ROW_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\/[a-zA-Z0-9-]{1,64}(@\d{1,16}){0,2}$/;
+// A grant key as a reader states it: `<identity>/<role>`, no row suffix.
+const LOGICAL_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\/[a-zA-Z0-9-]{1,64}$/;
 const FOUNDER_ROLE_PATTERN = /^founder-([a-f0-9]{16})@(\d{1,10})$/;
 // An ordinal register: founder-shaped (oneshot, on the app's founding
 // committee at a rung, component-blind) with two exits a founder row never
@@ -1256,6 +1258,43 @@ async function record(req, res) {
 }
 
 /**
+ * The committee the walk seats for a held key at a generation, over the
+ * membership this node holds now. A founder or ordinal row is not a key here:
+ * those committees are read from the founding basis.
+ */
+async function committee(req, res) {
+  try {
+    const key = req.params.key ?? req.query.key;
+    if (typeof key !== 'string' || !LOGICAL_KEY_PATTERN.test(key)) {
+      return res.status(400).json(messageHelper.createErrorMessage('malformed key'));
+    }
+    const generation = Number(req.query.generation ?? 0);
+    if (!Number.isInteger(generation) || generation < 0) {
+      return res.status(400).json(messageHelper.createErrorMessage('malformed generation'));
+    }
+    const fingerprint = networkStateService.membershipFingerprint();
+    const membership = fingerprint ? networkStateService.membershipAt(fingerprint) : null;
+    if (!membership) {
+      return res.status(503).json(messageHelper.createErrorMessage('this node holds no membership view yet'));
+    }
+    const size = committeeSize('held');
+    const dealt = selectCommittee(membership, rosterOverlay.walkKeyFor(key, generation), { size });
+    return res.json(messageHelper.createDataMessage({
+      key,
+      generation,
+      fingerprint,
+      size,
+      quorum: dealt.quorum,
+      refusal: dealt.refusal,
+      members: dealt.refusal ? [] : dealt.members.map((node) => ({ outpoint: `${node.txhash}:${node.outidx}`, ip: node.ip })),
+    }));
+  } catch (error) {
+    log.error(`quorumGrant grantorController committee: ${error.message}`);
+    return res.status(500).json(messageHelper.createErrorMessage(error.message));
+  }
+}
+
+/**
  * The founding basis this node's own photo holds for one app anchor —
  * fingerprint, generation, quorum, members. A routing aid for photo-less
  * hosts, never a trust grant: every grantor an asker then reaches verifies
@@ -1317,6 +1356,7 @@ module.exports = {
   release,
   vacate,
   record,
+  committee,
   foundingBasis,
   noteReturnFromUnreachability,
   seedDelistedHolders,

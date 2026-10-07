@@ -1,7 +1,6 @@
 // fleet: 6
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
-import { createRequire } from 'node:module';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { waitFor } from '../framework/wait.js';
@@ -10,8 +9,12 @@ import { getSubnetConfig } from '../framework/subnet-config.js';
 
 // The set the fleet declares, so this suite covers whatever is in it rather
 // than whatever somebody remembered to write a case for.
-const require = createRequire(import.meta.url);
-const { FLUX_CAPABILITIES } = require('../../../ZelBack/src/services/utils/peerCapabilities.js');
+// The capabilities every node of this build advertises; a change to the set is a
+// wire change and is written here on purpose.
+const FLUX_CAPABILITIES = [
+  'transmissionTimestamps', 'peerExchange', 'binaryMessages', 'appStateSync', 'appStateSyncRefusal',
+  'appStateSyncReady', 'appInstallingClaims', 'limitCounterRecords', 'masterlease', 'syncSigV2', 'policyBundle',
+];
 
 // MSG_TYPE.REQUEST_APP_RUNNING — one of the four types a signed sync request
 // carries, and the one every node answers whatever else it holds.
@@ -180,7 +183,7 @@ describe('Peer capabilities', function () {
       // loss from the boot's peer churn cannot answer for it. Not swallowed: a
       // partition that did not take means this case proved nothing.
       await partition(env, [dropped]);
-      await Promise.any(REAL_NODES.filter((i) => i !== dropped).map((i, n) => env.clients[i].waitForEvent(
+      await Promise.any(REAL_NODES.filter((i) => i !== dropped).map((i) => env.clients[i].waitForEvent(
         'peers:removed',
         (data) => data.ip === droppedIp,
         120000,

@@ -298,6 +298,7 @@ module.exports = [
   // The register is public fact (epoch, grantee) — an unauthenticated read,
   // served even during the grantor's rejoin drain.
   { method: 'get', path: '/flux/quorumgrant/record', none: NONE.PEER, handler: 'quorumGrant/grantorController#record' },
+  { method: 'get', path: '/flux/quorumgrant/committee', none: NONE.PEER, handler: 'quorumGrant/grantorController#committee' },
   // The founding basis this node photographed for one app anchor — a routing
   // aid for photo-less hosts; every grantor still verifies asks against its
   // own photo, so this read carries no trust. Unauthenticated like record.
