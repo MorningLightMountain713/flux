@@ -138,6 +138,11 @@ describe('a chain stall coasts every master and demotes none', function () {
     }, { timeout: 240000, interval: 10000, label: 'a grant quorum forms' });
     masterIndex = Number(Object.keys(outpoints).find((i) => outpoints[i] === verdict.grantee));
     expect(HOLDERS, `master ${verdict.grantee} maps to a holder`).to.include(masterIndex);
+    // The stall is staged over a RUNNING master: the grant is taken a pass before
+    // the container starts, and a pass that meets the stall first hangs on the
+    // daemon and never starts it.
+    await waitFor(async () => (await getAppContainerStatus(env.clients[masterIndex].container, name))?.status?.startsWith('Up') === true,
+      { timeout: 180000, interval: 2000, label: 'the master runs its container before the stall' });
   });
 
   after(async function () {
