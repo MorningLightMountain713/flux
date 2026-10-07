@@ -2,7 +2,9 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { getAppContainerStatus, restartFluxos, execInContainer } from '../framework/container.js';
+import {
+  getAppContainerStatus, requireAppContainerName, restartFluxos, execInContainer,
+} from '../framework/container.js';
 import { setSynced, resetSyncState } from '../framework/syncthing-control.js';
 import { waitForReconcileActuated, waitFor } from '../framework/wait.js';
 import { bootAndPeer, seedSyncthingApp } from '../framework/reconciler-suite.js';
@@ -24,7 +26,10 @@ async function isUp(client, appName) {
   return !!(status && status.status.startsWith('Up'));
 }
 
-async function startedAt(client, containerName) {
+// The container is named by the app's minted identity, so its docker name is
+// looked up, never built from the app's name or its folder id.
+async function startedAt(client, appName) {
+  const containerName = await requireAppContainerName(client.container, appName, appName);
   const r = await execInContainer(
     client.container,
     `docker inspect --format '{{.State.StartedAt}}' ${containerName} 2>/dev/null || echo ""`,
@@ -64,7 +69,7 @@ describe('reconciler keeps a running syncthing app up across a FluxOS process re
 
     // baseline: container is Up; record when it started
     expect(await isUp(client, appName)).to.equal(true);
-    const before = await startedAt(client, folder);
+    const before = await startedAt(client, appName);
     expect(before, 'container should have a StartedAt before the restart').to.not.equal('');
 
     // restart ONLY the FluxOS process - dockerd and the app container keep running,
@@ -79,7 +84,7 @@ describe('reconciler keeps a running syncthing app up across a FluxOS process re
       // eslint-disable-next-line no-await-in-loop
       expect(await isUp(client, appName), 'container must stay Up across the FluxOS restart').to.equal(true);
       // eslint-disable-next-line no-await-in-loop
-      expect(await startedAt(client, folder), 'container must not be restarted (StartedAt unchanged)').to.equal(before);
+      expect(await startedAt(client, appName), 'container must not be restarted (StartedAt unchanged)').to.equal(before);
       // eslint-disable-next-line no-await-in-loop
       await new Promise((r) => setTimeout(r, 3000));
     }
