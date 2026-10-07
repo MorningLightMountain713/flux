@@ -108,9 +108,11 @@ describe('appSpawner tests', () => {
   }
 
   before(async function loadLibrary() {
-    // The first fromSubmission compiles the ajv schemas.
+    // The first fromSubmission compiles the ajv schemas: built here, so no test
+    // pays for it inside its own time limit.
     this.timeout(60_000);
     flux = await loadSpecLibrary();
+    await realInstantiated();
   });
 
   /**
