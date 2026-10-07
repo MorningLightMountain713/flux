@@ -27,7 +27,7 @@ import {
   waitForAppInstalled, waitForAppSpecStored,
 } from '../framework/wait.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
-import { componentIdentifier } from '../framework/container.js';
+import { componentRequestName } from '../framework/container.js';
 
 function localRegistryCompose(appName) {
   return [{
@@ -71,7 +71,8 @@ describe('App monitoring endpoints', function () {
       env.clients[0].url, nodeKey(1), spec, env.clients,
     );
     expect(regResult.status).to.equal('success');
-    component = componentIdentifier(regResult.app);
+    // A request names a component by the app's name; the node resolves the container.
+    component = componentRequestName(regResult.app);
 
     await waitForBlockProcessed(
       env.clients[0], (d) => d.height >= regResult.targetHeight, 60000,
