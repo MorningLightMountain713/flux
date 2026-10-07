@@ -20,9 +20,10 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 // SSE event bus + the appcontentmanifests rows + the FluxDrive stub state (never logs):
 //   1. gossip propagation + latest-wins — a v2 update reaches every node that holds
 //      the spec (content:manifestReceived) and the register advances 1 -> 2 everywhere.
-//   2. manifest-before-spec quarantine — at submission the manifest gossips ahead of
-//      the (unconfirmed) spec, so non-origin nodes QUARANTINE it
-//      (content:manifestStored{confirmed:false}) rather than dropping it.
+//   2. manifest-before-spec hold — at submission the manifest gossips ahead of
+//      the (unapplied) registration, so every node keeps it with no signer
+//      (content:manifestStored{resolved:false}) rather than dropping it, and
+//      judges it again when the registration applies.
 //   3. forged owner-signature drop — a peer stub gossips a manifest whose owner sig is
 //      from a non-owner key; a spec-holding node drops it (manifestDropped{forged_signature}).
 //   4. boot recovery — a node down while a version is published catches it up on boot
@@ -94,11 +95,13 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
     // populated the FluxDrive backstop so a cold installer has a manifest source.
     const stored = await origin.waitForEvent(
       'content:manifestStored',
-      (d) => d.appName === appName && d.version === 1 && d.resolved === true,
+      (d) => d.appName === appName && d.version === 1,
       30000,
       { afterId: beforeIds[2] },
     );
-    expect(stored.data.resolved).to.equal(true);
+    // Nothing resolves until the registration applies, the origin included: the
+    // row is kept with no signer and judged again at the row write.
+    expect(stored.data.resolved).to.equal(false);
     await origin.waitForEvent(
       'content:manifestBackstopped',
       (d) => d.appName === appName && d.version === 1,
@@ -106,8 +109,8 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
       { afterId: beforeIds[2] },
     );
 
-    // The other four nodes receive the gossip but do not yet hold the (unconfirmed)
-    // spec, so they QUARANTINE (confirmed:false) — never a drop. This IS scenario 2.
+    // The other four nodes receive the gossip before the registration applies,
+    // so they keep it with no signer (resolved:false) — never a drop. This IS scenario 2.
     await Promise.all([0, 1, 3, 4].map((i) => env.clients[i].waitForEvent(
       'content:manifestStored',
       (d) => d.appName === appName && d.resolved === false,
@@ -115,7 +118,7 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
       { afterId: beforeIds[i] },
     )));
 
-    // The quarantine is durable in the register: a confirmed:false row at version 1.
+    // The hold is durable in the register: a row at version 1 with no signer.
     for (const i of [0, 1, 3, 4]) {
       // eslint-disable-next-line no-await-in-loop
       const row = await dbClients[i].getContentManifest(appName);
@@ -168,13 +171,13 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
 
   it('propagates a v2 content update to every spec-holding node and advances the register latest-wins', async function () {
     this.timeout(180000);
-    // After confirmation each non-origin node promotes its quarantined v1 row once the
-    // spec lands (the promote-on-confirm hook); a confirmed:true row is the durable
-    // proof the spec is now local, so receiveManifest will store (not re-quarantine) v2.
+    // Once the registration applies, each node judges its held v1 row again and
+    // resolves its signer; a signed row is the durable proof the spec is now local,
+    // so the v2 update is stored against it rather than held.
     await Promise.all([0, 1, 3, 4].map((i) => waitFor(
       async () => {
         const row = await dbClients[i].getContentManifest(appName);
-        return !!(row && row.version === 1 && row.confirmed === true);
+        return !!(row && row.version === 1 && row.signer !== null);
       },
       { timeout: 120000, interval: 3000, label: `node ${i} promotes v1 on spec-confirm` },
     )));
@@ -302,7 +305,7 @@ describe('content slots: manifest gossip propagation + boot recovery', function 
     await waitFor(
       async () => {
         const row = await dbClients[installedIndex].getContentManifest(appName);
-        return !!(row && row.version === 3 && row.confirmed === true);
+        return !!(row && row.version === 3 && row.signer !== null);
       },
       { timeout: 180000, interval: 3000, label: 'rebooted node catches up v3 published while down' },
     );
