@@ -44,8 +44,10 @@ describe('Peers disconnect on confirmation loss (4019)', function () {
     const client = env.clients[0];
     const nodeIp = subnet.nodeIp(1);
 
-    const peersBefore = await client.getPeers();
-    expect(peersBefore.data.length).to.be.greaterThan(0);
+    // Peers held in BOTH directions: in a full mesh which end of a connection
+    // dialled is a race, and a node can hold every peer inbound.
+    const [outboundBefore, inboundBefore] = await Promise.all([client.getPeers(), client.getIncomingPeers()]);
+    expect(outboundBefore.data.length + inboundBefore.data.length).to.be.greaterThan(0);
 
     // The peer routes are cached for 30 seconds (apicache, routes.js) and the
     // read above populates that entry, so a peer count fetched over HTTP
@@ -149,9 +151,8 @@ describe('Full confirmation loss and regain lifecycle', function () {
     await clearNodeStatus(nodeIp);
     await waitForNodeStatus(client, (d) => d.confirmed === true, 30000);
 
-    // outbound is the count /flux/connectedpeers reports, and 4 is the peering
-    // target the fleet boots to - so this is the node back to full strength,
-    // not merely holding one peer again.
-    await client.waitForEvent('peers:added', (d) => d.outbound >= 4, 120000, { afterId: beforeRegain });
+    // 4 is the peering target the fleet boots to, counted in both directions:
+    // the node is back to full strength, not merely holding one peer again.
+    await client.waitForEvent('peers:added', (d) => d.total >= 4, 120000, { afterId: beforeRegain });
   });
 });
