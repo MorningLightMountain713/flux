@@ -28,12 +28,13 @@ const HOLDERS = [0, 1, 2];
 describe('two apps share their holders, and their terms never entangle', function () {
   let env;
   let names; // [appA, appB]
+  const identities = {}; // app name -> the identity its registration mints
   let holderOutpoints;
 
   async function readCell(appName, clientIndex) {
     try {
       const res = await fetch(
-        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${appName}/master`)}`,
+        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${identities[appName]}/master`)}`,
         { signal: AbortSignal.timeout(5000) },
       );
       const body = await res.json();
@@ -113,6 +114,7 @@ describe('two apps share their holders, and their terms never entangle', functio
       await pushImage(name, 'v1');
       // eslint-disable-next-line no-await-in-loop
       const app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby', pinnedTo: HOLDERS });
+      identities[name] = app.identity;
       const installAfters = HOLDERS.map((i) => env.clients[i].getLastEventId());
       // eslint-disable-next-line no-await-in-loop
       await installOnNodes(env, app, HOLDERS);

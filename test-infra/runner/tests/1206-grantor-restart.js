@@ -284,7 +284,7 @@ describe('a grantor restarts, and its promises outlive the process', function ()
     const masterIndex = Number(Object.keys(holderOutpoints).find((i) => holderOutpoints[i] === verdict.grantee));
     const standby = HOLDERS.find((i) => i !== masterIndex);
 
-    const wiped = await dbClient(standby + 1).wipeMasterleaseRecord(name, 'master');
+    const wiped = await dbClient(standby + 1).wipeMasterleaseRecord(app.identity, 'master');
     expect(wiped, 'the staged miss removed the row').to.equal(1);
 
     const preRestartMarkers = env.clients.map((c) => c.getLastEventId());
