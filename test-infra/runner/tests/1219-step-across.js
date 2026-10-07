@@ -20,8 +20,9 @@ import {
   waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent,
 } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
-import { getState, advanceBlocks, stopTicker } from '../framework/daemon-control.js';
-import { authenticate, signBtcMessage } from '../auth.js';
+import { advanceBlocks, stopTicker } from '../framework/daemon-control.js';
+import { authenticate } from '../auth.js';
+import { postGenerationRecord } from '../framework/generation-record.js';
 import { appOwnerKey } from '../framework/keys.js';
 
 // The walk the nodes run, so the suite deals the same committees they do.
@@ -157,20 +158,10 @@ describe('step-across: the owner re-rolls the committee under a running master, 
     .filter(({ hits }) => hits.length)
     .map(({ i, hits }) => `${label(i)} at generation ${hits.map((e) => e.data?.generation ?? 0).join('/')}`);
 
-  async function submitReroll() {
-    const owner = appOwnerKey();
-    const { currentHeight } = await getState();
-    const at = Date.now();
-    const canonical = `fluxgrantgeneration:${app.identity}|master|1|${currentHeight}|${at}`;
-    const signature = await signBtcMessage(canonical, owner.privkey);
-    const res = await fetch(`${env.clients[0].url}/apps/grantgeneration`, {
-      method: 'POST',
-      headers: { zelidauth: ownerAuth0, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        identity: app.identity, role: 'master', generation: 1, height: currentHeight, at, signature,
-      }),
+  function submitReroll() {
+    return postGenerationRecord(env.clients[0].url, {
+      name: app.spec.name, identity: app.identity, role: 'master', generation: 1, ownerKey: appOwnerKey(), auth: ownerAuth0,
     });
-    return { status: res.status, body: await res.text(), height: currentHeight };
   }
 
   before(async function () {

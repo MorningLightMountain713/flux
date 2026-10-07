@@ -6,9 +6,10 @@ import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { registerEncryptedV9App, updateEncryptedV9App } from '../framework/content-helper.js';
 import { pushBusybox } from '../framework/registry-helper.js';
-import { queueAppTx, advanceBlocks, getState } from '../framework/daemon-control.js';
+import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
-import { authenticate, signBtcMessage } from '../auth.js';
+import { authenticate } from '../auth.js';
+import { postGenerationRecord } from '../framework/generation-record.js';
 import { dbClient } from '../framework/db-client.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { execInContainer, requireAppContainerName, appContainersFor } from '../framework/container.js';
@@ -275,31 +276,21 @@ describe('the founding grant on a multi-node fleet', function () {
     expect(before.status).to.equal('success');
     expect(before.data.generation).to.equal(0);
 
-    const owner = appOwnerKey();
-    const { currentHeight } = await getState();
-    const at = Date.now();
     const identity = await dbClient(1).identityOf(name);
 
-    async function submitGeneration(generation) {
-      const canonical = `fluxgrantgeneration:${identity}|founder|${generation}|${currentHeight}|${at}`;
-      const signature = await signBtcMessage(canonical, owner.privkey);
-      const res = await fetch(`${env.clients[0].url}/apps/grantgeneration`, {
-        method: 'POST',
-        headers: { zelidauth: ownerAuth0, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          identity, role: 'founder', generation, height: currentHeight, at, signature,
-        }),
+    function submitGeneration(generation) {
+      return postGenerationRecord(env.clients[0].url, {
+        name, identity, role: 'founder', generation, ownerKey: appOwnerKey(), auth: ownerAuth0,
       });
-      return { code: res.status, body: await res.json() };
     }
 
     // A skipped generation is refused, teaching the next honest submission.
     const skipped = await submitGeneration(2);
-    expect(skipped.code).to.equal(409);
-    expect(skipped.body.data.message).to.contain('the next is 1');
+    expect(skipped.status, skipped.body).to.equal(409);
+    expect(skipped.json.data.message).to.contain('the next is 1');
 
     const accepted = await submitGeneration(1);
-    expect(accepted.code, JSON.stringify(accepted.body)).to.equal(200);
+    expect(accepted.status, accepted.body).to.equal(200);
 
     // The record broadcast reaches every node's read surface.
     await waitFor(async () => {
