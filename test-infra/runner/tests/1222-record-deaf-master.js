@@ -27,6 +27,7 @@ import { appOwnerKey } from '../framework/keys.js';
 // The walk the nodes run, so the suite deals the same committees they do.
 const require = createRequire(import.meta.url);
 import { committeeFor } from '../framework/committee.js';
+import { readGrantRecord } from '../framework/grant-record.js';
 
 // A re-roll under a running master whose whole side MISSED the record. The
 // master's node and every cell of its granting committee are partitioned from
@@ -109,18 +110,7 @@ describe('record-deaf master: after the heal every certificate the partition for
   const indexOf = (outpoint) => Number(Object.keys(outpoints).find((i) => outpoints[i] === outpoint));
   const describeCells = (cells) => [...cells].map((cell) => label(indexOf(cell))).join(', ');
 
-  async function readCell(i) {
-    try {
-      const res = await fetch(
-        `${env.clients[i].url}/flux/quorumgrant/record?key=${encodeURIComponent(key())}`,
-        { signal: AbortSignal.timeout(5000) },
-      );
-      const body = await res.json();
-      return body?.data ?? null;
-    } catch {
-      return null;
-    }
-  }
+  const readCell = (i) => readGrantRecord(env.clients[i].url, key());
 
   async function quorumVerdict(quorum) {
     const cells = await Promise.all(env.clients.map((_, i) => readCell(i)));

@@ -16,6 +16,7 @@ import {
   unpauseHostContainer,
 } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent } from '../framework/wait.js';
+import { readGrantRecord } from '../framework/grant-record.js';
 
 // A chain stall must coast every master, never demote one. When no node's
 // daemon has seen a block past chainStaleAfterMs — a chain halt, a fleet
@@ -52,18 +53,7 @@ describe('a chain stall coasts every master and demotes none', function () {
   let masterIndex;
   let stubPaused = false;
 
-  async function readCell(clientIndex) {
-    try {
-      const res = await fetch(
-        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${app.identity}/master`)}`,
-        { signal: AbortSignal.timeout(5000) },
-      );
-      const body = await res.json();
-      return body?.data ?? null;
-    } catch {
-      return null;
-    }
-  }
+  const readCell = (clientIndex) => readGrantRecord(env.clients[clientIndex].url, `${app.identity}/master`);
 
   async function quorumVerdict() {
     const cells = await Promise.all(env.clients.map((_, i) => readCell(i)));

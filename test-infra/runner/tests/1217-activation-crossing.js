@@ -18,6 +18,7 @@ import {
   restartFluxos,
 } from '../framework/container.js';
 import { advanceBlocks, stopTicker, getState } from '../framework/daemon-control.js';
+import { readGrantRecord } from '../framework/grant-record.js';
 import {
   waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent,
 } from '../framework/wait.js';
@@ -175,18 +176,7 @@ function helpers(env, name, app) {
     const cells = await Promise.all(nodes.map((i) => readCell(i)));
     return cells.every((cell) => cell?.serving === true);
   }, { timeout: timeoutMs, interval: 5000, label: `cells ${nodes.map(label).join(', ')} serve` });
-  const readCell = async (i) => {
-    try {
-      const res = await fetch(
-        `${env.clients[i].url}/flux/quorumgrant/record?key=${encodeURIComponent(key)}`,
-        { signal: AbortSignal.timeout(5000) },
-      );
-      const body = await res.json();
-      return body?.data ?? null;
-    } catch {
-      return null;
-    }
-  };
+  const readCell = (i) => readGrantRecord(env.clients[i].url, key);
 
   // The crossing proper: cross activateAt, prove the plane engaged on every
   // holder, then the no-op — same holder, same container, nobody else ever ran

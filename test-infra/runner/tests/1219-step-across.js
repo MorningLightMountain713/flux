@@ -26,6 +26,7 @@ import { appOwnerKey } from '../framework/keys.js';
 
 // The walk the nodes run, so the suite deals the same committees they do.
 import { committeeFor } from '../framework/committee.js';
+import { readGrantRecord } from '../framework/grant-record.js';
 
 // A re-roll under a running master (STEP_ACROSS_DESIGN.md). Every referee
 // that accepts or renews a term signs it; the holder keeps a quorum of those
@@ -92,18 +93,7 @@ describe('step-across: the owner re-rolls the committee under a running master, 
   const indexOf = (outpoint) => Number(Object.keys(outpoints).find((i) => outpoints[i] === outpoint));
   const describeCells = (cells) => [...cells].map((cell) => label(indexOf(cell))).join(', ');
 
-  async function readCell(i) {
-    try {
-      const res = await fetch(
-        `${env.clients[i].url}/flux/quorumgrant/record?key=${encodeURIComponent(key())}`,
-        { signal: AbortSignal.timeout(5000) },
-      );
-      const body = await res.json();
-      return body?.data ?? null;
-    } catch {
-      return null;
-    }
-  }
+  const readCell = (i) => readGrantRecord(env.clients[i].url, key());
 
   // The cells whose register names a grantee at a generation, live or lapsed.
   async function cellsNaming(grantee, generation) {

@@ -12,6 +12,7 @@ import { setSynced } from '../framework/syncthing-control.js';
 import { appSyncthingFolderId, componentIdentifier, getAppContainerStatus, restartFluxos } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, assertNoEvent, waitForReconcileActuated } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
+import { readGrantRecord } from '../framework/grant-record.js';
 
 // A grantor that restarts must come back as the SAME grantor: its promises
 // were journaled before every reply, so the record survives the process —
@@ -29,22 +30,7 @@ describe('a grantor restarts, and its promises outlive the process', function ()
   let app;
   let holderOutpoints;
 
-  async function readCell(clientIndex) {
-    try {
-      // A restarting node may accept the TCP connect and never answer, so an
-      // unbounded read hangs for undici's ~300s default and stalls the whole
-      // verdict on one silent node. Silence is a non-answer; the quorum
-      // arithmetic already tolerates missing cells.
-      const res = await fetch(
-        `${env.clients[clientIndex].url}/flux/quorumgrant/record?key=${encodeURIComponent(`${app.identity}/master`)}`,
-        { signal: AbortSignal.timeout(5000) },
-      );
-      const body = await res.json();
-      return body?.data ?? null;
-    } catch {
-      return null;
-    }
-  }
+  const readCell = (clientIndex) => readGrantRecord(env.clients[clientIndex].url, `${app.identity}/master`);
 
   async function quorumVerdict() {
     const cells = await Promise.all(env.clients.map((_, i) => readCell(i)));
