@@ -1830,7 +1830,7 @@ describe('AppSyncOrchestrator', () => {
         getEligibleSyncPeersStub = sinon.stub().callsFake(() => peers);
         const orchestrator = makeOrchestrator();
         orchestrator.start(defaultBootContext);
-        blockEmitter.emit('blocksProcessed', 2555000);
+        blockEmitter.emit('blocksProcessed', 2_555_000);
         peerEmitter.emit('peerThresholdReached', 12);
         await clock.tickAsync(0);
         await clock.tickAsync(SYNC_TIMEOUT_MS + 1000);
