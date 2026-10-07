@@ -217,14 +217,16 @@ async function openManifestSlots(manifest, ctx, deps = {}) {
  * FluxDrive under the identical locator. A carried-over hash is presence-checked
  * instead of re-uploaded, so rotating one slot attaches one file.
  *
- * @param {object} input - { manifest, spec, owner, encrypted, identity, ownedFrom, blobs, ownerSigs }
+ * @param {object} input - { manifest, spec, owner, encrypted, identity, ownedFrom, original, blobs, ownerSigs }
  *   ownedFrom - the height the signing owner took the app, 0 for a registration
+ *   original - whether that ownership is the app's first, under which the
+ *     registration's list (signed at height 0) counts in the version sequence
  * @param {object} deps - { getRows?, pendingRanks?, standing?, refresh?, uploader, benchmark?, now?, verify?, provider? }
  * @returns {Promise<object>} the gossip-form manifest
  */
 async function processManifestSubmission(input, deps) {
   const {
-    manifest, spec, owner, encrypted, identity, ownedFrom, blobs, ownerSigs,
+    manifest, spec, owner, encrypted, identity, ownedFrom, original = false, blobs, ownerSigs,
   } = input;
   const {
     getRows = appsRepository.getContentManifests, pendingRanks = appsRepository.carriedManifestRanks,
@@ -243,7 +245,7 @@ async function processManifestSubmission(input, deps) {
   // sequence within an ownership gapless and bounds a leaked owner key to
   // advancing the counter one step per signed update. A manifest waiting in the
   // pool with an unpaid update counts: the update may yet apply.
-  const ownership = { owner, from: ownedFrom };
+  const ownership = { owner, from: ownedFrom, original };
   const expectedVersion = async () => (await highestVersionInOwnership(identity, ownership, { getRows, pendingRanks })) + 1;
   let expected = await expectedVersion();
   if (manifest.version > expected) {
@@ -792,7 +794,7 @@ async function getContentManifestsApi(req, res) {
     const listed = owners.length ? owners[owners.length - 1] : null;
     const { row, rows } = await standingManifest(app.identity);
     const nextVersion = listed
-      ? (await highestVersionInOwnership(app.identity, listed, { getRows: appsRepository.getContentManifests, pendingRanks: appsRepository.carriedManifestRanks })) + 1
+      ? (await highestVersionInOwnership(app.identity, { ...listed, original: owners.length === 1 }, { getRows: appsRepository.getContentManifests, pendingRanks: appsRepository.carriedManifestRanks })) + 1
       : 1;
     res.json(messageHelper.createDataMessage({
       appName: app.name,
@@ -1858,7 +1860,7 @@ async function submitContentUpdate(body, deps = {}) {
 
   const gossipManifest = await processSubmission(
     {
-      manifest, spec, owner, encrypted, identity, ownedFrom: listed.from, blobs, ownerSigs,
+      manifest, spec, owner, encrypted, identity, ownedFrom: listed.from, original: owners.length === 1, blobs, ownerSigs,
     },
     { uploader, benchmark, now, verify, provider },
   );

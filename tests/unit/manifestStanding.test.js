@@ -135,6 +135,19 @@ describe('manifestStanding', () => {
       expect(await svc.highestVersionInOwnership(IDENTITY, { owner: BUYER, from: 200 })).to.equal(2);
       expect(await svc.highestVersionInOwnership(IDENTITY, { owner: BUYER, from: 300 })).to.equal(0);
     });
+
+    it('counts the registration\'s list, signed at height 0, within the app\'s original ownership and no other', async () => {
+      const svc = load({
+        getContentManifests: sinon.stub().resolves([
+          row({ hash: 'r1', version: 1, ownedFrom: 0, signer: SELLER }),
+          row({ hash: 'b1', version: 1, ownedFrom: 200 }),
+        ]),
+        carriedManifestRanks: sinon.stub().resolves([]),
+      });
+      expect(await svc.highestVersionInOwnership(IDENTITY, { owner: SELLER, from: 100, original: true })).to.equal(1);
+      expect(await svc.highestVersionInOwnership(IDENTITY, { owner: SELLER, from: 100 })).to.equal(0);
+      expect(await svc.highestVersionInOwnership(IDENTITY, { owner: BUYER, from: 200, original: true })).to.equal(1);
+    });
   });
 
   describe('standingIndex', () => {
