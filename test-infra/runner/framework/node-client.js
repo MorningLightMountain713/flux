@@ -238,6 +238,7 @@ export function nodeClient(nodeNum) {
         'daemon:ownStatus',
         'daemon:polled',
         'daemon:stale',
+        'hashSync:ephemeralRound',
         'daemon:recovered',
         'daemon:reorg',
         'daemon:resync',
