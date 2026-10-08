@@ -403,6 +403,8 @@ export function nodeClient(nodeNum) {
         'placementHold:cleared',
         'hostStall:appUnloaded',
         'hostStall:appsStopped',
+        'nodedown:unreachable',
+        'nodedown:isolated',
         'nodedown:assembled',
         'nodedown:stored',
         'nodedown:refused',

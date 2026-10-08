@@ -706,6 +706,16 @@ describe('appStartupManager tests', () => {
       expect(appUninstallerStub.uninstallApplication.calledWith('AppA', REMOVE)).to.equal(true);
     });
 
+    it('isolated for the grace: every app removed without a row read, no broadcast', async () => {
+      installedStub.names.resolves(['AppA', 'AppB']);
+      appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA' }]);
+      expect(await appStartupManager.enforceNodePlacement('isolated')).to.deep.equal({ placed: false, removed: ['AppA', 'AppB'], failed: [] });
+      expect(appsRepositoryStub.appLocationFromEvents.called, 'the rows are not consulted').to.equal(false);
+      expect(nodeDownStoreStub.lockoutForAddress.called).to.equal(false);
+      expect(appUninstallerStub.uninstallApplication.calledWith('AppA', REMOVE)).to.equal(true);
+      expect(appUninstallerStub.uninstallApplication.calledWith('AppB', REMOVE)).to.equal(true);
+    });
+
     it('decides nothing on a lookup error, and keeps every app without an address', async () => {
       installedStub.names.resolves(['AppA']);
       appsRepositoryStub.appLocationFromEvents.rejects(new Error('DB error'));

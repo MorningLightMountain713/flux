@@ -283,7 +283,6 @@ module.exports = {
     spawnReconfirmDelayMs: 30000,
     globalCmdDelayMs: 100,
     discoveryAutostart: false,
-    nodeDownSweepIntervalMs: 5000,
     connectionBackoffMs: [2000, 5000, 10000, 15000],
     spawnDeferrals: {
       staticIpMs: { encrypted: 200, standard: 400 },

@@ -29,12 +29,12 @@ let stateManager = null;
  */
 let resolveStarted;
 let started = new Promise((resolve) => { resolveStarted = resolve; });
-
 /**
- * Says each time the node list has been fetched afresh, whether or not it
- * changed. Outlives a stop and start, so a listener is added once.
+ * Says each time the node list has been refreshed, whether or not it changed,
+ * however it was filled. Outlives a stop and start, so a listener is added once.
  */
 const listUpdates = new EventEmitter();
+listUpdates.setMaxListeners(0);
 
 /**
  * The ring topology over the live list, one instance per manager lifecycle.
@@ -89,13 +89,12 @@ function startByFetching(waitTimeoutMs) {
       resolve();
     });
 
-    // Every refresh, to onUpdated's listeners and, with what the node now believes
-    // the fleet to be, to the test-only bus: a test that changes the node list
-    // otherwise has no way to know when this node has read the change, because
-    // the endpoints that report one ask the daemon rather than this cache.
+    // Every fetched refresh, with what the node now believes the fleet to be, to
+    // the test-only bus: a test that changes the node list otherwise has no way
+    // to know when this node has read the change, because the endpoints that
+    // report one ask the daemon rather than this cache.
     stateManager.on('updated', () => {
       fluxEventBus.publish('networkstate:updated', { nodes: stateManager.nodeCount });
-      listUpdates.emit('updated');
     });
 
     setImmediate(() => stateManager.start());
@@ -132,6 +131,7 @@ async function start(options = {}) {
   // forgiven. The register itself decides what a departure means.
   stateManager.on('updated', () => {
     const listed = stateManager.state();
+    listUpdates.emit('updated');
     departures.noteList(listed.map((node) => node.ip));
     // the same refresh, keyed on outpoints, for the mesh seats: a seat whose
     // holder left the list reads as free at this cell once the grace has run
@@ -218,8 +218,8 @@ function onReady(callback) {
 }
 
 /**
- * Calls `listener` each time the node list has been fetched afresh: about once
- * a block, and on the first fetch.
+ * Calls `listener` each time the node list has been refreshed, however it was
+ * filled: about once a block, and on the first fill.
  * @param {function(): void} listener
  * @returns {function(): void} Stops calling it.
  */

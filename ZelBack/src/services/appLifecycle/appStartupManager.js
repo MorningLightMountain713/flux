@@ -215,18 +215,24 @@ async function prepareAppFirewall() {
  * app is kept and the caller announces. Not placed: every installed app is
  * removed, whatever its containers are doing, and nothing is broadcast. There is
  * no per-app test and no middle ground. A locked-out node takes the not-placed
- * branch whatever its rows say.
+ * branch whatever its rows say. A node isolated for the whole grace asks nothing
+ * of its rows: the fleet has certified it by that constant, and it removes every
+ * app where it stands.
  *
  * A database wobble or a missing address is never the reason an app is deleted:
  * no address keeps every app, and rows that cannot be read answer `placed: null`,
  * which removes nothing and decides nothing.
  *
- * @param {string} trigger 'boot' | 'return' | 'certificate', journal only
+ * @param {string} trigger 'boot' | 'return' | 'certificate' | 'isolated'
  * @returns {Promise<{placed: boolean|null, removed: string[], failed: Array<{app: string, error: string}>}>}
  */
 async function enforceNodePlacement(trigger) {
   const installedApps = await getInstalledAppNamesFromDb();
   if (installedApps.length === 0) return { placed: true, removed: [], failed: [] };
+  if (trigger === 'isolated') {
+    log.warn(`appStartupManager - placement check (isolated): no network for the ${NODE_DOWN_GRACE_MS / 1000}s grace, the fleet has certified this node; removing ${installedApps.length} app(s), no broadcast`);
+    return { placed: false, ...await removeUnplacedApps(installedApps) };
+  }
   const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
   if (!localSocketAddr) {
     log.warn(`appStartupManager - placement check (${trigger}) skipped: no local address`);
