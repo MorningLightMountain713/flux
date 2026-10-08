@@ -97,7 +97,9 @@ describe('Ephemeral connections resolve hashes via stub peers', function () {
         fluxapps: {
           hashSyncFallbackRecheckBlocks: 2,
           hashSyncMaxRounds: 1,
-          hashSyncEphemeralPeers: 5,
+          // Every node this node does not hold, so the one ephemeral round the
+          // budget allows reaches the stubs whatever the shuffle.
+          hashSyncEphemeralPeers: 16,
         },
       },
     });
