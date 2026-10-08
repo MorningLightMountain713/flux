@@ -316,12 +316,9 @@ async function broadcastHashRequest(hashes, peers) {
 }
 
 /**
- * Pick target IPs for a hash round: held peers first, then the rest of the
- * deterministic list. Held peers are proven reachable, and since the wire
- * carries the ephemeral distinction an ephemeral ask to a held peer is read
- * like any other. The old form EXCLUDED connected peers — a dodge around
- * the receiver swallowing ephemerals on held pairs — which on a small
- * network left only unreachable list entries and resolved nothing.
+ * Pick target IPs for the ephemeral round: random nodes of the deterministic
+ * list this node does not hold. The rounds before it asked held peers; this
+ * round reaches the nodes they could not.
  * @param {number} count
  * @returns {Promise<string[]>} Array of ip:port strings
  */
@@ -329,27 +326,22 @@ async function pickEphemeralTargets(count) {
   const nodeList = await fluxCommunicationUtils.deterministicFluxList();
   const localSocketAddress = await fluxNetworkHelper.getLocalSocketAddress();
   if (!localSocketAddress) return [];
-  const connectedKeys = new Set();
+  const held = new Set();
   for (const peer of peerManager.allValues()) {
-    connectedKeys.add(peer.key);
+    held.add(peer.key);
   }
-  const held = [];
   const unheld = [];
   for (const node of nodeList) {
     if (!node.ip) continue;
     const key = normalizeSocketAddress(node.ip);
-    if (key === localSocketAddress) continue;
-    if (connectedKeys.has(key)) held.push(key);
-    else unheld.push(key);
+    if (key === localSocketAddress || held.has(key)) continue;
+    unheld.push(key);
   }
-  const shuffle = (arr) => {
-    for (let i = arr.length - 1; i > 0; i -= 1) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [arr[i], arr[j]] = [arr[j], arr[i]];
-    }
-    return arr;
-  };
-  return [...shuffle(held), ...shuffle(unheld)].slice(0, count);
+  for (let i = unheld.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [unheld[i], unheld[j]] = [unheld[j], unheld[i]];
+  }
+  return unheld.slice(0, count);
 }
 
 /**

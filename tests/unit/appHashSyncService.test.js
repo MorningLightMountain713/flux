@@ -566,6 +566,47 @@ describe('appHashSyncService tests', () => {
       expect(calledPeers.length).to.equal(6);
     });
 
+    it('the ephemeral round asks only listed nodes this node does not hold: never itself, never a held peer', async () => {
+      const clock = sinon.useFakeTimers();
+      serviceHelperStub.delay = (ms) => { clock.tick(ms); return Promise.resolve(); };
+      const openEphemeralConnection = sinon.stub().resolves(null);
+      // the six held peers, three nodes nobody here holds, and this node itself
+      const listed = ['10.0.0.1', '10.0.0.2', '10.0.0.3', '10.0.0.4', '10.0.0.5', '10.0.0.6', '10.0.0.7', '10.0.0.8', '10.0.0.9', '10.0.0.99']
+        .map((ip) => ({ ip: `${ip}:16127` }));
+      const mod = proxyquire('../../ZelBack/src/services/appMessaging/appHashSyncService', buildProxyquireStubs({
+        '../fluxCommunicationUtils': { deterministicFluxList: sinon.stub().resolves(listed) },
+        '../fluxCommunication': { openEphemeralConnection },
+      }));
+      dbHelperStub.findInDatabase.resolves([{ hash: 'h1', txid: 'tx1', height: 100, value: 10, message: false }]);
+      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
+
+      await mod.syncMissingHashes();
+      clock.restore();
+
+      const asked = openEphemeralConnection.getCalls().map((call) => call.args[0]).sort();
+      expect(asked).to.deep.equal(['10.0.0.7:16127', '10.0.0.8:16127', '10.0.0.9:16127']);
+    });
+
+    it('the ephemeral round asks nobody when every listed node is already held', async () => {
+      const clock = sinon.useFakeTimers();
+      serviceHelperStub.delay = (ms) => { clock.tick(ms); return Promise.resolve(); };
+      const openEphemeralConnection = sinon.stub().resolves(null);
+      const listed = ['10.0.0.1', '10.0.0.2', '10.0.0.3', '10.0.0.4', '10.0.0.5', '10.0.0.6', '10.0.0.99']
+        .map((ip) => ({ ip: `${ip}:16127` }));
+      const mod = proxyquire('../../ZelBack/src/services/appMessaging/appHashSyncService', buildProxyquireStubs({
+        '../fluxCommunicationUtils': { deterministicFluxList: sinon.stub().resolves(listed) },
+        '../fluxCommunication': { openEphemeralConnection },
+      }));
+      dbHelperStub.findInDatabase.resolves([{ hash: 'h1', txid: 'tx1', height: 100, value: 10, message: false }]);
+      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
+
+      await mod.syncMissingHashes();
+      clock.restore();
+
+      expect(openEphemeralConnection.called).to.equal(false);
+      expect(logStub.info.calledWith('syncMissingHashes - No ephemeral targets available')).to.equal(true);
+    });
+
     it('should exclude deterministic peers', async () => {
       const clock = sinon.useFakeTimers();
       serviceHelperStub.delay = (ms) => { clock.tick(ms); return Promise.resolve(); };
