@@ -307,6 +307,20 @@ describe('appHashSyncService tests', () => {
       expect(dbHelperStub.findInDatabase.callCount).to.equal(2);
     });
 
+    it('never asks for the message of a voided payment, forced or not', async () => {
+      const mockDb = { db: sinon.stub().returns('database') };
+      dbHelperStub.databaseConnection.returns(mockDb);
+      dbHelperStub.findInDatabase.resolves([]);
+
+      await appHashSyncService.getMissingHashes();
+      await appHashSyncService.getMissingHashes({ force: true });
+
+      dbHelperStub.findInDatabase.getCalls().forEach((call) => {
+        expect(call.args[2].voided).to.deep.equal({ $ne: true });
+      });
+      expect(dbHelperStub.findInDatabase.callCount).to.equal(2);
+    });
+
     it('should exclude invalid messages when not forced', async () => {
       const mod = proxyquire(
         '../../ZelBack/src/services/appMessaging/appHashSyncService',

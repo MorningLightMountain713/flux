@@ -5,8 +5,9 @@
 // these are in force.
 //
 // Sequence (each a foundation self-send carrying one message):
-//   1. OracleKeyMessage (authority-signed) — publishes the oracle pubkey, so
-//      isOracleSigner can resolve the oracle address for the rate message.
+//   1. OracleKeyMessage (authority-signed) — publishes the oracle pubkey for the
+//      oracle role, so isOracleSigner can resolve the oracle address for the
+//      rate message.
 //   2. RateMessage (oracle-signed) — the FLUX/USD rate.
 //   3. PriceMessage (authority-signed) — the commodity rates + minPrice floor.
 //
@@ -67,7 +68,7 @@ export async function bootstrapPricing(opts = {}) {
 
   await injectSoftForkMessage(
     AUTHORITY_PRIVKEY,
-    OracleKeyMessage.encode({ pubkey: compressedPubkey(ORACLE_PRIVKEY) }),
+    OracleKeyMessage.encode({ role: OracleKeyMessage.ROLE.ORACLE, pubkey: compressedPubkey(ORACLE_PRIVKEY) }),
     'oraclekey',
   );
   await advanceBlocks(gap); // oracle key becomes effective

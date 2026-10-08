@@ -157,6 +157,7 @@ module.exports = {
         rateMessages: 'ratemessages',
         priceModifierMessages: 'pricemodifiermessages',
         oracleKeyMessages: 'oraclekeymessages',
+        unclaimedPaymentMessages: 'unclaimedpaymentmessages',
         policyGroupMessages: 'policygroupmessages',
       },
     },

@@ -218,6 +218,11 @@ async function storeConfirmedMessages(candidates) {
       result.unpaid.push(hash);
       continue;
     }
+    // A voided payment takes no contents: the void decided the hash.
+    if (record.voided) {
+      result.refused.push({ hash, reason: 'the payment is voided' });
+      continue;
+    }
     let event;
     try {
       // eslint-disable-next-line no-await-in-loop
