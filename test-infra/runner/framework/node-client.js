@@ -435,6 +435,7 @@ export function nodeClient(nodeNum) {
         'ephemeralSync:peerUnverified',
         'ephemeralSync:peerWriteFailed',
         'ephemeralSync:peerDisconnected',
+        'ephemeralSync:peerCrossed',
         'ephemeralSync:budgetSpent',
         'sync:chunkVerified',
         'hashSync:complete',

@@ -1020,6 +1020,16 @@ describe('FluxPeerManager tests', () => {
       expect(seen).to.deep.equal([{ key: '10.0.0.1:16127', connectionId: first.connectionId }]);
     });
 
+    it('announces a replaced connection that was not a crossing as no crossing', () => {
+      const seen = [];
+      const first = manager.add(createMockWs('10.0.0.1', '16127'), '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });
+      manager.on('peerDisconnected', (key, connectionId, how) => seen.push({ key, connectionId, how }));
+
+      manager.add(createMockWs('10.0.0.1', '16127'), '10.0.0.1', '16127', { source: PEER_SOURCE.RECONNECT });
+
+      expect(seen).to.deep.equal([{ key: '10.0.0.1:16127', connectionId: first.connectionId, how: { crossing: false } }]);
+    });
+
     it('announces nothing when the peer was not there', () => {
       const seen = [];
       manager.on('peerDisconnected', (key) => seen.push(key));
@@ -2041,10 +2051,16 @@ describe('FluxPeerManager tests', () => {
       it('replaces the held outbound when the peer has the lower address', () => {
         manager.setOwnSocketAddress('9.9.9.9:16127');
         const resolve = sinon.spy(manager, 'resolveCrossing');
+        const heldId = manager.get('8.8.8.8:16127').connectionId;
+        const lost = [];
+        manager.on('peerDisconnected', (key, connectionId, how) => lost.push({ key, connectionId, how }));
 
         manager.validateAndAddInbound(crossing, '16127', createMockReq('8.8.8.8'));
 
         sinon.assert.calledOnceWithExactly(resolve, sinon.match({ key: '8.8.8.8:16127' }), DIRECTION.INBOUND);
+        expect(lost, 'the closed half of a crossing is announced as one').to.deep.equal([
+          { key: '8.8.8.8:16127', connectionId: heldId, how: { crossing: true } },
+        ]);
 
         expect(manager.get('8.8.8.8:16127').direction).to.equal(DIRECTION.INBOUND);
         expect(manager.outboundCount).to.equal(0);

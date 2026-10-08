@@ -1750,6 +1750,7 @@ function onOutboundOpen() {
   // connection dialed by the lower address (peerManager.resolveCrossing), the
   // same choice the far end makes. Otherwise add() replaces the held one.
   const replaces = !existing || peerManager.resolveCrossing(existing, DIRECTION.OUTBOUND);
+  const crossing = Boolean(existing && existing.isAlive && existing.direction === DIRECTION.INBOUND);
   if (!replaces) {
     peerManager.clearPending(key);
     try { this.close(CLOSE_CODES.DUPLICATE_PEER, 'Peer already connected'); } catch (_e) { /* noop */ }
@@ -1762,6 +1763,7 @@ function onOutboundOpen() {
     remoteClockOffsetMs: meta.remoteClockOffsetMs,
     remoteVersion: meta.remoteVersion,
     remoteFluxUptime: meta.remoteFluxUptime,
+    crossing,
   });
   if (!peer) {
     // the stop began while this dial was in flight: the manager closed it
