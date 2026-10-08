@@ -42,6 +42,10 @@ const FETCH_REQUEST = 'fluxappcontentmanifestrequest';
 // its step unlatched, and had nothing to retry it. Joining hands back the real
 // outcome of a round that did compare against peers.
 let reconcileInFlight = null;
+// The round queued behind the one in flight, when a caller mid-round names a peer
+// the running round did not ask: every such caller folds its peers in here and
+// receives that one follow-up round's outcome. Null when nothing is queued.
+let queuedRound = null;
 // The in-flight round: the peers we asked (so their index/body responses are accepted)
 // and the indexes collected so far. Null between rounds.
 let activeRound = null;
@@ -128,8 +132,11 @@ function computeNeeded(target, local, outranks) {
  * Run one reconcile round against the given peers (objects with `.key` and `.send`).
  * Best-effort and bounded: completes after the index wait + the per-peer fetch settles,
  * so it can gate boot readiness (the spawner waits on the manifest view converging) while
- * still releasing if peers are slow/absent. One round at a time: a caller arriving
- * mid-round joins it and receives that round's real outcome.
+ * still releasing if peers are slow/absent. One round at a time. A round selects its
+ * peers when it starts, so a caller arriving mid-round whose peers the round already
+ * asked joins it and receives its real outcome, and one naming a peer the round did not
+ * ask receives the outcome of a single follow-up round, run after this one with every
+ * peer the mid-round callers named: a peer that connected during a round is asked.
  *
  * @param {Array<{key: string, send: Function}>} peers
  * @param {object} deps - { getLocalVersions?, sign?, delay?, now?, indexTimeoutMs?, fetchSettleMs? }
@@ -137,15 +144,38 @@ function computeNeeded(target, local, outranks) {
  *                    requested: number, remaining: string[]}>}
  */
 async function reconcile(peers, deps = {}) {
-  if (reconcileInFlight) return reconcileInFlight;
-  if (!Array.isArray(peers) || peers.length === 0) {
+  const named = Array.isArray(peers) ? peers : [];
+  if (reconcileInFlight) {
+    const covered = (peer) => activeRound?.peerKeys.has(peer.key) || queuedRound?.peers.has(peer.key);
+    if (named.every(covered)) return reconcileInFlight;
+    if (!queuedRound) {
+      queuedRound = { peers: new Map(), deps };
+      reconcileInFlight = reconcileInFlight.then(runQueuedRound, runQueuedRound);
+    }
+    for (const peer of named) queuedRound.peers.set(peer.key, peer);
+    return reconcileInFlight;
+  }
+  if (named.length === 0) {
     return {
       peers: 0, indexesReceived: 0, fetched: 0, requested: 0, remaining: [],
     };
   }
-
-  reconcileInFlight = runReconcile(peers, deps).finally(() => { reconcileInFlight = null; });
+  reconcileInFlight = runRound(named, deps);
   return reconcileInFlight;
+}
+
+function runQueuedRound() {
+  const next = queuedRound;
+  queuedRound = null;
+  return runRound([...next.peers.values()], next.deps);
+}
+
+async function runRound(peers, deps) {
+  try {
+    return await runReconcile(peers, deps);
+  } finally {
+    if (!queuedRound) reconcileInFlight = null;
+  }
 }
 
 async function runReconcile(peers, deps = {}) {
