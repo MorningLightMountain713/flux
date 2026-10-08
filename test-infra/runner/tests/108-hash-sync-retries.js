@@ -243,9 +243,10 @@ describe('Hash sync: attempts reset after degrade/recover', function () {
     }
     await waitForOrchestratorState(client, 'DEGRADED', 30000, { afterId: mark });
 
-    // Inject failpoint after DEGRADED — node is quiet (no blocks processing,
-    // no explorer queries) so the failpoint won't be consumed before hash sync.
-    await db.failpointFind('zelappshashes', { times: 1 });
+    // Planted after DEGRADED and kept until the sync has failed: the sync is
+    // not the only reader of the collection in this window, and a one-shot
+    // fault goes to whichever read comes first.
+    await db.failpointFind('zelappshashes', { always: true });
 
     // Reconnect
     for (let i = 0; i < last; i++) {
