@@ -1441,8 +1441,8 @@ describe('AppSyncOrchestrator', () => {
       return { mod, orchestrator };
     }
 
-    // The first block also starts the explorer, and #onBlocksProcessed counts it
-    // as one block, like any other at the tip.
+    // The first block also starts the explorer; with no daemon tip injected the
+    // epoch starts from height zero, so every block emitted here counts.
     async function driveBlocks(from, count) {
       for (let i = 0; i < count; i += 1) {
         blockEmitter.emit('blocksProcessed', from + i);
@@ -1629,13 +1629,13 @@ describe('AppSyncOrchestrator', () => {
   // times - an asked-mark on the peer manager, a slot here, a declined flag on
   // the socket - by different code, cleared by different rules. Every way they
   // could disagree was a defect, and the four below are those ways.
-  describe('the block fallback is time at the tip, not the catch-up', () => {
+  describe('the block fallback counts blocks mined since the epoch started, never the catch-up', () => {
     // appSyncFallbackMinutes (125) x 2 blocks a minute
     const BUDGET = 250;
 
-    async function syncingWithPeers() {
+    async function syncingWithPeers(getDaemonHeight) {
       getEligibleSyncPeersStub = sinon.stub().returns(makeEligiblePeers(3));
-      const orchestrator = makeOrchestrator();
+      const orchestrator = makeOrchestrator({ getDaemonHeight });
       orchestrator.start(defaultBootContext);
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
@@ -1647,37 +1647,44 @@ describe('AppSyncOrchestrator', () => {
       for (let i = 0; i < count; i += 1) blockEmitter.emit('blocksProcessed', from + i);
     }
 
-    it('a block the scan is catching up on charges nothing, however many there are', async () => {
-      const orchestrator = await syncingWithPeers();
-      capabilities.setForTests('explorerSynced', false);
-      blocks(2_555_001, BUDGET + 50);
+    it('blocks the chain already held when the sync started are catch-up and charge nothing; blocks mined after it charge', async () => {
+      // the node starts its sync 300 blocks behind the daemon's tip
+      const orchestrator = await syncingWithPeers(() => 2_555_300);
+      blocks(2_555_001, 300);
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.SYNCING);
 
-      capabilities.setForTests('explorerSynced', true);
-      blocks(2_556_001, BUDGET - 1);
+      blocks(2_555_301, BUDGET - 1);
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.SYNCING);
-      blocks(2_556_001 + BUDGET - 1, 1);
+      blocks(2_555_301 + BUDGET - 1, 1);
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.READY);
     });
 
-    it('the first block at the tip after a catch-up is one block, not the gap it closed', async () => {
-      const orchestrator = await syncingWithPeers();
-      blocks(2_555_000, 1);
-      await clock.tickAsync(0);
-      // the explorer went quiet for a catch-up and the next block it reports is far ahead
-      blocks(2_555_000 + BUDGET + 100, 1);
-      await clock.tickAsync(0);
-      expect(orchestrator.state).to.equal(STATES.SYNCING);
-
-      blocks(2_555_000 + BUDGET + 101, BUDGET - 3);
-      await clock.tickAsync(0);
-      expect(orchestrator.state).to.equal(STATES.SYNCING);
-      blocks(2_555_000 + 2 * BUDGET + 98, 1);
+    it('blocks mined after the sync started count however the scan batches them', async () => {
+      // synced at the tip when the sync started; the chain then moves 300 and
+      // the explorer reports its catch-up in one block
+      const orchestrator = await syncingWithPeers(() => 2_555_000);
+      blocks(2_555_000 + 300, 1);
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.READY);
+    });
+
+    it('a block mined below the peer floor is consumed uncharged, never charged later', async () => {
+      getEligibleSyncPeersStub = sinon.stub().returns(makeEligiblePeers(3));
+      const orchestrator = makeOrchestrator({ getDaemonHeight: () => 2_555_000 });
+      orchestrator.start(defaultBootContext);
+      await clock.tickAsync(0);
+      // below the floor: the chain moves past the whole budget
+      blocks(2_555_001, BUDGET + 10);
+      await clock.tickAsync(0);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.SYNCING);
+      blocks(2_555_001 + BUDGET + 10, 1);
+      await clock.tickAsync(0);
+      expect(orchestrator.state, 'the blocks below the floor are not charged at the floor').to.equal(STATES.SYNCING);
     });
   });
 

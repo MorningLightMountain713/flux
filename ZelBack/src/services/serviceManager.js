@@ -556,6 +556,7 @@ async function startFluxFunctions() {
           catchUpRunningContent: () => contentSlotService.applyBehindContentApps(),
           fluxVersion,
           getScannedHeight: () => chainState.getScannedHeight(),
+          getDaemonHeight: () => daemonStatus.isDaemonSynced()?.data?.height ?? null,
         });
         // Whether an arriving sync response is still wanted. THE ROUND ANSWERS IT.
         // Only the orchestrator knows what it asked of whom, and on which socket,

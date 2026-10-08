@@ -216,6 +216,15 @@ class AppSyncOrchestrator {
   #offMongoUp = null;
   #offExplorerSynced = null;
   #getScannedHeight = async () => 0;
+
+  // The daemon's tip, read when a sync epoch starts: blocks the chain held
+  // then are catch-up, blocks mined after are the budget's clock.
+  #getDaemonHeight = () => null;
+
+  #tipAtSyncStart = 0;
+
+  // The highest scanned height the budget has accounted for, charged or not.
+  #chargedHeight = 0;
   #nextHashRetryHeight = 0;
   #lastBlockHeight = 0;
   #fluxVersion = null;
@@ -243,6 +252,7 @@ class AppSyncOrchestrator {
     // The last block the chain scan has written: the height the first sync
     // epoch starts from when no block has been processed since start.
     this.#getScannedHeight = options.getScannedHeight ?? (async () => 0);
+    this.#getDaemonHeight = options.getDaemonHeight ?? (() => null);
   }
 
   get state() {
@@ -992,7 +1002,7 @@ class AppSyncOrchestrator {
     // The block timer is EPOCH state: it backstops the sync that is starting,
     // and one carried over from before the degrade is already expired — which
     // would promote the recovery straight to READY without a sync running.
-    this.#blocksSinceSyncStarted = 0;
+    this.#startBudgetClock();
     this.#syncCompletions = freshSyncCompletions();
     this.#manifestSyncComplete = false;
     this.#stateSyncComplete = false;
@@ -1026,20 +1036,31 @@ class AppSyncOrchestrator {
     }
   }
 
+  // The budget's clock starts at the chain's tip as it stands when the epoch
+  // starts: what the chain already holds is this node's catch-up, not time it
+  // waited. A tip nothing has reported yet is taken from the first block the
+  // scan reports, which then counts as the first block waited.
+  #startBudgetClock() {
+    this.#blocksSinceSyncStarted = 0;
+    this.#tipAtSyncStart = Math.max(this.#getDaemonHeight() ?? 0, this.#lastBlockHeight);
+    this.#chargedHeight = this.#tipAtSyncStart;
+  }
+
   #onBlocksProcessed(blockHeight) {
     this.#lastBlockHeight = blockHeight;
+    if (this.#chargedHeight === 0) this.#chargedHeight = blockHeight - 1;
     // The fallback is a bound on a sync attempt that is not finishing, so it is
-    // time spent WITH peers AT THE TIP: a block that arrives while the peer set
-    // is below the floor counts for nothing, and a node that never reaches the
-    // floor cannot reach READY on the budget; a block the scan is catching up
-    // on counts for nothing either, since it was mined before this node began
-    // waiting. The explorer emits a processed block only once its scan is near
-    // the tip, so the first block after a catch-up arrives with the whole gap
-    // behind it: one block is one block, never the gap. The floor's edges are
-    // announced.
+    // time spent WITH peers: blocks mined since the epoch started, whatever
+    // batches the scan reports them in, and never a block the chain already
+    // held when it started, which is catch-up. A block that arrives while the
+    // peer set is below the floor counts for nothing, and a node that never
+    // reaches the floor cannot reach READY on the budget. The floor's edges
+    // are announced.
     if (this.#state !== STATES.INITIALIZING) {
+      const mined = Math.max(0, blockHeight - Math.max(this.#chargedHeight, this.#tipAtSyncStart));
+      this.#chargedHeight = Math.max(this.#chargedHeight, blockHeight);
       if (this.#peersAtFloor) {
-        if (capabilities.isUp('explorerSynced')) this.#blocksSinceSyncStarted += 1;
+        this.#blocksSinceSyncStarted += mined;
         if (this.#budgetStalled) {
           this.#budgetStalled = false;
           log.info('AppSyncOrchestrator - Peer threshold met, the readiness budget is advancing again');
@@ -1348,6 +1369,7 @@ class AppSyncOrchestrator {
     // INITIALIZING holds until the scan is first near the daemon's tip.
     if (!this.#explorerSynced) return;
     if (this.#state === STATES.INITIALIZING) {
+      this.#startBudgetClock();
       this.#setState(STATES.SYNCING);
     }
 
