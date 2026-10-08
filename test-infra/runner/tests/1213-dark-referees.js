@@ -104,8 +104,25 @@ describe('dark referees: the list lies, the plane must not', function () {
       if (![...committee.members].every(holdsTerm)) return false;
       seated = { grantee, committee, outpoints };
       return true;
-    }, { timeout, interval: 5000, label: 'every cell of the committee holds the term' });
+    }, { timeout, interval: 5000, label: 'every cell of the committee holds the term' }).catch(async (error) => {
+      throw new Error(`${error.message}\n${await describeCells(indexOf)}`);
+    });
     return seated;
+  }
+
+  // Each node's cell and its decision on the app, for the premise's failure: a
+  // cell that holds no term for an app it has refused, or never decided, says
+  // so here rather than as a bare timeout.
+  async function describeCells(indexOf) {
+    const lines = await Promise.all(env.clients.map(async (client, i) => {
+      const cell = await readCell(i);
+      const decision = await fetch(
+        `${client.url}/v2/apps/messages/${app.hash}/decision`, { signal: AbortSignal.timeout(5000) },
+      ).then((res) => res.json()).catch((err) => ({ error: err.message }));
+      const outpoint = [...indexOf.entries()].find(([, index]) => index === i)?.[0] ?? '?';
+      return `node ${i} (${outpoint.slice(0, 8)}): cell=${JSON.stringify(cell?.accepted ?? null)} decision=${JSON.stringify(decision)}`;
+    }));
+    return lines.join('\n');
   }
 
   async function runningMasters() {
