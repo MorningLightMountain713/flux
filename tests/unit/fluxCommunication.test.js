@@ -21,6 +21,7 @@ const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirma
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
 const generalService = require('../../ZelBack/src/services/generalService');
+const nodeStartupRepository = require('../../ZelBack/src/services/appDatabase/nodeStartupRepository');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
 const { peerManager } = require('../../ZelBack/src/services/utils/peerState');
@@ -965,6 +966,33 @@ describe('fluxCommunication tests', () => {
 
       sinon.assert.calledOnceWithExactly(res.json, expectedResult);
       sinon.assert.calledOnceWithExactly(verificationHelperStub, Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req));
+    });
+  });
+
+  describe('startDiscoveryApi', () => {
+    afterEach(() => sinon.restore());
+
+    it('starts discovery and records the operator\'s word for the node\'s next boots', async () => {
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      sinon.stub(nodeDownService, 'start');
+      const marked = sinon.stub(nodeStartupRepository, 'markDiscoveryStarted').resolves();
+      const res = { json: sinon.stub() };
+
+      await fluxCommunication.startDiscoveryApi({ headers: {} }, res);
+
+      sinon.assert.calledOnce(marked);
+      expect(res.json.firstCall.args[0].status).to.equal('success');
+    });
+
+    it('records nothing for a caller without the privilege', async () => {
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(false);
+      const marked = sinon.stub(nodeStartupRepository, 'markDiscoveryStarted').resolves();
+      const res = { json: sinon.stub() };
+
+      await fluxCommunication.startDiscoveryApi({ headers: {} }, res);
+
+      sinon.assert.notCalled(marked);
+      expect(res.json.firstCall.args[0].status).to.equal('error');
     });
   });
 

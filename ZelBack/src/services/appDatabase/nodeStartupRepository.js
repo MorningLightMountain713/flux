@@ -93,6 +93,36 @@ async function setHashSyncVersionMarker(version) {
   );
 }
 
+const DISCOVERY_STARTED_KEY = 'discoveryStarted';
+
+/**
+ * Whether an operator has told this node to start peer discovery: a node that
+ * does not start discovery on its own (`fluxapps.discoveryAutostart` false)
+ * keeps discovering across its restarts once told to.
+ * @returns {Promise<boolean>}
+ */
+async function discoveryStarted() {
+  const database = db();
+  if (!database) return false;
+  const marker = await dbHelper.findOneInDatabase(database, nodeStartupTrackerCollection, { _id: DISCOVERY_STARTED_KEY });
+  return Boolean(marker);
+}
+
+/**
+ * Records that an operator started peer discovery on this node.
+ */
+async function markDiscoveryStarted() {
+  const database = db();
+  if (!database) return;
+  await dbHelper.findOneAndUpdateInDatabase(
+    database,
+    nodeStartupTrackerCollection,
+    { _id: DISCOVERY_STARTED_KEY },
+    { $set: { at: Date.now() } },
+    { upsert: true },
+  );
+}
+
 // ── Liveness heartbeat ───────────────────────────────────────────────
 //
 // A single document carrying lastAlive, the machine boot id it was written
@@ -168,6 +198,8 @@ module.exports = {
   appendBootHistory,
   getHashSyncVersionMarker,
   setHashSyncVersionMarker,
+  discoveryStarted,
+  markDiscoveryStarted,
   getHeartbeat,
   writeHeartbeat,
   setShutdownReason,

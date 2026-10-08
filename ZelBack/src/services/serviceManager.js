@@ -39,6 +39,7 @@ const ownerSessions = require('../lib/socketIoHandlers/ownerSessions');
 const appShutdownCoordinator = require('./appLifecycle/appShutdownCoordinator');
 const appSpawner = require('./appLifecycle/appSpawner');
 const registryManager = require('./appDatabase/registryManager');
+const nodeStartupRepository = require('./appDatabase/nodeStartupRepository');
 const { AppSyncOrchestrator, STATES: APP_SYNC_STATES } = require('./appMessaging/appSyncOrchestrator');
 const grantorController = require('./quorumGrant/grantorController');
 const grantClient = require('./quorumGrant/grantClient');
@@ -737,7 +738,7 @@ async function startFluxFunctions() {
         log.info('Flux checks operational');
         fluxCommunication.initializeDiscovery();
         daemonUsageReporter.start();
-        if (config.get('fluxapps.discoveryAutostart') !== false) {
+        if (config.get('fluxapps.discoveryAutostart') !== false || await nodeStartupRepository.discoveryStarted()) {
           fluxCommunication.startDiscovery();
           log.info('Flux Discovery started');
         }
