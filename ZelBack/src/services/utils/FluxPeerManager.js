@@ -265,6 +265,9 @@ class FluxPeerManager extends EventEmitter {
    * @param {string} [options.source] - PEER_SOURCE value
    * @param {string[]} [options.remoteCapabilities] - Capabilities advertised by remote
    * @param {number} [options.remoteClockOffsetMs] - Remote clock offset in ms
+   * @param {boolean} [options.crossing] - The held connection is replaced as the
+   *   losing half of a crossing pair: both are live, and this one is the pair's
+   *   survivor
    * @returns {FluxPeerSocket|null} null once the stop has begun: the socket
    *   was closed with the stop code and nothing was added
    */
@@ -290,7 +293,8 @@ class FluxPeerManager extends EventEmitter {
       // membership can see it - but a request written into that socket is as
       // dead as one whose peer went away, and the only thing that told anyone
       // was a sweep looking for connection ids that had changed underneath it.
-      this.emit('peerDisconnected', existing.key, existing.connectionId);
+      // A crossing says so: the peer is still connected, over this connection.
+      this.emit('peerDisconnected', existing.key, existing.connectionId, { crossing: options.crossing === true });
     }
     const peer = new FluxPeerSocket(ws, ip, String(port), this);
     peer.source = options.source || PEER_SOURCE.INBOUND;
@@ -1560,7 +1564,7 @@ class FluxPeerManager extends EventEmitter {
         fluxEventBus.count('peers:crossing', replaces ? DIRECTION.INBOUND : DIRECTION.OUTBOUND);
         if (replaces) {
           log.info(`Crossing connections with ${key}: keeping the inbound one, dialed by the lower address`);
-          this.add(ws, ipv4Peer, port, { source: PEER_SOURCE.INBOUND, ...metadata });
+          this.add(ws, ipv4Peer, port, { source: PEER_SOURCE.INBOUND, ...metadata, crossing: true });
           return;
         }
       }

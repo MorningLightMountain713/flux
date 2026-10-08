@@ -1474,7 +1474,8 @@ function onOutboundOpen() {
   // settles as held: the duty it was dialed for is satisfied by the survivor.
   // Otherwise add() replaces the held one.
   const replaces = !existing || peerManager.newcomerReplaces(existing, DIRECTION.OUTBOUND);
-  if (existing && existing.isAlive && existing.direction === DIRECTION.INBOUND) {
+  const crossing = Boolean(existing && existing.isAlive && existing.direction === DIRECTION.INBOUND);
+  if (crossing) {
     fluxEventBus.count('peers:crossing', replaces ? DIRECTION.OUTBOUND : DIRECTION.INBOUND);
   }
   if (!replaces) {
@@ -1489,6 +1490,7 @@ function onOutboundOpen() {
     remoteClockOffsetMs: meta.remoteClockOffsetMs,
     remoteVersion: meta.remoteVersion,
     remoteFluxUptime: meta.remoteFluxUptime,
+    crossing,
   });
   if (!peer) {
     // the stop began while this dial was in flight: the manager closed it

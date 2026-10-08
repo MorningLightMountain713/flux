@@ -336,7 +336,7 @@ class AppSyncOrchestrator {
     // dead as one whose peer went away. The orchestrator holds the record that
     // decides, and #onSyncPeerLost already ignores a connection it was not
     // waiting on, so it takes the unfiltered event and answers for itself.
-    this.#peerDisconnectedHandler = (key, connectionId = null) => this.#onSyncPeerLost({ key, connectionId });
+    this.#peerDisconnectedHandler = (key, connectionId = null, { crossing = false } = {}) => this.#onSyncPeerLost({ key, connectionId, crossing });
     // The counterpart, and the only thing that completes a round the fleet was
     // too small to fill when it opened. The peer threshold is an edge and fires
     // once, so without this a part-filled pool stays part-filled however many
@@ -656,9 +656,14 @@ class AppSyncOrchestrator {
    * already tried. Told about the CONNECTION - a peer that reconnects keeps its
    * ip:port, and an announcement about a connection this request was not
    * written into says nothing about it.
-   * @param {{key: string, connectionId?: number|null}} lost
+   *
+   * A crossing is not the peer's answer. This node closed the connection as the
+   * losing half of a pair whose other half stays, so the peer is still
+   * connected: its request goes, and the next pass asks it over the kept
+   * connection.
+   * @param {{key: string, connectionId?: number|null, crossing?: boolean}} lost
    */
-  #onSyncPeerLost({ key, connectionId = null }) {
+  #onSyncPeerLost({ key, connectionId = null, crossing = false }) {
     // A scoped pull that dies with its socket was never answered: its loss
     // goes back to the credits, so the next re-establishment pulls from the
     // earliest gap and not from the connect time of a socket the far end
@@ -669,6 +674,15 @@ class AppSyncOrchestrator {
       this.#reconnectPulls.delete(key);
       const existing = this.#pendingReconnectPulls.get(key);
       this.#pendingReconnectPulls.set(key, existing === undefined ? lostAtMs : Math.min(existing, lostAtMs));
+    }
+    if (crossing) {
+      if (!this.#requests.isOpen(key, { channel: connectionId ?? null })) return;
+      this.#requests.discard(key);
+      if (this.#stateSyncComplete) return;
+      log.info(`AppSyncOrchestrator - Sync peer ${key} crossed with a sync outstanding, asking it again over the kept connection`);
+      fluxEventBus.publish('ephemeralSync:peerCrossed', { peer: key, connectionId: connectionId ?? null });
+      this.#own(this.#runRequestPass());
+      return;
     }
     if (!this.#requests.settle(key, 'disconnected', { channel: connectionId ?? null })) return;
     if (this.#stateSyncComplete) return;

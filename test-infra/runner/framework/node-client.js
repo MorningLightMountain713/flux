@@ -369,6 +369,7 @@ export function nodeClient(nodeNum) {
         'ephemeralSync:peerTimedOut',
         'ephemeralSync:peerUnverified',
         'ephemeralSync:peerDisconnected',
+        'ephemeralSync:peerCrossed',
         'ephemeralSync:budgetSpent',
         'sync:chunkVerified',
         'hashSync:complete',

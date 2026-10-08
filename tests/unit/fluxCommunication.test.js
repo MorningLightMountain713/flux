@@ -1056,6 +1056,9 @@ describe('fluxCommunication tests', () => {
       const dial = fluxCommunication.initiateAndHandleConnection(key, PEER_SOURCE.DETERMINISTIC);
       peerManager.add(held, '127.0.0.1', port, { source: PEER_SOURCE.INBOUND });
       const original = peerManager.get(key);
+      const lost = [];
+      const onLost = (lostKey, connectionId, how) => lost.push({ lostKey, connectionId, how });
+      peerManager.on('peerDisconnected', onLost);
 
       await dial;
       await dialAccepted;
@@ -1064,6 +1067,10 @@ describe('fluxCommunication tests', () => {
       expect(peerManager.get(key)).to.not.equal(original);
       expect(peerManager.get(key).direction).to.equal('outbound');
       expect(peerManager.inboundCount).to.equal(0);
+      peerManager.removeListener('peerDisconnected', onLost);
+      expect(lost, 'the closed half of a crossing is announced as one').to.deep.equal([
+        { lostKey: key, connectionId: original.connectionId, how: { crossing: true } },
+      ]);
       await waitFor(() => held.readyState === WebSocket.CLOSED, 5000);
     });
 
@@ -1091,6 +1098,9 @@ describe('fluxCommunication tests', () => {
       const original = peerManager.get(key);
       held.terminate();
       expect(original.isAlive, 'the held connection reads as dead').to.equal(false);
+      const lost = [];
+      const onLost = (lostKey, connectionId, how) => lost.push({ lostKey, connectionId, how });
+      peerManager.on('peerDisconnected', onLost);
 
       await dial;
       await dialAccepted;
@@ -1099,6 +1109,9 @@ describe('fluxCommunication tests', () => {
       expect(peerManager.get(key)).to.not.equal(original);
       expect(peerManager.get(key).direction).to.equal('outbound');
       expect(peerManager.inboundCount).to.equal(0);
+      peerManager.removeListener('peerDisconnected', onLost);
+      expect(lost.filter((l) => l.connectionId === original.connectionId).map((l) => l.how),
+        'a dead connection replaced is no crossing').to.not.deep.include({ crossing: true });
     });
   });
 

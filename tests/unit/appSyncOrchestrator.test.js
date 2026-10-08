@@ -109,6 +109,16 @@ describe('AppSyncOrchestrator', () => {
     return peer;
   }
 
+  // What add() does when both ends dialed at once: the losing connection is
+  // closed for the pair's other one, which stays, and the ending says so.
+  function crossPeer(key) {
+    const previous = connections.get(key) ?? null;
+    const peer = makePeer(key);
+    peerEmitter.emit('peerDisconnected', key, previous, { crossing: true });
+    peerEmitter.emit('peerConnected', key, peer.connectionId);
+    return peer;
+  }
+
   // A completion carries the peer it came from, exactly as the response
   // handlers emit it - they have had the key all along. Distinct peers here, so
   // a test that means "three peers answered" says so rather than relying on a
@@ -2054,6 +2064,53 @@ describe('AppSyncOrchestrator', () => {
       expect(orchestrator.isSyncResponseWanted(oldConnection), 'a dead connection could still complete the sync').to.equal(false);
       expect(reconnected.send.called, 'a peer that dropped mid-attempt was asked again on its new connection').to.equal(false);
       expect(spare.send.callCount, 'the slot the dropped peer freed was never refilled').to.equal(4);
+      await orchestrator.stop();
+    });
+
+    // A CROSSING IS NOT A TURN. Both ends dialed at once and this node closed
+    // the losing connection itself; the peer is still connected over the
+    // other, and is asked again there.
+    it('asks a peer again over the kept connection when its connection lost a crossing', async () => {
+      const peers = makeEligiblePeers(3);
+      const spare = makePeer('10.0.0.9:16127');
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      const oldConnection = peers[0];
+      expect(orchestrator.isSyncResponseWanted(oldConnection)).to.equal(true);
+
+      const kept = crossPeer(peers[0].key);
+      getEligibleSyncPeersStub.returns([kept, peers[1], peers[2], spare]);
+      await clock.tickAsync(0);
+
+      expect(orchestrator.isSyncResponseWanted(oldConnection), 'the closed connection could still complete the sync').to.equal(false);
+      expect(kept.send.callCount, 'the crossed peer was not asked again over the kept connection').to.equal(4);
+      expect(orchestrator.isSyncResponseWanted(kept)).to.equal(true);
+      expect(spare.send.called, 'a crossing spent the peer\'s turn and filled its slot from a spare').to.equal(false);
+      await orchestrator.stop();
+    });
+
+    it('leaves a peer that has answered alone when its connection loses a crossing', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      for (const type of ['apprunning', 'appinstalling', 'apperrors', 'apptemp']) {
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_REFUSED, type, peers[0].key);
+      }
+      await clock.tickAsync(0);
+
+      const kept = crossPeer(peers[0].key);
+      getEligibleSyncPeersStub.returns([kept, peers[1], peers[2]]);
+      await clock.tickAsync(0);
+
+      expect(kept.send.called, 'a peer whose request had ended was asked again').to.equal(false);
       await orchestrator.stop();
     });
 
