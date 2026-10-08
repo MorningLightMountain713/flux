@@ -23,6 +23,12 @@ const UNVERIFIABLE_APP_STATE_SYNC = process.env.UNVERIFIABLE_APP_STATE_SYNC === 
 // node in the first wave of a rollout.
 const POLICY_UNAWARE = process.env.POLICY_UNAWARE === 'true';
 const DIAL_TARGETS = (process.env.DIAL_TARGETS || '').split(',').filter(Boolean);
+// The nodes this stub is declared a peer of: the ones it asks to dial it, and
+// the only ones whose standing peering it accepts.
+const DECLARED_PEERS = new Set(DIAL_TARGETS);
+// FluxPeerSocket CLOSE_CODES.BLOCKED_INBOUND: a node reads it as a policy
+// refusal, retries nothing and accuses nobody.
+const BLOCKED_INBOUND = 4003;
 // What this peer advertises at the handshake, which is the only thing deciding
 // which form a node sends it. The fleet runs one image, so every pairing where
 // the two ends claim different sets is unreachable without this. Unset keeps
@@ -51,6 +57,7 @@ const messages = new Map();
 const clients = new Set();
 
 let connectionsReceived = 0;
+let peeringsRefused = 0;
 let requestsReceived = 0;
 let messagesServed = 0;
 // What this peer answers a policy ask with, and how many it has answered. `null` is a peer
@@ -331,7 +338,18 @@ wss.on('headers', (headers) => {
   headers.push('X-Flux-Uptime: 1000');
 });
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+  // A standing peering is accepted only from a node this stub is declared a
+  // peer of. A short-lived connection says so in its handshake
+  // (X-Flux-Ephemeral) and is accepted from anyone: it is how a node reaches
+  // a peer it does not hold.
+  const ephemeral = Boolean(req.headers['x-flux-ephemeral']);
+  const from = (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+  if (!ephemeral && !DECLARED_PEERS.has(from)) {
+    peeringsRefused++;
+    ws.close(BLOCKED_INBOUND, 'not a declared peer of this stub');
+    return;
+  }
   connectionsReceived++;
   connectedNodes.add(ws);
   ws.on('close', () => connectedNodes.delete(ws));
@@ -565,6 +583,7 @@ const controlServer = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         connectionsReceived,
+        peeringsRefused,
         requestsReceived,
         messagesServed,
         unverifiableResponsesSent,
@@ -708,6 +727,7 @@ const controlServer = http.createServer(async (req, res) => {
       messages.clear();
       requestLog.length = 0;
       connectionsReceived = 0;
+      peeringsRefused = 0;
       requestsReceived = 0;
       messagesServed = 0;
       promotedFolderRequests.length = 0;
