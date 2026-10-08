@@ -66,6 +66,17 @@ describe('containerEventBridge', () => {
     sinon.restore();
   });
 
+  describe('start', () => {
+    it('hands the stream the reachability edges it is given, beside its own reconnect sweep', async () => {
+      const onConnected = sinon.stub();
+      const onDisconnected = sinon.stub();
+      await containerEventBridge.start({ onConnected, onDisconnected });
+      expect(stubs.subscriptionOptions.onConnected).to.equal(onConnected);
+      expect(stubs.subscriptionOptions.onDisconnected).to.equal(onDisconnected);
+      expect(stubs.subscriptionOptions.onReconnect).to.be.a('function');
+    });
+  });
+
   const dieEvent = (name, exitCode = 1) => ({ Action: 'die', Actor: { Attributes: { name, exitCode: String(exitCode) } } });
   const startEvent = (name) => ({ Action: 'start', Actor: { Attributes: { name } } });
   const healthEvent = (name, status) => ({ Action: `health_status: ${status}`, Actor: { Attributes: { name } } });

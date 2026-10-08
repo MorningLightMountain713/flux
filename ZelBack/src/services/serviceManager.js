@@ -141,18 +141,17 @@ const portsNotWorking = new Set();
 const appsStorageViolations = [];
 
 /**
- * Keep `mongoReachable` and `dockerReachable` true to what the services answer.
- * Neither announces going away, so each is pinged on an interval: the one poll
- * the capability registry has.
+ * Keep `mongoReachable` true to what MongoDB answers. It announces nothing when
+ * it goes away, so it is pinged on an interval: the one poll the capability
+ * registry has. Docker's reachability follows its event stream instead
+ * (containerEventBridge.start).
  */
 function startDependencyProbes() {
   if (dependencyProbe) return;
   const mongo = capabilities.claim('mongoReachable', 'serviceManager');
-  const docker = capabilities.claim('dockerReachable', 'serviceManager');
   dependencyProbe = setInterval(async () => {
-    const [mongoUp, dockerUp] = await Promise.all([dbHelper.pingMongo(), dockerService.pingDocker()]);
+    const mongoUp = await dbHelper.pingMongo();
     if (mongoUp) mongo.raise('MongoDB answered'); else mongo.lower('MongoDB did not answer a ping');
-    if (dockerUp) docker.raise('Docker answered'); else docker.lower('Docker did not answer a ping');
   }, config.get('system.dependencyProbeMs'));
   dependencyProbe.unref?.();
 }
@@ -481,7 +480,13 @@ async function startFluxFunctions() {
         appReconciler.start().catch((error) => {
           log.error(`App reconciler error: ${error.message}`);
         });
-        containerEventBridge.start();
+        // Docker's reachability from here on is the event stream's: lost with
+        // it, back with it.
+        const docker = capabilities.claim('dockerReachable', 'serviceManager');
+        containerEventBridge.start({
+          onConnected: () => docker.raise('docker event stream connected'),
+          onDisconnected: (reason) => docker.lower(`docker event stream ${reason}`),
+        });
 
         // Telemetry identity socket for flux-telemetryd (Arcane-only; self-skips
         // elsewhere). The boot reconcile in appStartupManager repopulates routing.

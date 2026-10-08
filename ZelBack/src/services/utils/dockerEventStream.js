@@ -3,7 +3,11 @@
 const log = require('../../lib/log');
 const dockerService = require('../dockerService');
 
-const DEFAULT_RESUBSCRIBE_DELAY_MS = 10_000;
+// A lost stream is retried from a short delay, doubling while docker stays
+// away: a daemon restart is back in a second or two, a daemon that is gone
+// is not polled every second for it.
+const RESUBSCRIBE_FIRST_DELAY_MS = 1000;
+const RESUBSCRIBE_MAX_DELAY_MS = 10_000;
 
 /**
  * One Docker event subscription, with the plumbing every consumer of it needs.
@@ -29,7 +33,14 @@ const DEFAULT_RESUBSCRIBE_DELAY_MS = 10_000;
  * @param {function} [options.onReconnect] called after a RE-connection only, never
  *   the first: events during the outage are gone, so a consumer that cares needs
  *   to resynchronise from actual state
- * @param {number} [options.resubscribeDelayMs]
+ * @param {function} [options.onConnected] called on every edge to connected, the
+ *   first connection included: docker is answering
+ * @param {function} [options.onDisconnected] called with the reason on every edge
+ *   to disconnected, a failed first subscription included: docker is not answering
+ * @param {number} [options.resubscribeDelayMs] the first retry's delay after a
+ *   loss; each failed retry doubles it up to resubscribeMaxDelayMs, and a
+ *   connection resets it
+ * @param {number} [options.resubscribeMaxDelayMs]
  * @returns {{start: function, stop: function, connected: function}}
  */
 function createDockerEventStream(options) {
@@ -38,15 +49,22 @@ function createDockerEventStream(options) {
     filters,
     onEvent,
     onReconnect = null,
-    resubscribeDelayMs = DEFAULT_RESUBSCRIBE_DELAY_MS,
+    onConnected = null,
+    onDisconnected = null,
+    resubscribeDelayMs = RESUBSCRIBE_FIRST_DELAY_MS,
+    resubscribeMaxDelayMs = RESUBSCRIBE_MAX_DELAY_MS,
   } = options;
 
   let stream = null;
   let stopped = false;
   let subscribing = false;
   let resubscribeTimer = null;
+  let nextDelayMs = resubscribeDelayMs;
   let lineBuf = '';
   let hasConnected = false;
+  // The last state reported to onConnected/onDisconnected: edges only, so one
+  // outage's several signals and failed retries report one disconnection.
+  let reportedConnected = null;
 
   // Call synchronously — a consumer that handles an event without awaiting must
   // see it before control returns — and guard both a synchronous throw and a
@@ -62,17 +80,26 @@ function createDockerEventStream(options) {
     }
   }
 
+  function report(connected, reason) {
+    if (reportedConnected === connected) return;
+    reportedConnected = connected;
+    if (connected && onConnected) guarded('connected handler', onConnected);
+    if (!connected && onDisconnected) guarded('disconnected handler', () => onDisconnected(reason));
+  }
+
   // Every way a stream can die ('error', 'end', a raw 'close', or a failed
   // subscribe) funnels here, and the timer guard collapses them: one outage
   // produces exactly one new stream.
   function scheduleResubscribe(reason) {
     if (stopped || resubscribeTimer || stream) return;
-    log.warn(`${label} - event stream ${reason}; resubscribing in ${resubscribeDelayMs / 1000}s`);
+    report(false, reason);
+    log.warn(`${label} - event stream ${reason}; resubscribing in ${nextDelayMs / 1000}s`);
     resubscribeTimer = setTimeout(() => {
       resubscribeTimer = null;
       // eslint-disable-next-line no-use-before-define
       subscribe();
-    }, resubscribeDelayMs);
+    }, nextDelayMs);
+    nextDelayMs = Math.min(nextDelayMs * 2, resubscribeMaxDelayMs);
   }
 
   async function subscribe() {
@@ -126,7 +153,9 @@ function createDockerEventStream(options) {
       opened.on('close', () => onGone('closed'));
 
       log.info(`${label} - listening for docker events`);
+      nextDelayMs = resubscribeDelayMs;
 
+      report(true, 'connected');
       if (hasConnected && onReconnect) guarded('reconnect handler', onReconnect);
       hasConnected = true;
     } catch (err) {
@@ -141,6 +170,8 @@ function createDockerEventStream(options) {
     async start() {
       stopped = false;
       hasConnected = false;
+      reportedConnected = null;
+      nextDelayMs = resubscribeDelayMs;
       await subscribe();
     },
     stop() {
@@ -160,4 +191,4 @@ function createDockerEventStream(options) {
   };
 }
 
-module.exports = { createDockerEventStream, DEFAULT_RESUBSCRIBE_DELAY_MS };
+module.exports = { createDockerEventStream, RESUBSCRIBE_FIRST_DELAY_MS, RESUBSCRIBE_MAX_DELAY_MS };

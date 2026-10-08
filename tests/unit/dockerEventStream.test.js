@@ -198,6 +198,94 @@ describe('dockerEventStream', () => {
     });
   });
 
+  it('reports connected on every connection and disconnected once per outage, whatever signals it sends', async () => {
+    await withFakeTimers(async (clock) => {
+      const onConnected = sinon.stub();
+      const onDisconnected = sinon.stub();
+      const { subscription, streams } = build({ onConnected, onDisconnected });
+      await subscription.start();
+      expect(onConnected.calledOnce, 'the first connection is reported').to.equal(true);
+      expect(onDisconnected.called).to.equal(false);
+
+      streams[0].emit('error', new Error('dropped'));
+      streams[0].emit('end');
+      streams[0].emit('close');
+      expect(onDisconnected.calledOnce, 'one outage, one report').to.equal(true);
+      expect(onDisconnected.firstCall.args[0]).to.equal('errored');
+
+      await clock.tickAsync(1000);
+      expect(onConnected.calledTwice, 'the reconnection is reported').to.equal(true);
+      subscription.stop();
+    });
+  });
+
+  it('reports disconnected when the first subscription fails, and connected once a retry lands', async () => {
+    await withFakeTimers(async (clock) => {
+      const dockerGetEvents = sinon.stub();
+      dockerGetEvents.onFirstCall().rejects(new Error('docker down'));
+      dockerGetEvents.onSecondCall().resolves(makeStream());
+      const { createDockerEventStream } = load(dockerGetEvents);
+      const onConnected = sinon.stub();
+      const onDisconnected = sinon.stub();
+      const subscription = createDockerEventStream({
+        label: 'test', filters: FILTERS, onEvent: () => {}, onConnected, onDisconnected,
+      });
+
+      await subscription.start();
+      expect(onDisconnected.calledOnce).to.equal(true);
+      expect(onConnected.called).to.equal(false);
+
+      await clock.tickAsync(1000);
+      expect(onConnected.calledOnce).to.equal(true);
+      subscription.stop();
+    });
+  });
+
+  it('retries from one second and doubles while docker stays away, capped, and a connection resets it', async () => {
+    await withFakeTimers(async (clock) => {
+      const dockerGetEvents = sinon.stub();
+      const { createDockerEventStream } = load(dockerGetEvents);
+      const onDisconnected = sinon.stub();
+      const subscription = createDockerEventStream({
+        label: 'test', filters: FILTERS, onEvent: () => {}, onDisconnected,
+      });
+      const first = makeStream();
+      dockerGetEvents.onCall(0).resolves(first);
+      dockerGetEvents.onCall(1).rejects(new Error('down'));
+      dockerGetEvents.onCall(2).rejects(new Error('down'));
+      dockerGetEvents.onCall(3).rejects(new Error('down'));
+      dockerGetEvents.onCall(4).rejects(new Error('down'));
+      dockerGetEvents.onCall(5).rejects(new Error('down'));
+      const second = makeStream();
+      dockerGetEvents.onCall(6).resolves(second);
+      dockerGetEvents.onCall(7).resolves(makeStream());
+
+      await subscription.start();
+      first.emit('close');
+      // retries at 1s, +2s, +4s, +8s, +10s, +10s: the ladder doubles to the cap
+      const expectedCalls = [2, 3, 4, 5, 6, 7];
+      const delays = [1000, 2000, 4000, 8000, 10_000, 10_000];
+      for (let i = 0; i < delays.length; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await clock.tickAsync(delays[i] - 1);
+        expect(dockerGetEvents.callCount, `no retry before ${delays[i]}ms`).to.equal(expectedCalls[i] - 1);
+        // eslint-disable-next-line no-await-in-loop
+        await clock.tickAsync(1);
+        expect(dockerGetEvents.callCount, `a retry at ${delays[i]}ms`).to.equal(expectedCalls[i]);
+      }
+      expect(subscription.connected()).to.equal(true);
+      expect(onDisconnected.calledOnce, 'the failed retries are the same outage').to.equal(true);
+
+      // connected again: the next loss retries from one second, not the cap
+      second.emit('close');
+      await clock.tickAsync(999);
+      expect(dockerGetEvents.callCount).to.equal(7);
+      await clock.tickAsync(1);
+      expect(dockerGetEvents.callCount).to.equal(8);
+      subscription.stop();
+    });
+  });
+
   it('stop cancels a pending resubscribe', async () => {
     await withFakeTimers(async (clock) => {
       const { subscription, streams, dockerGetEvents } = build();
