@@ -323,6 +323,10 @@ export async function waitForCapabilityUp(node, name, timeout = 60000, opts) {
   return node.waitForEvent('capability:changed', (d) => d.name === name && d.to === 'up', timeout, opts);
 }
 
+export async function waitForCapabilityDown(node, name, timeout = 60000, opts) {
+  return node.waitForEvent('capability:changed', (d) => d.name === name && d.to === 'down', timeout, opts);
+}
+
 export async function waitForBootSettled(node, timeout = 120000, opts) {
   return node.waitForEvent('boot:settled', () => true, timeout, opts);
 }

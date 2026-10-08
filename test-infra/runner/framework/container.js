@@ -354,18 +354,28 @@ export async function getAppContainerExitCode(container, appName, componentName)
 }
 
 /**
+ * Kill the inner dockerd under a running FluxOS and return at once; the
+ * in-image watchdog respawns it. Without --live-restore this stops dockerd's
+ * containers, leaving them 'exited' for the reconnect sweep to recover.
+ * @returns {Promise<string>} the killed daemon's pid, for a caller that waits
+ *   for a different one
+ */
+export async function killDockerd(container) {
+  const before = (await execInContainer(container, 'pidof dockerd || true')).stdout.trim();
+  await execInContainer(container, 'kill $(pidof dockerd) 2>/dev/null || true');
+  return before;
+}
+
+/**
  * Bounce the inner dockerd under a running FluxOS (the dockerd-restart orphan
- * case). Kills dockerd; the in-image watchdog respawns it. Without --live-restore
- * this stops dockerd's containers, leaving them 'exited' for the reconnect sweep
- * to recover. Confirms dockerd actually went DOWN and came back UP, so the caller
- * can't observe a false "already ready".
+ * case): killDockerd, then confirm dockerd actually went DOWN and came back UP,
+ * so the caller can't observe a false "already ready".
  */
 export async function restartDockerd(container, { readyTimeoutMs = 40000, interval = 500 } = {}) {
   // Returns on the NEW daemon: a different dockerd pid whose API answers. The
   // old daemon keeps answering `docker info` for seconds after its SIGTERM while
   // it shuts down, so a down-then-up read of the API alone returns into the gap.
-  const before = (await execInContainer(container, 'pidof dockerd || true')).stdout.trim();
-  await execInContainer(container, 'kill $(pidof dockerd) 2>/dev/null || true');
+  const before = await killDockerd(container);
   const start = Date.now();
   while (Date.now() - start < readyTimeoutMs) {
     // an infra death voids the run - don't spend the budget proving it
