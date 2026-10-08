@@ -197,6 +197,10 @@ describe('Peer capabilities', function () {
         120000,
         { afterId: anchors[REAL_NODES.indexOf(i)] },
       )));
+      // The baseline is taken before the heal: the pull is answered within
+      // milliseconds of the event announcing it, before a read after the event
+      // could land.
+      const countersBefore = await Promise.all(REAL_NODES.map((i) => env.clients[i].getTestCounters()));
       await healPartition(env, [dropped]);
 
       // Held to a pull aimed at a FLEET node: a pull at a stub proves nothing
@@ -215,12 +219,12 @@ describe('Peer capabilities', function () {
       expect(target, `reconnect pull aimed at ${pull.peer}, which is no fleet node`).to.not.equal(undefined);
 
       const fromAsker = (peer) => peer.includes(askerIp);
-      const answered = async () => syncTally(await env.clients[target].getTestCounters(), 'sync:answered', fromAsker);
-      const refused = async () => syncTally(
-        await env.clients[target].getTestCounters(), 'sync:refused', fromAsker, 'badSignature',
-      );
-      const answeredBefore = await answered();
-      const refusedBefore = await refused();
+      const answeredOf = (counters) => syncTally(counters, 'sync:answered', fromAsker);
+      const refusedOf = (counters) => syncTally(counters, 'sync:refused', fromAsker, 'badSignature');
+      const answered = async () => answeredOf(await env.clients[target].getTestCounters());
+      const refused = async () => refusedOf(await env.clients[target].getTestCounters());
+      const answeredBefore = answeredOf(countersBefore[REAL_NODES.indexOf(target)]);
+      const refusedBefore = refusedOf(countersBefore[REAL_NODES.indexOf(target)]);
 
       // THE EVENT SAYS THE REQUEST LEFT, NOT THAT IT LANDED. The verdict is the
       // peer's, taken after the frame crosses the wire, so reading the refusal
