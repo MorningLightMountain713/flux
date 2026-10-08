@@ -46,6 +46,11 @@ const PARTITION_SEVER_BUDGET_MS = PARTITION_PING_MS * MISSED_PONGS;
 // offset the stub was seeded with. One block's worth of time is what the estimate
 // path then has to run, so it also has to be a duration a test can wait out.
 const OWED_BLOCK_MS = 10000;
+// The confirmation's time-based expiry runs only once the chain view has gone
+// stale, so a declared window puts the stale bound at two owed blocks: one for
+// the block itself and one for a poll that slips under load. Production's bound
+// is ten blocks, and the suites that declare a window would wait it out.
+const CHAIN_STALE_OWED_BLOCKS = 2;
 
 // The fixture read is cached; the offset is NOT. Caching the computed offset keys a
 // derived answer on nothing — the second caller gets the first caller's height back
@@ -141,6 +146,7 @@ export function deriveTiming(timing, { initialHeight }) {
       confirmExpirationBlocks: offset + blocksOwed,
       blockIntervalMs: OWED_BLOCK_MS,
     };
+    overrides.daemon = { subscriptions: { chainStaleAfterMs: CHAIN_STALE_OWED_BLOCKS * OWED_BLOCK_MS } };
   }
 
   return { overrides, wire: wireLatency };
@@ -205,6 +211,15 @@ export function validateTiming(timing, effective, { initialHeight }) {
       throw new Error(
         `timing: confirmExpirationBlocks ${limit} is at or below the ${offset}-block offset the node list is seeded `
         + 'with, so every node boots already expired and nothing in the suite can be attributed to the flow under test.',
+      );
+    }
+    const stale = effective?.daemon?.subscriptions?.chainStaleAfterMs;
+    const blockMs = effective?.confirmation?.blockIntervalMs;
+    if (!Number.isFinite(stale) || !Number.isFinite(blockMs) || stale > CHAIN_STALE_OWED_BLOCKS * blockMs) {
+      throw new Error(
+        `timing: daemon.subscriptions.chainStaleAfterMs ${stale}ms must be within ${CHAIN_STALE_OWED_BLOCKS} owed blocks `
+        + `(${CHAIN_STALE_OWED_BLOCKS * blockMs}ms): the confirmation expires by time only once the chain view is stale, `
+        + 'and a declared window is measured in owed blocks, not in production\'s stale bound.',
       );
     }
   }
