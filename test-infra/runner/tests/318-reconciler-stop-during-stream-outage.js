@@ -41,6 +41,8 @@ describe('a stop across a docker outage: refused while docker is unseen, landing
     this.timeout(300000);
     const client = env.clients[idx];
     await waitForUp(client, appName, 'running before the outage');
+    // Taken while docker is up: the login phrase is a route that needs it.
+    const auth = await authenticate(client.url, appOwnerKey());
     const mark = client.getLastEventId();
 
     // dockerd goes, its containers go with it, and the event stream dies: the
@@ -51,7 +53,6 @@ describe('a stop across a docker outage: refused while docker is unseen, landing
     // Inside the outage the stop is refused. The watchdog needs a second or more
     // to respawn dockerd and the stream's first retry is a second after its
     // loss; this request leaves within milliseconds of the loss's edge.
-    const auth = await authenticate(client.url, appOwnerKey());
     const refused = await client.getAuthed(`/apps/appstop/${appName}`, auth.zelidauth);
     expect(refused.status, JSON.stringify(refused)).to.equal('error');
     expect(refused.data.code, JSON.stringify(refused)).to.equal(503);
@@ -80,8 +81,7 @@ describe('a stop across a docker outage: refused while docker is unseen, landing
     expect(status && status.status.startsWith('Up')).to.not.equal(true);
 
     // and nothing is wedged: a normal appstart brings it back
-    const auth2 = await authenticate(client.url, appOwnerKey());
-    await client.getAuthed(`/apps/appstart/${appName}`, auth2.zelidauth);
+    await client.getAuthed(`/apps/appstart/${appName}`, auth.zelidauth);
     await waitForUp(client, appName, 'running again after appstart');
   });
 });
