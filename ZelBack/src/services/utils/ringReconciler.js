@@ -163,10 +163,11 @@ class RingReconciler {
       const entry = map.get(outpoint);
       if (!entry || entry.socketAddress !== socketAddress) return;
       entry.state = connected ? DUTY_STATE.CONNECTED : DUTY_STATE.FAILED;
-      // null = indeterminate (a dial was already in flight): retry next
-      // pass; only a resolved dial moves the write-off.
+      // null = indeterminate (a dial was already in flight): that dial's own
+      // resolution is the event; only a resolved dial moves the write-off
+      // or runs another pass.
       if (connected !== null) entry.writtenOff = !connected;
-      if (!connected) this.schedule('dial-failed');
+      if (connected === false) this.schedule('dial-failed');
     };
     this.#deps.dial(socketAddress, { witness }).then(settle).catch(() => settle(false));
   }
