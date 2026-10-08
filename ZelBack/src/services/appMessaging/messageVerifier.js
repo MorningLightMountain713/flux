@@ -216,6 +216,9 @@ async function checkAndRequestApp(hash, i = 0) {
   try {
     const existing = await appsRepository.getPermanentMessage(hash);
     if (existing) {
+      // Confirmed when its payment met contents already held: its ingress
+      // attestations persist with it.
+      await appsRepository.confirmIngressAttestations(hash);
       confirmedMessageStore.notifyStored([hash]);
       return true;
     }

@@ -427,6 +427,16 @@ describe('messageVerifier tests', () => {
       sinon.assert.calledOnceWithExactly(stubs['./confirmedMessageStore'].notifyStored, ['existing']);
     });
 
+    it('persists the ingress attestations of a message confirmed when its payment met contents already held', async () => {
+      const { stubs } = makeBaseStubs();
+      stubs['../appDatabase/appsRepository'].getPermanentMessage = sinon.stub().resolves({ hash: 'existing' });
+      stubs['../appDatabase/appsRepository'].confirmIngressAttestations = sinon.stub().resolves();
+      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
+
+      expect(await mv.checkAndRequestApp('existing')).to.equal(true);
+      sinon.assert.calledOnceWithExactly(stubs['../appDatabase/appsRepository'].confirmIngressAttestations, 'existing');
+    });
+
     it('should request from network and retry when temp message not found', async () => {
       const { stubs, broadcastStub } = makeBaseStubs();
       stubs['../appDatabase/appsRepository'].getTempMessage = sinon.stub().resolves(null);
