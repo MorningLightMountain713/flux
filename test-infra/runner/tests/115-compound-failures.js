@@ -82,8 +82,9 @@ describe('Compound failures: peer loss + daemon failure during READY', function 
     // is a node that was still entitled to go READY, and counting it would make
     // the assertion true or false for reasons that have nothing to do with the
     // rule under test.
+    const beforeAdvance = env.clients[0].getLastEventId();
     await advanceBlocks(260);
-    const lost = await waitForMessageCapabilityChanged(env.clients[0], false, 90000);
+    const lost = await waitForMessageCapabilityChanged(env.clients[0], false, 90000, { afterId: beforeAdvance });
 
     // Only now is denying promotion meaningful, so drive the block timer here:
     // the assertion has to be given the chance it is denying.
