@@ -16,6 +16,7 @@ import {
 } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent } from '../framework/wait.js';
 import { removeFromNodeList, resetNodeList, advanceBlock } from '../framework/daemon-control.js';
+import { committeeFor } from '../framework/committee.js';
 
 // Dark referees: nodes the chain still lists as valid while they answer
 // nothing — the confirmation gap means the list stays polluted for hours, and
@@ -26,6 +27,13 @@ import { removeFromNodeList, resetNodeList, advanceBlock } from '../framework/da
 //   never assemble a quorum, and the gate's answer must be to hold the app
 //   DOWN (fail closed), never to run it masterless or grant against thin
 //   air. Darkness lifting is what lets it found — nothing else.
+//
+//   THE FOUNDING SEATS THE WHOLE COMMITTEE — a cell that refused the founding
+//   because it had not yet learned the app, or who runs it, is seated by the
+//   holder's later asks as it learns: the ask carries the holder's own running
+//   announcement, and a cell that answers empty is re-seated by the repair
+//   chore. A term that stood on a bare quorum would fall to one dark seat,
+//   which is the premise the next test pulls one seat from.
 //
 //   DECONFIRMATION STEERS THE HEAL — when the chain finally drops a dark
 //   node (today by slow deconfirmation; the confirmation-gap workstream will
@@ -60,6 +68,44 @@ describe('dark referees: the list lies, the plane must not', function () {
     } catch {
       return null;
     }
+  }
+
+  // Every node's outpoint, by index: how a cell's grantee and a committee's
+  // members map back to the nodes the test drives.
+  async function outpointsByIndex() {
+    const outpoints = {};
+    for (let i = 0; i < env.clients.length; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const status = await env.clients[i].getNodeStatus();
+      outpoints[i] = `${status.data.txhash}:${status.data.outidx}`;
+    }
+    return outpoints;
+  }
+
+  // The held term once EVERY cell of its committee holds it: the grantee, the
+  // committee, and the nodes by outpoint. The committee is read from a holder
+  // for the generation the cells name, and each member's own cell must answer
+  // the grantee unreleased.
+  async function waitForCommitteeSeated(timeout) {
+    const outpoints = await outpointsByIndex();
+    const indexOf = new Map(Object.entries(outpoints).map(([i, op]) => [op, Number(i)]));
+    let seated = null;
+    await waitFor(async () => {
+      const cells = await Promise.all(env.clients.map((_, i) => readCell(i)));
+      const live = cells.filter((c) => c?.accepted?.grantee && !c.accepted.released);
+      if (!live.length) return false;
+      const { grantee } = live[0].accepted;
+      const generation = live[0].accepted.generation ?? 0;
+      const committee = await committeeFor(env.clients[HOLDERS[0]].url, `${app.identity}/master`, generation);
+      const holdsTerm = (outpoint) => {
+        const cell = cells[indexOf.get(outpoint)];
+        return Boolean(cell?.accepted?.grantee === grantee && !cell.accepted.released);
+      };
+      if (![...committee.members].every(holdsTerm)) return false;
+      seated = { grantee, committee, outpoints };
+      return true;
+    }, { timeout, interval: 5000, label: 'every cell of the committee holds the term' });
+    return seated;
   }
 
   async function runningMasters() {
@@ -128,8 +174,8 @@ describe('dark referees: the list lies, the plane must not', function () {
     await env?.teardown();
   });
 
-  it('a majority-dark list fails the founding closed; darkness lifting is what founds it', async function () {
-    this.timeout(600000);
+  it('a majority-dark list fails the founding closed; darkness lifting is what founds it and seats the whole committee', async function () {
+    this.timeout(900000);
 
     // Four live nodes (three holders + the spare) can never reach a quorum of
     // five: no grant may form, and the gate must hold the app DOWN — running
@@ -144,27 +190,20 @@ describe('dark referees: the list lies, the plane must not', function () {
     await waitFor(async () => (await runningMasters()) === 1, {
       timeout: 300000, interval: 10000, label: 'the grant founds and exactly one master runs',
     });
+    // The cells that came back knowing nothing of the app are seated as they
+    // learn it, not left out of the term for its life.
+    await waitForCommitteeSeated(300000);
   });
 
   it('deconfirmation steers the heal: the reclaimed seat lands on a live listed node', async function () {
-    this.timeout(600000);
+    this.timeout(900000);
 
-    // The held term's cells name the committee. Find a NON-HOLDER cell to
+    // The premise: every cell of the committee holds the term, so pulling one
+    // leaves a quorum for the heal to run on. A term standing on a bare
+    // quorum would lose it instead, and a demotion and a re-founding is the
+    // plane's designed answer to that, not a heal. Find a NON-HOLDER cell to
     // send dark — a referee seat, not a holder's.
-    let verdictGrantee = null;
-    await waitFor(async () => {
-      const cells = await Promise.all(env.clients.map((_, i) => readCell(i)));
-      const live = cells.filter((c) => c?.accepted?.grantee && !c.accepted.released);
-      if (live.length < 5) return false;
-      verdictGrantee = live[0].accepted.grantee;
-      return true;
-    }, { timeout: 120000, interval: 5000, label: 'a held term with a live quorum' });
-
-    const outpoints = {};
-    for (let i = 0; i < env.clients.length; i += 1) {
-      const status = await env.clients[i].getNodeStatus();
-      outpoints[i] = `${status.data.txhash}:${status.data.outidx}`;
-    }
+    const { grantee: verdictGrantee, outpoints } = await waitForCommitteeSeated(300000);
     const masterIndex = Number(Object.keys(outpoints).find((i) => outpoints[i] === verdictGrantee));
     expect(Number.isInteger(masterIndex), 'the grantee maps to a node').to.equal(true);
 
