@@ -31,6 +31,30 @@ describe('coupled harness knobs track production', () => {
     expect(knobs.PRODUCTION.peerSetDipEvaluateMs).to.equal(fluxapps.peerSetDipEvaluateMs);
   });
 
+  it('derives the announce interval the fleet derives from a row\'s lifetime', () => {
+    const production = productionConfig();
+    const appConstants = proxyquire('../../ZelBack/src/services/utils/appConstants', {
+      config: { get: (key) => key.split('.').reduce((o, k) => o[k], production) },
+    });
+    expect(knobs.announceMs(production.fluxapps.locationTtlS)).to.equal(appConstants.ANNOUNCE_INTERVAL_MS);
+  });
+
+  it('holds a certified node\'s row for the whole grace, in production and on the shared fleet', () => {
+    const { fluxapps } = productionConfig();
+    expect(() => knobs.assertRowOutlivesGrace(fluxapps, {
+      wsPingIntervalMs: knobs.PRODUCTION.wsPingIntervalMs, wsMaxMissedPongs: knobs.PRODUCTION.wsMaxMissedPongs,
+    })).to.not.throw();
+    const shared = knobs.loadSharedConfig();
+    expect(() => knobs.assertRowOutlivesGrace(shared.fluxapps, shared.peers)).to.not.throw();
+    expect(() => knobs.assertRowOutlivesGrace(shared.fluxapps, knobs.PARTITION_PEERS)).to.not.throw();
+  });
+
+  it('rejects a fleet whose row dies before its grace ends', () => {
+    const shared = knobs.loadSharedConfig();
+    expect(() => knobs.assertRowOutlivesGrace({ ...shared.fluxapps, locationTtlS: 63, nodeDownGraceS: 70 }, shared.peers))
+      .to.throw(/dies before its grace ends/);
+  });
+
   it('gives a partitioning suite production\'s miss count, not the compressed one', () => {
     const { peers } = productionConfig();
 
