@@ -621,12 +621,10 @@ describe('appHashSyncService tests', () => {
       expect(logStub.info.calledWith('syncMissingHashes - No ephemeral targets available')).to.equal(true);
     });
 
-    it('should exclude deterministic peers', async () => {
+    it('asks a deterministic peer like any other', async () => {
       const clock = sinon.useFakeTimers();
       serviceHelperStub.delay = (ms) => { clock.tick(ms); return Promise.resolve(); };
 
-
-      // All peers are deterministic except one
       peerManagerStub.allValues.returns([
         makePeer('10.0.0.1', '16127', 'deterministic'),
         makePeer('10.0.0.2', '16127', 'deterministic'),
@@ -645,11 +643,10 @@ describe('appHashSyncService tests', () => {
 
       clock.restore();
 
-      // Only the random peer should have been used
-      const allPeers = peerManagerStub.allValues();
-      const calledPeers = allPeers.filter((p) => p.send.called);
-      expect(calledPeers.length).to.equal(1);
-      expect(calledPeers[0].source).to.equal('random');
+      // Three peers per round, every held peer asked across the rounds.
+      const asked = peerManagerStub.allValues().filter((p) => p.send.called);
+      expect(asked.map((p) => p.key).sort()).to.deep.equal(['10.0.0.1:16127', '10.0.0.2:16127', '10.0.0.3:16127', '10.0.0.4:16127']);
+      expect(asked.filter((p) => p.source === 'deterministic').length).to.equal(3);
     });
 
     it('should use proportional timeout based on hash count', async () => {
@@ -740,11 +737,44 @@ describe('appHashSyncService tests', () => {
       expect(query.$or).to.be.undefined;
     });
 
-    it('should clamp backoff index to last value for high attempt counts', () => {
-      const lastBackoff = HASH_RETRY_BACKOFF[HASH_RETRY_BACKOFF.length - 1];
-      // Attempt 20 should clamp to last backoff value
-      const idx = Math.min(20, HASH_RETRY_BACKOFF.length - 1);
-      expect(HASH_RETRY_BACKOFF[idx]).to.equal(lastBackoff);
+    // A run that resolves nothing: one held peer that never answers.
+    async function failedRun(hashDoc, currentHeight) {
+      const clock = sinon.useFakeTimers();
+      serviceHelperStub.delay = (ms) => { clock.tick(ms); return Promise.resolve(); };
+      peerManagerStub.allValues.returns([makePeer('10.0.0.1', '16127')]);
+      dbHelperStub.findInDatabase.resolves([hashDoc]);
+      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: currentHeight });
+      try {
+        await appHashSyncService.syncMissingHashes({ currentHeight });
+      } finally {
+        clock.restore();
+      }
+      const ops = collectionStub.bulkWrite.lastCall.args[0];
+      expect(ops.length).to.equal(1);
+      return ops[0].updateOne;
+    }
+
+    it('the first failure takes the ladder\'s first rung', async () => {
+      const op = await failedRun({ hash: 'h1', txid: 'tx1', height: 100, value: 10, message: false }, 2_555_000);
+      expect(op.filter).to.deep.equal({ hash: 'h1' });
+      expect(op.update.$set.syncAttempts).to.equal(1);
+      expect(op.update.$set.nextRetryHeight).to.equal(2_555_000 + HASH_RETRY_BACKOFF[0]);
+    });
+
+    it('the second failure takes the second rung', async () => {
+      const op = await failedRun({
+        hash: 'h1', txid: 'tx1', height: 100, value: 10, message: false, syncAttempts: 1,
+      }, 2_555_000);
+      expect(op.update.$set.syncAttempts).to.equal(2);
+      expect(op.update.$set.nextRetryHeight).to.equal(2_555_000 + HASH_RETRY_BACKOFF[1]);
+    });
+
+    it('a failure past the ladder takes its last rung', async () => {
+      const op = await failedRun({
+        hash: 'h1', txid: 'tx1', height: 100, value: 10, message: false, syncAttempts: 20,
+      }, 2_555_000);
+      expect(op.update.$set.syncAttempts).to.equal(21);
+      expect(op.update.$set.nextRetryHeight).to.equal(2_555_000 + HASH_RETRY_BACKOFF[HASH_RETRY_BACKOFF.length - 1]);
     });
 
     function makeExpiryTestHashes() {

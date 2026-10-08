@@ -274,20 +274,19 @@ async function waitForResolution(pendingHashes, maxWaitMs, force, currentHeight)
 }
 
 /**
- * Pick N random peers that haven't been tried yet.
+ * Pick N random held peers that haven't been tried yet, whatever their source:
+ * a ring duty or a witness dial is a peer like any other for a hash request.
  * @param {object} peerManager
  * @param {number} count
  * @param {object} [options]
  * @param {Set} [options.excludeKeys] - Peer keys already tried
- * @param {string[]} [options.excludeSources] - Peer sources to exclude (e.g. ['deterministic'])
  * @returns {Array} Array of peer objects
  */
 function pickRandomPeers(peerManager, count, options = {}) {
-  const { excludeKeys = new Set(), excludeSources = [] } = options;
+  const { excludeKeys = new Set() } = options;
   const candidates = [];
   for (const peer of peerManager.allValues()) {
     if (excludeKeys.has(peer.key)) continue;
-    if (excludeSources.length && excludeSources.includes(peer.source)) continue;
     candidates.push(peer);
   }
   // Shuffle
@@ -439,7 +438,7 @@ async function syncMissingHashes(options = {}) {
 
     // Bulk fetch for large gaps (> 500 exceeds single fluxapprequest v2 cap)
     if (missingHashes.length > 500) {
-      const peers = pickRandomPeers(peerManager, maxConcurrentPeers, { excludeSources: ['deterministic'] });
+      const peers = pickRandomPeers(peerManager, maxConcurrentPeers);
       const peerKeys = peers.map((p) => p.key).join(', ');
       log.info(`syncMissingHashes - ${missingHashes.length} missing, using streaming bulk fetch from ${peers.length} peers: ${peerKeys}`);
 
@@ -462,10 +461,7 @@ async function syncMissingHashes(options = {}) {
       for (let round = 0; round < MAX_ROUNDS; round += 1) {
         if (missingHashes.length === 0) break;
 
-        const peers = pickRandomPeers(peerManager, PEERS_PER_ROUND, {
-          excludeKeys: triedPeers,
-          excludeSources: ['deterministic'],
-        });
+        const peers = pickRandomPeers(peerManager, PEERS_PER_ROUND, { excludeKeys: triedPeers });
         if (peers.length === 0) {
           log.info(`syncMissingHashes - No more untried peers available`);
           break;
@@ -519,7 +515,9 @@ async function syncMissingHashes(options = {}) {
         unreachable += 1;
       } else {
         const attempts = (hashDoc.syncAttempts ?? 0) + 1;
-        const backoffIdx = Math.min(attempts, HASH_RETRY_BACKOFF.length - 1);
+        // The ladder's first rung is the first failure: the next sweep asks
+        // again; the second failure waits the second rung, and so on.
+        const backoffIdx = Math.min(attempts - 1, HASH_RETRY_BACKOFF.length - 1);
         const nextRetry = currentHeight + HASH_RETRY_BACKOFF[backoffIdx];
         if (minNextRetry === null || nextRetry < minNextRetry) {
           minNextRetry = nextRetry;
