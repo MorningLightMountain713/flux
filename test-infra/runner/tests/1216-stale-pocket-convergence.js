@@ -12,7 +12,8 @@ import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.
 import {
   queueAppTx, advanceBlocks, removeFromNodeList, restoreToNodeList,
 } from '../framework/daemon-control.js';
-import { waitFor, waitForAppInstalled } from '../framework/wait.js';
+import { waitFor, waitForInstallSettled } from '../framework/wait.js';
+import { waitForCellsServing } from '../framework/grant-record.js';
 import { dbClient } from '../framework/db-client.js';
 import { execInContainer, requireAppContainerName } from '../framework/container.js';
 import { partition, healPartition } from '../framework/partition.js';
@@ -171,19 +172,27 @@ describe('two founders born across a partition converge to one on heal', functio
     [hostIn] = pocket;
     hostsOut = env.clients.map((unused, i) => i).filter((i) => !pocket.includes(i)).slice(0, 2);
 
+    // A mesh install asks the committee for its seat, and a cell inside its
+    // rejoin drain answers every ask "wait": the install is deferred, and with
+    // every spawner held nothing retries it. The cells say when they serve.
+    await waitForCellsServing(memberIdx.map((i) => env.clients[i]), `${identity}/ordinal-0@${anchor}`, { timeout: 120000 });
+
     // Targeted installs astride the cut (owners cannot pick nodes — the
-    // fixture authenticates as the flux team, the 1214 lesson).
+    // fixture authenticates as the flux team, the 1214 lesson). The bus
+    // decides whether a host holds the app; the body is evidence.
     const teamKey = fluxTeamKey();
     const hosts = [hostIn, ...hostsOut];
     try {
       for (const i of hosts) {
         const auth = await authenticate(env.clients[i].url, teamKey);
-        const installBody = await env.clients[i].installAppLocally(name, auth.zelidauth);
-        if (/error/i.test(installBody) && !/success/i.test(installBody.slice(-300))) {
-          throw new Error(`installapplocally failed on node ${i}: ${installBody.slice(-600)}`);
+        const mark = env.clients[i].getLastEventId();
+        const body = await env.clients[i].installAppLocally(name, auth.zelidauth);
+        try {
+          await waitForInstallSettled(env.clients[i], name, 240000, { afterId: mark, noRetrier: true });
+        } catch (error) {
+          throw new Error(`node ${i} does not hold ${name}: ${error.message} :: ${body.slice(-400)}`);
         }
       }
-      await Promise.all(hosts.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
     } finally {
       await releaseSpawnerHolds(env, name);
     }

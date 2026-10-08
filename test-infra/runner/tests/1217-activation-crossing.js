@@ -18,7 +18,7 @@ import {
   restartFluxos,
 } from '../framework/container.js';
 import { advanceBlocks, stopTicker, getState } from '../framework/daemon-control.js';
-import { readGrantRecord } from '../framework/grant-record.js';
+import { readGrantRecord, waitForCellsRefereeing, waitForCellsServing } from '../framework/grant-record.js';
 import {
   waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent,
 } from '../framework/wait.js';
@@ -159,23 +159,11 @@ function helpers(env, name, app) {
     .filter(({ hits }) => hits.length)
     .map(({ i }) => label(i));
 
-  // Every named cell answers its record read with refereeing: true — the boot
-  // sync has completed and the serve gates would take an ask. Asked of the
-  // cells themselves, never inferred from time.
-  const waitRefereeing = (nodes, timeoutMs) => waitFor(async () => {
-    const cells = await Promise.all(nodes.map((i) => readCell(i)));
-    return cells.every((cell) => cell?.refereeing === true);
-  }, { timeout: timeoutMs, interval: 5000, label: `cells ${nodes.map(label).join(', ')} referee again` });
-  // Every named cell answers serving: true — refereeing AND past its rejoin
-  // drain, so an accept lands as a row rather than a 'draining' refusal. A
-  // cell still draining at the incumbent's first accept records no row and
-  // is not a referee when the cells are read (the killed gate at a38302169:
-  // three of six cells draining, the grant on exactly a quorum, three
-  // referees found where five were expected).
-  const waitServing = (nodes, timeoutMs) => waitFor(async () => {
-    const cells = await Promise.all(nodes.map((i) => readCell(i)));
-    return cells.every((cell) => cell?.serving === true);
-  }, { timeout: timeoutMs, interval: 5000, label: `cells ${nodes.map(label).join(', ')} serve` });
+  // A cell still draining at the incumbent's first accept records no row and
+  // is not a referee when the cells are read, so the cells are asked, never
+  // the clock.
+  const waitRefereeing = (nodes, timeoutMs) => waitForCellsRefereeing(nodes.map((i) => env.clients[i]), key, { timeout: timeoutMs });
+  const waitServing = (nodes, timeoutMs) => waitForCellsServing(nodes.map((i) => env.clients[i]), key, { timeout: timeoutMs });
   const readCell = (i) => readGrantRecord(env.clients[i].url, key);
 
   // The crossing proper: cross activateAt, prove the plane engaged on every

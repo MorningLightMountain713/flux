@@ -199,11 +199,16 @@ export async function waitForDosChanged(node, predicate = () => true, timeout = 
  * @param {object} node
  * @param {string} appName
  * @param {number} [timeout]
- * @param {object} [opts] Anchoring, as waitForEvent takes it.
+ * @param {object} [opts] Anchoring, as waitForEvent takes it; `noRetrier: true`
+ *   when no spawner will retry a deferral, which then settles as not held.
  * @returns {Promise<object>}
  */
-export async function waitForInstallSettled(node, appName, timeout = 60000, opts) {
+export async function waitForInstallSettled(node, appName, timeout = 60000, { noRetrier = false, ...opts } = {}) {
   const forThisApp = (data) => data.name === appName;
+  // A deferral is an outcome the node's spawner retries. A fixture that holds
+  // every spawner has no retrier, and says so: a deferral then settles the
+  // wait as not held, named by its outcome, instead of running out the budget.
+  const lacksTheApp = (outcome) => LACKS_THE_APP.has(outcome) || (noRetrier && DECIDES_NOTHING.has(outcome));
   const installedHere = node.waitForEvent('app:installed', forThisApp, timeout, opts);
   const heldAlready = node.waitForEvent(
     'app:installOutcome',
@@ -213,7 +218,7 @@ export async function waitForInstallSettled(node, appName, timeout = 60000, opts
   );
   const notHeld = node.waitForEvent(
     'app:installOutcome',
-    (data) => forThisApp(data) && LACKS_THE_APP.has(data.outcome),
+    (data) => forThisApp(data) && lacksTheApp(data.outcome),
     timeout,
     opts,
   ).then((event) => {
