@@ -327,11 +327,30 @@ function bad(code, message) {
  * the ask plus the node record the identity resolved to — later checks reuse
  * it rather than looking the asker up twice.
  */
+/**
+ * The wire shape of a carried running announcement: a version-1 broadcast
+ * envelope around a fluxapprunning payload.
+ */
+function announcementWellFormed(announcement) {
+  if (typeof announcement !== 'object' || announcement === null) return false;
+  const {
+    version, timestamp, pubKey, signature, data,
+  } = announcement;
+  return version === 1
+    && Number.isFinite(timestamp)
+    && typeof pubKey === 'string' && pubKey.length > 0
+    && typeof signature === 'string' && signature.length > 0
+    && typeof data === 'object' && data !== null
+    && data.type === 'fluxapprunning'
+    && typeof data.ip === 'string'
+    && Number.isFinite(data.broadcastedAt);
+}
+
 async function readAsk(req, type) {
   const body = serviceHelper.ensureObject(req.body) ?? {};
   const {
     key, epoch, candidate, ttlMs, generation, fingerprint, at, signature,
-    remove, add, seq, chain, cancels, cert, carried,
+    remove, add, seq, chain, cancels, cert, carried, announcement,
   } = body;
 
   if (typeof key !== 'string' || !KEY_PATTERN.test(key)) {
@@ -398,6 +417,13 @@ async function readAsk(req, type) {
   if (carried !== undefined && !rosterOverlay.credentialWellFormed(carried)) {
     return bad(400, 'malformed credential');
   }
+  // The asker's own running announcement rides the same way: outside the
+  // signature (the broadcast envelope carries its own), shape-gated here,
+  // verified and stored by the holder check at a cell with no row for the
+  // asker.
+  if (announcement !== undefined && !announcementWellFormed(announcement)) {
+    return bad(400, 'malformed announcement');
+  }
   if (!Number.isSafeInteger(at) || Math.abs(Date.now() - at) > askFreshnessMs()) {
     return bad(400, 'stale ask');
   }
@@ -433,6 +459,7 @@ async function readAsk(req, type) {
     key, mode, epoch, candidate, ttlMs, generation, fingerprint, at, remove, add, seq, chain, cancels,
     ...(cert !== undefined ? { cert } : {}),
     ...(carried !== undefined ? { carried } : {}),
+    ...(announcement !== undefined ? { announcement } : {}),
   };
   const fields = signedEnvelope.fieldsFor(type, ask);
   if (!fields || !signedEnvelope.verify(type, fields, signature, askerNode.pubkey)) {
@@ -774,13 +801,37 @@ async function resyncReturnedKey(ask) {
   return true;
 }
 
+async function holderRow(identity, askerHost) {
+  const rows = await registryManager.appLocationOf(identity);
+  return (rows || []).find((location) => extractIp(location.ip) === askerHost) ?? null;
+}
+
+/**
+ * The asker's own running announcement, carried for the cells that have not
+ * received its broadcast: verified as the gossip intake verifies one and
+ * stored as a synced one is (an announcement serves for the row's lifetime,
+ * not the gossip window), so the row the holder check then reads is the one
+ * every other cell derived from the same broadcast. A copy of another node's
+ * announcement is refused unread.
+ * @returns {Promise<'adopted'|'refused'>}
+ */
+async function adoptAnnouncement(announcement, askerHost) {
+  if (extractIp(announcement.data.ip) !== askerHost) return 'refused';
+  const { result, announcer } = await fluxCommunicationUtils.verifyFluxBroadcast(announcement);
+  if (result !== fluxCommunicationUtils.VerifyResult.OK) return 'refused';
+  await messageStore.storeBatchAppRunningEvents([announcement], new Map([[announcement, announcer]]));
+  await messageStore.releaseInstallingClaims(announcement.data);
+  return 'adopted';
+}
+
 /**
  * Whether the asker holds the app the key names, from this node's own
- * locations view — the anti-squat rule. For HELD challenges of an existing
- * record the row must also be old enough that every grantor and the
- * incumbent's witness poll can already see it (§7's minimum-holder-age
- * floor); a first-ever acquisition is exempt, or a fresh app could not seat
- * its first master until the floor ran.
+ * locations view — the anti-squat rule. A cell with no row for the asker
+ * seats on the announcement the ask carries before it refuses. For HELD
+ * challenges of an existing record the row must also be old enough that
+ * every grantor and the incumbent's witness poll can already see it (§7's
+ * minimum-holder-age floor); a first-ever acquisition is exempt, or a fresh
+ * app could not seat its first master until the floor ran.
  */
 async function askerHolds(ask, askerNode, type) {
   const identity = ask.key.slice(0, ask.key.indexOf('/'));
@@ -798,10 +849,15 @@ async function askerHolds(ask, askerNode, type) {
   // instance fills, and a founder is a running member: for those the row is
   // real evidence and the rule stays.
   if (ORDINAL_ROLE_PATTERN.test(ask.key.slice(ask.key.indexOf('/') + 1))) return { holds: true };
-  const rows = await registryManager.appLocationOf(identity);
   const askerHost = extractIp(askerNode.ip);
-  const row = (rows || []).find((location) => extractIp(location.ip) === askerHost);
-  if (!row) return { holds: false, reason: 'not a holder of the app' };
+  let row = await holderRow(identity, askerHost);
+  let announcement;
+  if (!row && ask.announcement) {
+    announcement = await adoptAnnouncement(ask.announcement, askerHost);
+    if (announcement === 'adopted') row = await holderRow(identity, askerHost);
+  }
+  const evidence = announcement ? { announcement } : {};
+  if (!row) return { holds: false, reason: 'not a holder of the app', ...evidence };
 
   const challengeOps = type === 'prepare' || type === 'accept';
   if (ask.mode === 'held' && challengeOps && minHolderAgeMs() > 0) {
@@ -815,12 +871,12 @@ async function askerHolds(ask, askerNode, type) {
       const since = row.runningSince ?? row.broadcastedAt ?? null;
       const age = since !== null ? Date.now() - new Date(since).getTime() : 0;
       if (!Number.isFinite(age) || age < minHolderAgeMs()) {
-        return { holds: false, reason: 'holder too young to challenge' };
+        return { holds: false, reason: 'holder too young to challenge', ...evidence };
       }
     }
   }
 
-  return { holds: true };
+  return { holds: true, ...evidence };
 }
 
 /**
@@ -937,11 +993,15 @@ async function serve(req, res, type, operate) {
     // A release gives back only the asker's own term (the register binds its
     // grantee and epoch), and a removal broadcasts its appremoved before its
     // teardown releases, so the releaser's row is already gone here.
+    // Reported for the harness: whether this cell, holding no row for the
+    // asker, seated on the announcement the ask carried.
+    let seated = {};
     if (type !== 'probe' && type !== 'vacate' && type !== 'release') {
       const holding = await askerHolds(ask, askerNode, type);
       ms.holds = Date.now() - t0 - ms.read - ms.committee;
+      if (holding.announcement) seated = { announcement: holding.announcement };
       if (!holding.holds) {
-        report('refusedHolder');
+        report('refusedHolder', undefined, seated);
         return refuse(res, 403, holding.reason, ask.key);
       }
     }
@@ -981,7 +1041,10 @@ async function serve(req, res, type, operate) {
       ...(ordinalKey(ask.key) ? { holderDelisted: delistedHolders.isDelistedHolder } : {}),
     });
     ms.operate = Date.now() - t0 - ms.read - ms.committee - (ms.holds ?? 0);
-    report('served', reply?.ok === false ? reply.code : undefined, carried ? { carried, seatWaitMs } : {});
+    report('served', reply?.ok === false ? reply.code : undefined, {
+      ...(carried ? { carried, seatWaitMs } : {}),
+      ...seated,
+    });
     return res.json(messageHelper.createDataMessage(reply));
   } catch (error) {
     report('errored');

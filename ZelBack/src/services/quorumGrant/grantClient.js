@@ -512,6 +512,25 @@ async function relayThroughStandbys(standbys, members, type, ask, signature, hav
   return replies;
 }
 
+// The ask types a referee answers only to a holder of the app
+// (grantorController.askerHolds).
+const HOLDER_CHECKED_TYPES = new Set(['prepare', 'accept', 'renew']);
+
+/**
+ * This node's own running announcement, for the asks a referee answers only
+ * to a holder: a cell that has not received the broadcast seats on this
+ * copy instead of refusing. Outside the ask's signature; the broadcast
+ * envelope carries its own. Nothing to attach before the node's first
+ * announcement.
+ */
+async function holdingEvidence(type) {
+  if (!HOLDER_CHECKED_TYPES.has(type)) return {};
+  const socketAddress = await fluxNetworkHelper.getLocalSocketAddress();
+  if (!socketAddress) return {};
+  const announcement = await messageStore.appRunningBroadcastOf(socketAddress);
+  return announcement ? { announcement } : {};
+}
+
 async function signedAskFor(type, key, mode, epoch, identity, basis, extras = {}) {
   const ask = {
     key,
@@ -522,6 +541,7 @@ async function signedAskFor(type, key, mode, epoch, identity, basis, extras = {}
     fingerprint: basis.fingerprint,
     at: Date.now(),
     ...extras,
+    ...(await holdingEvidence(type)),
   };
   const fields = signedEnvelope.fieldsFor(type, ask);
   const signed = signedEnvelope.sign(type, fields, identity.wif);
