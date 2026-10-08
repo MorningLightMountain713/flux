@@ -153,11 +153,16 @@ describe('Ephemeral connections resolve hashes via stub peers', function () {
       'a real node opened an ephemeral round',
     ).to.be.true;
 
+    // The stubs served the message, and they refused the standing peerings
+    // the ring offered them: nobody's duty dial to a stub became a peer.
     let totalServed = 0;
+    let totalRefused = 0;
     for (const [, stub] of env.stubPeerClients) {
       const stats = await stub.getStats();
       totalServed += stats.messagesServed;
+      totalRefused += stats.peeringsRefused;
     }
     expect(totalServed).to.be.greaterThan(0);
+    expect(totalRefused, 'a stub refused a standing peering it was not declared for').to.be.greaterThan(0);
   });
 });
