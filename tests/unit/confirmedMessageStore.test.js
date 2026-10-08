@@ -107,12 +107,13 @@ describe('confirmedMessageStore', () => {
     expect(inserted).to.deep.equal([]);
   });
 
-  it('does not store contents for a payment that is voided', async () => {
+  it('holds the contents of a voided payment, for the decider to refuse while the void stands', async () => {
     const message = await domain.paidTempMessage({ version: 1 });
     pay(message, { voided: true });
     const result = await store.storeConfirmedMessages([message]);
-    expect(result.refused).to.deep.equal([{ hash: message.hash, reason: 'the payment is voided' }]);
-    expect(inserted).to.deep.equal([]);
+    expect(result.refused).to.deep.equal([]);
+    expect(result.stored.map(({ hash }) => hash)).to.deep.equal([message.hash]);
+    expect(inserted.map(({ hash }) => hash)).to.deep.equal([message.hash]);
   });
 
   it('does not store contents that do not hash to the paid hash', async () => {

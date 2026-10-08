@@ -158,29 +158,27 @@ describe('Unclaimed payment void', function () {
     );
   });
 
-  it('refuses the contents handed after the void: they reach the nodes and are never stored or decided', async function () {
+  it('refuses the contents handed after the void: they reach the nodes, are held beside the void and refused as unclaimed', async function () {
     this.timeout(180000);
     const res = await submitSignedApp(env.clients[0].url, nodeKey(1), signedOf(withheld));
     expect(res.status, JSON.stringify(res.data)).to.equal('success');
     expect(res.data).to.equal(withheld.hash);
 
     await waitFor(
-      async () => ((await env.clients[1].getTempMessages(withheld.hash)).data?.length ?? 0) > 0,
-      { timeout: 60000, label: 'the withheld contents reach a peer as a temporary message' },
+      async () => (await db(1).getAppHash(withheld.hash))?.message === true,
+      { timeout: 60000, label: 'the withheld contents reach a peer and are held beside the voided payment' },
     );
-    const clearBefore = await hashRetryCount(env.clients[1], 'clear');
-    await advanceBlocks(RETRY_PASS_BLOCKS);
-    await waitFor(
-      async () => (await hashRetryCount(env.clients[1], 'clear')) > clearBefore,
-      { timeout: 90000, label: 'a hash-sync pass on the peer after the contents arrived' },
-    );
+    await waitFor(async () => {
+      const { status, data } = await env.clients[1].request('GET', `/v2/apps/messages/${withheld.hash}/decision`);
+      return status === 200 && data.data.decision === 'refused' && data.data.reason === 'unclaimed';
+    }, { timeout: 60000, interval: 2000, label: 'the withheld contents refused as unclaimed on a peer' });
 
     expect(await db(1).getPermanentMessage(claimed.hash), 'the claimed contents are stored on the same node').to.exist;
-    expect(await db(1).getPermanentMessage(withheld.hash)).to.equal(null);
+    expect((await db(1).getAppHash(withheld.hash)).voided, 'the payment stays voided').to.equal(true);
     expect(await db(1).getGlobalApp(withheld.spec.name)).to.equal(null);
   });
 
-  it('gives the hash back on a rewind that drops the void, and takes the contents the network holds', async function () {
+  it('gives the hash back on a rewind that drops the void, and decides the contents it holds', async function () {
     this.timeout(240000);
     const forkHeight = voidHeight - 1;
     const seen = waitForReorg(env.clients[1], (d) => d.forkHeight === forkHeight, 60000);
@@ -192,10 +190,6 @@ describe('Unclaimed payment void', function () {
       { timeout: 60000, label: 'the payment record unmarked' },
     );
     await advanceBlocks(RETRY_PASS_BLOCKS);
-    await waitFor(
-      async () => Boolean(await db(1).getPermanentMessage(withheld.hash)),
-      { timeout: 120000, label: 'the withheld contents stored once the void fell' },
-    );
     await waitFor(
       async () => Boolean(await db(1).getGlobalApp(withheld.spec.name)),
       { timeout: 60000, label: 'the withheld app decided' },

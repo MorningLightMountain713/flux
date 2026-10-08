@@ -210,11 +210,9 @@ async function storeConfirmedMessages(candidates) {
       result.unpaid.push(hash);
       continue;
     }
-    // A voided payment takes no contents: the void decided the hash.
-    if (record.voided) {
-      result.refused.push({ hash, reason: 'the payment is voided' });
-      continue;
-    }
+    // A voided payment's contents are held like any other's; the decider refuses
+    // them as unclaimed while the void stands, and decides them anew when a
+    // rewind drops it.
     let event = null;
     let contents;
     try {
