@@ -1785,6 +1785,40 @@ describe('fluxCommunication tests', () => {
       expect(peerManager.inboundCount).to.equal(1);
     });
 
+    it('a probe in flight to a peer does not refuse the duty dial to it, nor the reverse: each guards its own duplicate', async () => {
+      sinon.stub(rateLimit, 'lruRateLimit').returns(true);
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: false, height: 0 } });
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').returns('44.192.51.11:16127');
+      peerManager.reset();
+      const { port } = localWsServer.address();
+      const key = `127.0.0.1:${port}`;
+      // the module learns its own port from a standing dial; a self-dial opens nothing
+      await fluxCommunication.initiateAndHandleConnection('44.192.51.11:16127');
+
+      const marked = sinon.spy(peerManager, 'markPendingEphemeral');
+      const probe = fluxCommunication.openEphemeralConnection(key);
+      sinon.assert.calledOnceWithExactly(marked, key);
+      expect(peerManager.isPendingEphemeral(key), 'the probe is in flight').to.equal(true);
+      expect(peerManager.isPending(key), 'the standing set is not touched by a probe').to.equal(false);
+
+      const settled = [];
+      fluxCommunication.initiateAndHandleConnection(key, PEER_SOURCE.DETERMINISTIC, {
+        onSettle: (v) => settled.push(v),
+      });
+      const peer = await probe;
+      expect(peer, 'the probe opened').to.not.equal(null);
+      await waitFor(() => settled.length === 1, 5000);
+      expect(settled, 'the duty dial behind the probe connected').to.deep.equal([true]);
+      peer.close();
+
+      // the reverse: a standing dial in flight leaves a probe free
+      peerManager.markPending(key);
+      const again = await fluxCommunication.openEphemeralConnection(key);
+      expect(again, 'a probe behind a standing dial opened').to.not.equal(null);
+      again.close();
+      peerManager.clearPending(key);
+    });
+
     it('a dial that completes after the stop began is closed with the stop code, and the duty learns nothing from it', async () => {
       // The stop announces itself on the held connections; a dial still in
       // flight would land after that and drop unannounced at exit. The

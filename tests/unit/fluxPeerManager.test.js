@@ -2300,6 +2300,16 @@ describe('FluxPeerManager tests', () => {
       expect(manager.isPending('10.0.0.1:16127')).to.equal(false);
     });
 
+    it('an ephemeral in flight leaves a standing dial free, and the reverse', () => {
+      manager.markPendingEphemeral('10.0.0.1:16127');
+      expect(manager.isPendingEphemeral('10.0.0.1:16127')).to.equal(true);
+      expect(manager.isPending('10.0.0.1:16127')).to.equal(false);
+      manager.markPending('10.0.0.1:16127');
+      manager.clearPendingEphemeral('10.0.0.1:16127');
+      expect(manager.isPendingEphemeral('10.0.0.1:16127')).to.equal(false);
+      expect(manager.isPending('10.0.0.1:16127')).to.equal(true);
+    });
+
     it('should clear pending on successful add', () => {
       manager.markPending('10.0.0.1:16127');
       manager.add(createMockWs('10.0.0.1', '16127'), '10.0.0.1', '16127', { source: PEER_SOURCE.RANDOM });

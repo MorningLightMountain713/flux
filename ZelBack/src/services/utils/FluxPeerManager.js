@@ -120,6 +120,7 @@ class FluxPeerManager extends EventEmitter {
   #ephemeralRefusalLoggedAt = 0;
   /** @type {Set<string>} keys of outbound connections currently being established */
   #pendingConnections = new Set();
+  #pendingEphemerals = new Set();
   /** @type {Map<string, number>} reconnect count per peer key, persists across connection cycles */
   #reconnectCounts = new Map();
   /** @type {number} peer count threshold for app sync readiness */
@@ -564,7 +565,7 @@ class FluxPeerManager extends EventEmitter {
     this.#ephemeralSeq += 1;
     peer.ephemeralKey = `${peer.key}#e${this.#ephemeralSeq}`;
     this.#ephemeralPeers.set(peer.ephemeralKey, peer);
-    this.#pendingConnections.delete(peer.key);
+    this.#pendingEphemerals.delete(peer.key);
     log.info(`Ephemeral connection ${options.inbound ? 'from' : 'to'} ${peer.key} ${options.inbound ? 'accepted' : 'established'}`);
     return peer;
   }
@@ -1153,6 +1154,22 @@ class FluxPeerManager extends EventEmitter {
    * @returns {boolean}
    */
   isPending(key) { return this.#pendingConnections.has(key); }
+
+  // An ephemeral connection and a standing dial to the same peer are different
+  // things, and each guards against its own duplicate only: a juror's probe in
+  // flight must not refuse the duty dial the same drop owes, nor the reverse.
+
+  /** @param {string} key - ip:port */
+  markPendingEphemeral(key) { this.#pendingEphemerals.add(key); }
+
+  /** @param {string} key - ip:port */
+  clearPendingEphemeral(key) { this.#pendingEphemerals.delete(key); }
+
+  /**
+   * @param {string} key - ip:port
+   * @returns {boolean}
+   */
+  isPendingEphemeral(key) { return this.#pendingEphemerals.has(key); }
 
   // --- Broadcast ---
 
@@ -2091,6 +2108,7 @@ class FluxPeerManager extends EventEmitter {
     this.#undecided.forEach((timer) => { if (timer) clearTimeout(timer); });
     this.#undecided.clear();
     this.#pendingConnections.clear();
+    this.#pendingEphemerals.clear();
     this.#reconnectCounts.clear();
     this.#peerTopology.clear();
     this.#peerExchangeListeners.length = 0;
