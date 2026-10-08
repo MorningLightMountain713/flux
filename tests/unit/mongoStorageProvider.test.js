@@ -123,18 +123,18 @@ describe('MongoStorageProvider', () => {
     expect(await provider.count(STORE, {})).to.equal(records.length + 1);
   });
 
-  it('sets and unsets fields on every record a query names', async () => {
-    await provider.update(STORE, { tags: 'x' }, { set: { marked: true }, unset: ['nested'] });
+  it('sets and unsets fields on every record a query names, and answers how many it matched', async () => {
+    expect(await provider.update(STORE, { tags: 'x' }, { set: { marked: true }, unset: ['nested'] })).to.equal(2);
     expect(keys(await provider.find(STORE, { marked: true }))).to.deep.equal(['a', 'd']);
     expect(keys(await provider.find(STORE, { nested: { exists: true } }))).to.deep.equal(['b']);
     await provider.update(STORE, { k: 'b' }, { unset: ['nested'] });
     expect(keys(await provider.find(STORE, { nested: { exists: true } }))).to.deep.equal([]);
-    await provider.update(STORE, { k: 'b' }, {});
+    expect(await provider.update(STORE, { k: 'b' }, {}), 'an empty change still counts the records it names').to.equal(1);
     expect(await provider.count(STORE, {})).to.equal(records.length);
   });
 
-  it('removes every record a query names', async () => {
-    await provider.remove(STORE, { s: 'x' });
+  it('removes every record a query names, and answers how many', async () => {
+    expect(await provider.remove(STORE, { s: 'x' })).to.equal(2);
     expect(keys(await provider.find(STORE, {}))).to.deep.equal(['b', 'c', 'd']);
   });
 

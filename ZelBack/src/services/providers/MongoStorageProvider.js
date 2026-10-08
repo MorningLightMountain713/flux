@@ -133,12 +133,14 @@ function providerClass() {
       const change = {};
       if (Object.keys(set).length) change.$set = set;
       if (unset.length) change.$unset = Object.fromEntries(unset.map((field) => [field, '']));
-      if (!Object.keys(change).length) return;
-      await this.#collection(store).updateMany(toFilter(query), change);
+      if (!Object.keys(change).length) return this.#collection(store).countDocuments(toFilter(query));
+      const { matchedCount } = await this.#collection(store).updateMany(toFilter(query), change);
+      return matchedCount;
     }
 
     async remove(store, query) {
-      await this.#collection(store).deleteMany(toFilter(query));
+      const { deletedCount } = await this.#collection(store).deleteMany(toFilter(query));
+      return deletedCount;
     }
 
     async ensureIndexes(store, indexes) {
