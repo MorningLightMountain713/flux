@@ -197,7 +197,7 @@ export function stubPeerClient(ip) {
 
     // Hold an app the way a real holder does: announce it, and keep announcing
     // it. A single runApp() is not a holder - the location it creates expires
-    // after locationTtlS (63s in this harness), so a suite that announces once
+    // after locationTtlS, so a suite that announces once
     // and then does anything slow watches its own fixture disappear halfway
     // through, and reads the result as the code under test doing something.
     //

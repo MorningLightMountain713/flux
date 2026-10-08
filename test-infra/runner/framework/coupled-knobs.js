@@ -99,6 +99,40 @@ export function peerDeathMs(peers) {
   return interval * (misses + 1);
 }
 
+// The announce interval the product derives from a location row's lifetime
+// (appConstants: two announcements per lifetime, with slack for a missed one);
+// tests/unit/coupledKnobs.test.js pins this to the fleet's derivation.
+export const ANNOUNCES_PER_EXPIRY = 2;
+export const ANNOUNCE_SLACK = 0.04;
+export function announceMs(locationTtlS) {
+  return Math.floor((locationTtlS * 1000 * (1 - ANNOUNCE_SLACK)) / ANNOUNCES_PER_EXPIRY / 1000) * 1000;
+}
+
+/**
+ * The row a certificate negates must outlive the grace. A node that goes dark
+ * announced last up to one announce interval before its drop, its jurors notice
+ * the drop one peer death later, and the row has to stand when that grace
+ * ends - the fleet moves nothing inside it, and the suites that prove so read
+ * the row. So: lifetime - announce >= grace + peerDeath. Production holds it
+ * with room (7500 - 3600 s against 420 + 60 s); a compressed fleet has to be
+ * checked, since the grace is compressed at the block cadence and the lifetime
+ * at the announce cadence, and the two factors are not the same.
+ * @param {object} fluxapps the EFFECTIVE fluxapps config
+ * @param {object} peers the EFFECTIVE peers config
+ */
+export function assertRowOutlivesGrace(fluxapps, peers) {
+  const lifetimeMs = fluxapps.locationTtlS * 1000;
+  const standsForMs = lifetimeMs - announceMs(fluxapps.locationTtlS);
+  const neededMs = fluxapps.nodeDownGraceS * 1000 + peerDeathMs(peers);
+  if (standsForMs >= neededMs) return;
+  throw new Error(
+    'coupled-knobs: a certified node\'s location row dies before its grace ends.\n'
+    + `  stands  ${standsForMs / 1000}s  (locationTtlS ${fluxapps.locationTtlS}s minus one announce of ${announceMs(fluxapps.locationTtlS) / 1000}s)\n`
+    + `  needed  ${neededMs / 1000}s  (nodeDownGraceS ${fluxapps.nodeDownGraceS}s plus a peer death of ${peerDeathMs(peers) / 1000}s)\n`
+    + '  The fleet would place a replacement inside the grace, which production never does.',
+  );
+}
+
 /**
  * The peers config for a suite that PARTITIONS.
  *
@@ -387,9 +421,10 @@ export function assertRenewalUndercutsTtl(fluxapps) {
  * @param {object} fluxapps Effective fluxapps config for the fleet.
  * @throws {Error} When any relationship does not hold.
  */
-export function assertCoupledRatios(fluxapps) {
+export function assertCoupledRatios(fluxapps, peers = null) {
   if (!fluxapps) return;
   assertRenewalUndercutsTtl(fluxapps);
+  if (peers && fluxapps.locationTtlS && fluxapps.nodeDownGraceS) assertRowOutlivesGrace(fluxapps, peers);
   if (!fluxapps.residentialQueueStepMs) return;
   assertDepartureOutlivesTicket(fluxapps);
   const blockCost = harnessBlockCostMs(fluxapps);

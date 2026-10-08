@@ -118,7 +118,7 @@ describe('Sync response: pruning and forged events', function () {
   //
   // It passed for as long as it did because locationTtlS was wired to nothing:
   // the window was the production 125 minutes, wide enough to swallow any boot.
-  // Live at 63s it is 2.1 announce intervals, matching production's 2.08, and a
+  // Live at the harness's locationTtlS it is 2.1 announce intervals, matching production's 2.08, and a
   // broadcast stamped before the fleet existed is one production would refuse
   // too.
   let stamp;
@@ -146,7 +146,7 @@ describe('Sync response: pruning and forged events', function () {
     // THE READER BOOTS BEFORE THE WINDOW OPENS, AND CANNOT SYNC WHILE IT DOES.
     //
     // Everything below is a broadcast, and messageStore refuses one older than
-    // locationTtlS - 63s here. Booting the reader after seeding put a node boot
+    // locationTtlS. Booting the reader after seeding put a node boot
     // inside that window: 24.6s of it on an idle box, ~83s under a six-way gate,
     // so the events expired during their own setup, were skipped in silence, and
     // the suite read an empty location list rather than a rejected message.
@@ -211,7 +211,7 @@ describe('Sync response: pruning and forged events', function () {
     // Seeded in ONE round trip per node, not one per event.
     //
     // These are broadcasts and their acceptance window is live: messageStore
-    // refuses one older than locationTtlS, 63s here. Ten nodes times 326 events
+    // refuses one older than locationTtlS. Ten nodes times 326 events
     // is 3,260 sequential insertOne round trips, which on a gate box outlives
     // that window - every event then arrives already expired, is skipped without
     // a word, and the suite reads an empty location list rather than a rejected

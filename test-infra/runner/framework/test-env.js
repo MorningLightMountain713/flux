@@ -230,6 +230,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // The baseline a suite's overrides merge onto - read once, so the ratio check
 // sees what the node will actually run rather than only what the suite set.
 const sharedFluxapps = loadSharedConfig().fluxapps ?? {};
+const sharedPeers = loadSharedConfig().peers ?? {};
 const fixturesDir = join(__dirname, '..', '..', 'fixtures');
 const manifest = JSON.parse(readFileSync(join(fixturesDir, 'node-manifest.json'), 'utf-8'));
 // Identity for the fake-blockchain node list (collateral/pubkey/tier). Base-independent;
@@ -2029,7 +2030,10 @@ async function _buildEnv(
     // stopped tracking the give-up pass. Throws rather than warns: a fleet
     // whose ratio has inverted still runs and still goes green, having quietly
     // stopped testing the thing the suite is named after.
-    assertCoupledRatios({ ...sharedFluxapps, ...(nodeConfig.fluxapps ?? {}) });
+    assertCoupledRatios(
+      { ...sharedFluxapps, ...(nodeConfig.fluxapps ?? {}) },
+      { ...sharedPeers, ...(nodeConfig.peers ?? {}) },
+    );
     // Handed over as a file rather than as NODE_CONFIG. The config package merges
     // that variable over every file, which is a redirect no hash can see, so the
     // entry points delete it - production has no environment path into config at

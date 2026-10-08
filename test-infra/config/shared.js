@@ -208,9 +208,12 @@ module.exports = {
     // appConstants derives that from this number, so compressing this one
     // compresses both and the ratio between them - how many announcements a
     // node may miss before its apps look gone - is structural rather than a
-    // pairing this file has to hold. 63s gives a 30s announce, the value this
-    // file used to carry by hand.
-    locationTtlS: 63,
+    // pairing this file has to hold. The floor is the node-down grace below:
+    // a certified node's row must stand for the whole grace, and it stands
+    // for one lifetime minus one announce (coupled-knobs
+    // assertRowOutlivesGrace, checked at every fleet boot). 180s gives an 86s
+    // announce and a row that stands 94s, past the 70s grace plus a peer death.
+    locationTtlS: 180,
     // The node-down graces at the block cadence's factor: the stub ticks a
     // block every 5 s against production's 30 s, and the graces are written
     // in blocks (the off-list grace is two blocks of fork plus a capped
