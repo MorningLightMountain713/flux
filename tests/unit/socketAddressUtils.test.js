@@ -9,6 +9,7 @@ const {
   socketAddressesMatch,
   ipsMatch,
   bareIp,
+  compareSocketAddresses,
 } = require('../../ZelBack/src/services/utils/socketAddressUtils');
 
 describe('socketAddressUtils tests', () => {
@@ -268,5 +269,25 @@ describe('socketAddressUtils tests', () => {
       expect(bareIp(undefined)).to.equal(null);
       expect(bareIp(1234)).to.equal(null);
     });
+  });
+});
+
+describe('compareSocketAddresses', () => {
+  it('orders by IP octet as a number, not as text', () => {
+    expect(compareSocketAddresses('9.0.0.1:16127', '10.0.0.1:16127')).to.equal(-1);
+    expect(compareSocketAddresses('10.0.0.1:16127', '9.0.0.1:16127')).to.equal(1);
+  });
+
+  it('orders by port when the IPs are equal', () => {
+    expect(compareSocketAddresses('8.8.8.8:16127', '8.8.8.8:16137')).to.equal(-1);
+  });
+
+  it('reads a bare IP at the default API port', () => {
+    expect(compareSocketAddresses('8.8.8.8', '8.8.8.8:16127')).to.equal(0);
+  });
+
+  it('answers null when either address does not parse', () => {
+    expect(compareSocketAddresses(null, '8.8.8.8:16127')).to.equal(null);
+    expect(compareSocketAddresses('8.8.8.8:16127', 'not an address')).to.equal(null);
   });
 });

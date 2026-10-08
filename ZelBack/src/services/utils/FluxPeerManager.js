@@ -10,6 +10,7 @@ const peerCodec = require('./peerCodec');
 const fluxEventBus = require('./fluxEventBus');
 const capabilities = require('./capabilities');
 const { appSyncEvents, EVENTS } = require('./appSyncEvents');
+const { compareSocketAddresses } = require('./socketAddressUtils');
 
 const UNSTABLE_DISCONNECT_THRESHOLD = 5;
 const UNSTABLE_WINDOW_MS = 2 * 60 * 60 * 1000; // 2 hours
@@ -772,6 +773,37 @@ class FluxPeerManager extends EventEmitter {
    * Set rather than derived here: this class is deliberately free of the
    * network helpers, and the address is known by the time peering starts.
    */
+  /**
+   * Which of a crossing pair's two connections this node keeps: the one dialed
+   * by the lower of the two socket addresses. Both ends compute it from the same
+   * two addresses, so they agree whatever order the connections established in
+   * at either end. Null while this node does not know its own address, or when
+   * the two cannot be ordered; the connection already held then stays.
+   * @param {string} peerKey The peer's ip:port.
+   * @returns {string|null} DIRECTION.OUTBOUND, DIRECTION.INBOUND or null.
+   */
+  crossingSurvivor(peerKey) {
+    const order = compareSocketAddresses(this.#ownSocketAddress, peerKey);
+    if (!order) return null;
+    return order < 0 ? DIRECTION.OUTBOUND : DIRECTION.INBOUND;
+  }
+
+  /**
+   * Whether a connection just established to a peer this node already holds
+   * replaces the held one. A held connection that is no longer alive is always
+   * replaced. A live one is never replaced by another in the same direction.
+   * Two live connections in opposite directions are a crossing, and the
+   * survivor is crossingSurvivor's.
+   * @param {object} existing The held peer.
+   * @param {string} direction The newcomer's DIRECTION.
+   * @returns {boolean}
+   */
+  newcomerReplaces(existing, direction) {
+    if (!existing.isAlive) return true;
+    if (existing.direction === direction) return false;
+    return this.crossingSurvivor(existing.key) === direction;
+  }
+
   setOwnSocketAddress(socketAddress) {
     this.#ownSocketAddress = socketAddress;
   }
@@ -1521,6 +1553,16 @@ class FluxPeerManager extends EventEmitter {
       if (isReconnect && existing) {
         this.#verifyOrReplace(existing, ws, ipv4Peer, port, metadata);
         return;
+      }
+      // Both ends dialed at once: this inbound is the pair's other connection.
+      if (existing && existing.direction === DIRECTION.OUTBOUND) {
+        const replaces = this.newcomerReplaces(existing, DIRECTION.INBOUND);
+        fluxEventBus.count('peers:crossing', replaces ? DIRECTION.INBOUND : DIRECTION.OUTBOUND);
+        if (replaces) {
+          log.info(`Crossing connections with ${key}: keeping the inbound one, dialed by the lower address`);
+          this.add(ws, ipv4Peer, port, { source: PEER_SOURCE.INBOUND, ...metadata });
+          return;
+        }
       }
       this.#deferRefusal(ws, CLOSE_CODES.DUPLICATE_PEER, 'Peer already connected');
       return;

@@ -21,6 +21,7 @@ const fluxCommunicationUtils = require('./fluxCommunicationUtils');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const messageHelper = require('./messageHelper');
 const { peerManager, PEER_SOURCE, CLOSE_CODES } = require('./utils/peerState');
+const { DIRECTION } = require('./utils/FluxPeerSocket');
 const limitCounter = require('./utils/limitCounter');
 const cacheManager = require('./utils/cacheManager').default;
 const networkStateService = require('./networkStateService');
@@ -1465,15 +1466,18 @@ function onOutboundOpen() {
   if (!meta) return;
   const key = `${meta.ip}:${meta.port}`;
   const existing = peerManager.get(key);
-  if (existing && existing.isAlive) {
-    // Both ends of a reciprocal duty can dial the same pair at once. The
-    // pair keeps the FIRST connection that established, whichever end
-    // dialed it — the same rule at both ends and in both directions, so a
-    // crossing race converges on one survivor. Replacing here instead
-    // makes each side close the other's connection and the pair re-dials
-    // forever. A dead or stalling existing still gets replaced by the
-    // reconnect flows; this newcomer simply lost the race, and the duty it
-    // was dialed for is satisfied by the survivor.
+  // A connection to this peer is already held: a live one in the same
+  // direction stays, and when both ends dialed at once the pair keeps the
+  // connection dialed by the lower address (peerManager.crossingSurvivor), the
+  // same choice the far end makes, so the race converges on one survivor at
+  // both ends instead of each end closing the other's dial forever. A loser
+  // settles as held: the duty it was dialed for is satisfied by the survivor.
+  // Otherwise add() replaces the held one.
+  const replaces = !existing || peerManager.newcomerReplaces(existing, DIRECTION.OUTBOUND);
+  if (existing && existing.isAlive && existing.direction === DIRECTION.INBOUND) {
+    fluxEventBus.count('peers:crossing', replaces ? DIRECTION.OUTBOUND : DIRECTION.INBOUND);
+  }
+  if (!replaces) {
     peerManager.clearPending(key);
     try { this.close(CLOSE_CODES.DUPLICATE_PEER, 'Peer already connected'); } catch (_e) { /* noop */ }
     settleOutbound(meta, DIAL_RESULT.HELD);
