@@ -153,6 +153,7 @@ describe('appUninstaller tests', () => {
 
     mastershipGrantGateStub = {
       onComponentTeardown: sinon.stub().resolves(),
+      noteFolderDemoted: sinon.stub(),
     };
     meshOrdinalsStub = { releaseOrdinal: sinon.stub().resolves() };
     contentStoreStub = { removeApp: sinon.stub().resolves() };
@@ -379,6 +380,12 @@ describe('appUninstaller tests', () => {
     it('a volume-preserving teardown (rebuild-in-place) holds the term', async () => {
       await appUninstaller.uninstallComponent(component(), { removeVolumes: false }).catch(() => {});
       sinon.assert.notCalled(mastershipGrantGateStub.onComponentTeardown);
+      sinon.assert.notCalled(mastershipGrantGateStub.noteFolderDemoted);
+    });
+
+    it('a volume-destroying teardown attests the folder demoted once it has left syncthing', async () => {
+      await appUninstaller.uninstallComponent(component(), { removeVolumes: true }).catch(() => {});
+      sinon.assert.calledOnceWithExactly(mastershipGrantGateStub.noteFolderDemoted, 'ab12cd34ef56');
     });
 
     it('a volume-destroying teardown releases the grant', async () => {

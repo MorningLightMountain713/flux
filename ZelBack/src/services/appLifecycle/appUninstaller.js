@@ -461,6 +461,10 @@ async function teardownComponentCore(c, opts = {}) {
     }
     if (removeVolumes) {
       await stopSyncthingAndCleanup(c.syncFolder?.id ?? null, c.appId);
+      // The folder has left syncthing with its data about to go: demoted and
+      // reverted in full, which a master fencing this node waits for before it
+      // re-admits the device.
+      if (c.identity) mastershipGrantGate.noteFolderDemoted(c.identity);
       await unmountVolume(c.appId, { entityName: c.label, onStatus });
       const dataRemoved = await cleanupAppData(c.appId, { entityName: c.label, onStatus });
       await cleanupCrontab(c.appId, { onStatus });
