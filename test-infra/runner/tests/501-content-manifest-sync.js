@@ -71,6 +71,9 @@ describe('content manifest sync: cold-boot in-band reconcile off the ephemeral p
     this.timeout(600000);
     env = await createTestEnv({
       hookCtx: this, nodes: NODES, deferredNodes: 1, tickerAutostart: false, arcane: true,
+      // The readiness budget is the backstop, not the subject: long enough that
+      // READY on every node here comes from its syncs completing.
+      configOverrides: { fluxapps: { appSyncFallbackMinutes: 125 } },
     });
     await bootAndPeerInitial(env, INITIAL_IDX);
     // this suite boots its fleet through the local index-taking helper, so it
