@@ -507,6 +507,10 @@ function tellDeclinedAskersStateSyncReady() {
   });
 }
 
+/**
+ * @returns {Promise<boolean>} false when this node refused the request because
+ *   its app state is not authoritative yet, true otherwise
+ */
 async function respondWithTempMessages(peer, sinceTimestamp = 0) {
   try {
     // THE SAME INCOMPLETENESS, ON A DIFFERENT COLLECTION. A node still catching
@@ -525,7 +529,7 @@ async function respondWithTempMessages(peer, sinceTimestamp = 0) {
       await sendSignedMessage({ type: 'fluxapptempsync', version: 1, messages: [], done: true, refused: true }, peer, { awaitDrain: true });
       rememberDeclinedAsker(peer);
       fluxEventBus.publish('sync:refused', { syncType: 'fluxapptempsync', peer: peer.key });
-      return;
+      return false;
     }
 
     const pooled = await appRecords.messages().pool({ receivedAfter: sinceTimestamp > 0 ? new Date(sinceTimestamp) : null });
@@ -549,8 +553,13 @@ async function respondWithTempMessages(peer, sinceTimestamp = 0) {
   } catch (error) {
     log.error(error);
   }
+  return true;
 }
 
+/**
+ * @returns {Promise<boolean>} false when this node refused the request because
+ *   its app state is not authoritative yet, true otherwise
+ */
 async function streamBatchedSync(peer, { sinceTimestamp, collectionName, validityMs, query, projection, messageType, label, batchSize = 2000 }) {
   try {
     // A NODE THAT DOES NOT KNOW YET SAYS SO, rather than sending what it
@@ -568,7 +577,7 @@ async function streamBatchedSync(peer, { sinceTimestamp, collectionName, validit
       await sendSignedMessage({ type: messageType, messages: [], done: true, refused: true }, peer, { awaitDrain: true });
       rememberDeclinedAsker(peer);
       fluxEventBus.publish('sync:refused', { syncType: messageType, peer: peer.key });
-      return;
+      return false;
     }
 
     const db = dbHelper.databaseConnection();
@@ -603,6 +612,7 @@ async function streamBatchedSync(peer, { sinceTimestamp, collectionName, validit
   } catch (error) {
     log.error(error);
   }
+  return true;
 }
 
 async function respondWithAppRunningMessages(peer, sinceTimestamp = 0) {

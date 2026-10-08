@@ -1221,6 +1221,28 @@ async function verifySyncRequest(peer, decoded) {
   return true;
 }
 
+/**
+ * Answers a peer's state-sync request at most once per throttle window for its
+ * type. The window is taken when the request arrives, so a burst is answered
+ * once; a refusal gives it back, because a refusal costs nothing and the
+ * declined peer asks again the moment this node can answer.
+ * @param {object} peer
+ * @param {object} decoded The decoded request.
+ * @param {string} stampField The peer field holding this type's last answer time.
+ * @param {function(object, number): Promise<boolean>} respond Answers, false when it refused.
+ */
+function throttledSyncResponse(peer, decoded, stampField, respond) {
+  const now = Date.now();
+  const previous = peer[stampField] || 0;
+  if (now - previous < config.get('fluxapps.syncResponseThrottleMs')) return;
+  peer[stampField] = now;
+  setImmediate(async () => {
+    if (!await verifySyncRequest(peer, decoded)) return;
+    const answered = await respond(peer, decoded.sinceTimestamp);
+    if (answered === false && peer[stampField] === now) peer[stampField] = previous;
+  });
+}
+
 peerManager.hashHandlers = {
   handleHashPresent: (peer, hexHash) => {
     const counter = peer.msgMap.get('newHash');
@@ -1232,48 +1254,19 @@ peerManager.hashHandlers = {
     peer.msgMap.set('requestHash', counter + 1);
     setImmediate(() => handleRequestMessageHash(hexHash, peer));
   },
-  handleTempMessagesRequest: (peer, decoded) => {
-    const now = Date.now();
-    const last = peer.lastTempSyncResponse || 0;
-    if (now - last < (config.get('fluxapps.syncResponseThrottleMs'))) return;
-    peer.lastTempSyncResponse = now;
-    setImmediate(async () => {
-      if (!await verifySyncRequest(peer, decoded)) return;
-      fluxCommunicationMessagesSender.respondWithTempMessages(peer, decoded.sinceTimestamp);
-    });
-  },
-  handleAppRunningRequest: (peer, decoded) => {
-    const now = Date.now();
-    const last = peer.lastAppRunningSyncResponse || 0;
-    if (now - last < (config.get('fluxapps.syncResponseThrottleMs'))) return;
-    peer.lastAppRunningSyncResponse = now;
-    setImmediate(async () => {
-      if (!await verifySyncRequest(peer, decoded)) return;
-      fluxCommunicationMessagesSender.respondWithAppRunningMessages(peer, decoded.sinceTimestamp);
-    });
-  },
-  handleAppInstallingRequest: (peer, decoded) => {
-    const now = Date.now();
-    const last = peer.lastAppInstallingSyncResponse || 0;
-    if (now - last < (config.get('fluxapps.syncResponseThrottleMs'))) return;
-    peer.lastAppInstallingSyncResponse = now;
-    setImmediate(async () => {
-      if (!await verifySyncRequest(peer, decoded)) return;
-      fluxCommunicationMessagesSender.respondWithAppInstallingMessages(peer, decoded.sinceTimestamp);
-    });
-  },
-  handleAppInstallingErrorsRequest: (peer, decoded) => {
-    const now = Date.now();
-    const last = peer.lastAppInstallingErrorsSyncResponse || 0;
-    if (now - last < (config.get('fluxapps.syncResponseThrottleMs'))) return;
-    peer.lastAppInstallingErrorsSyncResponse = now;
-    setImmediate(async () => {
-      if (!await verifySyncRequest(peer, decoded)) return;
-      fluxCommunicationMessagesSender.respondWithAppInstallingErrorsMessages(peer, decoded.sinceTimestamp);
-    });
-  },
+  handleTempMessagesRequest: (peer, decoded) => throttledSyncResponse(
+    peer, decoded, 'lastTempSyncResponse', fluxCommunicationMessagesSender.respondWithTempMessages,
+  ),
+  handleAppRunningRequest: (peer, decoded) => throttledSyncResponse(
+    peer, decoded, 'lastAppRunningSyncResponse', fluxCommunicationMessagesSender.respondWithAppRunningMessages,
+  ),
+  handleAppInstallingRequest: (peer, decoded) => throttledSyncResponse(
+    peer, decoded, 'lastAppInstallingSyncResponse', fluxCommunicationMessagesSender.respondWithAppInstallingMessages,
+  ),
+  handleAppInstallingErrorsRequest: (peer, decoded) => throttledSyncResponse(
+    peer, decoded, 'lastAppInstallingErrorsSyncResponse', fluxCommunicationMessagesSender.respondWithAppInstallingErrorsMessages,
+  ),
 };
-
 
 /**
  * To get IP addresses for all outgoing connected peers.

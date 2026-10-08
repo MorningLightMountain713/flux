@@ -2597,3 +2597,50 @@ describe('keepConnectionsAlive', () => {
     clock.restore();
   });
 });
+
+describe('the state-sync request throttle', () => {
+  const settle = async () => {
+    for (let i = 0; i < 5; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => { setImmediate(resolve); });
+    }
+  };
+  const request = () => ({
+    type: 7, sinceTimestamp: 0, requestTimestamp: Date.now(), pubkey: 'pk', signature: 'sig',
+  });
+
+  beforeEach(() => {
+    sinon.stub(networkStateService, 'getFluxnodesByPubkey').resolves([{ pubkey: 'pk' }]);
+    sinon.stub(verificationHelper, 'verifyMessage').returns(true);
+  });
+
+  afterEach(() => sinon.restore());
+
+  it('answers a peer once per window', async () => {
+    const respond = sinon.stub(fluxCommunicationMessagesSender, 'respondWithAppRunningMessages').resolves(true);
+    const peer = { key: '203.0.113.5:16127' };
+
+    peerManager.hashHandlers.handleAppRunningRequest(peer, request());
+    await settle();
+    peerManager.hashHandlers.handleAppRunningRequest(peer, request());
+    await settle();
+
+    sinon.assert.calledOnce(respond);
+  });
+
+  it('answers a peer it refused as soon as the peer asks again', async () => {
+    const respond = sinon.stub(fluxCommunicationMessagesSender, 'respondWithTempMessages');
+    respond.onFirstCall().resolves(false);
+    respond.resolves(true);
+    const peer = { key: '203.0.113.6:16127' };
+
+    peerManager.hashHandlers.handleTempMessagesRequest(peer, request());
+    await settle();
+    peerManager.hashHandlers.handleTempMessagesRequest(peer, request());
+    await settle();
+    peerManager.hashHandlers.handleTempMessagesRequest(peer, request());
+    await settle();
+
+    expect(respond.callCount, 'the refusal took the window, or the answer did not').to.equal(2);
+  });
+});

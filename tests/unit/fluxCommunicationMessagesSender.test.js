@@ -326,7 +326,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
     responders.forEach(([fn, wireType, envelope]) => {
       it(`${fn} refuses and reads nothing from the store`, async () => {
 
-        await fluxCommunicationMessagesSender[fn](peer, 0);
+        expect(await fluxCommunicationMessagesSender[fn](peer, 0), 'a refusal reports itself').to.equal(false);
 
         expect(sent()).to.deep.equal([{
           type: wireType, ...envelope, messages: [], done: true, refused: true,
@@ -351,7 +351,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
       it(`${fn} answers an empty store without refusing`, async () => {
         capabilities.setForTests('appStateSynced', true);
 
-        await fluxCommunicationMessagesSender[fn](peer, 0);
+        expect(await fluxCommunicationMessagesSender[fn](peer, 0)).to.equal(true);
 
         const messages = sent();
         expect(messages).to.have.lengthOf(1);
