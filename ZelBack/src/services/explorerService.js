@@ -22,7 +22,6 @@ const daemonServiceBlockchainRpcs = require('./daemonService/daemonServiceBlockc
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
 const chainUtilities = require('./utils/chainUtilities');
 const messageVerifier = require('./appMessaging/messageVerifier');
-
 const specReconciler = require('./appLifecycle/specReconciler');
 const appGiveUp = require('./appLifecycle/appGiveUp');
 const benchmarkService = require('./benchmarkService');
@@ -36,12 +35,12 @@ const { getSpecPolicy } = require('./utils/specLibs');
 const priceOracleState = require('./pricing/priceOracleState');
 const entitlementsState = require('./entitlementsState');
 const unclaimedPayments = require('./appDecisions/unclaimedPayments');
+const appRecords = require('./appDatabase/appRecords');
 const decider = require('./appDecisions/decider');
 const { pubKeyToAddr } = require('./utils/fluxCryptoUtils');
 const appQueryService = require('./appQuery/appQueryService');
 const appOperations = require('./appLifecycle/appOperations');
 
-const appsHashesCollection = config.get('database.daemon.collections.appsHashes');
 const scannedHeightCollection = config.get('database.daemon.collections.scannedHeight');
 const chainParamsMessagesCollection = config.get('database.chainparams.collections.chainMessages');
 const priceMessagesCollection = config.get('database.chainparams.collections.priceMessages');
@@ -52,7 +51,6 @@ const unclaimedPaymentMessagesCollection = config.get('database.chainparams.coll
 const policyGroupMessagesCollection = config.get('database.chainparams.collections.policyGroupMessages');
 
 let isInInitiationOfBP = false;
-let zelAppSpecsMigrationDone = false;
 let explorerReadyEmitted = false;
 let appsTransactions = [];
 // The last block the scan has written, in this process. The durable cursor moves
@@ -553,31 +551,11 @@ async function processSoftFork(txid, height, txIndex, payload, senderIsLegacyAut
 }
 
 /**
- * The payment record this node holds for an app message hash, or null. A record whose transaction
- * the chain does not hold (notOnChain) is no payment: it is removed, so the block paying that hash
- * records the payment in its place.
- * @param {object} database the daemon database
- * @param {string} hash
- * @returns {Promise<object|null>}
- */
-async function standingAppPayment(database, hash) {
-  const record = await dbHelper.findOneInDatabase(database, appsHashesCollection, { hash }, {
-    projection: {
-      _id: 0, txid: 1, hash: 1, height: 1, value: 1, message: 1, notOnChain: 1,
-    },
-  });
-  if (!record?.notOnChain) return record;
-  await dbHelper.removeDocumentsFromCollection(database, appsHashesCollection, { hash, notOnChain: true });
-  log.info(`Explorer - payment of ${hash} recorded at txid ${record.txid} height ${record.height} is not on the chain; recording the one this block holds`);
-  return null;
-}
-
-/**
  * To process verbose block data for entry to Insight database.
  * @param {object} blockDataVerbose Verbose block data.
  * @param {string} database Database.
  */
-async function processInsight(blockDataVerbose, database) {
+async function processInsight(blockDataVerbose) {
   await policyLibrary();
   // get Block Deltas information
   const txs = blockDataVerbose.tx;
@@ -621,17 +599,16 @@ async function processInsight(blockDataVerbose, database) {
         // MAY contain App transaction. Store it.
         if (isFluxAppMessageValue >= (priceSpecifications.minPrice * 1e8) && message.length === 64 && blockDataVerbose.height >= config.get('fluxapps.epochstart')) { // min of X flux had to be paid for us bothering checking
           const appTxRecord = {
-            txid: tx.txid, height: blockDataVerbose.height, txIndex, hash: message, value: isFluxAppMessageValue, message: false, // message is boolean saying if we already have it stored as permanent message
+            txid: tx.txid, height: blockDataVerbose.height, txIndex, hash: message, value: isFluxAppMessageValue,
             blockTime: blockDataVerbose.time, // confirming block timestamp — v9 registeredAt
-            syncAttempts: 0, nextRetryHeight: blockDataVerbose.height,
           };
           // A hash's payment is its first in chain order: a later payment of a
           // hash already recorded, or already buffered from an earlier block or
           // an earlier transaction of this one, is not recorded. A record whose
           // transaction the chain does not hold is no payment (standingAppPayment).
           // eslint-disable-next-line no-await-in-loop
-          const recorded = appsTransactions.some((record) => record.hash === message)
-            || await standingAppPayment(database, message);
+          const held = appsTransactions.some((record) => record.hash === message) || await appRecords.messages().byHash(message);
+          const recorded = held === true || (Boolean(held?.payment) && held.payment.notOnChain !== true);
           if (recorded) {
             log.info(`Explorer - hash ${message} is paid again at ${blockDataVerbose.height} by ${tx.txid}; its first payment stands`);
           } else {
@@ -661,19 +638,18 @@ async function processInsight(blockDataVerbose, database) {
 }
 
 /**
- * Writes the buffered payment records. Each hash appears once, as its first
- * payment (processInsight), so a duplicate key means the collection already
- * holds a record above the cursor. A payment that could not be recorded
- * rejects, and the scan's error recovery rewinds: a payment with no record is
- * never resolved, and the app message it paid for never reaches this node.
+ * Records the buffered payments. Each hash's payment is its first in chain
+ * order: one the collection already holds stands, and one it holds as not on
+ * the chain is replaced. A payment that could not be recorded rejects, and the
+ * scan's error recovery rewinds: a payment with no record is never resolved,
+ * and the app message it paid for never reaches this node.
  * @param {object[]} transactions
- * @param {object} database
- * @returns {Promise<void>}
  */
-async function insertTransactions(transactions, database) {
+async function insertTransactions(transactions) {
   if (transactions.length > 0) {
-    log.info(`Explorer - insertTransactions - Inserting ${transactions.length} transactions to apps hashes collection`);
-    await dbHelper.insertManyToDatabase(database, appsHashesCollection, transactions, { ordered: false });
+    log.info(`Explorer - insertTransactions - Recording ${transactions.length} payments`);
+    const { standing } = await appRecords.messages().recordPayments(transactions);
+    if (standing.length) log.info(`Explorer - insertTransactions - ${standing.length} payment(s) already recorded stand`);
     appsTransactions = [];
   }
 }
@@ -721,9 +697,9 @@ async function requestAppHashes(apps) {
   }
 }
 
-async function insertAndRequestAppHashes(apps, database) {
+async function insertAndRequestAppHashes(apps) {
   if (apps.length > 0) {
-    await insertTransactions(apps, database);
+    await insertTransactions(apps);
     setTimeout(requestAppHashes, 1, apps);
   }
 }
@@ -814,7 +790,7 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
       // speed up sync as there were no app messages between these two blocks
       return 862_002;
     }
-    await processInsight(blockDataVerbose, database);
+    await processInsight(blockDataVerbose);
 
     // After fork block, chain runs 4x faster, so multiply periods by 4
     const speedMultiplier = blockHeight >= config.get('fluxapps.daemonPONFork') ? 4 : 1;
@@ -866,7 +842,7 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
       if (blockWorkDue('benchUpnp', blockDataVerbose.height, benchPeriod)) {
         await scheduleUpnpBench(blockDataVerbose, benchPeriod);
       }
-      await insertAndRequestAppHashes(appsTransactions, database, true);
+      await insertAndRequestAppHashes(appsTransactions);
       await dbHelper.updateOneInDatabase(database, scannedHeightCollection, query, update, options);
       await chainState.blockScanned({ height: scannedHeight, time: blockDataVerbose.time });
       fluxEventBus.publish('block:processed', { height: scannedHeight });
@@ -875,7 +851,7 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
       blockEmitter.emit('blocksProcessed', scannedHeight);
     } else if (blockDataVerbose.height % cursorBatchSize() === 0) {
       log.info(`Processing Explorer Number of Transactions: ${appsTransactions.length}.`);
-      await insertTransactions(appsTransactions, database);
+      await insertTransactions(appsTransactions);
       await dbHelper.updateOneInDatabase(database, scannedHeightCollection, query, update, options);
       await chainState.blockScanned({ height: scannedHeight, time: blockDataVerbose.time });
       fluxEventBus.publish('block:processed', { height: scannedHeight });
@@ -887,44 +863,6 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
 }
 
 /**
- * Removes every payment record but the one a scan keeps for each app message
- * hash, and answers how many it removed: a payment this node already holds
- * stands (standingAppPayment), so a scan keeps the earliest, and a record
- * whose transaction the chain does not hold is no payment and gives way to one
- * that is. The stored message of each such hash moves to the record kept before
- * the others are removed, and the registry rebuild at boot writes its app's row
- * from it. The recovery the unique hash index is built with.
- * @param {object} collection the appsHashes collection
- * @returns {Promise<number>}
- */
-async function keepEarliestPayment(collection) {
-  const groups = await collection.aggregate([
-    { $addFields: { offChain: { $cond: [{ $eq: ['$notOnChain', true] }, 1, 0] } } },
-    { $sort: { offChain: 1, height: 1, txIndex: 1, _id: 1 } },
-    {
-      $group: {
-        _id: '$hash',
-        rows: {
-          $push: {
-            id: '$_id', txid: '$txid', height: '$height', value: '$value',
-          },
-        },
-      },
-    },
-    { $match: { 'rows.1': { $exists: true } } },
-  ]).toArray();
-  const toRemove = groups.flatMap((group) => group.rows.slice(1).map((row) => row.id));
-  if (!toRemove.length) return 0;
-  // the messages first: until the duplicates are gone, a failure here is found
-  // again by the next build of the unique index, which runs this again
-  await messageVerifier.moveStoredMessagesToPayments(groups.map(({ _id: hash, rows: [kept] }) => ({
-    hash, txid: kept.txid, height: kept.height, value: kept.value,
-  })));
-  await collection.deleteMany({ _id: { $in: toRemove } });
-  return toRemove.length;
-}
-
-/**
  * Asserts every index the explorer's collections need. Boot runs it on every
  * start, and a scan from zero runs it after emptying them; an index that
  * already exists costs a catalog check. Runs on the maintenance client.
@@ -932,18 +870,7 @@ async function keepEarliestPayment(collection) {
  */
 async function prepareCollections() {
   const db = dbHelper.databaseConnection();
-  const database = dbHelper.onMaintenanceClient(db.db(config.database.daemon.database));
   const databaseUpdates = dbHelper.onMaintenanceClient(db.db(config.database.chainparams.database));
-  await dbHelper.ensureIndexes(database.collection(appsHashesCollection), [
-    { key: { txid: 1 }, name: 'query for getting txid' },
-    { key: { height: 1 }, name: 'query for getting height' },
-    {
-      key: { hash: 1 }, name: 'query for getting app hash', unique: true, recover: keepEarliestPayment,
-    },
-    { key: { message: 1 }, name: 'query for getting app hashes depending if we have message' },
-    // a record without a position is indexed under null, so the boot backfill reads only those
-    { key: { txIndex: 1 }, name: 'query for getting app hashes without a position' },
-  ]);
   await dbHelper.ensureIndexes(databaseUpdates.collection(chainParamsMessagesCollection), [
     { key: { txid: 1 }, name: 'query for getting txid of some chain parameters update message' },
     { key: { height: 1 }, name: 'query for getting height of some chain parameters update message' },
@@ -959,20 +886,15 @@ async function prepareCollections() {
  */
 async function resetExplorerCollections() {
   log.info('Preparing daemon collections');
+  // A reindex takes every payment off the app messages; the rescan records
+  // them again, and the contents the node holds stay.
+  const cleared = await appRecords.messages().clearPayments();
+  log.info(`Explorer - reindex took the payment off ${cleared.kept} message(s) and removed ${cleared.removed} bare payment(s)`);
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.daemon.database);
   const databaseUpdates = db.db(config.database.chainparams.database);
-  const empty = [
-    [database, appsHashesCollection],
-    [databaseUpdates, chainParamsMessagesCollection],
-  ];
-  // eslint-disable-next-line no-restricted-syntax
-  for (const [owner, collection] of empty) {
-    // eslint-disable-next-line no-await-in-loop
-    await dbHelper.dropCollection(owner, collection).catch((error) => {
-      if (error.message !== 'ns not found') throw error;
-    });
-  }
+  await dbHelper.dropCollection(databaseUpdates, chainParamsMessagesCollection).catch((error) => {
+    if (error.message !== 'ns not found') throw error;
+  });
   await prepareCollections();
   log.info('Preparation done');
 }
@@ -1011,43 +933,6 @@ async function cleanupDuplicateScannedHeight(database) {
     log.info(`Removed ${deleteResult.deletedCount} duplicate scannedheight documents`);
   } catch (error) {
     log.error(`Error cleaning up duplicate scannedheight documents: ${error.message}`);
-  }
-}
-
-// One-time migration for nodes carrying records from before the Feb 2021
-// zelAppSpecifications → appSpecifications rename: bring data at rest in line
-// with the field name the rest of the code now reads exclusively, and drop the
-// indexes that backed the old field name. Idempotent (matches zero docs once
-// migrated). Safe to remove, along with the gating flag, once the whole fleet
-// has run it.
-async function migrateZelAppSpecifications(databaseGlobal) {
-  const col = databaseGlobal.collection(config.get('database.appsglobal.collections.appsMessages'));
-  const result = await col.updateMany(
-    { zelAppSpecifications: { $exists: true } },
-    { $rename: { zelAppSpecifications: 'appSpecifications' } },
-  );
-  if (result.modifiedCount > 0) {
-    log.info(`Migrated ${result.modifiedCount} records from zelAppSpecifications to appSpecifications`);
-  }
-  let existingIndexes;
-  try {
-    existingIndexes = await col.indexes();
-  } catch (error) {
-    // A node that has never stored an app message has no collection and nothing to migrate.
-    if (error?.codeName === 'NamespaceNotFound' || error?.code === 26) return;
-    throw error;
-  }
-  const legacyIndexNames = [
-    'query for getting zelapp message based on zelapp specs name',
-    'query for getting zelapp message based on zelapp specs owner',
-    'query for getting zelapp message based on image',
-  ];
-  for (const idx of existingIndexes) {
-    if (legacyIndexNames.includes(idx.name)) {
-      // eslint-disable-next-line no-await-in-loop
-      await col.dropIndex(idx.name);
-      log.info(`Dropped legacy index: ${idx.name}`);
-    }
   }
 }
 
@@ -1295,7 +1180,6 @@ function processBootstrapTx(tx, priceSpecs, txIndex) {
   return {
     txid: tx.txid, height, txIndex, hash: message, value: appValue,
     blockTime: tx.blocktime ?? null, // verbose getrawtransaction field — v9 registeredAt
-    message: false, syncAttempts: 0, nextRetryHeight: height,
   };
 }
 
@@ -1357,7 +1241,7 @@ async function bootstrapAppHashes(currentDaemonHeight) {
   const INSERT_BATCH = 5000;
   for (let i = 0; i < firstPayments.length; i += INSERT_BATCH) {
     // eslint-disable-next-line no-await-in-loop
-    await insertTransactions(firstPayments.slice(i, i + INSERT_BATCH), database);
+    await insertTransactions(firstPayments.slice(i, i + INSERT_BATCH));
   }
 
   const query = { generalScannedHeight: { $gte: 0 } };
@@ -1742,16 +1626,6 @@ async function initiateBlockProcessor(options = {}) {
 
     await cleanupDuplicateScannedHeight(database);
 
-    if (!zelAppSpecsMigrationDone) {
-      // Wrapped so a malformed DB can't stall block-processor init.
-      try {
-        const globalDb = db.db(config.get('database.appsglobal.database'));
-        await migrateZelAppSpecifications(globalDb);
-        zelAppSpecsMigrationDone = true;
-      } catch (error) {
-        log.error(`zelAppSpecifications migration failed: ${error.message}`);
-      }
-    }
     const scannedBlockHeight = height === null
       ? await chainState.rewind(deepRestore ? 'deep restore at start' : 'restore at start', restoreTarget(deepRestore))
       : await chainState.rewind(height === 0 ? 'reindex' : `rescan from ${height}`, height);
@@ -2027,11 +1901,6 @@ function setIsInInitiationOfBP(value) {
   isInInitiationOfBP = value;
 }
 
-// testing purposes
-function setZelAppSpecsMigrationDone(value) {
-  zelAppSpecsMigrationDone = value;
-}
-
 // A rewind invalidates what the scan holds for blocks above its height: the buffered
 // payment records, its position, and whether it is near the daemon's tip.
 chainState.onRewind((height) => {
@@ -2068,10 +1937,8 @@ function getAddressFusionCoinbase(_req, res) {
 module.exports = {
   prepareCollections,
   resetExplorerCollections,
-  keepEarliestPayment,
   // exported for tests
   pushedTip: () => pushedTipHeight,
-  migrateZelAppSpecifications,
   initiateBlockProcessor,
   scheduleUpnpBench,
   // Test seam: each unit test starts from a node that has processed no block.
@@ -2105,7 +1972,6 @@ module.exports = {
   processInsight,
   insertTransactions,
   setIsInInitiationOfBP,
-  setZelAppSpecsMigrationDone,
   isOracleSigner,
   loadSpecPolicy: policyLibrary,
   isAvailabilitySigner,

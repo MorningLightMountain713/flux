@@ -107,7 +107,7 @@ module.exports = {
         utxoIndex: 'utxoindex',
         addressTransactionIndex: 'addresstransactionindex',
         fluxTransactions: 'zelnodetransactions',
-        appsHashes: 'zelappshashes',
+        appsHashes: 'zelappshashes', // the payment index of nodes not yet past the app-messages migration, which moves it and drops this
         coinbaseFusionIndex: 'coinbasefusionindex',
       },
     },
@@ -127,10 +127,11 @@ module.exports = {
     appsglobal: {
       database: `${dbPrefix}globalzelapps`,
       collections: {
-        appsMessages: 'zelappsmessages', // storage for all flux apps messages done on flux network
+        appMessages: 'appmessages', // one record per app message hash: the chain's payment and the verified contents, in the states the app-messages migration leaves
+        appsMessages: 'zelappsmessages', // the permanent messages of nodes not yet past the app-messages migration, which moves them and drops this
         appDecisions: 'appdecisions', // one decision per paid app message: applied, or refused with its reason
         appsInformation: 'zelappsinformation', // stores actual state of flux app configuration info - initial state and its overwrites with update messages
-        appsTemporaryMessages: 'zelappstemporarymessages', // storages for all flux apps messages that are not yet confirmed on the flux network
+        appsTemporaryMessages: 'zelappstemporarymessages', // the temporary pool of nodes not yet past the app-messages migration, which moves it and drops this
         appsUnpayableMessages: 'appsunpayablemessages', // v9 messages this node dropped from the pool with no payment inside their window: the chain can no longer pay them
         appsInstallingLocations: 'appsinstallinglocations', // stores install location of flux apps as documents containing name, ip, obtainedAt
         limitCounterRecords: 'limitcounterrecords', // gossiped record of one caller's use of a limited feature, keyed by the counter's hash; self-reaping on its own endsAt

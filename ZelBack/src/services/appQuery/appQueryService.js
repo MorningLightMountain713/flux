@@ -2,7 +2,6 @@
 
 // App Query Service - Query and information functions for installed apps
 const config = require('config');
-const dbHelper = require('../dbHelper');
 const messageHelper = require('../messageHelper');
 const dockerService = require('../dockerService');
 const registryManager = require('../appDatabase/registryManager');
@@ -28,7 +27,6 @@ const appReconciler = require('../appMonitoring/appReconciler');
 const nodeSpecs = require('../appRequirements/nodeSpecs');
 
 // Database collections
-const globalAppsMessages = config.get('database.appsglobal.collections.appsMessages');
 
 /**
  * The names of the apps installed on this node that the network lists at
@@ -674,12 +672,7 @@ async function getAppsMessagesCount(req, res) {
     if (!appowner) {
       throw new Error('No Application Owner specified');
     }
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.get('database.appsglobal.database'));
-
-    const query = { 'appSpecifications.owner': appowner };
-
-    const count = await dbHelper.countInDatabase(database, globalAppsMessages, query);
+    const count = await appRecords.messages().confirmedCount({ owner: appowner });
     const countResponse = messageHelper.createDataMessage(count);
     res.json(countResponse);
   } catch (error) {

@@ -1,9 +1,7 @@
 'use strict';
 
-const config = require('config');
 
 const log = require('../../lib/log');
-const dbHelper = require('../dbHelper');
 const capabilities = require('../utils/capabilities');
 const chainState = require('../chainState');
 const fluxEventBus = require('../utils/fluxEventBus');
@@ -44,7 +42,6 @@ const { lookupBlockTime } = require('../appMessaging/confirmedMessageStore');
  * added. uuid, identity or term start alone run none.
  */
 
-const globalAppsMessages = config.get('database.appsglobal.collections.appsMessages');
 
 const CAPABILITY = 'appRegistryConsistent';
 const OWNER = 'appRegistry';
@@ -61,10 +58,6 @@ const listed = new Map();
 
 const removedListeners = [];
 const ownerChangedListeners = [];
-
-function globalDb() {
-  return dbHelper.databaseConnection().db(config.get('database.appsglobal.database'));
-}
 
 /**
  * The chain position liveness is judged at: the scanned block's height and time.
@@ -108,10 +101,8 @@ async function rowsFor(applied) {
   if (applied.size === 0) return { rows: new Map(), carried };
   const { InstantiatedSpec } = await getSpecBackend();
   const clock = await chainClock();
-  const messages = await dbHelper.findInDatabase(
-    globalDb(), globalAppsMessages, { hash: { $in: [...applied.values()].map((d) => d.hash) } }, { projection: { _id: 0 } },
-  );
-  const byHash = new Map(messages.map((message) => [message.hash, message]));
+  const messages = await appRecords.messages().confirmedByHashes([...applied.values()].map((d) => d.hash));
+  const byHash = new Map(messages.map((record) => [record.hash, record.permanentForm()]));
 
   const rows = new Map();
   for (const [name, decision] of applied) {

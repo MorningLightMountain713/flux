@@ -1,28 +1,17 @@
 'use strict';
 
 const config = require('config');
-const dbHelper = require('../dbHelper');
 const log = require('../../lib/log');
 const messageHelper = require('../messageHelper');
 const verificationHelper = require('../verificationHelper');
-const generalService = require('../generalService');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const serviceHelper = require('../serviceHelper');
 const appsRepository = require('../appDatabase/appsRepository');
 const confirmedMessageStore = require('./confirmedMessageStore');
-const {
-  globalAppsMessages,
-  globalAppsTempMessages,
-  appsHashesCollection,
-  scannedHeightCollection,
-} = require('../utils/appConstants');
-const { invalidMessages } = require('../invalidMessages');
+const appRecords = require('../appDatabase/appRecords');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const { Privilege, authOf } = require('../utils/privileges');
 
-// Import hashesNumberOfSearchs from appsService - this should be shared state
-// For now, we'll create a local instance, but ideally this should be moved to globalState
-const hashesNumberOfSearchs = new Map();
 
 /**
  * Request app message from network
@@ -92,53 +81,18 @@ async function requestAppMessageAPI(req, res) {
 
 
 /**
- * Check if app hash has message
- * @param {string} hash - Hash to check
- * @returns {Promise<boolean>} True if hash has message
- */
-async function appHashHasMessage(hash) {
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.get('database.daemon.database'));
-  const query = { hash };
-  const update = { $set: { message: true, messageNotFound: false } };
-  const options = {};
-  await dbHelper.updateOneInDatabase(database, appsHashesCollection, query, update, options);
-  return true;
-}
-
-/**
- * Check if app hash has message not found
- * @param {string} hash - Hash to check
- * @returns {Promise<boolean>} True if hash has message not found
- */
-async function appHashHasMessageNotFound(hash) {
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.get('database.daemon.database'));
-  const query = { hash };
-  const update = { $set: { messageNotFound: true } };
-  const options = {};
-  await dbHelper.updateOneInDatabase(database, appsHashesCollection, query, update, options);
-  return true;
-}
-
-/**
  * Get temporary app messages via API
  * @param {import('express').Request} req
  * @param {import('express').Response} res
  */
 async function getAppsTemporaryMessages(req, res) {
   try {
-    const db = dbHelper.databaseConnection();
-
-    const database = db.db(config.get('database.appsglobal.database'));
-    let query = {};
     let { hash } = req.params;
     hash = hash || req.query.hash;
-    if (hash) {
-      query = { hash };
-    }
-    const projection = { projection: { _id: 0 } };
-    const results = await dbHelper.findInDatabase(database, globalAppsTempMessages, query, projection);
+    const pooled = hash
+      ? [await appRecords.messages().byHash(hash)].filter((record) => record && record.isHeld && !record.isPaid)
+      : await appRecords.messages().pool();
+    const results = pooled.map((record) => record.temporaryForm());
     const resultsResponse = messageHelper.createDataMessage(results);
     res.json(resultsResponse);
   } catch (error) {
@@ -159,26 +113,17 @@ async function getAppsTemporaryMessages(req, res) {
  */
 async function getAppsPermanentMessages(req, res) {
   try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.get('database.appsglobal.database'));
-    const query = {};
     let { hash } = req.params;
     hash = hash || req.query.hash;
     let { owner } = req.params;
     owner = owner || req.query.owner;
     let { appname } = req.params;
     appname = appname || req.query.appname;
-    if (hash) {
-      query.hash = hash;
-    }
-    if (owner) {
-      query['appSpecifications.owner'] = owner;
-    }
-    if (appname) {
-      query['appSpecifications.name'] = appname;
-    }
-    const projection = { projection: { _id: 0 } };
-    const results = await dbHelper.findInDatabase(database, globalAppsMessages, query, projection);
+    const filter = {};
+    if (hash) filter.hash = hash;
+    if (owner) filter.owner = owner;
+    if (appname) filter.name = appname;
+    const results = (await appRecords.messages().confirmedFind(filter)).map((record) => record.permanentForm());
     const resultsResponse = messageHelper.createDataMessage(results);
     res.json(resultsResponse);
   } catch (error) {
@@ -271,7 +216,6 @@ async function checkAndRequestApp(hash, i = 0) {
   try {
     const existing = await appsRepository.getPermanentMessage(hash);
     if (existing) {
-      await appHashHasMessage(hash);
       confirmedMessageStore.notifyStored([hash]);
       return true;
     }
@@ -338,166 +282,15 @@ async function checkAndRequestMultipleApps(apps, i = 1) {
   }
 }
 
-// Global variables for continuousFluxAppHashesCheck
-let continuousFluxAppHashesCheckRunning = false;
-let firstContinuousFluxAppHashesCheckRun = true;
-
-/**
- * Continuously checks for missing flux app hashes and requests missing messages
- * @param {boolean} force - Force check even if already running
- * @returns {Promise<void>}
- */
-async function continuousFluxAppHashesCheck(force = false) {
-  try {
-    if (continuousFluxAppHashesCheckRunning) {
-      return;
-    }
-    log.info('Requesting missing Flux App messages');
-    continuousFluxAppHashesCheckRunning = true;
-    const numberOfPeers = fluxNetworkHelper.getNumberOfPeers();
-    if (numberOfPeers < config.get('fluxapps.minHashSyncPeers')) {
-      log.info('Not enough connected peers to request missing Flux App messages');
-      continuousFluxAppHashesCheckRunning = false;
-      return;
-    }
-
-    const synced = await generalService.checkSynced();
-    if (synced !== true) {
-      log.info('Flux not yet synced');
-      continuousFluxAppHashesCheckRunning = false;
-      return;
-    }
-
-    const dbopen = dbHelper.databaseConnection();
-    const database = dbopen.db(config.get('database.daemon.database'));
-    const queryHeight = { generalScannedHeight: { $gte: 0 } };
-    const projectionHeight = {
-      projection: {
-        _id: 0,
-        generalScannedHeight: 1,
-      },
-    };
-    const scanHeight = await dbHelper.findOneInDatabase(database, scannedHeightCollection, queryHeight, projectionHeight);
-    if (!scanHeight) {
-      throw new Error('Scanning not initiated');
-    }
-    const explorerHeight = serviceHelper.ensureNumber(scanHeight.generalScannedHeight);
-
-    // get flux app hashes that do not have a message
-    const query = { message: false };
-    const projection = {
-      projection: {
-        _id: 0,
-        txid: 1,
-        hash: 1,
-        height: 1,
-        value: 1,
-        message: 1,
-        messageNotFound: 1,
-        blockTime: 1,
-      },
-    };
-    const results = await dbHelper.findInDatabase(database, appsHashesCollection, query, projection);
-    // sort it by height, so we request oldest messages first
-    results.sort((a, b) => a.height - b.height);
-    let appsMessagesMissing = [];
-    // eslint-disable-next-line no-restricted-syntax
-    for (const result of results) {
-      if (!result.messageNotFound || force || firstContinuousFluxAppHashesCheckRun) { // most likely wrong data, if no message found. This attribute is cleaned every reconstructAppMessagesHashPeriod blocks so all nodes search again for missing messages
-        let heightDifference = explorerHeight - result.height;
-        if (heightDifference < 0) {
-          heightDifference = 0;
-        }
-        let maturity = Math.round(heightDifference / config.get('fluxapps.blocksLasting'));
-        if (maturity > 12) {
-          maturity = 16; // maturity of max 16 representing its older than 1 year. Old messages will only be searched 3 times, newer messages more oftenly
-        }
-        if (invalidMessages.find((message) => message.hash === result.hash && message.txid === result.txid)) {
-          if (!force) {
-            maturity = 30; // do not request known invalid messages.
-          }
-        }
-        // every config.fluxapps.blocksLasting increment maturity by 2;
-        let numberOfSearches = maturity;
-        if (hashesNumberOfSearchs.has(result.hash)) {
-          numberOfSearches = hashesNumberOfSearchs.get(result.hash) + 2; // max 10 tries
-        }
-        hashesNumberOfSearchs.set(result.hash, numberOfSearches);
-        log.info(`Requesting missing Flux App message: ${result.hash}, ${result.txid}, ${result.height}`);
-        if (numberOfSearches <= 20) { // up to 10 searches
-          const appMessageInformation = {
-            hash: result.hash,
-            txid: result.txid,
-            height: result.height,
-            value: result.value,
-            blockTime: result.blockTime ?? null,
-          };
-          appsMessagesMissing.push(appMessageInformation);
-          if (appsMessagesMissing.length === 500) {
-            log.info('Requesting 500 app messages');
-            checkAndRequestMultipleApps(appsMessagesMissing);
-            // eslint-disable-next-line no-await-in-loop
-            await serviceHelper.delay(2 * 60 * 1000); // delay 2 minutes to give enough time to process all messages received
-            appsMessagesMissing = [];
-          }
-        } else {
-          // eslint-disable-next-line no-await-in-loop
-          await appHashHasMessageNotFound(result.hash); // mark message as not found
-          hashesNumberOfSearchs.delete(result.hash); // remove from our map
-        }
-      }
-    }
-    if (appsMessagesMissing.length > 0) {
-      log.info(`Requesting ${appsMessagesMissing.length} app messages`);
-      checkAndRequestMultipleApps(appsMessagesMissing);
-    }
-    continuousFluxAppHashesCheckRunning = false;
-    firstContinuousFluxAppHashesCheckRun = false;
-  } catch (error) {
-    log.error(error);
-    continuousFluxAppHashesCheckRunning = false;
-    firstContinuousFluxAppHashesCheckRun = false;
-  }
-}
-
-/**
- * API endpoint to manually trigger app hashes check
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- * @returns {Promise<void>}
- */
-async function triggerAppHashesCheckAPI(req, res) {
-  try {
-    // only flux team and node owner can do this
-    const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req));
-    if (!authorized) {
-      const errMessage = messageHelper.errUnauthorizedMessage();
-      res.json(errMessage);
-      return;
-    }
-
-    continuousFluxAppHashesCheck(true);
-    const resultsResponse = messageHelper.createSuccessMessage('Running check on missing application messages ');
-    res.json(resultsResponse);
-  } catch (error) {
-    log.error(error);
-    const errMessage = messageHelper.createErrorMessage(error.message, error.name, error.code);
-    res.json(errMessage);
-  }
-}
 
 module.exports = {
   requestAppMessage,
   requestAppsMessage,
   requestAppMessageAPI,
-  appHashHasMessage,
-  appHashHasMessageNotFound,
   getAppsTemporaryMessages,
   getAppsPermanentMessages,
   getIngressAttestations,
   getIngressAttestationsByApp,
   checkAndRequestApp,
   checkAndRequestMultipleApps,
-  continuousFluxAppHashesCheck,
-  triggerAppHashesCheckAPI,
 };

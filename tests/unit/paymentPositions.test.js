@@ -7,12 +7,10 @@ const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
 const config = require('config');
 
-const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
-const messageVerifier = require('../../ZelBack/src/services/appMessaging/messageVerifier');
 const { appPaymentAddresses, appPaymentPositions } = require('../../ZelBack/src/services/appPaymentPositions');
-const { backfillPaymentPositions, BACKFILL_BATCH } = require('../../ZelBack/src/services/migrations/paymentPositions');
-const { requireMongo } = require('./dbTestHelper');
+const { backfillPaymentPositions } = require('../../ZelBack/src/services/migrations/paymentPositions');
+const { stubMessages } = require('./fixtures/appRecords');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -71,196 +69,81 @@ describe('app payment positions', () => {
     });
   });
 
-  describe('backfillPaymentPositions against the database', () => {
-    before(requireMongo);
-
-    let hashes;
-
-    beforeEach(async () => {
-      await dbHelper.initiateDB();
-      hashes = dbHelper.databaseConnection().db(config.database.daemon.database).collection(config.database.daemon.collections.appsHashes);
-      await hashes.deleteMany({});
-      sinon.stub(messageVerifier, 'moveStoredMessagesToPayments').resolves([]);
-      sinon.stub(messageVerifier, 'storeGoverningAppSpecifications').resolves();
-      executeCall.withArgs('getBlockCount').resolves({ status: 'success', data: 1000 });
-      executeCall.withArgs('getaddressdeltas').resolves({ status: 'success', data: [] });
-    });
-
-    afterEach(async () => {
-      await hashes.deleteMany({});
-    });
-
-    it('asks the daemon nothing for a record it already found not on the chain', async () => {
-      await hashes.insertOne({
-        hash: 'orphaned', txid: 'orphaned', height: 500, value: 1,
-      });
-
-      expect((await backfillPaymentPositions()).notOnChain).to.equal(1);
-      expect((await hashes.findOne({ hash: 'orphaned' })).notOnChain).to.equal(true);
-      executeCall.resetHistory();
-
-      expect(await backfillPaymentPositions()).to.deep.equal({
-        positioned: 0, heightsCorrected: 0, notOnChain: 0, aboveTip: 0,
-      });
-      sinon.assert.notCalled(executeCall);
-    });
-  });
-
   describe('backfillPaymentPositions', () => {
-    let findInDatabase;
-    let bulkWriteInDatabase;
-    let moveStoredMessagesToPayments;
-    let storeGoverningAppSpecifications;
-    const TIP = 1000;
+    let messages;
 
     beforeEach(() => {
-      sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
-      findInDatabase = sinon.stub(dbHelper, 'findInDatabase');
-      bulkWriteInDatabase = sinon.stub(dbHelper, 'bulkWriteInDatabase').resolves();
-      moveStoredMessagesToPayments = sinon.stub(messageVerifier, 'moveStoredMessagesToPayments').resolves([]);
-      storeGoverningAppSpecifications = sinon.stub(messageVerifier, 'storeGoverningAppSpecifications').resolves();
-      executeCall.withArgs('getBlockCount').resolves({ status: 'success', data: TIP });
+      messages = stubMessages();
     });
 
-    const writes = () => bulkWriteInDatabase.firstCall.args[2].map(({ updateOne }) => [updateOne.filter.txid, updateOne.update.$set]);
+    function daemonAnswers(tip, deltas) {
+      executeCall.withArgs('getBlockCount').resolves({ status: 'success', data: tip });
+      executeCall.withArgs('getaddressdeltas').resolves({ status: 'success', data: deltas });
+    }
 
-    it('asks the daemon nothing when every record has a position', async () => {
-      findInDatabase.resolves([]);
-      const outcome = await backfillPaymentPositions();
-      expect(outcome).to.deep.equal({
+    // What the migration wrote, by hash: a position, or the not-on-chain mark.
+    const written = () => [
+      ...messages.setPosition.getCalls().map((call) => [call.args[0], call.args[1]]),
+      ...messages.markNotOnChain.getCalls().map((call) => [call.args[0], { notOnChain: true }]),
+    ];
+
+    it('asks the daemon nothing and writes nothing when everything has a position', async () => {
+      const result = await backfillPaymentPositions();
+      expect(result).to.deep.equal({
         positioned: 0, heightsCorrected: 0, notOnChain: 0, aboveTip: 0,
       });
       sinon.assert.notCalled(executeCall);
-      sinon.assert.notCalled(bulkWriteInDatabase);
+      sinon.assert.notCalled(messages.setPosition);
+      sinon.assert.notCalled(messages.markNotOnChain);
     });
 
-    it('reads only the records without a position', async () => {
-      findInDatabase.resolves([]);
-      await backfillPaymentPositions();
-      expect(findInDatabase.firstCall.args[1]).to.equal(config.database.daemon.collections.appsHashes);
-      expect(findInDatabase.firstCall.args[2]).to.deep.equal({ txIndex: { $exists: false }, notOnChain: { $ne: true } });
+    it('positions each record from one address-index call from the first payment height to the tip, and marks one the chain does not hold', async () => {
+      messages.withoutPosition.resolves([
+        { hash: 'ha', txid: 'a', height: 900 }, { hash: 'hb', txid: 'b', height: 700 }, { hash: 'hgone', txid: 'gone', height: 800 },
+      ]);
+      daemonAnswers(950, [delta('a', 900, 4), delta('b', 700, 1), delta('b', 700, 1, -500_000_000)]);
+      const result = await backfillPaymentPositions();
+      sinon.assert.calledOnce(executeCall.withArgs('getaddressdeltas'));
+      expect(executeCall.withArgs('getaddressdeltas').firstCall.args[1][0]).to.include({ start: config.fluxapps.epochstart, end: 950 });
+      expect(executeCall.withArgs('getBlockCount').firstCall.args.slice(1)).to.deep.equal([[], { useCache: false }]);
+      expect(result).to.deep.equal({
+        positioned: 2, heightsCorrected: 0, notOnChain: 1, aboveTip: 0,
+      });
+      expect(written()).to.deep.equal([
+        ['ha', { txIndex: 4, height: 900 }], ['hb', { txIndex: 1, height: 700 }], ['hgone', { notOnChain: true }],
+      ]);
     });
 
-    it('positions a record, at the height the chain holds its transaction', async () => {
-      findInDatabase.resolves([{ txid: 'same', height: 500 }, { txid: 'moved', height: 501 }]);
-      executeCall.withArgs('getaddressdeltas').resolves({ status: 'success', data: [delta('same', 500, 4), delta('moved', 503, 1)] });
-
-      const outcome = await backfillPaymentPositions();
-
-      expect(writes()).to.deep.equal([['same', { txIndex: 4, height: 500 }], ['moved', { txIndex: 1, height: 503 }]]);
-      expect(outcome).to.deep.equal({
+    // A v8 node can hold a record written from a block that later left the chain:
+    // its height is not where the transaction is. The decider reads a term's start
+    // and its fee from that height, so the position comes with the chain's height.
+    it('writes the chain\'s height over a recorded height the transaction is not at', async () => {
+      messages.withoutPosition.resolves([{ hash: 'ha', txid: 'a', height: 2_021_225 }, { hash: 'hb', txid: 'b', height: 2_020_000 }]);
+      // a's true height is above every recorded height, so only a search to the tip finds it
+      daemonAnswers(2_030_000, [delta('a', 2_021_557, 3), delta('b', 2_020_000, 2)]);
+      const result = await backfillPaymentPositions();
+      expect(result).to.deep.equal({
         positioned: 2, heightsCorrected: 1, notOnChain: 0, aboveTip: 0,
       });
-      expect(executeCall.withArgs('getaddressdeltas').firstCall.args[1][0]).to.include({ start: config.fluxapps.epochstart, end: TIP });
-    });
-
-    it('moves the stored message of a record whose height it corrects before writing the record, and writes its app\'s registry row after', async () => {
-      findInDatabase.resolves([
-        {
-          hash: 'hsame', txid: 'same', height: 500, value: 5,
-        },
-        {
-          hash: 'hmoved', txid: 'moved', height: 501, value: 7,
-        },
-      ]);
-      executeCall.withArgs('getaddressdeltas').resolves({ status: 'success', data: [delta('same', 500, 4), delta('moved', 503, 1)] });
-      moveStoredMessagesToPayments.resolves(['MovedApp']);
-
-      await backfillPaymentPositions();
-
-      sinon.assert.calledOnceWithExactly(moveStoredMessagesToPayments, [{
-        hash: 'hmoved', txid: 'moved', height: 503, value: 7,
-      }]);
-      sinon.assert.calledOnceWithExactly(storeGoverningAppSpecifications, ['MovedApp']);
-      sinon.assert.callOrder(moveStoredMessagesToPayments, bulkWriteInDatabase, storeGoverningAppSpecifications);
-    });
-
-    it('writes no record when moving the stored messages fails, so the next start finds them again', async () => {
-      findInDatabase.resolves([{
-        hash: 'hmoved', txid: 'moved', height: 501, value: 7,
-      }]);
-      executeCall.withArgs('getaddressdeltas').resolves({ status: 'success', data: [delta('moved', 503, 1)] });
-      moveStoredMessagesToPayments.rejects(new Error('mongo gone'));
-
-      await expect(backfillPaymentPositions()).to.be.rejectedWith('mongo gone');
-      sinon.assert.notCalled(bulkWriteInDatabase);
-      sinon.assert.notCalled(storeGoverningAppSpecifications);
-    });
-
-    it('writes no registry row when writing the records fails', async () => {
-      findInDatabase.resolves([{
-        hash: 'hmoved', txid: 'moved', height: 501, value: 7,
-      }]);
-      executeCall.withArgs('getaddressdeltas').resolves({ status: 'success', data: [delta('moved', 503, 1)] });
-      moveStoredMessagesToPayments.resolves(['MovedApp']);
-      bulkWriteInDatabase.rejects(new Error('mongo gone'));
-
-      await expect(backfillPaymentPositions()).to.be.rejectedWith('mongo gone');
-      sinon.assert.notCalled(storeGoverningAppSpecifications);
-    });
-
-    it('moves no stored message when no height is corrected', async () => {
-      findInDatabase.resolves([{
-        hash: 'hsame', txid: 'same', height: 500, value: 5,
-      }]);
-      executeCall.withArgs('getaddressdeltas').resolves({ status: 'success', data: [delta('same', 500, 4)] });
-
-      await backfillPaymentPositions();
-
-      expect(writes()).to.deep.equal([['same', { txIndex: 4, height: 500 }]]);
-      sinon.assert.calledOnceWithExactly(moveStoredMessagesToPayments, []);
-      sinon.assert.calledOnceWithExactly(storeGoverningAppSpecifications, []);
-    });
-
-    it('marks a record whose transaction the chain does not hold as not on the chain', async () => {
-      findInDatabase.resolves([{ txid: 'orphaned', height: 600 }]);
-      executeCall.withArgs('getaddressdeltas').resolves({ status: 'success', data: [] });
-
-      const outcome = await backfillPaymentPositions();
-
-      expect(writes()).to.deep.equal([['orphaned', { notOnChain: true }]]);
-      expect(outcome.notOnChain).to.equal(1);
+      expect(written()).to.deep.equal([['ha', { txIndex: 3, height: 2_021_557 }], ['hb', { txIndex: 2, height: 2_020_000 }]]);
     });
 
     it('leaves a record above the daemon\'s tip for a later run', async () => {
-      findInDatabase.resolves([{ txid: 'ahead', height: TIP + 1 }]);
-      executeCall.withArgs('getaddressdeltas').resolves({ status: 'success', data: [] });
-
-      const outcome = await backfillPaymentPositions();
-
-      sinon.assert.notCalled(bulkWriteInDatabase);
-      expect(outcome).to.deep.equal({
+      messages.withoutPosition.resolves([{ hash: 'hahead', txid: 'ahead', height: 951 }]);
+      daemonAnswers(950, []);
+      const result = await backfillPaymentPositions();
+      expect(result).to.deep.equal({
         positioned: 0, heightsCorrected: 0, notOnChain: 0, aboveTip: 1,
       });
+      expect(written()).to.deep.equal([]);
     });
 
-    it('writes the records in batches, each of at most BACKFILL_BATCH', async () => {
-      const count = (2 * BACKFILL_BATCH) + 1;
-      const records = Array.from({ length: count }, (_, i) => ({ txid: `t${i}`, height: 500 }));
-      findInDatabase.resolves(records);
-      executeCall.withArgs('getaddressdeltas').resolves({ status: 'success', data: records.map(({ txid }, i) => delta(txid, 500, i)) });
-
-      const outcome = await backfillPaymentPositions();
-
-      expect(bulkWriteInDatabase.getCalls().map((call) => call.args[2].length)).to.deep.equal([BACKFILL_BATCH, BACKFILL_BATCH, 1]);
-      expect(outcome.positioned).to.equal(count);
-    });
-
-    it('writes only to a record that still has no position', async () => {
-      findInDatabase.resolves([{ txid: 'a', height: 500 }]);
-      executeCall.withArgs('getaddressdeltas').resolves({ status: 'success', data: [delta('a', 500, 0)] });
-
-      await backfillPaymentPositions();
-
-      expect(bulkWriteInDatabase.firstCall.args[2][0].updateOne.filter).to.deep.equal({ txid: 'a', txIndex: { $exists: false } });
-    });
-
-    it('fails, writing nothing, when the daemon cannot give its tip', async () => {
-      findInDatabase.resolves([{ txid: 'a', height: 500 }]);
-      executeCall.withArgs('getBlockCount').resolves({ status: 'error', data: { message: 'warming up' } });
-
-      await expect(backfillPaymentPositions()).to.be.rejectedWith('getBlockCount failed: warming up');
-      sinon.assert.notCalled(bulkWriteInDatabase);
+    it('fails rather than searching a range it cannot bound when the daemon gives no tip', async () => {
+      messages.withoutPosition.resolves([{ hash: 'ha', txid: 'a', height: 900 }]);
+      executeCall.withArgs('getBlockCount').resolves({ status: 'error', data: { message: 'loading block index' } });
+      await expect(backfillPaymentPositions()).to.be.rejectedWith('loading block index');
+      sinon.assert.notCalled(messages.setPosition);
+      sinon.assert.notCalled(messages.markNotOnChain);
     });
   });
 });

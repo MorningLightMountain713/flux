@@ -95,6 +95,7 @@ describe('appHashSyncService tests', () => {
   let fluxBroadcastHelperStub;
   let peerManagerStub;
   let collectionStub;
+  let messagesStub;
   let deserializeSpecStub;
 
   function makePeer(ip, port, source = 'random') {
@@ -128,6 +129,7 @@ describe('appHashSyncService tests', () => {
 
   function buildProxyquireStubs(overrides = {}) {
     return {
+      '../appDatabase/appRecords': { messages: () => messagesStub },
       './confirmedMessageStore': makeStoreDouble(() => appEventVerifierStub, () => collectionStub),
       '../dbHelper': dbHelperStub,
       '../messageHelper': messageHelperStub,
@@ -158,6 +160,14 @@ describe('appHashSyncService tests', () => {
   }
 
   beforeEach(() => {
+    // The app messages: the payments awaiting contents are what a test seeds
+    // dbHelperStub.findInDatabase with; every mark is a stub.
+    messagesStub = {
+      awaitingContents: sinon.stub().callsFake(async () => dbHelperStub.findInDatabase()),
+      markSyncAttempt: sinon.stub().resolves(),
+      markNotFound: sinon.stub().resolves(),
+      resetSyncState: sinon.stub().resolves(0),
+    };
     collectionStub = {
       bulkWrite: sinon.stub().resolves({ ok: 1 }),
       insertMany: sinon.stub().resolves({ insertedCount: 0 }),
@@ -277,50 +287,16 @@ describe('appHashSyncService tests', () => {
   });
 
   describe('getMissingHashes', () => {
-    it('should return missing hashes sorted by height', async () => {
-      const mockDb = { db: sinon.stub().returns('database') };
-      dbHelperStub.databaseConnection.returns(mockDb);
+    it('returns the payments awaiting contents as the collection lists them, earliest first', async () => {
       dbHelperStub.findInDatabase.resolves([
-        { hash: 'b', height: 200, message: false },
-        { hash: 'a', height: 100, message: false },
+        { hash: 'a', height: 100 },
+        { hash: 'b', height: 200 },
       ]);
-
       const result = await appHashSyncService.getMissingHashes();
-
-      expect(result).to.have.lengthOf(2);
-      expect(result[0].hash).to.equal('a');
-      expect(result[1].hash).to.equal('b');
+      expect(result.map((r) => r.hash)).to.deep.equal(['a', 'b']);
     });
 
     // A payment the chain does not hold has no message worth fetching, forced or not.
-    it('never asks for the message of a payment the chain does not hold', async () => {
-      const mockDb = { db: sinon.stub().returns('database') };
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findInDatabase.resolves([]);
-
-      await appHashSyncService.getMissingHashes();
-      await appHashSyncService.getMissingHashes({ force: true });
-
-      dbHelperStub.findInDatabase.getCalls().forEach((call) => {
-        expect(call.args[2].notOnChain).to.deep.equal({ $ne: true });
-      });
-      expect(dbHelperStub.findInDatabase.callCount).to.equal(2);
-    });
-
-    it('never asks for the message of a voided payment, forced or not', async () => {
-      const mockDb = { db: sinon.stub().returns('database') };
-      dbHelperStub.databaseConnection.returns(mockDb);
-      dbHelperStub.findInDatabase.resolves([]);
-
-      await appHashSyncService.getMissingHashes();
-      await appHashSyncService.getMissingHashes({ force: true });
-
-      dbHelperStub.findInDatabase.getCalls().forEach((call) => {
-        expect(call.args[2].voided).to.deep.equal({ $ne: true });
-      });
-      expect(dbHelperStub.findInDatabase.callCount).to.equal(2);
-    });
-
     it('should exclude invalid messages when not forced', async () => {
       const mod = proxyquire(
         '../../ZelBack/src/services/appMessaging/appHashSyncService',
@@ -346,6 +322,13 @@ describe('appHashSyncService tests', () => {
       expect(result[0].hash).to.equal('valid1');
     });
 
+    it('asks the collection for the payments awaiting contents at the height, forced or not', async () => {
+      dbHelperStub.findInDatabase.resolves([]);
+      await appHashSyncService.getMissingHashes({ currentHeight: 2_555_000 });
+      await appHashSyncService.getMissingHashes({ force: true, currentHeight: 2_555_000 });
+      sinon.assert.calledWithExactly(messagesStub.awaitingContents.firstCall, { height: 2_555_000, force: false });
+      sinon.assert.calledWithExactly(messagesStub.awaitingContents.secondCall, { height: 2_555_000, force: true });
+    });
     it('should return empty array when no hashes are missing', async () => {
       const mockDb = { db: sinon.stub().returns('database') };
       dbHelperStub.databaseConnection.returns(mockDb);
@@ -423,57 +406,6 @@ describe('appHashSyncService tests', () => {
         expect(err.message).to.equal('DB error');
       }
       expect(threw).to.equal(true);
-    });
-
-    it('should batch existence checks and skip existing messages via bulk fetch', async () => {
-      const manyMissing = Array(600).fill(null).map((_, i) => ({
-        hash: `hash${i}`, txid: `tx${i}`, height: 1000 + i, value: 100, message: false,
-      }));
-
-      // Bulk fetch returns 10 messages (6 already exist, 4 new)
-      const bulkFetchResult = await Promise.all(Array(10).fill(null).map((_, i) => legacyMessage({
-        type: 'fluxappregister', hash: `hash${i}`, txid: `tx${i}`, height: 1000 + i, name: `app${i}`,
-      })));
-      const existingPermanent = [
-        { hash: 'hash0' }, { hash: 'hash1' }, { hash: 'hash2' },
-        { hash: 'hash3' }, { hash: 'hash4' }, { hash: 'hash5' },
-      ];
-
-      const existingHashSet = new Set(existingPermanent.map((h) => h.hash));
-      const remainingAfterLocal = manyMissing.filter((h) => !existingHashSet.has(h.hash));
-      let getMissingCalls = 0;
-      dbHelperStub.findInDatabase.callsFake((db, col, query) => {
-        if (col === config.database.daemon.collections.appsHashes) {
-          getMissingCalls += 1;
-          if (getMissingCalls === 1) return Promise.resolve(manyMissing);
-          if (getMissingCalls === 2) return Promise.resolve(remainingAfterLocal);
-          return Promise.resolve([]);
-        }
-        if (col === config.database.appsglobal.collections.appsMessages && query && query.hash && query.hash.$in) {
-          return Promise.resolve(existingPermanent);
-        }
-        return Promise.resolve([]);
-      });
-      dbHelperStub.findOneInDatabase.resolves({ generalScannedHeight: 2_555_000 });
-
-      // Bulk fetch: 3 peers x 2 calls each (explorer check + permanent messages)
-      serviceHelperStub.axiosGet.callsFake((url) => {
-        if (url.includes('permanentmessages')) return Promise.resolve(makeStreamResponse(bulkFetchResult));
-        return Promise.resolve({ data: { status: 'success', data: true } });
-      });
-
-      await appHashSyncService.syncMissingHashes();
-
-      // 6 resolved locally via bulkWrite before bulk fetch
-      expect(collectionStub.bulkWrite.called).to.be.true;
-      const localOps = collectionStub.bulkWrite.firstCall.args[0];
-      expect(localOps.length).to.equal(6);
-      localOps.forEach((op) => {
-        expect(op.updateOne.update.$set.message).to.be.true;
-      });
-      // 4 new messages inserted via insertMany from bulk fetch
-      expect(collectionStub.insertMany.calledOnce).to.be.true;
-      expect(collectionStub.insertMany.firstCall.args[0].length).to.equal(4);
     });
 
     it('should send requests to 3 different peers per round', async () => {
@@ -669,74 +601,14 @@ describe('appHashSyncService tests', () => {
   });
 
   describe('resetHashSyncForUpgrade', () => {
-    it('should give fresh start to hashes without retryFromHeight and one retry to hashes with it', async () => {
-      const updateManyStub = sinon.stub()
-        .onFirstCall().resolves({ modifiedCount: 3 })
-        .onSecondCall().resolves({ modifiedCount: 7 });
-      const collectionStubLocal = { updateMany: updateManyStub };
-      const mockDatabase = { collection: sinon.stub().returns(collectionStubLocal) };
-      dbHelperStub.databaseConnection.returns({ db: sinon.stub().returns(mockDatabase) });
-
-      const result = await appHashSyncService.resetHashSyncForUpgrade(2_555_000);
-
-      expect(result).to.equal(10);
-      expect(updateManyStub.calledTwice).to.be.true;
-
-      // First call: hashes with retryFromHeight — one retry, keep syncAttempts
-      expect(updateManyStub.firstCall.args[0]).to.deep.equal({ message: false, retryFromHeight: { $exists: true } });
-      expect(updateManyStub.firstCall.args[1].$set.messageNotFound).to.equal(false);
-      expect(updateManyStub.firstCall.args[1].$set.nextRetryHeight).to.equal(2_555_000);
-      expect(updateManyStub.firstCall.args[1].$set).to.not.have.property('syncAttempts');
-      expect(updateManyStub.firstCall.args[1].$set).to.not.have.property('retryFromHeight');
-
-      // Second call: hashes without retryFromHeight — full fresh start
-      expect(updateManyStub.secondCall.args[0]).to.deep.equal({ message: false, retryFromHeight: { $exists: false } });
-      expect(updateManyStub.secondCall.args[1].$set.messageNotFound).to.equal(false);
-      expect(updateManyStub.secondCall.args[1].$set.syncAttempts).to.equal(0);
-      expect(updateManyStub.secondCall.args[1].$set.nextRetryHeight).to.equal(2_555_000);
-      expect(updateManyStub.secondCall.args[1].$set.retryFromHeight).to.equal(2_555_000);
-    });
-
-    it('should return 0 when no documents match', async () => {
-      const updateManyStub = sinon.stub().resolves({ modifiedCount: 0 });
-      const collectionStubLocal = { updateMany: updateManyStub };
-      const mockDatabase = { collection: sinon.stub().returns(collectionStubLocal) };
-      dbHelperStub.databaseConnection.returns({ db: sinon.stub().returns(mockDatabase) });
-
-      const result = await appHashSyncService.resetHashSyncForUpgrade(2_555_000);
-
-      expect(result).to.equal(0);
+    it('resets the sync state of every payment awaiting contents from the height', async () => {
+      messagesStub.resetSyncState.resolves(10);
+      expect(await appHashSyncService.resetHashSyncForUpgrade(2_555_000)).to.equal(10);
+      sinon.assert.calledOnceWithExactly(messagesStub.resetSyncState, 2_555_000);
     });
   });
 
   describe('hash sync backoff', () => {
-    it('should exclude hashes with future nextRetryHeight from getMissingHashes', async () => {
-      const missing = [
-        { hash: 'h1', txid: 'tx1', height: 2_555_000, value: 10, message: false },
-        { hash: 'h2', txid: 'tx2', height: 2_555_001, value: 10, message: false, nextRetryHeight: 9_999_999 },
-        { hash: 'h3', txid: 'tx3', height: 2_555_002, value: 10, message: false, nextRetryHeight: 1_000_000 },
-      ];
-      dbHelperStub.findInDatabase.resolves(missing);
-      // getMissingHashes adds $or filter for nextRetryHeight, but since we stub findInDatabase
-      // the filter is applied by the DB. For this test, verify the query includes the filter.
-      await appHashSyncService.getMissingHashes();
-      // All 3 returned because findInDatabase stub ignores the query — but verify the query was correct
-      const query = dbHelperStub.findInDatabase.firstCall.args[2];
-      expect(query.message).to.equal(false);
-      expect(query.messageNotFound).to.deep.equal({ $ne: true });
-      expect(query.$or).to.be.an('array');
-      expect(query.$or).to.have.length(2);
-      expect(query.$or[0]).to.deep.equal({ nextRetryHeight: { $exists: false } });
-      expect(query.$or[1].nextRetryHeight).to.have.property('$lte');
-    });
-
-    it('should not filter by nextRetryHeight when force is true', async () => {
-      dbHelperStub.findInDatabase.resolves([]);
-      await appHashSyncService.getMissingHashes({ force: true });
-      const query = dbHelperStub.findInDatabase.firstCall.args[2];
-      expect(query.$or).to.be.undefined;
-    });
-
     // A run that resolves nothing: one held peer that never answers.
     async function failedRun(hashDoc, currentHeight) {
       const clock = sinon.useFakeTimers();
@@ -749,9 +621,9 @@ describe('appHashSyncService tests', () => {
       } finally {
         clock.restore();
       }
-      const ops = collectionStub.bulkWrite.lastCall.args[0];
-      expect(ops.length).to.equal(1);
-      return ops[0].updateOne;
+      sinon.assert.calledOnce(messagesStub.markSyncAttempt);
+      const [hash, attempt] = messagesStub.markSyncAttempt.firstCall.args;
+      return { filter: { hash }, update: { $set: attempt } };
     }
 
     it('the first failure takes the ladder\'s first rung', async () => {
@@ -800,11 +672,11 @@ describe('appHashSyncService tests', () => {
 
     function assertExpiryBehavior() {
       // oldRetry: retryFromHeight 500000, currentHeight 2555000, diff 2055000 > HASH_EXPIRY_BLOCKS — expired
-      expect(messageVerifierStub.appHashHasMessageNotFound.calledWith('ancient_old')).to.be.true;
+      expect(messagesStub.markNotFound.calledWith('ancient_old')).to.be.true;
       // recentRetry: retryFromHeight 2554000, currentHeight 2555000, diff 1000 < HASH_EXPIRY_BLOCKS — NOT expired
-      expect(messageVerifierStub.appHashHasMessageNotFound.calledWith('ancient_recent')).to.be.false;
+      expect(messagesStub.markNotFound.calledWith('ancient_recent')).to.be.false;
       // recentRetry should get backoff instead
-      expect(collectionStub.bulkWrite.called).to.be.true;
+      expect(messagesStub.markSyncAttempt.calledWith('ancient_recent')).to.be.true;
     }
 
     it('should use retryFromHeight for expiry via targeted peer path', async () => {
@@ -903,6 +775,13 @@ describe('appHashSyncService tests', () => {
         '../fluxCommunication': { openEphemeralConnection: sinon.stub().resolves(null) },
         '../fluxNetworkHelper': { getLocalSocketAddress: sinon.stub().resolves('10.0.0.99:16127') },
         './confirmedMessageStore': localStore,
+        '../appDatabase/appRecords': {
+          messages: () => ({
+            awaitingContents: () => localDbHelperStub.findInDatabase(),
+            markSyncAttempt: async () => {},
+            markNotFound: async () => {},
+          }),
+        },
       });
     });
 

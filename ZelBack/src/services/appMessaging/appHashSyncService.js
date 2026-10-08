@@ -3,11 +3,9 @@
 const zlib = require('zlib');
 const { StringDecoder } = require('string_decoder');
 const config = require('config');
-const dbHelper = require('../dbHelper');
 const messageHelper = require('../messageHelper');
 const verificationHelper = require('../verificationHelper');
 const serviceHelper = require('../serviceHelper');
-const messageVerifier = require('./messageVerifier');
 const confirmedMessageStore = require('./confirmedMessageStore');
 const { serialiseAndSignFluxBroadcast } = require('../utils/fluxBroadcastHelper');
 const { peerManager } = require('../utils/peerState');
@@ -21,11 +19,9 @@ const { HASH_EXPIRY_BLOCKS, HASH_RETRY_BACKOFF } = require('../utils/appConstant
 const log = require('../../lib/log');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { invalidMessages } = require('../invalidMessages');
+const appRecords = require('../appDatabase/appRecords');
 const { Privilege, authOf } = require('../utils/privileges');
 
-const appsHashesCollection = config.get('database.daemon.collections.appsHashes');
-const globalAppsMessages = config.get('database.appsglobal.collections.appsMessages');
-const globalAppsTempMessages = config.get('database.appsglobal.collections.appsTemporaryMessages');
 
 const SETTLE_TIME_MS = config.get('fluxapps.hashSyncSettleMs');
 const RESPONSE_TIME_PER_HASH_MS = config.get('fluxapps.hashSyncResponseTimePerHashMs');
@@ -38,25 +34,7 @@ let syncRunning = false;
 
 async function getMissingHashes(options = {}) {
   const { force = false, currentHeight = 0 } = options;
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.get('database.daemon.database'));
-  // A payment the chain does not hold has no message worth fetching, and a
-  // voided one takes none.
-  const query = { message: false, notOnChain: { $ne: true }, voided: { $ne: true } };
-  if (!force) {
-    query.messageNotFound = { $ne: true };
-    query.$or = [
-      { nextRetryHeight: { $exists: false } },
-      { nextRetryHeight: { $lte: currentHeight } },
-    ];
-  }
-  const projection = {
-    projection: {
-      _id: 0, txid: 1, hash: 1, height: 1, value: 1, message: 1, messageNotFound: 1, syncAttempts: 1, retryFromHeight: 1, blockTime: 1,
-    },
-  };
-  const results = await dbHelper.findInDatabase(database, appsHashesCollection, query, projection);
-  results.sort((a, b) => a.height - b.height);
+  const results = await appRecords.messages().awaitingContents({ height: currentHeight, force });
   return results.filter((r) => {
     if (force) return true;
     return !invalidMessages.find((m) => m.hash === r.hash && m.txid === r.txid);
@@ -410,9 +388,6 @@ async function syncMissingHashes(options = {}) {
   syncRunning = true;
   fluxEventBus.count('hashSync:run');
   try {
-    const db = dbHelper.databaseConnection();
-    const daemonDb = db.db(config.get('database.daemon.database'));
-
     let missingHashes = await getMissingHashes({ force, currentHeight });
     log.info(`syncMissingHashes - Found ${missingHashes.length} missing hashes`);
 
@@ -420,49 +395,7 @@ async function syncMissingHashes(options = {}) {
       return { resolved: 0, missing: 0, unreachable: 0 };
     }
 
-    // Check local permanent messages before fetching from peers
-    const appsGlobalDb = db.db(config.get('database.appsglobal.database'));
-    const CHUNK_SIZE = 10_000;
-    let localResolved = 0;
-    for (let i = 0; i < missingHashes.length; i += CHUNK_SIZE) {
-      const chunk = missingHashes.slice(i, i + CHUNK_SIZE);
-      const hashValues = chunk.map((h) => h.hash);
-      // eslint-disable-next-line no-await-in-loop
-      const found = await dbHelper.findInDatabase(appsGlobalDb, globalAppsMessages, { hash: { $in: hashValues } }, { projection: { _id: 0, hash: 1 } });
-      if (found.length > 0) {
-        // The stored message follows this node's payment record.
-        const foundHashes = new Set(found.map((m) => m.hash));
-        // eslint-disable-next-line no-await-in-loop
-        await messageVerifier.alignStoredMessagesWithPayments(chunk.filter((record) => foundHashes.has(record.hash)));
-        const ops = found.map((m) => ({ updateOne: { filter: { hash: m.hash }, update: { $set: { message: true, messageNotFound: false } } } }));
-        // eslint-disable-next-line no-await-in-loop
-        await daemonDb.collection(appsHashesCollection).bulkWrite(ops, { ordered: false });
-        localResolved += found.length;
-      }
-    }
-    // A message this node holds unpromoted is promoted from that copy, as a block's scan
-    // promotes it; a peer's copy of a message already held is not taken (messageStore).
-    let poolResolved = 0;
-    for (let i = 0; i < missingHashes.length; i += CHUNK_SIZE) {
-      const chunk = missingHashes.slice(i, i + CHUNK_SIZE);
-      // eslint-disable-next-line no-await-in-loop
-      const held = await dbHelper.findInDatabase(appsGlobalDb, globalAppsTempMessages, { hash: { $in: chunk.map((h) => h.hash) } }, { projection: { _id: 0, hash: 1 } });
-      const heldHashes = new Set(held.map((m) => m.hash));
-      // eslint-disable-next-line no-restricted-syntax
-      for (const record of chunk.filter((r) => heldHashes.has(r.hash))) {
-        // eslint-disable-next-line no-await-in-loop
-        if (await messageVerifier.checkAndRequestApp(record.hash, 2)) poolResolved += 1;
-      }
-    }
-    if (localResolved > 0 || poolResolved > 0) {
-      log.info(`syncMissingHashes - Resolved ${localResolved} hashes from local permanent messages, ${poolResolved} from unpromoted ones`);
-      localResolved += poolResolved;
-      missingHashes = await getMissingHashes({ force, currentHeight });
-    }
-
-    if (missingHashes.length === 0) {
-      return { resolved: localResolved, missing: 0, unreachable: 0 };
-    }
+    const localResolved = 0;
 
     const initialCount = missingHashes.length;
     let resolved = localResolved;
@@ -540,29 +473,17 @@ async function syncMissingHashes(options = {}) {
     // Update backoff for unresolved hashes
     const finalMissing = await getMissingHashes({ force: false, currentHeight });
 
-    // A hash whose message this node already stores waits on no peer: the next pass
-    // writes its registry row from the stored copy, so it is neither backed off nor
-    // given up on.
-    const stored = new Set();
-    for (let i = 0; i < finalMissing.length; i += CHUNK_SIZE) {
-      const hashValues = finalMissing.slice(i, i + CHUNK_SIZE).map((h) => h.hash);
-      // eslint-disable-next-line no-await-in-loop
-      const found = await dbHelper.findInDatabase(appsGlobalDb, globalAppsMessages, { hash: { $in: hashValues } }, { projection: { _id: 0, hash: 1 } });
-      found.forEach((m) => stored.add(m.hash));
-    }
-
     let unreachable = 0;
     let minNextRetry = null;
     const backoffOps = [];
     for (const hashDoc of finalMissing) {
-      if (stored.has(hashDoc.hash)) continue;
       // A hash is looked for for HASH_EXPIRY_BLOCKS from this node's first look,
       // not from its payment: a node that records an old payment has not been
       // looking for it since.
       const retryFromHeight = hashDoc.retryFromHeight ?? currentHeight;
       if (currentHeight - retryFromHeight > HASH_EXPIRY_BLOCKS) {
         // eslint-disable-next-line no-await-in-loop
-        await messageVerifier.appHashHasMessageNotFound(hashDoc.hash);
+        await appRecords.messages().markNotFound(hashDoc.hash);
         unreachable += 1;
       } else {
         const attempts = (hashDoc.syncAttempts ?? 0) + 1;
@@ -573,17 +494,11 @@ async function syncMissingHashes(options = {}) {
         if (minNextRetry === null || nextRetry < minNextRetry) {
           minNextRetry = nextRetry;
         }
-        backoffOps.push({
-          updateOne: {
-            filter: { hash: hashDoc.hash },
-            update: { $set: { syncAttempts: attempts, nextRetryHeight: nextRetry, retryFromHeight } },
-          },
-        });
+        // eslint-disable-next-line no-await-in-loop
+        await appRecords.messages().markSyncAttempt(hashDoc.hash, { syncAttempts: attempts, nextRetryHeight: nextRetry })
+          .catch((err) => log.error(`syncMissingHashes backoff update: ${err.message}`));
+        backoffOps.push(hashDoc.hash);
       }
-    }
-    if (backoffOps.length > 0) {
-      await daemonDb.collection(appsHashesCollection).bulkWrite(backoffOps, { ordered: false })
-        .catch((err) => log.error(`syncMissingHashes backoff update: ${err.message}`));
     }
 
     const remaining = finalMissing.length - unreachable;
@@ -613,22 +528,7 @@ async function triggerAppHashesCheckAPI(req, res) {
 }
 
 async function resetHashSyncForUpgrade(currentHeight) {
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.get('database.daemon.database'));
-
-  // Hashes already seen by the new retry system — one retry with new code
-  const existingResult = await database.collection(appsHashesCollection).updateMany(
-    { message: false, retryFromHeight: { $exists: true } },
-    { $set: { messageNotFound: false, nextRetryHeight: currentHeight } },
-  );
-
-  // Hashes never seen by the new retry system — full fresh start with 1-year window
-  const newResult = await database.collection(appsHashesCollection).updateMany(
-    { message: false, retryFromHeight: { $exists: false } },
-    { $set: { messageNotFound: false, syncAttempts: 0, nextRetryHeight: currentHeight, retryFromHeight: currentHeight } },
-  );
-
-  return existingResult.modifiedCount + newResult.modifiedCount;
+  return appRecords.messages().resetSyncState(currentHeight);
 }
 
 module.exports = {

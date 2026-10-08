@@ -53,6 +53,7 @@ module.exports = {
     "appsglobal": {
         "database": "node05_globalzelapps",
         "collections": {
+            "appMessages": "appmessages",
             "appsMessages": "zelappsmessages",
             "appDecisions": "appdecisions",
             "appsInformation": "zelappsinformation",

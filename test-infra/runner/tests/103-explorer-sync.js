@@ -39,7 +39,7 @@ describe('Boot: explorer sync', function () {
       expect(state.currentHeight - explorerHeight).to.be.lessThanOrEqual(5);
     });
 
-    it('should have zelappshashes collection accessible', async function () {
+    it('should have the app messages collection accessible', async function () {
       const db = dbClient(1);
       const hashes = await db.hashCounts();
       expect(hashes.total).to.be.a('number');

@@ -7,10 +7,11 @@ const moduleLoader = require('../../../ZelBack/src/lib/moduleLoader');
 const { loadSpecLibrary } = require('./fluxSpec');
 
 /**
- * The app registry, the installed apps and the installed ledgers a unit test's
- * subject reads: a real collection held in memory, or one whose every
- * operation is a stub. Either is installed as appRecords.registry(),
- * appRecords.installed() or appRecords.ledgers() until sinon.restore().
+ * The app registry, the installed apps, the installed ledgers and the app
+ * messages a unit test's subject reads: a real collection held in memory, or
+ * one whose every operation is a stub. Either is installed as
+ * appRecords.registry(), appRecords.installed(), appRecords.ledgers() or
+ * appRecords.messages() until sinon.restore().
  */
 
 // What each operation answers until a test says otherwise.
@@ -134,6 +135,56 @@ async function inMemoryLedgers() {
   return { ledgers: install('ledgers', new InstalledLedgers(provider)), provider };
 }
 
+// What each app-messages operation answers until a test says otherwise.
+const MESSAGE_ANSWERS = {
+  byHash: null,
+  byHashes: [],
+  payment: null,
+  payments: new Map(),
+  recordPayment: 'recorded',
+  recordPayments: { recorded: [], standing: [] },
+  awaitingContents: [],
+  removePaymentsAbove: { kept: 0, removed: 0 },
+  clearPayments: { kept: 0, removed: 0 },
+  resetSyncState: 0,
+  storeContents: { record: null, stored: false },
+  signedByName: null,
+  pool: [],
+  windowsClosedBy: [],
+  carriedManifestRanks: [],
+  confirmed: [],
+  confirmedSummaries: [],
+  confirmedByHashes: [],
+  confirmedNamed: [],
+  confirmedFind: [],
+  confirmedCount: 0,
+  confirmedHashes: new Set(),
+  paid: [],
+  withoutPosition: [],
+};
+
+/**
+ * The app messages with every operation a sinon stub, installed as
+ * appRecords.messages(); calling it again in the same test returns it.
+ * @returns {Object<string, sinon.SinonStub>}
+ */
+function stubMessages() {
+  if (appRecords.messages.restore) return appRecords.messages();
+  return install('messages', stubbed(specLibrary.loaded().AppMessages, MESSAGE_ANSWERS));
+}
+
+/**
+ * A real AppMessages over flux-spec's in-memory store, installed as
+ * appRecords.messages(), with the store beside it.
+ * @returns {Promise<{messages: import('@runonflux/flux-spec-backend').AppMessages, provider: object}>}
+ */
+async function inMemoryMessages() {
+  const { AppMessages } = await loadSpecLibrary();
+  const { InMemoryStorageProvider } = await moduleLoader.importModule('@runonflux/flux-spec-backend/testing');
+  const provider = new InMemoryStorageProvider();
+  return { messages: install('messages', new AppMessages(provider)), provider };
+}
+
 /**
  * An installed record over a registered record, for a stub to answer with: the
  * real InstalledSpec when the record is a real InstantiatedSpec, else a
@@ -165,5 +216,5 @@ function installedRecord(record, { replica = null, owed = null } = {}) {
 }
 
 module.exports = {
-  stubRegistry, inMemoryRegistry, stubInstalled, inMemoryInstalled, stubLedgers, inMemoryLedgers, installedRecord,
+  stubRegistry, inMemoryRegistry, stubInstalled, inMemoryInstalled, stubLedgers, inMemoryLedgers, stubMessages, inMemoryMessages, installedRecord,
 };

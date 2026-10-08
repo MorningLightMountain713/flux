@@ -9,6 +9,7 @@ const entitlementsState = require('./entitlementsState');
 const priceOracleState = require('./pricing/priceOracleState');
 const unclaimedPayments = require('./appDecisions/unclaimedPayments');
 const decisionStore = require('./appDecisions/decisionStore');
+const appRecords = require('./appDatabase/appRecords');
 
 /**
  * Chain-derived state: the scan cursor, the app payment records and soft-fork
@@ -25,7 +26,6 @@ const decisionStore = require('./appDecisions/decisionStore');
  * rewind (the scan's error recovery, or the boot restore) completes the work.
  */
 
-const appsHashesCollection = config.get('database.daemon.collections.appsHashes');
 const scannedHeightCollection = config.get('database.daemon.collections.scannedHeight');
 const chainParamsMessagesCollection = config.get('database.chainparams.collections.chainMessages');
 const softForkCollections = [
@@ -144,20 +144,19 @@ async function setScannedHeight(database, height) {
 }
 
 /**
- * Deletes every chain-derived row above a height: app payment records, the
- * decisions of the messages they paid for, legacy and v9 soft-fork rows. The
- * app messages are not chain data and are never deleted here; the registry
- * follows the decisions at the next full pass. Whole-collection deletes: they
- * run on the maintenance client.
+ * Deletes every chain-derived row above a height: the app payments (the
+ * contents a message holds stay, as the pool's), the decisions of the messages
+ * they paid for, and the legacy and v9 soft-fork rows. The registry follows
+ * the decisions at the next full pass. The soft-fork deletes take whole
+ * collections: they run on the maintenance client.
  * @param {number} height
  */
 async function deleteAbove(height) {
   const dbopen = dbHelper.databaseConnection();
-  const database = dbHelper.onMaintenanceClient(dbopen.db(config.get('database.daemon.database')));
   const databaseUpdates = dbHelper.onMaintenanceClient(dbopen.db(config.get('database.chainparams.database')));
   const query = { height: { $gt: height } };
 
-  await dbHelper.removeDocumentsFromCollection(database, appsHashesCollection, query);
+  await appRecords.messages().removePaymentsAbove(height);
   await decisionStore.deleteAbove(height);
   await dbHelper.removeDocumentsFromCollection(databaseUpdates, chainParamsMessagesCollection, query);
   for (const collection of softForkCollections) {

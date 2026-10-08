@@ -13,17 +13,16 @@ const chainState = require('../../ZelBack/src/services/chainState');
 const confirmedMessageStore = require('../../ZelBack/src/services/appMessaging/confirmedMessageStore');
 const decisionStore = require('../../ZelBack/src/services/appDecisions/decisionStore');
 const { RULE_VERSION } = require('../../ZelBack/src/services/appDecisions/decisionRule');
+const appRecords = require('../../ZelBack/src/services/appDatabase/appRecords');
+const { loadSpecLibrary } = require('./fixtures/fluxSpec');
 
 const OWNER = '1OwnerAddress';
 const BUYER = '1BuyerAddress';
 
-function messages() {
+// The app messages, over the unit database.
+function appMessages() {
   return dbHelper.databaseConnection().db(config.get('database.appsglobal.database'))
-    .collection(config.get('database.appsglobal.collections.appsMessages'));
-}
-function records() {
-  return dbHelper.databaseConnection().db(config.get('database.daemon.database'))
-    .collection(config.get('database.daemon.collections.appsHashes'));
+    .collection(config.get('database.appsglobal.collections.appMessages'));
 }
 function decisions() {
   return dbHelper.databaseConnection().db(config.get('database.appsglobal.database'))
@@ -33,16 +32,16 @@ function decisions() {
 // A stored message, as the fake parser below reads it: its spec names an owner,
 // and its signature says who signed it.
 async function store({
-  hash, name = 'MyApp', type = 'fluxappregister', height, txIndex = 0, owner = OWNER, signer = OWNER, paid = true, timestamp,
+  hash, name = 'MyApp', type = 'fluxappregister', height, txIndex = 0, owner = OWNER, signer = OWNER, paid = true, positioned = true, timestamp,
 }) {
-  await messages().insertOne({
-    hash, type, version: 1, timestamp: timestamp ?? height * 1000 + txIndex, signature: signer, appSpecifications: { name, owner, version: 8 },
-  });
   if (paid) {
-    await records().insertOne({
-      hash, txid: `tx-${hash}`, height, txIndex, value: 100, message: true,
+    await appRecords.messages().recordPayment({
+      hash, txid: `tx-${hash}`, height, ...(positioned ? { txIndex } : {}), value: 100,
     });
   }
+  await appRecords.messages().storeContents({
+    hash, type, version: 1, timestamp: timestamp ?? height * 1000 + txIndex, signature: signer, appSpecifications: { name, owner, version: 8 },
+  }, { receivedAt: new Date() });
 }
 
 // Parsed events the rule can read: the spec's term is 1000 blocks.
@@ -100,13 +99,15 @@ async function verdict(hash) {
 describe('decider', function () {
   this.timeout(20_000);
 
-  before(async () => {
+  before(async function loadLibrary() {
+    this.timeout(30_000);
+    await loadSpecLibrary();
     await dbHelper.initiateDB();
     await decisionStore.prepareCollection();
   });
 
   beforeEach(async () => {
-    await Promise.all([messages().deleteMany({}), records().deleteMany({}), decisions().deleteMany({})]);
+    await Promise.all([appMessages().deleteMany({}), decisions().deleteMany({})]);
     capabilities.resetForTests();
     capabilities.setForTests('chainStateConsistent', true);
   });
@@ -114,7 +115,7 @@ describe('decider', function () {
   afterEach(() => sinon.restore());
 
   after(async () => {
-    await Promise.all([messages().deleteMany({}), records().deleteMany({}), decisions().deleteMany({})]);
+    await Promise.all([appMessages().deleteMany({}), decisions().deleteMany({})]);
     capabilities.resetForTests();
   });
 
@@ -259,8 +260,7 @@ describe('decider', function () {
   });
 
   it('lets a name wait while one of its payment records has no position', async () => {
-    await store({ hash: 'r', height: 100 });
-    await records().updateOne({ hash: 'r' }, { $unset: { txIndex: '' } });
+    await store({ hash: 'r', height: 100, positioned: false });
     const decider = loadDecider();
 
     decider.wakeAll();
@@ -272,15 +272,14 @@ describe('decider', function () {
   // The registry calls itself complete only after a pass that left no name
   // waiting: a name the decider could not order is neither listed nor refused.
   it('tells its full-pass listeners how many names it left waiting for a position', async () => {
-    await store({ hash: 'r', height: 100 });
-    await records().updateOne({ hash: 'r' }, { $unset: { txIndex: '' } });
+    await store({ hash: 'r', height: 100, positioned: false });
     const decider = loadDecider();
     const heard = [];
     decider.onFullPass(async (outcome) => { heard.push(outcome); });
 
     decider.wakeAll();
     await decider.idle();
-    await records().updateOne({ hash: 'r' }, { $set: { txIndex: 0 } });
+    await appRecords.messages().setPosition('r', { txIndex: 0, height: 100 });
     decider.wakeAll();
     await decider.idle();
 
@@ -291,8 +290,8 @@ describe('decider', function () {
   // A record whose transaction the chain does not hold is no payment: its
   // message is not one the decider has to order, and holds nothing up.
   it('neither decides nor waits on a message whose payment is not on the chain', async () => {
-    await store({ hash: 'r', height: 100 });
-    await records().updateOne({ hash: 'r' }, { $unset: { txIndex: '' }, $set: { notOnChain: true } });
+    await store({ hash: 'r', height: 100, positioned: false });
+    await appRecords.messages().markNotOnChain('r');
     const decider = loadDecider();
     const heard = [];
     decider.onFullPass(async (outcome) => { heard.push(outcome); });

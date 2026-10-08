@@ -155,70 +155,6 @@ describe('registryManager tests', () => {
   // The audit that repairs a hash row must also cause someone to go and fetch
   // what it now says is missing. Marking the row and leaving its retry schedule
   // alone means nothing re-seeks it until the height it last failed at.
-  describe('reconstructAppMessagesHashCollection tests', () => {
-    const hashes = config.database.daemon.collections.appsHashes;
-    const messages = config.database.appsglobal.collections.appsMessages;
-
-    beforeEach(async () => {
-      const db = dbHelper.databaseConnection();
-      await db.db(config.database.daemon.database).collection(hashes).deleteMany({});
-      await db.db(config.database.appsglobal.database).collection(messages).deleteMany({});
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ status: 'success', data: { height: 5000, synced: true } });
-    });
-
-    it('re-seeks a row it marked as holding the message, from the row own origin', async () => {
-      const db = dbHelper.databaseConnection();
-      await db.db(config.database.daemon.database).collection(hashes).insertOne({
-        hash: 'h1', txid: 't1', height: 900, message: false, messageNotFound: true, syncAttempts: 7, nextRetryHeight: 4000, retryFromHeight: 900,
-      });
-      await db.db(config.database.appsglobal.database).collection(messages).insertOne({ hash: 'h1' });
-
-      const result = await registryManager.reconstructAppMessagesHashCollection();
-
-      expect(result.changed).to.equal(1);
-      const row = await db.db(config.database.daemon.database).collection(hashes).findOne({ hash: 'h1' });
-      expect(row.message, 'the message is held after all').to.equal(true);
-      expect(row.messageNotFound).to.equal(false);
-      expect(row.syncAttempts, 'the attempts that failed do not count against the repaired row').to.equal(0);
-      expect(row.nextRetryHeight, 'sought from its own origin, not from where the chain is now').to.equal(900);
-    });
-
-    it('re-seeks a row whose message this node does not hold, from the current height', async () => {
-      const db = dbHelper.databaseConnection();
-      await db.db(config.database.daemon.database).collection(hashes).insertOne({
-        hash: 'h2', txid: 't2', height: 900, message: true, messageNotFound: false, syncAttempts: 3, nextRetryHeight: 4000, retryFromHeight: 900,
-      });
-
-      const result = await registryManager.reconstructAppMessagesHashCollection();
-
-      expect(result.changed).to.equal(1);
-      const row = await db.db(config.database.daemon.database).collection(hashes).findOne({ hash: 'h2' });
-      expect(row.message).to.equal(false);
-      expect(row.syncAttempts).to.equal(0);
-      expect(row.nextRetryHeight, 'missing NOW, whatever the row own origin says').to.equal(5000);
-    });
-
-    // The count is what the caller announces on, so it has to count
-    // CORRECTIONS. Counting documents examined would fire the recheck on every
-    // audit, whether or not anything was wrong.
-    it('counts corrections, not rows examined', async () => {
-      const db = dbHelper.databaseConnection();
-      await db.db(config.database.daemon.database).collection(hashes).insertMany([
-        {
-          hash: 'ok1', txid: 't1', height: 900, message: true, messageNotFound: false,
-        },
-        {
-          hash: 'ok2', txid: 't2', height: 901, message: false, messageNotFound: false,
-        },
-      ]);
-      await db.db(config.database.appsglobal.database).collection(messages).insertOne({ hash: 'ok1' });
-
-      const result = await registryManager.reconstructAppMessagesHashCollection();
-
-      expect(result.changed, 'both rows already say what they should').to.equal(0);
-    });
-  });
-
   describe('appLocation tests', () => {
     beforeEach(async () => {
       const collection = config.database.appsglobal.collections.appStateEvents;
@@ -1270,11 +1206,11 @@ describe('registryManager tests', () => {
     // take a name the registry already holds, and it decides it by asking the
     // STORED entry when its lease runs out. Nothing exercised it before.
     describe('re-registration by hash', () => {
-      const hashesCollection = config.database.daemon.collections.appsHashes;
+      const messagesCollection = config.database.appsglobal.collections.appMessages;
 
       beforeEach(async () => {
         try {
-          await db.db(config.database.daemon.database).collection(hashesCollection).drop();
+          await db.db(config.database.appsglobal.database).collection(messagesCollection).drop();
         } catch (err) {
           // Collection doesn't exist
         }
@@ -1292,10 +1228,7 @@ describe('registryManager tests', () => {
       });
 
       it('refuses a hash confirmed before the held name was registered', async () => {
-        await dbHelper.insertOneToDatabase(
-          db.db(config.database.daemon.database), hashesCollection,
-          { hash: 'olderhash', height: EXISTING_HEIGHT - 1000, txid: 'tx0' },
-        );
+        await appRecords.messages().recordPayment({ hash: 'olderhash', height: EXISTING_HEIGHT - 1000, txid: 'tx0', value: 1 });
         const appSpec = await v8Spec({ name: 'existingapp' });
 
         try {
@@ -1314,10 +1247,7 @@ describe('registryManager tests', () => {
         // no such accessor at all.
         const confirmedAt = EXISTING_HEIGHT + 1000;
         expect(confirmedAt, 'the incoming hash must land inside the lease').to.be.below(existingExpiresAt);
-        await dbHelper.insertOneToDatabase(
-          db.db(config.database.daemon.database), hashesCollection,
-          { hash: 'incominghash', height: confirmedAt, txid: 'tx1' },
-        );
+        await appRecords.messages().recordPayment({ hash: 'incominghash', height: confirmedAt, txid: 'tx1', value: 1 });
         const appSpec = await v8Spec({ name: 'existingapp' });
 
         try {

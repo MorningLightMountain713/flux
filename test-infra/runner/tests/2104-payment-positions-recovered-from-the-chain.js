@@ -79,7 +79,6 @@ describe('payment positions a node never recorded are recovered from the chain a
     const strayHeight = chainHeight + 1;
     await db.unsetTxIndex(hash);
     await db.setAppHashHeight(hash, strayHeight);
-    await db.setPermanentMessageHeight(hash, strayHeight);
     // The canary: the record and the message really are at the stray height before the restart.
     expect((await db.appHashRecord(hash)).height).to.equal(strayHeight);
     expect((await db.permanentMessages({ hash }))[0].height).to.equal(strayHeight);

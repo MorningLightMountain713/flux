@@ -55,17 +55,26 @@ describe('unclaimedPayments', () => {
       '../dbHelper': {
         databaseConnection: () => ({ db: (name) => name }),
         findInDatabase: async () => voidRows.map((row) => ({ ...row })),
-        findOneInDatabase: async (_db, _collection, query) => {
-          const record = records.get(query.hash);
-          return record ? { ...record } : null;
-        },
-        updateOneInDatabase: async (_db, _collection, query, update) => {
-          updates.push({ hash: query.hash, update });
-          const record = records.get(query.hash);
-          if (!record) return;
-          if (update.$set) Object.assign(record, update.$set);
-          if (update.$unset) Object.keys(update.$unset).forEach((key) => delete record[key]);
-        },
+      },
+      '../appDatabase/appRecords': {
+        messages: () => ({
+          payment: async (hash) => {
+            const record = records.get(hash);
+            return record ? { ...record } : null;
+          },
+          markVoided: async (hash) => {
+            updates.push({ hash, update: { $set: { voided: true } } });
+            const record = records.get(hash);
+            if (record) record.voided = true;
+          },
+          unmarkVoided: async (hashes) => {
+            for (const hash of hashes) {
+              updates.push({ hash, update: { $unset: { voided: '' } } });
+              const record = records.get(hash);
+              if (record) delete record.voided;
+            }
+          },
+        }),
       },
       './decisionStore': { undecide: async (hashes) => undecided.push(...hashes) },
       '../utils/specLibs': {

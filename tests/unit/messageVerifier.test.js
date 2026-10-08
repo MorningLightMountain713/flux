@@ -116,9 +116,6 @@ function makeBaseStubs(overrides = {}) {
       authorize: sinon.stub().resolves(),
     },
     '../utils/appConstants': {
-      globalAppsMessages: 'appsMessages',
-      globalAppsTempMessages: 'appsTempMessages',
-      appsHashesCollection: 'appsHashes',
       scannedHeightCollection: 'scannedHeight',
     },
     '../invalidMessages': {
@@ -136,25 +133,33 @@ function makeBaseStubs(overrides = {}) {
   const chain = {
     paid: true, txid: 'txid', height: 2_000_000, value: 200_000_000, blockTime: null,
   };
+  // The app messages: the pool and the confirmed records a test seeds, each
+  // answering the form the routes serve; every hash asked about is paid as
+  // `chain` says, and contents stored go to the repository's sink.
+  const messages = {
+    pooled: [],
+    confirmed: [],
+    held: new Set(),
+    pool: sinon.stub().callsFake(async () => messages.pooled),
+    byHash: sinon.stub().callsFake(async (hash) => [...messages.pooled, ...messages.confirmed].find((r) => r.hash === hash) ?? null),
+    confirmedFind: sinon.stub().callsFake(async () => messages.confirmed),
+    byHashes: sinon.stub().callsFake(async (hashes) => hashes.filter((hash) => messages.held.has(hash)).map((hash) => ({ hash, isHeld: true }))),
+    payments: sinon.stub().callsFake(async (hashes) => new Map(chain.paid ? hashes.map((hash) => [hash, { hash, ...chain }]) : [])),
+    setBlockTime: sinon.stub().resolves(),
+    storeContents: sinon.stub().callsFake(async (contents) => {
+      await stubs['../appDatabase/appsRepository'].storePermanentMessage(contents);
+      messages.held.add(contents.hash);
+      return { stored: true };
+    }),
+  };
+  stubs['../appDatabase/appRecords'] = { messages: () => messages };
   const store = () => proxyquire('../../ZelBack/src/services/appMessaging/confirmedMessageStore', {
     config: stubs.config,
     '../../lib/log': logStub,
     '../serviceHelper': stubs['../serviceHelper'],
     '../daemonService/daemonServiceBlockchainRpcs': stubs['../daemonService/daemonServiceBlockchainRpcs'],
     './appEventVerifier': { verifyAttestation: async () => true },
-    '../dbHelper': {
-      databaseConnection: dbStub.databaseConnection,
-      findInDatabase: async (_db, collection, query) => (collection === 'appsHashes' && chain.paid
-        ? query.hash.$in.map((hash) => ({ hash, ...chain }))
-        : []),
-      insertManyToDatabase: async (_db, _collection, docs) => {
-        for (const doc of docs) {
-          // eslint-disable-next-line no-await-in-loop
-          await stubs['../appDatabase/appsRepository'].storePermanentMessage(doc);
-        }
-      },
-      bulkWriteInDatabase: async () => {},
-    },
+    '../appDatabase/appRecords': { messages: () => messages },
   });
   stubs['./confirmedMessageStore'] = {
     storeConfirmedMessages: (...args) => store().storeConfirmedMessages(...args),
@@ -174,9 +179,17 @@ function makeBaseStubs(overrides = {}) {
   }
 
   return {
-    stubs, dbStub, logStub, messageHelperStub, broadcastStub, legacyRegime, v9Regime, chain,
+    stubs, dbStub, logStub, messageHelperStub, broadcastStub, legacyRegime, v9Regime, chain, messages,
   };
 }
+
+// A pool record or a confirmed record as the routes read it.
+const pooledRecord = (doc) => ({
+  hash: doc.hash, isHeld: true, isPaid: false, temporaryForm: () => doc,
+});
+const confirmedRecord = (doc) => ({
+  hash: doc.hash, isHeld: true, isPaid: true, permanentForm: () => doc,
+});
 
 describe('messageVerifier tests', () => {
   afterEach(() => {
@@ -264,69 +277,34 @@ describe('messageVerifier tests', () => {
   });
 
   describe('appHashHasMessage', () => {
-    it('should update the database and return true', async () => {
-      const { stubs, dbStub } = makeBaseStubs();
-      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
-
-      const result = await mv.appHashHasMessage('hash123');
-
-      expect(result).to.be.true;
-      expect(dbStub.updateOneInDatabase.calledOnce).to.be.true;
-      const [, collection, query, update] = dbStub.updateOneInDatabase.firstCall.args;
-      expect(collection).to.equal('appsHashes');
-      expect(query).to.deep.equal({ hash: 'hash123' });
-      expect(update).to.deep.equal({ $set: { message: true, messageNotFound: false } });
-    });
   });
 
   describe('appHashHasMessageNotFound', () => {
-    it('should update the database and return true', async () => {
-      const { stubs, dbStub } = makeBaseStubs();
-      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
-
-      const result = await mv.appHashHasMessageNotFound('hash456');
-
-      expect(result).to.be.true;
-      expect(dbStub.updateOneInDatabase.calledOnce).to.be.true;
-      const [, collection, query, update] = dbStub.updateOneInDatabase.firstCall.args;
-      expect(collection).to.equal('appsHashes');
-      expect(query).to.deep.equal({ hash: 'hash456' });
-      expect(update).to.deep.equal({ $set: { messageNotFound: true } });
-    });
   });
 
   describe('getAppsTemporaryMessages', () => {
     it('should return all temporary messages when no hash filter', async () => {
       const tempMsgs = [{ hash: 'h1' }, { hash: 'h2' }];
-      const { stubs, dbStub } = makeBaseStubs();
-      dbStub.findInDatabase.resolves(tempMsgs);
+      const { stubs, messages } = makeBaseStubs();
+      messages.pooled.push(...tempMsgs.map(pooledRecord));
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
-
       const res = { json: sinon.stub() };
       await mv.getAppsTemporaryMessages({ params: {}, query: {} }, res);
-
       expect(res.json.calledOnce).to.be.true;
       expect(res.json.firstCall.args[0].status).to.equal('success');
       expect(res.json.firstCall.args[0].data).to.deep.equal(tempMsgs);
     });
-
     it('should filter by hash when provided in params', async () => {
-      const { stubs, dbStub } = makeBaseStubs();
-      dbStub.findInDatabase.resolves([]);
+      const { stubs, messages } = makeBaseStubs();
+      messages.pooled.push(pooledRecord({ hash: 'xyz' }), pooledRecord({ hash: 'other' }));
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
-
       const res = { json: sinon.stub() };
       await mv.getAppsTemporaryMessages({ params: { hash: 'xyz' }, query: {} }, res);
-
-      expect(dbStub.findInDatabase.calledOnce).to.be.true;
-      const [, collection, query] = dbStub.findInDatabase.firstCall.args;
-      expect(collection).to.equal('appsTempMessages');
-      expect(query).to.deep.equal({ hash: 'xyz' });
+      expect(res.json.firstCall.args[0].data).to.deep.equal([{ hash: 'xyz' }]);
     });
-
     it('should return error on database failure', async () => {
-      const { stubs, dbStub } = makeBaseStubs();
-      dbStub.findInDatabase.rejects(new Error('DB error'));
+      const { stubs, messages } = makeBaseStubs();
+      messages.pool.rejects(new Error('DB error'));
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
       const res = { json: sinon.stub() };
@@ -340,39 +318,27 @@ describe('messageVerifier tests', () => {
   describe('getAppsPermanentMessages', () => {
     it('should return all permanent messages when no filters', async () => {
       const permMsgs = [{ hash: 'p1' }];
-      const { stubs, dbStub } = makeBaseStubs();
-      dbStub.findInDatabase.resolves(permMsgs);
+      const { stubs, messages } = makeBaseStubs();
+      messages.confirmed.push(...permMsgs.map(confirmedRecord));
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
-
       const res = { json: sinon.stub() };
       await mv.getAppsPermanentMessages({ params: {}, query: {} }, res);
-
       expect(res.json.calledOnce).to.be.true;
       expect(res.json.firstCall.args[0].status).to.equal('success');
       expect(res.json.firstCall.args[0].data).to.deep.equal(permMsgs);
     });
-
     it('should filter by hash, owner, and appname', async () => {
-      const { stubs, dbStub } = makeBaseStubs();
-      dbStub.findInDatabase.resolves([]);
+      const { stubs, messages } = makeBaseStubs();
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
-
       const res = { json: sinon.stub() };
       await mv.getAppsPermanentMessages({
         params: { hash: 'h1', owner: 'o1', appname: 'a1' },
         query: {},
       }, res);
-
-      expect(dbStub.findInDatabase.calledOnce).to.be.true;
-      const query = dbStub.findInDatabase.firstCall.args[2];
-      expect(query.hash).to.equal('h1');
-      expect(query['appSpecifications.owner']).to.equal('o1');
-      expect(query['appSpecifications.name']).to.equal('a1');
+      sinon.assert.calledOnceWithExactly(messages.confirmedFind, { hash: 'h1', owner: 'o1', name: 'a1' });
     });
-
     it('should accept filters from query string', async () => {
-      const { stubs, dbStub } = makeBaseStubs();
-      dbStub.findInDatabase.resolves([]);
+      const { stubs, messages } = makeBaseStubs();
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
       const res = { json: sinon.stub() };
@@ -381,15 +347,12 @@ describe('messageVerifier tests', () => {
         query: { hash: 'qh', owner: 'qo', appname: 'qa' },
       }, res);
 
-      const query = dbStub.findInDatabase.firstCall.args[2];
-      expect(query.hash).to.equal('qh');
-      expect(query['appSpecifications.owner']).to.equal('qo');
-      expect(query['appSpecifications.name']).to.equal('qa');
+      sinon.assert.calledOnceWithExactly(messages.confirmedFind, { hash: 'qh', owner: 'qo', name: 'qa' });
     });
 
     it('should return error on database failure', async () => {
-      const { stubs, dbStub } = makeBaseStubs();
-      dbStub.findInDatabase.rejects(new Error('DB failure'));
+      const { stubs, messages } = makeBaseStubs();
+      messages.confirmedFind.rejects(new Error('DB failure'));
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
       const res = { json: sinon.stub() };
@@ -454,14 +417,12 @@ describe('messageVerifier tests', () => {
     });
 
     it('should return true immediately when permanent message already exists', async () => {
-      const { stubs, dbStub } = makeBaseStubs();
+      const { stubs } = makeBaseStubs();
       stubs['../appDatabase/appsRepository'].getPermanentMessage = sinon.stub().resolves({ hash: 'existing' });
       const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
 
       const result = await mv.checkAndRequestApp('existing');
       expect(result).to.be.true;
-      // Should mark hash as having message
-      expect(dbStub.updateOneInDatabase.calledOnce).to.be.true;
       // and wake the decider for it: a message met again after a rescan is decided again
       sinon.assert.calledOnceWithExactly(stubs['./confirmedMessageStore'].notifyStored, ['existing']);
     });
@@ -541,50 +502,6 @@ describe('messageVerifier tests', () => {
     // and the refusal is also the canary: a path that tried would reach it.
   });
 
-  describe('triggerAppHashesCheckAPI', () => {
-    it('should return unauthorized when privilege check fails', async () => {
-      const { stubs } = makeBaseStubs({
-        '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(false) },
-      });
-      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
-
-      const res = { json: sinon.stub() };
-      await mv.triggerAppHashesCheckAPI({ params: {}, query: {} }, res);
-
-      expect(res.json.calledOnce).to.be.true;
-      expect(res.json.firstCall.args[0].status).to.equal('error');
-      expect(res.json.firstCall.args[0].data.code).to.equal(401);
-    });
-
-    it('should return success when authorized', async () => {
-      const { stubs } = makeBaseStubs();
-      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
-
-      const res = { json: sinon.stub() };
-      await mv.triggerAppHashesCheckAPI({ params: {}, query: {} }, res);
-
-      expect(res.json.calledOnce).to.be.true;
-      expect(res.json.firstCall.args[0].status).to.equal('success');
-    });
-  });
-
-  describe('continuousFluxAppHashesCheck', () => {
-    it('asks for every hash without a message on its first pass, including those marked not found', async () => {
-      const { stubs, dbStub, logStub } = makeBaseStubs();
-      dbStub.findOneInDatabase.resolves({ generalScannedHeight: 2_000_000 });
-      dbStub.findInDatabase.resolves([
-        { hash: 'h1', txid: 't1', height: 1_999_990, value: 1, message: false, messageNotFound: true },
-      ]);
-      const mv = proxyquire('../../ZelBack/src/services/appMessaging/messageVerifier', stubs);
-
-      await mv.continuousFluxAppHashesCheck();
-
-      sinon.assert.notCalled(logStub.error);
-      sinon.assert.calledWith(dbStub.findInDatabase, 'database', 'appsHashes', { message: false });
-      sinon.assert.calledWith(logStub.info, 'Requesting 1 app messages');
-    });
-  });
-
   describe('exported functions', () => {
     it('should export all remaining public functions', () => {
       const { stubs } = makeBaseStubs();
@@ -593,14 +510,10 @@ describe('messageVerifier tests', () => {
       expect(mv.requestAppMessage).to.be.a('function');
       expect(mv.requestAppsMessage).to.be.a('function');
       expect(mv.requestAppMessageAPI).to.be.a('function');
-      expect(mv.appHashHasMessage).to.be.a('function');
-      expect(mv.appHashHasMessageNotFound).to.be.a('function');
       expect(mv.getAppsTemporaryMessages).to.be.a('function');
       expect(mv.getAppsPermanentMessages).to.be.a('function');
       expect(mv.checkAndRequestApp).to.be.a('function');
       expect(mv.checkAndRequestMultipleApps).to.be.a('function');
-      expect(mv.continuousFluxAppHashesCheck).to.be.a('function');
-      expect(mv.triggerAppHashesCheckAPI).to.be.a('function');
     });
 
     it('should not export removed functions', () => {

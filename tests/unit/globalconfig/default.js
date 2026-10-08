@@ -134,6 +134,7 @@ const harnessOverrides = {
     appsglobal: {
       database: 'globalzelappstest',
       collections: {
+        appMessages: 'appmessages',
         appsMessages: 'zelappsmessages', // storage for all flux apps messages done on flux network
         appDecisions: 'appdecisions', // one decision per paid app message: applied, or refused with its reason
         appsInformation: 'zelappsinformation', // stores actual state of flux app configuration info - initial state and its overwrites with update messages

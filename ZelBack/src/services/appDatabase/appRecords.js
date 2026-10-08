@@ -24,12 +24,17 @@ const STORES = Object.freeze({
     database: config.get('database.appslocal.database'),
     collection: config.get('database.appslocal.collections.installedLedgers'),
   }),
+  appMessages: Object.freeze({
+    database: config.get('database.appsglobal.database'),
+    collection: config.get('database.appsglobal.collections.appMessages'),
+  }),
 });
 
 let storage = null;
 let appRegistry = null;
 let installedApps = null;
 let installedLedgers = null;
+let appMessages = null;
 
 function provider() {
   if (!storage) storage = MongoStorageProvider.create(STORES);
@@ -80,6 +85,21 @@ function ledgers() {
 }
 
 /**
+ * The app messages: one record per message hash, holding the chain's payment
+ * and the verified contents as the node has them.
+ * @returns {import('@runonflux/flux-spec-backend').AppMessages}
+ */
+function messages() {
+  if (!appMessages) {
+    const { AppMessages } = specLibrary.loaded();
+    appMessages = new AppMessages(provider(), {
+      onUnreadable: (stored, error) => log.warn(`appMessages: a stored record cannot be read: ${error.message} (hash=${stored.hash})`),
+    });
+  }
+  return appMessages;
+}
+
+/**
  * The installed record of the instance one of whose containers has an
  * identifier, found through its ledger; null when no ledger names it.
  * @param {string} identifier
@@ -101,5 +121,5 @@ function instanceKey({ name, replica }) {
 }
 
 module.exports = {
-  registry, installed, ledgers, installedByIdentifier, instanceKey, STORES,
+  registry, installed, ledgers, messages, installedByIdentifier, instanceKey, STORES,
 };

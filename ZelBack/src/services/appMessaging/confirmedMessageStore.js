@@ -1,13 +1,12 @@
 'use strict';
 
-const config = require('config');
 
 const log = require('../../lib/log');
-const dbHelper = require('../dbHelper');
 const serviceHelper = require('../serviceHelper');
 const daemonServiceBlockchainRpcs = require('../daemonService/daemonServiceBlockchainRpcs');
 const appEventVerifier = require('./appEventVerifier');
 const { getSpecBackend } = require('../utils/specLibs');
+const appRecords = require('../appDatabase/appRecords');
 
 /**
  * The one way an app message whose payment is mined is stored.
@@ -29,10 +28,7 @@ const { getSpecBackend } = require('../utils/specLibs');
  * Storing marks the payment record resolved.
  */
 
-const appsHashesCollection = config.get('database.daemon.collections.appsHashes');
-const globalAppsMessages = config.get('database.appsglobal.collections.appsMessages');
 
-const DUPLICATE_KEY = 11_000;
 
 const storedListeners = [];
 
@@ -130,11 +126,7 @@ async function confirmedEvent(contents, record) {
  * @returns {Promise<Map<string, object>>} by hash
  */
 async function paymentRecords(hashes) {
-  const daemonDb = dbHelper.databaseConnection().db(config.get('database.daemon.database'));
-  const records = await dbHelper.findInDatabase(
-    daemonDb, appsHashesCollection, { hash: { $in: hashes }, notOnChain: { $ne: true } }, { projection: { _id: 0 } },
-  );
-  return new Map(records.map((record) => [record.hash, record]));
+  return appRecords.messages().payments(hashes);
 }
 
 /**
@@ -142,10 +134,9 @@ async function paymentRecords(hashes) {
  * as sent, with this node's chain facts. Null unless the spec as sent hashes to
  * the paid hash by the legacy hash, which a v2 message's hash never is.
  * @param {object} contents
- * @param {{txid: string, height: number, value: number}} record
  * @returns {Promise<object|null>}
  */
-async function unreadableLegacyMessage(contents, record) {
+async function unreadableLegacyMessage(contents) {
   const spec = contents.appSpecifications;
   if (!spec || typeof spec !== 'object') return null;
   const { computeMessageHash } = await getSpecBackend();
@@ -158,10 +149,19 @@ async function unreadableLegacyMessage(contents, record) {
     hash: contents.hash,
     timestamp: contents.timestamp,
     signature: contents.signature,
-    txid: serviceHelper.ensureString(record.txid),
-    height: serviceHelper.ensureNumber(record.height),
-    valueSat: serviceHelper.ensureNumber(record.value),
   };
+}
+
+/**
+ * The contents an event's stored form carries: the signed message, without the
+ * chain facts the payment half holds.
+ * @param {object} serialized
+ * @returns {object}
+ */
+function signedContents(serialized) {
+  const contents = { ...serialized };
+  for (const field of ['txid', 'height', 'valueSat', 'registeredAt']) delete contents[field];
+  return contents;
 }
 
 /**
@@ -192,18 +192,10 @@ async function storeConfirmedMessages(candidates) {
     stored: [], alreadyStored: [], unpaid: [], refused: [],
   };
   if (candidates.length === 0) return result;
-
-  const connection = dbHelper.databaseConnection();
-  const messagesDb = connection.db(config.get('database.appsglobal.database'));
-  const daemonDb = connection.db(config.get('database.daemon.database'));
+  const messages = appRecords.messages();
   const hashes = [...new Set(candidates.map((candidate) => candidate.hash))];
-
-  const existing = new Set((await dbHelper.findInDatabase(
-    messagesDb, globalAppsMessages, { hash: { $in: hashes } }, { projection: { _id: 0, hash: 1 } },
-  )).map((doc) => doc.hash));
+  const existing = new Set((await messages.byHashes(hashes)).filter((record) => record.isHeld).map((record) => record.hash));
   const records = await paymentRecords(hashes);
-
-  const toInsert = [];
   const seen = new Set();
   for (const candidate of candidates) {
     const { hash } = candidate;
@@ -223,45 +215,38 @@ async function storeConfirmedMessages(candidates) {
       result.refused.push({ hash, reason: 'the payment is voided' });
       continue;
     }
-    let event;
+    let event = null;
+    let contents;
     try {
       // eslint-disable-next-line no-await-in-loop
       event = await confirmedEvent(candidate, record);
+      contents = signedContents(event.serialize());
     } catch (error) {
       // eslint-disable-next-line no-await-in-loop
-      const doc = await unreadableLegacyMessage(candidate, record);
-      if (doc) toInsert.push({ hash, event: null, doc, record });
-      else result.refused.push({ hash, reason: error.message });
-      continue;
+      contents = await unreadableLegacyMessage(candidate);
+      if (!contents) {
+        result.refused.push({ hash, reason: error.message });
+        continue;
+      }
+    }
+    if (event) {
+      // eslint-disable-next-line no-await-in-loop
+      const reason = await refusal(event);
+      if (reason) {
+        result.refused.push({ hash, reason });
+        continue;
+      }
+      if (record.blockTime == null && Number.isFinite(event.registeredAt)) {
+        // eslint-disable-next-line no-await-in-loop
+        await messages.setBlockTime(hash, event.registeredAt);
+      }
     }
     // eslint-disable-next-line no-await-in-loop
-    const reason = await refusal(event);
-    if (reason) result.refused.push({ hash, reason });
-    else toInsert.push({ hash, event, doc: event.serialize(), record });
+    const { stored } = await messages.storeContents(contents);
+    if (stored) result.stored.push({ hash, event, record });
+    else result.alreadyStored.push(hash);
   }
-
-  if (toInsert.length) {
-    const failedAt = new Set();
-    await dbHelper.insertManyToDatabase(messagesDb, globalAppsMessages, toInsert.map(({ doc }) => doc), { ordered: false })
-      .catch((error) => {
-        // A message another route stored meanwhile is already stored; any other
-        // failure is this node's and is raised.
-        const writeErrors = error.writeErrors ?? [];
-        if (writeErrors.length === 0 || writeErrors.some((writeError) => writeError.code !== DUPLICATE_KEY)) throw error;
-        writeErrors.forEach((writeError) => failedAt.add(writeError.index));
-      });
-    toInsert.forEach(({ hash, event, record }, index) => {
-      if (failedAt.has(index)) result.alreadyStored.push(hash);
-      else result.stored.push({ hash, event, record });
-    });
-  }
-
   const resolved = [...result.stored.map(({ hash }) => hash), ...result.alreadyStored];
-  if (resolved.length) {
-    await dbHelper.bulkWriteInDatabase(daemonDb, appsHashesCollection, resolved.map((hash) => ({
-      updateOne: { filter: { hash }, update: { $set: { message: true, messageNotFound: false } } },
-    })));
-  }
   notifyStored(resolved);
   if (result.refused.length) {
     log.warn(`confirmedMessageStore - ${result.refused.length} message(s) not stored: ${result.refused.slice(0, 5).map((r) => `${r.hash} (${r.reason})`).join(', ')}`);

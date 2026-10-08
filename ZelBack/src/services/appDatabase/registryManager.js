@@ -17,11 +17,9 @@ const legacyTransportProvider = require('../providers/FluxOSLegacyTransportProvi
 const transportCryptoProvider = require('../providers/FluxOSTransportProvider');
 const { resolveStorageRefs } = require('../utils/fluxStorageRefs');
 const {
-  globalAppsMessages,
   globalAppsInstallingLocations,
   globalAppsInstallingBroadcasts,
   globalAppsInstallingErrorsLocations,
-  appsHashesCollection,
   scannedHeightCollection,
   INSTALLING_EXPIRY_MS,
 } = require('../utils/appConstants');
@@ -97,28 +95,25 @@ async function materializeFoundingView(record) {
 }
 
 /**
- * Get all app hashes from the blockchain
+ * Every app payment the chain scan has recorded, as the v1 route serves it: the
+ * payment's facts and whether this node holds the message.
  * @param {object} _req - Request object (unused)
  * @param {import('express').Response} res
  * @returns {Promise<object>} List of app hashes
  */
 async function getAppHashes(_req, res) {
   try {
-    const dbopen = dbHelper.databaseConnection();
-    const database = dbopen.db(config.get('database.daemon.database'));
-    const query = {};
-    const projection = {
-      projection: {
-        _id: 0,
-        txid: 1,
-        hash: 1,
-        height: 1,
-        value: 1,
-        message: 1,
-        messageNotFound: 1,
-      },
-    };
-    const results = await dbHelper.findInDatabase(database, appsHashesCollection, query, projection);
+    const results = (await appRecords.messages().paid()).map((record) => {
+      const { payment } = record;
+      return {
+        txid: payment.txid,
+        hash: record.hash,
+        height: payment.height,
+        value: payment.value,
+        message: record.isHeld,
+        ...(payment.messageNotFound === undefined ? {} : { messageNotFound: payment.messageNotFound }),
+      };
+    });
     const resultsResponse = messageHelper.createDataMessage(results);
     return res ? res.json(resultsResponse) : resultsResponse;
   } catch (error) {
@@ -1037,22 +1032,11 @@ async function availableApps(_req, res) {
  * @returns {Promise<boolean>} True if no conflicts found
  */
 async function checkApplicationRegistrationNameConflicts(appSpecFormatted, hash) {
-  const dbopen = dbHelper.databaseConnection();
   const existingApp = await appRecords.registry().byName(appSpecFormatted.name);
 
   if (existingApp) {
     if (hash) {
-      const query = { hash };
-      const projection = {
-        projection: {
-          _id: 0,
-          txid: 1,
-          hash: 1,
-          height: 1,
-        },
-      };
-      const database = dbopen.db(config.get('database.daemon.database'));
-      const result = await dbHelper.findOneInDatabase(database, appsHashesCollection, query, projection);
+      const result = await appRecords.messages().payment(hash);
       if (!result) {
         throw new Error(`Flux App ${appSpecFormatted.name} already registered. Flux App has to be registered under different name. Hash not found in collection.`);
       }
@@ -1116,117 +1100,6 @@ async function getRunningApps() {
  */
 async function getRunningAppIpList(ip) {
   return appsRepository.appLocationFromEvents({ host: ip });
-}
-
-/**
- * Reconstruct app messages hash collection by validating hash records against
- * actual messages.
- *
- * A REPAIRED HASH IS RE-SOUGHT, not merely re-labelled. Marking a row
- * `message: false` says this node does not hold the message; leaving the retry
- * fields alone leaves it scheduled at whatever height it last failed at, so the
- * audit that found the gap does not cause anyone to go and close it. Resetting
- * `syncAttempts` and pointing `nextRetryHeight` back at the row's own origin is
- * what makes the next sync pass pick it up.
- *
- * Only rows whose state is WRONG are written, so the count is a count of
- * corrections rather than of documents examined - which is what the caller
- * decides whether to announce on.
- *
- * @returns {Promise<{changed: number}>} how many rows were corrected
- */
-async function reconstructAppMessagesHashCollection() {
-  try {
-    const db = dbHelper.databaseConnection();
-    const databaseApps = db.db(config.get('database.appsglobal.database'));
-    const databaseDaemon = db.db(config.get('database.daemon.database'));
-    const syncStatus = daemonStatus.isDaemonSynced();
-    const currentHeight = syncStatus.data.height || 0;
-    const query = {};
-    const projection = { projection: { _id: 0 } };
-
-    const permanentMessages = await dbHelper.findInDatabase(databaseApps, globalAppsMessages, query, projection);
-    const appHashes = await dbHelper.findInDatabase(databaseDaemon, appsHashesCollection, query, projection);
-    // A set, not a find() per row: the scan was quadratic in the number of
-    // hashes, and both collections are whole-chain.
-    const permanentHashes = new Set(permanentMessages.map((message) => message.hash));
-
-    const ops = [];
-    // eslint-disable-next-line no-restricted-syntax
-    for (const appHash of appHashes) {
-      const filter = { hash: appHash.hash, txid: appHash.txid };
-      const hasPermanent = permanentHashes.has(appHash.hash);
-      // Back to where the row itself began, so a re-sought hash is asked for
-      // from its own origin rather than from wherever the chain is now.
-      const retryFrom = appHash.retryFromHeight ?? appHash.height;
-
-      if (hasPermanent && (!appHash.message || appHash.messageNotFound)) {
-        ops.push({
-          updateOne: {
-            filter,
-            update: {
-              $set: {
-                message: true, messageNotFound: false, syncAttempts: 0, nextRetryHeight: retryFrom, retryFromHeight: retryFrom,
-              },
-            },
-          },
-        });
-      } else if (!hasPermanent && appHash.message) {
-        // The row claims a message this node does not hold. Sought again from
-        // the current height: the message is missing NOW, whatever the row's
-        // own origin says.
-        ops.push({
-          updateOne: {
-            filter,
-            update: {
-              $set: {
-                message: false, messageNotFound: false, syncAttempts: 0, nextRetryHeight: currentHeight, retryFromHeight: currentHeight,
-              },
-            },
-          },
-        });
-      }
-    }
-
-    let changed = 0;
-    if (ops.length > 0) {
-      const result = await databaseDaemon.collection(appsHashesCollection).bulkWrite(ops, { ordered: false });
-      changed += result.modifiedCount;
-    }
-
-    return { changed };
-  } catch (error) {
-    log.error(error);
-    throw error;
-  }
-}
-
-/**
- * API endpoint to reconstruct app messages hash collection
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- * @returns {Promise<object>} Reconstruction result message
- */
-async function reconstructAppMessagesHashCollectionAPI(req, res) {
-  try {
-    const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req));
-    if (authorized) {
-      const result = await reconstructAppMessagesHashCollection();
-      const message = messageHelper.createSuccessMessage(result);
-      res.json(message);
-    } else {
-      const errMessage = messageHelper.errUnauthorizedMessage();
-      res.json(errMessage);
-    }
-  } catch (error) {
-    log.error(error);
-    const errorResponse = messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-    res.json(errorResponse);
-  }
 }
 
 
@@ -1298,8 +1171,6 @@ module.exports = {
   getAllAppsInformation,
   getRunningApps,
   getRunningAppIpList,
-  reconstructAppMessagesHashCollection,
-  reconstructAppMessagesHashCollectionAPI,
   reindexGlobalAppsLocationAPI,
   countAppInstallingErrors,
 };

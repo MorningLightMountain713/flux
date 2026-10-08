@@ -78,7 +78,6 @@ const daemonUsageReporter = require('./daemonService/daemonUsageReporter');
 const reorgSource = require('./daemonService/reorgSource');
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
 const placements = require('./migrations/placements');
-const appMessageHashes = require('./migrations/appMessageHashes');
 const fluxService = require('./fluxService');
 const geolocationService = require('./geolocationService');
 const ipLocationSync = require('./appPlacement/ipLocationSync');
@@ -113,7 +112,6 @@ const limitCounterRecords = require('./utils/limitCounterRecords');
 const imageCacheMaintenance = require('./appLifecycle/imageCacheMaintenance');
 const imageReaper = require('./appLifecycle/imageReaper');
 const imageUpdateService = require('./imageUpdateService');
-const appsMaintenance = require('./appDatabase/appsMaintenance');
 const marketplaceTemplateCache = require('./marketplace/marketplaceTemplateCache');
 const telemetryIdentityService = require('./telemetryIdentityService');
 const { version: fluxVersion } = require('../../../package.json');
@@ -232,27 +230,9 @@ async function prepareDatabaseSchema() {
   log.info('Temporary database prepared');
   log.info('Preparing Flux Apps locations');
 
-  // ToDo: Fix all these broken database drops / index creations / removals all over the place. The prior dropIndex was removing the
-  // index entirely so there was no index at all!
-
-  // The below index is created in the Explorer Service. We need to remove all the database indexing from the Explorer Service.
-  // It's not the explorer service's responsibility, and other services need these indexes before Explorer Service creates them.
-
-  // It should be the dbService's responsibility that the db is in a state fit for use.
-
-  // we have to create this index again here, as we need it to repair the db. As we were deleting this on every reboot (and it was only created when scannedHeight was 0)
-  // Creating an index that already exists is a no-op
-  await dbHelper.ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appsMessages')), [
-    { key: { hash: 1 }, name: 'query for getting zelapp message based on hash', unique: true, recover: dbHelper.dedupeByKey },
-    { key: { txid: 1 }, name: 'query for getting zelapp message based on txid' },
-    { key: { height: 1 }, name: 'query for getting zelapp message based on height' },
-    { key: { 'appSpecifications.name': 1 }, name: 'query for getting app message based on zelapp specs name' },
-    { key: { 'appSpecifications.owner': 1 }, name: 'query for getting app message based on zelapp specs owner' },
-    { key: { 'appSpecifications.repotag': 1 }, name: 'query for getting app message based on image' },
-    { key: { 'appSpecifications.version': 1 }, name: 'query for getting app message based on version' },
-    { key: { 'appSpecifications.nodes': 1 }, name: 'query for getting app message based on nodes' },
-  ]);
-  await dbHelper.ensureNewestAppMessageIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appsMessages')));
+  // The app messages: the indexes their queries are answered by.
+  await appRecords.messages().ensureIndexes();
+  log.info('App messages prepared');
   await decisionStore.prepareCollection();
   // The app registry: one row per listed app. Its own indexes answer its
   // queries; `name` serves completeDerivedFields' rewrite of a row stored
@@ -318,9 +298,6 @@ async function prepareDatabaseSchema() {
   ]);
   log.info('Signed app installing errors broadcasts collection prepared');
 
-  // This fixes an issue where the appsMessage db has NaN for valueSat. Once db is repaired on all nodes,
-  // we can remove this.
-  await dbHelper.repairNanInAppsMessagesDb();
 }
 
 /**
@@ -544,7 +521,8 @@ async function startFluxFunctions() {
         capabilities.claim('localDbPrepared', 'serviceManager').raise('collections and indexes prepared');
       }),
       runOwner('chain state', async () => {
-        await capabilities.whenUp('mongoReachable');
+        // The rewind reads the collections the local database's migrations move.
+        await capabilities.whenUp('localDbPrepared');
         // Not awaited: it rewinds and builds the histories at once, then scans once
         // the daemon is synced. Safe to leave unhandled: initiateBlockProcessor does
         // not reject.
@@ -635,9 +613,6 @@ async function startFluxFunctions() {
       }),
       runOwner('network', async () => {
         await capabilities.whenUp(['localDbPrepared', 'daemonReachable']);
-        // Before the hash sync reads the flags and the retry windows.
-        await untilSucceeds('App message flag repair', () => appMessageHashes.repairLostMessageFlags());
-        await untilSucceeds('App message retry windows', () => appMessageHashes.restartRetryWindows());
         // Initialize app sync orchestrator and spawner
         const orchestrator = new AppSyncOrchestrator({
           blockEmitter: explorerService.getBlockEmitter(),

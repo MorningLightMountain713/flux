@@ -3376,7 +3376,6 @@ describe('AppSyncOrchestrator', () => {
       orchestrator.start(defaultBootContext);
       await orchestrator.stop();
       expect(blockEmitter.listenerCount('blocksProcessed')).to.equal(0);
-      expect(blockEmitter.listenerCount('hashesChanged')).to.equal(0);
       expect(peerEmitter.listenerCount('peerThresholdReached')).to.equal(0);
       expect(peerEmitter.listenerCount('peersBelowThreshold')).to.equal(0);
       expect(peerEmitter.listenerCount('peerConnected')).to.equal(0);
