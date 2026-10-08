@@ -7,7 +7,9 @@ import { buildAppSpec, registerAndConfirm } from '../framework/app-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { seedSpawnerApp } from '../framework/reconciler-suite.js';
 import { pushBrokenImage, pushImage } from '../framework/registry-helper.js';
-import { advanceBlock, advanceBlocks, startTicker, stopTicker } from '../framework/daemon-control.js';
+import {
+  advanceBlock, advanceBlocks, getState, startTicker, stopTicker,
+} from '../framework/daemon-control.js';
 import {
   waitForDaemonReady, waitForNodeStatus, waitForBlockProcessed,
   waitForOrchestratorState, waitForAppSpecStored,
@@ -30,6 +32,10 @@ async function bootToSpawnerReady(env) {
   // Advance past the 250-block threshold so orchestrator reaches READY via block fallback
   await advanceBlocks(260);
   await waitForOrchestratorState(env.clients[0], 'READY', 120000);
+  // READY by the block backstop says nothing about the scan, which the advance
+  // left behind the daemon; the registration door is closed until it catches up.
+  const { currentHeight } = await getState();
+  await waitForBlockProcessed(env.clients[0], (d) => d.height >= currentHeight, 60000);
 }
 
 describe('Spawner error caching: local install failure', function () {
@@ -64,7 +70,7 @@ describe('Spawner error caching: local install failure', function () {
       }],
     });
     const result = await registerAndConfirm(env.clients[0].url, nodeKey(1), spec, env.clients);
-    expect(result.status).to.equal('success');
+    expect(result.status, JSON.stringify(result.data)).to.equal('success');
     await waitForBlockProcessed(env.clients[0], (d) => d.height >= result.targetHeight, 60000);
     await waitForAppSpecStored(env.clients[0], appName);
   });
