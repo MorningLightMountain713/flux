@@ -119,18 +119,31 @@ function endpointForType(type) {
   return type === 'fluxappupdate' || type === 'zelappupdate' ? 'appupdate' : 'appregister';
 }
 
-export async function registerApp(nodeUrl, adminKeypair, spec, type = 'fluxappregister', { signerKey } = {}) {
+/**
+ * Hand a signed app message to a node through its submission door, as a client
+ * does. The node answers with the message's hash, which is the hash the signer
+ * computed when the spec is in the spelling the node signs.
+ *
+ * @param {string} nodeUrl
+ * @param {object} adminKeypair the key that logs in, any user's
+ * @param {{type: string, version: number, appSpecification: object, timestamp: number,
+ *   signature: string}} signed the message as its owner signed it
+ */
+export async function submitSignedApp(nodeUrl, adminKeypair, signed) {
   const auth = await authenticate(nodeUrl, adminKeypair);
-  const signed = await signAppSpec(spec, type, signerKey);
-
   // Updates have their own door — the register route accepts only register types.
-  const res = await fetch(`${nodeUrl}/apps/${endpointForType(type)}`, {
+  const res = await fetch(`${nodeUrl}/apps/${endpointForType(signed.type)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain', zelidauth: auth.zelidauth },
     body: JSON.stringify(signed),
   });
   const data = await res.json();
   return { ...data, auth };
+}
+
+export async function registerApp(nodeUrl, adminKeypair, spec, type = 'fluxappregister', { signerKey } = {}) {
+  const signed = await signAppSpec(spec, type, signerKey);
+  return submitSignedApp(nodeUrl, adminKeypair, signed);
 }
 
 /**

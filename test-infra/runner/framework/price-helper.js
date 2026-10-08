@@ -35,7 +35,13 @@ const DEFAULT_PRICE_FIELDS = {
 };
 const DEFAULT_FLUX_USD_E4 = 10000; // $1.00 / FLUX
 
-async function injectSoftForkMessage(signerPrivHex, messageBytes, label) {
+/**
+ * Mine one soft-fork message into the next block, as a self-send of its signer.
+ * @param {string} signerPrivHex the signing key, one of flux-chain-crypto's
+ * @param {Uint8Array} messageBytes the encoded message
+ * @param {string} label names the transaction, unique within the chain
+ */
+export async function injectSoftForkMessage(signerPrivHex, messageBytes, label) {
   const txid = `softfork-${label}`;
   const prevTxid = `softfork-${label}-prev`;
   const { tx, prevTx } = buildSignedSoftForkTx({

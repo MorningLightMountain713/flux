@@ -369,6 +369,13 @@ export function dbClient(nodeNum) {
       );
     },
 
+    // This node's payment record for an app message hash, as the scan wrote it
+    // and the voids and the sync have marked it. Null while the node holds none.
+    async getAppHash(hash) {
+      const explorerDb = await db('explorer');
+      return explorerDb.collection('zelappshashes').findOne({ hash }, { projection: { _id: 0 } });
+    },
+
     async markHashUnresolved(hash) {
       const explorerDb = await db('explorer');
       await explorerDb.collection('zelappshashes').updateOne(
