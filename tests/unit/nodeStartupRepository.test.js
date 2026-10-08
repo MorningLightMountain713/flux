@@ -133,6 +133,36 @@ describe('nodeStartupRepository tests', () => {
     });
   });
 
+  describe('the discovery-started marker', () => {
+    it('answers whether an operator has started discovery', async () => {
+      dbHelperStub.findOneInDatabase.resolves({ _id: 'discoveryStarted', at: 42 });
+
+      expect(await repository.discoveryStarted()).to.equal(true);
+      expect(dbHelperStub.findOneInDatabase.firstCall.args[2]).to.deep.equal({ _id: 'discoveryStarted' });
+
+      dbHelperStub.findOneInDatabase.resolves(null);
+      expect(await repository.discoveryStarted()).to.equal(false);
+    });
+
+    it('records the start once, as an upsert', async () => {
+      await repository.markDiscoveryStarted();
+
+      const [, , query, update, options] = dbHelperStub.findOneAndUpdateInDatabase.firstCall.args;
+      expect(query).to.deep.equal({ _id: 'discoveryStarted' });
+      expect(update.$set.at).to.be.a('number');
+      expect(options).to.deep.equal({ upsert: true });
+    });
+
+    it('answers false and writes nothing when the DB is not up', async () => {
+      dbHelperStub.databaseConnection.returns(null);
+
+      expect(await repository.discoveryStarted()).to.equal(false);
+      await repository.markDiscoveryStarted();
+
+      sinon.assert.notCalled(dbHelperStub.findOneAndUpdateInDatabase);
+    });
+  });
+
   describe('heartbeat', () => {
     it('reads the heartbeat document', async () => {
       dbHelperStub.findOneInDatabase.resolves({ _id: 'heartbeat', lastAlive: 42 });

@@ -10,6 +10,7 @@ const serviceHelper = require('./serviceHelper');
 const dbHelper = require('./dbHelper');
 const messageStore = require('./appMessaging/messageStore');
 const nodeDownService = require('./nodeDownService');
+const nodeStartupRepository = require('./appDatabase/nodeStartupRepository');
 const messageVerifier = require('./appMessaging/messageVerifier');
 const ingressAttestationService = require('./appMessaging/ingressAttestationService');
 const ingressAttestationSyncService = require('./appMessaging/ingressAttestationSyncService');
@@ -2182,6 +2183,9 @@ async function startDiscoveryApi(req, res) {
       return res.json(messageHelper.errUnauthorizedMessage());
     }
     startDiscovery();
+    // An operator's word outlives this process: a node that does not start
+    // discovery on its own starts it at its next boot once told to.
+    await nodeStartupRepository.markDiscoveryStarted();
     return res.json(messageHelper.createSuccessMessage('Discovery started'));
   } catch (error) {
     log.error(error);
