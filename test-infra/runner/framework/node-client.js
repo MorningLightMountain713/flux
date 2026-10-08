@@ -342,6 +342,8 @@ export function nodeClient(nodeNum) {
         'spawner:networkErrorSkip',
         'spawner:paused',
         'spawner:resumed',
+        'nodedown:unreachable',
+        'nodedown:isolated',
         'nodedown:assembled',
         'nodedown:stored',
         'nodedown:refused',

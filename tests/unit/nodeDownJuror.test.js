@@ -47,6 +47,15 @@ function makeWorld({ extraNodes = [], myDetectedIp = '10.0.0.11' } = {}) {
     probes: [],
     pushes: [],
     certificates: [],
+    // the looks the juror has scheduled: {due, fn}, fired by advance()
+    timers: [],
+  };
+  // The clock moves: every look due by then fires, in order.
+  world.advance = (ms) => {
+    world.nowMs += ms;
+    const due = world.timers.filter((t) => t.due <= world.nowMs).sort((a, b) => a.due - b.due);
+    world.timers = world.timers.filter((t) => t.due > world.nowMs);
+    due.forEach((t) => t.fn());
   };
   world.record = (height, atMs) => history.record(world.nodes, { height, hash: `h${height}` }, atMs);
   world.fp = world.record(999, T0);
@@ -75,6 +84,14 @@ function makeWorld({ extraNodes = [], myDetectedIp = '10.0.0.11' } = {}) {
     pushVerdict: (socketAddress, verdict) => world.pushes.push({ socketAddress, verdict }),
     currentHeight: () => world.height,
     now: () => world.nowMs,
+    schedule: (fn, ms) => {
+      const handle = { due: world.nowMs + ms, fn };
+      world.timers.push(handle);
+      return handle;
+    },
+    cancel: (handle) => {
+      world.timers = world.timers.filter((t) => t !== handle);
+    },
     currentFingerprint: () => history.currentFingerprint(),
     onCertificate: (certificate) => world.certificates.push(certificate),
   });
@@ -223,14 +240,27 @@ describe('nodeDownJuror', () => {
       world.juror.onVerdictArrived(world.verdictFrom('j4:0'));
       expect(world.certificates.length).to.equal(1);
 
-      world.height = 1020; // every verdict now past the 10-block lifetime
-      world.juror.sweep();
-      expect(world.juror.snapshot().piles[S]).to.equal(undefined);
-
+      world.height = 1020; // every verdict now past the 10-block lifetime: the next arrival re-arms
       world.juror.onVerdictArrived(world.verdictFrom('j2:0'));
       await tick();
       world.juror.onVerdictArrived(world.verdictFrom('j3:0'));
       world.juror.onVerdictArrived(world.verdictFrom('j4:0'));
+      expect(world.certificates.length).to.equal(2);
+    });
+
+    it('a pile aged to one short of H re-assembles on the next verdict alone', async () => {
+      // One verdict cast five blocks before the rest ages out on its own; the
+      // pile stands at H-1 and nothing has read it since it assembled. The
+      // verdict that refills it is the only call there will be.
+      const world = makeWorld();
+      world.juror.onVerdictArrived(world.verdictFrom('j2:0', { height: 995 }));
+      await tick();
+      world.juror.onVerdictArrived(world.verdictFrom('j3:0'));
+      world.juror.onVerdictArrived(world.verdictFrom('j4:0'));
+      expect(world.certificates.length).to.equal(1);
+
+      world.height = 1006; // j2's verdict is past its lifetime, the other three are not
+      world.juror.onVerdictArrived(world.verdictFrom('j5:0'));
       expect(world.certificates.length).to.equal(2);
     });
 
@@ -280,20 +310,18 @@ describe('nodeDownJuror — the drop carries its reason (R2), and a re-held duty
     const { honoured } = world.juror.noteDrop(S, 'shutdown');
     expect(honoured).to.equal(true);
 
-    world.nowMs += NODE_DOWN_GRACE_MS - 1;
-    world.juror.sweep();
+    world.advance(NODE_DOWN_GRACE_MS - 1);
     await tick();
     expect(world.probes).to.deep.equal([]);
     expect(world.pushes).to.deep.equal([]);
 
-    world.nowMs += 1;
-    world.juror.sweep();
+    world.advance(1);
     await tick();
     expect(world.probes).to.deep.equal([SUBJECT_ADDRESS]);
     expect(world.pushes.length).to.equal(5); // the other five jurors hear the verdict
 
     // looked once: the deferral is spent
-    world.juror.sweep();
+    world.advance(0);
     await tick();
     expect(world.probes.length).to.equal(1);
   });
@@ -301,12 +329,10 @@ describe('nodeDownJuror — the drop carries its reason (R2), and a re-held duty
   it('a RESTARTING close waits the shorter grace', async () => {
     const world = makeWorld();
     world.juror.noteDrop(S, 'restart');
-    world.nowMs += RESTART_GRACE_MS - 1;
-    world.juror.sweep();
+    world.advance(RESTART_GRACE_MS - 1);
     await tick();
     expect(world.probes).to.deep.equal([]);
-    world.nowMs += 1;
-    world.juror.sweep();
+    world.advance(1);
     await tick();
     expect(world.probes).to.deep.equal([SUBJECT_ADDRESS]);
   });
@@ -315,8 +341,7 @@ describe('nodeDownJuror — the drop carries its reason (R2), and a re-held duty
     const world = makeWorld();
     world.juror.noteDrop(S, 'shutdown');
     world.held.add(SUBJECT_ADDRESS);
-    world.nowMs += NODE_DOWN_GRACE_MS;
-    world.juror.sweep();
+    world.advance(NODE_DOWN_GRACE_MS);
     await tick();
     expect(world.probes).to.deep.equal([]);
   });
@@ -334,8 +359,7 @@ describe('nodeDownJuror — the drop carries its reason (R2), and a re-held duty
     expect(world.probes, 'but it wakes no look inside the grace').to.deep.equal([]);
     expect(world.pushes).to.deep.equal([]);
 
-    world.nowMs += NODE_DOWN_GRACE_MS;
-    world.juror.sweep();
+    world.advance(NODE_DOWN_GRACE_MS);
     await tick();
     expect(world.probes, 'the grace end looks once').to.deep.equal([SUBJECT_ADDRESS]);
   });
@@ -347,8 +371,7 @@ describe('nodeDownJuror — the drop carries its reason (R2), and a re-held duty
     await tick();
     expect(world.probes).to.deep.equal([SUBJECT_ADDRESS]);
     // and the old deferral is gone: the grace end owes nothing more
-    world.nowMs += NODE_DOWN_GRACE_MS;
-    world.juror.sweep();
+    world.advance(NODE_DOWN_GRACE_MS);
     await tick();
     expect(world.probes.length).to.equal(1);
   });
@@ -358,12 +381,10 @@ describe('nodeDownJuror — the drop carries its reason (R2), and a re-held duty
     world.juror.noteDrop(S, 'shutdown');
     world.nowMs += NODE_DOWN_GRACE_MS - 1000;
     world.juror.noteDrop(S, 'shutdown');
-    world.nowMs += 1000; // the first grace end
-    world.juror.sweep();
+    world.advance(1000); // the first grace end
     await tick();
     expect(world.probes).to.deep.equal([]);
-    world.nowMs += NODE_DOWN_GRACE_MS - 1000;
-    world.juror.sweep();
+    world.advance(NODE_DOWN_GRACE_MS - 1000);
     await tick();
     expect(world.probes).to.deep.equal([SUBJECT_ADDRESS]);
   });
@@ -405,8 +426,7 @@ describe('nodeDownJuror — the drop carries its reason (R2), and a re-held duty
     const world = makeWorld();
     world.juror.noteDrop(S, 'shutdown');
     world.juror.noteHeld(S);
-    world.nowMs += NODE_DOWN_GRACE_MS;
-    world.juror.sweep();
+    world.advance(NODE_DOWN_GRACE_MS);
     await tick();
     expect(world.probes).to.deep.equal([]);
   });
@@ -444,8 +464,7 @@ describe('nodeDownJuror — the verdict names the drop it answers (P1)', () => {
   it('a grace-end look\'s verdict carries the honoured drop, not the look', async () => {
     const world = makeWorld();
     world.juror.noteDrop(S, 'shutdown');
-    world.nowMs += NODE_DOWN_GRACE_MS;
-    world.juror.sweep();
+    world.advance(NODE_DOWN_GRACE_MS);
     await tick();
     expect(world.pushes[0].verdict).to.include({ droppedAt: T0, reason: 'shutdown' });
   });
@@ -542,8 +561,7 @@ describe('nodeDownJuror — the courtesy: a clean stop is honoured only so many 
       await cleanStop(world, 'shutdown');
     }
     expect(world.juror.noteDrop(S, 'shutdown').honoured).to.equal(true); // the fourth
-    world.nowMs += NODE_DOWN_GRACE_MS;
-    world.juror.sweep();
+    world.advance(NODE_DOWN_GRACE_MS);
     await tick();
     expect(world.probes).to.deep.equal([SUBJECT_ADDRESS]);
     world.juror.noteHeld(S);

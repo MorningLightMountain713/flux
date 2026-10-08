@@ -1,5 +1,6 @@
 'use strict';
 
+const { EventEmitter } = require('node:events');
 const daemonServiceFluxnodeRpcs = require('./daemonService/daemonServiceFluxnodeRpcs');
 const capabilities = require('./utils/capabilities');
 const nodeListSource = require('./nodeListSource');
@@ -28,6 +29,9 @@ let stateManager = null;
  */
 let resolveStarted;
 let started = new Promise((resolve) => { resolveStarted = resolve; });
+// Every refresh of the list, re-emitted for readers that plan against it.
+const listEvents = new EventEmitter();
+listEvents.setMaxListeners(0);
 
 /**
  * The ring topology over the live list, one instance per manager lifecycle.
@@ -126,6 +130,7 @@ async function start(options = {}) {
   // forgiven. The register itself decides what a departure means.
   stateManager.on('updated', () => {
     const listed = stateManager.state();
+    listEvents.emit('updated');
     departures.noteList(listed.map((node) => node.ip));
     // the same refresh, keyed on outpoints, for the mesh seats: a seat whose
     // holder left the list reads as free at this cell once the grace has run
@@ -209,6 +214,16 @@ function onReady(callback) {
   }
 
   started.then(callback);
+}
+
+/**
+ * Runs a callback on every refresh of the list, however it was filled.
+ * @param {Function} callback
+ * @returns {() => void} unsubscribe
+ */
+function onListUpdated(callback) {
+  listEvents.on('updated', callback);
+  return () => listEvents.off('updated', callback);
 }
 
 /**
@@ -416,6 +431,7 @@ module.exports = {
   networkState,
   nodeCount,
   onReady,
+  onListUpdated,
   nodeDownTopology,
   pubkeyInNetworkState,
   socketAddressInNetworkState,

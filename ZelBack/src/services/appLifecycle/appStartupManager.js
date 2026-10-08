@@ -131,38 +131,44 @@ async function getStoppedFluxContainers() {
  * broadcast: the removal event's only reader is the derivation, whose rows
  * are already gone. A locked-out node — four certifications standing — is
  * the same branch whatever its rows say: the lockout's self-uninstall.
- * Otherwise every app is kept and the caller announces.
+ * Otherwise every app is kept and the caller announces. A node isolated for
+ * the whole grace asks nothing of its rows: the fleet has certified it by
+ * that constant, and it removes every app where it stands.
  *
  * Fails OPEN: a database wobble or a missing address must never be the
  * reason an app is deleted.
  *
- * @param {string} trigger 'boot' | 'return' | 'certificate', journal only
+ * @param {string} trigger 'boot' | 'return' | 'certificate' | 'isolated'
  * @returns {Promise<{placed: boolean, removed: string[], failed: Array<{app: string, error: string}>}>}
  */
 async function enforceNodePlacement(trigger) {
   const installedApps = await getInstalledAppNamesFromDb();
   if (installedApps.length === 0) return { placed: true, removed: [], failed: [] };
-  const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
-  if (!localSocketAddr) {
-    log.warn(`appStartupManager - placement check (${trigger}) skipped: no local address`);
-    return { placed: true, removed: [], failed: [] };
+  let why;
+  if (trigger === 'isolated') {
+    why = `no network for the ${NODE_DOWN_GRACE_MS / 1000}s grace, the fleet has certified this node`;
+  } else {
+    const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
+    if (!localSocketAddr) {
+      log.warn(`appStartupManager - placement check (${trigger}) skipped: no local address`);
+      return { placed: true, removed: [], failed: [] };
+    }
+    let rows;
+    let lockout;
+    try {
+      [rows, lockout] = await Promise.all([
+        appsRepository.appLocationFromEvents({ ip: localSocketAddr }),
+        nodeDownStore.lockoutForAddress(localSocketAddr),
+      ]);
+    } catch (error) {
+      log.error(`appStartupManager - placement check (${trigger}) could not read the rows, keeping every app: ${error.message}`);
+      return { placed: true, removed: [], failed: [] };
+    }
+    if (rows.length > 0 && !lockout.lockedOut) return { placed: true, removed: [], failed: [] };
+    why = lockout.lockedOut
+      ? `locked out (${lockout.count} certifications standing)`
+      : `no row places ${localSocketAddr} any more, the network has moved on`;
   }
-  let rows;
-  let lockout;
-  try {
-    [rows, lockout] = await Promise.all([
-      appsRepository.appLocationFromEvents({ ip: localSocketAddr }),
-      nodeDownStore.lockoutForAddress(localSocketAddr),
-    ]);
-  } catch (error) {
-    log.error(`appStartupManager - placement check (${trigger}) could not read the rows, keeping every app: ${error.message}`);
-    return { placed: true, removed: [], failed: [] };
-  }
-  if (rows.length > 0 && !lockout.lockedOut) return { placed: true, removed: [], failed: [] };
-
-  const why = lockout.lockedOut
-    ? `locked out (${lockout.count} certifications standing)`
-    : `no row places ${localSocketAddr} any more, the network has moved on`;
   log.warn(`appStartupManager - placement check (${trigger}): ${why}; removing ${installedApps.length} app(s), no broadcast`);
   const removed = [];
   const failed = [];

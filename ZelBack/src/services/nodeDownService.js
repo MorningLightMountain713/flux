@@ -18,7 +18,8 @@ const { FluxPeerManager } = require('./utils/FluxPeerManager');
 const { CLOSE_CODES } = require('./utils/FluxPeerSocket');
 const { normalizeSocketAddress, extractIp } = require('./utils/socketAddressUtils');
 const fluxEventBus = require('./utils/fluxEventBus');
-const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('./utils/appSyncEvents');
+const capabilities = require('./utils/capabilities');
+const { NODE_DOWN_GRACE_MS } = require('./utils/appConstants');
 const log = require('../lib/log');
 const grantorController = require('./quorumGrant/grantorController');
 const peerNotification = require('./appMessaging/peerNotification');
@@ -37,13 +38,23 @@ let juror = null;
 // the process. A restart starts every duty from the bottom by design.
 let ladder = null;
 let localSocketAddress = null;
-let sweepTimer = null;
+// The network is gone: the peer floor fell, and the recovery's resync has not
+// completed since. Announcements are held meanwhile.
 let wasUnreachable = false;
+let unreachableSinceMs = null;
+// The grant plane and the mesh have heard of this return (the first peer back).
+let returnNoticed = false;
+// The grace, armed at the loss: the live-isolation clock.
+let isolationTimer = null;
 let dropHandler = null;
 let addHandler = null;
 let answerHandler = null;
-// A return waiting for the store to catch up before it asks its question.
-let returnSyncHandler = null;
+let unsubscribeList = null;
+let unsubscribeFloorDown = null;
+let unsubscribeFloorUp = null;
+let unsubscribeSynced = null;
+// The membership the duty memories were last pruned against.
+let prunedFingerprint;
 // This node's own lockout as last read — by the reconciler's pass, or the
 // moment a certificate about this node locks it out. Read by every dialler.
 let selfLocked = false;
@@ -343,16 +354,16 @@ async function settleStoredCertificate(certificate, source, stored) {
     const lockout = await nodeDownStore.lockoutFor(certificate.subject);
     selfLocked = lockout.lockedOut;
     if (lockout.lockedOut) {
-      clearReturnSync();
+      cancelPendingReturn();
       applyPlacementThenAnnounce('lockout').catch((error) => log.warn(`nodeDownService: ${error.message}`));
-    } else if (!returnSyncHandler && !stored.superseded) {
-      // Not while a return is pending: the reconnect pull delivers the
+    } else if (!wasUnreachable && !stored.superseded) {
+      // Not while a return is pending: the recovery's resync delivers the
       // records in its own order, a past one ahead of the newest, and a
-      // check run on the first would answer for a store the pull has not
+      // check run on the first would answer for a store the resync has not
       // finished filling — then release the hold and announce, which refutes
       // the newest on every survivor. The return check reads the whole store
-      // once a pull has answered. And not for a certificate older than the
-      // record held: a past incident is stored for the count, not news.
+      // once the resync has completed. And not for a certificate older than
+      // the record held: a past incident is stored for the count, not news.
       applyPlacementThenAnnounce('certificate').catch((error) => log.warn(`nodeDownService: ${error.message}`));
     }
   } else if (reconciler) {
@@ -523,10 +534,6 @@ function onVerdictMessage(msgObj) {
 function onPeerRemoved({ ip, port, closeCode }) {
   if (!reconciler) return;
   reconciler.schedule('peer-removed');
-  if (transport.peerManager.allPeersDown()) {
-    wasUnreachable = true;
-    peerNotification.holdAnnouncements('every peer is gone; the return check answers before the next announce');
-  }
 
   // Only an unexpected loss raises suspicion or counts as a flap — a
   // deliberate close (duplicate, capacity, our own teardown) is not an
@@ -590,40 +597,103 @@ async function onPeerAdded({ ip, port } = {}) {
       }
     }
   }
-  if (!wasUnreachable) return;
-  wasUnreachable = false;
-  // Back from unreachability without a restart: the grant plane re-fetches
-  // its published records before answering, and the announce doubles as the
-  // certificate refutation should one have formed while we were dark.
+  if (!wasUnreachable || returnNoticed) return;
+  returnNoticed = true;
+  // Back from unreachability without a restart, from the first peer back: the
+  // grant plane re-fetches its published records before answering, and the
+  // mesh re-probes the names a record gives this node before trusting them
+  // again. The announce waits for the network: the floor re-attained and the
+  // recovery's resync completed, which is when the rows can be read for real.
   try {
     grantorController.noteReturnFromUnreachability();
   } catch (error) {
     log.warn(`nodeDownService: return notice failed: ${error.message}`);
   }
-  // The mesh hears the same return: an ordinal the record names this node
-  // for may have been vacated and re-granted while it was cut, so its names
-  // are re-probed before they are trusted again.
   meshOrdinals.noteReturnFromUnreachability();
-  // The announce waits for the store: the orchestrator pulls what a
-  // re-established peer saw from the moment of the loss, and only once that
-  // pull has answered can the rows be read for real. Then the one question,
-  // then the announce — or the removal.
-  awaitReturnSync();
 }
 
-function awaitReturnSync() {
-  if (returnSyncHandler) return;
-  returnSyncHandler = () => {
-    clearReturnSync();
-    applyPlacementThenAnnounce('return').catch((error) => log.warn(`nodeDownService: ${error.message}`));
-  };
-  appSyncEvents.on(SYNC_EVENTS.RECONNECT_SYNC_COMPLETE, returnSyncHandler);
+/**
+ * The network is gone: the peer floor fell. Announcements are held until the
+ * return check has read what the network kept meanwhile, and the grace runs
+ * against this node as the jurors run it against every drop.
+ */
+function onFloorLost() {
+  if (!transport || wasUnreachable) return;
+  wasUnreachable = true;
+  returnNoticed = false;
+  unreachableSinceMs = Date.now();
+  peerNotification.holdAnnouncements('every peer is gone; the return check answers before the next announce');
+  fluxEventBus.publish('nodedown:unreachable', { sinceMs: unreachableSinceMs });
+  isolationTimer = setTimeout(() => {
+    isolationTimer = null;
+    onIsolatedPastGrace().catch((error) => log.warn(`nodeDownService: ${error.message}`));
+  }, NODE_DOWN_GRACE_MS);
+  if (isolationTimer.unref) isolationTimer.unref();
 }
 
-function clearReturnSync() {
-  if (!returnSyncHandler) return;
-  appSyncEvents.off(SYNC_EVENTS.RECONNECT_SYNC_COMPLETE, returnSyncHandler);
-  returnSyncHandler = null;
+/**
+ * The live-isolation clock: no network for the whole grace. The jurors have
+ * certified this node by that constant and the fleet has moved on, so the
+ * node applies the same constant to itself and removes every app where it
+ * stands, broadcasting nothing. Its rows are read for real once the network
+ * is back.
+ */
+async function onIsolatedPastGrace() {
+  if (!transport || !wasUnreachable) return;
+  log.warn(`nodeDownService: no peers for ${NODE_DOWN_GRACE_MS / 1000}s, the grace the fleet certifies a node by; removing every app`);
+  let removed = [];
+  try {
+    if (!placementCheck) throw new Error('no placement check is wired');
+    ({ removed } = await placementCheck('isolated'));
+  } catch (error) {
+    log.warn(`nodeDownService: the isolated removal failed: ${error.message}`);
+  }
+  fluxEventBus.publish('nodedown:isolated', { sinceMs: unreachableSinceMs, removed });
+}
+
+function clearIsolationTimer() {
+  if (isolationTimer) clearTimeout(isolationTimer);
+  isolationTimer = null;
+}
+
+/** A lockout answered the return's question; nothing stays pending. */
+function cancelPendingReturn() {
+  wasUnreachable = false;
+  clearIsolationTimer();
+}
+
+/**
+ * The network is back once the peer floor stands AND the recovery's resync
+ * has completed: the store then holds what the network decided while this
+ * node was dark. Then the one question, then the announce — or the removal.
+ */
+function maybeReturn() {
+  if (!wasUnreachable) return;
+  if (!capabilities.isUp('peersAboveFloor') || !capabilities.isUp('appStateSynced')) return;
+  wasUnreachable = false;
+  clearIsolationTimer();
+  applyPlacementThenAnnounce('return').catch((error) => log.warn(`nodeDownService: ${error.message}`));
+}
+
+/**
+ * The list moved: duties this node no longer owes leave every memory, the
+ * local address is re-read, and the ring re-plans against the new list.
+ */
+async function onListMoved() {
+  if (!reconciler) return;
+  const fingerprint = networkStateService.membershipFingerprint();
+  if (fingerprint === null || fingerprint === prunedFingerprint) return;
+  prunedFingerprint = fingerprint;
+  await primeLocalAddress();
+  const duties = dutyOutpoints();
+  ladder.retain(duties);
+  juror.retain(duties);
+  // A record seen standing for a node the list has since dropped is never
+  // asked about again: forget it, so a later relisting starts clean.
+  [...seenStanding.keys()].forEach((outpoint) => {
+    if (!duties.has(outpoint)) seenStanding.delete(outpoint);
+  });
+  reconciler.schedule('list-moved');
 }
 
 /**
@@ -770,34 +840,46 @@ function start(injectedTransport) {
   transport.peerManager.on('peer:answered', answerHandler);
   transport.peerManager.setInboundGate(inboundGate);
 
+  unsubscribeFloorDown = capabilities.onDown('peersAboveFloor', onFloorLost);
+  unsubscribeFloorUp = capabilities.onUp('peersAboveFloor', maybeReturn);
+  unsubscribeSynced = capabilities.onUp('appStateSynced', maybeReturn);
+  unsubscribeList = networkStateService.onListUpdated(() => {
+    onListMoved().catch((error) => log.warn(`nodeDownService: list move failed: ${error.message}`));
+  });
+
   primeLocalAddress().then(() => reconciler.start());
   // A node started before its list arrives owes duties it cannot name yet:
   // the list's arrival is the pass that dials them.
   networkStateService.onReady(() => {
     if (reconciler) reconciler.schedule('list-ready');
   });
-  sweepTimer = setInterval(() => {
-    sweep().catch((error) => log.warn(`nodeDownService: sweep failed: ${error.message}`));
-  }, config.get('fluxapps.nodeDownSweepIntervalMs'));
-  if (sweepTimer.unref) sweepTimer.unref();
   log.info('nodeDownService started');
 }
 
 function stop() {
-  if (sweepTimer) clearInterval(sweepTimer);
-  sweepTimer = null;
   if (transport && dropHandler) transport.peerManager.off('peer:removed', dropHandler);
   if (transport && addHandler) transport.peerManager.off('peer:added', addHandler);
   if (transport && answerHandler) transport.peerManager.off('peer:answered', answerHandler);
-  if (returnSyncHandler) {
-    clearReturnSync();
-    peerNotification.releaseAnnouncements();
-  }
+  if (unsubscribeFloorDown) unsubscribeFloorDown();
+  if (unsubscribeFloorUp) unsubscribeFloorUp();
+  if (unsubscribeSynced) unsubscribeSynced();
+  unsubscribeFloorDown = null;
+  unsubscribeFloorUp = null;
+  unsubscribeSynced = null;
+  if (unsubscribeList) unsubscribeList();
+  unsubscribeList = null;
+  clearIsolationTimer();
+  if (wasUnreachable) peerNotification.releaseAnnouncements();
+  wasUnreachable = false;
+  returnNoticed = false;
+  unreachableSinceMs = null;
+  prunedFingerprint = undefined;
   if (transport) transport.peerManager.setInboundGate(null);
   dropHandler = null;
   addHandler = null;
   if (reconciler) reconciler.stop();
   reconciler = null;
+  if (juror) juror.stop();
   juror = null;
   ladder = null;
   transport = null;
@@ -807,28 +889,10 @@ function stop() {
   seenStanding.clear();
 }
 
-/** Periodic housekeeping: refresh what a missed event may have left stale.
- *  Correctness never depends on it. */
-async function sweep() {
-  if (!reconciler) return;
-  await primeLocalAddress();
-  const duties = dutyOutpoints();
-  ladder.retain(duties);
-  juror.retain(duties);
-  // A record seen standing for a node the list has since dropped is never
-  // asked about again: forget it, so a later relisting starts clean.
-  [...seenStanding.keys()].forEach((outpoint) => {
-    if (!duties.has(outpoint)) seenStanding.delete(outpoint);
-  });
-  reconciler.schedule('sweep');
-  juror.sweep();
-}
-
 module.exports = {
   setPlacementCheck,
   start,
   stop,
-  sweep,
   probe,
   onVerdictMessage,
   onCertificateBroadcast,

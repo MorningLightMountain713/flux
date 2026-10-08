@@ -6,19 +6,33 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { EventEmitter } = require('node:events');
-const config = require('config');
 const log = require('../../ZelBack/src/lib/log');
 const { NodeDownJuror } = require('../../ZelBack/src/services/utils/nodeDownJuror');
 const { NODE_DOWN_GRACE_MS, RESTART_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
 const { CLOSE_CODES } = require('../../ZelBack/src/services/utils/FluxPeerSocket');
-const { appSyncEvents, EVENTS } = require('../../ZelBack/src/services/utils/appSyncEvents');
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 
 const tick = () => new Promise((resolve) => { setImmediate(() => setImmediate(resolve)); });
+
+// The two capabilities the return listens to, as their owners move them.
+const floor = () => capabilities.claim('peersAboveFloor', 'FluxPeerManager');
+const synced = () => capabilities.claim('appStateSynced', 'appSyncOrchestrator');
+
+// The list refreshed with a new membership.
+let movedLists = 0;
+async function listMoved(networkStateServiceStub) {
+  movedLists += 1;
+  const fingerprint = `fp-moved-${movedLists}`;
+  networkStateServiceStub.membershipFingerprint = () => fingerprint;
+  networkStateServiceStub.listUpdated();
+  await tick();
+}
 
 const MY_IP = '10.0.0.1:16127';
 const MY_OUTPOINT = 'me:0';
 
 function makeHarness(opts = {}) {
+  capabilities.resetForTests();
   const stubs = {
     registerWithGrantPlane: sinon.stub(),
     handleNodeDownEvent: sinon.stub().resolves({ accepted: true, rebroadcast: true, reason: 'stored' }),
@@ -40,11 +54,17 @@ function makeHarness(opts = {}) {
   const world = {
     height: 100, ownStatus: null, listReady: true, listWaiters: [],
   };
+  const listEvents = new EventEmitter();
   const networkStateServiceStub = {
     onReady: (callback) => {
       if (world.listReady) callback();
       else world.listWaiters.push(callback);
     },
+    onListUpdated: (callback) => {
+      listEvents.on('updated', callback);
+      return () => listEvents.off('updated', callback);
+    },
+    listUpdated: () => listEvents.emit('updated'),
     membershipFingerprint: () => 'fp1',
     networkState: () => [{
       txhash: 'me', outidx: 0, pubkey: 'pk', ip: MY_IP, added_height: 1,
@@ -201,20 +221,23 @@ describe('nodeDownService', () => {
     }
   });
 
-  it('runs its housekeeping on its own interval', async () => {
-    const clock = sinon.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
-    const { service, transport, networkStateServiceStub } = makeHarness();
+  it('re-reads its duties when the list moves, and not on a block that moved nothing', async () => {
+    const harness = makeHarness();
+    withDuty(harness);
+    const { service, transport, networkStateServiceStub } = harness;
     service.start(transport);
     await tick();
     try {
-      const before = networkStateServiceStub.membershipFingerprint;
       let reads = 0;
-      networkStateServiceStub.membershipFingerprint = () => { reads += 1; return before(); };
-      await clock.tickAsync(config.get('fluxapps.nodeDownSweepIntervalMs'));
-      expect(reads, 'the sweep refreshed the duty index').to.be.greaterThan(0);
+      const before = networkStateServiceStub.networkState;
+      networkStateServiceStub.networkState = () => { reads += 1; return before(); };
+      networkStateServiceStub.listUpdated();
+      await tick();
+      expect(reads, 'the same membership: nothing re-read').to.equal(0);
+      await listMoved(networkStateServiceStub);
+      expect(reads, 'the list moved: the duty index rebuilt').to.be.greaterThan(0);
     } finally {
       service.stop();
-      clock.restore();
     }
   });
 
@@ -414,18 +437,18 @@ describe('nodeDownService', () => {
     it('a locked-out duty stays out of the dial plan though its certificate is refuted', async () => {
       const harness = makeHarness();
       withDuty(harness);
-      const { service, transport, stubs } = harness;
+      const { service, transport, stubs, networkStateServiceStub } = harness;
       stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'refuted', key: 'nodedown:x:0:90' });
       stubs.lockoutFor.withArgs(DUTY_OUTPOINT).resolves({ lockedOut: true, count: 4, liftsAt: 1 });
       service.start(transport);
       await tick();
-      await service.sweep();
+      await listMoved(networkStateServiceStub);
       await tick();
       expect(transport.dial.callCount).to.equal(0);
 
       // the hold lifts: the same refuted record now lets the duty be dialed
       stubs.lockoutFor.withArgs(DUTY_OUTPOINT).resolves({ lockedOut: false, count: 3, liftsAt: null });
-      await service.sweep();
+      await listMoved(networkStateServiceStub);
       await tick();
       expect(transport.dial.firstCall.args[0]).to.equal(DUTY_IP);
       service.stop();
@@ -529,15 +552,12 @@ describe('nodeDownService', () => {
       service.stop();
     });
 
-    it('a certificate about this node that locks it out runs the removal though a return is pending: a locked-out node\'s return sync never completes', async () => {
+    it('a certificate about this node that locks it out runs the removal though a return is pending: a locked-out node\'s return never completes', async () => {
       const { service, transport, stubs } = makeHarness();
-      let peersDown = false;
-      transport.peerManager.allPeersDown = () => peersDown;
       service.start(transport);
       await tick();
-      peersDown = true;
-      transport.peerManager.emit('peer:removed', { ip: '1.2.3.4', port: '16127', closeCode: 4009 });
-      peersDown = false;
+      floor().raise('2 peers');
+      floor().lower('0 peers');
       transport.peerManager.emit('peer:added', {});
       await tick();
 
@@ -556,8 +576,9 @@ describe('nodeDownService', () => {
       expect(stubs.announce.callCount, 'a locked-out node announces nothing').to.equal(0);
       expect(aliveSent(transport), 'a lockout holds the stand-down open: no alive record').to.deep.equal([]);
 
-      // the lockout answered the return's question: a pull completing later runs no second check
-      appSyncEvents.emit(EVENTS.RECONNECT_SYNC_COMPLETE, '1.2.3.4:16127');
+      // the lockout answered the return's question: the network back later runs no second check
+      floor().raise('2 peers');
+      synced().raise('ephemeral state sync complete');
       await tick();
       expect(stubs.enforcePlacement.callCount).to.equal(1);
       service.stop();
@@ -566,16 +587,16 @@ describe('nodeDownService', () => {
     it('the reconciler reads the lockout on this node: locked out, it dials no duty; lifted, it dials again', async () => {
       const harness = makeHarness();
       withDuty(harness);
-      const { service, transport, stubs } = harness;
+      const { service, transport, stubs, networkStateServiceStub } = harness;
       stubs.lockoutFor.withArgs(MY_OUTPOINT).resolves({ lockedOut: true, count: 4, liftsAt: 1 });
       service.start(transport);
       await tick();
-      await service.sweep();
+      await listMoved(networkStateServiceStub);
       await tick();
       expect(transport.dial.callCount).to.equal(0);
 
       stubs.lockoutFor.withArgs(MY_OUTPOINT).resolves({ lockedOut: false, count: 0, liftsAt: null });
-      await service.sweep();
+      await listMoved(networkStateServiceStub);
       await tick();
       expect(transport.dial.firstCall.args[0]).to.equal(DUTY_IP);
       service.stop();
@@ -587,11 +608,11 @@ describe('nodeDownService', () => {
       // joiner never got its fourth peer. The pass awaits this reading first.
       const harness = makeHarness();
       withDuty(harness);
-      const { service, transport, stubs } = harness;
+      const { service, transport, stubs, networkStateServiceStub } = harness;
       stubs.lockoutFor.withArgs(MY_OUTPOINT).rejects(new Error('Failing command via failpoint'));
       service.start(transport);
       await tick();
-      await service.sweep();
+      await listMoved(networkStateServiceStub);
       await tick();
       expect(transport.dial.callCount, 'the pass went on to its plan').to.be.at.least(1);
       expect(transport.dial.firstCall.args[0]).to.equal(DUTY_IP);
@@ -599,12 +620,12 @@ describe('nodeDownService', () => {
 
       // the last reading is kept, whichever way it read
       stubs.lockoutFor.withArgs(MY_OUTPOINT).resolves({ lockedOut: true, count: 4, liftsAt: 1 });
-      await service.sweep();
+      await listMoved(networkStateServiceStub);
       await tick();
       expect(service.isLockedOut()).to.equal(true);
       const dialled = transport.dial.callCount;
       stubs.lockoutFor.withArgs(MY_OUTPOINT).rejects(new Error('Failing command via failpoint'));
-      await service.sweep();
+      await listMoved(networkStateServiceStub);
       await tick();
       expect(service.isLockedOut(), 'unreadable: still locked out').to.equal(true);
       expect(transport.dial.callCount, 'locked out: dialled nobody').to.equal(dialled);
@@ -630,7 +651,7 @@ describe('nodeDownService', () => {
     it('a certificate that locks this node out is remembered: isLockedOut answers from the last reading, a peering added while it holds is closed, and a later reading clears it', async () => {
       const harness = makeHarness();
       withDuty(harness); // a topology, so the reconciler's pass reads the lockout
-      const { service, transport, stubs } = harness;
+      const { service, transport, stubs, networkStateServiceStub } = harness;
       service.start(transport);
       await tick();
       expect(service.isLockedOut()).to.equal(false);
@@ -650,7 +671,7 @@ describe('nodeDownService', () => {
       expect(transport.closePeer.args).to.deep.equal([['10.0.0.2:16127', 'locked out']]);
 
       stubs.lockoutFor.withArgs(MY_OUTPOINT).resolves({ lockedOut: false, count: 3, liftsAt: null });
-      await service.sweep();
+      await listMoved(networkStateServiceStub);
       await tick();
       expect(service.isLockedOut()).to.equal(false);
       service.stop();
@@ -677,23 +698,23 @@ describe('nodeDownService', () => {
     it('the record lapsing under the hold probes the subject once — the jury never loses a still-dark node', async () => {
       const harness = makeHarness();
       withDuty(harness);
-      const { service, transport, stubs } = harness;
+      const { service, transport, stubs, networkStateServiceStub } = harness;
       stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'standing', key: 'nodedown:x:0:90' });
       stubs.lockoutFor.withArgs(DUTY_OUTPOINT).resolves({ lockedOut: true, count: 4, liftsAt: 1 });
       service.start(transport);
       await tick();
-      await service.sweep();
+      await listMoved(networkStateServiceStub);
       await tick();
       expect(transport.openEphemeralConnection.callCount).to.equal(0);
 
       // the row expired unrefuted
       stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'none', key: null });
-      await service.sweep();
+      await listMoved(networkStateServiceStub);
       await tick();
       expect(transport.openEphemeralConnection.args).to.deep.equal([[DUTY_IP]]);
       expect(transport.dial.callCount).to.equal(0); // the hold itself never lifted
 
-      await service.sweep();
+      await listMoved(networkStateServiceStub);
       await tick();
       expect(transport.openEphemeralConnection.callCount).to.equal(1); // once per lapse
       service.stop();
@@ -702,12 +723,12 @@ describe('nodeDownService', () => {
     it('a refutation is a return, not a lapse: no probe', async () => {
       const harness = makeHarness();
       withDuty(harness);
-      const { service, transport, stubs } = harness;
+      const { service, transport, stubs, networkStateServiceStub } = harness;
       stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'standing', key: 'nodedown:x:0:90' });
       service.start(transport);
       await tick();
       stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'refuted', key: 'nodedown:x:0:90' });
-      await service.sweep();
+      await listMoved(networkStateServiceStub);
       await tick();
       expect(transport.openEphemeralConnection.callCount).to.equal(0);
       service.stop();
@@ -724,13 +745,13 @@ describe('nodeDownService', () => {
       // the list moves on without x; the sweep prunes what nobody will ask about
       const listed = networkStateServiceStub.nodeDownTopology;
       networkStateServiceStub.nodeDownTopology = () => ({ ...listed(), duties: () => [] });
-      await service.sweep();
+      await listMoved(networkStateServiceStub);
       await tick();
 
       // x is listed again later with no record: a fresh start, not a lapse
       networkStateServiceStub.nodeDownTopology = listed;
       stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'none', key: null });
-      await service.sweep();
+      await listMoved(networkStateServiceStub);
       await tick();
       expect(transport.openEphemeralConnection.callCount).to.equal(0);
       service.stop();
@@ -739,12 +760,12 @@ describe('nodeDownService', () => {
     it('the lapse probe fires without a hold too: a still-dark node is re-certified, not forgotten', async () => {
       const harness = makeHarness();
       withDuty(harness);
-      const { service, transport, stubs } = harness;
+      const { service, transport, stubs, networkStateServiceStub } = harness;
       stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'standing', key: 'nodedown:x:0:90' });
       service.start(transport);
       await tick();
       stubs.recordStateFor.withArgs(DUTY_OUTPOINT).resolves({ state: 'none', key: null });
-      await service.sweep();
+      await listMoved(networkStateServiceStub);
       await tick();
       expect(transport.openEphemeralConnection.args).to.deep.equal([[DUTY_IP]]);
       service.stop();
@@ -771,18 +792,18 @@ describe('nodeDownService', () => {
     it('four unexpected drop-and-return cycles damp the duty: no dial while the floor is short, a dial once a window has passed', async () => {
       const harness = makeHarness();
       withDuty(harness);
-      const { service, transport, world } = harness;
+      const { service, transport, world, networkStateServiceStub } = harness;
       service.start(transport);
       await tick();
       await cycles(harness, 4);
       transport.dial.resetHistory(); // the dials the cycles themselves drew, before the trip
 
-      await service.sweep();
+      await listMoved(networkStateServiceStub);
       await tick();
       expect(transport.dial.callCount).to.equal(0);
 
       world.height += 90;
-      await service.sweep();
+      await listMoved(networkStateServiceStub);
       await tick();
       expect(transport.dial.firstCall.args[0]).to.equal(DUTY_IP);
       service.stop();
@@ -791,12 +812,12 @@ describe('nodeDownService', () => {
     it('a deliberate close is not a drop: four policy closes damp nothing', async () => {
       const harness = makeHarness();
       withDuty(harness);
-      const { service, transport } = harness;
+      const { service, transport, networkStateServiceStub } = harness;
       service.start(transport);
       await tick();
       await cycles(harness, 4, 4009);
 
-      await service.sweep();
+      await listMoved(networkStateServiceStub);
       await tick();
       expect(transport.dial.firstCall.args[0]).to.equal(DUTY_IP);
       service.stop();
@@ -805,7 +826,7 @@ describe('nodeDownService', () => {
     it('the count dies with the service: a restart starts every duty from the bottom', async () => {
       const harness = makeHarness();
       withDuty(harness);
-      const { service, transport } = harness;
+      const { service, transport, networkStateServiceStub } = harness;
       service.start(transport);
       await tick();
       await cycles(harness, 4);
@@ -814,31 +835,28 @@ describe('nodeDownService', () => {
       transport.dial.resetHistory();
       service.start(transport);
       await tick();
-      await service.sweep();
+      await listMoved(networkStateServiceStub);
       await tick();
       expect(transport.dial.firstCall.args[0]).to.equal(DUTY_IP);
       service.stop();
     });
   });
 
-  it('returning from total unreachability re-fetches grant records at once, and announces only after the resync says the rows still place it', async () => {
+  it('returning from total unreachability re-fetches grant records from the first peer back, and announces only once the floor stands and the resync says the rows still place it', async () => {
     const { service, transport, stubs } = makeHarness();
-    let peersDown = false;
-    transport.peerManager.allPeersDown = () => peersDown;
     service.start(transport);
     await tick();
+    floor().raise('2 peers');
 
-    // an ordinary drop with peers still up marks nothing
+    // an ordinary drop with the floor standing marks nothing
     transport.peerManager.emit('peer:removed', { ip: '1.2.3.4', port: '16127', closeCode: 4009 });
     transport.peerManager.emit('peer:added', {});
     await tick();
     expect(stubs.noteReturn.callCount).to.equal(0);
     expect(stubs.noteMeshReturn.callCount).to.equal(0);
 
-    // the last peer goes: the next connection is the return event, once
-    peersDown = true;
-    transport.peerManager.emit('peer:removed', { ip: '1.2.3.4', port: '16127', closeCode: 4009 });
-    peersDown = false;
+    // the floor falls: the first peer back is the return notice, once
+    floor().lower('0 peers');
     transport.peerManager.emit('peer:added', {});
     transport.peerManager.emit('peer:added', {});
     await tick();
@@ -848,20 +866,49 @@ describe('nodeDownService', () => {
     expect(stubs.enforcePlacement.callCount).to.equal(0);
     expect(stubs.announce.callCount).to.equal(0);
 
-    // the orchestrator's reconnect pull completes: the check runs, then the announce
-    appSyncEvents.emit(EVENTS.RECONNECT_SYNC_COMPLETE, '1.2.3.4:16127');
+    // the floor stands again, the resync has not completed: still nothing
+    floor().raise('2 peers');
+    await tick();
+    expect(stubs.enforcePlacement.callCount).to.equal(0);
+
+    // the recovery's resync completes: the check runs, then the announce
+    synced().raise('ephemeral state sync complete');
     await tick();
     sinon.assert.calledOnceWithExactly(stubs.enforcePlacement, 'return');
     expect(stubs.announce.callCount).to.equal(1);
 
-    // a later pull completion is not a return
-    appSyncEvents.emit(EVENTS.RECONNECT_SYNC_COMPLETE, '1.2.3.4:16127');
+    // a later resync is not a return
+    synced().lower('resyncing');
+    synced().raise('ephemeral state sync complete');
     await tick();
     expect(stubs.enforcePlacement.callCount).to.equal(1);
     service.stop();
   });
 
-  it('losing every peer holds the announcements until the return check has answered, and the release comes before the announce', async () => {
+  it('a resync completing below the floor is not a return; the floor standing again is', async () => {
+    const { service, transport, stubs } = makeHarness();
+    service.start(transport);
+    await tick();
+    floor().raise('2 peers');
+    synced().raise('ephemeral state sync complete');
+    floor().lower('0 peers');
+    synced().lower('resyncing');
+    await tick();
+    expect(stubs.hold.callCount).to.equal(1);
+
+    synced().raise('block fallback elapsed taking live broadcasts');
+    await tick();
+    expect(stubs.enforcePlacement.callCount, 'one peer or none: not the network').to.equal(0);
+    expect(stubs.release.callCount).to.equal(0);
+
+    floor().raise('2 peers');
+    await tick();
+    sinon.assert.calledOnceWithExactly(stubs.enforcePlacement, 'return');
+    expect(stubs.release.callCount).to.equal(1);
+    service.stop();
+  });
+
+  it('losing the floor holds the announcements until the return check has answered, and the release comes before the announce', async () => {
     // A node with no peer keeps announcing to nobody and storing every
     // announce; on return those announces refute, in its own store, the
     // certificate the network formed while it was dark, and the check keeps
@@ -869,28 +916,115 @@ describe('nodeDownService', () => {
     // thirty seconds through a seven-minute partition and again a second
     // after the heal, and never removed its app.
     const { service, transport, stubs } = makeHarness();
-    let peersDown = false;
-    transport.peerManager.allPeersDown = () => peersDown;
     service.start(transport);
     await tick();
+    floor().raise('2 peers');
 
     transport.peerManager.emit('peer:removed', { ip: '1.2.3.4', port: '16127', closeCode: 4009 });
-    expect(stubs.hold.callCount, 'peers remain: nothing is held').to.equal(0);
+    expect(stubs.hold.callCount, 'the floor stands: nothing is held').to.equal(0);
 
-    peersDown = true;
-    transport.peerManager.emit('peer:removed', { ip: '1.2.3.4', port: '16127', closeCode: 4009 });
-    expect(stubs.hold.callCount, 'the last peer gone: held').to.equal(1);
-    peersDown = false;
+    floor().lower('0 peers');
+    expect(stubs.hold.callCount, 'the floor gone: held').to.equal(1);
     transport.peerManager.emit('peer:added', {});
     await tick();
-    expect(stubs.release.callCount, 'a peer back is not the store caught up').to.equal(0);
+    expect(stubs.release.callCount, 'a peer back is not the network back').to.equal(0);
+    floor().raise('2 peers');
+    await tick();
+    expect(stubs.release.callCount, 'the floor back is not the store caught up').to.equal(0);
 
-    appSyncEvents.emit(EVENTS.RECONNECT_SYNC_COMPLETE, '1.2.3.4:16127');
+    synced().raise('ephemeral state sync complete');
     await tick();
     expect(stubs.release.callCount).to.equal(1);
     expect(stubs.announce.callCount).to.equal(1);
     sinon.assert.callOrder(stubs.enforcePlacement, stubs.release, stubs.announce);
     service.stop();
+  });
+
+  describe('the live-isolation clock', () => {
+    let clock;
+    beforeEach(() => {
+      clock = sinon.useFakeTimers({ now: 1_700_000_000_000, toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    });
+    afterEach(() => clock.restore());
+
+    it('no network for the grace removes every app where the node stands, once, and the return check still runs when the network is back', async () => {
+      const { service, transport, stubs } = makeHarness();
+      stubs.enforcePlacement.withArgs('isolated').resolves({ placed: false, removed: ['app'], failed: [] });
+      service.start(transport);
+      await tick();
+      floor().raise('2 peers');
+      floor().lower('0 peers');
+
+      clock.tick(NODE_DOWN_GRACE_MS - 1);
+      await tick();
+      expect(stubs.enforcePlacement.callCount, 'inside the grace: nothing').to.equal(0);
+      clock.tick(1);
+      await tick();
+      sinon.assert.calledOnceWithExactly(stubs.enforcePlacement, 'isolated');
+      expect(stubs.release.callCount, 'still dark: still held').to.equal(0);
+      clock.tick(NODE_DOWN_GRACE_MS);
+      await tick();
+      expect(stubs.enforcePlacement.callCount, 'once per outage').to.equal(1);
+
+      floor().raise('2 peers');
+      synced().raise('ephemeral state sync complete');
+      await tick();
+      expect(stubs.enforcePlacement.args.map(([trigger]) => trigger)).to.deep.equal(['isolated', 'return']);
+      expect(stubs.release.callCount).to.equal(1);
+      service.stop();
+    });
+
+    it('the network back inside the grace cancels the clock', async () => {
+      const { service, transport, stubs } = makeHarness();
+      service.start(transport);
+      await tick();
+      floor().raise('2 peers');
+      floor().lower('0 peers');
+      clock.tick(NODE_DOWN_GRACE_MS - 1);
+      floor().raise('2 peers');
+      synced().raise('ephemeral state sync complete');
+      await tick();
+      sinon.assert.calledOnceWithExactly(stubs.enforcePlacement, 'return');
+      clock.tick(NODE_DOWN_GRACE_MS * 2);
+      await tick();
+      expect(stubs.enforcePlacement.callCount).to.equal(1);
+      service.stop();
+    });
+
+    it('a lockout answers the question first: the clock is cancelled with the pending return', async () => {
+      const { service, transport, stubs } = makeHarness();
+      service.start(transport);
+      await tick();
+      floor().raise('2 peers');
+      floor().lower('0 peers');
+      stubs.lockoutFor.withArgs(MY_OUTPOINT).resolves({ lockedOut: true, count: 4, liftsAt: 1 });
+      stubs.enforcePlacement.resolves({ placed: false, removed: ['app'], failed: [] });
+      await service.onCertificateBroadcast({
+        certificate: {
+          subject: MY_OUTPOINT, height: 4, fingerprint: 'fp', verdicts: [],
+        },
+        broadcastedAt: Date.now(),
+      });
+      await tick();
+      sinon.assert.calledOnceWithExactly(stubs.enforcePlacement, 'lockout');
+      clock.tick(NODE_DOWN_GRACE_MS * 2);
+      await tick();
+      expect(stubs.enforcePlacement.callCount).to.equal(1);
+      service.stop();
+    });
+
+    it('stopping the service cancels the clock and releases the hold', async () => {
+      const { service, transport, stubs } = makeHarness();
+      service.start(transport);
+      await tick();
+      floor().raise('2 peers');
+      floor().lower('0 peers');
+      service.stop();
+      expect(stubs.release.callCount).to.equal(1);
+      clock.tick(NODE_DOWN_GRACE_MS * 2);
+      await tick();
+      expect(stubs.enforcePlacement.callCount).to.equal(0);
+    });
   });
 
   it('a peering is a hold once the far end has spoken: the add retires nothing, the first frame does', async () => {
@@ -919,30 +1053,28 @@ describe('nodeDownService', () => {
   });
 
   it('a certificate about this node arriving while the return is pending runs no check: the return check reads the whole store', async () => {
-    // The reconnect pull delivered C's refuted certificate ahead of D's; the
+    // The recovery's resync delivered C's refuted certificate ahead of D's; the
     // check ran on the first, found the rows still placing the node, released
     // the hold and announced, and that announce refuted D's certificate on
     // every survivor. On the fleet the subject never removed its app.
     const { service, transport, stubs } = makeHarness();
-    let peersDown = false;
-    transport.peerManager.allPeersDown = () => peersDown;
     service.start(transport);
     await tick();
-    peersDown = true;
-    transport.peerManager.emit('peer:removed', { ip: '1.2.3.4', port: '16127', closeCode: 4009 });
-    peersDown = false;
+    floor().raise('2 peers');
+    floor().lower('0 peers');
     transport.peerManager.emit('peer:added', {});
     await tick();
 
-    // a certificate about ME lands over the pull while the return is pending
+    // a certificate about ME lands over the resync while the return is pending
     stubs.handleNodeDownEvent.resolves({ accepted: true, rebroadcast: false, reason: 'stored' });
     await service.onCertificateSyncEvent({ data: { certificate: { subject: MY_OUTPOINT, height: 1, fingerprint: 'fp', verdicts: [] }, broadcastedAt: Date.now() } });
     await tick();
-    expect(stubs.enforcePlacement.callCount, 'no check on a store the pull is still filling').to.equal(0);
+    expect(stubs.enforcePlacement.callCount, 'no check on a store the resync is still filling').to.equal(0);
     expect(stubs.release.callCount).to.equal(0);
     expect(stubs.announce.callCount).to.equal(0);
 
-    appSyncEvents.emit(EVENTS.RECONNECT_SYNC_COMPLETE, '1.2.3.4:16127');
+    floor().raise('2 peers');
+    synced().raise('ephemeral state sync complete');
     await tick();
     sinon.assert.calledOnceWithExactly(stubs.enforcePlacement, 'return');
     expect(stubs.release.callCount).to.equal(1);
@@ -966,16 +1098,14 @@ describe('nodeDownService', () => {
   it('a node whose rows no longer place it releases the hold on return, announces no app, and sends its alive record', async () => {
     const { service, transport, stubs } = makeHarness();
     stubs.enforcePlacement.resolves({ placed: false, removed: ['app1'] });
-    let peersDown = false;
-    transport.peerManager.allPeersDown = () => peersDown;
     service.start(transport);
     await tick();
-    peersDown = true;
-    transport.peerManager.emit('peer:removed', { ip: '1.2.3.4', port: '16127', closeCode: 4009 });
-    peersDown = false;
+    floor().raise('2 peers');
+    floor().lower('0 peers');
     transport.peerManager.emit('peer:added', {});
     await tick();
-    appSyncEvents.emit(EVENTS.RECONNECT_SYNC_COMPLETE, '1.2.3.4:16127');
+    floor().raise('2 peers');
+    synced().raise('ephemeral state sync complete');
     await tick();
     expect(stubs.release.callCount).to.equal(1);
     expect(stubs.announce.callCount).to.equal(0);
@@ -990,16 +1120,14 @@ describe('nodeDownService', () => {
   it('a node whose rows no longer place it removes on return and announces nothing', async () => {
     const { service, transport, stubs } = makeHarness();
     stubs.enforcePlacement.resolves({ placed: false, removed: ['app1'] });
-    let peersDown = false;
-    transport.peerManager.allPeersDown = () => peersDown;
     service.start(transport);
     await tick();
-    peersDown = true;
-    transport.peerManager.emit('peer:removed', { ip: '1.2.3.4', port: '16127', closeCode: 4009 });
-    peersDown = false;
+    floor().raise('2 peers');
+    floor().lower('0 peers');
     transport.peerManager.emit('peer:added', {});
     await tick();
-    appSyncEvents.emit(EVENTS.RECONNECT_SYNC_COMPLETE, '1.2.3.4:16127');
+    floor().raise('2 peers');
+    synced().raise('ephemeral state sync complete');
     await tick();
     expect(stubs.enforcePlacement.callCount).to.equal(1);
     expect(stubs.announce.callCount).to.equal(0);
@@ -1008,20 +1136,18 @@ describe('nodeDownService', () => {
 
   it('stop forgets a return still waiting for its resync', async () => {
     const { service, transport, stubs } = makeHarness();
-    let peersDown = false;
-    transport.peerManager.allPeersDown = () => peersDown;
     service.start(transport);
     await tick();
-    peersDown = true;
-    transport.peerManager.emit('peer:removed', { ip: '1.2.3.4', port: '16127', closeCode: 4009 });
-    peersDown = false;
+    floor().raise('2 peers');
+    floor().lower('0 peers');
     transport.peerManager.emit('peer:added', {});
     await tick();
     service.stop();
-    appSyncEvents.emit(EVENTS.RECONNECT_SYNC_COMPLETE, '1.2.3.4:16127');
+    floor().raise('2 peers');
+    synced().raise('ephemeral state sync complete');
     await tick();
     expect(stubs.enforcePlacement.callCount).to.equal(0);
-    expect(appSyncEvents.listenerCount(EVENTS.RECONNECT_SYNC_COMPLETE)).to.equal(0);
+    expect(stubs.release.callCount, 'stop releases what it held').to.equal(1);
   });
 });
 
@@ -1043,7 +1169,7 @@ describe('nodeDownService — the drop carries its reason, and the probe is an e
   afterEach(() => sinon.restore());
 
   it('a SHUTTING_DOWN close probes nothing at the drop and feeds no ladder; the grace end probes once while the duty is unheld', async () => {
-    const clock = sinon.useFakeTimers({ now: 1_700_000_000_000, toFake: ['Date'] });
+    const clock = sinon.useFakeTimers({ now: 1_700_000_000_000, toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     const harness = makeHarness();
     withDuty(harness);
     const { service, transport, world } = harness;
@@ -1061,23 +1187,19 @@ describe('nodeDownService — the drop carries its reason, and the probe is an e
     await tick();
     expect(transport.openEphemeralConnection.callCount).to.equal(0);
     transport.dial.resetHistory();
-    await service.sweep();
-    await tick();
+    await listMoved(harness.networkStateServiceStub);
     expect(transport.dial.firstCall.args[0]).to.equal(DUTY_IP);
 
     // one more close and the duty stays unheld: the look comes at the grace end, once
     drop(transport, CLOSE_CODES.SHUTTING_DOWN);
     await tick();
     clock.tick(NODE_DOWN_GRACE_MS - 1);
-    await service.sweep();
     await tick();
     expect(transport.openEphemeralConnection.callCount).to.equal(0);
     clock.tick(1);
-    await service.sweep();
     await tick();
     expect(transport.openEphemeralConnection.callCount).to.equal(1);
     expect(transport.openEphemeralConnection.firstCall.args[0]).to.equal(DUTY_IP);
-    await service.sweep();
     await tick();
     expect(transport.openEphemeralConnection.callCount).to.equal(1);
     service.stop();
@@ -1085,7 +1207,7 @@ describe('nodeDownService — the drop carries its reason, and the probe is an e
   });
 
   it('a RESTARTING close is honoured for the shorter grace', async () => {
-    const clock = sinon.useFakeTimers({ now: 1_700_000_000_000, toFake: ['Date'] });
+    const clock = sinon.useFakeTimers({ now: 1_700_000_000_000, toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     const harness = makeHarness();
     withDuty(harness);
     const { service, transport } = harness;
@@ -1094,11 +1216,9 @@ describe('nodeDownService — the drop carries its reason, and the probe is an e
     drop(transport, CLOSE_CODES.RESTARTING);
     await tick();
     clock.tick(RESTART_GRACE_MS - 1);
-    await service.sweep();
     await tick();
     expect(transport.openEphemeralConnection.callCount).to.equal(0);
     clock.tick(1);
-    await service.sweep();
     await tick();
     expect(transport.openEphemeralConnection.callCount).to.equal(1);
     service.stop();
@@ -1106,7 +1226,7 @@ describe('nodeDownService — the drop carries its reason, and the probe is an e
   });
 
   it('a duty held again before the grace ends is not looked at', async () => {
-    const clock = sinon.useFakeTimers({ now: 1_700_000_000_000, toFake: ['Date'] });
+    const clock = sinon.useFakeTimers({ now: 1_700_000_000_000, toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     const harness = makeHarness();
     withDuty(harness);
     const { service, transport } = harness;
@@ -1116,7 +1236,6 @@ describe('nodeDownService — the drop carries its reason, and the probe is an e
     held(transport);
     await tick();
     clock.tick(NODE_DOWN_GRACE_MS);
-    await service.sweep();
     await tick();
     expect(transport.openEphemeralConnection.callCount).to.equal(0);
     service.stop();

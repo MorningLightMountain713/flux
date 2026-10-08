@@ -19,8 +19,9 @@ const log = require('../../lib/log');
 // assemble as one state machine, every side
 // effect injected. Observation in (a duty dropped, a duty dial failed, a
 // verdict arrived, our own gates recovered), verdict push and certificate
-// assembly out. No timer appears anywhere in the correctness path — verdicts
-// age in blocks, and every trigger is an event.
+// assembly out. Verdicts age in blocks and every trigger is an event; the one
+// instant the juror itself owes, the grace end of an honoured drop, is
+// scheduled once at the drop and cancelled by the duty being held again.
 //
 // The pile is how a node remembers it has already looked: a juror's newer
 // verdict REPLACES its
@@ -90,6 +91,9 @@ class NodeDownJuror {
    */
   #deferrals = new Map();
 
+  /** subject → the handle of the look scheduled for its grace end. */
+  #lookTimers = new Map();
+
   /**
    * The courtesy spent: subject → reason → heights of the honoured drops
    * inside the window. Duties only; gone with the process.
@@ -121,6 +125,9 @@ class NodeDownJuror {
    * @param {(certificate: object) => void} deps.onCertificate a pile crossed H
    * @param {() => number} [deps.now] wall clock in ms — the graces are
    *   wall-clock constants, so the grace end is a known instant
+   * @param {(fn: () => void, ms: number) => *} [deps.schedule] run `fn` once
+   *   after `ms`; answers a handle for `cancel`
+   * @param {(handle: *) => void} [deps.cancel]
    * @param {(subject: string) => Promise<number|undefined>} [deps.nextDeath]
    *   which death of the subject a verdict cast now would name: the highest
    *   number this node has seen certified for it, plus one. Undefined when
@@ -130,7 +137,16 @@ class NodeDownJuror {
    * @param {number} [options.maxAgeBlocks]
    */
   constructor(deps, options = {}) {
-    this.#deps = { now: () => Date.now(), ...deps };
+    this.#deps = {
+      now: () => Date.now(),
+      schedule: (fn, ms) => {
+        const handle = setTimeout(fn, ms);
+        if (handle.unref) handle.unref();
+        return handle;
+      },
+      cancel: (handle) => clearTimeout(handle),
+      ...deps,
+    };
     this.maxAgeBlocks = options.maxAgeBlocks ?? VERDICT_LIFETIME_BLOCKS;
   }
 
@@ -145,15 +161,39 @@ class NodeDownJuror {
    */
   noteDrop(subject, reason) {
     const droppedAt = this.#deps.now();
+    this.#spendDeferral(subject);
     if (!(reason in GRACE_MS) || !this.#honours(subject, reason)) {
-      this.#deferrals.delete(subject);
       this.look(subject, 'drop', { droppedAt, reason: reason in GRACE_MS ? reason : DROP_REASON.UNANNOUNCED });
       return { honoured: false };
     }
     this.#deferrals.set(subject, {
       reason, droppedAt, height: this.#deps.currentHeight(), lookAt: droppedAt + GRACE_MS[reason],
     });
+    this.#lookTimers.set(subject, this.#deps.schedule(() => this.#graceEnd(subject), GRACE_MS[reason]));
     return { honoured: true };
+  }
+
+  /** The deferral and the look it owed, both gone. */
+  #spendDeferral(subject) {
+    this.#deferrals.delete(subject);
+    const handle = this.#lookTimers.get(subject);
+    if (handle === undefined) return;
+    this.#lookTimers.delete(subject);
+    this.#deps.cancel(handle);
+  }
+
+  /**
+   * The grace end of an honoured drop: the one look it owes, if the duty is
+   * still unheld. A re-held duty spent the deferral already.
+   */
+  #graceEnd(subject) {
+    this.#lookTimers.delete(subject);
+    const deferral = this.#deferrals.get(subject);
+    if (!deferral) return;
+    this.#deferrals.delete(subject);
+    const socketAddress = this.#deps.resolveOutpoint(subject);
+    if (socketAddress !== null && this.#deps.isHeld(socketAddress)) return;
+    this.look(subject, 'grace-end', { droppedAt: deferral.droppedAt, reason: deferral.reason });
   }
 
   /**
@@ -188,6 +228,14 @@ class NodeDownJuror {
       this.#courtesy.delete(subject);
       log.info(`nodeDownJuror - ${subject} left this node's duties; its courtesy record is dropped`);
     });
+    [...this.#deferrals.keys()].forEach((subject) => {
+      if (!outpoints.has(subject)) this.#spendDeferral(subject);
+    });
+  }
+
+  /** Cancel every look still owed; the engine is going away. */
+  stop() {
+    [...this.#deferrals.keys()].forEach((subject) => this.#spendDeferral(subject));
   }
 
   /**
@@ -198,7 +246,7 @@ class NodeDownJuror {
    * @param {string} subject outpoint
    */
   noteHeld(subject) {
-    this.#deferrals.delete(subject);
+    this.#spendDeferral(subject);
     this.#piles.delete(subject);
     this.#assembled.delete(subject);
   }
@@ -337,6 +385,9 @@ class NodeDownJuror {
   }
 
   #record(subject, verdict) {
+    // A pile that aged below H since it last assembled re-arms before this
+    // verdict lands, so the verdict that refills it assembles again.
+    this.#maybeAssemble(subject);
     this.#pileFor(subject).set(verdict.juror, verdict);
     this.#maybeAssemble(subject);
   }
@@ -464,25 +515,6 @@ class NodeDownJuror {
 
     this.#assembled.add(subject);
     this.#deps.onCertificate(certificate);
-  }
-
-  /**
-   * The wiring's periodic housekeeping: the looks the honoured drops owe
-   * once their grace has ended, and the prune of every pile against the
-   * current height. The grace-end look is the one thing here correctness
-   * depends on — it is the first pass after a known instant, not a wait for
-   * information.
-   */
-  sweep() {
-    const now = this.#deps.now();
-    [...this.#deferrals.entries()].forEach(([subject, deferral]) => {
-      if (now < deferral.lookAt) return;
-      this.#deferrals.delete(subject);
-      const socketAddress = this.#deps.resolveOutpoint(subject);
-      if (socketAddress !== null && this.#deps.isHeld(socketAddress)) return;
-      this.look(subject, 'grace-end', { droppedAt: deferral.droppedAt, reason: deferral.reason });
-    });
-    [...this.#piles.keys()].forEach((subject) => this.#maybeAssemble(subject));
   }
 
   /** Observability. */
