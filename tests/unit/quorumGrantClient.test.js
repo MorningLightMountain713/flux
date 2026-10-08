@@ -358,6 +358,8 @@ describe('quorumGrant grantClient', () => {
       txhash: SELF_TXHASH, txindex: 0,
     });
     sinon.stub(fluxNetworkHelper, 'getFluxNodePrivateKey').resolves(WIF);
+    sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(`${SELF_HOST}:16127`);
+    sinon.stub(messageStore, 'appRunningBroadcastOf').resolves(null);
     sinon.stub(networkStateService, 'membershipFingerprint').returns(fingerprint);
     sinon.stub(networkStateService, 'membershipAt').callsFake(() => activeMembership);
     sinon.stub(registryManager, 'appLocationOf').resolves([
@@ -582,6 +584,60 @@ describe('quorumGrant grantClient', () => {
       const published = masterleasePublisher.publishMasterlease.firstCall.args[0];
       expect(published.fingerprint).to.equal('f'.repeat(64));
       expect(published.generation).to.equal(3);
+    });
+  });
+
+  describe('the asks a referee answers only to a holder carry this node\'s own announcement', () => {
+    const announcement = {
+      version: 1,
+      timestamp: 7,
+      pubKey: 'pk',
+      signature: 'sig',
+      data: {
+        type: 'fluxapprunning', version: 2, ip: `${SELF_HOST}:16127`, broadcastedAt: 7, apps: [{ name: 'app' }],
+      },
+    };
+
+    function bodiesTo(suffix) {
+      return serviceHelper.axiosPost.getCalls()
+        .filter((call) => String(call.args[0]).endsWith(suffix))
+        .map((call) => call.args[1]);
+    }
+
+    it('prepare, accept and renew carry it; probe does not', async () => {
+      messageStore.appRunningBroadcastOf.resolves(announcement);
+      const outcome = await grantClient.acquire(KEY, holderOptions());
+      expect(outcome.granted).to.equal(true);
+      await outcome.holder.renewOnce();
+      ['/prepare', '/accept', '/renew'].forEach((suffix) => {
+        const bodies = bodiesTo(suffix);
+        expect(bodies.length, suffix).to.be.greaterThan(0);
+        bodies.forEach((body) => expect(body.announcement, suffix).to.deep.equal(announcement));
+      });
+      const probes = bodiesTo('/probe');
+      expect(probes.length).to.be.greaterThan(0);
+      probes.forEach((body) => expect(body).to.not.have.property('announcement'));
+      expect(messageStore.appRunningBroadcastOf.firstCall.args[0]).to.equal(`${SELF_HOST}:16127`);
+      outcome.holder.stop();
+    });
+
+    it('a node that has not announced yet attaches nothing', async () => {
+      const outcome = await grantClient.acquire(KEY, holderOptions());
+      expect(outcome.granted).to.equal(true);
+      ['/prepare', '/accept'].forEach((suffix) => {
+        bodiesTo(suffix).forEach((body) => expect(body).to.not.have.property('announcement'));
+      });
+      outcome.holder.stop();
+    });
+
+    it('a node whose own address is unresolved attaches nothing', async () => {
+      fluxNetworkHelper.getLocalSocketAddress.resolves(null);
+      messageStore.appRunningBroadcastOf.resolves(announcement);
+      const outcome = await grantClient.acquire(KEY, holderOptions());
+      expect(outcome.granted).to.equal(true);
+      expect(messageStore.appRunningBroadcastOf.called).to.equal(false);
+      bodiesTo('/accept').forEach((body) => expect(body).to.not.have.property('announcement'));
+      outcome.holder.stop();
     });
   });
 

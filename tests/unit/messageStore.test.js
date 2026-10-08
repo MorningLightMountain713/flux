@@ -1768,6 +1768,36 @@ describe('messageStore tests', () => {
     });
   });
 
+  describe('appRunningBroadcastOf', () => {
+    function databaseAnswering(findOne) {
+      dbHelperStub.databaseConnection.returns({
+        db: sinon.stub().returns({ collection: sinon.stub().returns({ findOne }) }),
+      });
+      return findOne;
+    }
+
+    it('reassembles this node\'s latest announcement as it was broadcast', async () => {
+      const envelope = {
+        version: 1, timestamp: 5, pubKey: 'pk', signature: 'sig',
+      };
+      const data = { type: 'fluxapprunning', version: 2, ip: '1.2.3.4:16127', broadcastedAt: 5, apps: [] };
+      const findOne = databaseAnswering(sinon.stub().resolves({ envelope, data }));
+      const got = await messageStore.appRunningBroadcastOf('1.2.3.4:16127');
+      expect(got).to.deep.equal({ ...envelope, data });
+      expect(findOne.firstCall.args[0]).to.deep.equal({ ip: '1.2.3.4:16127', type: 'apprunning', dedupKey: 'v2' });
+    });
+
+    it('answers null before the first announcement', async () => {
+      databaseAnswering(sinon.stub().resolves(null));
+      expect(await messageStore.appRunningBroadcastOf('1.2.3.4:16127')).to.equal(null);
+    });
+
+    it('answers null for an event stored without its envelope — nothing a peer could verify', async () => {
+      databaseAnswering(sinon.stub().resolves({ data: { type: 'fluxapprunning', ip: '1.2.3.4:16127' } }));
+      expect(await messageStore.appRunningBroadcastOf('1.2.3.4:16127')).to.equal(null);
+    });
+  });
+
   describe('storeAppStateEvent', () => {
     let collectionStub;
 

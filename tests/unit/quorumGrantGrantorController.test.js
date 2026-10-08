@@ -24,6 +24,7 @@ const signedEnvelope = require('../../ZelBack/src/services/quorumGrant/signedEnv
 const rosterOverlay = require('../../ZelBack/src/services/quorumGrant/rosterOverlay');
 const { selectCommittee } = require('../../ZelBack/src/services/utils/committeeSelector');
 const delistedHolders = require('../../ZelBack/src/services/quorumGrant/delistedHolders');
+const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 
 // The controller's job is the gauntlet: identity, signature, committee
 // membership, holdership. The register behind it is stubbed — its rules have
@@ -72,6 +73,20 @@ function signedAsk(type, overrides = {}) {
   };
   const { signature } = signedEnvelope.sign(type, signedEnvelope.fieldsFor(type, ask), WIF);
   return { ...ask, signature };
+}
+
+// The asker's own running announcement as it was broadcast: a version-1
+// envelope around a fluxapprunning payload naming the asker's address.
+function runningAnnouncement(ip = `${ASKER_HOST}:16127`) {
+  return {
+    version: 1,
+    timestamp: Date.now(),
+    pubKey: PUBKEY,
+    signature: 'broadcast-signature',
+    data: {
+      type: 'fluxapprunning', version: 2, ip, broadcastedAt: Date.now(), apps: [{ name: 'myapp', hash: 'h' }],
+    },
+  };
 }
 
 function fakeReq(body, host = ASKER_HOST) {
@@ -658,6 +673,107 @@ describe('quorumGrant grantorController', () => {
       await grantorController.renew(fakeReq(signedAsk('renew')), renewed);
       expect(renewed.statusCode).to.equal(403);
       expect(grantRegister.renew.called).to.equal(false);
+    });
+
+    describe('a cell with no row for the asker seats on the announcement the ask carries', () => {
+      const askerRow = { ip: `${ASKER_HOST}:16127`, runningSince: Date.now() - 60_000 };
+      let announcement;
+
+      beforeEach(() => {
+        announcement = runningAnnouncement();
+        sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast').resolves({
+          result: fluxCommunicationUtils.VerifyResult.OK, announcer: fixtureFleet()[0],
+        });
+        sinon.stub(messageStore, 'storeBatchAppRunningEvents').resolves({ stored: 1 });
+        sinon.stub(messageStore, 'releaseInstallingClaims').resolves({ released: 0 });
+        sinon.stub(fluxEventBus, 'publish');
+      });
+
+      function servedReport() {
+        return fluxEventBus.publish.getCalls().map((call) => call.args).find(([name]) => name === 'quorumGrant:served')[1];
+      }
+
+      it('verifies the copy as the gossip intake would, stores it as a synced one, and answers the ask', async () => {
+        registryManager.appLocationOf.onFirstCall().resolves([]).onSecondCall().resolves([askerRow]);
+        const res = fakeRes();
+        await grantorController.accept(fakeReq(signedAsk('accept', { announcement })), res);
+        expect(res.statusCode).to.equal(200);
+        expect(grantRegister.accept.calledOnce).to.equal(true);
+        expect(fluxCommunicationUtils.verifyFluxBroadcast.calledOnceWith(announcement)).to.equal(true);
+        const [stored, announcers] = messageStore.storeBatchAppRunningEvents.firstCall.args;
+        expect(stored).to.deep.equal([announcement]);
+        expect(announcers.get(announcement)).to.deep.equal(fixtureFleet()[0]);
+        expect(messageStore.releaseInstallingClaims.calledOnceWith(announcement.data)).to.equal(true);
+        expect(servedReport()).to.include({ outcome: 'served', announcement: 'adopted' });
+      });
+
+      it('a renewal seats the same way', async () => {
+        registryManager.appLocationOf.onFirstCall().resolves([]).onSecondCall().resolves([askerRow]);
+        const res = fakeRes();
+        await grantorController.renew(fakeReq(signedAsk('renew', { announcement })), res);
+        expect(res.statusCode).to.equal(200);
+        expect(grantRegister.renew.calledOnce).to.equal(true);
+      });
+
+      it('a cell that holds the row never reads the copy', async () => {
+        const res = fakeRes();
+        await grantorController.accept(fakeReq(signedAsk('accept', { announcement })), res);
+        expect(res.statusCode).to.equal(200);
+        expect(fluxCommunicationUtils.verifyFluxBroadcast.called).to.equal(false);
+        expect(messageStore.storeBatchAppRunningEvents.called).to.equal(false);
+        expect(servedReport()).to.not.have.property('announcement');
+      });
+
+      it('only the asker\'s own announcement counts: another node\'s copy is refused unread', async () => {
+        registryManager.appLocationOf.resolves([]);
+        const res = fakeRes();
+        await grantorController.accept(fakeReq(signedAsk('accept', { announcement: runningAnnouncement('10.1.0.1:16127') })), res);
+        expect(res.statusCode).to.equal(403);
+        expect(res.body.data.message).to.contain('holder');
+        expect(fluxCommunicationUtils.verifyFluxBroadcast.called).to.equal(false);
+        expect(messageStore.storeBatchAppRunningEvents.called).to.equal(false);
+        expect(grantRegister.accept.called).to.equal(false);
+      });
+
+      it('a copy the broadcast verifier refuses stores nothing', async () => {
+        registryManager.appLocationOf.resolves([]);
+        fluxCommunicationUtils.verifyFluxBroadcast.resolves({
+          result: fluxCommunicationUtils.VerifyResult.BAD_SIGNATURE, announcer: null,
+        });
+        const res = fakeRes();
+        await grantorController.accept(fakeReq(signedAsk('accept', { announcement })), res);
+        expect(res.statusCode).to.equal(403);
+        expect(messageStore.storeBatchAppRunningEvents.called).to.equal(false);
+        expect(grantRegister.accept.called).to.equal(false);
+        expect(fluxEventBus.publish.getCalls().map((call) => call.args)
+          .find(([name]) => name === 'quorumGrant:served')[1]).to.include({ outcome: 'refusedHolder', announcement: 'refused' });
+      });
+
+      it('a copy that still names no row for the asker is refused after it is stored', async () => {
+        registryManager.appLocationOf.resolves([]);
+        const res = fakeRes();
+        await grantorController.accept(fakeReq(signedAsk('accept', { announcement })), res);
+        expect(res.statusCode).to.equal(403);
+        expect(messageStore.storeBatchAppRunningEvents.calledOnce).to.equal(true);
+        expect(registryManager.appLocationOf.calledTwice).to.equal(true);
+        expect(grantRegister.accept.called).to.equal(false);
+      });
+
+      it('a malformed copy is a malformed ask', async () => {
+        const res = fakeRes();
+        await grantorController.accept(fakeReq(signedAsk('accept', { announcement: { version: 2, data: { type: 'fluxapprunning' } } })), res);
+        expect(res.statusCode).to.equal(400);
+        expect(res.body.data.message).to.equal('malformed announcement');
+        expect(registryManager.appLocationOf.called).to.equal(false);
+      });
+
+      it('the copy rides outside the signature: the signed fields are the same with and without it', async () => {
+        registryManager.appLocationOf.onFirstCall().resolves([]).onSecondCall().resolves([askerRow]);
+        const bare = signedAsk('accept');
+        const res = fakeRes();
+        await grantorController.accept(fakeReq({ ...bare, announcement }), res);
+        expect(res.statusCode).to.equal(200);
+      });
     });
 
     it('a young holder may not CHALLENGE an existing held record', async () => {

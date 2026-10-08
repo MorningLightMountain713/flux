@@ -1326,6 +1326,24 @@ async function storeBatchAppRunningEvents(verifiedBroadcasts, announcers = new M
   return { stored: ops.length };
 }
 
+/**
+ * This node's own latest running announcement as it was broadcast, the
+ * envelope around the payload, for a holder to carry on its grant asks
+ * (grantClient.holdingEvidence); null before the first announcement.
+ * @param {string} ip this node's socket address as it announces it
+ * @returns {Promise<object|null>} a verifiable fluxapprunning broadcast
+ */
+async function appRunningBroadcastOf(ip) {
+  const db = dbHelper.databaseConnection();
+  const database = db.db(config.get('database.appsglobal.database'));
+  const event = await database.collection(globalAppStateEvents).findOne(
+    { ip, type: APP_STATE_EVENT_TYPES.APPRUNNING, dedupKey: 'v2' },
+    { projection: { _id: 0, envelope: 1, data: 1 } },
+  );
+  if (!event?.envelope || !event.data) return null;
+  return { ...event.envelope, data: event.data };
+}
+
 function storeSignedAppInstallingBroadcast(signedBroadcast) {
   const { data } = signedBroadcast;
   if (!data || !data.ip || !data.name || !data.broadcastedAt) return;
@@ -1587,6 +1605,7 @@ module.exports = {
   releaseInstallingClaims,
   storeAppStateEvent,
   storeBatchAppRunningEvents,
+  appRunningBroadcastOf,
   APP_STATE_EVENT_TYPES,
   storeAppInstallingMessage,
   storeSignedAppInstallingBroadcast,
