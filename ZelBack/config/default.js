@@ -70,7 +70,7 @@ module.exports = {
         utxoIndex: 'utxoindex',
         addressTransactionIndex: 'addresstransactionindex',
         fluxTransactions: 'zelnodetransactions',
-        appsHashes: 'zelappshashes',
+        appsHashes: 'zelappshashes', // the payment index of nodes not yet past the app-messages migration, which moves it and drops this
         coinbaseFusionIndex: 'coinbasefusionindex',
       },
     },
@@ -89,10 +89,11 @@ module.exports = {
     appsglobal: {
       database: `${dbPrefix}globalzelapps`,
       collections: {
-        appsMessages: 'zelappsmessages', // storage for all flux apps messages done on flux network
+        appMessages: 'appmessages', // one record per app message hash: the chain's payment and the verified contents, in the states the app-messages migration leaves
+        appsMessages: 'zelappsmessages', // the permanent messages of nodes not yet past the app-messages migration, which moves them and drops this
         appDecisions: 'appdecisions', // one decision per paid app message: applied, or refused with its reason
         appsInformation: 'zelappsinformation', // stores actual state of flux app configuration info - initial state and its overwrites with update messages
-        appsTemporaryMessages: 'zelappstemporarymessages', // storages for all flux apps messages that are not yet confirmed on the flux network
+        appsTemporaryMessages: 'zelappstemporarymessages', // the temporary pool of nodes not yet past the app-messages migration, which moves it and drops this
         appsUnpayableMessages: 'appsunpayablemessages', // v9 messages this node dropped from the pool with no payment inside their window: the chain can no longer pay them
         appsInstallingLocations: 'appsinstallinglocations', // stores install location of flux apps as documents containing name, ip, obtainedAt
         limitCounterRecords: 'limitcounterrecords', // gossiped record of one caller's use of a limited feature, keyed by the counter's hash; self-reaping on its own endsAt
@@ -778,7 +779,6 @@ module.exports = {
     expireFluxAppsPeriod: 100, // every 100 blocks we run a check that deletes apps specifications and stops/removes the application from existence if it has been lastly updated more than 22k blocks ago
     updateFluxAppsPeriod: 9, // every 9 blocks we check for reinstalling of old application versions
     removeFluxAppsPeriod: 11, // every 11 blocks we check for more than maximum number of instances of an application
-    reconstructAppMessagesHashPeriod: 3600, // every 5 days we ask for old messages
     benchUpnpPeriod: 6480, // every 9 days execute upnp bench
     hddFileSystemMinimum: 10, // right now 10, to be decreased to a minimum of 5GB of free space on hdd for docker with v8 specs activation
     defaultSwap: 2, // 2gb swap memory minimum, this is in gb

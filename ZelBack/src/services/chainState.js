@@ -9,6 +9,7 @@ const entitlementsState = require('./entitlementsState');
 const priceOracleState = require('./pricing/priceOracleState');
 const unclaimedPayments = require('./appDecisions/unclaimedPayments');
 const decisionStore = require('./appDecisions/decisionStore');
+const appRecords = require('./appDatabase/appRecords');
 
 /**
  * Chain-derived state: the scan cursor, the app payment records and soft-fork
@@ -25,7 +26,6 @@ const decisionStore = require('./appDecisions/decisionStore');
  * rewind (the scan's error recovery, or the boot restore) completes the work.
  */
 
-const appsHashesCollection = config.get('database.daemon.collections.appsHashes');
 const scannedHeightCollection = config.get('database.daemon.collections.scannedHeight');
 const chainParamsMessagesCollection = config.get('database.chainparams.collections.chainMessages');
 const softForkCollections = [
@@ -144,30 +144,23 @@ async function setScannedHeight(database, height) {
 }
 
 /**
- * Deletes every chain-derived row above a height: app payment records, the
- * decisions of the messages they paid for, legacy and v9 soft-fork rows, and
- * with `rescanGlobalApps` the stored app messages. The registry follows the
- * decisions at the next full pass.
+ * Deletes every chain-derived row above a height: the app payments (the
+ * contents a message holds stay, as the pool's), the decisions of the messages
+ * they paid for, and the legacy and v9 soft-fork rows. The registry follows
+ * the decisions at the next full pass.
  * @param {number} height
- * @param {boolean} rescanGlobalApps
  */
-async function deleteAbove(height, rescanGlobalApps) {
+async function deleteAbove(height) {
   const dbopen = dbHelper.databaseConnection();
-  const database = dbopen.db(config.get('database.daemon.database'));
   const databaseUpdates = dbopen.db(config.get('database.chainparams.database'));
   const query = { height: { $gt: height } };
 
-  await dbHelper.removeDocumentsFromCollection(database, appsHashesCollection, query);
+  await appRecords.messages().removePaymentsAbove(height);
   await decisionStore.deleteAbove(height);
   await dbHelper.removeDocumentsFromCollection(databaseUpdates, chainParamsMessagesCollection, query);
   for (const collection of softForkCollections) {
     // eslint-disable-next-line no-await-in-loop
     await dbHelper.removeDocumentsFromCollection(databaseUpdates, collection, query);
-  }
-  if (rescanGlobalApps) {
-    log.info('Rescanning Apps!');
-    const databaseGlobal = dbopen.db(config.get('database.appsglobal.database'));
-    await dbHelper.removeDocumentsFromCollection(databaseGlobal, config.get('database.appsglobal.collections.appsMessages'), query);
   }
 }
 
@@ -202,11 +195,10 @@ async function buildHistories() {
  *
  * @param {string} reason Why, for the capability and the log.
  * @param {number|((state: {cursor: number}) => (number|null))} target
- * @param {{rescanGlobalApps?: boolean}} [options]
  * @returns {Promise<number|null>} the height rewound to, or null when there was
  *   nothing to do
  */
-function rewind(reason, target, options = {}) {
+function rewind(reason, target) {
   return exclusive(async () => {
     const database = daemonDatabase();
     const cursor = await getScannedHeight(database);
@@ -223,7 +215,7 @@ function rewind(reason, target, options = {}) {
     log.info(`Chain state - rewinding from ${cursor} to ${height}: ${reason}`);
 
     await setScannedHeight(database, height);
-    await deleteAbove(height, options.rescanGlobalApps === true);
+    await deleteAbove(height);
     await Promise.all(rewindListeners.map((fn) => fn(height)));
     await buildHistories();
 

@@ -116,7 +116,7 @@ describe('App registration', function () {
       await waitForBlockProcessed(env.clients[0], (d) => d.height >= result.targetHeight, 60000);
     });
 
-    it('should add hash to zelappshashes after block processed', async function () {
+    it('should record the payment after block processed', async function () {
       const db = dbClient(1);
       const hashes = await db.hashCounts();
       expect(hashes.total).to.be.greaterThan(0);

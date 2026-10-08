@@ -3,7 +3,7 @@
 const config = require('config');
 
 const log = require('../../lib/log');
-const dbHelper = require('../dbHelper');
+const appRecords = require('../appDatabase/appRecords');
 const daemonServiceUtils = require('../daemonService/daemonServiceUtils');
 const { appPaymentPositions } = require('../appPaymentPositions');
 
@@ -22,44 +22,31 @@ const { appPaymentPositions } = require('../appPaymentPositions');
  * @returns {Promise<{positioned: number, heightsCorrected: number, notOnChain: number}>}
  */
 async function backfillPaymentPositions() {
-  const database = dbHelper.databaseConnection().db(config.get('database.daemon.database'));
-  const collection = config.get('database.daemon.collections.appsHashes');
-  const missing = await dbHelper.findInDatabase(
-    database, collection, { txIndex: { $exists: false } }, { projection: { _id: 0, txid: 1, height: 1 } },
-  );
+  const messages = appRecords.messages();
+  const missing = await messages.withoutPosition();
   if (missing.length === 0) return { positioned: 0, heightsCorrected: 0, notOnChain: 0 };
-
-  // Every height an app payment can be at: a recorded height says nothing about
-  // where a transaction recorded from a block that left the chain really is.
   const start = Math.min(...config.get('fluxapps.appPaymentAddresses').map(({ activeFromHeight }) => activeFromHeight));
   const tip = await daemonServiceUtils.executeCall('getBlockCount');
   if (tip.status !== 'success' || !Number.isInteger(tip.data)) {
     throw new Error(`getBlockCount failed: ${tip.data?.message ?? tip.data}`);
   }
   const positions = await appPaymentPositions(start, tip.data);
-  const operations = [];
   let heightsCorrected = 0;
   let notOnChain = 0;
-  for (const { txid, height } of missing) {
+  for (const { hash, txid, height } of missing) {
     const position = positions.get(txid);
     if (position) {
       if (position.height !== height) heightsCorrected += 1;
-      operations.push({
-        updateOne: {
-          filter: { txid, txIndex: { $exists: false } },
-          update: { $set: { txIndex: position.txIndex, height: position.height } },
-        },
-      });
+      // eslint-disable-next-line no-await-in-loop
+      await messages.setPosition(hash, { txIndex: position.txIndex, height: position.height });
     } else {
       notOnChain += 1;
-      operations.push({
-        updateOne: { filter: { txid, txIndex: { $exists: false } }, update: { $set: { notOnChain: true } } },
-      });
+      // eslint-disable-next-line no-await-in-loop
+      await messages.markNotOnChain(hash);
     }
   }
-  if (operations.length) await dbHelper.bulkWriteInDatabase(database, collection, operations);
-  log.info(`migrations - payment positions: ${operations.length - notOnChain} positioned, ${heightsCorrected} of them at the chain's height rather than the recorded one, ${notOnChain} not on the chain`);
-  return { positioned: operations.length - notOnChain, heightsCorrected, notOnChain };
+  log.info(`migrations - payment positions: ${missing.length - notOnChain} positioned, ${heightsCorrected} of them at the chain's height rather than the recorded one, ${notOnChain} not on the chain`);
+  return { positioned: missing.length - notOnChain, heightsCorrected, notOnChain };
 }
 
 module.exports = { backfillPaymentPositions };

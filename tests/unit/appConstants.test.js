@@ -142,9 +142,7 @@ describe('appConstants tests', () => {
 
     it('should expose daemon database collections', () => {
       expect(appConstants.scannedHeightCollection).to.exist;
-      expect(appConstants.appsHashesCollection).to.exist;
       expect(typeof appConstants.scannedHeightCollection).to.equal('string');
-      expect(typeof appConstants.appsHashesCollection).to.equal('string');
     });
 
     it('should expose local apps collections', () => {
@@ -153,15 +151,11 @@ describe('appConstants tests', () => {
     });
 
     it('should expose global apps collections', () => {
-      expect(appConstants.globalAppsMessages).to.exist;
       expect(appConstants.globalAppsInformation).to.exist;
-      expect(appConstants.globalAppsTempMessages).to.exist;
       expect(appConstants.globalAppsInstallingLocations).to.exist;
       expect(appConstants.globalAppsInstallingErrorsLocations).to.exist;
 
-      expect(typeof appConstants.globalAppsMessages).to.equal('string');
       expect(typeof appConstants.globalAppsInformation).to.equal('string');
-      expect(typeof appConstants.globalAppsTempMessages).to.equal('string');
       expect(typeof appConstants.globalAppsInstallingLocations).to.equal('string');
       expect(typeof appConstants.globalAppsInstallingErrorsLocations).to.equal('string');
     });
@@ -265,7 +259,6 @@ describe('appConstants tests', () => {
 
     it('should export all daemon database collections', () => {
       expect(appConstants).to.have.property('scannedHeightCollection');
-      expect(appConstants).to.have.property('appsHashesCollection');
     });
 
     it('should export all local apps collections', () => {
@@ -273,9 +266,7 @@ describe('appConstants tests', () => {
     });
 
     it('should export all global apps collections', () => {
-      expect(appConstants).to.have.property('globalAppsMessages');
       expect(appConstants).to.have.property('globalAppsInformation');
-      expect(appConstants).to.have.property('globalAppsTempMessages');
       expect(appConstants).to.have.property('globalAppsInstallingLocations');
       expect(appConstants).to.have.property('globalAppsInstallingErrorsLocations');
     });

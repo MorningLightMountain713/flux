@@ -1,8 +1,6 @@
 'use strict';
 
-const config = require('config');
-
-const dbHelper = require('../dbHelper');
+const appRecords = require('../appDatabase/appRecords');
 const { compareChainOrder } = require('../utils/chainOrder');
 const { lookupBlockTime } = require('../appMessaging/confirmedMessageStore');
 const decisionStore = require('./decisionStore');
@@ -17,11 +15,6 @@ const decisionStore = require('./decisionStore');
  * and the routes that serve stored messages as they are read them directly.
  */
 
-const globalAppsMessages = config.get('database.appsglobal.collections.appsMessages');
-
-function messagesDb() {
-  return dbHelper.databaseConnection().db(config.get('database.appsglobal.database'));
-}
 
 /**
  * Every applied message for a name, in chain order.
@@ -31,10 +24,8 @@ function messagesDb() {
 async function appliedMessages(name) {
   const decisions = (await decisionStore.appliedFor(String(name).toLowerCase())).sort(compareChainOrder);
   if (decisions.length === 0) return [];
-  const messages = await dbHelper.findInDatabase(
-    messagesDb(), globalAppsMessages, { hash: { $in: decisions.map((d) => d.hash) } }, { projection: { _id: 0 } },
-  );
-  const byHash = new Map(messages.map((message) => [message.hash, message]));
+  const messages = await appRecords.messages().confirmedByHashes(decisions.map((d) => d.hash));
+  const byHash = new Map(messages.map((record) => [record.hash, record.permanentForm()]));
   return decisions
     .filter((decision) => byHash.has(decision.hash))
     .map((decision) => ({ message: byHash.get(decision.hash), decision }));

@@ -1,9 +1,7 @@
 'use strict';
 
-const config = require('config');
 
 const log = require('../../lib/log');
-const dbHelper = require('../dbHelper');
 const capabilities = require('../utils/capabilities');
 const chainState = require('../chainState');
 const verifyPool = require('../utils/verifyPool');
@@ -11,6 +9,7 @@ const { compareChainOrder, isPositioned } = require('../utils/chainOrder');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const confirmedMessageStore = require('../appMessaging/confirmedMessageStore');
 const decisionStore = require('./decisionStore');
+const appRecords = require('../appDatabase/appRecords');
 const { createJudge } = require('./decisionJudge');
 const { decideName, RULE_VERSION } = require('./decisionRule');
 
@@ -36,8 +35,6 @@ const { decideName, RULE_VERSION } = require('./decisionRule');
  * that last write leaves the name undecided, and it is decided again.
  */
 
-const globalAppsMessages = config.get('database.appsglobal.collections.appsMessages');
-const appsHashesCollection = config.get('database.daemon.collections.appsHashes');
 
 /** Names decided under one hold of the chain-state lock. */
 const NAMES_PER_BATCH = 500;
@@ -48,14 +45,6 @@ const pendingHashes = new Set();
 let fullPassPending = false;
 let running = null;
 let started = false;
-
-function messagesDb() {
-  return dbHelper.databaseConnection().db(config.get('database.appsglobal.database'));
-}
-
-function daemonDb() {
-  return dbHelper.databaseConnection().db(config.get('database.daemon.database'));
-}
 
 /** The name a stored message is decided under: its spec's name, lower-cased. */
 function nameOf(message) {
@@ -96,40 +85,36 @@ function onFullPass(fn) {
 }
 
 /**
- * Every name holding a stored message with a payment record and no decision
- * under the current rule version. A record whose transaction the chain does not
- * hold is no payment, as paymentRecords reads it.
+ * Every name holding a confirmed message with no decision under the current
+ * rule version. A confirmed message is one whose payment the chain holds.
  * @returns {Promise<Set<string>>}
  */
 async function undecidedNames() {
-  const [messages, records, decided] = await Promise.all([
-    dbHelper.findInDatabase(messagesDb(), globalAppsMessages, {}, { projection: { _id: 0, hash: 1, 'appSpecifications.name': 1 } }),
-    dbHelper.findInDatabase(daemonDb(), appsHashesCollection, { notOnChain: { $ne: true } }, { projection: { _id: 0, hash: 1 } }),
+  const [summaries, decided] = await Promise.all([
+    appRecords.messages().confirmedSummaries(),
     decisionStore.decidedHashes(RULE_VERSION),
   ]);
-  const paid = new Set(records.map((record) => record.hash));
   const names = new Set();
-  for (const message of messages) {
-    if (paid.has(message.hash) && !decided.has(message.hash)) names.add(nameOf(message));
+  for (const { hash, name } of summaries) {
+    if (!decided.has(hash)) names.add(String(name ?? '').toLowerCase());
   }
   return names;
 }
 
 /**
- * Every stored message decided under one of `names`.
+ * Every confirmed message decided under one of `names`, in its permanent form.
  * @param {Set<string>} names
  * @returns {Promise<object[]>}
  */
 async function messagesNamed(names) {
-  const patterns = [...names].filter(Boolean)
-    .map((name) => new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
-  const query = names.has('') ? {} : { 'appSpecifications.name': { $in: patterns } };
-  const messages = await dbHelper.findInDatabase(messagesDb(), globalAppsMessages, query, { projection: { _id: 0 } });
-  return messages.filter((message) => names.has(nameOf(message)));
+  const records = names.has('')
+    ? await appRecords.messages().confirmed()
+    : await appRecords.messages().confirmedNamed([...names].filter(Boolean));
+  return records.map((record) => record.permanentForm()).filter((message) => names.has(nameOf(message)));
 }
 
 /**
- * The stored messages a run decides, grouped by name: every name holding an
+ * The confirmed messages a run decides, grouped by name: every name holding an
  * undecided message on a full pass, else the names holding the woken hashes.
  * @param {boolean} full
  * @param {string[]} hashes
@@ -139,15 +124,10 @@ async function messagesToDecide(full, hashes) {
   let messages;
   if (full) {
     const names = await undecidedNames();
-    messages = names.size
-      ? (await dbHelper.findInDatabase(messagesDb(), globalAppsMessages, {}, { projection: { _id: 0 } }))
-        .filter((message) => names.has(nameOf(message)))
-      : [];
+    messages = names.size ? await messagesNamed(names) : [];
   } else {
-    const woken = await dbHelper.findInDatabase(
-      messagesDb(), globalAppsMessages, { hash: { $in: hashes } }, { projection: { _id: 0, 'appSpecifications.name': 1 } },
-    );
-    messages = woken.length ? await messagesNamed(new Set(woken.map(nameOf))) : [];
+    const woken = await appRecords.messages().confirmedByHashes(hashes);
+    messages = woken.length ? await messagesNamed(new Set(woken.map((record) => String(record.name ?? '').toLowerCase()))) : [];
   }
   const grouped = new Map();
   for (const message of messages) {

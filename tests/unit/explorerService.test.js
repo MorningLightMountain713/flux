@@ -2,7 +2,6 @@
 
 const sinon = require('sinon');
 const config = require('config');
-const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const daemonSubscriptionService = require('../../ZelBack/src/services/daemonService/daemonSubscriptionService');
 const proxyquire = require('proxyquire');
 const explorerService = require('../../ZelBack/src/services/explorerService');
@@ -19,6 +18,7 @@ const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonSta
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
+const { stubMessages } = require('./fixtures/appRecords');
 const log = require('../../ZelBack/src/lib/log');
 const { requireMongo } = require('./dbTestHelper');
 
@@ -39,6 +39,10 @@ chai.use(chaiAsPromised);
 const { expect } = chai;
 
 describe('explorerService tests', () => {
+  // The app messages every block of tests reads and writes: a stub per test.
+  let messages;
+  beforeEach(() => { messages = stubMessages(); });
+
   // The daemon is synced and the local database prepared unless a test says otherwise.
   beforeEach(() => {
     capabilities.resetForTests();
@@ -552,66 +556,6 @@ describe('explorerService tests', () => {
   // next hash retry forward to the current block. Without the emit the audit
   // repaired rows that nothing then went looking for until their own scheduled
   // height came round again - a listener with no producer, which is how it was.
-  describe('the reconstruct audit announces what it corrected', () => {
-    // The audit runs on a block that is BOTH past epochstart and a multiple of
-    // the period, and only when the block is the tip - which is what carries
-    // everything gated below it.
-    const PERIOD = config.get('fluxapps.reconstructAppMessagesHashPeriod');
-    const EPOCH = config.get('fluxapps.epochstart');
-    const HEIGHT = Math.ceil(EPOCH / PERIOD) * PERIOD;
-    let reconstructStub;
-    let heard;
-
-    beforeEach(async () => {
-      sinon.useFakeTimers({ toFake: ['setTimeout'], shouldAdvanceTime: true });
-      sinon.stub(dbHelper, 'findOneInDatabase');
-      sinon.stub(dbHelper, 'insertManyToDatabase');
-      sinon.stub(dbHelper, 'updateOneInDatabase').returns(true);
-      sinon.stub(dbHelper, 'collectionStats').returns({ size: 10_000, count: 15, avgObjSize: 1111 });
-      sinon.stub(chainState, 'blockScanned').resolves();
-      sinon.stub(specReconciler, 'requestFullConvergence');
-      sinon.stub(portManager, 'restorePortsSupport');
-      await dbHelper.initiateDB();
-      dbHelper.databaseConnection();
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: HEIGHT } });
-      sinon.stub(daemonServiceBlockchainRpcs, 'getBlock').returns({
-        status: 'success',
-        data: { height: HEIGHT, tx: [], confirmations: 1 },
-      });
-      reconstructStub = sinon.stub(registryManager, 'reconstructAppMessagesHashCollection');
-      capabilities.setForTests('appRegistryConsistent', true);
-
-      heard = 0;
-      explorerService.getBlockEmitter().on('hashesChanged', () => { heard += 1; });
-    });
-
-    afterEach(() => {
-      capabilities.setForTests('appRegistryConsistent', false);
-      explorerService.getBlockEmitter().removeAllListeners('hashesChanged');
-      sinon.restore();
-    });
-
-    it('announces a corrected hash, so the retry comes forward', async () => {
-      reconstructStub.resolves({ changed: 3 });
-
-      await explorerService.processOneBlock(HEIGHT, true, { atTip: true });
-
-      sinon.assert.calledOnce(reconstructStub);
-      expect(heard, 'the orchestrator was never told').to.equal(1);
-    });
-
-    // Announcing an audit that corrected nothing would bring the retry forward
-    // on every pass, which is the schedule the retry heights exist to set.
-    it('says nothing when the audit corrected nothing', async () => {
-      reconstructStub.resolves({ changed: 0 });
-
-      await explorerService.processOneBlock(HEIGHT, true, { atTip: true });
-
-      sinon.assert.calledOnce(reconstructStub);
-      expect(heard).to.equal(0);
-    });
-  });
-
   describe('initiateBlockProcessor tests', () => {
     let findInDatabaseStub;
     let getBlockCountStub;
@@ -671,7 +615,6 @@ describe('explorerService tests', () => {
 
     afterEach(() => {
       explorerService.setIsInInitiationOfBP(false);
-      explorerService.setZelAppSpecsMigrationDone(false);
       sinon.restore();
     });
 
@@ -685,7 +628,6 @@ describe('explorerService tests', () => {
     });
 
     it('should throw and log error if getBlockCount does not return success', async () => {
-      explorerService.setZelAppSpecsMigrationDone(true);
       sinon.stub(dbHelper, 'countInDatabase').resolves(1);
       getBlockCountStub.returns({
         status: 'error',
@@ -886,8 +828,7 @@ describe('explorerService tests', () => {
       sinon.assert.calledWithMatch(logInfoSpy, 'Bootstrap: Using address-index fast path');
       sinon.assert.calledWithMatch(logInfoSpy, 'Preparing apps collections');
       sinon.assert.calledWithMatch(logInfoSpy, 'Preparation done');
-      sinon.assert.calledWithMatch(dropCollectionStub, sinon.match.object, 'zelappsmessages');
-      sinon.assert.calledWithMatch(dropCollectionStub, sinon.match.object, 'zelappshashes');
+      sinon.assert.calledOnce(messages.clearPayments);
     });
   });
 
@@ -930,7 +871,6 @@ describe('explorerService tests', () => {
       expect(record.txid).to.equal('abc123');
       expect(record.txIndex).to.equal(7);
       expect(record.hash).to.have.length(64);
-      expect(record.message).to.equal(false);
       // the confirming block's timestamp rides the row — it becomes v9 registeredAt
       expect(record.blockTime).to.equal(1_750_000_000);
     });
@@ -977,7 +917,6 @@ describe('explorerService tests', () => {
     const PAY = config.fluxapps.appPaymentAddresses[0].address;
     let executeCallStub;
     let executeBatchCallStub;
-    let insertManyStub;
     let updateOneStub;
 
     const hashHex1 = '6162636465666768696a6b6c6d6e6f707172737475767778797a303132333435363738394142434445464748494a4b4c4d4e4f505152535455565758595a3031';
@@ -1017,7 +956,7 @@ describe('explorerService tests', () => {
       dbHelper.databaseConnection();
       executeCallStub = sinon.stub(daemonServiceUtils, 'executeCall');
       executeBatchCallStub = sinon.stub(daemonServiceUtils, 'executeBatchCall');
-      insertManyStub = sinon.stub(dbHelper, 'insertManyToDatabase').resolves();
+      sinon.stub(dbHelper, 'insertManyToDatabase').resolves();
       updateOneStub = sinon.stub(dbHelper, 'updateOneInDatabase').resolves();
     });
 
@@ -1031,8 +970,8 @@ describe('explorerService tests', () => {
 
       await explorerService.bootstrapAppHashes(2_579_000);
 
-      sinon.assert.calledOnce(insertManyStub);
-      const inserted = insertManyStub.getCall(0).args[2];
+      sinon.assert.calledOnce(messages.recordPayments);
+      const inserted = messages.recordPayments.getCall(0).args[0];
       expect(inserted.map((record) => [record.txid, record.txIndex])).to.deep.equal([['tx1', 3], ['tx2', 1]]);
 
       const updateCall = updateOneStub.getCalls().find((c) => c.args[1] === config.database.daemon.collections.scannedHeight);
@@ -1045,7 +984,7 @@ describe('explorerService tests', () => {
 
       await explorerService.bootstrapAppHashes(2_579_000);
 
-      const inserted = insertManyStub.getCall(0).args[2];
+      const inserted = messages.recordPayments.getCall(0).args[0];
       expect(inserted.map((record) => record.txid)).to.deep.equal(['earlier']);
     });
 
@@ -1084,7 +1023,7 @@ describe('explorerService tests', () => {
       });
 
       await explorerService.bootstrapAppHashes(2_579_000);
-      expect(insertManyStub.getCall(0).args[2]).to.have.length(1);
+      expect(messages.recordPayments.getCall(0).args[0]).to.have.length(1);
     });
 
     it('fetches a transaction once when several of its outputs pay', async () => {
@@ -1108,8 +1047,8 @@ describe('explorerService tests', () => {
       }));
 
       await explorerService.bootstrapAppHashes(2_579_000);
-      expect(insertManyStub.callCount).to.equal(2);
-      expect(insertManyStub.getCalls().reduce((sum, call) => sum + call.args[2].length, 0)).to.equal(count);
+      expect(messages.recordPayments.callCount).to.equal(2);
+      expect(messages.recordPayments.getCalls().reduce((sum, call) => sum + call.args[0].length, 0)).to.equal(count);
     });
   });
 
@@ -1823,7 +1762,6 @@ describe('explorerService tests', () => {
     let fetched;
     let onFetch;
     let removeStub;
-    let insertStub;
     let blockAt;
 
     beforeEach(() => {
@@ -1841,7 +1779,7 @@ describe('explorerService tests', () => {
       });
       removeStub = sinon.stub(dbHelper, 'removeDocumentsFromCollection').resolves();
       sinon.stub(dbHelper, 'findInDatabase').resolves([]);
-      insertStub = sinon.stub(dbHelper, 'insertManyToDatabase').resolves();
+      sinon.stub(dbHelper, 'insertManyToDatabase').resolves();
       sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 1005 } });
       sinon.stub(daemonStatus, 'isInsightExplorer').returns(false);
       sinon.stub(daemonSubscriptionService, 'isTopicAvailable').returns(true);
@@ -1897,7 +1835,7 @@ describe('explorerService tests', () => {
       await explorerService.startScanning();
       await rewound;
 
-      const inserted = insertStub.getCalls().flatMap((call) => call.args[2]);
+      const inserted = messages.recordPayments.getCalls().flatMap((call) => call.args[0]);
       expect(inserted.map((record) => record.txid)).to.deep.equal(['payment']);
     });
 
@@ -1929,7 +1867,7 @@ describe('explorerService tests', () => {
 
       await explorerService.startScanning();
 
-      const inserted = insertStub.getCalls().flatMap((call) => call.args[2]);
+      const inserted = messages.recordPayments.getCalls().flatMap((call) => call.args[0]);
       expect(inserted.map((record) => [record.txid, record.txIndex])).to.deep.equal([['first', 1]]);
     });
 
@@ -1938,15 +1876,12 @@ describe('explorerService tests', () => {
       cursor = PAYMENT_HEIGHT - 1;
       daemonStatus.isDaemonSynced.returns({ data: { synced: true, height: PAYMENT_HEIGHT } });
       blockAt = (height) => ({ height, time: 1_700_000_000, tx: [paymentTx('only')] });
-      dbHelper.findOneInDatabase.callsFake(async (_db, collection) => {
-        if (collection === 'scannedheight') return { generalScannedHeight: cursor };
-        throw new Error('test: mongo read failed');
-      });
+      messages.byHash.rejects(new Error('test: mongo read failed'));
       const errorSpy = sinon.spy(log, 'error');
 
       await explorerService.startScanning();
 
-      expect(insertStub.called).to.equal(false);
+      expect(messages.recordPayments.called).to.equal(false);
       expect(errorSpy.calledWithMatch(sinon.match.has('message', 'test: mongo read failed'))).to.equal(true);
     });
 
@@ -1970,7 +1905,7 @@ describe('explorerService tests', () => {
 
       await explorerService.handleChainReorg({ fork: { height: 1001 }, depth: 1 });
 
-      sinon.assert.calledWithMatch(removeStub, sinon.match.object, 'zelappshashes', { height: { $gt: 1000 } });
+      sinon.assert.calledWith(messages.removePaymentsAbove, 1000);
     });
 
     it('leaves the chain alone for a reorg above every block the scan has written', async () => {
@@ -2015,12 +1950,10 @@ describe('explorerService tests', () => {
       rewindStub = sinon.stub(chainState, 'rewind').resolves(0);
       sinon.stub(dbHelper, 'countInDatabase').resolves(1);
       sinon.stub(daemonServiceBlockchainRpcs, 'getBlockCount').returns({ status: 'error', data: { message: 'test: stop here' } });
-      explorerService.setZelAppSpecsMigrationDone(true);
     });
 
     afterEach(() => {
       explorerService.setIsInInitiationOfBP(false);
-      explorerService.setZelAppSpecsMigrationDone(false);
       sinon.restore();
     });
 
@@ -2028,7 +1961,7 @@ describe('explorerService tests', () => {
       await explorerService.reindexExplorer({ rescanGlobalApps: true });
       await serviceHelper.delay(50);
 
-      sinon.assert.calledWith(rewindStub.firstCall, 'reindex', 0, { rescanGlobalApps: true });
+      sinon.assert.calledWith(rewindStub.firstCall, 'reindex', 0);
     });
 
     it('rescan rewinds to the height asked for', async () => {
@@ -2037,7 +1970,7 @@ describe('explorerService tests', () => {
       await explorerService.rescanExplorer({ blockheight: 1500 });
       await serviceHelper.delay(50);
 
-      sinon.assert.calledWith(rewindStub.firstCall, 'rescan from 1500', 1500, { rescanGlobalApps: false });
+      sinon.assert.calledWith(rewindStub.firstCall, 'rescan from 1500', 1500);
     });
   });
 
@@ -2051,7 +1984,6 @@ describe('explorerService tests', () => {
 
     afterEach(() => {
       explorerService.setIsInInitiationOfBP(false);
-      explorerService.setZelAppSpecsMigrationDone(false);
       sinon.restore();
     });
 
@@ -2060,7 +1992,6 @@ describe('explorerService tests', () => {
     // unhandledRejection handler, so anything escaping here ends fluxos: the failure
     // path is the one that must not be able to fail.
     it('swallows a failure in its own recovery rather than taking the process down', async () => {
-      explorerService.setZelAppSpecsMigrationDone(true);
       const errorSpy = sinon.spy(log, 'error');
       sinon.stub(dbHelper, 'findOneInDatabase').resolves({ generalScannedHeight: 700_000 });
       // The body fails...
@@ -2099,49 +2030,6 @@ describe('explorerService tests', () => {
       handler.onMessage({ height: 2_100_777 });
       expect(fresh.pushedTip(), 'the drain floors on the height the push carried').to.equal(2_100_777);
       await fresh.stopScanning();
-    });
-  });
-
-  describe('migrateZelAppSpecifications', () => {
-    const globalDbWith = (col) => ({ collection: () => col });
-
-    it('finds nothing to migrate on a node that has never stored an app message', async () => {
-      const missing = Object.assign(new Error('ns does not exist: node01_globalzelapps.zelappsmessages'), { codeName: 'NamespaceNotFound', code: 26 });
-      const col = {
-        updateMany: sinon.stub().resolves({ modifiedCount: 0 }),
-        indexes: sinon.stub().rejects(missing),
-        dropIndex: sinon.stub(),
-      };
-
-      await explorerService.migrateZelAppSpecifications(globalDbWith(col));
-
-      sinon.assert.calledOnce(col.indexes);
-      sinon.assert.notCalled(col.dropIndex);
-    });
-
-    it('still fails on any other error reading the indexes', async () => {
-      const col = {
-        updateMany: sinon.stub().resolves({ modifiedCount: 0 }),
-        indexes: sinon.stub().rejects(Object.assign(new Error('not authorized'), { codeName: 'Unauthorized', code: 13 })),
-        dropIndex: sinon.stub(),
-      };
-
-      let thrown = null;
-      await explorerService.migrateZelAppSpecifications(globalDbWith(col)).catch((error) => { thrown = error; });
-
-      expect(thrown?.message).to.equal('not authorized');
-    });
-
-    it('drops the legacy indexes of a collection that has them', async () => {
-      const col = {
-        updateMany: sinon.stub().resolves({ modifiedCount: 0 }),
-        indexes: sinon.stub().resolves([{ name: '_id_' }, { name: 'query for getting zelapp message based on image' }]),
-        dropIndex: sinon.stub().resolves(),
-      };
-
-      await explorerService.migrateZelAppSpecifications(globalDbWith(col));
-
-      sinon.assert.calledOnceWithExactly(col.dropIndex, 'query for getting zelapp message based on image');
     });
   });
 });

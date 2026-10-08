@@ -22,6 +22,8 @@ describe('messageStore tests', () => {
   let messageStore;
   let dbHelperStub;
   let appsRepositoryStub;
+  let messagesStub;
+  let confirmedStoreStub;
   let registryStub;
   let appEventVerifierStub;
   let logStub;
@@ -114,7 +116,8 @@ describe('messageStore tests', () => {
       config: asConfig(configStub),
       '../dbHelper': dbHelperStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
-      '../appDatabase/appRecords': { registry: () => registryStub },
+      '../appDatabase/appRecords': { registry: () => registryStub, messages: () => messagesStub },
+      './confirmedMessageStore': confirmedStoreStub,
       './appEventVerifier': appEventVerifierStub,
       './messageVerifier': { checkAndRequestApp: sinon.stub().resolves() },
       '../utils/specCutover': { ensureProvidersRegistered: sinon.stub().resolves() },
@@ -143,13 +146,10 @@ describe('messageStore tests', () => {
         EVENTS: { HASH_RESPONSE_RECEIVED: 'hashResponseReceived' },
       },
       '../utils/appConstants': {
-        globalAppsMessages: 'appsMessages',
-        globalAppsTempMessages: 'appsTempMessages',
         globalAppsInstallingLocations: 'appsInstallingLocations',
         globalAppsInstallingErrorsLocations: 'appsInstallingErrorsLocations',
         globalAppsInstallingErrorsBroadcasts: 'appsInstallingErrorsBroadcasts',
         globalAppStateEvents: 'appStateEvents',
-        appsHashesCollection: 'appsHashes',
         GOSSIP_VALIDITY_MS: 5 * 60 * 1000,
         RUNNING_EXPIRY_MS: 125 * 60 * 1000,
         INSTALLING_EXPIRY_MS: 15 * 60 * 1000,
@@ -182,6 +182,28 @@ describe('messageStore tests', () => {
     appsRepositoryStub = {
       getPermanentMessage: sinon.stub(),
       getTempMessage: sinon.stub(),
+    };
+    // The app messages: a record held when the repository stubs answer a
+    // message, paid when the payment lookup answers a payment; contents stored
+    // into the pool go through insertOneToDatabase as the stored form.
+    messagesStub = {
+      byHash: sinon.stub().callsFake(async (hash) => {
+        const permanent = await appsRepositoryStub.getPermanentMessage(hash);
+        const temp = await appsRepositoryStub.getTempMessage(hash);
+        const payment = await dbHelperStub.findOneInDatabase();
+        const held = Boolean(permanent || temp);
+        const paid = Boolean(payment && payment.txid);
+        if (!held && !paid) return null;
+        return {
+          hash, isHeld: held, isPaid: paid, payment: paid ? payment : null,
+        };
+      }),
+      storeContents: sinon.stub().callsFake(async (contents, pool) => dbHelperStub.insertOneToDatabase('database', 'appsTempMessages', { ...contents, ...pool })),
+    };
+    confirmedStoreStub = {
+      storeConfirmedMessages: sinon.stub().resolves({
+        stored: [], alreadyStored: [], unpaid: [], refused: [],
+      }),
     };
 
     appEventVerifierStub = {

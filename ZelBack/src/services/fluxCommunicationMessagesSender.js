@@ -7,6 +7,7 @@ const serviceHelper = require('./serviceHelper');
 const verificationHelper = require('./verificationHelper');
 const messageHelper = require('./messageHelper');
 const dbHelper = require('./dbHelper');
+const appRecords = require('./appDatabase/appRecords');
 const { peerManager } = require('./utils/peerState');
 const cacheManager = require('./utils/cacheManager').default;
 const { serialiseAndSignFluxBroadcast, getFluxMessageSignature } = require('./utils/fluxBroadcastHelper');
@@ -527,22 +528,14 @@ async function respondWithTempMessages(peer, sinceTimestamp = 0) {
       return;
     }
 
-    const globalAppsTempMessages = config.get('database.appsglobal.collections.appsTemporaryMessages');
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.get('database.appsglobal.database'));
-    const query = sinceTimestamp > 0 ? { receivedAt: { $gt: new Date(sinceTimestamp) } } : {};
-    const cursor = database.collection(globalAppsTempMessages)
-      .find(query, { projection: { _id: 0, receivedAt: 0, payableUntil: 0, windowClosedAt: 0 } })
-      .sort({ receivedAt: 1 });
-
+    const pooled = await appRecords.messages().pool({ receivedAfter: sinceTimestamp > 0 ? new Date(sinceTimestamp) : null });
     const batchSize = 2000;
     let batch = [];
     let total = 0;
-    for await (const msg of cursor) {
-      // The row is served whole: messageStore writes it from the typed event's
-      // serialize() and the projection strips the storage-only fields, so the
-      // row IS the wire shape — no field list to drift from the event class.
-      batch.push(msg);
+    for (const record of pooled) {
+      // The contents are served as they were signed: the record's contents are
+      // the wire shape, with the hash they state.
+      batch.push({ ...record.contents, hash: record.hash });
       if (batch.length >= batchSize) {
         log.info(`respondWithTempMessages - Sending chunk of ${batch.length} to ${peer.key}`);
         await sendSignedMessage({ type: 'fluxapptempsync', version: 1, messages: batch, done: false }, peer, { awaitDrain: true });

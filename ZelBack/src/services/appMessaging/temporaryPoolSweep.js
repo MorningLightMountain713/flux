@@ -5,7 +5,7 @@ const config = require('config');
 const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
 const chainState = require('../chainState');
-const confirmedMessageStore = require('./confirmedMessageStore');
+const appRecords = require('../appDatabase/appRecords');
 const { PAYMENT_WINDOW_MS } = require('../appDecisions/decisionRule');
 
 /**
@@ -44,17 +44,12 @@ const MAX_REORG_LENGTH = 40;
  */
 const UNPAYABLE_RECORD_MS = 30 * 24 * 60 * 60 * 1000;
 
-const poolCollectionName = config.get('database.appsglobal.collections.appsTemporaryMessages');
 const unpayableCollectionName = config.get('database.appsglobal.collections.appsUnpayableMessages');
 
 let started = false;
 
 function database() {
   return dbHelper.databaseConnection().db(config.get('database.appsglobal.database'));
-}
-
-function pool() {
-  return database().collection(poolCollectionName);
 }
 
 function unpayable() {
@@ -70,10 +65,8 @@ function payableUntil(timestamp) {
   return new Date(timestamp + PAYMENT_WINDOW_MS);
 }
 
-/** Asserts the pool's and the unpayable records' indexes; a no-op when they exist. */
+/** Asserts the unpayable records' indexes; a no-op when they exist. */
 async function prepareCollection() {
-  // The sync serves the pool in arrival order from a peer's cursor.
-  await dbHelper.ensureIndexes(pool(), [{ key: { receivedAt: 1 } }]);
   await dbHelper.ensureIndexes(unpayable(), [
     { key: { hash: 1 }, name: 'unpayable by hash', unique: true },
     { key: { expireAt: 1 }, name: 'unpayable record expiry', expireAfterSeconds: 0 },
@@ -86,31 +79,24 @@ async function prepareCollection() {
  *   and its stamp, in seconds
  */
 async function blockScanned({ height, time }) {
-  await pool().updateMany({ windowClosedAt: { $gte: height } }, { $unset: { windowClosedAt: '' } });
-  await pool().updateMany(
-    { windowClosedAt: { $exists: false }, payableUntil: { $lt: new Date(time * 1000) } },
-    { $set: { windowClosedAt: height } },
-  );
-  const closed = await pool().find(
-    { windowClosedAt: { $lte: height - MAX_REORG_LENGTH } },
-    { projection: { _id: 0, hash: 1, 'appSpecifications.version': 1 } },
-  ).toArray();
+  const messages = appRecords.messages();
+  await messages.reopenWindows(height);
+  await messages.closeWindows({ before: new Date(time * 1000), height });
+  const closed = await messages.windowsClosedBy(height - MAX_REORG_LENGTH);
   if (closed.length === 0) return;
-
-  const hashes = closed.map((row) => row.hash);
-  const paid = await confirmedMessageStore.paymentRecords(hashes);
-  const unpaidV9 = closed.filter((row) => !paid.has(row.hash) && row.appSpecifications?.version >= 9);
+  const hashes = closed.map((record) => record.hash);
+  const unpaidV9 = closed.filter((record) => record.contents.appSpecifications?.version >= 9);
   if (unpaidV9.length) {
     const expireAt = new Date(Date.now() + UNPAYABLE_RECORD_MS);
-    await unpayable().bulkWrite(unpaidV9.map((row) => ({
+    await unpayable().bulkWrite(unpaidV9.map((record) => ({
       updateOne: {
-        filter: { hash: row.hash },
-        update: { $set: { hash: row.hash, droppedAtHeight: height, expireAt } },
+        filter: { hash: record.hash },
+        update: { $set: { hash: record.hash, droppedAtHeight: height, expireAt } },
         upsert: true,
       },
     })), { ordered: false });
   }
-  await pool().deleteMany({ hash: { $in: hashes } });
+  await messages.dropUnpaid(hashes);
   log.info(`temporaryPoolSweep - ${hashes.length} message(s) left the pool at ${height}, their payment window closed ${MAX_REORG_LENGTH} blocks ago; ${unpaidV9.length} recorded unpayable`);
 }
 
@@ -121,28 +107,6 @@ async function blockScanned({ height, time }) {
  */
 async function unpayableRecord(hash) {
   return unpayable().findOne({ hash }, { projection: { _id: 0 } });
-}
-
-/**
- * Stamps `payableUntil` on the pool rows that lack it, written under the
- * wall-clock expiry they still carry, and drops that field. Idempotent: it
- * reads the rows that lack the stamp.
- * @returns {Promise<{stamped: number}>}
- */
-async function stampDeadlines() {
-  const rows = await pool().find(
-    { payableUntil: { $exists: false } },
-    { projection: { _id: 0, hash: 1, timestamp: 1 } },
-  ).toArray();
-  if (rows.length) {
-    await pool().bulkWrite(rows.map((row) => ({
-      updateOne: {
-        filter: { hash: row.hash },
-        update: { $set: { payableUntil: payableUntil(row.timestamp) }, $unset: { expireAt: '' } },
-      },
-    })), { ordered: false });
-  }
-  return { stamped: rows.length };
 }
 
 /** Sweeps the pool on every block the scan reports. */
@@ -158,7 +122,6 @@ module.exports = {
   blockScanned,
   payableUntil,
   prepareCollection,
-  stampDeadlines,
   start,
   unpayableRecord,
 };

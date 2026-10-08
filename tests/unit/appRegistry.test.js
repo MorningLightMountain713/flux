@@ -70,9 +70,11 @@ describe('appRegistry', () => {
     messages = [];
     capabilities.resetForTests();
     stubs = {
-      '../dbHelper': {
-        databaseConnection: () => ({ db: () => ({}) }),
-        findInDatabase: sinon.stub().callsFake(async (_db, _collection, query) => messages.filter((m) => query.hash.$in.includes(m.hash))),
+      // The app messages: the confirmed messages the test holds, by hash.
+      '../appDatabase/appRecords': {
+        messages: () => ({
+          confirmedByHashes: async (hashes) => messages.filter((m) => hashes.includes(m.hash)).map((m) => ({ hash: m.hash, permanentForm: () => m })),
+        }),
       },
       '../chainState': {
         getScannedHeight: sinon.stub().resolves(SCANNED_HEIGHT),

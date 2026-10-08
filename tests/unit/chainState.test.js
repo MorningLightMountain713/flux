@@ -7,6 +7,7 @@ const sinon = require('sinon');
 
 const chainState = require('../../ZelBack/src/services/chainState');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
+const { stubMessages } = require('./fixtures/appRecords');
 const entitlementsState = require('../../ZelBack/src/services/entitlementsState');
 const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
 const unclaimedPayments = require('../../ZelBack/src/services/appDecisions/unclaimedPayments');
@@ -28,6 +29,7 @@ describe('chainState', () => {
   let cursor;
   let events;
   let removeStub;
+  let messages;
   let updateStub;
   let builtPolicyGroups;
   let builtPrices;
@@ -45,6 +47,7 @@ describe('chainState', () => {
     updateStub = sinon.stub(dbHelper, 'updateOneInDatabase').callsFake(async (_db, _collection, _query, update) => {
       events.push(`cursor ${update.$set.generalScannedHeight}`);
     });
+    messages = stubMessages();
     removeStub = sinon.stub(dbHelper, 'removeDocumentsFromCollection').callsFake(async (_db, collection) => {
       events.push(`delete ${collection}`);
     });
@@ -91,14 +94,14 @@ describe('chainState', () => {
       expect(events.slice(-4)).to.deep.equal(['install groups', 'install prices', 'install voids', 'capability up']);
     });
 
-    it('deletes app payment records, their decisions, legacy rows and every v9 soft-fork row above the height', async () => {
+    it('takes the app payments off, and deletes their decisions, legacy rows and every v9 soft-fork row above the height', async () => {
       await chainState.rewind('test', 900);
 
       const query = { height: { $gt: 900 } };
-      for (const collection of ['zelappshashes', 'appdecisions', 'chainmessages', ...V9_SOFT_FORK_COLLECTIONS]) {
+      sinon.assert.calledOnceWithExactly(messages.removePaymentsAbove, 900);
+      for (const collection of ['appdecisions', 'chainmessages', ...V9_SOFT_FORK_COLLECTIONS]) {
         sinon.assert.calledWithMatch(removeStub, sinon.match.object, collection, query);
       }
-      sinon.assert.neverCalledWithMatch(removeStub, sinon.match.object, 'zelappsmessages');
       sinon.assert.neverCalledWithMatch(removeStub, sinon.match.object, 'zelappsinformation');
     });
 
@@ -109,13 +112,6 @@ describe('chainState', () => {
       for (const collection of V9_SOFT_FORK_COLLECTIONS) {
         sinon.assert.calledWithMatch(removeStub, sinon.match.object, collection, { height: { $gt: 0 } });
       }
-    });
-
-    it('deletes stored app messages when asked to rescan apps, and leaves the registry to its owner', async () => {
-      await chainState.rewind('test', 900, { rescanGlobalApps: true });
-
-      sinon.assert.calledWithMatch(removeStub, sinon.match.object, 'zelappsmessages', { height: { $gt: 900 } });
-      sinon.assert.neverCalledWithMatch(removeStub, sinon.match.object, 'zelappsinformation');
     });
 
     it('builds every history set before installing any', async () => {
@@ -134,7 +130,7 @@ describe('chainState', () => {
       const height = await chainState.rewind('test', 900);
 
       expect(height).to.equal(800);
-      sinon.assert.calledWithMatch(removeStub, sinon.match.object, 'zelappshashes', { height: { $gt: 800 } });
+      sinon.assert.calledOnceWithExactly(messages.removePaymentsAbove, 800);
     });
 
     it('asks a target function with the cursor it read under the lock', async () => {

@@ -3,11 +3,9 @@
 const zlib = require('zlib');
 const { StringDecoder } = require('string_decoder');
 const config = require('config');
-const dbHelper = require('../dbHelper');
 const messageHelper = require('../messageHelper');
 const verificationHelper = require('../verificationHelper');
 const serviceHelper = require('../serviceHelper');
-const messageVerifier = require('./messageVerifier');
 const confirmedMessageStore = require('./confirmedMessageStore');
 const { serialiseAndSignFluxBroadcast } = require('../utils/fluxBroadcastHelper');
 const { peerManager } = require('../utils/peerState');
@@ -21,10 +19,9 @@ const { HASH_EXPIRY_BLOCKS, HASH_RETRY_BACKOFF } = require('../utils/appConstant
 const log = require('../../lib/log');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { invalidMessages } = require('../invalidMessages');
+const appRecords = require('../appDatabase/appRecords');
 const { Privilege, authOf } = require('../utils/privileges');
 
-const appsHashesCollection = config.get('database.daemon.collections.appsHashes');
-const globalAppsMessages = config.get('database.appsglobal.collections.appsMessages');
 
 const SETTLE_TIME_MS = config.get('fluxapps.hashSyncSettleMs');
 const RESPONSE_TIME_PER_HASH_MS = config.get('fluxapps.hashSyncResponseTimePerHashMs');
@@ -37,25 +34,7 @@ let syncRunning = false;
 
 async function getMissingHashes(options = {}) {
   const { force = false, currentHeight = 0 } = options;
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.get('database.daemon.database'));
-  // A payment the chain does not hold has no message worth fetching, and a
-  // voided one takes none.
-  const query = { message: false, notOnChain: { $ne: true }, voided: { $ne: true } };
-  if (!force) {
-    query.messageNotFound = { $ne: true };
-    query.$or = [
-      { nextRetryHeight: { $exists: false } },
-      { nextRetryHeight: { $lte: currentHeight } },
-    ];
-  }
-  const projection = {
-    projection: {
-      _id: 0, txid: 1, hash: 1, height: 1, value: 1, message: 1, messageNotFound: 1, syncAttempts: 1, retryFromHeight: 1,
-    },
-  };
-  const results = await dbHelper.findInDatabase(database, appsHashesCollection, query, projection);
-  results.sort((a, b) => a.height - b.height);
+  const results = await appRecords.messages().awaitingContents({ height: currentHeight, force });
   return results.filter((r) => {
     if (force) return true;
     return !invalidMessages.find((m) => m.hash === r.hash && m.txid === r.txid);
@@ -398,9 +377,6 @@ async function syncMissingHashes(options = {}) {
   syncRunning = true;
   fluxEventBus.count('hashSync:run');
   try {
-    const db = dbHelper.databaseConnection();
-    const daemonDb = db.db(config.get('database.daemon.database'));
-
     let missingHashes = await getMissingHashes({ force, currentHeight });
     log.info(`syncMissingHashes - Found ${missingHashes.length} missing hashes`);
 
@@ -408,30 +384,7 @@ async function syncMissingHashes(options = {}) {
       return { resolved: 0, missing: 0, unreachable: 0 };
     }
 
-    // Check local permanent messages before fetching from peers
-    const appsGlobalDb = db.db(config.get('database.appsglobal.database'));
-    const CHUNK_SIZE = 10_000;
-    let localResolved = 0;
-    for (let i = 0; i < missingHashes.length; i += CHUNK_SIZE) {
-      const chunk = missingHashes.slice(i, i + CHUNK_SIZE);
-      const hashValues = chunk.map((h) => h.hash);
-      // eslint-disable-next-line no-await-in-loop
-      const found = await dbHelper.findInDatabase(appsGlobalDb, globalAppsMessages, { hash: { $in: hashValues } }, { projection: { _id: 0, hash: 1 } });
-      if (found.length > 0) {
-        const ops = found.map((m) => ({ updateOne: { filter: { hash: m.hash }, update: { $set: { message: true, messageNotFound: false } } } }));
-        // eslint-disable-next-line no-await-in-loop
-        await daemonDb.collection(appsHashesCollection).bulkWrite(ops, { ordered: false });
-        localResolved += found.length;
-      }
-    }
-    if (localResolved > 0) {
-      log.info(`syncMissingHashes - Resolved ${localResolved} hashes from local permanent messages`);
-      missingHashes = await getMissingHashes({ force, currentHeight });
-    }
-
-    if (missingHashes.length === 0) {
-      return { resolved: localResolved, missing: 0, unreachable: 0 };
-    }
+    const localResolved = 0;
 
     const initialCount = missingHashes.length;
     let resolved = localResolved;
@@ -511,7 +464,7 @@ async function syncMissingHashes(options = {}) {
     for (const hashDoc of finalMissing) {
       if (currentHeight - hashDoc.retryFromHeight > HASH_EXPIRY_BLOCKS) {
         // eslint-disable-next-line no-await-in-loop
-        await messageVerifier.appHashHasMessageNotFound(hashDoc.hash);
+        await appRecords.messages().markNotFound(hashDoc.hash);
         unreachable += 1;
       } else {
         const attempts = (hashDoc.syncAttempts ?? 0) + 1;
@@ -522,17 +475,11 @@ async function syncMissingHashes(options = {}) {
         if (minNextRetry === null || nextRetry < minNextRetry) {
           minNextRetry = nextRetry;
         }
-        backoffOps.push({
-          updateOne: {
-            filter: { hash: hashDoc.hash },
-            update: { $set: { syncAttempts: attempts, nextRetryHeight: nextRetry } },
-          },
-        });
+        // eslint-disable-next-line no-await-in-loop
+        await appRecords.messages().markSyncAttempt(hashDoc.hash, { syncAttempts: attempts, nextRetryHeight: nextRetry })
+          .catch((err) => log.error(`syncMissingHashes backoff update: ${err.message}`));
+        backoffOps.push(hashDoc.hash);
       }
-    }
-    if (backoffOps.length > 0) {
-      await daemonDb.collection(appsHashesCollection).bulkWrite(backoffOps, { ordered: false })
-        .catch((err) => log.error(`syncMissingHashes backoff update: ${err.message}`));
     }
 
     const remaining = finalMissing.length - unreachable;
@@ -562,22 +509,7 @@ async function triggerAppHashesCheckAPI(req, res) {
 }
 
 async function resetHashSyncForUpgrade(currentHeight) {
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.get('database.daemon.database'));
-
-  // Hashes already seen by the new retry system — one retry with new code
-  const existingResult = await database.collection(appsHashesCollection).updateMany(
-    { message: false, retryFromHeight: { $exists: true } },
-    { $set: { messageNotFound: false, nextRetryHeight: currentHeight } },
-  );
-
-  // Hashes never seen by the new retry system — full fresh start with 1-year window
-  const newResult = await database.collection(appsHashesCollection).updateMany(
-    { message: false, retryFromHeight: { $exists: false } },
-    { $set: { messageNotFound: false, syncAttempts: 0, nextRetryHeight: currentHeight, retryFromHeight: currentHeight } },
-  );
-
-  return existingResult.modifiedCount + newResult.modifiedCount;
+  return appRecords.messages().resetSyncState(currentHeight);
 }
 
 module.exports = {

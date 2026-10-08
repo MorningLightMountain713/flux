@@ -5,7 +5,6 @@ const dbHelper = require('../dbHelper');
 const log = require('../../lib/log');
 const daemonStatus = require('../daemonService/daemonStatus');
 const benchmarkService = require('../benchmarkService');
-const appsRepository = require('../appDatabase/appsRepository');
 const appRecords = require('../appDatabase/appRecords');
 const appEventVerifier = require('./appEventVerifier');
 const registryManager = require('../appDatabase/registryManager');
@@ -19,17 +18,16 @@ const { ensureProvidersRegistered } = require('../utils/specCutover');
 const { getStateBeforeHeight, latestAppliedState } = require('../appDatabase/appSpecHistory');
 const appHistory = require('../appDecisions/appHistory');
 const temporaryPoolSweep = require('./temporaryPoolSweep');
+const confirmedMessageStore = require('./confirmedMessageStore');
 const serviceHelper = require('../serviceHelper');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const globalState = require('../utils/globalState');
 const {
-  globalAppsTempMessages,
   globalAppsInstallingLocations,
   globalAppsInstallingBroadcasts: appsInstallingBroadcasts,
   globalAppsInstallingErrorsLocations,
   globalAppsInstallingErrorsBroadcasts,
   globalAppStateEvents,
-  appsHashesCollection,
 } = require('../utils/appConstants');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('../utils/appSyncEvents');
 const { RECORD_LIFETIME_MS } = require('../utils/nodeDownCertificates');
@@ -133,34 +131,21 @@ async function storeAppTemporaryMessage(message, options = {}) {
     return new Error('Invalid Flux App hash received');
   }
 
-  const appMessage = await appsRepository.getPermanentMessage(appEvent.hash);
+  // Contents already held, paid or in the pool, are not stored again.
+  const held = await appRecords.messages().byHash(appEvent.hash);
+  const appMessage = held?.isHeld ? held : null;
   if (appMessage) {
-    return false;
-  }
-  const tempMessage = await appsRepository.getTempMessage(appEvent.hash);
-  if (tempMessage && typeof tempMessage === 'object' && !Array.isArray(tempMessage)) {
     return false;
   }
 
   let isAppRequested = false;
-  const db = dbHelper.databaseConnection();
-  const query = { hash: appEvent.hash };
-  const projection = {
-    projection: {
-      _id: 0,
-      message: 1,
-      height: 1,
-      txid: 1,
-      value: 1,
-      blockTime: 1,
-    },
-  };
-  let database = db.db(config.get('database.daemon.database'));
-  const result = await dbHelper.findOneInDatabase(database, appsHashesCollection, query, projection);
+  // The chain's payment for a hash whose contents the node lacks: this message
+  // answers a request for it.
+  const result = held?.isPaid ? held.payment : null;
   const syncStatus = daemonStatus.isDaemonSynced();
   const daemonHeight = syncStatus.data.height;
   let block = daemonHeight;
-  if (result && !result.message) {
+  if (result) {
     isAppRequested = true;
     block = result.height;
     appSyncEvents.emit(SYNC_EVENTS.HASH_RESPONSE_RECEIVED, appEvent.hash);
@@ -266,28 +251,33 @@ async function storeAppTemporaryMessage(message, options = {}) {
   }
 
   const serialized = appEvent.serialize();
-  const value = {
+  const contents = {
     type: serialized.type,
     version: serialized.version,
     appSpecifications: serialized.appSpecifications,
     hash: serialized.hash,
     timestamp: serialized.timestamp,
     signature: serialized.signature,
-    receivedAt: new Date(),
-    payableUntil: temporaryPoolSweep.payableUntil(serialized.timestamp),
     arcaneAttestation: serialized.arcaneAttestation,
   };
   if (serialized.contentHash !== undefined) {
-    value.contentHash = serialized.contentHash;
-    value.extend = serialized.extend;
+    contents.contentHash = serialized.contentHash;
+    contents.extend = serialized.extend;
   }
-  if (serialized.contentManifest !== undefined) value.contentManifest = serialized.contentManifest;
-
-  database = db.db(config.get('database.appsglobal.database'));
-  await dbHelper.insertOneToDatabase(database, globalAppsTempMessages, value).catch((error) => {
-    log.error(error);
-    throw error;
-  });
+  if (serialized.contentManifest !== undefined) contents.contentManifest = serialized.contentManifest;
+  if (result) {
+    // A paid hash: the contents are stored against the payment by the confirmed
+    // store's rules.
+    await confirmedMessageStore.storeConfirmedMessages([contents]);
+  } else {
+    await appRecords.messages().storeContents(contents, {
+      receivedAt: new Date(),
+      payableUntil: temporaryPoolSweep.payableUntil(serialized.timestamp),
+    }).catch((error) => {
+      log.error(error);
+      throw error;
+    });
+  }
   if (isAppRequested) {
     const promotion = (result && result.txid && result.height)
       ? {

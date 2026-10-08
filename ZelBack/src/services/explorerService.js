@@ -22,7 +22,6 @@ const daemonServiceBlockchainRpcs = require('./daemonService/daemonServiceBlockc
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
 const chainUtilities = require('./utils/chainUtilities');
 const messageVerifier = require('./appMessaging/messageVerifier');
-const registryManager = require('./appDatabase/registryManager');
 const specReconciler = require('./appLifecycle/specReconciler');
 const appGiveUp = require('./appLifecycle/appGiveUp');
 const benchmarkService = require('./benchmarkService');
@@ -35,12 +34,12 @@ const { getSpecPolicy } = require('./utils/specLibs');
 const priceOracleState = require('./pricing/priceOracleState');
 const entitlementsState = require('./entitlementsState');
 const unclaimedPayments = require('./appDecisions/unclaimedPayments');
+const appRecords = require('./appDatabase/appRecords');
 const decider = require('./appDecisions/decider');
 const { pubKeyToAddr } = require('./utils/fluxCryptoUtils');
 const appQueryService = require('./appQuery/appQueryService');
 const appOperations = require('./appLifecycle/appOperations');
 
-const appsHashesCollection = config.get('database.daemon.collections.appsHashes');
 const scannedHeightCollection = config.get('database.daemon.collections.scannedHeight');
 const chainParamsMessagesCollection = config.get('database.chainparams.collections.chainMessages');
 const priceMessagesCollection = config.get('database.chainparams.collections.priceMessages');
@@ -51,7 +50,6 @@ const unclaimedPaymentMessagesCollection = config.get('database.chainparams.coll
 const policyGroupMessagesCollection = config.get('database.chainparams.collections.policyGroupMessages');
 
 let isInInitiationOfBP = false;
-let zelAppSpecsMigrationDone = false;
 let explorerReadyEmitted = false;
 let appsTransactions = [];
 // The last block the scan has written, in this process. The durable cursor moves
@@ -541,7 +539,7 @@ async function processSoftFork(txid, height, txIndex, payload, senderIsLegacyAut
  * @param {object} blockDataVerbose Verbose block data.
  * @param {string} database Database.
  */
-async function processInsight(blockDataVerbose, database) {
+async function processInsight(blockDataVerbose) {
   await policyLibrary();
   // get Block Deltas information
   const txs = blockDataVerbose.tx;
@@ -585,16 +583,15 @@ async function processInsight(blockDataVerbose, database) {
         // MAY contain App transaction. Store it.
         if (isFluxAppMessageValue >= (priceSpecifications.minPrice * 1e8) && message.length === 64 && blockDataVerbose.height >= config.get('fluxapps.epochstart')) { // min of X flux had to be paid for us bothering checking
           const appTxRecord = {
-            txid: tx.txid, height: blockDataVerbose.height, txIndex, hash: message, value: isFluxAppMessageValue, message: false, // message is boolean saying if we already have it stored as permanent message
+            txid: tx.txid, height: blockDataVerbose.height, txIndex, hash: message, value: isFluxAppMessageValue,
             blockTime: blockDataVerbose.time, // confirming block timestamp — v9 registeredAt
-            syncAttempts: 0, nextRetryHeight: blockDataVerbose.height, retryFromHeight: blockDataVerbose.height,
           };
           // A hash's payment is its first in chain order: a later payment of a
           // hash already recorded, or already buffered from an earlier block or
           // an earlier transaction of this one, is not recorded.
           // eslint-disable-next-line no-await-in-loop
-          const recorded = appsTransactions.some((record) => record.hash === message)
-            || await dbHelper.findOneInDatabase(database, appsHashesCollection, { hash: message }, { projection: { _id: 0, hash: 1 } });
+          const held = appsTransactions.some((record) => record.hash === message) || await appRecords.messages().byHash(message);
+          const recorded = held === true || Boolean(held?.payment);
           if (recorded) {
             log.info(`Explorer - hash ${message} is paid again at ${blockDataVerbose.height} by ${tx.txid}; its first payment stands`);
           } else {
@@ -621,17 +618,15 @@ async function processInsight(blockDataVerbose, database) {
 }
 
 /**
- * Writes the buffered payment records. Each hash appears once, as its first
- * payment (processInsight), so a duplicate key means the collection already
- * holds a record above the cursor: the insert throws, and the scan's error
- * recovery rewinds.
+ * Records the buffered payments. Each hash's payment is its first in chain
+ * order: one the collection already holds stands.
  * @param {object[]} transactions
- * @param {object} database
  */
-async function insertTransactions(transactions, database) {
+async function insertTransactions(transactions) {
   if (transactions.length > 0) {
-    log.info(`Explorer - insertTransactions - Inserting ${transactions.length} transactions to apps hashes collection`);
-    await dbHelper.insertManyToDatabase(database, appsHashesCollection, transactions, { ordered: false });
+    log.info(`Explorer - insertTransactions - Recording ${transactions.length} payments`);
+    const { standing } = await appRecords.messages().recordPayments(transactions);
+    if (standing.length) log.info(`Explorer - insertTransactions - ${standing.length} payment(s) already recorded stand`);
     appsTransactions = [];
   }
 }
@@ -641,9 +636,9 @@ async function insertTransactions(transactions, database) {
  * @param {array} apps array with appstransactions to be processed.
  * @param {string} database Database.
  */
-async function insertAndRequestAppHashes(apps, database) {
+async function insertAndRequestAppHashes(apps) {
   if (apps.length > 0) {
-    await insertTransactions(apps, database);
+    await insertTransactions(apps);
     setTimeout(async () => {
       const appsToRemove = [];
       let hasUnresolved = false;
@@ -693,7 +688,7 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
       // speed up sync as there were no app messages between these two blocks
       return 862_002;
     }
-    await processInsight(blockDataVerbose, database);
+    await processInsight(blockDataVerbose);
 
     // After fork block, chain runs 4x faster, so multiply periods by 4
     const speedMultiplier = blockHeight >= config.get('fluxapps.daemonPONFork') ? 4 : 1;
@@ -749,21 +744,6 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
             log.error(`give-up pass error: ${error.message}`);
           }
         }
-        if (blockDataVerbose.height % (config.get('fluxapps.reconstructAppMessagesHashPeriod') * speedMultiplier) === 0) {
-          try {
-            const reconstructResult = await registryManager.reconstructAppMessagesHashCollection();
-            log.info(`Validation of App Messages Hash Collection — ${reconstructResult.changed} corrected`);
-            // THE PRODUCER. The orchestrator subscribes to this and brings its
-            // next hash retry forward to the current block; without it the
-            // audit repaired rows that nothing then went looking for until
-            // their own scheduled height came round again.
-            if (reconstructResult.changed > 0) {
-              blockEmitter.emit('hashesChanged');
-            }
-          } catch (error) {
-            log.error(error);
-          }
-        }
       }
       if (blockDataVerbose.height % (config.get('fluxapps.benchUpnpPeriod') * speedMultiplier) === 0) {
         try {
@@ -791,7 +771,7 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
           log.error(error);
         }
       }
-      await insertAndRequestAppHashes(appsTransactions, database, true);
+      await insertAndRequestAppHashes(appsTransactions);
       await dbHelper.updateOneInDatabase(database, scannedHeightCollection, query, update, options);
       await chainState.blockScanned({ height: scannedHeight, time: blockDataVerbose.time });
       fluxEventBus.publish('block:processed', { height: scannedHeight });
@@ -800,7 +780,7 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
       blockEmitter.emit('blocksProcessed', scannedHeight);
     } else if (blockDataVerbose.height % cursorBatchSize() === 0) {
       log.info(`Processing Explorer Number of Transactions: ${appsTransactions.length}.`);
-      await insertTransactions(appsTransactions, database);
+      await insertTransactions(appsTransactions);
       await dbHelper.updateOneInDatabase(database, scannedHeightCollection, query, update, options);
       await chainState.blockScanned({ height: scannedHeight, time: blockDataVerbose.time });
       fluxEventBus.publish('block:processed', { height: scannedHeight });
@@ -846,43 +826,6 @@ async function cleanupDuplicateScannedHeight(database) {
     log.info(`Removed ${deleteResult.deletedCount} duplicate scannedheight documents`);
   } catch (error) {
     log.error(`Error cleaning up duplicate scannedheight documents: ${error.message}`);
-  }
-}
-
-// One-time migration for nodes carrying records from before the Feb 2021
-// zelAppSpecifications → appSpecifications rename: bring data at rest in line
-// with the field name the rest of the code now reads exclusively, and drop the
-// indexes that backed the old field name. Idempotent (matches zero docs once
-// migrated). Safe to remove, along with the gating flag, once the whole fleet
-// has run it.
-async function migrateZelAppSpecifications(databaseGlobal) {
-  const col = databaseGlobal.collection(config.get('database.appsglobal.collections.appsMessages'));
-  const result = await col.updateMany(
-    { zelAppSpecifications: { $exists: true } },
-    { $rename: { zelAppSpecifications: 'appSpecifications' } },
-  );
-  if (result.modifiedCount > 0) {
-    log.info(`Migrated ${result.modifiedCount} records from zelAppSpecifications to appSpecifications`);
-  }
-  let existingIndexes;
-  try {
-    existingIndexes = await col.indexes();
-  } catch (error) {
-    // A node that has never stored an app message has no collection and nothing to migrate.
-    if (error?.codeName === 'NamespaceNotFound' || error?.code === 26) return;
-    throw error;
-  }
-  const legacyIndexNames = [
-    'query for getting zelapp message based on zelapp specs name',
-    'query for getting zelapp message based on zelapp specs owner',
-    'query for getting zelapp message based on image',
-  ];
-  for (const idx of existingIndexes) {
-    if (legacyIndexNames.includes(idx.name)) {
-      // eslint-disable-next-line no-await-in-loop
-      await col.dropIndex(idx.name);
-      log.info(`Dropped legacy index: ${idx.name}`);
-    }
   }
 }
 
@@ -1131,7 +1074,6 @@ function processBootstrapTx(tx, priceSpecs, txIndex) {
   return {
     txid: tx.txid, height, txIndex, hash: message, value: appValue,
     blockTime: tx.blocktime ?? null, // verbose getrawtransaction field — v9 registeredAt
-    message: false, syncAttempts: 0, nextRetryHeight: height, retryFromHeight: height,
   };
 }
 
@@ -1193,7 +1135,7 @@ async function bootstrapAppHashes(currentDaemonHeight) {
   const INSERT_BATCH = 5000;
   for (let i = 0; i < firstPayments.length; i += INSERT_BATCH) {
     // eslint-disable-next-line no-await-in-loop
-    await insertTransactions(firstPayments.slice(i, i + INSERT_BATCH), database);
+    await insertTransactions(firstPayments.slice(i, i + INSERT_BATCH));
   }
 
   const query = { generalScannedHeight: { $gte: 0 } };
@@ -1579,38 +1521,22 @@ async function initiateBlockProcessor(options = {}) {
 
     await cleanupDuplicateScannedHeight(database);
 
-    if (!zelAppSpecsMigrationDone) {
-      // Wrapped so a malformed DB can't stall block-processor init.
-      try {
-        const globalDb = db.db(config.get('database.appsglobal.database'));
-        await migrateZelAppSpecifications(globalDb);
-        zelAppSpecsMigrationDone = true;
-      } catch (error) {
-        log.error(`zelAppSpecifications migration failed: ${error.message}`);
-      }
-    }
     const scannedBlockHeight = height === null
-      ? await chainState.rewind(deepRestore ? 'deep restore at start' : 'restore at start', restoreTarget(deepRestore), { rescanGlobalApps })
-      : await chainState.rewind(height === 0 ? 'reindex' : `rescan from ${height}`, height, { rescanGlobalApps });
+      ? await chainState.rewind(deepRestore ? 'deep restore at start' : 'restore at start', restoreTarget(deepRestore))
+      : await chainState.rewind(height === 0 ? 'reindex' : `rescan from ${height}`, height);
 
     if (scannedBlockHeight === 0) {
       log.info('Preparing daemon collections');
-      const resultD = await dbHelper.dropCollection(database, appsHashesCollection).catch((error) => {
-        if (error.message !== 'ns not found') throw error;
-      });
+      // A reindex takes every payment off the app messages; the rescan records
+      // them again, and the contents the node holds stay.
+      const cleared = await appRecords.messages().clearPayments();
+      log.info(`Explorer - reindex took the payment off ${cleared.kept} message(s) and removed ${cleared.removed} bare payment(s)`);
       const databaseUpdates = db.db(config.get('database.chainparams.database'));
       const resultChainParams = await dbHelper.dropCollection(databaseUpdates, chainParamsMessagesCollection).catch((error) => {
         if (error.message !== 'ns not found') throw error;
       });
-      log.info(resultD, resultChainParams);
+      log.info(resultChainParams);
 
-      await database.collection(appsHashesCollection).createIndex({ txid: 1 }, { name: 'query for getting txid' });
-      await database.collection(appsHashesCollection).createIndex({ height: 1 }, { name: 'query for getting height' });
-      await database.collection(appsHashesCollection).createIndex({ hash: 1 }, { name: 'query for getting app hash', unique: true }).catch((error) => {
-        log.error('Expected throw on index creation as of new uniquness. Do not remove this check until all nodes have rebuild apps data');
-        log.error(error);
-      });
-      await database.collection(appsHashesCollection).createIndex({ message: 1 }, { name: 'query for getting app hashes depending if we have message' });
       await databaseUpdates.collection(chainParamsMessagesCollection).createIndex({ txid: 1 }, { name: 'query for getting txid of some chain parameters update message' });
       await databaseUpdates.collection(chainParamsMessagesCollection).createIndex({ height: 1 }, { name: 'query for getting height of some chain parameters update message' });
       await databaseUpdates.collection(chainParamsMessagesCollection).createIndex({ message: 1 }, { name: 'query for getting message of some chain parameters update message' });
@@ -1619,9 +1545,6 @@ async function initiateBlockProcessor(options = {}) {
       const databaseGlobal = db.db(config.get('database.appsglobal.database'));
       log.info('Preparing apps collections');
       if (rescanGlobalApps === true) {
-        const resultE = await dbHelper.dropCollection(databaseGlobal, config.get('database.appsglobal.collections.appsMessages')).catch((error) => {
-          if (error.message !== 'ns not found') throw error;
-        });
         const resultH = await dbHelper.dropCollection(databaseGlobal, config.get('database.appsglobal.collections.appsInstallingLocations')).catch((error) => {
           if (error.message !== 'ns not found') throw error;
         });
@@ -1637,20 +1560,12 @@ async function initiateBlockProcessor(options = {}) {
         const resultL = await dbHelper.dropCollection(databaseGlobal, config.get('database.appsglobal.collections.appsInstallingBroadcasts')).catch((error) => {
           if (error.message !== 'ns not found') throw error;
         });
-        log.info(resultE, resultH, resultI, resultJ, resultK, resultL);
+        log.info(resultH, resultI, resultJ, resultK, resultL);
         await databaseGlobal.collection(config.get('database.appsglobal.collections.appStateEvents')).createIndex({ expireAt: 1 }, { expireAfterSeconds: 0 });
         await databaseGlobal.collection(config.get('database.appsglobal.collections.appStateEvents')).createIndex({ ip: 1, type: 1, dedupKey: 1 }, { unique: true });
         await databaseGlobal.collection(config.get('database.appsglobal.collections.appStateEvents')).createIndex({ broadcastedAt: 1 });
         await databaseGlobal.collection(config.get('database.appsglobal.collections.appStateEvents')).createIndex({ createdAt: 1 });
       }
-      await databaseGlobal.collection(config.get('database.appsglobal.collections.appsMessages')).createIndex({ hash: 1 }, { name: 'query for getting zelapp message based on hash', unique: true });
-      await databaseGlobal.collection(config.get('database.appsglobal.collections.appsMessages')).createIndex({ txid: 1 }, { name: 'query for getting zelapp message based on txid' });
-      await databaseGlobal.collection(config.get('database.appsglobal.collections.appsMessages')).createIndex({ height: 1 }, { name: 'query for getting zelapp message based on height' });
-      await databaseGlobal.collection(config.get('database.appsglobal.collections.appsMessages')).createIndex({ 'appSpecifications.name': 1 }, { name: 'query for getting app message based on zelapp specs name' });
-      await databaseGlobal.collection(config.get('database.appsglobal.collections.appsMessages')).createIndex({ 'appSpecifications.owner': 1 }, { name: 'query for getting app message based on zelapp specs owner' });
-      await databaseGlobal.collection(config.get('database.appsglobal.collections.appsMessages')).createIndex({ 'appSpecifications.repotag': 1 }, { name: 'query for getting app message based on image' });
-      await databaseGlobal.collection(config.get('database.appsglobal.collections.appsMessages')).createIndex({ 'appSpecifications.version': 1 }, { name: 'query for getting app message based on version' });
-      await databaseGlobal.collection(config.get('database.appsglobal.collections.appsMessages')).createIndex({ 'appSpecifications.nodes': 1 }, { name: 'query for getting app message based on nodes' });
       await databaseGlobal.collection(config.get('database.appsglobal.collections.appsInformation')).createIndex({ name: 1 }, { name: 'query for getting zelapp based on zelapp specs name' });
       await databaseGlobal.collection(config.get('database.appsglobal.collections.appsInformation')).createIndex({ owner: 1 }, { name: 'query for getting zelapp based on zelapp specs owner' });
       await databaseGlobal.collection(config.get('database.appsglobal.collections.appsInformation')).createIndex({ repotag: 1 }, { name: 'query for getting zelapp based on image' });
@@ -1910,11 +1825,6 @@ function setIsInInitiationOfBP(value) {
   isInInitiationOfBP = value;
 }
 
-// testing purposes
-function setZelAppSpecsMigrationDone(value) {
-  zelAppSpecsMigrationDone = value;
-}
-
 // A rewind invalidates what the scan holds for blocks above its height: the buffered
 // payment records, its position, and whether it is near the daemon's tip.
 chainState.onRewind((height) => {
@@ -1951,7 +1861,6 @@ function getAddressFusionCoinbase(_req, res) {
 module.exports = {
   // exported for tests
   pushedTip: () => pushedTipHeight,
-  migrateZelAppSpecifications,
   initiateBlockProcessor,
   processOneBlock,
   reindexExplorer,
@@ -1981,7 +1890,6 @@ module.exports = {
   decodeMessage,
   processInsight,
   setIsInInitiationOfBP,
-  setZelAppSpecsMigrationDone,
   isOracleSigner,
   loadSpecPolicy: policyLibrary,
   isAvailabilitySigner,

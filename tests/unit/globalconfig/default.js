@@ -107,6 +107,7 @@ const harnessOverrides = {
     appsglobal: {
       database: 'globalzelappstest',
       collections: {
+        appMessages: 'appmessages',
         appsMessages: 'zelappsmessages', // storage for all flux apps messages done on flux network
         appDecisions: 'appdecisions', // one decision per paid app message: applied, or refused with its reason
         appsInformation: 'zelappsinformation', // stores actual state of flux app configuration info - initial state and its overwrites with update messages
@@ -382,7 +383,6 @@ const harnessOverrides = {
     peerSetDipDosThreshold: 5,
     peerSetDipWindowMinutes: 120,
     peerSetDipEvaluateMs: 60 * 1000,
-    reconstructAppMessagesHashPeriod: 3600, // every 5 days we ask for old messages
     benchUpnpPeriod: 6480, // every 9 days execute upnp bench
     hddFileSystemMinimum: 10, // right now 10, to be decreased to a minimum of 5GB of free space on hdd for docker with v8 specs activation
     defaultSwap: 2, // 2gb swap memory minimum, this is in gb

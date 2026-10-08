@@ -41,14 +41,22 @@ export function dbClient(nodeNum) {
     prefix,
     dbNames,
 
+    // The app messages this node holds: one record per hash, the chain's
+    // payment and the contents as separate halves (`paid`, `held`).
+    async messages() {
+      const globalDb = await db('appsGlobal');
+      return globalDb.collection('appmessages');
+    },
+
+    // The payments the scan recorded: all of them, those whose contents the
+    // node holds, those still to fetch, and those marked not found.
     async hashCounts() {
-      const explorerDb = await db('explorer');
-      const col = explorerDb.collection('zelappshashes');
+      const col = await this.messages();
       const [total, resolved, missing, notFound] = await Promise.all([
-        col.countDocuments({}),
-        col.countDocuments({ message: true }),
-        col.countDocuments({ message: false, messageNotFound: { $ne: true } }),
-        col.countDocuments({ messageNotFound: true }),
+        col.countDocuments({ paid: true }),
+        col.countDocuments({ paid: true, held: true }),
+        col.countDocuments({ paid: true, held: false, messageNotFound: { $ne: true } }),
+        col.countDocuments({ paid: true, messageNotFound: true }),
       ]);
       return { total, resolved, missing, notFound };
     },
@@ -148,8 +156,7 @@ export function dbClient(nodeNum) {
     },
 
     async permanentMessageCount() {
-      const globalDb = await db('appsGlobal');
-      return globalDb.collection('zelappsmessages').countDocuments({});
+      return (await this.messages()).countDocuments({ paid: true, held: true });
     },
 
     // This node's permanent record of one app message. Promotion stores it
@@ -157,8 +164,7 @@ export function dbClient(nodeNum) {
     // signal that the pricing verdict has been reached — which is what lets a
     // test assert a message was refused without waiting out a timeout.
     async getPermanentMessage(hash) {
-      const globalDb = await db('appsGlobal');
-      return globalDb.collection('zelappsmessages').findOne({ hash }, { projection: { _id: 0 } });
+      return (await this.messages()).findOne({ hash, paid: true, held: true }, { projection: { _id: 0 } });
     },
 
     // This node's registry row for an app — the materialized global state, with
@@ -226,8 +232,7 @@ export function dbClient(nodeNum) {
     },
 
     async tempMessageCount() {
-      const globalDb = await db('appsGlobal');
-      return globalDb.collection('zelappstemporarymessages').countDocuments({});
+      return (await this.messages()).countDocuments({ held: true, paid: false });
     },
 
     async installingCount() {
@@ -370,28 +375,32 @@ export function dbClient(nodeNum) {
     },
 
     // This node's payment record for an app message hash, as the scan wrote it
-    // and the voids and the sync have marked it. Null while the node holds none.
+    // and the voids and the sync have marked it, with `message` saying whether
+    // the node holds the contents. Null while the node holds no payment.
     async getAppHash(hash) {
-      const explorerDb = await db('explorer');
-      return explorerDb.collection('zelappshashes').findOne({ hash }, { projection: { _id: 0 } });
+      const record = await (await this.messages()).findOne({ hash, paid: true }, { projection: { _id: 0 } });
+      return record ? { ...record, message: record.held === true } : null;
     },
 
-    async markHashUnresolved(hash) {
-      const explorerDb = await db('explorer');
-      await explorerDb.collection('zelappshashes').updateOne(
-        { hash },
-        { $set: { message: false, messageNotFound: false } },
+    // Takes the contents off a paid record, so the node must fetch them again.
+    async deletePermanentMessage(hash) {
+      await (await this.messages()).updateOne(
+        { hash, paid: true },
+        {
+          $set: { held: false, messageNotFound: false },
+          $unset: {
+            type: '', version: '', appSpecifications: '', contentHash: '', timestamp: '', extend: '', signature: '', arcaneAttestation: '', contentManifest: '', nameKey: '',
+          },
+        },
       );
     },
 
-    async deletePermanentMessage(hash) {
-      const explorerDb = await db('explorer');
-      await explorerDb.collection('zelappsmessages').deleteOne({ hash });
+    async markHashUnresolved(hash) {
+      await this.deletePermanentMessage(hash);
     },
 
     async deleteAppHash(hash) {
-      const explorerDb = await db('explorer');
-      await explorerDb.collection('zelappshashes').deleteOne({ hash });
+      await (await this.messages()).deleteOne({ hash });
     },
 
     async deleteAppSpec(name) {

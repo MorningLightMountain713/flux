@@ -3234,46 +3234,6 @@ describe('AppSyncOrchestrator', () => {
     });
   });
 
-  describe('hashesChanged event', () => {
-    it('should schedule immediate hash recheck when reconstruct changes hashes', async () => {
-      syncMissingHashesStub.onFirstCall().resolves({ resolved: 0, missing: 0, unreachable: 0, nextRetryHeight: 2_560_000 });
-      syncMissingHashesStub.onSecondCall().resolves({ resolved: 1, missing: 0, unreachable: 0, nextRetryHeight: null });
-
-      const orchestrator = makeOrchestrator();
-      orchestrator.start(defaultBootContext);
-
-      blockEmitter.emit('blocksProcessed', 2_555_000);
-      await clock.tickAsync(0);
-      expect(syncMissingHashesStub.calledOnce).to.be.true;
-
-      // Reconstruct found changes
-      blockEmitter.emit('hashesChanged');
-
-      // Next block should trigger sync immediately
-      blockEmitter.emit('blocksProcessed', 2_555_001);
-      await clock.tickAsync(0);
-      expect(syncMissingHashesStub.calledTwice).to.be.true;
-    });
-
-    it('should register hashesChanged listener on start', async () => {
-      const orchestrator = makeOrchestrator();
-      expect(blockEmitter.listenerCount('hashesChanged')).to.equal(0);
-      orchestrator.start(defaultBootContext);
-      expect(blockEmitter.listenerCount('hashesChanged')).to.equal(1);
-    });
-
-    it('should ignore hashesChanged before initial sync completes', async () => {
-      syncMissingHashesStub.rejects(new Error('not ready'));
-
-      const orchestrator = makeOrchestrator();
-      orchestrator.start(defaultBootContext);
-
-      blockEmitter.emit('hashesChanged');
-
-      expect(logStub.info.calledWith(sinon.match(/Reconstruct audit found changes/))).to.be.false;
-    });
-  });
-
   describe('version upgrade reset', () => {
     it('should call resetHashSyncForUpgrade with block height on version change', async () => {
       nodeStartupRepositoryStub.getHashSyncVersionMarker.resolves(null);
@@ -3334,7 +3294,6 @@ describe('AppSyncOrchestrator', () => {
       orchestrator.start(defaultBootContext);
       await orchestrator.stop();
       expect(blockEmitter.listenerCount('blocksProcessed')).to.equal(0);
-      expect(blockEmitter.listenerCount('hashesChanged')).to.equal(0);
       expect(peerEmitter.listenerCount('peerThresholdReached')).to.equal(0);
       expect(peerEmitter.listenerCount('peersBelowThreshold')).to.equal(0);
       expect(peerEmitter.listenerCount('peerConnected')).to.equal(0);

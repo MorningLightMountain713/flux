@@ -45,7 +45,7 @@ async function bootWithFailingLastNode(env) {
   await Promise.all(started.map((c) => waitForNodeStatus(c, (d) => d.confirmed === true, 30000)));
   await env.startDiscovery();
   const last = env.lastNodeIndex;
-  await dbClient(last + 1).failpointFind('zelappshashes', { always: true });
+  await dbClient(last + 1).failpointFind('appmessages', { always: true, db: 'appsGlobal' });
   await env.startNode(last);
   const client = env.clients[last];
   await waitForDaemonReady(client);
@@ -249,7 +249,7 @@ describe('Hash sync: attempts reset after degrade/recover', function () {
     // Planted after DEGRADED and kept until the sync has failed: the sync is
     // not the only reader of the collection in this window, and a one-shot
     // fault goes to whichever read comes first.
-    await db.failpointFind('zelappshashes', { always: true });
+    await db.failpointFind('appmessages', { always: true, db: 'appsGlobal' });
 
     // Reconnect
     for (let i = 0; i < last; i++) {

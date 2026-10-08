@@ -7,22 +7,27 @@ const { expect } = require('chai');
 // Stored app messages include every refused one, so a reader that treats them
 // as an app's history reads refusals as if they had happened. An app's history
 // is read through appDecisions/appHistory. These are the only modules that
-// touch the stored messages themselves, each for the reason given.
+// touch the app messages collection, each for the reason given.
 const ALLOWED = {
+  'services/appDatabase/appRecords.js': 'names the collection',
   'services/appDecisions/appHistory.js': 'the applied-messages accessor',
   'services/appDecisions/decider.js': 'decides every stored message',
+  'services/appDecisions/unclaimedPayments.js': 'voids a payment whose contents never appeared',
   'services/appDatabase/appRegistry.js': 'projects an applied decision\'s message into its row',
-  'services/appMessaging/confirmedMessageStore.js': 'the one store',
+  'services/appMessaging/confirmedMessageStore.js': 'stores a paid hash\'s contents',
+  'services/appMessaging/messageStore.js': 'stores a received message\'s contents',
   'services/appMessaging/appHashSyncService.js': 'which paid hashes this node holds',
-  'services/appDatabase/registryManager.js': 'the payment-record audit: which paid hashes this node holds',
+  'services/appMessaging/temporaryPoolSweep.js': 'the pool\'s payment windows',
+  'services/appDatabase/registryManager.js': 'serves the hash index and checks a name against the payments',
   'services/appMessaging/messageVerifier.js': '/apps/permanentmessages serves stored messages as they are',
   'services/appQuery/appQueryService.js': 'the per-owner message count counts every stored message',
   'services/appDatabase/appsRepository.js': 'a message by hash; ingress attestations by app; v7 secrets ever published',
-  'services/appDatabase/appsMaintenance.js': 'repairs stored values',
-  'services/chainState.js': 'a rescan deletes the messages above its height',
-  'services/explorerService.js': 'a reindex drops the collection',
+  'services/fluxCommunicationMessagesSender.js': 'serves the pool to a syncing peer',
+  'services/chainState.js': 'a rewind takes the payments above its height',
+  'services/explorerService.js': 'records the chain\'s payments; a reindex takes them all off',
+  'services/migrations/appMessages.js': 'folds the old collections in',
+  'services/migrations/paymentPositions.js': 'records a payment\'s chain position',
   'services/serviceManager.js': 'prepares the collection\'s indexes',
-  'services/utils/appConstants.js': 'names the collection',
 };
 
 // listAppMessagesByName reads every stored message for a name, refused ones
@@ -47,7 +52,7 @@ describe('readers of stored app messages', () => {
 
   it('touch the stored messages only in the modules listed, and every listed module does', () => {
     const touching = files
-      .filter(({ text }) => /globalAppsMessages|collections\.appsMessages/.test(text))
+      .filter(({ text }) => /appRecords\.messages\(\)|collections\.appMessages/.test(text))
       .map(({ file }) => file)
       .sort();
     expect(touching).to.deep.equal(Object.keys(ALLOWED).sort());

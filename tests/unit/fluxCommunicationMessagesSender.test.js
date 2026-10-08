@@ -22,6 +22,8 @@ const globalState = require('../../ZelBack/src/services/utils/globalState');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const { getSpec } = require('../../ZelBack/src/services/utils/specLibs');
 const policyStore = require('../../ZelBack/src/services/policyStore');
+const { loadSpecLibrary } = require('./fixtures/fluxSpec');
+const { stubMessages } = require('./fixtures/appRecords');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -281,6 +283,12 @@ describe('fluxCommunicationMessagesSender tests', () => {
   describe('a node that is not authoritative declines a sync request', () => {
     let peer;
     let findStub;
+    let messages;
+
+    before(async function loadLibrary() {
+      this.timeout(30_000);
+      await loadSpecLibrary();
+    });
 
     const sent = () => peer.sendAsync.getCalls().map((c) => JSON.parse(c.args[0]).data);
 
@@ -292,6 +300,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
       sinon.stub(fluxNetworkHelper, 'getFluxNodePrivateKey').returns('5JTeg79dTLzzHXoJPALMWuoGDM8QmLj4n5f6MeFjx8dzsirvjAh');
       findStub = sinon.stub().returns({ sort: () => [] });
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({ collection: () => ({ find: findStub }) }) });
+      messages = stubMessages();
     });
 
     afterEach(() => {
@@ -322,7 +331,7 @@ describe('fluxCommunicationMessagesSender tests', () => {
         expect(sent()).to.deep.equal([{
           type: wireType, ...envelope, messages: [], done: true, refused: true,
         }]);
-        expect(findStub.called, 'a refusing node still queried its own store').to.equal(false);
+        expect(findStub.called || messages.pool.called, 'a refusing node still queried its own store').to.equal(false);
       });
 
       // THE TRAP. A network with nothing running legitimately answers with an

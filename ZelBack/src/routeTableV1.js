@@ -507,7 +507,6 @@ module.exports = [
   { method: 'get', path: '/apps/reindexglobalappslocation', none: NONE.OPERATOR, handler: 'appDatabase/registryManager#reindexGlobalAppsLocationAPI' },
   { method: 'get', path: '/apps/redeploy/:appname?/:force?/:global?', guards: ['alwaysRespond'], needs: ['bootReconcileDecided', 'policyVerified', 'policyCurrent'], handler: 'appLifecycle/appOperations#redeployApplicationAPI' },
   { method: 'get', path: '/apps/redeploycomponent/:appname?/:component?/:force?', guards: ['alwaysRespond'], needs: ['bootReconcileDecided', 'policyVerified', 'policyCurrent'], handler: 'appLifecycle/appOperations#redeployComponentAPI' },
-  { method: 'get', path: '/apps/reconstructhashes', none: NONE.OPERATOR, handler: 'appDatabase/registryManager#reconstructAppMessagesHashCollectionAPI' },
   // alwaysRespond, like the other retired routes: the body is byte-identical on
   // every call, so express fingerprints it with a strong ETag and any caller that
   // revalidates gets an empty 304 from the second call on. Explaining why the

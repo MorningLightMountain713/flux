@@ -21,9 +21,11 @@ describe('appHistory', () => {
     applied = [];
     lookupBlockTime = sinon.stub().callsFake(async (height) => height * 10);
     history = proxyquire('../../ZelBack/src/services/appDecisions/appHistory', {
-      '../dbHelper': {
-        databaseConnection: () => ({ db: () => ({}) }),
-        findInDatabase: async (_db, _collection, query) => stored.filter((m) => query.hash.$in.includes(m.hash)),
+      // The app messages: the confirmed messages the test holds, by hash.
+      '../appDatabase/appRecords': {
+        messages: () => ({
+          confirmedByHashes: async (hashes) => stored.filter((m) => hashes.includes(m.hash)).map((m) => ({ hash: m.hash, permanentForm: () => m })),
+        }),
       },
       './decisionStore': { appliedFor: sinon.stub().callsFake(async (name) => applied.filter((d) => d.name === name)) },
       '../appMessaging/confirmedMessageStore': { lookupBlockTime },

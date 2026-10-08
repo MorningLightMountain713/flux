@@ -17,7 +17,7 @@ describe('migrations tests', () => {
       appIdentityMove: { moveInstalledAppsOntoIdentity: sinon.stub().resolves({ moved: [], skipped: [], failed: [] }) },
       installedLedger: { adoptInstalledLedgers: sinon.stub().resolves({ adopted: [], skipped: [] }) },
       retiredSchema: { dropRetiredSchema: sinon.stub().resolves({ collections: [], indexes: [] }) },
-      temporaryPoolSweep: { stampDeadlines: sinon.stub().resolves({ stamped: 0 }) },
+      appMessagesMigration: { migrateAppMessages: sinon.stub().resolves({ payments: 0, permanent: 0, pooled: 0 }) },
       appsRepository: { removeContentManifestsWithoutHash: sinon.stub().resolves(0) },
       paymentPositions: { backfillPaymentPositions: sinon.stub().resolves({ positioned: 0, unresolved: 0 }) },
     };
@@ -28,7 +28,7 @@ describe('migrations tests', () => {
       '../appLifecycle/appIdentityMove': stubs.appIdentityMove,
       '../appLifecycle/installedLedger': stubs.installedLedger,
       './retiredSchema': stubs.retiredSchema,
-      '../appMessaging/temporaryPoolSweep': stubs.temporaryPoolSweep,
+      './appMessages': stubs.appMessagesMigration,
       '../appDatabase/appsRepository': stubs.appsRepository,
       './paymentPositions': stubs.paymentPositions,
     });
@@ -61,14 +61,14 @@ describe('migrations tests', () => {
 
       expect(stubs.nodeIdentityMigration.migrateNodeIdentity.calledOnce).to.be.true;
       expect(stubs.retiredSchema.dropRetiredSchema.calledOnce).to.be.true;
-      expect(stubs.temporaryPoolSweep.stampDeadlines.calledOnce).to.be.true;
+      expect(stubs.appMessagesMigration.migrateAppMessages.calledOnce).to.be.true;
       expect(stubs.containerLabelBackfill.backfillContainerLabels.called).to.be.false;
     });
 
-    it('stamps the pool\'s deadlines after the retired expiry index is dropped', async () => {
+    it('moves the app messages after the retired schema is dropped', async () => {
       await migrations.runBefore('localDbPrepared');
 
-      sinon.assert.callOrder(stubs.retiredSchema.dropRetiredSchema, stubs.temporaryPoolSweep.stampDeadlines);
+      sinon.assert.callOrder(stubs.retiredSchema.dropRetiredSchema, stubs.appMessagesMigration.migrateAppMessages);
     });
 
     it('runs the container work before the boot reconcile decides, while containers are still down', async () => {
@@ -111,7 +111,7 @@ describe('migrations tests', () => {
       const results = await migrations.runBefore('localDbPrepared');
 
       expect(results).to.deep.equal([
-        { id: 'node-identity', ok: false }, { id: 'retired-schema', ok: true }, { id: 'temporary-pool-deadlines', ok: true }, { id: 'content-manifest-rows', ok: true },
+        { id: 'node-identity', ok: false }, { id: 'retired-schema', ok: true }, { id: 'app-messages', ok: true }, { id: 'content-manifest-rows', ok: true },
       ]);
       sinon.assert.calledWithMatch(stubs.log.error, /node-identity failed/);
     });
@@ -143,8 +143,8 @@ describe('migrations tests', () => {
         './retiredSchema': {
           dropRetiredSchema: async () => { order.push('second'); },
         },
-        '../appMessaging/temporaryPoolSweep': {
-          stampDeadlines: async () => { order.push('third'); },
+        './appMessages': {
+          migrateAppMessages: async () => { order.push('third'); },
         },
         '../appDatabase/appsRepository': {
           removeContentManifestsWithoutHash: async () => { order.push('fourth'); },

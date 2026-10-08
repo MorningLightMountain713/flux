@@ -6,9 +6,9 @@ const containerLabelBackfill = require('../appLifecycle/containerLabelBackfill')
 const appIdentityMove = require('../appLifecycle/appIdentityMove');
 const installedLedger = require('../appLifecycle/installedLedger');
 const retiredSchema = require('./retiredSchema');
-const temporaryPoolSweep = require('../appMessaging/temporaryPoolSweep');
 const appsRepository = require('../appDatabase/appsRepository');
 const paymentPositions = require('./paymentPositions');
+const appMessagesMigration = require('./appMessages');
 
 // One-off work that brings a node up to date with a change FluxOS has already
 // made. Each migration names the capability it must finish before: that
@@ -51,11 +51,12 @@ const migrations = [
     run: () => retiredSchema.dropRetiredSchema(),
   },
   {
-    id: 'temporary-pool-deadlines',
-    // After the retired expiry index is dropped, before the sweep reads the stamp.
+    id: 'app-messages',
+    // After the retired expiry index is dropped and before anything reads a
+    // message: every reader reads the one collection.
     before: 'localDbPrepared',
-    description: 'stamp the payment deadline on pool rows written under the wall-clock expiry',
-    run: () => temporaryPoolSweep.stampDeadlines(),
+    description: 'move the payment index, the permanent messages and the temporary pool into the app messages',
+    run: () => appMessagesMigration.migrateAppMessages(),
   },
   {
     id: 'content-manifest-rows',

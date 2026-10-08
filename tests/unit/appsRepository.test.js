@@ -9,18 +9,22 @@ const {
 } = require('./fixtures/fluxSpec');
 const { installedRecord } = require('./fixtures/appRecords');
 const setReconciler = require('../../ZelBack/src/services/appMessaging/setReconciler');
+const moduleLoader = require('../../ZelBack/src/lib/moduleLoader');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. This is the repository layer, so what the tests hand it are real STORED
 // forms: an InstantiatedSpec's serialization, cleartext or node-sealed. What stays
 // stubbed is I/O — mongo through dbHelper, and the event-log collection handle the
-// running-set derivation reads directly.
+// running-set derivation reads directly. The app messages are a real collection
+// over the library's in-memory store.
 let flux;
+let InMemoryStorageProvider;
 
 describe('appsRepository', () => {
   let appsRepository;
   let registryStub;
   let installedStub;
+  let messages;
   let dbHelperStub;
   let specLibsStub;
   let decisionStoreStub;
@@ -34,7 +38,25 @@ describe('appsRepository', () => {
     // The first fromSubmission compiles the ajv schemas.
     this.timeout(30_000);
     flux = await loadSpecLibrary();
+    ({ InMemoryStorageProvider } = await moduleLoader.importModule('@runonflux/flux-spec-backend/testing'));
   });
+
+  // A message the chain paid for and this node holds.
+  async function confirm({ hash, height, ...contents }) {
+    await messages.recordPayment({
+      hash, txid: `tx-${hash}`, height, value: 100,
+    });
+    await messages.storeContents({
+      type: 'fluxappregister', version: 1, timestamp: height * 1000, signature: 'sig', ...contents, hash,
+    });
+  }
+
+  // Contents the pool holds, unpaid.
+  async function pool({ hash, ...contents }) {
+    await messages.storeContents({
+      type: 'fluxappregister', version: 1, timestamp: 1000, signature: 'sig', ...contents, hash,
+    }, { receivedAt: new Date(1000), payableUntil: new Date(2000) });
+  }
 
   /**
    * The stored form of a legacy (v1–v8) app: the spec's wire form plus the chain
@@ -74,6 +96,7 @@ describe('appsRepository', () => {
     // The app registry: nothing listed, nothing pinned, unless a test says so.
     registryStub = { byName: sinon.stub().resolves(null), byIdentity: sinon.stub().resolves(null), pinned: sinon.stub().resolves([]) };
     installedStub = { byName: sinon.stub().resolves(null), byIdentity: sinon.stub().resolves(null) };
+    messages = new flux.AppMessages(new InMemoryStorageProvider());
 
     dbHelperStub = {
       databaseConnection: sinon.stub().returns(mockDb),
@@ -105,7 +128,6 @@ describe('appsRepository', () => {
           database: 'appsdb',
           collections: {
             appsInformation: 'zelappsinformation',
-            appsMessages: 'zelappsmessages',
             appContentManifests: 'zelappcontentmanifests',
           },
         },
@@ -140,14 +162,12 @@ describe('appsRepository', () => {
       '../utils/appConstants': {
         globalAppsInformation: 'zelappsinformation',
         localAppsInformation: 'zelappsinformation',
-        globalAppsMessages: 'zelappsmessages',
-        globalAppsTempMessages: 'zelappstemporarymessages',
         globalAppsIngressAttestations: 'appingressattestations',
         globalAppsIngressAttestationDigests: 'appingressattestationdigests',
         globalAppsInstallingErrorsLocations: 'appsinstallingerrorslocations',
         globalAppsInstallingErrorsBroadcasts: 'appsinstallingerrorsbroadcasts',
       },
-      './appRecords': { registry: () => registryStub, installed: () => installedStub },
+      './appRecords': { registry: () => registryStub, installed: () => installedStub, messages: () => messages },
     });
   });
 
@@ -161,15 +181,14 @@ describe('appsRepository', () => {
       return { hash, height, appSpecifications };
     };
 
-    it('returns null when findOne misses', async () => {
-      dbHelperStub.findOneInDatabase.resolves(null);
+    it('returns null for a hash it does not hold', async () => {
       expect(await appsRepository.getAppMessage('unknown')).to.be.null;
     });
 
     it('dispatches to the registered version class and wraps in InstantiatedSpec', async () => {
       const doc = await legacyDoc(await v8Spec({ name: 'example' }), { hash: 'h', height: 100 });
       const deserialize = sinon.spy(flux.FluxAppSpecV8, 'deserialize');
-      dbHelperStub.findOneInDatabase.resolves(messageWith(doc));
+      await confirm(messageWith(doc));
 
       const { spec: result } = await appsRepository.getAppMessage('h');
       expect(result).to.be.instanceOf(flux.InstantiatedSpec);
@@ -190,7 +209,7 @@ describe('appsRepository', () => {
     });
 
     it('returns no spec and logs when no version class is registered', async () => {
-      dbHelperStub.findOneInDatabase.resolves(messageWith({ name: 'phantom', version: 99, hash: 'h', height: 100 }));
+      await confirm(messageWith({ name: 'phantom', version: 99, hash: 'h', height: 100 }));
       const { spec } = await appsRepository.getAppMessage('h');
       expect(spec).to.be.null;
       expect(logStub.warn.calledOnce).to.be.true;
@@ -199,7 +218,7 @@ describe('appsRepository', () => {
 
     it('hydrates v9 documents through InstantiatedSpec.deserialize', async () => {
       const doc = await modernDoc(await v9Spec({ name: 'modern' }), { hash: 'h', height: 100 });
-      dbHelperStub.findOneInDatabase.resolves(messageWith(doc));
+      await confirm(messageWith(doc));
       const { spec: result } = await appsRepository.getAppMessage('h');
       expect(result).to.not.be.null;
       expect(result.spec).to.be.instanceOf(flux.FluxAppSpecV9);
@@ -210,7 +229,7 @@ describe('appsRepository', () => {
 
     it('hydrates a node-sealed v9 document and reports it encrypted', async () => {
       const doc = await modernDoc(await sealedV9Spec({ name: 'sealed9' }), { hash: 'hs9', height: 900 });
-      dbHelperStub.findOneInDatabase.resolves(messageWith(doc));
+      await confirm(messageWith(doc));
 
       const { spec: result } = await appsRepository.getAppMessage('hs9');
       expect(result.spec).to.be.instanceOf(flux.EncryptedSpecV9);
@@ -223,26 +242,13 @@ describe('appsRepository', () => {
 
     it('hydrates a v8 enterprise document', async () => {
       const doc = await legacyDoc(await sealedV8Spec({ name: 'sealed8' }), { hash: 'hs8', height: 800 });
-      dbHelperStub.findOneInDatabase.resolves(messageWith(doc));
+      await confirm(messageWith(doc));
 
       const { spec: result } = await appsRepository.getAppMessage('hs8');
       expect(result.spec).to.be.instanceOf(flux.EncryptedSpecV8);
       expect(result.isEncrypted).to.be.true;
       // v8's blob carries no cleartext summary at all: "I cannot tell from here".
       expect(result.resourceTotals()).to.be.null;
-    });
-
-    it('takes the document id off before a sealed spec sees it', async () => {
-      const stored = await modernDoc(await sealedV9Spec({ name: 'sealed9' }), { hash: 'hs9', height: 900 });
-      expect(
-        () => flux.InstantiatedSpec.deserialize({ ...stored, _id: 'mongo-id' }),
-        'the real class must refuse _id, or this test proves nothing',
-      ).to.throw(/unexpected fields on doc: _id/);
-
-      dbHelperStub.findOneInDatabase.resolves({ ...messageWith(stored), _id: 'mongo-id' });
-      const { spec: result } = await appsRepository.getAppMessage('hs9');
-      expect(result).to.not.be.null;
-      expect(result.spec).to.be.instanceOf(flux.EncryptedSpecV9);
     });
   });
 
@@ -341,21 +347,18 @@ describe('appsRepository', () => {
 
   describe('carriedManifestRanks', () => {
     it('reads the rank of each manifest held in the pool for an identity', async () => {
-      dbHelperStub.findInDatabase.resolves([{ contentManifest: { version: 3, ownedFrom: 100 } }, { contentManifest: { version: 2, ownedFrom: 0 } }]);
+      await pool({ hash: 'm3', contentManifest: { identity: 'bident', version: 3, ownedFrom: 100 } });
+      await pool({ hash: 'm2', contentManifest: { identity: 'bident', version: 2, ownedFrom: 0 } });
+      await pool({ hash: 'other', contentManifest: { identity: 'cident', version: 9, ownedFrom: 0 } });
 
       const ranks = await appsRepository.carriedManifestRanks('bident');
 
-      expect(ranks).to.deep.equal([{ version: 3, ownedFrom: 100 }, { version: 2, ownedFrom: 0 }]);
-      const [, collection, query, options] = dbHelperStub.findInDatabase.firstCall.args;
-      expect(collection).to.equal('zelappstemporarymessages');
-      expect(query).to.deep.equal({ 'contentManifest.identity': 'bident' });
-      expect(options.projection).to.deep.equal({ _id: 0, 'contentManifest.version': 1, 'contentManifest.ownedFrom': 1 });
+      expect(ranks).to.have.deep.members([{ version: 3, ownedFrom: 100 }, { version: 2, ownedFrom: 0 }]);
     });
   });
 
   describe('getAppMessage', () => {
     it('returns null when the hash is not found', async () => {
-      dbHelperStub.findOneInDatabase.resolves(null);
       const result = await appsRepository.getAppMessage('nope');
       expect(result).to.be.null;
     });
@@ -364,12 +367,11 @@ describe('appsRepository', () => {
       // A permanent message stores the spec's own wire form and nothing else: the
       // chain state lives on the message, and hydrate is what puts the two together.
       const spec = await v8Spec({ name: 'legacyapp' });
-      const message = { hash: 'abc', height: 500, appSpecifications: spec.serialize() };
       const deserialize = sinon.spy(flux.FluxAppSpecV8, 'deserialize');
-      dbHelperStub.findOneInDatabase.resolves(message);
+      await confirm({ hash: 'abc', height: 500, appSpecifications: spec.serialize() });
 
       const result = await appsRepository.getAppMessage('abc');
-      expect(result.message).to.equal(message);
+      expect(result.message).to.deep.include({ hash: 'abc', height: 500, appSpecifications: spec.serialize() });
       expect(result.spec.spec).to.be.instanceOf(flux.FluxAppSpecV8);
       expect(result.spec.spec.name).to.equal('legacyapp');
       expect(result.spec.hash).to.equal('abc');
@@ -522,14 +524,16 @@ describe('appsRepository', () => {
 
     describe('listIngressAttestationsByApp', () => {
       it('groups attestations by the app message they attest to, omitting messages with none', async () => {
+        await confirm({
+          hash: 'h1', height: 1, type: 'fluxappregister', timestamp: 1000, appSpecifications: { name: 'myapp' },
+        });
+        await confirm({
+          hash: 'h2', height: 2, type: 'fluxappupdate', timestamp: 2000, appSpecifications: { name: 'myapp' },
+        });
+        await confirm({
+          hash: 'h3', height: 3, type: 'fluxappupdate', timestamp: 3000, appSpecifications: { name: 'myapp' },
+        });
         dbHelperStub.findInDatabase.callsFake(async (_db, collection, query) => {
-          if (collection === 'zelappsmessages') {
-            return [
-              { hash: 'h1', type: 'fluxappregister', timestamp: 1000 },
-              { hash: 'h2', type: 'fluxappupdate', timestamp: 2000 },
-              { hash: 'h3', type: 'fluxappupdate', timestamp: 3000 },
-            ];
-          }
           const byHash = {
             h1: [{ hash: 'h1', node: 'n1', sealed: { kid: 'k' } }],
             h2: [{ hash: 'h2', node: 'n1', sealed: { kid: 'k' } }, { hash: 'h2', node: 'n2', sealed: { kid: 'k' } }],
@@ -549,10 +553,11 @@ describe('appsRepository', () => {
       });
 
       it('resolves the app by name against the message store', async () => {
-        dbHelperStub.findInDatabase.callsFake(async (_db, collection) => (collection === 'zelappsmessages' ? [] : []));
+        await confirm({ hash: 'h1', height: 1, appSpecifications: { name: 'myapp' } });
+        dbHelperStub.findInDatabase.resolves([{ hash: 'h1', node: 'n1', sealed: { kid: 'k' } }]);
+
         expect(await appsRepository.listIngressAttestationsByApp('ghost')).to.deep.equal([]);
-        const nameQuery = dbHelperStub.findInDatabase.getCalls().find((c) => c.args[1] === 'zelappsmessages').args[2];
-        expect(nameQuery).to.deep.equal({ 'appSpecifications.name': 'ghost' });
+        expect(await appsRepository.listIngressAttestationsByApp('myapp')).to.have.length(1);
       });
     });
 

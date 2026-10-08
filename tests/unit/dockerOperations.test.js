@@ -305,7 +305,7 @@ describe('appOperations application lifecycle tests', () => {
       // No app is mid-drain: a stop reads its containers as soon as the drive settles.
       '../utils/globalState': { getAppShutdownPipelineState: () => null },
       '../utils/appConstants': {
-        localAppsInformation: 'test', globalAppsInformation: 'test', globalAppsInstallingErrorsLocations: 'test', globalAppsMessages: 'test', appsFolder: APPS_FOLDER,
+        localAppsInformation: 'test', globalAppsInformation: 'test', globalAppsInstallingErrorsLocations: 'test', appsFolder: APPS_FOLDER,
       },
       config: asConfig({ fluxapps: { minimumInstances: 3, redeploy: { composedDelay: 30_000 } }, database: { appsglobal: { database: 'globalapps', collections: {} } } }),
 

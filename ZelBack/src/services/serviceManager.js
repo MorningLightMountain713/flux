@@ -101,7 +101,6 @@ const limitCounterRecords = require('./utils/limitCounterRecords');
 const imageCacheMaintenance = require('./appLifecycle/imageCacheMaintenance');
 const imageReaper = require('./appLifecycle/imageReaper');
 const imageUpdateService = require('./imageUpdateService');
-const appsMaintenance = require('./appDatabase/appsMaintenance');
 const marketplaceTemplateCache = require('./marketplace/marketplaceTemplateCache');
 const telemetryIdentityService = require('./telemetryIdentityService');
 const { version: fluxVersion } = require('../../../package.json');
@@ -383,11 +382,9 @@ async function startFluxFunctions() {
 
         // we have to create this index again here, as we need it to repair the db. As we were deleting this on every reboot (and it was only created when scannedHeight was 0)
         // Creating an index that already exists is a no-op
-        await ensureIndexes(databaseTemp.collection(config.get('database.appsglobal.collections.appsMessages')), [
-          { key: { hash: 1 }, name: 'query for getting zelapp message based on hash', unique: true, recover: dedupeByKey },
-          { key: { 'appSpecifications.version': 1 }, name: 'query for getting app message based on version' },
-          { key: { 'appSpecifications.nodes': 1 }, name: 'query for getting app message based on nodes' },
-        ]);
+        // The app messages: the indexes their queries are answered by.
+        await appRecords.messages().ensureIndexes();
+        log.info('App messages prepared');
         await decisionStore.prepareCollection();
         // The app registry: the indexes its queries are answered by, and the
         // derived fields of any record stored without them.
@@ -436,13 +433,11 @@ async function startFluxFunctions() {
         await ensureIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appsIngressAttestations')), { expireAt: 1 }, { expireAfterSeconds: 0, name: 'ingress_attestation_orphan_ttl' });
         log.info('App ingress attestations collection prepared');
 
-        // This fixes an issue where the appsMessage db has NaN for valueSat. Once db is repaired on all nodes,
-        // we can remove this.
-        await appsMaintenance.repairNanInAppsMessagesDb();
         capabilities.claim('localDbPrepared', 'serviceManager').raise('collections and indexes prepared');
       }),
       runOwner('chain state', async () => {
-        await capabilities.whenUp('mongoReachable');
+        // The rewind reads the collections the local database's migrations move.
+        await capabilities.whenUp('localDbPrepared');
         // Not awaited: it rewinds and builds the histories at once, then scans once
         // the daemon is synced. Safe to leave unhandled: initiateBlockProcessor does
         // not reject.

@@ -3,7 +3,7 @@
 const config = require('config');
 const dbHelper = require('../dbHelper');
 const decisionStore = require('./decisionStore');
-const { appsHashesCollection } = require('../utils/appConstants');
+const appRecords = require('../appDatabase/appRecords');
 const { getSpecPolicy } = require('../utils/specLibs');
 const { compareChainOrder } = require('../utils/chainOrder');
 const log = require('../../lib/log');
@@ -23,10 +23,6 @@ const log = require('../../lib/log');
  */
 
 let history = null;
-
-function daemonDb() {
-  return dbHelper.databaseConnection().db(config.get('database.daemon.database'));
-}
 
 function collectionName() {
   return config.get('database.chainparams.collections.unclaimedPaymentMessages');
@@ -72,13 +68,12 @@ function isVoided(hash, paymentHeight) {
 }
 
 async function paymentRecord(hash) {
-  return dbHelper.findOneInDatabase(daemonDb(), appsHashesCollection, { hash }, { projection: { _id: 0, hash: 1, height: 1, voided: 1 } });
+  return appRecords.messages().payment(hash);
 }
 
 async function markVoided(hash, voided) {
-  await dbHelper.updateOneInDatabase(
-    daemonDb(), appsHashesCollection, { hash }, voided ? { $set: { voided: true } } : { $unset: { voided: '' } },
-  );
+  if (voided) await appRecords.messages().markVoided(hash);
+  else await appRecords.messages().unmarkVoided([hash]);
 }
 
 /**

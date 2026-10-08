@@ -26,15 +26,12 @@ const contentStorePath = process.env.FLUX_CONTENT_STORE
 
 // Database collections - Daemon
 const scannedHeightCollection = config.get('database.daemon.collections.scannedHeight');
-const appsHashesCollection = config.get('database.daemon.collections.appsHashes');
 
 // Database collections - Local apps
 const localAppsInformation = config.get('database.appslocal.collections.appsInformation');
 
 // Database collections - Global apps
-const globalAppsMessages = config.get('database.appsglobal.collections.appsMessages');
 const globalAppsInformation = config.get('database.appsglobal.collections.appsInformation');
-const globalAppsTempMessages = config.get('database.appsglobal.collections.appsTemporaryMessages');
 const globalAppsInstallingLocations = config.get('database.appsglobal.collections.appsInstallingLocations');
 const globalAppsInstallingBroadcasts = config.get('database.appsglobal.collections.appsInstallingBroadcasts');
 const globalAppStateEvents = config.get('database.appsglobal.collections.appStateEvents');
@@ -184,11 +181,8 @@ module.exports = {
 
   // Database collections
   scannedHeightCollection,
-  appsHashesCollection,
   localAppsInformation,
-  globalAppsMessages,
   globalAppsInformation,
-  globalAppsTempMessages,
   globalAppsInstallingLocations,
   globalAppsInstallingBroadcasts,
   globalAppStateEvents,

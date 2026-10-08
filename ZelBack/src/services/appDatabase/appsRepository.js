@@ -7,8 +7,6 @@ const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const setReconciler = require('../appMessaging/setReconciler');
 const appRecords = require('./appRecords');
 const {
-  globalAppsMessages,
-  globalAppsTempMessages,
   globalAppsInstallingErrorsLocations,
   globalAppsInstallingErrorsBroadcasts,
   globalAppsInstallingLocations,
@@ -25,23 +23,14 @@ const decisionStore = require('../appDecisions/decisionStore');
 // because only the content-manifest plane touches it.
 const { appContentManifests } = config.get('database.appsglobal.collections');
 
-function nameRegex(name) {
-  return new RegExp(`^${name}$`, 'i');
-}
-
 async function hydrate(doc) {
   if (!doc) return null;
 
   await getSpec();
   const { InstantiatedSpec } = await getSpecBackend();
 
-  // The collection's own field, its document id, is taken off here;
-  // InstantiatedSpec takes off its own, and the spec class sees only the spec's.
-  // eslint-disable-next-line no-unused-vars
-  const { _id, ...specDoc } = doc;
-
   try {
-    return InstantiatedSpec.deserialize(specDoc);
+    return InstantiatedSpec.deserialize(doc);
   } catch (err) {
     log.warn(`appsRepository.hydrate: ${err.message} (name=${doc.name}, version=${doc.version})`);
     return null;
@@ -300,10 +289,13 @@ async function listResolvedContentManifestIdentities() {
 
 // ── Permanent / Temporary Messages ─────────────────────────────────
 
+/**
+ * A confirmed message by hash, with the spec it carries hydrated, or null.
+ * @param {string} hash
+ * @returns {Promise<?{message: object, spec: object|null}>} the message in its permanent form
+ */
 async function getAppMessage(hash) {
-  const doc = await dbHelper.findOneInDatabase(
-    globalDb(), globalAppsMessages, { hash }, { projection: { _id: 0 } },
-  );
+  const doc = await getPermanentMessage(hash);
   if (!doc) return null;
   const specBlob = doc.appSpecifications;
   if (!specBlob) return { message: doc, spec: null };
@@ -312,24 +304,34 @@ async function getAppMessage(hash) {
   return { message: doc, spec };
 }
 
+/**
+ * A confirmed message by hash in its permanent form, or null.
+ * @param {string} hash
+ * @returns {Promise<object|null>}
+ */
 async function getPermanentMessage(hash) {
-  return dbHelper.findOneInDatabase(
-    globalDb(), globalAppsMessages, { hash }, { projection: { _id: 0 } },
-  );
+  const record = await appRecords.messages().byHash(hash);
+  return record && record.isConfirmed ? record.permanentForm() : null;
 }
 
+/**
+ * The contents the pool holds for a hash, in their temporary form, or null.
+ * @param {string} hash
+ * @returns {Promise<object|null>}
+ */
 async function getTempMessage(hash) {
-  return dbHelper.findOneInDatabase(
-    globalDb(), globalAppsTempMessages, { hash }, { projection: { _id: 0 } },
-  );
+  const record = await appRecords.messages().byHash(hash);
+  return record && record.isHeld && !record.isPaid ? record.temporaryForm() : null;
 }
 
+/**
+ * The latest contents the pool holds under a name, in any letter case, or null.
+ * @param {string} name
+ * @returns {Promise<object|null>}
+ */
 async function getTempMessageByName(name) {
-  return dbHelper.findOneInDatabase(
-    globalDb(), globalAppsTempMessages,
-    { 'appSpecifications.name': nameRegex(name) },
-    { projection: { _id: 0 }, sort: { timestamp: -1 } },
-  );
+  const record = await appRecords.messages().signedByName(name);
+  return record ? record.temporaryForm() : null;
 }
 
 /**
@@ -340,12 +342,7 @@ async function getTempMessageByName(name) {
  * @returns {Promise<Array<{version: number, ownedFrom: number}>>}
  */
 async function carriedManifestRanks(identity) {
-  const rows = await dbHelper.findInDatabase(
-    globalDb(), globalAppsTempMessages,
-    { 'contentManifest.identity': identity },
-    { projection: { _id: 0, 'contentManifest.version': 1, 'contentManifest.ownedFrom': 1 } },
-  );
-  return rows.map((row) => ({ version: row.contentManifest.version, ownedFrom: row.contentManifest.ownedFrom }));
+  return appRecords.messages().carriedManifestRanks(identity);
 }
 
 // ── Ingress attestations ───────────────────────────────────────────
@@ -500,11 +497,14 @@ async function listIngressAttestationsForBuckets(bucketIds) {
   );
 }
 
+/**
+ * Every confirmed message under a name, in its permanent form.
+ * @param {string} name
+ * @returns {Promise<object[]>}
+ */
 async function listAppMessagesByName(name) {
-  const projection = { projection: { _id: 0 } };
-  return dbHelper.findInDatabase(
-    globalDb(), globalAppsMessages, { 'appSpecifications.name': name }, projection,
-  );
+  const records = await appRecords.messages().confirmedNamed([name]);
+  return records.map((record) => record.permanentForm());
 }
 
 /**
@@ -920,27 +920,13 @@ async function listLiveV7Secrets() {
 async function listHistoricalV7Secrets(before = null) {
   await getSpec();
   const { deserializeSpec } = await getSpecBackend();
-  const query = {
-    'appSpecifications.version': 7,
-    'appSpecifications.nodes': { $exists: true, $ne: [] },
-  };
   // Mined before a chain position: what the decider reads, so that a message
   // decided late on one node and early on another meets the same uses.
-  if (before) {
-    query.$or = [
-      { height: { $lt: before.height } },
-      ...(Number.isInteger(before.txIndex) ? [{ height: before.height, txIndex: { $lt: before.txIndex } }] : []),
-    ];
-  }
-  const docs = await dbHelper.findInDatabase(
-    globalDb(), globalAppsMessages,
-    query,
-    { projection: { _id: 0, appSpecifications: 1 } },
-  );
+  const records = await appRecords.messages().confirmedOfSpecVersion(7, { before });
   const results = [];
-  for (const doc of docs) {
-    const specBlob = doc.appSpecifications;
-    if (!specBlob) continue;
+  for (const record of records) {
+    const specBlob = record.contents.appSpecifications;
+    if (!Array.isArray(specBlob.nodes) || specBlob.nodes.length === 0) continue;
     let spec;
     try {
       spec = deserializeSpec(specBlob);
