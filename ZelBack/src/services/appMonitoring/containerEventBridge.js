@@ -200,13 +200,21 @@ function onReconnect() {
   return appReconciler.enqueueAll('reconnect');
 }
 
-async function start() {
+/**
+ * Subscribe to docker's container events. The stream's edges are docker's
+ * reachability as this node sees it: `onConnected` on every connection, the
+ * first included, `onDisconnected(reason)` on every loss.
+ * @param {{ onConnected?: function, onDisconnected?: function }} [edges]
+ */
+async function start({ onConnected = null, onDisconnected = null } = {}) {
   if (!subscription) {
     subscription = dockerEventStream.createDockerEventStream({
       label: 'containerEventBridge',
       filters: { type: ['container', 'network'], event: ['die', 'destroy', 'start', 'health_status', 'disconnect'] },
       onEvent: handleContainerEvent,
       onReconnect,
+      onConnected,
+      onDisconnected,
     });
   }
   await subscription.start();
