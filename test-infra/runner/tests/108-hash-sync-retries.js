@@ -49,6 +49,9 @@ async function bootWithFailingLastNode(env) {
   await env.startNode(last);
   const client = env.clients[last];
   await waitForDaemonReady(client);
+  // The late node dials its ring from here; the fleet's discovery above began
+  // before it existed.
+  await env.startDiscovery([last]);
   return client;
 }
 
