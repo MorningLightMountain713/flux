@@ -86,6 +86,14 @@ describe('updateAppGlobaly and the app an update is judged against', () => {
     expect(appEventVerifier.authorize.firstCall.args[0].previousState, 'authorized against the owner who held it').to.equal(held);
   });
 
+  it('answers an update whose payment the chain recorded first, held as a confirmed message', async () => {
+    byName.resolves({ spec, owner: spec.owner, identity: IDENTITY });
+    appsRepository.getTempMessage.resolves(null);
+    sinon.stub(appsRepository, 'getPermanentMessage').resolves({ hash: 'outbound-hash' });
+
+    expect(await appOperations.updateAppGlobaly(params())).to.equal('outbound-hash');
+  });
+
   it('refuses an update of a name no app ever held', async () => {
     const error = await appOperations.updateAppGlobaly(params()).catch((e) => e);
 
