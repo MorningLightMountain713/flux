@@ -103,6 +103,17 @@ describe('confirmedMessageStore', () => {
     expect(resolvedOps).to.deep.equal([]);
   });
 
+  it('does not store contents for a payment that is voided', async () => {
+    const message = await domain.paidTempMessage({ version: 1 });
+    pay(message, { voided: true });
+
+    const result = await store.storeConfirmedMessages([message]);
+
+    expect(result.refused).to.deep.equal([{ hash: message.hash, reason: 'the payment is voided' }]);
+    expect(inserted).to.deep.equal([]);
+    expect(resolvedOps).to.deep.equal([]);
+  });
+
   it('does not store contents that do not hash to the paid hash', async () => {
     const message = await domain.paidTempMessage({ version: 1 });
     const tampered = { ...message, timestamp: message.timestamp + 1 };

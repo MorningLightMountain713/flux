@@ -39,8 +39,9 @@ async function getMissingHashes(options = {}) {
   const { force = false, currentHeight = 0 } = options;
   const db = dbHelper.databaseConnection();
   const database = db.db(config.get('database.daemon.database'));
-  // A payment the chain does not hold has no message worth fetching.
-  const query = { message: false, notOnChain: { $ne: true } };
+  // A payment the chain does not hold has no message worth fetching, and a
+  // voided one takes none.
+  const query = { message: false, notOnChain: { $ne: true }, voided: { $ne: true } };
   if (!force) {
     query.messageNotFound = { $ne: true };
     query.$or = [

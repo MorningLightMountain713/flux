@@ -34,6 +34,8 @@ const { Privilege, authOf } = require('./utils/privileges');
 const { getSpecPolicy } = require('./utils/specLibs');
 const priceOracleState = require('./pricing/priceOracleState');
 const entitlementsState = require('./entitlementsState');
+const unclaimedPayments = require('./appDecisions/unclaimedPayments');
+const decider = require('./appDecisions/decider');
 const { pubKeyToAddr } = require('./utils/fluxCryptoUtils');
 const appQueryService = require('./appQuery/appQueryService');
 const appOperations = require('./appLifecycle/appOperations');
@@ -45,6 +47,7 @@ const priceMessagesCollection = config.get('database.chainparams.collections.pri
 const rateMessagesCollection = config.get('database.chainparams.collections.rateMessages');
 const priceModifierMessagesCollection = config.get('database.chainparams.collections.priceModifierMessages');
 const oracleKeyMessagesCollection = config.get('database.chainparams.collections.oracleKeyMessages');
+const unclaimedPaymentMessagesCollection = config.get('database.chainparams.collections.unclaimedPaymentMessages');
 const policyGroupMessagesCollection = config.get('database.chainparams.collections.policyGroupMessages');
 
 let isInInitiationOfBP = false;
@@ -331,11 +334,33 @@ function oracleAddressFromKey(oracleKey) {
   return pubKeyToAddr(Buffer.from(oracleKey.pubkey).toString('hex'), FLUX_T1_PUBKEY_HASH);
 }
 
-// The oracle's t1 address in force at a height, derived from the pubkey published
-// by the most recent OracleKeyMessage (0x05). Null if no oracle key is in force.
-function resolveOracleAddress(height) {
+// The library, held once loaded: the signer checks run in the scan's synchronous
+// paths and read the role bytes off it. The block scan loads it before its first
+// block, and the soft-fork intake before its first parse.
+let specPolicy = null;
+async function policyLibrary() {
+  if (!specPolicy) specPolicy = await getSpecPolicy();
+  return specPolicy;
+}
+function roleByte(name) {
+  return specPolicy ? specPolicy.OracleKeyMessage.ROLE[name] : null;
+}
+
+// The t1 address in force for a role at a height, derived from the pubkey the most
+// recent OracleKeyMessage (0x05) for that role published. Null if none is in force.
+function resolveRoleAddress(height, role) {
   const history = priceOracleState.getOracleKeyHistory();
-  return oracleAddressFromKey(history && history.resolveAt(height));
+  const byte = roleByte(role);
+  if (!history || byte == null) return null;
+  return oracleAddressFromKey(history.resolveAt(height, byte));
+}
+
+function resolveOracleAddress(height) {
+  return resolveRoleAddress(height, 'ORACLE');
+}
+
+function resolveAvailabilityAddress(height) {
+  return resolveRoleAddress(height, 'AVAILABILITY');
 }
 
 function isMessageAuthority(tx) {
@@ -353,6 +378,15 @@ function isOracleSigner(tx, height) {
   return tx.vin.some((vin) => vin.address === oracleAddr && inputSignsAllOutputs(vin));
 }
 
+// An UnclaimedPaymentMessage (0x06) is authorised only if its transaction is signed
+// by the availability key published on-chain via OracleKeyMessage (0x05, role
+// availability), with a SIGHASH_ALL signature. No key in force -> no void accepted.
+function isAvailabilitySigner(tx, height) {
+  const addr = resolveAvailabilityAddress(height);
+  if (!addr) return false;
+  return tx.vin.some((vin) => vin.address === addr && inputSignsAllOutputs(vin));
+}
+
 // Whether an address is a pre-v9 soft-fork authority (the legacy payment multisigs).
 // Gates the legacy ASCII price messages — kept narrow so the v9 authority and the
 // oracle can never publish a legacy price message.
@@ -361,16 +395,17 @@ function isLegacyMessageAuthority(address) {
 }
 
 // Coarse entry filter: is this address a recognised source of ANY soft-fork message?
-// The union of the legacy authorities, the v9 message authority, and the current
-// oracle. This only decides whether a tx is worth parsing as a soft-fork — the
-// per-type authority checks (isLegacyMessageAuthority / isMessageAuthority /
-// isOracleSigner) still enforce which signer may publish which message type. Strict
-// allowlist: any other sender is dropped at the gate, so it is no spam surface.
+// The union of the legacy authorities, the v9 message authority, and the keys in
+// force for each role. This only decides whether a tx is worth parsing as a
+// soft-fork — the per-type authority checks (isLegacyMessageAuthority /
+// isMessageAuthority / isOracleSigner / isAvailabilitySigner) still enforce which
+// signer may publish which message type. Strict allowlist: any other sender is
+// dropped at the gate, so it is no spam surface.
 function isRecognizedMessageSigner(address, height) {
   if (!address) return false;
   if (isLegacyMessageAuthority(address)) return true;
   if (address === config.get('fluxapps.messageAuthorityAddress')) return true;
-  return address === resolveOracleAddress(height);
+  return address === resolveOracleAddress(height) || address === resolveAvailabilityAddress(height);
 }
 
 /**
@@ -385,7 +420,7 @@ function isRecognizedMessageSigner(address, height) {
  */
 async function processSoftFork(txid, height, txIndex, payload, senderIsLegacyAuthority, tx) {
   const { vout, bytes, legacyPosition } = payload;
-  const { dispatch, ValidationError } = await getSpecPolicy();
+  const { dispatch, ValidationError } = await policyLibrary();
   let dispatched;
   try {
     dispatched = dispatch(bytes);
@@ -474,6 +509,19 @@ async function processSoftFork(txid, height, txIndex, payload, senderIsLegacyAut
         priceOracleState.getOracleKeyHistory(),
       );
       break;
+    case 'unclaimed-payment':
+      if (!isAvailabilitySigner(tx, height)) {
+        log.warn(`UnclaimedPaymentMessage rejected — wrong signer: ${txid} at height ${height}`);
+        return;
+      }
+      log.info(`UnclaimedPaymentMessage at height ${height}: ${txid} voids ${message.hashHex}`);
+      await applySoftForkMessage(
+        unclaimedPaymentMessagesCollection,
+        { txid, vout, height, txIndex, message },
+        unclaimedPayments.getUnclaimedPaymentHistory(),
+      );
+      await unclaimedPayments.applyVoid(message, height, decider.wake);
+      break;
     case 'policy-group':
       if (!isMessageAuthority(tx)) return;
       log.info(`PolicyGroupMessage at height ${height}: ${txid}`);
@@ -494,6 +542,7 @@ async function processSoftFork(txid, height, txIndex, payload, senderIsLegacyAut
  * @param {string} database Database.
  */
 async function processInsight(blockDataVerbose, database) {
+  await policyLibrary();
   // get Block Deltas information
   const txs = blockDataVerbose.tx;
   // go through each transaction in deltas. The index is the transaction's position in
@@ -1133,6 +1182,11 @@ async function bootstrapAppHashes(currentDaemonHeight) {
   records.sort(compareChainOrder);
   const seen = new Set();
   const firstPayments = records.filter((record) => !seen.has(record.hash) && seen.add(record.hash));
+  // The voids were recorded above, before the payments they name: a payment a
+  // recorded void reaches is voided from the start.
+  for (const record of firstPayments) {
+    if (unclaimedPayments.isVoided(record.hash, record.height)) record.voided = true;
+  }
 
   const db = dbHelper.databaseConnection();
   const database = db.db(config.get('database.daemon.database'));
@@ -1868,6 +1922,8 @@ chainState.onRewind((height) => {
   scanPosition = height;
   capabilities.claim('explorerSynced', 'explorerService').lower(`chain state rewound to ${height}`);
 });
+// A rewind that drops a void gives its hash back to the decider.
+chainState.onRewind((height) => unclaimedPayments.onRewind(height, decider.wake));
 
 // Registered at require time so the subscription service opens its socket with these
 // already attached. A topic the daemon does not publish simply never delivers, and the
@@ -1927,6 +1983,9 @@ module.exports = {
   setIsInInitiationOfBP,
   setZelAppSpecsMigrationDone,
   isOracleSigner,
+  loadSpecPolicy: policyLibrary,
+  isAvailabilitySigner,
+  resolveAvailabilityAddress,
   isMessageAuthority,
 
   isExplorerSynced,

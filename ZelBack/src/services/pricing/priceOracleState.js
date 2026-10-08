@@ -64,7 +64,15 @@ async function buildPriceOracleState() {
   inChainOrder(oracleKeyDocs, 'oracleKeyMessages');
   for (const doc of oracleKeyDocs) {
     fixBinaryFields(doc, ['pubkey']);
-    built.oracleKeyHistory.add(doc.message, doc.height, doc.txIndex);
+    // A row the history refuses is one written under a wire form the parser no
+    // longer produces; it stays out of the history, and the scan records what
+    // the chain holds under the current form.
+    try {
+      built.oracleKeyHistory.add(doc.message, doc.height, doc.txIndex);
+    } catch (error) {
+      if (!(error instanceof TypeError)) throw error;
+      log.warn(`Price oracle state: oracle key row ${doc.txid} at ${doc.height} left out of the history: ${error.message}`);
+    }
   }
 
   const priceDocs = await dbHelper.findInDatabase(

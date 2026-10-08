@@ -351,6 +351,15 @@ describe('decisionRule', () => {
     expect(verdicts(result)).to.deep.equal(['nothing-to-update', 'applied', 'replayed']);
   });
 
+  it('refuses a message whose payment is voided as unclaimed, before any other rule, and decides the name on from there', async () => {
+    const voided = entry({ hash: 'v', height: 100, spec: null });
+    voided.record.voided = true;
+
+    const result = await decide([voided, entry({ hash: 'r', height: 200 })]);
+
+    expect(verdicts(result)).to.deep.equal(['unclaimed', 'applied']);
+  });
+
   describe('a rule this node cannot evaluate', () => {
     it('stops the walk before the message, leaving it and every later one undecided', async () => {
       const failure = new Error('price history not in force');

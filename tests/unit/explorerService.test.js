@@ -25,6 +25,8 @@ const { requireMongo } = require('./dbTestHelper');
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
+const unclaimedPayments = require('../../ZelBack/src/services/appDecisions/unclaimedPayments');
+const decider = require('../../ZelBack/src/services/appDecisions/decider');
 const fluxSpecCjs = require('@runonflux/flux-spec-cjs');
 
 // 320-char OP_RETURN payload, hoisted so the call site stays inside max-len.
@@ -1365,7 +1367,7 @@ describe('explorerService tests', () => {
     });
 
     const oracleKeyHex = () => Buffer.from(
-      policy.OracleKeyMessage.encode({ pubkey: Buffer.from(ORACLE_PUBKEY_HEX, 'hex') }),
+      policy.OracleKeyMessage.encode({ role: policy.OracleKeyMessage.ROLE.ORACLE, pubkey: Buffer.from(ORACLE_PUBKEY_HEX, 'hex') }),
     ).toString('hex');
 
     const rateHex = () => Buffer.from(
@@ -1384,7 +1386,7 @@ describe('explorerService tests', () => {
 
     it('queries the oracle address a published key names, from that key\'s height', async () => {
       priceOracleState.getOracleKeyHistory().add(
-        { pubkey: Buffer.from(ORACLE_PUBKEY_HEX, 'hex') }, KEY_HEIGHT, 0,
+        { role: policy.OracleKeyMessage.ROLE.ORACLE, pubkey: Buffer.from(ORACLE_PUBKEY_HEX, 'hex') }, KEY_HEIGHT, 0,
       );
       executeCallStub.resolves({ status: 'success', data: [] });
 
@@ -1401,7 +1403,7 @@ describe('explorerService tests', () => {
 
     it('asks the foundation first — the oracle address is only knowable after', async () => {
       priceOracleState.getOracleKeyHistory().add(
-        { pubkey: Buffer.from(ORACLE_PUBKEY_HEX, 'hex') }, KEY_HEIGHT, 0,
+        { role: policy.OracleKeyMessage.ROLE.ORACLE, pubkey: Buffer.from(ORACLE_PUBKEY_HEX, 'hex') }, KEY_HEIGHT, 0,
       );
       executeCallStub.resolves({ status: 'success', data: [] });
 
@@ -1416,14 +1418,14 @@ describe('explorerService tests', () => {
     it('scans every address the key has ever had, and each one once', async () => {
       const OTHER_PUBKEY_HEX = '03a9329557d633a7b261290f7c3b17506d460c3fcfd0cb8fd9339b27d4f583eca7';
       priceOracleState.getOracleKeyHistory().add(
-        { pubkey: Buffer.from(ORACLE_PUBKEY_HEX, 'hex') }, KEY_HEIGHT, 0,
+        { role: policy.OracleKeyMessage.ROLE.ORACLE, pubkey: Buffer.from(ORACLE_PUBKEY_HEX, 'hex') }, KEY_HEIGHT, 0,
       );
       priceOracleState.getOracleKeyHistory().add(
-        { pubkey: Buffer.from(OTHER_PUBKEY_HEX, 'hex') }, KEY_HEIGHT + 5000, 0,
+        { role: policy.OracleKeyMessage.ROLE.ORACLE, pubkey: Buffer.from(OTHER_PUBKEY_HEX, 'hex') }, KEY_HEIGHT + 5000, 0,
       );
       // The same key again: a rotation back, or a re-publication. One address.
       priceOracleState.getOracleKeyHistory().add(
-        { pubkey: Buffer.from(ORACLE_PUBKEY_HEX, 'hex') }, KEY_HEIGHT + 9000, 0,
+        { role: policy.OracleKeyMessage.ROLE.ORACLE, pubkey: Buffer.from(ORACLE_PUBKEY_HEX, 'hex') }, KEY_HEIGHT + 9000, 0,
       );
       executeCallStub.resolves({ status: 'success', data: [] });
 
@@ -1434,6 +1436,24 @@ describe('explorerService tests', () => {
       expect(addresses).to.include(ORACLE_ADDR);
       // The earliest key still sets the lower bound, not the latest.
       expect(executeCallStub.secondCall.args[1][0].start).to.equal(KEY_HEIGHT);
+    });
+
+    it('scans the availability key\'s address in the second query too, from its own height', async () => {
+      const AVAILABILITY_PUBKEY_HEX = '03a9329557d633a7b261290f7c3b17506d460c3fcfd0cb8fd9339b27d4f583eca7';
+      const AVAILABILITY_ADDR = 't1KRvTTXmaYZmjpgEVbk7cAfu83uYJDoAn4';
+      priceOracleState.getOracleKeyHistory().add(
+        { role: policy.OracleKeyMessage.ROLE.AVAILABILITY, pubkey: Buffer.from(AVAILABILITY_PUBKEY_HEX, 'hex') }, KEY_HEIGHT, 0,
+      );
+      priceOracleState.getOracleKeyHistory().add(
+        { role: policy.OracleKeyMessage.ROLE.ORACLE, pubkey: Buffer.from(ORACLE_PUBKEY_HEX, 'hex') }, KEY_HEIGHT + 5000, 0,
+      );
+      executeCallStub.resolves({ status: 'success', data: [] });
+
+      await explorerService.bootstrapSoftForks(TIP);
+
+      const { addresses, start } = executeCallStub.secondCall.args[1][0];
+      expect(addresses).to.have.members([AVAILABILITY_ADDR, ORACLE_ADDR]);
+      expect(start).to.equal(KEY_HEIGHT);
     });
 
     it('rebuilds a rate message that only the second query can reach', async () => {
@@ -1462,10 +1482,72 @@ describe('explorerService tests', () => {
       expect(rates[0].chainHeight).to.equal(RATE_HEIGHT);
     });
 
+    describe('an UnclaimedPaymentMessage in the block walk', () => {
+      const AVAILABILITY_PUBKEY_HEX = '03a9329557d633a7b261290f7c3b17506d460c3fcfd0cb8fd9339b27d4f583eca7';
+      const AVAILABILITY_ADDR = 't1KRvTTXmaYZmjpgEVbk7cAfu83uYJDoAn4';
+      const VOID_HEIGHT = KEY_HEIGHT + 100;
+      const HASH_HEX = 'ab'.repeat(32);
+      const voidHex = () => Buffer.from(policy.UnclaimedPaymentMessage.encode({ hash: HASH_HEX })).toString('hex');
+      const keyInForce = (role, pubkeyHex) => priceOracleState.getOracleKeyHistory().add(
+        { role, pubkey: Buffer.from(pubkeyHex, 'hex') }, KEY_HEIGHT, 0,
+      );
+      const voidRows = () => dbHelper.updateOneInDatabase.getCalls().filter((call) => call.args[2]?.txid === 'voidTx');
+      let voids;
+      let applyVoidStub;
+
+      beforeEach(() => {
+        voids = new policy.UnclaimedPaymentHistory();
+        unclaimedPayments.installUnclaimedPaymentState({ unclaimedPaymentHistory: voids });
+        applyVoidStub = sinon.stub(unclaimedPayments, 'applyVoid').resolves(true);
+      });
+
+      afterEach(() => {
+        unclaimedPayments.installUnclaimedPaymentState({ unclaimedPaymentHistory: null });
+      });
+
+      const walk = (from) => explorerService.processInsight(
+        { height: VOID_HEIGHT, tx: [{ ...signedTx('voidTx', VOID_HEIGHT, from, voidHex()), version: 1 }] }, {},
+      );
+
+      it('is recorded, kept in the history and applied with the decider\'s wake when the availability key signs it', async () => {
+        keyInForce(policy.OracleKeyMessage.ROLE.AVAILABILITY, AVAILABILITY_PUBKEY_HEX);
+
+        await walk(AVAILABILITY_ADDR);
+
+        expect([...voids.entries()].map((entry) => entry.message.hashHex)).to.deep.equal([HASH_HEX]);
+        expect(voidRows()).to.have.lengthOf(1);
+        expect(voidRows()[0].args[1]).to.equal(config.database.chainparams.collections.unclaimedPaymentMessages);
+        sinon.assert.calledOnce(applyVoidStub);
+        const [message, height, wake] = applyVoidStub.firstCall.args;
+        expect(message.hashHex).to.equal(HASH_HEX);
+        expect(height).to.equal(VOID_HEIGHT);
+        expect(wake).to.equal(decider.wake);
+      });
+
+      it('is refused from the oracle key, whose role is the rate', async () => {
+        keyInForce(policy.OracleKeyMessage.ROLE.ORACLE, AVAILABILITY_PUBKEY_HEX);
+
+        await walk(AVAILABILITY_ADDR);
+
+        expect([...voids.entries()]).to.have.lengthOf(0);
+        expect(voidRows()).to.have.lengthOf(0);
+        sinon.assert.notCalled(applyVoidStub);
+      });
+
+      it('is refused from the foundation, and from the availability address while no availability key is in force', async () => {
+        await walk(authority);
+        await walk(AVAILABILITY_ADDR);
+
+        expect([...voids.entries()]).to.have.lengthOf(0);
+        expect(voidRows()).to.have.lengthOf(0);
+        sinon.assert.notCalled(applyVoidStub);
+      });
+    });
+
     describe('where a transaction carries its messages', () => {
       const OTHER_PUBKEY_HEX = '03a9329557d633a7b261290f7c3b17506d460c3fcfd0cb8fd9339b27d4f583eca7';
       const keyHex = (pubkeyHex) => Buffer.from(
-        policy.OracleKeyMessage.encode({ pubkey: Buffer.from(pubkeyHex, 'hex') }),
+        policy.OracleKeyMessage.encode({ role: policy.OracleKeyMessage.ROLE.ORACLE, pubkey: Buffer.from(pubkeyHex, 'hex') }),
       ).toString('hex');
       const pubkeysHeld = () => [...priceOracleState.getOracleKeyHistory().entries()]
         .map((entry) => Buffer.from(entry.message.pubkey).toString('hex'));
@@ -1517,6 +1599,12 @@ describe('explorerService tests', () => {
   });
 
   describe('soft-fork message authority', () => {
+    let ROLE;
+
+    before(async () => {
+      ({ OracleKeyMessage: { ROLE } } = await explorerService.loadSpecPolicy());
+    });
+
     afterEach(() => sinon.restore());
 
     // A real mainnet oracle RateMessage scriptSig: a P2PKH spend (72-byte signature
@@ -1580,6 +1668,52 @@ describe('explorerService tests', () => {
         oracleKeyInForce();
         const tx = { vin: [{ address: oracleAddr, scriptSig: { hex: NONE_SCRIPTSIG } }] };
         expect(explorerService.isOracleSigner(tx, 100)).to.equal(false);
+      });
+
+      it('rejects when the key in force is the availability role\'s, not the oracle\'s', () => {
+        sinon.stub(priceOracleState, 'getOracleKeyHistory').returns({
+          resolveAt: (height, role) => (role === ROLE.AVAILABILITY ? { pubkey: Buffer.from(pubkeyHex, 'hex') } : null),
+        });
+        const tx = { vin: [{ address: oracleAddr, ...allSig() }] };
+        expect(explorerService.isOracleSigner(tx, 100)).to.equal(false);
+      });
+    });
+
+    describe('isAvailabilitySigner', () => {
+      const pubkeyHex = '02c7f5b5e6e7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4';
+      const availabilityAddr = 't1NfrwmYygJYwm4krB9KkhnBNLRffuCqvw8';
+      const keyInForceFor = (held) => sinon.stub(priceOracleState, 'getOracleKeyHistory').returns({
+        resolveAt: (height, role) => (role === held ? { pubkey: Buffer.from(pubkeyHex, 'hex') } : null),
+      });
+
+      it('accepts a tx signed by the key in force for the availability role with SIGHASH_ALL', () => {
+        keyInForceFor(ROLE.AVAILABILITY);
+        const tx = { vin: [{ address: availabilityAddr, ...allSig() }] };
+        expect(explorerService.isAvailabilitySigner(tx, 100)).to.equal(true);
+      });
+
+      it('rejects when the key in force is the oracle\'s: each role rotates on its own', () => {
+        keyInForceFor(ROLE.ORACLE);
+        const tx = { vin: [{ address: availabilityAddr, ...allSig() }] };
+        expect(explorerService.isAvailabilitySigner(tx, 100)).to.equal(false);
+      });
+
+      it('rejects when no key is in force at the height', () => {
+        sinon.stub(priceOracleState, 'getOracleKeyHistory').returns({ resolveAt: () => null });
+        const tx = { vin: [{ address: availabilityAddr, ...allSig() }] };
+        expect(explorerService.isAvailabilitySigner(tx, 100)).to.equal(false);
+      });
+
+      it('rejects a tx not signed by the availability key', () => {
+        keyInForceFor(ROLE.AVAILABILITY);
+        const tx = { vin: [{ address: 't1SomeoneElse', ...allSig() }] };
+        expect(explorerService.isAvailabilitySigner(tx, 100)).to.equal(false);
+      });
+
+      it('rejects an availability input that does not sign all outputs (SIGHASH_NONE)', () => {
+        keyInForceFor(ROLE.AVAILABILITY);
+        const tx = { vin: [{ address: availabilityAddr, scriptSig: { hex: NONE_SCRIPTSIG } }] };
+        expect(explorerService.isAvailabilitySigner(tx, 100)).to.equal(false);
       });
     });
   });

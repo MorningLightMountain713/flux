@@ -9,6 +9,7 @@ const chainState = require('../../ZelBack/src/services/chainState');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const entitlementsState = require('../../ZelBack/src/services/entitlementsState');
 const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
+const unclaimedPayments = require('../../ZelBack/src/services/appDecisions/unclaimedPayments');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 
 chai.use(chaiAsPromised);
@@ -20,6 +21,7 @@ const V9_SOFT_FORK_COLLECTIONS = [
   config.get('database.chainparams.collections.rateMessages'),
   config.get('database.chainparams.collections.priceModifierMessages'),
   config.get('database.chainparams.collections.oracleKeyMessages'),
+  config.get('database.chainparams.collections.unclaimedPaymentMessages'),
 ];
 
 describe('chainState', () => {
@@ -29,6 +31,7 @@ describe('chainState', () => {
   let updateStub;
   let builtPolicyGroups;
   let builtPrices;
+  let builtVoids;
 
   beforeEach(() => {
     capabilities.resetForTests();
@@ -58,8 +61,14 @@ describe('chainState', () => {
       events.push('build prices');
       return builtPrices;
     });
+    builtVoids = { unclaimedPaymentHistory: { tag: 'new voids' } };
+    sinon.stub(unclaimedPayments, 'buildUnclaimedPaymentState').callsFake(async () => {
+      events.push('build voids');
+      return builtVoids;
+    });
     sinon.stub(entitlementsState, 'installPolicyGroupState').callsFake(() => events.push('install groups'));
     sinon.stub(priceOracleState, 'installPriceOracleState').callsFake(() => events.push('install prices'));
+    sinon.stub(unclaimedPayments, 'installUnclaimedPaymentState').callsFake(() => events.push('install voids'));
   });
 
   afterEach(() => {
@@ -79,7 +88,7 @@ describe('chainState', () => {
       expect(events[1]).to.equal('cursor 900');
       const lastDelete = events.map((e) => e.startsWith('delete')).lastIndexOf(true);
       expect(events.indexOf('build groups')).to.be.above(lastDelete);
-      expect(events.slice(-3)).to.deep.equal(['install groups', 'install prices', 'capability up']);
+      expect(events.slice(-4)).to.deep.equal(['install groups', 'install prices', 'install voids', 'capability up']);
     });
 
     it('deletes app payment records, their decisions, legacy rows and every v9 soft-fork row above the height', async () => {
@@ -109,12 +118,14 @@ describe('chainState', () => {
       sinon.assert.neverCalledWithMatch(removeStub, sinon.match.object, 'zelappsinformation');
     });
 
-    it('builds both history sets before installing either', async () => {
+    it('builds every history set before installing any', async () => {
       await chainState.rewind('test', 900);
 
       expect(events.indexOf('build prices')).to.be.below(events.indexOf('install groups'));
+      expect(events.indexOf('build voids')).to.be.below(events.indexOf('install groups'));
       sinon.assert.calledOnceWithExactly(entitlementsState.installPolicyGroupState, builtPolicyGroups);
       sinon.assert.calledOnceWithExactly(priceOracleState.installPriceOracleState, builtPrices);
+      sinon.assert.calledOnceWithExactly(unclaimedPayments.installUnclaimedPaymentState, builtVoids);
     });
 
     it('never rewinds above the durable cursor', async () => {
@@ -176,6 +187,21 @@ describe('chainState', () => {
       const lastDelete = events.map((e) => e.startsWith('delete')).lastIndexOf(true);
       expect(events.indexOf('listener')).to.be.above(lastDelete);
       expect(events.indexOf('listener')).to.be.below(events.indexOf('build groups'));
+    });
+
+    it('waits for a rewind listener that returns a promise before building the histories', async () => {
+      const unsubscribe = chainState.onRewind(() => new Promise((resolve) => {
+        setImmediate(() => {
+          events.push('listener done');
+          resolve();
+        });
+      }));
+
+      await chainState.rewind('test', 900);
+      unsubscribe();
+
+      expect(events.indexOf('listener done')).to.be.above(-1);
+      expect(events.indexOf('listener done')).to.be.below(events.indexOf('build groups'));
     });
 
     it('leaves chain state down and the cursor low when the deletion throws', async () => {

@@ -7,6 +7,7 @@ const dbHelper = require('./dbHelper');
 const capabilities = require('./utils/capabilities');
 const entitlementsState = require('./entitlementsState');
 const priceOracleState = require('./pricing/priceOracleState');
+const unclaimedPayments = require('./appDecisions/unclaimedPayments');
 const decisionStore = require('./appDecisions/decisionStore');
 
 /**
@@ -33,6 +34,7 @@ const softForkCollections = [
   config.get('database.chainparams.collections.rateMessages'),
   config.get('database.chainparams.collections.priceModifierMessages'),
   config.get('database.chainparams.collections.oracleKeyMessages'),
+  config.get('database.chainparams.collections.unclaimedPaymentMessages'),
 ];
 
 let lockTail = Promise.resolve();
@@ -177,8 +179,10 @@ async function deleteAbove(height, rescanGlobalApps) {
 async function buildHistories() {
   const policyGroups = await entitlementsState.buildPolicyGroupState();
   const prices = await priceOracleState.buildPriceOracleState();
+  const voids = await unclaimedPayments.buildUnclaimedPaymentState();
   entitlementsState.installPolicyGroupState(policyGroups);
   priceOracleState.installPriceOracleState(prices);
+  unclaimedPayments.installUnclaimedPaymentState(voids);
 }
 
 /**
@@ -193,7 +197,8 @@ async function buildHistories() {
  * In order: lowers `chainStateConsistent`; writes the cursor (before any
  * deletion, so a crash leaves the cursor low and the blocks are scanned again,
  * never skipped); deletes the rows above the height; calls the `onRewind`
- * listeners; builds and installs the histories; raises `chainStateConsistent`.
+ * listeners and waits for them; builds and installs the histories; raises
+ * `chainStateConsistent`.
  *
  * @param {string} reason Why, for the capability and the log.
  * @param {number|((state: {cursor: number}) => (number|null))} target
@@ -219,7 +224,7 @@ function rewind(reason, target, options = {}) {
 
     await setScannedHeight(database, height);
     await deleteAbove(height, options.rescanGlobalApps === true);
-    rewindListeners.forEach((fn) => fn(height));
+    await Promise.all(rewindListeners.map((fn) => fn(height)));
     await buildHistories();
 
     handle.raise(`histories built, scan cursor at ${height}`);

@@ -141,6 +141,11 @@ async function decideOne(entries, i, name, judge) {
   const entry = entries[i];
   const { record, spec } = entry;
 
+  // A voided payment, first of all: an UnclaimedPaymentMessage inside the
+  // payment's void window named its hash, so its contents, whenever they
+  // arrived, are not read.
+  if (record.voided) return refused(entry, name, 'unclaimed');
+
   // Every message, first: the owner's signed timestamp cannot change without
   // the owner's key, so a message carrying the timestamp of an earlier one for
   // the name is that message paid for again.
