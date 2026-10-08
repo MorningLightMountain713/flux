@@ -122,6 +122,17 @@ describe('manifestStanding', () => {
     });
   });
 
+  describe('listedOwnership', () => {
+    it('names the listed owner and their height, original only for the app\'s first ownership', () => {
+      const { listedOwnership } = load();
+      expect(listedOwnership([])).to.equal(null);
+      expect(listedOwnership([{ owner: '1a', from: 100 }])).to.deep.equal({ owner: '1a', from: 100, original: true });
+      expect(listedOwnership([{ owner: '1a', from: 100 }, { owner: '1b', from: 200 }])).to.deep.equal({ owner: '1b', from: 200, original: false });
+      // the first owner back after a transfer holds a new ownership, not the first
+      expect(listedOwnership([{ owner: '1a', from: 100 }, { owner: '1b', from: 200 }, { owner: '1a', from: 300 }])).to.deep.equal({ owner: '1a', from: 300, original: false });
+    });
+  });
+
   describe('highestVersionInOwnership', () => {
     it('counts only what this owner signed under this ownership, held or waiting in the pool', async () => {
       const svc = load({

@@ -23,6 +23,7 @@ const transportHelper = require('../utils/transportHelper');
 const appsRepository = require('../appDatabase/appsRepository');
 const appRecords = require('../appDatabase/appRecords');
 const appHistory = require('../appDecisions/appHistory');
+const manifestStanding = require('../appLifecycle/manifestStanding');
 const appSpecHistory = require('../appDatabase/appSpecHistory');
 const entitlementsState = require('../entitlementsState');
 const marketplaceTemplateCache = require('../marketplace/marketplaceTemplateCache');
@@ -711,17 +712,17 @@ async function uploadSealedContent(spec, content, ownerSigs, {
   // a registration, whose height does not exist yet.
   if (payload.manifest) {
     let ownedFrom = 0;
+    let original = false;
     if (priorSpec) {
-      const owners = await appHistory.ownerships(spec.name);
-      const listed = owners.length ? owners[owners.length - 1] : null;
+      const listed = manifestStanding.listedOwnership(await appHistory.ownerships(spec.name));
       if (!listed || listed.owner !== owner) throw new Error(`uploadSealedContent: ${spec.name} has no applied ownership for ${owner}`);
-      ownedFrom = listed.from;
+      ({ from: ownedFrom, original } = listed);
     }
     const slotHashes = new Set(Object.values(payload.manifest.slots || {}).map((s) => s.hash));
     const slotBlobs = new Map([...blobs].filter(([h]) => slotHashes.has(h)));
     const gossipManifest = await contentSlotService.processManifestSubmission(
       {
-        manifest: payload.manifest, spec, owner, encrypted: true, identity, ownedFrom, blobs: slotBlobs, ownerSigs,
+        manifest: payload.manifest, spec, owner, encrypted: true, identity, ownedFrom, original, blobs: slotBlobs, ownerSigs,
       },
       { uploader: fluxDriveClient },
     );

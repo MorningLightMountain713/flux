@@ -96,6 +96,20 @@ async function highestVersionInOwnership(identity, ownership, deps = {}) {
 }
 
 /**
+ * The ownership the chain lists now, as the version rule keys it: the listed
+ * owner, the height they took the app, and whether that ownership is the
+ * app's first — under which the registration's list, signed before the app
+ * had a height, counts in the version sequence.
+ * @param {Array<{owner: string, from: number}>} owners appHistory.ownerships, in order
+ * @returns {{owner: string, from: number, original: boolean}|null} null when nothing applied
+ */
+function listedOwnership(owners) {
+  if (!owners.length) return null;
+  const { owner, from } = owners[owners.length - 1];
+  return { owner, from, original: owners.length === 1 };
+}
+
+/**
  * The index this node serves to a reconciling peer: for each app with a servable
  * standing manifest (one that arrived in a node broadcast), its identity and the
  * rank of that manifest. A row without a broadcast cannot be re-served, so it is
@@ -122,6 +136,7 @@ async function standingIndex(deps = {}) {
 module.exports = {
   manifestOf,
   namedManifestOf,
+  listedOwnership,
   standingManifest,
   highestVersionInOwnership,
   standingIndex,
