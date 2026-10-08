@@ -8,7 +8,7 @@
 
 import { createHash } from 'node:crypto';
 import {
-  existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
+  existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -82,8 +82,10 @@ export async function ensureIpLocationSnapshot({
     artifact: artifact.sha256, nodes, nodeImageId, mongoImage, mongoArgs, builder: sha256Hex(builder),
   })).slice(0, 32);
   mkdirSync(SNAPSHOT_DIR, { recursive: true });
+  await pruneDeadSnapshots();
   const tarPath = join(SNAPSHOT_DIR, `${key}.tar`);
   const lockPath = join(SNAPSHOT_DIR, `${key}.lock`);
+  const metaPath = join(SNAPSHOT_DIR, `${key}.json`);
 
   const deadline = Date.now() + BUILD_TIMEOUT_MS;
   while (!existsSync(tarPath)) {
@@ -104,6 +106,7 @@ export async function ensureIpLocationSnapshot({
         await buildSnapshot({
           tarPath, nodes, artifact, nodeImage, mongoImage, mongoArgs,
         });
+        writeFileSync(metaPath, JSON.stringify({ nodeImageId, nodes, mongoImage }));
       } finally {
         rmSync(lockPath, { recursive: true, force: true });
       }
@@ -114,6 +117,38 @@ export async function ensureIpLocationSnapshot({
     await new Promise((resolve) => { setTimeout(resolve, 2000); });
   }
   return tarPath;
+}
+
+/**
+ * A snapshot is keyed by the node image it was built for, so a rebuilt image
+ * leaves the old one unreachable; the directory is a tmpfs and holds a few
+ * hundred megabytes per fleet size per image. Every build first drops the
+ * snapshots whose image is gone, and any without the sidecar that names one.
+ */
+async function pruneDeadSnapshots() {
+  const liveImages = new Map();
+  for (const name of readdirSync(SNAPSHOT_DIR)) {
+    if (!name.endsWith('.tar')) continue;
+    const key = name.slice(0, -'.tar'.length);
+    const metaPath = join(SNAPSHOT_DIR, `${key}.json`);
+    let dead = true;
+    if (existsSync(metaPath)) {
+      try {
+        const { nodeImageId } = JSON.parse(readFileSync(metaPath, 'utf8'));
+        if (!liveImages.has(nodeImageId)) {
+          // eslint-disable-next-line no-await-in-loop
+          const found = await run('docker', ['image', 'inspect', '-f', '{{.Id}}', nodeImageId], 15000);
+          liveImages.set(nodeImageId, found.ok);
+        }
+        dead = !liveImages.get(nodeImageId);
+      } catch (error) {
+        dead = true;
+      }
+    }
+    if (!dead) continue;
+    rmSync(join(SNAPSHOT_DIR, name), { force: true });
+    rmSync(metaPath, { force: true });
+  }
 }
 
 /**
