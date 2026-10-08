@@ -128,7 +128,6 @@ describe('messageStore tests', () => {
       },
       '../appDatabase/registryManager': registryManagerStub,
       '../appDatabase/appSpecHistory': {
-        getStateBeforeHeight: sinon.stub().resolves(priorState),
         latestAppliedState: sinon.stub().resolves(null),
       },
       '../utils/specLibs': {
@@ -446,6 +445,10 @@ describe('messageStore tests', () => {
         };
       }
 
+      function registrationMessage() {
+        return { ...updateMessage(), type: 'fluxappregister' };
+      }
+
       beforeEach(() => {
         appsRepositoryStub.getPermanentMessage.resolves(null);
         appsRepositoryStub.getTempMessage.resolves(null);
@@ -465,7 +468,6 @@ describe('messageStore tests', () => {
         await messageStore.storeAppTemporaryMessage(updateMessage());
 
         sinon.assert.calledOnceWithExactly(registryStub.byName, 'test');
-        sinon.assert.notCalled(stubs['../appDatabase/appSpecHistory'].getStateBeforeHeight);
 
         // The authorization gate stays stubbed, so nothing here exercises what it
         // does with what it is handed. The real one reads the renewal off the
@@ -479,22 +481,39 @@ describe('messageStore tests', () => {
           .to.equal(priorState.spec.owner);
       });
 
-      // A message already on chain is a replay: the node is catching up on
-      // something the network accepted at a past height, so it is judged
-      // against the state at that height rather than the state now.
-      it('reads the state at the confirming height for a message already on chain', async () => {
+      // A message already on chain is stored on the confirmed store's rules
+      // and the decider judges it: nothing here asks who may sign it.
+      it('judges nothing about a message already on chain, and stores it on the confirmed store\'s rules', async () => {
         const stubs = buildProxyquireStubs();
         dbHelperStub.findOneInDatabase.resolves({
           height: 500, txid: 'txid123', value: 10_000, blockTime: 1_750_000_000,
         });
         messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', stubs);
+        const message = updateMessage();
 
-        await messageStore.storeAppTemporaryMessage(updateMessage());
+        const result = await messageStore.storeAppTemporaryMessage(message);
 
-        sinon.assert.calledOnceWithExactly(
-          stubs['../appDatabase/appSpecHistory'].getStateBeforeHeight, 'test', 500,
-        );
+        expect(result).to.not.be.instanceOf(Error);
         sinon.assert.notCalled(registryStub.byName);
+        sinon.assert.notCalled(stubs['../appDatabase/appSpecHistory'].latestAppliedState);
+        sinon.assert.notCalled(stubs['./appEventVerifier'].authorize);
+        sinon.assert.calledOnce(confirmedStoreStub.storeConfirmedMessages);
+        expect(confirmedStoreStub.storeConfirmedMessages.firstCall.args[0][0]).to.deep.include({ type: message.type });
+      });
+
+      it('stores a registration already on chain whose name the registry holds', async () => {
+        const stubs = buildProxyquireStubs();
+        dbHelperStub.findOneInDatabase.resolves({
+          height: 500, txid: 'txid123', value: 10_000, blockTime: 1_750_000_000,
+        });
+        registryManagerStub.checkApplicationRegistrationNameConflicts = sinon.stub().rejects(new Error('already registered'));
+        messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', stubs);
+
+        const result = await messageStore.storeAppTemporaryMessage(registrationMessage());
+
+        expect(result).to.not.be.instanceOf(Error);
+        sinon.assert.notCalled(registryManagerStub.checkApplicationRegistrationNameConflicts);
+        sinon.assert.calledOnce(confirmedStoreStub.storeConfirmedMessages);
       });
 
       // A name the list no longer carries is judged against the app that last

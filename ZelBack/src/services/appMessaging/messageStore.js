@@ -15,7 +15,7 @@ const rosterOverlay = require('../quorumGrant/rosterOverlay');
 const networkStateService = require('../networkStateService');
 const { getSpec, assertVersionActivated } = require('../utils/specLibs');
 const { ensureProvidersRegistered } = require('../utils/specCutover');
-const { getStateBeforeHeight, latestAppliedState } = require('../appDatabase/appSpecHistory');
+const { latestAppliedState } = require('../appDatabase/appSpecHistory');
 const appHistory = require('../appDecisions/appHistory');
 const temporaryPoolSweep = require('./temporaryPoolSweep');
 const confirmedMessageStore = require('./confirmedMessageStore');
@@ -151,7 +151,10 @@ async function storeAppTemporaryMessage(message, options = {}) {
     appSyncEvents.emit(SYNC_EVENTS.HASH_RESPONSE_RECEIVED, appEvent.hash);
   }
 
-  if (furtherVerification) {
+  // A paid message is stored on the confirmed store's rules alone (its contents
+  // hash to the paid hash, its attestation verifies) and the decider judges it.
+  // The checks below decide whether live traffic is taken and relayed.
+  if (furtherVerification && !isAppRequested) {
     // A v9 encrypted spec must carry a valid arcane attestation (an Arcane
     // node's signed receipt that a genuine secure backend validated it), verified locally
     // against the hardcoded network key so non-Arcane nodes reject too. Drop
@@ -210,17 +213,11 @@ async function storeAppTemporaryMessage(message, options = {}) {
 
     let previousState = null;
     if (!appEvent.isRegistration) {
-      // Who this update has to be signed by. A live message is judged against
-      // the app that holds the name NOW — its active registry row, or, when the
-      // list carries none, the app that last held the name, so a renewal of an
-      // expired app is taken and relayed. A message already on chain is a
-      // replay: the node is catching up on something the network accepted at a
-      // past height, so it is judged against the state at that height
-      // (isAppRequested is set from the confirming block, so `block` is that
-      // height rather than the tip).
-      previousState = isAppRequested
-        ? await getStateBeforeHeight(appEvent.spec.name, block)
-        : (await appRecords.registry().byName(appEvent.spec.name)) ?? (await latestAppliedState(appEvent.spec.name));
+      // Who this update has to be signed by: the app that holds the name now,
+      // its active registry row, or, when the list carries none, the app that
+      // last held the name, so a renewal of an expired app is taken and relayed.
+      previousState = (await appRecords.registry().byName(appEvent.spec.name))
+        ?? (await latestAppliedState(appEvent.spec.name));
       if (!previousState) {
         log.info(`Queueing update for ${appEvent.spec.name} - no app of that name is listed or was applied`);
         globalState.queuePendingUpdate(appEvent.spec.name, message, block);
@@ -242,11 +239,6 @@ async function storeAppTemporaryMessage(message, options = {}) {
       previousState,
       daemonHeight: block,
       verifyHash: false,
-      // The same flag that decides which state this is judged against decides
-      // which door it came in by: requested means the node is catching up on
-      // something the network already accepted, anything else is live traffic
-      // the node is being asked to relay.
-      allowLegacyEncoding: isAppRequested,
     });
   }
 
