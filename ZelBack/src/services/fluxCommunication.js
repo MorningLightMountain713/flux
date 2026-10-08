@@ -1524,14 +1524,14 @@ async function initiateAndHandleConnection(connection, source = PEER_SOURCE.RAND
     // land after the held ones were announced, and a duty learns nothing
     // from a socket its subject is about to close.
     if (peerManager.stopping) {
-      if (onSettle) onSettle(DIAL_RESULT.NO_DIAL);
+      noDial(ip, port, 'stopping', onSettle);
       return;
     }
     // A locked-out node dials nobody: every dialler — the plan, a request to
     // be dialled back, the API — passes here, and its own lockout is read
     // here rather than in each of them.
     if (nodeDownService.isLockedOut()) {
-      if (onSettle) onSettle(DIAL_RESULT.NO_DIAL);
+      noDial(ip, port, 'lockedOut', onSettle);
       return;
     }
     const key = `${ip}:${port}`;
@@ -1540,7 +1540,7 @@ async function initiateAndHandleConnection(connection, source = PEER_SOURCE.RAND
       return;
     }
     if (peerManager.isPending(key)) {
-      if (onSettle) onSettle(DIAL_RESULT.NO_DIAL);
+      noDial(ip, port, 'pending', onSettle);
       return;
     }
     peerManager.markPending(key);
@@ -1568,7 +1568,7 @@ async function initiateAndHandleConnection(connection, source = PEER_SOURCE.RAND
 
     if (!localSocketAddr) {
       peerManager.clearPending(key);
-      if (onSettle) onSettle(DIAL_RESULT.NO_DIAL);
+      noDial(ip, port, 'noOwnAddress', onSettle);
       return;
     }
     myPort = extractPort(localSocketAddr);
@@ -1583,7 +1583,7 @@ async function initiateAndHandleConnection(connection, source = PEER_SOURCE.RAND
     if (socketAddressesMatch(key, localSocketAddr)) {
       log.warn(`initiateAndHandleConnection - refusing to connect to ourselves at ${key} (source ${source})`);
       peerManager.clearPending(key);
-      if (onSettle) onSettle(DIAL_RESULT.NO_DIAL);
+      noDial(ip, port, 'self', onSettle);
       return;
     }
     const options = {
@@ -1628,6 +1628,7 @@ async function initiateAndHandleConnection(connection, source = PEER_SOURCE.RAND
       options.headers['X-Flux-Reconnect'] = 'true';
     }
     const wsuri = `ws://${ip}:${port}/ws/flux/${myPort}`;
+    log.debug(`initiateAndHandleConnection - dialing ${key} (${source})`);
     const websocket = new WebSocket(wsuri, options);
     wsMetadata.set(websocket, {
       ip, port, source, onSettle, settled: false,
@@ -1639,9 +1640,18 @@ async function initiateAndHandleConnection(connection, source = PEER_SOURCE.RAND
   } catch (error) {
     const catchKey = `${ip}:${port}`;
     peerManager.clearPending(catchKey);
-    if (onSettle) onSettle(DIAL_RESULT.NO_DIAL);
+    noDial(ip, port, 'threw', onSettle);
     log.error(error);
   }
+}
+
+// A dial that was not made says why: the caller's duty stays pending on the
+// ring until the dial resolves, and a reason that never resolves is invisible
+// without this.
+function noDial(ip, port, reason, onSettle) {
+  fluxEventBus.count('dial:noDial', reason);
+  log.debug(`initiateAndHandleConnection - no dial to ${ip}:${port}: ${reason}`);
+  if (onSettle) onSettle(DIAL_RESULT.NO_DIAL);
 }
 
 /**
