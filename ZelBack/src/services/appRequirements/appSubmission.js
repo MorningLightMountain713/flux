@@ -600,13 +600,16 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
   await serviceHelper.delay(1200);
   await messageVerifier.requestAppMessage(messageHASH);
   await serviceHelper.delay(1200);
-  let tempMessage = await appsRepository.getTempMessage(messageHASH);
+  // Held in the pool, or confirmed when the chain recorded the payment first.
+  const heldMessage = async () => await appsRepository.getTempMessage(messageHASH)
+    || appsRepository.getPermanentMessage(messageHASH);
+  let tempMessage = await heldMessage();
   for (let i = 0; i < 20; i += 1) {
     if (!tempMessage) {
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(500);
       // eslint-disable-next-line no-await-in-loop
-      tempMessage = await appsRepository.getTempMessage(messageHASH);
+      tempMessage = await heldMessage();
     }
   }
   if (tempMessage && typeof tempMessage === 'object' && !Array.isArray(tempMessage)) {
