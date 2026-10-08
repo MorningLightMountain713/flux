@@ -97,7 +97,12 @@ describe('content manifest sync: cold-boot in-band reconcile off the ephemeral p
     await queueAppTx(appHash);
     await advanceBlocks(3);
 
-    const winner = await Promise.any(INITIAL_IDX.map(async (i) => {
+    // The gate is proven on a node whose READY the reconcile released. The
+    // node the harness established boots READY on a zero budget by design, so
+    // it is not a subject, whichever installs first.
+    const subjects = INITIAL_IDX.filter((i) => !env.establishedNodes.includes(i));
+    expect(subjects, 'initial nodes with the fleet\'s readiness budget').to.not.be.empty;
+    const winner = await Promise.any(subjects.map(async (i) => {
       const entry = await waitForAppInstalled(env.clients[i], appName, 200000);
       return { i, entry };
     }));
