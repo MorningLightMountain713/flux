@@ -20,10 +20,13 @@ const SIGHASH_ALL = 0x01;
 
 // Fixed test foundation keys. Deterministic scalars, never real keys — the
 // authority signs Price/OracleKey/Modifier/Marketplace/Policy; the oracle (whose
-// pubkey the authority publishes via OracleKeyMessage) signs Rate. Distinct by
-// design: the authority authorises the oracle, which may rotate.
+// pubkey the authority publishes via OracleKeyMessage under the oracle role)
+// signs Rate; the availability monitor (published the same way under its own
+// role) signs UnclaimedPayment. Distinct by design: the authority authorises
+// each of the others, and each may rotate on its own.
 export const AUTHORITY_PRIVKEY = 'a1'.repeat(32);
 export const ORACLE_PRIVKEY = '02'.repeat(32);
+export const AVAILABILITY_PRIVKEY = '03'.repeat(32);
 
 function concatBytes(...arrays) {
   const total = arrays.reduce((n, a) => n + a.length, 0);
@@ -123,3 +126,5 @@ export function buildSignedSoftForkTx({
 export function authorityAddress() { return t1Address(AUTHORITY_PRIVKEY); }
 /** The derived oracle address (published via OracleKeyMessage; signs RateMessages). */
 export function oracleAddress() { return t1Address(ORACLE_PRIVKEY); }
+/** The derived availability address (published via OracleKeyMessage; signs UnclaimedPaymentMessages). */
+export function availabilityAddress() { return t1Address(AVAILABILITY_PRIVKEY); }
