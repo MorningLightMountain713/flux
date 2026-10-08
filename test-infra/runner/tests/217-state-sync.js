@@ -90,6 +90,9 @@ describe('State sync: app running state (0x21)', function () {
     this.timeout(180000);
     const client = await env.startNode(10);
     await waitForDaemonReady(client);
+    // The late node dials its ring from here; the fleet's discovery began
+    // before it existed.
+    await env.startDiscovery([10]);
     await waitForNodeStatus(client, (d) => d.confirmed === true, 30000);
     await waitForOrchestratorState(client, 'READY', 120000);
 
@@ -141,6 +144,9 @@ describe('State sync: hash resolution', function () {
     this.timeout(180000);
     const client = await env.startNode(10);
     await waitForDaemonReady(client);
+    // The late node dials its ring from here; the fleet's discovery began
+    // before it existed.
+    await env.startDiscovery([10]);
     await waitForNodeStatus(client, (d) => d.confirmed === true, 30000);
     await waitForOrchestratorState(client, 'READY', 120000);
     // A hash still missing at READY is fetched and decided after it; the row
@@ -229,6 +235,9 @@ describe('State sync: 3-peer ephemeral sync', function () {
     this.timeout(180000);
     const client = await env.startNode(10);
     await waitForDaemonReady(client);
+    // The late node dials its ring from here; the fleet's discovery began
+    // before it existed.
+    await env.startDiscovery([10]);
     await waitForNodeStatus(client, (d) => d.confirmed === true, 30000);
 
     const reqEvent = await client.waitForEvent(
