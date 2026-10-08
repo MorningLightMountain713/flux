@@ -117,6 +117,73 @@ describe('contentManifestSyncService', () => {
       expect(b).to.deep.equal(a);
     });
 
+    // A round's index wait that ends only when the test releases it, so a caller can
+    // arrive while the round is in flight.
+    function heldRound() {
+      let release;
+      const held = new Promise((resolve) => { release = resolve; });
+      return { release, delay: () => held };
+    }
+
+    it('a caller mid-round naming a peer the round did not ask receives one follow-up round that asks it', async () => {
+      const svc = load();
+      const store = new Map();
+      const getLocalRanks = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
+      const silent = { key: 'p1', send: sinon.stub() };
+      const p2 = makePeer(svc, 'p2', [{ identity: 'a', version: 1 }], store);
+      const p3 = makePeer(svc, 'p3', [{ identity: 'b', version: 1 }], store);
+
+      const round = heldRound();
+      const first = svc.reconcile([silent], { getLocalRanks, delay: round.delay, fetchSettleMs: 0 });
+      // Two peers connect during the round: both callers share the one follow-up.
+      const second = svc.reconcile([silent, p2], { getLocalRanks, delay: async () => {}, indexTimeoutMs: 5, fetchSettleMs: 0 });
+      const third = svc.reconcile([silent, p3], { getLocalRanks, delay: async () => {}, indexTimeoutMs: 5, fetchSettleMs: 0 });
+      expect(p2.send.called, 'the running round is not widened').to.equal(false);
+      round.release();
+
+      const [a, b, c] = await Promise.all([first, second, third]);
+      expect(a.indexesReceived, 'the first round heard nobody').to.equal(0);
+      expect(b.peers, 'the follow-up asks every peer the mid-round callers named').to.equal(3);
+      expect(b.indexesReceived).to.equal(2);
+      expect(c).to.deep.equal(b);
+      expect(silent.send.callCount, 'the follow-up is one round').to.equal(2);
+      expect(p2.send.getCalls().filter((call) => call.args[0].type === 'fluxappcontentmanifestindexrequest').length).to.equal(1);
+    });
+
+    it('a caller mid-round naming only peers the round asked joins it and queues nothing', async () => {
+      const svc = load();
+      const store = new Map();
+      const getLocalRanks = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
+      const silent = { key: 'p1', send: sinon.stub() };
+
+      const round = heldRound();
+      const first = svc.reconcile([silent], { getLocalRanks, delay: round.delay, fetchSettleMs: 0 });
+      const second = svc.reconcile([silent], { getLocalRanks, delay: async () => {}, indexTimeoutMs: 5, fetchSettleMs: 0 });
+      round.release();
+
+      const [a, b] = await Promise.all([first, second]);
+      expect(b).to.deep.equal(a);
+      expect(silent.send.callCount, 'one round asked once').to.equal(1);
+    });
+
+    it('a call after the follow-up starts a fresh round', async () => {
+      const svc = load();
+      const store = new Map();
+      const getLocalRanks = sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
+      const silent = { key: 'p1', send: sinon.stub() };
+      const p2 = makePeer(svc, 'p2', [{ identity: 'a', version: 1 }], store);
+
+      const round = heldRound();
+      const first = svc.reconcile([silent], { getLocalRanks, delay: round.delay, fetchSettleMs: 0 });
+      const second = svc.reconcile([p2], { getLocalRanks, delay: async () => {}, indexTimeoutMs: 5, fetchSettleMs: 0 });
+      round.release();
+      await Promise.all([first, second]);
+
+      const third = await svc.reconcile([p2], { getLocalRanks, delay: async () => {}, indexTimeoutMs: 5, fetchSettleMs: 0 });
+      expect(third.peers).to.equal(1);
+      expect(p2.send.getCalls().filter((call) => call.args[0].type === 'fluxappcontentmanifestindexrequest').length, 'asked by the follow-up and by the fresh round').to.equal(2);
+    });
+
     it('runs the two-step exchange: index from all peers, fetch only the missing/stale', async () => {
       const svc = load();
       const store = new Map([['a', 4]]); // locally current on a, missing b and c
