@@ -67,6 +67,10 @@ describe('installing claims: election losers release their seats by cleared broa
           // invert that - claims still in flight as the park expires. 15s
           // keeps the park comfortably above one full propagation.
           installCollisionWaitMs: 15000,
+          // A certified node's row must outlive the node-down grace plus this
+          // suite's own peer death (2000ms x 3 misses: 6s), which the shared
+          // lifetime does not cover: 220s stands 115s past one announce.
+          locationTtlS: 220,
         },
       },
     });
