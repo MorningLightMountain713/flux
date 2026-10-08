@@ -3,7 +3,7 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
-import { bootAndPeer } from '../framework/reconciler-suite.js';
+import { bootAndPeer, holdSpawnerExcept, releaseSpawnerHolds } from '../framework/reconciler-suite.js';
 import { registerEncryptedV9App } from '../framework/content-helper.js';
 import { authenticate } from '../auth.js';
 import { fluxTeamKey } from '../framework/keys.js';
@@ -125,6 +125,10 @@ describe('two founders born across a partition converge to one on heal', functio
     this.timeout(480000);
     name = `e2epocket${Date.now()}`;
     await pushBusybox(name);
+    // The hosts are chosen below; every other node's spawner is held at its
+    // attempt for this app until the chosen ones hold it, so no spawner fills
+    // an instance a chosen host was to take.
+    await holdSpawnerExcept(env, name, []);
 
     const reg = await registerEncryptedV9App(env.clients[0].url, {
       name,
@@ -170,16 +174,19 @@ describe('two founders born across a partition converge to one on heal', functio
     // Targeted installs astride the cut (owners cannot pick nodes — the
     // fixture authenticates as the flux team, the 1214 lesson).
     const teamKey = fluxTeamKey();
-    for (const i of [hostIn, ...hostsOut]) {
-      // eslint-disable-next-line no-await-in-loop
-      const auth = await authenticate(env.clients[i].url, teamKey);
-      // eslint-disable-next-line no-await-in-loop
-      const installBody = await env.clients[i].installAppLocally(name, auth.zelidauth);
-      if (/error/i.test(installBody) && !/success/i.test(installBody.slice(-300))) {
-        throw new Error(`installapplocally failed on node ${i}: ${installBody.slice(-600)}`);
+    const hosts = [hostIn, ...hostsOut];
+    try {
+      for (const i of hosts) {
+        const auth = await authenticate(env.clients[i].url, teamKey);
+        const installBody = await env.clients[i].installAppLocally(name, auth.zelidauth);
+        if (/error/i.test(installBody) && !/success/i.test(installBody.slice(-300))) {
+          throw new Error(`installapplocally failed on node ${i}: ${installBody.slice(-600)}`);
+        }
       }
+      await Promise.all(hosts.map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
+    } finally {
+      await releaseSpawnerHolds(env, name);
     }
-    await Promise.all([hostIn, ...hostsOut].map((i) => waitForAppInstalled(env.clients[i], name, 240000)));
   });
 
   it('the pocket founds inside its freshness window, unseen', async function () {
