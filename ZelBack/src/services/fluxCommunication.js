@@ -1943,14 +1943,14 @@ function openEphemeralConnection(connection) {
     const port = extractPort(connection);
     try {
       const key = `${ip}:${port}`;
-      if (peerManager.isPending(key)) {
+      if (peerManager.isPendingEphemeral(key)) {
         log.info(`Ephemeral connection to ${key} skipped: pending`);
         resolve(null);
         return;
       }
-      peerManager.markPending(key);
+      peerManager.markPendingEphemeral(key);
       if (!myPort) {
-        peerManager.clearPending(key);
+        peerManager.clearPendingEphemeral(key);
         log.warn(`Ephemeral connection to ${key} skipped: myPort not set`);
         resolve(null);
         return;
@@ -1989,7 +1989,7 @@ function openEphemeralConnection(connection) {
       websocket.on('error', (error) => {
         if (settled) return;
         settled = true;
-        peerManager.clearPending(key);
+        peerManager.clearPendingEphemeral(key);
         log.warn(`Ephemeral connection to ${key} failed: ${error.message}`);
         resolve(null);
       });
@@ -1997,7 +1997,7 @@ function openEphemeralConnection(connection) {
       websocket.on('close', (code, reason) => {
         if (settled) return;
         settled = true;
-        peerManager.clearPending(key);
+        peerManager.clearPendingEphemeral(key);
         log.warn(`Ephemeral connection to ${key} closed before open: ${code} ${reason}`);
         resolve(null);
       });
@@ -2012,7 +2012,7 @@ function openEphemeralConnection(connection) {
         resolve(peer);
       };
     } catch (error) {
-      peerManager.clearPending(`${ip}:${port}`);
+      peerManager.clearPendingEphemeral(`${ip}:${port}`);
       log.error(error);
       resolve(null);
     }
