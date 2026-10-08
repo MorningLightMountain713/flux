@@ -408,7 +408,7 @@ class FluxPeerManager extends EventEmitter {
     // back up the moment the refusal lifts.
     if (peer.direction === 'outbound'
       && (!FluxPeerManager.shouldReconnect(closeCode) || closeCode === CLOSE_CODES.MAX_CONNECTIONS)) {
-      this.recordFailedConnection(peer.ip, peer.port);
+      this.recordFailedConnection(peer.ip, peer.port, { answered: true });
     }
     if (this.networkHealthMonitor) this.networkHealthMonitor.recordDisconnect(peer.connectedAt, closeCode);
 
@@ -1533,11 +1533,19 @@ class FluxPeerManager extends EventEmitter {
   // --- Failed connection tracking ---
 
   /**
-   * Record a failed connection attempt for backoff tracking.
+   * Record a failed connection attempt for backoff tracking. A refusal is a
+   * fact about the target whoever heard it. Silence is a fact about the
+   * target only as heard from a connected node: a node holding no peer at
+   * all is the dark one, its silences measure its own darkness, and it
+   * records none of them, so it keeps knocking and a heal is seen the moment
+   * a target answers.
    * @param {string} ip
    * @param {string} port
+   * @param {object} [options]
+   * @param {boolean} [options.answered] the target spoke and refused
    */
-  recordFailedConnection(ip, port) {
+  recordFailedConnection(ip, port, { answered = false } = {}) {
+    if (!answered && this.#peers.size === 0) return;
     const key = `${ip}:${port}`;
     const entry = this.#failedConnections.get(key);
     if (entry) {

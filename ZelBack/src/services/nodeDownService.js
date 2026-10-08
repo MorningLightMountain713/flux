@@ -534,6 +534,9 @@ function onVerdictMessage(msgObj) {
 function onPeerRemoved({ ip, port, closeCode }) {
   if (!reconciler) return;
   reconciler.schedule('peer-removed');
+  // every peer gone again while the network is still not back: the grace
+  // runs again from this drop, as the jurors' does
+  if (wasUnreachable && !isolationTimer && transport.peerManager.allPeersDown()) armIsolationClock();
 
   // Only an unexpected loss raises suspicion or counts as a flap — a
   // deliberate close (duplicate, capacity, our own teardown) is not an
@@ -597,7 +600,11 @@ async function onPeerAdded({ ip, port } = {}) {
       }
     }
   }
-  if (!wasUnreachable || returnNoticed) return;
+  if (!wasUnreachable) return;
+  // someone reached this node: the jurors hold it or can, and the fleet's
+  // grace stops running against it
+  clearIsolationTimer();
+  if (returnNoticed) return;
   returnNoticed = true;
   // Back from unreachability without a restart, from the first peer back: the
   // grant plane re-fetches its published records before answering, and the
@@ -621,9 +628,14 @@ function onFloorLost() {
   if (!transport || wasUnreachable) return;
   wasUnreachable = true;
   returnNoticed = false;
-  unreachableSinceMs = Date.now();
   peerNotification.holdAnnouncements('every peer is gone; the return check answers before the next announce');
   fluxEventBus.publish('nodedown:unreachable', { sinceMs: unreachableSinceMs });
+  armIsolationClock();
+}
+
+/** The grace, from now: nobody reaches this node. */
+function armIsolationClock() {
+  unreachableSinceMs = Date.now();
   isolationTimer = setTimeout(() => {
     isolationTimer = null;
     onIsolatedPastGrace().catch((error) => log.warn(`nodeDownService: ${error.message}`));
@@ -632,9 +644,9 @@ function onFloorLost() {
 }
 
 /**
- * The live-isolation clock: no network for the whole grace. The jurors have
- * certified this node by that constant and the fleet has moved on, so the
- * node applies the same constant to itself and removes every app where it
+ * The live-isolation clock: nobody reached this node for the whole grace,
+ * the same test and constant the jurors certify it by, so the fleet has moved
+ * on; the node applies the constant to itself and removes every app where it
  * stands, broadcasting nothing. Its rows are read for real once the network
  * is back.
  */

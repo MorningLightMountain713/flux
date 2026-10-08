@@ -974,6 +974,38 @@ describe('nodeDownService', () => {
       service.stop();
     });
 
+    it('a peer reaching this node cancels the clock, and every peer gone again runs the grace again from that drop', async () => {
+      const { service, transport, stubs } = makeHarness();
+      let peersDown = false;
+      transport.peerManager.allPeersDown = () => peersDown;
+      service.start(transport);
+      await tick();
+      floor().raise('2 peers');
+      peersDown = true;
+      floor().lower('0 peers');
+      clock.tick(NODE_DOWN_GRACE_MS - 1);
+
+      // one peer back: the fleet can reach this node; the grace stops
+      peersDown = false;
+      transport.peerManager.emit('peer:added', {});
+      await tick();
+      clock.tick(NODE_DOWN_GRACE_MS);
+      await tick();
+      expect(stubs.enforcePlacement.callCount, 'reached: no removal').to.equal(0);
+      expect(stubs.release.callCount, 'one peer is not the network back: still held').to.equal(0);
+
+      // that peer gone too: the grace runs from this drop, not the first
+      peersDown = true;
+      transport.peerManager.emit('peer:removed', { ip: '1.2.3.4', port: '16127', closeCode: 4009 });
+      clock.tick(NODE_DOWN_GRACE_MS - 1);
+      await tick();
+      expect(stubs.enforcePlacement.callCount).to.equal(0);
+      clock.tick(1);
+      await tick();
+      sinon.assert.calledOnceWithExactly(stubs.enforcePlacement, 'isolated');
+      service.stop();
+    });
+
     it('the network back inside the grace cancels the clock', async () => {
       const { service, transport, stubs } = makeHarness();
       service.start(transport);

@@ -2176,8 +2176,23 @@ describe('FluxPeerManager tests', () => {
   });
 
   describe('failed connection tracking', () => {
+    // The ladder measures a target as seen from a connected node: one peer held.
+    beforeEach(() => {
+      manager.add(createMockWs('10.0.0.200'), '10.0.0.200', '16127', { source: PEER_SOURCE.RANDOM });
+    });
+
     it('should allow first connection attempt', () => {
       expect(manager.shouldAttemptConnection('10.0.0.1', '16127')).to.equal(true);
+    });
+
+    it('a node holding no peer is the dark one: a silent target records nothing and is dialled again; a refusal is recorded whoever heard it', () => {
+      const dark = new FluxPeerManager();
+      dark.recordFailedConnection('10.0.0.1', '16127');
+      dark.recordFailedConnection('10.0.0.1', '16127');
+      expect(dark.getFailedConnection('10.0.0.1:16127')).to.equal(undefined);
+      expect(dark.shouldAttemptConnection('10.0.0.1', '16127')).to.equal(true);
+      dark.recordFailedConnection('10.0.0.2', '16127', { answered: true });
+      expect(dark.shouldAttemptConnection('10.0.0.2', '16127')).to.equal(false);
     });
 
     it('should block attempt during backoff window', () => {

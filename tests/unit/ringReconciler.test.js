@@ -100,6 +100,24 @@ describe('ringReconciler', () => {
     expect(reconciler.snapshot().outboundStanding).to.equal(12);
   });
 
+  it('a dial that settles indeterminate runs no pass: the dial already in flight resolves it', async () => {
+    const world = makeWorld({ duties: ['d1:0', 'd2:0'], successors: [] });
+    world.inbound = 99;
+    reconciler = makeReconciler(world);
+    await tick();
+    expect(world.dials.length).to.equal(2);
+
+    world.dials[0].resolve(null);
+    await tick();
+    await tick();
+    expect(world.dials.length, 'nothing re-dialled on an indeterminate settle').to.equal(2);
+
+    world.dials[1].resolve(false);
+    await tick();
+    await tick();
+    expect(world.dials.length, 'a resolved failure runs the pass').to.be.greaterThan(2);
+  });
+
   it('a resolved failure discounts from the floor and the top-up walks PAST the corpse', async () => {
     const world = makeWorld({
       duties: ['d1:0', 'd2:0', 'd3:0', 'd4:0'],
