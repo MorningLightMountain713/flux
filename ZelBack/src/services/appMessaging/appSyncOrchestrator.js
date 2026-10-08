@@ -1027,15 +1027,19 @@ class AppSyncOrchestrator {
   }
 
   #onBlocksProcessed(blockHeight) {
-    const count = this.#lastBlockHeight > 0 ? blockHeight - this.#lastBlockHeight : 1;
     this.#lastBlockHeight = blockHeight;
     // The fallback is a bound on a sync attempt that is not finishing, so it is
-    // time spent WITH peers: a block that arrives while the peer set is below
-    // the floor counts for nothing, and a node that never reaches the floor
-    // cannot reach READY on the budget. Announced on the edges only.
+    // time spent WITH peers AT THE TIP: a block that arrives while the peer set
+    // is below the floor counts for nothing, and a node that never reaches the
+    // floor cannot reach READY on the budget; a block the scan is catching up
+    // on counts for nothing either, since it was mined before this node began
+    // waiting. The explorer emits a processed block only once its scan is near
+    // the tip, so the first block after a catch-up arrives with the whole gap
+    // behind it: one block is one block, never the gap. The floor's edges are
+    // announced.
     if (this.#state !== STATES.INITIALIZING) {
       if (this.#peersAtFloor) {
-        this.#blocksSinceSyncStarted += count;
+        if (capabilities.isUp('explorerSynced')) this.#blocksSinceSyncStarted += 1;
         if (this.#budgetStalled) {
           this.#budgetStalled = false;
           log.info('AppSyncOrchestrator - Peer threshold met, the readiness budget is advancing again');

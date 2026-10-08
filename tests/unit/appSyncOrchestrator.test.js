@@ -1442,7 +1442,7 @@ describe('AppSyncOrchestrator', () => {
     }
 
     // The first block also starts the explorer, and #onBlocksProcessed counts it
-    // as one because there is no previous height to difference against.
+    // as one block, like any other at the tip.
     async function driveBlocks(from, count) {
       for (let i = 0; i < count; i += 1) {
         blockEmitter.emit('blocksProcessed', from + i);
@@ -1629,6 +1629,58 @@ describe('AppSyncOrchestrator', () => {
   // times - an asked-mark on the peer manager, a slot here, a declined flag on
   // the socket - by different code, cleared by different rules. Every way they
   // could disagree was a defect, and the four below are those ways.
+  describe('the block fallback is time at the tip, not the catch-up', () => {
+    // appSyncFallbackMinutes (125) x 2 blocks a minute
+    const BUDGET = 250;
+
+    async function syncingWithPeers() {
+      getEligibleSyncPeersStub = sinon.stub().returns(makeEligiblePeers(3));
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.SYNCING);
+      return orchestrator;
+    }
+
+    function blocks(from, count) {
+      for (let i = 0; i < count; i += 1) blockEmitter.emit('blocksProcessed', from + i);
+    }
+
+    it('a block the scan is catching up on charges nothing, however many there are', async () => {
+      const orchestrator = await syncingWithPeers();
+      capabilities.setForTests('explorerSynced', false);
+      blocks(2_555_001, BUDGET + 50);
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.SYNCING);
+
+      capabilities.setForTests('explorerSynced', true);
+      blocks(2_556_001, BUDGET - 1);
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.SYNCING);
+      blocks(2_556_001 + BUDGET - 1, 1);
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.READY);
+    });
+
+    it('the first block at the tip after a catch-up is one block, not the gap it closed', async () => {
+      const orchestrator = await syncingWithPeers();
+      blocks(2_555_000, 1);
+      await clock.tickAsync(0);
+      // the explorer went quiet for a catch-up and the next block it reports is far ahead
+      blocks(2_555_000 + BUDGET + 100, 1);
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.SYNCING);
+
+      blocks(2_555_000 + BUDGET + 101, BUDGET - 3);
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.SYNCING);
+      blocks(2_555_000 + 2 * BUDGET + 98, 1);
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.READY);
+    });
+  });
+
   describe('the request record is the only account of what has been asked', () => {
     const STALL_MS = 30_000;
     const SYNC_TIMEOUT_MS = 120_000;
