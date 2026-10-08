@@ -160,7 +160,12 @@ describe('appReconciler tests', () => {
         // Nothing else installed by default, so the cross-app dependent fan-out
         // is inert unless a test states requirers.
         apps: sinon.stub().resolves([]),
+        // No removal owed by default; the sweep's owed re-drive has its own test.
+        owed: sinon.stub().resolves([]),
       },
+      // The ledger of an owed instance, which the sweep's re-drive reads for its
+      // components; none by default.
+      ledgerByInstance: sinon.stub().resolves(null),
       // Null by default, so every test below drives the fallback that rows
       // predating the ledger still need. The ledger path has its own test
       // rather than being the silent default here.
@@ -175,6 +180,7 @@ describe('appReconciler tests', () => {
       // ledger left is the last thing that can still name a component.
       pendingTeardownStore: {
         teardownForComponent: sinon.stub().resolves(null),
+        readAllTeardowns: sinon.stub().resolves([]),
       },
       // Hands back the REAL DeploymentSpec built for the installed app — the same
       // class the real provider projects. Sync mode, restart policy, identifiers,
@@ -350,6 +356,7 @@ describe('appReconciler tests', () => {
           },
           byName: async (name) => installedRecord(await stubs.installed.byName(name)),
           apps: async () => (await stubs.installed.apps()).map((record) => installedRecord(record)),
+          owed: async () => stubs.installed.owed(),
         }),
         installedByIdentifier: async (identifier) => {
           const answer = await stubs.installedByIdentifier(identifier);
@@ -360,6 +367,7 @@ describe('appReconciler tests', () => {
             const identifiers = await stubs.ledgerIdentifiers(name);
             return [{ identifiers: () => identifiers }];
           },
+          byInstance: async (name, replica) => stubs.ledgerByInstance(name, replica),
         }),
       },
       '../appRuntime/deploymentProvider': stubs.deploymentProvider,
@@ -2559,6 +2567,35 @@ describe('appReconciler tests', () => {
       // the app id expands through the deployment layer to its component ids,
       // each reconciled to a start
       expect(started).to.have.members(['c1_entapp', 'c2_entapp']);
+    });
+
+    it('enqueues the components of a removal still owed, so the sweep after docker\'s return drives it on', async () => {
+      installNothing();
+      stubs.installed.owed.resolves([{ name: 'gone', replica: null, owed: { attempts: 12 } }]);
+      stubs.ledgerByInstance.resolves({ identifiers: () => ['www_gone'] });
+      stubs.installedByIdentifier.resolves({
+        record: {}, owed: true, name: 'gone', replica: null,
+      });
+      stubs.appUninstaller.driveOwedTeardown.resolves({ status: 'removed', attempts: 0 });
+      const published = sinon.stub(fluxEventBus, 'publish');
+
+      await appReconciler.enqueueAll('reconnect');
+      await flush();
+
+      sinon.assert.calledOnceWithExactly(stubs.appUninstaller.driveOwedTeardown, { name: 'gone', replica: null });
+      sinon.assert.calledWithMatch(published, 'reconciler:actuated', { identifier: 'www_gone', action: 'removed' });
+      sinon.assert.calledWithMatch(published, 'reconciler:swept', { reason: 'reconnect', count: 1 });
+    });
+
+    it('sweeps the installed apps when the owed teardowns cannot be read, and says so', async () => {
+      stubs.installed.owed.rejects(new Error('mongo down'));
+      const published = sinon.stub(fluxEventBus, 'publish');
+
+      await appReconciler.enqueueAll('hourly');
+      await flush();
+
+      sinon.assert.calledWithMatch(published, 'reconciler:swept', { reason: 'hourly', count: 0 });
+      sinon.assert.calledWithMatch(stubs.log.warn, /cannot read the owed teardowns for the hourly sweep: mongo down/);
     });
 
     it('defers an app whose spec cannot be resolved (decrypt fails) - never acts on ciphertext', async () => {

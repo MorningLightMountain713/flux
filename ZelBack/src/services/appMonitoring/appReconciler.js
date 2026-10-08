@@ -2262,7 +2262,40 @@ async function enqueueAll(reason = 'resync') {
     await enqueueApp(app.name);
     count += 1;
   }
+  count += await enqueueOwedTeardowns(reason);
   fluxEventBus.publish('reconciler:swept', { reason, count });
+}
+
+/**
+ * Enqueue every component of a removal still owed: an instance marked owed in
+ * the ledger, and a legacy owed-teardown record. A removal is a desired state
+ * the sweep converges like any other, whatever backoff its last partial pass
+ * left it with, so the sweep docker's return runs drives it on at once.
+ *
+ * @param {string} reason The sweep, for the log.
+ * @returns {Promise<number>} how many instances were enqueued
+ */
+async function enqueueOwedTeardowns(reason) {
+  let owed;
+  let legacy;
+  try {
+    owed = await appRecords.installed().owed();
+    legacy = await pendingTeardownStore.readAllTeardowns();
+  } catch (error) {
+    log.warn(`appReconciler - cannot read the owed teardowns for the ${reason} sweep: ${error.message}`);
+    return 0;
+  }
+  const identifiers = [];
+  for (const instance of owed) {
+    // eslint-disable-next-line no-await-in-loop
+    const ledger = await appRecords.ledgers().byInstance(instance.name, instance.replica);
+    identifiers.push(...(ledger?.identifiers() ?? []));
+  }
+  for (const doc of legacy) {
+    identifiers.push(...(doc.components || []).map((component) => component.identifier));
+  }
+  identifiers.forEach((identifier) => enqueueComponent(identifier));
+  return owed.length + legacy.length;
 }
 
 /**
