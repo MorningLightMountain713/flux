@@ -1346,6 +1346,9 @@ export async function createTestEnv({
   // being written down a second time — the duplication that let 0ba3b0e10 raise
   // one copy and leave every number derived from it behind.
   env.wire = declaredWire;
+  // The nodes that boot authoritative, on a zero readiness budget: the seed the
+  // rest sync from. A suite proving a readiness gate keeps its subject off them.
+  env.establishedNodes = [...establishedNodes];
   activeEnvs.add(env);
   // A previous env's death must not fail this one's waits.
   clearInfraDeath();
