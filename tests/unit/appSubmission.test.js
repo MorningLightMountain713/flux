@@ -1072,12 +1072,22 @@ describe('appSubmission tests', () => {
       expect(input.identity).to.equal(IDENTITY);
       expect(input.owner, 'the listed owner signed the update and its manifest').to.equal('1id');
       expect(input.ownedFrom, 'the height the listed owner took the app').to.equal(2_400_000);
+      expect(input.original, 'the first ownership: the registration\'s list counts in the sequence').to.equal(true);
       expect(input.spec).to.equal(buyer);
       expect(out.carriedManifest).to.deep.equal({ sealed: true, version: 2 });
       expect(contentSlotService.backstopManifest.firstCall.args[1]).to.include({ identity: IDENTITY, pendingMessageHash: MSG });
       expect(contentSlotService.reconcileSlots.firstCall.args[1]).to.include({ identity: IDENTITY, pendingMessageHash: MSG });
       sinon.assert.notCalled(sender.broadcastMessageToAll);
       sinon.assert.notCalled(contentSlotService.takeManifest);
+    });
+
+    it('an update\'s manifest under a later ownership is not original: its versions count from 1', async () => {
+      const { contentSlotService } = slotPath();
+      stubs.appHistory.ownerships = sinon.stub().resolves([{ owner: '1first', from: 2_400_000 }, { owner: '1id', from: 2_500_000 }]);
+      envelopeWith({ appName: 'myapp', version: 1, slots: { s: { hash: HSLOT } } });
+      await appSubmission.uploadSealedContent(spec, envelope, new Map(), bind({ priorSpec: { name: 'myapp', owner: '1id' } }));
+      const [input] = contentSlotService.processManifestSubmission.firstCall.args;
+      expect(input).to.include({ ownedFrom: 2_500_000, original: false });
     });
 
     it('refuses an update\'s manifest when the signing owner has no applied ownership of the app', async () => {

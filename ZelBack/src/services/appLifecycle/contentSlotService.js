@@ -21,7 +21,7 @@ const appSpecHistory = require('../appDatabase/appSpecHistory');
 const chainState = require('../chainState');
 const temporaryPoolSweep = require('../appMessaging/temporaryPoolSweep');
 const {
-  manifestOf, standingManifest, highestVersionInOwnership,
+  manifestOf, standingManifest, highestVersionInOwnership, listedOwnership,
 } = require('./manifestStanding');
 const networkStateService = require('../networkStateService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
@@ -790,11 +790,10 @@ async function getContentManifestsApi(req, res) {
       res.status(404).json(messageHelper.createErrorMessage(`No app ${appname} is listed or was applied`));
       return;
     }
-    const owners = await appHistory.ownerships(app.name);
-    const listed = owners.length ? owners[owners.length - 1] : null;
+    const listed = listedOwnership(await appHistory.ownerships(app.name));
     const { row, rows } = await standingManifest(app.identity);
     const nextVersion = listed
-      ? (await highestVersionInOwnership(app.identity, { ...listed, original: owners.length === 1 }, { getRows: appsRepository.getContentManifests, pendingRanks: appsRepository.carriedManifestRanks })) + 1
+      ? (await highestVersionInOwnership(app.identity, listed, { getRows: appsRepository.getContentManifests, pendingRanks: appsRepository.carriedManifestRanks })) + 1
       : 1;
     res.json(messageHelper.createDataMessage({
       appName: app.name,
@@ -1854,13 +1853,12 @@ async function submitContentUpdate(body, deps = {}) {
 
   // The manifest is signed under the listed ownership: the height the chain says
   // the listed owner took the app.
-  const owners = await ownerships(appName);
-  const listed = owners.length ? owners[owners.length - 1] : null;
+  const listed = listedOwnership(await ownerships(appName));
   if (!listed || listed.owner !== owner) throw new Error(`contentSlot: ${appName} has no applied ownership for ${owner}`);
 
   const gossipManifest = await processSubmission(
     {
-      manifest, spec, owner, encrypted, identity, ownedFrom: listed.from, original: owners.length === 1, blobs, ownerSigs,
+      manifest, spec, owner, encrypted, identity, ownedFrom: listed.from, original: listed.original, blobs, ownerSigs,
     },
     { uploader, benchmark, now, verify, provider },
   );

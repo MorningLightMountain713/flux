@@ -2860,7 +2860,7 @@ describe('contentSlotService', () => {
       await service.getContentManifestsApi({ params: { appname: APP } }, r);
       const { data } = r.json.firstCall.args[0];
       expect(data.identity).to.equal(IDENTITY);
-      expect(data.ownership).to.deep.equal({ owner: OWNER, from: 2_400_000 });
+      expect(data.ownership).to.deep.equal({ owner: OWNER, from: 2_400_000, original: true });
       expect(data.standing).to.deep.equal({ hash: 'h2', version: 2, ownedFrom: 2_400_000 });
       expect(data.nextVersion, 'one above the highest held or waiting under the ownership').to.equal(4);
       expect(data.manifests.map((m) => m.version)).to.deep.equal([1, 2]);
@@ -2879,7 +2879,7 @@ describe('contentSlotService', () => {
       sinon.assert.calledOnceWithExactly(latestAppliedState, APP);
       const { data } = r.json.firstCall.args[0];
       expect(data.identity).to.equal(IDENTITY);
-      expect(data.ownership).to.deep.equal({ owner: OWNER, from: 2_400_000 });
+      expect(data.ownership).to.deep.equal({ owner: OWNER, from: 2_400_000, original: true });
       expect(data.standing).to.equal(null);
       expect(data.nextVersion, 'the owner numbers a renewal\'s file list above what the node kept').to.equal(3);
       expect(data.manifests.map((m) => m.version)).to.deep.equal([1, 2]);
