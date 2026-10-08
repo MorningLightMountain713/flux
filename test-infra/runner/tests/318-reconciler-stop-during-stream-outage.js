@@ -2,26 +2,24 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { getAppContainerStatus, restartDockerd } from '../framework/container.js';
+import { getAppContainerStatus, killDockerd } from '../framework/container.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { bootAndPeer, seedSimpleApp } from '../framework/reconciler-suite.js';
 import {
-  waitForUp, waitForDown, assertNoEvent, waitForOperatorIntent
+  waitForUp, waitForDown, assertNoEvent, waitForOperatorIntent, waitForCapabilityDown, waitForCapabilityUp,
 } from '../framework/wait.js';
 
-// B6 end-to-end: a deliberate stop whose die event is LOST (docker event stream
-// down) must not wedge anything. The stoppingContainers flag is OPERATION-
-// scoped (cleared when the stop resolves, never by the die event), and the
-// operator lock was recorded before the docker op - so the lost event costs
-// nothing: the app stays stopped (desired state), no defer-loop persists, and a
-// later appstart works normally.
-//
-// The outage window is real, not simulated: restartDockerd drops FluxOS's event
-// stream, and the hardened subscriber takes ~10s to resubscribe - a stop issued
-// right after dockerd returns lands inside that window.
+// Docker's reachability, to the node, is its event stream: lost with it, back
+// with it, retried from one second. Across a dockerd outage that proves three
+// things. A stop sent while the node cannot see docker is refused, not taken on
+// trust and lost. The containers the outage stopped (no live-restore) died
+// unseen, and the reconnect sweep restores them from actual state. And once
+// the stream is back a stop lands, holds against the sweep, and a later
+// appstart works: the operator lock is recorded before the docker op, so the
+// die event's loss costs nothing.
 
-describe('deliberate stop during an event-stream outage neither wedges nor flaps', function () {
+describe('a stop across a docker outage: refused while docker is unseen, landing once the stream is back', function () {
   let env;
   const appName = `e2estreamout${Date.now()}`;
   let identifier;
@@ -39,28 +37,44 @@ describe('deliberate stop during an event-stream outage neither wedges nor flaps
     await env?.teardown();
   });
 
-  it('stop lands during the resubscribe window; app stays stopped and recovers on appstart', async function () {
-    this.timeout(240000);
+  it('refuses the stop while the stream is down, restores what the outage stopped, then stops and restarts on request', async function () {
+    this.timeout(300000);
     const client = env.clients[idx];
     await waitForUp(client, appName, 'running before the outage');
+    const mark = client.getLastEventId();
 
-    // cycle dockerd: the event stream dies with it and resubscribes ~10s later
-    await restartDockerd(client.container);
+    // dockerd goes, its containers go with it, and the event stream dies: the
+    // node marks docker unreachable on the stream's loss, not on a later ping.
+    await killDockerd(client.container);
+    const down = await waitForCapabilityDown(client, 'dockerReachable', 30000, { afterId: mark });
 
-    // stop immediately - dockerd is back, the stream very likely is not yet
+    // Inside the outage the stop is refused. The watchdog needs a second or more
+    // to respawn dockerd and the stream's first retry is a second after its
+    // loss; this request leaves within milliseconds of the loss's edge.
     const auth = await authenticate(client.url, appOwnerKey());
+    const refused = await client.getAuthed(`/apps/appstop/${appName}`, auth.zelidauth);
+    expect(refused.status, JSON.stringify(refused)).to.equal('error');
+    expect(refused.data.code, JSON.stringify(refused)).to.equal(503);
+
+    // The stream returns with dockerd and docker is reachable again at that
+    // instant. Events during the outage are gone, so the bridge sweeps every
+    // component from actual state and restarts the container the outage stopped.
+    const up = await waitForCapabilityUp(client, 'dockerReachable', 60000, { afterId: down.id });
+    const swept = await client.waitForEvent('reconciler:swept', (d) => d.reason === 'reconnect', 60000, { afterId: up.id });
+    await client.waitForEvent(
+      'reconciler:actuated',
+      (d) => d.identifier === identifier && (d.action === 'restart' || d.action === 'firstStart'),
+      60000,
+      { afterId: swept.id },
+    );
+    await waitForUp(client, appName, 'restored by the reconnect sweep');
+
+    // Now the stop lands, and it holds: no restart against the operator lock,
+    // no start/stop flapping.
     const stopRes = await client.getAuthed(`/apps/appstop/${appName}`, auth.zelidauth);
     expect(stopRes.status, JSON.stringify(stopRes)).to.equal('success');
-    // The interleaving this suite exists to catch puts the wrong start BEFORE the
-    // container goes down, so an assertion anchored after waitForDown has already
-    // stepped past it. Anchor on the intent instead - the id survives the stream
-    // outage, which a wall-clock or a last-seen-id anchor taken here would not.
     const intent = await waitForOperatorIntent(client, identifier, true);
-    await waitForDown(client, appName, 'stopped during the stream outage');
-
-    // the lost die event must cost nothing: no restart against the operator
-    // lock (reconnect sweep + boot-style reconciles all see operatorStopped),
-    // and no flapping start/stop loop
+    await waitForDown(client, appName, 'stopped on request');
     await assertNoEvent(client, 'reconciler:actuated', (d) => d.identifier === identifier && (d.action === 'firstStart' || d.action === 'restart'), 20000, { afterId: intent.id });
     const status = await getAppContainerStatus(client.container, appName, { all: true });
     expect(status && status.status.startsWith('Up')).to.not.equal(true);
