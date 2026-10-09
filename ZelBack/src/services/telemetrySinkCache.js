@@ -97,10 +97,6 @@ function deleteSink(appName) {
   setSink(appName, null);
 }
 
-function hasAnyTelemetryApps() {
-  return sinks.size > 0;
-}
-
 /**
  * Rebuild the cache from every installed app. Used at boot so a restart
  * re-establishes routing. Encrypted apps that cannot be decrypted (a
@@ -128,7 +124,6 @@ module.exports = {
   getSink,
   entries,
   deleteSink,
-  hasAnyTelemetryApps,
   reconcileFromInstalled,
   onChange,
 };

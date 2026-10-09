@@ -242,18 +242,28 @@ MemorySwapMax=1G
 EOF
 
   # ── Real flux-telemetryd (opt-in; the telemetryd e2e suite) ──────────
-  # The daemon binary and its REAL hardened unit are bind-mounted from the
-  # runner host (cindy's vendored cargo build). Installed but NOT enabled:
-  # FluxOS itself starts the unit when a telemetry app installs
-  # (telemetryConfigService.ensureNode) — the production flow under test.
+  # The daemon binary and its REAL packaging (service, the two socket units,
+  # the ACL oneshot and its tmpfiles drop-in) are bind-mounted from the runner
+  # host's pinned build. Installed AND enabled, as on the image: systemd
+  # creates both sockets and runs the daemon from boot; FluxOS connects to the
+  # identity socket and never starts or stops the daemon. The sockets name
+  # their owners, so those accounts exist first: fluxos owns identity.sock,
+  # flux-daemon-access is query.sock's group.
   if [ "$FLUX_TELEMETRYD_REAL" = "true" ]; then
     groupadd -f -r flux-telemetry
     id -u flux-telemetry >/dev/null 2>&1 || useradd -r -g flux-telemetry -s /usr/sbin/nologin flux-telemetry
-    # /run is a fresh tmpfs once systemd boots — the runtime dir must come
-    # from tmpfiles.d, not a pre-exec mkdir (which the mount would shadow).
-    echo 'd /run/flux/telemetry 0750 root flux-telemetry -' > /etc/tmpfiles.d/flux-telemetry.conf
+    groupadd -f -r flux-daemon-access
+    id -u fluxos >/dev/null 2>&1 || useradd -r -U -s /usr/sbin/nologin fluxos
     install -m 0755 /opt/telemetryd-dist/flux-telemetryd /usr/local/bin/flux-telemetryd
-    cp /opt/telemetryd-dist/flux-telemetryd.service /etc/systemd/system/
+    for unit in flux-telemetryd.service flux-telemetryd.socket flux-telemetryd-identity.socket flux-telemetryd-acl.service; do
+      cp "/opt/telemetryd-dist/$unit" /etc/systemd/system/
+    done
+    install -m 0644 /opt/telemetryd-dist/flux-telemetryd.conf /usr/lib/tmpfiles.d/flux-telemetryd.conf
+    mkdir -p /etc/systemd/system/sockets.target.wants
+    ln -sf /etc/systemd/system/flux-telemetryd.socket /etc/systemd/system/sockets.target.wants/flux-telemetryd.socket
+    ln -sf /etc/systemd/system/flux-telemetryd-identity.socket /etc/systemd/system/sockets.target.wants/flux-telemetryd-identity.socket
+    ln -sf /etc/systemd/system/flux-telemetryd-acl.service /etc/systemd/system/multi-user.target.wants/flux-telemetryd-acl.service
+    ln -sf /etc/systemd/system/flux-telemetryd.service /etc/systemd/system/multi-user.target.wants/flux-telemetryd.service
   fi
 
   # ── Real flux-dnsd (opt-in; the mesh DNS e2e suite) ──────────────────
@@ -386,25 +396,27 @@ if [ "$FLUX_SHUTDOWND_REAL" = "true" ]; then
   echo "started real flux-shutdownd"
 fi
 
-# Optional mock flux-telemetryd for the telemetry suites. The real daemon is a
-# host-side client of FluxOS's identity socket; the mock plays that client role
-# in-container. The runtime dir must exist BEFORE fluxos boots — FluxOS's
-# write-probe on /run/flux/telemetry is its Arcane gate for the identity server
-# (on a real Arcane node the daemon's package ships the dir AND the flux-telemetry
-# user/group). The mock itself retries until the socket appears. Node built-ins only.
+# Optional mock flux-telemetryd for the telemetry suites. The real daemon owns
+# the identity socket and FluxOS connects to it; the mock plays the daemon's
+# listening role in-container. It must be listening BEFORE fluxos boots: FluxOS
+# feeds a daemon only if the socket exists when its identity service starts
+# (on a real node systemd creates it at boot). Node built-ins only.
 if [ "$FLUX_TELEMETRYD_MOCK" = "true" ]; then
-  # The identity server grants the daemon user log access via chgrp/setfacl against
-  # the Arcane docker data-root (/dat/var/lib/docker). That user/group must exist,
-  # and that path must resolve to the mock dockerd's real data-root, or the grant
-  # fails and FluxOS announces nothing over the socket. On a real node the daemon
-  # package provides the user and the data-root is mounted at /dat/var/lib/docker;
-  # here we create the user and point the Arcane path at the mock data-root.
+  # FluxOS grants the daemon user log access via setfacl against the Arcane
+  # docker data-root (/dat/var/lib/docker). That user must exist, and that path
+  # must resolve to the mock dockerd's real data-root, or the grant fails and
+  # FluxOS announces nothing over the socket. On a real node the daemon package
+  # provides the user and the data-root is mounted at /dat/var/lib/docker; here
+  # we create the user and point the Arcane path at the mock data-root.
   groupadd -f -r flux-telemetry
   id -u flux-telemetry >/dev/null 2>&1 || useradd -r -g flux-telemetry -s /usr/sbin/nologin flux-telemetry
   mkdir -p /dat/var/lib
   ln -sfn /mnt/appdata/docker /dat/var/lib/docker
-  mkdir -p /run/flux/telemetry
   node /flux/test-infra/telemetryd-stub/index.js &
+  for _ in $(seq 1 50); do
+    [ -S "${FLUX_TELEMETRY_IDENTITY_SOCKET:-/run/flux-telemetryd/identity.sock}" ] && break
+    sleep 0.1
+  done
   echo "started mock flux-telemetryd (control port ${TELEMETRYD_MOCK_CONTROL_PORT:-16198})"
 fi
 

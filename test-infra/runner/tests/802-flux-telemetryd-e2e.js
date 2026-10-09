@@ -33,9 +33,9 @@ import { appOwnerKey } from '../framework/keys.js';
 //     in /sys/fs/cgroup/flux.slice/flux-apps.slice — the daemon's sampler
 //     path — while its logtail reads the real json-logs under the Arcane
 //     data-root;
-//   - FluxOS itself starts the daemon unit when the telemetry app installs
-//     (telemetryConfigService.ensureNode), writes config.toml, and serves
-//     the identity socket the daemon connects to — the production flow;
+//   - systemd runs the daemon from boot and creates both its sockets from
+//     their .socket units; FluxOS connects to the identity socket and pushes
+//     the container feed — the production flow;
 //   - the app's collector component is the otlp-receiver fixture
 //     (test-infra/otlp-receiver), which logs one OTLP-RECV line per
 //     OTLP/HTTP post with substring-match verdicts, so metrics and shipped
@@ -48,8 +48,8 @@ const NODES = 5;
 const APP = 'otlprealapp';
 const RECV_REPO = `${APP}recv`;
 const WEB_PORT = 31360;
-// The second telemetry app: the daemon's lifecycle is owned per-NODE, not
-// per-app, so its stop must wait for the LAST telemetry app to leave.
+// The second telemetry app: removing one app untracks only its containers,
+// and the daemon outlives the last one — it serves the node, not an app.
 const APP2 = 'otlpreallast';
 const RECV2_REPO = `${APP2}recv`;
 const WEB2_PORT = 31362;
@@ -207,16 +207,22 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
     expect(scope.exitCode, 'container scope under the daemon-sampled path').to.equal(0);
   });
 
-  it('FluxOS starts the real daemon, which pairs on the identity socket and tracks the send set', async function () {
+  it('systemd runs the real daemon, FluxOS connects, and the send set is tracked', async function () {
     this.timeout(120000);
-    // ensureNode runs on the telemetry-app install: config written, unit
-    // started — by FluxOS, never by this suite.
     await waitFor(async () => (await X('systemctl is-active flux-telemetryd')).stdout.trim() === 'active',
-      { timeout: 60000, interval: 2000, label: 'flux-telemetryd unit active (started by FluxOS)' });
+      { timeout: 60000, interval: 2000, label: 'flux-telemetryd unit active (enabled at boot)' });
 
-    const cfg = await X('ls -la /run/flux/telemetry/config.toml && cat /run/flux/telemetry/config.toml');
-    expect(cfg.exitCode, cfg.output).to.equal(0);
-    expect(cfg.stdout).to.include('opaqueId');
+    // systemd created both sockets with the ownership their units name.
+    const socks = await X("stat -c '%n %U:%G %a' /run/flux-telemetryd/identity.sock /run/flux-telemetryd/query.sock");
+    expect(socks.exitCode, socks.output).to.equal(0);
+    expect(socks.stdout).to.include('/run/flux-telemetryd/identity.sock fluxos:fluxos 600');
+    expect(socks.stdout).to.include('/run/flux-telemetryd/query.sock root:flux-daemon-access 660');
+
+    // FluxOS connected, and its sync carried the node tag: that is what
+    // brings the daemon's telemetry half up.
+    await waitFor(async () => (await daemonJournal('fluxos connected to the identity socket')).trim() !== ''
+      && (await daemonJournal('first identity sync with a node id')).trim() !== '',
+    { timeout: 60000, interval: 2000, label: 'FluxOS connected and synced with its opaque id' });
 
     // The running daemon is the PINNED one: build.rs stamps the source
     // commit into --version, and dist/ is built from the pin — the guard
@@ -374,13 +380,32 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
     expect(rm.exitCode, rm.output).to.equal(0);
     await startFluxos(client.container);
 
-    // FluxOS sends the full set on every connect; the daemon reconnects on a
-    // 5s retry. Whatever FluxOS has reinstalled by then, the ghost's id is
-    // absent from that set and must be reconciled away.
+    // FluxOS connects on start and sends the full set. Whatever it has
+    // reinstalled by then, the ghost's id is absent from that set and must be
+    // reconciled away.
     await waitFor(async () => (await daemonJournal(PRUNE_LINE, { lines: 50 })).includes(ghostId),
       { timeout: 180000, interval: 3000, label: 'daemon pruned the ghost on the reconnect sync' });
     expect(await daemonJournalCount(PRUNE_LINE),
       'the prune is new, not a pre-existing line').to.be.greaterThan(prunesBefore);
+  });
+
+  it('FluxOS reconnects and re-syncs when the daemon restarts, and the sockets survive it', async function () {
+    this.timeout(120000);
+    // systemd holds both listening sockets across the restart, so FluxOS's
+    // reconnect lands; the daemon starts empty and the sync re-fills it.
+    const connectsBefore = await daemonJournalCount('fluxos connected to the identity socket');
+    const syncsBefore = await daemonJournalCount('first identity sync with a node id');
+    const restart = await X(`systemctl restart ${DAEMON_UNIT}`);
+    expect(restart.exitCode, restart.output).to.equal(0);
+
+    await waitFor(async () => (await daemonJournalCount('fluxos connected to the identity socket')) > connectsBefore
+      && (await daemonJournalCount('first identity sync with a node id')) > syncsBefore,
+    { timeout: 60000, interval: 2000, label: 'FluxOS reconnected and re-synced after the daemon restart' });
+
+    const socks = await X("stat -c '%n %U:%G %a' /run/flux-telemetryd/identity.sock /run/flux-telemetryd/query.sock");
+    expect(socks.exitCode, socks.output).to.equal(0);
+    expect(socks.stdout).to.include('/run/flux-telemetryd/identity.sock fluxos:fluxos 600');
+    expect(socks.stdout).to.include('/run/flux-telemetryd/query.sock root:flux-daemon-access 660');
   });
 
   it('re-routes the real pipe at a new endpoint after a port-changing update', async function () {
@@ -436,10 +461,8 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
       { timeout: 120000, interval: 3000, label: 'shipped log line arriving at the rotated endpoint' });
   });
 
-  it('keeps the daemon running until the LAST telemetry app leaves', async function () {
+  it('untracks only the removed app, and keeps running after the last telemetry app leaves', async function () {
     this.timeout(900000);
-    // Daemon lifecycle is per-NODE while telemetry is declared per-APP, so
-    // the stop belongs to the last app on the node, not the first removal.
     // instances = NODES so the second app is guaranteed to land here: a
     // partial spread might miss this node entirely and prove nothing.
     await pushTestApp(APP2);
@@ -456,29 +479,28 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
     await queueAppTx(res.data);
     await advanceBlocks(3);
     await waitForAppInstalled(client, APP2, 300000);
+    const web2Container = await requireAppContainerName(client.container, APP2, 'web');
+    const web2Id = await containerId(web2Container);
+    await waitFor(async () => (await daemonJournal('tracking container', { lines: 200 })).includes(web2Id),
+      { timeout: 120000, interval: 3000, label: 'daemon tracking the second app' });
 
     const { zelidauth } = await authenticate(client.url, appOwnerKey());
+    const pid = (await X(`systemctl show -p MainPID --value ${DAEMON_UNIT}`)).stdout.trim();
     const untracksBefore = await daemonJournalCount('untracking container');
 
     await client.removeApp(APP, { zelidauth });
     await waitFor(async () => (await daemonJournalCount('untracking container')) > untracksBefore,
       { timeout: 120000, interval: 3000, label: 'daemon untracked the removed app' });
+    expect(await daemonJournal('untracking container', { lines: 50 }),
+      'the remaining app stays tracked').to.not.include(web2Id);
 
-    // The contract this scenario exists for: one telemetry app left, so the
-    // daemon stays up and its config survives.
-    expect(await unitState(client.container, DAEMON_UNIT),
-      'daemon must survive while another telemetry app remains').to.equal('active');
-    const stillConfigured = await X('test -f /run/flux/telemetry/config.toml');
-    expect(stillConfigured.exitCode, 'config.toml must survive the non-final removal').to.equal(0);
-
-    // Now the last one: appUninstaller stops the unit and removes config.toml
-    // — a clean stop, not a crash ('inactive', never 'failed').
+    // The last one: the daemon untracks it and keeps running — it serves the
+    // node (log queries, the next telemetry app), so FluxOS never stops it.
     await client.removeApp(APP2, { zelidauth });
-    await waitFor(async () => (await unitState(client.container, DAEMON_UNIT)) === 'inactive',
-      { timeout: 120000, interval: 2000, label: 'FluxOS stopped the daemon after the last telemetry app' });
-    const failed = await X(`systemctl is-failed ${DAEMON_UNIT}`);
-    expect(failed.stdout.trim(), 'unit must not be in a failed state').to.not.equal('failed');
-    const cfg = await X('test -f /run/flux/telemetry/config.toml');
-    expect(cfg.exitCode, 'config.toml removed with the daemon').to.not.equal(0);
+    await waitFor(async () => (await daemonJournal('untracking container', { lines: 50 })).includes(web2Id),
+      { timeout: 120000, interval: 3000, label: 'daemon untracked the last telemetry app' });
+    expect(await unitState(client.container, DAEMON_UNIT), 'the daemon outlives the last telemetry app').to.equal('active');
+    expect((await X(`systemctl show -p MainPID --value ${DAEMON_UNIT}`)).stdout.trim(),
+      'the same process, never stopped and started again').to.equal(pid);
   });
 });

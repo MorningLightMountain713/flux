@@ -189,7 +189,6 @@ describe('appInstaller tests', () => {
       },
       './contentSlotService': { provisionContentSlots: sinon.stub().resolves() },
       // Reaches generalService's daemon RPCs and writes real files.
-      '../telemetryConfigService': { ensureNode: sinon.stub().resolves() },
       '../telemetrySinkCache': { extractSink: sinon.stub().returns(null), setSink: sinon.stub() },
       // Opens a unix socket to the daemon.
       '../utils/fluxShutdowndClient': { upsertAppPlanBestEffort: sinon.stub().resolves() },

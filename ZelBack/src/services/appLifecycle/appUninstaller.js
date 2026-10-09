@@ -11,7 +11,6 @@ const globalState = require('../utils/globalState');
 const operationRegistry = require('../utils/operationRegistry');
 const telemetrySinkCache = require('../telemetrySinkCache');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
-const telemetryConfigService = require('../telemetryConfigService');
 const log = require('../../lib/log');
 const config = require('config');
 const upnpService = require('../upnpService');
@@ -1396,9 +1395,6 @@ async function executeTeardown(target, { onStatus = null } = {}) {
   if (appLeavesNode) {
     appTamperingDetectionService.forgetApp(name);
     telemetrySinkCache.deleteSink(name);
-    if (!telemetrySinkCache.hasAnyTelemetryApps()) {
-      await telemetryConfigService.remove().catch((e) => log.warn(`telemetry config remove: ${e.message}`));
-    }
   }
   // Scoped to the deployment this teardown owns: plans key identity[:replica],
   // so an untagged delete would look for a loose plan this app never had and

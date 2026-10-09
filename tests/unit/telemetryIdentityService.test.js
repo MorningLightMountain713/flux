@@ -3,8 +3,10 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const nodeCrypto = require('node:crypto');
 const nodeNet = require('node:net');
 const nodeFs = require('node:fs');
+const nodeOs = require('node:os');
 const nodePath = require('node:path');
 
 describe('telemetryIdentityService tests', () => {
@@ -14,6 +16,8 @@ describe('telemetryIdentityService tests', () => {
   let geolocationServiceStub;
   let sinkCacheStub;
   let logStub;
+  let collateralStub;
+  let eventStreamStub;
 
   const datadogSink = { provider: 'datadog', site: 'datadoghq.com', apiKey: 'k1' };
 
@@ -35,27 +39,30 @@ describe('telemetryIdentityService tests', () => {
       seed: (app, sink) => sinkMap.set(String(app).toLowerCase(), sink),
       getSink: sinon.stub().callsFake((app) => sinkMap.get(String(app).toLowerCase()) || null),
       entries: () => sinkMap.entries(),
-      hasAnyTelemetryApps: sinon.stub().returns(false),
       onChange: sinon.stub(),
     };
 
     logStub = { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() };
 
     runCommandStub = sinon.stub().resolves({ error: null, stdout: '', stderr: '' });
+    collateralStub = sinon.stub().resolves({ txhash: 'ab'.repeat(32) });
+    eventStreamStub = { start: sinon.stub().resolves(), stop: sinon.stub() };
     service = proxyquire('../../ZelBack/src/services/telemetryIdentityService', {
+      'node:crypto': nodeCrypto,
       'node:net': nodeNet,
       'node:fs': nodeFs,
-      'node:path': nodePath,
       '../lib/log': logStub,
       './dockerService': dockerServiceStub,
       './serviceHelper': { runCommand: runCommandStub },
       './geolocationService': geolocationServiceStub,
       './telemetrySinkCache': sinkCacheStub,
-      './telemetryConfigService': { chownGroup: sinon.stub().resolves(), ensureNode: sinon.stub().resolves() },
+      './generalService': { obtainNodeCollateralInformation: collateralStub },
+      './utils/dockerEventStream': { createDockerEventStream: () => eventStreamStub },
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await service.stop();
     sinon.restore();
   });
 
@@ -278,36 +285,6 @@ describe('telemetryIdentityService tests', () => {
     });
   });
 
-  describe('resolveIdentity', () => {
-    const containerId = 'a'.repeat(64);
-
-    it('returns null when the container cannot be inspected', async () => {
-      dockerServiceStub.dockerContainerInspect.resolves(null);
-      expect(await service.resolveIdentity(containerId)).to.be.null;
-    });
-
-    it('returns null for a non-telemetry app', async () => {
-      dockerServiceStub.dockerContainerInspect.resolves({ Id: containerId, Name: '/fluxMyApp', Config: { Image: 'nginx:1' } });
-      expect(await service.resolveIdentity(containerId)).to.be.null;
-    });
-
-    it('resolves a telemetry app with sink, tags and region', async () => {
-      dockerServiceStub.dockerContainerInspect.resolves({ Id: containerId, Name: '/fluxMyApp', Config: { Image: 'nginx:1.25' } });
-      sinkCacheStub.seed('MyApp', datadogSink);
-      const id = await service.resolveIdentity(containerId);
-      expect(id.app_name).to.equal('MyApp');
-      expect(id.sink).to.deep.equal(datadogSink);
-      expect(id.tags.image_name).to.equal('nginx:1.25');
-      expect(id.tags.region).to.equal('NA');
-    });
-
-    it('inspects by container id, not name (docker events carry raw ids)', async () => {
-      dockerServiceStub.dockerContainerInspect.resolves(null);
-      await service.resolveIdentity(containerId);
-      expect(dockerServiceStub.dockerContainerInspect.firstCall.args[1]).to.deep.equal({ identifierType: 'id' });
-    });
-  });
-
   describe('sendSync', () => {
     function fakeSocket() {
       return { destroyed: false, written: [], write(s) { this.written.push(s); } };
@@ -327,6 +304,7 @@ describe('telemetryIdentityService tests', () => {
       expect(socket.written).to.have.length(1);
       const msg = JSON.parse(socket.written[0]);
       expect(msg.op).to.equal('sync');
+      expect(msg.opaqueId, 'the node tag rides every sync').to.match(/^[0-9a-f]{64}$/);
       expect(msg.containers).to.have.length(1);
       expect(msg.containers[0].container_id).to.equal('c1'.padEnd(64, '0'));
       expect(msg.containers[0].identity.app_name).to.equal('TelemApp');
@@ -384,37 +362,113 @@ describe('telemetryIdentityService tests', () => {
     });
   });
 
-  describe('onComponentCreated Arcane gate', () => {
-    it('is a no-op when the server is not running (non-Arcane node)', async () => {
-      // start() was never called, so server is null.
-      await service.onComponentCreated({ identifier: 'fluxMyApp' });
-      expect(dockerServiceStub.dockerContainerInspect.called).to.equal(false);
+  describe('deriveOpaqueId', () => {
+    it('is a 64-hex hash of the collateral, stable for the node', async () => {
+      const first = await service.deriveOpaqueId();
+      expect(first).to.match(/^[0-9a-f]{64}$/);
+      expect(await service.deriveOpaqueId()).to.equal(first);
+      collateralStub.resolves({ txhash: 'cd'.repeat(32) });
+      expect(await service.deriveOpaqueId()).to.not.equal(first);
+    });
+
+    it('fails without a collateral', async () => {
+      collateralStub.resolves(null);
+      let error;
+      try { await service.deriveOpaqueId(); } catch (e) { error = e; }
+      expect(error).to.be.an('error');
     });
   });
 
-  describe('handleRequest (forward-compat lookup)', () => {
-    it('rejects invalid JSON', async () => {
-      const res = JSON.parse(await service.handleRequest('not json'));
-      expect(res.ok).to.be.false;
-      expect(res.error).to.equal('invalid JSON');
+  describe('the connection to flux-telemetryd', () => {
+    let dir;
+    let socketPath;
+    let server;
+    let streams;
+
+    // A stand-in daemon: listens where systemd puts the socket and records
+    // every line fluxos sends, per connection.
+    function listen() {
+      streams = [];
+      server = nodeNet.createServer((conn) => {
+        const stream = { conn, lines: [] };
+        streams.push(stream);
+        let buffer = '';
+        conn.on('data', (chunk) => {
+          buffer += chunk.toString();
+          let i = buffer.indexOf('\n');
+          while (i !== -1) {
+            stream.lines.push(JSON.parse(buffer.slice(0, i)));
+            buffer = buffer.slice(i + 1);
+            i = buffer.indexOf('\n');
+          }
+        });
+      });
+      return new Promise((resolve) => { server.listen(socketPath, resolve); });
+    }
+
+    async function until(check, timeoutMs = 4000) {
+      const deadline = Date.now() + timeoutMs;
+      while (!check()) {
+        if (Date.now() > deadline) throw new Error('timed out');
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => { setTimeout(r, 20); });
+      }
+    }
+
+    beforeEach(() => {
+      dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'telemetry-identity-'));
+      socketPath = nodePath.join(dir, 'identity.sock');
     });
 
-    it('rejects an unknown op', async () => {
-      const res = JSON.parse(await service.handleRequest('{"op":"delete"}'));
-      expect(res.ok).to.be.false;
+    afterEach(async () => {
+      await service.stop();
+      if (server) await new Promise((r) => { server.close(r); });
+      server = null;
+      nodeFs.rmSync(dir, { recursive: true, force: true });
     });
 
-    it('rejects a non-64-hex container_id', async () => {
-      const res = JSON.parse(await service.handleRequest('{"op":"lookup","container_id":"short"}'));
-      expect(res.ok).to.be.false;
-      expect(res.error).to.equal('invalid container_id');
+    it('does nothing, and says nothing, where the daemon does not run', async () => {
+      await service.start({ socketPath });
+      await service.onComponentCreated({ identifier: 'fluxMyApp' });
+      expect(dockerServiceStub.dockerContainerInspect.called).to.equal(false);
+      expect(eventStreamStub.start.called).to.equal(false);
+      expect(logStub.info.called || logStub.warn.called || logStub.error.called).to.equal(false);
     });
 
-    it('returns null identity for an unknown container', async () => {
-      dockerServiceStub.dockerContainerInspect.resolves(null);
-      const res = JSON.parse(await service.handleRequest(`{"op":"lookup","container_id":"${'a'.repeat(64)}"}`));
-      expect(res.ok).to.be.true;
-      expect(res.identity).to.be.null;
+    it('sends a sync carrying the node tag on connect, then pushes track', async () => {
+      await listen();
+      await service.start({ socketPath });
+      await until(() => streams.length === 1 && streams[0].lines.length === 1);
+      expect(streams[0].lines[0].op).to.equal('sync');
+      expect(streams[0].lines[0].opaqueId).to.match(/^[0-9a-f]{64}$/);
+
+      service.broadcastTrack('c'.repeat(64), { app_name: 'App' });
+      await until(() => streams[0].lines.length === 2);
+      expect(streams[0].lines[1]).to.deep.equal({ op: 'track', container_id: 'c'.repeat(64), identity: { app_name: 'App' } });
+    });
+
+    it('reconnects when the daemon drops the stream, and syncs again', async function reconnects() {
+      this.timeout(6000);
+      await listen();
+      await service.start({ socketPath });
+      await until(() => streams.length === 1 && streams[0].lines.length === 1);
+
+      streams[0].conn.destroy();
+      await until(() => streams.length === 2 && streams[1].lines.length === 1);
+      expect(streams[1].lines[0].op).to.equal('sync');
+    });
+
+    it('closes the stream on stop and does not reconnect', async function stops() {
+      this.timeout(4000);
+      await listen();
+      await service.start({ socketPath });
+      await until(() => streams.length === 1 && streams[0].lines.length === 1);
+      const ended = new Promise((r) => { streams[0].conn.on('close', r); });
+
+      await service.stop();
+      await ended;
+      await new Promise((r) => { setTimeout(r, 1500); });
+      expect(streams).to.have.length(1);
     });
   });
 

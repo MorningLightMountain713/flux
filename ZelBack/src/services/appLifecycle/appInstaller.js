@@ -29,7 +29,6 @@ const admissionControl = require('../utils/admissionControl');
 const cpuBurstHelper = require('../utils/cpuBurstHelper');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const telemetrySinkCache = require('../telemetrySinkCache');
-const telemetryConfigService = require('../telemetryConfigService');
 const shutdownPlan = require('./shutdownPlan');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const log = require('../../lib/log');
@@ -293,11 +292,9 @@ async function attemptInstallApplication(instantiated, options = {}) {
       if (!deployment) throw new Error(`Failed to build deployment for ${appName}`);
 
       // Record this app's telemetry sink (Arcane-only; null/no-op otherwise)
-      // so the identity socket can route its containers to its own backend,
-      // and make sure the daemon is running before its containers are created.
+      // so the identity socket can route its containers to its own backend.
       const telemetrySink = telemetrySinkCache.extractSink(deployment);
       telemetrySinkCache.setSink(appName, telemetrySink);
-      if (telemetrySink) await telemetryConfigService.ensureNode();
 
       const { owner } = instantiated;
       const burstEligible = owner

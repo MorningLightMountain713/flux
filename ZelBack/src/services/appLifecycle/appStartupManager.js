@@ -29,7 +29,6 @@ const meshReconciler = require('../appMesh/meshReconciler');
 const { getSpecBackend } = require('../utils/specLibs');
 const contentSlotService = require('./contentSlotService');
 const telemetrySinkCache = require('../telemetrySinkCache');
-const telemetryConfigService = require('../telemetryConfigService');
 const telemetryIdentityService = require('../telemetryIdentityService');
 const capabilities = require('../utils/capabilities');
 const fluxEventBus = require('../utils/fluxEventBus');
@@ -349,13 +348,9 @@ async function reconcileAppsOnBoot({ placement: decided = null } = {}) {
       log.error(`appStartupManager - mesh boot reconcile failed: ${e.message}`);
     });
 
-    // Rebuild per-app telemetry routing from installed apps, (re)start the
-    // daemon if any telemetry apps exist, and re-sync connected daemons.
-    // Arcane-only; a no-op elsewhere.
+    // Rebuild per-app telemetry routing from installed apps and re-sync the
+    // daemon. Arcane-only; a no-op elsewhere.
     await telemetrySinkCache.reconcileFromInstalled();
-    if (telemetrySinkCache.hasAnyTelemetryApps()) {
-      await telemetryConfigService.ensureNode();
-    }
     telemetryIdentityService.resyncAll();
 
     return results;

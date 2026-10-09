@@ -1766,9 +1766,9 @@ async function _buildEnv(
       );
     }
     // Real flux-telemetryd (systemd mode only): the pinned daemon build from
-    // test-infra/flux-telemetryd/dist (binary + its REAL hardened unit),
-    // bind-mounted; the entrypoint installs them and FluxOS starts the unit
-    // (production flow). A dist that is missing, or built from anything but the
+    // test-infra/flux-telemetryd/dist (binary + its REAL packaging: service,
+    // both socket units, the ACL oneshot and its tmpfiles drop-in),
+    // bind-mounted; the entrypoint installs and enables them as the image does. A dist that is missing, or built from anything but the
     // pin, fails here rather than letting a skewed daemon produce runtime
     // mysteries — see the pin check below for why stale is the dangerous case.
     if (telemetryd === 'real') {
@@ -1776,9 +1776,12 @@ async function _buildEnv(
       const overridden = Boolean(process.env.TELEMETRYD_BINARY);
       const distBinary = process.env.TELEMETRYD_BINARY ?? join(distDir, 'flux-telemetryd');
       const distUnit = process.env.TELEMETRYD_UNIT ?? join(distDir, 'flux-telemetryd.service');
+      const packaging = ['flux-telemetryd.socket', 'flux-telemetryd-identity.socket',
+        'flux-telemetryd-acl.service', 'flux-telemetryd.conf'];
       const buildCmd = 'run: bash test-infra/flux-telemetryd/build.sh';
-      if (!existsSync(distBinary) || !existsSync(distUnit)) {
-        throw new Error(`telemetryd 'real': ${distBinary} missing — ${buildCmd}`);
+      const missing = [distBinary, distUnit, ...packaging.map((f) => join(distDir, f))].filter((f) => !existsSync(f));
+      if (missing.length) {
+        throw new Error(`telemetryd 'real': ${missing.join(', ')} missing — ${buildCmd}`);
       }
       // A stale dist is worse than a missing one: the suite runs, the daemon
       // behaves like whatever it was built from, and a test written for a fix the
@@ -1799,6 +1802,7 @@ async function _buildEnv(
       bindMounts.push(
         { source: distBinary, target: '/opt/telemetryd-dist/flux-telemetryd', mode: 'ro' },
         { source: distUnit, target: '/opt/telemetryd-dist/flux-telemetryd.service', mode: 'ro' },
+        ...packaging.map((f) => ({ source: join(distDir, f), target: `/opt/telemetryd-dist/${f}`, mode: 'ro' })),
       );
     }
     // Real flux-dnsd (systemd mode only): the pinned resolver build from
@@ -1921,11 +1925,10 @@ async function _buildEnv(
     // the same socket, so running the pair would race for it.
     if (shutdownd === 'stub' && !isLegacy) nodeEnv.FLUX_SHUTDOWND_MOCK = 'true';
     if (shutdownd === 'real' && !isLegacy) nodeEnv.FLUX_SHUTDOWND_REAL = 'true';
-    // The mock flux-telemetryd is the CLIENT of FluxOS's identity socket (the
-    // inverse of shutdownd's direction). Opt-in: only the telemetry suites pay
-    // for the identity server + stub; the entrypoint also creates the
-    // /run/flux/telemetry runtime dir the identity server's Arcane write-probe
-    // demands.
+    // The mock flux-telemetryd LISTENS on the identity socket FluxOS connects
+    // to, as the real daemon does. Opt-in: only the telemetry suites pay for
+    // the stub; the entrypoint starts it before FluxOS, whose identity client
+    // feeds a daemon only if the socket exists when it starts.
     if (telemetryd === 'stub' && !isLegacy) nodeEnv.FLUX_TELEMETRYD_MOCK = 'true';
     // systemd mode (the journald-logging suite): the entrypoint execs a real
     // systemd as PID 1 — dockerd and fluxos run as units, fluxos's stdout is

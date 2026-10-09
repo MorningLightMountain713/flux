@@ -189,10 +189,6 @@ describe('appUninstaller tests', () => {
       '../../lib/log': logStub,
       '../utils/globalState': globalStateStub,
       '../utils/appConstants': { ...realAppConstants, ANNOUNCE_CYCLE_WAIT_MS: 50 },
-      '../telemetryConfigService': {
-        ensureNode: sinon.stub().resolves(),
-        remove: sinon.stub().resolves(),
-      },
       // Stubbed so the standalone run never reaches the real imageCacheStore,
       // whose DB fail-safe ("keep") would mask the reference-gated GC under test.
       './imageCacheRetention': {
