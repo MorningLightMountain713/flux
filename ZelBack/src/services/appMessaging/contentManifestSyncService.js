@@ -2,7 +2,7 @@
 
 const config = require('config');
 const serviceHelper = require('../serviceHelper');
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const { serialiseAndSignFluxBroadcast } = require('../utils/fluxBroadcastHelper');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { getSpec } = require('../utils/specLibs');
@@ -180,7 +180,7 @@ async function runRound(peers, deps) {
 
 async function runReconcile(peers, deps = {}) {
   const {
-    getLocalRanks = appsRepository.listContentManifestRanks,
+    getLocalRanks = () => appRecords.manifests().ranks(),
     sign = serialiseAndSignFluxBroadcast,
     delay = serviceHelper.delay,
     now = Date.now,

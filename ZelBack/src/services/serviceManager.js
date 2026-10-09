@@ -413,11 +413,10 @@ async function startFluxFunctions() {
         ]);
         log.info('Signed app installing errors broadcasts collection prepared');
 
-        // Content manifests: one row per manifest, keyed by the app identity and
-        // the manifest's hash, plus a PARTIAL TTL that reaps rows held for an app
-        // not yet listed (signer null) by their expireAt; a resolved row carries no
-        // expireAt and persists.
-        await ensureIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appContentManifests')), { identity: 1, hash: 1 }, { name: 'identity_hash', unique: true });
+        // Content manifests: the collection's own indexes, plus a PARTIAL TTL that
+        // reaps records held for an app not yet listed (signer null) by their
+        // expireAt; a resolved record carries no expireAt and persists.
+        await appRecords.manifests().ensureIndexes();
         await ensureIndex(databaseTemp.collection(config.get('database.appsglobal.collections.appContentManifests')), { expireAt: 1 }, { expireAfterSeconds: 0, partialFilterExpression: { signer: null }, name: 'manifest_held_ttl' });
         log.info('App content manifests collection prepared');
 

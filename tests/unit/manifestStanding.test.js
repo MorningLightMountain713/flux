@@ -12,23 +12,27 @@ const SELLER = '1SellerAddressXXXXXXXXXXXXXXXXXXXX';
 const BUYER = V9_SUBMISSION.owner;
 let flux;
 
+// A record the collection holds, as the rule reads it.
 function row({
   hash, version, ownedFrom, signer = BUYER, applied = false, servable = true,
 }) {
-  return {
+  return flux.ContentManifest.deserialize({
     identity: IDENTITY, hash, version, ownedFrom, signer, applied, data: { manifest: { identity: IDENTITY, version, ownedFrom } }, ...(servable ? { envelope: { v: 1 } } : {}),
-  };
+  });
 }
 
-function load({ byIdentity = sinon.stub().resolves(null), ...repo } = {}) {
+function load({
+  byIdentity = sinon.stub().resolves(null),
+  manifestsByIdentity = sinon.stub().resolves([]),
+  resolved = sinon.stub().resolves([]),
+  carriedManifestRanks = sinon.stub().resolves([]),
+} = {}) {
   return proxyquire('../../ZelBack/src/services/appLifecycle/manifestStanding', {
-    '../appDatabase/appRecords': { registry: () => ({ byIdentity }) },
-    '../appDatabase/appsRepository': {
-      getContentManifests: sinon.stub().resolves([]),
-      carriedManifestRanks: sinon.stub().resolves([]),
-      listResolvedContentManifests: sinon.stub().resolves([]),
-      ...repo,
+    '../appDatabase/appRecords': {
+      registry: () => ({ byIdentity }),
+      manifests: () => ({ byIdentity: manifestsByIdentity, resolved }),
     },
+    '../appDatabase/appsRepository': { carriedManifestRanks },
     '../utils/specLibs': { getSpec: async () => flux },
   });
 }
@@ -51,7 +55,7 @@ describe('manifestStanding', () => {
         row({ hash: 'buyer1', version: 1, ownedFrom: 200 }),
         row({ hash: 'buyer2', version: 2, ownedFrom: 200 }),
       ];
-      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER)), getContentManifests: sinon.stub().resolves(rows) });
+      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER)), manifestsByIdentity: sinon.stub().resolves(rows) });
       const { row: standing, aside } = await svc.standingManifest(IDENTITY);
       expect(standing.hash).to.equal('buyer2');
       expect(aside).to.equal(false);
@@ -62,7 +66,7 @@ describe('manifestStanding', () => {
         row({ hash: 'first9', version: 9, ownedFrom: 50 }),
         row({ hash: 'second1', version: 1, ownedFrom: 200 }),
       ];
-      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER)), getContentManifests: sinon.stub().resolves(rows) });
+      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER)), manifestsByIdentity: sinon.stub().resolves(rows) });
       const { row: standing } = await svc.standingManifest(IDENTITY);
       expect(standing.hash, 'version 1 of the later ownership, over version 9 of the earlier').to.equal('second1');
     });
@@ -72,14 +76,14 @@ describe('manifestStanding', () => {
         row({ hash: 'named', version: 3, ownedFrom: 100, signer: SELLER }),
         row({ hash: 'racing', version: 4, ownedFrom: 100, signer: SELLER }),
       ];
-      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER, { manifest: 'named' })), getContentManifests: sinon.stub().resolves(rows) });
+      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER, { manifest: 'named' })), manifestsByIdentity: sinon.stub().resolves(rows) });
       const { row: standing } = await svc.standingManifest(IDENTITY);
       expect(standing.hash, 'the named one, though the racing one ranks higher').to.equal('named');
     });
 
     it('stands on nothing, aside, when the spec names a manifest this node lacks', async () => {
       const rows = [row({ hash: 'racing', version: 4, ownedFrom: 100, signer: SELLER })];
-      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER, { manifest: 'named' })), getContentManifests: sinon.stub().resolves(rows) });
+      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER, { manifest: 'named' })), manifestsByIdentity: sinon.stub().resolves(rows) });
       const out = await svc.standingManifest(IDENTITY);
       expect(out.row).to.equal(null);
       expect(out.aside).to.equal(true);
@@ -87,24 +91,24 @@ describe('manifestStanding', () => {
 
     it('stands on nothing, not aside, when no row is valid and the spec names none; the seller\'s row stands again if the row returns to the seller', async () => {
       const rows = [row({ hash: 'seller7', version: 7, ownedFrom: 100, signer: SELLER })];
-      const getContentManifests = sinon.stub().resolves(rows);
-      const asBuyer = load({ byIdentity: sinon.stub().resolves(listed(BUYER)), getContentManifests });
+      const manifestsByIdentity = sinon.stub().resolves(rows);
+      const asBuyer = load({ byIdentity: sinon.stub().resolves(listed(BUYER)), manifestsByIdentity });
       expect(await asBuyer.standingManifest(IDENTITY)).to.include({ row: null, aside: false });
-      const backToSeller = load({ byIdentity: sinon.stub().resolves(listed(SELLER)), getContentManifests });
+      const backToSeller = load({ byIdentity: sinon.stub().resolves(listed(SELLER)), manifestsByIdentity });
       expect((await backToSeller.standingManifest(IDENTITY)).row.hash).to.equal('seller7');
     });
 
     it('ignores rows held unresolved, and stands on nothing for an app not listed', async () => {
       const rows = [row({ hash: 'held', version: 1, ownedFrom: 200, signer: null })];
-      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER)), getContentManifests: sinon.stub().resolves(rows) });
+      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER)), manifestsByIdentity: sinon.stub().resolves(rows) });
       expect((await svc.standingManifest(IDENTITY)).row).to.equal(null);
-      const unlisted = load({ getContentManifests: sinon.stub().resolves([row({ hash: 'x', version: 1, ownedFrom: 0 })]) });
+      const unlisted = load({ manifestsByIdentity: sinon.stub().resolves([row({ hash: 'x', version: 1, ownedFrom: 0 })]) });
       expect(await unlisted.standingManifest(IDENTITY)).to.include({ app: null, row: null, aside: false });
     });
 
     it('does not stand on a row held unresolved though the spec names its hash: nothing stands, aside, until the row write resolves it', async () => {
       const rows = [row({ hash: 'named', version: 1, ownedFrom: 200, signer: null })];
-      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER, { manifest: 'named' })), getContentManifests: sinon.stub().resolves(rows) });
+      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER, { manifest: 'named' })), manifestsByIdentity: sinon.stub().resolves(rows) });
       expect(await svc.standingManifest(IDENTITY)).to.include({ row: null, aside: true });
     });
 
@@ -113,10 +117,10 @@ describe('manifestStanding', () => {
       const decrypt = sinon.stub().resolves({ content: null });
       const sealed = { sealed: true, createProvider: async () => ({}), decrypt };
       const app = { name: 'myapp', identity: IDENTITY, owner: BUYER, spec: sealed };
-      const own = load({ byIdentity: sinon.stub().resolves(app), getContentManifests: sinon.stub().resolves([row({ hash: 'b1', version: 1, ownedFrom: 200 })]) });
+      const own = load({ byIdentity: sinon.stub().resolves(app), manifestsByIdentity: sinon.stub().resolves([row({ hash: 'b1', version: 1, ownedFrom: 200 })]) });
       expect((await own.standingManifest(IDENTITY)).row.hash).to.equal('b1');
       sinon.assert.notCalled(decrypt);
-      const other = load({ byIdentity: sinon.stub().resolves(app), getContentManifests: sinon.stub().resolves([row({ hash: 's1', version: 1, ownedFrom: 100, signer: SELLER })]) });
+      const other = load({ byIdentity: sinon.stub().resolves(app), manifestsByIdentity: sinon.stub().resolves([row({ hash: 's1', version: 1, ownedFrom: 100, signer: SELLER })]) });
       await other.standingManifest(IDENTITY);
       sinon.assert.calledOnce(decrypt);
     });
@@ -136,7 +140,7 @@ describe('manifestStanding', () => {
   describe('highestVersionInOwnership', () => {
     it('counts only what this owner signed under this ownership, held or waiting in the pool', async () => {
       const svc = load({
-        getContentManifests: sinon.stub().resolves([
+        manifestsByIdentity: sinon.stub().resolves([
           row({ hash: 's7', version: 7, ownedFrom: 100, signer: SELLER }),
           row({ hash: 'b1', version: 1, ownedFrom: 200 }),
           row({ hash: 'old3', version: 3, ownedFrom: 50 }), // the buyer's, from an earlier ownership
@@ -149,7 +153,7 @@ describe('manifestStanding', () => {
 
     it('counts the registration\'s list, signed at height 0, within the app\'s original ownership and no other', async () => {
       const svc = load({
-        getContentManifests: sinon.stub().resolves([
+        manifestsByIdentity: sinon.stub().resolves([
           row({ hash: 'r1', version: 1, ownedFrom: 0, signer: SELLER }),
           row({ hash: 'b1', version: 1, ownedFrom: 200 }),
         ]),
@@ -165,7 +169,7 @@ describe('manifestStanding', () => {
     it('lists, per app, the rank of the manifest it stands on, only when that row arrived in a broadcast it can re-serve', async () => {
       const other = `b${'c'.repeat(52)}`;
       const svc = load({
-        listResolvedContentManifests: sinon.stub().resolves([
+        resolved: sinon.stub().resolves([
           { identity: IDENTITY, hash: 'b2', version: 2, ownedFrom: 200, signer: BUYER, servable: true },
           { identity: IDENTITY, hash: 'b1', version: 1, ownedFrom: 200, signer: BUYER, servable: true },
           { identity: other, hash: 'o1', version: 1, ownedFrom: 0, signer: BUYER, servable: false },

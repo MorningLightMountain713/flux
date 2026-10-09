@@ -25,16 +25,24 @@ describe('appRecords', () => {
       database: config.get('database.appslocal.database'),
       collection: config.get('database.appslocal.collections.installedLedgers'),
     });
+    expect(appRecords.STORES.contentManifests).to.deep.equal({
+      database: config.get('database.appsglobal.database'),
+      collection: config.get('database.appsglobal.collections.appContentManifests'),
+    });
   });
 
-  it('builds the registry, the installed apps and the installed ledgers once each, over the storage adapter', () => {
-    const { AppRegistry, InstalledApps, InstalledLedgers } = specLibrary.loaded();
+  it('builds the registry, the installed apps, the installed ledgers and the content manifests once each, over the storage adapter', () => {
+    const {
+      AppRegistry, InstalledApps, InstalledLedgers, ContentManifests,
+    } = specLibrary.loaded();
     expect(appRecords.registry()).to.be.instanceOf(AppRegistry);
     expect(appRecords.registry()).to.equal(appRecords.registry());
     expect(appRecords.installed()).to.be.instanceOf(InstalledApps);
     expect(appRecords.installed()).to.equal(appRecords.installed());
     expect(appRecords.ledgers()).to.be.instanceOf(InstalledLedgers);
     expect(appRecords.ledgers()).to.equal(appRecords.ledgers());
+    expect(appRecords.manifests()).to.be.instanceOf(ContentManifests);
+    expect(appRecords.manifests()).to.equal(appRecords.manifests());
   });
 
   // Over the unit Mongo: the join reads both collections through their own

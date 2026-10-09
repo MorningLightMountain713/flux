@@ -6,7 +6,7 @@ const containerLabelBackfill = require('../appLifecycle/containerLabelBackfill')
 const appIdentityMove = require('../appLifecycle/appIdentityMove');
 const installedLedger = require('../appLifecycle/installedLedger');
 const retiredSchema = require('./retiredSchema');
-const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const paymentPositions = require('./paymentPositions');
 const appMessagesMigration = require('./appMessages');
 
@@ -64,7 +64,7 @@ const migrations = [
     // the index on identity and hash, which a hashless row would collide on.
     before: 'localDbPrepared',
     description: 'drop manifest rows written before a manifest row carried its hash',
-    run: () => appsRepository.removeContentManifestsWithoutHash(),
+    run: () => appRecords.manifests().dropHashless(),
   },
   {
     id: 'payment-positions',

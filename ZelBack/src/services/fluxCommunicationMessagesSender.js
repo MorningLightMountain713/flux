@@ -699,7 +699,7 @@ async function respondWithContentManifests(msgObj, peer) {
       await sendSignedMessage({ type: 'fluxappcontentmanifestsync', messages: [], done: true }, peer, { awaitDrain: true });
       return;
     }
-    const broadcasts = await appsRepository.listContentManifestBroadcasts(identities);
+    const broadcasts = await appRecords.manifests().broadcasts(identities);
 
     const batchSize = 2000;
     if (broadcasts.length === 0) {

@@ -28,6 +28,10 @@ const STORES = Object.freeze({
     database: config.get('database.appsglobal.database'),
     collection: config.get('database.appsglobal.collections.appMessages'),
   }),
+  contentManifests: Object.freeze({
+    database: config.get('database.appsglobal.database'),
+    collection: config.get('database.appsglobal.collections.appContentManifests'),
+  }),
 });
 
 let storage = null;
@@ -35,6 +39,7 @@ let appRegistry = null;
 let installedApps = null;
 let installedLedgers = null;
 let appMessages = null;
+let contentManifests = null;
 
 function provider() {
   if (!storage) storage = MongoStorageProvider.create(STORES);
@@ -100,6 +105,21 @@ function messages() {
 }
 
 /**
+ * The content manifests: one record per manifest this node holds for an app,
+ * keyed by the app identity and the manifest's hash.
+ * @returns {import('@runonflux/flux-spec-backend').ContentManifests}
+ */
+function manifests() {
+  if (!contentManifests) {
+    const { ContentManifests } = specLibrary.loaded();
+    contentManifests = new ContentManifests(provider(), {
+      onUnreadable: (stored, error) => log.warn(`contentManifests: a stored record cannot be read: ${error.message} (identity=${stored.identity}, hash=${stored.hash})`),
+    });
+  }
+  return contentManifests;
+}
+
+/**
  * The installed record of the instance one of whose containers has an
  * identifier, found through its ledger; null when no ledger names it.
  * @param {string} identifier
@@ -121,5 +141,5 @@ function instanceKey({ name, replica }) {
 }
 
 module.exports = {
-  registry, installed, ledgers, messages, installedByIdentifier, instanceKey, STORES,
+  registry, installed, ledgers, messages, manifests, installedByIdentifier, instanceKey, STORES,
 };
