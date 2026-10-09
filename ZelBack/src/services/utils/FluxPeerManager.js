@@ -286,8 +286,9 @@ class FluxPeerManager extends EventEmitter {
       this.#removeTracking(existing);
       // A replacement IS a reconnection of the pair: the old socket may have
       // stalled long before this dial arrived, and nothing else records the
-      // loss (remove() never ran for it).
-      this.#stampLoss(existing);
+      // loss (remove() never ran for it). A crossing is not one: both halves
+      // are live and the pair lost no link, so there is no gap to pull.
+      if (!options.crossing) this.#stampLoss(existing);
       // A CONNECTION ENDED HERE, and it used to end in silence. The address
       // stays in the map and the count does not move, so nothing that watches
       // membership can see it - but a request written into that socket is as

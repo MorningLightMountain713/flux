@@ -2007,6 +2007,20 @@ describe('FluxPeerManager tests', () => {
       sinon.assert.notCalled(crossing.close);
     });
 
+    it('announces no re-establishment for a crossing: the pair lost no link', () => {
+      manager.setOwnSocketAddress('9.9.9.9:16127');
+      manager.get('8.8.8.8:16127').lastPongTime = Date.now() - 45_000;
+      const reestablished = [];
+      manager.on('peerReestablished', (info) => reestablished.push(info));
+
+      manager.validateAndAddInbound(crossing, '16127', createMockReq('8.8.8.8'));
+
+      expect(reestablished, 'a crossing is not a reconnection of the pair').to.deep.equal([]);
+      manager.remove('8.8.8.8:16127', 1006);
+      manager.add(createMockWs('8.8.8.8'), '8.8.8.8', '16127', { source: PEER_SOURCE.DETERMINISTIC });
+      expect(reestablished, 'a later loss and return is one').to.have.lengthOf(1);
+    });
+
     it('refuses the inbound when this node has the lower address', (done) => {
       manager.setOwnSocketAddress('1.1.1.1:16127');
 

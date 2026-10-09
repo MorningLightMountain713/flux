@@ -572,8 +572,10 @@ class AppSyncOrchestrator {
   #onEphemeralSyncComplete(syncType, peerKey) {
     // A scoped reconnect pull completing is the pull's own business - it
     // answered from a since bound, not the round's since=0. It is announced:
-    // a node back from unreachability runs its placement check on it.
-    if (this.#reconnectPulls.delete(peerKey)) {
+    // a node back from unreachability runs its placement check on it. The
+    // pull is an apprunning pull; a completion of another type from the same
+    // peer is the round's.
+    if (syncType === 'apprunning' && this.#reconnectPulls.delete(peerKey)) {
       appSyncEvents.emit(EVENTS.RECONNECT_SYNC_COMPLETE, peerKey);
       return;
     }

@@ -2522,6 +2522,32 @@ describe('AppSyncOrchestrator', () => {
       }
     });
 
+    it('a completion of another type from the pulled peer is not the pull\'s: the pull waits for its apprunning answer', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+      await reachReady();
+      await clock.tickAsync(300_000);
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() - 60_000 });
+      await clock.tickAsync(0);
+
+      const heard = [];
+      const listener = (key) => heard.push(key);
+      appSyncEvents.on(EVENTS.RECONNECT_SYNC_COMPLETE, listener);
+      try {
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apptemp', peers[0].key);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', peers[0].key);
+        await clock.tickAsync(0);
+        expect(heard, 'another type\'s completion closed the pull').to.deep.equal([]);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peers[0].key);
+        await clock.tickAsync(0);
+        expect(heard).to.deep.equal([peers[0].key]);
+      } finally {
+        appSyncEvents.off(EVENTS.RECONNECT_SYNC_COMPLETE, listener);
+      }
+    });
+
     it('pulls in any state - a degraded-window node is the one that needs it most', async () => {
       // 1216 run five: the pocket sat outside READY through the whole heal
       // window (its resync round burned against its own side during the cut)
