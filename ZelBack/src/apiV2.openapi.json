@@ -14,6 +14,10 @@
     {
       "name": "operations",
       "description": "The status resource every long-running v2 operation points at."
+    },
+    {
+      "name": "node",
+      "description": "This node's own process: how it came up."
     }
   ],
   "paths": {
@@ -336,6 +340,190 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/node/boot": {
+      "get": {
+        "tags": [
+          "node"
+        ],
+        "operationId": "getNodeBoot",
+        "summary": "How this process came up",
+        "description": "Every capability's state now and every transition the process has made since it started, each with when it happened, why, how long the state before it lasted (`tookMs`) and which prerequisite it was waiting on. `startedAt` is the process start, so a transition's `at - tookMs` is where its bar begins on a timeline from there. The last 2,000 transitions are kept. For the node's operator and the Flux team: the `zelidauth` header.",
+        "parameters": [
+          {
+            "name": "zelidauth",
+            "in": "header",
+            "required": true,
+            "description": "The node operator's or a Flux team member's signed login.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Request-Id",
+            "in": "header",
+            "required": false,
+            "description": "Echoed back on the response and in meta.requestId. Minted when absent.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The boot timeline.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "startedAt",
+                        "now",
+                        "capabilities",
+                        "transitions"
+                      ],
+                      "properties": {
+                        "startedAt": {
+                          "type": "integer",
+                          "description": "The process start, epoch milliseconds."
+                        },
+                        "now": {
+                          "type": "integer",
+                          "description": "When this answer was made, epoch milliseconds."
+                        },
+                        "capabilities": {
+                          "type": "array",
+                          "description": "Every present capability's state now.",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "name",
+                              "owner",
+                              "needs",
+                              "state",
+                              "since",
+                              "reason",
+                              "waitingOn"
+                            ],
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "owner": {
+                                "type": "string",
+                                "description": "The service that raises and lowers it."
+                              },
+                              "needs": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                },
+                                "description": "The capabilities it is held below until they are up."
+                              },
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "down",
+                                  "coming-up",
+                                  "up"
+                                ]
+                              },
+                              "since": {
+                                "type": "integer",
+                                "description": "When it entered this state, epoch milliseconds."
+                              },
+                              "reason": {
+                                "type": "string"
+                              },
+                              "waitingOn": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "description": "The first prerequisite not up, or itself while its owner has not raised it; null when up."
+                              }
+                            }
+                          }
+                        },
+                        "transitions": {
+                          "type": "array",
+                          "description": "Every transition since the process started, oldest first.",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "name",
+                              "from",
+                              "to",
+                              "at",
+                              "reason",
+                              "tookMs",
+                              "waitingOn"
+                            ],
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "from": {
+                                "type": "string",
+                                "enum": [
+                                  "down",
+                                  "coming-up",
+                                  "up"
+                                ]
+                              },
+                              "to": {
+                                "type": "string",
+                                "enum": [
+                                  "down",
+                                  "coming-up",
+                                  "up"
+                                ]
+                              },
+                              "at": {
+                                "type": "integer",
+                                "description": "Epoch milliseconds."
+                              },
+                              "reason": {
+                                "type": "string"
+                              },
+                              "tookMs": {
+                                "type": "integer",
+                                "description": "How long the state left behind lasted."
+                              },
+                              "waitingOn": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           }
         }
       }

@@ -113,6 +113,7 @@ const surface = {
   refuse: (res, { message }) => res.fail('UNAVAILABLE', message),
   guards: {
     deliveryBody: express.json({ limit: DELIVERY_BODY_LIMIT }),
+    nodeOperatorOrFluxTeam: requireTier(Privilege.NODE_OPERATOR_OR_FLUX_TEAM),
   },
 };
 

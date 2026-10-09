@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FluxOS Boot Waterfall</title>
+<style>
+/* One column: a summary strip, the waterfall in its own scroll box, the blame
+   table, then the loader. Colours and type as tokens; the bar hue is one blue
+   stepped lighter for a wait, the critical chain is the one accent. */
+:root {
+  --bg: #f6f6f3;
+  --fg: #16161a;
+  --muted: #5f5e66;
+  --line: #d6d5cf;
+  --panel: #ffffff;
+  --bar: #2a78d6;
+  --bar-wait: #b7cff0;
+  --crit: #eb6834;
+  --crit-soft: #f6c7b3;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #131316; --fg: #ecebe6; --muted: #a3a29b; --line: #34343a; --panel: #1b1b1f;
+    --bar: #3987e5; --bar-wait: #27415f; --crit: #d95926; --crit-soft: #5a2f1d;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #131316; --fg: #ecebe6; --muted: #a3a29b; --line: #34343a; --panel: #1b1b1f;
+  --bar: #3987e5; --bar-wait: #27415f; --crit: #d95926; --crit-soft: #5a2f1d;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--sans); }
+main { max-width: 1120px; margin: 0 auto; padding-block: 24px 48px; padding-inline: 16px; display: grid; gap: 20px; }
+h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+h2 { font-size: 15px; margin: 0 0 8px; }
+p { margin: 0; }
+.sub { color: var(--muted); max-width: 70ch; }
+.strip { display: flex; flex-wrap: wrap; gap: 8px 24px; padding: 12px 14px; border: 1px solid var(--line); background: var(--panel); border-radius: 6px; }
+.strip dt { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.strip dd { margin: 0; font-variant-numeric: tabular-nums; }
+.strip div { min-width: 0; }
+.chart { overflow-x: auto; border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 8px 4px; }
+svg { display: block; font: 12px var(--sans); }
+svg text { fill: var(--fg); }
+svg .muted { fill: var(--muted); }
+svg .grid { stroke: var(--line); stroke-width: 1; }
+svg .track { stroke: var(--line); stroke-width: 1; stroke-dasharray: 2 3; }
+svg .wait { fill: var(--bar-wait); }
+svg .up { fill: var(--bar); }
+svg .open { fill: var(--bar); opacity: 0.35; }
+svg .edge { stroke: var(--bar); stroke-width: 3; stroke-linecap: round; }
+svg .chain .edge { stroke: var(--crit); }
+svg .chain text.name { font-weight: 600; }
+svg .link { stroke: var(--line); stroke-width: 1.5; fill: none; }
+svg .link.chain { stroke: var(--crit); }
+svg .dot { fill: var(--crit); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 12px; }
+.legend span::before { content: ""; display: inline-block; width: 14px; height: 10px; margin-right: 6px; vertical-align: -1px; border-radius: 2px; }
+.legend .l-wait::before { background: var(--bar-wait); }
+.legend .l-up::before { background: var(--bar); }
+.legend .l-chain::before { background: var(--crit); }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+td.num, th.num { text-align: right; }
+td.name { font-family: var(--mono); font-size: 12.5px; }
+tr.chain td.name { color: var(--crit); font-weight: 600; }
+.tablewrap { overflow-x: auto; }
+details { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); padding: 10px 14px; }
+summary { cursor: pointer; font-weight: 600; }
+.loader { display: grid; gap: 12px; margin-top: 10px; }
+.loader label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+textarea, input { font: 13px var(--mono); padding: 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--fg); width: 100%; min-width: 0; }
+textarea { min-height: 120px; resize: vertical; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+.row label { flex: 1 1 240px; }
+button { font: 600 13px var(--sans); padding: 8px 14px; border-radius: 4px; border: 1px solid var(--bar); background: var(--bar); color: #fff; cursor: pointer; }
+button.quiet { background: transparent; color: var(--fg); border-color: var(--line); }
+button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--crit); outline-offset: 2px; }
+.status { color: var(--muted); font-size: 12px; min-height: 1.2em; }
+.howto { color: var(--muted); max-width: 72ch; display: grid; gap: 6px; }
+@media (prefers-reduced-motion: no-preference) { svg .edge, svg .wait, svg .up { transition: opacity 120ms; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>FluxOS Boot Waterfall</h1>
+    <p class="sub">Every capability of one FluxOS process, from the process start to the moment it came up, with what each one waited on. Fed by <code>GET /v2/node/boot</code>, or by the <code>capability:changed</code> lines of a harness node log.</p>
+  </header>
+
+  <dl class="strip" id="summary"></dl>
+
+  <section>
+    <div class="chart"><svg id="plot" role="img" aria-label="Boot waterfall"></svg></div>
+    <p class="legend"><span class="l-wait">waiting (coming up, a prerequisite not yet up)</span><span class="l-up">up</span><span class="l-chain">the critical chain: what the last capability waited on, back to the start</span></p>
+  </section>
+
+  <section>
+    <h2>Blame</h2>
+    <div class="tablewrap"><table id="blame"><thead><tr><th>Capability</th><th class="num">Up at</th><th class="num">Own wait</th><th>Waited on</th><th>Reason it came up</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <details id="loader-box">
+    <summary>Load another boot</summary>
+    <div class="loader">
+      <label for="paste">Paste the answer of <code>GET /v2/node/boot</code>, or harness log lines (<code>capability:changed: {…}</code>)
+        <textarea id="paste" spellcheck="false" placeholder='{"data":{"startedAt":…,"transitions":[…]}}'></textarea>
+      </label>
+      <div class="row">
+        <button id="draw" type="button">Draw</button>
+        <button id="reset" type="button" class="quiet">Back to the sample</button>
+      </div>
+      <div class="row">
+        <label for="node-url">Node URL (works from a file on disk; a hosted copy of this page cannot reach a node)
+          <input id="node-url" type="url" placeholder="http://1.2.3.4:16127">
+        </label>
+        <label for="zelidauth">zelidauth header (node operator or Flux team)
+          <input id="zelidauth" type="text" autocomplete="off" placeholder="zelid=…&signature=…&loginPhrase=…">
+        </label>
+        <button id="fetch" type="button" class="quiet">Fetch</button>
+      </div>
+      <p class="status" id="status"></p>
+    </div>
+  </details>
+
+  <section class="howto">
+    <p><strong>How to read it.</strong> Each row is a capability. A light bar is the time it spent coming up, held below a prerequisite; the dark edge is the moment it came up; a faint bar after that is the state it is still in. A connector joins a capability to the prerequisite it was waiting on, drawn in the accent when both are on the critical chain. Blame lists capabilities by when they came up; own wait is the time between the capability first being asked for and its coming up.</p>
+  </section>
+</main>
+<script>
+(() => {
+  const SAMPLE = {"startedAt":1791395437922,"now":1791395444948,"transitions":[{"name":"apiListening","from":"down","to":"up","at":1791395440497,"reason":"listening on 16127 and 16128","tookMs":2575,"waitingOn":null},{"name":"dockerReachable","from":"down","to":"up","at":1791395441394,"reason":"Docker answered","tookMs":3472,"waitingOn":null},{"name":"mongoReachable","from":"down","to":"up","at":1791395441443,"reason":"MongoDB answered","tookMs":3521,"waitingOn":null},{"name":"localDbPrepared","from":"down","to":"coming-up","at":1791395441444,"reason":"running migrations and preparing collections","tookMs":3522,"waitingOn":null},{"name":"daemonReachable","from":"down","to":"up","at":1791395441463,"reason":"RPC answered","tookMs":3541,"waitingOn":null},{"name":"daemonSynced","from":"down","to":"up","at":1791395441483,"reason":"at 2952000 of 2952000","tookMs":3561,"waitingOn":null},{"name":"nodeConfirmed","from":"down","to":"up","at":1791395441493,"reason":"daemon reports this node confirmed","tookMs":3571,"waitingOn":null},{"name":"confirmationStatusKnown","from":"down","to":"up","at":1791395441500,"reason":"first confirmation status read","tookMs":3578,"waitingOn":null},{"name":"chainStateConsistent","from":"down","to":"up","at":1791395441522,"reason":"histories built, scan cursor at 2952000","tookMs":3600,"waitingOn":null},{"name":"localDbPrepared","from":"coming-up","to":"up","at":1791395442366,"reason":"collections and indexes prepared","tookMs":922,"waitingOn":null},{"name":"appRegistryConsistent","from":"down","to":"coming-up","at":1791395442367,"reason":"deriving the list from the decisions","tookMs":4445,"waitingOn":"explorerSynced"},{"name":"bootReconcileDecided","from":"down","to":"coming-up","at":1791395442423,"reason":"deciding what this node keeps","tookMs":4501,"waitingOn":null},{"name":"explorerSynced","from":"down","to":"up","at":1791395442432,"reason":"scan at 2952000, daemon at 2952000","tookMs":4510,"waitingOn":null},{"name":"nodeListPopulated","from":"down","to":"up","at":1791395442567,"reason":"node list populated","tookMs":4645,"waitingOn":null},{"name":"nodeMessageCapable","from":"down","to":"up","at":1791395442576,"reason":"the node list carries this node at its own address and key","tookMs":4654,"waitingOn":null},{"name":"appMessagesSynced","from":"down","to":"up","at":1791395442598,"reason":"hash sync ran, 0 unresolved","tookMs":4676,"waitingOn":null},{"name":"appRegistryConsistent","from":"coming-up","to":"up","at":1791395442598,"reason":"appMessagesSynced up","tookMs":231,"waitingOn":null},{"name":"peersAboveFloor","from":"down","to":"up","at":1791395443542,"reason":"2 peers, threshold 2","tookMs":5620,"waitingOn":null},{"name":"policyVerified","from":"down","to":"up","at":1791395444138,"reason":"verified bundle held","tookMs":6216,"waitingOn":null},{"name":"policyCurrent","from":"down","to":"up","at":1791395444138,"reason":"no reachable peer is ahead","tookMs":6216,"waitingOn":null},{"name":"appStateSynced","from":"down","to":"up","at":1791395444209,"reason":"ephemeral state sync complete","tookMs":6287,"waitingOn":null},{"name":"spawnerReady","from":"down","to":"coming-up","at":1791395444210,"reason":"orchestrator READY","tookMs":6288,"waitingOn":"bootReconcileDecided"},{"name":"bootReconcileDecided","from":"coming-up","to":"up","at":1791395444674,"reason":"boot reconcile has decided what this node keeps","tookMs":2251,"waitingOn":null},{"name":"spawnerReady","from":"coming-up","to":"up","at":1791395444674,"reason":"bootReconcileDecided up","tookMs":464,"waitingOn":null},{"name":"bootReconcilePassed","from":"down","to":"up","at":1791395444748,"reason":"nothing to drain","tookMs":6826,"waitingOn":null}]};
+  const SAMPLE_LABEL = 'sample: node 0 of a harness fleet, 2026-10-09';
+
+  function parseInput(text) {
+    const trimmed = text.trim();
+    if (!trimmed) throw new Error('nothing to draw');
+    if (trimmed[0] === '{') {
+      const doc = JSON.parse(trimmed);
+      const data = doc.data && doc.data.transitions ? doc.data : doc;
+      if (!Array.isArray(data.transitions)) throw new Error('no transitions in that JSON');
+      return { startedAt: data.startedAt, now: data.now, transitions: data.transitions, source: 'pasted answer' };
+    }
+    const transitions = [];
+    for (const line of trimmed.split('\n')) {
+      const i = line.indexOf('capability:changed: ');
+      if (i < 0) continue;
+      try { transitions.push(JSON.parse(line.slice(i + 'capability:changed: '.length))); } catch (e) { /* not an event line */ }
+    }
+    if (!transitions.length) throw new Error('no capability:changed lines found');
+    return { transitions, source: 'pasted log lines' };
+  }
+
+  // Rows per capability: the segments each state lasted, the up edge, and the
+  // prerequisite it waited on, read off the transitions alone.
+  function model(data) {
+    const transitions = [...data.transitions].sort((a, b) => a.at - b.at);
+    const startedAt = Number.isFinite(data.startedAt) ? data.startedAt
+      : Math.min(...transitions.map((t) => t.at - t.tookMs));
+    const now = Number.isFinite(data.now) ? data.now : Math.max(...transitions.map((t) => t.at));
+    const rows = new Map();
+    for (const t of transitions) {
+      if (!rows.has(t.name)) rows.set(t.name, { name: t.name, segments: [], upAt: null, waitedOn: null, upReason: null, firstSeen: t.at - t.tookMs, last: null });
+      const row = rows.get(t.name);
+      row.segments.push({ state: t.from, start: Math.max(startedAt, t.at - t.tookMs), end: t.at, reason: t.reason, waitingOn: t.waitingOn, to: t.to });
+      if (t.to === 'up' && row.upAt === null) {
+        row.upAt = t.at;
+        row.upReason = t.reason;
+        const m = /^(\w+) up$/.exec(t.reason);
+        if (m) row.waitedOn = m[1];
+      }
+      if (t.waitingOn && !row.waitedOn) row.waitedOn = t.waitingOn;
+      row.last = t;
+    }
+    for (const row of rows.values()) {
+      if (row.last && row.last.at < now) row.segments.push({ state: row.last.to, start: row.last.at, end: now, reason: row.last.reason, open: true });
+    }
+    // The declared prerequisites, when the answer carries them: the one that
+    // came up last is the binding one for a capability that named no wait.
+    const needs = new Map((data.capabilities || []).map((c) => [c.name, c.needs || []]));
+    const bindingOf = (row) => {
+      if (row.waitedOn && rows.has(row.waitedOn) && row.waitedOn !== row.name) return rows.get(row.waitedOn);
+      const pres = (needs.get(row.name) || []).map((n) => rows.get(n)).filter((r) => r && r.upAt !== null && r.name !== row.name);
+      return pres.sort((a, b) => b.upAt - a.upAt)[0] || null;
+    };
+    for (const row of rows.values()) { const b = bindingOf(row); row.binding = b ? b.name : null; }
+    const list = [...rows.values()].sort((a, b) => (a.upAt ?? Infinity) - (b.upAt ?? Infinity) || a.firstSeen - b.firstSeen);
+    const ups = list.filter((r) => r.upAt !== null).sort((a, b) => b.upAt - a.upAt);
+    const lastUp = ups[0] || null;
+    // The chain starts at the latest capability that waited on another and
+    // that nothing else waited on, and follows what each waited on back to the
+    // start.
+    const boundBy = new Set(list.map((r) => r.binding).filter(Boolean));
+    const root = ups.find((r) => r.binding && !boundBy.has(r.name)) || ups.find((r) => r.binding) || lastUp;
+    const chain = new Set();
+    let cur = root;
+    while (cur && !chain.has(cur.name)) {
+      chain.add(cur.name);
+      cur = cur.binding ? rows.get(cur.binding) : null;
+    }
+    return { startedAt, now, rows: list, byName: rows, lastUp, chain, transitions };
+  }
+
+  const fmt = (ms) => `${(ms / 1000).toFixed(2)} s`;
+
+  function render(m, source) {
+    const span = Math.max(1000, m.now - m.startedAt);
+    const labelW = 190;
+    const plotW = Math.max(520, Math.min(900, Math.round(span / 1000) * 90));
+    const rowH = 22;
+    const top = 26;
+    const W = labelW + plotW + 20;
+    const H = top + m.rows.length * rowH + 12;
+    const x = (t) => labelW + ((t - m.startedAt) / span) * plotW;
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.getElementById('plot');
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.setAttribute('width', W);
+    svg.setAttribute('height', H);
+    const el = (tag, attrs, parent) => {
+      const node = document.createElementNS(svgNS, tag);
+      Object.entries(attrs).forEach(([k, v]) => node.setAttribute(k, v));
+      (parent || svg).appendChild(node);
+      return node;
+    };
+    const text = (str, attrs, parent) => { const n = el('text', attrs, parent); n.textContent = str; return n; };
+
+    // the time axis: one tick per second, more coarsely past twenty
+    const step = span > 20000 ? 5000 : 1000;
+    for (let t = 0; t <= span; t += step) {
+      el('line', { x1: x(m.startedAt + t), x2: x(m.startedAt + t), y1: top - 6, y2: H - 8, class: 'grid' });
+      text(`${t / 1000}s`, { x: x(m.startedAt + t), y: top - 10, 'text-anchor': 'middle', class: 'muted' });
+    }
+
+    const rowY = new Map();
+    m.rows.forEach((row, i) => {
+      const y = top + i * rowH;
+      rowY.set(row.name, y);
+      const g = el('g', { class: m.chain.has(row.name) ? 'chain' : '' });
+      text(row.name, { x: labelW - 8, y: y + 15, 'text-anchor': 'end', class: 'name' }, g);
+      el('line', { x1: labelW, x2: labelW + plotW, y1: y + 11, y2: y + 11, class: 'track' }, g);
+      for (const s of row.segments) {
+        const x1 = x(s.start); const w = Math.max(1, x(s.end) - x1);
+        const cls = s.open ? (s.state === 'up' ? 'open' : 'wait') : (s.state === 'coming-up' ? 'wait' : null);
+        if (cls) {
+          const r = el('rect', { x: x1, y: y + 5, width: w, height: 12, rx: 2, class: cls }, g);
+          const tt = el('title', {}, r);
+          tt.textContent = s.open
+            ? `${row.name}: ${s.state} since +${fmt(s.start - m.startedAt)} (${s.reason})`
+            : `${row.name}: ${s.state} from +${fmt(s.start - m.startedAt)} to +${fmt(s.end - m.startedAt)}, ${fmt(s.end - s.start)}; then ${s.to}: ${s.reason}${s.waitingOn ? `, waiting on ${s.waitingOn}` : ''}`;
+        }
+      }
+      if (row.upAt !== null) {
+        const e = el('line', { x1: x(row.upAt), x2: x(row.upAt), y1: y + 3, y2: y + 19, class: 'edge' }, g);
+        const tt = el('title', {}, e);
+        tt.textContent = `${row.name} up at +${fmt(row.upAt - m.startedAt)}: ${row.upReason}`;
+      }
+    });
+    // connectors from the prerequisite's up edge to the row that waited on it
+    for (const row of m.rows) {
+      const pre = row.binding && m.byName.get(row.binding);
+      if (!pre || pre.upAt === null || row.upAt === null) continue;
+      const y1 = rowY.get(pre.name) + 11; const y2 = rowY.get(row.name) + 11;
+      const onChain = m.chain.has(row.name) && m.chain.has(pre.name);
+      el('path', { d: `M ${x(pre.upAt)} ${y1} V ${y2}`, class: `link${onChain ? ' chain' : ''}` });
+      if (onChain) el('circle', { cx: x(pre.upAt), cy: y2, r: 3, class: 'dot' });
+    }
+
+    // the summary strip
+    const summary = document.getElementById('summary');
+    summary.innerHTML = '';
+    const item = (k, v) => { const d = document.createElement('div'); d.innerHTML = `<dt>${k}</dt><dd>${v}</dd>`; summary.appendChild(d); };
+    item('Process start', new Date(m.startedAt).toISOString().replace('T', ' ').slice(0, 23));
+    item('Last capability up', m.lastUp ? `${m.lastUp.name} at +${fmt(m.lastUp.upAt - m.startedAt)}` : 'none yet');
+    item('Capabilities', `${m.rows.length}, ${m.rows.filter((r) => r.upAt !== null).length} up`);
+    item('Transitions', String(m.transitions.length));
+    item('Critical chain', [...m.chain].reverse().join(' → ') || '—');
+    item('Source', source);
+
+    // blame, by when each came up
+    const body = document.querySelector('#blame tbody');
+    body.innerHTML = '';
+    [...m.rows].sort((a, b) => (b.upAt ?? Infinity) - (a.upAt ?? Infinity)).forEach((row) => {
+      const tr = document.createElement('tr');
+      if (m.chain.has(row.name)) tr.className = 'chain';
+      const own = row.upAt === null ? null : row.upAt - row.firstSeen;
+      tr.innerHTML = `<td class="name">${row.name}</td><td class="num">${row.upAt === null ? 'not up' : fmt(row.upAt - m.startedAt)}</td><td class="num">${own === null ? '—' : fmt(own)}</td><td>${row.binding || '—'}</td><td>${row.upReason || (row.last ? row.last.reason : '')}</td>`;
+      body.appendChild(tr);
+    });
+  }
+
+  const status = (msg) => { document.getElementById('status').textContent = msg; };
+  function draw(data, source) {
+    try { render(model(data), source); status(''); } catch (e) { status(`Could not draw: ${e.message}`); }
+  }
+
+  document.getElementById('draw').addEventListener('click', () => {
+    try { const data = parseInput(document.getElementById('paste').value); draw(data, data.source); } catch (e) { status(`Could not read that: ${e.message}`); }
+  });
+  document.getElementById('reset').addEventListener('click', () => { document.getElementById('paste').value = ''; draw(SAMPLE, SAMPLE_LABEL); });
+  document.getElementById('fetch').addEventListener('click', async () => {
+    const url = document.getElementById('node-url').value.trim().replace(/\/+$/, '');
+    const auth = document.getElementById('zelidauth').value.trim();
+    if (!url) { status('Give the node URL first.'); return; }
+    status(`Asking ${url}/v2/node/boot …`);
+    try {
+      const res = await fetch(`${url}/v2/node/boot`, { headers: auth ? { zelidauth: auth } : {} });
+      const doc = await res.json();
+      if (!res.ok) throw new Error(doc.error ? `${doc.error.code}: ${doc.error.message}` : `HTTP ${res.status}`);
+      draw(doc.data, url);
+    } catch (e) { status(`Fetch failed: ${e.message}`); }
+  });
+
+  draw(SAMPLE, SAMPLE_LABEL);
+})();
+</script>
+</body>
+</html>
