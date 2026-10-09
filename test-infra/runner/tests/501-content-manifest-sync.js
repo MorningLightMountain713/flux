@@ -25,10 +25,16 @@ import { bootstrapPricing } from '../framework/price-helper.js';
 //
 // nodes:10 with one DEFERRED node: nodes 0-8 boot and install a slot app (so its
 // owner-signed manifest is confirmed + envelope-bearing on the fleet), then node 9
-// joins cold and reconciles the manifest it never saw. Asserts on the SSE event
-// bus (content:manifestSync* / content:manifestReconciled) plus the
-// appcontentmanifests DB rows (dbClient.getContentManifest) — never log scraping.
-// arcane:true so the node accepts the v9 content app and runs the benchmark crypto.
+// joins cold and reconciles the manifest it never saw. Two paths bring it: the
+// in-band round fetches the body it lacks, or the registration reaches the
+// joiner by hash sync first and its row write pulls the manifest from the app's
+// peers, leaving the round no gap; whichever runs first, the round's accounting
+// and the stored row say which. Suites 507 and 511 prove the in-band fetch with
+// a gap the row write cannot close. Asserts on the SSE event bus
+// (content:manifestSync* / content:manifestReconciled / content:manifestStored)
+// plus the appcontentmanifests DB rows (dbClient.getContentManifest) — never log
+// scraping. arcane:true so the node accepts the v9 content app and runs the
+// benchmark crypto.
 
 const NODES = 10;
 const DEFERRED = NODES - 1; // index 9 — the cold joiner
@@ -139,11 +145,20 @@ describe('content manifest sync: cold-boot in-band reconcile off the ephemeral p
     const complete = await deferredClient.waitForEvent(
       'content:manifestSyncComplete', () => true, 240000, { afterId: started.id },
     );
-    // The joiner asked peers (peers>=1), at least one answered the cheap index
-    // (indexesReceived>=1), and it fetched the one body it was missing (fetched>=1).
+    // The joiner asked peers (peers>=1) and at least one answered the cheap index
+    // (indexesReceived>=1). The manifest reaches the joiner by whichever of two
+    // paths runs first: the in-band round fetches the one body it lacks
+    // (fetched>=1), or the registration arrives by hash sync first and its row
+    // write pulls the manifest from the app's peers, so the round finds no gap
+    // and the body was stored before the round completed. A round that found no
+    // gap with nothing stored before it asked nobody, and fails.
     expect(complete.data.peers).to.be.at.least(1);
     expect(complete.data.indexesReceived).to.be.at.least(1);
-    expect(complete.data.fetched).to.be.at.least(1);
+    expect(complete.data.fetched).to.equal(complete.data.requested);
+    const storedBefore = deferredClient.getEventBuffer()
+      .find((e) => e.event === 'content:manifestStored' && e.data.appName === appName && e.id < complete.id);
+    if (complete.data.fetched === 0) expect(storedBefore, 'the row write stored the manifest before the round').to.exist;
+    else expect(complete.data.fetched).to.be.at.least(1);
 
     // The register converges to a SIGNED v1 row by either ordering: spec-first
     // stores the fetched body with its signer resolved, manifest-first keeps it
@@ -182,19 +197,24 @@ describe('content manifest sync: cold-boot in-band reconcile off the ephemeral p
 
   it('emits content:manifestReconciled with the round accounting { requested, fetched } (single-flight round)', async function () {
     this.timeout(30000);
-    // The cold joiner's single boot reconcile round publishes exactly one
-    // manifestReconciled carrying the gap accounting: it requested the one app it
-    // lacked and fetched it (fetched===requested, fully converged). reconcile() is
-    // single-flight (reconcileRunning guard) so one round yields one such event.
+    // The cold joiner's boot reconcile publishes a manifestReconciled per round
+    // carrying the gap accounting; reconcile() is single-flight. The round that
+    // completed the sync either requested the one app it lacked and fetched it
+    // (fetched===requested>=1), or found no gap because the registration's row
+    // write had already stored the manifest (test 1 says which).
     expect(deferredClient, 'cold node was started in test 1').to.exist;
-    const reconciled = deferredClient.getEventBuffer()
-      .filter((e) => e.event === 'content:manifestReconciled');
-    expect(reconciled.length, 'at least one reconcile round').to.be.at.least(1);
-
-    const withGap = reconciled.find((e) => e.data.requested >= 1);
-    expect(withGap, 'a reconcile round with a non-empty gap').to.exist;
-    expect(withGap.data.fetched).to.be.at.most(withGap.data.requested);
-    expect(withGap.data.fetched).to.equal(withGap.data.requested); // gap fully closed
-    expect(withGap.data.fetched).to.be.at.least(1);
+    const buffer = deferredClient.getEventBuffer();
+    const complete = buffer.find((e) => e.event === 'content:manifestSyncComplete');
+    expect(complete, 'the boot reconcile completed').to.exist;
+    const rounds = buffer.filter((e) => e.event === 'content:manifestReconciled' && e.id < complete.id);
+    expect(rounds.length, 'at least one reconcile round').to.be.at.least(1);
+    const completing = rounds[rounds.length - 1];
+    expect(completing.data.indexesReceived).to.be.at.least(1);
+    expect(completing.data.fetched).to.equal(completing.data.requested); // gap fully closed
+    if (completing.data.requested === 0) {
+      expect(buffer.find((e) => e.event === 'content:manifestStored' && e.data.appName === appName && e.id < completing.id), 'the manifest was held before the round').to.exist;
+    } else {
+      expect(completing.data.fetched).to.be.at.least(1);
+    }
   });
 });
