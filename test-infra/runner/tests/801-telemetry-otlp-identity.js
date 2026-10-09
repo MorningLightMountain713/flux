@@ -15,6 +15,8 @@ import { execInContainer, requireAppContainerName, appContainerName } from '../f
 import {
   telemetrydControl, waitForTelemetryEvent, announcedIdentities,
 } from '../framework/telemetryd-control.js';
+import { authenticate } from '../auth.js';
+import { appOwnerKey } from '../framework/keys.js';
 
 // OTLP telemetry (Option B): the app declares its own observability agent as an
 // ordinary component, and flux-telemetryd emits OTLP to that agent's receiver on
@@ -33,6 +35,9 @@ import {
 // The daemon's own half (cgroup sampling, OTLP protobuf emission, exporter
 // rotation on a changed endpoint) is covered by the daemon's unit tests and by
 // suite 802, which runs the real daemon.
+//
+// The stub has no query socket, so these nodes read container logs through
+// docker — the reader every node without the daemon keeps.
 // 5 nodes: the peering bar below (minOutbound 2) needs a mesh big enough that
 // dial-dedupe still leaves ~2 outbound per node — see suite 68's sizing note.
 const NODES = 5;
@@ -204,6 +209,26 @@ describe('otlp telemetry: the identity socket carries the resolved agent endpoin
       && e.conn > before
       && (e.containers || []).some((c) => c.identity.app_name === APP
         && /^http:\/\/\d+\.\d+\.\d+\.\d+:4318$/.test(c.identity.sink?.endpoint || '')), { timeout: 45000 });
+  });
+
+  it('reads container logs through docker on a node without the daemon\'s query socket', async function () {
+    this.timeout(60000);
+    const X = (cmd) => execInContainer(client.container, cmd);
+    expect((await X('test -e /run/flux-telemetryd/query.sock')).exitCode, 'the stub serves no query socket').to.not.equal(0);
+
+    // test-app logs a line on SIGUSR1, so the read has something to place a
+    // cursor on.
+    const web = await requireAppContainerName(client.container, APP, 'web');
+    expect((await X(`docker kill --signal=SIGUSR1 ${web}`)).exitCode).to.equal(0);
+    const { zelidauth } = await authenticate(client.url, appOwnerKey());
+    const body = await client.getAuthed(`/apps/applogpolling/web_${APP}/100`, zelidauth);
+    expect(body.status, JSON.stringify(body).slice(0, 300)).to.equal('success');
+    expect(body.logs.some((line) => line.includes('RELOAD SIGUSR1')), 'the provoked line').to.be.true;
+
+    // The docker reader's cursor is {ms, count}; only the daemon adds where it
+    // stopped in the file.
+    const cursor = JSON.parse(Buffer.from(body.cursor, 'base64url').toString('utf8'));
+    expect(Object.keys(cursor).sort()).to.deep.equal(['count', 'ms', 'v']);
   });
 
   it('keeps the announced endpoint correct across an agent recreate', async function () {
