@@ -56,15 +56,60 @@ function isPeerInActiveRound(peerKey) {
   return !!activeRound && activeRound.peerKeys.has(peerKey);
 }
 
+/** The index wait ends when every asked peer has answered or cannot: a peer the request
+ *  never reached, or whose connection ended with the ask outstanding, is not waited for. */
+function settleIndexWait() {
+  if (!activeRound || !activeRound.resolveIndexes) return;
+  if (activeRound.indexes.size + activeRound.unreached.size < activeRound.expected) return;
+  activeRound.resolveIndexes();
+}
+
 /** Record a peer's (identity, version) index for the live round; resolve the wait once
  *  every asked peer has answered (one index per peer; a late/dup is ignored). */
 function depositIndex(peerKey, index) {
   if (!activeRound || !activeRound.peerKeys.has(peerKey)) return;
   if (activeRound.indexes.has(peerKey)) return;
   activeRound.indexes.set(peerKey, Array.isArray(index) ? index : []);
-  if (activeRound.indexes.size >= activeRound.expected && activeRound.resolveIndexes) {
-    activeRound.resolveIndexes();
+  activeRound.unreached.delete(peerKey);
+  settleIndexWait();
+}
+
+/**
+ * A connection to a peer in the live round has ended. An ask written into it is dead and
+ * its answer, if one was on the way, died with it. A crossing closed the pair's losing
+ * socket and the peer is still connected over the kept one, so the ask is sent again
+ * there; any other ending makes the peer one the round cannot hear from. A body request
+ * in flight on the ended connection is released either way: its answer comes back on the
+ * socket it was asked on. A connection the round did not ask on says nothing about it.
+ *
+ * @param {string} peerKey ip:port of the peer
+ * @param {{connectionId?: number|null, crossing?: boolean}} [ending]
+ */
+function peerConnectionEnded(peerKey, { connectionId = null, crossing = false } = {}) {
+  if (!activeRound || !activeRound.peerKeys.has(peerKey)) return;
+  const asked = activeRound.channels.get(peerKey);
+  if (connectionId !== null && asked != null && asked !== connectionId) return;
+  const resolveFetch = activeRound.fetchWaiters.get(peerKey);
+  if (resolveFetch) {
+    activeRound.fetchWaiters.delete(peerKey);
+    resolveFetch();
   }
+  if (activeRound.indexes.has(peerKey) || activeRound.unreached.has(peerKey)) return;
+  if (crossing && activeRound.indexReq) {
+    const kept = activeRound.resolvePeer(peerKey, null);
+    if (kept && sendTo(kept, activeRound.indexReq)) {
+      activeRound.channels.set(peerKey, kept.connectionId ?? null);
+      return;
+    }
+  }
+  activeRound.unreached.add(peerKey);
+  settleIndexWait();
+}
+
+/** Whether a message reached the socket: send() reports a dead socket by returning false
+ *  and never throws, so the boolean is the only liveness signal a round gets. */
+function sendTo(peer, message) {
+  try { return peer.send(message) !== false; } catch (error) { return false; }
 }
 
 /** A peer has finished answering the body request it was sent — the `done` flag its reply
@@ -199,17 +244,34 @@ async function runReconcile(peers, deps = {}) {
     activeRound = {
       peerKeys: new Set(peers.map((peer) => peer.key)),
       indexes: new Map(),
+      // The peers the ask did not reach, or whose connection ended with it outstanding.
+      unreached: new Set(),
+      // The connection each ask went out on, so an ending names the ask it kills.
+      channels: new Map(),
       fetchWaiters: new Map(),
       expected: peers.length,
       resolveIndexes,
+      resolvePeer,
+      indexReq: null,
     };
 
     // Step 1 — request every peer's index. A fresh timestamp keeps the request out of the
-    // gossip dedup cache so a later round is not silently dropped.
+    // gossip dedup cache so a later round is not silently dropped. Each peer is resolved by
+    // key at the moment of sending: the handle the round was given was captured when the
+    // peer was selected, possibly seconds ago in a queued round, and a socket replaced or
+    // closed since cannot be told from that handle. A peer the ask does not reach is not
+    // waited for.
     const indexReq = await sign({ type: INDEX_REQUEST, version: 1, timestamp: now() });
+    activeRound.indexReq = indexReq;
     for (const peer of peers) {
-      try { peer.send(indexReq); } catch (error) { /* a dead peer just doesn't answer */ }
+      const live = resolvePeer(peer.key, peer);
+      if (live && sendTo(live, indexReq)) {
+        activeRound.channels.set(peer.key, live.connectionId ?? null);
+      } else {
+        activeRound.unreached.add(peer.key);
+      }
     }
+    settleIndexWait();
     await Promise.race([indexesReady, delay(indexTimeoutMs)]);
 
     const indexesReceived = activeRound.indexes.size;
@@ -239,9 +301,8 @@ async function runReconcile(peers, deps = {}) {
       // returned, and a waiter registered afterwards would miss it and then wait out the
       // full settle for a peer that had already finished.
       const peerDone = new Promise((resolve) => { activeRound.fetchWaiters.set(peer.key, resolve); });
-      let sent = false;
-      try { sent = live.send(fetchReq) !== false; } catch (error) { sent = false; }
-      if (!sent) { activeRound.fetchWaiters.delete(peer.key); continue; }
+      if (!sendTo(live, fetchReq)) { activeRound.fetchWaiters.delete(peer.key); continue; }
+      activeRound.channels.set(peer.key, live.connectionId ?? null);
       // The settle delay is the bound for a peer that never reports done, not the pace.
       // eslint-disable-next-line no-await-in-loop
       await Promise.race([peerDone, delay(fetchSettleMs)]);
@@ -280,6 +341,7 @@ module.exports = {
   reconcile,
   depositIndex,
   depositFetchDone,
+  peerConnectionEnded,
   isPeerInActiveRound,
   // exposed for tests
   unionTarget,

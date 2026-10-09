@@ -9,10 +9,14 @@ import {
   waitForSpawnerPaused, waitForSpawnerResumed,
 } from '../framework/wait.js';
 import {
-  advanceBlock, advanceBlocks, startTicker, stopTicker,
+  advanceBlock, advanceBlocks, startTicker,
   enableRpcFailure, disableAllRpcFailure, clearAllNodeStatus,
 } from '../framework/daemon-control.js';
 
+// READY is reached on the syncs alone, so the chain is held at one block past the seed
+// height until the first test moves it: the confirmation window these suites declare is
+// counted from that height, and a block the ticker mined while the join settled would be
+// spent from it before the failure under test is injected.
 async function bootToReady(env) {
   await Promise.all(env.clients.map((c) => waitForDaemonReady(c)));
   await Promise.all(env.clients.map((c) => waitForNodeStatus(c, (d) => d.confirmed === true, 30000)));
@@ -22,9 +26,7 @@ async function bootToReady(env) {
   await waitForBlockProcessed(env.clients[0], () => true, 20000);
   await env.startDiscovery();
   await waitForPeerThreshold(env.clients[0], 120000);
-  await startTicker();
   await waitForOrchestratorState(env.clients[0], 'READY', 120000);
-  await stopTicker();
 }
 
 describe('Compound failures: peer loss + daemon failure during READY', function () {
