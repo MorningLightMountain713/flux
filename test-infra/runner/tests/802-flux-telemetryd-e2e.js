@@ -76,6 +76,12 @@ const POISON_MARKER = 'RELOAD SIGUSR2';
 const LOG_EVERY_MS = '100';
 const LOG_BLOB_BYTES = '40000';
 const LOG_BLOB_AFTER = '100';
+// The rotation scenario's app: no telemetry, writing about 1 MB/s (a numbered
+// line and a 10,000-byte line every 10 ms) against the 4 x 5 MB json-file set
+// FluxOS gives every app container, so the current file is renamed to .1
+// every few seconds and the oldest unlinked within half a minute.
+const ROT_APP = 'otlprealrot';
+const ROT_PORT = 31364;
 // FluxOS's own decoder, for the docker side of the equality scenario.
 const LogFrameDecoder = createRequire(import.meta.url)('../../../ZelBack/src/services/utils/logFrameDecoder.js');
 
@@ -406,8 +412,13 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
     // reconnect lands; the daemon starts empty and the sync re-fills it.
     const connectsBefore = await daemonJournalCount('fluxos connected to the identity socket');
     const syncsBefore = await daemonJournalCount('first identity sync with a node id');
+    const drainsBefore = await daemonJournalCount('log shipping queues drained');
     const restart = await X(`systemctl restart ${DAEMON_UNIT}`);
     expect(restart.exitCode, restart.output).to.equal(0);
+    // systemd's SIGTERM stopped it by draining the shipping queues, not by
+    // killing it.
+    expect(await daemonJournalCount('log shipping queues drained'),
+      'the stopped daemon drained its queues').to.be.greaterThan(drainsBefore);
 
     await waitFor(async () => (await daemonJournalCount('fluxos connected to the identity socket')) > connectsBefore
       && (await daemonJournalCount('first identity sync with a node id')) > syncsBefore,
@@ -417,6 +428,84 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
     expect(socks.exitCode, socks.output).to.equal(0);
     expect(socks.stdout).to.include('/run/flux-telemetryd/identity.sock fluxos:fluxos 600');
     expect(socks.stdout).to.include('/run/flux-telemetryd/query.sock root:flux-daemon-access 660');
+  });
+
+  it('grants the daemon a container\'s log and nothing else in its directory', async function () {
+    this.timeout(60000);
+    // As flux-telemetry: the json log reads, the env-bearing config files do
+    // not, and the directory does not list. The collector is not tailed, so
+    // fluxos grants it nothing of its own: what holds is the boot unit's ACLs,
+    // first as the container inherited them, then after the unit's lines for
+    // existing containers run again over it.
+    const asDaemon = async (cmd) => (await X(`runuser -u flux-telemetry -- ${cmd}`)).exitCode;
+    const check = async (label) => {
+      for (const name of [collectorContainer, webContainer]) {
+        // eslint-disable-next-line no-await-in-loop
+        const id = await containerId(name);
+        const dir = `/dat/var/lib/docker/containers/${id}`;
+        // eslint-disable-next-line no-await-in-loop
+        expect(await asDaemon(`head -c1 ${dir}/${id}-json.log`), `${label}: ${name} log readable`).to.equal(0);
+        for (const file of ['config.v2.json', 'hostconfig.json']) {
+          // eslint-disable-next-line no-await-in-loop
+          expect(await asDaemon(`head -c1 ${dir}/${file}`), `${label}: ${name} ${file} unreadable`).to.not.equal(0);
+        }
+      }
+      const dir = `/dat/var/lib/docker/containers/${await containerId(collectorContainer)}`;
+      expect(await asDaemon(`ls ${dir}`), `${label}: the collector's directory does not list`).to.not.equal(0);
+    };
+    await check('inherited');
+    const reapply = await X('systemctl restart flux-telemetryd-acl.service');
+    expect(reapply.exitCode, reapply.output).to.equal(0);
+    await check('after the grant for existing containers');
+  });
+
+  it('needs nothing from FluxOS: answers a query with FluxOS stopped, and starts shipping on its first sync', async function () {
+    this.timeout(300000);
+    const webId = await containerId(webContainer);
+    // A read request straight to the socket, as root, parsed by its framing:
+    // control lines, and chunk bodies of the byte count each declares.
+    const query = async () => {
+      const script = [
+        "const s = require('net').createConnection('/run/flux-telemetryd/query.sock');",
+        "s.on('connect', () => s.write(JSON.stringify({ v: 1, op: 'read', container: process.argv[2], tail: 3 }) + String.fromCharCode(10)));",
+        'let b = Buffer.alloc(0);',
+        "s.on('data', (d) => { b = Buffer.concat([b, d]); });",
+        "s.on('end', () => {",
+        '  const controls = []; let lines = 0; let at = 0;',
+        '  while (at < b.length) {',
+        '    const nl = b.indexOf(10, at); if (nl === -1) break;',
+        "    const c = JSON.parse(b.toString('utf8', at, nl)); at = nl + 1;",
+        "    if (Number.isInteger(c.chunk)) { lines += b.toString('utf8', at, at + c.chunk).split(String.fromCharCode(10)).length; at += c.chunk; } else controls.push(c);",
+        '  }',
+        '  console.log(JSON.stringify({ header: controls[0], trailer: controls[controls.length - 1], lines }));',
+        '});',
+      ].join('\n');
+      const r = await X(`cat > /tmp/query.js <<'QUERY'\n${script}\nQUERY\nnode /tmp/query.js ${webId}`);
+      expect(r.exitCode, r.output).to.equal(0);
+      return JSON.parse(r.stdout.trim());
+    };
+
+    await stopFluxos(client.container);
+    try {
+      const restart = await X(`systemctl restart ${DAEMON_UNIT}`);
+      expect(restart.exitCode, restart.output).to.equal(0);
+      expect(await unitState(client.container, DAEMON_UNIT)).to.equal('active');
+      const { header, trailer, lines } = await query();
+      expect(header.ok, JSON.stringify(header)).to.equal(true);
+      expect(trailer, 'three lines served with no FluxOS and no identity peer').to.include({ end: true, lines: 3 });
+      expect(lines, 'the chunks carried the three lines the trailer counts').to.equal(3);
+    } finally {
+      await startFluxos(client.container);
+    }
+
+    // FluxOS's first sync carries the node id and brings the telemetry half
+    // up in the process already running.
+    const pid = (await X(`systemctl show -p MainPID --value ${DAEMON_UNIT}`)).stdout.trim();
+    const syncsBefore = await daemonJournalCount('first identity sync with a node id');
+    await waitFor(async () => (await daemonJournalCount('first identity sync with a node id')) > syncsBefore,
+      { timeout: 120000, interval: 2000, label: 'the telemetry half started on FluxOS\'s first sync' });
+    expect((await X(`systemctl show -p MainPID --value ${DAEMON_UNIT}`)).stdout.trim(),
+      'no daemon restart').to.equal(pid);
   });
 
   it('reads container logs through the daemon: every line once, through a daemon stop and a restart', async function () {
@@ -512,6 +601,88 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
     expect(fromDocker.length).to.be.at.least(served.logs.length);
     expect(served.logs, 'the daemon\'s full read is docker\'s, line for line')
       .to.deep.equal(fromDocker.slice(0, served.logs.length));
+  });
+
+  it('follows a log across rotation: a fresh cursor continues, a stale one is told its lines are gone', async function () {
+    this.timeout(600000);
+    await pushTestApp(ROT_APP);
+    await waitForSubmissionDoor(env.clients[0]);
+    const res = await registerEncryptedV9App(env.clients[0].url, {
+      name: ROT_APP,
+      components: {
+        web: {
+          name: 'web',
+          description: 'writes about 1 MB of log a second',
+          image: `${REGISTRY_REPO_HOST}/${ROT_APP}:v1`,
+          cpu: 0.2,
+          memory: 200,
+          rootFsGb: 2,
+          persistentStorage: { sizeGb: 1, mounts: {} },
+          ports: { http: { containerPort: 80, hostPort: ROT_PORT } },
+          env: { LOG_EVERY_MS: '10', LOG_BLOB_BYTES: '10000', LOG_BLOB_AFTER: '1' },
+        },
+      },
+      instances: NODES,
+    });
+    expect(res.status, JSON.stringify(res)).to.equal('success');
+    await queueAppTx(res.data);
+    await advanceBlocks(3);
+    await waitForAppInstalled(client, ROT_APP, 300000);
+    const rotWeb = await requireAppContainerName(client.container, ROT_APP, 'web');
+    const dir = `/dat/var/lib/docker/containers/${await containerId(rotWeb)}`;
+    const { zelidauth } = await authenticate(client.url, appOwnerKey());
+
+    try {
+      const poll = async (cursor) => {
+        const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+        const body = await client.getAuthed(`/apps/applogpolling/web_${ROT_APP}/100${query}`, zelidauth);
+        expect(body.status, `applogpolling refused: ${JSON.stringify(body).slice(0, 300)}`).to.equal('success');
+        return body;
+      };
+      const lineNumber = (line) => {
+        const match = /log line (\d+)\s*$/.exec(line);
+        return match ? Number(match[1]) : null;
+      };
+      const rotatedFiles = async () => Number(
+        (await X(`ls ${dir} | grep -c 'json.log\\.' || true`)).stdout.trim() || 0,
+      );
+      await waitFor(async () => (await rotatedFiles()) >= 1,
+        { timeout: 60000, interval: 1000, label: 'the log has rotated' });
+
+      const stale = (await poll()).cursor;
+
+      // A reader polling every second rides the renames: each poll's cursor
+      // file has usually become .1 by the next, and nothing is lost or repeated.
+      let { cursor } = await poll();
+      const collected = [];
+      for (let i = 0; i < 20; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => { setTimeout(resolve, 1000); });
+        // eslint-disable-next-line no-await-in-loop
+        const body = await poll(cursor);
+        expect(body.rolledOver, `poll ${i}: a reader one second behind lost lines`).to.be.false;
+        expect(body.skipped, `poll ${i}: a reader one second behind was moved to the end`).to.be.false;
+        body.logs.map(lineNumber).filter((n) => n !== null).forEach((n) => collected.push(n));
+        ({ cursor } = body);
+      }
+      expect(await rotatedFiles(), 'rotation happened under the reader').to.be.at.least(3);
+      const ordered = [...collected].sort((a, b) => a - b);
+      expect(new Set(collected).size, 'a line delivered twice').to.equal(collected.length);
+      for (let i = 1; i < ordered.length; i += 1) {
+        expect(ordered[i], `a gap between ${ordered[i - 1]} and ${ordered[i]}`).to.equal(ordered[i - 1] + 1);
+      }
+
+      // Once 20 MB more is written the stale cursor's file is unlinked, and the
+      // answer says the lines in between are gone.
+      let late;
+      await waitFor(async () => {
+        late = await poll(stale);
+        return late.rolledOver;
+      }, { timeout: 120000, interval: 2000, label: 'the stale cursor\'s file rotated away' });
+      expect(late.logs.length, 'answered from the oldest retained line').to.be.above(0);
+    } finally {
+      await client.removeApp(ROT_APP, { zelidauth });
+    }
   });
 
   it('re-routes the real pipe at a new endpoint after a port-changing update', async function () {
