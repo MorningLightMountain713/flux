@@ -7,7 +7,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 import { registerEncryptedV9App, updateEncryptedV9App } from '../framework/content-helper.js';
 import { queueAppTx, advanceBlock, advanceBlocks } from '../framework/daemon-control.js';
-import { waitForAppInstalled } from '../framework/wait.js';
+import { waitForAppInstalled, waitForCapabilityUp } from '../framework/wait.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableTestApp } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
@@ -144,6 +144,9 @@ describe('otlp telemetry: the identity socket carries the resolved agent endpoin
       },
     });
     await bootAndPeer(env, { minOutbound: 2, minInbound: 2, pricing: true });
+    // The submitting node refuses a registration until its app registry is
+    // built.
+    await waitForCapabilityUp(env.clients[0], 'appRegistryConsistent', 120000);
 
     await pushTestApp(APP);
     const res = await registerEncryptedV9App(env.clients[0].url, {
