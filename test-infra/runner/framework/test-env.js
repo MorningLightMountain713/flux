@@ -435,6 +435,12 @@ async function removeNetwork(networkName) {
 // image pull fails for real - marks it through testcontainers' own pre-stop hook,
 // which StartedGenericContainer.stop() awaits before it stops the container, so
 // the `die` that follows is never read as a death.
+function infraLog(env, name) {
+  const collector = createLogCollector();
+  env.infraCollectors.set(name, collector);
+  return collector;
+}
+
 function watchInfra(env, name, container) {
   const entry = { name, container, expected: false };
   container.containerIsStopping = async () => { entry.expected = true; };
@@ -587,6 +593,10 @@ function makeEnvShell(networkName) {
   const volumeNames = [];
   const eventSnapshots = new Map(); // node index -> SSE events captured at teardown
   const infraContainers = []; // { name, container, expected } - infra only, never nodes
+  // One log collector per infra container, attached before it starts: a container
+  // whose start wait fails is never registered above, and its log is the only
+  // account of why it did not answer.
+  const infraCollectors = new Map();
   let infraLogSnapshot = null; // infra logs captured at teardown when the run is void
   const nodeRecords = new Map(); // node ip -> in-container record (journal + file log)
   let tornDown = false;
@@ -599,6 +609,7 @@ function makeEnvShell(networkName) {
     nodeConfigs,
     volumeNames,
     infraContainers,
+    infraCollectors,
     stubPeerClients: new Map(),
     stubContainers: new Map(),
     // The death watch (armed by createTestEnv) reads both: `stopping` tells it
@@ -639,9 +650,18 @@ function makeEnvShell(networkName) {
     // while the containers exist; the teardown snapshot afterwards. Never rejects:
     // the caller is already reporting a failure and must not lose it to this.
     async infraDiagnostics() {
-      if (infraLogSnapshot) return infraLogSnapshot;
-      return readInfraLogs(infraContainers)
+      const read = infraLogSnapshot ?? await readInfraLogs(infraContainers)
         .catch((err) => [{ name: 'infra', text: '', error: err.message }]);
+      // The daemon's log of a running container, else the stream captured since
+      // its creation: a container that never started, or one already removed.
+      const byName = new Map(read.map((entry) => [entry.name, entry]));
+      for (const [name, collector] of infraCollectors) {
+        const have = byName.get(name);
+        if (have && !have.error && have.text) continue;
+        const lines = collector.getLines();
+        if (lines.length) byName.set(name, { name, text: lines.join('\n') });
+      }
+      return [...byName.values()];
     },
 
     /**
@@ -1457,6 +1477,7 @@ async function _buildEnv(
   // makes a ten-node fleet's setup take about a minute; on tmpfs, a few seconds.
   // The data lives as long as the container, which is the fleet's lifetime.
   const mongoContainer = new StaticIpContainer(MONGO_IMAGE)
+    .withLogConsumer(infraLog(env, 'mongo'))
     .withCommand(MONGO_ARGS)
     .withUlimits({ nofile: { soft: 65536, hard: 65536 } })
     .withTmpFs({ '/data/db': 'rw,size=4g' })
@@ -1485,6 +1506,7 @@ async function _buildEnv(
   });
 
   const daemonStub = await new StaticIpContainer(image('flux-e2e-daemon-stub'))
+    .withLogConsumer(infraLog(env, 'daemonStub'))
     .withStaticIp(networkName, DAEMON_IP)
     .withEnvironment({
       FLUX_TEST_HARNESS: 'true',
@@ -1552,6 +1574,7 @@ async function _buildEnv(
   }
 
   const syncthingStub = await new StaticIpContainer(image('flux-e2e-syncthing-stub'))
+    .withLogConsumer(infraLog(env, 'syncthingStub'))
     .withStaticIp(networkName, SYNCTHING_IP)
     .withEnvironment({ SYNCTHING_PORT: '8384', CONTROL_PORT: '8385' })
     .withWaitStrategy(new HttpPollWaitStrategy(`http://${SYNCTHING_IP}:8384/rest/noauth/health`))
@@ -1561,6 +1584,7 @@ async function _buildEnv(
   watchInfra(env, 'syncthingStub', syncthingStub);
 
   const externalStub = await new StaticIpContainer(image('flux-e2e-external-http-stub'))
+    .withLogConsumer(infraLog(env, 'externalStub'))
     // Also answers as Flux storage: the alias resolves through Docker's embedded
     // DNS, and the cert under /certs is signed by the CA the nodes trust.
     .withStaticIp(networkName, EXTERNAL_STUB_IP, [STORAGE_HOST])
@@ -1573,6 +1597,7 @@ async function _buildEnv(
   watchInfra(env, 'externalStub', externalStub);
 
   const fdmStub = await new StaticIpContainer(image('flux-e2e-fdm-stub'))
+    .withLogConsumer(infraLog(env, 'fdmStub'))
     .withStaticIp(networkName, FDM_IP)
     .withEnvironment({ FDM_PORT: '16130', CONTROL_PORT: '16131' })
     .withWaitStrategy(new HttpPollWaitStrategy(`http://${FDM_IP}:16131/health`))
@@ -1586,6 +1611,7 @@ async function _buildEnv(
   // service does.
   const nodeUrls = Array.from({ length: nodes }, (_, i) => `http://${subnet.nodeIp(i + 1)}:16127`).join(',');
   const fluxDriveStub = await new StaticIpContainer(image('flux-e2e-fluxdrive-stub'))
+    .withLogConsumer(infraLog(env, 'fluxDriveStub'))
     .withStaticIp(networkName, FLUXDRIVE_IP)
     .withEnvironment({ FLUXDRIVE_PORT: '16140', CONTROL_PORT: '16141', FLUX_NODE_URLS: nodeUrls })
     .withWaitStrategy(new HttpPollWaitStrategy(`http://${FLUXDRIVE_IP}:16141/health`))
@@ -1683,6 +1709,7 @@ async function _buildEnv(
   // node dockerd pulls fluxregistry.test:5000/... and TLS verifies DNS:fluxregistry.test, so
   // the registry works under any subnet base without regenerating the cert.
   const registry = await new StaticIpContainer('registry:2')
+    .withLogConsumer(infraLog(env, 'registry'))
     .withStaticIp(networkName, REGISTRY_IP, [REGISTRY_ALIAS])
     .withBindMounts([{
       source: registryTlsDir,
