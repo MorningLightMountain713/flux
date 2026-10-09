@@ -1,5 +1,6 @@
 import net from 'node:net';
 import { throwIfInfraDead, sleepUnlessInfraDead } from './infra-death.js';
+import { deathReport } from './container-death.js';
 
 // A testcontainers WaitStrategy that polls a TCP host:port until it accepts a
 // connection, bypassing Docker's health state machine entirely.
@@ -55,7 +56,11 @@ export class TcpPollWaitStrategy {
     });
   }
 
-  async waitUntilReady() {
+  // testcontainers passes the dockerode container as the first argument. A
+  // container that has exited never answers, so it is reported as soon as the
+  // probe after its exit fails, with what docker recorded, rather than polled
+  // to the deadline as if it were slow.
+  async waitUntilReady(container) {
     const deadline = Date.now() + this.#startupTimeoutMs;
     while (Date.now() < deadline) {
       // Another infra container died while this one was coming up - the run is
@@ -63,6 +68,11 @@ export class TcpPollWaitStrategy {
       throwIfInfraDead();
       // eslint-disable-next-line no-await-in-loop
       if (await this.#tryConnect()) return;
+      // eslint-disable-next-line no-await-in-loop
+      const death = await deathReport(container);
+      if (death) {
+        throw new Error(`TcpPollWaitStrategy: ${this.#host}:${this.#port} container exited during boot (${death})`);
+      }
       // eslint-disable-next-line no-await-in-loop
       await sleepUnlessInfraDead(this.#pollIntervalMs);
     }
