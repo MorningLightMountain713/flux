@@ -89,8 +89,7 @@ async function appLog(req, res) {
       // The request names a component of an app; the container identifier is built
       // from the app's stored identity, so it is resolved rather than assumed.
       const identifier = await deploymentProvider.resolveRequestContainer(appname);
-      let logs = await dockerService.dockerContainerLogs(identifier, lines);
-      logs = serviceHelper.dockerBufferToString(logs);
+      const logs = await dockerService.dockerContainerLogText(identifier, lines);
       const dataMessage = messageHelper.createDataMessage(logs);
       res.json(dataMessage);
     } else {

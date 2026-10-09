@@ -28,4 +28,35 @@ describe('logCursor tests', () => {
       expect(logCursor.decode(token), `${token} should not decode`).to.equal(null);
     });
   });
+
+  it('carries a daemon reader\'s file position, exactly, past 2^53', () => {
+    const position = {
+      ms: 1_788_508_223_926, count: 4, ino: '18446744073709551615', firstNs: '1788508223000123456', off: 10_629_356,
+    };
+
+    expect(logCursor.decode(logCursor.encode(position))).to.deep.equal(position);
+  });
+
+  it('decodes a token a node issued before file positions existed as it always did', () => {
+    const token = Buffer.from('{"v":1,"ms":1788508223926,"count":4}').toString('base64url');
+
+    expect(logCursor.decode(token)).to.deep.equal({ ms: 1_788_508_223_926, count: 4 });
+  });
+
+  it('keeps the position and drops a file position that is not whole and well formed', () => {
+    [
+      { ino: '12', firstNs: '5' },
+      { ino: 12, firstNs: '5', off: 0 },
+      { ino: '12', firstNs: 5, off: 0 },
+      { ino: '12', firstNs: '5', off: -1 },
+      { ino: '18446744073709551616', firstNs: '5', off: 0 },
+      { ino: '12', firstNs: '9223372036854775808', off: 0 },
+      { ino: '1e3', firstNs: '5', off: 0 },
+    ].forEach((file) => {
+      const token = Buffer.from(JSON.stringify({
+        v: 1, ms: 7, count: 1, ...file,
+      })).toString('base64url');
+      expect(logCursor.decode(token), JSON.stringify(file)).to.deep.equal({ ms: 7, count: 1 });
+    });
+  });
 });

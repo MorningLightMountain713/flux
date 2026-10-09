@@ -18,14 +18,48 @@
  * Opaque on the wire because clients and nodes upgrade independently: a reader
  * hands back what it was given without reading it, so this shape can change
  * without every client changing with it.
+ *
+ * A node that reads through flux-telemetryd adds where it stopped in the file:
+ * the file's inode and first-entry time, which together name it, and the byte
+ * offset. With them the daemon seeks straight back; without them - a docker
+ * reader, or a file rotated away - `{ms, count}` alone places the reader, so
+ * every reader understands every token. The inode and the time are decimal
+ * strings: a double holds integers exactly only up to 2^53.
  */
 
+const DIGITS = /^\d{1,20}$/;
+const SIGNED_DIGITS = /^-?\d{1,19}$/;
+const U64_MAX = 18_446_744_073_709_551_615n;
+const I64_MIN = -9_223_372_036_854_775_808n;
+const I64_MAX = 9_223_372_036_854_775_807n;
+
 /**
- * @param {{ms: number, count: number}} position
+ * @param {{ms: number, count: number, ino?: string, firstNs?: string, off?: number}} position
  * @returns {string} the token a reader hands back
  */
 function encode(position) {
-  return Buffer.from(JSON.stringify({ v: 1, ms: position.ms, count: position.count })).toString('base64url');
+  const token = { v: 1, ms: position.ms, count: position.count };
+  if (filePosition(position)) {
+    token.ino = position.ino;
+    token.firstNs = position.firstNs;
+    token.off = position.off;
+  }
+  return Buffer.from(JSON.stringify(token)).toString('base64url');
+}
+
+/**
+ * Whether a position carries a whole file position: all three parts, each
+ * well formed. Anything less is no file position at all.
+ *
+ * @param {object} position
+ * @returns {boolean}
+ */
+function filePosition(position) {
+  return typeof position.ino === 'string' && DIGITS.test(position.ino)
+    && BigInt(position.ino) <= U64_MAX
+    && typeof position.firstNs === 'string' && SIGNED_DIGITS.test(position.firstNs)
+    && BigInt(position.firstNs) >= I64_MIN && BigInt(position.firstNs) <= I64_MAX
+    && Number.isSafeInteger(position.off) && position.off >= 0;
 }
 
 /**
@@ -34,7 +68,7 @@ function encode(position) {
  * the most recent lines the same as a first request.
  *
  * @param {string} token
- * @returns {{ms: number, count: number}|null}
+ * @returns {{ms: number, count: number, ino?: string, firstNs?: string, off?: number}|null}
  */
 function decode(token) {
   if (!token || typeof token !== 'string') return null;
@@ -43,7 +77,13 @@ function decode(token) {
     if (parsed.v !== 1) return null;
     if (!Number.isFinite(parsed.ms) || !Number.isInteger(parsed.count)) return null;
     if (parsed.ms < 0 || parsed.count < 0) return null;
-    return { ms: parsed.ms, count: parsed.count };
+    const position = { ms: parsed.ms, count: parsed.count };
+    if (filePosition(parsed)) {
+      position.ino = parsed.ino;
+      position.firstNs = parsed.firstNs;
+      position.off = parsed.off;
+    }
+    return position;
   } catch (error) {
     return null;
   }

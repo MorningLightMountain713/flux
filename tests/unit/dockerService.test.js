@@ -16,6 +16,8 @@ const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVol
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
 const specLibs = require('../../ZelBack/src/services/utils/specLibs');
+const telemetryLogClient = require('../../ZelBack/src/services/telemetryLogClient');
+const telemetryDaemon = require('./fixtures/telemetryDaemon');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -404,6 +406,115 @@ describe('dockerService tests', () => {
       });
       expect(logs.thisValues[0].id, 'read logs from a container other than the one named').to.equal(FIXTURE_ID);
       expect(result).to.equal(frames);
+    });
+  });
+
+  describe('the node\'s log reader', () => {
+    // Docker frames each write with an 8-byte header (Tty false).
+    function dockerFrames(bodies) {
+      return Buffer.concat(bodies.map((body) => {
+        const payload = Buffer.from(body, 'utf8');
+        const header = Buffer.alloc(8);
+        header.writeUInt8(1, 0);
+        header.writeUInt32BE(payload.length, 4);
+        return Buffer.concat([header, payload]);
+      }));
+    }
+
+    const stamp = (ms) => new Date(ms).toISOString().replace('Z', '000000Z');
+    const LINES = [
+      `${stamp(1000)} boot`,
+      `${stamp(2000)} serving`,
+      `${stamp(2000)} same millisecond`,
+      `${stamp(1500)} older stamp, written later`,
+    ];
+
+    let daemon = null;
+
+    afterEach(async () => {
+      if (daemon) await daemon.close();
+      daemon = null;
+      telemetryLogClient.useSocket(telemetryLogClient.QUERY_SOCKET);
+    });
+
+    function dockerNode() {
+      telemetryLogClient.useSocket(path.join(__dirname, 'no-such-dir', 'query.sock'));
+    }
+
+    async function daemonNode(respond) {
+      daemon = await telemetryDaemon.fakeDaemon(respond);
+      telemetryLogClient.useSocket(daemon.socketPath);
+    }
+
+    [{ lineCount: 'all' }, { lineCount: 2 }].forEach((options) => {
+      it(`answers a poll for ${options.lineCount} lines in the docker reader's shape`, async () => {
+        dockerNode();
+        const window = options.lineCount === 'all' ? LINES : LINES.slice(-options.lineCount);
+        sinon.stub(Dockerode.Container.prototype, 'logs').resolves(dockerFrames(window.map((l) => `${l}\n`)));
+        const fromDocker = await dockerService.dockerContainerLogsPolling('website', options);
+        sinon.restore();
+        stubListing(fixtureListing());
+
+        await daemonNode((request, socket) => telemetryDaemon.answer(socket, window, {
+          position: {
+            ...fromDocker.position, ino: '12', first_ns: '1000000000', off: 512,
+          },
+        }));
+        const fromDaemon = await dockerService.dockerContainerLogsPolling('website', options);
+
+        const { position: dockerPosition, ...dockerRest } = fromDocker;
+        const { position: daemonPosition, ...daemonRest } = fromDaemon;
+        expect(daemonRest).to.deep.equal(dockerRest);
+        expect(daemonPosition).to.include(dockerPosition);
+      });
+    });
+
+    it('reads a daemon node\'s log from the daemon, for the container the name resolves to', async () => {
+      const logs = sinon.stub(Dockerode.Container.prototype, 'logs');
+      await daemonNode((request, socket) => telemetryDaemon.answer(socket, LINES));
+
+      const result = await dockerService.dockerContainerLogsPolling('website', { lineCount: 'all' });
+
+      expect(daemon.requests[0].container).to.equal(FIXTURE_ID);
+      expect(result.lines).to.deep.equal(LINES);
+      expect(logs.called, 'a daemon node never reads a log through docker').to.be.false;
+    });
+
+    it('answers the daemon\'s not_found as the docker reader answers a container it cannot find', async () => {
+      await daemonNode((request, socket) => socket.end('{"v":1,"ok":false,"error":"not_found","message":"no such container log"}\n'));
+
+      await expect(dockerService.dockerContainerLogsPolling('website', {}))
+        .to.be.rejectedWith('Container website not found');
+    });
+
+    ['unreadable', 'busy', 'timeout'].forEach((code) => {
+      it(`answers the daemon's ${code} with that error, never a docker read`, async () => {
+        const logs = sinon.stub(Dockerode.Container.prototype, 'logs');
+        await daemonNode((request, socket) => socket.end(`{"v":1,"ok":false,"error":"${code}","message":"m"}\n`));
+
+        await expect(dockerService.dockerContainerLogsPolling('website', { lineCount: 100 }))
+          .to.be.rejectedWith(telemetryLogClient.TelemetryLogError).and.eventually.include({ code });
+        await expect(dockerService.dockerContainerLogText('website', 100))
+          .to.be.rejectedWith(telemetryLogClient.TelemetryLogError).and.eventually.include({ code });
+        expect(logs.called).to.be.false;
+      });
+    });
+
+    it('gives /apps/applog the same text from either reader, blank entries included', async () => {
+      dockerNode();
+      sinon.stub(Dockerode.Container.prototype, 'logs').resolves(dockerFrames(['first\n', '\n', '  third\n']));
+      const fromDocker = await dockerService.dockerContainerLogText('website', 3);
+      sinon.restore();
+      stubListing(fixtureListing());
+
+      await daemonNode((request, socket) => telemetryDaemon.answer(socket, [
+        `${stamp(1000)} first`, `${stamp(2000)} `, `${stamp(3000)}   third`,
+      ]));
+      const fromDaemon = await dockerService.dockerContainerLogText('website', 3);
+
+      expect(fromDocker).to.equal('first\n\n  third\n');
+      expect(fromDaemon).to.equal(fromDocker);
+      expect(daemon.requests[0].tail).to.equal(3);
     });
   });
 

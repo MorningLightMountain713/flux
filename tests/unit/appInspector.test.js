@@ -965,13 +965,12 @@ describe('appInspector tests', () => {
         '../appRuntime/deploymentProvider': deploymentProviderStub(),
         '../dockerService': {
           ...dockerServiceStub,
-          dockerContainerLogs: sinon.stub().resolves('some data'),
+          dockerContainerLogText: sinon.stub().resolves('some data'),
         },
         '../messageHelper': messageHelperStub,
         '../../lib/log': logStub,
         '../serviceHelper': {
           ensureString: sinon.stub().returnsArg(0),
-          dockerBufferToString: sinon.stub().returns('some data'),
         },
         '../verificationHelper': {
           verifyPrivilege: sinon.stub().resolves(true),
@@ -1009,13 +1008,12 @@ describe('appInspector tests', () => {
         '../appRuntime/deploymentProvider': deploymentProviderStub(),
         '../dockerService': {
           ...dockerServiceStub,
-          dockerContainerLogs: sinon.stub().resolves('some data'),
+          dockerContainerLogText: sinon.stub().resolves('some data'),
         },
         '../messageHelper': messageHelperStub,
         '../../lib/log': logStub,
         '../serviceHelper': {
           ensureString: sinon.stub().returnsArg(0),
-          dockerBufferToString: sinon.stub().returns('some data'),
         },
         '../verificationHelper': {
           verifyPrivilege: sinon.stub().resolves(true),
@@ -1053,13 +1051,12 @@ describe('appInspector tests', () => {
         '../appRuntime/deploymentProvider': deploymentProviderStub(),
         '../dockerService': {
           ...dockerServiceStub,
-          dockerContainerLogs: sinon.stub().resolves('some data'),
+          dockerContainerLogText: sinon.stub().resolves('some data'),
         },
         '../messageHelper': messageHelperStub,
         '../../lib/log': logStub,
         '../serviceHelper': {
           ensureString: sinon.stub().returnsArg(0),
-          dockerBufferToString: sinon.stub().returns('some data'),
         },
         '../verificationHelper': {
           verifyPrivilege: sinon.stub().resolves(true),
