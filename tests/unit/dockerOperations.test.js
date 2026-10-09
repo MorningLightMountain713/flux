@@ -353,7 +353,6 @@ describe('appOperations application lifecycle tests', () => {
         adjustConfigFolders: sinon.stub().resolves({ status: 'success' }),
       },
       '../telemetrySinkCache': { extractSink: sinon.stub().returns(null), setSink: sinon.stub() },
-      '../telemetryConfigService': { ensureNode: sinon.stub().resolves() },
       '../telemetryIdentityService': { resyncAll: sinon.stub() },
       '../appManagement/appsRuntimeState': { isOperatorStopped: sinon.stub().resolves(false) },
       '../appManagement/globalCommand': { executeAppGlobalCommand: sinon.stub().resolves() },

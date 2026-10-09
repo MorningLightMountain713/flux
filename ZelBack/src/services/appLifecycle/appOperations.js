@@ -66,7 +66,6 @@ const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const appNetworkLinker = require('./appNetworkLinker');
 const relationshipResolver = require('./relationshipResolver');
 const telemetrySinkCache = require('../telemetrySinkCache');
-const telemetryConfigService = require('../telemetryConfigService');
 const telemetryIdentityService = require('../telemetryIdentityService');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const {
@@ -2238,11 +2237,10 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   // Re-seed telemetry routing from the updated spec. A sink change (key
   // rotation, added/dropped telemetry) can arrive with no component diff,
   // so this cannot ride on component reinstalls — re-announce the running
-  // containers so connected daemons rebuild their exporters.
+  // containers so the daemon rebuilds their exporters.
   if (freshDeployment) {
     const telemetrySink = telemetrySinkCache.extractSink(freshDeployment);
     telemetrySinkCache.setSink(appName, telemetrySink);
-    if (telemetrySink) await telemetryConfigService.ensureNode();
     telemetryIdentityService.resyncAll();
   }
 

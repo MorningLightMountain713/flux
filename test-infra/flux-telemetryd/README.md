@@ -4,7 +4,7 @@ FluxOS and flux-telemetryd ship together (one ISO) and speak a private
 identity-socket protocol with no compatibility aliases — so the harness
 tests them **as a pair**. This directory declares which daemon commit this
 branch pairs with and builds it for the real-daemon e2e suite
-(`runner/tests/73-flux-telemetryd-e2e.js`).
+(`runner/tests/802-flux-telemetryd-e2e.js`).
 
 ## Files
 
@@ -12,7 +12,9 @@ branch pairs with and builds it for the real-daemon e2e suite
   a deliberate pairing change (the same act as bumping the flux_iso pin),
   reviewed like any other diff.
 - `build.sh` — produces `dist/` (gitignored): the daemon binary plus its
-  real hardened systemd unit, taken from the pinned checkout. Builds in a
+  real packaging — the hardened service, the query and identity socket
+  units, the ACL oneshot and its tmpfiles drop-in — taken from the pinned
+  checkout. Builds in a
   dockerized Rust toolchain with a cargo-cache volume — no host Rust
   needed. Skips when `dist/.built-ref` already matches the pin; pass
   `--force` to rebuild anyway. The clone lives outside the repo tree
@@ -29,18 +31,18 @@ bash test-infra/flux-telemetryd/build.sh
 The clone is over ssh (private repo) — run with your agent forwarded.
 
 To pair with a new daemon commit: update `pin`, run `build.sh`, run suite
-73.
+802.
 
 ## How the pairing is enforced
 
 - `createTestEnv({ telemetryd: 'real' })` bind-mounts `dist/` into the
   (systemd-mode) node containers and fails fast with the build command if
   `dist/` is missing.
-- The node entrypoint installs the binary and the unit **without enabling
-  it** — FluxOS itself starts and stops the daemon
-  (`telemetryConfigService.ensureNode` / `remove`), which is the
-  production lifecycle under test.
-- Suite 73 asserts the running daemon's `--version` (its build stamps the
+- The node entrypoint installs the binary and the packaging and **enables**
+  them, as the image does: systemd creates both sockets and runs the daemon
+  from boot, and FluxOS connects to the identity socket — it never starts
+  or stops the daemon.
+- Suite 802 asserts the running daemon's `--version` (its build stamps the
   source commit) against `pin`, so a stale `dist/` fails loudly instead of
   silently testing the wrong daemon.
 
@@ -50,4 +52,4 @@ To pair with a new daemon commit: update `pin`, run `build.sh`, run suite
 - `TELEMETRYD_SRC` — checkout location
 - `TELEMETRYD_BINARY` / `TELEMETRYD_UNIT` — point the harness at a
   non-default build (e.g. a local work-in-progress daemon); note suite
-  73's version-vs-pin assertion still applies.
+  802's version-vs-pin assertion still applies.

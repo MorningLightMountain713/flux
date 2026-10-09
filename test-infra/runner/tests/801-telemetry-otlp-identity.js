@@ -24,15 +24,15 @@ import {
 // declared component/port shape and never talks to Docker.
 //
 // This suite stands up an Arcane fleet with the mock flux-telemetryd
-// (the telemetryd stub — the daemon-side CLIENT of the identity socket) and drives
+// (the telemetryd stub — listening on the identity socket FluxOS connects to) and drives
 // the FluxOS half end to end: registration through the real submission door,
 // install, announce (send-set gated — the same-app collector stays out by
 // default), reconnect-sync, agent recreation, the scoping gate, a
 // port-changing spec update that also overrides the send set, and inter-app
 // collector routing via a network-sharing dependency edge.
 // The daemon's own half (cgroup sampling, OTLP protobuf emission, exporter
-// rotation on a changed endpoint) is covered by the daemon's unit tests and the
-// live-node validation — the harness cannot run a host daemon.
+// rotation on a changed endpoint) is covered by the daemon's unit tests and by
+// suite 802, which runs the real daemon.
 // 5 nodes: the peering bar below (minOutbound 2) needs a mesh big enough that
 // dial-dedupe still leaves ~2 outbound per node — see suite 68's sizing note.
 const NODES = 5;
@@ -193,10 +193,10 @@ describe('otlp telemetry: the identity socket carries the resolved agent endpoin
     }
   });
 
-  it('replays a full sync with resolved endpoints when the daemon reconnects', async function () {
+  it('sends a full sync with resolved endpoints when it reconnects to the daemon', async function () {
     this.timeout(60000);
     // The reconnect sync is the daemon-restart / fluxos-restart recovery path:
-    // the server rebuilds the snapshot from the live container list, so the
+    // FluxOS rebuilds the snapshot from the live container list, so the
     // endpoint must resolve without any docker event having fired.
     const { conn: before } = await control.health();
     await control.disconnect();

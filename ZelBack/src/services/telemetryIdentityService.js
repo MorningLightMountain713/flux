@@ -1,22 +1,33 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const net = require('node:net');
 const fs = require('node:fs');
-const path = require('node:path');
 
 const log = require('../lib/log');
 const dockerService = require('./dockerService');
 const dockerEventStream = require('./utils/dockerEventStream');
 const serviceHelper = require('./serviceHelper');
 const geolocationService = require('./geolocationService');
+const generalService = require('./generalService');
 const telemetrySinkCache = require('./telemetrySinkCache');
-const telemetryConfigService = require('./telemetryConfigService');
 const { getSpecBackend } = require('./utils/specLibs');
 
-const SOCKET_DIR = '/run/flux/telemetry';
-const SOCKET_PATH = path.join(SOCKET_DIR, 'identity.sock');
+// flux-telemetryd's identity socket. systemd creates it at boot on an Arcane
+// node (fluxos:fluxos 0600); the daemon listens and fluxos is its only writer.
+const SOCKET_PATH = '/run/flux-telemetryd/identity.sock';
 
-const CONTAINER_ID_RE = /^[0-9a-f]{64}$/;
+// After the stream ends, reconnect after RECONNECT_MIN_MS — systemd holds the
+// socket across daemon restarts, so the connect lands. A stream that ends
+// sooner than STABLE_MS after opening (the daemon refusing us) doubles the
+// wait, up to RECONNECT_MAX_MS.
+const RECONNECT_MIN_MS = 1000;
+const RECONNECT_MAX_MS = 60_000;
+const STABLE_MS = 10_000;
+
+// The node tag on every metric and log record: a salted hash of the
+// collateral, stable for the node's life and not reversible to it.
+const OPAQUE_ID_SALT = 'flux-telemetry-v1';
 
 // flux-telemetryd reads each container's json-log via POSIX ACLs we set at
 // announce time. ArcaneOS sets the Docker data-root to /dat/var/lib/docker.
@@ -31,9 +42,13 @@ const TAG_ALLOWLIST = new Set([
   'container_name',
 ]);
 
-// The unix-socket server, and the set of connected daemon sockets we push to.
-let server = null;
-const sockets = new Set();
+// The connection to the daemon while it is open, and the client's state.
+let socketPath = SOCKET_PATH;
+let connection = null;
+let started = false;
+let reconnectTimer = null;
+let reconnectDelay = RECONNECT_MIN_MS;
+let opaqueId = null;
 
 // Resolved OTLP collector addresses, keyed by the COLLECTOR's identity
 // (`<collectorAppKey>/<componentLower>`) rather than the consumer app — one
@@ -212,14 +227,6 @@ async function buildIdentity(rawName, image, region, labels = null) {
   return { app_name: appName, tags, sink };
 }
 
-async function resolveIdentity(containerId) {
-  const inspect = await dockerService.dockerContainerInspect(containerId, { identifierType: 'id' });
-  if (!inspect) return null;
-  const region = await nodeRegion();
-  const image = inspect.Config && inspect.Config.Image;
-  return buildIdentity(inspect.Name, image, region, inspect.Config && inspect.Config.Labels);
-}
-
 function writeMessage(socket, obj) {
   if (socket.destroyed) return;
   try {
@@ -230,7 +237,7 @@ function writeMessage(socket, obj) {
 }
 
 function broadcast(obj) {
-  for (const socket of sockets) writeMessage(socket, obj);
+  if (connection) writeMessage(connection, obj);
 }
 
 // The wire ops are ensure-verbs naming the daemon's obligation, not lifecycle
@@ -246,7 +253,35 @@ function broadcastUntrack(containerId) {
   broadcast({ op: 'untrack', container_id: containerId });
 }
 
-/** Send a daemon a full snapshot of every running telemetry-app container. */
+async function deriveOpaqueId() {
+  const collateralInfo = await generalService.obtainNodeCollateralInformation();
+  if (!collateralInfo || !collateralInfo.txhash) {
+    throw new Error('cannot derive opaqueId: collateral tx hash unavailable');
+  }
+  return crypto
+    .createHash('sha256')
+    .update(OPAQUE_ID_SALT)
+    .update(collateralInfo.txhash)
+    .digest('hex');
+}
+
+/**
+ * The node's opaque id, derived once. Without it the daemon tracks nothing
+ * it can ship, so a failure is an error; the next sync retries.
+ */
+async function nodeOpaqueId() {
+  if (!opaqueId) {
+    try {
+      opaqueId = await deriveOpaqueId();
+    } catch (err) {
+      log.error(`telemetry identity: ${err.message}; the daemon ships nothing until a sync carries it`);
+      return undefined;
+    }
+  }
+  return opaqueId;
+}
+
+/** Send the daemon a full snapshot of every running telemetry-app container. */
 async function sendSync(socket) {
   const containers = await dockerService.dockerListContainers(false);
   const region = await nodeRegion();
@@ -298,20 +333,20 @@ async function sendSync(socket) {
     }
     entries.push({ container_id: container.Id, identity });
   }
-  writeMessage(socket, { op: 'sync', containers: entries });
+  writeMessage(socket, { op: 'sync', opaqueId: await nodeOpaqueId(), containers: entries });
 }
 
-/** Re-send a full sync to every connected daemon (after a boot reconcile). */
+/** Re-send the daemon a full sync (after a boot reconcile or a sink change). */
 function resyncAll() {
-  for (const socket of sockets) {
-    sendSync(socket).catch((err) => log.error(`telemetry identity: resync failed: ${err.message}`));
-  }
+  if (!connection) return;
+  sendSync(connection).catch((err) => log.error(`telemetry identity: resync failed: ${err.message}`));
 }
 
 // Sinks can appear after boot: the sink cache rebuild races fluxbenchd's
 // unseal, and the reconciler re-seeds the cache once decryption succeeds.
-// When that happens the daemon must exist and re-sync, or containers that
-// started sinkless stay invisible until the next fluxos restart.
+// When that happens the daemon must re-sync, or containers that started
+// sinkless stay invisible until the next fluxos restart. A removed sink
+// re-syncs too, so the daemon drops what it no longer ships.
 let sinkResyncTimer = null;
 
 function scheduleSinkResync() {
@@ -320,8 +355,6 @@ function scheduleSinkResync() {
     sinkResyncTimer = null;
     (async () => {
       pruneOtlpEndpoints();
-      if (!telemetrySinkCache.hasAnyTelemetryApps()) return;
-      await telemetryConfigService.ensureNode();
       resyncAll();
     })().catch((err) => log.warn(`telemetry identity: sink resync failed: ${err.message}`));
   }, 2000);
@@ -338,14 +371,6 @@ async function setfacl(params) {
     return false;
   }
   return true;
-}
-
-// The data-root and containers dir grants are set once (they persist); the
-// daemon only needs traverse + read-dir there, and read on each json-log.
-async function setBaseAcls() {
-  const root = await setfacl(['-m', `u:${TELEMETRY_USER}:x`, `${DOCKER_ROOT}/`]);
-  const containers = await setfacl(['-m', `u:${TELEMETRY_USER}:rX`, `${DOCKER_CONTAINERS}/`]);
-  return root && containers;
 }
 
 /**
@@ -381,10 +406,11 @@ async function setContainerAcls(containerId) {
  * Set the container's log ACL and push its identity (with sink) to the
  * daemon. Idempotent on the daemon side, so it is safe to call both from the
  * install hook (before start) and from the docker `start` event (restarts).
- * A no-op on non-Arcane nodes (no socket server) and for non-telemetry apps.
+ * A no-op where flux-telemetryd does not run (no identity socket) and for
+ * non-telemetry apps.
  */
 async function announce(idOrName, { identifierType = 'name' } = {}) {
-  if (!server) return;
+  if (!started) return;
   const inspect = await dockerService.dockerContainerInspect(idOrName, { identifierType });
   if (!inspect || !inspect.Id) return;
 
@@ -422,7 +448,7 @@ async function announce(idOrName, { identifierType = 'name' } = {}) {
  * line is written.
  */
 async function onComponentCreated(component) {
-  if (!server) return;
+  if (!started) return;
   try {
     await announce(component.identifier);
   } catch (err) {
@@ -454,156 +480,76 @@ async function subscribeEvents() {
   await eventStream.start();
 }
 
-// Kept for forward-compat: the daemon may issue ad-hoc lookups.
-async function handleRequest(line) {
-  let req;
-  try {
-    req = JSON.parse(line);
-  } catch {
-    return JSON.stringify({ ok: false, error: 'invalid JSON' });
-  }
-
-  if (req.op !== 'lookup') {
-    return JSON.stringify({ ok: false, error: `unknown op: ${req.op}` });
-  }
-
-  if (!req.container_id || !CONTAINER_ID_RE.test(req.container_id)) {
-    return JSON.stringify({ ok: false, error: 'invalid container_id' });
-  }
-
-  try {
-    const identity = await resolveIdentity(req.container_id);
-    return JSON.stringify({ ok: true, identity: identity || null });
-  } catch (err) {
-    log.error(`telemetry identity lookup failed: ${err.message}`);
-    return JSON.stringify({ ok: false, error: 'internal error' });
-  }
-}
-
-function handleConnection(socket) {
-  sockets.add(socket);
-  sendSync(socket).catch((err) => log.error(`telemetry identity: initial sync failed: ${err.message}`));
-
-  let buffer = '';
-
-  socket.on('data', (chunk) => {
-    buffer += chunk.toString('utf8');
-
-    let newlineIdx = buffer.indexOf('\n');
-    while (newlineIdx !== -1) {
-      const line = buffer.slice(0, newlineIdx).trim();
-      buffer = buffer.slice(newlineIdx + 1);
-
-      if (line.length > 0) {
-        handleRequest(line)
-          .then((response) => {
-            if (response && !socket.destroyed) socket.write(`${response}\n`);
-          })
-          .catch((err) => {
-            log.error(`telemetry identity: unhandled error: ${err.message}`);
-          });
-      }
-
-      newlineIdx = buffer.indexOf('\n');
-    }
-
-    if (buffer.length > 4096) {
-      log.warn('telemetry identity: client exceeded line buffer limit, closing');
-      socket.destroy();
-    }
+/**
+ * Open the stream to the daemon. On every connect fluxos sends a full sync;
+ * when the stream ends it reconnects. The daemon sends nothing back.
+ */
+function connect() {
+  const socket = net.createConnection(socketPath);
+  let openedAt = 0;
+  socket.on('connect', () => {
+    openedAt = Date.now();
+    connection = socket;
+    log.info('telemetry identity: connected to flux-telemetryd');
+    sendSync(socket).catch((err) => log.error(`telemetry identity: sync failed: ${err.message}`));
   });
-
-  socket.on('error', (err) => {
-    sockets.delete(socket);
-    if (err.code !== 'EPIPE' && err.code !== 'ECONNRESET') {
-      log.error(`telemetry identity socket error: ${err.message}`);
-    }
-  });
-
+  // 'close' follows every error, and decides what happens next.
+  socket.on('error', () => {});
+  socket.on('data', () => {});
   socket.on('close', () => {
-    sockets.delete(socket);
+    if (connection === socket) {
+      connection = null;
+      log.info('telemetry identity: the stream to flux-telemetryd ended');
+    }
+    if (!started) return;
+    if (openedAt && Date.now() - openedAt >= STABLE_MS) reconnectDelay = RECONNECT_MIN_MS;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
   });
 }
 
-async function start() {
-  if (server) {
-    log.warn('telemetry identity server already running');
+/**
+ * Feed flux-telemetryd. A node without its identity socket runs no daemon:
+ * there is nothing to feed, and nothing is logged.
+ *
+ * @param {{socketPath?: string}} [options] socketPath for tests.
+ */
+async function start(options = {}) {
+  if (started) {
+    log.warn('telemetry identity: already started');
     return;
   }
+  socketPath = options.socketPath || SOCKET_PATH;
+  if (!fs.existsSync(socketPath)) return;
 
-  // The runtime dir exists only on Arcane nodes (created by the daemon's
-  // package); this write probe is the Arcane gate — non-Arcane nodes no-op.
-  try {
-    await fs.promises.access(SOCKET_DIR, fs.constants.W_OK);
-  } catch (err) {
-    log.warn(`telemetry identity: ${SOCKET_DIR} not available (${err.code}), skipping`);
-    return;
-  }
-
-  try {
-    await fs.promises.unlink(SOCKET_PATH);
-  } catch (err) {
-    if (err.code !== 'ENOENT') {
-      log.error(`telemetry identity: cannot remove stale socket: ${err.message}`);
-      return;
-    }
-  }
-
+  started = true;
   stopped = false;
-  server = net.createServer(handleConnection);
-
-  server.on('error', (err) => {
-    log.error(`telemetry identity server error: ${err.message}`);
-  });
-
-  await new Promise((resolve, reject) => {
-    server.listen(SOCKET_PATH, (err) => {
-      if (err) return reject(err);
-      return resolve();
-    });
-  });
-
-  log.info(`telemetry identity server listening on ${SOCKET_PATH}`);
-
-  // The unprivileged daemon must traverse the dir and connect to the socket
-  // (connect needs write), so group-own both to flux-telemetry.
-  await telemetryConfigService.chownGroup(SOCKET_DIR, '0750');
-  await telemetryConfigService.chownGroup(SOCKET_PATH, '0660');
-
-  await setBaseAcls();
+  reconnectDelay = RECONNECT_MIN_MS;
+  connect();
   await subscribeEvents();
   telemetrySinkCache.onChange(scheduleSinkResync);
 }
 
 async function stop() {
+  started = false;
   stopped = true;
 
   if (sinkResyncTimer) {
     clearTimeout(sinkResyncTimer);
     sinkResyncTimer = null;
   }
-
-  if (eventStream) eventStream.stop();
-
-  for (const socket of sockets) socket.destroy();
-  sockets.clear();
-
-  if (!server) return;
-
-  await new Promise((resolve) => {
-    server.close(resolve);
-  });
-  server = null;
-
-  try {
-    await fs.promises.unlink(SOCKET_PATH);
-  } catch (err) {
-    if (err.code !== 'ENOENT') {
-      log.warn(`telemetry identity: cleanup unlink failed: ${err.message}`);
-    }
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
   }
-
-  log.info('telemetry identity server stopped');
+  if (eventStream) eventStream.stop();
+  if (connection) {
+    connection.destroy();
+    connection = null;
+  }
 }
 
 module.exports = {
@@ -612,13 +558,12 @@ module.exports = {
   parseContainerName,
   buildIdentity,
   refreshAgentEndpoint,
-  resolveIdentity,
   sendSync,
-  handleRequest,
   broadcastTrack,
   broadcastUntrack,
   onComponentCreated,
   resyncAll,
+  deriveOpaqueId,
   SOCKET_PATH,
   TAG_ALLOWLIST,
 };

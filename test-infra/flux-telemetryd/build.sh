@@ -48,6 +48,9 @@ docker run --rm -v "$src:/src" -w /src \
 
 mkdir -p "$dist"
 cp "$src/target/release/flux-telemetryd" "$dist/flux-telemetryd"
-cp "$src/packaging/systemd/flux-telemetryd.service" "$dist/flux-telemetryd.service"
+for unit in flux-telemetryd.service flux-telemetryd.socket flux-telemetryd-identity.socket flux-telemetryd-acl.service; do
+  cp "$src/packaging/systemd/$unit" "$dist/$unit"
+done
+cp "$src/packaging/tmpfiles.d/flux-telemetryd.conf" "$dist/flux-telemetryd.conf"
 echo "$pin" > "$dist/.built-ref"
 echo "built flux-telemetryd ${pin:0:12} -> $dist ($(wc -c < "$dist/flux-telemetryd") bytes)"

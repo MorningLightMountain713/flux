@@ -224,8 +224,7 @@ describe('appUninstaller tombstoning teardown', () => {
         isPathMounted: sinon.stub().resolves(true),
       },
       appSwapPoolService: { reconcile: sinon.stub().resolves() },
-      telemetrySinkCache: { deleteSink: sinon.stub(), hasAnyTelemetryApps: sinon.stub().returns(false) },
-      telemetryConfigService: { remove: sinon.stub().resolves() },
+      telemetrySinkCache: { deleteSink: sinon.stub() },
       fluxShutdowndClient: {
         beginAppStop: sinon.stub().resolves({ outcome: 'not_arcane' }),
         forceAppStop: sinon.stub().resolves({ outcome: 'forced' }),
@@ -274,7 +273,6 @@ describe('appUninstaller tombstoning teardown', () => {
       '../appManagement/appsRuntimeState': stubs.appsRuntimeState,
       './pendingTeardownStore': stubs.pendingTeardownStore,
       '../telemetrySinkCache': stubs.telemetrySinkCache,
-      '../telemetryConfigService': stubs.telemetryConfigService,
       '../utils/fluxShutdowndClient': stubs.fluxShutdowndClient,
       '../utils/operationRegistry': stubs.operationRegistry,
       '../appMonitoring/reconcilerQueue': stubs.reconcilerQueue,

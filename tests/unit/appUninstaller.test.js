@@ -187,10 +187,6 @@ describe('appUninstaller tests', () => {
       crontab: { load: (cb) => cb(null, null) },
       '../../lib/log': logStub,
       '../utils/globalState': globalStateStub,
-      '../telemetryConfigService': {
-        ensureNode: sinon.stub().resolves(),
-        remove: sinon.stub().resolves(),
-      },
       // Stubbed so the standalone run never reaches the real imageCacheStore,
       // whose DB fail-safe ("keep") would mask the reference-gated GC under test.
       './imageCacheRetention': {

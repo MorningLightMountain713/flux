@@ -1,9 +1,9 @@
 // Drives the mock flux-telemetryd (test-infra/telemetryd-stub) that runs inside a
-// node's container for the telemetry suites. The mock is the CLIENT of FluxOS's
-// identity socket — it records every pushed sync/track/untrack message — and
-// exposes an HTTP control port (default 16198) on the node's own IP, so the test
-// can read the received events, reset the log between scenarios, and force a
-// disconnect (the server replays a full sync on reconnect). `nodeNum` is the
+// node's container for the telemetry suites. The mock LISTENS on the identity
+// socket FluxOS connects to — it records every pushed sync/track/untrack
+// message — and exposes an HTTP control port (default 16198) on the node's own
+// IP, so the test can read the received events, reset the log between
+// scenarios, and drop FluxOS's stream (FluxOS reconnects and re-syncs). `nodeNum` is the
 // 1-based node index (as nodeClient uses).
 import { getSubnetConfig } from './subnet-config.js';
 
@@ -31,8 +31,8 @@ export function telemetrydControl(nodeNum) {
     health: () => get('/health'),
     getEvents: async () => (await get('/events')).events,
     reset: () => post('/reset', {}),
-    // drop the current connection -> the stub reconnects and the server
-    // replays a full sync (the real daemon's crash-recovery path)
+    // drop FluxOS's stream -> FluxOS reconnects and sends a full sync (what it
+    // does when the real daemon restarts)
     disconnect: () => post('/disconnect', {}),
   };
 }

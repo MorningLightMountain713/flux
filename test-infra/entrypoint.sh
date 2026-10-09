@@ -352,12 +352,14 @@ if [ "$FLUX_SHUTDOWND_REAL" = "true" ]; then
   install -m 0755 /opt/shutdownd-dist/shutdownctl /usr/local/bin/shutdownctl
   ln -sf /etc/systemd/system/flux-shutdownd-real.service /etc/systemd/system/multi-user.target.wants/flux-shutdownd-real.service
 fi
-# The mock flux-telemetryd the telemetry suites drive (telemetryd-stub).
-# FluxOS's identity server grants the daemon user log access by chgrp/setfacl on
-# the Arcane docker data-root, /dat/var/lib/docker: the flux-telemetry user/group
-# must exist and the path must resolve to the node's data-root, or the grant fails
-# and FluxOS announces nothing over the socket. On an arcaneHost node that path IS
-# the data-root (mounted below); otherwise it points at /mnt/appdata/docker.
+# The mock flux-telemetryd the telemetry suites drive (telemetryd-stub). The
+# real daemon owns the identity socket and FluxOS connects to it; the mock plays
+# the daemon's listening role, and its unit is up only once it listens.
+# FluxOS grants the daemon user log access by setfacl on the Arcane docker
+# data-root, /dat/var/lib/docker: the flux-telemetry user must exist and the
+# path must resolve to the node's data-root, or the grant fails and FluxOS
+# announces nothing over the socket. On an arcaneHost node that path IS the
+# data-root (mounted below); otherwise it points at /mnt/appdata/docker.
 if [ "$FLUX_TELEMETRYD_MOCK" = "true" ]; then
   groupadd -f -r flux-telemetry
   id -u flux-telemetry >/dev/null 2>&1 || useradd -r -g flux-telemetry -s /usr/sbin/nologin flux-telemetry
@@ -429,17 +431,28 @@ EOF
 fi
 
 # ── Real flux-telemetryd (FLUX_TELEMETRYD_REAL) ────────────────────────
-# The daemon binary and its REAL hardened unit are bind-mounted from the runner
-# host. Installed but NOT enabled: FluxOS itself starts the unit when a telemetry
-# app installs (telemetryConfigService.ensureNode) — the production flow under
-# test. /run is a fresh tmpfs once systemd boots, so the runtime dir comes from
-# tmpfiles.d.
+# The daemon binary and its REAL packaging (service, the two socket units, the
+# ACL oneshot and its tmpfiles drop-in) are bind-mounted from the runner host's
+# pinned build. Installed AND enabled, as on the image: systemd creates both
+# sockets and runs the daemon from boot; FluxOS connects to the identity socket
+# and never starts or stops the daemon. The sockets name their owners, so those
+# accounts exist first: fluxos owns identity.sock, flux-daemon-access is
+# query.sock's group.
 if [ "$FLUX_TELEMETRYD_REAL" = "true" ]; then
   groupadd -f -r flux-telemetry
   id -u flux-telemetry >/dev/null 2>&1 || useradd -r -g flux-telemetry -s /usr/sbin/nologin flux-telemetry
-  echo 'd /run/flux/telemetry 0750 root flux-telemetry -' > /etc/tmpfiles.d/flux-telemetry.conf
+  groupadd -f -r flux-daemon-access
+  id -u fluxos >/dev/null 2>&1 || useradd -r -U -s /usr/sbin/nologin fluxos
   install -m 0755 /opt/telemetryd-dist/flux-telemetryd /usr/local/bin/flux-telemetryd
-  cp /opt/telemetryd-dist/flux-telemetryd.service /etc/systemd/system/
+  for unit in flux-telemetryd.service flux-telemetryd.socket flux-telemetryd-identity.socket flux-telemetryd-acl.service; do
+    cp "/opt/telemetryd-dist/$unit" /etc/systemd/system/
+  done
+  install -m 0644 /opt/telemetryd-dist/flux-telemetryd.conf /usr/lib/tmpfiles.d/flux-telemetryd.conf
+  mkdir -p /etc/systemd/system/sockets.target.wants
+  ln -sf /etc/systemd/system/flux-telemetryd.socket /etc/systemd/system/sockets.target.wants/flux-telemetryd.socket
+  ln -sf /etc/systemd/system/flux-telemetryd-identity.socket /etc/systemd/system/sockets.target.wants/flux-telemetryd-identity.socket
+  ln -sf /etc/systemd/system/flux-telemetryd-acl.service /etc/systemd/system/multi-user.target.wants/flux-telemetryd-acl.service
+  ln -sf /etc/systemd/system/flux-telemetryd.service /etc/systemd/system/multi-user.target.wants/flux-telemetryd.service
 fi
 
 # ── Real flux-dnsd (FLUX_DNSD_REAL) ────────────────────────────────────

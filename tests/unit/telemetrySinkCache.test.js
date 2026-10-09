@@ -110,7 +110,7 @@ describe('telemetrySinkCache tests', () => {
       const sink = { provider: 'otlp', component: 'otelagent', port: 4318 };
       cache.setSink('OtlpApp', sink);
       expect(cache.getSink('otlpapp')).to.deep.equal(sink);
-      expect(cache.hasAnyTelemetryApps()).to.equal(true);
+      expect([...cache.entries()]).to.not.be.empty;
     });
 
     it('clears the entry for an otlp sink without a component', () => {
@@ -147,12 +147,12 @@ describe('telemetrySinkCache tests', () => {
       expect(cache.getSink('app1')).to.equal(null);
     });
 
-    it('hasAnyTelemetryApps reflects the populated state', () => {
-      expect(cache.hasAnyTelemetryApps()).to.equal(false);
+    it('entries reflects the populated state', () => {
+      expect([...cache.entries()]).to.have.length(0);
       cache.setSink('app1', { provider: 'datadog', apiKey: 'k1' });
-      expect(cache.hasAnyTelemetryApps()).to.equal(true);
+      expect([...cache.entries()]).to.have.length(1);
       cache.deleteSink('app1');
-      expect(cache.hasAnyTelemetryApps()).to.equal(false);
+      expect([...cache.entries()]).to.have.length(0);
     });
 
     it('getSink returns null for an unknown app', () => {
@@ -198,7 +198,7 @@ describe('telemetrySinkCache tests', () => {
 
       expect(cache.getSink('telemApp')).to.deep.equal({ provider: 'datadog', apiKey: 'k1', site: 'datadoghq.com' });
       expect(cache.getSink('plainApp')).to.equal(null);
-      expect(cache.hasAnyTelemetryApps()).to.equal(true);
+      expect([...cache.entries()]).to.not.be.empty;
     });
 
     it('clears stale entries no longer installed', async () => {
@@ -208,7 +208,7 @@ describe('telemetrySinkCache tests', () => {
       await cache.reconcileFromInstalled();
 
       expect(cache.getSink('goneApp')).to.equal(null);
-      expect(cache.hasAnyTelemetryApps()).to.equal(false);
+      expect([...cache.entries()]).to.be.empty;
     });
 
     it('logs and leaves the cache intact when the provider throws', async () => {
