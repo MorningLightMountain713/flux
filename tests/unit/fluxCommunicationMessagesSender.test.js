@@ -326,10 +326,10 @@ describe('fluxCommunicationMessagesSender tests', () => {
     responders.forEach(([fn, wireType, envelope]) => {
       it(`${fn} refuses and reads nothing from the store`, async () => {
 
-        expect(await fluxCommunicationMessagesSender[fn](peer, 0), 'a refusal reports itself').to.equal(false);
+        expect(await fluxCommunicationMessagesSender[fn](peer, 0, 1700), 'a refusal reports itself').to.equal(false);
 
         expect(sent()).to.deep.equal([{
-          type: wireType, ...envelope, messages: [], done: true, refused: true,
+          type: wireType, ...envelope, messages: [], done: true, refused: true, requestTimestamp: 1700,
         }]);
         expect(findStub.called || messages.pool.called, 'a refusing node still queried its own store').to.equal(false);
       });
@@ -351,12 +351,12 @@ describe('fluxCommunicationMessagesSender tests', () => {
       it(`${fn} answers an empty store without refusing`, async () => {
         capabilities.setForTests('appStateSynced', true);
 
-        expect(await fluxCommunicationMessagesSender[fn](peer, 0)).to.equal(true);
+        expect(await fluxCommunicationMessagesSender[fn](peer, 0, 1700)).to.equal(true);
 
         const messages = sent();
         expect(messages).to.have.lengthOf(1);
         expect(messages[0]).to.deep.equal({
-          type: wireType, ...envelope, messages: [], done: true,
+          type: wireType, ...envelope, messages: [], done: true, requestTimestamp: 1700,
         });
         expect(messages[0]).to.not.have.property('refused');
       });
