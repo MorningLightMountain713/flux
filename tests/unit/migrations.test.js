@@ -19,7 +19,7 @@ describe('migrations tests', () => {
       installedLedger: { adoptInstalledLedgers: sinon.stub().resolves({ adopted: [], skipped: [] }) },
       retiredSchema: { dropRetiredSchema: sinon.stub().resolves({ collections: [], indexes: [] }) },
       appMessagesMigration: { migrateAppMessages: sinon.stub().resolves({ payments: 0, permanent: 0, pooled: 0 }) },
-      appsRepository: { removeContentManifestsWithoutHash: sinon.stub().resolves(0) },
+      manifests: { dropHashless: sinon.stub().resolves(0) },
       paymentPositions: { backfillPaymentPositions: sinon.stub().resolves({ positioned: 0, unresolved: 0 }) },
     };
     migrations = proxyquire('../../ZelBack/src/services/migrations', {
@@ -30,7 +30,7 @@ describe('migrations tests', () => {
       '../appLifecycle/installedLedger': stubs.installedLedger,
       './retiredSchema': stubs.retiredSchema,
       './appMessages': stubs.appMessagesMigration,
-      '../appDatabase/appsRepository': stubs.appsRepository,
+      '../appDatabase/appRecords': { manifests: () => stubs.manifests },
       './paymentPositions': stubs.paymentPositions,
     });
   });
@@ -161,8 +161,8 @@ describe('migrations tests', () => {
         './appMessages': {
           migrateAppMessages: async () => { order.push('third'); },
         },
-        '../appDatabase/appsRepository': {
-          removeContentManifestsWithoutHash: async () => { order.push('fourth'); },
+        '../appDatabase/appRecords': {
+          manifests: () => ({ dropHashless: async () => { order.push('fourth'); } }),
         },
         './paymentPositions': {
           backfillPaymentPositions: async () => { order.push('fifth'); },

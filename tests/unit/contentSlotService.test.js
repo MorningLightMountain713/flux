@@ -114,21 +114,28 @@ const mountSource = (dep, slot) => dep.componentEntries()
 const identifierOf = (dep, name = 'web') => dep.componentEntries()
   .find(([n]) => n === name)[1].identifier;
 
-// All appContentManifests DB access lives in appsRepository (the registry); the
-// content domain only builds the row + opts and delegates. So the manifest seam is a
-// fake registry, and the mongo filter/update shaping is asserted in the appsRepository
-// suite, not here.
 function fakeRepo(overrides = {}) {
   return {
     getInstalledApp: sinon.stub().resolves(null),
-    getContentManifests: sinon.stub().resolves([]),
-    getContentManifest: sinon.stub().resolves(null),
-    putContentManifest: sinon.stub().resolves({ inserted: true }),
-    resolveContentManifest: sinon.stub().resolves(),
-    deleteContentManifest: sinon.stub().resolves(),
-    markContentManifestApplied: sinon.stub().resolves(),
     listInstalledApps: sinon.stub().resolves([]),
     carriedManifestRanks: sinon.stub().resolves([]),
+    ...overrides,
+  };
+}
+
+// The manifests a node holds are flux-spec's collection, read through
+// appRecords; the service builds a record's fields and hands them over, so the
+// seam is a fake collection and the collection's own suite proves its writes.
+function fakeManifests(overrides = {}) {
+  return {
+    byIdentity: sinon.stub().resolves([]),
+    byHash: sinon.stub().resolves(null),
+    put: sinon.stub().resolves({ inserted: true }),
+    resolve: sinon.stub().resolves(),
+    remove: sinon.stub().resolves(true),
+    removeAll: sinon.stub().resolves(0),
+    markApplied: sinon.stub().resolves(),
+    resolvedIdentities: sinon.stub().resolves([]),
     ...overrides,
   };
 }
@@ -136,8 +143,6 @@ function fakeRepo(overrides = {}) {
 // The standing derivation is a leaf the service reads; its own suite proves it.
 // Here it is a seam: by default nothing stands, and a test that needs a standing
 // manifest hands one in through deps or through load().
-const manifestStanding = require('../../ZelBack/src/services/appLifecycle/manifestStanding');
-
 // The real library, with assertValidContentManifest SPIED over the real
 // implementation (never replaced) so a test can still assert the manifest actually
 // went through flux-spec's validator.
@@ -157,27 +162,38 @@ function fakeRegistry(overrides = {}) {
 
 function load(repo = fakeRepo(), {
   registry = fakeRegistry(),
+  manifests = fakeManifests(),
   standing = async () => ({ app: null, row: null, aside: false, rows: [] }),
   ownerships = async () => [],
   latestAppliedState = async () => null,
 } = {}) {
   const bus = { publish: sinon.stub() };
   const specLib = specLibNamespace();
+  const records = {
+    registry: () => registry,
+    manifests: () => manifests,
+    installed: () => ({ byName: repo.getInstalledApp, apps: async () => (await repo.listInstalledApps()).map((record) => installedRecord(record)) }),
+  };
+  // The standing rule reads the same collections the service does.
+  const standingModule = proxyquire('../../ZelBack/src/services/appLifecycle/manifestStanding', {
+    '../appDatabase/appRecords': records,
+    '../appDatabase/appsRepository': repo,
+    '../utils/specLibs': { getSpec: sinon.stub().resolves(specLib) },
+  });
   const service = proxyquire('../../ZelBack/src/services/appLifecycle/contentSlotService', {
     '../utils/specLibs': { getSpec: sinon.stub().resolves(specLib) },
     '../appDatabase/appsRepository': repo,
-    '../appDatabase/appRecords': {
-      registry: () => registry,
-      installed: () => ({ byName: repo.getInstalledApp, apps: async () => (await repo.listInstalledApps()).map((record) => installedRecord(record)) }),
-    },
+    '../appDatabase/appRecords': records,
     '../appDecisions/appHistory': { ownerships },
     '../appDatabase/appSpecHistory': { latestAppliedState },
     '../chainState': { getScannedHeight: async () => 0 },
     '../appMessaging/temporaryPoolSweep': { MAX_REORG_LENGTH: 40 },
-    './manifestStanding': { ...manifestStanding, standingManifest: standing },
+    './manifestStanding': { ...standingModule, standingManifest: standing },
     '../utils/fluxEventBus': bus,
   });
-  return { service, specLib, repo, bus };
+  return {
+    service, specLib, repo, manifests, bus,
+  };
 }
 
 function makeBenchmark(overrides = {}) {
@@ -735,11 +751,14 @@ describe('contentSlotService', () => {
       slots: { sealed: { algorithm: 'fake', ciphertext: Buffer.from(JSON.stringify(slots)).toString('base64'), nonce: 'n', tag: 't' } },
     };
   }
-  function storedRow(version, slots, { signer = OWNER, ownedFrom = 2_400_000, applied = false, hash = `h${version}` } = {}) {
-    return {
-      identity: IDENTITY, hash, version, ownedFrom, signer, applied,
+  // A record the collection holds, as the service reads it.
+  function storedRow(version, slots, {
+    signer = OWNER, ownedFrom = 2_400_000, applied = false, hash = `h${version}`, expireAt = null,
+  } = {}) {
+    return flux.ContentManifest.deserialize({
+      identity: IDENTITY, hash, version, ownedFrom, signer, applied, expireAt,
       data: { type: 'fluxappcontentmanifest', appName: APP, manifest: sealedGossip({ version, ownedFrom }, slots) },
-    };
+    });
   }
 
   describe('takeManifest', () => {
@@ -772,6 +791,19 @@ describe('contentSlotService', () => {
       expect(row.data.manifest).to.deep.equal(sealedGossip());
       expect(row.expireAt).to.equal(undefined);
       sinon.assert.calledWith(bus.publish, 'content:manifestStored', sinon.match({ identity: IDENTITY, version: 2, resolved: true }));
+    });
+
+    it('reads and keeps the record through the content manifests when no seam is given', async () => {
+      const { service, specLib, manifests } = load();
+      const deps = takeDeps();
+      delete deps.getRow;
+      delete deps.put;
+      const taken = await service.takeManifest(sealedGossip(), {}, deps);
+      expect(taken.outcome).to.equal('stored');
+      sinon.assert.calledOnceWithExactly(manifests.byHash, IDENTITY, specLib.contentManifestHash(manifest()));
+      sinon.assert.calledOnce(manifests.put);
+      expect(manifests.put.firstCall.args[0]).to.include({ identity: IDENTITY, hash: taken.hash, signer: OWNER });
+      expect(manifests.put.firstCall.args[1]).to.have.property('now');
     });
 
     it('resolves the signer among every owner of the app\'s applied history, with the height that owner took the app', async () => {
@@ -827,7 +859,7 @@ describe('contentSlotService', () => {
 
     it('a second arrival of a resolved manifest is a duplicate that refreshes the row, and one of a held manifest stays held', async () => {
       const { service } = load();
-      const resolved = takeDeps({ getRow: async () => ({ signer: OWNER }) });
+      const resolved = takeDeps({ getRow: async () => storedRow(1, {}) });
       expect((await service.takeManifest(sealedGossip(), {}, resolved)).outcome).to.equal('duplicate');
       sinon.assert.calledOnce(resolved.put);
       const held = takeDeps({ getApp: async () => null, put: sinon.stub().resolves({ inserted: false }) });
@@ -990,7 +1022,7 @@ describe('contentSlotService', () => {
     const info = {
       name: APP, owner: OWNER, isEncrypted: true, spec: slotSpecSealed, identity: IDENTITY,
     };
-    const held = (version) => ({ ...storedRow(version, {}), signer: null, expireAt: new Date() });
+    const held = (version) => storedRow(version, {}, { signer: null, expireAt: new Date() });
 
     it('resolves a held manifest to the owner who signed it once the app is listed, and drops one no owner signed', async () => {
       const { service, bus } = load();
@@ -1010,6 +1042,21 @@ describe('contentSlotService', () => {
       sinon.assert.calledOnceWithExactly(drop, IDENTITY, 'h2');
       sinon.assert.calledWith(bus.publish, 'content:manifestPromoted', { appName: APP, identity: IDENTITY, version: 1 });
       sinon.assert.calledWith(bus.publish, 'content:manifestDropped', { appName: APP, reason: 'forged_signature' });
+    });
+
+    it('resolves and drops through the content manifests when no seam is given', async () => {
+      const manifests = fakeManifests({ byIdentity: sinon.stub().resolves([held(1), held(2)]) });
+      const { service } = load(fakeRepo(), { manifests });
+      const resolved = await service.resolveHeldManifests(IDENTITY, {
+        getApp: async () => info,
+        ownerships: async () => [{ owner: OWNER, from: 2_400_000 }],
+        verify: async (signed) => !signed.includes('"version":2'),
+        provider: fakeProvider(),
+      });
+      expect(resolved).to.equal(1);
+      sinon.assert.calledOnceWithExactly(manifests.byIdentity, IDENTITY);
+      sinon.assert.calledOnceWithExactly(manifests.resolve, IDENTITY, 'h1', OWNER);
+      sinon.assert.calledOnceWithExactly(manifests.remove, IDENTITY, 'h2');
     });
 
     it('resolves nothing while the app is not listed', async () => {
@@ -1261,7 +1308,7 @@ describe('contentSlotService', () => {
     }
     // The register already stored this app's initial manifest (version 1) under
     // this ownership, so the fixture update (version 2) is its successor.
-    const loadSub = () => load(fakeRepo({ getContentManifests: sinon.stub().resolves([storedRow(1, {})]) }), { standing: async () => ({ row: storedRow(1, {}) }) });
+    const loadSub = () => load(fakeRepo(), { manifests: fakeManifests({ byIdentity: sinon.stub().resolves([storedRow(1, {})]) }), standing: async () => ({ row: storedRow(1, {}) }) });
 
     it('transport-opens, processes, stores, and gossips the sealed manifest', async () => {
       const { service } = loadSub();
@@ -1963,6 +2010,14 @@ describe('contentSlotService', () => {
       sinon.assert.calledOnceWithExactly(recordApplied, IDENTITY, specLib.contentManifestHash(m));
     });
 
+    it('marks the manifest delivered through the content manifests when no seam is given', async () => {
+      const { service, specLib, manifests } = load();
+      await service.applyManifest(dep, m, { appName: APP, owner: OWNER, peers: [] }, {
+        resolve: async () => Buffer.from('x'), writeFile: sinon.spy(), applyPerms: sinon.spy(), signal: sinon.spy(),
+      });
+      sinon.assert.calledOnceWithExactly(manifests.markApplied, IDENTITY, specLib.contentManifestHash(m));
+    });
+
     it('does not record when the apply is skipped (already-applied guard)', async () => {
       const { service } = load();
       const recordApplied = sinon.spy();
@@ -2130,9 +2185,9 @@ describe('contentSlotService', () => {
     });
     const standsOn = (m, extra = {}) => async () => ({
       app: app(),
-      row: {
+      row: flux.ContentManifest.deserialize({
         identity: IDENTITY, hash: `h${m.version}`, version: m.version, ownedFrom: m.ownedFrom, signer: OWNER, applied: false, data: { manifest: m }, ...extra,
-      },
+      }),
     });
 
     it('mounts each slot component\'s volume before provisioning (the immutable mountpoint EPERMs an unmounted write)', async () => {
@@ -2832,30 +2887,32 @@ describe('contentSlotService', () => {
     it('numbers the original owner\'s next version after the registration\'s list, and a later owner\'s from 1', async () => {
       const registered = storedRow(1, {}, { ownedFrom: 0 });
       const standing = sinon.stub().resolves({ row: registered, rows: [registered] });
-      const repo = fakeRepo({
-        getContentManifests: sinon.stub().resolves([registered]),
-        carriedManifestRanks: sinon.stub().resolves([]),
-      });
+      const repo = fakeRepo({ carriedManifestRanks: sinon.stub().resolves([]) });
+      const manifests = fakeManifests({ byIdentity: sinon.stub().resolves([registered]) });
       const registry = fakeRegistry({ byName: sinon.stub().resolves({ name: APP, identity: IDENTITY }) });
-      const original = load(repo, { registry, standing, ownerships: async () => [{ owner: OWNER, from: 2_400_000 }] });
+      const original = load(repo, {
+        registry, manifests, standing, ownerships: async () => [{ owner: OWNER, from: 2_400_000 }],
+      });
       const r1 = res();
       await original.service.getContentManifestsApi({ params: { appname: APP } }, r1);
       expect(r1.json.firstCall.args[0].data.nextVersion, 'the registration\'s list is the original owner\'s version 1').to.equal(2);
-      const sold = load(repo, { registry, standing, ownerships: async () => [{ owner: OWNER, from: 2_400_000 }, { owner: '1buyer', from: 2_500_000 }] });
+      const sold = load(repo, {
+        registry, manifests, standing, ownerships: async () => [{ owner: OWNER, from: 2_400_000 }, { owner: '1buyer', from: 2_500_000 }],
+      });
       const r2 = res();
       await sold.service.getContentManifestsApi({ params: { appname: APP } }, r2);
       expect(r2.json.firstCall.args[0].data.nextVersion, 'a later owner starts at 1').to.equal(1);
     });
 
     it('serves every resolved manifest held, the standing one, the listed ownership and the next version to sign', async () => {
-      const rows = [storedRow(1, {}), storedRow(2, {}), { ...storedRow(3, {}), signer: null }];
+      const rows = [storedRow(1, {}), storedRow(2, {}), storedRow(3, {}, { signer: null })];
       const standing = sinon.stub().resolves({ row: rows[1], rows });
-      const repo = fakeRepo({
-        getContentManifests: sinon.stub().resolves(rows),
-        carriedManifestRanks: sinon.stub().resolves([{ version: 3, ownedFrom: 2_400_000 }]),
-      });
+      const repo = fakeRepo({ carriedManifestRanks: sinon.stub().resolves([{ version: 3, ownedFrom: 2_400_000 }]) });
+      const manifests = fakeManifests({ byIdentity: sinon.stub().resolves(rows) });
       const registry = fakeRegistry({ byName: sinon.stub().resolves({ name: APP, identity: IDENTITY }) });
-      const { service } = load(repo, { registry, standing, ownerships: async () => [{ owner: OWNER, from: 2_400_000 }] });
+      const { service } = load(repo, {
+        registry, manifests, standing, ownerships: async () => [{ owner: OWNER, from: 2_400_000 }],
+      });
       const r = res();
       await service.getContentManifestsApi({ params: { appname: APP } }, r);
       const { data } = r.json.firstCall.args[0];
@@ -2870,10 +2927,10 @@ describe('contentSlotService', () => {
       const rows = [storedRow(1, {}), storedRow(2, {})];
       const standing = sinon.stub().resolves({ app: null, row: null, aside: false, rows });
       const latestAppliedState = sinon.stub().resolves({ name: APP, identity: IDENTITY, owner: OWNER });
-      const repo = fakeRepo({
-        getContentManifests: sinon.stub().resolves(rows),
+      const manifests = fakeManifests({ byIdentity: sinon.stub().resolves(rows) });
+      const { service } = load(fakeRepo(), {
+        manifests, standing, ownerships: async () => [{ owner: OWNER, from: 2_400_000 }], latestAppliedState,
       });
-      const { service } = load(repo, { standing, ownerships: async () => [{ owner: OWNER, from: 2_400_000 }], latestAppliedState });
       const r = res();
       await service.getContentManifestsApi({ params: { appname: APP } }, r);
       sinon.assert.calledOnceWithExactly(latestAppliedState, APP);
@@ -2920,6 +2977,17 @@ describe('contentSlotService', () => {
       sinon.assert.calledOnceWithExactly(deps.latestRegistration, APP);
       sinon.assert.calledOnceWithExactly(deps.remove, IDENTITY);
       sinon.assert.calledWithMatch(bus.publish, 'content:manifestReaped', { count: 2, identities: [IDENTITY] });
+    });
+
+    it('lists and removes through the content manifests when no seam is given', async () => {
+      const manifests = fakeManifests({
+        resolvedIdentities: sinon.stub().resolves([{ identity: IDENTITY, appName: APP }]),
+        removeAll: sinon.stub().resolves(2),
+      });
+      const { service } = load(fakeRepo(), { manifests });
+      const out = await service.reapDisplacedManifests({ latestRegistration: async () => registrationOf(OTHER, 1000), scannedHeight: async () => 1040 });
+      expect(out).to.deep.equal({ reaped: 2, orphans: [IDENTITY] });
+      sinon.assert.calledOnceWithExactly(manifests.removeAll, IDENTITY);
     });
 
     it('keeps the rows while the displacing registration is within the reorg cap', async () => {

@@ -7,11 +7,12 @@ const moduleLoader = require('../../../ZelBack/src/lib/moduleLoader');
 const { loadSpecLibrary } = require('./fluxSpec');
 
 /**
- * The app registry, the installed apps, the installed ledgers and the app
- * messages a unit test's subject reads: a real collection held in memory, or
- * one whose every operation is a stub. Either is installed as
- * appRecords.registry(), appRecords.installed(), appRecords.ledgers() or
- * appRecords.messages() until sinon.restore().
+ * The app registry, the installed apps, the installed ledgers, the app
+ * messages and the content manifests a unit test's subject reads: a real
+ * collection held in memory, or one whose every operation is a stub. Either is
+ * installed as appRecords.registry(), appRecords.installed(),
+ * appRecords.ledgers(), appRecords.messages() or appRecords.manifests() until
+ * sinon.restore().
  */
 
 // What each operation answers until a test says otherwise.
@@ -185,6 +186,42 @@ async function inMemoryMessages() {
   return { messages: install('messages', new AppMessages(provider)), provider };
 }
 
+// What each content-manifests operation answers until a test says otherwise.
+const MANIFEST_ANSWERS = {
+  byIdentity: [],
+  byHash: null,
+  put: { inserted: true },
+  remove: true,
+  removeAll: 0,
+  dropHashless: 0,
+  resolved: [],
+  ranks: [],
+  broadcasts: [],
+  resolvedIdentities: [],
+};
+
+/**
+ * The content manifests with every operation a sinon stub, installed as
+ * appRecords.manifests(); calling it again in the same test returns it.
+ * @returns {Object<string, sinon.SinonStub>}
+ */
+function stubManifests() {
+  if (appRecords.manifests.restore) return appRecords.manifests();
+  return install('manifests', stubbed(specLibrary.loaded().ContentManifests, MANIFEST_ANSWERS));
+}
+
+/**
+ * A real ContentManifests over flux-spec's in-memory store, installed as
+ * appRecords.manifests(), with the store beside it.
+ * @returns {Promise<{manifests: import('@runonflux/flux-spec-backend').ContentManifests, provider: object}>}
+ */
+async function inMemoryManifests() {
+  const { ContentManifests } = await loadSpecLibrary();
+  const { InMemoryStorageProvider } = await moduleLoader.importModule('@runonflux/flux-spec-backend/testing');
+  const provider = new InMemoryStorageProvider();
+  return { manifests: install('manifests', new ContentManifests(provider)), provider };
+}
+
 /**
  * An installed record over a registered record, for a stub to answer with: the
  * real InstalledSpec when the record is a real InstantiatedSpec, else a
@@ -216,5 +253,5 @@ function installedRecord(record, { replica = null, owed = null } = {}) {
 }
 
 module.exports = {
-  stubRegistry, inMemoryRegistry, stubInstalled, inMemoryInstalled, stubLedgers, inMemoryLedgers, stubMessages, inMemoryMessages, installedRecord,
+  stubRegistry, inMemoryRegistry, stubInstalled, inMemoryInstalled, stubLedgers, inMemoryLedgers, stubMessages, inMemoryMessages, stubManifests, inMemoryManifests, installedRecord,
 };

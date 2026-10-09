@@ -17,11 +17,6 @@ const appsRepository = require('../appDatabase/appsRepository');
 const appRecords = require('../appDatabase/appRecords');
 const { getSpec } = require('../utils/specLibs');
 
-/** The manifest a stored row carries, as it travels. */
-function manifestOf(row) {
-  return row && row.data ? row.data.manifest : null;
-}
-
 /**
  * The manifest the listed spec names, or null. The `content` block is in the
  * sealed set, so an encrypted spec is opened under its own provider.
@@ -48,7 +43,7 @@ async function namedManifestOf(app) {
  * @returns {Promise<{app: ?object, row: ?object, aside: boolean, rows: object[]}>}
  */
 async function standingManifest(identity, deps = {}) {
-  const { getApp = (id) => appRecords.registry().byIdentity(id), getRows = appsRepository.getContentManifests } = deps;
+  const { getApp = (id) => appRecords.registry().byIdentity(id), getRows = (id) => appRecords.manifests().byIdentity(id) } = deps;
   const app = await getApp(identity);
   const rows = await getRows(identity);
   if (!app) {
@@ -57,7 +52,7 @@ async function standingManifest(identity, deps = {}) {
     };
   }
   const { ownerSignedIsValid, manifestRank, outranks } = await getSpec();
-  const resolved = rows.filter((row) => row.signer);
+  const resolved = rows.filter((row) => row.isResolved);
   const needsName = resolved.length === 0 || resolved.some((row) => row.signer !== app.owner);
   const namedHash = needsName ? await namedManifestOf(app) : null;
   const valid = resolved.filter((row) => ownerSignedIsValid(
@@ -88,7 +83,7 @@ async function standingManifest(identity, deps = {}) {
  * @returns {Promise<number>} 0 when nothing is signed under the ownership
  */
 async function highestVersionInOwnership(identity, ownership, deps = {}) {
-  const { getRows = appsRepository.getContentManifests, pendingRanks = appsRepository.carriedManifestRanks } = deps;
+  const { getRows = (id) => appRecords.manifests().byIdentity(id), pendingRanks = appsRepository.carriedManifestRanks } = deps;
   const within = (ownedFrom) => ownedFrom === ownership.from || (ownership.original === true && ownedFrom === 0);
   const rows = (await getRows(identity)).filter((row) => row.signer === ownership.owner && within(row.ownedFrom));
   const pending = (await pendingRanks(identity)).filter((rank) => within(rank.ownedFrom));
@@ -118,7 +113,7 @@ function listedOwnership(owners) {
  * @returns {Promise<Array<{identity: string, version: number, ownedFrom: number}>>}
  */
 async function standingIndex(deps = {}) {
-  const { listResolved = appsRepository.listResolvedContentManifests, standing = standingManifest } = deps;
+  const { listResolved = () => appRecords.manifests().resolved(), standing = standingManifest } = deps;
   const resolved = await listResolved();
   const identities = [...new Set(resolved.map((row) => row.identity))];
   const servable = new Set(resolved.filter((row) => row.servable).map((row) => `${row.identity}\n${row.hash}`));
@@ -134,7 +129,6 @@ async function standingIndex(deps = {}) {
 }
 
 module.exports = {
-  manifestOf,
   namedManifestOf,
   listedOwnership,
   standingManifest,

@@ -23,7 +23,7 @@ const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const { getSpec } = require('../../ZelBack/src/services/utils/specLibs');
 const policyStore = require('../../ZelBack/src/services/policyStore');
 const { loadSpecLibrary } = require('./fixtures/fluxSpec');
-const { stubMessages } = require('./fixtures/appRecords');
+const { stubMessages, stubManifests } = require('./fixtures/appRecords');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -2392,17 +2392,17 @@ describe('fluxCommunicationMessagesSender tests', () => {
     });
 
     it('respondWithContentManifests queries only the requested apps (the two-step fetch)', async () => {
-      const listStub = sinon.stub(appsRepository, 'listContentManifestBroadcasts')
-        .resolves([{ version: 1, data: { manifest: { identity: 'b' } } }]);
+      const manifests = stubManifests();
+      manifests.broadcasts.resolves([{ version: 1, data: { manifest: { identity: 'b' } } }]);
       const msgObj = { data: { type: 'fluxappcontentmanifestrequest', identities: ['b'] } };
       await fluxCommunicationMessagesSender.respondWithContentManifests(msgObj, peer());
-      sinon.assert.calledOnceWithExactly(listStub, ['b']);
+      sinon.assert.calledOnceWithExactly(manifests.broadcasts, ['b']);
     });
 
     it('respondWithContentManifests does not query the registry for an empty ask', async () => {
-      const listStub = sinon.stub(appsRepository, 'listContentManifestBroadcasts').resolves([]);
+      const manifests = stubManifests();
       await fluxCommunicationMessagesSender.respondWithContentManifests({ data: { identities: [] } }, peer());
-      sinon.assert.notCalled(listStub);
+      sinon.assert.notCalled(manifests.broadcasts);
     });
   });
 });

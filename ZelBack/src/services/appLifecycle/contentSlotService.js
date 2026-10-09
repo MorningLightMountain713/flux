@@ -21,7 +21,7 @@ const appSpecHistory = require('../appDatabase/appSpecHistory');
 const chainState = require('../chainState');
 const temporaryPoolSweep = require('../appMessaging/temporaryPoolSweep');
 const {
-  manifestOf, standingManifest, highestVersionInOwnership, listedOwnership,
+  standingManifest, highestVersionInOwnership, listedOwnership,
 } = require('./manifestStanding');
 const networkStateService = require('../networkStateService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
@@ -229,7 +229,7 @@ async function processManifestSubmission(input, deps) {
     manifest, spec, owner, encrypted, identity, ownedFrom, original = false, blobs, ownerSigs,
   } = input;
   const {
-    getRows = appsRepository.getContentManifests, pendingRanks = appsRepository.carriedManifestRanks,
+    getRows = (id) => appRecords.manifests().byIdentity(id), pendingRanks = appsRepository.carriedManifestRanks,
     standing = standingManifest, refresh = refreshManifests, uploader, benchmark, now, verify, provider,
   } = deps;
 
@@ -266,7 +266,7 @@ async function processManifestSubmission(input, deps) {
   let carriedOver = new Set();
   const { row: standingRow } = await standing(identity, deps);
   if (standingRow) {
-    const opened = await openManifestSlots(manifestOf(standingRow), { encrypted }, { provider });
+    const opened = await openManifestSlots(standingRow.manifest, { encrypted }, { provider });
     carriedOver = new Set(Object.values(opened.slots).map((s) => s.hash));
   }
 
@@ -374,8 +374,8 @@ async function signerOf(plaintext, app, deps = {}) {
 async function takeManifest(gossipManifest, opts = {}, deps = {}) {
   const {
     getApp = (identity) => appRecords.registry().byIdentity(identity),
-    getRow = appsRepository.getContentManifest,
-    put = appsRepository.putContentManifest,
+    getRow = (id, h) => appRecords.manifests().byHash(id, h),
+    put = (record, opts) => appRecords.manifests().put(record, opts),
     ownerships, verify, provider,
   } = deps;
   const { broadcast = null, now = Date.now() } = opts;
@@ -429,7 +429,7 @@ async function takeManifest(gossipManifest, opts = {}, deps = {}) {
     appName, identity, version: plaintext.version, hash, resolved: true,
   });
   return {
-    outcome: existing && existing.signer ? 'duplicate' : 'stored', hash, plaintext, app, signer,
+    outcome: existing && existing.isResolved ? 'duplicate' : 'stored', hash, plaintext, app, signer,
   };
 }
 
@@ -443,7 +443,7 @@ async function takeManifest(gossipManifest, opts = {}, deps = {}) {
 async function openStandingManifest(identity, deps = {}) {
   const { app, row } = await standingManifest(identity, deps);
   if (!row) return null;
-  const gossip = manifestOf(row);
+  const gossip = row.manifest;
   const plaintext = await openManifestSlots(gossip, { encrypted: await isSealedForm(gossip) }, { provider: deps.provider });
   return { app, row, plaintext };
 }
@@ -458,16 +458,16 @@ async function openStandingManifest(identity, deps = {}) {
 async function resolveHeldManifests(identity, deps = {}) {
   const {
     getApp = (identity) => appRecords.registry().byIdentity(identity),
-    getRows = appsRepository.getContentManifests,
-    resolve = appsRepository.resolveContentManifest,
-    drop = appsRepository.deleteContentManifest,
+    getRows = (id) => appRecords.manifests().byIdentity(id),
+    resolve = (id, h, signer) => appRecords.manifests().resolve(id, h, signer),
+    drop = (id, h) => appRecords.manifests().remove(id, h),
     ownerships, verify, provider,
   } = deps;
   const app = await getApp(identity);
   if (!app) return 0;
   let resolved = 0;
-  for (const row of (await getRows(identity)).filter((held) => !held.signer)) {
-    const gossip = manifestOf(row);
+  for (const row of (await getRows(identity)).filter((held) => !held.isResolved)) {
+    const gossip = row.manifest;
     let signer = null;
     let reason = 'invalid';
     try {
@@ -588,10 +588,10 @@ async function refreshManifests(appName, identity, deps = {}) {
  */
 async function reapDisplacedManifests(deps = {}) {
   const {
-    listHeld = appsRepository.listResolvedContentManifestIdentities,
+    listHeld = () => appRecords.manifests().resolvedIdentities(),
     latestRegistration = (name) => appHistory.latestApplied(name, { type: 'registration' }),
     scannedHeight = chainState.getScannedHeight,
-    remove = appsRepository.removeContentManifests,
+    remove = (id) => appRecords.manifests().removeAll(id),
   } = deps;
   const held = await listHeld();
   if (!held.length) return { reaped: 0, orphans: [] };
@@ -762,7 +762,7 @@ async function getContentManifestApi(req, res) {
       res.status(404).json(messageHelper.createErrorMessage(`No content manifest for ${appname}`));
       return;
     }
-    res.json(messageHelper.createDataMessage(manifestOf(row)));
+    res.json(messageHelper.createDataMessage(row.manifest));
   } catch (error) {
     log.error(error);
     res.json(messageHelper.createErrorMessage(error.message || error, error.name, error.code));
@@ -793,7 +793,7 @@ async function getContentManifestsApi(req, res) {
     const listed = listedOwnership(await appHistory.ownerships(app.name));
     const { row, rows } = await standingManifest(app.identity);
     const nextVersion = listed
-      ? (await highestVersionInOwnership(app.identity, listed, { getRows: appsRepository.getContentManifests, pendingRanks: appsRepository.carriedManifestRanks })) + 1
+      ? (await highestVersionInOwnership(app.identity, listed)) + 1
       : 1;
     res.json(messageHelper.createDataMessage({
       appName: app.name,
@@ -801,7 +801,7 @@ async function getContentManifestsApi(req, res) {
       ownership: listed,
       standing: row ? { hash: row.hash, version: row.version, ownedFrom: row.ownedFrom } : null,
       nextVersion,
-      manifests: rows.filter((held) => held.signer).map(manifestOf),
+      manifests: rows.filter((held) => held.isResolved).map((held) => held.manifest),
     }));
   } catch (error) {
     log.error(error);
@@ -963,7 +963,7 @@ const lastAppliedHash = new Map();
  * @param {object} deps
  */
 async function applyManifest(deployment, manifest, ctx, deps = {}) {
-  const { recordApplied = appsRepository.markContentManifestApplied } = deps;
+  const { recordApplied = (id, h) => appRecords.manifests().markApplied(id, h) } = deps;
   const { contentManifestHash } = await getSpec();
   const hash = contentManifestHash(manifest);
 
@@ -1255,7 +1255,7 @@ async function applyStoredIfBehind(appName, deps = {}) {
   if (!(await runsListedSpec(appName, app, deps))) return false; // the adoption of the listed spec delivers it
   if (!(await componentsRunning(deployment, deps))) return false; // stopped — the start path provisions it
 
-  const plaintext = await openManifestSlots(manifestOf(row), { encrypted: app.isEncrypted }, { provider });
+  const plaintext = await openManifestSlots(row.manifest, { encrypted: app.isEncrypted }, { provider });
   await schedule(plaintext, app.spec, deps);
   return true;
 }
@@ -1328,7 +1328,7 @@ async function reconcileBootContent(appName, deps = {}) {
   // The don't-apply-early decision is on the CLEARTEXT rollout of the manifest the
   // app stands on; a row held for an app not yet listed stands on nothing.
   const { app, row } = await standing(deployment.identity, deps);
-  const manifest = manifestOf(row);
+  const manifest = row ? row.manifest : null;
   const rollout = manifest && manifest.rollout;
   const deferred = rollout
     && (rollout.strategy === 'scheduled' || rollout.strategy === 'staggered')
@@ -1410,7 +1410,7 @@ async function coveringManifest(content, ctx, deps = {}) {
   const standingPlaintext = async () => {
     const { row } = await standing(identity, deps);
     if (!row) return null;
-    const plaintext = await openManifestSlots(manifestOf(row), { encrypted }, { provider });
+    const plaintext = await openManifestSlots(row.manifest, { encrypted }, { provider });
     return covers(plaintext) ? { row, plaintext } : null;
   };
   let current = await standingPlaintext();
@@ -1541,7 +1541,7 @@ async function provisionContentSlots(deployment, ctx, deps = {}) {
 
   const {
     stageApply = stageAndApplySlots,
-    recordApplied = appsRepository.markContentManifestApplied,
+    recordApplied = (id, h) => appRecords.manifests().markApplied(id, h),
     ...resolveDeps
   } = deps;
   const { appName, created = [] } = ctx;
