@@ -1,10 +1,12 @@
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { basename } from 'node:path';
 import { activeTestEnvs } from './test-env.js';
 import { execInContainer } from './container.js';
 import { SYNCTHING_HOME } from './syncthing-real.js';
 import { thawEveryNode } from './host-stall.js';
 import failedHooksModule from './failed-hooks.cjs';
+import { eventLines } from './event-lines.js';
 
 const { failedHooks } = failedHooksModule;
 
@@ -125,7 +127,18 @@ async function readFromNodes(env, script) {
 
 // DUMP_LOGS=always dumps per-node logs after every test (pass or fail), not just
 // failures — used to measure timing on green runs while investigating flakes.
+// DUMP_LOGS_SUITES=507,1503 does the same for the named suites only, so a gate
+// can carry the node logs of every test of a suite under study while the other
+// two hundred dump on failure as usual.
 const ALWAYS = process.env.DUMP_LOGS === 'always';
+const ALWAYS_SUITES = new Set((process.env.DUMP_LOGS_SUITES || '').split(',').map((s) => s.trim()).filter(Boolean));
+
+function dumpsEveryTest(test) {
+  if (ALWAYS) return true;
+  if (!ALWAYS_SUITES.size || !test?.file) return false;
+  const number = basename(test.file).split('-')[0];
+  return ALWAYS_SUITES.has(number);
+}
 
 function ancestorChain(suite) {
   const chain = new Set();
@@ -214,8 +227,8 @@ async function dump(label, envs) {
       const parts = [`=== Node ${index} (ip ${ip ?? '?'}) — ${lines.length} log lines ===`];
       parts.push(...lines);
       if (events.length) {
-        parts.push('', `=== Node ${index} SSE events (${events.length}) ===`);
-        events.forEach((ev) => parts.push(`${ev.event}: ${JSON.stringify(ev.data)}`));
+        parts.push('', `=== Node ${index} SSE events (${events.length}; #id, received at, replay = served again after a reconnect) ===`);
+        parts.push(...eventLines(events));
       }
       const file = join(dir, `${prefix}node-${String(index).padStart(2, '0')}.log`);
       writeFileSync(file, `${parts.join('\n')}\n`);
@@ -257,14 +270,15 @@ export const mochaHooks = {
   },
 
   async afterEach() {
-    // One line per test in the TAP, whatever its outcome: when it started and how
-    // long it ran. The gap between one test's end and the next one's start is the
-    // hooks and fleet boots between them.
+    // One line per test in the TAP, whatever its outcome: when it started, when
+    // it ended and how long it ran. The gap between one test's end and the next
+    // one's start is the hooks and fleet boots between them.
     const test = this.currentTest;
     const started = test.startedAtMs ?? Date.now();
-    console.log(`# timing ${new Date(started).toISOString()} ${Date.now() - started}ms ${test.state} ${test.fullTitle()}`);
+    const ended = Date.now();
+    console.log(`# timing start=${new Date(started).toISOString()} end=${new Date(ended).toISOString()} ${ended - started}ms ${test.state} ${test.fullTitle()}`);
 
-    if (!ALWAYS && this.currentTest.state !== 'failed') return;
+    if (!dumpsEveryTest(test) && this.currentTest.state !== 'failed') return;
     await dump(this.currentTest.fullTitle(), envsFor(this.currentTest.parent));
   },
 

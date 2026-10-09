@@ -3,6 +3,7 @@
 // It seals one HPKE content envelope over the blobs + initial manifest, owner-signs
 // every door, and POSTs spec + content + ownerSigs as multipart/form-data.
 import { authenticate } from '../auth.js';
+import { submitToNode } from './gated-fetch.js';
 import { appOwnerKey, userKey } from './keys.js';
 import * as benchCrypto from '../../daemon-stub/benchCrypto.js';
 import * as tk from './content-crypto-v9.js';
@@ -122,7 +123,7 @@ export async function deployContentApp(nodeUrl, opts) {
   form.append('ownerSigs', JSON.stringify(ownerSigs));
   form.append('content', new Blob([JSON.stringify(envelope)], { type: 'application/json' }), 'content.json');
 
-  const res = await fetch(`${nodeUrl}/apps/appregister`, {
+  const res = await submitToNode(`${nodeUrl}/apps/appregister`, {
     method: 'POST',
     headers: { zelidauth: auth.zelidauth },
     body: form,
@@ -173,7 +174,7 @@ export async function registerEncryptedV9App(nodeUrl, opts) {
   const form = new FormData();
   form.append('spec', JSON.stringify(specField));
 
-  const res = await fetch(`${nodeUrl}/apps/appregister`, {
+  const res = await submitToNode(`${nodeUrl}/apps/appregister`, {
     method: 'POST',
     headers: { zelidauth: auth.zelidauth },
     body: form,
@@ -222,7 +223,7 @@ export async function updateEncryptedV9App(nodeUrl, opts) {
   const form = new FormData();
   form.append('spec', JSON.stringify(specField));
 
-  const res = await fetch(`${nodeUrl}/apps/appupdate`, {
+  const res = await submitToNode(`${nodeUrl}/apps/appupdate`, {
     method: 'POST',
     headers: { zelidauth: auth.zelidauth },
     body: form,
@@ -318,7 +319,7 @@ export async function updateContentApp(nodeUrl, opts) {
   form.append('ownerSigs', JSON.stringify(ownerSigs));
   form.append('content', new Blob([JSON.stringify(envelope)], { type: 'application/json' }), 'content.json');
 
-  const res = await fetch(`${nodeUrl}/apps/appupdate`, {
+  const res = await submitToNode(`${nodeUrl}/apps/appupdate`, {
     method: 'POST',
     headers: { zelidauth: auth.zelidauth },
     body: form,
@@ -391,7 +392,7 @@ export async function pushContentUpdate(nodeUrl, opts) {
   form.append('ownerSigs', JSON.stringify(ownerSigs));
   form.append('content', new Blob([JSON.stringify(envelope)], { type: 'application/json' }), 'content.json');
 
-  const res = await fetch(`${nodeUrl}/apps/contentupdate`, {
+  const res = await submitToNode(`${nodeUrl}/apps/contentupdate`, {
     method: 'POST', headers: { zelidauth: auth.zelidauth }, body: form,
   });
   return res.json();

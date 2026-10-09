@@ -2,6 +2,7 @@ import { generationRecordText } from '@runonflux/flux-spec';
 import { signBtcMessage } from '../auth.js';
 import { getState } from './daemon-control.js';
 import { manifestStanding } from './content-helper.js';
+import { submitToNode } from './gated-fetch.js';
 
 /**
  * Post an owner-signed generation record to a node. The signed text is the
@@ -24,7 +25,7 @@ export async function postGenerationRecord(nodeUrl, {
     identity, role, generation, height: currentHeight, at, ownedFrom: ownership.from,
   };
   const signature = await signBtcMessage(generationRecordText(record), ownerKey.privkey);
-  const res = await fetch(`${nodeUrl}/apps/grantgeneration`, {
+  const res = await submitToNode(`${nodeUrl}/apps/grantgeneration`, {
     method: 'POST',
     headers: { zelidauth: auth, 'content-type': 'application/json' },
     body: JSON.stringify({ ...record, signature }),
