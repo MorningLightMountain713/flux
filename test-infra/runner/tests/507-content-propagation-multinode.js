@@ -252,12 +252,16 @@ describe('content propagation across a multi-node fleet', function () {
       { timeout: 120000, interval: 2000, label: 'whole fleet at the lower version pre-partition' },
     );
 
-    // Partition: isolate the last three nodes from the docker network entirely. The
-    // connected seven keep gossiping; the isolated three drop to 0 peers and degrade.
+    // Partition: isolate three nodes from the docker network entirely. The connected
+    // seven keep gossiping; the isolated three drop to 0 peers and degrade.
     // Event cursors are captured pre-partition: disconnect wipes the client buffer and
     // reconnect replays server history, so afterId 0 would match stale events.
-    const isolated = [7, 8, 9];
-    const connected = [0, 1, 2, 3, 4, 5, 6];
+    // Three nodes outside the fleet's established set: an established node boots
+    // with no readiness budget, so at the heal it would promote on the backstop
+    // and the reconcile this test waits on would be the catch-up, not the resync.
+    const ordinary = env.clients.map((_, i) => i).filter((i) => !env.establishedNodes.includes(i));
+    const isolated = ordinary.slice(-3);
+    const connected = env.clients.map((_, i) => i).filter((i) => !isolated.includes(i));
     const reconciledAfterIds = isolated.map((i) => env.clients[i].getLastEventId());
     const degradedBefore = await Promise.all(isolated.map(
       async (i) => orchestratorEntries(await countersInside(env.clients[i]), 'DEGRADED'),
