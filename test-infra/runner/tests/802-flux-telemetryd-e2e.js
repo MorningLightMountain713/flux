@@ -7,7 +7,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { registerEncryptedV9App, updateEncryptedV9App } from '../framework/content-helper.js';
 import { queueAppTx, advanceBlock, advanceBlocks } from '../framework/daemon-control.js';
-import { waitForAppInstalled, waitFor } from '../framework/wait.js';
+import { waitForAppInstalled, waitFor, waitForCapabilityUp } from '../framework/wait.js';
 import { pushTestApp, pushOtlpReceiver } from '../framework/registry-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { readFileSync } from 'node:fs';
@@ -182,6 +182,9 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
       },
     });
     await bootAndPeer(env, { minOutbound: 2, minInbound: 2, pricing: true });
+    // The submitting node refuses a registration until its app registry is
+    // built.
+    await waitForCapabilityUp(env.clients[0], 'appRegistryConsistent', 120000);
 
     await pushTestApp(APP);
     await pushOtlpReceiver(RECV_REPO);
