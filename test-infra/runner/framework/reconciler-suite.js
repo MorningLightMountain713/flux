@@ -6,7 +6,7 @@
 //   - TARGETED path: installOnNodes — install an app pinned to chosen nodes via each
 //     node's installapplocally endpoint (deterministic, fast, you pick the nodes).
 import { pushImage, pushTestApp } from './registry-helper.js';
-import { startTicker, advanceBlock } from './daemon-control.js';
+import { startTicker, advanceBlock, getState } from './daemon-control.js';
 import { dbClient } from './db-client.js';
 import { deliverAppMessage } from './app-delivery.js';
 import {
@@ -441,6 +441,20 @@ export async function bootAndPeer(env, { minOutbound, minInbound, pricing = fals
   await startTicker();
   if (pricing) {
     await bootstrapPricing(pricing === true ? {} : pricing);
+    // The bootstrap mines two soft-fork gaps of blocks at once, and a node whose
+    // scan is behind the daemon by that much lowers explorerSynced until it has
+    // caught up; the routes that price and take a registration refuse while it
+    // is down. Waited per node to the height the bootstrap left the chain at, so
+    // the first registration a suite submits meets a node that can take it.
+    const { currentHeight } = await getState();
+    for (const client of nodes) {
+      await Promise.any([
+        waitForBlockProcessed(client, (d) => d.height >= currentHeight, 120000),
+        waitForDeltaApplied(client, (d) => d.toHeight >= currentHeight, 120000),
+      ]).catch(() => {
+        throw new Error(`bootAndPeer: node never scanned the pricing bootstrap's blocks to ${currentHeight} within 120000ms`);
+      });
+    }
   }
   // "Chain is up" is not "node is up": boot recovery is still deciding which
   // installed apps this node keeps, and an install landing while it deliberates
