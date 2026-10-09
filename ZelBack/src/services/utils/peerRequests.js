@@ -139,14 +139,16 @@ class PeerRequests {
   }
 
   /**
-   * Whether a request to this peer is still open, optionally on a given channel.
+   * Whether a request to this peer is still open, optionally on a given channel
+   * and under a given id.
    * @param {string} peerKey ip:port
-   * @param {object} [match] channel the answer arrived on.
+   * @param {object} [match] channel the answer arrived on, and/or the id it named.
    * @returns {boolean}
    */
   isOpen(peerKey, match = {}) {
     const request = this.#requests.get(peerKey);
     if (!request || request.outcome) return false;
+    if (match.id && match.id !== request.id) return false;
     if ('channel' in match && (match.channel ?? null) !== request.channel) return false;
     return true;
   }

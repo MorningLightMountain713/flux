@@ -217,9 +217,9 @@ async function batchVerifyBroadcasts(broadcasts, label) {
 
 async function handleTempSyncResponse(message, peerSocket) {
   try {
-    if (!peerManager.isSyncResponseWanted(peerSocket)) return;
-    const peerKey = peerSocket.key;
     if (!message.data || message.data.type !== 'fluxapptempsync') return;
+    if (!peerManager.isSyncResponseWanted(peerSocket, message.data.requestTimestamp)) return;
+    const peerKey = peerSocket.key;
     const { messages, done, refused } = message.data;
     // A peer whose own app state is not authoritative holds an unknown fraction
     // of the network's pending registrations, and says so rather than sending
@@ -228,7 +228,7 @@ async function handleTempSyncResponse(message, peerSocket) {
     // none, so whichever refusal arrives first ends the request.
     if (refused) {
       log.info(`handleTempSyncResponse - ${peerKey} declined: its app state is not authoritative yet`);
-      appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_REFUSED, 'apptemp', peerKey);
+      appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_REFUSED, 'apptemp', peerKey, message.data.requestTimestamp);
       return;
     }
     if (!Array.isArray(messages) || messages.length > 2500) return;
@@ -257,7 +257,7 @@ async function handleTempSyncResponse(message, peerSocket) {
     // open until this one has ended too - the three surveys finishing first no
     // longer cuts off what is still arriving here.
     if (done) {
-      appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apptemp', peerKey);
+      appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apptemp', peerKey, message.data.requestTimestamp);
       log.info('handleTempSyncResponse - Sync complete');
     }
   } catch (error) {
@@ -268,7 +268,7 @@ async function handleTempSyncResponse(message, peerSocket) {
 async function handleAppRunningSyncResponse(message, peerSocket) {
   try {
     if (!message.data || message.data.type !== 'fluxapprunningsync') return;
-    if (!peerManager.isSyncResponseWanted(peerSocket)) return;
+    if (!peerManager.isSyncResponseWanted(peerSocket, message.data.requestTimestamp)) return;
     const peerKey = peerSocket.key;
     const { messages, done, refused } = message.data;
     // A peer that says its own app state is not worth surveying has ANSWERED,
@@ -277,7 +277,7 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
     // outstanding requests and gets another peer asked.
     if (refused) {
       log.info(`handleAppRunningSyncResponse - ${peerKey} declined: its app state is not authoritative yet`);
-      appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_REFUSED, 'apprunning', peerKey);
+      appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_REFUSED, 'apprunning', peerKey, message.data.requestTimestamp);
       return;
     }
     if (!Array.isArray(messages) || messages.length > 2500) return;
@@ -347,7 +347,7 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
     }
 
     if (done) {
-      appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peerKey);
+      appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peerKey, message.data.requestTimestamp);
       log.info('handleAppRunningSyncResponse - Sync complete');
     }
   } catch (error) {
@@ -357,14 +357,14 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
 
 async function handleAppInstallingSyncResponse(message, peerSocket) {
   try {
-    if (!peerManager.isSyncResponseWanted(peerSocket)) return;
-    const peerKey = peerSocket.key;
     if (!message.data || message.data.type !== 'fluxappinstallingsync') return;
+    if (!peerManager.isSyncResponseWanted(peerSocket, message.data.requestTimestamp)) return;
+    const peerKey = peerSocket.key;
     const { messages, done, refused } = message.data;
     // A refusal is an answer and not a completion - see handleAppRunningSyncResponse.
     if (refused) {
       log.info(`handleAppInstallingSyncResponse - ${peerKey} declined: its app state is not authoritative yet`);
-      appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_REFUSED, 'appinstalling', peerKey);
+      appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_REFUSED, 'appinstalling', peerKey, message.data.requestTimestamp);
       return;
     }
     if (!Array.isArray(messages) || messages.length > 2500) return;
@@ -377,7 +377,7 @@ async function handleAppInstallingSyncResponse(message, peerSocket) {
       fluxEventBus.publish('sync:chunkVerified', { syncType: 'appinstalling', peer: peerKey, verified: verified.length, stored });
     });
     if (done) {
-      appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', peerKey);
+      appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, 'appinstalling', peerKey, message.data.requestTimestamp);
       log.info('handleAppInstallingSyncResponse - Sync complete');
     }
   } catch (error) {
@@ -387,14 +387,14 @@ async function handleAppInstallingSyncResponse(message, peerSocket) {
 
 async function handleAppInstallingErrorsSyncResponse(message, peerSocket) {
   try {
-    if (!peerManager.isSyncResponseWanted(peerSocket)) return;
-    const peerKey = peerSocket.key;
     if (!message.data || message.data.type !== 'fluxappinstallingerrorssync') return;
+    if (!peerManager.isSyncResponseWanted(peerSocket, message.data.requestTimestamp)) return;
+    const peerKey = peerSocket.key;
     const { messages, done, refused } = message.data;
     // A refusal is an answer and not a completion - see handleAppRunningSyncResponse.
     if (refused) {
       log.info(`handleAppInstallingErrorsSyncResponse - ${peerKey} declined: its app state is not authoritative yet`);
-      appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_REFUSED, 'apperrors', peerKey);
+      appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_REFUSED, 'apperrors', peerKey, message.data.requestTimestamp);
       return;
     }
     if (!Array.isArray(messages) || messages.length > 2500) return;
@@ -407,7 +407,7 @@ async function handleAppInstallingErrorsSyncResponse(message, peerSocket) {
       fluxEventBus.publish('sync:chunkVerified', { syncType: 'apperrors', peer: peerKey, verified: verified.length, stored });
     });
     if (done) {
-      appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', peerKey);
+      appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apperrors', peerKey, message.data.requestTimestamp);
       log.info('handleAppInstallingErrorsSyncResponse - Sync complete');
     }
   } catch (error) {
@@ -1049,7 +1049,7 @@ async function dispatchSyncResponse(msgObj, peerSocket) {
     const type = msgObj.data?.type;
     const isReconcile = type === 'fluxappcontentmanifestindex' || type === 'fluxappcontentmanifestsync'
       || type === 'fluxappingressindex' || type === 'fluxappingresssync';
-    if (!isReconcile && !peerManager.isSyncResponseWanted(peerSocket)) {
+    if (!isReconcile && !peerManager.isSyncResponseWanted(peerSocket, msgObj.data?.requestTimestamp)) {
       // No request to this connection is open, so nobody asked for it. Said, because
       // the drop is otherwise silent.
       log.warn(`Unsolicited ${type} from ${peerSocket.direction} peer ${peerKey}`);
@@ -1120,7 +1120,7 @@ async function dispatchSyncResponse(msgObj, peerSocket) {
         // connection that has since been replaced still drains, and ending a
         // request on its behalf would close the one belonging to the peer that
         // dialled back in - which has answered nothing wrong.
-        if (peerManager.isSyncResponseWanted(peerSocket)) {
+        if (peerManager.isSyncResponseWanted(peerSocket, next.msgObj?.data?.requestTimestamp)) {
           appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_UNVERIFIED, peerKey);
         }
         return;
@@ -1222,24 +1222,37 @@ async function verifySyncRequest(peer, decoded) {
 }
 
 /**
- * Answers a peer's state-sync request at most once per throttle window for its
- * type. The window is taken when the request arrives, so a burst is answered
- * once; a refusal gives it back, because a refusal costs nothing and the
- * declined peer asks again the moment this node can answer.
+ * Distinct requests of one type a peer is answered inside one window. An asker
+ * sends, on its own, one ask per record, one re-ask after a crossing, one after
+ * a ready, and one pull per re-establishment: four for a join with one
+ * crossing. Eight leaves room for a second crossing's re-ask and pull.
+ */
+const SYNC_RESPONSE_BURST = 8;
+
+/**
+ * Answers a peer's state-sync request once per request for its type: a repeat
+ * of a request already answered inside the window (the same signed timestamp)
+ * is swallowed, a new request is answered, up to SYNC_RESPONSE_BURST of them per
+ * window, past which the window swallows. A refusal gives the request back,
+ * because a refusal costs nothing and the declined peer asks again the moment
+ * this node can answer.
  * @param {object} peer
  * @param {object} decoded The decoded request.
- * @param {string} stampField The peer field holding this type's last answer time.
- * @param {function(object, number): Promise<boolean>} respond Answers, false when it refused.
+ * @param {string} stampField The peer field holding this type's window.
+ * @param {function(object, number, number): Promise<boolean>} respond Answers, false when it refused.
  */
 function throttledSyncResponse(peer, decoded, stampField, respond) {
   const now = Date.now();
-  const previous = peer[stampField] || 0;
-  if (now - previous < config.get('fluxapps.syncResponseThrottleMs')) return;
-  peer[stampField] = now;
+  const open = peer[stampField] && now - peer[stampField].at < config.get('fluxapps.syncResponseThrottleMs')
+    ? peer[stampField] : null;
+  const answered = open ? open.requests : [];
+  if (answered.includes(decoded.requestTimestamp) || answered.length >= SYNC_RESPONSE_BURST) return;
+  const stamp = { at: open ? open.at : now, requests: [...answered, decoded.requestTimestamp] };
+  peer[stampField] = stamp;
   setImmediate(async () => {
     if (!await verifySyncRequest(peer, decoded)) return;
-    const answered = await respond(peer, decoded.sinceTimestamp);
-    if (answered === false && peer[stampField] === now) peer[stampField] = previous;
+    const result = await respond(peer, decoded.sinceTimestamp, decoded.requestTimestamp);
+    if (result === false && peer[stampField] === stamp) peer[stampField] = open;
   });
 }
 

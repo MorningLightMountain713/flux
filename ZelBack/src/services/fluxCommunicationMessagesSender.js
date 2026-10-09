@@ -508,10 +508,14 @@ function tellDeclinedAskersStateSyncReady() {
 }
 
 /**
+ * Every frame of a state-sync answer, the refusal included, names the request
+ * it answers by the request's signed timestamp, so the asker credits it to that
+ * question and to no other.
+ *
  * @returns {Promise<boolean>} false when this node refused the request because
  *   its app state is not authoritative yet, true otherwise
  */
-async function respondWithTempMessages(peer, sinceTimestamp = 0) {
+async function respondWithTempMessages(peer, sinceTimestamp = 0, requestTimestamp = null) {
   try {
     // THE SAME INCOMPLETENESS, ON A DIFFERENT COLLECTION. A node still catching
     // up holds SOME of the network's pending registrations and cannot say which
@@ -526,7 +530,9 @@ async function respondWithTempMessages(peer, sinceTimestamp = 0) {
     // and readiness still arrives by the block fallback exactly as before.
     if (!capabilities.isUp('appStateSynced') && !globalState.appStateSyncDeadlinePassed) {
       log.info(`respondWithTempMessages - Refusing ${peer.key}: this node's app state is not authoritative yet`);
-      await sendSignedMessage({ type: 'fluxapptempsync', version: 1, messages: [], done: true, refused: true }, peer, { awaitDrain: true });
+      await sendSignedMessage({
+        type: 'fluxapptempsync', version: 1, messages: [], done: true, refused: true, requestTimestamp,
+      }, peer, { awaitDrain: true });
       rememberDeclinedAsker(peer);
       fluxEventBus.publish('sync:refused', { syncType: 'fluxapptempsync', peer: peer.key });
       return false;
@@ -542,14 +548,18 @@ async function respondWithTempMessages(peer, sinceTimestamp = 0) {
       batch.push({ ...record.contents, hash: record.hash });
       if (batch.length >= batchSize) {
         log.info(`respondWithTempMessages - Sending chunk of ${batch.length} to ${peer.key}`);
-        await sendSignedMessage({ type: 'fluxapptempsync', version: 1, messages: batch, done: false }, peer, { awaitDrain: true });
+        await sendSignedMessage({
+          type: 'fluxapptempsync', version: 1, messages: batch, done: false, requestTimestamp,
+        }, peer, { awaitDrain: true });
         total += batch.length;
         batch = [];
       }
     }
     log.info(`respondWithTempMessages - Sending final ${batch.length} to ${peer.key} (total: ${total + batch.length})`);
     fluxEventBus.count('sync:answered', peer.key);
-    await sendSignedMessage({ type: 'fluxapptempsync', version: 1, messages: batch, done: true }, peer, { awaitDrain: true });
+    await sendSignedMessage({
+      type: 'fluxapptempsync', version: 1, messages: batch, done: true, requestTimestamp,
+    }, peer, { awaitDrain: true });
   } catch (error) {
     log.error(error);
   }
@@ -560,7 +570,9 @@ async function respondWithTempMessages(peer, sinceTimestamp = 0) {
  * @returns {Promise<boolean>} false when this node refused the request because
  *   its app state is not authoritative yet, true otherwise
  */
-async function streamBatchedSync(peer, { sinceTimestamp, collectionName, validityMs, query, projection, messageType, label, batchSize = 2000 }) {
+async function streamBatchedSync(peer, {
+  sinceTimestamp, requestTimestamp = null, collectionName, validityMs, query, projection, messageType, label, batchSize = 2000,
+}) {
   try {
     // A NODE THAT DOES NOT KNOW YET SAYS SO, rather than sending what it
     // happens to hold. An empty response and a complete one are the same three
@@ -574,7 +586,9 @@ async function streamBatchedSync(peer, { sinceTimestamp, collectionName, validit
     // behaving exactly as they do now.
     if (!capabilities.isUp('appStateSynced') && !globalState.appStateSyncDeadlinePassed) {
       log.info(`${label} - Refusing ${peer.key}: this node's app state is not authoritative yet`);
-      await sendSignedMessage({ type: messageType, messages: [], done: true, refused: true }, peer, { awaitDrain: true });
+      await sendSignedMessage({
+        type: messageType, messages: [], done: true, refused: true, requestTimestamp,
+      }, peer, { awaitDrain: true });
       rememberDeclinedAsker(peer);
       fluxEventBus.publish('sync:refused', { syncType: messageType, peer: peer.key });
       return false;
@@ -601,23 +615,28 @@ async function streamBatchedSync(peer, { sinceTimestamp, collectionName, validit
       batch.push(doc);
       if (batch.length >= batchSize) {
         log.info(`${label} - Sending chunk of ${batch.length} to ${peer.key}`);
-        await sendSignedMessage({ type: messageType, messages: batch, done: false }, peer, { awaitDrain: true });
+        await sendSignedMessage({
+          type: messageType, messages: batch, done: false, requestTimestamp,
+        }, peer, { awaitDrain: true });
         total += batch.length;
         batch = [];
       }
     }
     log.info(`${label} - Sending final ${batch.length} to ${peer.key} (total: ${total + batch.length})`);
     fluxEventBus.count('sync:answered', peer.key);
-    await sendSignedMessage({ type: messageType, messages: batch, done: true }, peer, { awaitDrain: true });
+    await sendSignedMessage({
+      type: messageType, messages: batch, done: true, requestTimestamp,
+    }, peer, { awaitDrain: true });
   } catch (error) {
     log.error(error);
   }
   return true;
 }
 
-async function respondWithAppRunningMessages(peer, sinceTimestamp = 0) {
+async function respondWithAppRunningMessages(peer, sinceTimestamp = 0, requestTimestamp = null) {
   return streamBatchedSync(peer, {
     sinceTimestamp,
+    requestTimestamp,
     collectionName: config.get('database.appsglobal.collections.appStateEvents'),
     validityMs: 125 * 60 * 1000,
     // The freshness floor fits the hourly apprunning gossip; masterlease and
@@ -649,9 +668,10 @@ async function respondWithAppRunningMessages(peer, sinceTimestamp = 0) {
   });
 }
 
-async function respondWithAppInstallingMessages(peer, sinceTimestamp = 0) {
+async function respondWithAppInstallingMessages(peer, sinceTimestamp = 0, requestTimestamp = null) {
   return streamBatchedSync(peer, {
     sinceTimestamp,
+    requestTimestamp,
     collectionName: config.get('database.appsglobal.collections.appsInstallingBroadcasts'),
     validityMs: 15 * 60 * 1000,
     messageType: 'fluxappinstallingsync',
@@ -659,9 +679,10 @@ async function respondWithAppInstallingMessages(peer, sinceTimestamp = 0) {
   });
 }
 
-async function respondWithAppInstallingErrorsMessages(peer, sinceTimestamp = 0) {
+async function respondWithAppInstallingErrorsMessages(peer, sinceTimestamp = 0, requestTimestamp = null) {
   return streamBatchedSync(peer, {
     sinceTimestamp,
+    requestTimestamp,
     collectionName: config.get('database.appsglobal.collections.appsInstallingErrorsBroadcasts'),
     validityMs: 24 * 60 * 60 * 1000,
     projection: { _id: 0 },

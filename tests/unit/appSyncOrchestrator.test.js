@@ -2102,7 +2102,7 @@ describe('AppSyncOrchestrator', () => {
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
       for (const type of ['apprunning', 'appinstalling', 'apperrors', 'apptemp']) {
-        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_REFUSED, type, peers[0].key);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, type, peers[0].key);
       }
       await clock.tickAsync(0);
 
@@ -2111,6 +2111,102 @@ describe('AppSyncOrchestrator', () => {
       await clock.tickAsync(0);
 
       expect(kept.send.called, 'a peer whose request had ended was asked again').to.equal(false);
+      await orchestrator.stop();
+    });
+
+    // The ready a declined peer owes can only arrive on a socket that exists.
+    it('asks again, on the kept socket, a peer that declined on the socket a crossing closed', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_REFUSED, 'apprunning', peers[0].key);
+      await clock.tickAsync(0);
+
+      const kept = crossPeer(peers[0].key);
+      getEligibleSyncPeersStub.returns([kept, peers[1], peers[2]]);
+      await clock.tickAsync(0);
+
+      expect(kept.send.callCount, 'the declined peer was not asked again over the kept socket').to.equal(4);
+      await orchestrator.stop();
+    });
+
+    it('asks again, on the socket that came back, a peer that declined on the one that died', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_REFUSED, 'apprunning', peers[0].key);
+      await clock.tickAsync(0);
+
+      const returned = reconnectPeer(peers[0].key);
+      getEligibleSyncPeersStub.returns([returned, peers[1], peers[2]]);
+      await clock.tickAsync(0);
+
+      expect(returned.send.callCount, 'the declined peer was not asked again on its new socket').to.equal(4);
+      await orchestrator.stop();
+    });
+
+    it('admits a response by the name it carries, and refuses one naming another request', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      const asked = encodeAppRunningStub.firstCall.args[1];
+
+      expect(orchestrator.isSyncResponseWanted(peers[0], asked)).to.equal(true);
+      expect(orchestrator.isSyncResponseWanted(peers[0], asked + 1), 'another request\'s answer was admitted').to.equal(false);
+      expect(orchestrator.isSyncResponseWanted(peers[0]), 'an unnamed answer on the asked socket').to.equal(true);
+      await orchestrator.stop();
+    });
+
+    it('leaves a request open when a refusal names a request already over', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      const asked = encodeAppRunningStub.firstCall.args[1];
+
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_REFUSED, 'apprunning', peers[0].key, asked - 1);
+      await clock.tickAsync(0);
+      expect(orchestrator.isSyncResponseWanted(peers[0], asked), 'a stale refusal ended the open request').to.equal(true);
+
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_REFUSED, 'apprunning', peers[0].key, asked);
+      await clock.tickAsync(0);
+      expect(orchestrator.isSyncResponseWanted(peers[0], asked)).to.equal(false);
+      await orchestrator.stop();
+    });
+
+    it('names each request by a strictly increasing timestamp, two passes in one millisecond included', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      const first = encodeAppRunningStub.lastCall.args[1];
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_REFUSED, 'apprunning', peers[0].key, first);
+      await clock.tickAsync(0);
+      const kept = crossPeer(peers[0].key);
+      getEligibleSyncPeersStub.returns([kept, peers[1], peers[2]]);
+      await clock.tickAsync(0);
+
+      const names = encodeAppRunningStub.getCalls().map((call) => call.args[1]);
+      expect(names.length, 'more than one pass ran inside the frozen millisecond').to.be.at.least(2);
+      names.slice(1).forEach((name, i) => expect(name, 'a later pass did not take a later name').to.be.above(names[i]));
       await orchestrator.stop();
     });
 
@@ -2520,6 +2616,106 @@ describe('AppSyncOrchestrator', () => {
       } finally {
         appSyncEvents.off(EVENTS.RECONNECT_SYNC_COMPLETE, listener);
       }
+    });
+
+    it('closes the pull on the completion that names it, and leaves the round alone', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+      await reachReady();
+      await clock.tickAsync(300_000);
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() - 60_000 });
+      await clock.tickAsync(0);
+      const pullTs = encodeAppRunningStub.lastCall.args[1];
+      expect(orchestrator.isSyncResponseWanted(peers[0], pullTs), 'the pull\'s own answer').to.equal(true);
+      expect(orchestrator.isSyncResponseWanted(peers[0], pullTs + 1), 'an answer naming another request').to.equal(false);
+
+      const heard = [];
+      const listener = (key) => heard.push(key);
+      appSyncEvents.on(EVENTS.RECONNECT_SYNC_COMPLETE, listener);
+      try {
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peers[0].key, pullTs + 1);
+        await clock.tickAsync(0);
+        expect(heard, 'a completion naming another request closed the pull').to.deep.equal([]);
+        appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peers[0].key, pullTs);
+        await clock.tickAsync(0);
+        expect(heard).to.deep.equal([peers[0].key]);
+      } finally {
+        appSyncEvents.off(EVENTS.RECONNECT_SYNC_COMPLETE, listener);
+      }
+      expect(orchestrator.isSyncResponseWanted(peers[0], pullTs), 'a closed pull still wanted its answer').to.equal(false);
+    });
+
+    it('ends the pull on a refusal that names it', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+      await reachReady();
+      await clock.tickAsync(300_000);
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() - 60_000 });
+      await clock.tickAsync(0);
+      const pullTs = encodeAppRunningStub.lastCall.args[1];
+
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_REFUSED, 'apprunning', peers[0].key, pullTs + 1);
+      await clock.tickAsync(0);
+      expect(orchestrator.isSyncResponseWanted(peers[0], pullTs), 'a refusal of another request ended the pull').to.equal(true);
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_REFUSED, 'apprunning', peers[0].key, pullTs);
+      await clock.tickAsync(0);
+      expect(orchestrator.isSyncResponseWanted(peers[0], pullTs), 'the refused pull was still waited on').to.equal(false);
+    });
+
+    it('keeps a pull on the kept socket when the pair\'s other socket is the one that goes', async () => {
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+      await reachReady();
+      await clock.tickAsync(300_000);
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() - 60_000 });
+      await clock.tickAsync(0);
+      const pullTs = encodeAppRunningStub.lastCall.args[1];
+      const pulls = encodeAppRunningStub.callCount;
+
+      peerEmitter.emit('peerDisconnected', peers[0].key, peers[0].connectionId + 500, { crossing: true });
+      await clock.tickAsync(0);
+      expect(orchestrator.isSyncResponseWanted(peers[0], pullTs), 'the loss of another socket ended the pull').to.equal(true);
+
+      peerEmitter.emit('peerDisconnected', peers[0].key, peers[0].connectionId);
+      await clock.tickAsync(0);
+      expect(orchestrator.isSyncResponseWanted(peers[0], pullTs), 'the loss of its own socket left the pull standing').to.equal(false);
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() - 30_000 });
+      await clock.tickAsync(0);
+      expect(encodeAppRunningStub.callCount, 'the lost pull\'s credit did not pull again').to.equal(pulls + 1);
+    });
+
+    it('ignores an answer naming a pull the round has since superseded, and credits the round nothing for it', async () => {
+      getEligibleSyncPeersStub = sinon.stub().returns([]);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
+      await clock.tickAsync(0);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub.returns(peers);
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() - 60_000 });
+      await clock.tickAsync(0);
+      const pullTs = encodeAppRunningStub.lastCall.args[1];
+      peerEmitter.emit('peerConnected', peers[1].key, peers[1].connectionId);
+      await clock.tickAsync(0);
+      const asked = encodeAppRunningStub.lastCall.args[1];
+      expect(asked, 'the round asked the pulled peer').to.not.equal(pullTs);
+
+      const publish = sinon.spy(fluxEventBus, 'publish');
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peers[0].key, pullTs);
+      await clock.tickAsync(0);
+      expect(publish.calledWith('ephemeralSync:peerComplete'), 'the superseded pull\'s answer was credited to the round').to.equal(false);
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, 'apprunning', peers[0].key, asked);
+      await clock.tickAsync(0);
+      expect(publish.calledWith('ephemeralSync:peerComplete', sinon.match({ syncType: 'apprunning', peer: peers[0].key }))).to.equal(true);
+      await orchestrator.stop();
     });
 
     it('a completion of another type from the pulled peer is not the pull\'s: the pull waits for its apprunning answer', async () => {

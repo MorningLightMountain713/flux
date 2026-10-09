@@ -1809,7 +1809,7 @@ describe('fluxCommunication tests', () => {
         appSyncEvents.off(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, onComplete);
       }
 
-      expect(completed).to.deep.equal([['apprunning', peerKey]]);
+      expect(completed).to.deep.equal([['apprunning', peerKey, undefined]]);
     });
   });
 
@@ -1866,7 +1866,7 @@ describe('fluxCommunication tests', () => {
       }
       expect(seen.progress).to.deep.equal([peerKey]);
       expect(seen.unverified).to.deep.equal([]);
-      expect(seen.completed).to.deep.equal([['apptemp', peerKey]]);
+      expect(seen.completed).to.deep.equal([['apptemp', peerKey, undefined]]);
     });
 
     it('a chunk whose envelope does not verify ends the request, and its stream is not handled', async () => {
@@ -2056,7 +2056,7 @@ describe('fluxCommunication tests', () => {
       expect(intake.firstCall.args[0]).to.deep.equal(bare);
       expect(intake.secondCall.args[0]).to.deep.equal(enveloped);
       expect(stateStore.callCount).to.equal(0);
-      expect(completed).to.deep.equal([['apprunning', peerKey]]);
+      expect(completed).to.deep.equal([['apprunning', peerKey, undefined]]);
     });
 
     it('a signed alive record in the stream is stored as the node\'s alive record', async () => {
@@ -2130,7 +2130,7 @@ describe('fluxCommunication tests', () => {
       expect(stateStore.callCount).to.equal(0);
       expect(batchStore.callCount).to.equal(0);
       expect(intake.callCount).to.equal(0);
-      expect(completed).to.deep.equal([['apprunning', peerKey]]);
+      expect(completed).to.deep.equal([['apprunning', peerKey, undefined]]);
     });
   });
 });
@@ -2598,6 +2598,50 @@ describe('keepConnectionsAlive', () => {
   });
 });
 
+describe('a state-sync answer names its request', () => {
+  afterEach(() => sinon.restore());
+
+  it('is admitted for the request it names, and completes under that name', async () => {
+    const wanted = sinon.stub(peerManager, 'isSyncResponseWanted').returns(true);
+    const peerKey = '10.20.30.41:16127';
+    const socket = { key: peerKey, connectionId: 9 };
+    const completed = [];
+    const onComplete = (...args) => completed.push(args);
+    appSyncEvents.on(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, onComplete);
+    try {
+      await fluxCommunication.handleAppRunningSyncResponse({
+        data: {
+          type: 'fluxapprunningsync', done: true, messages: [], requestTimestamp: 1700,
+        },
+      }, socket);
+    } finally {
+      appSyncEvents.off(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, onComplete);
+    }
+    sinon.assert.calledOnceWithExactly(wanted, socket, 1700);
+    expect(completed).to.deep.equal([['apprunning', peerKey, 1700]]);
+  });
+
+  it('refuses under the name it carries', async () => {
+    const wanted = sinon.stub(peerManager, 'isSyncResponseWanted').returns(true);
+    const peerKey = '10.20.30.42:16127';
+    const socket = { key: peerKey, connectionId: 9 };
+    const refused = [];
+    const onRefused = (...args) => refused.push(args);
+    appSyncEvents.on(SYNC_EVENTS.EPHEMERAL_SYNC_REFUSED, onRefused);
+    try {
+      await fluxCommunication.handleTempSyncResponse({
+        data: {
+          type: 'fluxapptempsync', done: true, messages: [], refused: true, requestTimestamp: 1701,
+        },
+      }, socket);
+    } finally {
+      appSyncEvents.off(SYNC_EVENTS.EPHEMERAL_SYNC_REFUSED, onRefused);
+    }
+    sinon.assert.calledOnceWithExactly(wanted, socket, 1701);
+    expect(refused).to.deep.equal([['apptemp', peerKey, 1701]]);
+  });
+});
+
 describe('the state-sync request throttle', () => {
   const settle = async () => {
     for (let i = 0; i < 5; i += 1) {
@@ -2616,31 +2660,63 @@ describe('the state-sync request throttle', () => {
 
   afterEach(() => sinon.restore());
 
-  it('answers a peer once per window', async () => {
+  it('answers a repeat of the same request once per window, and names the request to the responder', async () => {
     const respond = sinon.stub(fluxCommunicationMessagesSender, 'respondWithAppRunningMessages').resolves(true);
     const peer = { key: '203.0.113.5:16127' };
+    const same = request();
 
-    peerManager.hashHandlers.handleAppRunningRequest(peer, request());
+    peerManager.hashHandlers.handleAppRunningRequest(peer, same);
     await settle();
-    peerManager.hashHandlers.handleAppRunningRequest(peer, request());
+    peerManager.hashHandlers.handleAppRunningRequest(peer, same);
     await settle();
 
     sinon.assert.calledOnce(respond);
+    sinon.assert.calledWithExactly(respond, peer, 0, same.requestTimestamp);
   });
 
-  it('answers a peer it refused as soon as the peer asks again', async () => {
+  it('answers a new request inside the window: each question is answered, a repeat is not', async () => {
+    const respond = sinon.stub(fluxCommunicationMessagesSender, 'respondWithAppRunningMessages').resolves(true);
+    const peer = { key: '203.0.113.7:16127' };
+    const first = request();
+    const second = { ...request(), requestTimestamp: first.requestTimestamp + 1 };
+
+    peerManager.hashHandlers.handleAppRunningRequest(peer, first);
+    await settle();
+    peerManager.hashHandlers.handleAppRunningRequest(peer, second);
+    await settle();
+    peerManager.hashHandlers.handleAppRunningRequest(peer, first);
+    await settle();
+
+    expect(respond.callCount, 'two questions, one of them repeated').to.equal(2);
+  });
+
+  it('answers at most eight distinct requests of a type per window', async () => {
+    const respond = sinon.stub(fluxCommunicationMessagesSender, 'respondWithAppRunningMessages').resolves(true);
+    const peer = { key: '203.0.113.8:16127' };
+    const base = request();
+    for (let i = 0; i < 9; i += 1) {
+      peerManager.hashHandlers.handleAppRunningRequest(peer, { ...base, requestTimestamp: base.requestTimestamp + i });
+      // eslint-disable-next-line no-await-in-loop
+      await settle();
+    }
+
+    expect(respond.callCount).to.equal(8);
+  });
+
+  it('answers a request it refused as soon as the peer repeats it', async () => {
     const respond = sinon.stub(fluxCommunicationMessagesSender, 'respondWithTempMessages');
     respond.onFirstCall().resolves(false);
     respond.resolves(true);
     const peer = { key: '203.0.113.6:16127' };
+    const same = request();
 
-    peerManager.hashHandlers.handleTempMessagesRequest(peer, request());
+    peerManager.hashHandlers.handleTempMessagesRequest(peer, same);
     await settle();
-    peerManager.hashHandlers.handleTempMessagesRequest(peer, request());
+    peerManager.hashHandlers.handleTempMessagesRequest(peer, same);
     await settle();
-    peerManager.hashHandlers.handleTempMessagesRequest(peer, request());
+    peerManager.hashHandlers.handleTempMessagesRequest(peer, same);
     await settle();
 
-    expect(respond.callCount, 'the refusal took the window, or the answer did not').to.equal(2);
+    expect(respond.callCount, 'the refusal kept the request, or the answer did not').to.equal(2);
   });
 });

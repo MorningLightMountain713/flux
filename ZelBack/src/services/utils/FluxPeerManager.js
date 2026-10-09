@@ -949,11 +949,12 @@ class FluxPeerManager extends EventEmitter {
    * Closed by default. An unsolicited sync response is dropped, which is what
    * happens before anything registers an answer here.
    * @param {FluxPeerSocket} peerSocket
+   * @param {number|null} [requestTimestamp] the request the response names, when it names one
    * @returns {boolean}
    */
-  isSyncResponseWanted(peerSocket) {
+  isSyncResponseWanted(peerSocket, requestTimestamp = null) {
     if (!this.syncResponseWanted) return false;
-    return this.syncResponseWanted(peerSocket);
+    return this.syncResponseWanted(peerSocket, requestTimestamp);
   }
 
   // --- Liveness ---

@@ -48,6 +48,15 @@ describe('peerRequests tests', () => {
       expect(requests.settle(PEER, 'disconnected', { channel: 7 })).to.equal(true);
     });
 
+    it('answers isOpen against the id too', () => {
+      const requests = new PeerRequests();
+      requests.open(PEER, { id: 'first', channel: 7 });
+      expect(requests.isOpen(PEER, { id: 'first' })).to.equal(true);
+      expect(requests.isOpen(PEER, { id: 'second' })).to.equal(false);
+      expect(requests.isOpen(PEER, { id: 'first', channel: 7 })).to.equal(true);
+      expect(requests.isOpen(PEER, { id: 'first', channel: 6 })).to.equal(false);
+    });
+
     it('answers isOpen against the channel too', () => {
       const requests = new PeerRequests();
       requests.open(PEER, { channel: 7 });

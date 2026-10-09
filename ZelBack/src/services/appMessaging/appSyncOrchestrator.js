@@ -204,6 +204,9 @@ class AppSyncOrchestrator {
   // reclaims it (round membership wins). A pull whose socket dies unanswered
   // hands its loss back to the credits.
   #reconnectPulls = new Map();
+
+  /** The timestamp the last request this node signed was named by. */
+  #lastRequestTs = 0;
   // Reconnect credits not yet spent: key -> earliest lostAtMs. The
   // re-establishment event is one-shot but the credit it grants is DURABLE
   // until a pull is sent or a round covers the peer at since=0 - a transient
@@ -276,17 +279,23 @@ class AppSyncOrchestrator {
    * @param {{key: string, connectionId?: number|null}} peer the socket a response arrived on
    * @returns {boolean}
    */
-  isSyncResponseWanted(peer) {
+  isSyncResponseWanted(peer, requestTimestamp = null) {
     if (!peer || !peer.key) return false;
+    const id = requestTimestamp == null ? null : String(requestTimestamp);
     // A reconnect pull is wanted in any state - the degraded window is its
     // whole point - and there is one outstanding per address, answered on the
-    // socket that came back.
-    if (this.#reconnectPulls.has(peer.key)) return true;
+    // socket that came back. A response that names a request is the pull's only
+    // when it names the pull.
+    const pull = this.#reconnectPulls.get(peer.key);
+    if (pull && (id === null || pull.id === id)) return true;
     if (this.#stateSyncComplete) return false;
     // The request record answers it, so the gate that admits a response and the
     // deadline that gives up on one read the same fact. A peer that has answered
-    // every stream has its request closed, so it is not waited on any more.
-    return this.#requests.isOpen(peer.key, { channel: peer.connectionId ?? null });
+    // every stream has its request closed, so it is not waited on any more. A
+    // response that names its request is admitted for that request alone; one
+    // from a peer that names nothing is admitted on the socket it was asked on.
+    const channel = peer.connectionId ?? null;
+    return this.#requests.isOpen(peer.key, id === null ? { channel } : { channel, id });
   }
 
   #setState(newState) {
@@ -365,14 +374,14 @@ class AppSyncOrchestrator {
       this.#peerThresholdHandler();
     }
 
-    this.#ephemeralSyncHandler = (syncType, peerKey) => this.#onEphemeralSyncComplete(syncType, peerKey);
+    this.#ephemeralSyncHandler = (syncType, peerKey, requestTimestamp) => this.#onEphemeralSyncComplete(syncType, peerKey, requestTimestamp);
     appSyncEvents.on(EVENTS.EPHEMERAL_SYNC_COMPLETE, this.#ephemeralSyncHandler);
 
     // The other three answers a peer can give. fluxCommunication has always
     // emitted them - a refusal, an unverifiable response, and any sign of life
     // mid-answer - and nothing listened, so the round waited out the full
     // deadline on a peer that had already said no.
-    this.#ephemeralRefusedHandler = (syncType, peerKey) => this.#onEphemeralSyncRefused(syncType, peerKey);
+    this.#ephemeralRefusedHandler = (syncType, peerKey, requestTimestamp) => this.#onEphemeralSyncRefused(syncType, peerKey, requestTimestamp);
     appSyncEvents.on(EVENTS.EPHEMERAL_SYNC_REFUSED, this.#ephemeralRefusedHandler);
 
     this.#peerStateSyncReadyHandler = (peerKey, channel) => this.#onPeerStateSyncReady(peerKey, channel);
@@ -460,12 +469,23 @@ class AppSyncOrchestrator {
    * for it saying anything at all.
    * @param {{key: string, connectionId?: number}} peer
    */
-  #openRequest(peer) {
+  #openRequest(peer, requestTs) {
     this.#requests.open(peer.key, {
+      id: String(requestTs),
       channel: peer.connectionId ?? null,
       timeoutMs: FIRST_RESPONSE_MS,
       onTimeout: (peerKey) => this.#onRequestDeadline(peerKey, 'said nothing'),
     });
+  }
+
+  /**
+   * The name of the next request this node signs: its timestamp, kept strictly
+   * increasing so that no two questions this node asks one peer share a name.
+   * @returns {number}
+   */
+  #nextRequestTs() {
+    this.#lastRequestTs = Math.max(Date.now(), this.#lastRequestTs + 1);
+    return this.#lastRequestTs;
   }
 
   /**
@@ -499,15 +519,28 @@ class AppSyncOrchestrator {
    * A peer refuses all four streams when it refuses any, and only the first of
    * those closes the request - so the log says once what happened once.
    *
+   * A refusal that names the pull ends the pull: a peer that cannot answer has
+   * nothing to pull, and the ready it owes is for the round's ask. One that
+   * names a request this round is not waiting on answers a question already
+   * over.
+   *
    * @param {string} syncType apptemp | apprunning | appinstalling | apperrors
    * @param {string} peerKey ip:port of the peer that declined
+   * @param {number|null} [requestTimestamp] the request the refusal names, when it names one
    */
-  #onEphemeralSyncRefused(syncType, peerKey) {
+  #onEphemeralSyncRefused(syncType, peerKey, requestTimestamp = null) {
+    const id = requestTimestamp == null ? null : String(requestTimestamp);
+    const pull = peerKey ? this.#reconnectPulls.get(peerKey) : undefined;
+    if (pull && id !== null && pull.id === id) {
+      this.#reconnectPulls.delete(peerKey);
+      return;
+    }
     if (this.#stateSyncComplete) return;
     if (!peerKey) {
       log.error(`AppSyncOrchestrator - ${syncType} sync declined with no peer, cannot replace it`);
       return;
     }
+    if (id !== null && !this.#requests.isOpen(peerKey, { id })) return;
     this.#endRequest(peerKey, 'declined', `declined the ${syncType} sync`);
   }
 
@@ -569,13 +602,16 @@ class AppSyncOrchestrator {
     });
   }
 
-  #onEphemeralSyncComplete(syncType, peerKey) {
+  #onEphemeralSyncComplete(syncType, peerKey, requestTimestamp = null) {
+    const id = requestTimestamp == null ? null : String(requestTimestamp);
     // A scoped reconnect pull completing is the pull's own business - it
     // answered from a since bound, not the round's since=0. It is announced:
-    // a node back from unreachability runs its placement check on it. The
-    // pull is an apprunning pull; a completion of another type from the same
-    // peer is the round's.
-    if (syncType === 'apprunning' && this.#reconnectPulls.delete(peerKey)) {
+    // a node back from unreachability runs its placement check on it. A
+    // completion that names its request is the pull's only when it names the
+    // pull; one that names nothing is the pull's when it is the pull's stream.
+    const pull = peerKey ? this.#reconnectPulls.get(peerKey) : undefined;
+    if (pull && (id === null ? syncType === 'apprunning' : pull.id === id)) {
+      this.#reconnectPulls.delete(peerKey);
       appSyncEvents.emit(EVENTS.RECONNECT_SYNC_COMPLETE, peerKey);
       return;
     }
@@ -589,6 +625,9 @@ class AppSyncOrchestrator {
       return;
     }
     if (this.#syncCompletions[syncType] === undefined) return;
+    // A completion naming a request this round is not waiting on answers a
+    // question already over, and counts for nothing.
+    if (id !== null && !this.#requests.isOpen(peerKey, { id })) return;
     this.#syncCompletions[syncType].add(peerKey);
     // Its whole answer is in, so it is no longer being waited on. The record
     // stands as answered: a peer that has given its whole view must not be
@@ -670,12 +709,20 @@ class AppSyncOrchestrator {
     // goes back to the credits, so the next re-establishment pulls from the
     // earliest gap and not from the connect time of a socket the far end
     // refused (a peer at its inbound cap closes every accept within a
-    // second, and each accept is a re-establishment).
-    const lostAtMs = this.#reconnectPulls.get(key);
-    if (lostAtMs !== undefined) {
+    // second, and each accept is a re-establishment). A pull on another socket
+    // of the pair is still being answered, and stands.
+    const pull = this.#reconnectPulls.get(key);
+    if (pull && (connectionId === null || pull.channel === null || pull.channel === connectionId)) {
       this.#reconnectPulls.delete(key);
       const existing = this.#pendingReconnectPulls.get(key);
-      this.#pendingReconnectPulls.set(key, existing === undefined ? lostAtMs : Math.min(existing, lostAtMs));
+      this.#pendingReconnectPulls.set(key, existing === undefined ? pull.lostAtMs : Math.min(existing, pull.lostAtMs));
+    }
+    // A record declined on the socket that went is dropped with it: the ready
+    // the peer owes can only come on a socket that exists, so the peer is a
+    // candidate again on the one kept, or on the one that comes back.
+    if (this.#requests.outcomeOf(key, { channel: connectionId ?? null }) === 'declined') {
+      this.#requests.discard(key);
+      if (!this.#stateSyncComplete) this.#own(this.#runRequestPass());
     }
     if (crossing) {
       if (!this.#requests.isOpen(key, { channel: connectionId ?? null })) return;
@@ -848,7 +895,7 @@ class AppSyncOrchestrator {
     try {
       signer = await nodeSigner();
       if (!signer) throw new Error('this node cannot sign as itself');
-      requestTs = Date.now();
+      requestTs = this.#nextRequestTs();
       // Both forms are signed once per pass rather than once per peer: which one a
       // peer is sent is settled by its handshake capability.
       messages = SYNC_TYPES.map((type) => {
@@ -880,7 +927,7 @@ class AppSyncOrchestrator {
     }
 
     for (const peer of peersToAsk) {
-      this.#openRequest(peer);
+      this.#openRequest(peer, requestTs);
       // round membership wins: this peer's next completion is the round's
       this.#reconnectPulls.delete(peer.key);
     }
@@ -977,7 +1024,7 @@ class AppSyncOrchestrator {
       // sends nothing and the peer keeps its credit for the next drain.
       // eslint-disable-next-line no-await-in-loop
       const signer = await nodeSigner();
-      const requestTs = Date.now();
+      const requestTs = this.#nextRequestTs();
       const sig = signer && signer.sign(peerCodec.buildSyncSignatureMessage(
         peerCodec.MSG_TYPE.REQUEST_APP_RUNNING, sinceTs, requestTs,
         { legacy: !peer.remoteCapabilities?.has('syncSigV2') },
@@ -987,7 +1034,7 @@ class AppSyncOrchestrator {
         return;
       }
       this.#pendingReconnectPulls.delete(key);
-      this.#reconnectPulls.set(key, lostAtMs);
+      this.#reconnectPulls.set(key, { lostAtMs, id: String(requestTs), channel: peer.connectionId ?? null });
       this.#sendRequests([peer], 'apprunning (reconnect)', peerCodec.encodeRequestAppRunning(sinceTs, requestTs, signer.pubKey, sig));
       fluxEventBus.publish('ephemeralSync:reconnectRequested', { peer: key, sinceTimestamp: sinceTs });
     }

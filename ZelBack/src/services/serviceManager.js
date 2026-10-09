@@ -564,7 +564,7 @@ async function startFluxFunctions() {
         // different connection, so nothing arriving on the new one answers a request
         // written into the old one - asked by address, a stale view is counted as
         // this round's completion.
-        peerManager.syncResponseWanted = (peerSocket) => orchestrator.isSyncResponseWanted(peerSocket);
+        peerManager.syncResponseWanted = (peerSocket, requestTimestamp) => orchestrator.isSyncResponseWanted(peerSocket, requestTimestamp);
 
         // The other half of the peer-gated fallback. The orchestrator stops a node
         // whose peer set keeps collapsing from ever reaching READY, which is silent;
