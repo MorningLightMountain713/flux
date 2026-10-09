@@ -3846,4 +3846,109 @@ describe('AppSyncOrchestrator', () => {
       sinon.assert.calledWithExactly(ingressEndedStub, peers[1].key, { connectionId: peers[1].connectionId, crossing: true });
     });
   });
+
+  // Readiness on the block fallback releases the spawner; it does not end the
+  // catch-up. A permanent-plane step that has not latched runs on every wake-up
+  // until it does, READY included, and a round joined by several wake-ups is one
+  // round with one outcome.
+  describe('the permanent-plane steps run until they latch', () => {
+    function makeElapsed(peers) {
+      const mod = loadWithConfig({ appSyncFallbackMinutes: 0 });
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const orchestrator = new mod.AppSyncOrchestrator({ blockEmitter, ...makePeerOptions() });
+      orchestrator.onMessageCapabilityChange(true);
+      return { mod, orchestrator };
+    }
+
+    it('runs the manifest reconcile at a heal on a node whose fallback has elapsed, after it is READY', async () => {
+      const { mod, orchestrator } = makeElapsed(makeEligiblePeers(3));
+      await orchestrator.start(defaultBootContext);
+      peersUp();
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(mod.STATES.READY);
+      peerEmitter.emit('peersBelowThreshold', 0);
+      expect(orchestrator.state).to.equal(mod.STATES.DEGRADED);
+      reconcileStub.resetHistory();
+
+      peersUp();
+      await clock.tickAsync(0);
+
+      expect(orchestrator.state, 'promoted on the fallback').to.equal(mod.STATES.READY);
+      expect(reconcileStub.calledOnce, 'the register still got its catch-up round').to.equal(true);
+      expect(reconcileStub.firstCall.args[0]).to.have.lengthOf(3);
+    });
+
+    it('retries an unlatched manifest step on the next block after readiness on the fallback', async () => {
+      const { mod, orchestrator } = makeElapsed([]);
+      await orchestrator.start(defaultBootContext);
+      // A block before readiness, so the steady-state refresh is a period away
+      // from here and the calls below are the step's own.
+      blockEmitter.emit('blocksProcessed', 2_555_000);
+      await clock.tickAsync(0);
+      peersUp();
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(mod.STATES.READY);
+      // Every round so far asked nobody, so the step never latched.
+      expect(reconcileStub.getCalls().every((c) => c.args[0].length === 0)).to.equal(true);
+      reconcileStub.resetHistory();
+
+      const peers = makeEligiblePeers(2);
+      getEligibleSyncPeersStub.returns(peers);
+      blockEmitter.emit('blocksProcessed', 2_555_001);
+      await clock.tickAsync(0);
+
+      expect(reconcileStub.calledOnce, 'the block drove the step in READY').to.equal(true);
+      expect(reconcileStub.firstCall.args[0]).to.have.lengthOf(2);
+      reconcileStub.resetHistory();
+
+      blockEmitter.emit('blocksProcessed', 2_555_002);
+      await clock.tickAsync(0);
+      expect(reconcileStub.called, 'a latched step is not run again').to.equal(false);
+    });
+
+    it('runs an unlatched manifest step when peers become askable after readiness on the fallback', async () => {
+      const { mod, orchestrator } = makeElapsed([]);
+      await orchestrator.start(defaultBootContext);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
+      await clock.tickAsync(0);
+      peersUp();
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(mod.STATES.READY);
+      reconcileStub.resetHistory();
+
+      const peers = makeEligiblePeers(2);
+      getEligibleSyncPeersStub.returns(peers);
+      peerEmitter.emit('syncPeersAvailable');
+      await clock.tickAsync(0);
+
+      expect(reconcileStub.calledOnce, 'askable peers drove the step in READY').to.equal(true);
+      expect(reconcileStub.firstCall.args[0]).to.have.lengthOf(2);
+    });
+
+    it('reports a round joined by several wake-ups once', async () => {
+      const peers = makeEligiblePeers(2);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      let endRound;
+      const round = new Promise((resolve) => { endRound = resolve; });
+      reconcileStub.returns(round);
+      const publish = sinon.spy(fluxEventBus, 'publish');
+      const orchestrator = makeOrchestrator();
+      await orchestrator.start(defaultBootContext);
+      peersUp();
+      await clock.tickAsync(0);
+      // Two more joins land while the round is in flight.
+      peerEmitter.emit('peerConnected', peers[0].key, peers[0].connectionId);
+      peerEmitter.emit('peerConnected', peers[1].key, peers[1].connectionId);
+      await clock.tickAsync(0);
+      expect(reconcileStub.callCount, 'every wake-up asked the service').to.be.at.least(3);
+
+      endRound({ peers: 2, indexesReceived: 2, fetched: 0 });
+      await clock.tickAsync(0);
+
+      const announced = publish.getCalls().filter((c) => c.args[0] === 'content:manifestSyncComplete');
+      expect(announced, 'one round, one announcement').to.have.lengthOf(1);
+      const logged = logStub.info.getCalls().filter((c) => String(c.args[0]).includes('Manifest reconcile complete'));
+      expect(logged).to.have.lengthOf(1);
+    });
+  });
 });

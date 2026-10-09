@@ -183,6 +183,9 @@ class AppSyncOrchestrator {
   // whole thing the minimum exists to prevent.
   #syncCompletions = freshSyncCompletions();
   #manifestSyncComplete = false;
+  /** The outcome of the last manifest round this node awaited, so a round joined by
+   *  several wake-ups is reported once. */
+  #lastManifestRoundResult = null;
   #ingressSyncComplete = false;
   #stateSyncComplete = false;
   // A completed sync paused at the authority checkpoint, so later answers do
@@ -684,8 +687,7 @@ class AppSyncOrchestrator {
   // it is what resumes the work - no timer, and a step that has latched complete is
   // never re-run.
   #onSyncPeersAvailable() {
-    if (this.#hashSyncComplete && this.#manifestSyncComplete) return;
-    if (this.#state !== STATES.SYNCING && this.#state !== STATES.RESYNCING) return;
+    if (!this.#permanentStepsOwed()) return;
     this.#own(this.#advanceSync());
   }
 
@@ -816,10 +818,23 @@ class AppSyncOrchestrator {
     // Peers arriving is also a wake-up for the permanent-plane syncs: on boot the
     // manifest round may have run before discovery connected anyone (nothing to
     // compare against, so it never latched), and recovery needs a real peer set to
-    // resync against. #advanceSync runs only the steps still incomplete.
-    if (this.#state === STATES.SYNCING || this.#state === STATES.RESYNCING) {
+    // resync against. A step runs until it latches, in READY as well: readiness
+    // on the block fallback releases the spawner and does not end the catch-up,
+    // and a node that promoted that way still owes the register its gap.
+    if (this.#permanentStepsOwed()) {
       await this.#advanceSync();
     }
+  }
+
+  /**
+   * Whether a permanent-plane step (the hash sync, the manifest reconcile) has
+   * yet to latch in a state where it can run. INITIALIZING has no chain feed to
+   * verify against and DEGRADED has no peer set to ask.
+   * @returns {boolean}
+   */
+  #permanentStepsOwed() {
+    if (this.#hashSyncComplete && this.#manifestSyncComplete) return false;
+    return this.#state === STATES.SYNCING || this.#state === STATES.RESYNCING || this.#state === STATES.READY;
   }
 
   /**
@@ -1144,13 +1159,12 @@ class AppSyncOrchestrator {
       // block. Its own wake-ups are edges — peers crossing the threshold, peers
       // becoming askable — and a round that reached peers and simply got no index
       // back consumes one without changing anything, so there may be no further
-      // edge to wait for. Readiness is 250 blocks away, and the steady-state
-      // refresh cannot help because it only runs once READY, which is the state
-      // this node cannot reach. Retrying per block bounds that stall to one block
+      // edge to wait for. Retrying per block bounds that stall to one block
       // instead of hours; the rounds themselves are cheap and idempotent, and a
-      // step that has latched is skipped.
-      if ((this.#state === STATES.SYNCING || this.#state === STATES.RESYNCING)
-        && (!this.#hashSyncComplete || !this.#manifestSyncComplete)) {
+      // step that has latched is skipped. READY is no exception: a node that
+      // promoted on the block fallback still owes the register its gap, and the
+      // steady-state refresh is a period away.
+      if (this.#permanentStepsOwed()) {
         this.#own(this.#advanceSync());
       }
     }
@@ -1299,6 +1313,10 @@ class AppSyncOrchestrator {
         // by key is how the reconnect pull already addresses a peer at the moment it uses it.
         resolvePeer: (key, captured) => this.#getPeerByKey(key) ?? captured,
       });
+      // Every wake-up that lands while a round is in flight joins it and is handed the
+      // same outcome; one round is one outcome, latched, logged and announced once.
+      if (result === this.#lastManifestRoundResult) return;
+      this.#lastManifestRoundResult = result;
       // Latch complete only on evidence the register was actually compared against a peer
       // (>=1 index received) AND that the gap the comparison found was closed. A vacuous
       // round — no eligible peers, a single-flight collision, a silent index timeout — has
