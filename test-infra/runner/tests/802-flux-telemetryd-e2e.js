@@ -437,9 +437,11 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
     this.timeout(60000);
     // As flux-telemetry: the json log reads, the env-bearing config files do
     // not, and the directory does not list. The collector is not tailed, so
-    // fluxos grants it nothing of its own: what holds is the boot unit's ACLs,
-    // first as the container inherited them, then after the unit's lines for
-    // existing containers run again over it.
+    // fluxos grants it nothing of its own: what holds is the boot unit's ACLs.
+    // First as the container inherited them; then as a container that existed
+    // before the grant gets them - no ACL at all, as on a node taking the
+    // grant for the first time, until the unit runs. A file with no ACL has no
+    // mask, and an explicit entry then sets one from what it grants.
     const asDaemon = async (cmd) => (await X(`runuser -u flux-telemetry -- ${cmd}`)).exitCode;
     const check = async (label) => {
       for (const name of [collectorContainer, webContainer]) {
@@ -457,9 +459,12 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
       expect(await asDaemon(`ls ${dir}`), `${label}: the collector's directory does not list`).to.not.equal(0);
     };
     await check('inherited');
+    const collectorDir = `/dat/var/lib/docker/containers/${await containerId(collectorContainer)}`;
+    const strip = await X(`setfacl -bR ${collectorDir}`);
+    expect(strip.exitCode, strip.output).to.equal(0);
     const reapply = await X('systemctl restart flux-telemetryd-acl.service');
     expect(reapply.exitCode, reapply.output).to.equal(0);
-    await check('after the grant for existing containers');
+    await check('a container from before the grant');
   });
 
   it('needs nothing from FluxOS: answers a query with FluxOS stopped, and starts shipping on its first sync', async function () {
