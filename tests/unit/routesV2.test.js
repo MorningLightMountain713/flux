@@ -428,6 +428,49 @@ describe('routesV2 - the /v2 surface', () => {
     });
   });
 
+  describe('GET /node/boot', () => {
+    let verifyPrivilege;
+    let app;
+
+    beforeEach(() => {
+      verifyPrivilege = sinon.stub(verificationHelper, 'verifyPrivilege');
+      capabilities.resetForTests();
+      capabilities.setForTests('apiListening', true);
+      app = express();
+      app.use('/v2', routesV2);
+    });
+
+    afterEach(() => {
+      sinon.restore();
+      capabilities.resetForTests();
+    });
+
+    it('is for the node operator and the Flux team, judged on the zelidauth header', async () => {
+      verifyPrivilege.resolves(false);
+      const res = await supertest(app).get('/v2/node/boot').set('zelidauth', 'the-header-value');
+      expect(res.status).to.equal(401);
+      expect(res.body.error.code).to.equal('UNAUTHORIZED');
+      sinon.assert.calledOnceWithExactly(verifyPrivilege, 'adminandfluxteam', 'the-header-value');
+    });
+
+    it('answers the process start, every capability\'s state and every transition since', async () => {
+      verifyPrivilege.resolves(true);
+      const before = Date.now();
+      const res = await supertest(app).get('/v2/node/boot').set('zelidauth', 'the-header-value');
+      expect(res.status).to.equal(200);
+      const { data } = res.body;
+      expect(data.startedAt, 'the process started before the answer').to.be.at.most(data.now);
+      expect(data.now).to.be.at.least(before);
+      const api = data.capabilities.find((c) => c.name === 'apiListening');
+      expect(api).to.include({ state: 'up', waitingOn: null });
+      expect(api.needs).to.be.an('array');
+      const raised = data.transitions.find((t) => t.name === 'apiListening' && t.to === 'up');
+      expect(raised, 'the raise this test made is in the history').to.exist;
+      expect(raised.tookMs).to.be.at.least(0);
+      expect(raised.at - raised.tookMs, 'a bar begins where the previous state began').to.be.at.least(data.startedAt);
+    });
+  });
+
   describe('requireTier / requireAppTier', () => {
     let verifyPrivilege;
     let routerModule;

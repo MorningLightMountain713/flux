@@ -26,4 +26,9 @@ module.exports = [
   {
     method: 'get', path: '/operations/:id', none: 'reads the operation registry this process holds', handler: 'apiV2/operations#read',
   },
+  // How this process came up: the capability registry's states and transitions,
+  // which exist before anything else does. For the node's operator and the team.
+  {
+    method: 'get', path: '/node/boot', guards: ['nodeOperatorOrFluxTeam'], none: 'reads the capability registry this process holds', handler: 'apiV2/node#boot',
+  },
 ];
