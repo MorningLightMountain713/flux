@@ -1,4 +1,5 @@
 import { throwIfInfraDead, sleepUnlessInfraDead } from './infra-death.js';
+import { deathReport } from './container-death.js';
 
 // A testcontainers WaitStrategy that polls an HTTP URL until it responds OK,
 // bypassing Docker's health state machine entirely.
@@ -58,21 +59,6 @@ export class HttpPollWaitStrategy {
   // Only a SETTLED container counts as dead. 'created' is the pre-start moment, and
   // inspect can fail transiently (the container may be mid-removal on another path);
   // neither is evidence, so both keep polling and the deadline stays the backstop.
-  async #deathReport(container) {
-    if (!container || typeof container.inspect !== 'function') return null;
-    let state;
-    try {
-      ({ State: state } = await container.inspect());
-    } catch {
-      return null;
-    }
-    if (!state || state.Running || state.Status === 'created') return null;
-    const parts = [`status=${state.Status}`, `exitCode=${state.ExitCode}`];
-    if (state.OOMKilled) parts.push('OOMKilled=true');
-    if (state.Error) parts.push(`error=${state.Error}`);
-    return parts.join(' ');
-  }
-
   // A container that has EXITED never answers, so without a liveness check a dead node
   // is indistinguishable from a slow one: both stay silent for the whole allowance and
   // both report "not ready after Nms". Raising the allowance cannot fix that reading,
@@ -96,7 +82,7 @@ export class HttpPollWaitStrategy {
       }
       // Checked after the probe so a container that served and then exited on its own
       // teardown is still reported ready, rather than lost to a race with it.
-      const death = await this.#deathReport(container);
+      const death = await deathReport(container);
       if (death) {
         throw new Error(`HttpPollWaitStrategy: ${this.#url} container exited during boot (${death})`);
       }

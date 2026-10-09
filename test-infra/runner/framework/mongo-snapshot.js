@@ -82,7 +82,7 @@ export async function ensureIpLocationSnapshot({
     artifact: artifact.sha256, nodes, nodeImageId, mongoImage, mongoArgs, builder: sha256Hex(builder),
   })).slice(0, 32);
   mkdirSync(SNAPSHOT_DIR, { recursive: true });
-  await pruneDeadSnapshots();
+  await pruneDeadSnapshots(SNAPSHOT_DIR);
   const tarPath = join(SNAPSHOT_DIR, `${key}.tar`);
   const lockPath = join(SNAPSHOT_DIR, `${key}.lock`);
   const metaPath = join(SNAPSHOT_DIR, `${key}.json`);
@@ -104,9 +104,8 @@ export async function ensureIpLocationSnapshot({
       try {
         // eslint-disable-next-line no-await-in-loop
         await buildSnapshot({
-          tarPath, nodes, artifact, nodeImage, mongoImage, mongoArgs,
+          tarPath, metaPath, meta: { nodeImageId, nodes, mongoImage }, nodes, artifact, nodeImage, mongoImage, mongoArgs,
         });
-        writeFileSync(metaPath, JSON.stringify({ nodeImageId, nodes, mongoImage }));
       } finally {
         rmSync(lockPath, { recursive: true, force: true });
       }
@@ -120,25 +119,50 @@ export async function ensureIpLocationSnapshot({
 }
 
 /**
+ * Put a built snapshot in the cache: its sidecar first, then the tar, in one
+ * rename. Every fleet boot prunes a tar that has no sidecar, and fleets boot
+ * concurrently, so a tar must never be visible before the record that keeps it;
+ * a sidecar without a tar is a leftover nothing acts on.
+ *
+ * @param {{built: string, tarPath: string, metaPath: string, meta: object}} snapshot
+ * @returns {void}
+ */
+export function publishSnapshot({
+  built, tarPath, metaPath, meta,
+}) {
+  writeFileSync(metaPath, JSON.stringify(meta));
+  renameSync(built, tarPath);
+}
+
+async function imageIsPresent(nodeImageId) {
+  const found = await run('docker', ['image', 'inspect', '-f', '{{.Id}}', nodeImageId], 15000);
+  return found.ok;
+}
+
+/**
  * A snapshot is keyed by the node image it was built for, so a rebuilt image
  * leaves the old one unreachable; the directory is a tmpfs and holds a few
  * hundred megabytes per fleet size per image. Every build first drops the
  * snapshots whose image is gone, and any without the sidecar that names one.
+ *
+ * @param {string} dir the cache directory
+ * @param {{imageLive?: (nodeImageId: string) => Promise<boolean>}} [deps]
+ * @returns {Promise<string[]>} the keys removed
  */
-async function pruneDeadSnapshots() {
+export async function pruneDeadSnapshots(dir, { imageLive = imageIsPresent } = {}) {
   const liveImages = new Map();
-  for (const name of readdirSync(SNAPSHOT_DIR)) {
+  const removed = [];
+  for (const name of readdirSync(dir)) {
     if (!name.endsWith('.tar')) continue;
     const key = name.slice(0, -'.tar'.length);
-    const metaPath = join(SNAPSHOT_DIR, `${key}.json`);
+    const metaPath = join(dir, `${key}.json`);
     let dead = true;
     if (existsSync(metaPath)) {
       try {
         const { nodeImageId } = JSON.parse(readFileSync(metaPath, 'utf8'));
         if (!liveImages.has(nodeImageId)) {
           // eslint-disable-next-line no-await-in-loop
-          const found = await run('docker', ['image', 'inspect', '-f', '{{.Id}}', nodeImageId], 15000);
-          liveImages.set(nodeImageId, found.ok);
+          liveImages.set(nodeImageId, await imageLive(nodeImageId));
         }
         dead = !liveImages.get(nodeImageId);
       } catch (error) {
@@ -146,9 +170,11 @@ async function pruneDeadSnapshots() {
       }
     }
     if (!dead) continue;
-    rmSync(join(SNAPSHOT_DIR, name), { force: true });
+    rmSync(join(dir, name), { recursive: true, force: true });
     rmSync(metaPath, { force: true });
+    removed.push(key);
   }
+  return removed;
 }
 
 /**
@@ -157,7 +183,7 @@ async function pruneDeadSnapshots() {
  * mongod has exited, into a host directory, and the tar is renamed into place.
  */
 async function buildSnapshot({
-  tarPath, nodes, artifact, nodeImage, mongoImage, mongoArgs,
+  tarPath, metaPath, meta, nodes, artifact, nodeImage, mongoImage, mongoArgs,
 }) {
   const work = join(SNAPSHOT_DIR, `build-${process.pid}-${Date.now()}`);
   mkdirSync(work, { recursive: true });
@@ -193,7 +219,9 @@ async function buildSnapshot({
     if (exited !== '0') throw new Error(`the scratch mongo container exited ${exited}`);
     const mongodRc = readFileSync(join(work, 'mongod.rc'), 'utf8').trim();
     if (mongodRc !== '0') throw new Error(`mongod exited ${mongodRc} at shutdown`);
-    renameSync(join(work, 'mongo.tar'), tarPath);
+    publishSnapshot({
+      built: join(work, 'mongo.tar'), tarPath, metaPath, meta,
+    });
   } finally {
     if (mongoId) await run('docker', ['rm', '-f', mongoId], 60000);
     // The tar and the rc are root's, written from the container; the directory is ours.
