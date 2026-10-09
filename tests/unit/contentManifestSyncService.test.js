@@ -333,6 +333,120 @@ describe('contentManifestSyncService', () => {
       });
     });
 
+    // The ask goes out on a connection, and a connection can end with the ask outstanding:
+    // a crossing closes the pair's losing socket milliseconds after a join, a peer goes
+    // away, a handle captured for a queued round is closed by the time the round runs.
+    // The index wait is the full timeout for every peer it is still waiting on, so a peer
+    // the round cannot hear from must leave the wait, and a peer still connected over the
+    // kept socket must be asked again there.
+    describe('a connection that ends mid-round', () => {
+      // The round has sent its ask once sign() has resolved and the loop has run; two
+      // turns of the event loop are past that point on every path.
+      const asksSent = async () => {
+        await new Promise((resolve) => { setImmediate(resolve); });
+        await new Promise((resolve) => { setImmediate(resolve); });
+      };
+      const never = () => new Promise(() => {});
+      const ranksOf = (store) => sinon.stub().callsFake(async () => [...store].map(([identity, version]) => ({ identity, version })));
+
+      it('writes the ask into the socket the key resolves to now, never the handle it was given', async () => {
+        const svc = load();
+        const stale = { key: 'p1', connectionId: 1, send: sinon.stub().returns(false) };
+        const live = { key: 'p1', connectionId: 2 };
+        live.send = sinon.stub().callsFake((msg) => {
+          if (msg.type === 'fluxappcontentmanifestindexrequest') svc.depositIndex('p1', [{ identity: 'a', version: 1 }]);
+          return true;
+        });
+
+        const result = await svc.reconcile([stale], { getLocalRanks: ranksOf(new Map([['a', 1]])), delay: never, resolvePeer: () => live });
+
+        expect(stale.send.called, 'the captured handle is never written into').to.equal(false);
+        expect(live.send.calledOnce).to.equal(true);
+        expect(result.indexesReceived).to.equal(1);
+      });
+
+      it('does not wait for a peer the ask could not reach', async () => {
+        const svc = load();
+        const closed = { key: 'p1', connectionId: 1, send: sinon.stub().returns(false) };
+
+        // delay never resolves: a round that waits on the timeout for this peer never ends.
+        const result = await svc.reconcile([closed], { getLocalRanks: ranksOf(new Map()), delay: never });
+
+        expect(result).to.include({ peers: 1, indexesReceived: 0 });
+      });
+
+      it('asks again over the kept socket when the connection it asked on loses a crossing, and completes on that answer', async () => {
+        const svc = load();
+        const current = new Map();
+        const losing = { key: 'p1', connectionId: 1, send: sinon.stub().returns(true) };
+        const kept = { key: 'p1', connectionId: 2 };
+        kept.send = sinon.stub().callsFake((msg) => {
+          if (msg.type === 'fluxappcontentmanifestindexrequest') svc.depositIndex('p1', [{ identity: 'a', version: 1 }]);
+          return true;
+        });
+        current.set('p1', losing);
+        const round = svc.reconcile([losing], { getLocalRanks: ranksOf(new Map([['a', 1]])), delay: never, resolvePeer: (key, captured) => current.get(key) ?? captured });
+        await asksSent();
+        expect(losing.send.calledOnce, 'the ask went out on the connection that then lost the crossing').to.equal(true);
+
+        current.set('p1', kept);
+        svc.peerConnectionEnded('p1', { connectionId: 1, crossing: true });
+
+        const result = await round;
+        expect(kept.send.calledOnce, 'the ask was sent again over the kept socket').to.equal(true);
+        expect(kept.send.firstCall.args[0].type).to.equal('fluxappcontentmanifestindexrequest');
+        expect(result.indexesReceived).to.equal(1);
+      });
+
+      it('stops waiting for a peer whose connection ends with the ask outstanding', async () => {
+        const svc = load();
+        const silent = { key: 'p1', connectionId: 1, send: sinon.stub().returns(true) };
+        const round = svc.reconcile([silent], { getLocalRanks: ranksOf(new Map()), delay: never });
+        await asksSent();
+
+        svc.peerConnectionEnded('p1', { connectionId: 1 });
+
+        const result = await round;
+        expect(result).to.include({ peers: 1, indexesReceived: 0 });
+      });
+
+      it('leaves the ask standing when another connection to the same peer ends', async () => {
+        const svc = load();
+        const asked = { key: 'p1', connectionId: 1, send: sinon.stub().returns(true) };
+        let settled = false;
+        const round = svc.reconcile([asked], { getLocalRanks: ranksOf(new Map([['a', 1]])), delay: never }).then((r) => { settled = true; return r; });
+        await asksSent();
+
+        svc.peerConnectionEnded('p1', { connectionId: 7 });
+        await asksSent();
+        expect(settled, 'the round is still waiting on the connection it asked on').to.equal(false);
+
+        svc.depositIndex('p1', [{ identity: 'a', version: 1 }]);
+        const result = await round;
+        expect(result.indexesReceived).to.equal(1);
+      });
+
+      it('releases a body request in flight on the connection that ended', async () => {
+        const svc = load();
+        const store = new Map();
+        // Advertises a body, is asked for it, and its connection ends before it delivers.
+        const hollow = { key: 'p1', connectionId: 1 };
+        hollow.send = sinon.stub().callsFake((msg) => {
+          if (msg.type === 'fluxappcontentmanifestindexrequest') svc.depositIndex('p1', [{ identity: 'a', version: 2 }]);
+          return true;
+        });
+        const round = svc.reconcile([hollow], { getLocalRanks: ranksOf(store), delay: never });
+        await asksSent();
+        await asksSent();
+        expect(hollow.send.callCount, 'index asked, then the body').to.equal(2);
+
+        svc.peerConnectionEnded('p1', { connectionId: 1 });
+
+        const result = await round;
+        expect(result).to.include({ requested: 1, fetched: 0 });
+      });
+    });
+
     // A node that reconciled against silence and a node that was already current both end
     // a round having fetched nothing. Only indexesReceived separates them, so it has to be
     // on the event and not merely in the return value — an observer watching the bus (the

@@ -8,7 +8,9 @@ import { bootAndPeer, seedSpawnerApp, seedSpecUpdate } from '../framework/reconc
 import { buildSeedableApp, buildSeedableUpdate, nodeOutpoint } from '../framework/seed-helper.js';
 import { fluxTeamKey } from '../framework/keys.js';
 import { authenticate } from '../auth.js';
-import { waitFor, waitForBootSettled, waitForAppRemoved } from '../framework/wait.js';
+import {
+  waitFor, waitForBootSettled, waitForAppRemoved, waitForCapabilityUp,
+} from '../framework/wait.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // An app pinned to named nodes runs on those nodes and nowhere else.
@@ -77,6 +79,10 @@ describe('a pinned app runs where its spec says', function () {
       configOverrides: { fluxapps: { minOutgoing: 2, minIncoming: 1 } },
     });
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1 });
+    // Every verdict below is a spawner's. A node whose spawner is not yet up when an app
+    // is seeded never judges it: by the time it looks, the named node has placed the
+    // app and an app at its instance count enters no node's filter chain.
+    await Promise.all(env.clients.map((c) => waitForCapabilityUp(c, 'spawnerReady', 180000)));
   });
 
   after(async function () {

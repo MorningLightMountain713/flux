@@ -42,6 +42,9 @@ describe('AppSyncOrchestrator', () => {
   let getFluxNodePrivateKeyStub;
   let signMessageStub;
   let reconcileStub;
+  let manifestEndedStub;
+  let ingressReconcileStub;
+  let ingressEndedStub;
   let buildSyncSigStub;
   let encodeAppRunningStub;
 
@@ -186,6 +189,9 @@ describe('AppSyncOrchestrator', () => {
     reconcileStub = sinon.stub().callsFake((peers = []) => Promise.resolve({
       peers: peers.length, indexesReceived: peers.length, fetched: 0,
     }));
+    manifestEndedStub = sinon.stub();
+    ingressReconcileStub = sinon.stub().resolves({ peers: 0, indexesReceived: 0, fetched: 0 });
+    ingressEndedStub = sinon.stub();
 
     ({ appSyncEvents, EVENTS } = appSyncEventsModule);
     appSyncEvents.removeAllListeners();
@@ -197,8 +203,12 @@ describe('AppSyncOrchestrator', () => {
       '../../lib/log': logStub,
       '../appDatabase/nodeStartupRepository': nodeStartupRepositoryStub,
       './appHashSyncService': { syncMissingHashes: syncMissingHashesStub, getMissingHashes: getMissingHashesStub, resetHashSyncForUpgrade: resetHashSyncForUpgradeStub },
-      './contentManifestSyncService': { reconcile: reconcileStub, depositIndex: sinon.stub(), isPeerInActiveRound: sinon.stub().returns(false) },
-      './ingressAttestationSyncService': { reconcile: sinon.stub().resolves({ peers: 0, indexesReceived: 0, fetched: 0 }), depositDigests: sinon.stub(), isPeerInActiveRound: sinon.stub().returns(false) },
+      './contentManifestSyncService': {
+        reconcile: reconcileStub, depositIndex: sinon.stub(), isPeerInActiveRound: sinon.stub().returns(false), peerConnectionEnded: manifestEndedStub,
+      },
+      './ingressAttestationSyncService': {
+        reconcile: ingressReconcileStub, depositDigests: sinon.stub(), isPeerInActiveRound: sinon.stub().returns(false), peerConnectionEnded: ingressEndedStub,
+      },
       './peerNotification': {
         checkAndNotifyPeersOfRunningApps: checkAndNotifyStub,
         startBroadcasting: startBroadcastingStub,
@@ -3813,6 +3823,27 @@ describe('AppSyncOrchestrator', () => {
         (c) => typeof c.args[0] === 'string' && c.args[0].includes('not confirmed'),
       );
       expect(notConfirmedLogs).to.have.lengthOf(0);
+    });
+  });
+
+  // The permanent-plane rounds ask on connections, as the state sync does, and
+  // the orchestrator is what hears a connection end.
+  describe('a connection ending reaches the permanent-plane rounds', () => {
+    it('tells both rounds when a connection ends, and whether it was a crossing', async () => {
+      const peers = makeEligiblePeers(2);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const orchestrator = makeOrchestrator();
+      await orchestrator.start(defaultBootContext);
+      peersUp();
+      await clock.tickAsync(0);
+
+      removePeer(peers[0].key);
+      crossPeer(peers[1].key);
+
+      sinon.assert.calledWithExactly(manifestEndedStub, peers[0].key, { connectionId: peers[0].connectionId, crossing: false });
+      sinon.assert.calledWithExactly(manifestEndedStub, peers[1].key, { connectionId: peers[1].connectionId, crossing: true });
+      sinon.assert.calledWithExactly(ingressEndedStub, peers[0].key, { connectionId: peers[0].connectionId, crossing: false });
+      sinon.assert.calledWithExactly(ingressEndedStub, peers[1].key, { connectionId: peers[1].connectionId, crossing: true });
     });
   });
 });

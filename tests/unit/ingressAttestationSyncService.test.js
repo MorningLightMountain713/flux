@@ -57,6 +57,92 @@ describe('ingressAttestationSyncService', () => {
       expect(await svc.reconcile([])).to.deep.equal({ peers: 0, indexesReceived: 0, fetched: 0 });
     });
 
+    // The ask goes out on a connection, and a connection can end with the ask outstanding;
+    // the digest wait is the full timeout for every peer it is still waiting on.
+    describe('a connection that ends mid-round', () => {
+      const asksSent = async () => {
+        await new Promise((resolve) => { setImmediate(resolve); });
+        await new Promise((resolve) => { setImmediate(resolve); });
+      };
+      const never = () => new Promise(() => {});
+      const noLocal = () => sinon.stub().resolves(digestsOf([]));
+
+      it('writes the ask into the socket the key resolves to now, never the handle it was given', async () => {
+        const svc = load();
+        const stale = { key: 'p1', connectionId: 1, send: sinon.stub().returns(false) };
+        const live = { key: 'p1', connectionId: 2 };
+        live.send = sinon.stub().callsFake((msg) => {
+          if (msg.type === 'fluxappingressindexrequest') svc.depositDigests('p1', digestsOf([]));
+          return true;
+        });
+
+        const result = await svc.reconcile([stale], { getLocalDigests: noLocal(), delay: never, resolvePeer: () => live });
+
+        expect(stale.send.called, 'the captured handle is never written into').to.equal(false);
+        expect(live.send.calledOnce).to.equal(true);
+        expect(result.indexesReceived).to.equal(1);
+      });
+
+      it('does not wait for a peer the ask could not reach', async () => {
+        const svc = load();
+        const closed = { key: 'p1', connectionId: 1, send: sinon.stub().returns(false) };
+
+        const result = await svc.reconcile([closed], { getLocalDigests: noLocal(), delay: never });
+
+        expect(result).to.include({ peers: 1, indexesReceived: 0 });
+      });
+
+      it('asks again over the kept socket when the connection it asked on loses a crossing', async () => {
+        const svc = load();
+        const current = new Map();
+        const losing = { key: 'p1', connectionId: 1, send: sinon.stub().returns(true) };
+        const kept = { key: 'p1', connectionId: 2 };
+        kept.send = sinon.stub().callsFake((msg) => {
+          if (msg.type === 'fluxappingressindexrequest') svc.depositDigests('p1', digestsOf([]));
+          return true;
+        });
+        current.set('p1', losing);
+        const round = svc.reconcile([losing], { getLocalDigests: noLocal(), delay: never, resolvePeer: (key, captured) => current.get(key) ?? captured });
+        await asksSent();
+        expect(losing.send.calledOnce).to.equal(true);
+
+        current.set('p1', kept);
+        svc.peerConnectionEnded('p1', { connectionId: 1, crossing: true });
+
+        const result = await round;
+        expect(kept.send.calledOnce, 'the ask was sent again over the kept socket').to.equal(true);
+        expect(result.indexesReceived).to.equal(1);
+      });
+
+      it('stops waiting for a peer whose connection ends with the ask outstanding', async () => {
+        const svc = load();
+        const silent = { key: 'p1', connectionId: 1, send: sinon.stub().returns(true) };
+        const round = svc.reconcile([silent], { getLocalDigests: noLocal(), delay: never });
+        await asksSent();
+
+        svc.peerConnectionEnded('p1', { connectionId: 1 });
+
+        const result = await round;
+        expect(result).to.include({ peers: 1, indexesReceived: 0 });
+      });
+
+      it('leaves the ask standing when another connection to the same peer ends', async () => {
+        const svc = load();
+        const asked = { key: 'p1', connectionId: 1, send: sinon.stub().returns(true) };
+        let settled = false;
+        const round = svc.reconcile([asked], { getLocalDigests: noLocal(), delay: never }).then((r) => { settled = true; return r; });
+        await asksSent();
+
+        svc.peerConnectionEnded('p1', { connectionId: 7 });
+        await asksSent();
+        expect(settled, 'the round is still waiting on the connection it asked on').to.equal(false);
+
+        svc.depositDigests('p1', digestsOf([]));
+        const result = await round;
+        expect(result.indexesReceived).to.equal(1);
+      });
+    });
+
     it('fetches only the differing buckets and converges the set', async () => {
       const svc = load();
       const store = [{ hash: 'h1', node: 'nA' }]; // missing h2/nB and h3/nC

@@ -705,6 +705,11 @@ class AppSyncOrchestrator {
    * @param {{key: string, connectionId?: number|null, crossing?: boolean}} lost
    */
   #onSyncPeerLost({ key, connectionId = null, crossing = false }) {
+    // The permanent-plane rounds ask on connections too: an index or digest ask
+    // written into this one is dead, and each round re-asks over the kept socket
+    // or stops waiting for the peer.
+    contentManifestSyncService.peerConnectionEnded(key, { connectionId, crossing });
+    ingressAttestationSyncService.peerConnectionEnded(key, { connectionId, crossing });
     // A scoped pull that dies with its socket was never answered: its loss
     // goes back to the credits, so the next re-establishment pulls from the
     // earliest gap and not from the connect time of a socket the far end
@@ -1328,7 +1333,9 @@ class AppSyncOrchestrator {
     if (!this.#canSendMessages) return;
     try {
       const peers = this.#getEligibleSyncPeers(MIN_UPTIME_SECONDS);
-      const result = await ingressAttestationSyncService.reconcile(peers);
+      const result = await ingressAttestationSyncService.reconcile(peers, {
+        resolvePeer: (key, captured) => this.#getPeerByKey(key) ?? captured,
+      });
       if (result.indexesReceived >= 1) {
         this.#ingressSyncComplete = true;
         log.info(`AppSyncOrchestrator - Ingress attestation reconcile complete (peers=${result.peers}, indexes=${result.indexesReceived}, fetched=${result.fetched ?? 0})`);
