@@ -11,6 +11,7 @@ import { waitForAppInstalled, waitFor } from '../framework/wait.js';
 import { pushTestApp, pushOtlpReceiver } from '../framework/registry-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execInContainer, requireAppContainerName } from '../framework/container.js';
@@ -69,6 +70,15 @@ const LOG_MARKER = 'RELOAD SIGUSR1';
 // so REJECT_SUBSTR is inert everywhere else.
 const POISON_MARKER = 'RELOAD SIGUSR2';
 
+// The web component writes `log line <n>` every 100 ms, alternating stdout and
+// stderr, and every 100 lines one 40,000-byte line that docker splits into
+// 16 KiB entries: the container log the query-socket scenarios read.
+const LOG_EVERY_MS = '100';
+const LOG_BLOB_BYTES = '40000';
+const LOG_BLOB_AFTER = '100';
+// FluxOS's own decoder, for the docker side of the equality scenario.
+const LogFrameDecoder = createRequire(import.meta.url)('../../../ZelBack/src/services/utils/logFrameDecoder.js');
+
 // Container names carry the app's minted identity; resolved from the labels once the
 // containers exist, never spelled from the app name.
 let webContainer;
@@ -86,6 +96,7 @@ const buildComponents = ({
     rootFsGb: 2,
     persistentStorage: { sizeGb: 1, mounts: {} },
     ports: { http: { containerPort: 80, hostPort: webPort } },
+    env: { LOG_EVERY_MS, LOG_BLOB_BYTES, LOG_BLOB_AFTER },
   },
   // Portless on purpose, like suite 69's agent: reachable only node-locally
   // on the app network — the deployment model the telemetry block points at.
@@ -406,6 +417,101 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
     expect(socks.exitCode, socks.output).to.equal(0);
     expect(socks.stdout).to.include('/run/flux-telemetryd/identity.sock fluxos:fluxos 600');
     expect(socks.stdout).to.include('/run/flux-telemetryd/query.sock root:flux-daemon-access 660');
+  });
+
+  it('reads container logs through the daemon: every line once, through a daemon stop and a restart', async function () {
+    this.timeout(300000);
+    const { zelidauth } = await authenticate(client.url, appOwnerKey());
+    const poll = async (cursor) => {
+      const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+      const body = await client.getAuthed(`/apps/applogpolling/web_${APP}/100${query}`, zelidauth);
+      expect(body.status, `applogpolling refused: ${JSON.stringify(body).slice(0, 300)}`).to.equal('success');
+      return body;
+    };
+    const lineNumber = (line) => {
+      const match = /log line (\d+)\s*$/.exec(line);
+      return match ? Number(match[1]) : null;
+    };
+    const blob = (line) => /^\S+ B+$/.test(line);
+
+    let { cursor } = await poll();
+    // Only the daemon adds where it stopped in the file to the cursor.
+    const fields = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+    expect(fields, 'a daemon-issued cursor').to.include.keys('ino', 'firstNs', 'off');
+
+    const collected = [];
+    const take = (body) => {
+      expect(body.rolledOver, 'a line this reader had not read was discarded').to.be.false;
+      expect(body.skipped, 'a reader one second behind was moved to the end').to.be.false;
+      body.logs.filter((line) => !blob(line)).forEach((line) => {
+        const n = lineNumber(line);
+        expect(n, `unparseable log line: ${line.slice(0, 200)}`).to.not.equal(null);
+        collected.push(n);
+      });
+      return body.cursor;
+    };
+
+    for (let i = 0; i < 16; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => { setTimeout(resolve, 1000); });
+      if (i === 5) {
+        // Stopped: systemd keeps the sockets, and the next connect - this
+        // reader's poll or FluxOS's identity reconnect - starts it again.
+        // eslint-disable-next-line no-await-in-loop
+        expect((await X(`systemctl stop ${DAEMON_UNIT}`)).exitCode).to.equal(0);
+      }
+      if (i === 10) {
+        // A restart racing a poll: a response cut before its trailer is asked
+        // for again, of the daemon.
+        // eslint-disable-next-line no-await-in-loop
+        const [body, restart] = await Promise.all([poll(cursor), X(`systemctl restart ${DAEMON_UNIT}`)]);
+        expect(restart.exitCode, restart.output).to.equal(0);
+        cursor = take(body);
+      } else {
+        // eslint-disable-next-line no-await-in-loop
+        cursor = take(await poll(cursor));
+      }
+    }
+    expect(await unitState(client.container, DAEMON_UNIT), 'a connect started the stopped daemon').to.equal('active');
+    // One poll more: stdout and stderr interleave, so the last poll's newest
+    // line can have an older neighbour that only the next read carries.
+    await new Promise((resolve) => { setTimeout(resolve, 2000); });
+    take(await poll(cursor));
+
+    expect(collected.length, 'sixteen polls over ten lines a second').to.be.above(100);
+    expect(new Set(collected).size, `a line was delivered twice: ${collected.join(',')}`).to.equal(collected.length);
+    const ordered = [...collected].sort((a, b) => a - b);
+    for (let i = 1; i < ordered.length; i += 1) {
+      expect(ordered[i], `a gap between ${ordered[i - 1]} and ${ordered[i]}`).to.equal(ordered[i - 1] + 1);
+    }
+  });
+
+  it('answers a full read with what docker gives FluxOS\'s decoder, split lines included', async function () {
+    this.timeout(120000);
+    const { zelidauth } = await authenticate(client.url, appOwnerKey());
+    // The comparison needs a log with a split line in it: the container writes
+    // one every LOG_BLOB_AFTER lines, and may be younger than that here.
+    const splitLine = (line) => line.length === 31 + Number(LOG_BLOB_BYTES);
+    let served;
+    await waitFor(async () => {
+      served = await client.getAuthed(`/apps/applogpolling/web_${APP}/all`, zelidauth);
+      expect(served.status, JSON.stringify(served).slice(0, 300)).to.equal('success');
+      return served.logs.some(splitLine);
+    }, { timeout: 60000, interval: 2000, label: 'a split line in the web container\'s log' });
+
+    // Docker's framed stream for the same container, read after the daemon's
+    // answer and so a superset of it, through the decoder FluxOS's docker
+    // reader uses.
+    const id = await containerId(webContainer);
+    const framed = await X(`curl -sf --unix-socket /var/run/docker.sock 'http://docker/containers/${id}/logs?stdout=1&stderr=1&timestamps=1' | base64 -w0`);
+    expect(framed.exitCode, framed.output.slice(0, 300)).to.equal(0);
+    const decoder = new LogFrameDecoder({ timestamped: true });
+    const fromDocker = [...decoder.push(Buffer.from(framed.stdout.trim(), 'base64')), ...decoder.flush()];
+
+    expect(served.logs.length, 'a log to compare').to.be.above(100);
+    expect(fromDocker.length).to.be.at.least(served.logs.length);
+    expect(served.logs, 'the daemon\'s full read is docker\'s, line for line')
+      .to.deep.equal(fromDocker.slice(0, served.logs.length));
   });
 
   it('re-routes the real pipe at a new endpoint after a port-changing update', async function () {
