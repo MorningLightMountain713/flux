@@ -96,7 +96,7 @@ describe('content propagation across a multi-node fleet', function () {
         name: 'conf', destination: '/etc/app.conf', bytes: Buffer.from('prop config v1'), onUpdate: { action: 'restart' },
       }],
     });
-    expect(dep.status).to.equal('success');
+    expect(dep.status, JSON.stringify(dep)).to.equal('success');
     await queueAppTx(dep.data);
     await advanceBlocks(3);
     await Promise.any(env.clients.map((c, i) => waitForAppInstalled(c, name, 220000).then(() => i)));
@@ -153,7 +153,7 @@ describe('content propagation across a multi-node fleet', function () {
       contentRef: contentBytes,
       instances: 5,
     });
-    expect(dep.status).to.equal('success');
+    expect(dep.status, JSON.stringify(dep)).to.equal('success');
     const uploaded = await env.clients[0].waitForEvent(
       'content:blobUploaded',
       (d) => d.appName === name && d.source === 'blob',
@@ -238,7 +238,7 @@ describe('content propagation across a multi-node fleet', function () {
         name: 'conf', destination: '/etc/app.conf', bytes: Buffer.from('diverge v1'), onUpdate: { action: 'restart' },
       }],
     });
-    expect(dep.status).to.equal('success');
+    expect(dep.status, JSON.stringify(dep)).to.equal('success');
     await queueAppTx(dep.data);
     await advanceBlocks(3);
     await Promise.any(env.clients.map((c, i) => waitForAppInstalled(c, name, 220000).then(() => i)));
