@@ -407,6 +407,11 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
       { timeout: 180000, interval: 3000, label: 'daemon pruned the ghost on the reconnect sync' });
     expect(await daemonJournalCount(PRUNE_LINE),
       'the prune is new, not a pre-existing line').to.be.greaterThan(prunesBefore);
+
+    // The scenarios after this one read web's log: wait for FluxOS's
+    // reconciler to have it running again.
+    await waitFor(async () => (await X(`docker inspect -f '{{.State.Running}}' ${webContainer} 2>/dev/null || true`)).stdout.trim() === 'true',
+      { timeout: 180000, interval: 2000, label: 'FluxOS recreated the removed web container' });
   });
 
   it('FluxOS reconnects and re-syncs when the daemon restarts, and the sockets survive it', async function () {
