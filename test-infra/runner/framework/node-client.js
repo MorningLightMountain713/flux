@@ -164,6 +164,12 @@ export function nodeClient(nodeNum) {
   const emitter = new EventEmitter();
   emitter.on('error', () => {});
   let lastEventAt = 0;
+  // Ids are the node's, seeded from its clock and monotonic across its
+  // restarts. The highest this client has ever received survives a disconnect
+  // so that an event the node re-serves on the next connection (its ring,
+  // replayed from the start) is marked as served before.
+  let highestSeenId = 0;
+  let connectedAtId = 0;
 
   // The library's auto-reconnect fetch has no connect timeout: one hung TCP
   // connect freezes its retry loop forever and starves every wait on this
@@ -187,6 +193,7 @@ export function nodeClient(nodeNum) {
         reject(new Error(`SSE connect timeout after ${timeout}ms for ${ip}`));
       }, timeout);
 
+      connectedAtId = highestSeenId;
       eventSource = new EventSource(`${url}/flux/eventstream`, { fetch: fetchWithConnectTimeout });
 
       eventSource.onopen = () => {
@@ -420,11 +427,15 @@ export function nodeClient(nodeNum) {
         'activeStandby:decided',
       ]) {
         eventSource.addEventListener(name, (e) => {
+          const id = parseInt(e.lastEventId, 10) || 0;
           const entry = {
             event: e.type,
             data: JSON.parse(e.data),
-            id: parseInt(e.lastEventId, 10) || 0,
+            id,
+            at: Date.now(),
+            replayed: id <= connectedAtId,
           };
+          if (id > highestSeenId) highestSeenId = id;
           lastEventAt = Date.now();
           eventBuffer.push(entry);
           emitter.emit(e.type, entry);

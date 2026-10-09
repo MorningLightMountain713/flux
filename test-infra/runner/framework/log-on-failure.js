@@ -1,13 +1,26 @@
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { basename } from 'node:path';
 import { activeTestEnvs } from './test-env.js';
 import { execInContainer } from './container.js';
+import { eventLines } from './event-lines.js';
 
 const LOG_ROOT = join(process.cwd(), 'test-logs');
 
 // DUMP_LOGS=always dumps per-node logs after every test (pass or fail), not just
 // failures — used to measure timing on green runs while investigating flakes.
+// DUMP_LOGS_SUITES=507,1503 does the same for the named suites only, so a gate
+// can carry the node logs of every test of a suite under study while the other
+// two hundred dump on failure as usual.
 const ALWAYS = process.env.DUMP_LOGS === 'always';
+const ALWAYS_SUITES = new Set((process.env.DUMP_LOGS_SUITES || '').split(',').map((s) => s.trim()).filter(Boolean));
+
+function dumpsEveryTest(test) {
+  if (ALWAYS) return true;
+  if (!ALWAYS_SUITES.size || !test?.file) return false;
+  const number = basename(test.file).split('-')[0];
+  return ALWAYS_SUITES.has(number);
+}
 
 // Suites already evidenced by a failed-test dump; the after-all backstop skips
 // them so one failure isn't written twice under two labels.
@@ -130,8 +143,8 @@ async function dump(label, envs) {
       const parts = [`=== Node ${index} (ip ${ip ?? '?'}) — ${lines.length} log lines ===`];
       parts.push(...lines);
       if (events.length) {
-        parts.push('', `=== Node ${index} SSE events (${events.length}) ===`);
-        events.forEach((ev) => parts.push(`${ev.event}: ${JSON.stringify(ev.data)}`));
+        parts.push('', `=== Node ${index} SSE events (${events.length}; #id, received at, replay = served again after a reconnect) ===`);
+        parts.push(...eventLines(events));
       }
       if (record) {
         parts.push('', `=== Node ${index} in-container record (journal + file log) ===`);
@@ -159,14 +172,15 @@ export const mochaHooks = {
   },
 
   async afterEach() {
-    // One line per test in the TAP, whatever its outcome: when it started and how
-    // long it ran. The gap between one test's end and the next one's start is the
-    // hooks and fleet boots between them.
+    // One line per test in the TAP, whatever its outcome: when it started, when
+    // it ended and how long it ran. The gap between one test's end and the next
+    // one's start is the hooks and fleet boots between them.
     const test = this.currentTest;
     const started = test.startedAtMs ?? Date.now();
-    console.log(`# timing ${new Date(started).toISOString()} ${Date.now() - started}ms ${test.state} ${test.fullTitle()}`);
+    const ended = Date.now();
+    console.log(`# timing start=${new Date(started).toISOString()} end=${new Date(ended).toISOString()} ${ended - started}ms ${test.state} ${test.fullTitle()}`);
 
-    if (!ALWAYS && this.currentTest.state !== 'failed') return;
+    if (!dumpsEveryTest(test) && this.currentTest.state !== 'failed') return;
     const envs = envsFor(this.currentTest.parent);
     // The containers are still alive here - the one moment their journals
     // (systemd nodes log there, never to stdout) can be read. Bounded pulls.

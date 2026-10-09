@@ -6,6 +6,7 @@ import { REGISTRY_REPO_HOST } from './subnet-config.js';
 import { assignPorts } from './port-allocator.js';
 import * as daemon from './daemon-control.js';
 import { waitFor } from './wait.js';
+import { submitToNode } from './gated-fetch.js';
 
 const defaultSpec = {
   version: 8,
@@ -132,7 +133,7 @@ function endpointForType(type) {
 export async function submitSignedApp(nodeUrl, adminKeypair, signed) {
   const auth = await authenticate(nodeUrl, adminKeypair);
   // Updates have their own door — the register route accepts only register types.
-  const res = await fetch(`${nodeUrl}/apps/${endpointForType(signed.type)}`, {
+  const res = await submitToNode(`${nodeUrl}/apps/${endpointForType(signed.type)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain', zelidauth: auth.zelidauth },
     body: JSON.stringify(signed),
