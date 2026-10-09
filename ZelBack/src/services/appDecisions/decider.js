@@ -165,9 +165,7 @@ async function entriesOf(messages, records, decisions) {
       type: typeOf(message),
       timestamp: message.timestamp,
       record: {
-        txid: record.txid,
-        height: record.height,
-        txIndex: record.txIndex,
+        ...record,
         valueSat: record.value,
         blockTime: record.blockTime ?? message.registeredAt ?? null,
       },

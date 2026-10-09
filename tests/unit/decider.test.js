@@ -303,6 +303,17 @@ describe('decider', function () {
     expect(heard).to.deep.equal([{ unpositioned: 0 }]);
   });
 
+  it('refuses the contents held for a voided payment as unclaimed', async () => {
+    await store({ hash: 'v', height: 100 });
+    await appRecords.messages().markVoided('v');
+    const decider = loadDecider();
+
+    decider.wakeAll();
+    await decider.idle();
+
+    expect(await verdict('v')).to.equal('unclaimed');
+  });
+
   it('decides only holding the chain-state lock', async () => {
     await store({ hash: 'r', height: 100 });
     const decider = loadDecider();

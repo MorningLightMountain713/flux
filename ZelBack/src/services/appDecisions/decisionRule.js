@@ -37,7 +37,9 @@ const UPDATE = 'update';
  * @property {'registration'|'update'} type
  * @property {number} timestamp - the signed timestamp
  * @property {{txid: string, height: number, txIndex: number, valueSat: number,
- *   blockTime: ?number}} record - this node's payment record
+ *   blockTime: ?number, voided?: boolean}} record - this node's payment record
+ *   as the app messages hold it, its value as `valueSat` and its block time
+ *   falling back to the message's `registeredAt`
  * @property {?object} spec - the parsed spec; null when it does not parse
  * @property {?object} event - the parsed event; null when the spec does not parse
  * @property {?string} contentHash - a v2 message's content hash
