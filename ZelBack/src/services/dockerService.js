@@ -18,6 +18,7 @@ const { appNetworkOwner } = require('./utils/appNetworkOwner');
 const { obtainPayloadFromStorage } = require('./utils/fluxStorageRefs');
 const cpuBurstHelper = require('./utils/cpuBurstHelper');
 const LogFrameDecoder = require('./utils/logFrameDecoder');
+const telemetryLogClient = require('./telemetryLogClient');
 
 
 const operationRegistry = require('./utils/operationRegistry');
@@ -687,6 +688,40 @@ async function dockerContainerLogs(idOrName, lines, options = {}) {
 }
 
 /**
+ * The last `lines` lines of a container's log as text, without timestamps -
+ * through the node's log reader (telemetryLogClient).
+ *
+ * @param {string} idOrName
+ * @param {number|string} lines a whole number, or 'all'
+ * @returns {Promise<string>}
+ */
+async function dockerContainerLogText(idOrName, lines) {
+  if (!telemetryLogClient.readsThroughDaemon()) {
+    return serviceHelper.dockerBufferToString(await dockerContainerLogs(idOrName, lines));
+  }
+  const dockerContainer = await getDockerContainer(idOrName);
+  if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
+  return withContainerNotFound(idOrName, telemetryLogClient.readText(dockerContainer.id, lines));
+}
+
+/**
+ * The daemon's `not_found` - the container's log directory is gone - answered
+ * as the docker reader answers a container it cannot find.
+ *
+ * @param {string} idOrName
+ * @param {Promise} read
+ * @returns {Promise}
+ */
+async function withContainerNotFound(idOrName, read) {
+  try {
+    return await read;
+  } catch (error) {
+    if (error.code === 'not_found') throw new Error(`Container ${idOrName} not found`);
+    throw error;
+  }
+}
+
+/**
  * How many of `lines` docker will hand back again when asked from `ms`, so that
  * many can be skipped next time.
  *
@@ -739,6 +774,10 @@ const MAX_RETAINED_LINES = Math.ceil(
 /**
  * The lines a reader has not seen yet, and the position it has reached.
  *
+ * Through the node's log reader: on a node that reads through flux-telemetryd
+ * the daemon answers under the same rules (telemetryLogClient). What follows
+ * is the docker reader.
+ *
  * A poll, not a subscription: docker is asked for what it has and closes the
  * connection itself, so the read costs what the read costs. `follow: true` was
  * asked for instead, which never closes - the only way out was a 1500ms timer,
@@ -773,6 +812,12 @@ async function dockerContainerLogsPolling(idOrName, options = {}) {
 
   const dockerContainer = await getDockerContainer(idOrName);
   if (!dockerContainer) throw new Error(`Container ${idOrName} not found`);
+
+  if (telemetryLogClient.readsThroughDaemon()) {
+    return withContainerNotFound(idOrName, telemetryLogClient.readPolling(dockerContainer.id, {
+      position, since, lineCount, maxLines,
+    }));
+  }
 
   const logOptions = {
     follow: false,
@@ -2948,6 +2993,7 @@ module.exports = {
   dockerContainerExec,
   dockerContainerInspect,
   dockerContainerLogs,
+  dockerContainerLogText,
   dockerContainerLogsStream,
   dockerContainerLogsPolling,
   dockerContainerStats,
