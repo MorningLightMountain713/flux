@@ -176,6 +176,23 @@ export async function buildSignedCleartextSubmission({
   return { specField, contentHash, timestamp };
 }
 
+// A v9 registration message in the clear, as a node that skipped the submission
+// rules would gossip it: the spec travels as it is, its contentHash computed as
+// for a sealed spec, since the library refuses to canonicalize content in the
+// clear. What every other node is handed to judge.
+export async function buildCleartextV9Message({
+  submissionSpec, ownerKey, timestamp = Date.now(), type = 'fluxappregister', extend = true,
+}) {
+  const contentHash = contentHashOf(submissionSpec);
+  const signature = await signV9Event({
+    type, contentHash, timestamp, extend, ownerPrivkey: ownerKey.privkey,
+  });
+  const hash = computeMessageHashV2(type, 2, contentHash, timestamp, extend, signature);
+  return {
+    type, version: 2, appSpecifications: submissionSpec, hash, contentHash, timestamp, extend, signature,
+  };
+}
+
 // The hash of a signed registration or update message, as every node computes it
 // and as a FluxDrive write carried by the message names it.
 export function registrationMessageHash(specField) {
