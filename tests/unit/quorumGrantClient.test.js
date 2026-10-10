@@ -118,6 +118,7 @@ describe('quorumGrant grantClient', () => {
   let draining; // hosts refusing every ask under the standing generation as draining
   let ownership; // who holds the app and from which height, as this node's chain has it
   let cellWorld; // the world the cells stand in when it is not the taught record's: {generation, height}
+  let predecessorGen; // the generation the cells prove a credential against; undefined = the one below the standing
   // the world the cells stand in: their own, else the taught record's, else the registration's
   const standingGen = () => cellWorld?.generation ?? taughtRecord?.generation ?? 0;
   const cellsHeight = () => (cellWorld ? cellWorld.height : (taughtRecord?.height ?? null));
@@ -205,10 +206,11 @@ describe('quorumGrant grantClient', () => {
     // one lock-delay and only a candidate carrying the retired committee's
     // signed acceptances, verified here with real signatures, is let in at once
     const seatTunables = () => {
-      if ((ask.generation ?? 0) < 1) return REGISTER_TUNABLES;
-      const carriedIncumbent = ask.carried
+      if ((ask.generation ?? 0) < 1 && !freshSeats) return REGISTER_TUNABLES;
+      const expected = predecessorGen === undefined ? standingGen() - 1 : predecessorGen;
+      const carriedIncumbent = ask.carried && expected !== null
         ? rosterOverlay.verifyTermCredential(activeMembership, ask.key, ask.carried, {
-          committeeSize: COMMITTEE_SIZE, candidate: ask.candidate, standingGeneration: taughtRecord?.generation ?? 0,
+          committeeSize: COMMITTEE_SIZE, candidate: ask.candidate, expectedGeneration: expected,
         })
         : null;
       const servingSinceMs = freshSeats ? Date.now() : Date.now() - REGISTER_TUNABLES.lockDelayMs - 1;
@@ -327,6 +329,7 @@ describe('quorumGrant grantClient', () => {
     draining = new Set();
     ownership = { owner: 'owner', from: 100, transferred: false };
     cellWorld = null;
+    predecessorGen = undefined;
     teachCalls = [];
     teachAcks = new Map();
 
@@ -1982,6 +1985,35 @@ describe('quorumGrant grantClient', () => {
           expect(demoted).to.deep.equal([]);
           expect(holder.state).to.equal('held');
           expect(holder.generation, 'the holder holds under generation 0 again').to.equal(0);
+          expect(seatedAt(oldHosts, 0).length).to.be.at.least(oldCommittee.quorum);
+        });
+
+        // the generation-0 committee's cells hold no row for the holder and
+        // first serve at the lift, so only a credential lets it in at once
+        const stepBackOntoFreshSeats = async (predecessor) => {
+          taughtRecord = null;
+          const demoted = [];
+          const holder = reroll(await acquireHolder({ onDemoted: (reason) => demoted.push(reason) }));
+          clockNow += 1000;
+          await holder.renewOnce();
+          expect(holder.generation, 'fixture: the holder stepped across to the re-roll').to.equal(1);
+          sell();
+          oldHosts.forEach((host) => registers.get(host)?.delete(KEY));
+          freshSeats = true;
+          predecessorGen = predecessor;
+          nextHosts.forEach((host) => teaching.add(host));
+          grantClient.noteGenerationRecord({ identity: 'myapp', role: 'master', generation: 0 });
+          drainLiftsAtTheWitnessPollOn(oldHosts);
+          clockNow += TTL + 30_000;
+          await holder.renewOnce();
+          return { holder, demoted };
+        };
+
+        it('the step back\'s fresh seats take the holder on its credential from the seller\'s generation, the world that stood before', async () => {
+          const { holder, demoted } = await stepBackOntoFreshSeats(1);
+          expect(demoted).to.deep.equal([]);
+          expect(holder.state).to.equal('held');
+          expect(holder.generation).to.equal(0);
           expect(seatedAt(oldHosts, 0).length).to.be.at.least(oldCommittee.quorum);
         });
 

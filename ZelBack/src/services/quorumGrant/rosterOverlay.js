@@ -480,9 +480,10 @@ function verifyTermCredential(membership, key, carried, {
 }) {
   if (!credentialWellFormed(carried)) return null;
   if (typeof candidate !== 'string' || !candidate) return null;
-  // a step-across carries the world just below the standing one; a published
-  // record is proved against the committee of its own generation
-  const expected = expectedGeneration ?? standingGeneration - 1;
+  // a step-across carries the world that stood before the standing one; a
+  // published record is proved against the committee of its own generation;
+  // an expected null means no world stood before, and nothing verifies
+  const expected = expectedGeneration === undefined ? standingGeneration - 1 : expectedGeneration;
   if (carried.generation !== expected) return null;
   const committee = verifyChain(
     membership, key, carried.fingerprint, carried.generation, committeeSize, carried.roster?.chain ?? [],

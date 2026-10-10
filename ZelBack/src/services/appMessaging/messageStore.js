@@ -1099,34 +1099,101 @@ async function handleGrantGenerationEvent({ message, envelope }) {
  *
  * @returns {Promise<{record: ?object, aside: boolean, ownership: ?{owner: string, from: number, transferred: boolean}}>}
  */
+/** The record an app's grants block names for a role, by hash, or null. */
+function namedHashFor(grants, role) {
+  return grants && typeof grants[role] === 'string' ? grants[role] : null;
+}
+
+/**
+ * The records one ownership validates: those its owner signed in it, and the
+ * one the transfer that began it names.
+ *
+ * @param {string} identity
+ * @param {Array<object>} rows - every record held for the role
+ * @param {{owner: string, from: ?number, original: boolean, namedHash: ?string}} ownership
+ * @returns {Promise<Array<object>>}
+ */
+async function validInOwnership(identity, rows, {
+  owner, from, original, namedHash,
+}) {
+  const { ownerSignedIsValid } = await getSpec();
+  return rows.filter((row) => ownerSignedIsValid(
+    { identity, hash: row.hash, ownedFrom: row.data?.ownedFrom },
+    {
+      appIdentity: identity, listedOwnerSigned: row.signer === owner, ownedFrom: from, original, namedHash,
+    },
+  ));
+}
+
+/**
+ * The record a set of valid records stands on: the highest-ranked, the first
+ * of equals.
+ */
+async function standingOf(valid) {
+  const { generationRecordRank, outranks } = await getSpec();
+  let record = valid[0];
+  for (const row of valid.slice(1)) {
+    if (outranks(generationRecordRank(row.data), generationRecordRank(record.data))) record = row;
+  }
+  return record;
+}
+
 async function standingGeneration(identity, role) {
   const app = await appRecords.registry().byIdentity(identity);
   if (!app) return { record: null, aside: false, ownership: null };
   const owners = await appHistory.ownerships(app.name);
   const listed = owners.length ? owners[owners.length - 1] : null;
   const ownership = listed ? { owner: listed.owner, from: listed.from, transferred: owners.length > 1 } : null;
-  const grants = app.grants ?? app.spec?.grants ?? null;
-  const namedHash = grants && typeof grants[role] === 'string' ? grants[role] : null;
-  const db = dbHelper.databaseConnection();
-  const database = db.db(config.get('database.appsglobal.database'));
-  const rows = await dbHelper.findInDatabase(
-    database, globalAppStateEvents,
-    { type: APP_STATE_EVENT_TYPES.GRANTGENERATION, identity, role },
-    { projection: { _id: 0 } },
-  );
-  const { ownerSignedIsValid, generationRecordRank, outranks } = await getSpec();
-  const valid = rows.filter((row) => ownerSignedIsValid(
-    { identity, hash: row.hash, ownedFrom: row.data?.ownedFrom },
-    {
-      appIdentity: identity, listedOwnerSigned: row.signer === app.owner, ownedFrom: listed?.from, original: owners.length === 1, namedHash,
-    },
-  ));
+  const namedHash = namedHashFor(app.grants ?? app.spec?.grants ?? null, role);
+  const valid = await validInOwnership(identity, await heldGenerationRecords(identity, role), {
+    owner: app.owner, from: listed?.from, original: owners.length === 1, namedHash,
+  });
   if (valid.length === 0) return { record: null, aside: namedHash !== null, ownership };
-  let record = valid[0];
-  for (const row of valid.slice(1)) {
-    if (outranks(generationRecordRank(row.data), generationRecordRank(record.data))) record = row;
+  return { record: await standingOf(valid), aside: false, ownership };
+}
+
+/**
+ * The generation of the world that stood immediately before the standing one
+ * for an app role: the world a step-across credential is proved against.
+ * Within an ownership it is the record ranked just below the standing one,
+ * and the registration's 0 below its owner's first re-roll after a transfer
+ * that named none; a world the transfer began — the record it names, or the
+ * registration's after one naming none — follows the world that stood when
+ * the previous ownership ended. Null when nothing this node can name stood
+ * before: an app that never changed hands and stands on its registration,
+ * or a named record this node lacks in either ownership.
+ *
+ * @returns {Promise<?number>}
+ */
+async function predecessorGeneration(identity, role) {
+  const app = await appRecords.registry().byIdentity(identity);
+  if (!app) return null;
+  const owners = await appHistory.ownerships(app.name);
+  const rows = await heldGenerationRecords(identity, role);
+  const last = owners.length - 1;
+  const namedHash = namedHashFor(app.grants ?? app.spec?.grants ?? null, role);
+  const valid = await validInOwnership(identity, rows, {
+    owner: app.owner, from: owners[last]?.from, original: owners.length === 1, namedHash,
+  });
+  if (valid.length === 0 && namedHash !== null) return null;
+  if (valid.length > 0) {
+    const { generationRecordRank, outranks } = await getSpec();
+    const standing = await standingOf(valid);
+    const below = valid.filter((row) => outranks(generationRecordRank(standing.data), generationRecordRank(row.data)));
+    if (below.length > 0) return (await standingOf(below)).data.generation;
+    // the lowest the ownership validates is its owner's own first re-roll: the
+    // transfer that began the ownership named none, or there was no transfer
+    if (standing.signer === app.owner) return 0;
   }
-  return { record, aside: false, ownership };
+  // the world the transfer began follows what stood when the previous ownership ended
+  if (last < 1) return null;
+  const previous = owners[last - 1];
+  const previousNamed = namedHashFor(previous.grants ?? null, role);
+  const ended = await validInOwnership(identity, rows, {
+    owner: previous.owner, from: previous.from, original: last - 1 === 0, namedHash: previousNamed,
+  });
+  if (ended.length === 0) return previousNamed === null ? 0 : null;
+  return (await standingOf(ended)).data.generation;
 }
 
 /**
@@ -1618,6 +1685,7 @@ module.exports = {
   getMasterleaseRecordsByGrantee,
   getGrantGenerationRecord,
   standingGeneration,
+  predecessorGeneration,
   heldGenerationRecords,
   rejudgeGenerationRecords,
   askPeersForGenerationRecords,
