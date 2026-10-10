@@ -6,7 +6,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { Binary } = require('mongodb');
 const {
-  loadSpecLibrary, V9_SUBMISSION, V8_SUBMISSION, v9Spec,
+  loadSpecLibrary, V9_SUBMISSION, V8_SUBMISSION, v9Spec, v8Spec, decryptedV8Spec,
 } = require('./fixtures/fluxSpec');
 
 chai.use(chaiAsPromised);
@@ -136,24 +136,28 @@ describe('entitlementsState', () => {
       expect(checkSpy.firstCall.returnValue.allowed).to.equal(true);
     });
 
-    // The gate is handed the spec object, and reaches its feature set through
-    // toCanonical(). Pin that delegation: the canonical body the real resolver
-    // walked has to be the one the spec produces, or the gate is reading
-    // something else.
-    it('hands the real check the spec\'s own canonical body', async () => {
+    // The spec answers its own feature summary; a serialized form has lost the
+    // objects that summary is read through.
+    it('hands the real check the spec itself', async () => {
       docs = [definitionDoc({ features: { mesh: true } })];
       entitlementsState.installPolicyGroupState(await entitlementsState.buildPolicyGroupState());
 
       await entitlementsState.assertSpecEntitled(gatedSpec, OWNER, effectiveHeight, false);
 
-      const [fluxidBytes, canonical, height, isEncrypted] = checkSpy.firstCall.args;
-      expect(canonical, 'the gate must walk the spec\'s canonical form')
-        .to.deep.equal(gatedSpec.toCanonical());
-      expect([...flux.usedFeatures(canonical, false)], 'and that form must still expose the feature')
-        .to.include('mesh');
+      const [fluxidBytes, checked, height, isEncrypted] = checkSpy.firstCall.args;
+      expect(checked).to.equal(gatedSpec);
+      expect([...flux.usedFeatures(checked, false)]).to.include('mesh');
       expect(fluxidBytes).to.be.instanceOf(Uint8Array);
       expect(height).to.equal(effectiveHeight);
       expect(isEncrypted).to.equal(false);
+    });
+
+    it('passes a v8 spec, cleartext or decrypted, with no grants on chain', async () => {
+      entitlementsState.installPolicyGroupState(await entitlementsState.buildPolicyGroupState());
+      await entitlementsState.assertSpecEntitled(await v8Spec(), OTHER_OWNER, effectiveHeight, false);
+      await entitlementsState.assertSpecEntitled(await decryptedV8Spec(), OTHER_OWNER, effectiveHeight, true);
+      sinon.assert.calledTwice(checkSpy);
+      expect(checkSpy.getCalls().map((call) => call.returnValue.allowed)).to.deep.equal([true, true]);
     });
 
     it('throws FEATURE_NOT_ENTITLED when a gated feature has no grant', async () => {

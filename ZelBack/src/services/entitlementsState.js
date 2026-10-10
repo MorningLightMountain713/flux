@@ -76,14 +76,15 @@ function getFeatureEntitlements() { return featureEntitlements; }
  * the gate is strict: the required on-chain policy groups are expected to be
  * in place before any spec uses the feature.
  *
- * @param {object} canonicalSpec - v9 spec instance exposing toCanonical()
+ * @param {object} spec - a constructed spec of any version; it answers its own
+ *   feature summary, and a v1-v8 spec answers that it uses none
  * @param {string} owner - cleartext owner address
  * @param {number} height - daemon height to resolve entitlements at
  * @param {boolean} isEncrypted - whether the spec was submitted encrypted; flows
  *   into used-feature detection so an encryption-derived gated feature would be
  *   gated correctly (encryptedSpec itself is ungated, so inert today).
  */
-async function assertSpecEntitled(canonicalSpec, owner, height, isEncrypted) {
+async function assertSpecEntitled(spec, owner, height, isEncrypted) {
   if (!featureEntitlements) {
     log.warn('entitlementsState - policy group state not built, skipping feature entitlement gate');
     return;
@@ -99,7 +100,7 @@ async function assertSpecEntitled(canonicalSpec, owner, height, isEncrypted) {
     throw new Error(`Owner address '${owner}' is not a valid fluxid for feature entitlement checks`);
   }
 
-  const result = featureEntitlements.check(fluxidBytes, canonicalSpec.toCanonical(), height, isEncrypted);
+  const result = featureEntitlements.check(fluxidBytes, spec, height, isEncrypted);
   if (!result.allowed) {
     const err = new Error(`Feature not available: ${result.reason}`);
     err.code = 'FEATURE_NOT_ENTITLED';
