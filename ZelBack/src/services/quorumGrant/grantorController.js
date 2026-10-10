@@ -243,7 +243,7 @@ async function taught(key) {
   const role = key.slice(key.indexOf('/') + 1);
   if (FOUNDER_ROLE_PATTERN.test(role)) return {};
   const known = await heldGeneration(key);
-  return { generation: known.generation, generationRecord: known.record };
+  return { generation: known.generation, height: known.height, generationRecord: known.record };
 }
 
 /** A refusal about a known key, teaching the standing generation with it. */

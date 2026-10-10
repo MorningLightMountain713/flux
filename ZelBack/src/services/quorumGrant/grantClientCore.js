@@ -203,7 +203,8 @@ function holderStateAt(nowMs, safeUntil, demotionAt) {
  *
  * @param {Array<string>} standbys every other holder of the app, by outpoint
  * @param {Map<string, object>} witnessReplies outpoint -> reply, where a
- *   reply is {quorumReachable: boolean, holding: boolean, acquiring: boolean}
+ *   reply is {quorumReachable: boolean, holding: boolean, acquiring: boolean,
+ *   doubt?: boolean}, doubt when the standby read a referee in a later world
  * @returns {{coast: boolean, reason: string|null}} the reason names the first
  *   standby that broke unanimity, for the demotion log
  */
@@ -438,6 +439,9 @@ function coastVerdict(standbys, witnessReplies) {
     }
     if (reply.quorumReachable) {
       return { coast: false, reason: `standby ${outpoint} can reach quorum` };
+    }
+    if (reply.doubt) {
+      return { coast: false, reason: `standby ${outpoint} reads a referee in a later world than its own` };
     }
     if (reply.holding || reply.acquiring) {
       return { coast: false, reason: `standby ${outpoint} holds or is acquiring` };

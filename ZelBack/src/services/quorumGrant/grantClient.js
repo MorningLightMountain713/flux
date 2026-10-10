@@ -14,6 +14,7 @@ const fluxEventBus = require('../utils/fluxEventBus');
 const messageStore = require('../appMessaging/messageStore');
 const foundingCommittee = require('../appMesh/foundingCommittee');
 const signedEnvelope = require('./signedEnvelope');
+const generationWorld = require('./generationWorld');
 const rosterOverlay = require('./rosterOverlay');
 const downCertificates = require('./downCertificates');
 const core = require('./grantClientCore');
@@ -192,7 +193,8 @@ async function committeeFor(key, mode, fingerprint) {
   const membership = networkStateService.membershipAt(fingerprint);
   if (!membership) return null;
 
-  const generation = await currentGeneration(key);
+  const world = await currentWorld(key);
+  const { generation } = world;
   const walkKey = rosterOverlay.walkKeyFor(key, generation);
   const committee = selectCommittee(membership, walkKey, { size: committeeSizeFor('held') });
   if (committee.refusal) return null;
@@ -227,7 +229,7 @@ async function committeeFor(key, mode, fingerprint) {
   const members = cancelledApplied(membership, walkKey, chainMembers, chain, cancels);
 
   return {
-    members, chainMembers, quorum: committee.quorum, fingerprint, generation, chain, cancels,
+    members, chainMembers, quorum: committee.quorum, fingerprint, generation, height: world.height, chain, cancels,
   };
 }
 
@@ -240,16 +242,17 @@ function overlayExtras(committee) {
 }
 
 /**
- * The current generation for a key: the newest owner-signed record on the
- * event plane as this node has synced it, 0 when the owner never re-rolled.
+ * The world a key stands in as this node has synced it: the generation its
+ * committee is dealt from and the height that committee took over at.
  */
-async function currentGeneration(key) {
+async function currentWorld(key) {
   try {
     const slash = key.indexOf('/');
-    const record = await messageStore.getGrantGenerationRecord(key.slice(0, slash), key.slice(slash + 1));
-    return record?.data?.generation ?? 0;
+    return generationWorld.worldOf(await messageStore.standingGeneration(key.slice(0, slash), key.slice(slash + 1)));
   } catch (error) {
-    return 0;
+    return {
+      generation: 0, height: null, record: null, aside: false,
+    };
   }
 }
 
@@ -269,17 +272,19 @@ async function knownGenerationRecord(key) {
 const learning = new Set();
 
 /**
- * Consume what an answer teaches. A generation record newer than the world
- * this node asked under enters the store through the same owner-verified,
- * newest-wins path a broadcast takes — one fact, kept in one place — and
- * the store's listeners carry the news to whoever holds the key. A record
- * no newer than what was asked under is nothing this node does not know,
+ * Consume what an answer teaches. A generation record naming a generation
+ * other than the one this node asked under enters the store through the same
+ * owner-verified path a broadcast takes — one fact, kept in one place — and
+ * the store, which keeps every record it verifies, decides which stands; its
+ * listeners carry the news to whoever holds the key. A lower number is news
+ * as much as a higher one: a sale steps an app back to an earlier world. A
+ * record at the generation asked under is nothing this node does not know,
  * and a record about some other key is not this answer's to teach.
  */
 async function learnGeneration(key, askedGeneration, answer) {
   const record = answer?.generationRecord;
   if (!record || !Number.isSafeInteger(record.generation)) return;
-  if (record.generation <= (askedGeneration ?? 0)) return;
+  if (record.generation === (askedGeneration ?? 0)) return;
   const slash = key.indexOf('/');
   if (record.identity !== key.slice(0, slash) || record.role !== key.slice(slash + 1)) return;
   if (learning.has(key)) return;
@@ -443,8 +448,15 @@ async function askGrantorDetailed(member, type, ask, signature, { timeoutMs } = 
       status: error.response?.status ?? null,
       reason: error.response?.data?.data?.message ?? error.message ?? null,
     });
-    await learnGeneration(ask.key, ask.generation, error.response?.data?.data);
-    return { reply: null, answered: error.response?.status !== undefined };
+    const refusal = error.response?.data?.data;
+    await learnGeneration(ask.key, ask.generation, refusal);
+    return {
+      reply: null,
+      answered: error.response?.status !== undefined,
+      named: Number.isSafeInteger(refusal?.generation)
+        ? { generation: refusal.generation, height: refusal.height }
+        : null,
+    };
   }
 }
 
@@ -452,7 +464,8 @@ async function askGrantorDetailed(member, type, ask, signature, { timeoutMs } = 
  * Ask every committee member directly. One signature serves all of them —
  * the payload never names the member.
  * @returns {Map<string, object>} outpoint -> reply, silent members absent;
- *   `answered` on the map counts the members that responded at all
+ *   `answered` on the map counts the members that responded at all, and
+ *   `named` holds every world ({generation, height}) a refusing member named as its standing one
  */
 async function askCommittee(members, type, ask, signature, { timeoutMs } = {}) {
   const asks = members.map(async (member) => ({
@@ -460,12 +473,17 @@ async function askCommittee(members, type, ask, signature, { timeoutMs } = {}) {
   }));
   const settled = await Promise.all(asks);
   const replies = new Map();
+  const named = [];
   let answered = 0;
-  settled.forEach(({ member, reply, answered: responded }) => {
+  settled.forEach(({
+    member, reply, answered: responded, named: world,
+  }) => {
     if (responded) answered += 1;
     if (reply) replies.set(outpointOf(member), reply);
+    if (world) named.push(world);
   });
   replies.answered = answered;
+  replies.named = named;
   return replies;
 }
 
@@ -1095,15 +1113,21 @@ class Holder {
   }
 
   /**
-   * A newer generation stands for this key: the world this term was granted
-   * in has ended, and the next contact with the referees is the one that
-   * acts on it — now, not a renewal interval from now. A pass in flight is
-   * that contact already.
+   * A generation record for this key landed, or its row was written with a
+   * new owner. When this node now stands in a world other than the one this
+   * term was granted in — a re-roll, a sale, a step back — that world has
+   * ended, and the next contact with the referees is the one that acts on it:
+   * now, not a renewal interval from now. A pass in flight is that contact
+   * already.
+   *
+   * @returns {Promise<void>}
    */
-  noteGeneration(generation) {
-    if (this.#stopped || generation <= this.#committee.generation) return;
-    log.info(`quorumGrant holder ${this.#key}: generation ${generation} stands over our `
-      + `${this.#committee.generation} — contacting the referees now`);
+  async noteGeneration() {
+    if (this.#stopped) return;
+    const standing = await currentWorld(this.#key);
+    if (this.#stopped || generationWorld.sameWorld(standing, this.#committee)) return;
+    log.info(`quorumGrant holder ${this.#key}: generation ${standing.generation} from height ${standing.height} `
+      + `stands in place of our ${this.#committee.generation} — contacting the referees now`);
     if (this.#timer === null) return;
     this.#loop(0);
   }
@@ -1192,7 +1216,7 @@ class Holder {
       return;
     }
 
-    await this.#assess(renewed >= this.#committee.quorum);
+    await this.#assess(renewed >= this.#committee.quorum, await this.#doubtNamed(direct.named));
 
     await this.#maybeHeal();
 
@@ -1469,15 +1493,15 @@ class Holder {
     // holder's accept must land first (formal/quiet-window family K; the
     // boot inequality asserts only that the delivery itself fits).
     const roundMs = timeoutMs ?? Math.max(1, Math.min(askTimeoutMs(), Math.floor((lockDelayMs() - askTimeoutMs()) / 3)));
-    const standing = await currentGeneration(this.#key);
-    if (standing <= this.#committee.generation) return false;
+    const standing = await currentWorld(this.#key);
+    if (generationWorld.sameWorld(standing, this.#committee)) return false;
     const credential = this.credential();
     if (!credential) {
-      log.info(`quorumGrant holder ${this.#key}: generation ${standing} stands over ours and no credential is held — not stepping across`);
+      log.info(`quorumGrant holder ${this.#key}: generation ${standing.generation} stands in place of ours and no credential is held — not stepping across`);
       return false;
     }
     const next = await committeeFor(this.#key, 'held', networkStateService.membershipFingerprint());
-    if (!next || next.generation !== standing) return false;
+    if (!next) return false;
     next.chain = next.chain ?? [];
     next.cancels = next.cancels ?? [];
     const extras = { ...overlayExtras(next), carried: credential };
@@ -1499,7 +1523,7 @@ class Holder {
     const prepareReplies = await askCommittee(next.members, 'prepare', prepareSigned.ask, prepareSigned.signature, { timeoutMs: roundMs });
     const prepared = core.prepareOutcome([...prepareReplies.values()], next.quorum);
     if (!prepared.promised) {
-      log.info(`quorumGrant holder ${this.#key}: step-across to generation ${standing} not promised (${prepared.reason ?? 'no prepare quorum'})`);
+      log.info(`quorumGrant holder ${this.#key}: step-across to generation ${next.generation} not promised (${prepared.reason ?? 'no prepare quorum'})`);
       return false;
     }
 
@@ -1528,8 +1552,8 @@ class Holder {
     this.#state = 'held';
     this.#armDemotion(this.safeUntil() + demotionSlackMs());
     await this.publishRecord();
-    log.info(`quorumGrant holder ${this.#key}: stepped across to generation ${standing} at epoch ${epoch}`);
-    fluxEventBus.publish('quorumGrant:steppedAcross', { key: this.#key, generation: standing, epoch });
+    log.info(`quorumGrant holder ${this.#key}: stepped across to generation ${next.generation} at epoch ${epoch}`);
+    fluxEventBus.publish('quorumGrant:steppedAcross', { key: this.#key, generation: next.generation, epoch });
     return true;
   }
 
@@ -1554,7 +1578,26 @@ class Holder {
     return this.#maybeStepAcross({ timeoutMs: Math.min(askTimeoutMs(), Math.floor(budgetMs / 3)) });
   }
 
-  async #assess(quorumRenewed) {
+  /**
+   * A refusal naming a world taken over after the one this node stands in,
+   * once it has learned what the refusals taught: the referee has a sale or
+   * re-roll this node's chain has not shown it. That is no ground for a
+   * coast, which vouches that no takeover is possible; and it is no ground
+   * for a step, which needs a world this node can name.
+   *
+   * @param {?Array<{generation: number, height: ?number}>} named - the worlds the refusing referees named
+   * @returns {Promise<?string>} the doubt, or null
+   */
+  async #doubtNamed(named) {
+    if (!named?.length) return null;
+    const standing = await currentWorld(this.#key);
+    const later = named.find((world) => generationWorld.laterWorld(world, standing));
+    return later === undefined
+      ? null
+      : `a referee names generation ${later.generation} from height ${later.height}, which this node does not stand on`;
+  }
+
+  async #assess(quorumRenewed, doubt = null) {
     const now = this.#clock();
     const safeUntil = this.safeUntil();
 
@@ -1585,19 +1628,22 @@ class Holder {
     // past safety: a legitimate coast must already stand when the standing
     // alarm fires, because the alarm no longer waits for a pass to notice
     // the deadline.
-    const standbys = await standbysFor(this.#key, this.#identity.outpoint);
-    // Zero resolvable witnesses is maximal doubt, and doubt never coasts: a
-    // global app always has other instances by spec floor, so an empty set
-    // means nobody can vouch that no takeover is possible - unanimity over
-    // nobody proved nothing, and it kept an isolated master running.
-    const witnessReplies = standbys.length
-      ? await pollWitnesses(standbys, this.#key, this.#committee.generation)
-      : new Map();
-    const verdict = standbys.length
-      ? core.coastVerdict(standbys.map(outpointOf), witnessReplies)
-      : { coast: false, reason: 'no witnesses resolvable' };
-    seen.standbys = standbys.length;
-    seen.witnessReplies = witnessReplies.size;
+    let verdict = { coast: false, reason: doubt };
+    if (!doubt) {
+      const standbys = await standbysFor(this.#key, this.#identity.outpoint);
+      // Zero resolvable witnesses is maximal doubt, and doubt never coasts: a
+      // global app always has other instances by spec floor, so an empty set
+      // means nobody can vouch that no takeover is possible - unanimity over
+      // nobody proved nothing, and it kept an isolated master running.
+      const witnessReplies = standbys.length
+        ? await pollWitnesses(standbys, this.#key, this.#committee.generation)
+        : new Map();
+      verdict = standbys.length
+        ? core.coastVerdict(standbys.map(outpointOf), witnessReplies)
+        : { coast: false, reason: 'no witnesses resolvable' };
+      seen.standbys = standbys.length;
+      seen.witnessReplies = witnessReplies.size;
+    }
 
     if (verdict.coast) {
       this.#state = 'jeopardy';
@@ -1813,6 +1859,7 @@ async function witnessAnswer(key, mode = 'held') {
   const isAcquiring = acquiring.has(key);
 
   let quorumReachable = false;
+  let doubt = false;
   const fingerprint = networkStateService.membershipFingerprint();
   const committee = fingerprint ? await committeeFor(key, mode, fingerprint) : null;
   if (committee) {
@@ -1832,6 +1879,15 @@ async function witnessAnswer(key, mode = 'held') {
         // at that lift. An absent field is an older node and counts as it
         // always did.
         await learnGeneration(key, committee.generation, response?.data?.data);
+        // A cell standing in a world taken over after this node's has a sale
+        // or re-roll this node's chain has not shown it: this node polled the
+        // wrong committee for whether a takeover is possible, so it cannot
+        // vouch that none is.
+        const answered = response?.data?.data;
+        if (Number.isSafeInteger(answered?.generation)
+          && generationWorld.laterWorld({ generation: answered.generation, height: answered.height }, committee)) {
+          doubt = true;
+        }
         return response?.data?.status === 'success'
           && response.data.data?.refereeing !== false
           && response.data.data?.serving !== false;
@@ -1851,6 +1907,7 @@ async function witnessAnswer(key, mode = 'held') {
     holding,
     acquiring: isAcquiring,
     quorumReachable,
+    doubt,
     generation: generationRecord?.generation ?? 0,
     generationRecord,
   };
@@ -1970,8 +2027,10 @@ function holderFor(key) {
 function noteGenerationRecord({ identity, role, generation }) {
   const key = `${identity}/${role}`;
   const holder = held.get(key);
-  if (holder) holder.noteGeneration(generation);
-  return startCourier(key, generation);
+  const noted = holder
+    ? holder.noteGeneration().catch((error) => log.error(`quorumGrant holder ${key}: ${error.message}`))
+    : Promise.resolve();
+  return Promise.all([noted, startCourier(key, generation)]);
 }
 
 // ---------------------------------------------------------------------------

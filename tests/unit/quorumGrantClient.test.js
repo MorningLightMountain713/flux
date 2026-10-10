@@ -116,6 +116,11 @@ describe('quorumGrant grantClient', () => {
   let teaching; // hosts refusing every ask under a newer world, and teaching it
   let taughtRecord; // the standing generation record those refusals and every record read carry
   let draining; // hosts refusing every ask under the standing generation as draining
+  let ownership; // who holds the app and from which height, as this node's chain has it
+  let cellWorld; // the world the cells stand in when it is not the taught record's: {generation, height}
+  // the world the cells stand in: their own, else the taught record's, else the registration's
+  const standingGen = () => cellWorld?.generation ?? taughtRecord?.generation ?? 0;
+  const cellsHeight = () => (cellWorld ? cellWorld.height : (taughtRecord?.height ?? null));
   let teachCalls; // every courier delivery this node made: { host, record }
   let teachAcks; // host -> the generation an instance answers a delivery with (default: the carried one)
 
@@ -242,15 +247,16 @@ describe('quorumGrant grantClient', () => {
         data: {
           name: 'Error',
           message,
-          generation: taughtRecord.generation,
+          generation: standingGen(),
+          height: cellsHeight(),
           generationRecord: taughtRecord,
         },
       },
     };
     return error;
   }
-  const taughtRefusal = () => doorRefusal(`ask names generation 0, current is ${taughtRecord.generation}`);
-  const drainingRefusal = () => doorRefusal(`generation ${taughtRecord.generation} is draining until height ${(taughtRecord.height ?? 0) + 3}`);
+  const taughtRefusal = (asked) => doorRefusal(`ask names generation ${asked}, current is ${standingGen()}`);
+  const drainingRefusal = () => doorRefusal(`generation ${standingGen()} is draining until height ${(taughtRecord?.height ?? 0) + 3}`);
 
   function fakePost(url, body) {
     const [, host, path] = url.match(/^http:\/\/([^:]+):\d+(\/.*)$/);
@@ -291,13 +297,13 @@ describe('quorumGrant grantClient', () => {
 
     const type = path.split('/').pop();
     if (unreachable.has(host) || dark.has(host)) throw new Error('unreachable');
-    // a teaching cell refuses only an ask naming a RETIRED generation (the
-    // controller's "ask names generation X, current is Y"); the standing one
-    // is served — a re-rolled committee shares cells with the old one
-    if (teaching.has(host) && (body?.generation ?? 0) < (taughtRecord?.generation ?? 0)) throw taughtRefusal();
+    // a teaching cell refuses an ask naming any generation but the standing
+    // one (the controller's "ask names generation X, current is Y"); the
+    // standing one is served — a re-rolled committee shares cells with the old one
+    if (teaching.has(host) && (body?.generation ?? 0) !== standingGen()) throw taughtRefusal(body?.generation ?? 0);
     // a draining cell refuses every ask under the standing generation until
     // the drain lifts (the controller's "generation X is draining until height Y")
-    if (draining.has(host) && taughtRecord && (body?.generation ?? 0) >= taughtRecord.generation) throw drainingRefusal();
+    if (draining.has(host) && (body?.generation ?? 0) === standingGen()) throw drainingRefusal();
     return { data: { status: 'success', data: dispatchToGrantor(host, type, body) } };
   }
 
@@ -319,6 +325,8 @@ describe('quorumGrant grantClient', () => {
     teaching = new Set();
     taughtRecord = null;
     draining = new Set();
+    ownership = { owner: 'owner', from: 100, transferred: false };
+    cellWorld = null;
     teachCalls = [];
     teachAcks = new Map();
 
@@ -347,7 +355,9 @@ describe('quorumGrant grantClient', () => {
               roster: stored?.roster ?? null,
               ...(refereeingAnswer !== undefined ? { refereeing: refereeingAnswer } : {}),
               ...(servingAnswer !== undefined ? { serving: servingAnswer } : {}),
-              ...(taughtRecord ? { generation: taughtRecord.generation, generationRecord: taughtRecord } : {}),
+              ...(taughtRecord || cellWorld
+                ? { generation: standingGen(), height: cellsHeight(), generationRecord: taughtRecord }
+                : {}),
             },
           },
         };
@@ -369,6 +379,16 @@ describe('quorumGrant grantClient', () => {
     sinon.stub(masterleasePublisher, 'publishMasterlease').resolves(true);
     sinon.stub(messageStore, 'getMasterleaseRecord').resolves(null);
     sinon.stub(messageStore, 'getGrantGenerationRecord').resolves(null);
+    // the standing a node derives: the record a test sets, signed by the listed
+    // owner unless the test says otherwise, under the ownership the test sets
+    sinon.stub(messageStore, 'standingGeneration').callsFake(async (identity, role) => {
+      const record = await messageStore.getGrantGenerationRecord(identity, role);
+      return {
+        record: record ? { signer: ownership.owner, ...record } : null,
+        aside: false,
+        ownership,
+      };
+    });
     // the founding record's committee happens to sit at the current basis in
     // this fixture; the basis-divergence case asserts its own fingerprint
     sinon.stub(foundingCommittee, 'refereeCommittee').resolves({
@@ -1105,6 +1125,21 @@ describe('quorumGrant grantClient', () => {
       expect(answer.quorumReachable).to.equal(false);
     });
 
+    it('a referee standing in a later world than this node\'s ends the vouch: the cell has a sale this node has not scanned', async () => {
+      await grantClient.acquire(KEY, holderOptions());
+      cellWorld = { generation: 1, height: 900 };
+      const answer = await grantClient.witnessAnswer(KEY);
+      expect(answer.doubt).to.equal(true);
+    });
+
+    it('a referee behind this node\'s world is no doubt', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: { identity: 'myapp', role: 'master', generation: 1, height: 900 } });
+      await grantClient.acquire(KEY, holderOptions());
+      cellWorld = { generation: 0, height: null };
+      const answer = await grantClient.witnessAnswer(KEY);
+      expect(answer.doubt).to.equal(false);
+    });
+
     it('a node without the serving word counts as it always did', async () => {
       await grantClient.acquire(KEY, holderOptions());
       refereeingAnswer = true;
@@ -1601,6 +1636,19 @@ describe('quorumGrant grantClient', () => {
       expect(messageStore.storeAppStateEvent.called).to.equal(false);
     });
 
+    it('a taught record below the world this node asked under is stored too: the store keeps every record and decides which stands', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: RECORD });
+      const lower = { ...RECORD, generation: 1 };
+      taughtRecord = lower;
+      const holder = await acquireHolder();
+      expect(holder.generation, 'fixture: the holder holds under the higher record').to.equal(RECORD.generation);
+      rolledHosts.forEach((host) => teaching.add(host));
+      clockNow += 20_000;
+      await holder.renewOnce();
+      expect(messageStore.storeAppStateEvent.callCount).to.equal(1);
+      expect(messageStore.storeAppStateEvent.firstCall.args[1]).to.deep.equal({ message: lower, envelope: null });
+    });
+
     it('a record about some other key is not this answer\'s to teach', async () => {
       taughtRecord = { ...RECORD, identity: 'otherapp' };
       const holder = await acquireHolder();
@@ -1670,7 +1718,8 @@ describe('quorumGrant grantClient', () => {
       const loop = handles.find((handle) => handle.ms < TTL);
       expect(loop, 'the loop is armed at acquisition').to.not.equal(undefined);
 
-      grantClient.noteGenerationRecord({ identity: 'myapp', role: 'master', generation: 2 });
+      messageStore.getGrantGenerationRecord.resolves({ data: { ...RECORD, generation: 2 } });
+      await grantClient.noteGenerationRecord({ identity: 'myapp', role: 'master', generation: 2 });
       expect(cancelled).to.include(loop);
       expect(handles[handles.length - 1].ms).to.equal(0);
       expect(holder.state).to.equal('held');
@@ -1870,6 +1919,127 @@ describe('quorumGrant grantClient', () => {
         expect(holder.generation, 'the holder stepped across on the other cells').to.equal(1);
       });
 
+      describe('a sale', () => {
+        const BUYER = 'buyer';
+        const SOLD_AT = 500;
+        // the chain applies the transfer: the buyer holds the app from SOLD_AT,
+        // and a sale naming no record leaves no record standing in his ownership
+        const sell = () => {
+          ownership = { owner: BUYER, from: SOLD_AT, transferred: true };
+          messageStore.getGrantGenerationRecord.resolves(null);
+          taughtRecord = null;
+          cellWorld = { generation: 0, height: SOLD_AT };
+        };
+        const drainLiftsAtTheWitnessPollOn = (hosts) => {
+          hosts.forEach((host) => draining.add(host));
+          witnessReplies.set(STANDBY_HOST, () => {
+            draining.clear();
+            return { quorumReachable: true, holding: false, acquiring: false };
+          });
+        };
+        const seatedAt = (hosts, generation) => hosts.filter((host) => {
+          const row = registers.get(host)?.get(KEY);
+          return row?.accepted?.grantee === SELF && row.accepted.generation === generation && row.accepted.released === false
+            && row.accepted.expiresAt > Date.now();
+        });
+
+        it('naming no record keeps generation 0 on the same committee: at the drain\'s lift the holder takes its seat again instead of demoting', async () => {
+          taughtRecord = null;
+          const demoted = [];
+          const holder = await acquireHolder({ onDemoted: (reason) => demoted.push(reason) });
+          const epochBefore = holder.epoch;
+          sell();
+          grantClient.noteGenerationRecord({ identity: 'myapp', role: 'master', generation: 0 });
+          drainLiftsAtTheWitnessPollOn(oldHosts);
+          clockNow += TTL + 30_000;
+          await holder.renewOnce();
+          expect(demoted).to.deep.equal([]);
+          expect(holder.state).to.equal('held');
+          expect(holder.generation).to.equal(0);
+          expect(holder.epoch, 'a new term on the committee the sale drained').to.be.above(epochBefore);
+          expect(seatedAt(oldHosts, 0).length).to.be.at.least(oldCommittee.quorum);
+          // and it renews there from now on: the world it took is the one its node stands in
+          const epochAfter = holder.epoch;
+          clockNow += 1000;
+          await holder.renewOnce();
+          expect(holder.state).to.equal('held');
+          expect(holder.epoch, 'no step across a world it already holds').to.equal(epochAfter);
+        });
+
+        it('a v8 sale of a re-rolled app steps the world back to generation 0: the holder steps back across at the lift', async () => {
+          taughtRecord = null;
+          const demoted = [];
+          const holder = reroll(await acquireHolder({ onDemoted: (reason) => demoted.push(reason) }));
+          clockNow += 1000;
+          await holder.renewOnce();
+          expect(holder.generation, 'fixture: the holder stepped across to the re-roll').to.equal(1);
+          sell();
+          nextHosts.forEach((host) => teaching.add(host));
+          grantClient.noteGenerationRecord({ identity: 'myapp', role: 'master', generation: 0 });
+          drainLiftsAtTheWitnessPollOn(oldHosts);
+          clockNow += TTL + 30_000;
+          await holder.renewOnce();
+          expect(demoted).to.deep.equal([]);
+          expect(holder.state).to.equal('held');
+          expect(holder.generation, 'the holder holds under generation 0 again').to.equal(0);
+          expect(seatedAt(oldHosts, 0).length).to.be.at.least(oldCommittee.quorum);
+        });
+
+        it('a referee naming a generation this node does not stand on ends the coast, however the witnesses vouch', async () => {
+          taughtRecord = null;
+          const demoted = [];
+          const holder = reroll(await acquireHolder({ onDemoted: (reason) => demoted.push(reason) }));
+          clockNow += 1000;
+          await holder.renewOnce();
+          expect(holder.generation, 'fixture: the holder stepped across to the re-roll').to.equal(1);
+          // the cells have the sale and stand on generation 0; this node's
+          // chain has not reached it, so it still stands on the re-roll
+          taughtRecord = null;
+          cellWorld = { generation: 0, height: SOLD_AT };
+          nextHosts.forEach((host) => teaching.add(host));
+          oldHosts.forEach((host) => draining.add(host));
+          witnessReplies.set(STANDBY_HOST, { quorumReachable: false, holding: false, acquiring: false });
+          clockNow += TTL + 30_000;
+          await holder.renewOnce();
+          expect(demoted).to.have.lengthOf(1);
+          expect(demoted[0]).to.match(/names generation 0/);
+        });
+
+        it('a referee behind this node\'s world is no doubt: a cell yet to take the re-roll leaves the coast to the witnesses', async () => {
+          taughtRecord = null;
+          const demoted = [];
+          const holder = reroll(await acquireHolder({ onDemoted: (reason) => demoted.push(reason) }));
+          clockNow += 1000;
+          await holder.renewOnce();
+          expect(holder.generation, 'fixture: the holder stepped across to the re-roll').to.equal(1);
+          // the cells answer the registration's world, older than the re-roll this node stands on
+          taughtRecord = null;
+          cellWorld = { generation: 0, height: null };
+          nextHosts.forEach((host) => teaching.add(host));
+          witnessReplies.set(STANDBY_HOST, { quorumReachable: false, holding: false, acquiring: false });
+          clockNow += TTL + 30_000;
+          await holder.renewOnce();
+          expect(demoted).to.deep.equal([]);
+          expect(holder.state).to.equal('jeopardy');
+        });
+
+        it('the same refusals from cells this node stands with are no doubt: the holder coasts through the sale\'s drain', async () => {
+          taughtRecord = null;
+          const demoted = [];
+          const holder = reroll(await acquireHolder({ onDemoted: (reason) => demoted.push(reason) }));
+          clockNow += 1000;
+          await holder.renewOnce();
+          sell();
+          nextHosts.forEach((host) => teaching.add(host));
+          oldHosts.forEach((host) => draining.add(host));
+          witnessReplies.set(STANDBY_HOST, { quorumReachable: false, holding: false, acquiring: false });
+          clockNow += TTL + 30_000;
+          await holder.renewOnce();
+          expect(demoted).to.deep.equal([]);
+          expect(holder.state).to.equal('jeopardy');
+        });
+      });
+
       it('a rival already granted on a quorum of the new committee: the register refuses the carrier and the holder demotes', async () => {
         taughtRecord = null;
         const demoted = [];
@@ -1897,7 +2067,7 @@ describe('quorumGrant grantClient', () => {
       });
     });
 
-    it('a generation no newer than the held world, or a key nobody here holds, moves nothing', async () => {
+    it('a note in the world the holder already holds, or for a key nobody here holds, moves nothing', async () => {
       taughtRecord = null;
       const handles = [];
       await acquireHolder({
@@ -1908,8 +2078,8 @@ describe('quorumGrant grantClient', () => {
         },
       });
       const armed = handles.length;
-      grantClient.noteGenerationRecord({ identity: 'myapp', role: 'master', generation: 0 });
-      grantClient.noteGenerationRecord({ identity: 'otherapp', role: 'master', generation: 7 });
+      await grantClient.noteGenerationRecord({ identity: 'myapp', role: 'master', generation: 0 });
+      await grantClient.noteGenerationRecord({ identity: 'otherapp', role: 'master', generation: 7 });
       expect(handles).to.have.length(armed);
     });
   });
