@@ -32,6 +32,7 @@ const globalState = require('../utils/globalState');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { getSpec } = require('../utils/specLibs');
 const { Privilege, authOf } = require('../utils/privileges');
+const messageStore = require('../appMessaging/messageStore');
 
 const MANIFEST_GOSSIP_TYPE = 'fluxappcontentmanifest';
 
@@ -1807,6 +1808,7 @@ async function submitContentUpdate(body, deps = {}) {
   const {
     getApp = (name) => appRecords.registry().byName(name),
     ownerships = appHistory.ownerships,
+    waitingTransfer = messageStore.waitingTransfer,
     isInstalledHere = (name) => appRecords.installed().byName(name),
     openEnvelope = transportHelper.openContentEnvelope,
     processSubmission = processManifestSubmission,
@@ -1832,6 +1834,12 @@ async function submitContentUpdate(body, deps = {}) {
   const {
     owner, isEncrypted: encrypted, spec, identity,
   } = info;
+
+  // R4: while a transfer of the app waits for payment on this node, its
+  // content is not changed; the transfer names the manifest it stands on.
+  if (await waitingTransfer(appName, owner)) {
+    throw new Error(`contentSlot: a transfer of the app waits for payment on this node; a content update for ${appName} is refused until it is paid or its payment window closes (R4)`);
+  }
 
   // Transport-open the sealed payload (content never travels unencrypted). The
   // cleartext meta drove the AAD, so binding it to the recovered manifest below
