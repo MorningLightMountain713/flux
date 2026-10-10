@@ -106,9 +106,11 @@ describe('a sale of every app kind that carries no content', function () {
     return (res.data ?? []).find((a) => a.name === name) ?? null;
   }
 
+  // The node's registry row: the spec with the hash of the message it stands on.
   async function listedOn(index, name) {
-    const res = await env.clients[index].getAppSpecs(name);
-    return res.status === 'success' ? res.data : null;
+    const res = await fetch(`${env.clients[index].url}/apps/globalappsspecifications?appname=${encodeURIComponent(name)}`);
+    const body = await res.json();
+    return body.status === 'success' && Array.isArray(body.data) ? body.data[0] ?? null : null;
   }
 
   // The container docker holds for the app on a node: its id, which a recreate
