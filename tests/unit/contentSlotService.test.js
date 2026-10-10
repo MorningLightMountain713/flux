@@ -297,7 +297,7 @@ describe('contentSlotService', () => {
   describe('verifyManifest', () => {
     it('accepts a valid, owner-signed manifest whose slots are all declared', async () => {
       const { service, specLib } = load();
-      await service.verifyManifest(manifest(), { owner: OWNER, spec: slotSpec, identity: IDENTITY }, { verify: () => true });
+      await service.verifyManifest(manifest(), { owner: OWNER, spec: slotSpec, identity: IDENTITY, ownedFrom: 2_400_000 }, { verify: () => true });
       sinon.assert.calledOnce(specLib.assertValidContentManifest);
     });
 
@@ -313,14 +313,26 @@ describe('contentSlotService', () => {
       expect(decrypted.sealed, 'but it can be read right now').to.equal(false);
 
       await service.verifyManifest(
-        manifest(), { owner: OWNER, spec: decrypted, identity: IDENTITY }, { verify: () => true },
+        manifest(), { owner: OWNER, spec: decrypted, identity: IDENTITY, ownedFrom: 2_400_000 }, { verify: () => true },
+      );
+    });
+
+    // An owner who took the app back holds a new ownership: a manifest they
+    // signed in the earlier one is not valid for it unless the spec names it.
+    it('rejects a manifest the listed owner signed in an earlier ownership', async () => {
+      const { service } = load();
+      await expectReject(
+        service.verifyManifest(manifest(), {
+          owner: OWNER, spec: slotSpec, identity: IDENTITY, ownedFrom: 2_500_000,
+        }, { verify: () => true }),
+        /invalid owner signature/,
       );
     });
 
     it('rejects an invalid owner signature', async () => {
       const { service } = load();
       await expectReject(
-        service.verifyManifest(manifest(), { owner: OWNER, spec: slotSpec, identity: IDENTITY }, { verify: () => false }),
+        service.verifyManifest(manifest(), { owner: OWNER, spec: slotSpec, identity: IDENTITY, ownedFrom: 2_400_000 }, { verify: () => false }),
         /invalid owner signature/,
       );
     });
@@ -328,7 +340,7 @@ describe('contentSlotService', () => {
     it('rejects a manifest whose appName does not match the spec', async () => {
       const { service } = load();
       await expectReject(
-        service.verifyManifest(manifest({ appName: 'other' }), { owner: OWNER, spec: slotSpec, identity: IDENTITY }, { verify: () => true }),
+        service.verifyManifest(manifest({ appName: 'other' }), { owner: OWNER, spec: slotSpec, identity: IDENTITY, ownedFrom: 2_400_000 }, { verify: () => true }),
         /does not match the spec/,
       );
     });
@@ -336,7 +348,7 @@ describe('contentSlotService', () => {
     it('rejects a manifest signed for another registration of the name', async () => {
       const { service } = load();
       await expectReject(
-        service.verifyManifest(manifest({ identity: `b${'c'.repeat(52)}` }), { owner: OWNER, spec: slotSpec, identity: IDENTITY }, { verify: () => true }),
+        service.verifyManifest(manifest({ identity: `b${'c'.repeat(52)}` }), { owner: OWNER, spec: slotSpec, identity: IDENTITY, ownedFrom: 2_400_000 }, { verify: () => true }),
         /another registration of this app name/,
       );
     });
@@ -344,7 +356,7 @@ describe('contentSlotService', () => {
     it('takes a manifest listing a slot the spec does not declare: the slot is ignored, not refused', async () => {
       const { service } = load();
       const otherSpec = cleartextSpec(webWith(slotMount('something-else')));
-      await service.verifyManifest(manifest(), { owner: OWNER, spec: otherSpec, identity: IDENTITY }, { verify: () => true });
+      await service.verifyManifest(manifest(), { owner: OWNER, spec: otherSpec, identity: IDENTITY, ownedFrom: 2_400_000 }, { verify: () => true });
     });
 
     it('takes a manifest the spec names though the listed owner did not sign it, and refuses one it does not name', async () => {
@@ -352,14 +364,14 @@ describe('contentSlotService', () => {
       const named = flux.FluxAppSpecV9.fromSubmission({
         ...V9_SUBMISSION, name: APP, components: webWith(slotMount('app-config')), content: { manifest: flux.contentManifestHash(manifest()) },
       }, { encrypted: true });
-      await service.verifyManifest(manifest(), { owner: OWNER, spec: named, identity: IDENTITY }, { verify: () => false });
+      await service.verifyManifest(manifest(), { owner: OWNER, spec: named, identity: IDENTITY, ownedFrom: 2_400_000 }, { verify: () => false });
       await expectReject(
-        service.verifyManifest(manifest({ version: 3 }), { owner: OWNER, spec: named, identity: IDENTITY }, { verify: () => false }),
+        service.verifyManifest(manifest({ version: 3 }), { owner: OWNER, spec: named, identity: IDENTITY, ownedFrom: 2_400_000 }, { verify: () => false }),
         /neither signed by the listed owner nor the one the spec names/,
       );
       // the named one is refused all the same for another registration of the name
       await expectReject(
-        service.verifyManifest(manifest({ identity: `b${'c'.repeat(51)}a` }), { owner: OWNER, spec: named, identity: IDENTITY }, { verify: () => false }),
+        service.verifyManifest(manifest({ identity: `b${'c'.repeat(51)}a` }), { owner: OWNER, spec: named, identity: IDENTITY, ownedFrom: 2_400_000 }, { verify: () => false }),
         /another registration/,
       );
     });
@@ -372,7 +384,7 @@ describe('contentSlotService', () => {
       await expectReject(
         service.verifyManifest(
           manifest({ slots: { 'app-config': { hash: 'not-a-hash' } } }),
-          { owner: OWNER, spec: slotSpec, identity: IDENTITY }, { verify },
+          { owner: OWNER, spec: slotSpec, identity: IDENTITY, ownedFrom: 2_400_000 }, { verify },
         ),
         /sha256/,
       );
@@ -385,7 +397,7 @@ describe('contentSlotService', () => {
       // declared slots are visible only after decrypt -> DecryptedCanonicalSpec.
       expect(service.specSlotNames(slotSpecSealed).size, 'a sealed spec declares nothing readable')
         .to.equal(0);
-      await service.verifyManifest(manifest(), { owner: OWNER, spec: slotSpecSealed, identity: IDENTITY }, { verify: () => true });
+      await service.verifyManifest(manifest(), { owner: OWNER, spec: slotSpecSealed, identity: IDENTITY, ownedFrom: 2_400_000 }, { verify: () => true });
     });
   });
 

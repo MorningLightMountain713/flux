@@ -16,6 +16,7 @@
 const appsRepository = require('../appDatabase/appsRepository');
 const appRecords = require('../appDatabase/appRecords');
 const { getSpec } = require('../utils/specLibs');
+const appHistory = require('../appDecisions/appHistory');
 
 /**
  * The manifest the listed spec names, or null. The `content` block is in the
@@ -39,11 +40,14 @@ async function namedManifestOf(app) {
  * none is resolved.
  *
  * @param {string} identity
- * @param {object} [deps] - { getApp?, getRows? }
+ * @param {object} [deps] - { getApp?, getRows?, ownerships? }
  * @returns {Promise<{app: ?object, row: ?object, aside: boolean, rows: object[]}>}
  */
 async function standingManifest(identity, deps = {}) {
-  const { getApp = (id) => appRecords.registry().byIdentity(id), getRows = (id) => appRecords.manifests().byIdentity(id) } = deps;
+  const {
+    getApp = (id) => appRecords.registry().byIdentity(id), getRows = (id) => appRecords.manifests().byIdentity(id),
+    ownerships = appHistory.ownerships,
+  } = deps;
   const app = await getApp(identity);
   const rows = await getRows(identity);
   if (!app) {
@@ -55,9 +59,12 @@ async function standingManifest(identity, deps = {}) {
   const resolved = rows.filter((row) => row.isResolved);
   const needsName = resolved.length === 0 || resolved.some((row) => row.signer !== app.owner);
   const namedHash = needsName ? await namedManifestOf(app) : null;
+  const ownership = listedOwnership(await ownerships(app.name));
   const valid = resolved.filter((row) => ownerSignedIsValid(
-    { identity, hash: row.hash },
-    { appIdentity: identity, listedOwnerSigned: row.signer === app.owner, namedHash },
+    { identity, hash: row.hash, ownedFrom: row.ownedFrom },
+    {
+      appIdentity: identity, listedOwnerSigned: row.signer === app.owner, ownedFrom: ownership?.from, namedHash,
+    },
   ));
   if (!valid.length) {
     return {

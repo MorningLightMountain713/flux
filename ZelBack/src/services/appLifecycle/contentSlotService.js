@@ -137,17 +137,20 @@ async function verifyManifest(manifest, ctx, deps = {}) {
     throw new Error('contentSlot: manifest is for another registration of this app name');
   }
 
-  // A manifest is valid when the listed owner signed it, or the listed spec
-  // names it: a transfer names the manifest the outgoing owner signed, and it
-  // stands under the incoming owner until they sign one. The slots it lists
+  // A manifest is valid when the listed owner signed it in the listed
+  // ownership, or the listed spec names it: a transfer names the manifest the
+  // outgoing owner signed, and it stands under the incoming owner until they
+  // sign one. The slots it lists
   // are no part of its validity: one the spec does not declare maps to no
   // mount, and no blob is fetched for it.
   const signed = await canonicalManifest(manifest);
   const listedOwnerSigned = Boolean(await verify(signed, owner, manifest.ownerSignature));
   const namedHash = (spec.content && spec.content.manifest) || null;
   const valid = ownerSignedIsValid(
-    { identity: manifest.identity, hash: contentManifestHash(manifest) },
-    { appIdentity: ctx.identity, listedOwnerSigned, namedHash },
+    { identity: manifest.identity, hash: contentManifestHash(manifest), ownedFrom: manifest.ownedFrom },
+    {
+      appIdentity: ctx.identity, listedOwnerSigned, ownedFrom: ctx.ownedFrom, namedHash,
+    },
   );
   if (!valid) {
     throw new Error(namedHash
@@ -234,11 +237,13 @@ async function processManifestSubmission(input, deps) {
     standing = standingManifest, refresh = refreshManifests, uploader, benchmark, now, verify, provider,
   } = deps;
 
-  await verifyManifest(manifest, { owner, spec, identity }, { verify });
   if (!Number.isSafeInteger(ownedFrom) || ownedFrom < 0) throw new Error('contentSlot: the submission names no ownership height');
   if (manifest.ownedFrom !== ownedFrom) {
     throw new Error(`contentSlot: manifest ownedFrom must be ${ownedFrom}, the height the owner took the app (0 for a registration), got ${manifest.ownedFrom}`);
   }
+  await verifyManifest(manifest, {
+    owner, spec, identity, ownedFrom,
+  }, { verify });
 
   // The submission door is the only stage that can be strict — every other path
   // keeps what it is given and ranks it — and every submission is

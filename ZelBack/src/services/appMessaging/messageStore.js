@@ -1116,8 +1116,10 @@ async function standingGeneration(identity, role) {
   );
   const { ownerSignedIsValid, generationRecordRank, outranks } = await getSpec();
   const valid = rows.filter((row) => ownerSignedIsValid(
-    { identity, hash: row.hash },
-    { appIdentity: identity, listedOwnerSigned: row.signer === app.owner, namedHash },
+    { identity, hash: row.hash, ownedFrom: row.data?.ownedFrom },
+    {
+      appIdentity: identity, listedOwnerSigned: row.signer === app.owner, ownedFrom: listed?.from, namedHash,
+    },
   ));
   if (valid.length === 0) return { record: null, aside: namedHash !== null, ownership };
   let record = valid[0];
