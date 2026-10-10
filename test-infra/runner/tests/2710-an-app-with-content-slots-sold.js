@@ -277,6 +277,9 @@ describe('an app with content slots sold while it runs', function () {
     await reorgChain({ forkHeight });
     await waitForReorg(env.clients[registrar], (d) => d.forkHeight === forkHeight, 60000, { afterId: mark });
     await advanceBlocks(1);
+    // The resale names the buyer's manifest, so the standing manifest reads the
+    // same before the rewind and after it: the row is what shows it undone.
+    await view.listedEverywhere(saleHash, nodes, 'every node lists the sale again');
     await standingEverywhere(buyersManifest, nodes, 'every node stands on the buyer\'s manifest');
     for (const i of nodes) {
       // eslint-disable-next-line no-await-in-loop
