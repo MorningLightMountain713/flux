@@ -8,6 +8,7 @@ const proxyquire = require('proxyquire');
 const config = require('config');
 
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
+const { requireMongo } = require('./dbTestHelper');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const chainState = require('../../ZelBack/src/services/chainState');
 const confirmedMessageStore = require('../../ZelBack/src/services/appMessaging/confirmedMessageStore');
@@ -102,7 +103,7 @@ describe('decider', function () {
   before(async function loadLibrary() {
     this.timeout(30_000);
     await loadSpecLibrary();
-    await dbHelper.initiateDB();
+    await requireMongo.call(this);
     await decisionStore.prepareCollection();
   });
 

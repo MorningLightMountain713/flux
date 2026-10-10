@@ -162,10 +162,9 @@ describe('chainReadApi tests', () => {
   describe('getScannedHeight tests', () => {
     let findOneInDatabaseStub;
 
-    beforeEach(async () => {
+    beforeEach(() => {
       findOneInDatabaseStub = sinon.stub(dbHelper, 'findOneInDatabase');
-      await dbHelper.initiateDB();
-      dbHelper.databaseConnection();
+      sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
     });
 
     it('should return an error when scanning has not been initiated', async () => {

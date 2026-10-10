@@ -14,7 +14,7 @@ const chai = require('chai');
 
 const { FluxServer } = require('../../ZelBack/src/lib/fluxServer');
 const log = require('../../ZelBack/src/lib/log');
-const dbHelper = require('../../ZelBack/src/services/dbHelper');
+const { requireMongo } = require('./dbTestHelper');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const generalService = require('../../ZelBack/src/services/generalService');
@@ -91,8 +91,8 @@ describe('loading express', () => {
     sinon.restore();
     fluxServerHttp.close(done);
   });
-  before(async () => {
-    await dbHelper.initiateDB();
+  before(async function setup() {
+    await requireMongo.call(this);
     // Both routes below resolve node identity, which unstubbed is a real RPC to
     // the benchmark daemon (/flux/version, via the analytics node-IP refresh)
     // and to the daemon (/id/loginphrase, via the node-tier hardware check).

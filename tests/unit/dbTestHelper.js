@@ -33,17 +33,26 @@ function isMongoReachable() {
   });
 }
 
+/** The test file whose suite opened the connection now open, or null. */
+let openedBy = null;
+
 /**
- * Drop-in replacement for `await dbHelper.initiateDB()` in test `before` hooks.
- * Must be called with a regular `function` (not arrow) so `this.skip()` works.
+ * The connection a unit test reads, opened for the suite that asks and closed
+ * when that suite ends. Call it from a `before` hook, with a regular `function`
+ * (not an arrow) so `this.skip()` works:
  *
- * Usage:
  *   before(requireMongo);
  *   // or inside an existing before:
- *   before(async function() {
+ *   before(async function setup() {
  *     await requireMongo.call(this);
  *     // ... other setup
  *   });
+ *
+ * The close is added to the suite when the connection opens, so it runs after
+ * the suite's own `after` hooks, which may still write. A connection left open
+ * past its file keeps the driver's timers running under every later test, and
+ * a test that fakes the clock then runs them; tests/init.js fails the next
+ * file's first test when one is.
  */
 async function requireMongo() {
   if (mongoAvailable === null) {
@@ -53,7 +62,19 @@ async function requireMongo() {
     this.skip();
     return;
   }
+  if (dbHelper.databaseConnection()) return;
   await dbHelper.initiateDB();
+  const suite = this.test.parent;
+  openedBy = suite.file;
+  suite.afterAll('closes the database connection this suite opened', async () => {
+    await dbHelper.closeDbConnection();
+    openedBy = null;
+  });
 }
 
-module.exports = { requireMongo, isMongoReachable };
+/** @returns {string|null} the test file whose suite opened the open connection */
+function connectionOpenedBy() {
+  return openedBy;
+}
+
+module.exports = { requireMongo, isMongoReachable, connectionOpenedBy };

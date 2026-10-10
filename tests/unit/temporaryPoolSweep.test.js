@@ -7,6 +7,7 @@ const sinon = require('sinon');
 const config = require('config');
 
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
+const { requireMongo } = require('./dbTestHelper');
 const chainState = require('../../ZelBack/src/services/chainState');
 const { PAYMENT_WINDOW_MS } = require('../../ZelBack/src/services/appDecisions/decisionRule');
 const temporaryPoolSweep = require('../../ZelBack/src/services/appMessaging/temporaryPoolSweep');
@@ -65,7 +66,7 @@ describe('temporaryPoolSweep', () => {
   before(async function loadLibrary() {
     this.timeout(30_000);
     await loadSpecLibrary();
-    await dbHelper.initiateDB();
+    await requireMongo.call(this);
     await clear();
   });
 

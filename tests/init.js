@@ -8,6 +8,8 @@ const path = require('path');
 const noRealNetwork = require('./noRealNetwork');
 const specLibrary = require('../ZelBack/src/services/utils/specLibrary');
 const { testUserconfig } = require('./fixtures/userconfig');
+const dbHelper = require('../ZelBack/src/services/dbHelper');
+const { connectionOpenedBy } = require('./unit/dbTestHelper');
 
 // adjustExternalIP rewrites config/userconfig.js — the node's real identity and
 // IP. A unit test that reaches it without stubbing writeFile replaces the
@@ -26,6 +28,8 @@ const USERCONFIG_SUFFIX = path.join('config', 'userconfig.js');
 const userconfigWrites = [];
 const realWriteFile = fsPromises.writeFile;
 let currentTest = '(unknown)';
+let currentFile = null;
+const connectionLeaks = new Set();
 
 fsPromises.writeFile = async function guardedWriteFile(file, ...rest) {
   if (String(file).endsWith(USERCONFIG_SUFFIX)) {
@@ -56,13 +60,32 @@ exports.mochaHooks = {
   async beforeAll() {
     await specLibrary.loadSpecLibrary();
   },
-  beforeEach() {
+  async beforeEach() {
+    const file = this.currentTest ? this.currentTest.file : null;
+    if (file !== currentFile) {
+      // A connection another file's suite opened and did not close: closed
+      // here, so this file runs without its timers, and reported at the end.
+      const owner = connectionOpenedBy();
+      if (dbHelper.databaseConnection() && owner !== null && owner !== file) {
+        connectionLeaks.add(`${owner}: a suite that opened it did not close it`);
+        await dbHelper.closeDbConnection();
+      }
+      currentFile = file;
+    }
     currentTest = this.currentTest ? this.currentTest.fullTitle() : '(unknown)';
     noRealNetwork.setCurrentTest(currentTest);
     resetGlobalState();
     // Every test starts from the fixture config, whatever a file set before it;
     // a test that needs another sets it in its own beforeEach or body.
     globalThis.userconfig = testUserconfig();
+  },
+  // A connection open with no owner after a test was opened by that test's
+  // file outside requireMongo, so nothing closes it when the file ends.
+  async afterEach() {
+    if (dbHelper.databaseConnection() && connectionOpenedBy() === null) {
+      connectionLeaks.add(`${this.currentTest.file}: opened outside requireMongo`);
+      await dbHelper.closeDbConnection();
+    }
   },
   afterAll() {
     if (userconfigWrites.length) {
@@ -72,6 +95,13 @@ exports.mochaHooks = {
       throw new Error(
         `${userconfigWrites.length} unit test write(s) to the real config/userconfig.js were blocked — `
         + 'stub writeFile on node:fs/promises in the tests listed above',
+      );
+    }
+    if (connectionLeaks.size) {
+      for (const leak of connectionLeaks) console.error(`  database connection left open: ${leak}`);
+      throw new Error(
+        `${connectionLeaks.size} database connection(s) outlived the file that opened them — `
+        + 'open them with requireMongo in a before hook, which closes them when the suite ends',
       );
     }
     const count = noRealNetwork.report();
