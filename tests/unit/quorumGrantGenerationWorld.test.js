@@ -2,7 +2,7 @@
 
 const { expect } = require('chai');
 
-const { worldOf, sameWorld } = require('../../ZelBack/src/services/quorumGrant/generationWorld');
+const { worldOf, sameWorld, laterWorld } = require('../../ZelBack/src/services/quorumGrant/generationWorld');
 
 describe('quorumGrant generationWorld', () => {
   const OWNER = 'alice';
@@ -43,6 +43,23 @@ describe('quorumGrant generationWorld', () => {
 
     it('no app row: the registration\'s world', () => {
       expect(worldOf({ record: null, aside: false, ownership: null })).to.include({ generation: 0, height: null });
+    });
+  });
+
+  describe('laterWorld', () => {
+    it('an answer taken over at a later height than this node\'s world is later: a sale or re-roll this node has not taken', () => {
+      expect(laterWorld({ generation: 0, height: 500 }, { generation: 1, height: 90 })).to.equal(true);
+      expect(laterWorld({ generation: 0, height: 500 }, { generation: 0, height: null })).to.equal(true);
+    });
+
+    it('an answer from an earlier or the same height is not later: a cell yet to take what this node holds', () => {
+      expect(laterWorld({ generation: 0, height: null }, { generation: 1, height: 90 })).to.equal(false);
+      expect(laterWorld({ generation: 0, height: 80 }, { generation: 1, height: 90 })).to.equal(false);
+      expect(laterWorld({ generation: 1, height: 500 }, { generation: 0, height: 500 })).to.equal(false);
+    });
+
+    it('an answer naming no height, from a node without the field, is never later', () => {
+      expect(laterWorld({ generation: 3 }, { generation: 1, height: 90 })).to.equal(false);
     });
   });
 

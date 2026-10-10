@@ -2173,6 +2173,27 @@ describe('quorumGrant grantorController', () => {
       expect(messageStore.getGrantGenerationRecord.lastCall.args).to.deep.equal(['myapp', 'master']);
     });
 
+    it('a refusal and a record read name the height the standing world took over at: a sale naming no record teaches generation 0 from the sale', async () => {
+      messageStore.standingGeneration.resolves({ record: null, aside: false, ownership: { owner: 'buyer', from: 90, transferred: true } });
+      const refused = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 2 })), refused);
+      expect(refused.statusCode).to.equal(409);
+      expect(refused.body.data).to.include({ generation: 0, height: 90 });
+      const req = fakeReq({});
+      req.query.key = 'myapp/master';
+      const read = fakeRes();
+      await grantorController.record(req, read);
+      expect(read.body.data).to.include({ generation: 0, height: 90 });
+    });
+
+    it('an app that never changed hands teaches no takeover height', async () => {
+      const req = fakeReq({});
+      req.query.key = 'myapp/master';
+      const read = fakeRes();
+      await grantorController.record(req, read);
+      expect(read.body.data).to.include({ generation: 0, height: null });
+    });
+
     it('a founder cell read carries no held-world generation — the founder plane teaches through its basis', async () => {
       messageStore.getGrantGenerationRecord.resolves({ data: RECORD });
       const req = fakeReq({});

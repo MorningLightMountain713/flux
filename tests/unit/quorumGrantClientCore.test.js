@@ -490,6 +490,14 @@ describe('quorumGrant grantClientCore', () => {
       expect(verdict.reason).to.contain('unaccounted');
     });
 
+    it('a standby that reads a referee in a later world than its own ends the coast', () => {
+      const verdict = coastVerdict(['s1'], new Map([['s1', {
+        quorumReachable: false, holding: false, acquiring: false, doubt: true,
+      }]]));
+      expect(verdict.coast).to.equal(false);
+      expect(verdict.reason).to.match(/later world/);
+    });
+
     it('a standby that can reach quorum ends the coast', () => {
       const replies = new Map([
         ['s1:0', deny],

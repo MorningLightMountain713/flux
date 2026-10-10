@@ -46,4 +46,19 @@ function sameWorld(a, b) {
   return a.generation === b.generation && (a.height ?? null) === (b.height ?? null);
 }
 
-module.exports = { worldOf, sameWorld };
+/**
+ * Whether an answering referee stands in a world taken over after the one
+ * this node stands in: a sale or re-roll this node's chain has not shown it.
+ * A referee yet to take this node's world answers an earlier one, and an
+ * answer without a height, from a node without the field, is never later.
+ *
+ * @param {{generation: number, height?: ?number}} answer
+ * @param {{generation: number, height?: ?number}} own
+ * @returns {boolean}
+ */
+function laterWorld(answer, own) {
+  if (!Number.isSafeInteger(answer.height)) return false;
+  return own.height === null || own.height === undefined || answer.height > own.height;
+}
+
+module.exports = { worldOf, sameWorld, laterWorld };
