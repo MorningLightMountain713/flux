@@ -42,13 +42,13 @@ import {
 } from '../framework/container.js';
 import { setSynced } from '../framework/syncthing-control.js';
 import { grantPlaneOverrides, grantVerdict } from '../framework/grant-record.js';
-import { postGenerationRecord } from '../framework/generation-record.js';
+import { rerollRole } from '../framework/generation-record.js';
 import { appView } from '../framework/app-view.js';
 import {
   advanceBlocks, getState, queueAppTx, reorgChain, startTicker, stopTicker,
 } from '../framework/daemon-control.js';
 import {
-  waitFor, waitForDaemonReady, waitForInstallSettled, waitForReconcileActuated, waitForReorg,
+  waitFor, waitForDaemonReady, waitForInstallSettled, waitForReorg,
 } from '../framework/wait.js';
 import { appIdentityFromUuid, appUuid, generationRecordHash } from '@runonflux/flux-spec';
 
@@ -97,40 +97,18 @@ describe('an activeStandby app re-rolled, then sold', function () {
     return body;
   }
 
-  // The owner's re-roll of the master role to `generation`, the app stopped across
-  // it: yield and stop everywhere, post the record, restart, and mine the drain.
-  async function reroll(generation, ownerKey, holders) {
-    await stopTicker();
-    try {
-      const markers = env.clients.map((c) => c?.getLastEventId());
-      await ownerGet(registrar, `/apps/appyield/${name}/true`, ownerKey);
-      await Promise.all(holders.map((i) => waitForReconcileActuated(
-        env.clients[i], identifier, 'settledStopped', 120000, { afterId: markers[i] },
-      )));
-      await waitFor(async () => (await verdict()) === null, {
-        timeout: CONVERGE_MS, interval: 5000, label: 'the yielded term is released',
-      });
-      const { zelidauth } = await authenticate(url(registrar), ownerKey);
-      const posted = await postGenerationRecord(url(registrar), {
-        name, identity: registered.identity, role: 'master', generation, ownerKey, auth: zelidauth,
-      });
-      expect(posted.status, `the generation-${generation} record: ${posted.body}`).to.equal(200);
-      await Promise.all(holders.map((i) => env.clients[i].waitForEvent(
-        'quorumGrant:generationRecord',
-        (d) => d.identity === registered.identity && d.role === 'master' && d.generation === generation,
-        120000,
-        { afterId: markers[i] },
-      )));
-      await ownerGet(registrar, `/apps/apprestart/${name}/true`, ownerKey);
-      await advanceBlocks(DRAIN_BLOCKS);
-      await waitFor(async () => (await verdict())?.generation === generation, {
-        timeout: CONVERGE_MS, interval: 5000, label: `a generation-${generation} term forms`,
-      });
-      return posted.record;
-    } finally {
-      await startTicker();
-    }
-  }
+  // The owner's re-roll of the master role to `generation`.
+  const reroll = (generation, ownerKey, holders) => rerollRole(env, {
+    name,
+    identity: registered.identity,
+    identifier,
+    generation,
+    ownerKey,
+    via: registrar,
+    holders,
+    drainBlocks: DRAIN_BLOCKS,
+    quorum: QUORUM,
+  });
 
   // Every node named holds the record for the role.
   async function heldEverywhere(record, indices, label) {
