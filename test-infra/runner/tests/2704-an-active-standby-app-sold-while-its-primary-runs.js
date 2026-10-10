@@ -5,8 +5,9 @@
  * A v9 encrypted app whose one component syncs activeStandby names three nodes:
  * its primary's, its standby's, and a node that boots after the sale. The owner
  * sells it through the door while the standby is off the network. Then:
- *   - the primary keeps the term and its container: a sale changes no component
- *     and no committee answer;
+ *   - the primary keeps the term and its container, through the drain the sale
+ *     starts: no cell serves the key for DRAIN_BLOCKS after the transfer applies,
+ *     so no other node can be seated and the primary coasts;
  *   - the standby returns holding the sale and is still a standby;
  *   - the node that boots afterwards installs the app as sold, as a standby;
  *   - the buyer's update applies on all three and the seller's is refused;
@@ -45,6 +46,8 @@ import { appIdentityFromUuid, appUuid } from '@runonflux/flux-spec';
 const NODES = 11;
 const FRESH = 10; // boots after the sale
 const QUORUM = 5;
+// The blocks a sale's committee drains before it serves: production's value.
+const DRAIN_BLOCKS = 20;
 const CONVERGE_MS = 300000;
 const DOOR_REFUSAL = /does not correspond with Flux App owner/;
 const OUTAGE_LIMIT_MS = (loadSharedConfig().fluxapps.nodeDownGraceS - 20) * 1000;
@@ -86,7 +89,9 @@ describe('an activeStandby app sold while its primary runs', function () {
       tickerAutostart: false,
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
-        fluxapps: grantPlaneOverrides({ adoptionStaggerStepMs: 5000, adoptionStaggerWindowMs: 10000 }),
+        fluxapps: grantPlaneOverrides({
+          quorumGrantGenerationDrainBlocks: DRAIN_BLOCKS, adoptionStaggerStepMs: 5000, adoptionStaggerWindowMs: 10000,
+        }),
       },
     });
     await bootAndPeer(env, { pricing: true });
@@ -175,10 +180,17 @@ describe('an activeStandby app sold while its primary runs', function () {
     await view.installedEverywhere(sold.spec.hash, [primary], 'the primary adopts the sale');
     expect((await view.installedOn(primary)).owner, 'the primary\'s record names the buyer').to.equal(buyer.zelid);
 
-    const term = await verdict();
-    expect(term?.grantee, 'the primary still holds the term').to.equal(masterGrantee);
+    // Past the drain the sale started, the primary renews: the same grantee holds
+    // a live term, and its container never stopped.
+    await waitFor(async () => (await getState()).currentHeight >= result.targetHeight + DRAIN_BLOCKS, {
+      timeout: CONVERGE_MS, interval: 5000, label: 'the chain passes the sale\'s drain',
+    });
+    await waitFor(async () => (await verdict())?.grantee === masterGrantee, {
+      timeout: CONVERGE_MS, interval: 5000, label: 'the primary holds a live term past the drain',
+    });
     const now = await view.containerOn(primary);
     expect(now.id, 'the primary\'s container was not recreated').to.equal(primaryContainer.id);
+    expect(now.startedAt, 'the primary\'s container was not restarted').to.equal(primaryContainer.startedAt);
     expect(now.running, 'the primary\'s container runs').to.equal(true);
     expect(await view.runningCount(), 'exactly one master runs').to.equal(1);
   });

@@ -7,7 +7,8 @@
  * re-rolls its master role to generation 1, then sells it through the door while
  * the standby is off the network; the sale names the generation-1 record in its
  * `grants` block. Then:
- *   - the primary keeps the term, at generation 1, and its container;
+ *   - the primary keeps the term, at generation 1, and its container, through the
+ *     drain the sale starts;
  *   - the standby returns holding the sale and is still a standby;
  *   - the node that boots afterwards installs the app as a standby, holds the
  *     record the sale names although the outgoing owner signed it, and takes the
@@ -248,10 +249,16 @@ describe('an activeStandby app re-rolled, then sold', function () {
 
     await view.listedEverywhere(sold.spec.hash, stayers, 'every node that stayed lists the sale');
     await view.installedEverywhere(sold.spec.hash, [primary], 'the primary adopts the sale');
-    const term = await verdict();
-    expect(term?.grantee, 'the primary still holds the term').to.equal(masterGrantee);
-    expect(term?.generation, 'at generation 1').to.equal(1);
-    expect((await view.containerOn(primary)).id, 'the primary\'s container was not recreated').to.equal(primaryContainer.id);
+    await waitFor(async () => (await getState()).currentHeight >= result.targetHeight + DRAIN_BLOCKS, {
+      timeout: CONVERGE_MS, interval: 5000, label: 'the chain passes the sale\'s drain',
+    });
+    await waitFor(async () => (await verdict())?.grantee === masterGrantee, {
+      timeout: CONVERGE_MS, interval: 5000, label: 'the primary holds a live term past the drain',
+    });
+    expect((await verdict()).generation, 'at generation 1').to.equal(1);
+    const now = await view.containerOn(primary);
+    expect(now.id, 'the primary\'s container was not recreated').to.equal(primaryContainer.id);
+    expect(now.startedAt, 'the primary\'s container was not restarted').to.equal(primaryContainer.startedAt);
     expect(await view.runningCount(), 'exactly one master runs').to.equal(1);
   });
 
