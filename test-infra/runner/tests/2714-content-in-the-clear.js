@@ -39,7 +39,9 @@ describe('content in the clear is refused by every node', function () {
     name,
     image: `${REGISTRY_REPO_HOST}/${name}:v1`,
     instances: 1,
-    contentSlots: [{ name: SLOT, destination: SLOT_PATH }],
+    contentSlots: [{
+      name: SLOT, destination: SLOT_PATH, onUpdate: null, atomic: true,
+    }],
   });
 
   before(async function () {
@@ -87,7 +89,10 @@ describe('content in the clear is refused by every node', function () {
   it('accepts the same app sealed through the door', async function () {
     this.timeout(600000);
     const res = await deployContentApp(env.clients[0].url, {
-      ...slotSpec(sealed), contentSlots: [{ name: SLOT, destination: SLOT_PATH, bytes: Buffer.from('sealed\n') }],
+      ...slotSpec(sealed),
+      contentSlots: [{
+        name: SLOT, destination: SLOT_PATH, bytes: Buffer.from('sealed\n'), onUpdate: null, atomic: true,
+      }],
     });
     expect(res.status, `the sealed registration: ${JSON.stringify(res).slice(0, 300)}`).to.equal('success');
     await confirmOnChain(res.data, env.clients);

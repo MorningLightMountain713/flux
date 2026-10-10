@@ -61,7 +61,9 @@ describe('a name registered again is a new app', function () {
           sizeGb: 1,
           mounts: {
             '/data': { source: 'data', destination: '/data' },
-            [SLOT_PATH]: { source: SLOT, destination: SLOT_PATH, type: 'file', contentSlot: SLOT },
+            [SLOT_PATH]: {
+              source: SLOT, destination: SLOT_PATH, type: 'file', contentSlot: SLOT, onUpdate: null, atomic: true,
+            },
           },
         },
         ports: { http: { containerPort: 80, hostPort: 31270 } },
