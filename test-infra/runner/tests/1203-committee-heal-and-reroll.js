@@ -260,6 +260,23 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
     const survivors = env.clients.map((_, i) => i).filter((i) => i !== masterIndex);
     const survivorAfters = new Map(survivors.map((i) => [i, env.clients[i].getLastEventId()]));
 
+    // The healed seat took part in the reshaped election: its cell answered
+    // for a post-heal successor. Assert that intent directly, not a match to
+    // the CURRENT verdict — under load the term can hand on more than once
+    // (epoch N -> N+1), a quorum can exclude this one cell, and a read of a
+    // busy cell can abort at 5s, so a "specific cell holds the current
+    // grantee" check chases a moving target. A successor row (grantee no
+    // longer the paused master) proves the seat verified the roster chain
+    // and served the new committee's grant.
+    const seatAnswersSuccessor = () => waitFor(async () => {
+      const cell = await readCell(addedIndex);
+      return Boolean(cell?.accepted?.grantee) && cell.accepted.grantee !== before.grantee;
+    }, { timeout: 120000, interval: 5000, label: 'the replacement seat answers for a post-heal successor' });
+    // The walk may seat the replacement on the master's own node: that cell
+    // is dark with its master, so it answers once it returns and the
+    // successor renews across the healed committee.
+    const seatIsMasters = addedIndex === masterIndex;
+
     await pauseHostContainer(env.clients[masterIndex].container);
     try {
       await Promise.any(survivors.map((i) => env.clients[i].waitForEvent(
@@ -273,19 +290,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
         return second !== null && second.grantee !== before.grantee;
       }, { timeout: 120000, interval: 10000, label: 'a successor holds the grant' });
       expect(second.epoch, 'epochs never move backwards').to.be.greaterThan(before.epoch);
-
-      // The healed seat took part in the reshaped election: its cell answered
-      // for a post-heal successor. Assert that intent directly, not a match to
-      // the CURRENT verdict — under load the term can hand on more than once
-      // (epoch N -> N+1), a quorum can exclude this one cell, and a read of a
-      // busy cell can abort at 5s, so a "specific cell holds the current
-      // grantee" check chases a moving target. A successor row (grantee no
-      // longer the paused master) proves the seat verified the roster chain
-      // and served the new committee's grant.
-      await waitFor(async () => {
-        const cell = await readCell(addedIndex);
-        return Boolean(cell?.accepted?.grantee) && cell.accepted.grantee !== before.grantee;
-      }, { timeout: 120000, interval: 5000, label: 'the replacement seat answers for a post-heal successor' });
+      if (!seatIsMasters) await seatAnswersSuccessor();
     } finally {
       await unpauseHostContainer(env.clients[masterIndex].container);
     }
@@ -295,6 +300,7 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       const verdict = await quorumVerdict();
       return verdict !== null && verdict.grantee !== before.grantee;
     }, { timeout: 120000, interval: 10000, label: 'the returning corpse adopted' });
+    if (seatIsMasters) await seatAnswersSuccessor();
 
     // The returned master and the replacement make a surplus; the trim sheds
     // down to the spec's count, and the tests after this one address the
