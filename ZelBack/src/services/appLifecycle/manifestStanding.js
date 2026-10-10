@@ -63,7 +63,7 @@ async function standingManifest(identity, deps = {}) {
   const valid = resolved.filter((row) => ownerSignedIsValid(
     { identity, hash: row.hash, ownedFrom: row.ownedFrom },
     {
-      appIdentity: identity, listedOwnerSigned: row.signer === app.owner, ownedFrom: ownership?.from, namedHash,
+      appIdentity: identity, listedOwnerSigned: row.signer === app.owner, ownedFrom: ownership?.from, original: ownership?.original, namedHash,
     },
   ));
   if (!valid.length) {
@@ -91,7 +91,8 @@ async function standingManifest(identity, deps = {}) {
  */
 async function highestVersionInOwnership(identity, ownership, deps = {}) {
   const { getRows = (id) => appRecords.manifests().byIdentity(id), pendingRanks = appsRepository.carriedManifestRanks } = deps;
-  const within = (ownedFrom) => ownedFrom === ownership.from || (ownership.original === true && ownedFrom === 0);
+  const { signedInOwnership } = await getSpec();
+  const within = (ownedFrom) => signedInOwnership(ownedFrom, ownership);
   const rows = (await getRows(identity)).filter((row) => row.signer === ownership.owner && within(row.ownedFrom));
   const pending = (await pendingRanks(identity)).filter((rank) => within(rank.ownedFrom));
   return Math.max(0, ...rows.map((row) => row.version), ...pending.map((rank) => rank.version));
