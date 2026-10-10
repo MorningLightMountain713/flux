@@ -34,31 +34,39 @@ describe('pricing integration — chain messages through PricingEngine', () => {
   });
 
   // Realistic v9 spec shape (minimal canonical form)
-  const testSpec = {
+  // A constructed spec, as the engine takes: one 0.5-core, 512 MB component with
+  // 5 GB of storage, a 1 GB root filesystem and one standard port, on 3 instances.
+  const testSubmission = {
     version: 9,
     name: 'testapp',
+    description: 'pricing fixture',
+    owner: '1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm',
     instances: 3,
     ttl: 2_592_000, // 30 days in seconds
-    placement: { staticIp: false, dataCenter: false, geoAllow: null, geoDeny: null },
-    network: { mesh: false },
-    telemetry: null,
+    contacts: { email: ['test@example.com'] },
     components: {
       web: {
+        name: 'web',
+        image: 'nginx:latest',
         cpu: 0.5,
         memory: 512,
         rootFsGb: 1,
-        swapGb: 0,
-        persistentStorage: { sizeGb: 5, sync: null, mounts: {} },
+        persistentStorage: { sizeGb: 5, mounts: {} },
         ports: {
-          http: { hostPort: 31_000, containerPort: 80, protocol: 'tcp' },
+          http: { hostPort: 31_000, containerPort: 80 },
         },
-        loadBalancing: null,
-        shutdown: null,
-        preStop: null,
-        imageAuth: null,
       },
     },
   };
+
+  function specOf(submission) {
+    return FluxAppSpecV9.fromSubmission(structuredClone(submission));
+  }
+
+  let testSpec;
+  before(() => {
+    testSpec = specOf(testSubmission);
+  });
 
   function buildTestHistories(opts = {}) {
     const chainHeight = opts.chainHeight || 100;
@@ -233,7 +241,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     });
 
     it('applies tier 1 surcharge for 10+ instances', async () => {
-      const bigSpec = { ...testSpec, instances: 12 };
+      const bigSpec = specOf({ ...testSubmission, instances: 12 });
       const h = buildTestHistories();
       stubHistories(h);
 
@@ -341,11 +349,12 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const h = buildTestHistories();
       stubHistories(h);
 
-      const stdSpec = { ...testSpec };
-      const premSpec = JSON.parse(JSON.stringify(testSpec));
-      premSpec.components.web.ports = {
-        https: { hostPort: 443, containerPort: 443, protocol: 'tcp' },
+      const stdSpec = testSpec;
+      const premSubmission = structuredClone(testSubmission);
+      premSubmission.components.web.ports = {
+        https: { hostPort: 443, containerPort: 443 },
       };
+      const premSpec = specOf(premSubmission);
 
       const engine = await buildPricingEngine(h.queryHeight);
       const stdBreakdown = await engine.price(stdSpec, { height: h.queryHeight, duration: stdSpec.ttl, isEncrypted: false });
