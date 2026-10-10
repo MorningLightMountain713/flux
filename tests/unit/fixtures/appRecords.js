@@ -150,6 +150,7 @@ const MESSAGE_ANSWERS = {
   resetSyncState: 0,
   storeContents: { record: null, stored: false },
   signedByName: null,
+  waitingTransfer: null,
   pool: [],
   windowsClosedBy: [],
   carriedManifestRanks: [],

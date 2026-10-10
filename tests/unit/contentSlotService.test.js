@@ -1293,6 +1293,7 @@ describe('contentSlotService', () => {
           owner: OWNER, isEncrypted: true, spec: slotSpecSealed, identity: IDENTITY,
         }),
         ownerships: async () => [{ owner: OWNER, from: 2_400_000 }],
+        waitingTransfer: async () => null,
         isInstalledHere: async () => null,
         openEnvelope: async () => sealedPayload(),
         broadcast: sinon.spy(),
@@ -1309,6 +1310,22 @@ describe('contentSlotService', () => {
     // The register already stored this app's initial manifest (version 1) under
     // this ownership, so the fixture update (version 2) is its successor.
     const loadSub = () => load(fakeRepo(), { manifests: fakeManifests({ byIdentity: sinon.stub().resolves([storedRow(1, {})]) }), standing: async () => ({ row: storedRow(1, {}) }) });
+
+    // R4: while a transfer of the app waits for payment on this node, its
+    // content is not changed.
+    it('refuses a content update while a transfer of the app waits for payment on this node, naming the rule, before opening it', async () => {
+      const { service } = loadSub();
+      const waitingTransfer = sinon.stub().resolves({ hash: 'a'.repeat(64) });
+      const openEnvelope = sinon.stub().resolves(sealedPayload());
+      const deps = subDeps({ waitingTransfer, openEnvelope });
+      await service.submitContentUpdate(subBody(), deps).then(
+        () => { throw new Error('accepted'); },
+        (error) => expect(error.message).to.match(/transfer of the app waits for payment.*R4/),
+      );
+      sinon.assert.calledWith(waitingTransfer, APP, OWNER);
+      sinon.assert.notCalled(openEnvelope);
+      sinon.assert.notCalled(deps.broadcast);
+    });
 
     it('transport-opens, processes, stores, and gossips the sealed manifest', async () => {
       const { service } = loadSub();

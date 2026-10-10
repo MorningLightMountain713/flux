@@ -81,6 +81,14 @@ async function submit(req, res) {
       ));
     }
 
+    // R16: while a transfer of the app waits for payment on this node, the
+    // owner may not re-roll; the transfer names the record it stands on.
+    if (await messageStore.waitingTransfer(app.name, app.owner)) {
+      return res.status(409).json(messageHelper.createErrorMessage(
+        'a transfer of the app waits for payment on this node; a re-roll is refused until it is paid or its payment window closes (R16)',
+      ));
+    }
+
     // Generations count within one ownership: the first record an owner signs
     // after taking the app is 1, whatever an earlier owner signed.
     const { record: standing } = await messageStore.standingGeneration(record.identity, record.role);

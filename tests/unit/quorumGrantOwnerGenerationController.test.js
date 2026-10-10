@@ -2,7 +2,7 @@
 
 const { expect } = require('chai');
 const sinon = require('sinon');
-const { stubRegistry } = require('./fixtures/appRecords');
+const { stubRegistry, stubMessages } = require('./fixtures/appRecords');
 
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
@@ -60,6 +60,7 @@ describe('quorumGrant ownerGenerationController', () => {
     sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
     sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('203.0.113.5:16127');
     stubRegistry().byIdentity.callsFake(async (identity) => (identity === IDENTITY ? { name: 'myapp', owner: OWNER } : null));
+    stubMessages();
     sinon.stub(messageStore, 'standingGeneration').resolves({ record: null, aside: false });
     sinon.stub(messageStore, 'getGrantGenerationRecord').resolves(null);
     sinon.stub(messageStore, 'heldGenerationRecords').resolves([]);
@@ -132,6 +133,19 @@ describe('quorumGrant ownerGenerationController', () => {
       const second = fakeRes();
       await ownerGenerationController.submit(fakeReq(await signedRecord({ generation: 8 })), second);
       expect(second.statusCode).to.equal(409);
+    });
+
+    // R16: while a transfer of the app waits for payment on this node, the
+    // owner may not re-roll.
+    it('refuses a re-roll while a transfer of the app waits for payment on this node, naming the rule', async () => {
+      sinon.stub(messageStore, 'waitingTransfer').resolves({ hash: 'a'.repeat(64) });
+      const res = fakeRes();
+      await ownerGenerationController.submit(fakeReq(await signedRecord()), res);
+      expect(res.statusCode).to.equal(409);
+      expect(res.body.data.message).to.match(/transfer of the app waits for payment.*R16/);
+      sinon.assert.calledWith(messageStore.waitingTransfer, 'myapp', OWNER);
+      sinon.assert.notCalled(fluxCommunicationMessagesSender.broadcastMessageToAll);
+      sinon.assert.notCalled(messageStore.storeAppStateEvent);
     });
 
     it('refuses malformed records before any authority is consulted', async () => {

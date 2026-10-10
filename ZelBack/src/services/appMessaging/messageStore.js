@@ -1127,6 +1127,19 @@ async function standingGeneration(identity, role) {
   return { record, aside: false, ownership };
 }
 
+/**
+ * The transfer of an app waiting for payment in this node's pool, if one is:
+ * an update naming an owner other than the listed one, whose payment window
+ * the chain has not closed. The content-update door refuses while one waits
+ * (R4), and so does the re-roll door (R16).
+ * @param {string} appName
+ * @param {string} listedOwner
+ * @returns {Promise<object|null>} the waiting update's record, or null
+ */
+async function waitingTransfer(appName, listedOwner) {
+  return appRecords.messages().waitingTransfer(appName, listedOwner);
+}
+
 /** Every generation record this node holds for one app role. */
 async function heldGenerationRecords(identity, role) {
   const db = dbHelper.databaseConnection();
@@ -1583,6 +1596,7 @@ async function processPendingUpdates(appName) {
 
 module.exports = {
   storeAppTemporaryMessage,
+  waitingTransfer,
   processPendingUpdates,
   releaseInstallingClaims,
   storeAppStateEvent,
