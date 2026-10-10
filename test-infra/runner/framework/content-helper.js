@@ -395,6 +395,31 @@ export async function updateContentApp(nodeUrl, opts) {
 }
 
 /**
+ * Ask a node to derive a blob's locator (POST /apps/bloblocator) as the caller:
+ * the contentHash travels sealed toward the node's transport key for the caller,
+ * and the node derives the locator for the identity the caller owns.
+ *
+ * @param {string} nodeUrl
+ * @param {{ name: string, contentHash: string, ownerKey: object, timestamp?: number }} opts
+ * @returns {Promise<object>} the route's answer, its data `{ locator }` on success
+ */
+export async function requestBlobLocator(nodeUrl, {
+  name, contentHash, ownerKey, timestamp = Date.now(),
+}) {
+  const transportPubB64 = await fetchTransportPubKey(nodeUrl, name, ownerKey.zelid);
+  const sealed = await tk.sealLocatorRequest({
+    contentHash, appName: name, timestamp, transportPubB64,
+  });
+  const auth = await authenticate(nodeUrl, ownerKey);
+  const res = await fetch(`${nodeUrl}/apps/bloblocator`, {
+    method: 'POST',
+    headers: { zelidauth: auth.zelidauth, 'content-type': 'application/json' },
+    body: JSON.stringify({ appName: name, timestamp, sealed }),
+  });
+  return res.json();
+}
+
+/**
  * Push a standalone content-slot update (POST /apps/contentupdate): a new manifest
  * version with new slot bytes, sealed as one HPKE content envelope (AAD ref
  * manifest:v<version>) with the owner-signed manifest + the FluxDrive dual-sigs.

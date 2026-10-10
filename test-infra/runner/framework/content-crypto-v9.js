@@ -8,7 +8,7 @@ import {
   CipherSuite, DhkemX25519HkdfSha256, HkdfSha256, Aes256Gcm,
 } from '@hpke/core';
 import {
-  TransportEnvelope, buildTransportAad, buildContentTransportAad, buildSignaturePayloadV2,
+  TransportEnvelope, buildTransportAad, buildContentTransportAad, buildSignaturePayloadV2, CONTENT_LOCATOR_AAD_REF,
   FluxAppSpecV9, canonicalContentManifest, TRANSPORT_ALGORITHM, TRANSPORT_INFO, TRANSPORT_EXPORT_LABEL,
   appUuid, appIdentityFromUuid, blobUploadDigest, manifestPutDigest, slotReconcileDigest,
 } from '@runonflux/flux-spec';
@@ -221,6 +221,15 @@ export async function buildContentEnvelope({
   if (reconcileSig) payload.reconcileSig = reconcileSig;
   const aad = buildContentTransportAad({ appName, ref, timestamp });
   return sealExport(Buffer.from(JSON.stringify(payload)), aad, transportPubB64);
+}
+
+// Seal a locator request: the blob's contentHash, toward the node's transport key
+// for the caller, under the locator's AAD reference, so only that node opens it.
+export async function sealLocatorRequest({
+  contentHash, appName, timestamp, transportPubB64,
+}) {
+  const aad = buildContentTransportAad({ appName, ref: CONTENT_LOCATOR_AAD_REF, timestamp });
+  return sealExport(Buffer.from(JSON.stringify({ contentHash })), aad, transportPubB64);
 }
 
 // An owner-signed plaintext ContentManifest (gossip form for a plaintext app; the node
