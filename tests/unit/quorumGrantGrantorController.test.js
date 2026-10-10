@@ -1918,6 +1918,24 @@ describe('quorumGrant grantorController', () => {
       expect((await readRecord()).serving).to.equal(true);
     });
 
+    it('a sale\'s drain at generation zero makes the cell non-serving, and serving once it lifts', async () => {
+      // the sale applied at 200 and named no record: the registration's
+      // committee drains until 220
+      messageStore.standingGeneration.resolves({ record: null, aside: false, ownership: { owner: 'buyer', from: 200, transferred: true } });
+      daemonStatus.isDaemonSynced.returns({ status: 'success', data: { synced: true, height: 210, header: 210 } });
+      expect((await readRecord()).serving).to.equal(false);
+      daemonStatus.isDaemonSynced.returns({ status: 'success', data: { synced: true, height: 220, header: 220 } });
+      expect((await readRecord()).serving).to.equal(true);
+    });
+
+    it('a cell that does not hold the record the spec names is not serving', async () => {
+      messageStore.standingGeneration.resolves({ record: null, aside: true, ownership: { owner: 'buyer', from: 200, transferred: true } });
+      daemonStatus.isDaemonSynced.returns({ status: 'success', data: { synced: true, height: 300, header: 300 } });
+      const data = await readRecord();
+      expect(data.refereeing).to.equal(true);
+      expect(data.serving).to.equal(false);
+    });
+
     it('a cell that is not refereeing is not serving either', async () => {
       grantorController.registerSyncReadyProvider(() => false);
       const data = await readRecord();
@@ -2023,6 +2041,23 @@ describe('quorumGrant grantorController', () => {
       const stamped = grantRegister.prepare.lastCall.args[2].servingSinceMs;
       expect(stamped).to.be.at.least(before);
       expect(stamped).to.be.above(first);
+    });
+
+    it('past a sale\'s drain the first serve stamps the anchor, so a successor\'s wait starts at the lift', async () => {
+      messageStore.standingGeneration.resolves({ record: null, aside: false, ownership: { owner: 'buyer', from: 200, transferred: true } });
+      viewAt(210);
+      const draining = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 0 })), draining);
+      expect(draining.statusCode).to.equal(409);
+      expect(draining.body.data.message).to.contain('draining until height 220');
+      await tick(5);
+
+      const before = Date.now();
+      viewAt(220);
+      const res = fakeRes();
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 0 })), res);
+      expect(res.statusCode).to.equal(200);
+      expect(grantRegister.prepare.lastCall.args[2].servingSinceMs).to.be.at.least(before);
     });
 
     it("generation zero stamps nothing beyond the refereeing return — an app's birth is not a re-roll", async () => {
