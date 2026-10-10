@@ -35,7 +35,7 @@ import { appIdentityFromUuid, appUuid } from '@runonflux/flux-spec';
 const NODES = 3;
 const CONVERGE_MS = 240000;
 const SLOT = 'cfg';
-const SLOT_PATH = '/etc/app.conf';
+const SLOT_PATH = '/io.runonflux/app.conf';
 
 describe('a name registered again is a new app', function () {
   let env;
