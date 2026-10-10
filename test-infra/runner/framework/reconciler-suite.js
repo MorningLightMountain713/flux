@@ -145,8 +145,10 @@ function spawnerNodes(env) {
  * spawner is held at its attempt while the app is delivered and installed, and
  * released once the named nodes hold it, so it judges the instance count filled.
  * The app stays free to be placed anywhere later, which a pinned fixture is not.
+ * With `release: false` the holds stay until the suite calls releaseSpawnerHolds,
+ * so an instance still owed is left for a node that boots later, which holds none.
  */
-export async function placeOnNodes(env, app, indices, { timeout = 120000 } = {}) {
+export async function placeOnNodes(env, app, indices, { timeout = 120000, release = true } = {}) {
   if (app.spec.pinTargets?.length) {
     throw new Error(`placeOnNodes needs an unpinned app: ${app.spec.name} is pinned`);
   }
@@ -167,8 +169,11 @@ export async function placeOnNodes(env, app, indices, { timeout = 120000 } = {})
         throw new Error(`node ${i} does not hold ${app.spec.name}: ${error.message} :: ${body.slice(-400)}`);
       }
     }));
+  } catch (error) {
+    if (!release) await releaseSpawnerHolds(env, app.spec.name);
+    throw error;
   } finally {
-    await releaseSpawnerHolds(env, app.spec.name);
+    if (release) await releaseSpawnerHolds(env, app.spec.name);
   }
   return indices;
 }

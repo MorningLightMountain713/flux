@@ -3,8 +3,8 @@
  * A sale, for each kind of app that carries no content: a v8 cleartext app, a v8
  * enterprise app, a v9 cleartext app and a v9 encrypted app.
  *
- * Each app runs on two nodes and names a third that has not yet booted. While one
- * of the two is off the network, the owner on record sells all four through the
+ * Each app runs on two nodes and owes a third instance to a node that has not
+ * yet booted. While one of the two is off the network, the owner on record sells all four through the
  * submission door. Then, for every app:
  *   - the node that ran it through the sale restarted nothing;
  *   - the node that was off the network returns and holds the sale;
@@ -14,10 +14,14 @@
  *     door, and for a v8 app handed to a node as a paid message, by the decider;
  *   - a resale undone by a rewind leaves every node's row as it stood before it.
  *
- * The two v8 apps are pinned, which the door grants only to an enterprise owner
- * and this fleet lists none, so their registrations reach the fleet as paid
- * messages; a sale or update restating the same pin is carried forward by the
- * door. The two v9 apps are registered through the door. Every app's subjects
+ * A v8 cleartext spec cannot name nodes, so that app is unpinned: it is placed on
+ * its two nodes while every other node's spawner is held, and the holds stay until
+ * the fresh node, which boots holding none, has placed the third instance. The v8
+ * enterprise app is pinned, which the door grants only to an enterprise owner and
+ * this fleet lists none, so its registration reaches the fleet as a paid message;
+ * a sale or update restating the same pin is carried forward by the door. The two
+ * v9 apps are pinned by their placement and registered through the door. Every
+ * app's subjects
  * are chosen outside env.establishedNodes, whose spent fallback budget would
  * have them promote past the joins this suite measures.
  */
@@ -26,7 +30,9 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { buyerKey, transferApp } from '../framework/transfer-helper.js';
-import { bootAndPeer, installOnNodes, seedGlobalSpec } from '../framework/reconciler-suite.js';
+import {
+  bootAndPeer, installOnNodes, placeOnNodes, releaseSpawnerHolds, seedGlobalSpec,
+} from '../framework/reconciler-suite.js';
 import {
   buildSeedableApp, buildSeedableEnterpriseApp, buildSeedableUpdate,
 } from '../framework/seed-helper.js';
@@ -134,17 +140,23 @@ describe('a sale of every app kind that carries no content', function () {
     }, { timeout: CONVERGE_MS, interval: 3000, label: `${kind.label}: ${label}` });
   }
 
-  // A v8 app: seeded pinned, then sold and updated through the door, restating
-  // its spec with the owner and description each submission names.
+  // A v8 app: seeded, then sold and updated through the door, restating its spec
+  // with the owner and description each submission names. An enterprise app is
+  // pinned; a cleartext one is placed with the other spawners held.
   function v8Kind({ label, name, enterprise }) {
     return {
       label,
       name,
       component: name,
       v8: true,
+      held: !enterprise,
       async register(pins) {
-        const build = enterprise ? buildSeedableEnterpriseApp : buildSeedableApp;
-        const app = await build({
+        if (!enterprise) {
+          const app = await buildSeedableApp({ name, instances: 3, compose: [v8Component(name)] });
+          await placeOnNodes(env, app, [host, away], { release: false });
+          return app;
+        }
+        const app = await buildSeedableEnterpriseApp({
           name, pinnedTo: pins, instances: 3, compose: [v8Component(name)],
         });
         await seedGlobalSpec(env, app, online().map((c) => env.clients.indexOf(c)));
@@ -161,7 +173,7 @@ describe('a sale of every app kind that carries no content', function () {
       },
       async sell(app) {
         const sold = await transferApp(env.clients[registrar].url, seller, app, online());
-        expect(sold.status, `${label}: the sale is accepted`).to.equal('success');
+        expect(sold.status, `${label}: the sale is accepted: ${JSON.stringify(sold)}`).to.equal('success');
         return sold.app;
       },
     };
@@ -327,6 +339,8 @@ describe('a sale of every app kind that carries no content', function () {
       await installedEverywhere(kind, kind.sold.spec.hash, [FRESH], 'the fresh node installs the app as sold');
       // eslint-disable-next-line no-await-in-loop
       expect((await installedOn(FRESH, kind.name)).owner, `${kind.label}: the fresh node's record names the buyer`).to.equal(buyer.zelid);
+      // eslint-disable-next-line no-await-in-loop
+      if (kind.held) await releaseSpawnerHolds(env, kind.name);
     }
   });
 
