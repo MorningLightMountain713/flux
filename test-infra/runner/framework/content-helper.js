@@ -301,11 +301,13 @@ export async function updateCleartextV9App(nodeUrl, opts) {
  *
  * A slot entry is { name, destination, bytes } (new or rotated: bytes attached and
  * owner-signed) or { name, destination, hash } (kept from the standing manifest).
+ * A `contentRef` is the app's immutable blob, attached and owner-signed like a
+ * rotated slot.
  *
  * @param {string} nodeUrl
  * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?, placement?,
- *   assignment?, contentSlots: [{ name, destination, bytes | hash, onUpdate?, atomic? }],
- *   version?, ownerKey?, timestamp? }
+ *   assignment?, contentRef?: Buffer, contentSlots: [{ name, destination, bytes | hash, onUpdate?, atomic? }],
+ *   specOverrides?, version?, ownerKey?, timestamp? }
  * @returns {Promise<object>} the /apps/appupdate response (its data is the update's
  *   message hash) + { contentHash, appName, manifest }
  */
@@ -315,6 +317,7 @@ export async function updateContentApp(nodeUrl, opts) {
   const { name } = opts;
   const timestamp = opts.timestamp || Date.now();
   const contentSlots = opts.contentSlots || [];
+  const contentRefHash = opts.contentRef ? tk.blobHash(opts.contentRef) : null;
 
   const submissionSpec = tk.buildV9ContentSpec({
     name,
@@ -325,9 +328,11 @@ export async function updateContentApp(nodeUrl, opts) {
     components: opts.components,
     placement: opts.placement,
     assignment: opts.assignment,
+    contentRefHash,
     contentSlots: contentSlots.map((s) => ({
       name: s.name, destination: s.destination, source: s.source, onUpdate: s.onUpdate, atomic: s.atomic, uid: s.uid, gid: s.gid, mode: s.mode,
     })),
+    ...(opts.specOverrides || {}),
   });
 
   const transportPubB64 = await fetchTransportPubKey(nodeUrl, name, owner);
@@ -336,6 +341,7 @@ export async function updateContentApp(nodeUrl, opts) {
   });
 
   const blobs = {};
+  if (opts.contentRef) blobs[contentRefHash] = opts.contentRef;
   const slotMap = {};
   for (const s of contentSlots) {
     const h = s.bytes ? tk.blobHash(s.bytes) : s.hash;
