@@ -27,6 +27,8 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
+import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
+import { loadSharedConfig } from '../framework/coupled-knobs.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { buyerKey, transferApp } from '../framework/transfer-helper.js';
 import { bootAndPeer, placeOnNodes, releaseSpawnerHolds } from '../framework/reconciler-suite.js';
@@ -53,6 +55,9 @@ const NODES = 5;
 const FRESH = 4; // boots after the sale
 const CONVERGE_MS = 240000;
 const DOOR_REFUSAL = /does not correspond with Flux App owner/;
+// A node with no peers for the node-down grace is certified down and removes every
+// app, which is another suite's subject: the outage here ends well inside it.
+const OUTAGE_LIMIT_MS = (loadSharedConfig().fluxapps.nodeDownGraceS - 20) * 1000;
 
 function v8Component(name) {
   return {
@@ -230,6 +235,8 @@ describe('a sale of every app kind that carries no content', function () {
       deferredNodes: 1,
       arcane: true,
       tickerAutostart: false,
+      // The chain's push path: a node hears the rewind as it happens.
+      zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: { fluxapps: { adoptionStaggerStepMs: 5000, adoptionStaggerWindowMs: 10000 } },
     });
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1, pricing: true });
@@ -277,14 +284,19 @@ describe('a sale of every app kind that carries no content', function () {
     this.timeout(1200000);
     await env.disconnectNode(away);
     offline = away;
-    for (const kind of kinds) {
-      // eslint-disable-next-line no-await-in-loop
-      kind.sold = await kind.sell(kind.registered);
+    const wentAway = Date.now();
+    const sold = await Promise.all(kinds.map((kind) => kind.sell(kind.registered)));
+    const stayers = online().map((c) => env.clients.indexOf(c));
+    await env.reconnectNode(away);
+    offline = null;
+    expect(Date.now() - wentAway, 'the node was away for less than the node-down grace').to.be.below(OUTAGE_LIMIT_MS);
+    for (const [i, kind] of kinds.entries()) {
+      kind.sold = sold[i];
       expect(kind.sold.identity, `${kind.label}: a sale keeps the identity`).to.equal(kind.registered.identity);
     }
     for (const kind of kinds) {
       // eslint-disable-next-line no-await-in-loop
-      await listedEverywhere(kind, kind.sold.spec.hash, online().map((c) => env.clients.indexOf(c)), 'every online node lists the sale');
+      await listedEverywhere(kind, kind.sold.spec.hash, stayers, 'every node that stayed lists the sale');
       // eslint-disable-next-line no-await-in-loop
       await installedEverywhere(kind, kind.sold.spec.hash, [host], 'the host adopts the sale');
       // eslint-disable-next-line no-await-in-loop
@@ -304,10 +316,8 @@ describe('a sale of every app kind that carries no content', function () {
     }
   });
 
-  it('brings the node that was off the network through the sale to the buyer, restarting nothing', async function () {
+  it('brings the node that was off the network through the sale to the buyer once it returns, restarting nothing', async function () {
     this.timeout(CONVERGE_MS * 2);
-    await env.reconnectNode(away);
-    offline = null;
     await waitForDaemonReady(env.clients[away]);
     for (const kind of kinds) {
       // eslint-disable-next-line no-await-in-loop
@@ -419,9 +429,9 @@ describe('a sale of every app kind that carries no content', function () {
       await listedEverywhere(kind, resales[i], nodes, 'every node lists the resale');
     }
 
-    const seen = waitForReorg(env.clients[registrar], (d) => d.forkHeight === forkHeight, 60000);
+    const mark = env.clients[registrar].getLastEventId();
     await reorgChain({ forkHeight });
-    await seen;
+    await waitForReorg(env.clients[registrar], (d) => d.forkHeight === forkHeight, 60000, { afterId: mark });
     await advanceBlocks(1);
     for (const kind of kinds) {
       // eslint-disable-next-line no-await-in-loop
