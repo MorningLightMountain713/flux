@@ -232,6 +232,64 @@ export async function updateEncryptedV9App(nodeUrl, opts) {
   return { ...data, contentHash, appName: name };
 }
 
+// A cleartext v9 register or update through its door: the spec is signed and sent
+// as it is, never sealed, so it is stored and gossiped in the clear.
+async function submitCleartextV9App(nodeUrl, opts, type) {
+  const ownerKey = opts.ownerKey || appOwnerKey();
+  const owner = opts.owner || ownerKey.zelid;
+  const submissionSpec = tk.buildV9ContentSpec({
+    name: opts.name,
+    owner,
+    image: opts.image,
+    instances: opts.instances,
+    ttl: opts.ttl,
+    components: opts.components,
+    placement: opts.placement,
+    assignment: opts.assignment,
+    ...(opts.specOverrides || {}),
+  });
+  const { specField, contentHash } = await tk.buildSignedCleartextSubmission({
+    submissionSpec, ownerKey, timestamp: opts.timestamp || Date.now(), type,
+  });
+
+  const auth = await authenticate(nodeUrl, ownerKey);
+  const form = new FormData();
+  form.append('spec', JSON.stringify(specField));
+  const door = type === 'fluxappupdate' ? 'appupdate' : 'appregister';
+  const res = await submitToNode(`${nodeUrl}/apps/${door}`, {
+    method: 'POST',
+    headers: { zelidauth: auth.zelidauth },
+    body: form,
+  });
+  const data = await res.json();
+  return { ...data, contentHash, appName: opts.name };
+}
+
+/**
+ * Register a cleartext v9 app (POST /apps/appregister): registerEncryptedV9App's
+ * sibling for a spec that is never sealed. It carries no content.
+ *
+ * @param {string} nodeUrl
+ * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?, placement?,
+ *   assignment?, specOverrides?, ownerKey?, timestamp? }
+ * @returns {Promise<object>} the /apps/appregister response + { contentHash, appName }
+ */
+export async function registerCleartextV9App(nodeUrl, opts) {
+  return submitCleartextV9App(nodeUrl, opts, 'fluxappregister');
+}
+
+/**
+ * Update a cleartext v9 app's spec (POST /apps/appupdate): the full new spec,
+ * signed by `ownerKey` and naming `owner`, which for a sale is the buyer.
+ *
+ * @param {string} nodeUrl
+ * @param {object} opts - as registerCleartextV9App
+ * @returns {Promise<object>} the /apps/appupdate response + { contentHash, appName }
+ */
+export async function updateCleartextV9App(nodeUrl, opts) {
+  return submitCleartextV9App(nodeUrl, opts, 'fluxappupdate');
+}
+
 /**
  * Update a v9 content app's SPEC with its content (POST /apps/appupdate, multipart):
  * a signed fluxappupdate carrying the full new submission spec and one sealed content
