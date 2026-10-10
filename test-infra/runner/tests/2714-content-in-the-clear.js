@@ -26,7 +26,7 @@ import { appView } from '../framework/app-view.js';
 const NODES = 3;
 const CONVERGE_MS = 240000;
 const SLOT = 'cfg';
-const SLOT_PATH = '/etc/app.conf';
+const SLOT_PATH = '/io.runonflux/app.conf';
 const IN_THE_CLEAR = /clear|content.*sealed|contentSlot/i;
 
 describe('content in the clear is refused by every node', function () {
