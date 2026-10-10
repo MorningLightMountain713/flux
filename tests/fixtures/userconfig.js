@@ -3,13 +3,16 @@
 /**
  * The userconfig every test runs against.
  *
- * FluxOS reads this off `globalThis`, set once by tests/init.js. It lives here
- * rather than inline in that file so a test that needs to vary a field can
- * build from the same base the global was built from — two independent copies
- * drift, and a test that "sets" config while the code reads the other one is
- * green without governing anything.
+ * FluxOS reads this off `globalThis`. tests/init.js sets it when the run loads,
+ * for modules that read it when they are required, and again before every
+ * test, so no test sees another's. It lives here rather than inline in that
+ * file so a test that needs to vary a field can build from the same base the
+ * global was built from — two independent copies drift, and a test that "sets"
+ * config while the code reads the other one is green without governing
+ * anything.
  *
- * Callers that override MUST restore: it is process-global state.
+ * A test that needs another config sets it in its own beforeEach or body; a
+ * file that sets it when it loads changes it for every test that runs after.
  */
 function testUserconfig(overrides = {}) {
   return {

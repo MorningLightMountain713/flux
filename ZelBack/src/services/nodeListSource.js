@@ -245,6 +245,7 @@ async function start(options) {
 }
 
 function stop() {
+  mode = null;
   manager = null;
   fetchList = null;
   buffered = [];

@@ -295,6 +295,15 @@ describe('nodeListSource tests', () => {
       ]);
     });
 
+    it('a stopped source reports no mode', async () => {
+      isTopicAvailableStub.returns(false);
+      await nodeListSource.start({ stateManager, listFetcher });
+      expect(nodeListSource.currentMode()).to.equal('poll');
+
+      nodeListSource.stop();
+      expect(nodeListSource.currentMode()).to.equal(null);
+    });
+
     it('should announce the block the list is anchored to', async () => {
       await nodeListSource.start({ stateManager, listFetcher });
 

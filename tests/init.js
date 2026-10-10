@@ -60,6 +60,9 @@ exports.mochaHooks = {
     currentTest = this.currentTest ? this.currentTest.fullTitle() : '(unknown)';
     noRealNetwork.setCurrentTest(currentTest);
     resetGlobalState();
+    // Every test starts from the fixture config, whatever a file set before it;
+    // a test that needs another sets it in its own beforeEach or body.
+    globalThis.userconfig = testUserconfig();
   },
   afterAll() {
     if (userconfigWrites.length) {
