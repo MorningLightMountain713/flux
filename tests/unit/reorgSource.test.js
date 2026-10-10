@@ -120,5 +120,14 @@ describe('reorgSource tests', () => {
         { source: 'reorgSource', mode: 'poll', topic: 'chainreorg' },
       ]);
     });
+
+    it('a stopped source reports no mode', () => {
+      sinon.stub(daemonSubscriptionService, 'isTopicAvailable').returns(false);
+      reorgSource.start();
+      expect(reorgSource.currentMode()).to.equal('poll');
+
+      reorgSource.stop();
+      expect(reorgSource.currentMode()).to.equal(null);
+    });
   });
 });

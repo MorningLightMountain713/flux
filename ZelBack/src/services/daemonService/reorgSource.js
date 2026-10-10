@@ -85,6 +85,7 @@ function start() {
 }
 
 function stop() {
+  mode = null;
   listeners.length = 0;
 }
 

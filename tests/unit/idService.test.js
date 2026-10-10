@@ -32,9 +32,6 @@ const adminConfig = {
   },
 };
 
-// Set globalThis.userconfig for idService which reads from globalThis
-globalThis.userconfig = adminConfig;
-
 const idService = proxyquire(
   '../../ZelBack/src/services/idService',
   { },
@@ -59,6 +56,11 @@ const generateResponse = () => {
 };
 
 describe('idService tests', () => {
+  // idService reads the node's config off globalThis when it is called.
+  beforeEach(() => {
+    globalThis.userconfig = adminConfig;
+  });
+
   before(requireMongo);
 
   // Signature verification now consults the canonical-form rule in flux-spec,
