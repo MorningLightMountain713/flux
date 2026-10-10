@@ -76,6 +76,14 @@ describe('manifestStanding', () => {
       expect(standing.hash, 'version 1 of the later ownership, over version 9 of the earlier').to.equal('second1');
     });
 
+    // A registration's manifest is signed before its height exists, at 0.
+    it('stands on the registration\'s manifest, signed at 0, while the app has its original owner', async () => {
+      const rows = [row({ hash: 'registered', version: 1, ownedFrom: 0 })];
+      const ownerships = sinon.stub().resolves([{ owner: BUYER, from: 150 }]);
+      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER)), manifestsByIdentity: sinon.stub().resolves(rows), ownerships });
+      expect((await svc.standingManifest(IDENTITY)).row.hash).to.equal('registered');
+    });
+
     it('an owner holding the app a second time does not stand on what they signed in the first: nothing stands until they sign again', async () => {
       const rows = [row({ hash: 'seller7', version: 7, ownedFrom: 100, signer: SELLER })];
       const ownerships = sinon.stub().resolves([...SOLD, { owner: SELLER, from: 300 }]);

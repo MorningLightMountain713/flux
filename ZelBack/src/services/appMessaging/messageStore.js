@@ -1118,7 +1118,7 @@ async function standingGeneration(identity, role) {
   const valid = rows.filter((row) => ownerSignedIsValid(
     { identity, hash: row.hash, ownedFrom: row.data?.ownedFrom },
     {
-      appIdentity: identity, listedOwnerSigned: row.signer === app.owner, ownedFrom: listed?.from, namedHash,
+      appIdentity: identity, listedOwnerSigned: row.signer === app.owner, ownedFrom: listed?.from, original: owners.length === 1, namedHash,
     },
   ));
   if (valid.length === 0) return { record: null, aside: namedHash !== null, ownership };
