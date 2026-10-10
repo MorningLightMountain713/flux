@@ -123,6 +123,11 @@ describe('quorumGrant grantorController', () => {
     // The grantor reads the standing record through standingGeneration; these
     // tests drive it through the record they stub, never set aside, an app
     // that never changed hands.
+    // the world before the standing one, against which a step-across credential is proved
+    sinon.stub(messageStore, 'predecessorGeneration').callsFake(async (identity, role) => {
+      const record = await messageStore.getGrantGenerationRecord(identity, role);
+      return record ? record.data.generation - 1 : null;
+    });
     sinon.stub(messageStore, 'standingGeneration').callsFake(async (identity, role) => ({
       record: await messageStore.getGrantGenerationRecord(identity, role),
       aside: false,
@@ -1830,21 +1835,36 @@ describe('quorumGrant grantorController', () => {
     });
     const retired = retiredKeys.map((k, i) => ({ txhash: String(i + 5).repeat(64).slice(0, 64), outidx: 0, pubkey: k.pubkey, ip: `10.${i + 20}.0.1:16127` }));
     const outpointOf = (n) => `${n.txhash}:${n.outidx}`;
-    const credentialFor = (grantee, epoch, signers = retired) => ({
+    const credentialFor = (grantee, epoch, signers = retired, generation = 0) => ({
       fingerprint: RETIRED_FP,
-      generation: 0,
+      generation,
       epoch,
       roster: null,
       acceptances: signers.map((node, i) => {
-        const fields = signedEnvelope.fieldsFor('termaccept', { key: 'myapp/master', fingerprint: RETIRED_FP, generation: 0, epoch, grantee });
+        const fields = signedEnvelope.fieldsFor('termaccept', { key: 'myapp/master', fingerprint: RETIRED_FP, generation, epoch, grantee });
         return { grantor: outpointOf(node), signature: signedEnvelope.sign('termaccept', fields, retiredKeys[i].wif).signature };
       }),
     });
     beforeEach(() => {
       networkStateService.membershipAt.restore();
       sinon.stub(networkStateService, 'membershipAt').callsFake((fp) => (fp === RETIRED_FP ? retired : fixtureFleet()));
-      // the standing world is generation 1, its drain over
+      // the standing world is generation 1, its drain over, the registration's below it
       messageStore.getGrantGenerationRecord.resolves({ data: { generation: 1, height: 50 } });
+      messageStore.predecessorGeneration.resolves(0);
+    });
+
+    it('after a v8 sale steps the app back to generation 0, a credential from the seller\'s generation 1 verifies: it is the world that stood before', async () => {
+      messageStore.standingGeneration.resolves({ record: null, aside: false, ownership: { owner: 'buyer', from: 30, transferred: true } });
+      messageStore.predecessorGeneration.resolves(1);
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 0, carried: credentialFor(ASKER, 4, retired, 1) })), fakeRes());
+      expect(grantRegister.prepare.lastCall.args[2].carriedIncumbent).to.equal(ASKER);
+      expect(messageStore.predecessorGeneration.lastCall.args).to.deep.equal(['myapp', 'master']);
+    });
+
+    it('with no world this cell can name before the standing one, no credential verifies', async () => {
+      messageStore.predecessorGeneration.resolves(null);
+      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1, carried: credentialFor(ASKER, 4) })), fakeRes());
+      expect(grantRegister.prepare.lastCall.args[2].carriedIncumbent).to.equal(null);
     });
 
     it('a valid credential reaches the register as the verified incumbent', async () => {

@@ -1002,10 +1002,12 @@ async function serve(req, res, type, operate) {
     }
 
     // The carried credential (STEP_ACROSS_DESIGN.md D2/D3): the retired
-    // world's basis resolved to ITS membership, the standing generation read
-    // off the store, and the overlay's verification with real signatures. A
-    // credential that verifies makes the candidate the recorded incumbent at
-    // this cell's empty seat; one that does not makes the ask a stranger's.
+    // world's basis resolved to ITS membership, the world that stood before
+    // the standing one read off the store — the next record down after a
+    // re-roll, what stood when the seller sold after a transfer — and the
+    // overlay's verification with real signatures. A credential that
+    // verifies makes the candidate the recorded incumbent at this cell's
+    // empty seat; one that does not makes the ask a stranger's.
     let carriedIncumbent = null;
     // Reported for the harness: whether a credential rode this ask and
     // verified, and the lock-delay a candidate without one would still face
@@ -1014,10 +1016,11 @@ async function serve(req, res, type, operate) {
     let seatWaitMs;
     if (ask.carried && (type === 'prepare' || type === 'accept') && (ask.mode ?? 'held') === 'held') {
       const basis = networkStateService.membershipAt(ask.carried.fingerprint);
-      const standing = await heldGeneration(ask.key);
+      const slash = ask.key.indexOf('/');
+      const before = await messageStore.predecessorGeneration(ask.key.slice(0, slash), ask.key.slice(slash + 1));
       carriedIncumbent = basis
         ? rosterOverlay.verifyTermCredential(basis, ask.key, ask.carried, {
-          committeeSize: committeeSize('held'), candidate: ask.candidate, standingGeneration: standing.generation,
+          committeeSize: committeeSize('held'), candidate: ask.candidate, expectedGeneration: before,
         })
         : null;
       carried = carriedIncumbent ? 'verified' : 'refused';

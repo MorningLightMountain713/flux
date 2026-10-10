@@ -97,10 +97,11 @@ async function appliedUpdateEvents(name) {
 
 /**
  * Who has owned the app that holds a name, in order: each owner with the height
- * at which they took it, the registration's height for the first. The last
- * entry is the listed owner. Empty when nothing applied.
+ * at which they took it, the registration's height for the first, and the
+ * grants block the message that began their ownership named (null when it
+ * named none). The last entry is the listed owner. Empty when nothing applied.
  * @param {string} name - in any letter case
- * @returns {Promise<Array<{owner: string, from: number}>>}
+ * @returns {Promise<Array<{owner: string, from: number, grants: ?object}>>}
  */
 async function ownerships(name) {
   const owners = [];
@@ -108,7 +109,7 @@ async function ownerships(name) {
     const owner = message?.appSpecifications?.owner;
     if (typeof owner !== 'string' || !owner) continue;
     if (owners.length === 0 || owners[owners.length - 1].owner !== owner) {
-      owners.push({ owner, from: decision.height });
+      owners.push({ owner, from: decision.height, grants: message.appSpecifications.grants ?? null });
     }
   }
   return owners;

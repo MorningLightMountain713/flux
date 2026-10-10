@@ -85,6 +85,25 @@ describe('appHistory', () => {
     expect(await history.currentAppMessages('myapp')).to.deep.equal([]);
   });
 
+  it('answers each owner with the height they took the app and the grants block the message that began their ownership named', async () => {
+    applied = [
+      decision('r', { type: 'registration', height: 100 }),
+      decision('u1', { type: 'update', height: 150 }),
+      decision('t', { type: 'update', height: 200 }),
+      decision('u2', { type: 'update', height: 250 }),
+    ];
+    stored = [
+      { hash: 'r', appSpecifications: { owner: 'alice' } },
+      { hash: 'u1', appSpecifications: { owner: 'alice', grants: { master: 'sha256:a1' } } },
+      { hash: 't', appSpecifications: { owner: 'bob', grants: { master: 'sha256:a1' } } },
+      { hash: 'u2', appSpecifications: { owner: 'bob', grants: { master: 'sha256:b1' } } },
+    ];
+    expect(await history.ownerships('myapp')).to.deep.equal([
+      { owner: 'alice', from: 100, grants: null },
+      { owner: 'bob', from: 200, grants: { master: 'sha256:a1' } },
+    ]);
+  });
+
   it('answers the version of the message that registered an app: the first applied message of the app with a uuid, or of the app holding the name', async () => {
     applied = [
       decision('r1', { type: 'registration', height: 100, uuid: 'first' }),
