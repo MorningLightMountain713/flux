@@ -11,6 +11,8 @@ const IDENTITY = `b${'a'.repeat(52)}`;
 const SELLER = '1SellerAddressXXXXXXXXXXXXXXXXXXXX';
 const BUYER = V9_SUBMISSION.owner;
 let flux;
+// The ownerships the rows below were signed in: the seller's from 100, the buyer's from 200.
+const SOLD = [{ owner: SELLER, from: 100 }, { owner: BUYER, from: 200 }];
 
 // A record the collection holds, as the rule reads it.
 function row({
@@ -26,8 +28,10 @@ function load({
   manifestsByIdentity = sinon.stub().resolves([]),
   resolved = sinon.stub().resolves([]),
   carriedManifestRanks = sinon.stub().resolves([]),
+  ownerships = sinon.stub().resolves(SOLD),
 } = {}) {
   return proxyquire('../../ZelBack/src/services/appLifecycle/manifestStanding', {
+    '../appDecisions/appHistory': { ownerships },
     '../appDatabase/appRecords': {
       registry: () => ({ byIdentity }),
       manifests: () => ({ byIdentity: manifestsByIdentity, resolved }),
@@ -66,9 +70,17 @@ describe('manifestStanding', () => {
         row({ hash: 'first9', version: 9, ownedFrom: 50 }),
         row({ hash: 'second1', version: 1, ownedFrom: 200 }),
       ];
-      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER)), manifestsByIdentity: sinon.stub().resolves(rows) });
+      const ownerships = sinon.stub().resolves([{ owner: BUYER, from: 50 }, { owner: SELLER, from: 100 }, { owner: BUYER, from: 200 }]);
+      const svc = load({ byIdentity: sinon.stub().resolves(listed(BUYER)), manifestsByIdentity: sinon.stub().resolves(rows), ownerships });
       const { row: standing } = await svc.standingManifest(IDENTITY);
       expect(standing.hash, 'version 1 of the later ownership, over version 9 of the earlier').to.equal('second1');
+    });
+
+    it('an owner holding the app a second time does not stand on what they signed in the first: nothing stands until they sign again', async () => {
+      const rows = [row({ hash: 'seller7', version: 7, ownedFrom: 100, signer: SELLER })];
+      const ownerships = sinon.stub().resolves([...SOLD, { owner: SELLER, from: 300 }]);
+      const svc = load({ byIdentity: sinon.stub().resolves(listed(SELLER)), manifestsByIdentity: sinon.stub().resolves(rows), ownerships });
+      expect(await svc.standingManifest(IDENTITY)).to.include({ row: null, aside: false });
     });
 
     it('stands on the manifest the listed spec names when its signer is no longer the owner, and sets the racing one aside', async () => {
@@ -94,7 +106,8 @@ describe('manifestStanding', () => {
       const manifestsByIdentity = sinon.stub().resolves(rows);
       const asBuyer = load({ byIdentity: sinon.stub().resolves(listed(BUYER)), manifestsByIdentity });
       expect(await asBuyer.standingManifest(IDENTITY)).to.include({ row: null, aside: false });
-      const backToSeller = load({ byIdentity: sinon.stub().resolves(listed(SELLER)), manifestsByIdentity });
+      // A rewind undoes the sale: the seller's ownership is the one it ended, from 100.
+      const backToSeller = load({ byIdentity: sinon.stub().resolves(listed(SELLER)), manifestsByIdentity, ownerships: sinon.stub().resolves([{ owner: SELLER, from: 100 }]) });
       expect((await backToSeller.standingManifest(IDENTITY)).row.hash).to.equal('seller7');
     });
 

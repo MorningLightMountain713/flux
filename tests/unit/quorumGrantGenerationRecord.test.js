@@ -261,6 +261,20 @@ describe('quorumGrant ownerGenerationRecord', () => {
         expect(record.data.generation).to.equal(1);
       });
 
+      // A resale back to the seller is a new ownership, from the resale's
+      // height; what the seller signed while it held the app before is a
+      // record of an ownership that has ended.
+      it('a resale to the seller naming nothing stands on nothing: its records from the earlier ownership stay aside', async () => {
+        const RESOLD_AT = BOUGHT_AT + 1000;
+        await stored(await signedRecord({ role: 'master', generation: 2 }));
+        await sold(null);
+        await stored(await signedRecord({ role: 'master', generation: 1, ownedFrom: BOUGHT_AT }, BUYER_WIF));
+        expect((await messageStore.standingGeneration('myapp', 'master')).record.signer).to.equal(BUYER);
+        app = { name: 'myapp', owner: OWNER, grants: null };
+        owners = [{ owner: OWNER, from: OWNED_FROM }, { owner: BUYER, from: BOUGHT_AT }, { owner: OWNER, from: RESOLD_AT }];
+        expect(await messageStore.standingGeneration('myapp', 'master')).to.deep.include({ record: null, aside: false });
+      });
+
       it('an undone sale: the row returns to the seller and the record set aside stands again', async () => {
         const named = await signedRecord({ role: 'master', generation: 1 });
         const racing = await signedRecord({ role: 'master', generation: 2 });
