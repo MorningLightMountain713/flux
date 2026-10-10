@@ -1,4 +1,4 @@
-// fleet: 5
+// fleet: 6
 /*
  * A sale, for each kind of app that carries no content: a v8 cleartext app, a v8
  * enterprise app, a v9 cleartext app and a v9 encrypted app.
