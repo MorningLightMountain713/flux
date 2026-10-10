@@ -86,7 +86,7 @@ describe('an app with content slots sold while it runs', function () {
         mounts: {
           '/data': { source: 'data', destination: '/data' },
           [SLOT_PATH]: {
-            source: SLOT, destination: SLOT_PATH, type: 'file', contentSlot: SLOT, onUpdate: 'signal',
+            source: SLOT, destination: SLOT_PATH, type: 'file', contentSlot: SLOT, onUpdate: { action: 'signal', signal: 'SIGHUP' },
           },
         },
       },
@@ -148,7 +148,9 @@ describe('an app with content slots sold while it runs', function () {
     image = `${REGISTRY_REPO_HOST}/${name}:v1`;
     components.web.image = image;
     const reg = await deployContentApp(url(registrar), {
-      name, ...shape(), contentSlots: [{ name: SLOT, destination: SLOT_PATH, bytes: v1, onUpdate: 'signal' }],
+      name, ...shape(), contentSlots: [{
+        name: SLOT, destination: SLOT_PATH, bytes: v1, onUpdate: { action: 'signal', signal: 'SIGHUP' },
+      }],
     });
     expect(reg.status, `the registration is accepted: ${JSON.stringify(reg).slice(0, 300)}`).to.equal('success');
     await confirmOnChain(reg.data, env.clients.filter(Boolean));
