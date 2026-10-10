@@ -5,6 +5,7 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const { expect } = require('chai');
 const config = require('config');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
+const { requireMongo } = require('./dbTestHelper');
 const appRecords = require('../../ZelBack/src/services/appDatabase/appRecords');
 const { migrateAppMessages } = require('../../ZelBack/src/services/migrations/appMessages');
 const { PAYMENT_WINDOW_MS } = require('../../ZelBack/src/services/appDecisions/decisionRule');
@@ -32,9 +33,9 @@ const contents = (hash, extra = {}) => ({
 describe('the app-messages migration', function () {
   this.timeout(30_000);
 
-  before(async () => {
+  before(async function setup() {
     await loadSpecLibrary();
-    await dbHelper.initiateDB();
+    await requireMongo.call(this);
     await dropAll();
   });
   beforeEach(dropAll);

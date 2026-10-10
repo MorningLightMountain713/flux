@@ -10,6 +10,7 @@ const bs58check = require('bs58check').default;
 const config = require('config');
 
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
+const { requireMongo } = require('./dbTestHelper');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const downCertificates = require('../../ZelBack/src/services/quorumGrant/downCertificates');
 const { MembershipHistory } = require('../../ZelBack/src/services/utils/membershipHistory');
@@ -98,7 +99,7 @@ describe('nodeDownStore', () => {
 
   before(async function bootstrap() {
     this.timeout(30_000);
-    await dbHelper.initiateDB();
+    await requireMongo.call(this);
     collection = dbHelper.databaseConnection()
       .db(config.database.appsglobal.database)
       .collection(globalAppStateEvents);
@@ -686,7 +687,7 @@ describe('nodeDownStore — the record carries since and reason (R4)', () => {
 
   before(async function bootstrap() {
     this.timeout(30_000);
-    await dbHelper.initiateDB();
+    await requireMongo.call(this);
     collection = dbHelper.databaseConnection()
       .db(config.database.appsglobal.database)
       .collection(globalAppStateEvents);
