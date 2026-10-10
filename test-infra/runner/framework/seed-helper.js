@@ -219,10 +219,11 @@ export function syncedContainerData(syncMode, path = '/appdata') {
  *
  * @param {object} app - what buildSeedableApp returned
  * @param {(spec: object) => void} mutate - changes the copy in place
+ * @param {object} [opts] - { signerKey }: who signs the update, the harness's
+ *   app owner unless given; after a sale the owner on record is the buyer
  * @returns {Promise<object>} the same shape buildSeedableApp returns
  */
-export async function buildSeedableUpdate(app, mutate) {
-  const ownerKey = appOwnerKey();
+export async function buildSeedableUpdate(app, mutate, { signerKey = appOwnerKey() } = {}) {
 
   // hash, uuid and identity are what the registration made; the signature and
   // the hash below are taken over the specification alone, exactly as
@@ -248,7 +249,7 @@ export async function buildSeedableUpdate(app, mutate) {
   const version = 1;
   const timestamp = Date.now();
   const payload = type + version + JSON.stringify(spec) + timestamp;
-  const signature = await signBtcMessage(payload, ownerKey.privkey);
+  const signature = await signBtcMessage(payload, signerKey.privkey);
 
   const hash = sha256(type + version + JSON.stringify(spec) + timestamp + signature);
 

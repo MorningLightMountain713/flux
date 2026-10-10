@@ -1,6 +1,6 @@
 import { appOwnerKey, userKey } from './keys.js';
 import { registerAndConfirm, confirmOnChain } from './app-helper.js';
-import { updateEncryptedV9App } from './content-helper.js';
+import { updateCleartextV9App, updateEncryptedV9App } from './content-helper.js';
 
 // A sale: the owner on record signs an update whose spec names another owner, and
 // the chain confirms it like any update. The buyer is the harness's second owner
@@ -8,7 +8,8 @@ import { updateEncryptedV9App } from './content-helper.js';
 // spec with the owner changed and is signed by the seller. For an encrypted v9
 // app the submission names the buyer, is sealed to the transport key of the name
 // and the buyer, since the node stores the spec sealed for the owner it names,
-// and is signed by the seller; `standsOn` names what the sale stands on, the
+// and is signed by the seller; a cleartext v9 app's (`v9.cleartext`) is the same
+// submission unsealed. `standsOn` names what the sale stands on, the
 // manifest in the spec's `content` block as `sha256:<hex>` and the generation
 // records by hash per role in its `grants` block. The returned app keeps the identity its
 // registration minted: a sale changes the owner, never the identity.
@@ -23,7 +24,7 @@ export const buyerKey = () => userKey();
  *   submission is rebuilt from go in `v9`
  * @param {Array} nodes - the fleet the confirmation waits on
  * @param {object} [opts] - { sellerKey, buyerKey, standsOn: { manifest?, grants? },
- *   v9: { image, instances, ttl, components, placement, assignment, specOverrides? },
+ *   v9: { cleartext?, image, instances, ttl, components, placement, assignment, specOverrides? },
  *   propagationTimeoutMs, explorerTimeoutMs, valueSat }
  * @returns {Promise<object>} the confirmation result with `app` under the buyer
  */
@@ -49,8 +50,10 @@ export async function transferApp(nodeUrl, adminKeypair, app, nodes, {
       ...(standsOn.manifest ? { content: { manifest: standsOn.manifest } } : {}),
       ...(standsOn.grants ? { grants: standsOn.grants } : {}),
     };
-    const submitted = await updateEncryptedV9App(nodeUrl, {
-      ...v9,
+    const { cleartext = false, ...submission } = v9;
+    const update = cleartext ? updateCleartextV9App : updateEncryptedV9App;
+    const submitted = await update(nodeUrl, {
+      ...submission,
       name: app.spec.name,
       owner: buyer.zelid,
       ownerKey: sellerKey,
@@ -62,8 +65,12 @@ export async function transferApp(nodeUrl, adminKeypair, app, nodes, {
     return sold({ status: 'success', appHash: updateHash, contentHash: submitted.contentHash, ...confirm }, updateHash);
   }
 
+  // Signed over the specification alone: the hash, uuid and identity are what
+  // the registration made, not fields of the spec.
   const spec = { ...app.spec };
   delete spec.hash;
+  delete spec.uuid;
+  delete spec.identity;
   const result = await registerAndConfirm(nodeUrl, adminKeypair, { ...spec, owner: buyer.zelid }, nodes, {
     ...confirmOpts, type: 'fluxappupdate', signerKey: sellerKey,
   });

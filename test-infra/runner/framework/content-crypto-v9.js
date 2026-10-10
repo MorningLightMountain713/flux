@@ -160,6 +160,22 @@ export async function buildSignedRegistration({
   return { specField, contentHash, timestamp };
 }
 
+// Build the signed `spec` field of a cleartext v9 register or update: the spec
+// travels as it is, its contentHash is over the spec as a cleartext one, and the
+// owner signs the event as for a sealed one.
+export async function buildSignedCleartextSubmission({
+  submissionSpec, ownerKey, timestamp = Date.now(), type = 'fluxappregister', extend = true,
+}) {
+  const contentHash = FluxAppSpecV9.fromSubmission(submissionSpec, { encrypted: false }).contentHash();
+  const signature = await signV9Event({
+    type, contentHash, timestamp, extend, ownerPrivkey: ownerKey.privkey,
+  });
+  const specField = {
+    type, version: 2, appSpecification: submissionSpec, contentHash, timestamp, extend, signature,
+  };
+  return { specField, contentHash, timestamp };
+}
+
 // The hash of a signed registration or update message, as every node computes it
 // and as a FluxDrive write carried by the message names it.
 export function registrationMessageHash(specField) {
