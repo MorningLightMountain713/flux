@@ -12,11 +12,13 @@
  *   - the node that boots afterwards installs the app as a standby, holds the
  *     record the sale names although the outgoing owner signed it, and takes the
  *     term when the primary and the standby both stand down;
- *   - the buyer re-rolls to generation 2 and the fleet follows;
+ *   - the buyer re-rolls, to generation 1 under their own ownership, and every
+ *     node stands on the buyer's record;
  *   - a resale undone by a rewind leaves every row as it stood.
  *
  * A re-roll is the owner's sequence: the app yields and stops, the record is
  * posted, the app restarts, and the generation's drain lifts after its blocks.
+ * Generations count within an ownership, so the buyer's first is 1 again.
  * Standing down is a local yield, so no node leaves the network for longer than
  * the node-down grace.
  */
@@ -68,7 +70,7 @@ describe('an activeStandby app re-rolled, then sold', function () {
   let sold;
   let shape;
   let sellersRecord; // the generation-1 record the sale names
-  let buyersRecord; // the generation-2 record
+  let buyersRecord; // the buyer's generation-1 record
   let masterGrantee;
   let primaryContainer;
   const seller = appOwnerKey();
@@ -104,6 +106,9 @@ describe('an activeStandby app re-rolled, then sold', function () {
       await Promise.all(holders.map((i) => waitForReconcileActuated(
         env.clients[i], identifier, 'settledStopped', 120000, { afterId: markers[i] },
       )));
+      await waitFor(async () => (await verdict()) === null, {
+        timeout: CONVERGE_MS, interval: 5000, label: 'the yielded term is released',
+      });
       const { zelidauth } = await authenticate(url(registrar), ownerKey);
       const posted = await postGenerationRecord(url(registrar), {
         name, identity: registered.identity, role: 'master', generation, ownerKey, auth: zelidauth,
@@ -126,7 +131,7 @@ describe('an activeStandby app re-rolled, then sold', function () {
     }
   }
 
-  // The generation-`generation` record every node named holds for the role.
+  // Every node named holds the record for the role.
   async function heldEverywhere(record, indices, label) {
     const hash = generationRecordHash(record);
     await waitFor(async () => {
@@ -284,11 +289,18 @@ describe('an activeStandby app re-rolled, then sold', function () {
     });
   });
 
-  it('follows the buyer\'s re-roll to generation 2', async function () {
+  it('follows the buyer\'s re-roll: every node stands on the buyer\'s record', async function () {
     this.timeout(1200000);
-    buyersRecord = await reroll(2, buyer, [primary, standby, FRESH]);
-    await heldEverywhere(buyersRecord, live(), 'every node holds the buyer\'s generation-2 record');
-    expect((await verdict()).generation, 'the term stands at generation 2').to.equal(2);
+    buyersRecord = await reroll(1, buyer, [primary, standby, FRESH]);
+    const hash = generationRecordHash(buyersRecord);
+    await waitFor(async () => {
+      const standing = await Promise.all(live().map(async (i) => {
+        const res = await fetch(`${url(i)}/apps/grantgeneration/${registered.identity}/master`);
+        const body = await res.json();
+        return body.data?.record ? generationRecordHash(body.data.record) : null;
+      }));
+      return standing.every((h) => h === hash);
+    }, { timeout: CONVERGE_MS, interval: 5000, label: 'every node stands on the buyer\'s record' });
     await waitFor(async () => (await view.runningCount()) === 1, {
       timeout: CONVERGE_MS, interval: 5000, label: 'exactly one master runs',
     });
