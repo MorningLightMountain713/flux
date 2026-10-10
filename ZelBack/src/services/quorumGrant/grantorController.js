@@ -290,6 +290,20 @@ function generationDrainBlocks() {
   return config.get('fluxapps.quorumGrantGenerationDrainBlocks');
 }
 
+/**
+ * The height a key's standing committee drains until before it serves: the
+ * height heldGeneration names plus the drain, after a re-roll and after a sale
+ * alike; null for an app that never changed hands and stands on its
+ * registration. Every gate that asks whether the key is draining reads this:
+ * the ask's refusal, the record read's `serving`, and the serving-since stamp.
+ *
+ * @param {{height: ?number}} known - heldGeneration's answer
+ * @returns {?number}
+ */
+function drainUntil(known) {
+  return known.height === null ? null : known.height + generationDrainBlocks();
+}
+
 // The plane's birth is the other height-gated serve: a register that served
 // fresh keys the moment its own node crossed would hand every running app's
 // term to whichever pursuer's tip crossed earliest, so instead the register
@@ -541,22 +555,23 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain,
   if (generation !== current.generation && !retired) {
     return { member: false, code: 409, reason: `ask names generation ${generation}, current is ${current.generation}` };
   }
-  if (!retired && current.height !== null) {
+  const until = retired ? null : drainUntil(current);
+  if (until !== null) {
     const height = daemonStatus.isDaemonSynced()?.data?.height ?? 0;
-    const drainUntil = current.height + generationDrainBlocks();
-    if (height < drainUntil) {
+    if (height < until) {
       return {
         member: false,
         code: 409,
-        reason: `generation ${current.generation} is draining until height ${drainUntil}`,
+        reason: `generation ${current.generation} is draining until height ${until}`,
       };
     }
   }
-  // Past the drain this cell serves the re-rolled generation: its first ask
+  // Past a drain this cell serves the committee that drained: its first ask
   // here is the serving-since anchor's third moment (see the anchor's
-  // comment) — once per generation, whatever the ask goes on to be refused for
-  if (!retired && current.generation >= 1 && generationServedMs.get(key)?.generation !== current.generation) {
-    generationServedMs.set(key, { generation: current.generation, atMs: Date.now() });
+  // comment) — once per drain, whatever the ask goes on to be refused for, so
+  // a successor's lock-delay starts no earlier than the lift
+  if (until !== null && generationServedMs.get(key)?.drainUntil !== until) {
+    generationServedMs.set(key, { drainUntil: until, atMs: Date.now() });
   }
 
   // The two heights (ACTIVATION_CROSSING_DESIGN.md §2.1): a VIRGIN row is
@@ -1288,21 +1303,22 @@ async function record(req, res) {
     observeSynced(daemonSynced && booted);
     const refereeing = daemonSynced && booted && !resyncPending?.has(key);
     // Whether this cell would SERVE an ask for the key right now: refereeing
-    // AND its rejoin drain over AND the key's generation not draining. The
-    // drains are deliberately not in `refereeing` — a draining cell referees
-    // and counts as such everywhere but the coast — and `serving` is the word
-    // the witness poll consumes: a quorum of cells in a drain can seat nobody,
-    // so a restart wave reads as committee-down and the incumbent coasts
-    // (formal/quiet-window DrainAwareCoast, rows 23 and 29–31).
-    let generationDraining = false;
+    // AND its rejoin drain over AND the key's committee not draining AND the
+    // record the spec names held. The drains are deliberately not in
+    // `refereeing` — a draining cell referees and counts as such everywhere but
+    // the coast — and `serving` is the word the witness poll consumes: a
+    // quorum of cells in a drain can seat nobody, so a restart wave, a re-roll
+    // and a sale read as committee-down and the incumbent coasts
+    // (formal/quiet-window DrainAwareCoast, rows 23 and 29–31, and the sale's
+    // drain).
+    let keyClosed = false;
     if (!founderShaped(key)) {
       const known = await heldGeneration(key);
-      if (known.generation >= 1 && known.height !== null) {
-        const height = daemonStatus.isDaemonSynced()?.data?.height ?? 0;
-        generationDraining = height < known.height + generationDrainBlocks();
-      }
+      const until = drainUntil(known);
+      const height = daemonStatus.isDaemonSynced()?.data?.height ?? 0;
+      keyClosed = known.aside || (until !== null && height < until);
     }
-    const serving = refereeing && grantRegister.drainRemainingMs() === 0 && !generationDraining;
+    const serving = refereeing && grantRegister.drainRemainingMs() === 0 && !keyClosed;
     return res.json(messageHelper.createDataMessage({
       key,
       promisedEpoch: stored?.promisedEpoch ?? 0,
