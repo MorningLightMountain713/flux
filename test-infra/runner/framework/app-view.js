@@ -1,7 +1,7 @@
 // One app as each node of a fleet holds it: its registry row, its installed
 // record and its container. A row and a record each carry the hash of the
 // message they stand on, which is what a suite compares across nodes.
-import { getAppContainerId, getAppContainerStatus } from './container.js';
+import { execInContainer, getAppContainerId, getAppContainerStatus } from './container.js';
 import { waitFor } from './wait.js';
 
 /**
@@ -25,13 +25,20 @@ export function appView(env, name, { component = name, timeout = 240000 } = {}) 
     return (res.data ?? []).find((a) => a.name === name) ?? null;
   }
 
-  // The component's container on a node: its id, which a recreate changes, and
-  // whether it runs.
+  // The component's container on a node: its id, which a recreate changes, when
+  // it last started, which a restart changes, and whether it runs.
   async function containerOn(index) {
     const { container } = env.clients[index];
     const status = await getAppContainerStatus(container, name).catch(() => null);
     const id = await getAppContainerId(container, name, component).catch(() => null);
-    return { id, running: Boolean(status?.status?.startsWith('Up')), status: status?.status ?? null };
+    let startedAt = null;
+    if (status?.name) {
+      const { stdout } = await execInContainer(container, `docker inspect --format '{{.State.StartedAt}}' ${status.name}`);
+      startedAt = stdout.trim() || null;
+    }
+    return {
+      id, startedAt, running: Boolean(status?.status?.startsWith('Up')), status: status?.status ?? null,
+    };
   }
 
   async function runningCount() {

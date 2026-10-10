@@ -61,8 +61,8 @@ async function waitForCells(clients, key, field, timeout, verb) {
 
 /**
  * The term a quorum of cells stands on for a key: the grantee at least `quorum`
- * live cells (granted, not released) name, with the highest epoch and generation
- * among them; null when no grantee has a quorum.
+ * live cells (granted, not released, time left) name, with the highest epoch and
+ * generation among them; null when no grantee has a quorum.
  * @param {Array<{url: string}>} clients The cells; a missing client is skipped.
  * @param {string} key `<identity>/<role>`.
  * @param {{quorum: number}} options How many cells make a quorum.
@@ -70,7 +70,7 @@ async function waitForCells(clients, key, field, timeout, verb) {
  */
 export async function grantVerdict(clients, key, { quorum }) {
   const cells = await Promise.all(clients.filter(Boolean).map((c) => readGrantRecord(c.url, key)));
-  const live = cells.filter((c) => c?.accepted?.grantee && !c.accepted.released);
+  const live = cells.filter((c) => c?.accepted?.grantee && !c.accepted.released && c.remainingMs !== 0);
   const byGrantee = new Map();
   for (const cell of live) {
     const list = byGrantee.get(cell.accepted.grantee) ?? [];
