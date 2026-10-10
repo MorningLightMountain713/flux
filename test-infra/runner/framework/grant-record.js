@@ -88,3 +88,26 @@ export async function grantVerdict(clients, key, { quorum }) {
   }
   return null;
 }
+
+/**
+ * The grant plane on, at harness timescales: a held term outlives two failed
+ * pass cycles (about 35 s each under a partition), and the plane governs from
+ * the floor already in force.
+ * @param {object} [extra] - fluxapps settings the suite adds or overrides
+ * @returns {object} fluxapps config overrides
+ */
+export function grantPlaneOverrides(extra = {}) {
+  return {
+    quorumGrantMastership: true,
+    quorumGrantHeldTtlMs: 90000,
+    quorumGrantRenewIntervalMs: 10000,
+    quorumGrantLockDelayMs: 15000,
+    quorumGrantDemotionSlackMs: 5000,
+    quorumGrantMaxTtlMs: 120000,
+    quorumGrantDrainMs: 90000,
+    quorumGrantMinHolderAgeMs: 0,
+    quorumGrantPursuitIntervalMs: 10000,
+    quorumGrantActivationHeight: 2_100_000,
+    ...extra,
+  };
+}
