@@ -30,11 +30,10 @@ import { registerEncryptedV9App, updateEncryptedV9App } from '../framework/conte
 import { pushImage } from '../framework/registry-helper.js';
 import { nodeOutpoint } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
-import {
-  appDataRoot, appSyncthingFolderId, execInContainer, getAppContainerId, getAppContainerStatus,
-} from '../framework/container.js';
+import { appDataRoot, appSyncthingFolderId, execInContainer } from '../framework/container.js';
 import { setSynced } from '../framework/syncthing-control.js';
-import { grantVerdict } from '../framework/grant-record.js';
+import { grantPlaneOverrides, grantVerdict } from '../framework/grant-record.js';
+import { appView } from '../framework/app-view.js';
 import {
   advanceBlocks, getState, queueAppTx, reorgChain, startTicker, stopTicker,
 } from '../framework/daemon-control.js';
@@ -65,47 +64,10 @@ describe('an activeStandby app sold while its primary runs', function () {
   const buyer = buyerKey();
   const name = `standbysale${Date.now()}`;
   let shape;
+  let view;
 
   const indexOfGrantee = (grantee) => env.clients.findIndex((c, i) => c && nodeOutpoint(i) === grantee);
   const verdict = () => grantVerdict(env.clients, key, { quorum: QUORUM });
-
-  async function installedOn(index) {
-    const res = await env.clients[index].getInstalledApps();
-    if (res.status !== 'success') return null;
-    return (res.data ?? []).find((a) => a.name === name) ?? null;
-  }
-
-  async function listedOn(index) {
-    const res = await fetch(`${env.clients[index].url}/apps/globalappsspecifications?appname=${encodeURIComponent(name)}`);
-    const body = await res.json();
-    return body.status === 'success' && Array.isArray(body.data) ? body.data[0] ?? null : null;
-  }
-
-  async function containerOn(index) {
-    const { container } = env.clients[index];
-    const status = await getAppContainerStatus(container, name).catch(() => null);
-    const id = await getAppContainerId(container, name, 'web').catch(() => null);
-    return { id, running: Boolean(status?.status?.startsWith('Up')), status: status?.status ?? null };
-  }
-
-  async function runningMasters() {
-    const states = await Promise.all(env.clients.map((c, i) => (c ? containerOn(i).catch(() => null) : null)));
-    return states.filter((s) => s?.running).length;
-  }
-
-  async function installedEverywhere(hash, indices, label) {
-    await waitFor(async () => {
-      const held = await Promise.all(indices.map((i) => installedOn(i)));
-      return held.every((app) => app?.hash === hash);
-    }, { timeout: CONVERGE_MS, interval: 3000, label });
-  }
-
-  async function listedEverywhere(hash, indices, label) {
-    await waitFor(async () => {
-      const rows = await Promise.all(indices.map((i) => listedOn(i)));
-      return rows.every((row) => row?.hash === hash);
-    }, { timeout: CONVERGE_MS, interval: 3000, label });
-  }
 
   // A synced folder holds bytes on every holder, or the stall ladder removes the
   // standbys: written after each holder's install, which clears its volume.
@@ -124,23 +86,11 @@ describe('an activeStandby app sold while its primary runs', function () {
       tickerAutostart: false,
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
-        fluxapps: {
-          quorumGrantMastership: true,
-          quorumGrantHeldTtlMs: 90000,
-          quorumGrantRenewIntervalMs: 10000,
-          quorumGrantLockDelayMs: 15000,
-          quorumGrantDemotionSlackMs: 5000,
-          quorumGrantMaxTtlMs: 120000,
-          quorumGrantDrainMs: 90000,
-          quorumGrantMinHolderAgeMs: 0,
-          quorumGrantPursuitIntervalMs: 10000,
-          quorumGrantActivationHeight: 2_100_000,
-          adoptionStaggerStepMs: 5000,
-          adoptionStaggerWindowMs: 10000,
-        },
+        fluxapps: grantPlaneOverrides({ adoptionStaggerStepMs: 5000, adoptionStaggerWindowMs: 10000 }),
       },
     });
     await bootAndPeer(env, { pricing: true });
+    view = appView(env, name, { component: 'web', timeout: CONVERGE_MS });
 
     const running = Array.from({ length: FRESH }, (_, i) => i);
     const ordinary = running.filter((i) => !env.establishedNodes.includes(i));
@@ -200,12 +150,12 @@ describe('an activeStandby app sold while its primary runs', function () {
 
   it('runs the app on its primary, with the standby stopped', async function () {
     this.timeout(CONVERGE_MS);
-    await waitFor(async () => (await containerOn(primary)).running && !(await containerOn(standby)).running, {
+    await waitFor(async () => (await view.containerOn(primary)).running && !(await view.containerOn(standby)).running, {
       timeout: CONVERGE_MS, interval: 5000, label: 'the primary runs and the standby is stopped',
     });
-    primaryContainer = await containerOn(primary);
+    primaryContainer = await view.containerOn(primary);
     masterGrantee = (await verdict()).grantee;
-    expect(await runningMasters(), 'exactly one master runs').to.equal(1);
+    expect(await view.runningCount(), 'exactly one master runs').to.equal(1);
   });
 
   it('keeps the primary\'s term and container through a sale made while the standby is away', async function () {
@@ -221,24 +171,24 @@ describe('an activeStandby app sold while its primary runs', function () {
     expect(result.status, `the sale is accepted: ${JSON.stringify(result).slice(0, 300)}`).to.equal('success');
     sold = result.app;
 
-    await listedEverywhere(sold.spec.hash, stayers, 'every node that stayed lists the sale');
-    await installedEverywhere(sold.spec.hash, [primary], 'the primary adopts the sale');
-    expect((await installedOn(primary)).owner, 'the primary\'s record names the buyer').to.equal(buyer.zelid);
+    await view.listedEverywhere(sold.spec.hash, stayers, 'every node that stayed lists the sale');
+    await view.installedEverywhere(sold.spec.hash, [primary], 'the primary adopts the sale');
+    expect((await view.installedOn(primary)).owner, 'the primary\'s record names the buyer').to.equal(buyer.zelid);
 
     const term = await verdict();
     expect(term?.grantee, 'the primary still holds the term').to.equal(masterGrantee);
-    const now = await containerOn(primary);
+    const now = await view.containerOn(primary);
     expect(now.id, 'the primary\'s container was not recreated').to.equal(primaryContainer.id);
     expect(now.running, 'the primary\'s container runs').to.equal(true);
-    expect(await runningMasters(), 'exactly one master runs').to.equal(1);
+    expect(await view.runningCount(), 'exactly one master runs').to.equal(1);
   });
 
   it('brings the standby back holding the sale, still a standby', async function () {
     this.timeout(CONVERGE_MS * 2);
     await waitForDaemonReady(env.clients[standby]);
-    await installedEverywhere(sold.spec.hash, [standby], 'the standby adopts the sale');
-    expect((await installedOn(standby)).owner, 'the standby\'s record names the buyer').to.equal(buyer.zelid);
-    expect((await containerOn(standby)).running, 'the standby is stopped').to.equal(false);
+    await view.installedEverywhere(sold.spec.hash, [standby], 'the standby adopts the sale');
+    expect((await view.installedOn(standby)).owner, 'the standby\'s record names the buyer').to.equal(buyer.zelid);
+    expect((await view.containerOn(standby)).running, 'the standby is stopped').to.equal(false);
     expect((await verdict())?.grantee, 'the primary still holds the term').to.equal(masterGrantee);
   });
 
@@ -247,12 +197,12 @@ describe('an activeStandby app sold while its primary runs', function () {
     const fresh = await env.startNode(FRESH);
     await waitForDaemonReady(fresh);
     await env.startDiscovery([FRESH]);
-    await installedEverywhere(sold.spec.hash, [FRESH], 'the fresh node installs the app as sold');
+    await view.installedEverywhere(sold.spec.hash, [FRESH], 'the fresh node installs the app as sold');
     await seedData(FRESH);
-    expect((await installedOn(FRESH)).owner, 'the fresh node\'s record names the buyer').to.equal(buyer.zelid);
-    expect((await containerOn(FRESH)).running, 'the fresh node holds it as a standby').to.equal(false);
+    expect((await view.installedOn(FRESH)).owner, 'the fresh node\'s record names the buyer').to.equal(buyer.zelid);
+    expect((await view.containerOn(FRESH)).running, 'the fresh node holds it as a standby').to.equal(false);
     expect((await verdict())?.grantee, 'the primary still holds the term').to.equal(masterGrantee);
-    expect(await runningMasters(), 'exactly one master runs').to.equal(1);
+    expect(await view.runningCount(), 'exactly one master runs').to.equal(1);
   });
 
   it('applies the buyer\'s update on all three nodes and refuses the seller\'s', async function () {
@@ -269,8 +219,8 @@ describe('an activeStandby app sold while its primary runs', function () {
     expect(res.status, `the buyer's update is accepted: ${JSON.stringify(res).slice(0, 300)}`).to.equal('success');
     await confirmOnChain(res.data, env.clients.filter(Boolean));
     updated = res.data;
-    await installedEverywhere(updated, [primary, standby, FRESH], 'every node runs the buyer\'s update');
-    expect(await runningMasters(), 'exactly one master runs').to.equal(1);
+    await view.installedEverywhere(updated, [primary, standby, FRESH], 'every node runs the buyer\'s update');
+    expect(await view.runningCount(), 'exactly one master runs').to.equal(1);
   });
 
   it('leaves every row as it stood before a resale that a rewind undoes', async function () {
@@ -288,16 +238,16 @@ describe('an activeStandby app sold while its primary runs', function () {
     }, { timeout: 60000, interval: 2000, label: 'every node holds the resale' });
     await queueAppTx(resale.data);
     await advanceBlocks(2);
-    await listedEverywhere(resale.data, nodes, 'every node lists the resale');
+    await view.listedEverywhere(resale.data, nodes, 'every node lists the resale');
 
     const mark = env.clients[registrar].getLastEventId();
     await reorgChain({ forkHeight });
     await waitForReorg(env.clients[registrar], (d) => d.forkHeight === forkHeight, 60000, { afterId: mark });
     await advanceBlocks(1);
-    await listedEverywhere(updated, nodes, 'every node lists the buyer\'s update again');
+    await view.listedEverywhere(updated, nodes, 'every node lists the buyer\'s update again');
     for (const i of nodes) {
       // eslint-disable-next-line no-await-in-loop
-      expect((await listedOn(i)).owner, `node ${i}'s row names the buyer`).to.equal(buyer.zelid);
+      expect((await view.listedOn(i)).owner, `node ${i}'s row names the buyer`).to.equal(buyer.zelid);
     }
     await startTicker();
   });
