@@ -41,8 +41,9 @@ describe('the chain this node runs on', () => {
 // The library refuses a missing chain, but FluxOS's read paths turn a refusal
 // into an unreadable record and carry on, so a forgotten chain would not fail
 // loudly: this scan does.
-describe('every call FluxOS makes to a door that builds a legacy spec passes a chain', () => {
-  const SRC = path.join(__dirname, '../../ZelBack/src');
+describe('every call FluxOS and its harness make to a door that builds a legacy spec passes a chain', () => {
+  const ROOT = path.join(__dirname, '../..');
+  const SOURCES = [path.join(ROOT, 'ZelBack/src'), path.join(ROOT, 'test-infra/runner/framework')];
   const DOORS = new RegExp(`\\b(${[
     'deserializeSpec', 'parseSubmission', 'InstantiatedSpec\\.deserialize', 'InstalledSpec\\.deserialize',
     'AppEventLegacy\\.deserialize', 'EncryptedSpecV8\\.(?:deserialize|fromSubmission)',
@@ -55,7 +56,7 @@ describe('every call FluxOS makes to a door that builds a legacy spec passes a c
 
   const files = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) return files(full);
+    if (entry.isDirectory()) return entry.name === 'node_modules' ? [] : files(full);
     return entry.name.endsWith('.js') ? [full] : [];
   });
 
@@ -70,8 +71,8 @@ describe('every call FluxOS makes to a door that builds a legacy spec passes a c
     return source.slice(open, at - 1);
   };
 
-  const calls = () => files(SRC).flatMap((file) => {
-    const relative = path.relative(SRC, file);
+  const calls = () => SOURCES.flatMap(files).flatMap((file) => {
+    const relative = path.relative(path.join(ROOT, 'ZelBack/src'), file);
     const source = fs.readFileSync(file, 'utf8');
     return [...source.matchAll(DOORS)]
       .filter((match) => !(OWN[relative] ?? []).includes(match[1]))
