@@ -247,9 +247,9 @@ async function taught(key) {
 }
 
 /** A refusal about a known key, teaching the standing generation with it. */
-async function refuse(res, code, message, key) {
+async function refuse(res, code, message, key, extra = {}) {
   const body = messageHelper.createErrorMessage(message);
-  Object.assign(body.data, await taught(key));
+  Object.assign(body.data, await taught(key), extra);
   return res.status(code).json(body);
 }
 
@@ -559,6 +559,7 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain,
         member: false,
         code: 409,
         reason: `generation ${current.generation} is draining until height ${until}`,
+        drainUntil: until,
       };
     }
   }
@@ -975,7 +976,8 @@ async function serve(req, res, type, operate) {
     ms.committee = Date.now() - t0 - ms.read;
     if (!committee.member) {
       report('refusedCommittee');
-      return refuse(res, committee.code, committee.reason, ask.key);
+      return refuse(res, committee.code, committee.reason, ask.key,
+        committee.drainUntil === undefined ? {} : { drainUntil: committee.drainUntil });
     }
 
     // A carried cancel chain that verified is journaled before anything is
