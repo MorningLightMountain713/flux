@@ -809,7 +809,8 @@ describe('quorumGrant grantRegisterCore', () => {
   // folds the same anchor in for a lapsed old-world row.
   describe('the drain-lift and receipt anchors on a re-rolled generation', () => {
     const servedAt = T0 + TTL + 100_000; // long past the old row's death + lockDelay
-    const anchored = { ...TUNABLES, servingSinceMs: servedAt };
+    // a re-rolled world drains, and the controller says so beside the anchor
+    const anchored = { ...TUNABLES, servingSinceMs: servedAt, worldDrained: true };
     const oldWorld = (overrides = {}) => heldRecord({ accepted: { generation: 0, ...overrides } });
 
     it('an empty new-generation seat holds a challenger one lock-delay past the first serve', () => {
@@ -861,11 +862,40 @@ describe('quorumGrant grantRegisterCore', () => {
       expect(released.ok).to.equal(true);
     });
 
-    it("generation zero is not this rule's business — an app's birth pays no seat delay", () => {
-      const { reply } = onPrepare(null, { epoch: 1, candidate: 'cccc:0', generation: 0 }, servedAt + 1, anchored);
+    it("a world that never drained is not this rule's business — an app's birth pays no seat delay", () => {
+      const birth = { ...anchored, worldDrained: false };
+      const { reply } = onPrepare(null, { epoch: 1, candidate: 'cccc:0', generation: 0 }, servedAt + 1, birth);
       expect(reply.ok).to.equal(true);
-      const { reply: bare } = onPrepare(null, { epoch: 1, candidate: 'cccc:0' }, servedAt + 1, anchored);
+      const { reply: bare } = onPrepare(null, { epoch: 1, candidate: 'cccc:0' }, servedAt + 1, birth);
       expect(bare.ok).to.equal(true);
+    });
+
+    // A sale hands the key to a new world at generation 0, which drains like a
+    // re-roll's: its empty seat is the same seat.
+    it('a sold app\'s generation-0 seat holds a challenger one lock-delay past the first serve', () => {
+      const sold = { epoch: 1, candidate: 'cccc:0', generation: 0, generationHeight: 600_000 };
+      const { reply } = onPrepare(null, sold, servedAt + 1, anchored);
+      expect(reply.code).to.equal('lock_delay');
+      expect(reply.retryAfterMs).to.equal(TUNABLES.lockDelayMs - 1);
+    });
+
+    it('an accepted term records the world it was granted in', () => {
+      const { record } = onAccept(null, {
+        epoch: 1, grantee: 'aaaa:0', mode: 'held', ttlMs: TTL, generation: 0, generationHeight: 600_000,
+      }, T0, TUNABLES);
+      expect(record.accepted).to.include({ generation: 0, generationHeight: 600_000 });
+      const { record: birth } = onAccept(null, { epoch: 1, grantee: 'aaaa:0', mode: 'held', ttlMs: TTL }, T0, TUNABLES);
+      expect(birth.accepted).to.include({ generation: 0, generationHeight: null });
+    });
+
+    it('a row of the asked generation from the world before the sale is the empty seat, not the asked world\'s row', () => {
+      const registration = oldWorld({ released: true });
+      const sold = { epoch: 9, candidate: 'cccc:0', generation: 0, generationHeight: 600_000 };
+      const { reply } = onPrepare(registration, sold, servedAt + 1, anchored);
+      expect(reply.code).to.equal('lock_delay');
+      const sameWorld = oldWorld({ released: true, generationHeight: 600_000 });
+      const { reply: free } = onPrepare(sameWorld, sold, servedAt + 1, anchored);
+      expect(free.ok, 'a row the asked world wrote is judged by the row rules').to.equal(true);
     });
 
     it('a row of the same generation is judged by the row rules, not the seat', () => {

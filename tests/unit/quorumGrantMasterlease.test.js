@@ -105,6 +105,24 @@ describe('quorumGrant masterlease', () => {
         sinon.restore();
       }
     });
+
+    it('names the world the grant stands in: the generation and the height it took over at', async () => {
+      const sent = [];
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('203.0.113.5:16127');
+      sinon.stub(fluxCommunicationMessagesSender, 'broadcastMessageToAll').callsFake(async (message) => { sent.push(message); return null; });
+      sinon.stub(messageStore, 'storeAppStateEvent').resolves();
+      try {
+        const base = {
+          key: 'myapp/master', grantee: `${'a'.repeat(64)}:0`, epoch: 2, mode: 'held', fingerprint: 'd'.repeat(64), generation: 0, ttlMs: 1000,
+        };
+        await masterleasePublisher.publishMasterlease({ ...base, generationHeight: 600_000 });
+        await masterleasePublisher.publishMasterlease(base);
+        expect(sent[0]).to.deep.include({ generation: 0, generationHeight: 600_000 });
+        expect(sent[1]).to.deep.include({ generation: 0, generationHeight: null });
+      } finally {
+        sinon.restore();
+      }
+    });
   });
 
   describe('the by-grantee read', () => {
@@ -249,6 +267,29 @@ describe('quorumGrant masterlease', () => {
         expect(updates).to.have.length(1);
         expect(updates[0].update[0].$set.outpoint.$cond[1]).to.equal(null);
       });
+    });
+
+    it('a record whose world height is not a height is dropped whole', async () => {
+      for (const generationHeight of ['600000', -1, 1.5]) {
+        // eslint-disable-next-line no-await-in-loop
+        await messageStore.storeAppStateEvent('masterlease', {
+          // a founding record needs no acceptances, so only its shape can drop it
+          message: baseMessage({
+            role: 'ordinal-0@500', mode: 'oneshot', ttlMs: undefined, generationHeight,
+          }),
+          envelope: null,
+          announcer: messageStore.LOCAL_ANNOUNCER,
+        });
+      }
+      expect(updates).to.have.length(0);
+      await messageStore.storeAppStateEvent('masterlease', {
+        message: baseMessage({
+          role: 'ordinal-0@500', mode: 'oneshot', ttlMs: undefined, generationHeight: 600_000,
+        }),
+        envelope: null,
+        announcer: messageStore.LOCAL_ANNOUNCER,
+      });
+      expect(updates, 'the control: a well-formed height stores').to.have.length(1);
     });
 
     it('a record whose released flag is not a boolean is dropped whole', async () => {

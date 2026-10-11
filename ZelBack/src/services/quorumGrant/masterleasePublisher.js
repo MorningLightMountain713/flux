@@ -26,6 +26,8 @@ const log = require('../../lib/log');
  * @param {number} [grant.generation] the owner's re-roll counter the grant
  *   was written under; orders ahead of the epoch, so a re-rolled world's
  *   record replaces the retired one whatever epoch the old world reached
+ * @param {?number} [grant.generationHeight] the height the grant's world took
+ *   over at; null for an app that never changed hands
  * @param {number} [grant.ttlMs] held term duration; drives the record's expiry
  * @param {{chain: object[]}} [grant.roster] the committee's quorum-signed
  *   seat changes atop the generation's base — self-verifying, so the record
@@ -53,6 +55,7 @@ async function publishMasterlease(grant) {
       epoch: grant.epoch,
       mode: grant.mode,
       generation: grant.generation ?? 0,
+      generationHeight: grant.generationHeight ?? null,
       fingerprint: grant.fingerprint,
       ...(grant.mode === 'held' ? { ttlMs: grant.ttlMs } : {}),
       // the granting committee's signed term acceptances: the proof every

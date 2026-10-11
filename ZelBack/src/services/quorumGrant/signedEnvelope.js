@@ -115,29 +115,38 @@ function verify(type, fields, signature, pubkey) {
  * `generation` and `fingerprint` are the committee basis pair — which deal
  * of the seats, over which membership. Every type carries both, because
  * every type is answered by a committee and a committee without an agreed
- * basis is not one set.
+ * basis is not one set. Beside the generation every type about a term
+ * carries the height the world it names took over at (`generationHeight`,
+ * empty for an app that never changed hands): a sale can hand a key to a new
+ * world at a generation it already had, so the generation alone names two
+ * worlds. A roster entry does not: it changes the committee's seats, which are
+ * dealt by generation, and the same deal stands either side of a sale.
  *
  * @param {string} type one of TYPES
  * @param {object} ask parsed ask fields
  * @returns {Array<string|number>|null}
  */
+function takeoverHeight(ask) {
+  return ask.generationHeight ?? '';
+}
+
 function fieldsFor(type, ask) {
   switch (type) {
     case 'probe':
     case 'prepare':
-      return [ask.key, ask.mode, ask.epoch, ask.candidate, ask.generation, ask.fingerprint, ask.at];
+      return [ask.key, ask.mode, ask.epoch, ask.candidate, ask.generation, takeoverHeight(ask), ask.fingerprint, ask.at];
     case 'accept':
-      return [ask.key, ask.mode, ask.epoch, ask.candidate, ask.ttlMs ?? 0, ask.generation, ask.fingerprint, ask.at];
+      return [ask.key, ask.mode, ask.epoch, ask.candidate, ask.ttlMs ?? 0, ask.generation, takeoverHeight(ask), ask.fingerprint, ask.at];
     case 'renew':
-      return [ask.key, ask.epoch, ask.candidate, ask.ttlMs, ask.generation, ask.fingerprint, ask.at];
+      return [ask.key, ask.epoch, ask.candidate, ask.ttlMs, ask.generation, takeoverHeight(ask), ask.fingerprint, ask.at];
     case 'release':
-      return [ask.key, ask.epoch, ask.candidate, ask.generation, ask.fingerprint, ask.at];
+      return [ask.key, ask.epoch, ask.candidate, ask.generation, takeoverHeight(ask), ask.fingerprint, ask.at];
     case 'vacate':
       // candidate is the node submitting the certificate, not the row's
       // holder; the certificate rides OUTSIDE these fields — it is
       // self-verifying through the node-down store's seam, exactly as a
       // cancel-chain entry is, so one signature serves every cell
-      return [ask.key, ask.candidate, ask.generation, ask.fingerprint, ask.at];
+      return [ask.key, ask.candidate, ask.generation, takeoverHeight(ask), ask.fingerprint, ask.at];
     case 'roster':
       // the proposal: candidate is the proposing grantee; seq pins where in
       // the chain this entry lands. The carried chain rides OUTSIDE these
@@ -157,7 +166,7 @@ function fieldsFor(type, ask) {
       // that was never on the committee that this committee accepted this
       // grantee at this epoch (STEP_ACROSS_DESIGN.md D1). Replaying one is a
       // no-op: it names a term, it does not ask for anything.
-      return [ask.key, ask.fingerprint, ask.generation, ask.epoch, ask.grantee];
+      return [ask.key, ask.fingerprint, ask.generation, takeoverHeight(ask), ask.epoch, ask.grantee];
     default:
       return null;
   }

@@ -343,7 +343,7 @@ function announcementWellFormed(announcement) {
 async function readAsk(req, type) {
   const body = serviceHelper.ensureObject(req.body) ?? {};
   const {
-    key, epoch, candidate, ttlMs, generation, fingerprint, at, signature,
+    key, epoch, candidate, ttlMs, generation, generationHeight, fingerprint, at, signature,
     remove, add, seq, chain, cancels, cert, carried, announcement,
   } = body;
 
@@ -383,6 +383,10 @@ async function readAsk(req, type) {
   }
   if (!Number.isSafeInteger(generation) || generation < 0) {
     return bad(400, 'malformed generation');
+  }
+  if (generationHeight !== undefined && generationHeight !== null
+    && (!Number.isSafeInteger(generationHeight) || generationHeight < 0)) {
+    return bad(400, 'malformed generation height');
   }
   if (type === 'roster') {
     if (typeof remove !== 'string' || !OUTPOINT_PATTERN.test(remove)) {
@@ -450,7 +454,7 @@ async function readAsk(req, type) {
   }
 
   const ask = {
-    key, mode, epoch, candidate, ttlMs, generation, fingerprint, at, remove, add, seq, chain, cancels,
+    key, mode, epoch, candidate, ttlMs, generation, generationHeight: generationHeight ?? null, fingerprint, at, remove, add, seq, chain, cancels,
     ...(cert !== undefined ? { cert } : {}),
     ...(carried !== undefined ? { carried } : {}),
     ...(announcement !== undefined ? { announcement } : {}),
@@ -483,18 +487,25 @@ async function readAsk(req, type) {
  * being an intersection. Fails closed throughout: a node that cannot
  * identify itself cannot show it belongs.
  *
- * The held committee is one deal of a generation-salted walk: the
- * ask names the generation, and it must be the newest one the owner has
- * signed as this grantor knows it — an ask under a retired generation is
- * refused with the current number, because grants written by two
- * generations' committees against one register are two masters. The base
+ * The held committee is one deal of a generation-salted walk: the ask names
+ * its world — the generation and the height it took over at — and it must be
+ * the world standing as this grantor knows it. An ask under any other world
+ * is refused with the standing one, because grants written in two worlds
+ * against one register are two masters, and a sale can repeat a generation
+ * in a new world. The base
  * is then read THROUGH the roster overlay: this grantor's own journaled
  * chain applies as written, and a longer chain carried on the ask applies
  * after full verification against the same membership — which is how a
  * freshly seated replacement, whose register has never heard of the key,
  * knows to answer for it.
  */
-async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain, carriedCancels, { retiredOk = false } = {}) {
+function describeWorld(world) {
+  return world.height === null
+    ? `generation ${world.generation}`
+    : `generation ${world.generation} from height ${world.height}`;
+}
+
+async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain, carriedCancels, { retiredOk = false, generationHeight = null } = {}) {
   if (mode === 'oneshot') {
     const role = roleOf(key);
     const founderRole = FOUNDER_ROLE_PATTERN.exec(role) ?? ORDINAL_ROLE_PATTERN.exec(role);
@@ -531,9 +542,14 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain,
   // asker's own row, nothing else: a retired generation is served for it, on
   // that generation's committee, through the standing generation's drain,
   // and it never stamps the standing generation's anchor.
-  const retired = retiredOk && generation < current.generation;
-  if (generation !== current.generation && !retired) {
-    return { member: false, code: 409, reason: `ask names generation ${generation}, current is ${current.generation}` };
+  const asked = { generation, height: generationHeight ?? null };
+  const retired = retiredOk && generationWorld.laterWorld(current, asked);
+  if (!generationWorld.sameWorld(asked, current) && !retired) {
+    return {
+      member: false,
+      code: 409,
+      reason: `ask names ${describeWorld(asked)}, current is ${describeWorld(current)}`,
+    };
   }
   const until = retired ? null : drainUntil(current);
   if (until !== null) {
@@ -741,6 +757,7 @@ async function adoptStandingTerm(ask, committee) {
 async function resyncReturnedKey(ask) {
   const committee = await selfOnCommittee(
     ask.key, 'held', ask.fingerprint, ask.generation, ask.chain, ask.cancels,
+    { generationHeight: ask.generationHeight },
   );
   if (!committee.members || !committee.quorum) return false;
   const self = await generalService.obtainNodeCollateralInformation();
@@ -953,7 +970,7 @@ async function serve(req, res, type, operate) {
 
     const committee = await selfOnCommittee(
       ask.key, ask.mode ?? 'held', ask.fingerprint, ask.generation, ask.chain, ask.cancels,
-      { retiredOk: type === 'release' },
+      { retiredOk: type === 'release', generationHeight: ask.generationHeight },
     );
     ms.committee = Date.now() - t0 - ms.read;
     if (!committee.member) {
@@ -1017,10 +1034,10 @@ async function serve(req, res, type, operate) {
     if (ask.carried && (type === 'prepare' || type === 'accept') && (ask.mode ?? 'held') === 'held') {
       const basis = networkStateService.membershipAt(ask.carried.fingerprint);
       const slash = ask.key.indexOf('/');
-      const before = await messageStore.predecessorGeneration(ask.key.slice(0, slash), ask.key.slice(slash + 1));
+      const before = await messageStore.predecessorWorld(ask.key.slice(0, slash), ask.key.slice(slash + 1));
       carriedIncumbent = basis
         ? rosterOverlay.verifyTermCredential(basis, ask.key, ask.carried, {
-          committeeSize: committeeSize('held'), candidate: ask.candidate, expectedGeneration: before,
+          committeeSize: committeeSize('held'), candidate: ask.candidate, expectedWorld: before,
         })
         : null;
       carried = carriedIncumbent ? 'verified' : 'refused';
@@ -1031,6 +1048,9 @@ async function serve(req, res, type, operate) {
     }
     const reply = await operate(ask, {
       servingSinceMs: servingSinceFor(ask.key),
+      // the asked world drained before this cell served it: a sale's or a
+      // re-roll's, never an app's birth; a founding has no world
+      worldDrained: (ask.mode ?? 'held') === 'held' && drainUntil(await heldGeneration(ask.key)) !== null,
       carriedIncumbent,
       // A delisted holder resolves to nobody — for SEATS only: an ordinal row
       // whose holder left the node list past the grace reads as released at
@@ -1097,6 +1117,7 @@ async function withTermAcceptance(ask, reply) {
     key: ask.key,
     fingerprint: ask.fingerprint ?? null,
     generation: ask.generation ?? 0,
+    generationHeight: ask.generationHeight ?? null,
     epoch: ask.epoch,
     grantee: ask.candidate,
   });

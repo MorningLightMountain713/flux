@@ -290,33 +290,33 @@ describe('quorumGrant ownerGenerationRecord', () => {
 
     // The world a step-across credential may come from: the one that stood
     // immediately before the standing one.
-    describe('predecessorGeneration', () => {
+    describe('predecessorWorld', () => {
       const sell = async (namedRecord) => {
         app = { name: 'myapp', owner: BUYER, grants: namedRecord ? { master: await ownerGenerationRecord.hash(namedRecord) } : null };
         owners = [{ owner: OWNER, from: OWNED_FROM, grants: null }, { owner: BUYER, from: BOUGHT_AT, grants: app.grants }];
       };
 
       it('an app that never changed hands and stands on its registration: nothing stood before', async () => {
-        expect(await messageStore.predecessorGeneration('myapp', 'master')).to.equal(null);
+        expect(await messageStore.predecessorWorld('myapp', 'master')).to.equal(null);
       });
 
       it('a re-roll: the record ranked just below it in the same ownership, the registration\'s 0 below the first', async () => {
         await stored(await signedRecord({ role: 'master', generation: 1 }));
-        expect(await messageStore.predecessorGeneration('myapp', 'master')).to.equal(0);
+        expect(await messageStore.predecessorWorld('myapp', 'master')).to.deep.include({ generation: 0, height: null });
         await stored(await signedRecord({ role: 'master', generation: 2 }));
-        expect(await messageStore.predecessorGeneration('myapp', 'master')).to.equal(1);
+        expect(await messageStore.predecessorWorld('myapp', 'master')).to.deep.include({ generation: 1, height: 500_100 });
       });
 
       it('a sale naming no record of an app the seller re-rolled to 2: the seller\'s 2', async () => {
         await stored(await signedRecord({ role: 'master', generation: 1 }));
         await stored(await signedRecord({ role: 'master', generation: 2 }));
         await sell(null);
-        expect(await messageStore.predecessorGeneration('myapp', 'master')).to.equal(2);
+        expect(await messageStore.predecessorWorld('myapp', 'master')).to.deep.include({ generation: 2, height: 500_100 });
       });
 
       it('a sale naming no record of an app never re-rolled: the registration\'s 0', async () => {
         await sell(null);
-        expect(await messageStore.predecessorGeneration('myapp', 'master')).to.equal(0);
+        expect(await messageStore.predecessorWorld('myapp', 'master')).to.deep.include({ generation: 0, height: null });
       });
 
       it('a sale naming the seller\'s record: what stood when the seller sold', async () => {
@@ -325,7 +325,7 @@ describe('quorumGrant ownerGenerationRecord', () => {
         await stored(named);
         await stored(racing);
         await sell(named);
-        expect(await messageStore.predecessorGeneration('myapp', 'master')).to.equal(2);
+        expect(await messageStore.predecessorWorld('myapp', 'master')).to.deep.include({ generation: 2, height: 500_100 });
       });
 
       it('the buyer\'s first re-roll after a sale naming the seller\'s 7 is numbered 1: the world below it is the 7, not 0', async () => {
@@ -333,14 +333,14 @@ describe('quorumGrant ownerGenerationRecord', () => {
         await stored(named);
         await sell(named);
         await stored(await signedRecord({ role: 'master', generation: 1, ownedFrom: BOUGHT_AT }, BUYER_WIF));
-        expect(await messageStore.predecessorGeneration('myapp', 'master')).to.equal(7);
+        expect(await messageStore.predecessorWorld('myapp', 'master')).to.deep.include({ generation: 7, height: 600_000 });
       });
 
       it('the buyer\'s first re-roll after a sale naming no record: the registration\'s 0', async () => {
         await stored(await signedRecord({ role: 'master', generation: 3 }));
         await sell(null);
         await stored(await signedRecord({ role: 'master', generation: 1, ownedFrom: BOUGHT_AT }, BUYER_WIF));
-        expect(await messageStore.predecessorGeneration('myapp', 'master')).to.equal(0);
+        expect(await messageStore.predecessorWorld('myapp', 'master')).to.deep.include({ generation: 0, height: 600_000 });
       });
 
       // Alice sells to Bob naming her generation 1; Bob never re-rolls and
@@ -360,19 +360,19 @@ describe('quorumGrant ownerGenerationRecord', () => {
         await stored(named);
         await stored(await signedRecord({ role: 'master', generation: 2 }));
         await resell(named);
-        expect(await messageStore.predecessorGeneration('myapp', 'master')).to.equal(1);
+        expect(await messageStore.predecessorWorld('myapp', 'master')).to.deep.include({ generation: 1, height: 600_000 });
       });
 
       it('a resale whose previous sale named a record this node lacks: no world it can name stood before', async () => {
         const named = await signedRecord({ role: 'master', generation: 1 });
         await resell(named);
-        expect(await messageStore.predecessorGeneration('myapp', 'master')).to.equal(null);
+        expect(await messageStore.predecessorWorld('myapp', 'master')).to.equal(null);
       });
 
       it('a sale naming a record this node lacks: no world it can name stood before', async () => {
         const named = await signedRecord({ role: 'master', generation: 1 });
         await sell(named);
-        expect(await messageStore.predecessorGeneration('myapp', 'master')).to.equal(null);
+        expect(await messageStore.predecessorWorld('myapp', 'master')).to.equal(null);
       });
     });
 

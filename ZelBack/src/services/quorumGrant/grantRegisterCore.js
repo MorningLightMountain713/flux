@@ -2,6 +2,7 @@
 
 const { selectCommittee } = require('../utils/committeeSelector');
 const rosterOverlay = require('./rosterOverlay');
+const generationWorld = require('./generationWorld');
 
 // The grantor's decision rules, pure. One record in, one request in, one
 // verdict and possibly one changed record out — no clock reads, no I/O, so
@@ -109,28 +110,30 @@ function lockDelayRemaining(record, candidate, nowMs, lockDelayMs, servingSinceM
 }
 
 /**
- * The empty seat a re-roll creates. A re-rolled generation's row at this cell
- * is EMPTY — nothing of that generation was ever accepted here — so no
- * row-death rule can hold a successor, and the register is closed to that
- * generation until the drain lifts and the record is received, neither of
- * which ages any row. The seat therefore opens to a candidate other than this
- * cell's own recorded grantee one lock-delay past the cell's serving-since
- * (formal/quiet-window, DrainLiftAnchoredLockDelay and its receipt half): the
- * recorded grantee claims at once, its step-across being what the wait exists
- * to order before. A row of the asked generation, whatever its state, is the
- * row rules' business; generation zero is an app's birth, not a re-roll, and
- * pays nothing here. An absent anchor leaves the seat open.
+ * The empty seat a drained world creates: a re-roll's, and a sale's, whatever
+ * generation the sale lands on. The asked world's row at this cell is EMPTY —
+ * nothing of that world was ever accepted here — so no row-death rule can
+ * hold a successor, and the register is closed to that world until the drain
+ * lifts and the record is received, neither of which ages any row. The seat
+ * therefore opens to a candidate other than this cell's own recorded grantee
+ * one lock-delay past the cell's serving-since: the recorded grantee, or the
+ * incumbent its credential proves, claims at once, its step-across being what
+ * the wait exists to order before. A row the asked world wrote, whatever its
+ * state, is the row rules' business; a world that never drained is an app's
+ * birth and pays nothing here. An absent anchor leaves the seat open.
  *
  * @returns {number} ms the candidate must still wait; 0 when free to proceed
  */
-function newGenerationSeatRemaining(record, request, nowMs, lockDelayMs, servingSinceMs, carriedIncumbent) {
+function newGenerationSeatRemaining(record, request, nowMs, lockDelayMs, servingSinceMs, carriedIncumbent, worldDrained) {
   // a founding is write-once and has no term to step across: the seat rule
   // is the HELD plane's (a re-found at a later generation pays nothing here)
   if (request.mode === 'oneshot') return 0;
-  const generation = request.generation ?? 0;
-  if (generation < 1) return 0;
+  if (!worldDrained) return 0;
   const accepted = record?.accepted;
-  if (accepted && (accepted.generation ?? 0) === generation) return 0;
+  const asked = { generation: request.generation ?? 0, height: request.generationHeight ?? null };
+  if (accepted && generationWorld.sameWorld(
+    { generation: accepted.generation ?? 0, height: accepted.generationHeight ?? null }, asked,
+  )) return 0;
   const asker = request.candidate ?? request.grantee;
   if (isGrantee(accepted, asker)) return 0;
   // the recorded incumbent by PROOF (STEP_ACROSS_DESIGN.md D3): a quorum of
@@ -189,7 +192,9 @@ function decidePrepare(stored, request, nowMs, tunables) {
   if (waitMs > 0) {
     return { reply: refusal('lock_delay', record, { retryAfterMs: waitMs }), record: null };
   }
-  const seatMs = newGenerationSeatRemaining(record, request, nowMs, tunables.lockDelayMs, tunables.servingSinceMs, tunables.carriedIncumbent);
+  const seatMs = newGenerationSeatRemaining(
+    record, request, nowMs, tunables.lockDelayMs, tunables.servingSinceMs, tunables.carriedIncumbent, tunables.worldDrained,
+  );
   if (seatMs > 0) {
     return { reply: refusal('lock_delay', record, { retryAfterMs: seatMs }), record: null };
   }
@@ -263,7 +268,9 @@ function onAccept(stored, request, nowMs, tunables) {
   if (waitMs > 0) {
     return { reply: refusal('lock_delay', record, { retryAfterMs: waitMs }), record: null };
   }
-  const seatMs = newGenerationSeatRemaining(record, request, nowMs, tunables.lockDelayMs, tunables.servingSinceMs, tunables.carriedIncumbent);
+  const seatMs = newGenerationSeatRemaining(
+    record, request, nowMs, tunables.lockDelayMs, tunables.servingSinceMs, tunables.carriedIncumbent, tunables.worldDrained,
+  );
   if (seatMs > 0) {
     return { reply: refusal('lock_delay', record, { retryAfterMs: seatMs }), record: null };
   }
@@ -278,6 +285,7 @@ function onAccept(stored, request, nowMs, tunables) {
     mode,
     fingerprint: fingerprint ?? null,
     generation: request.generation ?? 0,
+    generationHeight: request.generationHeight ?? null,
     expiresAt: mode === 'held' ? nowMs + ttlMs : null,
     released: false,
     // this cell's clock at the grant: a seat granted before its holder left

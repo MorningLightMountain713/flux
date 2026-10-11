@@ -25,6 +25,7 @@ const rosterOverlay = require('../../ZelBack/src/services/quorumGrant/rosterOver
 const { selectCommittee } = require('../../ZelBack/src/services/utils/committeeSelector');
 const delistedHolders = require('../../ZelBack/src/services/quorumGrant/delistedHolders');
 const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
+const generationWorld = require('../../ZelBack/src/services/quorumGrant/generationWorld');
 
 // The controller's job is the gauntlet: identity, signature, committee
 // membership, holdership. The register behind it is stubbed — its rules have
@@ -73,6 +74,17 @@ function signedAsk(type, overrides = {}) {
   };
   const { signature } = signedEnvelope.sign(type, signedEnvelope.fieldsFor(type, ask), WIF);
   return { ...ask, signature };
+}
+
+// An ask in the world the cell stands on when it names the standing generation,
+// as a holder asks under the world its own node stands on; a test naming a
+// height asks in that world instead.
+async function worldAsk(type, overrides = {}) {
+  if ('generationHeight' in overrides || overrides.mode === 'oneshot') return signedAsk(type, overrides);
+  const [identity, role] = (overrides.key ?? 'myapp/master').split('/');
+  const standing = generationWorld.worldOf(await messageStore.standingGeneration(identity, role));
+  const named = (overrides.generation ?? 0) === standing.generation && Number.isSafeInteger(standing.height);
+  return signedAsk(type, { ...overrides, generationHeight: named ? standing.height : null });
 }
 
 // The asker's own running announcement as it was broadcast: a version-1
@@ -124,9 +136,9 @@ describe('quorumGrant grantorController', () => {
     // tests drive it through the record they stub, never set aside, an app
     // that never changed hands.
     // the world before the standing one, against which a step-across credential is proved
-    sinon.stub(messageStore, 'predecessorGeneration').callsFake(async (identity, role) => {
+    sinon.stub(messageStore, 'predecessorWorld').callsFake(async (identity, role) => {
       const record = await messageStore.getGrantGenerationRecord(identity, role);
-      return record ? record.data.generation - 1 : null;
+      return record ? { generation: record.data.generation - 1, height: null } : null;
     });
     sinon.stub(messageStore, 'standingGeneration').callsFake(async (identity, role) => ({
       record: await messageStore.getGrantGenerationRecord(identity, role),
@@ -161,7 +173,7 @@ describe('quorumGrant grantorController', () => {
   describe('the happy paths', () => {
     it('a well-formed signed prepare reaches the register', async () => {
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), res);
       expect(res.statusCode).to.equal(200);
       expect(res.body.status).to.equal('success');
       expect(grantRegister.prepare.calledOnceWith('myapp/master', {
@@ -171,7 +183,7 @@ describe('quorumGrant grantorController', () => {
 
     it('accept carries mode, ttl, generation, and fingerprint through', async () => {
       const res = fakeRes();
-      await grantorController.accept(fakeReq(signedAsk('accept')), res);
+      await grantorController.accept(fakeReq(await worldAsk('accept')), res);
       expect(res.statusCode).to.equal(200);
       expect(grantRegister.accept.calledOnceWith('myapp/master', {
         epoch: 3, grantee: ASKER, mode: 'held', ttlMs: 60_000, generation: 0, fingerprint: FINGERPRINT,
@@ -186,7 +198,7 @@ describe('quorumGrant grantorController', () => {
     it('an accepted term carries the referee\'s signed acceptance over the term\'s identity', async () => {
       grantRegister.accept.resolves({ ok: true, accepted: { epoch: 3, grantee: ASKER, mode: 'held' } });
       const res = fakeRes();
-      await grantorController.accept(fakeReq(signedAsk('accept')), res);
+      await grantorController.accept(fakeReq(await worldAsk('accept')), res);
       expect(res.statusCode).to.equal(200);
       const { acceptance } = res.body.data;
       expect(acceptance, 'the reply carries an acceptance').to.be.an('object');
@@ -199,7 +211,7 @@ describe('quorumGrant grantorController', () => {
 
     it('a renewed term carries the same acceptance, at the term\'s epoch and generation', async () => {
       const res = fakeRes();
-      await grantorController.renew(fakeReq(signedAsk('renew', { epoch: 4, generation: 0 })), res);
+      await grantorController.renew(fakeReq(await worldAsk('renew', { epoch: 4, generation: 0 })), res);
       expect(res.statusCode).to.equal(200);
       const { acceptance } = res.body.data;
       const fields = signedEnvelope.fieldsFor('termaccept', {
@@ -208,23 +220,36 @@ describe('quorumGrant grantorController', () => {
       expect(signedEnvelope.verify('termaccept', fields, acceptance.signature, PUBKEY)).to.equal(true);
     });
 
+    it('the acceptance names the world the term stands in: after a sale, the sale\'s height with the generation', async () => {
+      messageStore.standingGeneration.resolves({ record: null, aside: false, ownership: { owner: 'buyer', from: 50, transferred: true } });
+      grantRegister.accept.resolves({ ok: true, accepted: { epoch: 3, grantee: ASKER, mode: 'held' } });
+      const res = fakeRes();
+      await grantorController.accept(fakeReq(await worldAsk('accept')), res);
+      const { acceptance } = res.body.data;
+      const inWorld = (generationHeight) => signedEnvelope.fieldsFor('termaccept', {
+        key: 'myapp/master', fingerprint: FINGERPRINT, generation: 0, generationHeight, epoch: 3, grantee: ASKER,
+      });
+      expect(signedEnvelope.verify('termaccept', inWorld(50), acceptance.signature, PUBKEY)).to.equal(true);
+      expect(signedEnvelope.verify('termaccept', inWorld(null), acceptance.signature, PUBKEY), 'not the world before the sale').to.equal(false);
+    });
+
     it('a refusal carries no acceptance, and a referee that cannot sign refuses rather than half-accepts', async () => {
       grantRegister.accept.resolves({ ok: false, code: 'lock_delay', retryAfterMs: 5 });
       const refused = fakeRes();
-      await grantorController.accept(fakeReq(signedAsk('accept')), refused);
+      await grantorController.accept(fakeReq(await worldAsk('accept')), refused);
       expect(refused.body.data).to.not.have.property('acceptance');
 
       grantRegister.accept.resolves({ ok: true, accepted: { epoch: 3, grantee: ASKER, mode: 'held' } });
       fluxNetworkHelper.getFluxNodePrivateKey.resolves(null);
       const unsigned = fakeRes();
-      await grantorController.accept(fakeReq(signedAsk('accept')), unsigned);
+      await grantorController.accept(fakeReq(await worldAsk('accept')), unsigned);
       expect(unsigned.body.data.ok).to.equal(false);
       expect(unsigned.body.data.code).to.equal('unavailable');
     });
 
     it('renew and release reach the register as the grantee', async () => {
-      await grantorController.renew(fakeReq(signedAsk('renew')), fakeRes());
-      await grantorController.release(fakeReq(signedAsk('release')), fakeRes());
+      await grantorController.renew(fakeReq(await worldAsk('renew')), fakeRes());
+      await grantorController.release(fakeReq(await worldAsk('release')), fakeRes());
       expect(grantRegister.renew.calledOnce).to.equal(true);
       expect(grantRegister.release.calledOnce).to.equal(true);
     });
@@ -250,14 +275,14 @@ describe('quorumGrant grantorController', () => {
 
     it('refuses a stale ask — signatures do not age well', async () => {
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { at: Date.now() - 10 * 60 * 1000 })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { at: Date.now() - 10 * 60 * 1000 })), res);
       expect(res.statusCode).to.equal(400);
       expect(res.body.data.message).to.contain('stale');
     });
 
     it('refuses a held accept without a ttl', async () => {
       const res = fakeRes();
-      await grantorController.accept(fakeReq(signedAsk('accept', { ttlMs: undefined })), res);
+      await grantorController.accept(fakeReq(await worldAsk('accept', { ttlMs: undefined })), res);
       expect(res.statusCode).to.equal(400);
     });
   });
@@ -265,28 +290,28 @@ describe('quorumGrant grantorController', () => {
   describe('identity — who is asking', () => {
     it('refuses a candidate the list does not carry', async () => {
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { candidate: `${'b'.repeat(64)}:0` })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { candidate: `${'b'.repeat(64)}:0` })), res);
       expect(res.statusCode).to.equal(403);
       expect(res.body.data.message).to.contain('not a listed node');
     });
 
     it('refuses an ask arriving from an address that is not the candidate', async () => {
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare'), '198.51.100.99'), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare'), '198.51.100.99'), res);
       expect(res.statusCode).to.equal(403);
       expect(res.body.data.message).to.contain('originate');
     });
 
     it('serves a renew carried by another listed node — the one carrier-independent ask', async () => {
       const res = fakeRes();
-      await grantorController.renew(fakeReq(signedAsk('renew'), '10.2.0.1'), res);
+      await grantorController.renew(fakeReq(await worldAsk('renew'), '10.2.0.1'), res);
       expect(res.statusCode).to.equal(200);
       expect(grantRegister.renew.calledOnce).to.equal(true);
     });
 
     it('refuses a renew carried by an address the list does not carry', async () => {
       const res = fakeRes();
-      await grantorController.renew(fakeReq(signedAsk('renew'), '198.51.100.99'), res);
+      await grantorController.renew(fakeReq(await worldAsk('renew'), '198.51.100.99'), res);
       expect(res.statusCode).to.equal(403);
       expect(res.body.data.message).to.contain('caller is not a listed node');
       expect(grantRegister.renew.called).to.equal(false);
@@ -294,7 +319,7 @@ describe('quorumGrant grantorController', () => {
 
     it('a carried prepare stays refused — only renew is carrier-independent', async () => {
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare'), '10.2.0.1'), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare'), '10.2.0.1'), res);
       expect(res.statusCode).to.equal(403);
       expect(res.body.data.message).to.contain('originate');
       expect(grantRegister.prepare.called).to.equal(false);
@@ -324,21 +349,21 @@ describe('quorumGrant grantorController', () => {
         txhash: 'f'.repeat(64), txindex: 7,
       });
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), res);
       expect(res.statusCode).to.equal(409);
       expect(grantRegister.prepare.called).to.equal(false);
     });
 
     it('the committee is computed against the membership the ask NAMES', async () => {
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), res);
       expect(networkStateService.membershipAt.calledOnceWith(FINGERPRINT)).to.equal(true);
     });
 
     it('409 unknown fingerprint — never a substitution of the current list', async () => {
       networkStateService.membershipAt.returns(null);
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), res);
       expect(res.statusCode).to.equal(409);
       expect(res.body.data.message).to.contain('fingerprint');
       expect(grantRegister.prepare.called).to.equal(false);
@@ -347,9 +372,9 @@ describe('quorumGrant grantorController', () => {
     it('409 when the ask names a retired generation, teaching the current one', async () => {
       messageStore.getGrantGenerationRecord.resolves({ data: { generation: 2 } });
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), res);
       expect(res.statusCode).to.equal(409);
-      expect(res.body.data.message).to.contain('current is 2');
+      expect(res.body.data.message).to.contain('current is generation 2');
       expect(grantRegister.prepare.called).to.equal(false);
     });
 
@@ -360,7 +385,7 @@ describe('quorumGrant grantorController', () => {
     it('serves a release naming a retired generation', async () => {
       messageStore.getGrantGenerationRecord.resolves({ data: { generation: 2, height: 50 } });
       const res = fakeRes();
-      await grantorController.release(fakeReq(signedAsk('release', { generation: 1 })), res);
+      await grantorController.release(fakeReq(await worldAsk('release', { generation: 1 })), res);
       expect(res.statusCode, JSON.stringify(res.body)).to.equal(200);
       expect(grantRegister.release.calledOnce).to.equal(true);
     });
@@ -369,7 +394,7 @@ describe('quorumGrant grantorController', () => {
       // standing generation 2 at height 200, this cell at 100: draining until 220
       messageStore.getGrantGenerationRecord.resolves({ data: { generation: 2, height: 200 } });
       const res = fakeRes();
-      await grantorController.release(fakeReq(signedAsk('release', { generation: 1 })), res);
+      await grantorController.release(fakeReq(await worldAsk('release', { generation: 1 })), res);
       expect(res.statusCode, JSON.stringify(res.body)).to.equal(200);
       expect(grantRegister.release.calledOnce).to.equal(true);
     });
@@ -380,7 +405,7 @@ describe('quorumGrant grantorController', () => {
     it('refuses every ask while the spec names a record this cell does not hold', async () => {
       messageStore.standingGeneration.resolves({ record: null, aside: true, ownership: { owner: 'buyer', from: 200, transferred: true } });
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 0 })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 0 })), res);
       expect(res.statusCode).to.equal(409);
       expect(res.body.data.message).to.contain('does not hold');
       expect(grantRegister.prepare.called).to.equal(false);
@@ -392,7 +417,7 @@ describe('quorumGrant grantorController', () => {
         record: { data: { generation: 2, height: 50 }, signer: 'seller' }, aside: false, ownership: { owner: 'buyer', from: 200, transferred: true },
       });
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 2 })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 2 })), res);
       expect(res.statusCode).to.equal(409);
       expect(res.body.data.message).to.contain('draining until height 220');
     });
@@ -400,28 +425,53 @@ describe('quorumGrant grantorController', () => {
     it('the registration\'s committee drains after a transfer naming nothing, and never for an app that never changed hands', async () => {
       messageStore.standingGeneration.resolves({ record: null, aside: false, ownership: { owner: 'buyer', from: 200, transferred: true } });
       const sold = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 0 })), sold);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 0 })), sold);
       expect(sold.statusCode).to.equal(409);
       expect(sold.body.data.message).to.contain('draining until height 220');
 
       messageStore.standingGeneration.resolves({ record: null, aside: false, ownership: { owner: 'owner', from: 200, transferred: false } });
       const kept = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 0 })), kept);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 0 })), kept);
       expect(kept.statusCode, JSON.stringify(kept.body)).to.equal(200);
+    });
+
+    // A sale can hand the key to a new world at the generation it already had:
+    // the cell compares the whole world, never the number alone.
+    it('refuses an ask naming the standing generation in the world before a sale, serves the world the sale began', async () => {
+      // the sale applied at 50 and named no record; this cell at 100 is past its drain
+      messageStore.standingGeneration.resolves({ record: null, aside: false, ownership: { owner: 'buyer', from: 50, transferred: true } });
+      const before = fakeRes();
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 0, generationHeight: null })), before);
+      expect(before.statusCode).to.equal(409);
+      expect(before.body.data.message).to.contain('current is generation 0 from height 50');
+      expect(grantRegister.prepare.called).to.equal(false);
+
+      const sold = fakeRes();
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 0, generationHeight: 50 })), sold);
+      expect(sold.statusCode, JSON.stringify(sold.body)).to.equal(200);
+    });
+
+    it('tells the register the asked world drained after a sale, and not for an app that never changed hands', async () => {
+      messageStore.standingGeneration.resolves({ record: null, aside: false, ownership: { owner: 'buyer', from: 50, transferred: true } });
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 0 })), fakeRes());
+      expect(grantRegister.prepare.lastCall.args[2].worldDrained).to.equal(true);
+      messageStore.standingGeneration.resolves({ record: null, aside: false, ownership: { owner: 'owner', from: 50, transferred: false } });
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 0 })), fakeRes());
+      expect(grantRegister.prepare.lastCall.args[2].worldDrained).to.equal(false);
     });
 
     it('a retired renew stays refused', async () => {
       messageStore.getGrantGenerationRecord.resolves({ data: { generation: 2, height: 50 } });
       const res = fakeRes();
-      await grantorController.renew(fakeReq(signedAsk('renew', { generation: 1 })), res);
+      await grantorController.renew(fakeReq(await worldAsk('renew', { generation: 1 })), res);
       expect(res.statusCode).to.equal(409);
-      expect(res.body.data.message).to.contain('current is 2');
+      expect(res.body.data.message).to.contain('current is generation 2');
       expect(grantRegister.renew.called).to.equal(false);
     });
 
     it('refuses an ask without a well-formed fingerprint outright', async () => {
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { fingerprint: 'fp-1' })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { fingerprint: 'fp-1' })), res);
       expect(res.statusCode).to.equal(400);
     });
   });
@@ -435,20 +485,20 @@ describe('quorumGrant grantorController', () => {
 
     it('an ordinal ask consults the founding committee at its rung, component-blind', async () => {
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot', key: ORDINAL_KEY })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { mode: 'oneshot', key: ORDINAL_KEY })), res);
       expect(res.statusCode).to.equal(200);
       expect(foundingCommittee.selfOnFoundingCommittee.calledOnceWith('myapp', 500_000, FINGERPRINT, 0)).to.equal(true);
       expect(grantRegister.prepare.firstCall.args[0]).to.equal(`${ORDINAL_KEY}@0`);
     });
 
     it('a delisted holder resolves to nobody at seat rows only: the ordinal ask carries the delisted-holder read, the founder and held asks do not', async () => {
-      await grantorController.probe(fakeReq(signedAsk('probe', { mode: 'oneshot', key: ORDINAL_KEY })), fakeRes());
+      await grantorController.probe(fakeReq(await worldAsk('probe', { mode: 'oneshot', key: ORDINAL_KEY })), fakeRes());
       expect(grantRegister.probe.calledOnce).to.equal(true);
       const [, , seatContext] = grantRegister.probe.firstCall.args;
       expect(seatContext.holderDelisted).to.equal(delistedHolders.isDelistedHolder);
 
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot', key: FOUNDER_KEY })), fakeRes());
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), fakeRes());
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { mode: 'oneshot', key: FOUNDER_KEY })), fakeRes());
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), fakeRes());
       expect(grantRegister.prepare.calledTwice).to.equal(true);
       grantRegister.prepare.getCalls().forEach((call) => {
         expect(call.args[2]).to.not.have.property('holderDelisted');
@@ -464,7 +514,7 @@ describe('quorumGrant grantorController', () => {
         { ip: '10.1.0.1:16127', runningSince: Date.now() - 24 * 60 * 60 * 1000 },
       ]);
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot', key: ORDINAL_KEY })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { mode: 'oneshot', key: ORDINAL_KEY })), res);
       expect(res.statusCode).to.equal(200);
       expect(grantRegister.prepare.calledOnce).to.equal(true);
     });
@@ -474,17 +524,17 @@ describe('quorumGrant grantorController', () => {
         { ip: '10.1.0.1:16127', runningSince: Date.now() - 24 * 60 * 60 * 1000 },
       ]);
       let res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), res);
       expect(res.statusCode, 'held').to.equal(403);
       res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot', key: FOUNDER_KEY })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { mode: 'oneshot', key: FOUNDER_KEY })), res);
       expect(res.statusCode, 'founder').to.equal(403);
       expect(grantRegister.prepare.called).to.equal(false);
     });
 
     it('release of an ordinal row reaches the register row with the oneshot permission', async () => {
       const res = fakeRes();
-      await grantorController.release(fakeReq(signedAsk('release', { key: ORDINAL_KEY, generation: 0 })), res);
+      await grantorController.release(fakeReq(await worldAsk('release', { key: ORDINAL_KEY, generation: 0 })), res);
       expect(res.statusCode).to.equal(200);
       const [row, request] = grantRegister.release.firstCall.args;
       expect(row).to.equal(`${ORDINAL_KEY}@0`);
@@ -494,7 +544,7 @@ describe('quorumGrant grantorController', () => {
 
     it('release of a founder row carries no such permission — founder rows never reopen', async () => {
       const res = fakeRes();
-      await grantorController.release(fakeReq(signedAsk('release', { key: FOUNDER_KEY, generation: 0 })), res);
+      await grantorController.release(fakeReq(await worldAsk('release', { key: FOUNDER_KEY, generation: 0 })), res);
       expect(res.statusCode).to.equal(200);
       const [row, request] = grantRegister.release.firstCall.args;
       expect(row).to.equal(`${FOUNDER_KEY}@0`);
@@ -503,7 +553,7 @@ describe('quorumGrant grantorController', () => {
 
     it('release of a held key is unchanged: the key itself, no permission', async () => {
       const res = fakeRes();
-      await grantorController.release(fakeReq(signedAsk('release')), res);
+      await grantorController.release(fakeReq(await worldAsk('release')), res);
       expect(res.statusCode).to.equal(200);
       const [row, request] = grantRegister.release.firstCall.args;
       expect(row).to.equal('myapp/master');
@@ -550,13 +600,13 @@ describe('quorumGrant grantorController', () => {
 
       it('a vacate without a certificate, or against a held or founder key, is refused', async () => {
         let res = fakeRes();
-        await grantorController.vacate(fakeReq(signedAsk('vacate', { key: ORDINAL_KEY, generation: 0 })), res);
+        await grantorController.vacate(fakeReq(await worldAsk('vacate', { key: ORDINAL_KEY, generation: 0 })), res);
         expect(res.statusCode).to.equal(400);
         res = fakeRes();
-        await grantorController.vacate(fakeReq(signedAsk('vacate', { key: 'myapp/master', generation: 0, cert: { token: 'standing', subject: HOLDER } })), res);
+        await grantorController.vacate(fakeReq(await worldAsk('vacate', { key: 'myapp/master', generation: 0, cert: { token: 'standing', subject: HOLDER } })), res);
         expect(res.statusCode).to.equal(409);
         res = fakeRes();
-        await grantorController.vacate(fakeReq(signedAsk('vacate', { key: FOUNDER_KEY, generation: 0, cert: { token: 'standing', subject: HOLDER } })), res);
+        await grantorController.vacate(fakeReq(await worldAsk('vacate', { key: FOUNDER_KEY, generation: 0, cert: { token: 'standing', subject: HOLDER } })), res);
         expect(res.statusCode).to.equal(409);
         expect(grantRegister.vacate.called).to.equal(false);
       });
@@ -583,7 +633,7 @@ describe('quorumGrant grantorController', () => {
   describe('the founder plane — oneshot membership answers from the founding record', () => {
     it('an oneshot ask consults the founding committee, never the walk', async () => {
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot', key: FOUNDER_KEY })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { mode: 'oneshot', key: FOUNDER_KEY })), res);
       expect(res.statusCode).to.equal(200);
       expect(foundingCommittee.selfOnFoundingCommittee.calledOnceWith('myapp', 500_000, FINGERPRINT, 0)).to.equal(true);
       expect(networkStateService.membershipAt.called).to.equal(false);
@@ -592,7 +642,7 @@ describe('quorumGrant grantorController', () => {
 
     it('refuses an oneshot ask that is not a founder register', async () => {
       const plain = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot' })), plain);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { mode: 'oneshot' })), plain);
       expect(plain.statusCode).to.equal(409);
       expect(plain.body.data.message).to.contain('not a founder register');
       expect(grantRegister.prepare.called).to.equal(false);
@@ -601,21 +651,21 @@ describe('quorumGrant grantorController', () => {
     it('answers a basis its own window never covered — the record outlives the album', async () => {
       networkStateService.membershipAt.returns(null);
       const res = fakeRes();
-      await grantorController.accept(fakeReq(signedAsk('accept', { mode: 'oneshot', ttlMs: undefined, key: FOUNDER_KEY })), res);
+      await grantorController.accept(fakeReq(await worldAsk('accept', { mode: 'oneshot', ttlMs: undefined, key: FOUNDER_KEY })), res);
       expect(res.statusCode).to.equal(200);
       expect(grantRegister.accept.calledOnce).to.equal(true);
     });
 
     it('a founder round addresses one register cell per world and generation', async () => {
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot', key: FOUNDER_KEY })), fakeRes());
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { mode: 'oneshot', key: FOUNDER_KEY })), fakeRes());
       expect(grantRegister.prepare.firstCall.args[0]).to.equal(`${FOUNDER_KEY}@0`);
 
-      await grantorController.accept(fakeReq(signedAsk('accept', {
+      await grantorController.accept(fakeReq(await worldAsk('accept', {
         mode: 'oneshot', ttlMs: undefined, generation: 2, key: FOUNDER_KEY,
       })), fakeRes());
       expect(grantRegister.accept.firstCall.args[0]).to.equal(`${FOUNDER_KEY}@2`);
 
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), fakeRes());
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), fakeRes());
       expect(grantRegister.prepare.secondCall.args[0]).to.equal('myapp/master');
     });
 
@@ -634,7 +684,7 @@ describe('quorumGrant grantorController', () => {
         member: false, reason: 'ask names a different committee basis',
       });
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { mode: 'oneshot', key: FOUNDER_KEY })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { mode: 'oneshot', key: FOUNDER_KEY })), res);
       expect(res.statusCode).to.equal(409);
       expect(res.body.data.message).to.contain('basis');
       expect(grantRegister.prepare.called).to.equal(false);
@@ -642,7 +692,7 @@ describe('quorumGrant grantorController', () => {
 
     it('held asks never consult the founding committee', async () => {
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), res);
       expect(res.statusCode).to.equal(200);
       expect(foundingCommittee.selfOnFoundingCommittee.called).to.equal(false);
     });
@@ -652,7 +702,7 @@ describe('quorumGrant grantorController', () => {
     it('refuses an asker that does not hold the app', async () => {
       registryManager.appLocationOf.resolves([]);
       const res = fakeRes();
-      await grantorController.accept(fakeReq(signedAsk('accept', { mode: 'oneshot', ttlMs: undefined, key: FOUNDER_KEY })), res);
+      await grantorController.accept(fakeReq(await worldAsk('accept', { mode: 'oneshot', ttlMs: undefined, key: FOUNDER_KEY })), res);
       expect(res.statusCode).to.equal(403);
       expect(res.body.data.message).to.contain('holder');
       expect(grantRegister.accept.called).to.equal(false);
@@ -661,7 +711,7 @@ describe('quorumGrant grantorController', () => {
     it('probe alone skips the holder check — reading costs nothing', async () => {
       registryManager.appLocationOf.resolves([]);
       const res = fakeRes();
-      await grantorController.probe(fakeReq(signedAsk('probe')), res);
+      await grantorController.probe(fakeReq(await worldAsk('probe')), res);
       expect(res.statusCode).to.equal(200);
       expect(grantRegister.probe.calledOnce).to.equal(true);
     });
@@ -671,11 +721,11 @@ describe('quorumGrant grantorController', () => {
       // the releaser's row is already gone at every cell that heard it
       registryManager.appLocationOf.resolves([]);
       const released = fakeRes();
-      await grantorController.release(fakeReq(signedAsk('release')), released);
+      await grantorController.release(fakeReq(await worldAsk('release')), released);
       expect(released.statusCode).to.equal(200);
       expect(grantRegister.release.calledOnce).to.equal(true);
       const renewed = fakeRes();
-      await grantorController.renew(fakeReq(signedAsk('renew')), renewed);
+      await grantorController.renew(fakeReq(await worldAsk('renew')), renewed);
       expect(renewed.statusCode).to.equal(403);
       expect(grantRegister.renew.called).to.equal(false);
     });
@@ -701,7 +751,7 @@ describe('quorumGrant grantorController', () => {
       it('verifies the copy as the gossip intake would, stores it as a synced one, and answers the ask', async () => {
         registryManager.appLocationOf.onFirstCall().resolves([]).onSecondCall().resolves([askerRow]);
         const res = fakeRes();
-        await grantorController.accept(fakeReq(signedAsk('accept', { announcement })), res);
+        await grantorController.accept(fakeReq(await worldAsk('accept', { announcement })), res);
         expect(res.statusCode).to.equal(200);
         expect(grantRegister.accept.calledOnce).to.equal(true);
         expect(fluxCommunicationUtils.verifyFluxBroadcast.calledOnceWith(announcement)).to.equal(true);
@@ -715,14 +765,14 @@ describe('quorumGrant grantorController', () => {
       it('a renewal seats the same way', async () => {
         registryManager.appLocationOf.onFirstCall().resolves([]).onSecondCall().resolves([askerRow]);
         const res = fakeRes();
-        await grantorController.renew(fakeReq(signedAsk('renew', { announcement })), res);
+        await grantorController.renew(fakeReq(await worldAsk('renew', { announcement })), res);
         expect(res.statusCode).to.equal(200);
         expect(grantRegister.renew.calledOnce).to.equal(true);
       });
 
       it('a cell that holds the row never reads the copy', async () => {
         const res = fakeRes();
-        await grantorController.accept(fakeReq(signedAsk('accept', { announcement })), res);
+        await grantorController.accept(fakeReq(await worldAsk('accept', { announcement })), res);
         expect(res.statusCode).to.equal(200);
         expect(fluxCommunicationUtils.verifyFluxBroadcast.called).to.equal(false);
         expect(messageStore.storeBatchAppRunningEvents.called).to.equal(false);
@@ -732,7 +782,7 @@ describe('quorumGrant grantorController', () => {
       it('only the asker\'s own announcement counts: another node\'s copy is refused unread', async () => {
         registryManager.appLocationOf.resolves([]);
         const res = fakeRes();
-        await grantorController.accept(fakeReq(signedAsk('accept', { announcement: runningAnnouncement('10.1.0.1:16127') })), res);
+        await grantorController.accept(fakeReq(await worldAsk('accept', { announcement: runningAnnouncement('10.1.0.1:16127') })), res);
         expect(res.statusCode).to.equal(403);
         expect(res.body.data.message).to.contain('holder');
         expect(fluxCommunicationUtils.verifyFluxBroadcast.called).to.equal(false);
@@ -746,7 +796,7 @@ describe('quorumGrant grantorController', () => {
           result: fluxCommunicationUtils.VerifyResult.BAD_SIGNATURE, announcer: null,
         });
         const res = fakeRes();
-        await grantorController.accept(fakeReq(signedAsk('accept', { announcement })), res);
+        await grantorController.accept(fakeReq(await worldAsk('accept', { announcement })), res);
         expect(res.statusCode).to.equal(403);
         expect(messageStore.storeBatchAppRunningEvents.called).to.equal(false);
         expect(grantRegister.accept.called).to.equal(false);
@@ -757,7 +807,7 @@ describe('quorumGrant grantorController', () => {
       it('a copy that still names no row for the asker is refused after it is stored', async () => {
         registryManager.appLocationOf.resolves([]);
         const res = fakeRes();
-        await grantorController.accept(fakeReq(signedAsk('accept', { announcement })), res);
+        await grantorController.accept(fakeReq(await worldAsk('accept', { announcement })), res);
         expect(res.statusCode).to.equal(403);
         expect(messageStore.storeBatchAppRunningEvents.calledOnce).to.equal(true);
         expect(registryManager.appLocationOf.calledTwice).to.equal(true);
@@ -766,7 +816,7 @@ describe('quorumGrant grantorController', () => {
 
       it('a malformed copy is a malformed ask', async () => {
         const res = fakeRes();
-        await grantorController.accept(fakeReq(signedAsk('accept', { announcement: { version: 2, data: { type: 'fluxapprunning' } } })), res);
+        await grantorController.accept(fakeReq(await worldAsk('accept', { announcement: { version: 2, data: { type: 'fluxapprunning' } } })), res);
         expect(res.statusCode).to.equal(400);
         expect(res.body.data.message).to.equal('malformed announcement');
         expect(registryManager.appLocationOf.called).to.equal(false);
@@ -787,7 +837,7 @@ describe('quorumGrant grantorController', () => {
         { ip: `${ASKER_HOST}:16127`, runningSince: Date.now() - 60_000 },
       ]);
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), res);
       expect(res.statusCode).to.equal(403);
       expect(res.body.data.message).to.contain('young');
     });
@@ -801,7 +851,7 @@ describe('quorumGrant grantorController', () => {
         { ip: `${ASKER_HOST}:16127`, runningSince: Date.now() - 60_000 },
       ]);
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), res);
       expect(res.statusCode).to.equal(200);
       expect(grantRegister.prepare.calledOnce).to.equal(true);
     });
@@ -811,7 +861,7 @@ describe('quorumGrant grantorController', () => {
         { ip: `${ASKER_HOST}:16127`, runningSince: Date.now() - 60_000 },
       ]);
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), res);
       expect(res.statusCode).to.equal(200);
     });
 
@@ -821,7 +871,7 @@ describe('quorumGrant grantorController', () => {
         { ip: `${ASKER_HOST}:16127`, runningSince: Date.now() - 60_000 },
       ]);
       const res = fakeRes();
-      await grantorController.accept(fakeReq(signedAsk('accept', { mode: 'oneshot', ttlMs: undefined, key: FOUNDER_KEY })), res);
+      await grantorController.accept(fakeReq(await worldAsk('accept', { mode: 'oneshot', ttlMs: undefined, key: FOUNDER_KEY })), res);
       expect(res.statusCode).to.equal(200);
     });
   });
@@ -838,7 +888,7 @@ describe('quorumGrant grantorController', () => {
       expect(overflowRes.statusCode).to.equal(429);
 
       const otherPeerRes = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare'), '10.1.0.1'), otherPeerRes);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare'), '10.1.0.1'), otherPeerRes);
       expect(otherPeerRes.statusCode).to.not.equal(429);
     });
   });
@@ -1002,11 +1052,11 @@ describe('quorumGrant grantorController', () => {
       sinon.stub(grantRegister, 'adopt').resolves(null);
 
       const bareRes = fakeRes();
-      await grantorController.renew(fakeReq(signedAsk('renew')), bareRes);
+      await grantorController.renew(fakeReq(await worldAsk('renew')), bareRes);
       expect(bareRes.statusCode, 'no chain, not on the committee at all').to.equal(409);
 
       const chainRes = fakeRes();
-      await grantorController.renew(fakeReq(signedAsk('renew', { chain })), chainRes);
+      await grantorController.renew(fakeReq(await worldAsk('renew', { chain })), chainRes);
       expect(chainRes.statusCode).to.equal(200);
       expect(grantRegister.adopt.calledOnce, 'it served without adopting').to.equal(true);
       expect(grantRegister.adopt.firstCall.args[1].grantee).to.equal(ASKER);
@@ -1023,7 +1073,7 @@ describe('quorumGrant grantorController', () => {
       sinon.stub(grantRegister, 'adopt').resolves(null);
 
       const res = fakeRes();
-      await grantorController.renew(fakeReq(signedAsk('renew', { chain })), res);
+      await grantorController.renew(fakeReq(await worldAsk('renew', { chain })), res);
       expect(res.statusCode).to.equal(409);
       expect(grantRegister.renew.called, 'it served with no state at all').to.equal(false);
     });
@@ -1051,7 +1101,7 @@ describe('quorumGrant grantorController', () => {
       sinon.stub(grantRegister, 'adopt').resolves(null);
 
       const res = fakeRes();
-      await grantorController.renew(fakeReq(signedAsk('renew', { chain })), res);
+      await grantorController.renew(fakeReq(await worldAsk('renew', { chain })), res);
       expect(grantRegister.adopt.called, 'adopted a term no quorum records').to.equal(false);
     });
 
@@ -1067,7 +1117,7 @@ describe('quorumGrant grantorController', () => {
       sinon.stub(grantRegister, 'adopt').resolves(null);
 
       const res = fakeRes();
-      await grantorController.renew(fakeReq(signedAsk('renew', { chain })), res);
+      await grantorController.renew(fakeReq(await worldAsk('renew', { chain })), res);
       expect(res.statusCode).to.equal(200);
       expect(grantRegister.adopt.called, 'nothing to adopt, so nothing written').to.equal(false);
     });
@@ -1078,11 +1128,11 @@ describe('quorumGrant grantorController', () => {
       });
 
       const bareRes = fakeRes();
-      await grantorController.renew(fakeReq(signedAsk('renew')), bareRes);
+      await grantorController.renew(fakeReq(await worldAsk('renew')), bareRes);
       expect(bareRes.statusCode).to.equal(200);
 
       const chainRes = fakeRes();
-      await grantorController.renew(fakeReq(signedAsk('renew', { chain })), chainRes);
+      await grantorController.renew(fakeReq(await worldAsk('renew', { chain })), chainRes);
       expect(chainRes.statusCode).to.equal(409);
     });
 
@@ -1095,7 +1145,7 @@ describe('quorumGrant grantorController', () => {
         txhash: added.txhash, txindex: added.outidx,
       });
       const res = fakeRes();
-      await grantorController.renew(fakeReq(signedAsk('renew')), res);
+      await grantorController.renew(fakeReq(await worldAsk('renew')), res);
       expect(res.statusCode).to.equal(200);
     });
   });
@@ -1369,7 +1419,7 @@ describe('quorumGrant grantorController', () => {
       selfIs(replacement);
 
       const without = fakeRes();
-      await grantorController.probe(fakeReq(signedAsk('probe')), without);
+      await grantorController.probe(fakeReq(await worldAsk('probe')), without);
       expect(without.statusCode).to.equal(409);
 
       const withCancels = fakeRes();
@@ -1388,7 +1438,7 @@ describe('quorumGrant grantorController', () => {
       selfIs(cancelled);
 
       const without = fakeRes();
-      await grantorController.probe(fakeReq(signedAsk('probe')), without);
+      await grantorController.probe(fakeReq(await worldAsk('probe')), without);
       expect(without.statusCode).to.equal(200);
 
       const withCancels = fakeRes();
@@ -1414,7 +1464,7 @@ describe('quorumGrant grantorController', () => {
       });
 
       const res = fakeRes();
-      await grantorController.probe(fakeReq(signedAsk('probe')), res);
+      await grantorController.probe(fakeReq(await worldAsk('probe')), res);
       expect(res.statusCode).to.equal(200);
     });
 
@@ -1465,11 +1515,11 @@ describe('quorumGrant grantorController', () => {
       });
 
       const probeRes = fakeRes();
-      await grantorController.probe(fakeReq(signedAsk('probe')), probeRes);
+      await grantorController.probe(fakeReq(await worldAsk('probe')), probeRes);
       expect(probeRes.statusCode).to.equal(503);
 
       const renewRes = fakeRes();
-      await grantorController.renew(fakeReq(signedAsk('renew')), renewRes);
+      await grantorController.renew(fakeReq(await worldAsk('renew')), renewRes);
       expect(renewRes.statusCode).to.equal(503);
 
       const recordReq = fakeReq({});
@@ -1485,7 +1535,7 @@ describe('quorumGrant grantorController', () => {
       });
       const res = fakeRes();
       await grantorController.probe(
-        fakeReq(signedAsk('probe', { key: FOUNDER_KEY, mode: 'oneshot' })), res,
+        fakeReq(await worldAsk('probe', { key: FOUNDER_KEY, mode: 'oneshot' })), res,
       );
       expect(res.statusCode).to.equal(200);
     });
@@ -1517,13 +1567,13 @@ describe('quorumGrant grantorController', () => {
 
       sinon.stub(serviceHelper, 'axiosGet').rejects(new Error('unreachable'));
       const refused = fakeRes();
-      await grantorController.probe(fakeReq(signedAsk('probe')), refused);
+      await grantorController.probe(fakeReq(await worldAsk('probe')), refused);
       expect(refused.statusCode).to.equal(503);
       expect(grantRegister.adopt.called).to.equal(false);
 
       serviceHelper.axiosGet.resolves(TERM_RECORD);
       const served = fakeRes();
-      await grantorController.probe(fakeReq(signedAsk('probe')), served);
+      await grantorController.probe(fakeReq(await worldAsk('probe')), served);
       expect(served.statusCode).to.equal(200);
       expect(grantRegister.adopt.calledOnce).to.equal(true);
       const [key, term] = grantRegister.adopt.firstCall.args;
@@ -1533,7 +1583,7 @@ describe('quorumGrant grantorController', () => {
 
       // resynced once: the next ask is served without another fetch
       const again = fakeRes();
-      await grantorController.probe(fakeReq(signedAsk('probe')), again);
+      await grantorController.probe(fakeReq(await worldAsk('probe')), again);
       expect(again.statusCode).to.equal(200);
       expect(grantRegister.adopt.calledOnce).to.equal(true);
     });
@@ -1545,7 +1595,7 @@ describe('quorumGrant grantorController', () => {
       });
 
       const res = fakeRes();
-      await grantorController.probe(fakeReq(signedAsk('probe')), res);
+      await grantorController.probe(fakeReq(await worldAsk('probe')), res);
       expect(res.statusCode).to.equal(200);
       expect(grantRegister.adopt.called).to.equal(false);
     });
@@ -1568,7 +1618,7 @@ describe('quorumGrant grantorController', () => {
       });
 
       const res = fakeRes();
-      await grantorController.probe(fakeReq(signedAsk('probe')), res);
+      await grantorController.probe(fakeReq(await worldAsk('probe')), res);
       expect(res.statusCode).to.equal(200);
       expect(grantRegister.adoptCancels.calledOnce).to.equal(true);
       const [key, overlay] = grantRegister.adoptCancels.firstCall.args;
@@ -1582,7 +1632,7 @@ describe('quorumGrant grantorController', () => {
 
       const res = fakeRes();
       await grantorController.probe(
-        fakeReq(signedAsk('probe', { key: FOUNDER_KEY, mode: 'oneshot' })), res,
+        fakeReq(await worldAsk('probe', { key: FOUNDER_KEY, mode: 'oneshot' })), res,
       );
       expect(res.statusCode).to.equal(200);
     });
@@ -1598,7 +1648,7 @@ describe('quorumGrant grantorController', () => {
       });
 
       const draining = fakeRes();
-      await grantorController.probe(fakeReq(signedAsk('probe', { generation: 1 })), draining);
+      await grantorController.probe(fakeReq(await worldAsk('probe', { generation: 1 })), draining);
       expect(draining.statusCode).to.equal(409);
       expect(draining.body.data.message).to.match(/draining/);
 
@@ -1606,13 +1656,13 @@ describe('quorumGrant grantorController', () => {
         status: 'success', data: { synced: true, height: 115, header: 115 },
       });
       const served = fakeRes();
-      await grantorController.probe(fakeReq(signedAsk('probe', { generation: 1 })), served);
+      await grantorController.probe(fakeReq(await worldAsk('probe', { generation: 1 })), served);
       expect(served.statusCode).to.equal(200);
     });
 
     it('generation zero never drains — there is no old world to outlive', async () => {
       const res = fakeRes();
-      await grantorController.probe(fakeReq(signedAsk('probe')), res);
+      await grantorController.probe(fakeReq(await worldAsk('probe')), res);
       expect(res.statusCode).to.equal(200);
     });
   });
@@ -1642,13 +1692,13 @@ describe('quorumGrant grantorController', () => {
       grantorController.resetActivationForTests({ activateAt: 100, preWindowBlocks: 40 });
       atHeight(59);
       const shut = fakeRes();
-      await grantorController.probe(fakeReq(signedAsk('probe')), shut);
+      await grantorController.probe(fakeReq(await worldAsk('probe')), shut);
       expect(shut.statusCode).to.equal(409);
       expect(shut.body.data.message).to.match(/the register opens for new keys at height 60/);
 
       atHeight(60);
       const served = fakeRes();
-      await grantorController.probe(fakeReq(signedAsk('probe')), served);
+      await grantorController.probe(fakeReq(await worldAsk('probe')), served);
       expect(served.statusCode).to.equal(200);
     });
 
@@ -1656,7 +1706,7 @@ describe('quorumGrant grantorController', () => {
       grantorController.resetActivationForTests({ activateAt: 100, preWindowBlocks: 40 });
       atHeight(99);
       const res = fakeRes();
-      await grantorController.probe(fakeReq(signedAsk('probe')), res);
+      await grantorController.probe(fakeReq(await worldAsk('probe')), res);
       expect(res.statusCode).to.equal(200);
     });
 
@@ -1664,7 +1714,7 @@ describe('quorumGrant grantorController', () => {
       grantorController.resetActivationForTests({ activateAt: 100 });
       atHeight(59);
       const shut = fakeRes();
-      await grantorController.probe(fakeReq(signedAsk('probe')), shut);
+      await grantorController.probe(fakeReq(await worldAsk('probe')), shut);
       expect(shut.statusCode).to.equal(409);
       expect(shut.body.data.message).to.match(/at height 60/);
     });
@@ -1675,7 +1725,7 @@ describe('quorumGrant grantorController', () => {
       grantRegister.read.resolves({ accepted: { epoch: 2, grantee: 'x:1', mode: 'held' } });
 
       const res = fakeRes();
-      await grantorController.probe(fakeReq(signedAsk('probe')), res);
+      await grantorController.probe(fakeReq(await worldAsk('probe')), res);
       expect(res.statusCode).to.equal(200);
     });
 
@@ -1685,7 +1735,7 @@ describe('quorumGrant grantorController', () => {
 
       const res = fakeRes();
       await grantorController.probe(
-        fakeReq(signedAsk('probe', { key: FOUNDER_KEY, mode: 'oneshot' })), res,
+        fakeReq(await worldAsk('probe', { key: FOUNDER_KEY, mode: 'oneshot' })), res,
       );
       expect(res.statusCode).to.equal(200);
     });
@@ -1702,7 +1752,7 @@ describe('quorumGrant grantorController', () => {
       grantorController.registerSyncReadyProvider(() => false);
 
       const refused = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), refused);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), refused);
       expect(refused.statusCode).to.equal(503);
       expect(refused.body.data.message).to.match(/sync/i);
 
@@ -1718,7 +1768,7 @@ describe('quorumGrant grantorController', () => {
       grantorController.registerSyncReadyProvider(() => false);
       const res = fakeRes();
       await grantorController.probe(
-        fakeReq(signedAsk('probe', { key: FOUNDER_KEY, mode: 'oneshot' })), res,
+        fakeReq(await worldAsk('probe', { key: FOUNDER_KEY, mode: 'oneshot' })), res,
       );
       expect(res.statusCode).to.equal(200);
     });
@@ -1726,12 +1776,12 @@ describe('quorumGrant grantorController', () => {
     it('serves once the provider answers ready, and the reopening stamps the lock-delay anchor', async () => {
       let ready = false;
       grantorController.registerSyncReadyProvider(() => ready);
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), fakeRes());
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), fakeRes());
 
       const before = Date.now();
       ready = true;
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), res);
       expect(res.statusCode).to.equal(200);
       const context = grantRegister.prepare.lastCall.args[2];
       expect(context.servingSinceMs).to.be.at.least(before);
@@ -1740,12 +1790,12 @@ describe('quorumGrant grantorController', () => {
     it('an unregistered or throwing provider fails closed', async () => {
       grantorController.registerSyncReadyProvider(null);
       const unregistered = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), unregistered);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), unregistered);
       expect(unregistered.statusCode).to.equal(503);
 
       grantorController.registerSyncReadyProvider(() => { throw new Error('boom'); });
       const throwing = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), throwing);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), throwing);
       expect(throwing.statusCode).to.equal(503);
     });
   });
@@ -1765,7 +1815,7 @@ describe('quorumGrant grantorController', () => {
         status: 'success', data: { synced: false, height: 0 },
       });
       const staleRes = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), staleRes);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), staleRes);
       expect(staleRes.statusCode).to.equal(503);
 
       const before = Date.now();
@@ -1773,7 +1823,7 @@ describe('quorumGrant grantorController', () => {
         status: 'success', data: { synced: true, height: 100, header: 100 },
       });
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), res);
       expect(res.statusCode).to.equal(200);
       const context = grantRegister.prepare.lastCall.args[2];
       expect(context, 'the register call must carry the anchor context').to.be.an('object');
@@ -1794,7 +1844,7 @@ describe('quorumGrant grantorController', () => {
         status: 'success', data: { synced: true, height: 100, header: 100 },
       });
       const res = fakeRes();
-      await grantorController.accept(fakeReq(signedAsk('accept')), res);
+      await grantorController.accept(fakeReq(await worldAsk('accept')), res);
       expect(res.statusCode).to.equal(200);
       const context = grantRegister.accept.lastCall.args[2];
       expect(context, 'the register call must carry the anchor context').to.be.an('object');
@@ -1812,7 +1862,7 @@ describe('quorumGrant grantorController', () => {
 
       const before = Date.now();
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), res);
       expect(res.statusCode).to.equal(200);
       const context = grantRegister.prepare.lastCall.args[2];
       expect(context, 'the register call must carry the anchor context').to.be.an('object');
@@ -1835,13 +1885,16 @@ describe('quorumGrant grantorController', () => {
     });
     const retired = retiredKeys.map((k, i) => ({ txhash: String(i + 5).repeat(64).slice(0, 64), outidx: 0, pubkey: k.pubkey, ip: `10.${i + 20}.0.1:16127` }));
     const outpointOf = (n) => `${n.txhash}:${n.outidx}`;
-    const credentialFor = (grantee, epoch, signers = retired, generation = 0) => ({
+    const credentialFor = (grantee, epoch, signers = retired, generation = 0, generationHeight = null) => ({
       fingerprint: RETIRED_FP,
       generation,
+      generationHeight,
       epoch,
       roster: null,
       acceptances: signers.map((node, i) => {
-        const fields = signedEnvelope.fieldsFor('termaccept', { key: 'myapp/master', fingerprint: RETIRED_FP, generation, epoch, grantee });
+        const fields = signedEnvelope.fieldsFor('termaccept', {
+          key: 'myapp/master', fingerprint: RETIRED_FP, generation, generationHeight, epoch, grantee,
+        });
         return { grantor: outpointOf(node), signature: signedEnvelope.sign('termaccept', fields, retiredKeys[i].wif).signature };
       }),
     });
@@ -1850,49 +1903,56 @@ describe('quorumGrant grantorController', () => {
       sinon.stub(networkStateService, 'membershipAt').callsFake((fp) => (fp === RETIRED_FP ? retired : fixtureFleet()));
       // the standing world is generation 1, its drain over, the registration's below it
       messageStore.getGrantGenerationRecord.resolves({ data: { generation: 1, height: 50 } });
-      messageStore.predecessorGeneration.resolves(0);
+      messageStore.predecessorWorld.resolves({ generation: 0, height: null });
     });
 
     it('after a v8 sale steps the app back to generation 0, a credential from the seller\'s generation 1 verifies: it is the world that stood before', async () => {
       messageStore.standingGeneration.resolves({ record: null, aside: false, ownership: { owner: 'buyer', from: 30, transferred: true } });
-      messageStore.predecessorGeneration.resolves(1);
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 0, carried: credentialFor(ASKER, 4, retired, 1) })), fakeRes());
+      // the seller re-rolled to 1 at height 20; the buyer's world is the registration's from 30
+      messageStore.predecessorWorld.resolves({ generation: 1, height: 20 });
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', {
+        generation: 0, generationHeight: 30, carried: credentialFor(ASKER, 4, retired, 1, 20),
+      })), fakeRes());
       expect(grantRegister.prepare.lastCall.args[2].carriedIncumbent).to.equal(ASKER);
-      expect(messageStore.predecessorGeneration.lastCall.args).to.deep.equal(['myapp', 'master']);
+      expect(messageStore.predecessorWorld.lastCall.args).to.deep.equal(['myapp', 'master']);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', {
+        generation: 0, generationHeight: 30, carried: credentialFor(ASKER, 4, retired, 1, null),
+      })), fakeRes());
+      expect(grantRegister.prepare.lastCall.args[2].carriedIncumbent, 'the seller\'s generation in another world').to.equal(null);
     });
 
     it('with no world this cell can name before the standing one, no credential verifies', async () => {
-      messageStore.predecessorGeneration.resolves(null);
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1, carried: credentialFor(ASKER, 4) })), fakeRes());
+      messageStore.predecessorWorld.resolves(null);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 1, carried: credentialFor(ASKER, 4) })), fakeRes());
       expect(grantRegister.prepare.lastCall.args[2].carriedIncumbent).to.equal(null);
     });
 
     it('a valid credential reaches the register as the verified incumbent', async () => {
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1, carried: credentialFor(ASKER, 4) })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 1, carried: credentialFor(ASKER, 4) })), res);
       expect(res.statusCode).to.equal(200);
       const context = grantRegister.prepare.lastCall.args[2];
       expect(context.carriedIncumbent).to.equal(ASKER);
-      await grantorController.accept(fakeReq(signedAsk('accept', { generation: 1, carried: credentialFor(ASKER, 4) })), fakeRes());
+      await grantorController.accept(fakeReq(await worldAsk('accept', { generation: 1, carried: credentialFor(ASKER, 4) })), fakeRes());
       expect(grantRegister.accept.lastCall.args[2].carriedIncumbent).to.equal(ASKER);
     });
 
     it('a credential that does not verify makes the ask a stranger\'s, not a refusal', async () => {
       const res = fakeRes();
       const other = `${'9'.repeat(64)}:0`;
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1, carried: credentialFor(other, 4) })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 1, carried: credentialFor(other, 4) })), res);
       expect(res.statusCode).to.equal(200);
       expect(grantRegister.prepare.lastCall.args[2].carriedIncumbent).to.equal(null);
       const unknownBasis = { ...credentialFor(ASKER, 4), fingerprint: 'd'.repeat(64) };
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1, carried: unknownBasis })), fakeRes());
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 1, carried: unknownBasis })), fakeRes());
       expect(grantRegister.prepare.lastCall.args[2].carriedIncumbent).to.equal(null);
     });
 
     it('an ask without a credential carries null; a malformed one is refused whole', async () => {
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1 })), fakeRes());
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 1 })), fakeRes());
       expect(grantRegister.prepare.lastCall.args[2].carriedIncumbent).to.equal(null);
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1, carried: { fingerprint: RETIRED_FP, acceptances: 'x' } })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 1, carried: { fingerprint: RETIRED_FP, acceptances: 'x' } })), res);
       expect(res.statusCode).to.equal(400);
       expect(res.body.data.message).to.match(/malformed credential/);
     });
@@ -1988,13 +2048,13 @@ describe('quorumGrant grantorController', () => {
       viewAt(115);
       // the refereeing return is observed at the very first ask, whatever it asks
       const retired = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 0 })), retired);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 0 })), retired);
       expect(retired.statusCode).to.equal(409);
       await tick(5);
 
       const before = Date.now();
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1 })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 1 })), res);
       expect(res.statusCode).to.equal(200);
       const context = grantRegister.prepare.lastCall.args[2];
       expect(context, 'the register call must carry the anchor context').to.be.an('object');
@@ -2006,13 +2066,13 @@ describe('quorumGrant grantorController', () => {
       rerolled(1, 95);
       viewAt(115);
       const released = fakeRes();
-      await grantorController.release(fakeReq(signedAsk('release', { generation: 0 })), released);
+      await grantorController.release(fakeReq(await worldAsk('release', { generation: 0 })), released);
       expect(released.statusCode).to.equal(200);
       await tick(5);
 
       const before = Date.now();
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1 })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 1 })), res);
       expect(res.statusCode).to.equal(200);
       expect(grantRegister.prepare.lastCall.args[2].servingSinceMs, 'the anchor is the first standing-generation ask, not the release')
         .to.be.at.least(before);
@@ -2021,10 +2081,10 @@ describe('quorumGrant grantorController', () => {
     it('the stamp is made once: a later ask under the same generation carries the same moment', async () => {
       rerolled(1, 95);
       viewAt(115);
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1 })), fakeRes());
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 1 })), fakeRes());
       const first = grantRegister.prepare.lastCall.args[2].servingSinceMs;
       await tick(5);
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1 })), fakeRes());
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 1 })), fakeRes());
       expect(grantRegister.prepare.lastCall.args[2].servingSinceMs).to.equal(first);
     });
 
@@ -2032,7 +2092,7 @@ describe('quorumGrant grantorController', () => {
       rerolled(1, 95);
       viewAt(100);
       const draining = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1 })), draining);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 1 })), draining);
       expect(draining.statusCode).to.equal(409);
       expect(draining.body.data.message).to.match(/draining/);
       await tick(5);
@@ -2040,7 +2100,7 @@ describe('quorumGrant grantorController', () => {
       const before = Date.now();
       viewAt(115);
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1 })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 1 })), res);
       expect(res.statusCode).to.equal(200);
       expect(grantRegister.prepare.lastCall.args[2].servingSinceMs).to.be.at.least(before);
     });
@@ -2048,7 +2108,7 @@ describe('quorumGrant grantorController', () => {
     it('a newer generation re-stamps at its own first serve', async () => {
       rerolled(1, 95);
       viewAt(115);
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 1 })), fakeRes());
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 1 })), fakeRes());
       const first = grantRegister.prepare.lastCall.args[2].servingSinceMs;
       await tick(5);
 
@@ -2056,7 +2116,7 @@ describe('quorumGrant grantorController', () => {
       rerolled(2, 110);
       viewAt(130);
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 2 })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 2 })), res);
       expect(res.statusCode).to.equal(200);
       const stamped = grantRegister.prepare.lastCall.args[2].servingSinceMs;
       expect(stamped).to.be.at.least(before);
@@ -2067,7 +2127,7 @@ describe('quorumGrant grantorController', () => {
       messageStore.standingGeneration.resolves({ record: null, aside: false, ownership: { owner: 'buyer', from: 200, transferred: true } });
       viewAt(210);
       const draining = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 0 })), draining);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 0 })), draining);
       expect(draining.statusCode).to.equal(409);
       expect(draining.body.data.message).to.contain('draining until height 220');
       await tick(5);
@@ -2075,7 +2135,7 @@ describe('quorumGrant grantorController', () => {
       const before = Date.now();
       viewAt(220);
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 0 })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 0 })), res);
       expect(res.statusCode).to.equal(200);
       expect(grantRegister.prepare.lastCall.args[2].servingSinceMs).to.be.at.least(before);
     });
@@ -2084,12 +2144,12 @@ describe('quorumGrant grantorController', () => {
       // the refereeing return is stamped at the first ask of all; a FIRST ask
       // about another key, later, must carry that same return and nothing
       // of its own — the stamp is per key, so only a second key can tell
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), fakeRes());
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), fakeRes());
       const returned = grantRegister.prepare.lastCall.args[2].servingSinceMs;
       await tick(5);
       const before = Date.now();
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { key: 'otherapp/master' })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { key: 'otherapp/master' })), res);
       expect(res.statusCode).to.equal(200);
       const other = grantRegister.prepare.lastCall.args[2].servingSinceMs;
       expect(other).to.equal(returned);
@@ -2123,7 +2183,7 @@ describe('quorumGrant grantorController', () => {
     it('a currency 409 carries the standing record, not just its number', async () => {
       messageStore.getGrantGenerationRecord.resolves({ data: RECORD });
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare')), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare')), res);
       expect(res.statusCode).to.equal(409);
       expect(res.body.data.generation).to.equal(2);
       expect(res.body.data.generationRecord).to.deep.equal(RECORD);
@@ -2135,7 +2195,7 @@ describe('quorumGrant grantorController', () => {
         status: 'success', data: { synced: false, height: 100, header: 130 },
       });
       const stale = fakeRes();
-      await grantorController.renew(fakeReq(signedAsk('renew')), stale);
+      await grantorController.renew(fakeReq(await worldAsk('renew')), stale);
       expect(stale.statusCode).to.equal(503);
       expect(stale.body.data.generation).to.equal(2);
       expect(stale.body.data.generationRecord).to.deep.equal(RECORD);
@@ -2145,7 +2205,7 @@ describe('quorumGrant grantorController', () => {
       });
       grantorController.registerSyncReadyProvider(() => false);
       const syncing = fakeRes();
-      await grantorController.renew(fakeReq(signedAsk('renew')), syncing);
+      await grantorController.renew(fakeReq(await worldAsk('renew')), syncing);
       expect(syncing.statusCode).to.equal(503);
       expect(syncing.body.data.generation).to.equal(2);
       expect(syncing.body.data.generationRecord).to.deep.equal(RECORD);
@@ -2155,7 +2215,7 @@ describe('quorumGrant grantorController', () => {
       messageStore.getGrantGenerationRecord.resolves({ data: RECORD });
       registryManager.appLocationOf.resolves([]);
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 2 })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 2 })), res);
       expect(res.statusCode).to.equal(403);
       expect(res.body.data.generation).to.equal(2);
       expect(res.body.data.generationRecord).to.deep.equal(RECORD);
@@ -2166,7 +2226,7 @@ describe('quorumGrant grantorController', () => {
         status: 'success', data: { synced: false, height: 100, header: 130 },
       });
       const res = fakeRes();
-      await grantorController.renew(fakeReq(signedAsk('renew')), res);
+      await grantorController.renew(fakeReq(await worldAsk('renew')), res);
       expect(res.statusCode).to.equal(503);
       expect(res.body.data.generation).to.equal(0);
       expect(res.body.data.generationRecord).to.equal(null);
@@ -2175,7 +2235,7 @@ describe('quorumGrant grantorController', () => {
     it('a refusal before the key is read teaches nothing — there is no key to answer for', async () => {
       messageStore.getGrantGenerationRecord.resolves({ data: RECORD });
       const res = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { key: 'bad key' })), res);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { key: 'bad key' })), res);
       expect(res.statusCode).to.equal(400);
       expect(res.body.data).to.not.have.property('generation');
       expect(res.body.data).to.not.have.property('generationRecord');
@@ -2196,7 +2256,7 @@ describe('quorumGrant grantorController', () => {
     it('a refusal and a record read name the height the standing world took over at: a sale naming no record teaches generation 0 from the sale', async () => {
       messageStore.standingGeneration.resolves({ record: null, aside: false, ownership: { owner: 'buyer', from: 90, transferred: true } });
       const refused = fakeRes();
-      await grantorController.prepare(fakeReq(signedAsk('prepare', { generation: 2 })), refused);
+      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 2 })), refused);
       expect(refused.statusCode).to.equal(409);
       expect(refused.body.data).to.include({ generation: 0, height: 90 });
       const req = fakeReq({});
