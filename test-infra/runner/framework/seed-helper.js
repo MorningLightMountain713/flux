@@ -7,7 +7,7 @@ import { signBtcMessage } from '../auth.js';
 import { appOwnerKey } from './keys.js';
 import { REGISTRY_REPO_HOST } from './subnet-config.js';
 import { assertHermeticRepotags } from './app-helper.js';
-import { appIdentityFromUuid, appUuid } from '@runonflux/flux-spec';
+import { appIdentityFromUuid, appUuid, Chain } from '@runonflux/flux-spec';
 import { deserializeSpec } from '@runonflux/flux-spec-backend';
 import { allocatePortFor, assignPorts } from './port-allocator.js';
 
@@ -40,7 +40,8 @@ export function nodeOutpoint(index) {
  * @returns {object}
  */
 function signedSpelling(spec) {
-  const parsed = deserializeSpec(spec);
+  // the harness fleet runs mainnet's chain: its stub daemon reports `main`
+  const parsed = deserializeSpec(spec, { chain: Chain.MAIN });
   return typeof parsed.allSerializations === 'function' ? parsed.allSerializations()[0] : parsed.toCanonical();
 }
 
