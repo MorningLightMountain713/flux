@@ -373,7 +373,14 @@ async function startDependencies() {
  */
 async function startDaemon() {
   await daemonServiceUtils.buildFluxdClient();
-  await daemonStatus.waitForDaemonRpc();
+  const daemonInfo = await daemonStatus.waitForDaemonRpc();
+  // Before anything follows the daemon's chain: every height this node reads is
+  // a position on its own configured chain.
+  const mismatch = daemonStatus.daemonChainMismatch(daemonInfo);
+  if (mismatch) {
+    log.error(mismatch);
+    process.exit(1);
+  }
 
   // After buildFluxdClient, which parses flux.conf — capability detection reads it
   // to decide which topics this daemon actually publishes. Consumers registered
@@ -1036,4 +1043,5 @@ module.exports = {
   wireServices,
   // testing exports
   dosState,
+  startDaemon,
 };

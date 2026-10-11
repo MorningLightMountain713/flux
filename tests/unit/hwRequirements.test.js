@@ -99,7 +99,7 @@ async function v7Spec(overrides = {}) {
     nodes: [],
     staticip: false,
     ...overrides,
-  });
+  }, { chain: flux.Chain.MAIN });
 }
 
 /** A real v9 spec whose named replica is PINNED to a node identity. `instances`

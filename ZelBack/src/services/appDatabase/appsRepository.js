@@ -18,6 +18,7 @@ const {
 } = require('../utils/appConstants');
 const { departures } = require('./offListDepartures');
 const decisionStore = require('../appDecisions/decisionStore');
+const { nodeChain } = require('../utils/nodeChain');
 
 // The content manifests a node holds, one row per manifest. Not in appConstants
 // because only the content-manifest plane touches it.
@@ -29,7 +30,7 @@ async function hydrate(doc) {
   const { InstantiatedSpec } = await getSpecBackend();
 
   try {
-    return InstantiatedSpec.deserialize(doc);
+    return InstantiatedSpec.deserialize(doc, { chain: nodeChain() });
   } catch (err) {
     log.warn(`appsRepository.hydrate: ${err.message} (name=${doc.name}, version=${doc.version})`);
     return null;
@@ -733,7 +734,7 @@ async function listHistoricalV7Secrets(before = null) {
     if (!Array.isArray(specBlob.nodes) || specBlob.nodes.length === 0) continue;
     let spec;
     try {
-      spec = deserializeSpec(specBlob);
+      spec = deserializeSpec(specBlob, { chain: nodeChain(), height: record.payment?.height });
     } catch (err) {
       log.warn(`listHistoricalV7Secrets: ${err.message} (name=${specBlob.name})`);
       continue;

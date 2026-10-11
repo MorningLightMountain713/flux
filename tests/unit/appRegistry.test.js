@@ -59,7 +59,7 @@ describe('appRegistry', () => {
   /** Stores rows in the registry as a node would hold them. */
   async function seed(docs) {
     const flux = await loadSpecLibrary();
-    for (const doc of docs) await mem.put(flux.InstantiatedSpec.deserialize(doc)); // eslint-disable-line no-await-in-loop
+    for (const doc of docs) await mem.put(flux.InstantiatedSpec.deserialize(doc, { chain: flux.Chain.MAIN })); // eslint-disable-line no-await-in-loop
     mem.put.resetHistory();
   }
 

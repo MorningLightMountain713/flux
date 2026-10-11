@@ -22,7 +22,7 @@
  * DRIVEN BY BLOCKS, not by a timer. The pass fires on
  * `blockHeight % (updateFluxAppsPeriod * speedMultiplier) === 0`, and
  * updateFluxAppsPeriod is re-randomised to 4-9 after every firing. The harness
- * chain starts above daemonPONFork so speedMultiplier is 4, which puts a firing
+ * chain starts above the Proof of Node height so speedMultiplier is 4, which puts a firing
  * every 16 to 36 blocks - hence driveUntil rather than a wait.
  *
  * The component's hdd is untouched, so this is the SOFT path: the component is

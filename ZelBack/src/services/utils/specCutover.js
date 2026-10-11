@@ -4,6 +4,7 @@ const { getSpec, getSpecBackend } = require('./specLibs');
 const legacyCryptoProvider = require('../providers/FluxOSLegacyCryptoProvider');
 const cryptoProvider = require('../providers/FluxOSCryptoProvider');
 const log = require('../../lib/log');
+const { nodeChain } = require('./nodeChain');
 
 let providersRegistered = false;
 
@@ -20,7 +21,7 @@ async function deserializeSpec(plainSpec) {
     await getSpec();
     await ensureProvidersRegistered();
     const { deserializeSpec: impl } = await getSpecBackend();
-    return impl(plainSpec);
+    return impl(plainSpec, { chain: nodeChain() });
   } catch (error) {
     const name = plainSpec?.name || 'unknown';
     const version = plainSpec?.version ?? '?';

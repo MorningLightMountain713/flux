@@ -84,7 +84,7 @@ describe('imageArchitectureValidator.verifyImageRegistryAndArchitectures', () =>
       ...overrides,
     };
     delete blob.enterprise;
-    return flux.FluxAppSpecBase.getVersionClass(7).fromSubmission(blob);
+    return flux.FluxAppSpecBase.getVersionClass(7).fromSubmission(blob, { chain: flux.Chain.MAIN });
   }
 
   /** A legacy compose entry off the shared blob. */

@@ -72,9 +72,7 @@ describe('appSpawner tests', () => {
       },
       fluxapps: {
         installation: { delay: 300 },
-        daemonPONFork: 2_020_000,
-        blocksLasting: 22_000,
-        newMinBlocksAllowance: 100,
+        spawnAllowanceBlocks: 100,
         maxAppsPerNode: 200,
         installCollisionWaitMs: 5000,
         spawnReconfirmDelayMs: 10_000,
@@ -2010,7 +2008,7 @@ describe('appSpawner tests', () => {
       expect(candidate.required).to.equal(3);
     });
 
-    it('asks for the apps alive past the spawn allowance: newMinBlocksAllowance blocks, and thirty seconds a block', async () => {
+    it('asks for the apps alive past the spawn allowance: spawnAllowanceBlocks blocks, at the block time in force', async () => {
       buildModule();
       await appSpawner.underProvisionedApps(2_555_000, 1_716_000_000);
       sinon.assert.calledOnceWithExactly(aliveStub, {

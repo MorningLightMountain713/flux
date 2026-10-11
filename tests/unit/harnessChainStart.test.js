@@ -4,6 +4,7 @@ const path = require('path');
 const { DEFAULT_INITIAL_HEIGHT } = require('../../test-infra/runner/framework/chain-start.cjs');
 const productionConfig = require('../../ZelBack/config/default');
 const unitTestConfig = require('./globalconfig/default');
+const specLibrary = require('../../ZelBack/src/services/utils/specLibrary');
 
 // The harness chain has to start ABOVE every block-height gate in the production
 // config, or every suite silently runs on the wrong side of a fork. The validator
@@ -59,7 +60,7 @@ const CONFIGS = {
   // above.
   'the harness overlay': {
     config: requireShared(),
-    sentinel: 'fluxapps.daemonPONFork',
+    sentinel: 'fluxapps.appSpecsEnforcementHeights.9',
     atLeast: 3,
   },
 };
@@ -84,13 +85,7 @@ describe('harness chain start', () => {
   // Counts of blocks - a span, not a point in the chain, so free to exceed the
   // start without meaning anything is wrong.
   const BLOCK_COUNTS = new Set([
-    'fluxapps.maxBlocksAllowance',
-    'fluxapps.postPonMaxBlocksAllowance',
-    'fluxapps.minBlocksAllowance',
-    'fluxapps.newMinBlocksAllowance',
-    'fluxapps.blocksAllowanceInterval',
-    'fluxapps.blocksLasting',
-    'fluxapps.cancel1BlockMinBlocksAllowance',
+    'fluxapps.spawnAllowanceBlocks',
     'fluxapps.explorerDeepRestoreBlocks',
     'fluxapps.hashSyncFallbackRecheckBlocks',
   ]);
@@ -178,8 +173,24 @@ describe('harness chain start', () => {
       'fluxapps.appPaymentAddresses.2.activeFromHeight',
       'fluxapps.epochstart',
       'fluxapps.publicepochstart',
-      'fluxapps.applyMinimumPriceOn3Instances',
-      'fluxapps.applyMinimumForExtraInstances',
     ]);
+  });
+
+  // The legacy rules' heights live in flux-spec, per network; the harness runs
+  // mainnet's chain, so it has to start above every one of mainnet's.
+  it('starts above every mainnet height the spec library judges legacy documents by', () => {
+    const {
+      Chain, LEGACY_PRICING_HEIGHTS, EXPIRE_INTERVAL_DROPPED,
+    } = specLibrary.loaded();
+    const heights = {
+      'the Proof of Node upgrade': Chain.MAIN.blockTimes[1].fromHeight,
+      'the expire-interval rule dropped': EXPIRE_INTERVAL_DROPPED.heightOn(Chain.MAIN),
+      ...Object.fromEntries(Object.entries(LEGACY_PRICING_HEIGHTS)
+        .map(([name, activation]) => [`pricing: ${name}`, activation.heightOn(Chain.MAIN)])),
+    };
+    expect(Object.keys(heights)).to.have.lengthOf(5);
+    Object.entries(heights).forEach(([what, height]) => {
+      expect(height, what).to.be.a('number').and.be.below(DEFAULT_INITIAL_HEIGHT);
+    });
   });
 });

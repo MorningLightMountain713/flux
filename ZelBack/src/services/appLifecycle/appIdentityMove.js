@@ -26,6 +26,7 @@ const { getSpec } = require('../utils/specLibs');
 const { ConfigMethod } = require('../utils/syncthingConstants');
 const { appsFolder } = require('../utils/appConstants');
 const log = require('../../lib/log');
+const { nodeChain } = require('../utils/nodeChain');
 
 // Moves an app installed under its name onto the identity its registration
 // mints, so that every container, directory, image and network of the app is
@@ -146,7 +147,7 @@ async function attempt(label, step) {
  */
 async function putRecord(installed, fields) {
   const { InstalledSpec, InstantiatedSpec } = specLibrary.loaded();
-  const registered = InstantiatedSpec.deserialize({ ...installed.serialize(), ...fields });
+  const registered = InstantiatedSpec.deserialize({ ...installed.serialize(), ...fields }, { chain: nodeChain() });
   await appRecords.installed().put(new InstalledSpec({
     record: registered, replica: installed.replica, owed: installed.owed,
   }));

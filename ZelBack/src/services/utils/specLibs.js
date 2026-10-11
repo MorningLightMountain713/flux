@@ -2,6 +2,7 @@
 
 const config = require('config');
 const { load, CONTRACT_VERSION } = require('@runonflux/flux-spec-cjs');
+const { nodeChain } = require('./nodeChain');
 
 // The lowest flux-spec surface this FluxOS can run against. Raise it in the same change
 // that starts calling an export added by a later flux-spec release.
@@ -93,7 +94,7 @@ async function validateSubmissionSpec(spec, { height, purpose, encrypted } = {})
   const context = { encrypted: encrypted === true };
   if (purpose !== undefined) context.purpose = purpose;
   if (height !== undefined) context.height = height;
-  return VersionClass.fromSubmission(spec, context);
+  return VersionClass.fromSubmission(spec, { ...context, chain: nodeChain() });
 }
 
 /**

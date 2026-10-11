@@ -89,7 +89,7 @@ describe('hardwareValidationService tests', () => {
       // eslint-disable-next-line no-await-in-loop
       const spec = await specSized(entry.name, entry.sizing);
       const row = entry.height === undefined
-        ? flux.InstantiatedSpec.deserialize({ ...spec.serialize(), hash: 'a'.repeat(64) })
+        ? flux.InstantiatedSpec.deserialize({ ...spec.serialize(), hash: 'a'.repeat(64) }, { chain: flux.Chain.MAIN })
         // eslint-disable-next-line no-await-in-loop
         : await instantiatedSpec(spec, { height: entry.height });
       rows.push(row);

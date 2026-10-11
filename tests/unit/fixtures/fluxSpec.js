@@ -145,7 +145,7 @@ async function v8Spec(overrides = {}, { encrypted = false } = {}) {
   const flux = await loadSpecLibrary();
   const blob = { ...V8_SUBMISSION, ...overrides };
   if (encrypted) delete blob.enterprise;
-  return flux.FluxAppSpecV8.fromSubmission(blob, { encrypted });
+  return flux.FluxAppSpecV8.fromSubmission(blob, { encrypted, chain: flux.Chain.MAIN });
 }
 
 /** A real FluxAppSpecV8 off the chain door rather than the submission door.
@@ -157,7 +157,7 @@ async function v8Spec(overrides = {}, { encrypted = false } = {}) {
  * one whatever it says. */
 async function v8SpecFromChain(overrides = {}) {
   const flux = await loadSpecLibrary();
-  return flux.FluxAppSpecV8.deserialize({ ...V8_SUBMISSION, ...overrides });
+  return flux.FluxAppSpecV8.deserialize({ ...V8_SUBMISSION, ...overrides }, { chain: flux.Chain.MAIN });
 }
 
 /**
@@ -189,7 +189,7 @@ async function v1Spec(overrides = {}) {
     ram: component.ram,
     hdd: component.hdd,
     ...overrides,
-  });
+  }, { chain: flux.Chain.MAIN });
 }
 
 /** A real EncryptedSpecV9 — the node-sealed form a v9 app is stored and

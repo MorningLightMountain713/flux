@@ -2,11 +2,16 @@
 
 const { expect } = require('chai');
 const sinon = require('sinon');
+const proxyquire = require('proxyquire');
 const config = require('config');
 const deploymentInfoService = require('../../ZelBack/src/services/appQuery/deploymentInfoService');
 const messageHelper = require('../../ZelBack/src/services/messageHelper');
 const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const chainUtilities = require('../../ZelBack/src/services/utils/chainUtilities');
+const specLibrary = require('../../ZelBack/src/services/utils/specLibrary');
+
+// Mainnet's Proof of Node height, where the block time fell from 120 to 30 seconds.
+const MAINNET_PON_HEIGHT = 2_020_000;
 
 describe('deploymentInfoService tests', () => {
   afterEach(() => {
@@ -132,8 +137,11 @@ describe('deploymentInfoService tests', () => {
       // question at that app's own registration height, so it needs the fork
       // height and not only the answer this node computed for the current one.
       expect(response.data).to.have.property('daemonPONFork');
-      expect(response.data.daemonPONFork, 'the shipped fork height is what is served')
-        .to.equal(config.fluxapps.daemonPONFork);
+      expect(response.data.daemonPONFork, 'the node\'s chain\'s fork height is what is served')
+        .to.equal(MAINNET_PON_HEIGHT);
+      expect(response.data.blocksLasting).to.equal(22_000);
+      expect(response.data.minBlocksAllowance).to.equal(5000);
+      expect(response.data.blocksAllowanceInterval).to.equal(1000);
     });
 
     it('should use post-PON max blocks allowance after fork', async () => {
@@ -142,7 +150,7 @@ describe('deploymentInfoService tests', () => {
         json: sinon.stub(),
       };
 
-      const forkHeight = config.fluxapps.daemonPONFork;
+      const forkHeight = MAINNET_PON_HEIGHT;
 
       sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         status: 'success',
@@ -159,7 +167,26 @@ describe('deploymentInfoService tests', () => {
 
       sinon.assert.calledOnce(res.json);
       const response = res.json.firstCall.args[0];
-      expect(response.data.maxBlocksAllowance).to.equal(config.fluxapps.postPonMaxBlocksAllowance);
+      expect(response.data.maxBlocksAllowance).to.equal(1_056_000);
+    });
+
+    it('serves the legacy term rules of the chain the node runs on', async () => {
+      const { Chain } = specLibrary.loaded();
+      const onLabnet = proxyquire('../../ZelBack/src/services/appQuery/deploymentInfoService', {
+        '../utils/nodeChain': { nodeChain: () => Chain.LABNET },
+      });
+      const res = { json: sinon.stub() };
+      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ status: 'success', data: { height: 10, synced: true } });
+      sinon.stub(chainUtilities, 'getChainParamsPriceUpdates').resolves([{ height: 0, price: 1000 }]);
+      sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
+
+      await onLabnet.deploymentInformation({}, res);
+
+      const { data } = res.json.firstCall.args[0];
+      expect(data.daemonPONFork).to.equal(2);
+      expect(data.blocksLasting).to.equal(22_000);
+      expect(data.minBlocksAllowance).to.equal(1);
+      expect(data.maxBlocksAllowance).to.equal(1_056_000);
     });
 
     it('should use pre-PON max blocks allowance before fork', async () => {
@@ -168,7 +195,7 @@ describe('deploymentInfoService tests', () => {
         json: sinon.stub(),
       };
 
-      const forkHeight = config.fluxapps.daemonPONFork;
+      const forkHeight = MAINNET_PON_HEIGHT;
 
       sinon.stub(daemonStatus, 'isDaemonSynced').returns({
         status: 'success',
@@ -185,7 +212,7 @@ describe('deploymentInfoService tests', () => {
 
       sinon.assert.calledOnce(res.json);
       const response = res.json.firstCall.args[0];
-      expect(response.data.maxBlocksAllowance).to.equal(config.fluxapps.maxBlocksAllowance);
+      expect(response.data.maxBlocksAllowance).to.equal(264_000);
     });
 
     it('should handle errors gracefully', async () => {

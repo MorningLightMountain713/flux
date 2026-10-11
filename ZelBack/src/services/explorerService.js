@@ -39,6 +39,7 @@ const appRecords = require('./appDatabase/appRecords');
 const decider = require('./appDecisions/decider');
 const { pubKeyToAddr } = require('./utils/fluxCryptoUtils');
 const appQueryService = require('./appQuery/appQueryService');
+const { nodeChain } = require('./utils/nodeChain');
 const appOperations = require('./appLifecycle/appOperations');
 
 const scannedHeightCollection = config.get('database.daemon.collections.scannedHeight');
@@ -773,6 +774,19 @@ async function scheduleUpnpBench(tipBlock, period) {
   }
 }
 
+/**
+ * How many blocks at a height span one of the chain's first blocks. The block
+ * loop's periods are counted in the chain's first blocks, and are scaled by
+ * this to the block time in force at the height.
+ *
+ * @param {number} blockHeight
+ * @returns {number}
+ */
+function speedMultiplierAt(blockHeight) {
+  const chain = nodeChain();
+  return chain.blockTimes[0].seconds / chain.blockSecondsAt(blockHeight);
+}
+
 async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
   {
     const atTip = Boolean(loopOptions && loopOptions.atTip);
@@ -792,8 +806,7 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
     }
     await processInsight(blockDataVerbose);
 
-    // After fork block, chain runs 4x faster, so multiply periods by 4
-    const speedMultiplier = blockHeight >= config.get('fluxapps.daemonPONFork') ? 4 : 1;
+    const speedMultiplier = speedMultiplierAt(blockHeight);
 
     const scannedHeight = blockDataVerbose.height;
     // update scanned Height in scannedBlockHeightCollection
@@ -1962,6 +1975,7 @@ module.exports = {
   handleChainReorg,
 
   // exports for testing purposes
+  speedMultiplierAt,
   processSoftFork,
   bootstrapSoftForks,
   bootstrapAppHashes,

@@ -8,7 +8,6 @@ const fs = require('fs');
 const path = require('path');
 const proxyquire = require('proxyquire').noCallThru();
 const { load } = require('@runonflux/flux-spec-cjs');
-const config = require('config');
 
 
 // Every update message the chain has ever carried, projected to the three
@@ -29,6 +28,9 @@ const ROWS_PATH = process.env.FLUX_PRICING_ROWS || path.join(
   'test', 'fixtures', 'pricing-update-rows.json',
 );
 const CORPUS_REQUIRED = process.env.FLUX_CORPUS_REQUIRED === '1';
+
+// Mainnet's Proof of Node height, where the block time fell from 120 to 30 seconds.
+const MAINNET_PON_HEIGHT = 2_020_000;
 
 describe('the early-update credit, over every update on chain', function corpus() {
   this.timeout(120_000);
@@ -54,15 +56,11 @@ describe('the early-update credit, over every update on chain', function corpus(
 
   // The credit as the source computes it, without the async plumbing: the
   // helper resolves the same two functions out of the spec library.
-  const credit = (row, expire) => {
-    const paid = spec.subscriptionSeconds({ height: row.prevHeight, expire });
-    const elapsed = spec.secondsBetweenHeights(row.prevHeight, row.updateHeight);
-    return (paid - elapsed) / paid;
-  };
+  const credit = (row, expire) => spec.unusedSubscriptionFraction(spec.Chain.MAIN, row.prevHeight, expire, row.updateHeight);
 
   // A v1-v5 spec carries no expire; pricing substitutes the default for the
   // height it was registered at, which is what these rows are priced from.
-  const expireOf = (row) => row.prevExpire ?? spec.legacyDefaultExpire(row.prevHeight);
+  const expireOf = (row) => row.prevExpire ?? spec.legacyDefaultExpire(spec.Chain.MAIN, row.prevHeight);
 
   it('never reports a credit above the whole subscription', () => {
     const bad = rows.filter((r) => credit(r, expireOf(r)) > 1);
@@ -80,7 +78,7 @@ describe('the early-update credit, over every update on chain', function corpus(
   it('credits every update that lands before its expiry height', () => {
     const bad = rows.filter((r) => {
       const expire = expireOf(r);
-      const expiresAt = spec.expiresAtHeightFor({ height: r.prevHeight, expire });
+      const expiresAt = spec.expiresAtHeightFor({ height: r.prevHeight, expire, chain: spec.Chain.MAIN });
       return r.updateHeight < expiresAt && credit(r, expire) <= 0;
     });
     expect(bad.length, `${bad.length} rows had time left and got nothing`).to.equal(0);
@@ -89,7 +87,7 @@ describe('the early-update credit, over every update on chain', function corpus(
   it('credits nothing to an update that lands at or after its expiry height', () => {
     const bad = rows.filter((r) => {
       const expire = expireOf(r);
-      const expiresAt = spec.expiresAtHeightFor({ height: r.prevHeight, expire });
+      const expiresAt = spec.expiresAtHeightFor({ height: r.prevHeight, expire, chain: spec.Chain.MAIN });
       return r.updateHeight >= expiresAt && credit(r, expire) > 0;
     });
     expect(bad.length, `${bad.length} spent rows were still credited`).to.equal(0);
@@ -99,13 +97,13 @@ describe('the early-update credit, over every update on chain', function corpus(
   // seconds. Asserted as a population rather than a count, so the test does not
   // have to be repinned when the corpus grows.
   it('credits the fork-crossing rows, which is where the block arithmetic failed', () => {
-    const FORK = config.get('fluxapps.daemonPONFork');
+    const FORK = MAINNET_PON_HEIGHT;
     const crossing = rows.filter((r) => r.prevHeight < FORK && r.updateHeight >= FORK);
     expect(crossing.length, 'the corpus should contain fork-crossing updates').to.be.above(0);
 
     const withTimeLeft = crossing.filter((r) => {
       const expire = expireOf(r);
-      return r.updateHeight < spec.expiresAtHeightFor({ height: r.prevHeight, expire });
+      return r.updateHeight < spec.expiresAtHeightFor({ height: r.prevHeight, expire, chain: spec.Chain.MAIN });
     });
     const uncredited = withTimeLeft.filter((r) => credit(r, expireOf(r)) <= 0);
     expect(uncredited.length, `${uncredited.length} of ${withTimeLeft.length} crossing rows got nothing`).to.equal(0);
@@ -117,7 +115,7 @@ describe('the early-update credit, over every update on chain', function corpus(
   // real, with the credit's two inputs recorded: if any site grows its own
   // arithmetic again, the arguments stop matching.
   describe('the three sites that price an update read one credit', () => {
-    const FORK = config.get('fluxapps.daemonPONFork');
+    const FORK = MAINNET_PON_HEIGHT;
     const PREV_HEIGHT = FORK - 20_000;
     const UPDATE_HEIGHT = FORK + 40_000;
     const EXPIRE = 40_000;
@@ -131,6 +129,7 @@ describe('the early-update credit, over every update on chain', function corpus(
       height: 0, cpu: 0, ram: 0, hdd: 100, port: 0, scope: 0, staticip: 0, minPrice: 0.001,
     };
     const APP = {
+      get chain() { return spec.Chain.MAIN; },
       name: 'app',
       owner: 'o',
       expire: EXPIRE,
@@ -147,24 +146,8 @@ describe('the early-update credit, over every update on chain', function corpus(
       resourceTotalsFor: () => ({ cpu: 0, memoryMb: 0, storageGb: 30 }),
     };
 
-    const loadRecording = (asked) => proxyquire('../../ZelBack/src/services/pricing/legacyPricingRegime', {
-      '../utils/specLibs': {
-        // The real library, with the two credit helpers wrapped to record what
-        // they were asked. Spread rather than listed, because the regime also
-        // reaches for the discount helpers and a stub that names only what this
-        // test cares about breaks every time the regime uses one more.
-        getSpec: async () => ({
-          ...spec,
-          subscriptionSeconds: (args) => {
-            asked.push(`subscription ${args.height}/${args.expire}`);
-            return spec.subscriptionSeconds(args);
-          },
-          secondsBetweenHeights: (from, to) => {
-            asked.push(`elapsed ${from}->${to}`);
-            return spec.secondsBetweenHeights(from, to);
-          },
-        }),
-      },
+    const loadRegime = () => proxyquire('../../ZelBack/src/services/pricing/legacyPricingRegime', {
+      '../utils/specLibs': { getSpec: async () => spec },
       '../utils/chainUtilities': {
         getChainParamsPriceUpdates: async () => [CARD],
       },
@@ -183,9 +166,8 @@ describe('the early-update credit, over every update on chain', function corpus(
       // one implementation of the credit now, inside the engine, so a test that
       // watched for three sites asking the same question would pass by
       // construction and say nothing.
-      const regime = loadRecording([]);
-      const asked = [];
-      const credited = loadRecording(asked);
+      const regime = loadRegime();
+      const credited = loadRegime();
 
       const withCredit = Number(await credited.onChainDisplayPrice(APP));
       const feeWithCredit = Number(await regime.updateFee(APP, APP, { height: UPDATE_HEIGHT, prevHeight: PREV_HEIGHT }));

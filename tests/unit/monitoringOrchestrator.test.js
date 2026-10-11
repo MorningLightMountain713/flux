@@ -54,7 +54,7 @@ function legacySpec(name) {
     ram: 1000,
     hdd: 5,
     instances: 3,
-  });
+  }, { chain: flux.Chain.MAIN });
 }
 
 /**
@@ -76,7 +76,7 @@ function composedSpec(name, componentNames) {
       containerPorts: [443 + index],
     })),
     owner: LEGACY_OWNER,
-  });
+  }, { chain: flux.Chain.MAIN });
 }
 
 /**

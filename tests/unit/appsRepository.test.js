@@ -143,9 +143,6 @@ describe('appsRepository', () => {
         },
       },
       fluxapps: {
-        daemonPONFork: 2_020_000,
-        blocksLasting: 22_000,
-        newMinBlocksAllowance: 100,
       },
     };
 

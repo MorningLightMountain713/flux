@@ -70,7 +70,7 @@ async function deploymentOfSize(size) {
  */
 function legacyRow(submission) {
   return flux.FluxAppSpecBase.getVersionClass(submission.version)
-    .fromSubmission(submission).serialize();
+    .fromSubmission(submission, { chain: flux.Chain.MAIN }).serialize();
 }
 
 /**
@@ -81,7 +81,7 @@ function legacyRow(submission) {
  * row the library refuses fails LOUDLY at the fixture.
  */
 function storedRow(doc) {
-  flux.InstantiatedSpec.deserialize(doc);
+  flux.InstantiatedSpec.deserialize(doc, { chain: flux.Chain.MAIN });
   return doc;
 }
 
@@ -134,7 +134,7 @@ describe('resourceQueryService tests', () => {
       // eslint-disable-next-line no-restricted-syntax
       for (const row of rows) {
         let record = null;
-        try { record = flux.InstantiatedSpec.deserialize(row); } catch { record = null; }
+        try { record = flux.InstantiatedSpec.deserialize(row, { chain: flux.Chain.MAIN }); } catch { record = null; }
         // eslint-disable-next-line no-await-in-loop
         if (record) await appRecords.installed().put(new flux.InstalledSpec({ record }));
         // eslint-disable-next-line no-await-in-loop
@@ -627,7 +627,7 @@ describe('resourceQueryService tests', () => {
       };
       let threw = null;
       try {
-        flux.InstantiatedSpec.deserialize(malformed);
+        flux.InstantiatedSpec.deserialize(malformed, { chain: flux.Chain.MAIN });
       } catch (err) {
         threw = err;
       }

@@ -72,8 +72,6 @@ function makeBaseStubs(overrides = {}) {
       },
       fluxapps: {
         epochstart: 694_000,
-        daemonPONFork: 2_020_000,
-        blocksLasting: 22_000,
         minHashSyncPeers: 12,
       },
     }),

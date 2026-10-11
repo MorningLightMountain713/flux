@@ -26,6 +26,7 @@ const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/flux
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const log = require('../../ZelBack/src/lib/log');
 const { peerManager } = require('../../ZelBack/src/services/utils/FluxPeerManager');
+const { nodeChain } = require('../../ZelBack/src/services/utils/nodeChain');
 
 chai.use(chaiAsPromised);
 
@@ -385,7 +386,7 @@ describe('fluxNetworkMonitor tests', () => {
       const record = (version, name) => InstantiatedSpec.deserialize({
         version, name, description: 'x', owner: '1abc', instances: 3, contacts: [], geolocation: [], expire: 88_000,
         ...(version >= 7 ? { nodes: [] } : {}), staticip: true, compose: [component], hash: `h-${name}`, height: 1000,
-      });
+      }, { chain: nodeChain() });
 
       await adjustWith([record(6, 'sixapp'), record(7, 'sevenapp')], '192.168.1.101');
 
