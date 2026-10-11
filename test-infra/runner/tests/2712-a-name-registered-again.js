@@ -30,12 +30,13 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { appView } from '../framework/app-view.js';
 import { appCaCertificate } from '../framework/daemon-control.js';
 import { waitFor, waitForAppRemoved } from '../framework/wait.js';
-import { appIdentityFromUuid, appUuid } from '@runonflux/flux-spec';
+import { execInContainer, getAppContainerStatus } from '../framework/container.js';
 
 const NODES = 3;
 const CONVERGE_MS = 240000;
 const SLOT = 'cfg';
 const SLOT_PATH = '/io.runonflux/app.conf';
+const TLS_DIR = '/io.runonflux/tls';
 
 describe('a name registered again is a new app', function () {
   let env;
@@ -79,7 +80,21 @@ describe('a name registered again is a new app', function () {
     expect(reg.status, `the registration is accepted: ${JSON.stringify(reg).slice(0, 300)}`).to.equal('success');
     await confirmOnChain(reg.data, env.clients);
     await view.listedEverywhere(reg.data, [0, 1, 2], 'every node lists the registration');
-    return appIdentityFromUuid(appUuid(name, reg.data));
+    const { identity } = await manifestStanding(node.url, name);
+    expect(identity, 'the node holds the registration under an identity').to.be.a('string');
+    return identity;
+  }
+
+  // The backend-TLS certificate a node installed for the app, or null.
+  async function certOn(index) {
+    const { container } = env.clients[index];
+    const cont = await getAppContainerStatus(container, name).catch(() => null);
+    if (!cont) return null;
+    const mounts = await execInContainer(container, `docker inspect --format '{{json .Mounts}}' ${cont.name}`);
+    const dir = JSON.parse(mounts.stdout.trim() || '[]').find((m) => m.Destination === TLS_DIR)?.Source;
+    if (!dir) return null;
+    const { stdout, exitCode } = await execInContainer(container, `cat ${dir}/cert.pem`);
+    return exitCode === 0 && stdout.includes('BEGIN CERTIFICATE') ? stdout : null;
   }
 
   before(async function () {
@@ -144,9 +159,14 @@ describe('a name registered again is a new app', function () {
   });
 
   it('signs the new app\'s certificates with a CA of its own', async function () {
-    this.timeout(60000);
-    const laterCa = await appCaCertificate(name, later.identity);
-    const fingerprint = (pem) => new crypto.X509Certificate(pem).fingerprint256;
-    expect(fingerprint(laterCa), 'the new identity\'s CA').to.not.equal(fingerprint(earlier.ca));
+    this.timeout(CONVERGE_MS);
+    let installed = null;
+    await waitFor(async () => {
+      installed = (await Promise.all([0, 1, 2].map((i) => certOn(i)))).find(Boolean) ?? null;
+      return installed !== null;
+    }, { timeout: CONVERGE_MS, interval: 3000, label: 'a host installs the new app\'s certificate' });
+    const verifiesUnder = (ca) => new crypto.X509Certificate(installed).verify(new crypto.X509Certificate(ca).publicKey);
+    expect(verifiesUnder(await appCaCertificate(name, later.identity)), 'the installed certificate is the new identity\'s').to.equal(true);
+    expect(verifiesUnder(earlier.ca), 'and the earlier app\'s CA does not sign it').to.equal(false);
   });
 });
