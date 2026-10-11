@@ -118,7 +118,7 @@ describe('quorumGrant grantClient', () => {
   let draining; // hosts refusing every ask under the standing generation as draining
   let ownership; // who holds the app and from which height, as this node's chain has it
   let cellWorld; // the world the cells stand in when it is not the taught record's: {generation, height}
-  let predecessorGen; // the generation the cells prove a credential against; undefined = the one below the standing
+  let predecessorWorld; // the world the cells prove a credential against; undefined = the registration's, below a first re-roll
   // the world the cells stand in: their own, else the taught record's, else the registration's
   const standingGen = () => cellWorld?.generation ?? taughtRecord?.generation ?? 0;
   const cellsHeight = () => (cellWorld ? cellWorld.height : (taughtRecord?.height ?? null));
@@ -193,7 +193,7 @@ describe('quorumGrant grantClient', () => {
       if (type === 'accept' && !acceptanceOnAccept) return outcome;
       const node = hostNodes.get(host);
       const fields = signedEnvelope.fieldsFor('termaccept', {
-        key: ask.key, fingerprint: ask.fingerprint, generation: ask.generation, epoch: ask.epoch, grantee: ask.candidate,
+        key: ask.key, fingerprint: ask.fingerprint, generation: ask.generation, generationHeight: ask.generationHeight, epoch: ask.epoch, grantee: ask.candidate,
       });
       const signed = signedEnvelope.sign('termaccept', fields, hostWifs.get(host));
       return {
@@ -207,14 +207,17 @@ describe('quorumGrant grantClient', () => {
     // signed acceptances, verified here with real signatures, is let in at once
     const seatTunables = () => {
       if ((ask.generation ?? 0) < 1 && !freshSeats) return REGISTER_TUNABLES;
-      const expected = predecessorGen === undefined ? standingGen() - 1 : predecessorGen;
+      const expected = predecessorWorld === undefined ? { generation: 0, height: null } : predecessorWorld;
       const carriedIncumbent = ask.carried && expected !== null
         ? rosterOverlay.verifyTermCredential(activeMembership, ask.key, ask.carried, {
-          committeeSize: COMMITTEE_SIZE, candidate: ask.candidate, expectedGeneration: expected,
+          committeeSize: COMMITTEE_SIZE, candidate: ask.candidate, expectedWorld: expected,
         })
         : null;
       const servingSinceMs = freshSeats ? Date.now() : Date.now() - REGISTER_TUNABLES.lockDelayMs - 1;
-      return { ...REGISTER_TUNABLES, servingSinceMs, carriedIncumbent };
+      // as the controller says: a world with a takeover height drained
+      return {
+        ...REGISTER_TUNABLES, servingSinceMs, carriedIncumbent, worldDrained: cellsHeight() !== null,
+      };
     };
     const handlers = {
       probe: () => ({ reply: registerCore.onProbe(record, request, Date.now(), seatTunables()), record: null }),
@@ -329,7 +332,7 @@ describe('quorumGrant grantClient', () => {
     draining = new Set();
     ownership = { owner: 'owner', from: 100, transferred: false };
     cellWorld = null;
-    predecessorGen = undefined;
+    predecessorWorld = undefined;
     teachCalls = [];
     teachAcks = new Map();
 
@@ -2000,7 +2003,7 @@ describe('quorumGrant grantClient', () => {
           sell();
           oldHosts.forEach((host) => registers.get(host)?.delete(KEY));
           freshSeats = true;
-          predecessorGen = predecessor;
+          predecessorWorld = predecessor;
           nextHosts.forEach((host) => teaching.add(host));
           grantClient.noteGenerationRecord({ identity: 'myapp', role: 'master', generation: 0 });
           drainLiftsAtTheWitnessPollOn(oldHosts);
@@ -2010,11 +2013,33 @@ describe('quorumGrant grantClient', () => {
         };
 
         it('the step back\'s fresh seats take the holder on its credential from the seller\'s generation, the world that stood before', async () => {
-          const { holder, demoted } = await stepBackOntoFreshSeats(1);
+          const { holder, demoted } = await stepBackOntoFreshSeats({ generation: 1, height: NEXT.height });
           expect(demoted).to.deep.equal([]);
           expect(holder.state).to.equal('held');
           expect(holder.generation).to.equal(0);
           expect(seatedAt(oldHosts, 0).length).to.be.at.least(oldCommittee.quorum);
+        });
+
+        it('the holder asks the step back\'s committee in the world the sale began: generation 0 from the sale\'s height', async () => {
+          await stepBackOntoFreshSeats({ generation: 1, height: NEXT.height });
+          const asks = serviceHelper.axiosPost.getCalls()
+            .filter((call) => /\/(prepare|accept)$/.test(String(call.args[0])))
+            .map((call) => call.args[1])
+            .filter((body) => body.generation === 0 && body.carried);
+          expect(asks.length).to.be.greaterThan(0);
+          asks.forEach((body) => expect(body.generationHeight).to.equal(SOLD_AT));
+        });
+
+        it('the record the holder publishes in the world the sale began names that world', async () => {
+          await stepBackOntoFreshSeats({ generation: 1, height: NEXT.height });
+          const published = masterleasePublisher.publishMasterlease.lastCall.args[0];
+          expect(published).to.deep.include({ generation: 0, generationHeight: SOLD_AT });
+        });
+
+        it('control: proved against a world other than the one that stood before, the credential takes no fresh seat', async () => {
+          const { holder } = await stepBackOntoFreshSeats({ generation: 0, height: null });
+          expect(holder.generation).to.equal(1);
+          expect(seatedAt(oldHosts, 0)).to.deep.equal([]);
         });
 
         it('a referee naming a generation this node does not stand on ends the coast, however the witnesses vouch', async () => {

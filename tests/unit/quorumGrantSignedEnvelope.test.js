@@ -102,7 +102,7 @@ describe('quorumGrant signedEnvelope', () => {
       const ask = {
         key: 'app/ordinal-0@500', candidate: 'aaaa:0', generation: 2, fingerprint: 'f'.repeat(64), at: 5, cert: { subject: 'bbbb:1' },
       };
-      expect(fieldsFor('vacate', ask)).to.deep.equal(['app/ordinal-0@500', 'aaaa:0', 2, 'f'.repeat(64), 5]);
+      expect(fieldsFor('vacate', ask)).to.deep.equal(['app/ordinal-0@500', 'aaaa:0', 2, '', 'f'.repeat(64), 5]);
       expect(TYPES).to.include('vacate');
     });
 
@@ -110,16 +110,44 @@ describe('quorumGrant signedEnvelope', () => {
     // D1): the term's identity and nothing on any clock — no timestamp, no
     // expiry — so a quorum of them proves "this committee accepted this grantee
     // at this epoch" to a referee that was never on that committee.
-    it('termaccept is the term\'s identity: key, fingerprint, generation, epoch, grantee', () => {
+    it('termaccept is the term\'s identity: key, fingerprint, world, epoch, grantee', () => {
       expect(TYPES).to.include('termaccept');
       const fields = fieldsFor('termaccept', {
         key: 'app/master', fingerprint: 'f'.repeat(64), generation: 2, epoch: 7, grantee: 'aaaa:0',
       });
-      expect(fields).to.deep.equal(['app/master', 'f'.repeat(64), 2, 7, 'aaaa:0']);
+      expect(fields).to.deep.equal(['app/master', 'f'.repeat(64), 2, '', 7, 'aaaa:0']);
       const signed = sign('termaccept', fields, WIF);
       expect(verify('termaccept', fields, signed.signature, PUBKEY)).to.equal(true);
       expect(verify('termaccept', fields, signed.signature, WRONG_PUBKEY)).to.equal(false);
-      expect(verify('termaccept', ['app/master', 'f'.repeat(64), 2, 8, 'aaaa:0'], signed.signature, PUBKEY), 'another epoch is another term').to.equal(false);
+      expect(verify('termaccept', ['app/master', 'f'.repeat(64), 2, '', 8, 'aaaa:0'], signed.signature, PUBKEY), 'another epoch is another term').to.equal(false);
+    });
+
+    // A sale can hand a key to a new world at a generation it already had, so
+    // a signature binding the generation alone binds two worlds at once.
+    const ROSTER_TYPES = ['roster', 'rosteraccept'];
+
+    it('every type about a term binds the world: the generation and the height it took over at', () => {
+      const base = {
+        key: 'app/master', mode: 'held', epoch: 3, candidate: 'aaaa:0', ttlMs: 1000, fingerprint: 'f'.repeat(64),
+        at: 5, remove: 'bbbb:0', add: 'cccc:0', seq: 1, grantee: 'aaaa:0', generation: 0,
+      };
+      TYPES.filter((type) => !ROSTER_TYPES.includes(type)).forEach((type) => {
+        const registration = fieldsFor(type, { ...base, generationHeight: null });
+        const sold = fieldsFor(type, { ...base, generationHeight: 2_500_000 });
+        expect(sold, type).to.include(2_500_000);
+        expect(registration, type).to.include('');
+        expect(registration, `${type}: two worlds at one generation sign differently`).to.not.deep.equal(sold);
+      });
+    });
+
+    it('a roster entry binds the deal, not the world: the same seats stand either side of a sale', () => {
+      const base = {
+        key: 'app/master', epoch: 3, candidate: 'aaaa:0', fingerprint: 'f'.repeat(64), at: 5, remove: 'bbbb:0', add: 'cccc:0', seq: 1, generation: 0,
+      };
+      ROSTER_TYPES.forEach((type) => {
+        expect(fieldsFor(type, { ...base, generationHeight: 2_500_000 }), type)
+          .to.deep.equal(fieldsFor(type, { ...base, generationHeight: null }));
+      });
     });
 
     it('every declared type signs and verifies', () => {

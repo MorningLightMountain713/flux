@@ -4,6 +4,7 @@ const { rankNodes } = require('../utils/rendezvousRank');
 const { extractIp } = require('../utils/socketAddressUtils');
 const { selectCommittee, eligible, RUNGS } = require('../utils/committeeSelector');
 const signedEnvelope = require('./signedEnvelope');
+const generationWorld = require('./generationWorld');
 
 // The roster overlay: how a pinned committee heals a dark seat without
 // anyone's reachability opinion ever picking a member.
@@ -455,6 +456,8 @@ function credentialWellFormed(carried) {
   if (!carried || typeof carried !== 'object') return false;
   if (typeof carried.fingerprint !== 'string' || !carried.fingerprint) return false;
   if (!Number.isSafeInteger(carried.generation) || carried.generation < 0) return false;
+  if (carried.generationHeight !== null && carried.generationHeight !== undefined
+    && (!Number.isSafeInteger(carried.generationHeight) || carried.generationHeight < 0)) return false;
   if (!Number.isSafeInteger(carried.epoch) || carried.epoch < 1) return false;
   if (carried.roster !== null && carried.roster !== undefined
     && (!carried.roster || !chainWellFormed(carried.roster.chain))) return false;
@@ -469,29 +472,36 @@ function credentialWellFormed(carried) {
  * it — the walk key at the carried generation, then the carried roster chain
  * — and each acceptance is verified over the term's identity with the
  * CANDIDATE as grantee, so a bundle signed for someone else can never admit
- * the node presenting it. Only the world immediately below the standing one
- * counts: a credential from an older world proves nothing about who held the
- * term at the re-roll.
+ * the node presenting it. Only the world it is proved against counts, by its
+ * generation and the height it took over at: a credential from another world
+ * proves nothing about who held the term there, and a sale can repeat a
+ * generation in a new world.
  *
  * @returns {string|null} the verified incumbent (the candidate) or null
  */
 function verifyTermCredential(membership, key, carried, {
-  committeeSize, candidate, standingGeneration, expectedGeneration,
+  committeeSize, candidate, expectedWorld,
 }) {
   if (!credentialWellFormed(carried)) return null;
   if (typeof candidate !== 'string' || !candidate) return null;
   // a step-across carries the world that stood before the standing one; a
-  // published record is proved against the committee of its own generation;
-  // an expected null means no world stood before, and nothing verifies
-  const expected = expectedGeneration === undefined ? standingGeneration - 1 : expectedGeneration;
-  if (carried.generation !== expected) return null;
+  // published record is proved against its own world; an expected null means
+  // no world stood before, and nothing verifies
+  if (!expectedWorld) return null;
+  const carriedWorld = { generation: carried.generation, height: carried.generationHeight ?? null };
+  if (!generationWorld.sameWorld(carriedWorld, expectedWorld)) return null;
   const committee = verifyChain(
     membership, key, carried.fingerprint, carried.generation, committeeSize, carried.roster?.chain ?? [],
   );
   if (!committee) return null;
   const members = new Map(committee.members.map((node) => [outpointOf(node), node]));
   const fields = signedEnvelope.fieldsFor('termaccept', {
-    key, fingerprint: carried.fingerprint, generation: carried.generation, epoch: carried.epoch, grantee: candidate,
+    key,
+    fingerprint: carried.fingerprint,
+    generation: carried.generation,
+    generationHeight: carried.generationHeight ?? null,
+    epoch: carried.epoch,
+    grantee: candidate,
   });
   if (!fields) return null;
   const signers = new Set();

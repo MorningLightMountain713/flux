@@ -556,6 +556,7 @@ async function signedAskFor(type, key, mode, epoch, identity, basis, extras = {}
     epoch,
     candidate: identity.outpoint,
     generation: basis.generation ?? 0,
+    generationHeight: basis.height ?? null,
     fingerprint: basis.fingerprint,
     at: Date.now(),
     ...extras,
@@ -1031,6 +1032,7 @@ class Holder {
     return {
       fingerprint: this.#committee.fingerprint,
       generation: this.#committee.generation,
+      generationHeight: this.#committee.height ?? null,
       epoch: this.#epoch,
       roster: this.#committee.chain.length ? { chain: this.#committee.chain } : null,
       acceptances,
@@ -1067,6 +1069,7 @@ class Holder {
       mode: 'held',
       fingerprint: this.#committee.fingerprint,
       generation: this.#committee.generation,
+      generationHeight: this.#committee.height ?? null,
       ttlMs: this.#ttlMs,
       acceptances: [...this.#acceptances.values()],
       ...(this.#committee.chain.length ? { roster: { chain: this.#committee.chain } } : {}),

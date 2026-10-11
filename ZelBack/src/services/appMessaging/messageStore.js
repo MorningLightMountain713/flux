@@ -12,6 +12,7 @@ const foundingCommittee = require('../appMesh/foundingCommittee');
 const fluxEventBus = require('../utils/fluxEventBus');
 const ownerGenerationRecord = require('../quorumGrant/ownerGenerationRecord');
 const rosterOverlay = require('../quorumGrant/rosterOverlay');
+const generationWorld = require('../quorumGrant/generationWorld');
 const networkStateService = require('../networkStateService');
 const { getSpec, assertVersionActivated } = require('../utils/specLibs');
 const { ensureProvidersRegistered } = require('../utils/specCutover');
@@ -850,6 +851,8 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
   if (message.mode === 'held' && (!Number.isSafeInteger(message.ttlMs) || message.ttlMs < 1)) return;
   if (message.generation !== undefined
     && (!Number.isSafeInteger(message.generation) || message.generation < 0)) return;
+  if (message.generationHeight !== undefined && message.generationHeight !== null
+    && (!Number.isSafeInteger(message.generationHeight) || message.generationHeight < 0)) return;
   // A released record is an ordinal given back (uninstall) or reclaimed (a
   // node-down certificate): same row, same epoch, a newer broadcast, and the
   // flag is what readers of the ordinal- prefix skip. Boolean or absent;
@@ -893,6 +896,7 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
     const carried = {
       fingerprint: message.fingerprint,
       generation: message.generation ?? 0,
+      generationHeight: message.generationHeight ?? null,
       epoch: message.epoch,
       roster: message.roster ?? null,
       acceptances: message.acceptances,
@@ -909,7 +913,7 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
       const proved = rosterOverlay.verifyTermCredential(membership, `${message.identity}/${message.role}`, carried, {
         committeeSize: config.get('fluxapps.quorumGrantHeldCommitteeSize'),
         candidate: message.grantee,
-        expectedGeneration: carried.generation,
+        expectedWorld: { generation: carried.generation, height: carried.generationHeight },
       });
       if (!proved) {
         dropped('acceptances do not verify against the granting committee');
@@ -1153,24 +1157,27 @@ async function standingGeneration(identity, role) {
 }
 
 /**
- * The generation of the world that stood immediately before the standing one
- * for an app role: the world a step-across credential is proved against.
- * Within an ownership it is the record ranked just below the standing one,
- * and the registration's 0 below its owner's first re-roll after a transfer
- * that named none; a world the transfer began — the record it names, or the
- * registration's after one naming none — follows the world that stood when
- * the previous ownership ended. Null when nothing this node can name stood
- * before: an app that never changed hands and stands on its registration,
- * or a named record this node lacks in either ownership.
+ * The world that stood immediately before the standing one for an app role:
+ * the world a step-across credential is proved against, by its generation and
+ * the height it took over at. Within an ownership it is the record ranked just
+ * below the standing one, and the registration's below its owner's first
+ * re-roll after a transfer that named none; a world the transfer began — the
+ * record it names, or the registration's after one naming none — follows the
+ * world that stood when the previous ownership ended. Null when nothing this
+ * node can name stood before: an app that never changed hands and stands on
+ * its registration, or a named record this node lacks in either ownership.
  *
- * @returns {Promise<?number>}
+ * @returns {Promise<?{generation: number, height: ?number}>}
  */
-async function predecessorGeneration(identity, role) {
+async function predecessorWorld(identity, role) {
   const app = await appRecords.registry().byIdentity(identity);
   if (!app) return null;
   const owners = await appHistory.ownerships(app.name);
   const rows = await heldGenerationRecords(identity, role);
   const last = owners.length - 1;
+  const ownershipAt = (index) => (index < 0 ? null : {
+    owner: owners[index].owner, from: owners[index].from, transferred: index > 0,
+  });
   const namedHash = namedHashFor(app.grants ?? app.spec?.grants ?? null, role);
   const valid = await validInOwnership(identity, rows, {
     owner: app.owner, from: owners[last]?.from, original: owners.length === 1, namedHash,
@@ -1180,10 +1187,14 @@ async function predecessorGeneration(identity, role) {
     const { generationRecordRank, outranks } = await getSpec();
     const standing = await standingOf(valid);
     const below = valid.filter((row) => outranks(generationRecordRank(standing.data), generationRecordRank(row.data)));
-    if (below.length > 0) return (await standingOf(below)).data.generation;
+    if (below.length > 0) {
+      return generationWorld.worldOf({ record: await standingOf(below), aside: false, ownership: ownershipAt(last) });
+    }
     // the lowest the ownership validates is its owner's own first re-roll: the
     // transfer that began the ownership named none, or there was no transfer
-    if (standing.signer === app.owner) return 0;
+    if (standing.signer === app.owner) {
+      return generationWorld.worldOf({ record: null, aside: false, ownership: ownershipAt(last) });
+    }
   }
   // the world the transfer began follows what stood when the previous ownership ended
   if (last < 1) return null;
@@ -1192,8 +1203,12 @@ async function predecessorGeneration(identity, role) {
   const ended = await validInOwnership(identity, rows, {
     owner: previous.owner, from: previous.from, original: last - 1 === 0, namedHash: previousNamed,
   });
-  if (ended.length === 0) return previousNamed === null ? 0 : null;
-  return (await standingOf(ended)).data.generation;
+  if (ended.length === 0) {
+    return previousNamed === null
+      ? generationWorld.worldOf({ record: null, aside: false, ownership: ownershipAt(last - 1) })
+      : null;
+  }
+  return generationWorld.worldOf({ record: await standingOf(ended), aside: false, ownership: ownershipAt(last - 1) });
 }
 
 /**
@@ -1685,7 +1700,7 @@ module.exports = {
   getMasterleaseRecordsByGrantee,
   getGrantGenerationRecord,
   standingGeneration,
-  predecessorGeneration,
+  predecessorWorld,
   heldGenerationRecords,
   rejudgeGenerationRecords,
   askPeersForGenerationRecords,

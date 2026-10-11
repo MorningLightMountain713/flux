@@ -183,10 +183,11 @@ describe('quorumGrant rosterOverlay', () => {
   describe('verifyTermCredential', () => {
     const EPOCH = 7;
     const GRANTEE = outpointOf(membership[11]); // not on the committee, as a master need not be
-    const STANDING = GENERATION + 1;
+    // the world the credential's term stood in: a sale took it over at this height
+    const TAKEOVER = 600_000;
     function termAcceptance(node, wif, overrides = {}) {
       const fields = signedEnvelope.fieldsFor('termaccept', {
-        key: KEY, fingerprint: FINGERPRINT, generation: GENERATION, epoch: EPOCH, grantee: GRANTEE, ...overrides,
+        key: KEY, fingerprint: FINGERPRINT, generation: GENERATION, generationHeight: TAKEOVER, epoch: EPOCH, grantee: GRANTEE, ...overrides,
       });
       const signed = signedEnvelope.sign('termaccept', fields, wif);
       return { grantor: outpointOf(node), signature: signed.signature };
@@ -194,12 +195,13 @@ describe('quorumGrant rosterOverlay', () => {
     const credential = (signers, extra = {}) => ({
       fingerprint: FINGERPRINT,
       generation: GENERATION,
+      generationHeight: TAKEOVER,
       epoch: EPOCH,
       roster: null,
       acceptances: signers.map((node) => termAcceptance(node, wifs.get(outpointOf(node)))),
       ...extra,
     });
-    const opts = { committeeSize: SIZE, candidate: GRANTEE, standingGeneration: STANDING };
+    const opts = { committeeSize: SIZE, candidate: GRANTEE, expectedWorld: { generation: GENERATION, height: TAKEOVER } };
 
     it('a quorum of the retired committee\'s signatures over this candidate\'s term names it the incumbent', () => {
       const verified = rosterOverlay.verifyTermCredential(membership, KEY, credential(base.members.slice(0, base.quorum)), opts);
@@ -218,10 +220,13 @@ describe('quorumGrant rosterOverlay', () => {
       expect(rosterOverlay.verifyTermCredential(membership, KEY, repeated, opts), 'one signer counted once').to.equal(null);
     });
 
-    it('only the world immediately below the standing one, and only for the grantee the signatures name', () => {
+    it('only the world it is proved against, and only for the grantee the signatures name', () => {
       const good = credential(base.members.slice(0, base.quorum));
-      expect(rosterOverlay.verifyTermCredential(membership, KEY, good, { ...opts, standingGeneration: STANDING + 1 })).to.equal(null);
-      expect(rosterOverlay.verifyTermCredential(membership, KEY, good, { ...opts, standingGeneration: GENERATION })).to.equal(null);
+      expect(rosterOverlay.verifyTermCredential(membership, KEY, good, { ...opts, expectedWorld: { generation: GENERATION + 1, height: TAKEOVER } })).to.equal(null);
+      expect(rosterOverlay.verifyTermCredential(membership, KEY, good, { ...opts, expectedWorld: { generation: GENERATION, height: null } }), 'the same generation in another world').to.equal(null);
+      expect(rosterOverlay.verifyTermCredential(membership, KEY, good, { ...opts, expectedWorld: null }), 'no world stood before').to.equal(null);
+      const claimed = { ...good, generationHeight: null };
+      expect(rosterOverlay.verifyTermCredential(membership, KEY, claimed, { ...opts, expectedWorld: { generation: GENERATION, height: null } }), 'a world the signatures do not name').to.equal(null);
       expect(rosterOverlay.verifyTermCredential(membership, KEY, good, { ...opts, candidate: outpointOf(membership[10]) }), 'presented by someone else').to.equal(null);
       expect(rosterOverlay.verifyTermCredential(membership, KEY, { ...good, epoch: EPOCH + 1 }, opts), 'another epoch is another term').to.equal(null);
     });
