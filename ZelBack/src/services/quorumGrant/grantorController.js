@@ -231,6 +231,19 @@ async function heldGeneration(key) {
 }
 
 /**
+ * What the register judges a held ask by beside its own knobs: this cell's
+ * serving-since anchor for the key, and whether the asked world drained
+ * before this cell served it (a sale's or a re-roll's, never an app's birth).
+ * One source for an ask and for the record read's seat verdict.
+ */
+async function heldContext(key) {
+  return {
+    servingSinceMs: servingSinceFor(key),
+    worldDrained: drainUntil(await heldGeneration(key)) !== null,
+  };
+}
+
+/**
  * What every answer about a held key teaches: the generation this cell
  * knows for it, and the owner-signed record behind the number. A holder or
  * witness that never synced the owner's re-roll learns it from whatever
@@ -1049,10 +1062,10 @@ async function serve(req, res, type, operate) {
         : 0;
     }
     const reply = await operate(ask, {
-      servingSinceMs: servingSinceFor(ask.key),
-      // the asked world drained before this cell served it: a sale's or a
-      // re-roll's, never an app's birth; a founding has no world
-      worldDrained: (ask.mode ?? 'held') === 'held' && drainUntil(await heldGeneration(ask.key)) !== null,
+      // a founding has no world, so nothing drained before it
+      ...((ask.mode ?? 'held') === 'held'
+        ? await heldContext(ask.key)
+        : { servingSinceMs: servingSinceFor(ask.key), worldDrained: false }),
       carriedIncumbent,
       // A delisted holder resolves to nobody — for SEATS only: an ordinal row
       // whose holder left the node list past the grace reads as released at
@@ -1325,6 +1338,29 @@ async function record(req, res) {
       keyClosed = known.aside || (until !== null && height < until);
     }
     const serving = refereeing && grantRegister.drainRemainingMs() === 0 && !keyClosed;
+    // Whether this cell would seat a named candidate now: the register's
+    // prepare decision for it in the cell's standing world — the live term's
+    // shield, the lock-delay, the empty-seat door — with the epoch out of
+    // reach, since a promise is a matter of retrying, not of whether a seat
+    // is open. What a witness asks before it vouches that no takeover is
+    // possible.
+    const { candidate } = req.query;
+    let seats;
+    if (!founderShaped(key) && typeof candidate === 'string' && OUTPOINT_PATTERN.test(candidate)) {
+      seats = false;
+      if (serving) {
+        const known = await heldGeneration(key);
+        const verdict = await grantRegister.probe(key, {
+          key,
+          mode: 'held',
+          candidate,
+          epoch: Number.MAX_SAFE_INTEGER,
+          generation: known.generation,
+          generationHeight: known.height,
+        }, await heldContext(key));
+        seats = verdict?.ok === true;
+      }
+    }
     return res.json(messageHelper.createDataMessage({
       key,
       promisedEpoch: stored?.promisedEpoch ?? 0,
@@ -1334,6 +1370,7 @@ async function record(req, res) {
       cancels: stored?.cancels ?? null,
       refereeing,
       serving,
+      ...(seats === undefined ? {} : { seats }),
       ...(await taught(key)),
     }));
   } catch (error) {

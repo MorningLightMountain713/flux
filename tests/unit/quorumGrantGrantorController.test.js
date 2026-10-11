@@ -2041,6 +2041,54 @@ describe('quorumGrant grantorController', () => {
     });
   });
 
+  // A witness asks each cell whether it would seat the witness's node now:
+  // the register's prepare decision for that candidate in the cell's standing
+  // world, the epoch out of reach — what the cell would actually do, not
+  // whether it merely serves.
+  describe('the record read answers whether it would seat a candidate', () => {
+    const CANDIDATE = `${'c'.repeat(64)}:0`;
+    beforeEach(() => {
+      sinon.stub(grantRegister, 'drainRemainingMs').returns(0);
+    });
+    const readFor = async (candidate) => {
+      const req = fakeReq({});
+      req.query.key = 'myapp/master';
+      if (candidate !== undefined) req.query.candidate = candidate;
+      const res = fakeRes();
+      await grantorController.record(req, res);
+      return res.body.data;
+    };
+
+    it('seats is the register\'s answer to a prepare from the candidate, in the cell\'s standing world, no epoch in the way', async () => {
+      messageStore.standingGeneration.resolves({ record: null, aside: false, ownership: { owner: 'buyer', from: 200, transferred: true } });
+      daemonStatus.isDaemonSynced.returns({ status: 'success', data: { synced: true, height: 230, header: 230 } });
+      grantRegister.probe.resolves({ ok: false, code: 'lock_delay', retryAfterMs: 9000 });
+      expect((await readFor(CANDIDATE)).seats).to.equal(false);
+      const [key, request, context] = grantRegister.probe.lastCall.args;
+      expect(key).to.equal('myapp/master');
+      expect(request).to.deep.include({
+        mode: 'held', candidate: CANDIDATE, generation: 0, generationHeight: 200, epoch: Number.MAX_SAFE_INTEGER,
+      });
+      expect(context.worldDrained, 'the sale\'s world drained, so its empty seats wait').to.equal(true);
+      expect(context.servingSinceMs).to.be.a('number');
+
+      grantRegister.probe.resolves({ ok: true, probe: true });
+      expect((await readFor(CANDIDATE)).seats).to.equal(true);
+    });
+
+    it('a cell that does not serve the key seats nobody, and asks its register nothing', async () => {
+      grantRegister.drainRemainingMs.returns(45_000);
+      expect((await readFor(CANDIDATE)).seats).to.equal(false);
+      expect(grantRegister.probe.called).to.equal(false);
+    });
+
+    it('a read naming no candidate, or a malformed one, answers no seat verdict', async () => {
+      expect(await readFor()).to.not.have.property('seats');
+      expect(await readFor('not-an-outpoint')).to.not.have.property('seats');
+      expect(grantRegister.probe.called).to.equal(false);
+    });
+  });
+
   // The re-rolled seat's anchor (formal/quiet-window, DrainLiftAnchoredLockDelay
   // and its receipt half): a re-rolled generation's seat at this cell is empty,
   // and the generation drain and the record's receipt both close the register
