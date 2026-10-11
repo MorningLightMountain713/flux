@@ -111,6 +111,8 @@ describe('quorumGrant grantClient', () => {
   let readCostMs; // what each record read costs this node on its OWN clock
   let refereeingAnswer; // record reads carry it when set; undefined = old node
   let servingAnswer; // record reads carry it when set; undefined = a node without the word
+  let seatsAnswer; // record reads naming a candidate carry it when set; undefined = a node without the verdict
+  let readCandidates; // the candidate each record read named
   let acceptanceOnAccept; // false = the referees withhold the term acceptance on accept (delivered on renew)
   let freshSeats; // true = the referees first served the re-rolled generation just now (a stranger waits); false = long ago
   let refuseAccept; // true = every referee answers accept with a refusal
@@ -337,6 +339,8 @@ describe('quorumGrant grantClient', () => {
     readCostMs = 0;
     refereeingAnswer = undefined;
     servingAnswer = undefined;
+    seatsAnswer = undefined;
+    readCandidates = [];
     acceptanceOnAccept = true;
     freshSeats = false;
     refuseAccept = false;
@@ -364,7 +368,9 @@ describe('quorumGrant grantClient', () => {
       const [, path, query] = url.match(/^http:\/\/[^:]+:\d+([^?]+)\??(.*)$/);
       if (path === '/flux/quorumgrant/record') {
         clockNow += readCostMs;
-        const key = new URLSearchParams(query).get('key');
+        const params = new URLSearchParams(query);
+        const key = params.get('key');
+        readCandidates.push(params.get('candidate'));
         const stored = registers.get(host)?.get(key) ?? null;
         const expiresAt = stored?.accepted?.expiresAt;
         return {
@@ -378,6 +384,7 @@ describe('quorumGrant grantClient', () => {
               roster: stored?.roster ?? null,
               ...(refereeingAnswer !== undefined ? { refereeing: refereeingAnswer } : {}),
               ...(servingAnswer !== undefined ? { serving: servingAnswer } : {}),
+              ...(seatsAnswer !== undefined && params.get('candidate') ? { seats: seatsAnswer } : {}),
               ...(taughtRecord || cellWorld
                 ? { generation: standingGen(), height: cellsHeight(), generationRecord: taughtRecord }
                 : {}),
@@ -788,6 +795,19 @@ describe('quorumGrant grantClient', () => {
       expect(holder.coasting).to.equal(true);
     });
 
+    it('a witness standing in another world than the term vouches nothing: no coast', async () => {
+      const holder = await acquireHolder();
+      committeeHosts.forEach((host) => unreachable.add(host));
+      relayDelivers = false;
+      witnessReplies.set(STANDBY_HOST, {
+        quorumReachable: false, holding: false, acquiring: false, world: { generation: 0, height: 900 },
+      });
+      clockNow += TTL + 30_000;
+      await holder.renewOnce();
+      expect(holder.coasting).to.equal(false);
+      expect(holder.state).to.equal('lost');
+    });
+
     it('demotes past the deadline when a witness breaks unanimity', async () => {
       let demotedReason = null;
       const outcome = await grantClient.acquire(KEY, holderOptions({
@@ -1196,6 +1216,39 @@ describe('quorumGrant grantClient', () => {
       cellWorld = { generation: 0, height: null };
       const answer = await grantClient.witnessAnswer(KEY);
       expect(answer.doubt).to.equal(false);
+    });
+
+    it('a committee that serves but would seat this node nowhere counts as unreachable: the vouch is what the cells would do', async () => {
+      await grantClient.acquire(KEY, holderOptions());
+      refereeingAnswer = true;
+      servingAnswer = true;
+      seatsAnswer = false;
+      const answer = await grantClient.witnessAnswer(KEY);
+      expect(answer.quorumReachable).to.equal(false);
+      seatsAnswer = true;
+      expect((await grantClient.witnessAnswer(KEY)).quorumReachable).to.equal(true);
+    });
+
+    it('the witness asks each cell about its own node', async () => {
+      await grantClient.acquire(KEY, holderOptions());
+      readCandidates = [];
+      await grantClient.witnessAnswer(KEY);
+      expect(readCandidates.length).to.be.greaterThan(0);
+      readCandidates.forEach((candidate) => expect(candidate).to.equal(SELF));
+    });
+
+    it('a node without the seat verdict counts as it always did', async () => {
+      await grantClient.acquire(KEY, holderOptions());
+      refereeingAnswer = true;
+      servingAnswer = true;
+      seatsAnswer = undefined;
+      expect((await grantClient.witnessAnswer(KEY)).quorumReachable).to.equal(true);
+    });
+
+    it('the witness answer names the world this node stands in', async () => {
+      messageStore.getGrantGenerationRecord.resolves({ data: { identity: 'myapp', role: 'master', generation: 1, height: 900 } });
+      const answer = await grantClient.witnessAnswer(KEY);
+      expect(answer.world).to.deep.equal({ generation: 1, height: 900 });
     });
 
     it('a node without the serving word counts as it always did', async () => {

@@ -498,6 +498,23 @@ describe('quorumGrant grantClientCore', () => {
       expect(verdict.reason).to.match(/later world/);
     });
 
+    // "No cell would seat me now" vouches only for a term in the witness's own
+    // world: a holder asking another world never renews where those doors
+    // open.
+    it('a standby standing in another world than the term vouches nothing', () => {
+      const term = { generation: 1, height: 500 };
+      const sold = { ...deny, world: { generation: 0, height: 900 } };
+      const verdict = coastVerdict(['s1:0'], new Map([['s1:0', sold]]), term);
+      expect(verdict.coast).to.equal(false);
+      expect(verdict.reason).to.match(/generation 0 from height 900/);
+      const same = { ...deny, world: { generation: 1, height: 500 } };
+      expect(coastVerdict(['s1:0'], new Map([['s1:0', same]]), term).coast).to.equal(true);
+    });
+
+    it('a standby naming no world is judged as before', () => {
+      expect(coastVerdict(['s1:0'], new Map([['s1:0', deny]]), { generation: 1, height: 500 }).coast).to.equal(true);
+    });
+
     it('a standby that can reach quorum ends the coast', () => {
       const replies = new Map([
         ['s1:0', deny],
