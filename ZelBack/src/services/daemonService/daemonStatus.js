@@ -8,6 +8,7 @@ const daemonServiceBlockchainRpcs = require('./daemonServiceBlockchainRpcs');
 const log = require('../../lib/log');
 const fluxEventBus = require('../utils/fluxEventBus');
 const capabilities = require('../utils/capabilities');
+const { nodeChain } = require('../utils/nodeChain');
 
 /**
  * Get the default daemon header based on testnet configuration
@@ -182,8 +183,9 @@ const RPC_IN_WARMUP = -28;
 
 /**
  * Wait for the daemon RPC to become available.
- * Polls getblockcount every 5 seconds until a successful response.
- * @returns {Promise<number>} The block height once RPC is available.
+ * Polls getblockchaininfo every 5 seconds until a successful response.
+ * @returns {Promise<{blocks: number, chain: string}>} the daemon's height and
+ *   its name for the chain it runs, once RPC is available
  */
 async function waitForDaemonRpc() {
   const POLL_INTERVAL_MS = 5000;
@@ -192,11 +194,11 @@ async function waitForDaemonRpc() {
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const result = await daemonServiceBlockchainRpcs.getBlockCount();
+    const result = await daemonServiceBlockchainRpcs.getBlockchainInfo();
     if (result.status === 'success') {
-      log.info(`Daemon RPC available at block height ${result.data}`);
+      log.info(`Daemon RPC available at block height ${result.data.blocks} on chain ${result.data.chain}`);
       publishDaemonReachable(true);
-      return result.data;
+      return { blocks: result.data.blocks, chain: result.data.chain };
     }
     const now = Date.now();
     if (!lastLogAt || now - lastLogAt >= LOG_INTERVAL_MS) {
@@ -209,6 +211,19 @@ async function waitForDaemonRpc() {
     // eslint-disable-next-line no-await-in-loop
     await serviceHelper.delay(POLL_INTERVAL_MS);
   }
+}
+
+/**
+ * Why this node cannot run on the daemon it reached, or null when it can: the
+ * daemon must run the chain this node reads every height on.
+ *
+ * @param {{chain: string}} daemonInfo - as waitForDaemonRpc returns it
+ * @returns {?string}
+ */
+function daemonChainMismatch(daemonInfo) {
+  const expected = nodeChain().name;
+  if (daemonInfo.chain === expected) return null;
+  return `The daemon runs chain "${daemonInfo.chain}" and this node is configured for "${expected}" (daemon.chain). Shutting down.`;
 }
 
 function getIsDaemonInsightExplorer() {
@@ -261,6 +276,7 @@ module.exports = {
   daemonBlockchainInfoService,
   recordChainTip,
   waitForDaemonRpc,
+  daemonChainMismatch,
 
   // exports for testing purposes
   fluxDaemonBlockchainInfo,

@@ -141,9 +141,6 @@ module.exports = {
     minHashSyncPeers: 1,
     minUpTime: 10,
     maxAppsPerNode: 200,
-    blocksLasting: 22000,
-    newMinBlocksAllowance: 100,
-    daemonPONFork: 2020000,
     // Version-activation floors. The harness chain tip is INITIAL_HEIGHT
     // (2,100,000), so every version here resolves active; v9 is pulled below the
     // tip (prod is 2.6M+) so v9 specs are accepted under the harness.

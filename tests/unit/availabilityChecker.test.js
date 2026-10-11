@@ -59,7 +59,7 @@ function multiPortSpec(name, hostPorts) {
       ports: [hostPort],
       containerPorts: [8080 + index],
     })),
-  });
+  }, { chain: flux.Chain.MAIN });
 }
 
 /** A real DeploymentSpec — the object the checker calls allHostPorts() on. */

@@ -19,6 +19,7 @@ const allSpecs = fs.existsSync(FIXTURE_PATH)
 describe('pricing equivalence — BigInt comparison produces same result as float', () => {
   let chainPrices;
   let engine;
+  let legacyDefaultExpire;
 
   before(async function () {
     if (allSpecs.length === 0) {
@@ -39,7 +40,8 @@ describe('pricing equivalence — BigInt comparison produces same result as floa
     }
     chainPrices = [...config.fluxapps.price];
     chainPrices.sort((a, b) => a.height - b.height);
-    const { LegacyPricingEngine } = await getSpecPolicy();
+    let LegacyPricingEngine;
+    ({ LegacyPricingEngine, legacyDefaultExpire } = await getSpecPolicy());
     engine = new LegacyPricingEngine({ chainRates: chainPrices });
     // The encrypted fixtures cannot be decrypted without the node's benchmark
     // daemon, and each attempt was a real RPC to it. They are skipped either
@@ -99,8 +101,7 @@ describe('pricing equivalence — BigInt comparison produces same result as floa
         return;
       }
 
-      const blockHeightMultiplier = height >= config.fluxapps.daemonPONFork ? 4 : 1;
-      const defaultExpire = config.fluxapps.blocksLasting * blockHeightMultiplier;
+      const defaultExpire = legacyDefaultExpire(spec.chain, height);
       const expireIn = spec.expire || defaultExpire;
       const multiplier = expireIn / defaultExpire;
       let scaledPrice = appPrice * multiplier;

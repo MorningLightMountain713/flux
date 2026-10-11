@@ -149,6 +149,10 @@ module.exports = {
     socketPath: '/run/fluxbenchd/full.sock',
   },
   daemon: {
+    // fluxd's name for the chain this node runs on (`getblockchaininfo.chain`).
+    // The flux-spec library reads every height on this chain, and boot refuses
+    // a daemon that reports another.
+    chain: 'main',
     host: '127.0.0.1',
     chainValidHeight: 1_062_000,
     port: 16_125,
@@ -380,7 +384,7 @@ module.exports = {
     // sick disk mid volume-create, a hung docker create) from wedging the
     // component's reconcile single-flight; generous so no live pull ever hits it
     recreateProvisionCapMs: 900_000,
-    // in flux main chain per month (blocksLasting)
+    // in flux main chain per month
     price: [
       { // any price fork can be done by adjusting object similarily.
         height: -1, // height from which price spec is valid
@@ -763,17 +767,9 @@ module.exports = {
       probability: 2, // 50%
       composedDelay: 5,
     },
-    blocksLasting: 22_000, // by default registered app will live for 22000 of blocks 44000 minutes ~= 1 month
-    minBlocksAllowance: 5000, // app can be registered for a minimum of this blocks ~ 1 week
-    newMinBlocksAllowance: 100, // app can be registered for a minimum of this blocks ~ 3 hours - to allow users to cancel application subscription
-    newMinBlocksAllowanceBlock: 1_630_040, // block where we will start looking at new min blocks allowance. block expected on 26th of April 2024
-    cancel1BlockMinBlocksAllowance: 1, // app can be registered for a minimum of 1 block for cancellation purposes
-    cancel1BlockMinBlocksAllowanceBlock: 1_964_447, // block where we will start allowing 1 block lifetime updates - Expected August 6th 2025
-    maxBlocksAllowance: 264_000, // app can be registered up for a maximum of this blocks ~ 1 year
-    postPonMaxBlocksAllowance: 1_056_000, // after PON fork, chain works 4x faster, so max blocks is 4x higher ~ 1 year
-    daemonPONFork: 2_020_000, // block height where PON (Proof of Node) fork activates - chain works 4x faster after this block
-    blocksAllowanceInterval: 1000, // ap differences can be in 1000s - more than 1 day
-    removeBlocksAllowanceIntervalBlock: 1_625_000, // after this block we can start having app updates without extending subscription - block expected in April 19th 2024
+    // the margin past the current chain position an app's term must reach for
+    // this node to spawn an instance of it, in blocks at the block time in force
+    spawnAllowanceBlocks: 100,
     ownerAppAllowance: 1000, // a by-name local install (fluxteam only) runs for this amount of blocks before the expiry sweep removes it
     temporaryAppAllowance: 200, // in case of any user installing some temporary app message for testing purposes, the app will run for this many blocks
     expireFluxAppsPeriod: 100, // every 100 blocks we run a check that deletes apps specifications and stops/removes the application from existence if it has been lastly updated more than 22k blocks ago
@@ -782,8 +778,6 @@ module.exports = {
     benchUpnpPeriod: 6480, // every 9 days execute upnp bench
     hddFileSystemMinimum: 10, // right now 10, to be decreased to a minimum of 5GB of free space on hdd for docker with v8 specs activation
     defaultSwap: 2, // 2gb swap memory minimum, this is in gb
-    applyMinimumPriceOn3Instances: 1_691_000, // after this block we use the min. usd price on prices per 3 instances.
-    applyMinimumForExtraInstances: 1_890_000,
     latestAppSpecification: 8,
     bootDelayMultiplier: 1,
     spawnDelayMs: 0,

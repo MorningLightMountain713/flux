@@ -7,6 +7,7 @@ const daemonServiceBlockchainRpcs = require('../daemonService/daemonServiceBlock
 const appEventVerifier = require('./appEventVerifier');
 const { getSpecBackend } = require('../utils/specLibs');
 const appRecords = require('../appDatabase/appRecords');
+const { nodeChain } = require('../utils/nodeChain');
 
 /**
  * The one way an app message whose payment is mined is stored.
@@ -116,7 +117,7 @@ async function confirmedEvent(contents, record) {
     timestamp: contents.timestamp,
     signature: contents.signature,
     ...chain,
-  });
+  }, { chain: nodeChain() });
 }
 
 /**

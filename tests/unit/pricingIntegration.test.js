@@ -9,6 +9,7 @@ const proxyquire = require('proxyquire');
 const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
 const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 const { buildPricingEngine } = require('../../ZelBack/src/services/pricing/buildPricingEngine');
+const { nodeChain } = require('../../ZelBack/src/services/utils/nodeChain');
 
 describe('pricing integration — chain messages through PricingEngine', () => {
   let PriceMessage, RateMessage, PriceModifierMessage, dispatch;
@@ -537,7 +538,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
           secrets: '',
           repoauth: '',
         }],
-      });
+      }, { chain: nodeChain() });
     }
 
     async function feeWithPredecessorAt(prevHeight) {

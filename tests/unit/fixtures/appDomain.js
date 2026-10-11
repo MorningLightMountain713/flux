@@ -93,8 +93,8 @@ function submissionV8(overrides = {}) {
 
 /** The real FluxAppSpecV8, through the same deserializer production uses. */
 async function v8Spec(overrides = {}) {
-  const { deserializeSpec } = await load();
-  return deserializeSpec(submissionV8(overrides));
+  const { deserializeSpec, Chain } = await load();
+  return deserializeSpec(submissionV8(overrides), { chain: Chain.MAIN });
 }
 
 /**
@@ -105,13 +105,13 @@ async function v8Spec(overrides = {}) {
  * stubs resolveInstantiatedSpec, and only that.
  */
 async function encryptedV8Spec(overrides = {}) {
-  const { deserializeSpec } = await load();
+  const { deserializeSpec, Chain } = await load();
   return deserializeSpec({
     ...submissionV8({ compose: [] }),
     name: 'encapp',
     enterprise: 'base64blob',
     ...overrides,
-  });
+  }, { chain: Chain.MAIN });
 }
 
 /**
@@ -119,7 +119,7 @@ async function encryptedV8Spec(overrides = {}) {
  * the spec, and that component named after the app.
  */
 async function v3Spec(overrides = {}) {
-  const { deserializeSpec } = await load();
+  const { deserializeSpec, Chain } = await load();
   return deserializeSpec({
     version: 3,
     name: 'legacyapp',
@@ -138,12 +138,12 @@ async function v3Spec(overrides = {}) {
     tiered: false,
     instances: 3,
     ...overrides,
-  });
+  }, { chain: Chain.MAIN });
 }
 
 /** The real AppEventLegacy, for temp messages below version 2. */
 async function legacyEvent(overrides = {}) {
-  const { AppEventLegacy } = await load();
+  const { AppEventLegacy, Chain } = await load();
   const { spec, ...rest } = overrides;
   const appSpecifications = (spec ?? await v8Spec()).serialize();
   return AppEventLegacy.deserialize({
@@ -157,7 +157,7 @@ async function legacyEvent(overrides = {}) {
     height: 2_000_000,
     valueSat: 100_000_000,
     ...rest,
-  });
+  }, { chain: Chain.MAIN });
 }
 
 /** The real FluxAppSpecV9. */

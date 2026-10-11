@@ -28,6 +28,7 @@ const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracle
 const unclaimedPayments = require('../../ZelBack/src/services/appDecisions/unclaimedPayments');
 const decider = require('../../ZelBack/src/services/appDecisions/decider');
 const fluxSpecCjs = require('@runonflux/flux-spec-cjs');
+const specLibrary = require('../../ZelBack/src/services/utils/specLibrary');
 
 // 320-char OP_RETURN payload, hoisted so the call site stays inside max-len.
 // A standard P2PKH output's script, as the daemon reports it. Every payment output
@@ -410,6 +411,27 @@ describe('explorerService tests', () => {
       const [deps] = giveUpStub.firstCall.args;
       expect(deps.installedAppsFn).to.equal(appQueryService.installedApps);
       expect(deps.isElectedPrimary).to.equal(appOperations.isElectedPrimary);
+    });
+
+    it('past the Proof of Node height the removal period counts four blocks for each of the chain\'s first', async () => {
+      // 2,020,007 is a multiple of removeFluxAppsPeriod (11) and not of 44;
+      // 2,020,040 is a multiple of 44.
+      const giveUpStub = sinon.stub(appGiveUp, 'checkAndGiveUpAnApp').resolves();
+      dbStubUpdate.returns(true);
+      dbStubCollectionStats.returns({ size: 10_000, count: 15, avgObjSize: 1111 });
+      daemonStatusStub.returns({ data: { synced: true } });
+      for (const blockHeight of [2_020_007, 2_020_040]) {
+        daemonServiceBlockchainRpcsStub.returns({
+          status: 'success',
+          data: {
+            tx: [], height: blockHeight, time: 1_700_000_000, confirmations: 1,
+          },
+        });
+        // eslint-disable-next-line no-await-in-loop
+        await explorerService.processOneBlock(blockHeight, true, { atTip: true });
+      }
+
+      sinon.assert.calledOnce(giveUpStub);
     });
 
     it('should update db if all parameters are passed correctly, height == 900009', async () => {
@@ -2030,6 +2052,22 @@ describe('explorerService tests', () => {
       handler.onMessage({ height: 2_100_777 });
       expect(fresh.pushedTip(), 'the drain floors on the height the push carried').to.equal(2_100_777);
       await fresh.stopScanning();
+    });
+  });
+
+  describe('speedMultiplierAt', () => {
+    it('scales the block loop\'s periods by how many blocks span one of the chain\'s first', () => {
+      expect(explorerService.speedMultiplierAt(2_019_999)).to.equal(1);
+      expect(explorerService.speedMultiplierAt(2_020_000)).to.equal(4);
+    });
+
+    it('on labnet, from height 2', () => {
+      const { Chain } = specLibrary.loaded();
+      const onLabnet = proxyquire('../../ZelBack/src/services/explorerService', {
+        './utils/nodeChain': { nodeChain: () => Chain.LABNET },
+      });
+      expect(onLabnet.speedMultiplierAt(1)).to.equal(1);
+      expect(onLabnet.speedMultiplierAt(2)).to.equal(4);
     });
   });
 });

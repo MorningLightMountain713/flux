@@ -103,7 +103,7 @@ describe('appSubmission tests', () => {
         // Real library behind FluxOS's own wrappers. assertVersionActivated stays
         // stubbed because it is FluxOS policy about fork heights, not spec shape.
         validateSubmissionSpec: sinon.stub().callsFake(async (blob) => (
-          flux.FluxAppSpecBase.getVersionClass(blob.version).fromSubmission(blob)
+          flux.FluxAppSpecBase.getVersionClass(blob.version).fromSubmission(blob, { chain: flux.Chain.MAIN })
         )),
         getSpec: sinon.stub().callsFake(async () => flux),
         getSpecBackend: sinon.stub(),
@@ -690,7 +690,7 @@ describe('appSubmission tests', () => {
       const updateSpec = await v8Spec();
       const v7Blob = { ...V8_SUBMISSION, version: 7 };
       delete v7Blob.enterprise; // v8's field
-      const previousSpec = flux.FluxAppSpecBase.getVersionClass(7).fromSubmission(v7Blob);
+      const previousSpec = flux.FluxAppSpecBase.getVersionClass(7).fromSubmission(v7Blob, { chain: flux.Chain.MAIN });
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 8 });
       stubs.parseSpec.resolves({ isEncrypted: false });
       stubs.specLibs.validateSubmissionSpec.resolves(updateSpec);

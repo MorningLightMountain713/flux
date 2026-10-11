@@ -37,6 +37,7 @@ const globalState = require('../utils/globalState');
 const capabilities = require('../utils/capabilities');
 const { peerManager } = require('../utils/peerState');
 const { Privilege, authOf } = require('../utils/privileges');
+const { nodeChain } = require('../utils/nodeChain');
 
 /**
  * Resolve the effective template submission spec for the tier the deploy claims.
@@ -149,7 +150,7 @@ async function previousSettledSpec(spec) {
   if (!latest) return null;
   const { message } = latest;
   const { deserializeSpec } = await getSpecBackend();
-  return deserializeSpec(message.appSpecifications);
+  return deserializeSpec(message.appSpecifications, { chain: nodeChain(), height: message.height });
 }
 
 /** Whether two placements name the same nodes, in any order. */
@@ -246,7 +247,7 @@ async function resolveSubmission(appSpecification, {
   // validator's field-precise message, so the validation error propagates.
   await ensureProvidersRegistered();
   const { deserializeSpec: parseSubmission, EncryptedSpecV8 } = await getSpecBackend();
-  const wireSpec = await parseSubmission(submissionBlob);
+  const wireSpec = await parseSubmission(submissionBlob, { chain: nodeChain() });
   if (!wireSpec) throw new Error('Could not deserialize app specifications');
 
   // The ENVELOPE of a v8 enterprise submission, which nothing else checks.
@@ -270,7 +271,7 @@ async function resolveSubmission(appSpecification, {
   // has ever been registered. The return value is discarded — `wireSpec` is
   // already built and is what flows on; this call is the assertion.
   if (EncryptedSpecV8.matchesWire(submissionBlob)) {
-    EncryptedSpecV8.fromSubmission(submissionBlob);
+    EncryptedSpecV8.fromSubmission(submissionBlob, { chain: nodeChain() });
   }
 
   // Computed BEFORE validation, because validation needs it. `wasTransportEncrypted`

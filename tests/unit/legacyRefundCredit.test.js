@@ -4,7 +4,6 @@
 process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 
 const { expect } = require('chai');
-const config = require('config');
 const { load } = require('@runonflux/flux-spec-cjs');
 const proxyquire = require('proxyquire').noCallThru();
 
@@ -18,7 +17,8 @@ const proxyquire = require('proxyquire').noCallThru();
 // of the arithmetic alone would pass while the node charged from another
 // expression entirely.
 describe('the early-update credit', () => {
-  const FORK = config.get('fluxapps.daemonPONFork');
+  // Mainnet's Proof of Node height, where the block time fell from 120 to 30 seconds.
+  const FORK = 2_020_000;
   let spec;
 
   before(async function loadLibrary() {
@@ -29,8 +29,8 @@ describe('the early-update credit', () => {
   // The subscription and the elapsed time, both in seconds, is the whole rule.
   // Stated here directly so a case below can be read without running it.
   const creditFor = (registeredHeight, expire, atHeight) => {
-    const paid = spec.subscriptionSeconds({ height: registeredHeight, expire });
-    const elapsed = spec.secondsBetweenHeights(registeredHeight, atHeight);
+    const paid = spec.subscriptionSeconds({ height: registeredHeight, expire, chain: spec.Chain.MAIN });
+    const elapsed = spec.Chain.MAIN.secondsBetween(registeredHeight, atHeight);
     return (paid - elapsed) / paid;
   };
 
@@ -56,7 +56,7 @@ describe('the early-update credit', () => {
 
     it('runs out exactly at the expiry height, not before or after', () => {
       const registered = FORK - 20_000;
-      const expiresAt = spec.expiresAtHeightFor({ height: registered, expire: 40_000 });
+      const expiresAt = spec.expiresAtHeightFor({ height: registered, expire: 40_000, chain: spec.Chain.MAIN });
 
       expect(creditFor(registered, 40_000, expiresAt - 1)).to.be.above(0);
       expect(creditFor(registered, 40_000, expiresAt)).to.be.closeTo(0, 1e-9);
@@ -119,6 +119,7 @@ describe('the early-update credit', () => {
     // Answers only what pricing asks. 30GB at 100 FLUX/GB is 3000 a month,
     // quoted a third at a time, so 1000.
     const specOf = (expire) => ({
+      get chain() { return spec.Chain.MAIN; },
       expire,
       version: 8,
       instances: 1,
@@ -163,7 +164,7 @@ describe('the early-update credit', () => {
       const credited = await fee(FORK + 40_000);
       const spent = await fee(FORK + 500_000);
 
-      const previousSpecsPrice = 1000 * (40_000 / spec.legacyDefaultExpire(registered));
+      const previousSpecsPrice = 1000 * (40_000 / spec.legacyDefaultExpire(spec.Chain.MAIN, registered));
       const expectedCredit = creditFor(registered, 40_000, FORK + 40_000) * previousSpecsPrice * 0.9;
 
       expect(spent - credited).to.be.closeTo(expectedCredit, 0.02);

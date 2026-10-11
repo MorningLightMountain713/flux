@@ -30,8 +30,8 @@ const MIN_SYNC_COMPLETIONS = config.get('fluxapps.appSyncMinCompletions');
 // the block fallback is what carries the node to readiness.
 const SYNC_TIMEOUT_MS = config.get('fluxapps.syncTimeoutMs');
 const FALLBACK_MINUTES = config.get('fluxapps.appSyncFallbackMinutes');
-// A chain fact, not a policy: blocks are 30 seconds since the PON fork
-// (config.fluxapps.daemonPONFork), so two a minute. Not a knob - a node that
+// A chain fact, not a policy: blocks are 30 seconds past the Proof of Node
+// upgrade on every chain this node runs, so two a minute. Not a knob - a node that
 // disagrees with the chain about this converts appSyncFallbackMinutes into the
 // wrong number of blocks and waits the wrong length of time in silence.
 const BLOCKS_PER_MINUTE = 2;

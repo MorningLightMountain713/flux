@@ -38,7 +38,7 @@ function makeStreamResponse(data) {
  * the four members this service happens to read today.
  */
 function makeDeserializeSpecStub() {
-  return sinon.stub().callsFake(async (blob) => flux.deserializeSpec(blob));
+  return sinon.stub().callsFake(async (blob) => flux.deserializeSpec(blob, { chain: flux.Chain.MAIN }));
 }
 
 /**
@@ -51,7 +51,7 @@ function makeDeserializeSpecStub() {
 function makeDeserializeMessageStub() {
   return sinon.stub().callsFake(async (msg) => (msg.version === 2
     ? flux.ConfirmedAppEvent.deserialize(msg)
-    : flux.AppEventLegacy.deserialize(msg)));
+    : flux.AppEventLegacy.deserialize(msg, { chain: flux.Chain.MAIN })));
 }
 
 /**

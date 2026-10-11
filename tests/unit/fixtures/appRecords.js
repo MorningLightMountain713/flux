@@ -106,9 +106,9 @@ function stubLedgers() {
  * @returns {Promise<import('@runonflux/flux-spec-backend').AppRegistry>}
  */
 async function inMemoryRegistry() {
-  const { AppRegistry } = await loadSpecLibrary();
+  const { AppRegistry, Chain } = await loadSpecLibrary();
   const { InMemoryStorageProvider } = await moduleLoader.importModule('@runonflux/flux-spec-backend/testing');
-  return install('registry', new AppRegistry(new InMemoryStorageProvider()));
+  return install('registry', new AppRegistry(new InMemoryStorageProvider(), { chain: Chain.MAIN }));
 }
 
 /**
@@ -118,10 +118,10 @@ async function inMemoryRegistry() {
  * @returns {Promise<{installed: import('@runonflux/flux-spec-backend').InstalledApps, provider: object}>}
  */
 async function inMemoryInstalled() {
-  const { InstalledApps } = await loadSpecLibrary();
+  const { InstalledApps, Chain } = await loadSpecLibrary();
   const { InMemoryStorageProvider } = await moduleLoader.importModule('@runonflux/flux-spec-backend/testing');
   const provider = new InMemoryStorageProvider();
-  return { installed: install('installed', new InstalledApps(provider)), provider };
+  return { installed: install('installed', new InstalledApps(provider, { chain: Chain.MAIN })), provider };
 }
 
 /**

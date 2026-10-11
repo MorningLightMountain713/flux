@@ -4,6 +4,7 @@ const config = require('config');
 const log = require('../../lib/log');
 const specLibrary = require('../utils/specLibrary');
 const MongoStorageProvider = require('../providers/MongoStorageProvider');
+const { nodeChain } = require('../utils/nodeChain');
 
 /**
  * flux-spec's record collections over this node's database. FluxOS reads and
@@ -54,6 +55,7 @@ function registry() {
   if (!appRegistry) {
     const { AppRegistry } = specLibrary.loaded();
     appRegistry = new AppRegistry(provider(), {
+      chain: nodeChain(),
       onUnreadable: (stored, error) => log.warn(`appRegistry: a stored record cannot be read: ${error.message} (name=${stored.name}, version=${stored.version})`),
     });
   }
@@ -68,6 +70,7 @@ function installed() {
   if (!installedApps) {
     const { InstalledApps } = specLibrary.loaded();
     installedApps = new InstalledApps(provider(), {
+      chain: nodeChain(),
       onUnreadable: (stored, error) => log.warn(`installedApps: a stored record cannot be read: ${error.message} (name=${stored.name}, replica=${stored.replica ?? null}, version=${stored.version})`),
     });
   }

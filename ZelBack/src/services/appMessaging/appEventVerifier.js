@@ -8,13 +8,14 @@ const { ARCANE_APP_ATTESTATION_PUBKEY, verifyAttestationSignature } = require('.
 const { getChainTeamSupportAddressUpdates } = require('../utils/chainUtilities');
 const { isMarketplaceApp } = require('../utils/marketplaceApps');
 const { ownerChangeRaceSigner } = require('./ownerChangeRaces');
+const { nodeChain } = require('../utils/nodeChain');
 
 async function deserializeMessage(message) {
   const { AppEventLegacy, ConfirmedAppEvent } = await getSpecBackend();
   if (message.version === 2) {
     return ConfirmedAppEvent.deserialize(message);
   }
-  return AppEventLegacy.deserialize(message);
+  return AppEventLegacy.deserialize(message, { chain: nodeChain() });
 }
 
 async function deserializeTempMessage(message) {
@@ -22,7 +23,7 @@ async function deserializeTempMessage(message) {
   if (message.version === 2) {
     return SignedAppEvent.deserialize(message);
   }
-  return AppEventLegacy.deserialize(message);
+  return AppEventLegacy.deserialize(message, { chain: nodeChain() });
 }
 
 async function verifyFn(payload, address, signature) {

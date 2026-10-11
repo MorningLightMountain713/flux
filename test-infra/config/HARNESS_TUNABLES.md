@@ -166,4 +166,4 @@ it uses a hardcoded constant instead, at the production value, in every suite.
 Deliberately uncompressed - a suite depending on one of these is depending on the
 production number.
 
-`syncthing.port` = 8384 · `fluxapps.maxAppsPerNode` = 200 · `fluxapps.blocksLasting` = 22000 · `fluxapps.newMinBlocksAllowance` = 100 · `fluxapps.daemonPONFork` = 2020000 · `fluxapps.hashSyncResponseTimePerHashMs` = 150 · `fluxapps.hashSyncBufferMs` = 5000 · `fluxapps.hashSyncMaxRounds` = 4 · `fluxapps.hashSyncPeersPerRound` = 3 · `fluxapps.installingTtlS` = 900 · `fluxapps.installErrorTtlS` = 86400 · `fluxapps.installation.probability` = 100 · `fluxapps.removal.probability` = 25 · `fluxapps.redeploy.probability` = 2
+`syncthing.port` = 8384 · `fluxapps.maxAppsPerNode` = 200 · `fluxapps.hashSyncResponseTimePerHashMs` = 150 · `fluxapps.hashSyncBufferMs` = 5000 · `fluxapps.hashSyncMaxRounds` = 4 · `fluxapps.hashSyncPeersPerRound` = 3 · `fluxapps.installingTtlS` = 900 · `fluxapps.installErrorTtlS` = 86400 · `fluxapps.installation.probability` = 100 · `fluxapps.removal.probability` = 25 · `fluxapps.redeploy.probability` = 2

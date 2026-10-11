@@ -76,7 +76,6 @@ describe('appInstaller tests', () => {
         },
       },
       fluxapps: {
-        blocksLasting: 22_000,
         latestAppSpecification: 1,
         ownerAppAllowance: 100,
         temporaryAppAllowance: 200,

@@ -15,6 +15,7 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 const upnpService = require('../upnpService');
 const specLibrary = require('../utils/specLibrary');
 const { appsFolder } = require('../utils/appConstants');
+const { nodeChain } = require('../utils/nodeChain');
 
 /**
  * The ledger of an installed instance as the host holds it now, read for an
@@ -143,7 +144,7 @@ async function adoptInstalledLedgers() {
       const move = moves.get(appRecords.instanceKey(record)) ?? null;
       let registered = record.record;
       if (registered.identity === null) {
-        registered = InstantiatedSpec.deserialize({ ...registered.serialize(), identity: registered.name });
+        registered = InstantiatedSpec.deserialize({ ...registered.serialize(), identity: registered.name }, { chain: nodeChain() });
       }
       // eslint-disable-next-line no-await-in-loop
       if (move) await appIdentityMoveStore.begin(record.name, record.replica, move.to, move.since);

@@ -198,7 +198,7 @@ describe('appQueryService tests', () => {
       // comes from, and a shape hydrate cannot read is a shape nobody can consume.
       const [payload] = messageHelperStub.createDataMessage.firstCall.args;
       payload.forEach((doc) => {
-        expect(flux.InstantiatedSpec.deserialize(doc)).to.be.instanceOf(flux.InstantiatedSpec);
+        expect(flux.InstantiatedSpec.deserialize(doc, { chain: flux.Chain.MAIN })).to.be.instanceOf(flux.InstantiatedSpec);
       });
     });
 
@@ -220,11 +220,11 @@ describe('appQueryService tests', () => {
       expect(doc, 'the cleartext component set must not be served').to.not.have.property('components');
       // The cleartext summary survives, which is what a caller sizes the app from.
       expect(doc.resources).to.exist;
-      expect(flux.InstantiatedSpec.deserialize(doc).spec).to.be.instanceOf(flux.EncryptedSpecV9);
+      expect(flux.InstantiatedSpec.deserialize(doc, { chain: flux.Chain.MAIN }).spec).to.be.instanceOf(flux.EncryptedSpecV9);
       // And the round-trip above is not vacuous: a sealed row binds its cleartext
       // metadata into the AAD, so one extra storage field is refused outright.
       expect(
-        () => flux.InstantiatedSpec.deserialize({ ...doc, replica: 'r1' }),
+        () => flux.InstantiatedSpec.deserialize({ ...doc, replica: 'r1' }, { chain: flux.Chain.MAIN }),
         'a decorated sealed doc must be refused, or the round-trip proves nothing',
       ).to.throw(/unexpected fields/);
     });
@@ -968,7 +968,7 @@ describe('appQueryService tests', () => {
       // wire form. The owner the endpoint reads is the spec's own owner, and the
       // placeholder these rows used to carry is not an address at all:
       expect(
-        () => flux.FluxAppSpecV8.fromSubmission({ ...V8_SUBMISSION, owner: 'owner1' }),
+        () => flux.FluxAppSpecV8.fromSubmission({ ...V8_SUBMISSION, owner: 'owner1' }, { chain: flux.Chain.MAIN }),
         'the real class refuses a placeholder owner',
       ).to.throw(/Flux ID/);
 

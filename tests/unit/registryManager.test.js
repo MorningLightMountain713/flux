@@ -83,7 +83,7 @@ describe('registryManager tests', () => {
     if (!(spec instanceof flux.EncryptedSpecV8)) {
       const doc = instantiated.serialize();
       if (spec.version < 9) delete doc.registeredAt;
-      stored = flux.InstantiatedSpec.deserialize(doc);
+      stored = flux.InstantiatedSpec.deserialize(doc, { chain: flux.Chain.MAIN });
     }
     stubRegistry().byName.resolves(stored);
     return stored;
@@ -1905,7 +1905,7 @@ describe('registryManager tests', () => {
      */
     function assertStorable(record, name) {
       expect(record.name, 'the registry keys the record on its name').to.equal(name);
-      const rehydrated = flux.InstantiatedSpec.deserialize(record.serialize());
+      const rehydrated = flux.InstantiatedSpec.deserialize(record.serialize(), { chain: flux.Chain.MAIN });
       expect(rehydrated.spec).to.be.instanceOf(flux.FluxAppSpecV9);
       expect(rehydrated.name).to.equal(name);
       return rehydrated;

@@ -28,6 +28,7 @@
  */
 
 const { expect } = require('chai');
+const { nodeChain } = require('../../ZelBack/src/services/utils/nodeChain');
 
 const {
   validateSubmissionSpec,
@@ -122,7 +123,7 @@ describe('spec door order — a submitted document is bounded at either door', (
   });
 
   it('the baseline document is accepted by both doors', async () => {
-    expect(await outcome(() => deserializeSpec(validV8())), 'the baseline must pass the wire '
+    expect(await outcome(() => deserializeSpec(validV8(), { chain: nodeChain() })), 'the baseline must pass the wire '
       + 'door, or every probe below rejects for the wrong reason').to.equal('ACCEPTED');
     expect(await outcome(() => validateSubmissionSpec(validV8())), 'the baseline must pass the '
       + 'submission door').to.equal('ACCEPTED');
@@ -130,11 +131,11 @@ describe('spec door order — a submitted document is bounded at either door', (
 
   describe('the wire door, which registration reaches first', () => {
     it('refuses an oversized document', async () => {
-      expect(await outcome(() => deserializeSpec(oversizedV8()))).to.equal('SPEC_TOO_LARGE');
+      expect(await outcome(() => deserializeSpec(oversizedV8(), { chain: nodeChain() }))).to.equal('SPEC_TOO_LARGE');
     });
 
     it('refuses an over-deep document', async () => {
-      expect(await outcome(() => deserializeSpec(overDeepV8()))).to.equal('DOCUMENT_TOO_DEEP');
+      expect(await outcome(() => deserializeSpec(overDeepV8(), { chain: nodeChain() }))).to.equal('DOCUMENT_TOO_DEEP');
     });
   });
 
@@ -152,14 +153,14 @@ describe('spec door order — a submitted document is bounded at either door', (
 
   describe('the two doors agree, so no route depends on its call order', () => {
     it('gives the same verdict on an oversized document', async () => {
-      const viaWire = await outcome(() => deserializeSpec(oversizedV8()));
+      const viaWire = await outcome(() => deserializeSpec(oversizedV8(), { chain: nodeChain() }));
       const viaSubmission = await outcome(() => validateSubmissionSpec(oversizedV8()));
       expect(viaSubmission, 'the doors disagree about the same document, so whether a route is '
         + 'bounded now depends on which door it reaches first').to.equal(viaWire);
     });
 
     it('gives the same verdict on an over-deep document', async () => {
-      const viaWire = await outcome(() => deserializeSpec(overDeepV8()));
+      const viaWire = await outcome(() => deserializeSpec(overDeepV8(), { chain: nodeChain() }));
       const viaSubmission = await outcome(() => validateSubmissionSpec(overDeepV8()));
       expect(viaSubmission, 'the doors disagree about the same document, so whether a route is '
         + 'bounded now depends on which door it reaches first').to.equal(viaWire);

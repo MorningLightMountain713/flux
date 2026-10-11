@@ -60,6 +60,7 @@ const messageStore = require('../appMessaging/messageStore');
 const registryManager = require('../appDatabase/registryManager');
 const appsRepository = require('../appDatabase/appsRepository');
 const appRecords = require('../appDatabase/appRecords');
+const { nodeChain } = require('../utils/nodeChain');
 const nodeDownStore = require('../appMessaging/nodeDownStore');
 const imageManager = require('../appSecurity/imageManager');
 const hwRequirements = require('../appRequirements/hwRequirements');
@@ -296,10 +297,11 @@ async function broadcastInstallingCleared(name, ip, replica = null) {
  * @returns {Promise<Array<{instantiated: object, actual: number, required: number}>>}
  */
 async function underProvisionedApps(currentHeight, nowSeconds) {
-  const marginBlocks = config.get('fluxapps.newMinBlocksAllowance');
+  const marginBlocks = config.get('fluxapps.spawnAllowanceBlocks');
+  const marginSeconds = marginBlocks * nodeChain().blockSecondsAt(currentHeight);
   const [alive, runningByApp] = await Promise.all([
     appRecords.registry().alive({
-      height: currentHeight, time: nowSeconds, marginBlocks, marginSeconds: marginBlocks * 30,
+      height: currentHeight, time: nowSeconds, marginBlocks, marginSeconds,
     }),
     appsRepository.countRunningByApp(),
   ]);
