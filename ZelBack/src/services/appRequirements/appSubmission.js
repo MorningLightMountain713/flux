@@ -816,51 +816,22 @@ async function registerAppGlobalyApi(req, res) {
   return undefined;
 }
 
-function normalizePGPSecret(pgpMessage) {
-  if (!pgpMessage) return '';
-  return pgpMessage.replace(/\s+/g, '').replace(/\\n/g, '').trim();
-}
-
+/**
+ * Refuse a v7 component's secrets at the door by the rule the decider applies
+ * (flux-spec `v7SecretsRefusal`): the same secrets never serve two apps, an
+ * update keeps the secrets its own app carries now whoever it names as owner,
+ * and secrets another owner used before are refused otherwise.
+ */
 async function assertSecretsNotConflicting(appName, componentName, secrets, owner, options = {}) {
   const { isRegistration = false } = options;
-  const normalized = normalizePGPSecret(secrets);
-  if (!normalized) return;
-
-  const liveSecrets = await appsRepository.listLiveV7Secrets();
-  let foundSameApp = false;
-  let foundDifferentApp = false;
-
-  for (const entry of liveSecrets) {
-    if (normalizePGPSecret(entry.secrets) === normalized) {
-      if (isRegistration) {
-        throw new Error(
-          `Provided component '${componentName}' secrets are not valid (duplicate in app: '${entry.appName}')`,
-        );
-      } else if (entry.appName !== appName) {
-        foundDifferentApp = true;
-      } else {
-        foundSameApp = true;
-      }
-    }
-  }
-
-  if (!isRegistration && foundDifferentApp && !foundSameApp) {
-    throw new Error('Provided component(s) secrets are not valid (conflict with another app).');
-  }
-
-  const historicalSecrets = await appsRepository.listHistoricalV7Secrets();
-  const seen = new Set();
-  for (const entry of historicalSecrets) {
-    const entryNormalized = normalizePGPSecret(entry.secrets);
-    if (seen.has(entryNormalized)) continue;
-    seen.add(entryNormalized);
-
-    if (entryNormalized === normalized && entry.owner !== owner) {
-      throw new Error(
-        `Provided component '${componentName}' secrets are not valid (owner mismatch: '${entry.owner}').`,
-      );
-    }
-  }
+  const { v7SecretsRefusal } = await getSpec();
+  const refusal = v7SecretsRefusal(
+    {
+      secrets, appName, owner, componentName, isRegistration,
+    },
+    { live: await appsRepository.listLiveV7Secrets(), earlier: await appsRepository.listHistoricalV7Secrets() },
+  );
+  if (refusal) throw new Error(`Provided component '${componentName}' secrets are not valid: ${refusal.message}`);
 }
 
 module.exports = {
