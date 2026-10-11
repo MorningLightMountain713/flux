@@ -13,6 +13,8 @@ const networkStateService = require('../../ZelBack/src/services/networkStateServ
 const signedEnvelope = require('../../ZelBack/src/services/quorumGrant/signedEnvelope');
 const rosterOverlay = require('../../ZelBack/src/services/quorumGrant/rosterOverlay');
 const { selectCommittee } = require('../../ZelBack/src/services/utils/committeeSelector');
+const appHistory = require('../../ZelBack/src/services/appDecisions/appHistory');
+const { stubRegistry } = require('./fixtures/appRecords');
 const bs58check = require('bs58check').default;
 const secp256k1 = require('secp256k1');
 
@@ -170,14 +172,22 @@ describe('quorumGrant masterlease', () => {
       sinon.restore();
     });
 
-    it('keys one row per app role — no ip, so a successor REPLACES the deposed', async () => {
+    it('keys one row per app role and world — no ip, so a successor in that world REPLACES the deposed', async () => {
       await messageStore.storeAppStateEvent('masterlease', {
         message: baseMessage(), envelope: null, announcer: messageStore.LOCAL_ANNOUNCER,
       });
-      expect(updates).to.have.length(1);
-      expect(updates[0].filter).to.deep.equal({
-        type: 'masterlease', dedupKey: 'masterlease:myapp/master',
+      await messageStore.storeAppStateEvent('masterlease', {
+        message: baseMessage({
+          generation: 0, generationHeight: 600_000, fingerprint: 'e'.repeat(64), acceptances: [],
+        }),
+        envelope: null,
+        announcer: messageStore.LOCAL_ANNOUNCER,
       });
+      expect(updates).to.have.length(2);
+      expect(updates[0].filter).to.deep.equal({
+        type: 'masterlease', dedupKey: 'masterlease:myapp/master@0:registration',
+      });
+      expect(updates[1].filter.dedupKey).to.equal('masterlease:myapp/master@0:600000');
       expect(updates[0].options.upsert).to.equal(true);
     });
 
@@ -570,13 +580,15 @@ describe('quorumGrant masterlease', () => {
       expect(updates, 'a malformed roster sinks the record whole').to.have.length(0);
     });
 
-    it('reads back by app and role', async () => {
+    it('reads back by app, role and the world the role stands in', async () => {
       const row = { type: 'masterlease', data: baseMessage() };
+      stubRegistry().byIdentity.resolves(null);
+      const asked = [];
       dbHelper.databaseConnection.returns({
         db: () => ({
           collection: () => ({
             findOne: async (filter) => {
-              expect(filter.dedupKey).to.equal('masterlease:myapp/master');
+              asked.push(filter.dedupKey);
               return row;
             },
           }),
@@ -584,6 +596,126 @@ describe('quorumGrant masterlease', () => {
       });
       const found = await messageStore.getMasterleaseRecord('myapp', 'master');
       expect(found).to.equal(row);
+      expect(asked).to.deep.equal(['masterlease:myapp/master@0:registration']);
+    });
+  });
+
+  // A held term's record belongs to the world it was granted in. A sale can
+  // step an app back to a lower generation, and the seller can go on
+  // publishing after it: the node reads the record of the world its own chain
+  // says the app stands in, never the highest generation number it holds.
+  describe('across worlds', () => {
+    const SELLER = 'seller-address';
+    const BUYER = 'buyer-address';
+    const OWNED_FROM = 500_000;
+    const SOLD_AT = 600_000;
+    const OLD_MASTER = `${'b'.repeat(64)}:0`;
+    const NEW_MASTER = `${'c'.repeat(64)}:0`;
+    const RACER = `${'e'.repeat(64)}:0`;
+    let rows; // dedupKey -> the masterlease row the store holds
+    let generationRows; // the owner generation records the node holds
+    let app;
+    let owners;
+
+    beforeEach(() => {
+      rows = new Map();
+      generationRows = [];
+      app = { name: 'myapp', owner: SELLER, grants: null };
+      owners = [{ owner: SELLER, from: OWNED_FROM }];
+      // The conditional upsert as the database applies its leading ordinals:
+      // a row is written when none stands, else replaced by a higher
+      // generation, or an equal generation at a higher epoch.
+      const collection = {
+        updateOne: async (filter, update) => {
+          const incoming = update[0].$set.data.$cond[1];
+          const stored = rows.get(filter.dedupKey);
+          const newer = !stored
+            || (incoming.generation ?? 0) > (stored.data.generation ?? 0)
+            || ((incoming.generation ?? 0) === (stored.data.generation ?? 0) && incoming.epoch > stored.data.epoch);
+          if (newer) rows.set(filter.dedupKey, { type: 'masterlease', dedupKey: filter.dedupKey, data: incoming });
+          return { acknowledged: true };
+        },
+        findOne: async (filter) => rows.get(filter.dedupKey) ?? null,
+      };
+      sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({ collection: () => collection }) });
+      sinon.stub(dbHelper, 'findInDatabase').callsFake(async (database, name, query) => generationRows
+        .filter((r) => r.type === query.type && r.identity === query.identity && r.role === query.role));
+      stubRegistry().byIdentity.callsFake(async () => app);
+      sinon.stub(appHistory, 'ownerships').callsFake(async () => owners);
+      // no membership to rebuild: every record stores unverified, which is
+      // beside the point here
+      sinon.stub(networkStateService, 'membershipAt').returns(null);
+    });
+
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    const reRolled = (generation, height, hash = `sha256:${String(generation).repeat(64)}`) => {
+      generationRows.push({
+        type: 'grantgeneration', identity: 'myapp', role: 'master', hash, signer: SELLER,
+        data: { generation, height, ownedFrom: OWNED_FROM },
+      });
+      return hash;
+    };
+    const sold = (namedHash = null) => {
+      app = { name: 'myapp', owner: BUYER, grants: namedHash ? { master: namedHash } : null };
+      owners = [{ owner: SELLER, from: OWNED_FROM }, { owner: BUYER, from: SOLD_AT }];
+    };
+    const granted = (grantee, generation, generationHeight, epoch = 3) => messageStore.storeAppStateEvent('masterlease', {
+      message: baseMessage({
+        grantee, generation, generationHeight, epoch, acceptances: [],
+      }),
+      envelope: null,
+      announcer: messageStore.LOCAL_ANNOUNCER,
+    });
+    const reads = async () => (await messageStore.getMasterleaseRecord('myapp', 'master'))?.data?.grantee ?? null;
+
+    it('a sale stepping the app back to generation 0 reads the new world\'s record, not the seller\'s higher one', async () => {
+      reRolled(1, 500_100);
+      await granted(OLD_MASTER, 1, 500_100);
+      sold();
+      await granted(NEW_MASTER, 0, SOLD_AT);
+      expect(await reads()).to.equal(NEW_MASTER);
+    });
+
+    it('a record of a world the node does not stand in yet is kept, and read once its chain shows that world', async () => {
+      reRolled(1, 500_100);
+      await granted(NEW_MASTER, 0, SOLD_AT);
+      await granted(OLD_MASTER, 1, 500_100);
+      expect(await reads(), 'before the sale').to.equal(OLD_MASTER);
+      sold();
+      expect(await reads(), 'after the sale').to.equal(NEW_MASTER);
+    });
+
+    it('the seller\'s record of a world the sale did not name never stands in for the world it named', async () => {
+      const named = reRolled(1, 500_100);
+      reRolled(2, SOLD_AT + 100);
+      sold(named);
+      await granted(NEW_MASTER, 1, SOLD_AT);
+      await granted(RACER, 2, SOLD_AT + 100);
+      expect(await reads()).to.equal(NEW_MASTER);
+    });
+
+    it('before the new world has a record, the read is the world before it: the term its holder carries across', async () => {
+      reRolled(1, 500_100);
+      await granted(OLD_MASTER, 1, 500_100);
+      sold();
+      expect(await reads()).to.equal(OLD_MASTER);
+    });
+
+    it('no record of the standing world or the one before it reads as none', async () => {
+      await granted(RACER, 4, 400_000);
+      expect(await reads()).to.equal(null);
+    });
+
+    it('a founding record keeps its one row per role', async () => {
+      await messageStore.storeAppStateEvent('masterlease', {
+        message: baseMessage({ role: 'founder-0123456789abcdef@500000', mode: 'oneshot', ttlMs: undefined }),
+        envelope: null,
+        announcer: messageStore.LOCAL_ANNOUNCER,
+      });
+      expect([...rows.keys()]).to.deep.equal(['masterlease:myapp/founder-0123456789abcdef@500000']);
     });
   });
 

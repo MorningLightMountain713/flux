@@ -843,6 +843,18 @@ function buildOrdinalConditionalUpsert(ordinals, broadcastedAt, conditionalField
   return [{ $set: set }];
 }
 
+/**
+ * The row a published grant record lives in: one per app role, and a held
+ * term's one per world it was granted in.
+ *
+ * @param {?{generation: number, height: ?number}} world - a held term's world; null for a founding or ordinal record
+ * @returns {string}
+ */
+function masterleaseRowKey(identity, role, world = null) {
+  const row = `masterlease:${identity}/${role}`;
+  return world ? `${row}@${world.generation}:${world.height ?? 'registration'}` : row;
+}
+
 async function handleMasterleaseEvent({ message, envelope, announcer }) {
   if (!message || !message.ip || !message.identity || !message.role || !message.grantee) return;
   if (!Number.isSafeInteger(message.epoch) || message.epoch < 1) return;
@@ -929,16 +941,21 @@ async function handleMasterleaseEvent({ message, envelope, announcer }) {
   try {
     const db = dbHelper.databaseConnection();
     const database = db.db(config.get('database.appsglobal.database'));
-    const dedupKey = `masterlease:${message.identity}/${message.role}`;
-    // One row per app/role — the record names the MASTER, not a node, so the
-    // query carries no ip: a successor's record replaces the deposed
-    // master's rather than accumulating beside it. Durable until superseded,
+    const dedupKey = masterleaseRowKey(message.identity, message.role, message.mode === 'held'
+      ? { generation: message.generation ?? 0, height: message.generationHeight ?? null }
+      : null);
+    // One row per app role, and a held term's one per world — the record
+    // names the MASTER, not a node, so the query carries no ip: a successor's
+    // record replaces the deposed master's rather than accumulating beside it.
+    // A record of one world never competes with another's: a sale can step an
+    // app back to a lower generation and the seller can publish after it, so
+    // which world stands is answered at the read, from this node's chain
+    // (getMasterleaseRecord). Durable until superseded,
     // held and founding alike: the record says WHO holds the term, never
     // whether they still stand — liveness is asked of the referees, so the
     // row carries no expiry and nothing depends on a sweeper reaping it.
-    // Generation orders ahead of epoch: a re-rolled world's first grant
-    // replaces the retired world's record however high its epoch climbed.
-    // Within a generation a verified record outranks an unverified one; a
+    // Within a row generation orders ahead of epoch, and within a generation
+    // a verified record outranks an unverified one; a
     // released row or a founding record carries no term to prove and ranks
     // as verified, so a release still supersedes the term it ends. The
     // comparator's field is the numeric proofRank — the database orders a
@@ -1294,16 +1311,23 @@ async function getGrantGenerationRecord(identity, role) {
 }
 
 /**
- * The published grant record for one app role, or null. What standbys, FDM
- * and re-pinned committees consult — public fact, one row, newest epoch.
+ * The published record of a held term for one app role, or null: the record
+ * of the world this node's chain says the role stands in, else of the world
+ * before it — the term its holder carries across a re-roll or a sale until it
+ * holds in the new one. What standbys, the coordinator and the holder's
+ * committee overlay consult — public fact, newest epoch of its world.
  */
 async function getMasterleaseRecord(identity, role) {
   const db = dbHelper.databaseConnection();
   const database = db.db(config.get('database.appsglobal.database'));
-  return database.collection(globalAppStateEvents).findOne(
-    { type: APP_STATE_EVENT_TYPES.MASTERLEASE, dedupKey: `masterlease:${identity}/${role}` },
+  const read = (world) => database.collection(globalAppStateEvents).findOne(
+    { type: APP_STATE_EVENT_TYPES.MASTERLEASE, dedupKey: masterleaseRowKey(identity, role, world) },
     { projection: { _id: 0 } },
   );
+  const standing = await read(generationWorld.worldOf(await standingGeneration(identity, role)));
+  if (standing) return standing;
+  const before = await predecessorWorld(identity, role);
+  return before ? read(before) : null;
 }
 
 /**
