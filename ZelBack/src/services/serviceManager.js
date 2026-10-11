@@ -656,6 +656,9 @@ async function startFluxFunctions() {
         // A standing generation record ends the world a held term was granted
         // in; the holder hears it from the store the moment the record lands.
         messageStore.onGrantGenerationRecord(grantClient.noteGenerationRecord);
+        // The block that lifts the drain a held term's step-across was refused
+        // under is when that holder steps across.
+        explorerService.getBlockEmitter().on('blocksProcessed', (height) => { grantClient.noteBlock(height); });
         // The mesh's ordinals are write-once grants on the founding committee;
         // the plane registers into the mesh's seam here, and until it does every
         // ordinal answer is the closed one.

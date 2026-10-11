@@ -487,6 +487,7 @@ async function askGrantorDetailed(member, type, ask, signature, { timeoutMs } = 
       named: Number.isSafeInteger(refusal?.generation)
         ? { generation: refusal.generation, height: refusal.height }
         : null,
+      drainUntil: Number.isSafeInteger(refusal?.drainUntil) ? refusal.drainUntil : null,
     };
   }
 }
@@ -496,7 +497,8 @@ async function askGrantorDetailed(member, type, ask, signature, { timeoutMs } = 
  * the payload never names the member.
  * @returns {Map<string, object>} outpoint -> reply, silent members absent;
  *   `answered` on the map counts the members that responded at all, and
- *   `named` holds every world ({generation, height}) a refusing member named as its standing one
+ *   `named` holds every world ({generation, height}) a refusing member named as its standing one,
+ *   `draining` the lift height each member refusing as draining named
  */
 async function askCommittee(members, type, ask, signature, { timeoutMs } = {}) {
   const asks = members.map(async (member) => ({
@@ -505,16 +507,19 @@ async function askCommittee(members, type, ask, signature, { timeoutMs } = {}) {
   const settled = await Promise.all(asks);
   const replies = new Map();
   const named = [];
+  const draining = [];
   let answered = 0;
   settled.forEach(({
-    member, reply, answered: responded, named: world,
+    member, reply, answered: responded, named: world, drainUntil,
   }) => {
     if (responded) answered += 1;
     if (reply) replies.set(outpointOf(member), reply);
     if (world) named.push(world);
+    if (drainUntil !== null && drainUntil !== undefined) draining.push(drainUntil);
   });
   replies.answered = answered;
   replies.named = named;
+  replies.draining = draining;
   return replies;
 }
 
@@ -948,9 +953,18 @@ class Holder {
   // credential, STEP_ACROSS_DESIGN.md D1); starts empty at every epoch bump
   #acceptances = new Map();
 
-  // the last step-across probe this pass: when, how many cells, how many
-  // answered at all, how many replied
-  #lastProbe = null;
+  // The drain the committee this holder steps across to stands in: the height
+  // it lifts at, and the latest moment enough of its cells to meet every
+  // quorum were refusing as draining. A stranger's seat opens no earlier
+  // than one lock-delay past that moment, so it bounds every step taken
+  // after the lift. Null while no such refusals are known.
+  #lift = null;
+
+  // the step-across on the wire, shared by every caller while it is
+  #stepping = null;
+
+  // a lift block landed while a step was on the wire: step again when it settles
+  #liftAgain = false;
 
   #lastAnswerMs = new Map(); // grantor outpoint -> last instant it answered anything
 
@@ -1178,8 +1192,11 @@ class Holder {
     // success the renewal below already runs under the new committee; on
     // refusal nothing changed and today's path follows — the old cells
     // refuse, the lease lapses, the demotion handler runs.
-    await this.#maybeStepAcross();
+    await this.#stepAcross();
     if (this.#stopped) return;
+    // a step at the lift can land while this pass is on the wire: from then
+    // the pass's replies and verdict are about a term the holder left
+    const basis = this.#committee;
 
     const signed = await signedAskFor(
       'renew',
@@ -1217,6 +1234,8 @@ class Holder {
       );
     }
 
+    if (this.#stopped || this.#committee !== basis) return;
+
     let renewed = 0;
     replies.forEach((reply, outpoint) => {
       // any reply at all — a grant, a refusal — is a referee that answers;
@@ -1250,7 +1269,7 @@ class Holder {
       return;
     }
 
-    await this.#assess(renewed >= this.#committee.quorum, await this.#doubtNamed(direct.named));
+    await this.#assess(renewed >= this.#committee.quorum, await this.#doubtNamed(direct.named), basis);
 
     await this.#maybeHeal();
 
@@ -1519,7 +1538,6 @@ class Holder {
    * @returns {Promise<boolean>} whether the holder now holds under the new world
    */
   async #maybeStepAcross({ timeoutMs } = {}) {
-    this.#lastProbe = null;
     if (this.#stopped) return false;
     // The three rounds fit inside what the lock-delay leaves after the
     // courier's delivery (one ask timeout): a cell that learned the re-roll
@@ -1528,33 +1546,48 @@ class Holder {
     // boot inequality asserts only that the delivery itself fits).
     const roundMs = timeoutMs ?? Math.max(1, Math.min(askTimeoutMs(), Math.floor((lockDelayMs() - askTimeoutMs()) / 3)));
     const standing = await currentWorld(this.#key);
-    if (generationWorld.sameWorld(standing, this.#committee)) return false;
+    if (generationWorld.sameWorld(standing, this.#committee)) {
+      this.#lift = null;
+      return false;
+    }
     const credential = this.credential();
     if (!credential) {
       log.info(`quorumGrant holder ${this.#key}: generation ${standing.generation} stands in place of ours and no credential is held — not stepping across`);
       return false;
     }
     const next = await committeeFor(this.#key, 'held', networkStateService.membershipFingerprint());
-    if (!next) return false;
+    if (!next) {
+      log.info(`quorumGrant holder ${this.#key}: no committee resolves for generation ${standing.generation} at this membership — not stepping across`);
+      return false;
+    }
     next.chain = next.chain ?? [];
     next.cancels = next.cancels ?? [];
     const extras = { ...overlayExtras(next), carried: credential };
 
     const probeSigned = await signedAskFor('probe', this.#key, 'held', 1, this.#identity, next, extras);
-    if (!probeSigned) return false;
+    if (!probeSigned) {
+      log.info(`quorumGrant holder ${this.#key}: step-across probe could not be signed`);
+      return false;
+    }
     const probeAtMs = this.#clock();
     const probeReplies = await askCommittee(next.members, 'probe', probeSigned.ask, probeSigned.signature, { timeoutMs: roundMs });
-    this.#lastProbe = {
-      atMs: probeAtMs, members: next.members.length, answered: probeReplies.answered, replies: probeReplies.size,
-    };
+    this.#noteDrain(probeReplies, probeAtMs, next);
     // a grantee already seated on the new committee is its holder, not us: fall back
     const adopted = core.adoptFrom([...probeReplies.values()]);
-    if (adopted && adopted.grantee !== this.#identity.outpoint) return false;
+    if (adopted && adopted.grantee !== this.#identity.outpoint) {
+      log.info(`quorumGrant holder ${this.#key}: step-across to generation ${next.generation} finds ${adopted.grantee} seated at epoch ${adopted.epoch}`);
+      return false;
+    }
     const epoch = core.nextEpoch(Math.max(core.highestEpochSeen([...probeReplies.values()]), this.#epoch));
 
     const prepareSigned = await signedAskFor('prepare', this.#key, 'held', epoch, this.#identity, next, extras);
-    if (!prepareSigned) return false;
+    if (!prepareSigned) {
+      log.info(`quorumGrant holder ${this.#key}: step-across prepare could not be signed`);
+      return false;
+    }
+    const prepareAtMs = this.#clock();
     const prepareReplies = await askCommittee(next.members, 'prepare', prepareSigned.ask, prepareSigned.signature, { timeoutMs: roundMs });
+    this.#noteDrain(prepareReplies, prepareAtMs, next);
     const prepared = core.prepareOutcome([...prepareReplies.values()], next.quorum);
     if (!prepared.promised) {
       log.info(`quorumGrant holder ${this.#key}: step-across to generation ${next.generation} not promised (${prepared.reason ?? 'no prepare quorum'})`);
@@ -1562,14 +1595,24 @@ class Holder {
     }
 
     const acceptSigned = await signedAskFor('accept', this.#key, 'held', epoch, this.#identity, next, { ttlMs: this.#ttlMs, ...extras });
-    if (!acceptSigned) return false;
+    if (!acceptSigned) {
+      log.info(`quorumGrant holder ${this.#key}: step-across accept could not be signed`);
+      return false;
+    }
     const sentMs = this.#clock();
     const acceptReplies = await askCommittee(next.members, 'accept', acceptSigned.ask, acceptSigned.signature, { timeoutMs: roundMs });
+    this.#noteDrain(acceptReplies, sentMs, next);
     const accepted = core.acceptOutcome([...acceptReplies.values()], next.quorum);
-    if (!accepted.granted) return false;
+    if (!accepted.granted) {
+      log.info(`quorumGrant holder ${this.#key}: step-across to generation ${next.generation} not accepted (${accepted.reason ?? 'no accept quorum'})`);
+      return false;
+    }
+    // a holder demoted or stopped while its rounds were on the wire takes no world
+    if (this.#stopped) return false;
 
     this.#committee = next;
     this.#epoch = epoch;
+    this.#lift = null;
     this.#acks.clear();
     this.#acceptances.clear();
     this.#refusals.clear();
@@ -1592,6 +1635,76 @@ class Holder {
   }
 
   /**
+   * One round's drain refusals from the committee this holder steps across
+   * to. When enough of its cells to meet every quorum refused as draining,
+   * none of them had first served past the lift when the round was sent, so
+   * no stranger can be seated before one lock-delay past that moment.
+   */
+  #noteDrain(replies, sentMs, next) {
+    const { draining } = replies;
+    if (!draining || draining.length < next.members.length - next.quorum + 1) return;
+    this.#lift = { height: Math.min(...draining), refusedAtMs: sentMs };
+  }
+
+  /** What is left of the time a step after the lift has, or null with no drain known. */
+  #liftBudgetMs() {
+    if (!this.#lift) return null;
+    return this.#lift.refusedAtMs + lockDelayMs() - this.#clock() - core.HARD_STOP_MS;
+  }
+
+  /**
+   * The step-across, one at a time: a caller arriving while a step is on the
+   * wire shares its outcome.
+   *
+   * @returns {Promise<boolean>} whether the holder now holds under the new world
+   */
+  #stepAcross(options) {
+    if (this.#stepping) return this.#stepping;
+    this.#stepping = this.#maybeStepAcross(options).finally(() => {
+      this.#stepping = null;
+      if (this.#liftAgain) {
+        this.#liftAgain = false;
+        this.#stepAtLift();
+      }
+    });
+    return this.#stepping;
+  }
+
+  /**
+   * Step across once the committee's drain has lifted, inside what the
+   * lock-delay leaves past the last drain refusal.
+   *
+   * @returns {Promise<boolean>} whether the holder now holds under the new world
+   */
+  async #stepAtLift() {
+    if (this.#stopped || !this.#lift) return false;
+    const budgetMs = this.#liftBudgetMs();
+    if (budgetMs <= 0) {
+      log.info(`quorumGrant holder ${this.#key}: the drain lifted at height ${this.#lift.height} with ${budgetMs}ms of the lock-delay left — not stepping across`);
+      this.#lift = null;
+      return false;
+    }
+    return this.#stepAcross({ timeoutMs: Math.min(askTimeoutMs(), Math.floor(budgetMs / 3)) });
+  }
+
+  /**
+   * A block this node processed. The block that lifts the drain the holder's
+   * step-across was refused under is the moment the new committee first
+   * serves: the holder steps across then, not at its next pass.
+   *
+   * @param {number} height
+   * @returns {Promise<boolean>} whether the holder now holds under the new world
+   */
+  async noteBlock(height) {
+    if (this.#stopped || !this.#lift || height < this.#lift.height) return false;
+    if (this.#stepping) {
+      this.#liftAgain = true;
+      return this.#stepping;
+    }
+    return this.#stepAtLift();
+  }
+
+  /**
    * The block that lifts a drain can land inside one pass, between the
    * step-across probe (the new cells refused it at their door) and the
    * witness poll (the new cells serve): the pass would demote a holder that
@@ -1600,16 +1713,12 @@ class Holder {
    * accept quorum admits the carrier iff no rival was chosen (a chosen rival
    * shields a quorum of cells, which refuses the carrier's prepare); a silent
    * cell changes nothing, since a rival needs a quorum and the carrier reads
-   * the rest. The only bound is time: inside what the lock-delay leaves after
-   * this pass and the hard stop, so a demotion is never delayed past a
-   * stranger's earliest seat.
+   * the rest. The only bound is time: inside what the lock-delay leaves past
+   * the last drain refusal and the hard stop, so a demotion is never delayed
+   * past a stranger's earliest seat.
    */
   async #stepAcrossBeforeDemoting() {
-    const probe = this.#lastProbe;
-    if (!probe) return false;
-    const budgetMs = probe.atMs + lockDelayMs() - this.#clock() - core.HARD_STOP_MS;
-    if (budgetMs <= 0) return false;
-    return this.#maybeStepAcross({ timeoutMs: Math.min(askTimeoutMs(), Math.floor(budgetMs / 3)) });
+    return this.#stepAtLift();
   }
 
   /**
@@ -1631,7 +1740,7 @@ class Holder {
       : `a referee names generation ${later.generation} from height ${later.height}, which this node does not stand on`;
   }
 
-  async #assess(quorumRenewed, doubt = null) {
+  async #assess(quorumRenewed, doubt = null, basis = this.#committee) {
     const now = this.#clock();
     const safeUntil = this.safeUntil();
 
@@ -1677,6 +1786,7 @@ class Holder {
         : { coast: false, reason: 'no witnesses resolvable' };
       seen.standbys = standbys.length;
       seen.witnessReplies = witnessReplies.size;
+      if (this.#stopped || this.#committee !== basis) return;
     }
 
     if (verdict.coast) {
@@ -1731,6 +1841,15 @@ class Holder {
         // a renewal moved the deadline after this timer was set - stand the
         // alarm at the newer target
         this.#armDemotion(this.#deadlineTargetMs);
+        return;
+      }
+      // a step on the wire is bounded by the lock-delay past the last drain
+      // refusal: the alarm decides once it has landed, which re-arms it on success
+      if (this.#stepping) {
+        this.#stepping.then(() => {
+          if (this.#stopped || this.#demotionTimer !== null || this.#deadlineTargetMs === null) return;
+          this.#armDemotion(this.#deadlineTargetMs);
+        });
         return;
       }
       this.#demote(this.#lastDoubt ?? 'renewal quorum lost past the deadline');
@@ -2049,6 +2168,20 @@ async function pollWitnesses(standbys, key, askedGeneration) {
   return replies;
 }
 
+/**
+ * A block this node processed: every holder whose step-across waits on a
+ * drain lifting at or below it steps across now.
+ *
+ * @param {number} height
+ * @returns {Promise<boolean[]>} each holder's outcome
+ */
+function noteBlock(height) {
+  return Promise.all([...held.values()].map((holder) => holder.noteBlock(height).catch((error) => {
+    log.error(`quorumGrant holder ${holder.key}: ${error.message}`);
+    return false;
+  })));
+}
+
 /** The live Holder for a key on this node, or null. */
 function holderFor(key) {
   return held.get(key) ?? null;
@@ -2197,6 +2330,7 @@ module.exports = {
   relearn,
   isAcquiring,
   witnessAnswer,
+  noteBlock,
   noteGenerationRecord,
   setCourierSchedulerForTests,
   carryAsk,
