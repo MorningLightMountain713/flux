@@ -430,6 +430,41 @@ describe('quorumGrant grantClient', () => {
     });
   }
 
+  // A standby pursues a seat only one lock-delay after its node first stood
+  // the key in the world it pursues in: its witness answers name that world
+  // from the same moment, so a holder coasting on another world's vouch reads
+  // them and stops inside the wait.
+  describe('the wait from this node\'s receipt of a key\'s world', () => {
+    const LOCK_DELAY = REGISTER_TUNABLES.lockDelayMs;
+    let monotonic;
+    beforeEach(() => {
+      monotonic = 5_000_000n;
+      sinon.stub(process.hrtime, 'bigint').callsFake(() => monotonic * 1_000_000n);
+    });
+    const advance = (ms) => { monotonic += BigInt(ms); };
+
+    it('waits one lock-delay from the moment the world was first seen, counting down', async () => {
+      expect(await grantClient.worldReceiptWaitMs(KEY)).to.equal(LOCK_DELAY);
+      advance(LOCK_DELAY - 1);
+      expect(await grantClient.worldReceiptWaitMs(KEY)).to.equal(1);
+      advance(1);
+      expect(await grantClient.worldReceiptWaitMs(KEY)).to.equal(0);
+    });
+
+    it('a new world starts the wait again; the same world read again does not', async () => {
+      await grantClient.worldReceiptWaitMs(KEY);
+      advance(LOCK_DELAY);
+      expect(await grantClient.worldReceiptWaitMs(KEY), 'the same world').to.equal(0);
+      ownership = { owner: 'buyer', from: 500, transferred: true };
+      expect(await grantClient.worldReceiptWaitMs(KEY), 'a sale\'s world, just received').to.equal(LOCK_DELAY);
+    });
+
+    it('a world this node cannot read waits the whole lock-delay', async () => {
+      messageStore.standingGeneration.rejects(new Error('db down'));
+      expect(await grantClient.worldReceiptWaitMs(KEY)).to.equal(LOCK_DELAY);
+    });
+  });
+
   describe('the rest check', () => {
     it('a live incumbent anywhere keeps the rest', async () => {
       seedRecord({

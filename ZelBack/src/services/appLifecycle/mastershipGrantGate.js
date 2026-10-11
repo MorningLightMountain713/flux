@@ -269,6 +269,28 @@ function scheduleWindowRetry(identifier, identity, key, taughtMs) {
   windowRetries.set(key, timer);
 }
 
+// key -> the one pending pursuit waiting out this node's receipt of the key's world
+const receiptWaits = new Map();
+
+/**
+ * A pursuit held by this node's receipt of the key's world runs at the moment
+ * the wait ends: the end is known, so it is scheduled. One per key; the
+ * pursuit it runs re-reads everything, so a node that took the term or
+ * learned of a holder meanwhile stops on its own.
+ */
+function scheduleReceiptWait(identifier, identity, key, waitMs) {
+  if (receiptWaits.has(key)) return;
+  log.info(`mastershipGrantGate - ${key}: pursuing in ${waitMs}ms, one lock-delay after this node received the key's world`);
+  const timer = setTimeout(() => {
+    receiptWaits.delete(key);
+    if (grantClient.holderFor(key) || grantClient.isAcquiring(key)) return;
+    pursuits.set(key, nowMs());
+    acquireUnlessSettled(identifier, identity, key);
+  }, waitMs);
+  if (typeof timer.unref === 'function') timer.unref();
+  receiptWaits.set(key, timer);
+}
+
 function keyFor(identity) {
   return `${identity}/${ROLE}`;
 }
@@ -328,6 +350,8 @@ async function acquireUnlessSettled(identifier, identity, key) {
   } catch (error) {
     log.warn(`mastershipGrantGate - operator-state read before pursuing ${key} failed: ${error.message}`);
   }
+  // whether the published record names this node: its own term to re-acquire
+  let ours = false;
   try {
     // Below the height the whole rule is this node's own docker: it asks iff
     // it runs the container (ACTIVATION_CROSSING_DESIGN.md §2.2), cold key or
@@ -351,9 +375,10 @@ async function acquireUnlessSettled(identifier, identity, key) {
     }
     const record = await messageStore.getMasterleaseRecord(identity, ROLE);
     const data = record?.data;
+    const self = await generalService.obtainNodeCollateralInformation();
+    ours = Boolean(data?.grantee) && data.grantee === `${self.txhash}:${self.txindex}`;
     if (data?.grantee && data.mode === 'held') {
-      const self = await generalService.obtainNodeCollateralInformation();
-      if (data.grantee !== `${self.txhash}:${self.txindex}`) {
+      if (!ours) {
         // The record is durable and names the last known master; whether it
         // still stands is asked of the referees, never inferred from the
         // row's age. Only a positive lapse answer opens a pursuit — a live
@@ -366,6 +391,17 @@ async function acquireUnlessSettled(identifier, identity, key) {
   } catch (error) {
     // an unreadable record must not stop a pursuit — the grantors decide
     log.warn(`mastershipGrantGate - record read before pursuing ${key} failed: ${error.message}`);
+  }
+
+  // Past the height, a pursuit of any term but this node's own waits one
+  // lock-delay from this node's receipt of the key's world; the restart
+  // re-acquire of its own term stays immediate.
+  if (featureEnabled() && !ours) {
+    const waitMs = await grantClient.worldReceiptWaitMs(key);
+    if (waitMs > 0) {
+      scheduleReceiptWait(identifier, identity, key, waitMs);
+      return;
+    }
   }
 
   // An acquisition's own duration is what says whether it fits inside the
@@ -753,6 +789,8 @@ function resetForTests(options = {}) {
   pursuits.clear();
   windowRetries.forEach((timer) => clearTimeout(timer));
   windowRetries.clear();
+  receiptWaits.forEach((timer) => clearTimeout(timer));
+  receiptWaits.clear();
   folderDemotions.clear();
   fences.clear();
   liftPolls.clear();
