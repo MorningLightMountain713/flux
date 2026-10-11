@@ -2,6 +2,7 @@
 
 const { expect } = require('chai');
 const sinon = require('sinon');
+const config = require('config');
 const secp256k1 = require('secp256k1');
 const bs58check = require('bs58check').default;
 
@@ -122,6 +123,11 @@ describe('quorumGrant grantClient', () => {
   // the world the cells stand in: their own, else the taught record's, else the registration's
   const standingGen = () => cellWorld?.generation ?? taughtRecord?.generation ?? 0;
   const cellsHeight = () => (cellWorld ? cellWorld.height : (taughtRecord?.height ?? null));
+  // the height the cells' drain lifts at, as their refusals name it
+  const liftHeight = () => (cellsHeight() ?? 0) + 3;
+  let onAsk; // (type, host) => void: runs as each cell receives an ask, before it answers
+  let witnessWait; // a promise the standby's witness answer waits on; null = answers at once
+  let askGate; // (type) => a promise that ask's answer waits on, or null
   let teachCalls; // every courier delivery this node made: { host, record }
   let teachAcks; // host -> the generation an instance answers a delivery with (default: the carried one)
 
@@ -243,7 +249,7 @@ describe('quorumGrant grantClient', () => {
 
   // A grantor refusing at its door, exactly as the controller answers it: an
   // HTTP 409 whose error payload carries the standing record.
-  function doorRefusal(message) {
+  function doorRefusal(message, extra = {}) {
     const error = new Error('Request failed with status code 409');
     error.response = {
       status: 409,
@@ -255,15 +261,19 @@ describe('quorumGrant grantClient', () => {
           generation: standingGen(),
           height: cellsHeight(),
           generationRecord: taughtRecord,
+          ...extra,
         },
       },
     };
     return error;
   }
   const taughtRefusal = (asked) => doorRefusal(`ask names generation ${asked}, current is ${standingGen()}`);
-  const drainingRefusal = () => doorRefusal(`generation ${standingGen()} is draining until height ${(taughtRecord?.height ?? 0) + 3}`);
+  const drainingRefusal = () => doorRefusal(
+    `generation ${standingGen()} is draining until height ${liftHeight()}`,
+    { drainUntil: liftHeight() },
+  );
 
-  function fakePost(url, body) {
+  async function fakePost(url, body) {
     const [, host, path] = url.match(/^http:\/\/([^:]+):\d+(\/.*)$/);
 
     if (path === '/flux/quorumgrant/relay') {
@@ -292,6 +302,7 @@ describe('quorumGrant grantClient', () => {
 
     if (path === '/flux/quorumgrant/witness') {
       if (unreachable.has(host) || dark.has(host)) throw new Error('unreachable');
+      if (witnessWait) await witnessWait;
       // a function fixture answers at the moment of the poll, so a test can
       // move the world between a pass's earlier asks and its witness poll
       const fixture = witnessReplies.get(host);
@@ -301,6 +312,9 @@ describe('quorumGrant grantClient', () => {
     }
 
     const type = path.split('/').pop();
+    if (onAsk) onAsk(type, host);
+    const gate = askGate ? askGate(type) : null;
+    if (gate) await gate;
     if (unreachable.has(host) || dark.has(host)) throw new Error('unreachable');
     // a teaching cell refuses an ask naming any generation but the standing
     // one (the controller's "ask names generation X, current is Y"); the
@@ -335,6 +349,9 @@ describe('quorumGrant grantClient', () => {
     predecessorWorld = undefined;
     teachCalls = [];
     teachAcks = new Map();
+    onAsk = null;
+    witnessWait = null;
+    askGate = null;
 
     sinon.stub(serviceHelper, 'axiosPost').callsFake(async (url, body) => fakePost(url, body));
     sinon.stub(serviceHelper, 'axiosGet').callsFake(async (url) => {
@@ -1958,6 +1975,215 @@ describe('quorumGrant grantClient', () => {
         expect(demoted, 'a silent cell no longer forces a demotion').to.deep.equal([]);
         expect(holder.state).to.equal('held');
         expect(holder.generation, 'the holder stepped across on the other cells').to.equal(1);
+      });
+
+      // A stranger's seat opens one lock-delay past each cell's first serve
+      // after the lift, so the time left to step across runs from the last
+      // ask the new committee refused as draining — however long the rounds
+      // before it took.
+      it('a slow probe round costs the retry nothing: its time runs from the last round the new committee refused as draining', async () => {
+        taughtRecord = null;
+        const demoted = [];
+        const holder = reroll(await acquireHolder({ onDemoted: (reason) => demoted.push(reason) }));
+        let probed = false;
+        onAsk = (type) => {
+          if (type !== 'probe' || probed) return;
+          probed = true;
+          clockNow += 10_000; // the probe round waits out an unreachable member
+        };
+        // the pass from the prepare to the verdict takes all but 7 s of what
+        // the lock-delay leaves after the refused prepare
+        drainLiftsAtTheWitnessPoll({ beforeAnswering: () => { clockNow += REGISTER_TUNABLES.lockDelayMs - 9000; } });
+        clockNow += TTL + 30_000;
+        await holder.renewOnce();
+        expect(demoted).to.deep.equal([]);
+        expect(holder.state).to.equal('held');
+        expect(holder.generation).to.equal(1);
+      });
+
+      const drainRefusedBy = (count) => {
+        nextHosts.forEach((host, i) => (i < count ? draining : unreachable).add(host));
+        witnessReplies.set(STANDBY_HOST, () => {
+          draining.clear();
+          unreachable.clear();
+          return { quorumReachable: true, holding: false, acquiring: false };
+        });
+      };
+
+      it('drain refusals from fewer cells than meet every quorum bound nothing: the holder demotes without asking again', async () => {
+        taughtRecord = null;
+        const demoted = [];
+        const holder = reroll(await acquireHolder({ onDemoted: (reason) => demoted.push(reason) }));
+        drainRefusedBy(newCommittee.members.length - newCommittee.quorum);
+        clockNow += TTL + 30_000;
+        await holder.renewOnce();
+        expect(demoted).to.have.lengthOf(1);
+        expect(holder.generation).to.equal(0);
+      });
+
+      it('drain refusals from enough cells to meet every quorum: the holder asks again and steps across', async () => {
+        taughtRecord = null;
+        const demoted = [];
+        const holder = reroll(await acquireHolder({ onDemoted: (reason) => demoted.push(reason) }));
+        drainRefusedBy(newCommittee.members.length - newCommittee.quorum + 1);
+        clockNow += TTL + 30_000;
+        await holder.renewOnce();
+        expect(demoted).to.deep.equal([]);
+        expect(holder.generation).to.equal(1);
+      });
+
+      const settle = async () => {
+        for (let i = 0; i < 50; i += 1) {
+          // eslint-disable-next-line no-await-in-loop -- each turn lets one hop of the fake wire resolve
+          await new Promise((resolve) => { setImmediate(resolve); });
+        }
+      };
+      const refusedByTheDrain = async (options = {}) => {
+        const holder = reroll(await acquireHolder(options));
+        nextHosts.forEach((host) => draining.add(host));
+        witnessReplies.set(STANDBY_HOST, { quorumReachable: false, holding: false, acquiring: false });
+        clockNow += 1000;
+        await holder.renewOnce();
+        expect(holder.generation, 'fixture: the drain refused the pass').to.equal(0);
+        return holder;
+      };
+
+      it('the block that lifts the drain steps the holder across at once, without waiting for its next pass', async () => {
+        taughtRecord = null;
+        const holder = await refusedByTheDrain();
+        draining.clear();
+        await grantClient.noteBlock(liftHeight() - 1);
+        expect(holder.generation, 'a block below the lift asks nothing').to.equal(0);
+        await grantClient.noteBlock(liftHeight());
+        expect(holder.generation).to.equal(1);
+        expect(holder.state).to.equal('held');
+      });
+
+      it('a lift noted while a step is in flight steps again once that step settles', async () => {
+        taughtRecord = null;
+        const holder = reroll(await acquireHolder());
+        nextHosts.forEach((host) => draining.add(host));
+        witnessReplies.set(STANDBY_HOST, { quorumReachable: false, holding: false, acquiring: false });
+        // the lift lands while the pass's own prepare is on the wire: every
+        // cell has refused it as draining by then
+        let prepares = 0;
+        onAsk = (type) => {
+          if (type !== 'prepare') return;
+          prepares += 1;
+          if (prepares === nextHosts.length) {
+            draining.clear();
+            grantClient.noteBlock(liftHeight());
+          }
+        };
+        clockNow += 1000;
+        await holder.renewOnce();
+        await settle();
+        expect(holder.generation).to.equal(1);
+        expect(holder.state).to.equal('held');
+      });
+
+      it('a step that lands while the pass awaits its witnesses ends the pass: the stale verdict does not touch the new term', async () => {
+        taughtRecord = null;
+        const holder = reroll(await acquireHolder());
+        nextHosts.forEach((host) => draining.add(host));
+        witnessReplies.set(STANDBY_HOST, { quorumReachable: false, holding: false, acquiring: false });
+        let lifted = false;
+        onAsk = (type) => {
+          if (type !== 'renew' || lifted) return;
+          lifted = true;
+          draining.clear();
+          // the witness answers only once the step the lift set off has landed
+          witnessWait = grantClient.noteBlock(liftHeight());
+        };
+        clockNow += 1000;
+        await holder.renewOnce();
+        expect(holder.generation).to.equal(1);
+        expect(holder.state).to.equal('held');
+        expect(holder.coasting).to.equal(false);
+      });
+
+      it('a step that lands while the pass\'s renew round is on the wire ends the pass: the old world\'s refusals do not judge the new term', async () => {
+        taughtRecord = null;
+        const holder = reroll(await acquireHolder());
+        nextHosts.forEach((host) => draining.add(host));
+        witnessReplies.set(STANDBY_HOST, { quorumReachable: false, holding: false, acquiring: false });
+        clockNow += TTL + 30_000;
+        let landed = null;
+        onAsk = (type) => {
+          if (type !== 'renew' || landed) return;
+          draining.clear();
+          // the old cells answer once the step has landed, naming a world
+          // later than this node stands in
+          landed = grantClient.noteBlock(liftHeight()).then(() => {
+            cellWorld = { generation: 1, height: NEXT.height + 10 };
+          });
+        };
+        askGate = (type) => (type === 'renew' ? landed : null);
+        await holder.renewOnce();
+        expect(holder.generation).to.equal(1);
+        expect(holder.state).to.equal('held');
+      });
+
+      it('a pass arriving while a step is on the wire shares it: one set of rounds', async () => {
+        taughtRecord = null;
+        const holder = await refusedByTheDrain();
+        draining.clear();
+        serviceHelper.axiosPost.resetHistory();
+        const stepping = grantClient.noteBlock(liftHeight());
+        await holder.renewOnce();
+        await stepping;
+        const probes = serviceHelper.axiosPost.getCalls().filter((call) => /\/probe$/.test(String(call.args[0])));
+        expect(probes).to.have.lengthOf(nextHosts.length);
+        expect(holder.generation).to.equal(1);
+      });
+
+      it('the demotion alarm firing while a step is in flight waits for it: a step that lands keeps the holder', async () => {
+        taughtRecord = null;
+        const demoted = [];
+        const handles = [];
+        const holder = reroll(await acquireHolder({
+          onDemoted: (reason) => demoted.push(reason),
+          schedule: (fn, ms) => {
+            const handle = { fn, ms };
+            handles.push(handle);
+            return handle;
+          },
+        }));
+        const armedAt = clockNow;
+        nextHosts.forEach((host) => draining.add(host));
+        // the witnesses refuse the coast: the alarm stands at the deadline
+        witnessReplies.set(STANDBY_HOST, { quorumReachable: true, holding: false, acquiring: false });
+        const deadline = holder.safeUntil() + config.get('fluxapps.quorumGrantDemotionSlackMs');
+        clockNow = deadline - 5000;
+        await holder.renewOnce();
+        expect(holder.state, 'fixture: the pass awaits the deadline').to.equal('jeopardy');
+        const alarms = handles.filter((handle) => handle.ms === deadline - armedAt);
+        expect(alarms, 'fixture: one alarm at the deadline').to.have.lengthOf(1);
+        clockNow = deadline + 1000;
+        draining.clear();
+        const stepping = grantClient.noteBlock(liftHeight());
+        alarms[0].fn();
+        await stepping;
+        await settle();
+        expect(demoted).to.deep.equal([]);
+        expect(holder.generation).to.equal(1);
+        expect(holder.state).to.equal('held');
+      });
+
+      it('a holder stopped while its step is on the wire takes no world: no generation change, no record', async () => {
+        taughtRecord = null;
+        const holder = await refusedByTheDrain();
+        draining.clear();
+        const publishedBefore = masterleasePublisher.publishMasterlease.callCount;
+        let stopped = false;
+        onAsk = (type) => {
+          if (type !== 'accept' || stopped) return;
+          stopped = true;
+          holder.stop();
+        };
+        await grantClient.noteBlock(liftHeight());
+        expect(holder.generation).to.equal(0);
+        expect(masterleasePublisher.publishMasterlease.callCount).to.equal(publishedBefore);
       });
 
       describe('a sale', () => {
