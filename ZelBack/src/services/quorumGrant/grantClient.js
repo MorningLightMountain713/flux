@@ -1782,7 +1782,7 @@ class Holder {
         ? await pollWitnesses(standbys, this.#key, this.#committee.generation)
         : new Map();
       verdict = standbys.length
-        ? core.coastVerdict(standbys.map(outpointOf), witnessReplies)
+        ? core.coastVerdict(standbys.map(outpointOf), witnessReplies, this.#committee)
         : { coast: false, reason: 'no witnesses resolvable' };
       seen.standbys = standbys.length;
       seen.witnessReplies = witnessReplies.size;
@@ -2002,10 +2002,10 @@ async function vacateOneshot(key, committee, cert) {
 // what this node answers its peers
 
 /**
- * The witness answer for a key: what THIS node is doing about it, plus a
- * live reachability check toward the key's committee — record reads, cheap
- * and unauthenticated, because the question is "could you be granted", and
- * reaching a quorum of grantors is its observable half.
+ * The witness answer for a key: what THIS node is doing about it, the world it
+ * stands the key in, and whether a quorum of the key's committee would seat
+ * this node now — record reads naming this node as the candidate, cheap and
+ * unauthenticated, each cell answering what its register would decide.
  */
 async function witnessAnswer(key, mode = 'held') {
   const holding = held.has(key);
@@ -2016,10 +2016,12 @@ async function witnessAnswer(key, mode = 'held') {
   const fingerprint = networkStateService.membershipFingerprint();
   const committee = fingerprint ? await committeeFor(key, mode, fingerprint) : null;
   if (committee) {
+    const self = await generalService.obtainNodeCollateralInformation();
+    const candidate = encodeURIComponent(`${self.txhash}:${self.txindex}`);
     const probes = committee.members.map(async (member) => {
       try {
         const response = await serviceHelper.axiosGet(
-          grantorUrl(member, `/flux/quorumgrant/record?key=${encodeURIComponent(key)}`),
+          grantorUrl(member, `/flux/quorumgrant/record?key=${encodeURIComponent(key)}&candidate=${candidate}`),
           { timeout: askTimeoutMs() },
         );
         // A cell that answers reads but is not REFEREEING cannot seat a
@@ -2041,9 +2043,12 @@ async function witnessAnswer(key, mode = 'held') {
           && generationWorld.laterWorld({ generation: answered.generation, height: answered.height }, committee)) {
           doubt = true;
         }
+        // a cell counts when it would seat this node now; an older node
+        // without the verdict counts as serving
         return response?.data?.status === 'success'
           && response.data.data?.refereeing !== false
-          && response.data.data?.serving !== false;
+          && response.data.data?.serving !== false
+          && response.data.data?.seats !== false;
       } catch (error) {
         return false;
       }
@@ -2056,11 +2061,13 @@ async function witnessAnswer(key, mode = 'held') {
   // still polls its witnesses, and a witness that knows the standing
   // generation is the master's remaining way to hear its world ended.
   const generationRecord = await knownGenerationRecord(key);
+  const standing = await currentWorld(key);
   return {
     holding,
     acquiring: isAcquiring,
     quorumReachable,
     doubt,
+    world: { generation: standing.generation, height: standing.height },
     generation: generationRecord?.generation ?? 0,
     generationRecord,
   };

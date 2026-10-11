@@ -1,5 +1,7 @@
 'use strict';
 
+const generationWorld = require('./generationWorld');
+
 // The client's decision rules, pure — the half of the protocol that runs on
 // the CANDIDATE. Everything here is arithmetic over replies already in hand;
 // the loop that gathers them (grantClient.js) stays thin around it.
@@ -430,12 +432,30 @@ function recoverOutcome(replies, selfOutpoint, quorum, roundTripMs) {
   };
 }
 
-function coastVerdict(standbys, witnessReplies) {
+/**
+ * Whether the holder may coast on its witnesses' word: every standby
+ * accounted for, none able to be seated, none in doubt, none holding or
+ * acquiring — and each standing in the term's world, since a witness's "no
+ * cell would seat me now" vouches only for a holder that renews where those
+ * doors open.
+ *
+ * @param {string[]} standbys - the standbys' outpoints
+ * @param {Map<string, object>} witnessReplies - outpoint -> witness answer
+ * @param {?{generation: number, height: ?number}} [termWorld] - the world the term was granted in
+ * @returns {{coast: boolean, reason: ?string}}
+ */
+function coastVerdict(standbys, witnessReplies, termWorld = null) {
   for (let i = 0; i < (standbys || []).length; i += 1) {
     const outpoint = standbys[i];
     const reply = witnessReplies?.get(outpoint);
     if (!reply) {
       return { coast: false, reason: `standby ${outpoint} unaccounted for` };
+    }
+    if (termWorld && reply.world && !generationWorld.sameWorld(reply.world, termWorld)) {
+      return {
+        coast: false,
+        reason: `standby ${outpoint} stands in generation ${reply.world.generation} from height ${reply.world.height}, not this term's world`,
+      };
     }
     if (reply.quorumReachable) {
       return { coast: false, reason: `standby ${outpoint} can reach quorum` };
