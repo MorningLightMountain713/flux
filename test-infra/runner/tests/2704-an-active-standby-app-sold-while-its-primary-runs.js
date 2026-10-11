@@ -180,11 +180,38 @@ describe('an activeStandby app sold while its primary runs', function () {
     await view.installedEverywhere(sold.spec.hash, [primary], 'the primary adopts the sale');
     expect((await view.installedOn(primary)).owner, 'the primary\'s record names the buyer').to.equal(buyer.zelid);
 
+    // The drain's lift lands inside one of the primary's passes, between its
+    // step into the sale's world (refused: the cells still drain) and its
+    // witness poll. The chain is held one block short of the lift until the
+    // primary's step is refused there, and the lift block is made at once.
+    const client = env.clients[primary];
+    const DRAINING = /is draining until height (\d+)/;
+    const draining = (data) => data?.type === 'probe' && DRAINING.test(data?.reason ?? '');
+    const first = await client.waitForEvent('quorumGrant:askRefused', draining, CONVERGE_MS);
+    const liftAt = Number(DRAINING.exec(first.data.reason)[1]);
+    await waitFor(async () => (await getState()).currentHeight >= liftAt - 2, {
+      timeout: CONVERGE_MS, interval: 1000, label: 'the chain nears the drain\'s lift',
+    });
+    await stopTicker();
+    let lifted = false;
+    try {
+      const { currentHeight } = await getState();
+      expect(currentHeight, 'the chain is held short of the lift').to.be.below(liftAt);
+      await advanceBlocks(liftAt - 1 - currentHeight);
+      const lastHeld = await client.waitForEvent('quorumGrant:askRefused', draining, CONVERGE_MS, { afterId: first.id });
+      const held = await client.waitForEvent('quorumGrant:askRefused', draining, CONVERGE_MS, { afterId: lastHeld.id });
+      await advanceBlocks(1);
+      lifted = true;
+      // the witness poll of the pass the lift landed in vouches no takeover:
+      // every cell's stranger door is shut for a lock-delay past the lift
+      await client.waitForEvent('quorumGrant:assess', (data) => data?.outcome === 'coast', CONVERGE_MS, { afterId: held.id });
+    } finally {
+      await startTicker();
+    }
+    expect(lifted, 'the lift was made inside a pass').to.equal(true);
+
     // Past the drain the sale started, the primary renews: the same grantee holds
     // a live term, and its container never stopped.
-    await waitFor(async () => (await getState()).currentHeight >= result.targetHeight + DRAIN_BLOCKS, {
-      timeout: CONVERGE_MS, interval: 5000, label: 'the chain passes the sale\'s drain',
-    });
     await waitFor(async () => (await verdict())?.grantee === masterGrantee, {
       timeout: CONVERGE_MS, interval: 5000, label: 'the primary holds a live term past the drain',
     });
@@ -193,6 +220,8 @@ describe('an activeStandby app sold while its primary runs', function () {
     expect(now.startedAt, 'the primary\'s container was not restarted').to.equal(primaryContainer.startedAt);
     expect(now.running, 'the primary\'s container runs').to.equal(true);
     expect(await view.runningCount(), 'exactly one master runs').to.equal(1);
+    const demoted = await client.waitForEvent('quorumGrant:demoted', () => true, 1000).then(() => true, () => false);
+    expect(demoted, 'the primary was never demoted').to.equal(false);
   });
 
   it('brings the standby back holding the sale, still a standby', async function () {
