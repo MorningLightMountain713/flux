@@ -66,6 +66,8 @@ describe('quorumGrant mastershipGrantGate', () => {
     sinon.stub(appsRuntimeState, 'isOperatorStopped').resolves(false);
     sinon.stub(grantClient, 'acquire').resolves({ granted: false, reason: 'test' });
     sinon.stub(grantClient, 'termLapsed').resolves(false);
+    // this node has stood in the key's world for longer than a lock-delay
+    sinon.stub(grantClient, 'worldReceiptWaitMs').resolves(0);
     sinon.stub(grantClient, 'relearn').resolves({ recovered: false, holder: null, reason: 'test' });
     sinon.stub(reconcilerQueue, 'enqueueComponent');
   });
@@ -805,6 +807,46 @@ describe('quorumGrant mastershipGrantGate', () => {
       await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
       await new Promise((resolve) => { setImmediate(resolve); });
       expect(grantClient.acquire.calledOnce).to.equal(true);
+    });
+
+    describe('the wait from this node\'s receipt of the key\'s world', () => {
+      let clock;
+      beforeEach(() => {
+        clock = sinon.useFakeTimers({ now: Date.now(), toFake: ['setTimeout', 'clearTimeout'] });
+      });
+      afterEach(() => clock.restore());
+
+      it('a pursuit of another node\'s lapsed term waits out the receipt, then runs at the moment it ends', async () => {
+        messageStore.getMasterleaseRecord.resolves({ data: { grantee: 'other:0', mode: 'held' } });
+        grantClient.termLapsed.resolves(true);
+        grantClient.worldReceiptWaitMs.resolves(5000);
+        await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+        await new Promise((resolve) => { setImmediate(resolve); });
+        expect(grantClient.acquire.called, 'held by the wait').to.equal(false);
+
+        grantClient.worldReceiptWaitMs.resolves(0);
+        await clock.tickAsync(4999);
+        expect(grantClient.acquire.called, 'not before the wait ends').to.equal(false);
+        await clock.tickAsync(1);
+        await new Promise((resolve) => { setImmediate(resolve); });
+        expect(grantClient.acquire.calledOnce).to.equal(true);
+      });
+
+      it('a cold key with no record waits the same: a holder this node has not heard of may stand', async () => {
+        messageStore.getMasterleaseRecord.resolves(null);
+        grantClient.worldReceiptWaitMs.resolves(5000);
+        await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+        await new Promise((resolve) => { setImmediate(resolve); });
+        expect(grantClient.acquire.called).to.equal(false);
+      });
+
+      it('this node\'s own term is re-acquired at once, whatever the wait', async () => {
+        messageStore.getMasterleaseRecord.resolves({ data: { grantee: SELF, mode: 'held' } });
+        grantClient.worldReceiptWaitMs.resolves(5000);
+        await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());
+        await new Promise((resolve) => { setImmediate(resolve); });
+        expect(grantClient.acquire.calledOnce).to.equal(true);
+      });
     });
 
     it('does not stack pursuits while one is in flight', async () => {

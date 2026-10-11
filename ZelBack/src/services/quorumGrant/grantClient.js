@@ -241,6 +241,16 @@ function overlayExtras(committee) {
   };
 }
 
+// key -> { world, atMs }: the monotonic moment this node first stood the key
+// in the world it stands in now
+const worldsReceived = new Map();
+
+function noteWorldReceived(key, world) {
+  const seen = worldsReceived.get(key);
+  if (seen && generationWorld.sameWorld(seen.world, world)) return;
+  worldsReceived.set(key, { world: { generation: world.generation, height: world.height }, atMs: nowMs() });
+}
+
 /**
  * The world a key stands in as this node has synced it: the generation its
  * committee is dealt from and the height that committee took over at.
@@ -248,12 +258,33 @@ function overlayExtras(committee) {
 async function currentWorld(key) {
   try {
     const slash = key.indexOf('/');
-    return generationWorld.worldOf(await messageStore.standingGeneration(key.slice(0, slash), key.slice(slash + 1)));
+    const world = generationWorld.worldOf(await messageStore.standingGeneration(key.slice(0, slash), key.slice(slash + 1)));
+    noteWorldReceived(key, world);
+    return world;
   } catch (error) {
     return {
       generation: 0, height: null, record: null, aside: false,
     };
   }
+}
+
+/**
+ * How long this node must still wait before pursuing a seat for a key it does
+ * not hold: one lock-delay from the moment it first stood the key in its
+ * current world. From that moment its witness answers name that world, so a
+ * holder coasting on another world's vouch reads that at its next poll,
+ * inside the wait, and stops before this node can be seated. A world first
+ * seen at this node's start waits the same, and a world this node cannot read
+ * waits the whole lock-delay.
+ *
+ * @param {string} key
+ * @returns {Promise<number>} ms still to wait; 0 when free to pursue
+ */
+async function worldReceiptWaitMs(key) {
+  await currentWorld(key);
+  const seen = worldsReceived.get(key);
+  if (!seen) return lockDelayMs();
+  return Math.max(0, seen.atMs + lockDelayMs() - nowMs());
 }
 
 /** The owner-signed generation record this node holds for a key, or null. */
@@ -1983,6 +2014,7 @@ function resetForTests() {
   acquiring.clear();
   couriers.forEach((courier) => { if (courier.timer) courierCancel(courier.timer); });
   couriers.clear();
+  worldsReceived.clear();
 }
 
 function stopHolder(holder) {
@@ -2160,6 +2192,7 @@ function isAcquiring(key) {
 module.exports = {
   acquire,
   termLapsed,
+  worldReceiptWaitMs,
   holderFor,
   relearn,
   isAcquiring,
