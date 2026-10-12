@@ -26,6 +26,7 @@ describe('updateAppGlobaly and the manifest an update carries', () => {
   const CARRIED = { appName: 'myapp', identity: IDENTITY, version: 2, slots: { sealed: { ciphertext: 'c' } } };
   let appOperations;
   let uploadSealedContent;
+  let assertNamesWhatStands;
   let broadcast;
   let spec;
 
@@ -37,12 +38,14 @@ describe('updateAppGlobaly and the manifest an update carries', () => {
   beforeEach(async () => {
     spec = await v9Spec({ name: 'myapp' });
     uploadSealedContent = sinon.stub().resolves({ payload: {}, blobs: new Map(), carriedManifest: null });
+    assertNamesWhatStands = sinon.stub().resolves();
     appOperations = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
       '../appRequirements/appSubmission': {
         ...appSubmission,
         resolveSubmission: sinon.stub().resolves({ spec, broadcastBlob: spec.serialize() }),
         assertSecretsNotConflicting: sinon.stub().resolves(),
         uploadSealedContent,
+        assertNamesWhatStands,
       },
       '../utils/specLibs': { ...specLibs, assertUpdateInvariants: sinon.stub().resolves() },
     });
@@ -81,6 +84,34 @@ describe('updateAppGlobaly and the manifest an update carries', () => {
     const [message] = broadcast.firstCall.args;
     expect(message.hash).to.equal('outbound-hash');
     expect(message.contentManifest).to.deep.equal(CARRIED);
+  });
+
+  it('judges what the update names against the manifest it carries before anything is gossiped', async () => {
+    uploadSealedContent.resolves({ payload: {}, blobs: new Map(), carriedManifest: CARRIED });
+    await appOperations.updateAppGlobaly(params({ content: { sealed: true }, ownerSigs: new Map() }));
+    sinon.assert.calledOnce(assertNamesWhatStands);
+    const [judged, app, options] = assertNamesWhatStands.firstCall.args;
+    expect(judged).to.equal(spec);
+    expect(app).to.include({ identity: IDENTITY, owner: spec.owner });
+    expect(options).to.deep.equal({ carriedManifest: CARRIED });
+    sinon.assert.callOrder(uploadSealedContent, assertNamesWhatStands, broadcast);
+  });
+
+  it('an update with no content judges against the standing manifest', async () => {
+    await appOperations.updateAppGlobaly(params(null));
+    expect(assertNamesWhatStands.firstCall.args[2]).to.deep.equal({ carriedManifest: null });
+  });
+
+  it('an update refused for what it names is never gossiped', async () => {
+    assertNamesWhatStands.rejects(new Error('Flux App myapp update refused: content must name the manifest the update stands on'));
+    let refused = null;
+    try {
+      await appOperations.updateAppGlobaly(params(null));
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused?.message).to.match(/content must name/);
+    sinon.assert.notCalled(broadcast);
   });
 
   it('gossips no manifest field for an update that carries none', async () => {
