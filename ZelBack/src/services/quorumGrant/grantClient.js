@@ -1717,7 +1717,7 @@ class Holder {
         : new Map();
       witnessed = { standbys: standbys.map(outpointOf), replies: witnessReplies, polledAtMs };
       verdict = standbys.length
-        ? core.coastVerdict(standbys.map(outpointOf), witnessReplies, this.#committee)
+        ? core.coastVerdict(standbys.map(outpointOf), witnessReplies, await currentWorld(this.#key))
         : { coast: false, reason: 'no witnesses resolvable' };
       seen.standbys = standbys.length;
       seen.witnessReplies = witnessReplies.size;

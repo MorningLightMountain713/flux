@@ -790,7 +790,7 @@ describe('quorumGrant grantClient', () => {
       expect(holder.coasting).to.equal(true);
     });
 
-    it('a witness standing in another world than the term vouches nothing: no coast', async () => {
+    it('a witness standing in another world than this node vouches nothing: no coast', async () => {
       const holder = await acquireHolder();
       committeeHosts.forEach((host) => unreachable.add(host));
       relayDelivers = false;
@@ -2322,6 +2322,25 @@ describe('quorumGrant grantClient', () => {
           const { holder } = await stepBackOntoFreshSeats({ generation: 0, height: null });
           expect(holder.generation).to.equal(1);
           expect(seatedAt(oldHosts, 0)).to.deep.equal([]);
+        });
+
+        // The holder asks in the world its node stands in, so a witness
+        // standing there vouches for it, whatever world its term was granted in.
+        it('a witness standing in the sale\'s world with this node vouches for it: the holder coasts through the sale\'s drain', async () => {
+          taughtRecord = null;
+          const demoted = [];
+          const holder = await acquireHolder({ onDemoted: (reason) => demoted.push(reason) });
+          sell();
+          grantClient.noteGenerationRecord({ identity: 'myapp', role: 'master', generation: 0 });
+          oldHosts.forEach((host) => draining.add(host));
+          witnessReplies.set(STANDBY_HOST, {
+            quorumReachable: false, holding: false, acquiring: false, world: { generation: 0, height: SOLD_AT },
+          });
+          clockNow += TTL + 30_000;
+          await holder.renewOnce();
+          expect(demoted).to.deep.equal([]);
+          expect(holder.state).to.equal('jeopardy');
+          expect(holder.coasting).to.equal(true);
         });
 
         it('a referee naming a generation this node does not stand on ends the coast, however the witnesses vouch', async () => {
