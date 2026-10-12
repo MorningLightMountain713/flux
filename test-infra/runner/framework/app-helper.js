@@ -7,6 +7,7 @@ import { assignPorts } from './port-allocator.js';
 import * as daemon from './daemon-control.js';
 import { waitFor } from './wait.js';
 import { submitToNode } from './gated-fetch.js';
+import { harnessNow } from './harness-clock.js';
 
 const defaultSpec = {
   version: 8,
@@ -104,7 +105,7 @@ export function buildAppSpec({
 // signerKey is the owner on record, who alone may sign the message: for a sale it
 // is the outgoing owner while spec.owner already names the incoming one.
 export async function signAppSpec(spec, type = 'fluxappregister', signerKey = appOwnerKey()) {
-  const timestamp = Date.now();
+  const timestamp = harnessNow();
   const version = 1;
   const payload = type + version + JSON.stringify(spec) + timestamp;
   const signature = await signBtcMessage(payload, signerKey.privkey);

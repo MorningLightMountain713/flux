@@ -63,7 +63,13 @@ RUN set -eu; \
     acl \
     dbus \
     openssh-client \
+    libfaketime \
     && rm -rf /var/lib/apt/lists/*
+
+# The harness clock (runner/framework/harness-clock.js): a suite that shares one
+# preloads this library from a fixed path, whatever the architecture.
+RUN ln -s "$(dpkg -L libfaketime | grep '/libfaketime.so.1$')" /usr/local/lib/libfaketime.so.1 \
+    && test -e /usr/local/lib/libfaketime.so.1
 
 # The mesh data plane: nebula + nebula-cert at the version FluxOS requires,
 # fetched from the upstream release and verified against the pins the harness
