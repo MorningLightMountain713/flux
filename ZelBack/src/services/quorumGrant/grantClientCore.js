@@ -435,26 +435,26 @@ function recoverOutcome(replies, selfOutpoint, quorum, roundTripMs) {
 /**
  * Whether the holder may coast on its witnesses' word: every standby
  * accounted for, none able to be seated, none in doubt, none holding or
- * acquiring — and each standing in the term's world, since a witness's "no
- * cell would seat me now" vouches only for a holder that renews where those
- * doors open.
+ * acquiring — and each standing in the world the holder's node stands in,
+ * the world it renews or steps across in, since a witness's "no cell would
+ * seat me now" vouches only for a holder that renews where those doors open.
  *
  * @param {string[]} standbys - the standbys' outpoints
  * @param {Map<string, object>} witnessReplies - outpoint -> witness answer
- * @param {?{generation: number, height: ?number}} [termWorld] - the world the term was granted in
+ * @param {?{generation: number, height: ?number}} [holderWorld] - the world the holder's node stands in
  * @returns {{coast: boolean, reason: ?string}}
  */
-function coastVerdict(standbys, witnessReplies, termWorld = null) {
+function coastVerdict(standbys, witnessReplies, holderWorld = null) {
   for (let i = 0; i < (standbys || []).length; i += 1) {
     const outpoint = standbys[i];
     const reply = witnessReplies?.get(outpoint);
     if (!reply) {
       return { coast: false, reason: `standby ${outpoint} unaccounted for` };
     }
-    if (termWorld && reply.world && !generationWorld.sameWorld(reply.world, termWorld)) {
+    if (holderWorld && reply.world && !generationWorld.sameWorld(reply.world, holderWorld)) {
       return {
         coast: false,
-        reason: `standby ${outpoint} stands in generation ${reply.world.generation} from height ${reply.world.height}, not this term's world`,
+        reason: `standby ${outpoint} stands in generation ${reply.world.generation} from height ${reply.world.height}, not the world this node stands in`,
       };
     }
     if (reply.quorumReachable) {
