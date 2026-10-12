@@ -42,6 +42,7 @@ describe('updateAppGlobaly and the app an update is judged against', () => {
         ...appSubmission,
         resolveSubmission: sinon.stub().resolves({ spec, broadcastBlob: spec.serialize() }),
         assertSecretsNotConflicting: sinon.stub().resolves(),
+        assertNamesWhatStands: sinon.stub().resolves(),
       },
       '../utils/specLibs': { ...specLibs, assertUpdateInvariants: sinon.stub().resolves() },
     });

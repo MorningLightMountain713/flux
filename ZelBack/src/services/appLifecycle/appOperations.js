@@ -69,7 +69,7 @@ const telemetrySinkCache = require('../telemetrySinkCache');
 const telemetryIdentityService = require('../telemetryIdentityService');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const {
-  resolveSubmission, assertSecretsNotConflicting, parseMultipartSubmission, uploadSealedContent,
+  resolveSubmission, assertSecretsNotConflicting, parseMultipartSubmission, uploadSealedContent, assertNamesWhatStands,
 } = require('../appRequirements/appSubmission');
 const globalState = require('../utils/globalState');
 const contentBlobService = require('./contentBlobService');
@@ -1908,6 +1908,10 @@ async function updateAppGlobaly(params) {
       priorSpec: priorCleartext,
     }));
   }
+
+  // The update names the manifest and the generation records it stands on
+  // exactly when the owner it names did not sign them: a sale names them all.
+  await assertNamesWhatStands(spec, appInfo, { carriedManifest });
 
   // v9 only (envelope version 2). v8 enterprise messages are envelope version 1,
   // which old nodes still parse — they must not carry an unknown arcaneAttestation
