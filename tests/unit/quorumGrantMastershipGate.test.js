@@ -849,6 +849,52 @@ describe('quorumGrant mastershipGrantGate', () => {
       });
     });
 
+    // A holder past its deadline retries inside the soonest pursuit any
+    // standby reports, so the answer is the gate's own rule for when this
+    // node's pursuit may start.
+    describe('how long until this node may pursue a key', () => {
+      const KEY = 'myapp/master';
+
+      it('another node\'s term: what is left of the wait from receiving the key\'s world', async () => {
+        messageStore.getMasterleaseRecord.resolves({ data: { grantee: 'other:0', mode: 'held' } });
+        grantClient.worldReceiptWaitMs.resolves(5000);
+        expect(await mastershipGrantGate.pursuitWaitMs(KEY)).to.equal(5000);
+        expect(grantClient.worldReceiptWaitMs.calledWith(KEY)).to.equal(true);
+      });
+
+      it('a cold key with no record: the same wait', async () => {
+        grantClient.worldReceiptWaitMs.resolves(5000);
+        expect(await mastershipGrantGate.pursuitWaitMs(KEY)).to.equal(5000);
+      });
+
+      it('this node\'s own term: none, it is re-acquired at once', async () => {
+        messageStore.getMasterleaseRecord.resolves({ data: { grantee: SELF, mode: 'held' } });
+        grantClient.worldReceiptWaitMs.resolves(5000);
+        expect(await mastershipGrantGate.pursuitWaitMs(KEY)).to.equal(0);
+      });
+
+      it('a key this node holds or is acquiring: none, its pursuit has begun', async () => {
+        grantClient.worldReceiptWaitMs.resolves(5000);
+        grantClient.holderFor.returns({ state: 'held' });
+        expect(await mastershipGrantGate.pursuitWaitMs(KEY), 'holding').to.equal(0);
+        grantClient.holderFor.returns(null);
+        grantClient.isAcquiring.returns(true);
+        expect(await mastershipGrantGate.pursuitWaitMs(KEY), 'acquiring').to.equal(0);
+      });
+
+      it('below the height: none, the running node asks at once', async () => {
+        mastershipGrantGate.resetForTests({ enabled: false });
+        grantClient.worldReceiptWaitMs.resolves(5000);
+        expect(await mastershipGrantGate.pursuitWaitMs(KEY)).to.equal(0);
+      });
+
+      it('an unreadable record: the wait, as the pursuit itself would take it', async () => {
+        messageStore.getMasterleaseRecord.rejects(new Error('db down'));
+        grantClient.worldReceiptWaitMs.resolves(5000);
+        expect(await mastershipGrantGate.pursuitWaitMs(KEY)).to.equal(5000);
+      });
+    });
+
     it('does not stack pursuits while one is in flight', async () => {
       grantClient.isAcquiring.returns(true);
       await mastershipGrantGate.grantVerdict(IDENTIFIER, activeStandbyComp());

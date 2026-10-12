@@ -9,6 +9,7 @@ const registryManager = require('../../ZelBack/src/services/appDatabase/registry
 const grantClient = require('../../ZelBack/src/services/quorumGrant/grantClient');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
 const grantPeerController = require('../../ZelBack/src/services/quorumGrant/grantPeerController');
+const mastershipGrantGate = require('../../ZelBack/src/services/appLifecycle/mastershipGrantGate');
 
 // The witness and relay gauntlets. What they answer is grantClient's and has
 // its own suite; what gets THROUGH to them is this one's.
@@ -70,6 +71,14 @@ describe('quorumGrant grantPeerController', () => {
       expect(res.statusCode).to.equal(200);
       expect(res.body.data.quorumReachable).to.equal(true);
       expect(grantClient.witnessAnswer.calledOnceWith('myapp/master')).to.equal(true);
+    });
+
+    it('carries how long until this node may pursue the key, as its own gate decides it', async () => {
+      sinon.stub(mastershipGrantGate, 'pursuitWaitMs').resolves(7000);
+      const res = fakeRes();
+      await grantPeerController.witness(fakeReq({ key: 'myapp/master' }), res);
+      expect(res.body.data.pursueInMs).to.equal(7000);
+      expect(mastershipGrantGate.pursuitWaitMs.calledOnceWith('myapp/master')).to.equal(true);
     });
 
     it('refuses malformed keys and unlisted callers', async () => {
