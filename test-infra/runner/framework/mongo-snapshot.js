@@ -8,7 +8,7 @@
 
 import { createHash } from 'node:crypto';
 import {
-  existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
+  existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -26,6 +26,11 @@ const SNAPSHOT_DIR = process.env.E2E_MONGO_SNAPSHOT_DIR || join(tmpdir(), 'flux-
 // A build takes one fleet's load, about a minute for sixteen nodes; a lock older
 // than this belongs to a builder that died.
 const STALE_LOCK_MS = 15 * 60 * 1000;
+// The cache is a tmpfs shared by every run on the host. Past this many bytes the
+// least recently used snapshots are evicted; a snapshot used within the hour is
+// never evicted, since a fleet may be about to bind-mount it.
+const SNAPSHOT_CAP_BYTES = Number(process.env.E2E_MONGO_SNAPSHOT_CAP_GB || 10) * 1024 ** 3;
+const IN_USE_MS = 60 * 60 * 1000;
 const BUILD_TIMEOUT_MS = 10 * 60 * 1000;
 // Where the fleet's mongo container finds its snapshot.
 export const SNAPSHOT_MOUNT = '/snapshot/mongo.tar';
@@ -115,6 +120,10 @@ export async function ensureIpLocationSnapshot({
     // eslint-disable-next-line no-await-in-loop
     await new Promise((resolve) => { setTimeout(resolve, 2000); });
   }
+  // A snapshot's mtime is when it was last used: the cap evicts by it.
+  const usedAt = new Date();
+  utimesSync(tarPath, usedAt, usedAt);
+  capSnapshots(SNAPSHOT_DIR, { capBytes: SNAPSHOT_CAP_BYTES });
   return tarPath;
 }
 
@@ -172,6 +181,34 @@ export async function pruneDeadSnapshots(dir, { imageLive = imageIsPresent } = {
     if (!dead) continue;
     rmSync(join(dir, name), { recursive: true, force: true });
     rmSync(metaPath, { force: true });
+    removed.push(key);
+  }
+  return removed;
+}
+
+/**
+ * Evict the least recently used snapshots, with their sidecars, until the cache
+ * holds no more than `capBytes`. A snapshot used within IN_USE_MS is never
+ * evicted, so the cache may stay over the cap while every snapshot in it is in use.
+ *
+ * @param {string} dir the cache directory
+ * @param {{capBytes: number, now?: number}} options
+ * @returns {string[]} the keys removed, least recently used first
+ */
+export function capSnapshots(dir, { capBytes, now = Date.now() }) {
+  const snapshots = readdirSync(dir)
+    .filter((name) => name.endsWith('.tar'))
+    .map((name) => ({ key: name.slice(0, -'.tar'.length), stat: statSync(join(dir, name)) }))
+    .filter(({ stat }) => stat.isFile())
+    .sort((a, b) => a.stat.mtimeMs - b.stat.mtimeMs);
+  let total = snapshots.reduce((sum, { stat }) => sum + stat.size, 0);
+  const removed = [];
+  for (const { key, stat } of snapshots) {
+    if (total <= capBytes) break;
+    if (now - stat.mtimeMs < IN_USE_MS) continue;
+    rmSync(join(dir, `${key}.tar`), { force: true });
+    rmSync(join(dir, `${key}.json`), { force: true });
+    total -= stat.size;
     removed.push(key);
   }
   return removed;
