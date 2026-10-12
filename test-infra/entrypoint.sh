@@ -495,4 +495,8 @@ echo "[entrypoint] setup complete, handing off to systemd as pid 1"
 # /dev/console, and a container without a TTY has none, so a systemd that dies before
 # journald is completely mute. The fallback only fires when the journal is
 # unavailable, so a healthy boot writes nothing to kmsg.
-exec /lib/systemd/systemd --log-target=journal-or-kmsg
+#
+# The harness clock (runner/framework/harness-clock.js) reaches the units through
+# /etc/fluxos-harness.env above, never PID 1: systemd runs on the wall clock.
+exec env -u LD_PRELOAD -u FAKETIME_TIMESTAMP_FILE -u FAKETIME_CACHE_DURATION -u DONT_FAKE_MONOTONIC \
+  /lib/systemd/systemd --log-target=journal-or-kmsg

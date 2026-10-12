@@ -7,6 +7,7 @@ import { submitToNode } from './gated-fetch.js';
 import { appOwnerKey, userKey } from './keys.js';
 import * as benchCrypto from '../../daemon-stub/benchCrypto.js';
 import * as tk from './content-crypto-v9.js';
+import { harnessNow } from './harness-clock.js';
 
 // The node's per-app transport pubkey (the real frontend fetches this before sealing).
 // The route wraps the benchmark reply as { status:'success', data:{ status:'ok', publicKey } }.
@@ -52,7 +53,7 @@ export async function deployContentApp(nodeUrl, opts) {
   const ownerKey = opts.ownerKey || appOwnerKey();
   const owner = opts.owner || ownerKey.zelid;
   const { name } = opts;
-  const timestamp = opts.timestamp || Date.now();
+  const timestamp = opts.timestamp || harnessNow();
   const contentSlots = opts.contentSlots || [];
 
   // Spec: contentRef mount (immutable) + contentSlot mounts (mutable).
@@ -149,7 +150,7 @@ export async function registerEncryptedV9App(nodeUrl, opts) {
   const ownerKey = opts.ownerKey || appOwnerKey();
   const owner = opts.owner || ownerKey.zelid;
   const { name } = opts;
-  const timestamp = opts.timestamp || Date.now();
+  const timestamp = opts.timestamp || harnessNow();
 
   const submissionSpec = tk.buildV9ContentSpec({
     name,
@@ -198,7 +199,7 @@ export async function updateEncryptedV9App(nodeUrl, opts) {
   const ownerKey = opts.ownerKey || appOwnerKey();
   const owner = opts.owner || ownerKey.zelid;
   const { name } = opts;
-  const timestamp = opts.timestamp || Date.now();
+  const timestamp = opts.timestamp || harnessNow();
 
   const submissionSpec = tk.buildV9ContentSpec({
     name,
@@ -249,7 +250,7 @@ async function submitCleartextV9App(nodeUrl, opts, type) {
     ...(opts.specOverrides || {}),
   });
   const { specField, contentHash } = await tk.buildSignedCleartextSubmission({
-    submissionSpec, ownerKey, timestamp: opts.timestamp || Date.now(), type,
+    submissionSpec, ownerKey, timestamp: opts.timestamp || harnessNow(), type,
   });
 
   const auth = await authenticate(nodeUrl, ownerKey);
@@ -315,7 +316,7 @@ export async function updateContentApp(nodeUrl, opts) {
   const ownerKey = opts.ownerKey || appOwnerKey();
   const owner = opts.owner || ownerKey.zelid;
   const { name } = opts;
-  const timestamp = opts.timestamp || Date.now();
+  const timestamp = opts.timestamp || harnessNow();
   const contentSlots = opts.contentSlots || [];
   const contentRefHash = opts.contentRef ? tk.blobHash(opts.contentRef) : null;
 
@@ -404,7 +405,7 @@ export async function updateContentApp(nodeUrl, opts) {
  * @returns {Promise<object>} the route's answer, its data `{ locator }` on success
  */
 export async function requestBlobLocator(nodeUrl, {
-  name, contentHash, ownerKey, timestamp = Date.now(),
+  name, contentHash, ownerKey, timestamp = harnessNow(),
 }) {
   const transportPubB64 = await fetchTransportPubKey(nodeUrl, name, ownerKey.zelid);
   const sealed = await tk.sealLocatorRequest({
@@ -436,7 +437,7 @@ export async function pushContentUpdate(nodeUrl, opts) {
   const ownerKey = opts.ownerKey || appOwnerKey();
   const owner = opts.owner || ownerKey.zelid;
   const { name } = opts;
-  const timestamp = opts.timestamp || Date.now();
+  const timestamp = opts.timestamp || harnessNow();
 
   const slotMap = {};
   const blobs = {};

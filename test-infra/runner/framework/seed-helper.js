@@ -10,6 +10,7 @@ import { assertHermeticRepotags } from './app-helper.js';
 import { appIdentityFromUuid, appUuid, Chain } from '@runonflux/flux-spec';
 import { deserializeSpec } from '@runonflux/flux-spec-backend';
 import { allocatePortFor, assignPorts } from './port-allocator.js';
+import { harnessNow } from './harness-clock.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const deterministicList = JSON.parse(
@@ -148,7 +149,7 @@ export async function buildSeedableApp(opts) {
 
   const type = 'fluxappregister';
   const version = 1;
-  const timestamp = Date.now();
+  const timestamp = harnessNow();
   const payload = type + version + JSON.stringify(spec) + timestamp;
   const signature = await signBtcMessage(payload, ownerKey.privkey);
 
@@ -251,7 +252,7 @@ export async function buildSeedableUpdate(app, mutate, { signer = appOwnerKey() 
 
   const type = 'fluxappupdate';
   const version = 1;
-  const timestamp = Date.now();
+  const timestamp = harnessNow();
   const payload = type + version + JSON.stringify(spec) + timestamp;
   const signature = await signBtcMessage(payload, ownerKey.privkey);
 
@@ -327,7 +328,7 @@ export async function buildSeedableLegacyApp({
 
   const type = 'fluxappregister';
   const messageVersion = 1;
-  const timestamp = Date.now();
+  const timestamp = harnessNow();
   const payload = type + messageVersion + JSON.stringify(spec) + timestamp;
   const signature = await signBtcMessage(payload, ownerKey.privkey);
 

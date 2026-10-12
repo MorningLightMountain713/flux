@@ -30,6 +30,7 @@ import {
 } from './infra-death.js';
 import { acquireBootLock, releaseBootLock, BOOT_LOCK_MAX_WAIT_MS } from './boot-lock.js';
 import { stubPeerClient } from './stub-peer-helper.js';
+import { harnessClockFor } from './harness-clock.js';
 import { derivePeerThresholds, ringArc, dialerCount } from './peer-topology.js';
 import { pushImage, mirrorExecutorImage, executorImageReference } from './registry-helper.js';
 import { defaultGroupGrantDoc } from './policy-helper.js';
@@ -1131,6 +1132,9 @@ export async function createTestEnv({
   // Own-status is about the RECEIVER, so a fleet that wants it reads from its own
   // socket rather than the shared one every node hears.
   perNodeZmq = false,
+  // One clock for the chain, the nodes and the runner's signer, which a suite
+  // moves forward with advanceHarnessClock (harness-clock.js).
+  harnessClock = false,
   ...unknownOptions
 } = {}) {
   const unknown = Object.keys(unknownOptions);
@@ -1142,6 +1146,7 @@ export async function createTestEnv({
   oneOf('shutdownd', shutdownd, ['none', 'stub', 'real']);
   oneOf('telemetryd', telemetryd, ['none', 'stub', 'real']);
   oneOf('dnsd', dnsd, ['none', 'real']);
+  oneOf('harnessClock', harnessClock, [false, true]);
   // Before the boot lock, the network, or a single container: a flux-spec
   // vendor lagging the branch surfaces as a product mystery minutes later,
   // and only in suites that install something.
@@ -1482,7 +1487,9 @@ export async function createTestEnv({
     // mongo starts, i.e. inside the fleet boot, where the waits at risk are the
     // boot's own.
     await startInfraDeathWatch(env);
-    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, mergedOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, pm2Nodes, pausedSyncthingNodes, { ...sharedKeys, ...collateralOf }, networkShapes, globalIpv6, dnsRecords, firewall, collateralOf, syncthingFaults, configuredIp, nodeImageTags, freezableDockerRoot, symlinkedAppsFolder, arcane, shutdownd, telemetryd, fluxosJournal, arcaneHost, dnsd, zmqTopics, nodeZmqTopics, { perNodeZmq, seedPolicyGrant, ipLocationSeeded }, stubCapabilities);
+    await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, mergedOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, pm2Nodes, pausedSyncthingNodes, { ...sharedKeys, ...collateralOf }, networkShapes, globalIpv6, dnsRecords, firewall, collateralOf, syncthingFaults, configuredIp, nodeImageTags, freezableDockerRoot, symlinkedAppsFolder, arcane, shutdownd, telemetryd, fluxosJournal, arcaneHost, dnsd, zmqTopics, nodeZmqTopics, {
+      perNodeZmq, seedPolicyGrant, ipLocationSeeded, harnessClock,
+    }, stubCapabilities);
     if (env.ipLocationSnapshot) await assertIpLocationSnapshotAdopted(env);
     return env;
   } catch (err) {
@@ -1538,7 +1545,13 @@ async function assertIpLocationSnapshotAdopted(env) {
 }
 
 async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, configOverrides, nodeConfigOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing = 'stub', aptSeeded = true, aptBadSource = false, geolocation, locationTable, staticIp = true, policy = null, policySeeds = null, policyReachable = false, pm2Nodes = {}, pausedSyncthingNodes = [], sharedKeys = {}, networkShapes = {}, globalIpv6 = [], dnsRecords = [], firewall = false, collateralOf = {}, syncthingFaults = {}, configuredIp = {}, nodeImageTags = {}, freezableDockerRoot = [], symlinkedAppsFolder = [], arcane = false, shutdownd = 'none', telemetryd = 'none', fluxosJournal = false, arcaneHost = false, dnsd = 'none', zmqTopics, nodeZmqTopics, zmqOptions = {}, stubCapabilities) {
-  const { perNodeZmq = false, seedPolicyGrant = true, ipLocationSeeded = true } = zmqOptions;
+  const {
+    perNodeZmq = false, seedPolicyGrant = true, ipLocationSeeded = true, harnessClock = false,
+  } = zmqOptions;
+  // the bind mount and environment that put a container on the suite's clock, or null
+  const clock = harnessClockFor(env.networkName, harnessClock);
+  const onClock = (environment) => (clock ? { ...environment, ...clock.environment } : environment);
+  const clockMounts = clock ? [clock.bindMount] : [];
   // Everything built here registers onto the env shell as it comes up, so a
   // boot-phase throw leaves the partial state reachable (see makeEnvShell).
   const {
@@ -1600,7 +1613,7 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
   const daemonStub = await new StaticIpContainer(image('flux-e2e-daemon-stub'))
     .withLogConsumer(infraLog(env, 'daemonStub'))
     .withStaticIp(networkName, DAEMON_IP)
-    .withEnvironment({
+    .withEnvironment(onClock({
       FLUX_TEST_HARNESS: 'true',
       FLUXD_PORT: '16124',
       BENCHD_PORT: '16224',
@@ -1611,12 +1624,12 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
       TICKER_AUTOSTART: tickerAutostart ? 'true' : 'false',
       NODE_COUNT: String(nodes),
       INITIAL_HEIGHT: String(initialHeight),
-    })
+    }))
     .withBindMounts([{
       source: fixturesDir,
       target: '/fixtures',
       mode: 'ro',
-    }])
+    }, ...clockMounts])
     .withWaitStrategy(new HttpPollWaitStrategy(`http://${DAEMON_IP}:18232/state`))
     .start();
   started.push(daemonStub);
@@ -1715,7 +1728,8 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
   const fluxDriveStub = await new StaticIpContainer(image('flux-e2e-fluxdrive-stub'))
     .withLogConsumer(infraLog(env, 'fluxDriveStub'))
     .withStaticIp(networkName, FLUXDRIVE_IP)
-    .withEnvironment({ FLUXDRIVE_PORT: '16140', CONTROL_PORT: '16141', FLUX_NODE_URLS: nodeUrls })
+    .withEnvironment(onClock({ FLUXDRIVE_PORT: '16140', CONTROL_PORT: '16141', FLUX_NODE_URLS: nodeUrls }))
+    .withBindMounts(clockMounts)
     .withWaitStrategy(new HttpPollWaitStrategy(`http://${FLUXDRIVE_IP}:16141/health`))
     .withHealthCheck({
       test: ['CMD', 'node', '-e', "require('http').get('http://localhost:16141/health', r => { r.on('data', () => {}); r.statusCode === 200 ? process.exit(0) : process.exit(1) })"],
@@ -2235,9 +2249,9 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
       // instead of stalling whatever asked for it until its own deadline.
       // Only the nodes: the stub resolves normally, or it would relay to itself.
       .withDnsServer(EXTERNAL_STUB_IP)
-      .withBindMounts(bindMounts)
+      .withBindMounts([...bindMounts, ...clockMounts])
       .withLogConsumer(logCollector)
-      .withEnvironment(nodeEnv)
+      .withEnvironment(onClock(nodeEnv))
       // A bound, not a pace. The wait is an event-driven HTTP poll, so a healthy node
       // costs exactly its boot time whatever this says; the number exists only so a
       // node that will never serve cannot hold a suite open indefinitely. It must sit
@@ -2273,7 +2287,8 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
 
     const stub = await new StaticIpContainer(image('flux-e2e-peer-stub'))
       .withStaticIp(networkName, nodeIp)
-      .withEnvironment({
+      .withBindMounts(clockMounts)
+      .withEnvironment(onClock({
         FLUX_TEST_HARNESS: 'true',
         WS_PORT: '16127',
         CONTROL_PORT: '16128',
@@ -2289,7 +2304,7 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
         DIAL_TARGETS: (stubPeerings.get(stubIdx) ?? [])
           .map((i) => subnet.nodeIp(i + 1))
           .join(','),
-      })
+      }))
       .withWaitStrategy(new HttpPollWaitStrategy(`http://${nodeIp}:16128/health`))
       .start();
     started.push(stub);

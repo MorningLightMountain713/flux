@@ -14,6 +14,7 @@ import {
 } from '@runonflux/flux-spec';
 import { computeMessageHashV2 } from '@runonflux/flux-spec-backend';
 import { signBtcMessage } from '../auth.js';
+import { harnessNow } from './harness-clock.js';
 
 const enc = new TextEncoder();
 const sha256Hex = (input) => crypto.createHash('sha256').update(input).digest('hex');
@@ -145,7 +146,7 @@ export async function signV9Event({
 // and signature stay self-consistent around the given hash, so the node opens the
 // envelope and its own validation is what rejects — the actual surface under test.
 export async function buildSignedRegistration({
-  submissionSpec, ownerKey, transportPubB64, timestamp = Date.now(), type = 'fluxappregister', extend = true, contentHash: givenHash,
+  submissionSpec, ownerKey, transportPubB64, timestamp = harnessNow(), type = 'fluxappregister', extend = true, contentHash: givenHash,
 }) {
   const contentHash = givenHash || contentHashOf(submissionSpec);
   const aad = buildTransportAad({ contentHash, timestamp, type });
@@ -164,7 +165,7 @@ export async function buildSignedRegistration({
 // travels as it is, its contentHash is over the spec as a cleartext one, and the
 // owner signs the event as for a sealed one.
 export async function buildSignedCleartextSubmission({
-  submissionSpec, ownerKey, timestamp = Date.now(), type = 'fluxappregister', extend = true,
+  submissionSpec, ownerKey, timestamp = harnessNow(), type = 'fluxappregister', extend = true,
 }) {
   const contentHash = FluxAppSpecV9.fromSubmission(submissionSpec, { encrypted: false }).contentHash();
   const signature = await signV9Event({
@@ -181,7 +182,7 @@ export async function buildSignedCleartextSubmission({
 // for a sealed spec, since the library refuses to canonicalize content in the
 // clear. What every other node is handed to judge.
 export async function buildCleartextV9Message({
-  submissionSpec, ownerKey, timestamp = Date.now(), type = 'fluxappregister', extend = true,
+  submissionSpec, ownerKey, timestamp = harnessNow(), type = 'fluxappregister', extend = true,
 }) {
   const contentHash = contentHashOf(submissionSpec);
   const signature = await signV9Event({
@@ -256,7 +257,7 @@ export async function sealLocatorRequest({
 export async function buildOwnerSignedManifest({
   // rollout is mandatory on a manifest (contentManifest.js requires a strategy);
   // immediate is the simplest valid value, overridden by the rollout-strategy tests
-  appName, identity, version, ownedFrom = 0, slots, ownerKey, timestamp = Date.now(), rollout = { strategy: 'immediate' },
+  appName, identity, version, ownedFrom = 0, slots, ownerKey, timestamp = harnessNow(), rollout = { strategy: 'immediate' },
 }) {
   const manifest = {
     appName,
