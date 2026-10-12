@@ -393,15 +393,10 @@ async function acquireUnlessSettled(identifier, identity, key) {
     log.warn(`mastershipGrantGate - record read before pursuing ${key} failed: ${error.message}`);
   }
 
-  // Past the height, a pursuit of any term but this node's own waits one
-  // lock-delay from this node's receipt of the key's world; the restart
-  // re-acquire of its own term stays immediate.
-  if (featureEnabled() && !ours) {
-    const waitMs = await grantClient.worldReceiptWaitMs(key);
-    if (waitMs > 0) {
-      scheduleReceiptWait(identifier, identity, key, waitMs);
-      return;
-    }
+  const waitMs = await receiptWaitMs(key, ours);
+  if (waitMs > 0) {
+    scheduleReceiptWait(identifier, identity, key, waitMs);
+    return;
   }
 
   // An acquisition's own duration is what says whether it fits inside the
@@ -796,6 +791,40 @@ function resetForTests(options = {}) {
   liftPolls.clear();
 }
 
+/**
+ * Past the height, a pursuit of any term but this node's own waits one
+ * lock-delay from this node's receipt of the key's world; below it, and for
+ * the restart re-acquire of its own term, a pursuit starts at once.
+ *
+ * @returns {Promise<number>} ms still to wait; 0 when free to pursue
+ */
+async function receiptWaitMs(key, ours) {
+  if (!featureEnabled() || ours) return 0;
+  return grantClient.worldReceiptWaitMs(key);
+}
+
+/**
+ * How long until this node may pursue a key, as its witness answer reports
+ * it: 0 once it holds or is acquiring the key, else the pursuit's own wait. A
+ * record this node cannot read leaves the wait standing, as the pursuit
+ * itself takes it.
+ *
+ * @param {string} key
+ * @returns {Promise<number>} ms until this node's pursuit may start
+ */
+async function pursuitWaitMs(key) {
+  if (grantClient.holderFor(key) || grantClient.isAcquiring(key)) return 0;
+  let ours = false;
+  try {
+    const record = await messageStore.getMasterleaseRecord(key.slice(0, key.indexOf('/')), ROLE);
+    const self = await generalService.obtainNodeCollateralInformation();
+    ours = Boolean(record?.data?.grantee) && record.data.grantee === `${self.txhash}:${self.txindex}`;
+  } catch (error) {
+    log.warn(`mastershipGrantGate - record read for the pursuit wait of ${key} failed: ${error.message}`);
+  }
+  return receiptWaitMs(key, ours);
+}
+
 module.exports = {
   grantVerdict,
   blocksStart,
@@ -808,5 +837,6 @@ module.exports = {
   liftFence,
   onComponentTeardown,
   yieldMastership,
+  pursuitWaitMs,
   resetForTests,
 };

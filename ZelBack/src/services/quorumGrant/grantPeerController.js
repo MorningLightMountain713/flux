@@ -103,6 +103,9 @@ async function witness(req, res) {
     // waits for before re-admitting this node's device.
     const identity = key.slice(0, key.indexOf('/'));
     answer.folderDemotedAt = mastershipGrantGate.folderDemotedAt(identity);
+    // when this node's own pursuit of the key may start: a holder past its
+    // deadline retries only inside the soonest of these
+    answer.pursueInMs = await mastershipGrantGate.pursuitWaitMs(key);
     return res.json(messageHelper.createDataMessage(answer));
   } catch (error) {
     log.error(`quorumGrant witness: ${error.message}`);
