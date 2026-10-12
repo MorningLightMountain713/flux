@@ -182,36 +182,37 @@ describe('an activeStandby app sold while its primary runs', function () {
 
     // The drain's lift lands inside one of the primary's passes, between its
     // step into the sale's world (refused: the cells still drain) and its
-    // witness poll. The chain is held one block short of the lift until the
-    // primary's step is refused there, and the lift block is made at once.
+    // witness poll. The chain is held one block short of the lift; the first
+    // prepare refused as draining after the primary processed that block is a
+    // pass's step, and the lift block is made at once, before that pass polls.
     const client = env.clients[primary];
     const DRAINING = /is draining until height (\d+)/;
-    const draining = (data) => data?.type === 'probe' && DRAINING.test(data?.reason ?? '');
-    const first = await client.waitForEvent('quorumGrant:askRefused', draining, CONVERGE_MS);
+    const drainingAsk = (type) => (data) => data?.type === type && DRAINING.test(data?.reason ?? '');
+    const first = await client.waitForEvent('quorumGrant:askRefused', drainingAsk('probe'), CONVERGE_MS);
     const liftAt = Number(DRAINING.exec(first.data.reason)[1]);
-    await waitFor(async () => (await getState()).currentHeight >= liftAt - 2, {
-      timeout: CONVERGE_MS, interval: 1000, label: 'the chain nears the drain\'s lift',
-    });
     await stopTicker();
-    let lifted = false;
+    let lift;
+    let verdictAtLift;
     try {
       const { currentHeight } = await getState();
       expect(currentHeight, 'the chain is held short of the lift').to.be.below(liftAt);
       await advanceBlocks(liftAt - 1 - currentHeight);
-      const lastHeld = await client.waitForEvent('quorumGrant:askRefused', draining, CONVERGE_MS, { afterId: first.id });
-      const held = await client.waitForEvent('quorumGrant:askRefused', draining, CONVERGE_MS, { afterId: lastHeld.id });
+      const heldAt = await client.waitForEvent('block:processed', (data) => data?.height === liftAt - 1, CONVERGE_MS);
+      const refused = await client.waitForEvent('quorumGrant:askRefused', drainingAsk('prepare'), CONVERGE_MS, { afterId: heldAt.id });
       await advanceBlocks(1);
-      lifted = true;
-      // the witness poll of the pass the lift landed in vouches no takeover:
-      // every cell's stranger door is shut for a lock-delay past the lift
-      await client.waitForEvent('quorumGrant:assess', (data) => data?.outcome === 'coast', CONVERGE_MS, { afterId: held.id });
+      lift = await client.waitForEvent('block:processed', (data) => data?.height === liftAt, CONVERGE_MS, { afterId: refused.id });
+      verdictAtLift = await client.waitForEvent('quorumGrant:assess', () => true, CONVERGE_MS, { afterId: refused.id });
     } finally {
       await startTicker();
     }
-    expect(lifted, 'the lift was made inside a pass').to.equal(true);
+    // the witness poll of the pass the lift landed in vouches no takeover:
+    // every cell's stranger door is shut for a lock-delay past the lift
+    expect(lift.id, 'the primary processed the lift before its pass judged').to.be.below(verdictAtLift.id);
+    expect(verdictAtLift.data.outcome, 'the verdict of the pass the lift landed in').to.equal('coast');
 
-    // Past the drain the sale started, the primary renews: the same grantee holds
-    // a live term, and its container never stopped.
+    // Past the drain the sale started, the primary steps across and renews: the
+    // same grantee holds a live term, and its container never stopped.
+    await client.waitForEvent('quorumGrant:steppedAcross', () => true, CONVERGE_MS, { afterId: lift.id });
     await waitFor(async () => (await verdict())?.grantee === masterGrantee, {
       timeout: CONVERGE_MS, interval: 5000, label: 'the primary holds a live term past the drain',
     });
