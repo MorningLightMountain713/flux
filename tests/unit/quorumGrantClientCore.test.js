@@ -12,6 +12,8 @@ const {
   safeUntilMs,
   holderStateAt,
   coastVerdict,
+  retryBudgetMs,
+  HARD_STOP_MS,
   recoverOutcome,
   timingIsSafe,
   quorumTerm,
@@ -533,6 +535,49 @@ describe('quorumGrant grantClientCore', () => {
     it('an app with no standbys coasts on its own word', () => {
       // single-instance mastership: there is no possible challenger
       expect(coastVerdict([], new Map()).coast).to.equal(true);
+    });
+  });
+
+  // A stranger is seated no sooner than some standby's pursuit starts, so the
+  // retry before demoting runs inside the soonest wait the standbys reported.
+  describe('the retry before demoting — inside the soonest standby wait', () => {
+    const waiting = (pursueInMs) => ({
+      quorumReachable: true, holding: false, acquiring: false, pursueInMs,
+    });
+
+    it('is the soonest wait, less the time since the poll and the hard stop', () => {
+      const replies = new Map([['s1:0', waiting(12_000)], ['s2:0', waiting(9000)]]);
+      expect(retryBudgetMs(['s1:0', 's2:0'], replies, 1500)).to.equal(9000 - 1500 - HARD_STOP_MS);
+    });
+
+    it('a standby free to pursue now leaves nothing, whatever the others wait', () => {
+      const replies = new Map([['s1:0', waiting(12_000)], ['s2:0', waiting(0)]]);
+      expect(retryBudgetMs(['s1:0', 's2:0'], replies, 0)).to.be.at.most(0);
+    });
+
+    it('the hard stop comes out of it: a wait shorter than the hard stop leaves nothing', () => {
+      const replies = new Map([['s1:0', waiting(HARD_STOP_MS - 1)]]);
+      expect(retryBudgetMs(['s1:0'], replies, 0)).to.be.at.most(0);
+    });
+
+    it('the time since the poll comes out of it: a wait spent while the answers travelled leaves nothing', () => {
+      const replies = new Map([['s1:0', waiting(HARD_STOP_MS + 5000)]]);
+      expect(retryBudgetMs(['s1:0'], replies, 0)).to.equal(5000);
+      expect(retryBudgetMs(['s1:0'], replies, 5000)).to.be.at.most(0);
+    });
+
+    it('a standby unaccounted for bounds nothing: no retry', () => {
+      const replies = new Map([['s1:0', waiting(12_000)]]);
+      expect(retryBudgetMs(['s1:0', 's2:0'], replies, 0)).to.equal(null);
+    });
+
+    it('a standby answering without its wait (an older node) bounds nothing: no retry', () => {
+      const replies = new Map([['s1:0', waiting(12_000)], ['s2:0', { quorumReachable: true, holding: false, acquiring: false }]]);
+      expect(retryBudgetMs(['s1:0', 's2:0'], replies, 0)).to.equal(null);
+    });
+
+    it('no standby to answer bounds nothing: no retry', () => {
+      expect(retryBudgetMs([], new Map(), 0)).to.equal(null);
     });
   });
 });
