@@ -47,19 +47,37 @@ if (!process.env.INITIAL_HEIGHT) {
   throw new Error('daemon-stub: INITIAL_HEIGHT is required - the chain start comes from runner/framework/chain-start.cjs, never from a default here');
 }
 let currentHeight = Number(process.env.INITIAL_HEIGHT);
+
+// -- Block times --
+// A block's time is fixed when the block is made, as a real chain's is, so it reads
+// the same however often it is asked. A height the stub never made - below its
+// start, or skipped by /set-height - reads the time of the block made below it. The
+// stub's wall clock is the suite's harness clock when it shares one, so its blocks
+// move with the nodes' time.
+const startedAt = Math.floor(Date.now() / 1000);
+const blockTimes = new Map(); // height -> seconds, for each block the stub made
+
+function blockTime(height) {
+  if (blockTimes.has(height)) return blockTimes.get(height);
+  let below = startedAt;
+  let belowHeight = -Infinity;
+  for (const [stamped, time] of blockTimes) {
+    if (stamped < height && stamped > belowHeight) {
+      belowHeight = stamped;
+      below = time;
+    }
+  }
+  return below;
+}
+
+/** Stamp the tip as it is made: now, and never before the block below it. */
+function stampTip() {
+  if (blockTimes.has(currentHeight)) return;
+  blockTimes.set(currentHeight, Math.max(Math.floor(Date.now() / 1000), blockTime(currentHeight - 1)));
+}
 let deterministicNodeList = [];
 let originalNodeList = [];
 let pendingBlocks = [];
-// height -> block time, epoch seconds. A block's time is fixed when it is mined,
-// or when it is first asked about if it predates this stub, and every later read
-// returns the same value - as the chain does, where every node reads one header
-// time for a block whenever it fetches it.
-const blockTimes = new Map();
-
-function blockTimeOf(height) {
-  if (!blockTimes.has(height)) blockTimes.set(height, Math.floor(Date.now() / 1000));
-  return blockTimes.get(height);
-}
 // Serial behind the node keys, so every createzelnodekey differs from the last.
 let nodeKeySerial = 0;
 
@@ -394,7 +412,7 @@ const rpcHandlers = {
       version: 4,
       merkleroot: '0000000000000000000000000000000000000000000000000000000000000000',
       tx: [],
-      time: blockTimeOf(height),
+      time: blockTime(height),
       nonce: 0,
       difficulty: 1000,
       previousblockhash: height > 0 ? blockHash(height - 1) : undefined,
@@ -423,7 +441,7 @@ const rpcHandlers = {
       height,
       version: 4,
       previousblockhash: height > 0 ? blockHash(height - 1) : undefined,
-      time: blockTimeOf(currentHeight),
+      time: blockTime(height),
     };
   },
 
@@ -523,8 +541,8 @@ const rpcHandlers = {
         vout,
         blockhash: blockHash(currentHeight),
         confirmations: 1,
-        time: Math.floor(Date.now() / 1000),
-        blocktime: Math.floor(Date.now() / 1000),
+        time: blockTime(currentHeight),
+        blocktime: blockTime(currentHeight),
       };
     }
     return '0100000000000000000000';
@@ -1038,6 +1056,7 @@ function diffNodeLists(before, after) {
  * @returns {void}
  */
 function publishBlockConnect({ from = null, isReorg = false } = {}) {
+  stampTip();
   const to = currentTip();
   const previous = from ?? { height: Math.max(0, currentHeight - 1), hash: blockHash(currentHeight - 1) };
 
@@ -1090,7 +1109,7 @@ let tickerHandle = null;
 
 function tickBlock() {
   currentHeight += 1;
-  blockTimeOf(currentHeight);
+  stampTip();
   mineConfirmations();
   const txs = [];
   while (pendingAppTxQueue.length > 0) {
@@ -1106,7 +1125,7 @@ function tickBlock() {
       version: 4,
       merkleroot: '0000000000000000000000000000000000000000000000000000000000000000',
       tx: txs,
-      time: blockTimeOf(currentHeight),
+      time: blockTime(currentHeight),
       nonce: 0,
       difficulty: 1000,
       previousblockhash: blockHash(currentHeight - 1),
@@ -1159,6 +1178,8 @@ control.get('/state', (req, res) => {
   res.json({
     currentHeight,
     bestBlockHash: blockHash(currentHeight),
+    // the tip's time, seconds
+    tipTime: blockTime(currentHeight),
     nodeCount: deterministicNodeList.length,
     pendingBlocks: pendingBlocks.length,
     pendingAppTxQueue: pendingAppTxQueue.length,
@@ -1213,7 +1234,9 @@ function buildAppRegistrationTx(appHash, height, valueSat = DEFAULT_APP_TX_VALUE
 control.post('/advance-block', (req, res) => {
   const { block, appHash } = req.body;
   currentHeight += 1;
-  blockTimeOf(currentHeight);
+  // a block a test brings carries its own time
+  if (block && Number.isSafeInteger(block.time)) blockTimes.set(currentHeight, block.time);
+  stampTip();
   mineConfirmations();
   const txs = [];
   if (appHash) {
@@ -1226,14 +1249,13 @@ control.post('/advance-block', (req, res) => {
   if (block) {
     block.height = block.height || currentHeight;
     block.hash = block.hash || blockHash(currentHeight);
-    block.time = block.time ?? blockTimeOf(block.height);
     // Computed live, the way a synthesized block computes it at the top of this
     // file. Stamping 1 at push time made a block carrying transactions read as
     // the chain tip no matter how far behind the node was, while an empty block
     // did not - so the one class of block whose isSynced skip matters most, an
     // app registration, was the one class the stub had made unskippable.
     block.confirmations = currentHeight - block.height + 1;
-    block.time = block.time || Math.floor(Date.now() / 1000);
+    block.time = blockTime(currentHeight);
     block.tx = [...(block.tx || []), ...txs];
     pendingBlocks.push(block);
   } else if (txs.length > 0) {
@@ -1245,7 +1267,7 @@ control.post('/advance-block', (req, res) => {
       version: 4,
       merkleroot: '0000000000000000000000000000000000000000000000000000000000000000',
       tx: txs,
-      time: blockTimeOf(currentHeight),
+      time: blockTime(currentHeight),
       nonce: 0,
       difficulty: 1000,
       previousblockhash: blockHash(currentHeight - 1),
@@ -1675,6 +1697,8 @@ control.post('/reorg', (req, res) => {
   // The same for blocks a test added: one above the fork was mined on the chain
   // being abandoned, and the new chain's block at that height carries none of it.
   pendingBlocks = pendingBlocks.filter((block) => Number(block.height) <= fork);
+  // and its blocks' times: the new chain's blocks are stamped as they are made
+  for (const height of [...blockTimes.keys()]) if (height > fork) blockTimes.delete(height);
   nextForkSalt += 1;
   chainEras.push({ firstHeight: fork + 1, salt: nextForkSalt });
   abandonedTips.unshift({ height: oldTip.height, hash: oldTip.hash, forkHeight: fork });
