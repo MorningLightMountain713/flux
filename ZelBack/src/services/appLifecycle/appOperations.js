@@ -1847,8 +1847,9 @@ async function updateAppGlobaly(params) {
   const previousSpec = appInfo.spec;
 
   // Registration-locked invariants (e.g. referral). Both specs must be
-  // cleartext; the stored prior spec may be encrypted, so decrypt it first.
-  const priorCleartext = previousSpec.isEncrypted
+  // cleartext; a listed row's spec is sealed, and the state an expired app last
+  // held arrives opened, so open only a sealed one.
+  const priorCleartext = previousSpec.sealed
     ? await previousSpec.decrypt(await previousSpec.createProvider())
     : previousSpec;
   await assertUpdateInvariants(priorCleartext, spec);
