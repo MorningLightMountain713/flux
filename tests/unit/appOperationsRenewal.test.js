@@ -16,7 +16,9 @@ const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 const appSubmission = require('../../ZelBack/src/services/appRequirements/appSubmission');
-const { loadSpecLibrary, v9Spec } = require('./fixtures/fluxSpec');
+const {
+  loadSpecLibrary, v9Spec, decryptedV9Spec, sealedV9Spec,
+} = require('./fixtures/fluxSpec');
 const { stubRegistry } = require('./fixtures/appRecords');
 
 // The update route and the app it judges an update against: the one the list
@@ -29,6 +31,7 @@ describe('updateAppGlobaly and the app an update is judged against', () => {
   let spec;
   let byName;
   let latestAppliedState;
+  let assertUpdateInvariants;
 
   before(async function loadLibrary() {
     this.timeout(30_000);
@@ -37,6 +40,7 @@ describe('updateAppGlobaly and the app an update is judged against', () => {
 
   beforeEach(async () => {
     spec = await v9Spec({ name: 'myapp' });
+    assertUpdateInvariants = sinon.stub().resolves();
     appOperations = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
       '../appRequirements/appSubmission': {
         ...appSubmission,
@@ -44,7 +48,7 @@ describe('updateAppGlobaly and the app an update is judged against', () => {
         assertSecretsNotConflicting: sinon.stub().resolves(),
         assertNamesWhatStands: sinon.stub().resolves(),
       },
-      '../utils/specLibs': { ...specLibs, assertUpdateInvariants: sinon.stub().resolves() },
+      '../utils/specLibs': { ...specLibs, assertUpdateInvariants },
     });
     sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 2_600_000 } });
     byName = stubRegistry().byName.resolves(null);
@@ -85,6 +89,27 @@ describe('updateAppGlobaly and the app an update is judged against', () => {
 
     sinon.assert.calledOnceWithExactly(latestAppliedState, 'myapp');
     expect(appEventVerifier.authorize.firstCall.args[0].previousState, 'authorized against the owner who held it').to.equal(held);
+  });
+
+  it('opens a listed encrypted app\'s sealed spec before judging the update against it', async () => {
+    const sealed = await sealedV9Spec({ name: 'myapp' });
+    expect(sealed.sealed, 'fixture: a listed row\'s sealed spec').to.equal(true);
+    byName.resolves({ spec: sealed, owner: spec.owner, identity: IDENTITY });
+
+    await appOperations.updateAppGlobaly(params()).catch(() => null);
+
+    const [prior] = assertUpdateInvariants.firstCall.args;
+    expect(prior.sealed, 'the invariants read the opened spec').to.equal(false);
+  });
+
+  // The state an expired app last held is read from its applied message,
+  // already opened: an encrypted app's spec arrives readable.
+  it('renews an expired encrypted app on the state it last held, which arrives already opened', async () => {
+    const opened = await decryptedV9Spec({ name: 'myapp' });
+    expect(opened.isEncrypted, 'fixture: an encrypted app\'s opened spec').to.equal(true);
+    latestAppliedState.resolves({ spec: opened, owner: spec.owner, identity: IDENTITY });
+
+    expect(await appOperations.updateAppGlobaly(params())).to.equal('outbound-hash');
   });
 
   it('answers an update whose payment the chain recorded first, held as a confirmed message', async () => {
