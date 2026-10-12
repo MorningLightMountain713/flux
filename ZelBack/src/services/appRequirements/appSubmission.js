@@ -32,6 +32,7 @@ const { isFluxStorageUrl, storageLinkOf } = require('../utils/fluxStorage');
 const enterpriseNetwork = require('../utils/enterpriseNetwork');
 const signatureVerifier = require('../signatureVerifier');
 const contentSlotService = require('../appLifecycle/contentSlotService');
+const messageStore = require('../appMessaging/messageStore');
 const fluxDriveClient = require('../utils/fluxDriveClient');
 const globalState = require('../utils/globalState');
 const capabilities = require('../utils/capabilities');
@@ -834,6 +835,73 @@ async function assertSecretsNotConflicting(appName, componentName, secrets, owne
   if (refusal) throw new Error(`Provided component '${componentName}' secrets are not valid: ${refusal.message}`);
 }
 
+/** The slot names a spec's components declare. */
+function declaredSlots(spec) {
+  return Object.values(spec.components || {}).flatMap((component) => (
+    component.persistentStorage?.getMountsWithContentSlot?.() ?? []
+  ).map((mount) => mount.contentSlot));
+}
+
+/** The names of the slots an opened manifest holds. */
+function slotNames(plaintext) {
+  return Object.entries(plaintext?.slots || {}).filter(([, slot]) => slot && slot.hash).map(([name]) => name);
+}
+
+/**
+ * The facts of the manifest an update stands on: the one it carries, else the
+ * one standing for the app, asked of peers and FluxDrive when none stands.
+ * Null when the spec declares no slot, or when there is still none.
+ */
+async function manifestFacts(spec, app, carriedManifest) {
+  if (declaredSlots(spec).length === 0) return null;
+  const { contentManifestHash } = await getSpec();
+  if (carriedManifest) {
+    const plaintext = await contentSlotService.openManifestSlots(carriedManifest, { encrypted: true });
+    return {
+      hash: contentManifestHash(plaintext),
+      slots: slotNames(plaintext),
+      ownedFrom: carriedManifest.ownedFrom,
+      // the listed owner signs an update and the manifest it carries
+      specOwnerSigned: app.owner === spec.owner,
+    };
+  }
+  let { row } = await manifestStanding.standingManifest(app.identity);
+  if (!row) {
+    await contentSlotService.refreshManifests(app.name, app.identity);
+    ({ row } = await manifestStanding.standingManifest(app.identity));
+  }
+  if (!row) return null;
+  const plaintext = await contentSlotService.openManifestSlots(row.manifest, { encrypted: true });
+  return {
+    hash: row.hash, slots: slotNames(plaintext), ownedFrom: row.ownedFrom, specOwnerSigned: row.signer === spec.owner,
+  };
+}
+
+/**
+ * Refuse an update that does not name what it stands on: the manifest of an
+ * app declaring content slots, and each standing generation record, named in
+ * the spec's `content` and `grants` blocks exactly when the owner the spec
+ * names did not sign it in that owner's ownership (flux-spec
+ * standingNamesRefusal). A sale names everything that stands.
+ *
+ * @param {object} spec - the cleartext update
+ * @param {{name: string, identity: string, owner: string}} app - the listed app
+ * @param {{carriedManifest?: ?object}} [options] - the manifest the update carries, in its gossip form
+ */
+async function assertNamesWhatStands(spec, app, { carriedManifest = null } = {}) {
+  const { standingNamesRefusal } = await getSpec();
+  const listed = manifestStanding.listedOwnership(await appHistory.ownerships(app.name));
+  const records = {};
+  for (const role of ['master', 'founder']) {
+    // eslint-disable-next-line no-await-in-loop -- two roles, read in turn
+    const { record } = await messageStore.standingGeneration(app.identity, role);
+    if (record) records[role] = { hash: record.hash, ownedFrom: record.data?.ownedFrom, specOwnerSigned: record.signer === spec.owner };
+  }
+  const manifest = await manifestFacts(spec, app, carriedManifest);
+  const refusal = standingNamesRefusal(spec, { listed, manifest, records });
+  if (refusal) throw new Error(`Flux App ${spec.name} update refused: ${refusal.message}`);
+}
+
 module.exports = {
   resolveSubmission,
   assertPlacementPrivileges,
@@ -844,4 +912,5 @@ module.exports = {
   parseMultipartSubmission,
   uploadSealedContent,
   assertSecretsNotConflicting,
+  assertNamesWhatStands,
 };
