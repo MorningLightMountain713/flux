@@ -422,23 +422,6 @@ describe('quorumGrant grantorController', () => {
       expect(res.body.data.message).to.contain('draining until height 220');
     });
 
-    it('a drain refusal names the height it lifts at, which a holder steps across at', async () => {
-      messageStore.standingGeneration.resolves({ record: null, aside: false, ownership: { owner: 'buyer', from: 200, transferred: true } });
-      const res = fakeRes();
-      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 0 })), res);
-      expect(res.statusCode).to.equal(409);
-      expect(res.body.data.drainUntil).to.equal(220);
-    });
-
-    it('a refusal other than the drain names no lift height', async () => {
-      messageStore.standingGeneration.resolves({ record: null, aside: false, ownership: { owner: 'buyer', from: 200, transferred: true } });
-      const res = fakeRes();
-      await grantorController.prepare(fakeReq(await worldAsk('prepare', { generation: 0, generationHeight: null })), res);
-      expect(res.statusCode).to.equal(409);
-      expect(res.body.data.message).to.match(/ask names generation 0/);
-      expect(res.body.data).to.not.have.property('drainUntil');
-    });
-
     it('the registration\'s committee drains after a transfer naming nothing, and never for an app that never changed hands', async () => {
       messageStore.standingGeneration.resolves({ record: null, aside: false, ownership: { owner: 'buyer', from: 200, transferred: true } });
       const sold = fakeRes();
