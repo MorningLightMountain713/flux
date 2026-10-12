@@ -550,17 +550,6 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
   // durably stored before the spec is gossiped. The identity is the one this
   // registration's hash makes, and FluxDrive holds the manifest until the nodes
   // answer that the registration applied.
-  if (contentCtx) {
-    const { appUuid, registrationIdentity } = await getSpec();
-    await uploadSealedContent(spec, contentCtx.content, contentCtx.ownerSigs, {
-      ref: contentHash,
-      timestamp,
-      identity: registrationIdentity(appUuid(spec.name, messageHASH)),
-      owner: spec.owner,
-      messageHash: messageHASH,
-    });
-  }
-
   const signedEvent = await appEventVerifier.deserializeTempMessage({
     type: messageType,
     version: typeVersion,
@@ -575,6 +564,18 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
     daemonHeight,
     verifyHash: false,
   });
+
+  // Content is uploaded only for a registration signed by its owner.
+  if (contentCtx) {
+    const { appUuid, registrationIdentity } = await getSpec();
+    await uploadSealedContent(spec, contentCtx.content, contentCtx.ownerSigs, {
+      ref: contentHash,
+      timestamp,
+      identity: registrationIdentity(appUuid(spec.name, messageHASH)),
+      owner: spec.owner,
+      messageHash: messageHASH,
+    });
+  }
 
   // v9 only (envelope version 2). v8 enterprise messages are envelope
   // version 1, which old nodes still parse — they must not carry an unknown

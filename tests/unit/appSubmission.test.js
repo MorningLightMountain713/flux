@@ -13,6 +13,7 @@ const {
 const { FluxPeerManager, PEER_SOURCE } = require('../../ZelBack/src/services/utils/FluxPeerManager');
 const { asConfig } = require('./fixtures/config');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
+const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. What stays stubbed is I/O and FluxOS policy.
@@ -1110,6 +1111,72 @@ describe('appSubmission tests', () => {
       const input = stubs.contentBlobService.encryptAndUploadBlobs.firstCall.args[0];
       expect(input.priorSpec).to.equal(prior);
       expect(out.carriedManifest).to.equal(null);
+    });
+  });
+
+  // A registration's content is uploaded only once its signature is known to
+  // be the owner's: a forged registration costs the node no upload.
+  describe('a registration carrying content', () => {
+    let calls;
+    let authorize;
+    let appSubmission;
+    const envelope = { algorithm: 'x', encapsulatedKey: 'k', nonce: 'n', ciphertext: 'c' };
+
+    beforeEach(() => {
+      calls = [];
+      const spec = flux.FluxAppSpecV9.fromSubmission({ ...V9_SUBMISSION });
+      stubs.parseSpec.resolves(spec);
+      stubs.transportHelper.openTransportEnvelope.callsFake(async (blob) => blob);
+      stubs.transportHelper.openContentEnvelope.callsFake(async () => {
+        calls.push('open');
+        return Buffer.from(JSON.stringify({ blobs: {} }));
+      });
+      stubs.contentBlobService.encryptAndUploadBlobs.callsFake(async () => { calls.push('upload'); return []; });
+      authorize = sinon.stub().callsFake(async () => { calls.push('authorize'); });
+      appSubmission = load({
+        '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(true) },
+        '../utils/peerState': { peerManager: { getNumberOfPeers: () => 100 } },
+        '../appMessaging/appEventVerifier': {
+          computeOutboundHash: sinon.stub().resolves('f'.repeat(64)),
+          deserializeTempMessage: sinon.stub().resolves({ requiresArcaneAttestation: () => false }),
+          authorize,
+        },
+        '../fluxCommunicationMessagesSender': {
+          broadcastTemporaryAppMessage: sinon.stub().callsFake(async () => { calls.push('broadcast'); }),
+        },
+        '../appMessaging/ingressAttestationService': { emit: sinon.stub().resolves() },
+        '../appMessaging/messageVerifier': { requestAppMessage: sinon.stub().resolves() },
+        '../appDatabase/appsRepository': { getTempMessage: sinon.stub().resolves({ hash: 'f'.repeat(64) }) },
+        '../serviceHelper': { ...serviceHelper, delay: sinon.stub().resolves() },
+        '../utils/globalState': { isArcane: () => true },
+      });
+    });
+
+    // A real multipart registration through the route, as a wallet sends one.
+    const register = () => {
+      const app = express();
+      app.post('/apps/appregister', (req, res) => appSubmission.registerAppGlobalyApi(req, res));
+      const specField = JSON.stringify({
+        appSpecification: { ...V9_SUBMISSION }, timestamp: Date.now(), signature: 'sig', type: 'fluxappregister', version: 2, extend: true,
+      });
+      return request(app).post('/apps/appregister')
+        .field('spec', specField)
+        .field('ownerSigs', '{}')
+        .attach('content', Buffer.from(JSON.stringify(envelope)), { filename: 'content.json' });
+    };
+
+    it('a registration whose signature is refused opens and uploads nothing', async () => {
+      authorize.callsFake(async () => { calls.push('authorize'); throw new Error('signature is not the owner\'s'); });
+      const res = await register();
+      expect(res.body.status, JSON.stringify(res.body)).to.equal('error');
+      expect(res.body.data.message).to.match(/not the owner/);
+      expect(calls).to.deep.equal(['authorize']);
+    });
+
+    it('a signed registration uploads its content after the signature is checked and before it is broadcast', async () => {
+      const res = await register();
+      expect(res.body.status, JSON.stringify(res.body)).to.equal('success');
+      expect(calls).to.deep.equal(['authorize', 'open', 'upload', 'broadcast']);
     });
   });
 
