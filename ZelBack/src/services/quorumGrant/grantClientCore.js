@@ -470,6 +470,29 @@ function coastVerdict(standbys, witnessReplies, termWorld = null) {
   return { coast: true, reason: null };
 }
 
+/**
+ * The time a holder past its deadline has for one more step-across before it
+ * demotes: until the soonest any standby may pursue the key, less the time
+ * since the poll that read those waits and the hard stop. No standby can be
+ * seated before its own pursuit starts, so a step landing inside it races no
+ * stranger. Null, and no retry, unless every standby answered with its wait.
+ *
+ * @param {string[]} standbys - the standbys' outpoints
+ * @param {Map<string, object>} witnessReplies - outpoint -> witness answer
+ * @param {number} sincePollMs - the time since the poll was sent
+ * @returns {?number} ms the retry may take; at most 0 means none
+ */
+function retryBudgetMs(standbys, witnessReplies, sincePollMs) {
+  if (!standbys?.length) return null;
+  let soonestMs = Infinity;
+  for (let i = 0; i < standbys.length; i += 1) {
+    const waitMs = witnessReplies?.get(standbys[i])?.pursueInMs;
+    if (!Number.isFinite(waitMs)) return null;
+    soonestMs = Math.min(soonestMs, waitMs);
+  }
+  return soonestMs - sincePollMs - HARD_STOP_MS;
+}
+
 module.exports = {
   nextEpoch,
   adoptFrom,
@@ -480,6 +503,7 @@ module.exports = {
   safeUntilMs,
   holderStateAt,
   coastVerdict,
+  retryBudgetMs,
   recoverOutcome,
   timingIsSafe,
   quorumTerm,
