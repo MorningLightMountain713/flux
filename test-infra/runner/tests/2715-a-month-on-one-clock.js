@@ -115,6 +115,17 @@ describe('a month on one clock', function () {
     const renewal = await updateEncryptedV9App(url(0), { name, ownerKey: owner, ...shape });
     expect(renewal.status, `the renewal is accepted: ${JSON.stringify(renewal).slice(0, 300)}`).to.equal('success');
     await confirmOnChain(renewal.data, nodes().map((i) => env.clients[i]));
+    // each node's word on the paid renewal, named in the failure when it refuses
+    const decisionOn = async (i) => {
+      const res = await fetch(`${url(i)}/v2/apps/messages/${renewal.data}/decision`);
+      return res.ok ? (await res.json()).data ?? null : null;
+    };
+    let decisions = [];
+    await waitFor(async () => {
+      decisions = await Promise.all(nodes().map(decisionOn));
+      return decisions.every((d) => d && d.decision !== 'undecided');
+    }, { timeout: CONVERGE_MS, interval: 5000, label: 'every node decides the renewal' });
+    decisions.forEach((d, k) => expect(d.decision, `node ${k} decides the renewal: ${JSON.stringify(d)}`).to.equal('applied'));
     await waitFor(async () => (await Promise.all(nodes().map((i) => view.listedOn(i)))).every(Boolean), {
       timeout: CONVERGE_MS, interval: 5000, label: 'the renewed app is listed on every node',
     });

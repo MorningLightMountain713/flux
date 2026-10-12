@@ -22,6 +22,8 @@ import { advanceBlock } from './daemon-control.js';
 const LIBFAKETIME = '/usr/local/lib/libfaketime.so.1';
 const MOUNT = '/harness-clock';
 // How long a shifted process keeps an offset before reading the file again.
+// libfaketime counts it in whole seconds, so a process reads a new offset up
+// to twice this after it is written.
 const REREAD_SECONDS = 1;
 
 let offsetSeconds = 0;
@@ -67,8 +69,8 @@ export function harnessClockFor(networkName, enabled) {
 
 /**
  * Move the suite's clock forward: every shifted process reads the new time
- * within a second, and with `mine` one block is made so the chain's tip carries
- * it.
+ * within two re-read periods, and with `mine` one block is made so the chain's
+ * tip carries it.
  *
  * @param {number} seconds - a positive whole number; the clock never goes back
  * @param {{mine?: boolean}} [options]
@@ -79,7 +81,7 @@ export async function advanceHarnessClock(seconds, { mine = true } = {}) {
   if (!Number.isSafeInteger(seconds) || seconds <= 0) throw new Error(`advanceHarnessClock: ${seconds} is not a positive whole number of seconds`);
   offsetSeconds += seconds;
   writeOffset();
-  await new Promise((resolve) => { setTimeout(resolve, REREAD_SECONDS * 1000 + 500); });
+  await new Promise((resolve) => { setTimeout(resolve, 2 * REREAD_SECONDS * 1000 + 500); });
   if (mine) await advanceBlock();
   return harnessNow();
 }
