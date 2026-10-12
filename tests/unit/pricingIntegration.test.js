@@ -602,9 +602,9 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       });
     }
 
-    // The predecessor's term is fully spent, so no unused-time credit offsets
-    // the charge — the plainest case for the fee to be visible.
-    async function priceGrowthAgainst(previous) {
+    // By default the predecessor's term is fully spent, so no unused-time
+    // credit offsets the charge — the plainest case for the fee to be visible.
+    async function priceGrowthAgainst(previous, { remainingSeconds = 0 } = {}) {
       const h = buildTestHistories();
       stubHistories(h);
       const grown = baseSpec({ cpu: 4 });
@@ -620,7 +620,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
         recentEvents: [],
         oldScaledPriceMicrodollars: oldBreakdown.preFloorMicrodollars,
         oldMetered: meteredQuantities(oldBreakdown),
-        remainingSeconds: 0,
+        remainingSeconds,
         oldTtl: previous.ttl,
         isEncrypted: false,
       });
@@ -633,8 +633,10 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     });
 
     it('rules that same growth free when the predecessor is the update itself', async () => {
+      // with time left on the term: an update to an app whose term has ended
+      // buys a new one and is never free
       const grown = baseSpec({ cpu: 4 });
-      const result = await priceGrowthAgainst(grown);
+      const result = await priceGrowthAgainst(grown, { remainingSeconds: grown.ttl });
       expect(result.free).to.equal(true);
       expect(result.total).to.be.undefined;
     });
