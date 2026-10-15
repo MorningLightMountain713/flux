@@ -115,6 +115,14 @@ export async function waitForDaemonReady(node, timeout = 60000, opts) {
   return node.waitForEvent('daemon:polled', () => true, timeout, opts);
 }
 
+// A node back on the network follows the chain again once it processes a block
+// after this call. Blocks reach it by subscription, which a short outage need not
+// interrupt, so no daemon poll need follow its return: waitForDaemonReady proves
+// nothing about it. The chain must be advancing.
+export async function waitForChainFollowed(node, timeout = 120000) {
+  return node.waitForEvent('block:processed', () => true, timeout, { afterId: node.getLastEventId() });
+}
+
 export async function waitForFileOpsRecovered(node, predicate = () => true, timeout = 120000, opts) {
   return node.waitForEvent('fileops:recovered', predicate, timeout, opts);
 }

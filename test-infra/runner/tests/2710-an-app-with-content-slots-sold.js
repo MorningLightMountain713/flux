@@ -41,7 +41,7 @@ import {
   advanceBlocks, getState, queueAppTx, reorgChain, startTicker, stopTicker,
 } from '../framework/daemon-control.js';
 import {
-  assertNoEvent, waitFor, waitForDaemonReady, waitForInstallSettled, waitForReorg,
+  assertNoEvent, waitFor, waitForChainFollowed, waitForDaemonReady, waitForInstallSettled, waitForReorg,
 } from '../framework/wait.js';
 
 const NODES = 6;
@@ -209,7 +209,7 @@ describe('an app with content slots sold while it runs', function () {
 
   it('brings the returning node onto the manifest the sale names', async function () {
     this.timeout(CONVERGE_MS * 2);
-    await waitForDaemonReady(env.clients[away]);
+    await waitForChainFollowed(env.clients[away]);
     await view.installedEverywhere(saleHash, [away], 'the returning node adopts the sale');
     await standingEverywhere(namedManifest, [away], 'the returning node stands on the named manifest');
     expect(await slotOn(away), 'the returning node\'s slot').to.equal(v1.toString());

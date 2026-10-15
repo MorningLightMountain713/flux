@@ -32,7 +32,9 @@ import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.
 import { execInContainer, getAppContainerStatus } from '../framework/container.js';
 import { appView } from '../framework/app-view.js';
 import { appCaCertificate } from '../framework/daemon-control.js';
-import { waitFor, waitForDaemonReady, waitForInstallSettled } from '../framework/wait.js';
+import {
+  waitFor, waitForChainFollowed, waitForDaemonReady, waitForInstallSettled,
+} from '../framework/wait.js';
 import { appIdentityFromUuid, appUuid } from '@runonflux/flux-spec';
 
 const NODES = 5;
@@ -169,7 +171,7 @@ describe('an app with backend TLS sold while it runs', function () {
 
   it('brings the returning host to the sale with a certificate under the same CA', async function () {
     this.timeout(CONVERGE_MS * 2);
-    await waitForDaemonReady(env.clients[away]);
+    await waitForChainFollowed(env.clients[away]);
     await view.installedEverywhere(sold.spec.hash, [away], 'the returning node adopts the sale');
     const pem = await certOn(away);
     expect(verifiesUnderTheCa(pem), 'its certificate verifies under the CA').to.equal(true);
