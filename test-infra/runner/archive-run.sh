@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Archive one harness run: its log dir, its driver log, the per-test node logs, and
-# the mongo profiler's dbwatch log if one was taken.
+# Archive one harness run: its log dir, which holds the per-test node logs, its driver
+# log, and the mongo profiler's dbwatch log if one was taken.
 #
 # Run it verbatim, and run it BEFORE anything clears /tmp — the next run's sweep
 # takes the log dir, and a re-run cannot reproduce the evidence that mattered.
@@ -85,7 +85,6 @@ step() {  # step <label> <src> <dst>
 echo "archiving $LOG_DIR -> $DEST"
 step "log dir"       "$LOG_DIR"                                    "$DEST/e2e-logs"
 [ -n "$DRIVER_LOG" ] && step "driver log" "$DRIVER_LOG" "$DEST/driver.log"
-step "per-test logs" "$(dirname "$0")/test-logs"                   "$DEST/test-logs"
 # No dbwatch step. A gate does not produce one and never did: db-watch.js watches a
 # SINGLE node at a few samples a second, which is a targeted-investigation instrument,
 # not a gate one. Copying "if present" here implied a gate ought to have it and made

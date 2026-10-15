@@ -5,7 +5,9 @@ import { activeTestEnvs } from './test-env.js';
 import { execInContainer } from './container.js';
 import { eventLines } from './event-lines.js';
 
-const LOG_ROOT = join(process.cwd(), 'test-logs');
+// Under the run's own log directory, so a later run of the same test, in this
+// clone or alongside it, never writes over a failure's evidence.
+const LOG_ROOT = join(process.env.E2E_LOG_DIR || process.cwd(), 'test-logs');
 
 // DUMP_LOGS=always dumps per-node logs after every test (pass or fail), not just
 // failures — used to measure timing on green runs while investigating flakes.
