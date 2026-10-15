@@ -92,6 +92,27 @@ describe('componentKeyMap', () => {
     });
   });
 
+  describe('formerNamesForVersion', () => {
+    it('gives each component every name its key held before, once each, in the order it held them', async () => {
+      sinon.stub(appHistory, 'appliedMessages').resolves([
+        await applied(H1, { web: component('web'), db: component('db') }),
+        await applied(H2, { site: component('site', 'web'), db: component('db') }),
+        await applied(H3, { web: component('web', 'site'), db: component('db') }),
+      ]);
+      const names = await componentKeyMap.formerNamesForVersion(await registered(HX, { www: component('www', 'web'), db: component('db') }));
+      expect([...names]).to.have.deep.members([['www', ['web', 'site']], ['db', []]]);
+    });
+
+    it('gives a re-added name nothing of the component that held it before', async () => {
+      sinon.stub(appHistory, 'appliedMessages').resolves([
+        await applied(H1, { web: component('web') }),
+        await applied(H2, { site: component('site', 'web') }),
+      ]);
+      const names = await componentKeyMap.formerNamesForVersion(await registered(H3, { site: component('site'), web: component('web') }));
+      expect([...names]).to.have.deep.members([['site', ['web']], ['web', []]]);
+    });
+  });
+
   describe('keysForUpdate', () => {
     it('carries the installed record\'s keys onto the update: a rename keeps its key', async () => {
       const install = new flux.InstalledSpec({
