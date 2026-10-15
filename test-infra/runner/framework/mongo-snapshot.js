@@ -227,9 +227,11 @@ async function buildSnapshot({
   writeFileSync(join(work, 'iplocation.bin.gz'), artifact.bytes);
   let mongoId = null;
   try {
-    const script = 'docker-entrypoint.sh mongod "$@"; rc=$?; tar cf /out/mongo.tar -C /data/db . && echo $rc > /out/mongod.rc';
+    // The tar is handed to the runner's user: the cache marks a snapshot used by
+    // setting its mtime, which only the file's owner may do.
+    const script = 'docker-entrypoint.sh mongod "$@"; rc=$?; tar cf /out/mongo.tar -C /data/db . && chown "$TAR_OWNER" /out/mongo.tar && echo $rc > /out/mongod.rc';
     mongoId = await docker([
-      'run', '-d', '--tmpfs', '/data/db:rw,size=4g', '-v', `${work}:/out`,
+      'run', '-d', '--tmpfs', '/data/db:rw,size=4g', '-v', `${work}:/out`, '-e', `TAR_OWNER=${process.getuid()}:${process.getgid()}`,
       '--entrypoint', 'sh', mongoImage, '-c', script, 'sh', ...mongoArgs,
     ]);
     const up = Date.now() + 60000;
