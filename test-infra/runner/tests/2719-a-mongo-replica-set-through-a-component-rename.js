@@ -39,8 +39,10 @@ const CONVERGE_MS = 480000;
 // Named replicas roll one adoption step apart; a minute apart, no two members
 // are down at once.
 const STEP_MS = 60000;
-// mongo:7.0, the linux/amd64 entry and every other of its index.
-const MONGO_IMAGE = 'registry-1.docker.io/library/mongo@sha256:9650758f83af117fc96699f030a44f9300bed839734e67012f56df05b2fd6290';
+// mongo:7.0 as published, copied by the digest its tag named when this was
+// written; the nodes ask for it by the tag.
+const MONGO_IMAGE = 'registry-1.docker.io/library/mongo:7.0';
+const MONGO_DIGEST = 'sha256:9650758f83af117fc96699f030a44f9300bed839734e67012f56df05b2fd6290';
 // The longest a client waits between acknowledged writes while the primary's
 // member is recreated: the secondaries call an election after
 // electionTimeoutMillis (10 s, the replica set default) without the primary's
@@ -171,7 +173,7 @@ describe('a Mongo replica set through a component rename', function () {
     await Promise.all(env.clients.map((c) => execInContainer(c.container, `ip route replace default via ${GATEWAY} dev eth0`)));
     view = appView(env, name, { component: 'db', timeout: CONVERGE_MS });
 
-    image = await mirrorImage(MONGO_IMAGE, name);
+    image = await mirrorImage(MONGO_IMAGE, name, { digest: MONGO_DIGEST });
     const reg = await registerEncryptedV9App(url(0), {
       name,
       assignment: assignment(),
