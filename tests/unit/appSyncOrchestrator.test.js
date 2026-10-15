@@ -265,6 +265,7 @@ describe('AppSyncOrchestrator', () => {
       capabilities.setForTests('explorerSynced', false);
       const orchestrator = makeOrchestrator({ getScannedHeight: async () => 2_600_000 });
       orchestrator.start(defaultBootContext);
+      peersUp();
       await clock.tickAsync(0);
       expect(orchestrator.state).to.equal(STATES.INITIALIZING);
 
@@ -297,6 +298,7 @@ describe('AppSyncOrchestrator', () => {
     it('should log sync started on first blockReceived', async () => {
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
+      peersUp();
 
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
@@ -306,6 +308,7 @@ describe('AppSyncOrchestrator', () => {
     it('should call syncMissingHashes on first blockReceived', async () => {
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
+      peersUp();
 
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
@@ -315,6 +318,7 @@ describe('AppSyncOrchestrator', () => {
     it('leaves appRegistryConsistent to the registry owner after a hash sync', async () => {
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
+      peersUp();
 
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
@@ -3098,7 +3102,7 @@ describe('AppSyncOrchestrator', () => {
       expect(orchestrator.state).to.equal(STATES.READY);
     });
 
-    it('retries the manifest reconcile when peers arrive after a peerless boot round (F1)', async () => {
+    it('starts the hash sync and the manifest reconcile only once peers reach the floor (F1)', async () => {
       // Boot: explorer + capability ready, but discovery has not connected peers yet.
       getEligibleSyncPeersStub.returns([]);
       const orchestrator = makeOrchestrator({ isEnterprise: () => true });
@@ -3106,11 +3110,14 @@ describe('AppSyncOrchestrator', () => {
 
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
-      // First round ran against nobody, so the manifest did not latch.
-      expect(reconcileStub.calledOnce).to.be.true;
+      blockEmitter.emit('blocksProcessed', 2_555_001);
+      await clock.tickAsync(0);
+      // Nothing asks a peer set that does not exist.
       expect(orchestrator.state).to.equal(STATES.SYNCING);
+      sinon.assert.notCalled(syncMissingHashesStub);
+      sinon.assert.notCalled(reconcileStub);
 
-      // Discovery connects peers -> the peer-threshold edge re-drives the sync.
+      // Discovery connects peers -> the peer-threshold edge starts the sync.
       const peers = makeEligiblePeers(3);
       getEligibleSyncPeersStub.returns(peers);
       peerEmitter.emit('peerThresholdReached', 12);
@@ -3118,8 +3125,30 @@ describe('AppSyncOrchestrator', () => {
       completeEphemeral();
       await clock.tickAsync(0);
 
-      expect(reconcileStub.callCount).to.be.greaterThan(1);
+      sinon.assert.calledOnce(syncMissingHashesStub);
+      expect(reconcileStub.called).to.be.true;
       expect(orchestrator.state).to.equal(STATES.READY);
+    });
+
+    it('retries no missing hash while the peer set is below the floor', async () => {
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+      peersUp();
+      blockEmitter.emit('blocksProcessed', 2_555_000);
+      await clock.tickAsync(0);
+      sinon.assert.calledOnce(syncMissingHashesStub);
+
+      peerEmitter.emit('peersBelowThreshold', 3);
+      appSyncEvents.emit(EVENTS.HASH_UNRESOLVED);
+      blockEmitter.emit('blocksProcessed', 2_555_001);
+      await clock.tickAsync(0);
+      sinon.assert.calledOnce(syncMissingHashesStub);
+
+      // Back at the floor, the next block asks.
+      peersUp();
+      blockEmitter.emit('blocksProcessed', 2_555_002);
+      await clock.tickAsync(0);
+      sinon.assert.calledTwice(syncMissingHashesStub);
     });
 
     it('retries an unlatched round on the next block, with no edge left to wait for', async () => {
@@ -3222,6 +3251,7 @@ describe('AppSyncOrchestrator', () => {
       getEligibleSyncPeersStub.returns([]);
       const orchestrator = makeOrchestrator({ isEnterprise: () => true });
       orchestrator.start(defaultBootContext);
+      peersUp();
 
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
@@ -3388,6 +3418,7 @@ describe('AppSyncOrchestrator', () => {
 
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
+      peersUp();
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
 
@@ -3400,6 +3431,7 @@ describe('AppSyncOrchestrator', () => {
       syncMissingHashesStub.rejects(new Error('broken'));
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
+      peersUp();
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
 
@@ -3422,6 +3454,7 @@ describe('AppSyncOrchestrator', () => {
       syncMissingHashesStub.onSecondCall().resolves({ resolved: 1, missing: 0, unreachable: 0 });
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
+      peersUp();
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
       expect(syncMissingHashesStub.calledOnce).to.be.true;
@@ -3512,6 +3545,7 @@ describe('AppSyncOrchestrator', () => {
 
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
+      peersUp();
 
       // Initial sync sets nextRetryHeight to 2555200
       blockEmitter.emit('blocksProcessed', 2_555_000);
@@ -3534,6 +3568,7 @@ describe('AppSyncOrchestrator', () => {
 
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
+      peersUp();
 
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
@@ -3556,6 +3591,7 @@ describe('AppSyncOrchestrator', () => {
 
       const orchestrator = makeOrchestrator();
       orchestrator.start(defaultBootContext);
+      peersUp();
 
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
@@ -3590,6 +3626,7 @@ describe('AppSyncOrchestrator', () => {
 
       const orchestrator = makeOrchestrator({ fluxVersion: '8.12.0' });
       orchestrator.start(defaultBootContext);
+      peersUp();
 
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
@@ -3616,6 +3653,7 @@ describe('AppSyncOrchestrator', () => {
 
       const orchestrator = makeOrchestrator({ fluxVersion: '8.12.0' });
       orchestrator.start(defaultBootContext);
+      peersUp();
 
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
