@@ -2017,6 +2017,9 @@ describe('fluxNetworkHelper tests', () => {
 
   describe('local socket address announcements', () => {
     afterEach(() => {
+      // Setting the address also tells the peer manager; a later suite must not
+      // find this node at the address these tests gave it.
+      fluxNetworkHelper.setLocalSocketAddress(null);
       sinon.restore();
     });
 
