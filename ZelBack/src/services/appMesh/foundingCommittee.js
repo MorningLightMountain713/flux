@@ -30,10 +30,10 @@ const log = require('../../lib/log');
 // names an anchor this node photographed. Which components exist, and which
 // register key belongs to which component, is knowledge that lives ONLY
 // where the cleartext legitimately lives — the hosting nodes, which decrypt
-// the spec to run the app and which are where the founder ask arrives. The
-// component's name never travels: the register key carries a
-// domain-separated hash token the hosts compute and everyone else treats as
-// opaque.
+// the spec to run the app and which are where the founder ask arrives. A
+// component is known here by its key, which a rename keeps, and the key never
+// travels: the register key carries a domain-separated hash token the hosts
+// compute and everyone else treats as opaque.
 //
 // The pin is immutable; the membership is not. When a photo's owners rot
 // below a quorum of the CURRENT list, the committee does NOT re-derive at
@@ -74,13 +74,13 @@ function outpointOf(member) {
 
 /**
  * The blinded component token that rides in founder register keys. Stable
- * everywhere the name is known, meaningless everywhere it is not — a
+ * everywhere the component's key is known, meaningless everywhere it is not — a
  * non-hosting node learns nothing about an encrypted app's insides from
  * the keys it referees.
  */
-function founderToken(identity, component) {
+function founderToken(identity, componentKey) {
   return crypto.createHash('sha256')
-    .update(`fluxfounder|${identity}|${component}`)
+    .update(`fluxfounder|${identity}|${componentKey}`)
     .digest('hex')
     .slice(0, 16);
 }
@@ -226,7 +226,7 @@ async function retract(identity, height) {
 }
 
 /**
- * Maintain the component→anchor mapping from the CLEARTEXT view of a spec
+ * Maintain the component key→anchor mapping from the CLEARTEXT view of a spec
  * just stored — host-side knowledge, present exactly where the view can be
  * resolved and absent everywhere else, which is the design and not a gap.
  * A component absent from the mapping — brand new, or re-added after a
@@ -234,20 +234,19 @@ async function retract(identity, height) {
  * to at least its own height, and the max keeps anchors identical whatever
  * order the roll and the specs arrive in.
  *
- * @param {{name: string, height: number, network?: object, components?: object}} view
+ * @param {{identity: string, height: number, componentKeys: string[]}} view - the
+ *   keys of the components the mesh app's spec at this height declares
  */
 async function applyComponentView(view) {
   try {
-    if (view?.network?.mesh !== true || !view.identity || !Number.isFinite(view.height)) return;
-    const names = Object.keys(view.components ?? {});
-    if (!names.length) return;
-    await serialized(view.identity, () => applyMapping(view.identity, view.height, names));
+    if (!view?.identity || !Number.isFinite(view.height)) return;
+    await serialized(view.identity, () => applyMapping(view.identity, view.height, view.componentKeys));
   } catch (error) {
     log.warn(`foundingCommittee - component view for ${view?.identity} failed: ${error.message}`);
   }
 }
 
-async function applyMapping(identity, height, names) {
+async function applyMapping(identity, height, componentKeys) {
   const database = db();
   if (!database) return;
 
@@ -256,9 +255,9 @@ async function applyMapping(identity, height, names) {
 
   const rollFloor = (existing?.generation ?? 0) >= 1 ? existing.generationHeight : 0;
   const components = {};
-  names.forEach((name) => {
-    const kept = existing?.components?.[name];
-    components[name] = kept ?? { anchorHeight: Math.max(height, rollFloor) };
+  componentKeys.forEach((key) => {
+    const kept = existing?.components?.[key];
+    components[key] = kept ?? { anchorHeight: Math.max(height, rollFloor) };
   });
 
   await dbHelper.findOneAndUpdateInDatabase(
@@ -549,11 +548,11 @@ function startFlipEvaluator() {
  * knowledge, null wherever the view was never resolvable (which for a
  * non-hosting node is the design, not a gap).
  */
-async function componentAnchor(identity, component) {
+async function componentAnchor(identity, componentKey) {
   const database = db();
   if (!database) return null;
   const record = await dbHelper.findOneInDatabase(database, collection(), { _id: identity });
-  return record?.components?.[component]?.anchorHeight ?? null;
+  return record?.components?.[componentKey]?.anchorHeight ?? null;
 }
 
 /**
@@ -564,11 +563,11 @@ async function componentAnchor(identity, component) {
  * (§8.5: a completion landing one block before a flip loses a one-block
  * gossip race; the quiet zone closes that race entirely).
  */
-async function componentWorld(identity, component) {
+async function componentWorld(identity, componentKey) {
   const database = db();
   if (!database) return null;
   const record = await dbHelper.findOneInDatabase(database, collection(), { _id: identity });
-  const intro = record?.components?.[component]?.anchorHeight ?? null;
+  const intro = record?.components?.[componentKey]?.anchorHeight ?? null;
   if (intro === null) return null;
 
   const rungs = worldRungs(record, intro);

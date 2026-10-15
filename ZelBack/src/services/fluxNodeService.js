@@ -19,6 +19,7 @@ const benchmarkService = require('./benchmarkService');
 const meshSnapshot = require('./appMesh/meshSnapshot');
 const foundingService = require('./appMesh/foundingService');
 const appRecords = require('./appDatabase/appRecords');
+const deploymentProvider = require('./appRuntime/deploymentProvider');
 
 const express = require('express');
 
@@ -224,7 +225,14 @@ async function postMeshFounder(req, res) {
       res.json(messageHelper.errUnauthorizedMessage());
       return;
     }
-    const reply = await foundingService.founderAsk(installed.identity, scoped.component);
+    // Founding is the component's for its life, so it is asked under its key.
+    const deployment = await deploymentProvider.buildDeployment(installed, { replica: installed.replica });
+    const component = deployment.getComponent(scoped.component);
+    if (!component) {
+      res.json(messageHelper.errUnauthorizedMessage());
+      return;
+    }
+    const reply = await foundingService.founderAsk(installed.identity, component.componentKey);
     res.json(messageHelper.createDataMessage(reply));
   } catch (error) {
     log.error(`postMeshFounder: ${error}`);

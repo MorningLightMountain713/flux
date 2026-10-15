@@ -43,21 +43,21 @@ const HEX64 = /^[0-9a-f]{64}$/;
  * Answer one component's founding ask.
  *
  * @param {string} identity
- * @param {string} component the calling container's component
+ * @param {string} componentKey the calling container's component's key
  * @returns {Promise<{answer: 'yes'|'no'|'wait', retryAfterMs?: number}>}
  */
-async function founderAsk(identity, component) {
+async function founderAsk(identity, componentKey) {
   // The world is host-side knowledge (this node runs the container, so it
   // resolves the view): the intro anchor and every flip rung this node has
   // minted. Missing it is an honest "not yet" — never a no, never a minted
   // basis.
-  const world = await foundingCommittee.componentWorld(identity, component);
+  const world = await foundingCommittee.componentWorld(identity, componentKey);
   if (!world) {
-    log.info(`foundingService - ${identity}/${component}: wait (component world unresolved)`);
+    log.info(`foundingService - ${identity}/${componentKey}: wait (component world unresolved)`);
     return { answer: 'wait' };
   }
 
-  const token = foundingCommittee.founderToken(identity, component);
+  const token = foundingCommittee.founderToken(identity, componentKey);
   const generation = await currentGeneration(identity);
 
   // Record first, HIGHEST rung wins (newest-decided-wins, §8.5): a decided
@@ -74,7 +74,7 @@ async function founderAsk(identity, component) {
   if (recorded) {
     const collateral = await generalService.obtainNodeCollateralInformation();
     const self = `${collateral.txhash}:${collateral.txindex}`;
-    return settled(identity, component, recorded === self ? 'yes' : 'no');
+    return settled(identity, componentKey, recorded === self ? 'yes' : 'no');
   }
 
   // Undecided everywhere — asker gates before any round (§8.5, both
@@ -82,11 +82,11 @@ async function founderAsk(identity, component) {
   // an ARMED world (rot sustained, flip within the quiet zone) refuses to
   // start a founding that would race the flip's one-block gossip window.
   if (daemonStatus.isDaemonSynced()?.data?.synced !== true) {
-    log.info(`foundingService - ${identity}/${component}: wait (own chain view stale)`);
+    log.info(`foundingService - ${identity}/${componentKey}: wait (own chain view stale)`);
     return { answer: 'wait' };
   }
   if (world.armed) {
-    log.info(`foundingService - ${identity}/${component}: wait (world armed - flip inside the quiet zone)`);
+    log.info(`foundingService - ${identity}/${componentKey}: wait (world armed - flip inside the quiet zone)`);
     return { answer: 'wait' };
   }
 
@@ -108,7 +108,7 @@ async function founderAsk(identity, component) {
     }
   }
   if (!committee) {
-    log.info(`foundingService - ${identity}/${component}: wait (no committee basis - no photo, nothing discovered)`);
+    log.info(`foundingService - ${identity}/${componentKey}: wait (no committee basis - no photo, nothing discovered)`);
     return { answer: 'wait' };
   }
 
@@ -117,9 +117,9 @@ async function founderAsk(identity, component) {
     mode: 'oneshot',
     committee,
   });
-  if (outcome.granted) return settled(identity, component, 'yes');
-  if (outcome.founder) return settled(identity, component, 'no');
-  log.info(`foundingService - ${identity}/${component}: wait (${outcome.reason ?? `retry in ${outcome.retryAfterMs}ms`})`);
+  if (outcome.granted) return settled(identity, componentKey, 'yes');
+  if (outcome.founder) return settled(identity, componentKey, 'no');
+  log.info(`foundingService - ${identity}/${componentKey}: wait (${outcome.reason ?? `retry in ${outcome.retryAfterMs}ms`})`);
   return {
     answer: 'wait',
     ...(outcome.retryAfterMs ? { retryAfterMs: outcome.retryAfterMs } : {}),
@@ -130,8 +130,8 @@ async function founderAsk(identity, component) {
  * A settled founder answer — yes or no, never wait — published to the
  * event bus so the harness can await the verdict instead of inferring it.
  */
-function settled(identity, component, answer) {
-  fluxEventBus.publish('quorumGrant:founderAnswer', { identity, component, answer });
+function settled(identity, componentKey, answer) {
+  fluxEventBus.publish('quorumGrant:founderAnswer', { identity, componentKey, answer });
   return { answer };
 }
 

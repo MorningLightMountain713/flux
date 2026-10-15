@@ -26,8 +26,8 @@ const crypto = require('crypto');
 // address-correct inside the successor's overlay.
 //
 // The component slot comes from flux-spec's `meshComponentSlot` (via the CJS
-// bridge) — the same derivation the spec's collision gate runs at submission.
-// Callers pass it in.
+// bridge) over the component's key — the derivation `componentKeysFor` keeps
+// free of collisions. Callers pass it in.
 const APP_PREFIX_DOMAIN = 'flux-mesh-app';
 const NODE_BLOCK_DOMAIN = 'flux-mesh-node';
 const TRANSLATOR_DOMAIN = 'flux-mesh-siit';
