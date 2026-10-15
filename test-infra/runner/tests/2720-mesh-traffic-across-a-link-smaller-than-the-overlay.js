@@ -5,10 +5,12 @@
  * A node behind a VPN carries less than the 1500 bytes a plain link does
  * (WireGuard's default is 1420), and nebula wraps every overlay packet in its
  * own headers, so a packet that fills the overlay does not fit that node's link
- * unwrapped. Here one node's link is shrunk to WireGuard's 1420, dropping what
- * does not fit with no reply, as a path that filters the "too big" message
- * does. A member on that node must still exchange packets as large as its mesh
- * device carries with its peers, in both directions.
+ * once wrapped. Here one node's link is shrunk to WireGuard's 1420, dropping
+ * what does not fit with no reply, as a path that filters the "too big" message
+ * does, and the node restarts, as one booting behind a VPN, and measures it. It
+ * announces what it measured, its peers size their routes to it, and a member
+ * there exchanges a stream of full-size segments with a peer in both
+ * directions, byte for byte.
  */
 import {
   describe, it, before, after, afterEach,
@@ -23,16 +25,19 @@ import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { execInContainer, requireAppContainerName } from '../framework/container.js';
+import { restartFluxos } from '../framework/systemd-control.js';
 import { pushBusybox } from '../framework/registry-helper.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
 
 const { gateway: GATEWAY } = getSubnetConfig();
 const SMALL_LINK_MTU = 1420;
+// The overlay route to the node behind it: the small link less nebula's 60
+// bytes of wrapping.
+const ROUTE_MTU = SMALL_LINK_MTU - 60;
 const BEHIND = 1; // the node whose link is shrunk
 const PEER = 0;
-// The container's flux-mesh0 carries 1400 bytes: 1372 of ping payload, 8 of
-// ICMP header and 20 of IPv4.
-const FULL_PAYLOAD = 1372;
+const STREAM_KB = 200;
+const STREAM_PORT = 8091;
 
 describe('mesh traffic across a link smaller than the overlay', function () {
   let env;
@@ -69,10 +74,27 @@ describe('mesh traffic across a link smaller than the overlay', function () {
     return app.members.find((m) => m.nodeId === nodeId)?.ip ?? null;
   }
 
-  async function received(from, to, payload) {
+  // A stream of STREAM_KB random kilobytes from node `from`'s member to node
+  // `to`'s, over the overlay: whether it arrived byte for byte.
+  async function streamArrives(from, to) {
     const ip = await addressOf(from, to);
-    const out = await inApp(from, `/bin/busybox ping -c 3 -W 3 -s ${payload} ${ip}`);
-    return Number(out.stdout.match(/(\d+) packets received/)?.[1] ?? 0);
+    const receiver = await requireAppContainerName(env.clients[to].container, name, 'web');
+    await execInContainer(env.clients[to].container,
+      `docker exec -d ${receiver} /bin/busybox sh -c "/bin/busybox nc -l -p ${STREAM_PORT} > /tmp/received"`);
+    await inApp(from, `/bin/busybox sh -c "/bin/busybox dd if=/dev/urandom of=/tmp/sent bs=1024 count=${STREAM_KB} 2>/dev/null"`);
+    await inApp(from, `/bin/busybox sh -c "/bin/busybox nc -w 15 ${ip} ${STREAM_PORT} < /tmp/sent"`);
+    const sent = (await inApp(from, '/bin/busybox md5sum /tmp/sent')).stdout.split(' ')[0];
+    let received = null;
+    await waitFor(async () => {
+      received = (await inApp(to, '/bin/busybox md5sum /tmp/received')).stdout.split(' ')[0];
+      return received === sent;
+    }, { timeout: 30000, interval: 2000, label: `node ${from} to node ${to}: ${STREAM_KB} KB arrive whole` }).catch(() => {});
+    return received === sent;
+  }
+
+  async function uplinkMtu(index) {
+    const res = await fetch(`${env.clients[index].url}/flux/info`);
+    return (await res.json()).data?.flux?.uplink?.mtu ?? null;
   }
 
   before(async function () {
@@ -168,24 +190,26 @@ describe('mesh traffic across a link smaller than the overlay', function () {
     })));
   });
 
-  it('carries full-size packets both ways while every link is a full one', async function () {
+  it('carries a stream of full-size segments both ways while every link is a full one', async function () {
     this.timeout(180000);
-    await waitFor(async () => (await received(PEER, BEHIND, 56)) > 0 && (await received(BEHIND, PEER, 56)) > 0, {
-      timeout: 120000, interval: 5000, label: 'small packets cross both ways',
-    });
-    expect(await received(PEER, BEHIND, FULL_PAYLOAD), 'full-size, toward the member').to.be.above(0);
-    expect(await received(BEHIND, PEER, FULL_PAYLOAD), 'full-size, from the member').to.be.above(0);
+    expect(await streamArrives(PEER, BEHIND), 'toward the member').to.equal(true);
+    expect(await streamArrives(BEHIND, PEER), 'from the member').to.equal(true);
   });
 
-  it('carries full-size packets both ways to a member behind a link smaller than the overlay', async function () {
-    this.timeout(180000);
+  it('carries it both ways to a member behind a link smaller than the overlay', async function () {
+    this.timeout(600000);
     const shrunk = await execInContainer(env.clients[BEHIND].container, `ip link set eth0 mtu ${SMALL_LINK_MTU}`);
     expect(shrunk.exitCode, `node ${BEHIND}'s link is ${SMALL_LINK_MTU}`).to.equal(0);
-    expect(await received(PEER, BEHIND, 56), 'small packets still cross toward the member').to.be.above(0);
-    expect(await received(BEHIND, PEER, 56), 'small packets still cross from the member').to.be.above(0);
-    const from = await received(BEHIND, PEER, FULL_PAYLOAD);
-    const toward = await received(PEER, BEHIND, FULL_PAYLOAD);
-    expect({ from, toward }, 'full-size packets received, of three each way')
-      .to.satisfy(({ from: f, toward: t }) => f > 0 && t > 0);
+    await restartFluxos(env.clients[BEHIND].container);
+    await waitFor(async () => (await uplinkMtu(BEHIND)) === SMALL_LINK_MTU, {
+      timeout: 180000, interval: 5000, label: `node ${BEHIND} measures its link at ${SMALL_LINK_MTU}`,
+    });
+    await waitFor(async () => {
+      const text = (await execInContainer(env.clients[PEER].container, 'cat /dat/var/lib/flux-mesh/*/config.yml')).stdout;
+      return text.includes(`      mtu: ${ROUTE_MTU}`);
+    }, { timeout: 240000, interval: 5000, label: `node ${PEER} sizes its route to node ${BEHIND} at ${ROUTE_MTU}` });
+
+    expect(await streamArrives(PEER, BEHIND), 'toward the member').to.equal(true);
+    expect(await streamArrives(BEHIND, PEER), 'from the member').to.equal(true);
   });
 });

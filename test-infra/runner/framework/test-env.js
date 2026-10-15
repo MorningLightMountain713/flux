@@ -2127,6 +2127,10 @@ async function _buildEnv(
       mongodb: { signingKeyBaseUrl: `http://${EXTERNAL_STUB_IP}:3000` },
       marketplace: { apiBaseUrl: `http://${EXTERNAL_STUB_IP}:3000` },
       upnp: { gatewayUrl: `http://${EXTERNAL_STUB_IP}:3000/upnp/device.xml` },
+      // A node measures its link's MTU by pinging these; the fleet network has
+      // no route beyond it, and its gateway answers at the size the node's own
+      // link carries.
+      uplink: { probeTargets: [GATEWAY] },
       // Every base URL a node fetches from belongs here, not just in
       // config/shared.js: a run claims its own /24, so an address baked into the
       // shared config is only correct for the run that happens to claim the
