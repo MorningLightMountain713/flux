@@ -531,6 +531,16 @@ export async function blobUploadPublicKey() {
 }
 
 /**
+ * The benchmark channel's signature over one FluxDrive write, as a node asks
+ * for it: fields { kind: 'upload'|'manifest'|'reconcile', identity, ... } (for
+ * an upload: locator and timestamp).
+ */
+export async function signBlobWrite(fields) {
+  const { signature } = await benchRpc('signblobupload', [JSON.stringify(fields)]);
+  return signature;
+}
+
+/**
  * An app's backend-TLS CA certificate (PEM), fetched the way FDM fetches it: the
  * CA is keyed by the app's identity and named after the app.
  */
