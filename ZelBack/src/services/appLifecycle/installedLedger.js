@@ -148,16 +148,18 @@ async function adoptInstalledLedgers() {
       }
       // eslint-disable-next-line no-await-in-loop
       if (move) await appIdentityMoveStore.begin(record.name, record.replica, move.to, move.since);
+      let install = record;
       if (move || registered !== record.record) {
-        // eslint-disable-next-line no-await-in-loop
-        await installed.put(new InstalledSpec({
+        install = new InstalledSpec({
           record: registered, replica: record.replica, owed: record.owed, componentKeys: record.componentKeys,
-        }));
+        });
+        // eslint-disable-next-line no-await-in-loop
+        await installed.put(install);
       }
       // eslint-disable-next-line no-await-in-loop
       const registrationVersion = await appHistory.registrationVersionOf(record.name, registered.uuid) ?? undefined;
       // eslint-disable-next-line no-await-in-loop
-      const deployment = await deploymentProvider.buildDeployment(registered, { replica: record.replica, registrationVersion });
+      const deployment = await deploymentProvider.buildDeployment(install, { replica: record.replica, registrationVersion });
       // eslint-disable-next-line no-await-in-loop
       const body = await observeLedger(deployment, async (identifier) => discoverVolumeImage(identifier, await appsRuntimeState.getVolumeImage(identifier)));
       // eslint-disable-next-line no-await-in-loop

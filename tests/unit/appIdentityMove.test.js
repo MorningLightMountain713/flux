@@ -77,7 +77,7 @@ describe('appIdentityMove tests', () => {
   // fields, the registered record beneath them.
   function rowView(row) {
     return {
-      ...row, record: { ...row, serialize: () => ({ ...row }) }, owed: null,
+      ...row, record: { ...row, serialize: () => ({ ...row }) }, owed: null, componentKeys: row.componentKeys ?? null,
     };
   }
 
@@ -162,6 +162,10 @@ describe('appIdentityMove tests', () => {
         buildDeployment: async (installed, opts) => {
           record('buildDeployment', installed.identity, opts);
           return deployment(installed.name, opts.identity ?? installed.identity, compOpts);
+        },
+        planDeployment: async (registered, opts) => {
+          record('planDeployment', registered.identity, opts);
+          return deployment(registered.name, opts.identity ?? registered.identity, compOpts);
         },
       },
       dockerService: {
@@ -297,6 +301,7 @@ describe('appIdentityMove tests', () => {
       await appIdentityMove.moveInstalledAppsOntoIdentity();
 
       expect(lastPut.componentKeys).to.equal(keys);
+      expect(calls[indexOf('planDeployment')][2].componentKeys, 'the view under the identity is keyed as installed').to.deep.equal(keys);
     });
 
     it('reads the uuid off the applied decision of the row\'s message and records it on the row', async () => {
@@ -320,7 +325,7 @@ describe('appIdentityMove tests', () => {
       await appIdentityMove.moveInstalledAppsOntoIdentity();
 
       sinon.assert.calledWith(stubs.appHistory.registrationVersionOf, NAME, UUID);
-      const next = calls.filter((call) => call[0] === 'buildDeployment').find((call) => call[2].identity === IDENTITY);
+      const next = calls.filter((call) => call[0] === 'planDeployment').find((call) => call[2].identity === IDENTITY);
       expect(next, 'the view under the identity').to.not.equal(undefined);
       expect(next[2].registrationVersion).to.equal(8);
       const former = calls.filter((call) => call[0] === 'buildDeployment').find((call) => call[2].identity === undefined);
@@ -390,7 +395,9 @@ describe('appIdentityMove tests', () => {
 
       expect(results.moved).to.deep.equal([{ name: NAME, replica: 'r1', to: IDENTITY }]);
       expect(calls[indexOf('buildDeployment')].slice(1)).to.deep.equal([NAME, { replica: 'r1' }]);
-      expect(calls[indexOf('buildDeployment', (id, o) => o.identity)].slice(1)).to.deep.equal([NAME, { replica: 'r1', identity: IDENTITY, registrationVersion: 8 }]);
+      expect(calls[indexOf('planDeployment')].slice(1)).to.deep.equal([NAME, {
+        replica: 'r1', identity: IDENTITY, registrationVersion: 8, componentKeys: null,
+      }]);
     });
   });
 

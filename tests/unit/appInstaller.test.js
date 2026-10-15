@@ -388,6 +388,10 @@ describe('appInstaller tests', () => {
       // telemetrySinkCache.extractSink — run against it for real.
       const deployment = flux.DeploymentSpec.fromSpec(newappSpec, APPS_FOLDER, { replica: null });
       const buildDeployment = sinon.stub().resolves(deployment);
+      const planDeployment = sinon.stub().resolves(deployment);
+      // The keys the install derives from the app's applied history, each unlike its name.
+      const componentKeys = new Map([['web', `c${'k'.repeat(52)}`]]);
+      const keysForInstall = sinon.stub().resolves(componentKeys);
       const resolveDeploymentIdentity = sinon.stub().resolves(null);
       // The version the app was registered with, as its registration message states it.
       const registrationVersionOf = sinon.stub().resolves(8);
@@ -396,7 +400,7 @@ describe('appInstaller tests', () => {
       // read-back is the real record class over the spec being installed.
       const installedStub = {
         put: sinon.stub().resolves(),
-        byReplica: sinon.stub().resolves(new flux.InstalledSpec({ record: newappInstantiated, replica: null })),
+        byReplica: sinon.stub().resolves(new flux.InstalledSpec({ record: newappInstantiated, replica: null, componentKeys })),
         keys: sinon.stub().resolves(alreadyInstalled ? [{ name: 'newapp', replica: null }] : []),
       };
       const ledgersStub = { put: sinon.stub().resolves(), setNetwork: sinon.stub().resolves() };
@@ -445,9 +449,11 @@ describe('appInstaller tests', () => {
           listInstalledDeployments: sinon.stub().resolves([]),
           getInstalledDeployment: sinon.stub().resolves(deployment),
           buildDeployment,
+          planDeployment,
           resolveDeploymentIdentity,
         },
         '../appDecisions/appHistory': { registrationVersionOf },
+        './componentKeyMap': { keysForInstall },
         './contentSlotService': { provisionContentSlots },
         '../utils/fluxEventBus': { publish: fluxEventBusPublish },
         '../appMonitoring/appReconciler': { awaitConvergence: appReconcilerAwaitConvergence },
@@ -470,6 +476,9 @@ describe('appInstaller tests', () => {
         abortInstall,
         teardownOwedFor,
         buildDeployment,
+        planDeployment,
+        keysForInstall,
+        componentKeys,
         registrationVersionOf,
         resolveDeploymentIdentity,
         isImageBlocked,
@@ -583,7 +592,7 @@ describe('appInstaller tests', () => {
     // read each argument back off its stub and call what the real one calls.
     it('hands each stubbed collaborator an object that answers what the real one asks', async () => {
       const {
-        installer, deployment, installComponent, buildDeployment, registrationVersionOf, resolveDeploymentIdentity,
+        installer, deployment, installComponent, buildDeployment, planDeployment, keysForInstall, componentKeys, registrationVersionOf, resolveDeploymentIdentity,
         checkAppDependencyRequirements, connectComponentToLinkedApps, isImageBlocked,
         installedStub, ledgersStub, ensureAppDockerNetwork, appReconcilerAwaitConvergence, provisionContentSlots,
       } = loadFresh({ converge: { converged: true, failed: [] } });
@@ -608,18 +617,22 @@ describe('appInstaller tests', () => {
       const [depChecked] = checkAppDependencyRequirements.firstCall.args;
       assertAnswers(depChecked.spec, ['dependencyEntries']);
 
-      // deploymentProvider.buildDeployment projects the view into a DeploymentSpec —
+      // deploymentProvider.planDeployment projects the view into a DeploymentSpec —
       // so run the real construction the stub is standing in for.
-      const [built, buildOpts] = buildDeployment.firstCall.args;
+      const [built, buildOpts] = planDeployment.firstCall.args;
       expect(buildOpts).to.have.property('replica', null);
+      // The version installed is planned with the keys derived for it.
+      sinon.assert.calledOnceWithExactly(keysForInstall, newappInstantiated);
+      expect(buildOpts.componentKeys).to.equal(componentKeys);
       // Every view the install provisions from is named by the version the
       // registration message states, read once.
       sinon.assert.calledOnce(registrationVersionOf);
       expect(buildOpts).to.have.property('registrationVersion', 8);
       expect(buildDeployment.lastCall.args[1]).to.have.property('registrationVersion', 8);
-      // The build after the records are put is from the registered record read
-      // back, not the installed record around it.
-      expect(buildDeployment.lastCall.args[0]).to.equal(newappInstantiated);
+      // The build after the records are put is from the installed record read back.
+      const [readBack] = buildDeployment.lastCall.args;
+      expect(readBack).to.be.instanceOf(flux.InstalledSpec);
+      expect(readBack.record).to.equal(newappInstantiated);
       expect(() => flux.DeploymentSpec.fromSpec(built.spec, APPS_FOLDER, { replica: null }))
         .to.not.throw();
 
@@ -666,6 +679,8 @@ describe('appInstaller tests', () => {
       expect(installed).to.be.instanceOf(flux.InstalledSpec);
       expect(installed.record).to.equal(newappInstantiated);
       expect(installed.replica).to.equal(null);
+      // It holds the component keys the install derived for it.
+      expect(installed.componentKeys).to.deep.equal(componentKeys);
       const [ledger] = ledgersStub.put.firstCall.args;
       expect(ledger).to.be.instanceOf(flux.InstalledLedger);
       expect(ledger.serialize()).to.deep.equal({

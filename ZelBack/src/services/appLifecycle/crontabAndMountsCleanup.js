@@ -28,21 +28,21 @@ async function getInstalledAppIds() {
 
   // The read throws on a failure: "cannot enumerate" must surface as unknown to
   // callers, never as "nothing installed" (which would reap live mounts).
-  const installed = (await appRecords.installed().apps()).map((record) => record.record);
+  const installed = await appRecords.installed().apps();
 
   // eslint-disable-next-line no-restricted-syntax
-  for (const instantiated of installed) {
+  for (const install of installed) {
     let deployments;
     try {
       // Every local identity's view: a co-located pair owns one mount set per
       // replica, and missing one would reap a live sibling's mounts.
       // eslint-disable-next-line no-await-in-loop
-      deployments = await deploymentProvider.buildDeployments(instantiated);
+      deployments = await deploymentProvider.buildDeployments(install);
     } catch (error) {
       // An encrypted app's components live in a sealed blob and cannot be enumerated
       // when decryption is unavailable; derive its component ids from the FLUXFSVOL
       // images on disk so its mounts are not reaped as "not installed".
-      if (instantiated.isEncrypted) {
+      if (install.isEncrypted) {
         // An enterprise app's components live in the sealed blob, so a node that
         // cannot decrypt cannot enumerate them from the spec. The row states them:
         // written at install, and for apps predating that, by the startup backfill
@@ -50,18 +50,18 @@ async function getInstalledAppIds() {
         // never a derivation — a boot no longer depends on the benchmark channel
         // answering at this moment.
         // eslint-disable-next-line no-await-in-loop
-        const recorded = (await appRecords.ledgers().instancesOf(instantiated.name)).flatMap((ledger) => ledger.identifiers());
+        const recorded = (await appRecords.ledgers().instancesOf(install.name)).flatMap((ledger) => ledger.identifiers());
         if (recorded.length > 0) {
-          log.warn(`getInstalledAppIds - could not decrypt ${instantiated.name} (${error.message}); using the components its ledger names`);
-          recorded.forEach((id) => installedAppIds.set(dockerService.getAppIdentifier(id), instantiated.name));
+          log.warn(`getInstalledAppIds - could not decrypt ${install.name} (${error.message}); using the components its ledger names`);
+          recorded.forEach((id) => installedAppIds.set(dockerService.getAppIdentifier(id), install.name));
         } else {
           // Nothing states them and nothing can derive them here. Saying so is the
           // point: the caller must treat this app as UNKNOWN rather than as having
           // no components, which would unmount a live app and drop its crontab net.
-          log.error(`getInstalledAppIds - ${instantiated.name} could not be decrypted (${error.message}) and its ledger names no components; its volumes cannot be enumerated this boot`);
+          log.error(`getInstalledAppIds - ${install.name} could not be decrypted (${error.message}) and its ledger names no components; its volumes cannot be enumerated this boot`);
         }
       } else {
-        log.warn(`getInstalledAppIds - could not build deployment for ${instantiated.name}: ${error.message}`);
+        log.warn(`getInstalledAppIds - could not build deployment for ${install.name}: ${error.message}`);
       }
       // eslint-disable-next-line no-continue
       continue;
@@ -82,7 +82,7 @@ async function getInstalledAppIds() {
         // and syncthingMonitor all gate on this; this enumeration did not.
         // eslint-disable-next-line no-continue
         if (deployComp.isStateless) continue;
-        installedAppIds.set(dockerService.getAppIdentifier(deployComp.identifier), instantiated.name);
+        installedAppIds.set(dockerService.getAppIdentifier(deployComp.identifier), install.name);
       }
     }
   }

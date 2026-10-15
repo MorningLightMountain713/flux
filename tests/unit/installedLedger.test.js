@@ -209,9 +209,12 @@ describe('installedLedger', () => {
     });
 
     function buildsRealDeployments() {
-      stubs.deploymentProvider.buildDeployment.callsFake(async (record, { replica, registrationVersion }) => flux.DeploymentSpec.fromSpec(
-        record.spec, APPS_FOLDER, { replica, identity: record.identity, registrationVersion },
-      ));
+      stubs.deploymentProvider.buildDeployment.callsFake(async (install, { replica, registrationVersion }) => {
+        if (!(install instanceof flux.InstalledSpec)) throw new Error('buildDeployment builds from an installed record');
+        return flux.DeploymentSpec.fromSpec(install.spec, APPS_FOLDER, {
+          replica, identity: install.identity, registrationVersion, ...(install.componentKeys ? { componentKeys: install.componentKeys } : {}),
+        });
+      });
     }
 
     /** A v9 app whose one component shares its data: the folder it is named under is the registration's. */
@@ -223,6 +226,7 @@ describe('installedLedger', () => {
           persistentStorage: { sizeGb: 5, mounts: { '/data': { source: 'data', destination: '/data' } }, sync: { mode: 'activeStandby' } },
         },
       },
+    // The provider builds only from an installed record, keyed by its component keys.
     })).serialize();
 
     it('names the ledger it writes by the version the registration message states, read for the record\'s app', async () => {

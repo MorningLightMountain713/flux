@@ -57,15 +57,15 @@ async function requestGracefulStop(identifier, reconcilerReason) {
   // the minted identity and cannot be taken apart into a name. A row the boot
   // backfill has not resolved yet does not answer, and the local stop below is
   // exactly what such rows get today.
-  const instantiated = (await appRecords.installedByIdentifier(identifier))?.record;
-  if (!instantiated) return false;
-  const appName = instantiated.name;
+  const install = await appRecords.installedByIdentifier(identifier);
+  if (!install) return false;
+  const appName = install.name;
 
   // A whole-app drain in flight covers every component of the app.
   if (inFlight.has(appName)) return true;
   let deployments;
   try {
-    deployments = await deploymentProvider.buildDeployments(instantiated);
+    deployments = await deploymentProvider.buildDeployments(install);
   } catch {
     return false;
   }
@@ -98,7 +98,7 @@ async function requestGracefulStop(identifier, reconcilerReason) {
   // first await, so the gate is set before we return and suppresses the reconciler's
   // subsequent passes. A component stop seeds no gate: its siblings keep running.
   const drain = fluxShutdowndClient
-    .beginAppStop(shutdownPlan.daemonIdentity(instantiated), appName, reason, options)
+    .beginAppStop(shutdownPlan.daemonIdentity(install), appName, reason, options)
     .then((res) => {
       inFlight.delete(key);
       if (res.outcome === 'unreachable' || res.outcome === 'timeout') {

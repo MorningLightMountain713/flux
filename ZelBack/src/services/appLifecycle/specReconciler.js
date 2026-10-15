@@ -155,7 +155,7 @@ async function isInstalledApp(installed, registrySpec) {
 }
 
 async function fireAdoption(appName) {
-  const installed = (await appRecords.installed().byName(appName))?.record;
+  const installed = await appRecords.installed().byName(appName);
   if (!installed) return;
   const registrySpec = await appRecords.registry().byName(appName);
   if (!registrySpec || registrySpec.hash === installed.hash) return;
@@ -375,7 +375,7 @@ async function fullConvergence({ reason, atBoot = false } = {}) {
   }
   try {
     if (!await convergenceAllowed({ atBoot })) return;
-    const installedApps = (await appRecords.installed().apps()).map((record) => record.record);
+    const installedApps = await appRecords.installed().apps();
     if (!installedApps.length) return;
     const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
     const globalRows = await appRecords.registry().byNames(installedApps.map((app) => app.name));
@@ -430,7 +430,7 @@ async function requestAppConvergence(appName, { reason, delayMs = 0 } = {}) {
   try {
     if (delayMs) await serviceHelper.delay(delayMs);
     if (!await convergenceAllowed()) return;
-    const installed = (await appRecords.installed().byName(appName))?.record;
+    const installed = await appRecords.installed().byName(appName);
     if (!installed) return;
     const registrySpec = await appRecords.registry().byName(appName);
     const ctx = { localSocketAddr: await fluxNetworkHelper.getLocalSocketAddress() };

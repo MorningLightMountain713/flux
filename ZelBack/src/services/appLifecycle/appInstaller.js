@@ -25,6 +25,7 @@ const globalState = require('../utils/globalState');
 const capabilities = require('../utils/capabilities');
 const owedRemovals = require('./owedRemovals');
 const appHistory = require('../appDecisions/appHistory');
+const componentKeyMap = require('./componentKeyMap');
 const admissionControl = require('../utils/admissionControl');
 const cpuBurstHelper = require('../utils/cpuBurstHelper');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
@@ -196,7 +197,9 @@ async function attemptInstallApplication(instantiated, options = {}) {
     // The version the app was registered with names its components: read once,
     // from the registration message, for every view this install provisions from.
     const registrationVersion = await appHistory.registrationVersionOf(appName, instantiated.uuid) ?? undefined;
-    deployment = await deploymentProvider.buildDeployment(instantiated, { replica, registrationVersion });
+    // The keys of the version installed, from the app's applied history.
+    const componentKeys = await componentKeyMap.keysForInstall(instantiated);
+    deployment = await deploymentProvider.planDeployment(instantiated, { replica, registrationVersion, componentKeys });
     // Check resources and reserve them atomically: two concurrent installs of
     // different apps must not both pass before either is accounted (the in-flight
     // double-admit race). The reservation is released once the app is durably in
@@ -275,7 +278,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
     // to create. A stale pair for the SAME identity is replaced; a co-located
     // sibling's is a different key entirely and is never touched.
     const { InstalledSpec, InstalledLedger } = specLibrary.loaded();
-    await appRecords.installed().put(new InstalledSpec({ record: instantiated, replica: replica ?? null }));
+    await appRecords.installed().put(new InstalledSpec({ record: instantiated, replica: replica ?? null, componentKeys }));
     await appRecords.ledgers().put(new InstalledLedger({ name: appName, replica: replica ?? null }));
     log.info(`Database entry created for ${appName} BEFORE Docker container creation`);
     // Now counted by appsResources (it is in the DB); drop the pending reservation
@@ -288,7 +291,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
     try {
       const freshInst = await appRecords.installed().byReplica(appName, replica ?? null);
       if (!freshInst) throw new Error(`Failed to read back installed spec for ${appName}`);
-      const deployment = await deploymentProvider.buildDeployment(freshInst.record, { replica, registrationVersion });
+      const deployment = await deploymentProvider.buildDeployment(freshInst, { replica, registrationVersion });
       if (!deployment) throw new Error(`Failed to build deployment for ${appName}`);
 
       // Record this app's telemetry sink (Arcane-only; null/no-op otherwise)

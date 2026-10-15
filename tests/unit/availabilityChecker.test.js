@@ -83,7 +83,7 @@ describe('availabilityChecker tests', () => {
 
   /**
    * deploymentProvider stays stubbed, so nothing here exercises what the real
-   * one does with the InstantiatedSpec it is handed. buildDeployments reads
+   * one does with the InstalledSpec it is handed. buildDeployments reads
    * `.isEncrypted` and `.spec` (through resolveInstantiatedSpec), `.name` for
    * its error messages and `.identity` for every container name it derives,
    * then asks the resolved spec's placement for its mode. Assert all of that
@@ -222,7 +222,7 @@ describe('availabilityChecker tests', () => {
 
       sinon.assert.calledOnce(listInstalledAppsStub);
       sinon.assert.calledOnce(buildDeploymentStub);
-      sinon.assert.calledWith(buildDeploymentStub, instantiated);
+      sinon.assert.calledWith(buildDeploymentStub, sinon.match.instanceOf(flux.InstalledSpec).and(sinon.match.has('record', instantiated)));
       assertBuildDeploymentGotARealSpec(spec);
       expect(waitMs).to.equal(240_000);
     });
@@ -346,9 +346,9 @@ describe('availabilityChecker tests', () => {
       // sinon's withArgs cannot tell two frozen InstantiatedSpec instances
       // apart, so the answer is keyed off an identity Map instead.
       const answers = new Map([[healthyInstantiated, deploymentOf(healthy)]]);
-      buildDeploymentStub.callsFake(async (inst) => {
-        const deployment = answers.get(inst);
-        if (!deployment) throw new Error(`Could not resolve spec for ${inst.name}`);
+      buildDeploymentStub.callsFake(async (install) => {
+        const deployment = answers.get(install.record);
+        if (!deployment) throw new Error(`Could not resolve spec for ${install.name}`);
         return deployment;
       });
       mockDosState.nextTestingPort = 31_002;
