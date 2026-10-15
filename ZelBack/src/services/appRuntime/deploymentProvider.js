@@ -57,51 +57,6 @@ async function resolveRuntimeSpec(instantiated) {
 }
 
 /**
- * Build the deployment view for one identity of an app on this node.
- *
- * @param {object} instantiated - InstantiatedSpec
- * @param {object} opts
- * @param {string|null} opts.replica - the identity to build: a replica name
- *   (named placement) or null (loose). REQUIRED - a caller that means every
- *   identity iterates buildDeployments; one that cannot say which identity it
- *   means must not receive an arbitrary one.
- * @param {number} [opts.registrationVersion] - the version the app was
- *   registered with, stated by a caller that provisions (it names a component
- *   the ledger does not hold yet); a reader leaves it out
- * @returns {Promise<object>} DeploymentSpec
- */
-async function toDeployment(instantiated, opts = {}) {
-  if (!('replica' in opts)) {
-    throw new Error(`buildDeployment for ${instantiated.name} requires an explicit replica (null for loose); a caller that means every identity uses buildDeployments`);
-  }
-  const resolved = await resolveInstantiatedSpec(instantiated);
-  if (!resolved) throw new Error(`Could not resolve spec for ${instantiated.name}`);
-
-  const { DeploymentSpec } = await getSpecBackend();
-  const ledger = await appRecords.ledgers().byInstance(instantiated.name, opts.replica);
-  // The identity is READ off the row, never recomputed from the name. This and
-  // toDeployments are what decide every container name, volume path, network and
-  // syncthing folder id on this node, so an app keeps the identity
-  // it was installed with for as long as it is installed - including across a
-  // spec update, an owner change, or a name someone else later re-registers.
-  // Null (an app installed before identities were stored) falls back to the
-  // name inside fromSpec, which is exactly the identifier it already has.
-  return DeploymentSpec.fromSpec(resolved, appsFolder, {
-    replica: opts.replica,
-    // opts.identity is the update path's seam: a registry spec carries no
-    // identity (identities are minted at install), so the caller diffing an
-    // update hands in the installed row's — the app keeps the identity it was
-    // installed with for as long as it is installed.
-    identity: opts.identity ?? instantiated.identity ?? null,
-    // The version the app was registered with names a component the ledger
-    // does not hold yet: a caller that provisions states it, read from the
-    // app's registration message; a reader states none and takes the ledger's.
-    registrationVersion: opts.registrationVersion,
-    names: recordedNames(ledger),
-  });
-}
-
-/**
  * The names the ledger records for the components the node has started on:
  * by component, the folder id its data is shared under and the aliases its
  * container is created with. A deployment built with them names those
@@ -182,40 +137,127 @@ async function localIdentities(instantiated) {
 }
 
 /**
- * Every deployment of an app on this node: one per assigned replica for named
- * placement (empty when named elsewhere), exactly one (unqualified) for loose.
- *
- * @param {object} instantiated - InstantiatedSpec
+ * One identity's deployment of a registered record, its components keyed as stated.
+ * @param {object} registered - InstantiatedSpec
+ * @param {object} opts - { replica, identity, registrationVersion, componentKeys }
+ * @returns {Promise<object>} DeploymentSpec
+ */
+async function deploymentOf(registered, opts) {
+  const resolved = await resolveInstantiatedSpec(registered);
+  if (!resolved) throw new Error(`Could not resolve spec for ${registered.name}`);
+  const { DeploymentSpec } = await getSpecBackend();
+  const ledger = await appRecords.ledgers().byInstance(registered.name, opts.replica);
+  // The identity is READ off the row, never recomputed from the name: this and
+  // deploymentsOf decide every container name, volume path, network and folder
+  // id on this node, so an app keeps the identity it was installed with for as
+  // long as it is installed. Null (an app installed before identities were
+  // stored) falls back to the name inside fromSpec.
+  return DeploymentSpec.fromSpec(resolved, appsFolder, {
+    replica: opts.replica,
+    identity: opts.identity ?? registered.identity ?? null,
+    registrationVersion: opts.registrationVersion,
+    names: opts.recordedNames === false ? undefined : recordedNames(ledger),
+    ...(opts.componentKeys == null ? {} : { componentKeys: opts.componentKeys }),
+  });
+}
+
+/**
+ * Every assigned identity's deployment of a registered record: one per replica
+ * named to this node (none when named elsewhere), exactly one for loose placement.
+ * @param {object} registered - InstantiatedSpec
+ * @param {object} opts - { identity, registrationVersion, componentKeys }
  * @returns {Promise<object[]>} DeploymentSpec[]
  */
-async function toDeployments(instantiated, opts = {}) {
-  const resolved = await resolveInstantiatedSpec(instantiated);
-  if (!resolved) throw new Error(`Could not resolve spec for ${instantiated.name}`);
+async function deploymentsOf(registered, opts) {
+  const resolved = await resolveInstantiatedSpec(registered);
+  if (!resolved) throw new Error(`Could not resolve spec for ${registered.name}`);
   const replicas = await resolveLocalReplicas(resolved);
-  const identities = replicas === null ? [null] : replicas;
-
-  const { DeploymentSpec } = await getSpecBackend();
-  const ledgers = new Map((await appRecords.ledgers().instancesOf(instantiated.name))
-    .map((ledger) => [ledger.replica ?? null, ledger]));
   const deployments = [];
-  for (const replica of identities) {
-    // Same identity read as toDeployment: every identity of one app shares the
-    // app's, so building the set without it would name the same containers
-    // differently from the single-identity path that created them. opts.identity
-    // is the update path's seam (see toDeployment).
-    deployments.push(DeploymentSpec.fromSpec(resolved, appsFolder, {
-      replica,
-      identity: opts.identity ?? instantiated.identity ?? null,
-      registrationVersion: opts.registrationVersion,
-      names: recordedNames(ledgers.get(replica) ?? null),
-    }));
+  for (const replica of replicas === null ? [null] : replicas) {
+    // eslint-disable-next-line no-await-in-loop
+    deployments.push(await deploymentOf(registered, { ...opts, replica }));
   }
   return deployments;
 }
 
+async function assertInstall(install, what) {
+  const { InstalledSpec } = await getSpecBackend();
+  if (!(install instanceof InstalledSpec)) {
+    throw new Error(`${what} builds from an installed record, whose component keys name the containers; plan a version not installed as it is with ${what.replace('build', 'plan')}`);
+  }
+}
+
+/**
+ * The deployment of one identity of an app installed on this node: its
+ * installed record's registered record, keyed by the component keys the node
+ * derived for it.
+ *
+ * @param {object} install - InstalledSpec
+ * @param {object} opts
+ * @param {string|null} opts.replica - the identity to build: a replica name
+ *   (named placement) or null (loose). REQUIRED - a caller that means every
+ *   identity iterates buildDeployments; one that cannot say which identity it
+ *   means must not receive an arbitrary one.
+ * @param {number} [opts.registrationVersion] - the version the app was
+ *   registered with, stated by a caller that provisions (it names a component
+ *   the ledger does not hold yet); a reader leaves it out
+ * @returns {Promise<object>} DeploymentSpec
+ */
+async function buildDeployment(install, opts = {}) {
+  await assertInstall(install, 'buildDeployment');
+  if (!('replica' in opts)) {
+    throw new Error(`buildDeployment for ${install.name} requires an explicit replica (null for loose); a caller that means every identity uses buildDeployments`);
+  }
+  return deploymentOf(install.record, {
+    replica: opts.replica, registrationVersion: opts.registrationVersion, componentKeys: install.componentKeys,
+  });
+}
+
+/**
+ * Every assigned identity's deployment of an app installed on this node, keyed
+ * by its installed record's component keys.
+ * @param {object} install - InstalledSpec
+ * @param {object} [opts] - { registrationVersion }
+ * @returns {Promise<object[]>} DeploymentSpec[]
+ */
+async function buildDeployments(install, opts = {}) {
+  await assertInstall(install, 'buildDeployments');
+  return deploymentsOf(install.record, { registrationVersion: opts.registrationVersion, componentKeys: install.componentKeys });
+}
+
+/**
+ * The deployment of one identity of a version not installed as it is: an
+ * update being planned, an install being prepared. Its component keys are
+ * stated, null for components keyed by their names.
+ * @param {object} registered - InstantiatedSpec
+ * @param {object} opts - { replica, componentKeys, identity?, registrationVersion?, recordedNames? }
+ *   recordedNames: false builds the names the spec derives, ignoring the ones
+ *   the ledger recorded for the components the node has started on
+ * @returns {Promise<object>} DeploymentSpec
+ */
+async function planDeployment(registered, opts = {}) {
+  if (!('replica' in opts) || !('componentKeys' in opts)) {
+    throw new Error(`planDeployment for ${registered.name} requires an explicit replica and componentKeys`);
+  }
+  return deploymentOf(registered, opts);
+}
+
+/**
+ * Every assigned identity's deployment of a version not installed as it is.
+ * @param {object} registered - InstantiatedSpec
+ * @param {object} opts - { componentKeys, identity?, registrationVersion? }
+ * @returns {Promise<object[]>} DeploymentSpec[]
+ */
+async function planDeployments(registered, opts = {}) {
+  if (!('componentKeys' in opts)) {
+    throw new Error(`planDeployments for ${registered.name} requires explicit componentKeys`);
+  }
+  return deploymentsOf(registered, opts);
+}
+
 /**
  * Every deployment view an app is ACTUALLY INSTALLED with on this node — the
- * runtime counterpart to toDeployments' assigned view.
+ * runtime counterpart to buildDeployments' assigned view.
  *
  * A replica the spec assigns but that was never installed here has no volume
  * and no container, so anything that ACTUATES must drive this list. Driving the
@@ -225,28 +267,29 @@ async function toDeployments(instantiated, opts = {}) {
  * provisioned here. Provisioning is the install path's job; a replica must be
  * installed before anything may start it.
  *
- * @param {object} instantiated - InstantiatedSpec
+ * @param {object} install - InstalledSpec
  * @returns {Promise<object[]>} DeploymentSpec[]
  */
-async function installedDeployments(instantiated) {
-  const installed = new Set((await appRecords.installed().keys(instantiated.name)).map((key) => key.replica));
-  const deployments = await toDeployments(instantiated);
+async function installedDeployments(install) {
+  await assertInstall(install, 'installedDeployments');
+  const installed = new Set((await appRecords.installed().keys(install.name)).map((key) => key.replica));
+  const deployments = await buildDeployments(install);
   return deployments.filter((d) => installed.has(d.replica ?? null));
 }
 
 /**
  * Every installed app's deployments.
  *
- * `installedSpecs` lets a caller that has already listed the installed apps hand
+ * `installs` lets a caller that has already listed the installed apps hand
  * them over instead of having them read and deserialized a second time. The
  * resource check does exactly that, and it runs on every admission decision and
  * every spawn cycle — so the read it saves is the one that happens most.
  *
- * @param {Array<object>|null} [installedSpecs] - already-listed InstantiatedSpecs
+ * @param {Array<object>|null} [installs] - already-listed InstalledSpecs
  * @returns {Promise<Array<object>>}
  */
-async function listInstalledDeployments(installedSpecs = null) {
-  const { deployments } = await listInstalledDeploymentsDetailed(installedSpecs);
+async function listInstalledDeployments(installs = null) {
+  const { deployments } = await listInstalledDeploymentsDetailed(installs);
   return deployments;
 }
 
@@ -266,18 +309,18 @@ async function listInstalledDeployments(installedSpecs = null) {
  * are built from (`component_identity[_replica]`), so a folder names its owner
  * even when that owner's components cannot be read.
  *
- * @param {Array<object>|null} [installedSpecs] - already-listed InstantiatedSpecs
+ * @param {Array<object>|null} [installs] - already-listed InstalledSpecs
  * @returns {Promise<{deployments: Array<object>, unreadableApps: Map<string, string>}>}
  *   `unreadableApps`: identity -> app name
  */
-async function listInstalledDeploymentsDetailed(installedSpecs = null) {
-  const installed = installedSpecs ?? (await appRecords.installed().apps()).map((record) => record.record);
+async function listInstalledDeploymentsDetailed(installs = null) {
+  const installed = installs ?? await appRecords.installed().apps();
   const deployments = [];
   const unreadableApps = new Map();
   for (const inst of installed) {
     try {
       // eslint-disable-next-line no-await-in-loop
-      const appDeployments = await toDeployments(inst);
+      const appDeployments = await buildDeployments(inst);
       deployments.push(...appDeployments);
     } catch (err) {
       unreadableApps.set(inst.identity ?? inst.name, inst.name);
@@ -296,10 +339,10 @@ async function listInstalledDeploymentsDetailed(installedSpecs = null) {
  * @returns {Promise<object|null>}
  */
 async function getInstalledDeployment(name) {
-  const inst = (await appRecords.installed().byName(name))?.record;
+  const inst = await appRecords.installed().byName(name);
   if (!inst) return null;
   try {
-    const deployments = await toDeployments(inst);
+    const deployments = await buildDeployments(inst);
     return deployments[0] || null;
   } catch (err) {
     log.error(`deploymentProvider: failed to build deployment for ${name}: ${err.message}`);
@@ -316,7 +359,7 @@ async function getInstalledDeployment(name) {
  * @returns {Promise<object[]>}
  */
 async function getInstalledDeployments(name) {
-  const inst = (await appRecords.installed().byName(name))?.record;
+  const inst = await appRecords.installed().byName(name);
   if (!inst) return [];
   try {
     const deployments = await installedDeployments(inst);
@@ -364,7 +407,7 @@ function componentNameFromRequest(appname, component, componentNames) {
  * The request holds names; a container identifier is built from the app's stored
  * IDENTITY, and those differ for every app registered since identity minting. So
  * the request string is not an identifier and must never be used as one — it is
- * resolved by lookup instead: the app's row, its deployments, then the component
+ * resolved by lookup instead: the app's installed row, its deployments, then the component
  * by NAME. Everything returned therefore belongs to the app that was named, which
  * is what lets a caller check ownership against that name and act on these ids
  * without the two disagreeing.
@@ -376,11 +419,13 @@ function componentNameFromRequest(appname, component, componentNames) {
  */
 async function resolveRequestTargets(appname, opts = {}) {
   const { replica = null } = opts;
-  const instantiated = await appRecords.registry().byName(appNameFromRequest(appname));
-  if (!instantiated) {
+  // The containers are this node's, so they are named by its installed record.
+  const install = await appRecords.installed().byName(appNameFromRequest(appname));
+  if (!install) {
     throw new Error('Application not found');
   }
-  let deployments = await toDeployments(instantiated);
+  const instantiated = install.record;
+  let deployments = await buildDeployments(install);
   if (replica != null) {
     deployments = deployments.filter((deployment) => deployment.replica === replica);
     if (deployments.length === 0) {
@@ -445,7 +490,9 @@ module.exports = {
   resolveDeploymentIdentity,
   assignedIdentities,
   localIdentities,
-  buildDeployment: toDeployment,
-  buildDeployments: toDeployments,
+  buildDeployment,
+  buildDeployments,
+  planDeployment,
+  planDeployments,
   installedDeployments,
 };

@@ -359,7 +359,7 @@ async function listComponentVolumeMounts(appName, componentName) {
   // asked of it rather than built here: a flat (v1-3) app's is its bare
   // identity, a compose app's is built from the component's key.
   const identifiers = await Promise.all(replicas.map(async (replica) => {
-    const deployment = await deploymentProvider.buildDeployment(installed.record, { replica });
+    const deployment = await deploymentProvider.buildDeployment(installed, { replica });
     return { replica, identifier: deployment.getComponent(component)?.identifier ?? null };
   }));
 

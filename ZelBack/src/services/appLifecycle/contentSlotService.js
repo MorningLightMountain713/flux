@@ -17,6 +17,7 @@ const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSen
 const appsRepository = require('../appDatabase/appsRepository');
 const appRecords = require('../appDatabase/appRecords');
 const appHistory = require('../appDecisions/appHistory');
+const componentKeyMap = require('./componentKeyMap');
 const appSpecHistory = require('../appDatabase/appSpecHistory');
 const chainState = require('../chainState');
 const temporaryPoolSweep = require('../appMessaging/temporaryPoolSweep');
@@ -1481,13 +1482,14 @@ async function stageContent(deployment, ctx, deps = {}) {
  * missing.
  *
  * @param {object} instance - the InstantiatedSpec the row stands on
- * @param {object} deps - { getInstalled?, buildDeployments?, registrationVersionOf?, stage? }
+ * @param {object} deps - { getInstalled?, keysForUpdate?, planDeployments?, registrationVersionOf?, stage? }
  * @returns {Promise<boolean>} whether the listed spec's content is in the store
  */
 async function prefetchListedContent(instance, deps = {}) {
   const {
     getInstalled = (name) => appRecords.installed().byName(name),
-    buildDeployments = deploymentProvider.buildDeployments,
+    keysForUpdate = componentKeyMap.keysForUpdate,
+    planDeployments = deploymentProvider.planDeployments,
     registrationVersionOf = appHistory.registrationVersionOf,
     stage = stageContent,
   } = deps;
@@ -1498,10 +1500,12 @@ async function prefetchListedContent(instance, deps = {}) {
   const { uuid } = installed;
   try {
     // The listed spec's view of each identity this node runs, named as the
-    // adoption names it: by the identity the app was installed with.
-    const deployments = await buildDeployments(instance, {
+    // adoption names it: by the identity the app was installed with, and the
+    // component keys the update carries from the installed record.
+    const deployments = await planDeployments(instance, {
       identity,
       registrationVersion: await registrationVersionOf(appName, uuid) ?? undefined,
+      componentKeys: await keysForUpdate(installed, instance),
     });
     // eslint-disable-next-line no-restricted-syntax
     for (const deployment of deployments) {

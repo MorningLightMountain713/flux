@@ -382,11 +382,11 @@ function owedAfterRemoval(outcome) {
  *
  * @param {object} deps
  * @param {Function} deps.listInstalled Answers {specs, unreadable}: the installed
- *   specifications, and the names of rows that could not be read. Rejects when the
+ *   records, and the names of rows that could not be read. Rejects when the
  *   table cannot be read at all.
- * @param {Function} deps.readInstalled One installed specification by name, null when
+ * @param {Function} deps.readInstalled One installed record by name, null when
  *   the node does not hold it. Rejects when the record cannot be read.
- * @param {Function} deps.imagesOf The images a specification runs, or null when its
+ * @param {Function} deps.imagesOf The images an installed record runs, or null when its
  *   components cannot be read (an enterprise specification that did not decrypt)
  * @param {Function} deps.uninstall Removes an application, answering {status} with an
  *   appUninstaller UninstallStatus value
@@ -779,18 +779,18 @@ function nodeComplianceDeps() {
       const apps = await appRecords.installed().apps();
       const readable = new Set(apps.map((record) => record.name.toLowerCase()));
       const unreadable = (await appRecords.installed().names()).filter((name) => !readable.has(name.toLowerCase()));
-      return { specs: apps.map((record) => record.record), unreadable };
+      return { specs: apps, unreadable };
     },
     readInstalled: async (name) => {
       const record = await appRecords.installed().byName(name);
-      if (record) return record.record;
+      if (record) return record;
       if ((await appRecords.installed().keys(name)).length) throw new Error(`the installed record of ${name} could not be read`);
       return null;
     },
     // Images are spec-level, so every identity's deployment view carries the same set.
-    imagesOf: async (spec) => {
+    imagesOf: async (install) => {
       try {
-        const deployments = await deploymentProvider.buildDeployments(spec);
+        const deployments = await deploymentProvider.buildDeployments(install);
         return [...new Set(deployments.flatMap((deployment) => deployment.allImages()))];
       } catch (error) {
         return null;

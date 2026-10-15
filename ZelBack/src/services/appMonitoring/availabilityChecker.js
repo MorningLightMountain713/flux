@@ -110,18 +110,18 @@ async function runAvailabilityCheckOnce(dosState, portsNotWorking, failedNodesTe
       return timeouts.appError;
     }
 
-    const installedApps = (await appRecords.installed().apps()).map((record) => record.record);
+    const installedApps = await appRecords.installed().apps();
     const appPorts = [];
 
-    for (const instantiated of installedApps) {
+    for (const install of installedApps) {
       try {
         // eslint-disable-next-line no-await-in-loop
-        const deployments = await deploymentProvider.buildDeployments(instantiated);
+        const deployments = await deploymentProvider.buildDeployments(install);
         for (const deployment of deployments) {
           appPorts.push(...deployment.allHostPorts());
         }
       } catch (err) {
-        log.warn(`checkMyAppsAvailability: could not resolve ports for ${instantiated.name}: ${err.message}`);
+        log.warn(`checkMyAppsAvailability: could not resolve ports for ${install.name}: ${err.message}`);
       }
     }
 

@@ -1129,10 +1129,14 @@ describe('contentSlotService', () => {
     let slotDeployment;
     before(async () => { slotDeployment = await deploymentOf(webWith(slotMount('app-config'))); });
 
+    // The keys the update carries from the installed record, each unlike its name.
+    const KEYS = new Map([['web', `c${'k'.repeat(52)}`]]);
+
     function prefetchDeps(overrides = {}) {
       return {
         getInstalled: async () => installedAt(EARLIER_SPEC_HASH),
-        buildDeployments: sinon.stub().resolves([slotDeployment]),
+        keysForUpdate: sinon.stub().resolves(KEYS),
+        planDeployments: sinon.stub().resolves([slotDeployment]),
         registrationVersionOf: sinon.stub().resolves(9),
         stage: sinon.stub().resolves(1),
         ...overrides,
@@ -1141,13 +1145,15 @@ describe('contentSlotService', () => {
 
     it('stages the content of each deployment the listed spec gives this node, named by the identity and the registration it was installed with', async () => {
       const { service } = load();
-      const deps = prefetchDeps();
+      const installed = installedAt(EARLIER_SPEC_HASH);
+      const deps = prefetchDeps({ getInstalled: async () => installed });
       const instance = listed();
 
       expect(await service.prefetchListedContent(instance, deps)).to.equal(true);
 
       sinon.assert.calledOnceWithExactly(deps.registrationVersionOf, APP, 'uuid-app');
-      sinon.assert.calledOnceWithExactly(deps.buildDeployments, instance, { identity: IDENTITY, registrationVersion: 9 });
+      sinon.assert.calledOnceWithExactly(deps.keysForUpdate, installed, instance);
+      sinon.assert.calledOnceWithExactly(deps.planDeployments, instance, { identity: IDENTITY, registrationVersion: 9, componentKeys: KEYS });
       sinon.assert.calledOnce(deps.stage);
       expect(deps.stage.firstCall.args[0]).to.equal(slotDeployment);
       expect(deps.stage.firstCall.args[1]).to.deep.equal({ appName: APP });
@@ -1160,14 +1166,14 @@ describe('contentSlotService', () => {
 
       await service.prefetchListedContent(instance, deps);
 
-      sinon.assert.calledOnceWithExactly(deps.buildDeployments, instance, { identity: null, registrationVersion: 9 });
+      sinon.assert.calledOnceWithExactly(deps.planDeployments, instance, { identity: null, registrationVersion: 9, componentKeys: KEYS });
     });
 
     it('does nothing on a node that does not run the app', async () => {
       const { service } = load();
       const deps = prefetchDeps({ getInstalled: async () => null });
       expect(await service.prefetchListedContent(listed(), deps)).to.equal(false);
-      sinon.assert.notCalled(deps.buildDeployments);
+      sinon.assert.notCalled(deps.planDeployments);
       sinon.assert.notCalled(deps.stage);
     });
 

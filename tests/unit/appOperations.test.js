@@ -44,6 +44,7 @@ const componentProvisioner2 = require('../../ZelBack/src/services/appLifecycle/c
 const appGiveUp = require('../../ZelBack/src/services/appLifecycle/appGiveUp');
 const owedRemovals = require('../../ZelBack/src/services/appLifecycle/owedRemovals');
 const appHistory = require('../../ZelBack/src/services/appDecisions/appHistory');
+const componentKeyMap = require('../../ZelBack/src/services/appLifecycle/componentKeyMap');
 const globalCommand = require('../../ZelBack/src/services/appManagement/globalCommand');
 const syncthingFolderStateMachine = require('../../ZelBack/src/services/appMonitoring/syncthingFolderStateMachine');
 const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
@@ -105,6 +106,10 @@ describe('appOperations tests', () => {
     });
     sinon.stub(deploymentProvider, 'buildDeployments').callsFake(async (inst) => {
       const deployment = await deploymentProvider.buildDeployment(inst, { replica: null });
+      return deployment ? [deployment] : [];
+    });
+    sinon.stub(deploymentProvider, 'planDeployments').callsFake(async (registered, opts) => {
+      const deployment = await deploymentProvider.planDeployment(registered, { ...opts, replica: null });
       return deployment ? [deployment] : [];
     });
   });
@@ -2062,6 +2067,26 @@ describe('appOperations tests', () => {
     });
   });
 
+  describe('the containers an app-wide start drives', () => {
+    it('are this node\'s, named by its installed record whatever version the registry lists', async () => {
+      const KEY = `c${'k'.repeat(52)}`;
+      const install = installedRecord(await instantiatedSpec(await v9Spec({ name: 'myapp' }), { identity: IDENTITY }), {
+        componentKeys: new Map([['web', KEY]]),
+      });
+      stubInstalled().byName.resolves(install);
+      stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'myapp' }), { identity: `b${'f'.repeat(52)}` }));
+      sinon.stub(deploymentProvider, 'buildDeployment').callsFake(async (record) => deploymentFor(record.spec, {
+        identity: record.identity, componentKeys: record.componentKeys,
+      }));
+      const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
+
+      await appOperations.startApplication('myapp');
+
+      expect(deploymentProvider.buildDeployment.firstCall.args[0]).to.equal(install);
+      sinon.assert.calledOnceWithExactly(drive, [`${KEY}_${IDENTITY}`], 'running');
+    });
+  });
+
   describe('reconcileComponents port-delta tests', () => {
     // A spec-change reconcile must move only the ufw/UPnP rules that changed: close the
     // dropped ports (old−new), open the added ports (new−old), leave the kept ports'
@@ -2111,7 +2136,7 @@ describe('appOperations tests', () => {
       stubInstalled();
       // freshDeployment = null short-circuits the install loop, telemetry and shutdown-plan
       // blocks, leaving the port close + gated open as the only port effects under test.
-      sinon.stub(deploymentProvider, 'buildDeployment').resolves(null);
+      sinon.stub(deploymentProvider, 'planDeployment').resolves(null);
       sinon.stub(hwRequirements, 'checkNodeResources').resolves();
       // The redeploy/update path uses the reclaiming variant: these run AFTER
       // the containers are gone, so a shortfall leaves a paid app destroyed and
@@ -2140,6 +2165,9 @@ describe('appOperations tests', () => {
       });
     };
 
+    /** Each component's key in a deployment, by name: what the update carries. */
+    const keysOf = (deployment) => new Map(deployment.componentEntries().map(([, comp]) => [comp.name, comp.componentKey]));
+
     /** The registry side of a reconcile is an InstantiatedSpec (a hydrated row). */
     let registrySpec;
 
@@ -2154,13 +2182,14 @@ describe('appOperations tests', () => {
       const oldDeployment = await makeDeployment({ hostPorts: [80, 443], storage: 5 });
       const newDeployment = await makeDeployment({ hostPorts: [443, 8080], storage: 10 });
 
-      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
 
       expect(uninstallComponentStub.calledWith(sinon.match.any, sinon.match({ skipPorts: true })), 'teardown skips ports').to.be.true;
       expect(denyPortsStub.calledOnceWith([{ port: 80, opened: ['ufw', 'upnp'] }], 'myapp'), 'closes only the dropped port, by the methods it was opened with').to.be.true;
       expect(openHostPortsStub.calledOnceWith([8080], 'myapp'), 'opens only the added port').to.be.true;
-      // The registry record is what every instance's record becomes.
-      sinon.assert.calledOnceWithExactly(stubInstalled().updateRecord, registrySpec);
+      // The registry record is what every instance's record becomes, with the
+      // component keys the update carries.
+      sinon.assert.calledOnceWithExactly(stubInstalled().updateRecord, registrySpec, { componentKeys: keysOf(newDeployment) });
 
       // The uninstaller stays stubbed: assert the component it was handed carries
       // the two fields the real teardown reads off it (container name, port set).
@@ -2172,10 +2201,11 @@ describe('appOperations tests', () => {
       // path hands the registry spec through — it has to be one the real provider
       // could resolve and build from. The view is named by the version the
       // registration message states, so a component the update adds is named right.
-      const [handedRegistrySpec, buildOpts] = deploymentProvider.buildDeployment.firstCall.args;
+      const [handedRegistrySpec, buildOpts] = deploymentProvider.planDeployment.firstCall.args;
       expect(deploymentFor(await resolveInstantiatedSpec(handedRegistrySpec)).appName).to.equal('myapp');
       sinon.assert.calledOnceWithExactly(appHistory.registrationVersionOf, 'myapp', registrySpec.uuid);
       expect(buildOpts).to.have.property('registrationVersion', 9);
+      expect(buildOpts.componentKeys).to.deep.equal(keysOf(newDeployment));
     });
 
     // The update's new views, one per identity, are named by the registration
@@ -2183,12 +2213,16 @@ describe('appOperations tests', () => {
     it('builds the update\'s new views by the version the registration message states', async () => {
       setup();
       deploymentProvider.getInstalledDeployments.resolves([]);
-      deploymentProvider.buildDeployments.resolves([]);
+      deploymentProvider.planDeployments.resolves([]);
+      const keys = new Map([['web', `c${'k'.repeat(52)}`]]);
+      sinon.stub(componentKeyMap, 'keysForUpdate').resolves(keys);
+      const installed = { name: 'myapp', uuid: 'u-myapp', identity: 'idmyapp' };
 
-      await appOperations.reconcileApp({ name: 'myapp', uuid: 'u-myapp', identity: 'idmyapp' }, registrySpec);
+      await appOperations.reconcileApp(installed, registrySpec);
 
       sinon.assert.calledOnceWithExactly(appHistory.registrationVersionOf, 'myapp', 'u-myapp');
-      sinon.assert.calledOnceWithExactly(deploymentProvider.buildDeployments, registrySpec, { identity: 'idmyapp', registrationVersion: 9 });
+      sinon.assert.calledOnceWithExactly(componentKeyMap.keysForUpdate, installed, registrySpec);
+      sinon.assert.calledOnceWithExactly(deploymentProvider.planDeployments, registrySpec, { identity: 'idmyapp', registrationVersion: 9, componentKeys: keys });
     });
 
     it('routes a graceful component teardown through flux-shutdownd, component-scoped', async () => {
@@ -2203,7 +2237,7 @@ describe('appOperations tests', () => {
       expect(oldDeployment.getComponent('web').requiresDaemonShutdown()).to.be.true;
       expect(oldDeployment.getComponent('web').equals(newDeployment.getComponent('web')), 'the component must read as changed').to.be.false;
 
-      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
 
       expect(beginAppStop.calledOnce, 'the daemon owns the graceful stop').to.be.true;
       const [identity, app, reason, opts] = beginAppStop.firstCall.args;
@@ -2222,7 +2256,7 @@ describe('appOperations tests', () => {
       const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, cpu: 0.7 });
       expect(oldDeployment.getComponent('web').requiresDaemonShutdown(), 'no shutdown/preStop/drain declared').to.be.false;
 
-      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
 
       expect(beginAppStop.called, 'docker SIGTERM+grace IS this component contract').to.be.false;
       expect(uninstallComponentStub.calledWith(sinon.match.any, sinon.match({ stopHandled: true }))).to.be.false;
@@ -2236,7 +2270,7 @@ describe('appOperations tests', () => {
       const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
       const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
 
-      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
 
       expect(uninstallComponentStub.called, 'an unchanged component must not be torn down').to.be.false;
       expect(denyPortsStub.called, 'and its ports must not move').to.be.false;
@@ -2252,7 +2286,7 @@ describe('appOperations tests', () => {
       async function update(oldShape, newShape) {
         const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5, ...oldShape }, { identity: IDENTITY });
         const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, ...newShape }, { identity: IDENTITY });
-        deploymentProvider.buildDeployment.resolves(newDeployment);
+        deploymentProvider.planDeployment.resolves(newDeployment);
         installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
         return { oldDeployment, newDeployment };
       }
@@ -2261,7 +2295,7 @@ describe('appOperations tests', () => {
         setup();
         const { oldDeployment, newDeployment } = await update({}, { cpu: 0.7 });
 
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
 
         sinon.assert.calledOnceWithExactly(stageContentStub, newDeployment, { appName: 'myapp' });
         sinon.assert.calledOnce(uninstallComponentStub);
@@ -2273,7 +2307,7 @@ describe('appOperations tests', () => {
         const { oldDeployment, newDeployment } = await update({}, { cpu: 0.7 });
         stageContentStub.rejects(new Error('contentBlob: no source for sha256:x'));
 
-        const failure = await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec).then(() => null, (error) => error);
+        const failure = await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment)).then(() => null, (error) => error);
 
         expect(failure?.message).to.match(/no source/);
         sinon.assert.notCalled(uninstallComponentStub);
@@ -2286,7 +2320,7 @@ describe('appOperations tests', () => {
         setup();
         const { oldDeployment, newDeployment } = await update({}, { cpu: 0.7 });
 
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
 
         sinon.assert.calledOnceWithExactly(provisionContentSlotsStub, newDeployment, { appName: 'myapp', created: ['web'] });
         expect(provisionContentSlotsStub.calledAfter(installComponent)).to.equal(true);
@@ -2296,7 +2330,7 @@ describe('appOperations tests', () => {
         setup();
         const { oldDeployment, newDeployment } = await update({}, {});
 
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
 
         sinon.assert.notCalled(installComponent);
         sinon.assert.calledOnceWithExactly(provisionContentSlotsStub, newDeployment, { appName: 'myapp', created: [] });
@@ -2307,7 +2341,7 @@ describe('appOperations tests', () => {
         const { oldDeployment, newDeployment } = await update({}, { cpu: 0.7 });
         provisionContentSlotsStub.rejects(new Error('contentSlot: no manifest covering every declared slot'));
 
-        const failure = await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec).then(() => null, (error) => error);
+        const failure = await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment)).then(() => null, (error) => error);
 
         expect(failure?.message).to.match(/covering every declared slot/);
       });
@@ -2321,9 +2355,9 @@ describe('appOperations tests', () => {
       async function update(oldShape, newShape) {
         const oldDeployment = await makeDeployment({ hostPorts: [80], ...oldShape }, { identity: IDENTITY });
         const newDeployment = await makeDeployment({ hostPorts: [80], ...newShape }, { identity: IDENTITY });
-        deploymentProvider.buildDeployment.resolves(newDeployment);
+        deploymentProvider.planDeployment.resolves(newDeployment);
         installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
         return newDeployment.getComponent('web');
       }
 
@@ -2366,10 +2400,10 @@ describe('appOperations tests', () => {
         const oldDeployment = await stateless(0.5);
         const newDeployment = await stateless(0.7);
         expect(newDeployment.getComponent('web').isStateless, 'the fixture is stateless').to.equal(true);
-        deploymentProvider.buildDeployment.resolves(newDeployment);
+        deploymentProvider.planDeployment.resolves(newDeployment);
         installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
 
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
 
         sinon.assert.calledOnce(installComponent);
         sinon.assert.notCalled(ensureSourcesStub);
@@ -2385,9 +2419,9 @@ describe('appOperations tests', () => {
         sinon.stub(componentProvisioner, 'installComponent').resolves();
         const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5, ...oldShape }, { identity: IDENTITY, ...depOpts });
         const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, ...newShape }, { identity: IDENTITY, ...depOpts });
-        deploymentProvider.buildDeployment.resolves(newDeployment);
+        deploymentProvider.planDeployment.resolves(newDeployment);
 
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
       }
 
       it('is pushed under the app\'s identity for an app that stops through the daemon, and none is deleted', async () => {
@@ -2424,14 +2458,15 @@ describe('appOperations tests', () => {
         setup();
         const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful }, { identity: IDENTITY });
         const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful }, { identity: IDENTITY });
-        deploymentProvider.buildDeployment.resolves(newDeployment);
+        deploymentProvider.planDeployment.resolves(newDeployment);
         deploymentProvider.getInstalledDeployments.resolves([oldDeployment]);
-        deploymentProvider.buildDeployments.resolves([newDeployment]);
+        deploymentProvider.planDeployments.resolves([newDeployment]);
         installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
         sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
         sinon.stub(fluxShutdowndClient, 'upsertAppPlanBestEffort').resolves();
         sinon.stub(fluxShutdowndClient, 'deleteAppPlanBestEffort').resolves();
         sinon.stub(appReconciler, 'enqueueApp');
+        sinon.stub(componentKeyMap, 'keysForUpdate').resolves(keysOf(newDeployment));
         expect(registrySpec.owner, 'the fixture names two owners').to.not.equal(SELLER);
 
         await appOperations.reconcileApp({
@@ -2442,7 +2477,7 @@ describe('appOperations tests', () => {
       it('recreates no container, and the installed record takes the buyer', async () => {
         await adoptSale();
 
-        sinon.assert.calledOnceWithExactly(stubInstalled().updateRecord, registrySpec);
+        sinon.assert.calledOnceWithExactly(stubInstalled().updateRecord, registrySpec, { componentKeys: new Map([['web', 'web']]) });
         sinon.assert.notCalled(uninstallComponentStub);
         sinon.assert.notCalled(installComponent);
         expect(denyPortsStub.called, 'its ports do not move').to.be.false;
@@ -2471,7 +2506,7 @@ describe('appOperations tests', () => {
       const oldDeployment = await makeDeployment({ hostPorts: [80, 443], storage: 5 });
       const newDeployment = await makeDeployment({ hostPorts: [443, 8080], storage: 10 });
 
-      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
 
       sinon.assert.calledOnceWithExactly(ledgers.byInstance, 'myapp', null);
       sinon.assert.calledOnceWithExactly(ledgers.setComponent, 'myapp', null, 'web', 'hostPorts', [
@@ -2487,7 +2522,7 @@ describe('appOperations tests', () => {
       const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
       const newDeployment = await makeDeployment({ hostPorts: [80, 81], storage: 5 });
 
-      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
 
       sinon.assert.calledOnceWithExactly(ledgers.setComponent, 'myapp', null, 'web', 'hostPorts', [
         { port: 80, opened: ['ufw'] }, { port: 81, opened: ['ufw'] },
@@ -2504,7 +2539,7 @@ describe('appOperations tests', () => {
         web: { ports: { p80: { containerPort: 80, hostPort: 80 } } },
       }));
 
-      await appOperations.reconcileComponents('myapp', both, webOnly, registrySpec);
+      await appOperations.reconcileComponents('myapp', both, webOnly, registrySpec, keysOf(webOnly));
 
       sinon.assert.calledOnceWithExactly(ledgers.removeComponent, 'myapp', null, 'db');
       const dbTeardown = uninstallComponentStub.getCalls().find((c) => c.args[0].name === 'db');
@@ -2519,11 +2554,110 @@ describe('appOperations tests', () => {
       const oldDeployment = await makeDeployment({ hostPorts: [80, 443], storage: 5 });
       const newDeployment = await makeDeployment({ hostPorts: [443, 8080], storage: 10 });
 
-      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec);
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
 
       expect(teardownOwedForStub.calledWith('myapp')).to.be.true;
       expect(openHostPortsStub.called, 'a raced cancel must skip the port-open (no orphaned rules)').to.be.false;
       expect(denyPortsStub.calledOnceWith([{ port: 80, opened: ['ufw', 'upnp'] }], 'myapp'), 'closing removed ports is always safe and still runs').to.be.true;
+    });
+
+    // Components are matched by their keys: a component keeps its key across a
+    // rename, and a name dropped and declared again is a new component.
+    describe('components matched by key', () => {
+      const KEY = `c${'k'.repeat(52)}`;
+      const OTHER_KEY = `c${'q'.repeat(52)}`;
+      let installComponent;
+
+      const keyed = (name, key, overrides = {}) => oneComponentDeployment('myapp', name, { ports: { p80: { containerPort: 80, hostPort: 80 } }, ...overrides }, {
+        identity: IDENTITY, componentKeys: new Map([[name, key]]),
+      });
+
+      beforeEach(() => {
+        setup();
+        installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
+        const { InstalledLedger } = specLibrary.loaded();
+        ledgers.byInstance.resolves(new InstalledLedger({
+          name: 'myapp',
+          components: {
+            [KEY]: {
+              ...InstalledLedger.newBlock({ identifier: `${KEY}_${IDENTITY}`, image: 'img' }),
+              hostPorts: [{ port: 80, opened: ['ufw', 'upnp'] }],
+            },
+          },
+        }));
+      });
+
+      it('recreates a renamed component under its new name on the volume it had, its ledger block kept', async () => {
+        const oldDeployment = await keyed('web', KEY);
+        const newDeployment = await keyed('site', KEY);
+        deploymentProvider.planDeployment.resolves(newDeployment);
+
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+
+        sinon.assert.calledOnce(uninstallComponentStub);
+        const [torn, tornOpts] = uninstallComponentStub.firstCall.args;
+        expect(torn.name).to.equal('web');
+        expect(tornOpts.removeVolumes, 'a rename keeps the volume').to.equal(false);
+        sinon.assert.notCalled(ledgers.removeComponent);
+
+        sinon.assert.calledOnce(installComponent);
+        const [made, madeOpts] = installComponent.firstCall.args;
+        expect(made.name).to.equal('site');
+        expect(made.identifier).to.equal(`${KEY}_${IDENTITY}`);
+        expect(madeOpts.createVolumes).to.equal(false);
+
+        // Its ports carry the methods they were opened with, by its key.
+        sinon.assert.calledWithExactly(ledgers.setComponent, 'myapp', null, KEY, 'hostPorts', [{ port: 80, opened: ['ufw', 'upnp'] }]);
+        expect(denyPortsStub.called, 'a rename moves no port').to.be.false;
+        expect(openHostPortsStub.called).to.be.false;
+      });
+
+      it('records the new name\'s aliases for a renamed component before its container is made', async () => {
+        const oldDeployment = await keyed('web', KEY);
+        const newDeployment = await keyed('site', KEY);
+        deploymentProvider.planDeployment.resolves(newDeployment);
+
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+
+        const derived = deploymentProvider.planDeployment.getCalls().find((call) => call.args[1].recordedNames === false);
+        expect(derived, 'the new name\'s aliases are derived, not read from the ledger').to.not.equal(undefined);
+        expect(derived.args[1].componentKeys).to.deep.equal(keysOf(newDeployment));
+        const aliases = ledgers.setComponent.getCalls().find((call) => call.args[3] === 'aliases');
+        expect(aliases.args).to.deep.equal(['myapp', null, KEY, 'aliases', newDeployment.getComponent('site').networkAliases]);
+        expect(aliases.calledBefore(installComponent.firstCall)).to.equal(true);
+        expect(newDeployment.getComponent('site').networkAliases).to.include('site');
+      });
+
+      it('writes no aliases when nothing is renamed', async () => {
+        const oldDeployment = await keyed('web', KEY);
+        const newDeployment = await keyed('web', KEY, { cpu: 0.7 });
+        deploymentProvider.planDeployment.resolves(newDeployment);
+
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+
+        sinon.assert.calledOnce(installComponent);
+        expect(ledgers.setComponent.getCalls().some((call) => call.args[3] === 'aliases')).to.equal(false);
+        sinon.assert.alwaysCalledWith(deploymentProvider.planDeployment, registrySpec, sinon.match((opts) => opts.recordedNames === undefined));
+      });
+
+      it('removes a component whose name is declared again under a new key, with its volume and block, and installs the new one empty', async () => {
+        const oldDeployment = await keyed('web', KEY);
+        const newDeployment = await keyed('web', OTHER_KEY);
+        deploymentProvider.planDeployment.resolves(newDeployment);
+
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+
+        sinon.assert.calledOnce(uninstallComponentStub);
+        const [torn, tornOpts] = uninstallComponentStub.firstCall.args;
+        expect(torn.identifier).to.equal(`${KEY}_${IDENTITY}`);
+        expect(tornOpts.removeVolumes).to.equal(true);
+        sinon.assert.calledOnceWithExactly(ledgers.removeComponent, 'myapp', null, KEY);
+
+        sinon.assert.calledOnce(installComponent);
+        const [made, madeOpts] = installComponent.firstCall.args;
+        expect(made.identifier).to.equal(`${OTHER_KEY}_${IDENTITY}`);
+        expect(madeOpts.createVolumes).to.equal(true);
+      });
     });
   });
 
@@ -2573,7 +2707,7 @@ describe('appOperations tests', () => {
     async function restoreStubs(appName, deployment) {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
-      stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: appName })));
+      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: appName }))));
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       sinon.stub(appReconciler, 'observedContainerState').resolves({
         reachable: true, exists: true, running: false, indeterminate: false,
@@ -2821,7 +2955,7 @@ describe('appOperations tests', () => {
     it('holds the component whose data could not be cleared, in those words', async () => {
       const deployment = await oneComponentDeployment('myapp', 'web');
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
-      stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'myapp' })));
+      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: 'myapp' }))));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       sinon.stub(appReconciler, 'observedContainerState').resolves({
@@ -2911,7 +3045,7 @@ describe('appOperations tests', () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(composed);
       copyIs(true);
       const pauseFolder = sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves('held');
-      stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: 'bkapp' }))));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(composed);
       sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       // The stop is proved against docker, not against the drive's verdict: the
@@ -2953,7 +3087,7 @@ describe('appOperations tests', () => {
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
       const deployment = await oneComponentDeployment('bkapp', 'comp1');
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
-      stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: 'bkapp' }))));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       // The gate stands for two reads, and the container is up for exactly as long.
@@ -3019,7 +3153,7 @@ describe('appOperations tests', () => {
           },
         }));
         sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(composed);
-        stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+        stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: 'bkapp' }))));
         sinon.stub(deploymentProvider, 'buildDeployment').resolves(composed);
         sinon.stub(syncthingFolderStateMachine, 'probeFolderSyncCompletion').resolves(probe);
         sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves('held');
@@ -3119,7 +3253,7 @@ describe('appOperations tests', () => {
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
       const deployment = await oneComponentDeployment('bkapp', 'comp1');
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
-      stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: 'bkapp' }))));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
       // drive() awaits convergence but ANSWERS whether it happened. A component
       // that ran out the converge backstop comes back unconverged, and archiving
@@ -3160,7 +3294,7 @@ describe('appOperations tests', () => {
       // somewhere else, which is what it did on the first attempt.
       const deployment = await oneComponentDeployment('bkapp', 'comp1');
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
-      stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: 'bkapp' }))));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
       sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
       sinon.stub(IOUtils, 'checkFileExists').resolves(false);
@@ -3195,7 +3329,7 @@ describe('appOperations tests', () => {
       const deployment = await oneComponentDeployment('bkapp', 'comp1');
       expect(deployment.getComponent('comp1').hasSyncthing()).to.be.false;
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
-      stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: 'bkapp' }))));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       // The stop is proved against docker, not against the drive's verdict: the
@@ -3242,7 +3376,7 @@ describe('appOperations tests', () => {
       expect(composed.getComponent('web').hasActiveStandbySyncthing(), 'fixture must be activeStandby').to.be.true;
       expect(composed.getComponent('worker').hasActiveStandbySyncthing()).to.be.false;
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(composed);
-      stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: 'bkapp' }))));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(composed);
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       // The stop is proved against docker, not against the drive's verdict: the
@@ -3307,7 +3441,7 @@ describe('appOperations tests', () => {
         // A real InstantiatedSpec: the (unstubbed) buildDeployment behind
         // componentIdentifiersFor resolves and builds from it for real, with no
         // ledger, so the registration names its components.
-        stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'bkapp' })));
+        stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: 'bkapp' }))));
         stubLedgers();
         sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
         // The stop is proved against docker, not against the drive's verdict: the

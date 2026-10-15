@@ -45,21 +45,20 @@ async function appsResources() {
     // This runs on every admission decision and every spawn cycle. A record
     // this node holds and cannot read is named by the collection and not read.
     const records = await appRecords.installed().apps();
-    const installed = records.map((record) => record.record);
     const readable = new Set(records.map((record) => record.name.toLowerCase()));
     const unhydrated = (await appRecords.installed().names()).filter((name) => !readable.has(name.toLowerCase()));
-    const deployments = await deploymentProvider.listInstalledDeployments(installed);
+    const deployments = await deploymentProvider.listInstalledDeployments(records);
     // An app whose deployment could not be built (its components are inside a
     // blob this node cannot read) is absent from `deployments`, not zero-sized:
     // it is named, so the caller can tell unaccountable from unused.
     //
-    // A row that could not be deserialized at all never reaches `installed`, so
+    // A row that could not be deserialized at all never reaches `records`, so
     // it is absent from both sides of that comparison and the subtraction comes
     // out clean. It is the same condition — an app this node holds and cannot
     // size — and it joins the same list.
     const built = new Set(deployments.map((deployment) => deployment.appName));
     const unreadable = [
-      ...installed.filter((inst) => !built.has(inst.name)).map((inst) => inst.name),
+      ...records.filter((inst) => !built.has(inst.name)).map((inst) => inst.name),
       ...unhydrated,
     ];
     let appsCpusLocked = 0;

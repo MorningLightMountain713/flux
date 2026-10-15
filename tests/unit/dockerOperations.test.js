@@ -177,6 +177,7 @@ describe('appOperations application lifecycle tests', () => {
   let registryManagerStub;
   let appsRepositoryStub;
   let registryStub;
+  let installedByName;
   let buildDeploymentStub;
   let appVolumeServiceStub;
   let appReconcilerStub;
@@ -200,6 +201,7 @@ describe('appOperations application lifecycle tests', () => {
     };
 
     registryStub = { byName: sinon.stub().resolves(null) };
+    installedByName = sinon.stub().resolves(null);
     appsRepositoryStub = {
       listInstalledApps: sinon.stub().resolves([]),
     };
@@ -275,7 +277,7 @@ describe('appOperations application lifecycle tests', () => {
         installed: () => ({
           apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)),
           keys: sinon.stub().resolves([]),
-          byName: sinon.stub().resolves(null),
+          byName: installedByName,
           names: sinon.stub().resolves([]),
         }),
       },
@@ -454,7 +456,7 @@ describe('appOperations application lifecycle tests', () => {
 
       await appOperations.stopApplication(web.identifier);
 
-      sinon.assert.notCalled(registryStub.byName);
+      sinon.assert.notCalled(installedByName);
     });
 
     // These two used to assert that a failure here was logged and swallowed.
@@ -465,7 +467,7 @@ describe('appOperations application lifecycle tests', () => {
     // it. The throw reaches each caller's catch, which restarts the app and
     // releases the lease.
     it('refuses the whole app rather than reporting it stopped, when its specs are not found', async () => {
-      registryStub.byName.resolves(null);
+      installedByName.resolves(null);
 
       let raised = null;
       await appOperations.stopApplication('testapp').catch((error) => { raised = error; });
@@ -570,8 +572,7 @@ describe('appOperations application lifecycle tests', () => {
 
     it('should drive all components of a whole app to stopped', async () => {
       const { spec, deployment } = await twoComponentApp();
-      const installed = await instantiatedSpec(spec);
-      registryStub.byName.resolves(installed);
+      installedByName.resolves(installedRecord(await instantiatedSpec(spec)));
 
       await appOperations.stopApplication(spec.name);
 
@@ -589,6 +590,7 @@ describe('appOperations application lifecycle tests', () => {
       expect(handed.isEncrypted, 'resolveInstantiatedSpec branches on this').to.be.a('boolean');
       expect(handed.name).to.equal(spec.name);
       expect(handed).to.have.property('identity');
+      expect(handed, 'the installed record, whose keys name the containers').to.have.property('componentKeys');
       expect(flux.DeploymentSpec.fromSpec(handed.spec, APPS_FOLDER, { replica: null, identity: handed.identity ?? null })
         .componentEntries().map(([, comp]) => comp.identifier), 'the real provider must be able to build from what it was handed')
         .to.deep.equal(identifiers);
@@ -621,7 +623,7 @@ describe('appOperations application lifecycle tests', () => {
 
     it('should drive all components of a whole app to running', async () => {
       const { spec, deployment } = await twoComponentApp();
-      registryStub.byName.resolves(await instantiatedSpec(spec));
+      installedByName.resolves(installedRecord(await instantiatedSpec(spec)));
 
       await appOperations.startApplication(spec.name);
 
@@ -631,7 +633,7 @@ describe('appOperations application lifecycle tests', () => {
     });
 
     it('should log error and not drive when app not found', async () => {
-      registryStub.byName.resolves(null);
+      installedByName.resolves(null);
 
       await appOperations.startApplication('testapp');
 

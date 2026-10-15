@@ -93,9 +93,10 @@ async function assignedPortsGlobalApps(appNames) {
     try {
       // Every local identity's effective ports: co-located replicas carry
       // distinct hostPort overrides, so one replica's view would under-guard
-      // the siblings'.
+      // the siblings'. Not installed here, so no component keys: only ports are
+      // read, and a key names no port.
       // eslint-disable-next-line no-await-in-loop
-      const deployments = await deploymentProvider.buildDeployments(inst);
+      const deployments = await deploymentProvider.planDeployments(inst, { componentKeys: null });
       const ports = deployments.flatMap((deployment) => deployment.allHostPorts());
       if (ports.length > 0) {
         apps.push({ identity: deployments[0].identity, name: inst.name, ports });

@@ -61,6 +61,7 @@ const appUninstaller = require('./appUninstaller');
 const componentProvisioner = require('./componentProvisioner');
 const owedRemovals = require('./owedRemovals');
 const appHistory = require('../appDecisions/appHistory');
+const componentKeyMap = require('./componentKeyMap');
 const shutdownPlan = require('./shutdownPlan');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const appNetworkLinker = require('./appNetworkLinker');
@@ -313,9 +314,9 @@ async function redeployComponent(appName, componentName, options = {}) {
       await serviceHelper.delay(config.get('fluxapps.redeploy.composedDelay') * 1000);
 
       // eslint-disable-next-line no-await-in-loop
-      const instantiated = (await appRecords.installed().byName(appName))?.record;
+      const install = await appRecords.installed().byName(appName);
       // eslint-disable-next-line no-await-in-loop
-      const freshDeployment = await deploymentProvider.buildDeployment(instantiated, { replica: deployComp.replica ?? null });
+      const freshDeployment = await deploymentProvider.buildDeployment(install, { replica: deployComp.replica ?? null });
       // eslint-disable-next-line no-await-in-loop
       await hwRequirements.checkNodeResourcesReclaiming(freshDeployment);
 
@@ -324,8 +325,8 @@ async function redeployComponent(appName, componentName, options = {}) {
       await componentProvisioner.installComponent(deployComp, {
         createVolumes,
         skipPorts: true,
-        specVersion: instantiated.version,
-        uuid: instantiated.uuid,
+        specVersion: install.record.version,
+        uuid: install.record.uuid,
         requiresEncryption: shutdownPlan.appRequiresDaemonShutdown(freshDeployment),
       });
 
@@ -499,12 +500,12 @@ async function redeployApplication(appName, options = {}) {
       status(`${unitLabel} removed. Awaiting installation...`);
 
       // eslint-disable-next-line no-await-in-loop
-      const instantiated = (await appRecords.installed().byName(appName))?.record;
-      if (!instantiated) {
+      const install = await appRecords.installed().byName(appName);
+      if (!install) {
         throw new Error(`Application ${appName} not found in database after removal`);
       }
       // eslint-disable-next-line no-await-in-loop
-      const freshDeployment = await deploymentProvider.buildDeployment(instantiated, { replica: deployment.replica ?? null });
+      const freshDeployment = await deploymentProvider.buildDeployment(install, { replica: deployment.replica ?? null });
       if (!freshDeployment) {
         throw new Error(`Application ${appName} deployment not found after requirement check`);
       }
@@ -517,7 +518,7 @@ async function redeployApplication(appName, options = {}) {
 
       // Re-verify the dependency edges before recreating containers.
       // eslint-disable-next-line no-await-in-loop
-      await relationshipResolver.checkAppDependencyRequirements(instantiated);
+      await relationshipResolver.checkAppDependencyRequirements(install.record);
 
       const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(freshDeployment);
       for (const [, deployComp] of freshDeployment.componentEntries()) {
@@ -526,8 +527,8 @@ async function redeployApplication(appName, options = {}) {
         await componentProvisioner.installComponent(deployComp, {
           createVolumes,
           skipPorts: true,
-          specVersion: instantiated.version,
-          uuid: instantiated.uuid,
+          specVersion: install.record.version,
+          uuid: install.record.uuid,
           requiresEncryption,
         });
         // Re-attach the recreated container to every linked app's network.
@@ -547,7 +548,7 @@ async function redeployApplication(appName, options = {}) {
         try {
           // eslint-disable-next-line no-await-in-loop
           await fluxShutdowndClient.upsertAppPlanBestEffort(
-            shutdownPlan.buildShutdownPlan(instantiated, freshDeployment),
+            shutdownPlan.buildShutdownPlan(install.record, freshDeployment),
           );
         } catch (error) {
           log.warn(`flux-shutdownd plan handoff skipped: ${error.message}`);
@@ -875,13 +876,14 @@ async function applyPermissionsFix(appname, appId) {
  */
 async function componentIdentifiersFor(appname) {
   if (appname.includes('_')) return [appname];
-  const instantiated = await appRecords.registry().byName(appname);
-  if (!instantiated) {
+  // The containers are this node's, named by its installed record.
+  const install = await appRecords.installed().byName(appname);
+  if (!install) {
     throw new Error('Application not found');
   }
   // Every local identity's components: an app-wide stop/start (backup, restore)
   // must cover a co-located pair's containers, not one arbitrary replica's.
-  const deployments = await deploymentProvider.buildDeployments(instantiated);
+  const deployments = await deploymentProvider.buildDeployments(install);
   return deployments.flatMap((deployment) => deployment.componentEntries().map(([, deployComp]) => deployComp.identifier));
 }
 
@@ -2105,6 +2107,8 @@ async function contentBlobServeApi(req, res) {
  * Brings one installed identity of an app from the spec it was installed with
  * to the spec the registry lists: the components the update drops are removed,
  * the ones it adds are installed, and a kept one is recreated when it changed.
+ * Components are matched by their keys, so a renamed component is a kept one:
+ * its container is recreated under its new name, its volume and folder stay.
  *
  * An update that only names another owner changes no component, so it
  * recreates nothing: a sale restarts nothing. Nothing on a container says who
@@ -2114,28 +2118,31 @@ async function contentBlobServeApi(req, res) {
  * @param {object} oldDeployment - the installed view of this identity
  * @param {object} newDeployment - the listed spec's view of it
  * @param {object} registrySpec - the listed row
+ * @param {Map<string, string>} componentKeys - the listed spec's component keys, as this node derived them
  */
-async function reconcileComponents(appName, oldDeployment, newDeployment, registrySpec) {
-  const oldNames = new Set(Object.keys(oldDeployment.components));
-  const newNames = new Set(Object.keys(newDeployment.components));
+async function reconcileComponents(appName, oldDeployment, newDeployment, registrySpec, componentKeys) {
+  const byKey = (deployment) => new Map(deployment.componentEntries().map(([, comp]) => [comp.componentKey, comp]));
+  const oldByKey = byKey(oldDeployment);
+  const newByKey = byKey(newDeployment);
 
-  const removed = [...oldNames].filter((n) => !newNames.has(n));
-  const added = [...newNames].filter((n) => !oldNames.has(n));
-  const kept = [...oldNames].filter((n) => newNames.has(n));
+  const removed = [...oldByKey.keys()].filter((key) => !newByKey.has(key));
+  const added = [...newByKey.keys()].filter((key) => !oldByKey.has(key));
+  const kept = [...oldByKey.keys()].filter((key) => newByKey.has(key));
+  const renamed = kept.filter((key) => oldByKey.get(key).name !== newByKey.get(key).name);
 
   // A changed kept component keeps its volume when only non-storage fields differ;
   // a storage change forces a volume recreate (the loop volume is resized).
   const keepVolume = [];
   const recreateVolume = [];
-  for (const name of kept) {
-    const oldComp = oldDeployment.getComponent(name);
-    const newComp = newDeployment.getComponent(name);
+  for (const key of kept) {
+    const oldComp = oldByKey.get(key);
+    const newComp = newByKey.get(key);
     if (oldComp.equals(newComp)) {
-      log.info(`Component ${name} of ${appName} unchanged, skipping`);
+      log.info(`Component ${newComp.name} of ${appName} unchanged, skipping`);
     } else if (oldComp.storage === newComp.storage) {
-      keepVolume.push(name);
+      keepVolume.push(key);
     } else {
-      recreateVolume.push(name);
+      recreateVolume.push(key);
     }
   }
 
@@ -2143,10 +2150,9 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   // versions down, so a broken update aborts (caught by reconcileApp, which releases
   // + hands off — no destroy) with the old versions still running. Manifest check
   // only — no pull, no transient disk cost.
-  for (const name of [...keepVolume, ...recreateVolume, ...added]) {
-    const newComp = newDeployment.getComponent(name);
+  for (const key of [...keepVolume, ...recreateVolume, ...added]) {
     // eslint-disable-next-line no-await-in-loop
-    if (newComp) await componentProvisioner.verifyComponentImage(newComp);
+    await componentProvisioner.verifyComponentImage(newByKey.get(key));
   }
 
   // And every content file the listed spec declares is in this node's store
@@ -2179,12 +2185,11 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
 
   const toUninstall = [...removed, ...recreateVolume, ...keepVolume];
   if (toUninstall.length > 0) {
-    for (const name of toUninstall.reverse()) {
-      const deployComp = oldDeployment.getComponent(name);
-      if (!deployComp) continue;
-      const removeVolumes = removed.includes(name) || recreateVolume.includes(name);
+    for (const key of toUninstall.reverse()) {
+      const deployComp = oldByKey.get(key);
+      const removeVolumes = removed.includes(key) || recreateVolume.includes(key);
       if (removeVolumes) {
-        log.warn(`REMOVAL REASON: Reconciliation - ${deployComp.identifier} ${removed.includes(name) ? 'removed from spec' : 'storage changed'}`);
+        log.warn(`REMOVAL REASON: Reconciliation - ${deployComp.identifier} ${removed.includes(key) ? 'removed from spec' : 'storage changed'}`);
       }
       // A declared graceful contract routes the stop through flux-shutdownd,
       // component-scoped — siblings keep serving; everything else takes the
@@ -2199,7 +2204,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
       // with it. One rebuilt or reinstalled keeps its block for the ports and
       // the volume the reinstall does not recreate.
       // eslint-disable-next-line no-await-in-loop
-      if (removed.includes(name)) await appRecords.ledgers().removeComponent(appName, oldDeployment.replica ?? null, name);
+      if (removed.includes(key)) await appRecords.ledgers().removeComponent(appName, oldDeployment.replica ?? null, key);
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(config.get('fluxapps.redeploy.composedDelay') * 1000);
     }
@@ -2218,25 +2223,33 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   // the orphaned injected files — only what was injected and no longer is, never
   // owner data — before the containers come back up. recreateVolume wipes the
   // whole volume already; removed components were fully uninstalled above.
-  for (const name of keepVolume) {
-    const oldComp = oldDeployment.getComponent(name);
-    const newComp = newDeployment.getComponent(name);
-    if (!oldComp || !newComp) continue;
+  for (const key of keepVolume) {
     // eslint-disable-next-line no-await-in-loop
-    await appVolumeService.removeOrphanedInjectedContent(oldComp, newComp);
+    await appVolumeService.removeOrphanedInjectedContent(oldByKey.get(key), newByKey.get(key));
   }
 
-  await appRecords.installed().updateRecord(registrySpec);
+  await appRecords.installed().updateRecord(registrySpec, { componentKeys });
   log.info(`Database updated for ${appName}`);
 
-  // Rebuild THIS identity's fresh view - handing a co-located sibling's view to
+  // THIS identity's view of the update - handing a co-located sibling's view to
   // the reinstalls below would apply its ports/env to the wrong containers.
-  const freshDeployment = await deploymentProvider.buildDeployment(registrySpec, {
+  const planned = {
     replica: newDeployment.replica ?? null,
     identity: newDeployment.identity ?? null,
     // A component the update adds is named by the registration.
     registrationVersion: await appHistory.registrationVersionOf(appName, registrySpec.uuid) ?? undefined,
-  });
+    componentKeys,
+  };
+  // A renamed component's container is recreated under its new name, so the
+  // aliases the ledger recorded for it are its new name's, not its old ones.
+  if (renamed.length > 0) {
+    const derived = byKey(await deploymentProvider.planDeployment(registrySpec, { ...planned, recordedNames: false }));
+    for (const key of renamed) {
+      // eslint-disable-next-line no-await-in-loop
+      await appRecords.ledgers().setComponent(appName, planned.replica, key, 'aliases', derived.get(key).networkAliases);
+    }
+  }
+  const freshDeployment = await deploymentProvider.planDeployment(registrySpec, planned);
   await hwRequirements.checkNodeResourcesReclaiming(freshDeployment);
 
   // Re-seed telemetry routing from the updated spec. A sink change (key
@@ -2252,11 +2265,11 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   const toInstall = [...keepVolume, ...recreateVolume, ...added];
   const created = [];
   if (freshDeployment && toInstall.length > 0) {
+    const freshByKey = byKey(freshDeployment);
     const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(freshDeployment);
-    for (const name of toInstall) {
-      const deployComp = freshDeployment.getComponent(name);
-      if (!deployComp) continue;
-      const createVolumes = recreateVolume.includes(name) || added.includes(name);
+    for (const key of toInstall) {
+      const deployComp = freshByKey.get(key);
+      const createVolumes = recreateVolume.includes(key) || added.includes(key);
       log.info(`Installing ${deployComp.identifier} (${createVolumes ? 'with' : 'without'} volumes)...`);
       if (!createVolumes && !deployComp.isStateless) {
         // A kept volume holds the sources the old spec's mounts had. A mount the
@@ -2273,7 +2286,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
         specVersion: registrySpec.version,
         requiresEncryption,
       });
-      created.push(name);
+      created.push(deployComp.name);
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(config.get('fluxapps.redeploy.composedDelay') * 1000);
     }
@@ -2291,11 +2304,11 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   // one takes the methods the node opens ports by now.
   const opened = await componentProvisioner.portOpenMethods();
   // eslint-disable-next-line no-restricted-syntax
-  for (const [name, comp] of newDeployment.componentEntries()) {
-    const before = ledger?.component(name)?.hostPorts ?? [];
+  for (const [key, comp] of newByKey) {
+    const before = ledger?.component(key)?.hostPorts ?? [];
     const hostPorts = (comp.hostPorts ?? []).map((port) => ({ port, opened: before.find((p) => p.port === port)?.opened ?? opened }));
     // eslint-disable-next-line no-await-in-loop
-    await appRecords.ledgers().setComponent(appName, replica, name, 'hostPorts', hostPorts);
+    await appRecords.ledgers().setComponent(appName, replica, key, 'hostPorts', hostPorts);
   }
 
   // Open the added ports now that the new containers are up. Gate the open on the same
@@ -2318,7 +2331,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   // another app) is left alone, and there is no churn because the new set is up.
   // This is the set-diff layer that knows what was dropped; the per-component
   // uninstall primitive does not.
-  const removedImages = removed.map((name) => oldDeployment.getComponent(name)?.image);
+  const removedImages = removed.map((key) => oldByKey.get(key).image);
   await appUninstaller.reclaimUnusedImages(removedImages, (msg) => log.info(msg));
 
   // The applied spec changed, so the app-wide shutdown plan (hash, components,
@@ -2346,9 +2359,11 @@ async function reconcileApp(installed, registrySpec) {
   // app was installed with, or the diff's new side spells <component>_<appName>
   // and matches nothing (no component ever redeploys, and the row's identifier
   // list is rewritten wrong).
-  const newDeployments = await deploymentProvider.buildDeployments(registrySpec, {
+  const componentKeys = await componentKeyMap.keysForUpdate(installed, registrySpec);
+  const newDeployments = await deploymentProvider.planDeployments(registrySpec, {
     identity: installed.identity ?? null,
     registrationVersion: await appHistory.registrationVersionOf(installed.name, installed.uuid) ?? undefined,
+    componentKeys,
   });
   if (oldDeployments.length === 0 || newDeployments.length === 0) return;
 
@@ -2373,7 +2388,7 @@ async function reconcileApp(installed, registrySpec) {
       const newDeployment = newByReplica.get(oldDeployment.replica ?? null);
       if (!newDeployment) continue;
       // eslint-disable-next-line no-await-in-loop
-      await reconcileComponents(installed.name, oldDeployment, newDeployment, registrySpec);
+      await reconcileComponents(installed.name, oldDeployment, newDeployment, registrySpec, componentKeys);
     }
     log.info(`Application ${installed.name} reconciliation complete`);
   } catch (error) {
@@ -2413,7 +2428,7 @@ async function shutdownPlanResync() {
   }
 
   try {
-    const installedApps = (await appRecords.installed().apps()).map((record) => record.record);
+    const installedApps = await appRecords.installed().apps();
     // One plan per deployment, as the daemon keys them: the app's identity, and
     // a named replica's segment after it (neither can contain ':').
     const planKey = (identity, replica) => (replica != null ? `${identity}:${replica}` : identity);

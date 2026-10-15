@@ -25,7 +25,7 @@ const { getSpecBackend } = require('../utils/specLibs');
  *   list, which would read as "this app has no components".
  */
 async function resolveComponentIdentifiers(name, replica) {
-  const installed = (await appRecords.installed().byName(name))?.record;
+  const installed = await appRecords.installed().byName(name);
   if (!installed) return null;
 
   const deployment = await deploymentProvider

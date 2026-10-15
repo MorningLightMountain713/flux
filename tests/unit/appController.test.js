@@ -24,7 +24,7 @@ const { requireMongo } = require('./dbTestHelper');
 const {
   loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION, v1Spec, v8Spec, v9Spec, instantiatedSpec,
 } = require('./fixtures/fluxSpec');
-const { stubRegistry } = require('./fixtures/appRecords');
+const { stubInstalled, installedRecord } = require('./fixtures/appRecords');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 
 // The spec library is REAL here, and so is the whole resolution chain beneath
@@ -128,9 +128,14 @@ describe('appController tests', () => {
     return instantiatedSpec(spec, state);
   }
 
-  /** The one mongo read these handlers make, on the way into the real resolver. */
-  function registryHolds(instantiated) {
-    return stubRegistry().byName.resolves(instantiated);
+  /**
+   * The one mongo read these handlers make, on the way into the real resolver:
+   * the installed record over the app, which names this node's containers.
+   */
+  function installedHolds(instantiated) {
+    const install = installedRecord(instantiated);
+    stubInstalled().byName.resolves(install);
+    return install;
   }
 
   /**
@@ -196,7 +201,7 @@ describe('appController tests', () => {
 
     it('clears the operator lock and enqueues the reconciler (no direct docker start)', async () => {
       verificationHelperStub.resolves(true);
-      registryHolds(await flatApp('TestApp'));
+      installedHolds(await flatApp('TestApp'));
 
       const req = { params: { appname: 'TestApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -213,7 +218,7 @@ describe('appController tests', () => {
     it('withdraws a decider verdict recorded before the stop, so the decider rules again', async () => {
       verificationHelperStub.resolves(true);
       const clearControllerDesired = sinon.stub(appReconciler, 'clearControllerDesired');
-      registryHolds(await flatApp('TestApp'));
+      installedHolds(await flatApp('TestApp'));
 
       const req = { params: { appname: 'TestApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -268,7 +273,7 @@ describe('appController tests', () => {
       // as one keys a component that does not exist.
       verificationHelperStub.resolves(true);
       const held = await composedApp('TestApp', ['Component'], { identity: 'a1b2c3d4e5f6' });
-      registryHolds(held);
+      installedHolds(held);
 
       const req = { params: { appname: 'Component_TestApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -286,7 +291,7 @@ describe('appController tests', () => {
 
     it('refuses a component this node does not hold instead of reporting success', async () => {
       verificationHelperStub.resolves(true);
-      registryHolds(await composedApp('TestApp', ['Component']));
+      installedHolds(await composedApp('TestApp', ['Component']));
 
       const req = { params: { appname: 'Ghost_TestApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -302,7 +307,7 @@ describe('appController tests', () => {
 
     it('enqueues every component for a version 4+ app', async () => {
       verificationHelperStub.resolves(true);
-      registryHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
+      installedHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
 
       const req = { params: { appname: 'ComposedApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -349,7 +354,7 @@ describe('appController tests', () => {
 
     it('sets the operator stop lock and enqueues the reconciler (no direct docker stop)', async () => {
       verificationHelperStub.resolves(true);
-      registryHolds(await flatApp('TestApp'));
+      installedHolds(await flatApp('TestApp'));
 
       const req = { params: { appname: 'TestApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -364,7 +369,7 @@ describe('appController tests', () => {
 
     it('locks and enqueues every component for a version 4+ app', async () => {
       verificationHelperStub.resolves(true);
-      registryHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
+      installedHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
 
       const req = { params: { appname: 'ComposedApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -380,7 +385,7 @@ describe('appController tests', () => {
 
     it('locks the identifier the deployment states, not the request string', async () => {
       verificationHelperStub.resolves(true);
-      registryHolds(await composedApp('TestApp', ['Component'], { identity: 'a1b2c3d4e5f6' }));
+      installedHolds(await composedApp('TestApp', ['Component'], { identity: 'a1b2c3d4e5f6' }));
 
       const req = { params: { appname: 'Component_TestApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -399,7 +404,7 @@ describe('appController tests', () => {
       // lock-after would let a crash between enqueue and the lock write leave a
       // running container the reconciler keeps running against the operator's intent
       verificationHelperStub.resolves(true);
-      registryHolds(await composedApp('TestApp', ['Component']));
+      installedHolds(await composedApp('TestApp', ['Component']));
 
       const req = { params: { appname: 'Component_TestApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -429,7 +434,7 @@ describe('appController tests', () => {
       // on a released grant, and the ex-master is fastest to its registers).
       // With the lock first, an in-flight pursuit still sees the held key
       // and the gate is unconsulted afterwards.
-      registryHolds(await flatApp('TestApp', { identity: 'TestApp' }));
+      installedHolds(await flatApp('TestApp', { identity: 'TestApp' }));
 
       const outcome = await appController.appYield('TestApp');
 
@@ -442,7 +447,7 @@ describe('appController tests', () => {
 
     it('still stops when this node holds nothing — the global fan-out stays idempotent', async () => {
       yieldMastership.resolves({ held: false });
-      registryHolds(await flatApp('TestApp'));
+      installedHolds(await flatApp('TestApp'));
 
       const outcome = await appController.appYield('TestApp');
 
@@ -451,7 +456,7 @@ describe('appController tests', () => {
     });
 
     it('yields the APP mastership even when a component is named — grants are app-scoped', async () => {
-      registryHolds(await composedApp('TestApp', ['Component'], { identity: 'TestApp' }));
+      installedHolds(await composedApp('TestApp', ['Component'], { identity: 'TestApp' }));
 
       await appController.appYield('Component_TestApp');
 
@@ -460,7 +465,7 @@ describe('appController tests', () => {
     });
 
     it('yields the lease of the app the name holds, keyed by its identity', async () => {
-      registryHolds(await activeStandbyApp('myapp', 'web', { identity: 'ab12cd34ef56' }));
+      installedHolds(await activeStandbyApp('myapp', 'web', { identity: 'ab12cd34ef56' }));
 
       await appController.appYield('myapp');
 
@@ -511,7 +516,7 @@ describe('appController tests', () => {
     it('clears the lock, bumps the restart generation and enqueues (no direct docker restart)', async () => {
       verificationHelperStub.resolves(true);
       // a flat (v1-3) app: its single component is identified by the bare app name
-      registryHolds(await flatApp('TestApp'));
+      installedHolds(await flatApp('TestApp'));
 
       const req = { params: { appname: 'TestApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -529,7 +534,7 @@ describe('appController tests', () => {
       verificationHelperStub.resolves(true);
       isOperatorStopped.resolves(true);
       const clearControllerDesired = sinon.stub(appReconciler, 'clearControllerDesired');
-      registryHolds(await flatApp('TestApp'));
+      installedHolds(await flatApp('TestApp'));
 
       const req = { params: { appname: 'TestApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -545,7 +550,7 @@ describe('appController tests', () => {
     it('keeps the decider verdict of a running component it bounces', async () => {
       verificationHelperStub.resolves(true);
       const clearControllerDesired = sinon.stub(appReconciler, 'clearControllerDesired');
-      registryHolds(await flatApp('TestApp'));
+      installedHolds(await flatApp('TestApp'));
 
       const req = { params: { appname: 'TestApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -557,7 +562,7 @@ describe('appController tests', () => {
 
     it('restarts every component of a composed app through the reconciler', async () => {
       verificationHelperStub.resolves(true);
-      registryHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
+      installedHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
 
       const req = { params: { appname: 'ComposedApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -573,10 +578,10 @@ describe('appController tests', () => {
     it('a whole-app restart of a co-located app covers every local identity', async () => {
       verificationHelperStub.resolves(true);
       const held = await colocatedApp('coloapp', ['s1', 's2']);
-      registryHolds(held);
+      const install = installedHolds(held);
       // The two identities are real: pinned placement derived from the assignment
       // map, matched against this node's socket address by flux-spec.
-      const deployments = await deploymentProvider.buildDeployments(held);
+      const deployments = await deploymentProvider.buildDeployments(install);
       expect(deployments.map((d) => d.replica)).to.deep.equal(['s1', 's2']);
 
       const req = { params: { appname: 'coloapp' }, query: {} };
@@ -590,7 +595,7 @@ describe('appController tests', () => {
 
     it('a replica-scoped restart (?replica=) targets exactly that identity, sibling untouched', async () => {
       verificationHelperStub.resolves(true);
-      registryHolds(await colocatedApp('coloapp', ['s1', 's2']));
+      installedHolds(await colocatedApp('coloapp', ['s1', 's2']));
 
       const req = { params: { appname: 'coloapp' }, query: { replica: 's2' } };
       const res = { json: sinon.fake((param) => param) };
@@ -605,7 +610,7 @@ describe('appController tests', () => {
 
     it('a replica-scoped restart of an absent replica errors instead of touching anything', async () => {
       verificationHelperStub.resolves(true);
-      registryHolds(await colocatedApp('coloapp', ['s1']));
+      installedHolds(await colocatedApp('coloapp', ['s1']));
 
       const req = { params: { appname: 'coloapp' }, query: { replica: 's9' } };
       const res = { json: sinon.fake((param) => param) };
@@ -637,7 +642,7 @@ describe('appController tests', () => {
 
     it('restarts only the named component, by the identifier it states', async () => {
       verificationHelperStub.resolves(true);
-      registryHolds(await composedApp('ComposedApp', ['Component1', 'Component2'], { identity: 'a1b2c3d4e5f6' }));
+      installedHolds(await composedApp('ComposedApp', ['Component1', 'Component2'], { identity: 'a1b2c3d4e5f6' }));
 
       const req = { params: { appname: 'Component1_ComposedApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -654,11 +659,11 @@ describe('appController tests', () => {
     it('routes an activeStandby component restart through the reconciler (no caller-side skip)', async () => {
       verificationHelperStub.resolves(true);
       const held = await activeStandbyApp('composedapp', 'gcomp');
-      registryHolds(held);
+      const install = installedHolds(held);
       const dockerStop = sinon.stub(dockerService, 'appDockerStop');
       // Really active/standby, by the real component's own reading of the spec —
       // otherwise this test proves nothing about the branch it names.
-      const [deployment] = await deploymentProvider.buildDeployments(held);
+      const [deployment] = await deploymentProvider.buildDeployments(install);
       expect(deployment.getComponent('gcomp').hasActiveStandbySyncthing()).to.equal(true);
 
       const req = { params: { appname: 'gcomp_composedapp' }, query: {} };
@@ -682,7 +687,7 @@ describe('appController tests', () => {
 
     it('sets the durable force-stop lock and enqueues (no direct docker kill)', async () => {
       verificationHelperStub.resolves(true);
-      registryHolds(await composedApp('TestApp', ['Component']));
+      installedHolds(await composedApp('TestApp', ['Component']));
 
       const req = { params: { appname: 'Component_TestApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -695,7 +700,7 @@ describe('appController tests', () => {
 
     it('should kill app and return success message', async () => {
       verificationHelperStub.resolves(true);
-      registryHolds(await flatApp('TestApp'));
+      installedHolds(await flatApp('TestApp'));
 
       const req = { params: { appname: 'TestApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -710,7 +715,7 @@ describe('appController tests', () => {
 
     it('force-stops every component for a version 4+ app', async () => {
       verificationHelperStub.resolves(true);
-      registryHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
+      installedHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
 
       const req = { params: { appname: 'ComposedApp' }, query: {} };
       const res = { json: sinon.fake((param) => param) };
@@ -726,7 +731,7 @@ describe('appController tests', () => {
 
     it('should return error if app not found', async () => {
       verificationHelperStub.resolves(true);
-      registryHolds(null);
+      installedHolds(null);
 
       const req = {
         params: { appname: 'NonExistentApp' },
@@ -767,7 +772,7 @@ describe('appController tests', () => {
     const orderOf = (stub) => stub.getCalls().map((c) => c.args[0]);
 
     it('takes a composed app down in the reverse of the order it comes up', async () => {
-      registryHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
+      installedHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
       containersAre({ running: false });
 
       await appController.appStop(reqFor('ComposedApp'), res());
@@ -778,7 +783,7 @@ describe('appController tests', () => {
     });
 
     it('kills in the same reverse order', async () => {
-      registryHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
+      installedHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
       containersAre({ running: false });
 
       await appController.appKill(reqFor('ComposedApp'), res());
@@ -789,7 +794,7 @@ describe('appController tests', () => {
     // The control. A blanket reverse would satisfy both cases above while
     // inverting startup, so the forward direction is pinned too.
     it('brings it back up in compose order', async () => {
-      registryHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
+      installedHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
 
       await appController.appStart(reqFor('ComposedApp'), res());
 
@@ -797,7 +802,7 @@ describe('appController tests', () => {
     });
 
     it('restarts in compose order too', async () => {
-      registryHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
+      installedHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
 
       await appController.appRestart(reqFor('ComposedApp'), res());
 
@@ -805,7 +810,7 @@ describe('appController tests', () => {
     });
 
     it('does not reorder the caller\'s id array, which it goes on to probe', async () => {
-      registryHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
+      installedHolds(await composedApp('ComposedApp', ['Component1', 'Component2']));
       containersAre({ running: false });
       const probed = [];
       observedStateStub.callsFake(async (id) => {
@@ -825,7 +830,7 @@ describe('appController tests', () => {
         .map((c) => c.args[1]);
 
       it('announces a stop, carrying the force mode and the bare identifier', async () => {
-        registryHolds(await flatApp('TestApp'));
+        installedHolds(await flatApp('TestApp'));
         containersAre({ running: false });
 
         await appController.appKill(reqFor('TestApp'), res());
@@ -839,7 +844,7 @@ describe('appController tests', () => {
       });
 
       it('announces a start, and a restart as a start that asked for one', async () => {
-        registryHolds(await flatApp('TestApp'));
+        installedHolds(await flatApp('TestApp'));
 
         await appController.appStart(reqFor('TestApp'), res());
         await appController.appRestart(reqFor('TestApp'), res());
@@ -851,7 +856,7 @@ describe('appController tests', () => {
       });
 
       it('is published AFTER the write, so it cannot claim an intent that did not persist', async () => {
-        registryHolds(await flatApp('TestApp'));
+        installedHolds(await flatApp('TestApp'));
         containersAre({ running: false });
 
         await appController.appStop(reqFor('TestApp'), res());
@@ -862,7 +867,7 @@ describe('appController tests', () => {
 
     describe('accepted, not applied', () => {
       it('does not report a stop that has not happened', async () => {
-        registryHolds(await flatApp('TestApp'));
+        installedHolds(await flatApp('TestApp'));
         containersAre({ running: true }); // the reconciler has not got to it
 
         const response = res();
@@ -873,7 +878,7 @@ describe('appController tests', () => {
       });
 
       it('names an election as the reason a start did not run it, not a failure', async () => {
-        registryHolds(await flatApp('TestApp'));
+        installedHolds(await flatApp('TestApp'));
         containersAre({ running: false });
         sinon.stub(appReconciler, 'desiredRunState').resolves({ desired: null, reason: 'awaitingController' });
 
@@ -887,7 +892,7 @@ describe('appController tests', () => {
       // This tree's reconciler answers eight reasons development's map never
       // carried, and each is a settled state that "not yet" misdescribes.
       it('names this tree\'s own reasons rather than falling back', async () => {
-        registryHolds(await flatApp('TestApp'));
+        installedHolds(await flatApp('TestApp'));
         containersAre({ running: false });
         const desired = sinon.stub(appReconciler, 'desiredRunState');
 
@@ -908,7 +913,7 @@ describe('appController tests', () => {
       });
 
       it('reports a stop that did happen plainly', async () => {
-        registryHolds(await flatApp('TestApp'));
+        installedHolds(await flatApp('TestApp'));
         containersAre({ running: false });
 
         const response = res();

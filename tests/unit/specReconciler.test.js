@@ -517,11 +517,11 @@ describe('specReconciler tests', () => {
     // The images of every identity are the spec's own, read from the real deployment
     // view, and a specification that cannot be read answers null rather than nothing.
     it('reads the images the sweeper judges from the real deployment view', async () => {
-      const row = await specWith({});
+      const install = installedRecord(await specWith({}));
       const { imagesOf } = imageManager.nodeComplianceDeps();
-      expect(await imagesOf(row)).to.deep.equal(['nginx:latest']);
+      expect(await imagesOf(install)).to.deep.equal(['nginx:latest']);
       sinon.stub(deploymentProvider, 'buildDeployments').rejects(new Error('could not decrypt'));
-      expect(await imagesOf(row), 'unread components are not an empty image list').to.equal(null);
+      expect(await imagesOf(install), 'unread components are not an empty image list').to.equal(null);
     });
 
     // A record this node holds and cannot read is not a record saying it is gone.
@@ -530,8 +530,9 @@ describe('specReconciler tests', () => {
       const installedApps = stubInstalled();
       const { readInstalled } = imageManager.nodeComplianceDeps();
 
-      installedApps.byName.resolves(installedRecord(row));
-      expect(await readInstalled('myapp')).to.equal(row);
+      const install = installedRecord(row);
+      installedApps.byName.resolves(install);
+      expect(await readInstalled('myapp')).to.equal(install);
       sinon.assert.calledWithExactly(installedApps.byName, 'myapp');
 
       installedApps.byName.resolves(null);
@@ -626,15 +627,16 @@ describe('specReconciler tests', () => {
       expect([...sweepStub.firstCall.args[0]]).to.deep.equal(['myapp']);
 
       // reconcileApp stays stubbed, so nothing else proves what it was handed.
-      // It reads name/identity off the installed row and pushes the registry row
-      // straight into deploymentProvider.buildDeployments.
+      // It reads name/identity off the installed record and plans the registry
+      // row with deploymentProvider.planDeployments.
       const [handedInstalled, handedRegistry] = reconcileAppStub.firstCall.args;
       assertAnswers(handedInstalled, ['serialize']);
       assertAnswers(handedRegistry, ['serialize']);
       expect(handedInstalled.name).to.equal('myapp');
       expect(handedRegistry.hash).to.equal(registryRow.hash);
-      const deployments = await deploymentProvider.buildDeployments(
-        handedRegistry, { identity: handedInstalled.identity ?? null },
+      expect(handedInstalled.componentKeys, 'the installed record, which carries its component keys').to.equal(null);
+      const deployments = await deploymentProvider.planDeployments(
+        handedRegistry, { identity: handedInstalled.identity ?? null, componentKeys: handedInstalled.componentKeys },
       );
       expect(deployments.map((deployment) => deployment.replica)).to.deep.equal(['s1']);
     });

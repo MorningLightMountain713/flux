@@ -23,7 +23,7 @@ const { verifyAppVolumeMount } = require('../utils/volumeService');
  * retry rather than reformat.
  *
  * @param {string} componentIdentifier
- * @param {object|null} instantiated - InstantiatedSpec of the app that owns this
+ * @param {object|null} install - InstalledSpec of the app that owns this
  *   component, resolved by the caller. Taken rather than looked up: this used to
  *   recover the app by splitting the identifier, which yields the APP-IDENTITY
  *   SEGMENT and not a name — the two coincide only for an app whose identity was
@@ -31,12 +31,12 @@ const { verifyAppVolumeMount } = require('../utils/volumeService');
  *   pass that got here, so asking again could also answer differently.
  * @param {{abortSignal?: AbortSignal, allowVolumeCreation?: boolean}} [options]
  */
-async function recreateMissingContainers(componentIdentifier, instantiated, { abortSignal = null, allowVolumeCreation = true } = {}) {
-  if (!instantiated) {
+async function recreateMissingContainers(componentIdentifier, install, { abortSignal = null, allowVolumeCreation = true } = {}) {
+  if (!install) {
     throw new Error(`App for ${componentIdentifier} not found in local database`);
   }
-  const mainAppName = instantiated.name;
-  const identity = instantiated.identity ?? mainAppName;
+  const mainAppName = install.name;
+  const identity = install.identity ?? mainAppName;
 
   // The app's docker network is a precondition of the recreate below, and the
   // reconciler guarantees it before reaching any path that runs a container -
@@ -49,7 +49,7 @@ async function recreateMissingContainers(componentIdentifier, instantiated, { ab
   // spec-backend bridge, which only resolves once something else has warmed it
   // — a dependency this entry point (health monitor, network heal) has no way
   // to guarantee, since it is not on the reconciler's boot path.
-  const deployments = await deploymentProvider.installedDeployments(instantiated);
+  const deployments = await deploymentProvider.installedDeployments(install);
   let matched = null;
   for (const deployment of deployments) {
     const component = deployment.componentForIdentifier(componentIdentifier);

@@ -88,7 +88,7 @@ async function appFor(identifier) {
     installed = await appRecords.installed().byIdentity(identity, { includeOwed: true });
   }
   if (installed?.owed) return { installed: null, name: installed.name, owedTeardown: { name: installed.name, replica: installed.replica } };
-  if (installed) return { installed: installed.record, name: installed.name, owedTeardown: null };
+  if (installed) return { installed, name: installed.name, owedTeardown: null };
   const legacy = await pendingTeardownStore.teardownForComponent(identifier);
   return { installed: null, name: legacy?.name ?? null, owedTeardown: legacy ? { legacyKey: legacy.key } : null };
 }
@@ -376,7 +376,7 @@ function policyAllowsRun(policy, exitCode) {
  * containerData parsing — the reconciler never reads raw spec documents.
  *
  * @param {string} identifier
- * @param {object} inst - InstantiatedSpec of the app that owns this component
+ * @param {object} inst - InstalledSpec of the app that owns this component
  */
 async function getLocalComponentSpec(identifier, inst) {
   const mainAppName = inst.name;
@@ -2224,7 +2224,7 @@ async function enqueueApp(name) {
   try {
     identifiers = (await appRecords.ledgers().instancesOf(name)).flatMap((ledger) => ledger.identifiers());
     if (identifiers.length === 0) {
-      const inst = (await appRecords.installed().byName(name))?.record;
+      const inst = await appRecords.installed().byName(name);
       // Not installed here: nothing to converge. A row-deleted app mid-removal is
       // driven per component by the uninstaller and replayed at boot from the owed
       // records, neither of which needs this path.

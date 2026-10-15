@@ -190,8 +190,8 @@ describe('crontabAndMountsCleanup tests', () => {
     appsRepositoryMock.listComponentIdentifiers.resolves([]);
     deploymentProviderMock.buildDeployment.reset();
     outcomeByRow.clear();
-    deploymentProviderMock.buildDeployment.callsFake(async (row) => {
-      const outcome = outcomeByRow.get(row);
+    deploymentProviderMock.buildDeployment.callsFake(async (install) => {
+      const outcome = outcomeByRow.get(install.record);
       if (outcome instanceof Error) throw outcome;
       return outcome || null;
     });
@@ -283,7 +283,7 @@ describe('crontabAndMountsCleanup tests', () => {
 
       const result = await crontabAndMountsCleanup.getInstalledAppIds();
 
-      expect(deploymentProviderMock.buildDeployment.calledWith(enterpriseHermes.row)).to.be.true;
+      expect(deploymentProviderMock.buildDeployment.calledWith(sinon.match.has('record', enterpriseHermes.row))).to.be.true;
       expect(result.has('fluxhermes_hermesagent123')).to.be.true;
       expect(result.size).to.equal(1);
     });
@@ -345,6 +345,7 @@ describe('crontabAndMountsCleanup tests', () => {
       expect(handedRow.spec, 'and unwraps this when it is encrypted').to.be.an('object');
       expect(handedRow.name, 'which this module keys the map by').to.equal('wordpress123');
       expect(handedRow, 'identity is READ off the row, never recomputed').to.have.property('identity');
+      expect(handedRow, 'the installed record, whose keys name the containers').to.have.property('componentKeys');
 
       // and what comes back is walked by componentEntries(), one identifier each
       const handedDeployment = await deploymentProviderMock.buildDeployment.firstCall.returnValue;

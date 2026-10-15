@@ -193,9 +193,9 @@ async function planRow(row, { isAppIdentity, appIdentityFromUuid }) {
   const token = operationRegistry.acquire(name, 'move', 'appIdentityMove', `moving ${name} onto ${to}`);
   if (!token) return { name, replica, skipped: 'held by another operation' };
   try {
-    const former = await deploymentProvider.buildDeployment(installed.record, { replica });
-    const next = await deploymentProvider.buildDeployment(installed.record, {
-      replica, identity: to, registrationVersion: registration.registrationVersion,
+    const former = await deploymentProvider.buildDeployment(installed, { replica });
+    const next = await deploymentProvider.planDeployment(installed.record, {
+      replica, identity: to, registrationVersion: registration.registrationVersion, componentKeys: installed.componentKeys,
     });
     return {
       name, replica, installed, registration, from: installed.identity, to, former, next, token,
@@ -341,7 +341,7 @@ async function repointFolder(comp) {
  */
 async function recreate(name, replica, uuid) {
   const installed = await appRecords.installed().byReplica(name, replica);
-  const deployment = await deploymentProvider.buildDeployment(installed.record, { replica });
+  const deployment = await deploymentProvider.buildDeployment(installed, { replica });
   const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(deployment);
   // eslint-disable-next-line no-restricted-syntax
   for (const [, component] of deployment.componentEntries()) {

@@ -920,7 +920,7 @@ async function uninstallApplication(appName, options = {}) {
       let budgetSeconds = 0;
       try {
         // eslint-disable-next-line no-await-in-loop
-        const deployment = await deploymentProvider.buildDeployment(instance.record, { replica: instance.replica });
+        const deployment = await deploymentProvider.buildDeployment(instance, { replica: instance.replica });
         if (deployment) budgetSeconds = shutdownPlan.appShutdownBudgetSeconds(deployment);
       } catch (err) {
         log.warn(`uninstall ${appName}: deployment build failed (${err.message}); the stop gets no budget`);

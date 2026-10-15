@@ -206,6 +206,21 @@ async function instantiatedSpec(overrides = {}) {
 }
 
 /**
+ * The real InstalledSpec: a registered record this node runs, the replica it
+ * runs as, and the component keys it derived for it. `record` defaults to
+ * instantiatedSpec(rest).
+ */
+async function installedSpec(overrides = {}) {
+  const { InstalledSpec } = await load();
+  const {
+    record, replica = null, owed = null, componentKeys = null, ...rest
+  } = overrides;
+  return new InstalledSpec({
+    record: record ?? await instantiatedSpec(rest), replica, owed, componentKeys,
+  });
+}
+
+/**
  * The temporary message a verifier reads before promoting it.
  *
  * `version` here is the MESSAGE version, not the spec's, and it decides which
@@ -279,5 +294,6 @@ module.exports = {
   confirmedEvent,
   legacyEvent,
   instantiatedSpec,
+  installedSpec,
   tempMessage,
 };
