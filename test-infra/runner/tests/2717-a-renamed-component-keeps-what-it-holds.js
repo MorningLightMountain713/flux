@@ -31,7 +31,7 @@ import {
 } from '../framework/container.js';
 import { getSyncthingState } from '../framework/syncthing-control.js';
 import { appView } from '../framework/app-view.js';
-import { waitForDaemonReady, waitForInstallSettled } from '../framework/wait.js';
+import { waitFor, waitForDaemonReady, waitForInstallSettled } from '../framework/wait.js';
 import { appIdentityFromUuid, appUuid } from '@runonflux/flux-spec';
 
 const NODES = 5;
@@ -125,7 +125,7 @@ describe('a renamed component keeps what it holds', function () {
       deferredNodes: 1,
       tickerAutostart: false,
       arcane: true,
-      configOverrides: { fluxapps: { minOutgoing: 2 } },
+      configOverrides: { fluxapps: { minOutgoing: 2, adoptionStaggerStepMs: 5000, adoptionStaggerWindowMs: 10000 } },
     });
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1, pricing: true });
     view = appView(env, name, { component: 'web', timeout: CONVERGE_MS });
@@ -171,9 +171,13 @@ describe('a renamed component keeps what it holds', function () {
     const was = new Map();
     // eslint-disable-next-line no-restricted-syntax
     for (const index of hosts) {
+      // The folder is configured on the monitor's pass after the install.
+      // eslint-disable-next-line no-await-in-loop
+      await waitFor(async () => (await foldersOn(index)).includes(installedAs.get(`${index}:web`)), {
+        timeout: CONVERGE_MS, interval: 3000, label: `node ${index} shares web's data under its identifier`,
+      });
       // eslint-disable-next-line no-await-in-loop
       was.set(index, { container: await containerOf(index, 'web'), folders: await foldersOn(index) });
-      expect(was.get(index).folders, `node ${index} shares web's data under its identifier`).to.include(installedAs.get(`${index}:web`));
     }
 
     const webKey = app.componentKeys.get('web');
