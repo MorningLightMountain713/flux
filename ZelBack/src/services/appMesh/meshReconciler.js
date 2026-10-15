@@ -27,6 +27,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const appRecords = require('../appDatabase/appRecords');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const componentKeyMap = require('../appLifecycle/componentKeyMap');
+const uplinkService = require('../uplinkService');
 const dockerService = require('../dockerService');
 const daemonStatus = require('../daemonService/daemonStatus');
 const daemonServiceBlockchainRpcs = require('../daemonService/daemonServiceBlockchainRpcs');
@@ -289,6 +290,7 @@ async function reconcileAppMaterial(app, ctx) {
     listenPort: meshPort,
     members,
     sshClientPublicKey: ctx.sshClientPublicKey,
+    ownMtu: uplinkService.getUplinkSummary().mtu,
   });
   const configPath = path.join(meshCertificates.meshAppDir(app.identity), NEBULA_CONFIG_FILE);
   const configChanged = await writeFileIfChanged(configPath, configText);

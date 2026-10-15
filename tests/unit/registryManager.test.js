@@ -1488,6 +1488,21 @@ describe('registryManager tests', () => {
       expect(result[0].ip).to.equal('1.2.3.4');
     });
 
+    it('carries an entry\'s mesh fields, its link MTU among them', async () => {
+      const event = makeV2Event('1.2.3.4', [{
+        name: 'AppA', hash: 'h1', meshCa: 'ca', meshVoucher: 'v', meshPort: 16_230, meshMtu: 1420,
+      }, { name: 'AppB', hash: 'h2' }], now);
+      event.data.meshAnchor = { height: 10, hash: 'ab' };
+      await database.collection(eventsCollection).insertOne(event);
+
+      const rows = await appsRepository.appLocationFromEvents();
+      const byName = Object.fromEntries(rows.map((r) => [r.name, r]));
+      expect(byName.AppA).to.deep.include({
+        meshCa: 'ca', meshVoucher: 'v', meshPort: 16_230, meshMtu: 1420, meshAnchor: { height: 10, hash: 'ab' },
+      });
+      expect(byName.AppB.meshMtu, 'an entry that announces none').to.equal(null);
+    });
+
     it('should exclude apps with newer appremoved event', async () => {
       await database.collection(eventsCollection).insertMany([
         makeV2Event('1.2.3.4', [{ name: 'AppA', hash: 'h1' }, { name: 'AppB', hash: 'h2' }], now - 60_000),

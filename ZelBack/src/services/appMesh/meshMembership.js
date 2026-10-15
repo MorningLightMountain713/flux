@@ -59,6 +59,19 @@ const sameSet = (values, expected) => {
   return expected.every((entry) => values.includes(entry));
 };
 
+// The range a node measures its own link's MTU in (uplinkService): an
+// announced value outside it was not measured, and is taken as unknown.
+const ANNOUNCED_MTU_MIN = 1280;
+const ANNOUNCED_MTU_MAX = 1500;
+
+/**
+ * @param {*} value a member's announced link MTU
+ * @returns {number|null} the value when a node could have measured it, else null
+ */
+function announcedMtu(value) {
+  return Number.isInteger(value) && value >= ANNOUNCED_MTU_MIN && value <= ANNOUNCED_MTU_MAX ? value : null;
+}
+
 /**
  * Evaluate one app's announced candidates into accepted members.
  *
@@ -66,7 +79,7 @@ const sameSet = (values, expected) => {
  *   appUuid: string,
  *   ownOutpoint: string,
  *   rows: Array<{outpoint: string|null, ip: string, broadcastedAt: number,
- *     meshCa: string|null, meshVoucher: string|null, meshPort: number|null,
+ *     meshCa: string|null, meshVoucher: string|null, meshPort: number|null, meshMtu?: number|null,
  *     meshAnchor: {height: number, hash: string}|null}>,
  *   tipHeight: number,
  *   anchorHeights: Map<string, number|null>, resolved from MY chain, by hash —
@@ -78,7 +91,7 @@ const sameSet = (values, expected) => {
  * }} ctx
  * @returns {Promise<{members: Array<{outpoint: string, nodeId: string,
  *   address: string, block: string, endpoint: string, caShas: string[],
- *   meshCa: string}>, rejected: Array<{outpoint: string|null, reason: string}>}>}
+ *   meshCa: string, mtu: number|null}>, rejected: Array<{outpoint: string|null, reason: string}>}>}
  */
 async function evaluateCandidates(ctx) {
   const {
@@ -173,6 +186,7 @@ async function evaluateCandidates(ctx) {
       endpoint: `${host}:${row.meshPort}`,
       caShas: certs.map((cert) => cert.fingerprint),
       meshCa: row.meshCa,
+      mtu: announcedMtu(row.meshMtu),
     });
   }
 

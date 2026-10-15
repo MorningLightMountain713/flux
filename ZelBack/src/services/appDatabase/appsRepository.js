@@ -517,12 +517,13 @@ const RUNNING_ROW_TAIL = [
       state: { $cond: [{ $in: ['$_v2Filtered.apps.state', ['draining', 'stopping']] }, '$_v2Filtered.apps.state', 'active'] },
       replica: { $ifNull: ['$_v2Filtered.apps.replica', null] },
       // Mesh membership fields, null-defaulted to one shape: the entry's
-      // authority bundle, its voucher, its transport port, and the broadcast's
-      // anchor block. Absent on non-mesh entries and on announcements that
-      // predate mesh.
+      // authority bundle, its voucher, its transport port, its node's measured
+      // link MTU, and the broadcast's anchor block. Absent on non-mesh entries
+      // and on announcements that predate mesh.
       meshCa: { $ifNull: ['$_v2Filtered.apps.meshCa', null] },
       meshVoucher: { $ifNull: ['$_v2Filtered.apps.meshVoucher', null] },
       meshPort: { $ifNull: ['$_v2Filtered.apps.meshPort', null] },
+      meshMtu: { $ifNull: ['$_v2Filtered.apps.meshMtu', null] },
       meshAnchor: { $ifNull: ['$_v2Filtered.meshAnchor', null] },
       shutdowns: 1,
     },

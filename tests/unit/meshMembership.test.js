@@ -76,6 +76,20 @@ describe('meshMembership', () => {
     });
   });
 
+  it('carries the link MTU a member announces, and none it could not have measured', async () => {
+    const mtuOf = async (meshMtu) => (await meshMembership.evaluateCandidates(
+      ctx({ rows: [candidateRow({ meshMtu })] }),
+    )).members[0].mtu;
+    expect(await mtuOf(1420)).to.equal(1420);
+    expect(await mtuOf(1280)).to.equal(1280);
+    expect(await mtuOf(1500)).to.equal(1500);
+    expect(await mtuOf(undefined)).to.equal(null);
+    for (const unmeasurable of [1279, 1501, 9000, 1420.5, '1420', -1]) {
+      // eslint-disable-next-line no-await-in-loop
+      expect(await mtuOf(unmeasurable), String(unmeasurable)).to.equal(null);
+    }
+  });
+
   it('never admits itself and keeps only the newest row per outpoint', async () => {
     const stale = candidateRow({ broadcastedAt: 1, meshPort: 1111 });
     const own = candidateRow({ outpoint: OWN });
