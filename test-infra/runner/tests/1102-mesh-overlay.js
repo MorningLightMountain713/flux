@@ -223,4 +223,24 @@ describe('mesh overlay across a real systemd fleet', function () {
     await dial(0);
     await dial(1);
   });
+
+  it('a packet as large as the container\'s mesh device crosses the overlay', async function () {
+    this.timeout(180000);
+    // The container's flux-mesh0 carries 1400 bytes: 1372 of ping payload, 8 of
+    // ICMP header and 20 of IPv4. A small ping to the same peer first, so a
+    // failure is about size and nothing else.
+    const envOut = await inApp(0, '/bin/busybox sh -c "/bin/busybox env | /bin/busybox grep FLUX_MESH_SELF_IP"');
+    const selfIp = envOut.stdout.match(/FLUX_MESH_SELF_IP=([0-9.]+)/)?.[1];
+    const peerIps = (await nodeSnapshotMembers(0)).map((m) => m.ip).filter((ip) => ip && ip !== selfIp);
+    expect(peerIps, 'peer addresses visible from node 0').to.have.length(2);
+    // eslint-disable-next-line no-restricted-syntax
+    for (const peerIp of peerIps) {
+      // eslint-disable-next-line no-await-in-loop
+      const small = await inApp(0, `/bin/busybox ping -c 3 -W 3 -s 56 ${peerIp}`);
+      expect(small.stdout, `a small packet reaches ${peerIp}`).to.match(/[1-3] packets received/);
+      // eslint-disable-next-line no-await-in-loop
+      const full = await inApp(0, `/bin/busybox ping -c 3 -W 3 -s 1372 ${peerIp}`);
+      expect(full.stdout, `a 1400-byte packet reaches ${peerIp}`).to.match(/[1-3] packets received/);
+    }
+  });
 });
