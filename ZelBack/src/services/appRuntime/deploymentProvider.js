@@ -58,7 +58,7 @@ async function resolveRuntimeSpec(instantiated) {
 
 /**
  * The names the ledger records for the components the node has started on:
- * by component, the folder id its data is shared under and the aliases its
+ * by component key, the folder id its data is shared under and the aliases its
  * container is created with. A deployment built with them names those
  * components as recorded and leaves the registration to name the rest.
  * @param {import('@runonflux/flux-spec-backend').InstalledLedger|null} ledger
@@ -66,7 +66,7 @@ async function resolveRuntimeSpec(instantiated) {
  */
 function recordedNames(ledger) {
   if (!ledger) return undefined;
-  return Object.fromEntries(Object.entries(ledger.components).map(([name, block]) => [name, {
+  return Object.fromEntries(Object.entries(ledger.components).map(([key, block]) => [key, {
     syncFolderId: block.syncFolder?.id ?? null,
     aliases: [...block.aliases],
   }]));

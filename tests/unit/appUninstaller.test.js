@@ -362,11 +362,14 @@ describe('appUninstaller tests', () => {
   });
 
   describe('uninstallComponent: the grant release keys on the data', () => {
+    // The component's key, deliberately unlike its name: the ledger is keyed by it.
+    const COMPONENT_KEY = `c${'k'.repeat(52)}`;
     const component = () => ({
       identifier: 'web_TestApp',
       appName: 'TestApp',
       identity: 'ab12cd34ef56',
       name: 'web',
+      componentKey: COMPONENT_KEY,
       hasActiveStandbySyncthing: () => true,
     });
 
@@ -429,7 +432,7 @@ describe('appUninstaller tests', () => {
 
       it('tears down the ports, the folder and the image file the block names', async () => {
         ledgersStub.byInstance.resolves(ledgerOf({
-          web: {
+          [COMPONENT_KEY]: {
             identifier: 'web_TestApp',
             image: { reference: 'img', digest: null },
             hostPorts: [{ port: 31_001, opened: ['upnp'] }, { port: 31_002, opened: ['ufw'] }],

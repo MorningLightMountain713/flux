@@ -521,7 +521,7 @@ async function uninstallComponent(component, options = {}) {
   // What the ledger names for the component is what goes: its ports by the
   // methods they were opened with, its folder by its id, its image file.
   const ledger = await appRecords.ledgers().byInstance(appName, component.replica ?? null);
-  const block = ledger?.component(componentName) ?? null;
+  const block = ledger?.component(component.componentKey) ?? null;
   if (!block) log.warn(`uninstall ${component.identifier}: the ledger names no block for it; no port, folder or image file is removed`);
   const { removed } = await teardownComponentCore(
     {
@@ -1059,7 +1059,7 @@ function teardownTarget(instance, ledger, owed) {
     identity: instance.identity,
     networkName: ledger?.network?.name ?? null,
     components: ledger
-      ? Object.entries(ledger.components).map(([componentName, block]) => ({ componentName, ...block }))
+      ? Object.entries(ledger.components).map(([componentKey, block]) => ({ componentKey, ...block }))
       : [],
     owed,
     source: 'record',
@@ -1084,7 +1084,8 @@ async function legacyTarget(doc) {
     // eslint-disable-next-line no-await-in-loop
     const image = await installedLedger.discoverVolumeImage(c.identifier, null);
     components.push({
-      componentName: c.componentName,
+      // A release before the ledger ran no v9 app: each component is keyed by its name.
+      componentKey: c.componentName,
       identifier: c.identifier,
       image: { reference: c.image ?? null, digest: null },
       hostPorts: (c.ports || []).map((port) => ({ port, opened })),
@@ -1338,7 +1339,7 @@ async function executeTeardown(target, { onStatus = null } = {}) {
   await withHostMutationLock(async () => {
     // eslint-disable-next-line no-restricted-syntax
     for (const c of list) {
-      const label = c.componentName === name ? name : `component ${c.componentName} of ${name}`;
+      const label = c.componentKey === name ? name : `component ${c.componentKey} of ${name}`;
       // eslint-disable-next-line no-await-in-loop
       const { removed, cleanupFailed } = await teardownComponentCore(
         {

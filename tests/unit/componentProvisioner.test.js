@@ -67,9 +67,13 @@ describe('componentProvisioner tests', () => {
     });
   }
 
+  // The component's key, deliberately unlike its name: the ledger is keyed by it.
+  const COMPONENT_KEY = `c${'k'.repeat(52)}`;
+
   function makeComponent(syncMode, overrides = {}) {
     return {
       name: 'web',
+      componentKey: COMPONENT_KEY,
       appName: 'syncholdapp',
       identity: IDENTITY,
       identifier: 'web_syncholdapp',
@@ -128,7 +132,7 @@ describe('componentProvisioner tests', () => {
         hostPorts: [31_000], hasSyncthing: () => true, syncFolderId: 'fluxweb_synchold',
       }), { createVolumes: true });
 
-      sinon.assert.calledOnceWithExactly(ledgersStub.addComponent, 'syncholdapp', null, 'web', {
+      sinon.assert.calledOnceWithExactly(ledgersStub.addComponent, 'syncholdapp', null, COMPONENT_KEY, {
         identifier: 'web_syncholdapp', image: 'nginx:latest', syncFolder: { id: 'fluxweb_synchold', path: '/apps/web_syncholdapp' }, aliases: ['web'],
       });
       expect(ledgersStub.addComponent.calledBefore(allowPortStub), 'the block precedes the first port').to.equal(true);
@@ -139,7 +143,7 @@ describe('componentProvisioner tests', () => {
     it('names no sync folder for a component without syncthing, and carries the replica of a named instance', async () => {
       const provisioner = loadProvisioner();
       await provisioner.installComponent(makeComponent(null, { replica: 'r1' }));
-      sinon.assert.calledOnceWithExactly(ledgersStub.addComponent, 'syncholdapp', 'r1', 'web', {
+      sinon.assert.calledOnceWithExactly(ledgersStub.addComponent, 'syncholdapp', 'r1', COMPONENT_KEY, {
         identifier: 'web_syncholdapp', image: 'nginx:latest', syncFolder: null, aliases: ['web'],
       });
       expect(ledgersStub.setComponent.getCalls().every((c) => c.args[1] === 'r1'), 'every entry is the replica\'s').to.equal(true);
@@ -150,7 +154,7 @@ describe('componentProvisioner tests', () => {
       await provisioner.installComponent(makeComponent(null, { hostPorts: [31_000, 31_001] }));
 
       const ports = ledgerWrite('hostPorts');
-      expect(ports.args).to.deep.equal(['syncholdapp', null, 'web', 'hostPorts', [
+      expect(ports.args).to.deep.equal(['syncholdapp', null, COMPONENT_KEY, 'hostPorts', [
         { port: 31_000, opened: ['ufw', 'upnp'] }, { port: 31_001, opened: ['ufw', 'upnp'] },
       ]]);
       expect(ports.calledBefore(allowPortStub.firstCall), 'recorded before opened').to.equal(true);
@@ -227,7 +231,7 @@ describe('componentProvisioner tests', () => {
 
     it('fails the install when an entry cannot be written, before the step that uses it', async () => {
       const provisioner = loadProvisioner({ firewallActive: true });
-      ledgersStub.setComponent.withArgs('syncholdapp', null, 'web', 'hostPorts').rejects(new Error('ledger down'));
+      ledgersStub.setComponent.withArgs('syncholdapp', null, COMPONENT_KEY, 'hostPorts').rejects(new Error('ledger down'));
       let threw = null;
       await provisioner.installComponent(makeComponent(null, { hostPorts: [31_000] })).catch((e) => { threw = e; });
       expect(threw.message).to.equal('ledger down');

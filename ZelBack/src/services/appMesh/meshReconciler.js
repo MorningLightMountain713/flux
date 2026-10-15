@@ -338,7 +338,7 @@ async function gatherContainers(app) {
         identifier: component.identifier,
         pid,
         sourceIp: bridge?.IPAddress || null,
-        meshSelf: ledger?.component(componentName)?.mesh?.name ?? null,
+        meshSelf: ledger?.component(component.componentKey)?.mesh?.name ?? null,
       });
     }
   }

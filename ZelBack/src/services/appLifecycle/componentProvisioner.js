@@ -203,9 +203,9 @@ async function installComponent(component, options = {}) {
   };
 
   const ledgers = appRecords.ledgers();
-  const entry = (field, value) => ledgers.setComponent(appName, replica, component.name, field, value);
+  const entry = (field, value) => ledgers.setComponent(appName, replica, component.componentKey, field, value);
   const compDir = path.join(appsFolder, id);
-  await ledgers.addComponent(appName, replica, component.name, {
+  await ledgers.addComponent(appName, replica, component.componentKey, {
     identifier: id,
     image: component.image,
     syncFolder: component.hasSyncthing() ? { id: component.syncFolderId, path: compDir } : null,

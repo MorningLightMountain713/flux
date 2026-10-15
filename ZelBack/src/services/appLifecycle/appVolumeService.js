@@ -98,13 +98,13 @@ async function createAppVolume(deployComp, res) {
       const volume = {
         file: volumeFile, disk: useThisVolume.mount, fsUuid: null, mountDir: appsFolder + appId,
       };
-      await appRecords.ledgers().setComponent(deployComp.appName, deployComp.replica ?? null, deployComp.name, 'volume', volume);
+      await appRecords.ledgers().setComponent(deployComp.appName, deployComp.replica ?? null, deployComp.componentKey, 'volume', volume);
       await serviceHelper.runCommand('fallocate', { params: ['-l', `${requiredGb}G`, volumeFile], runAsRoot: true });
       emitStatus(res, { status: 'Space allocated' });
 
       emitStatus(res, { status: 'Creating filesystem...' });
       await serviceHelper.runCommand('mke2fs', { params: ['-t', 'ext4', '-U', volumeFsUuid, volumeFile], runAsRoot: true });
-      await appRecords.ledgers().setComponent(deployComp.appName, deployComp.replica ?? null, deployComp.name, 'volume', { ...volume, fsUuid: volumeFsUuid });
+      await appRecords.ledgers().setComponent(deployComp.appName, deployComp.replica ?? null, deployComp.componentKey, 'volume', { ...volume, fsUuid: volumeFsUuid });
       emitStatus(res, { status: 'Filesystem created' });
 
       emitStatus(res, { status: 'Making directory...' });
