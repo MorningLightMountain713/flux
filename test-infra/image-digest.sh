@@ -76,6 +76,13 @@ fi
 dir="test-infra/$image"
 [ -d "$dir" ] || { echo "image-digest: no such image source: $dir" >&2; exit 2; }
 
+# An image built from a vendored source (vendor.sh beside a pin) is that source:
+# a vendor whose stamp differs from the pin has no digest to offer.
+if [ -f "$dir/pin" ] && [ "$(cat "$dir/src/.vendored-ref" 2>/dev/null)" != "$(tr -d '[:space:]' < "$dir/pin")" ]; then
+  echo "image-digest: $dir/src is not vendored at $dir/pin - run bash $dir/vendor.sh" >&2
+  exit 3
+fi
+
 # A stub that builds FROM the node image inherits its contents, so a stale
 # fluxos-01 makes the stub stale too even when its own directory has not moved.
 # external-http-stub is the one that does this today; the ARG is what says so.
