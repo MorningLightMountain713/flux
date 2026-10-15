@@ -38,9 +38,8 @@ import { pushImage } from '../framework/registry-helper.js';
 import { nodeOutpoint } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
 import {
-  appDataRoot, appSyncthingFolderId, componentIdentifier, execInContainer,
+  appDataRoot, componentIdentifier, execInContainer,
 } from '../framework/container.js';
-import { setSynced } from '../framework/syncthing-control.js';
 import { grantPlaneOverrides, grantVerdict } from '../framework/grant-record.js';
 import { rerollRole } from '../framework/generation-record.js';
 import { appView } from '../framework/app-view.js';
@@ -186,7 +185,6 @@ describe('an activeStandby app re-rolled, then sold', function () {
 
     await Promise.all([first, second].map((i) => waitForInstallSettled(env.clients[i], name, CONVERGE_MS)));
     await Promise.all([first, second].map((i) => seedData(i)));
-    await setSynced({ folder: await appSyncthingFolderId(env.clients[first], name, 'web') });
     await waitFor(async () => (await verdict()) !== null, {
       timeout: CONVERGE_MS, interval: 10000, label: 'a term forms',
     });
