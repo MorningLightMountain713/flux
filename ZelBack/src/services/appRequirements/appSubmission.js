@@ -318,6 +318,14 @@ async function resolveSubmission(appSpecification, {
 
   assertStorageLinksAddressFluxStorage(spec);
 
+  // A registration continues no component, so a `renamedFrom` on one names
+  // nothing, and every node would refuse to install it. An update's are judged
+  // against the version it updates (assertUpdateInvariants).
+  if (type === 'fluxappregister') {
+    const { componentContinuations } = await getSpec();
+    componentContinuations(spec, null);
+  }
+
   // POLICY IS A PRECONDITION OF ANSWERING. The blocked-repository list is part of the
   // signed bundle, so without a confirmed one this node cannot establish that an image
   // is not banned. A node in that state is not refusing this app; it is not yet in a

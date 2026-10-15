@@ -371,6 +371,37 @@ describe('appSubmission tests', () => {
       sinon.assert.calledOnce(stubs.entitlementsState.assertSpecEntitled);
     });
 
+    it('refuses a registration whose component names renamedFrom: it continues nothing', async () => {
+      appSubmission = load();
+      const spec = v9Spec({ components: { site: { ...V9_SUBMISSION.components.web, name: 'site', renamedFrom: 'web' } } });
+      stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
+      stubs.parseSpec.resolves({ isEncrypted: false });
+      stubs.specLibs.validateSubmissionSpec.resolves(spec);
+
+      let caught;
+      try {
+        await appSubmission.resolveSubmission({ version: 9 }, {
+          contentHash: spec.contentHash(), timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
+        });
+      } catch (error) { caught = error; }
+
+      expect(caught).to.be.instanceOf(flux.ValidationError);
+      expect(caught.errors.map((e) => e.path)).to.deep.equal([['components', 'site', 'renamedFrom']]);
+    });
+
+    it('leaves an update\'s renamedFrom to the update invariants', async () => {
+      appSubmission = load();
+      const spec = v9Spec({ components: { site: { ...V9_SUBMISSION.components.web, name: 'site', renamedFrom: 'web' } } });
+      stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });
+      stubs.parseSpec.resolves({ isEncrypted: false });
+      stubs.specLibs.validateSubmissionSpec.resolves(spec);
+
+      const result = await appSubmission.resolveSubmission({ version: 9 }, {
+        contentHash: spec.contentHash(), timestamp: 1, type: 'fluxappupdate', daemonHeight: 100,
+      });
+      expect(result.spec).to.equal(spec);
+    });
+
     // The rules a legacy version gates by height - the expire ceiling and
     // floor, the instance floor, the host port range - are the class's, and
     // the class judges them at the height it is given. This node's part is to
@@ -873,7 +904,7 @@ describe('appSubmission tests', () => {
       it('verifies against the merged base+override spec for the deployed tier', async () => {
         const deepMerge = sinon.stub().returns({ version: 9, merged: true });
         const fromSubmission = sinon.stub().returns({ templateSpec: true });
-        stubs.specLibs.getSpec = sinon.stub().resolves({ FluxAppSpecV9: { fromSubmission }, deepMerge });
+        stubs.specLibs.getSpec = sinon.stub().resolves({ ...flux, FluxAppSpecV9: { fromSubmission }, deepMerge });
         stubs.marketplaceTemplateCache.getTemplate = sinon.stub().resolves(tieredTemplate());
 
         const spec = configuredSpec(CONFIG_ID, { matches: true, mismatches: [], unresolved: [] });
