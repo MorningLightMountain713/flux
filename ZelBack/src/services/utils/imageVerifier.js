@@ -720,7 +720,10 @@ class ImageVerifier {
     };
 
     const evaluateMultipleImages = async (manifest) => {
-      const images = manifest.manifests.filter((m) => this.architectureSet.includes(m.platform.architecture));
+      // A node runs Linux images; an index's Windows builds and attestation
+      // entries are none of its business, whatever architecture they name.
+      const images = manifest.manifests.filter((m) => m.platform?.os === 'linux'
+        && this.architectureSet.includes(m.platform.architecture));
 
       if (!images.length) {
         this.#evaluationErrorDetail = `Docker image: ${this.rawImageTag} does not have a valid architecture`;

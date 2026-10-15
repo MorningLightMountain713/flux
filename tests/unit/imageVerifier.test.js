@@ -892,6 +892,40 @@ describe('imageVerifier tests', () => {
       expect(verifier.imageSizeBytes).to.equal(compressed);
     });
 
+    it('measures only the images a node runs, never a Windows build in the same index', async () => {
+      // mongo:7.0's index carries windows/amd64 builds beside the linux ones.
+      const linuxDigest = `sha256:${'1'.repeat(64)}`;
+      const windowsDigest = `sha256:${'2'.repeat(64)}`;
+      const windowsLayerDigest = `sha256:${'3'.repeat(64)}`;
+      const index = {
+        schemaVersion: 2,
+        mediaType: 'application/vnd.oci.image.index.v1+json',
+        manifests: [
+          { digest: linuxDigest, platform: { os: 'linux', architecture: 'amd64' } },
+          { digest: windowsDigest, platform: { os: 'windows', architecture: 'amd64' } },
+        ],
+      };
+      axiosGetStub.callsFake(async (url) => {
+        if (url === 'megachips/ipshow/manifests/web') return { data: index };
+        if (url === `megachips/ipshow/manifests/${linuxDigest}`) {
+          return { data: manifestOf([{ mediaType: gzipMediaType, size: 3_630_321, digest: layerDigest }]) };
+        }
+        if (url === `megachips/ipshow/manifests/${windowsDigest}`) {
+          return { data: manifestOf([{ mediaType: gzipMediaType, size: 1_523_059_351, digest: windowsLayerDigest }]) };
+        }
+        if (url === `megachips/ipshow/blobs/${configDigest}`) return { data: registryResponses.imageConfigAmd64 };
+        if (url === `megachips/ipshow/blobs/${layerDigest}`) return { status: 206, data: gzipTrailer(8_092_160) };
+        if (url === `megachips/ipshow/blobs/${windowsLayerDigest}`) return { status: 206, data: gzipTrailer(3_723_050_496) };
+        return { data: null };
+      });
+
+      const verifier = new ImageVerifier(repotag, { maxImageSize });
+      await verifier.verifyImage();
+
+      expect(verifier.error, verifier.errorDetail).to.equal(false);
+      expect(verifier.decompressedSizeBytes).to.equal(8_092_160);
+    });
+
     it('sums the layers of a multi-layer image', async () => {
       serveManifest(
         manifestOf([
