@@ -506,7 +506,9 @@ async function resolveTag(registry, repo, tag) {
  */
 export async function mirrorImage(reference, repo = null, { digest: knownDigest = null } = {}) {
   const pinned = /^([^/]+)\/(.+)@(sha256:[0-9a-f]{64})$/.exec(reference);
-  const tagged = /^([^/]+)\/([^:]+):([\w][\w.-]*)$/.exec(reference);
+  // A digest-pinned reference reads as a tagged one too (repo@sha256, tag the
+  // digest), so it is tagged only when it is not pinned.
+  const tagged = pinned ? null : /^([^/]+)\/([^:]+):([\w][\w.-]*)$/.exec(reference);
   if (!pinned && !tagged) {
     throw new Error(`mirrorImage needs host/repo@sha256:... or host/repo:tag, got '${reference}'`);
   }
