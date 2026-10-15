@@ -7,7 +7,7 @@
 //     // fleet: 16
 //
 // The number is the most nodes the suite has running at one time - the `nodes`
-// plus `deferredNodes` of its largest env. Suites that boot several envs tear
+// of its largest env, its `deferredNodes` among them. Suites that boot several envs tear
 // each down before the next, so the peak is the largest single env, not the sum.
 //
 // The declaration is what the launcher reads; the derivation here is what keeps
@@ -95,14 +95,12 @@ export function derivedFleet(source) {
   const unresolved = [];
   for (const args of calls) {
     const nodesExpr = field(args, 'nodes') ?? '1';
-    const deferredExpr = field(args, 'deferredNodes') ?? '0';
     const nodes = evaluate(nodesExpr, constants);
-    const deferred = evaluate(deferredExpr, constants);
-    if (nodes === null || deferred === null) {
-      unresolved.push(nodes === null ? nodesExpr : deferredExpr);
+    if (nodes === null) {
+      unresolved.push(nodesExpr);
       continue;
     }
-    peak = Math.max(peak ?? 0, nodes + deferred);
+    peak = Math.max(peak ?? 0, nodes);
   }
   return { peak, envs: calls.length, unresolved };
 }
