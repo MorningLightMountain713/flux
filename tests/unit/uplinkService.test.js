@@ -64,6 +64,9 @@ describe('uplinkService tests', () => {
   afterEach(() => {
     sinon.restore();
     uplinkService.reset();
+    // Setting the address also tells the peer manager; a later suite must not
+    // find this node at an address these tests gave it.
+    fluxNetworkHelper.setLocalSocketAddress(null);
   });
 
   describe('parsePing', () => {
