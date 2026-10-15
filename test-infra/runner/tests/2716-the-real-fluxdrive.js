@@ -125,7 +125,6 @@ describe('the real FluxDrive', function () {
       arcane: true,
       harnessClock: true,
       fluxDrive: 'real',
-      configOverrides: { fluxapps: { minOutgoing: 2 } },
     });
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1, pricing: true });
     view = appView(env, name, { component: 'web', timeout: CONVERGE_MS });
