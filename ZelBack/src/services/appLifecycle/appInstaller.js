@@ -198,7 +198,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
     // from the registration message, for every view this install provisions from.
     const registrationVersion = await appHistory.registrationVersionOf(appName, instantiated.uuid) ?? undefined;
     // The keys of the version installed, from the app's applied history.
-    const componentKeys = await componentKeyMap.keysForInstall(instantiated);
+    const componentKeys = await componentKeyMap.keysForVersion(instantiated);
     deployment = await deploymentProvider.planDeployment(instantiated, { replica, registrationVersion, componentKeys });
     // Check resources and reserve them atomically: two concurrent installs of
     // different apps must not both pass before either is accounted (the in-flight

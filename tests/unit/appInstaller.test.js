@@ -391,7 +391,7 @@ describe('appInstaller tests', () => {
       const planDeployment = sinon.stub().resolves(deployment);
       // The keys the install derives from the app's applied history, each unlike its name.
       const componentKeys = new Map([['web', `c${'k'.repeat(52)}`]]);
-      const keysForInstall = sinon.stub().resolves(componentKeys);
+      const keysForVersion = sinon.stub().resolves(componentKeys);
       const resolveDeploymentIdentity = sinon.stub().resolves(null);
       // The version the app was registered with, as its registration message states it.
       const registrationVersionOf = sinon.stub().resolves(8);
@@ -453,7 +453,7 @@ describe('appInstaller tests', () => {
           resolveDeploymentIdentity,
         },
         '../appDecisions/appHistory': { registrationVersionOf },
-        './componentKeyMap': { keysForInstall },
+        './componentKeyMap': { keysForVersion },
         './contentSlotService': { provisionContentSlots },
         '../utils/fluxEventBus': { publish: fluxEventBusPublish },
         '../appMonitoring/appReconciler': { awaitConvergence: appReconcilerAwaitConvergence },
@@ -477,7 +477,7 @@ describe('appInstaller tests', () => {
         teardownOwedFor,
         buildDeployment,
         planDeployment,
-        keysForInstall,
+        keysForVersion,
         componentKeys,
         registrationVersionOf,
         resolveDeploymentIdentity,
@@ -592,7 +592,7 @@ describe('appInstaller tests', () => {
     // read each argument back off its stub and call what the real one calls.
     it('hands each stubbed collaborator an object that answers what the real one asks', async () => {
       const {
-        installer, deployment, installComponent, buildDeployment, planDeployment, keysForInstall, componentKeys, registrationVersionOf, resolveDeploymentIdentity,
+        installer, deployment, installComponent, buildDeployment, planDeployment, keysForVersion, componentKeys, registrationVersionOf, resolveDeploymentIdentity,
         checkAppDependencyRequirements, connectComponentToLinkedApps, isImageBlocked,
         installedStub, ledgersStub, ensureAppDockerNetwork, appReconcilerAwaitConvergence, provisionContentSlots,
       } = loadFresh({ converge: { converged: true, failed: [] } });
@@ -622,7 +622,7 @@ describe('appInstaller tests', () => {
       const [built, buildOpts] = planDeployment.firstCall.args;
       expect(buildOpts).to.have.property('replica', null);
       // The version installed is planned with the keys derived for it.
-      sinon.assert.calledOnceWithExactly(keysForInstall, newappInstantiated);
+      sinon.assert.calledOnceWithExactly(keysForVersion, newappInstantiated);
       expect(buildOpts.componentKeys).to.equal(componentKeys);
       // Every view the install provisions from is named by the version the
       // registration message states, read once.
