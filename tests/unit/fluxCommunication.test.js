@@ -1939,8 +1939,6 @@ describe('fluxCommunication tests', () => {
       peerManager.reset();
       const { port } = localWsServer.address();
       const key = `127.0.0.1:${port}`;
-      // the module learns its own port from a standing dial; a self-dial opens nothing
-      await fluxCommunication.initiateAndHandleConnection('44.192.51.11:16127');
 
       const marked = sinon.spy(peerManager, 'markPendingEphemeral');
       const probe = fluxCommunication.openEphemeralConnection(key);
@@ -1964,6 +1962,29 @@ describe('fluxCommunication tests', () => {
       expect(again, 'a probe behind a standing dial opened').to.not.equal(null);
       again.close();
       peerManager.clearPending(key);
+    });
+
+    it('names to the far end the local API port the node holds when it connects, with no dial made first', async () => {
+      const { port } = localWsServer.address();
+      const key = `127.0.0.1:${port}`;
+      sinon.stub(peerManager, 'getOwnSocketAddress').returns('44.192.51.11:16199');
+      const requested = new Promise((resolve) => { localWsServer.once('connection', (ws, req) => resolve(req.url)); });
+
+      const peer = await fluxCommunication.openEphemeralConnection(key);
+
+      expect(peer, 'the connection opened').to.not.equal(null);
+      expect(await requested).to.equal('/ws/flux/16199');
+      peer.close();
+    });
+
+    it('opens no connection while the node does not know its own address, and leaves none pending', async () => {
+      const { port } = localWsServer.address();
+      const key = `127.0.0.1:${port}`;
+      sinon.stub(peerManager, 'getOwnSocketAddress').returns(null);
+      sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(null);
+
+      expect(await fluxCommunication.openEphemeralConnection(key)).to.equal(null);
+      expect(peerManager.isPendingEphemeral(key)).to.equal(false);
     });
 
     it('a dial that completes after the stop began is closed with the stop code, and the duty learns nothing from it', async () => {

@@ -1438,7 +1438,6 @@ async function removeIncomingPeer(req, res) {
  * To initiate and handle a connection. Opens a web socket and handles various events during connection.
  * @param {string} connection IP address (and port if applicable).
  */
-let myPort = null;
 let discoveryRunning = false;
 
 /** @type {WeakMap<WebSocket, {ip: string, port: string, source: string}>} */
@@ -1558,33 +1557,13 @@ async function initiateAndHandleConnection(connection, source = PEER_SOURCE.RAND
     }
     peerManager.markPending(key);
 
-    // This node's own address, asked of the peer manager rather than of
-    // benchmark. That is where the fact lives - fluxNetworkHelper pushes every
-    // refresh into it from the one place the node learns what it is - and the
-    // peer manager already answers this exact question for the sync draw.
-    // Asking benchmark is an uncached RPC (executeCall), and this runs on every
-    // dial: the ring reconciler's duties and top-ups, the random draw, the
-    // manual add and /flux/addpeer. Left to each caller it also made all of
-    // them hard dependent on benchd answering.
-    //
-    // Fresh enough by construction: the availability checker and the
-    // address-change handler refresh it, so after an address change a node
-    // does not announce a stale port for as long as it runs.
-    let localSocketAddr = peerManager.getOwnSocketAddress?.() || null;
-
-    if (!localSocketAddr) {
-      // Never been told, which a dial arriving before the first refresh
-      // genuinely is. Ask once - the answer fills the peer manager's copy on its
-      // way through, so this costs one call rather than one per dial.
-      localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
-    }
-
+    const localSocketAddr = await localSocketAddress();
     if (!localSocketAddr) {
       peerManager.clearPending(key);
       noDial(ip, port, 'noOwnAddress', onSettle);
       return;
     }
-    myPort = extractPort(localSocketAddr);
+    const localApiPort = extractPort(localSocketAddr);
 
     // Never ourselves, and refused HERE rather than by each caller: manual,
     // deterministic, reconnect and random dials all arrive through this
@@ -1640,7 +1619,7 @@ async function initiateAndHandleConnection(connection, source = PEER_SOURCE.RAND
     if (source === PEER_SOURCE.RECONNECT) {
       options.headers['X-Flux-Reconnect'] = 'true';
     }
-    const wsuri = `ws://${ip}:${port}/ws/flux/${myPort}`;
+    const wsuri = `ws://${ip}:${port}/ws/flux/${localApiPort}`;
     log.debug(`initiateAndHandleConnection - dialing ${key} (${source})`);
     const websocket = new WebSocket(wsuri, options);
     wsMetadata.set(websocket, {
@@ -1668,29 +1647,50 @@ function noDial(ip, port, reason, onSettle) {
 }
 
 /**
+ * This node's own socket address, which every connection it opens names to the
+ * far end as the port to reach it back on. Asked of the peer manager, not of
+ * benchmark: fluxNetworkHelper pushes every refresh into it (the availability
+ * checker and the address-change handler keep it current), whereas benchmark is
+ * an uncached RPC that every dial and every ephemeral connection would then
+ * depend on. A node not yet told asks once, and the answer fills the peer
+ * manager's copy on its way through.
+ * @returns {Promise<string|null>} `ip:port`, or null while the node cannot say
+ */
+async function localSocketAddress() {
+  return peerManager.getOwnSocketAddress?.() || await fluxNetworkHelper.getLocalSocketAddress() || null;
+}
+
+/**
  * Open an ephemeral connection to a peer. Returns a promise that resolves
  * with the FluxPeerSocket once connected, or null on failure.
  * @param {string} connection - IP or IP:port
  * @returns {Promise<FluxPeerSocket|null>}
  */
-function openEphemeralConnection(connection) {
+async function openEphemeralConnection(connection) {
+  const ip = extractIp(connection);
+  const port = extractPort(connection);
+  const key = `${ip}:${port}`;
+  if (peerManager.isPendingEphemeral(key)) {
+    log.info(`Ephemeral connection to ${key} skipped: pending`);
+    return null;
+  }
+  peerManager.markPendingEphemeral(key);
+  let localSocketAddr;
+  try {
+    localSocketAddr = await localSocketAddress();
+  } catch (error) {
+    peerManager.clearPendingEphemeral(key);
+    log.error(error);
+    return null;
+  }
+  if (!localSocketAddr) {
+    peerManager.clearPendingEphemeral(key);
+    log.warn(`Ephemeral connection to ${key} skipped: this node does not know its own address`);
+    return null;
+  }
+  const localApiPort = extractPort(localSocketAddr);
   return new Promise((resolve) => {
-    const ip = extractIp(connection);
-    const port = extractPort(connection);
     try {
-      const key = `${ip}:${port}`;
-      if (peerManager.isPendingEphemeral(key)) {
-        log.info(`Ephemeral connection to ${key} skipped: pending`);
-        resolve(null);
-        return;
-      }
-      peerManager.markPendingEphemeral(key);
-      if (!myPort) {
-        peerManager.clearPendingEphemeral(key);
-        log.warn(`Ephemeral connection to ${key} skipped: myPort not set`);
-        resolve(null);
-        return;
-      }
       const options = {
         handshakeTimeout: config.get('fluxapps.wsHandshakeTimeoutMs'),
         headers: {
@@ -1707,7 +1707,7 @@ function openEphemeralConnection(connection) {
       if (offsetMs !== null) {
         options.headers['X-Flux-Clock-Offset'] = String(offsetMs);
       }
-      const wsuri = `ws://${ip}:${port}/ws/flux/${myPort}`;
+      const wsuri = `ws://${ip}:${port}/ws/flux/${localApiPort}`;
       const websocket = new WebSocket(wsuri, options);
       const meta = { ip, port };
       let settled = false;
@@ -1748,7 +1748,7 @@ function openEphemeralConnection(connection) {
         resolve(peer);
       };
     } catch (error) {
-      peerManager.clearPendingEphemeral(`${ip}:${port}`);
+      peerManager.clearPendingEphemeral(key);
       log.error(error);
       resolve(null);
     }
