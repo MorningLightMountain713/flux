@@ -196,7 +196,9 @@ async function containerAttachment(containerPid) {
 /**
  * Routes that steer traffic into the translator's tun. Callable only after
  * the tayga unit is up (the device exists only while it runs), which is why
- * they are separate from the namespace bring-up.
+ * they are separate from the namespace bring-up. The tun carries the overlay's
+ * IPv6 packets as well as the containers' IPv4 ones, so it takes the overlay's
+ * MTU; the containers' own devices hold IPv4 to theirs.
  *
  * @param {string} instance
  * @param {{ownBlock: string}} app the node's /96 in this app
@@ -204,7 +206,7 @@ async function containerAttachment(containerPid) {
 async function ensureTranslatorRoutes(instance, { ownBlock }) {
   const ns = netnsName(instance);
   const device = meshRuntimeConfig.TAYGA_TUN_DEVICE;
-  await ip(['-n', ns, 'link', 'set', device, 'mtu', String(meshRuntimeConfig.IPV4_FACE_MTU), 'up']);
+  await ip(['-n', ns, 'link', 'set', device, 'mtu', String(meshRuntimeConfig.OVERLAY_MTU), 'up']);
   await ip(['-n', ns, '-6', 'route', 'replace', ownBlock, 'dev', device]);
   await ip(['-n', ns, 'route', 'replace', meshRuntimeConfig.MESH_IPV4_RANGE, 'dev', device]);
 }

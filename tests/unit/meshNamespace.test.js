@@ -154,10 +154,10 @@ describe('meshNamespace', () => {
   });
 
   describe('ensureTranslatorRoutes', () => {
-    it('steers the block and the synthetic range into the translator tun', async () => {
+    it('steers the block and the synthetic range into the translator tun, which carries the overlay\'s packets', async () => {
       await meshNamespace.ensureTranslatorRoutes(INSTANCE, { ownBlock: 'fdb2:8fa9:3450:76a8:bd32:a312::/96' });
       expect(calls).to.deep.equal([
-        `ip -n ${NS} link set siit0 mtu 1400 up`,
+        `ip -n ${NS} link set siit0 mtu 1420 up`,
         `ip -n ${NS} -6 route replace fdb2:8fa9:3450:76a8:bd32:a312::/96 dev siit0`,
         `ip -n ${NS} route replace 10.127.0.0/20 dev siit0`,
       ]);
