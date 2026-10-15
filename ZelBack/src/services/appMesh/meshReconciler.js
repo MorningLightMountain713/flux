@@ -210,11 +210,12 @@ function lastPassStatus(appName) {
 }
 
 async function gatherMeshApps() {
-  const installed = (await appRecords.installed().apps()).map((record) => record.record);
-  const claimedIdentities = new Set(installed.map((inst) => inst.identity).filter(Boolean));
+  const installs = await appRecords.installed().apps();
+  const claimedIdentities = new Set(installs.map((install) => install.record.identity).filter(Boolean));
   const apps = [];
   // eslint-disable-next-line no-restricted-syntax
-  for (const inst of installed) {
+  for (const install of installs) {
+    const inst = install.record;
     // eslint-disable-next-line no-await-in-loop
     const view = await resolveInstantiatedSpec(inst);
     if (view?.network?.mesh !== true) continue; // eslint-disable-line no-continue
@@ -227,6 +228,7 @@ async function gatherMeshApps() {
       uuid: inst.uuid,
       identity: inst.identity,
       view,
+      install,
     });
   }
   return { apps, claimedIdentities };
@@ -628,8 +630,11 @@ async function runReconcilePass() {
   // eslint-disable-next-line no-restricted-syntax
   for (const app of apps) {
     try {
-      app.slots = new Map(app.view.componentNames()
-        .map((component) => [component, meshComponentSlot(app.name, component)]));
+      // A component's overlay address follows its key, so a rename keeps it.
+      // eslint-disable-next-line no-await-in-loop
+      const deployment = await deploymentProvider.buildDeployment(app.install, { replica: app.install.replica });
+      app.slots = new Map(deployment.componentEntries()
+        .map(([component, { componentKey }]) => [component, meshComponentSlot(app.name, componentKey)]));
       // eslint-disable-next-line no-await-in-loop
       app.material = await reconcileAppMaterial(app, ctx);
       // eslint-disable-next-line no-await-in-loop
