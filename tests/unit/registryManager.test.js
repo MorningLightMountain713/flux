@@ -19,6 +19,7 @@ const transportCryptoProvider = require('../../ZelBack/src/services/providers/Fl
 const legacyTransportProvider = require('../../ZelBack/src/services/providers/FluxOSLegacyTransportProvider');
 const specCutover = require('../../ZelBack/src/services/utils/specCutover');
 const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCommittee');
+const componentKeyMap = require('../../ZelBack/src/services/appLifecycle/componentKeyMap');
 const { RUNNING_EXPIRY_MS } = require('../../ZelBack/src/services/utils/appConstants');
 const { requireMongo } = require('./dbTestHelper');
 const {
@@ -1955,8 +1956,8 @@ describe('registryManager tests', () => {
   // Every spec write also maintains the host-side component mapping, from the
   // CLEARTEXT view of what was just stored. Nothing covered it.
   describe('founding view materialization', () => {
-    it('resolves the entry it just stored and maps the components off the cleartext view', async () => {
-      const sealed = await sealedV9Spec({ name: 'meshapp' });
+    it('resolves the entry it just stored and maps its components by their keys', async () => {
+      const sealed = await sealedV9Spec({ name: 'meshapp', network: { mesh: true } });
       const stored = await registryHolds(sealed, { hash: 'hm', height: 2_500_000, identity: 'ab12cd34ef56' });
       // The resolver decrypts through the benchmark channel, so it stays
       // stubbed — and it hands back what the real one hands back for a sealed
@@ -1964,6 +1965,8 @@ describe('registryManager tests', () => {
       const view = await sealed.decrypt(await sealed.createProvider());
       const resolve = sinon.stub(specCutover, 'resolveInstantiatedSpec').resolves(view);
       const applyComponentView = sinon.stub(foundingCommittee, 'applyComponentView').resolves();
+      const webKey = `c${'w'.repeat(52)}`;
+      const keysForInstall = sinon.stub(componentKeyMap, 'keysForInstall').resolves(new Map([['web', webKey]]));
 
       await registryManager.storeGlobalSpec(stored);
 
@@ -1977,14 +1980,26 @@ describe('registryManager tests', () => {
       expect(handed.name, 'and logs a failed decrypt against it').to.equal('meshapp');
       assertAnswers(handed.spec, ['createProvider']);
 
-      // And the mapping is taken off the cleartext view, not off the sealed row —
-      // the sealed row has no components at all.
+      // The mapping names each component by the key its history gives it, so a
+      // renamed component keeps its founding.
+      sinon.assert.calledOnceWithExactly(keysForInstall, stored);
       sinon.assert.calledOnce(applyComponentView);
       const [mapped] = applyComponentView.firstCall.args;
-      expect(mapped.identity).to.equal('ab12cd34ef56');
-      expect(mapped.height).to.equal(2_500_000);
-      expect(Object.keys(mapped.components)).to.deep.equal(['web']);
+      expect(mapped).to.deep.equal({ identity: 'ab12cd34ef56', height: 2_500_000, componentKeys: [webKey] });
       expect(stored.serialize(), 'the stored record itself carries none').to.not.have.property('components');
+    });
+
+    it('maps nothing, and walks no history, for an app off the mesh', async () => {
+      const spec = await v9Spec({ name: 'plainapp' });
+      const stored = await registryHolds(spec, { hash: 'hp', height: 2_500_000, identity: 'ab12cd34ef57' });
+      sinon.stub(specCutover, 'resolveInstantiatedSpec').resolves(spec);
+      const applyComponentView = sinon.stub(foundingCommittee, 'applyComponentView').resolves();
+      const keysForInstall = sinon.stub(componentKeyMap, 'keysForInstall').resolves(new Map());
+
+      await registryManager.storeGlobalSpec(stored);
+
+      sinon.assert.notCalled(keysForInstall);
+      sinon.assert.notCalled(applyComponentView);
     });
   });
 });

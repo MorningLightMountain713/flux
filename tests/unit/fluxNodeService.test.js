@@ -9,6 +9,8 @@ describe('fluxNodeService — the mesh surface', () => {
   let fluxNodeService;
   let stubs;
 
+  const DB_KEY = `c${'d'.repeat(52)}`;
+
   const SNAPSHOT = {
     schemaVersion: 1,
     generation: 42,
@@ -38,7 +40,11 @@ describe('fluxNodeService — the mesh surface', () => {
       waitForGeneration: sinon.stub().callsFake(async () => stubs.snapshot?.generation ?? 0),
       founderAsk: sinon.stub().resolves({ answer: 'wait' }),
       // The app installed here under the caller's name.
-      getInstalledApp: sinon.stub().callsFake(async (name) => (name === 'myblog' ? { name, identity: 'ab12cd34ef56' } : null)),
+      getInstalledApp: sinon.stub().callsFake(async (name) => (name === 'myblog' ? { name, identity: 'ab12cd34ef56', replica: null } : null)),
+      // Its deployment: each component's key, as the installed record gives it.
+      buildDeployment: sinon.stub().callsFake(async () => ({
+        getComponent: (name) => (name === 'db' ? { componentKey: DB_KEY } : undefined),
+      })),
     };
     fluxNodeService = proxyquire('../../ZelBack/src/services/fluxNodeService', {
       './appMesh/meshSnapshot': {
@@ -49,6 +55,7 @@ describe('fluxNodeService — the mesh surface', () => {
         founderAsk: stubs.founderAsk,
       },
       './appDatabase/appRecords': { installed: () => ({ byName: stubs.getInstalledApp }) },
+      './appRuntime/deploymentProvider': { buildDeployment: stubs.buildDeployment },
     });
   });
 
@@ -143,11 +150,14 @@ describe('fluxNodeService — the mesh surface', () => {
   });
 
   describe('/mesh/founder', () => {
-    it('asks for the caller app and component, and relays the answer verbatim', async () => {
+    it('asks for the caller app and its component\'s key, and relays the answer verbatim', async () => {
       stubs.founderAsk.resolves({ answer: 'yes' });
       const { req, res, body } = request('::ffff:172.23.0.2');
       await fluxNodeService.postMeshFounder(req, res);
-      expect(stubs.founderAsk.calledOnceWith('ab12cd34ef56', 'db')).to.equal(true);
+      expect(stubs.buildDeployment.calledOnce).to.equal(true);
+      expect(stubs.buildDeployment.firstCall.args[0].identity).to.equal('ab12cd34ef56');
+      expect(stubs.buildDeployment.firstCall.args[1]).to.deep.equal({ replica: null });
+      expect(stubs.founderAsk.calledOnceWith('ab12cd34ef56', DB_KEY)).to.equal(true);
       expect(body().status).to.equal('success');
       expect(body().data).to.deep.equal({ answer: 'yes' });
     });
@@ -161,6 +171,14 @@ describe('fluxNodeService — the mesh surface', () => {
 
     it('refuses a caller whose app is not installed here', async () => {
       stubs.getInstalledApp.resolves(null);
+      const { req, res, body } = request('172.23.0.2');
+      await fluxNodeService.postMeshFounder(req, res);
+      expect(body()).to.deep.equal(messageHelper.errUnauthorizedMessage());
+      expect(stubs.founderAsk.called).to.equal(false);
+    });
+
+    it('refuses a caller whose component the installed app does not declare', async () => {
+      stubs.buildDeployment.callsFake(async () => ({ getComponent: () => undefined }));
       const { req, res, body } = request('172.23.0.2');
       await fluxNodeService.postMeshFounder(req, res);
       expect(body()).to.deep.equal(messageHelper.errUnauthorizedMessage());

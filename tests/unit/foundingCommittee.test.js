@@ -41,8 +41,7 @@ function meshView(overrides = {}) {
   return {
     identity: IDENTITY,
     height: REG_HEIGHT,
-    network: { mesh: true },
-    components: { db: {} },
+    componentKeys: ['db'],
     ...overrides,
   };
 }
@@ -138,18 +137,15 @@ describe('foundingCommittee', () => {
   });
 
   describe('the component mapping from the view', () => {
-    it('maps components at their introducing height, mesh views only', async () => {
+    it('maps components by key at their introducing height', async () => {
       await foundingCommittee.applyComponentView(meshView());
       expect(store.get(IDENTITY).components.db.anchorHeight).to.equal(REG_HEIGHT);
-
-      await foundingCommittee.applyComponentView({ ...meshView({ identity: 'plain' }), network: {} });
-      expect(store.get('plain')).to.equal(undefined);
     });
 
     it('an update keeps old anchors, pins new components, drops removed ones', async () => {
       await foundingCommittee.applyComponentView(meshView());
       await foundingCommittee.applyComponentView(meshView({
-        height: 600_000, components: { db: {}, cache: {} },
+        height: 600_000, componentKeys: ['db', 'cache'],
       }));
       let record = store.get(IDENTITY);
       expect(record.components.db.anchorHeight).to.equal(REG_HEIGHT);
@@ -162,10 +158,10 @@ describe('foundingCommittee', () => {
     });
 
     it('a re-added component is a NEW world at a new anchor', async () => {
-      await foundingCommittee.applyComponentView(meshView({ components: { db: {}, cache: {} } }));
+      await foundingCommittee.applyComponentView(meshView({ componentKeys: ['db', 'cache'] }));
       await foundingCommittee.applyComponentView(meshView({ height: 600_000 }));
       await foundingCommittee.applyComponentView(meshView({
-        height: 700_000, components: { db: {}, cache: {} },
+        height: 700_000, componentKeys: ['db', 'cache'],
       }));
       expect(store.get(IDENTITY).components.cache.anchorHeight).to.equal(700_000);
       expect(store.get(IDENTITY).components.db.anchorHeight).to.equal(REG_HEIGHT);
@@ -174,7 +170,7 @@ describe('foundingCommittee', () => {
     it('a stale view write changes nothing', async () => {
       await foundingCommittee.applyComponentView(meshView({ height: 600_000 }));
       await foundingCommittee.applyComponentView(meshView({
-        height: REG_HEIGHT, components: { ghost: {} },
+        height: REG_HEIGHT, componentKeys: ['ghost'],
       }));
       expect(store.get(IDENTITY).components.ghost).to.equal(undefined);
     });
@@ -194,7 +190,7 @@ describe('foundingCommittee', () => {
       await foundingCommittee.recordAnchor(anchorDoc());
       await foundingCommittee.applyComponentView(meshView());
       await foundingCommittee.recordAnchor(anchorDoc({ height: 600_000 }));
-      await foundingCommittee.applyComponentView(meshView({ height: 600_000, components: { db: {}, cache: {} } }));
+      await foundingCommittee.applyComponentView(meshView({ height: 600_000, componentKeys: ['db', 'cache'] }));
 
       await foundingCommittee.retract(IDENTITY, REG_HEIGHT);
 
@@ -204,7 +200,7 @@ describe('foundingCommittee', () => {
 
       // The spec the app went back to is written again, and takes.
       await foundingCommittee.recordAnchor(anchorDoc());
-      await foundingCommittee.applyComponentView(meshView({ components: { db: {}, web: {} } }));
+      await foundingCommittee.applyComponentView(meshView({ componentKeys: ['db', 'web'] }));
       record = store.get(IDENTITY);
       expect(record.specHeight).to.equal(REG_HEIGHT);
       expect(record.components.web.anchorHeight).to.equal(REG_HEIGHT);
@@ -261,7 +257,7 @@ describe('foundingCommittee', () => {
       expect(store.get(IDENTITY).components.db.anchorHeight).to.equal(600_000);
 
       await foundingCommittee.applyComponentView(meshView({
-        height: 700_000, components: { db: {}, cache: {} },
+        height: 700_000, componentKeys: ['db', 'cache'],
       }));
       expect(store.get(IDENTITY).components.db.anchorHeight).to.equal(600_000);
       expect(store.get(IDENTITY).components.cache.anchorHeight).to.equal(700_000);

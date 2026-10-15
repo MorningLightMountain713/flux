@@ -6,6 +6,7 @@ const appsRepository = require('./appsRepository');
 const appRecords = require('./appRecords');
 const decisionStore = require('../appDecisions/decisionStore');
 const foundingCommittee = require('../appMesh/foundingCommittee');
+const componentKeyMap = require('../appLifecycle/componentKeyMap');
 const log = require('../../lib/log');
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
@@ -72,22 +73,24 @@ async function storeGlobalSpec(record) {
 }
 
 /**
- * Maintain the host-side component mapping from the CLEARTEXT view of the
- * spec just stored. Decryption is local, with this node's own provider —
- * the same resolution every mesh consumer already performs — and a node
- * that cannot decrypt maintains no mapping, which is the component-blind
- * design and not a gap: only hosts answer founder asks, and only hosts
- * can. No-throw — a failed resolution never fails a spec store.
+ * Maintain the host-side component mapping of a mesh app from the CLEARTEXT
+ * view of the spec just stored, each component named by its key, which its
+ * applied versions give it on every node that opens them. Decryption is
+ * local, with this node's own provider — the same resolution every mesh
+ * consumer already performs — and a node that cannot decrypt maintains no
+ * mapping, which is the component-blind design and not a gap: only hosts
+ * answer founder asks, and only hosts can. No-throw — a failed resolution
+ * never fails a spec store.
  */
 async function materializeFoundingView(record) {
   try {
     const view = await specCutover.resolveInstantiatedSpec(record);
-    if (!view) return;
+    if (view?.network?.mesh !== true) return;
+    const componentKeys = await componentKeyMap.keysForInstall(record);
     await foundingCommittee.applyComponentView({
       identity: record.identity,
       height: record.height,
-      network: view.network,
-      components: view.components,
+      componentKeys: [...componentKeys.values()],
     });
   } catch (error) {
     log.warn(`materializeFoundingView - ${record?.name}: ${error.message}`);
