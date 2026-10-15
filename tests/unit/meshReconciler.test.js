@@ -484,9 +484,10 @@ describe('meshReconciler', () => {
       expect(stubs.writeSnapshotCalls).to.have.length(1);
       const snapApp = stubs.writeSnapshotCalls[0].apps[0];
       expect(snapApp.name).to.equal('myblog');
+      // A record that holds no keys keys each component by its name.
       expect(snapApp.members).to.deep.equal([
-        { component: 'web', nodeId: OWN_NODE_ID },
-        { component: 'web', nodeId: PEER_NODE_ID },
+        { component: 'web', componentKey: 'web', nodeId: OWN_NODE_ID },
+        { component: 'web', componentKey: 'web', nodeId: PEER_NODE_ID },
       ].sort((a, b) => (a.nodeId < b.nodeId ? -1 : 1)));
       // The bridge address was found on the deployment's OWN network — the
       // identity-named one, the only network the inspect stub carries.
@@ -556,6 +557,15 @@ describe('meshReconciler', () => {
       await meshReconciler.reconcileAllMeshApps();
       sinon.assert.calledTwice(stubs.formerNamesForVersion);
       expect(stubs.formerNamesForVersion.secondCall.args[0].hash).to.equal('f'.repeat(64));
+    });
+
+    it('names each member in the snapshot by its component\'s key, which holds its address', async () => {
+      const key = `c${'a'.repeat(52)}`;
+      stubs.installedKeys = new Map([['web', key]]);
+      stubs.deployments = [deploymentFor(stubs.installedApps[0].spec, null, stubs.installedKeys)];
+      await meshReconciler.reconcileAllMeshApps();
+      const { members } = stubs.writeSnapshotCalls[0].apps[0];
+      expect(members.map((m) => m.componentKey)).to.deep.equal(members.map(() => key));
     });
 
     it('forgets the former names of an app no longer installed', async () => {
@@ -1061,6 +1071,7 @@ describe('meshReconciler', () => {
         material: { members: [{ nodeId: PEER_NODE_ID }] },
         containers: [],
         formerNames: new Map(),
+        componentKeys: new Map(),
       };
       const snapApp = meshReconciler.buildSnapshotApp(app, { ownNodeId: OWN_NODE_ID });
       // Only components that declare mesh ports or held other names appear;
@@ -1084,6 +1095,7 @@ describe('meshReconciler', () => {
         material: { members: [] },
         containers: [],
         formerNames: new Map(),
+        componentKeys: new Map(),
       };
       const snapApp = meshReconciler.buildSnapshotApp(app, { ownNodeId: OWN_NODE_ID });
       expect(snapApp.components).to.deep.equal({});
@@ -1103,6 +1115,7 @@ describe('meshReconciler', () => {
         },
         containers: [],
         formerNames: new Map(),
+        componentKeys: new Map(),
       };
       const snapApp = meshReconciler.buildSnapshotApp(app, {
         ownNodeId: OWN_NODE_ID, ownOutpoint: OWN_OUTPOINT,

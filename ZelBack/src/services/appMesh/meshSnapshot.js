@@ -56,16 +56,17 @@ async function readCurrentSnapshot() {
  * members from the lowest free offsets. Pure.
  *
  * @param {object|null} previous the current snapshot (the ledger)
- * @param {Array<{name: string, members: Array<{component: string, nodeId: string}>}>} apps
+ * @param {Array<{name: string, members: Array<{component: string, componentKey: string, nodeId: string}>}>} apps
  * @returns {Map<string, string>} `${app}|${nodeId}|${component}` → IPv4
  */
 function assignMemberAddresses(previous, apps) {
+  // A member's address is held by its component's key, so a rename keeps it.
   const assigned = new Map();
   const used = new Set();
   for (const app of previous?.apps ?? []) {
     for (const member of app.members ?? []) {
       if (typeof member.ip === 'string') {
-        assigned.set(`${app.name}|${member.nodeId}|${member.component}`, member.ip);
+        assigned.set(`${app.name}|${member.nodeId}|${member.componentKey}`, member.ip);
         used.add(member.ip);
       }
     }
@@ -82,13 +83,12 @@ function assignMemberAddresses(previous, apps) {
   const result = new Map();
   for (const app of apps) {
     for (const member of app.members) {
-      const key = `${app.name}|${member.nodeId}|${member.component}`;
-      let ip = assigned.get(key);
+      let ip = assigned.get(`${app.name}|${member.nodeId}|${member.componentKey}`);
       if (!ip) {
         ip = nextFree();
         used.add(ip);
       }
-      result.set(key, ip);
+      result.set(`${app.name}|${member.nodeId}|${member.component}`, ip);
     }
   }
   return result;
@@ -107,7 +107,7 @@ function assignMemberAddresses(previous, apps) {
  * @param {string} ownNodeId this node's member id
  * @param {Array<{name: string,
  *   components: Object<string, {ports: Object<string, {port: number, proto: string}>}>,
- *   members: Array<{component: string, nodeId: string, ordinal?: number}>,
+ *   members: Array<{component: string, componentKey: string, nodeId: string, ordinal?: number}>,
  *   containers: Array<{component: string, sourceIp: string}>}>} apps
  * @returns {Promise<{generation: number, snapshot: object, addresses: Map<string, string>}>}
  */
@@ -123,6 +123,7 @@ async function writeSnapshot(ownNodeId, apps) {
       components: app.components ?? {},
       members: app.members.map((member) => ({
         component: member.component,
+        componentKey: member.componentKey,
         nodeId: member.nodeId,
         ip: addresses.get(`${app.name}|${member.nodeId}|${member.component}`),
         ...(Number.isInteger(member.ordinal) ? { ordinal: member.ordinal } : {}),
