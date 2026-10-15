@@ -815,10 +815,9 @@ class AppSyncOrchestrator {
     // orphaned rejection thrown after the pass has already returned.
     await this.#runRequestPass();
 
-    // Peers arriving is also a wake-up for the permanent-plane syncs: on boot the
-    // manifest round may have run before discovery connected anyone (nothing to
-    // compare against, so it never latched), and recovery needs a real peer set to
-    // resync against. A step runs until it latches, in READY as well: readiness
+    // Peers arriving is the wake-up that starts the permanent-plane syncs, which
+    // wait for a peer set to ask, and recovery needs a real peer set to resync
+    // against. A step runs until it latches, in READY as well: readiness
     // on the block fallback releases the spawner and does not end the catch-up,
     // and a node that promoted that way still owes the register its gap.
     if (this.#permanentStepsOwed()) {
@@ -1204,13 +1203,15 @@ class AppSyncOrchestrator {
   // proxy, so no interleaving of the three signals can leave a step un-run. Each
   // step self-guards on its own completion latch: one that already succeeded is
   // skipped, one that never truly ran is retried by whichever signal arrives next.
-  // Deferred until the node can both verify against synced specs (explorer) and
-  // send requests (capability); the block timer stays the terminal readiness
-  // backstop.
+  // Deferred until the node can verify against synced specs (explorer), send
+  // requests (capability) and has a peer set to ask (the level the state sync
+  // reads): a pass that asked nobody would latch on what this node already held.
+  // Peers reaching the floor is the wake-up that starts it; the block timer
+  // stays the terminal readiness backstop.
   async #advanceSync() {
     if (this.#syncInProgress) return;
-    if (!this.#explorerSynced || !this.#canSendMessages) {
-      log.info(`AppSyncOrchestrator - Sync deferred (explorerSynced=${this.#explorerSynced}, canSendMessages=${this.#canSendMessages})`);
+    if (!this.#explorerSynced || !this.#canSendMessages || !this.#networkReady || !this.#peersAtFloor) {
+      log.info(`AppSyncOrchestrator - Sync deferred (explorerSynced=${this.#explorerSynced}, canSendMessages=${this.#canSendMessages}, peersAtFloor=${this.#peersAtFloor})`);
       return;
     }
     // Both permanent-plane steps already converged — nothing to run, just re-evaluate.
