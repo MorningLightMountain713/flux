@@ -33,9 +33,9 @@ describe('derivedFleet', () => {
     const r = derivedFleet('env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });');
     assert.deepEqual(r, { peak: 10, envs: 1, unresolved: [] });
   });
-  it('adds the deferred nodes that join later', () => {
+  it('counts the deferred nodes among the nodes, as createTestEnv does', () => {
     const r = derivedFleet('createTestEnv({ hookCtx: this, nodes: 12, deferredNodes: 2 })');
-    assert.equal(r.peak, 14);
+    assert.equal(r.peak, 12);
   });
   it('resolves a file constant and a constant plus a literal', () => {
     const r = derivedFleet(suite([
