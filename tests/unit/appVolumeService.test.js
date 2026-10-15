@@ -152,8 +152,10 @@ describe('appVolumeService.removeOrphanedInjectedContent', () => {
 });
 
 describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', () => {
+  // The component's key, deliberately unlike its name: the ledger is keyed by it.
+  const COMPONENT_KEY = `c${'k'.repeat(52)}`;
   const deployComp = {
-    identifier: 'web_testapp', name: 'web', appName: 'testapp', replica: null, storage: 10, mounts: [],
+    identifier: 'web_testapp', name: 'web', componentKey: COMPONENT_KEY, appName: 'testapp', replica: null, storage: 10, mounts: [],
   };
   // placementVolumesInGib's rows: whole GiB, emptiest first.
   const disk = (mount, available) => ({
@@ -214,10 +216,11 @@ describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', 
 
     sinon.assert.calledTwice(setComponent);
     const [placed, stamped] = setComponent.getCalls();
-    expect(placed.args.slice(0, 4)).to.deep.equal(['testapp', null, 'web', 'volume']);
+    expect(placed.args.slice(0, 4)).to.deep.equal(['testapp', null, COMPONENT_KEY, 'volume']);
     expect(placed.args[4]).to.deep.include({ file: '/dat/fluxweb_testappFLUXFSVOL', disk: '/dat', fsUuid: null });
     expect(placed.args[4].mountDir).to.match(/\/fluxweb_testapp$/);
     expect(placed.calledBefore(fallocate), 'named before the file exists').to.equal(true);
+    expect(stamped.args.slice(0, 4)).to.deep.equal(['testapp', null, COMPONENT_KEY, 'volume']);
     expect(stamped.args[4]).to.deep.equal({ ...placed.args[4], fsUuid: uuid });
     expect(stamped.calledAfter(mke2fs), 'stamped once the filesystem carries it').to.equal(true);
   });

@@ -110,6 +110,19 @@ describe('installedLedger', () => {
       expect((await installedLedger.observeLedger(deployment, volumeOf)).components.web.hostPorts[0].opened).to.deep.equal(['upnp']);
     });
 
+    it('keys each component\'s block by its key, never its name', async () => {
+      const key = `c${'k'.repeat(52)}`;
+      const deployment = flux.DeploymentSpec.fromSpec(await v9Spec({ name: 'keyed' }), APPS_FOLDER, {
+        replica: null, identity: IDENTITY, componentKeys: new Map([['web', key]]),
+      });
+      volumeOf.resolves(null);
+
+      const { components } = await installedLedger.observeLedger(deployment, volumeOf);
+
+      expect(Object.keys(components)).to.deep.equal([key]);
+      expect(components[key].identifier).to.equal(`${key}_${IDENTITY}`);
+    });
+
     it('writes null for what the host does not hold: a volume never recorded, an image the daemon lacks, a stateless component', async () => {
       const deployment = flux.DeploymentSpec.fromSpec(await v9Spec({ name: 'bare' }), APPS_FOLDER, { replica: null, identity: IDENTITY });
       volumeOf.resolves(null);
@@ -123,6 +136,7 @@ describe('installedLedger', () => {
       const stateless = {
         networkName: 'net',
         componentEntries: () => [['job', {
+          componentKey: 'job',
           identifier: 'job_x', image: 'busybox', hostPorts: [], isStateless: true, mounts: [], networkAliases: ['job'], hasSyncthing: () => false, requiresBackendTls: () => false,
         }]],
       };
@@ -137,6 +151,7 @@ describe('installedLedger', () => {
       const deployment = {
         networkName: 'net',
         componentEntries: () => [['db', {
+          componentKey: 'db',
           identifier: 'db_x',
           image: 'postgres:16',
           hostPorts: [],
@@ -208,6 +223,7 @@ describe('installedLedger', () => {
       ...(spec), hash: `h-${spec.name}`, height: 100, replica: null, componentIdentifiers: [`web_${spec.name}`], ...extra,
     });
 
+    // The provider builds only from an installed record, keyed by its component keys.
     function buildsRealDeployments() {
       stubs.deploymentProvider.buildDeployment.callsFake(async (install, { replica, registrationVersion }) => {
         if (!(install instanceof flux.InstalledSpec)) throw new Error('buildDeployment builds from an installed record');
@@ -216,6 +232,24 @@ describe('installedLedger', () => {
         });
       });
     }
+
+    it('keys the ledger it writes by the installed record\'s component keys', async () => {
+      const key = `c${'k'.repeat(52)}`;
+      const { installed, provider } = await inMemoryInstalled();
+      const { ledgers } = await inMemoryLedgers();
+      await provider.insert(installed.constructor.STORE, [legacyRow((await v9Spec({ name: 'keyed' })).serialize(), {
+        identity: IDENTITY, uuid: 'u-keyed', componentKeys: { web: key },
+      })]);
+      await installed.completeDerivedFields();
+      buildsRealDeployments();
+
+      const results = await installedLedger.adoptInstalledLedgers();
+
+      expect(results.adopted).to.deep.equal([{ name: 'keyed', replica: null }]);
+      const ledger = await ledgers.byInstance('keyed', null);
+      expect(Object.keys(ledger.components)).to.deep.equal([key]);
+      expect(ledger.component(key).identifier).to.equal(`${key}_${IDENTITY}`);
+    });
 
     /** A v9 app whose one component shares its data: the folder it is named under is the registration's. */
     const syncedSpec = async (name) => (await v9Spec({
@@ -226,7 +260,6 @@ describe('installedLedger', () => {
           persistentStorage: { sizeGb: 5, mounts: { '/data': { source: 'data', destination: '/data' } }, sync: { mode: 'activeStandby' } },
         },
       },
-    // The provider builds only from an installed record, keyed by its component keys.
     })).serialize();
 
     it('names the ledger it writes by the version the registration message states, read for the record\'s app', async () => {

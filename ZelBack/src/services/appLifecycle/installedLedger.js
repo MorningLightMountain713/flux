@@ -94,11 +94,11 @@ async function observeLedger(deployment, volumeOf) {
   ];
   const components = {};
   // eslint-disable-next-line no-restricted-syntax
-  for (const [name, component] of deployment.componentEntries()) {
+  for (const [, component] of deployment.componentEntries()) {
     const compDir = path.join(appsFolder, component.identifier);
     // eslint-disable-next-line no-await-in-loop
     const recorded = component.isStateless ? null : await volumeOf(component.identifier);
-    components[name] = {
+    components[component.componentKey] = {
       identifier: component.identifier,
       // eslint-disable-next-line no-await-in-loop
       image: { reference: component.image, digest: await dockerService.appDockerImageDigest(component.image) },

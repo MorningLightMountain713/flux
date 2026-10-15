@@ -102,14 +102,15 @@ describe('meshReconciler', () => {
 
   /**
    * The ledger the install wrote for a deployment: every block projected off the
-   * real DeploymentSpec, the mesh member name each container was created with as
-   * given, null for a component created with none.
+   * real DeploymentSpec and keyed by each component's key, the mesh member name
+   * each container was created with as given by component name, null for a
+   * component created with none.
    */
   const ledgerNaming = (deployment, meshNames) => new flux.InstalledLedger({
     name: deployment.appName,
     replica: deployment.replica ?? null,
     network: { name: deployment.networkName },
-    components: Object.fromEntries(deployment.componentEntries().map(([name, c]) => [name, {
+    components: Object.fromEntries(deployment.componentEntries().map(([name, c]) => [c.componentKey, {
       ...flux.InstalledLedger.newBlock({ identifier: c.identifier, image: c.image }),
       mesh: meshNames[name] ? { name: meshNames[name] } : null,
     }])),
@@ -776,6 +777,21 @@ describe('meshReconciler', () => {
       stubs.meshNames.web = 'web-1';
       await meshReconciler.reconcileAllMeshApps();
       expect(meshReconciler.lastPassStatus('myblog').identityDrift).to.deep.equal([]);
+    });
+
+    it('finds the name a keyed component was created with by its key', async () => {
+      const key = `c${'k'.repeat(52)}`;
+      stubs.deployments = [flux.DeploymentSpec.fromSpec(stubs.installedApps[0].spec, appsFolder, {
+        replica: null, identity: IDENTITY, componentKeys: new Map([['web', key]]),
+      })];
+      stubs.ordinals = { own: 1, byNode: new Map([[OWN_NODE_ID, 1]]) };
+      stubs.meshNames = { web: `web-${OWN_NODE_ID}` };
+
+      await meshReconciler.reconcileAllMeshApps();
+
+      expect(meshReconciler.lastPassStatus('myblog').identityDrift).to.deep.equal([{
+        identifier: `${key}_${IDENTITY}`, component: 'web', is: `web-${OWN_NODE_ID}`, wants: 'web-1',
+      }]);
     });
 
     it('reads the ledger of the instance the deployment is, replica included', async () => {
