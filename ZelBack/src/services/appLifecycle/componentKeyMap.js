@@ -1,7 +1,10 @@
 'use strict';
 
+const log = require('../../lib/log');
 const appHistory = require('../appDecisions/appHistory');
+const appRecords = require('../appDatabase/appRecords');
 const specCutover = require('../utils/specCutover');
+const specLibrary = require('../utils/specLibrary');
 const { getSpec } = require('../utils/specLibs');
 
 /**
@@ -20,6 +23,17 @@ async function opened(spec, name) {
 }
 
 /**
+ * The keys of a record stored before keys: each component it runs keyed by
+ * its name, which is what its containers, data and folders are named by.
+ * @param {object} install - InstalledSpec
+ * @returns {Promise<Map<string, string>>}
+ */
+async function namesAsKeys(install) {
+  const running = await opened(await specCutover.resolveInstantiatedSpec(install.record), install.name);
+  return new Map(running.componentNames().map((name) => [name, name]));
+}
+
+/**
  * The keys of an update this node applies to an app it runs: the installed
  * record's keys carried onto the update's spec. A record stored before keys
  * holds none, and each component it runs is keyed by its name.
@@ -30,13 +44,10 @@ async function opened(spec, name) {
 async function keysForUpdate(install, registered) {
   const { componentKeysFor } = await getSpec();
   const update = await opened(await specCutover.resolveInstantiatedSpec(registered), registered.name);
-  let previous = install.componentKeys;
-  if (previous === null) {
-    const running = await opened(await specCutover.resolveInstantiatedSpec(install.record), install.name);
-    previous = new Map(running.componentNames().map((name) => [name, name]));
-  }
   return componentKeysFor(update, {
-    previous, appIdentity: install.identity ?? install.name, messageHash: registered.hash,
+    previous: install.componentKeys ?? await namesAsKeys(install),
+    appIdentity: install.identity ?? install.name,
+    messageHash: registered.hash,
   });
 }
 
@@ -67,7 +78,39 @@ async function keysForInstall(registered) {
   return keys;
 }
 
+/**
+ * Writes the keys of every installed record stored before keys: its
+ * components' names. A record whose spec this node cannot open now keeps
+ * none, and is read as keyed by its names until a later boot writes them.
+ * @returns {Promise<{keyed: Array<{name: string, replica: string|null}>, skipped: Array<{name: string, replica: string|null, reason: string}>}>}
+ */
+async function keyInstalledByName() {
+  const { InstalledSpec } = specLibrary.loaded();
+  const installed = appRecords.installed();
+  const results = { keyed: [], skipped: [] };
+  // eslint-disable-next-line no-restricted-syntax
+  for (const install of await installed.all()) {
+    if (install.componentKeys !== null) continue; // eslint-disable-line no-continue
+    const key = { name: install.name, replica: install.replica };
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const componentKeys = await namesAsKeys(install);
+      // eslint-disable-next-line no-await-in-loop
+      await installed.put(new InstalledSpec({
+        record: install.record, replica: install.replica, owed: install.owed, componentKeys,
+      }));
+      results.keyed.push(key);
+    } catch (error) {
+      log.warn(`componentKeyMap - ${install.name}${install.replica ? ` (${install.replica})` : ''} keeps no component keys this boot: ${error.message}`);
+      results.skipped.push({ ...key, reason: error.message });
+    }
+  }
+  if (results.keyed.length) log.info(`componentKeyMap - ${results.keyed.length} installed instance(s) keyed by their component names`);
+  return results;
+}
+
 module.exports = {
   keysForInstall,
   keysForUpdate,
+  keyInstalledByName,
 };

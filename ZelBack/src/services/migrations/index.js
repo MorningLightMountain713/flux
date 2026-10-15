@@ -5,6 +5,7 @@ const nodeIdentityMigration = require('../appDatabase/nodeIdentityMigration');
 const containerLabelBackfill = require('../appLifecycle/containerLabelBackfill');
 const appIdentityMove = require('../appLifecycle/appIdentityMove');
 const installedLedger = require('../appLifecycle/installedLedger');
+const componentKeyMap = require('../appLifecycle/componentKeyMap');
 const retiredSchema = require('./retiredSchema');
 const appRecords = require('../appDatabase/appRecords');
 const paymentPositions = require('./paymentPositions');
@@ -98,6 +99,14 @@ const migrations = [
     before: 'bootReconcileDecided',
     description: 'restamp containers created before the identity label carried one',
     run: () => containerLabelBackfill.backfillContainerLabels(),
+  },
+  {
+    id: 'component-keys',
+    // After the move onto the identity, which rewrites the records it moves, and
+    // before the boot reconcile builds any deployment from them.
+    before: 'bootReconcileDecided',
+    description: 'key the components of apps installed before records held keys by their names',
+    run: () => componentKeyMap.keyInstalledByName(),
   },
 ];
 

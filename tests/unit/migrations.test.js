@@ -16,6 +16,7 @@ describe('migrations tests', () => {
       containerLabelBackfill: { backfillContainerLabels: sinon.stub().resolves({ covered: true }) },
       appIdentityMove: { moveInstalledAppsOntoIdentity: sinon.stub().resolves({ moved: [], skipped: [], failed: [] }) },
       installedLedger: { adoptInstalledLedgers: sinon.stub().resolves({ adopted: [], skipped: [] }) },
+      componentKeyMap: { keyInstalledByName: sinon.stub().resolves({ keyed: [], skipped: [] }) },
       retiredSchema: { dropRetiredSchema: sinon.stub().resolves({ collections: [], indexes: [] }) },
       appMessagesMigration: { migrateAppMessages: sinon.stub().resolves({ payments: 0, permanent: 0, pooled: 0 }) },
       manifests: { dropHashless: sinon.stub().resolves(0) },
@@ -27,6 +28,7 @@ describe('migrations tests', () => {
       '../appLifecycle/containerLabelBackfill': stubs.containerLabelBackfill,
       '../appLifecycle/appIdentityMove': stubs.appIdentityMove,
       '../appLifecycle/installedLedger': stubs.installedLedger,
+      '../appLifecycle/componentKeyMap': stubs.componentKeyMap,
       './retiredSchema': stubs.retiredSchema,
       './appMessages': stubs.appMessagesMigration,
       '../appDatabase/appRecords': { manifests: () => stubs.manifests },
@@ -78,14 +80,15 @@ describe('migrations tests', () => {
       expect(stubs.nodeIdentityMigration.migrateNodeIdentity.called).to.be.false;
     });
 
-    it('adopts the installed ledger, then moves apps onto their identity, then restamps the containers', async () => {
+    it('adopts the installed ledger, moves apps onto their identity, restamps the containers, then keys the records', async () => {
       const results = await migrations.runBefore('bootReconcileDecided');
 
-      expect(results.map((r) => r.id)).to.deep.equal(['installed-ledger', 'app-identity', 'container-labels']);
+      expect(results.map((r) => r.id)).to.deep.equal(['installed-ledger', 'app-identity', 'container-labels', 'component-keys']);
       sinon.assert.callOrder(
         stubs.installedLedger.adoptInstalledLedgers,
         stubs.appIdentityMove.moveInstalledAppsOntoIdentity,
         stubs.containerLabelBackfill.backfillContainerLabels,
+        stubs.componentKeyMap.keyInstalledByName,
       );
     });
 
@@ -119,7 +122,9 @@ describe('migrations tests', () => {
     it('reports a migration that succeeded', async () => {
       const results = await migrations.runBefore('bootReconcileDecided');
 
-      expect(results).to.deep.equal([{ id: 'installed-ledger', ok: true }, { id: 'app-identity', ok: true }, { id: 'container-labels', ok: true }]);
+      expect(results).to.deep.equal([
+        { id: 'installed-ledger', ok: true }, { id: 'app-identity', ok: true }, { id: 'container-labels', ok: true }, { id: 'component-keys', ok: true },
+      ]);
     });
 
     it('runs the rest after one fails', async () => {
@@ -139,6 +144,9 @@ describe('migrations tests', () => {
         },
         '../appLifecycle/containerLabelBackfill': {
           backfillContainerLabels: async () => { order.push('eighth'); },
+        },
+        '../appLifecycle/componentKeyMap': {
+          keyInstalledByName: async () => { order.push('ninth'); },
         },
         './retiredSchema': {
           dropRetiredSchema: async () => { order.push('second'); },
@@ -160,8 +168,8 @@ describe('migrations tests', () => {
 
       const results = await rebuilt.runBefore('localDbPrepared');
 
-      expect(order).to.deep.equal(['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth']);
-      expect(results.map((r) => r.ok)).to.deep.equal([false, true, true, true, true, true, true, true]);
+      expect(order).to.deep.equal(['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth']);
+      expect(results.map((r) => r.ok)).to.deep.equal([false, true, true, true, true, true, true, true, true]);
     });
   });
 });
