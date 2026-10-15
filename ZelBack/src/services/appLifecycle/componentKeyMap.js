@@ -52,30 +52,34 @@ async function keysForUpdate(install, registered) {
 }
 
 /**
- * The keys of a version of an app this node installs: the app's applied
- * messages, from its registration to this version, opened in chain order with
- * the keys carried from each to the next.
- * @param {object} registered - InstantiatedSpec of the version installed
+ * The keys of a version of an app: the app's versions applied before it, in
+ * chain order, opened with the keys carried from each to the next, and then
+ * the version itself. The version need not be recorded as applied yet: the
+ * registry stores a version before its decision is written, and a version is
+ * the latest of its app when either reads its keys.
+ * @param {object} registered - InstantiatedSpec of the version
  * @returns {Promise<Map<string, string>>}
  */
-async function keysForInstall(registered) {
+async function keysForVersion(registered) {
   const { componentKeysFor } = await getSpec();
-  const history = await appHistory.appliedMessages(registered.name);
-  const own = history.find(({ decision }) => decision.hash === registered.hash);
-  if (!own) throw new Error(`component keys for ${registered.name}: ${registered.hash} is not an applied message of the app`);
+  const appIdentity = registered.identity ?? registered.name;
   // The app is the one this version belongs to: a name registered again after
   // expiry is another app, whose messages are not this one's history.
-  const versions = history.filter(({ decision }) => decision.uuid === own.decision.uuid);
+  const before = [];
+  // eslint-disable-next-line no-restricted-syntax
+  for (const version of await appHistory.appliedMessages(registered.name)) {
+    if (version.decision.hash === registered.hash) break;
+    if (version.decision.uuid === registered.uuid) before.push(version);
+  }
   let keys = null;
-  for (const { message, decision } of versions) {
+  // eslint-disable-next-line no-restricted-syntax
+  for (const { message, decision } of before) {
     // eslint-disable-next-line no-await-in-loop
     const spec = await opened(await specCutover.resolveSpec(message.appSpecifications), registered.name);
-    keys = componentKeysFor(spec, {
-      previous: keys, appIdentity: registered.identity ?? registered.name, messageHash: decision.hash,
-    });
-    if (decision.hash === registered.hash) break;
+    keys = componentKeysFor(spec, { previous: keys, appIdentity, messageHash: decision.hash });
   }
-  return keys;
+  const own = await opened(await specCutover.resolveInstantiatedSpec(registered), registered.name);
+  return componentKeysFor(own, { previous: keys, appIdentity, messageHash: registered.hash });
 }
 
 /**
@@ -110,7 +114,7 @@ async function keyInstalledByName() {
 }
 
 module.exports = {
-  keysForInstall,
+  keysForVersion,
   keysForUpdate,
   keyInstalledByName,
 };

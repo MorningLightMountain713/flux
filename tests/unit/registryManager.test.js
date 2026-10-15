@@ -1966,7 +1966,7 @@ describe('registryManager tests', () => {
       const resolve = sinon.stub(specCutover, 'resolveInstantiatedSpec').resolves(view);
       const applyComponentView = sinon.stub(foundingCommittee, 'applyComponentView').resolves();
       const webKey = `c${'w'.repeat(52)}`;
-      const keysForInstall = sinon.stub(componentKeyMap, 'keysForInstall').resolves(new Map([['web', webKey]]));
+      const keysForVersion = sinon.stub(componentKeyMap, 'keysForVersion').resolves(new Map([['web', webKey]]));
 
       await registryManager.storeGlobalSpec(stored);
 
@@ -1982,7 +1982,7 @@ describe('registryManager tests', () => {
 
       // The mapping names each component by the key its history gives it, so a
       // renamed component keeps its founding.
-      sinon.assert.calledOnceWithExactly(keysForInstall, stored);
+      sinon.assert.calledOnceWithExactly(keysForVersion, stored);
       sinon.assert.calledOnce(applyComponentView);
       const [mapped] = applyComponentView.firstCall.args;
       expect(mapped).to.deep.equal({ identity: 'ab12cd34ef56', height: 2_500_000, componentKeys: [webKey] });
@@ -1994,11 +1994,11 @@ describe('registryManager tests', () => {
       const stored = await registryHolds(spec, { hash: 'hp', height: 2_500_000, identity: 'ab12cd34ef57' });
       sinon.stub(specCutover, 'resolveInstantiatedSpec').resolves(spec);
       const applyComponentView = sinon.stub(foundingCommittee, 'applyComponentView').resolves();
-      const keysForInstall = sinon.stub(componentKeyMap, 'keysForInstall').resolves(new Map());
+      const keysForVersion = sinon.stub(componentKeyMap, 'keysForVersion').resolves(new Map());
 
       await registryManager.storeGlobalSpec(stored);
 
-      sinon.assert.notCalled(keysForInstall);
+      sinon.assert.notCalled(keysForVersion);
       sinon.assert.notCalled(applyComponentView);
     });
   });

@@ -49,7 +49,7 @@ describe('componentKeyMap', () => {
     sinon.restore();
   });
 
-  describe('keysForInstall', () => {
+  describe('keysForVersion', () => {
     it('replays the app\'s applied versions in order: a rename keeps the key, an added component mints one', async () => {
       sinon.stub(appHistory, 'appliedMessages').resolves([
         await applied(HX, { web: component('web') }, 'u-earlier-app'),
@@ -59,7 +59,7 @@ describe('componentKeyMap', () => {
       ]);
       const atRegistration = flux.componentKeysFor(await specWith({ web: component('web') }), { previous: null, appIdentity: IDENTITY, messageHash: H1 });
 
-      const keys = await componentKeyMap.keysForInstall(await registered(H2, { frontend: component('frontend', 'web'), db: component('db') }));
+      const keys = await componentKeyMap.keysForVersion(await registered(H2, { frontend: component('frontend', 'web'), db: component('db') }));
 
       expect([...keys.keys()]).to.have.members(['frontend', 'db']);
       expect(keys.get('frontend'), 'the renamed component keeps the key the registration minted').to.equal(atRegistration.get('web'));
@@ -67,22 +67,28 @@ describe('componentKeyMap', () => {
       expect(keys.get('db')).to.not.equal(keys.get('frontend'));
     });
 
-    it('stops at the version being installed', async () => {
+    it('reads no version applied after it', async () => {
       sinon.stub(appHistory, 'appliedMessages').resolves([
         await applied(H1, { web: component('web') }),
-        await applied(H2, { web: component('web'), db: component('db') }),
+        await applied(H2, { site: component('site', 'web'), web: component('web') }),
       ]);
-      const keys = await componentKeyMap.keysForInstall(await registered(H1, { web: component('web') }, 'fluxappregister'));
-      expect([...keys.keys()]).to.deep.equal(['web']);
+      const atRegistration = flux.componentKeysFor(await specWith({ web: component('web') }), { previous: null, appIdentity: IDENTITY, messageHash: H1 });
+      const keys = await componentKeyMap.keysForVersion(await registered(H1, { web: component('web') }, 'fluxappregister'));
+      expect([...keys]).to.deep.equal([['web', atRegistration.get('web')]]);
     });
 
-    it('refuses a version the app\'s history never applied', async () => {
-      sinon.stub(appHistory, 'appliedMessages').resolves([await applied(H1, { web: component('web') })]);
-      let caught;
-      try {
-        await componentKeyMap.keysForInstall(await registered(H2, { web: component('web') }));
-      } catch (error) { caught = error; }
-      expect(caught?.message).to.match(/not an applied message/);
+    it('keys a version whose decision is not stored yet from the versions applied before it', async () => {
+      sinon.stub(appHistory, 'appliedMessages').resolves([
+        await applied(HX, { web: component('web') }, 'u-earlier-app'),
+        await applied(H1, { web: component('web') }),
+      ]);
+      const atRegistration = flux.componentKeysFor(await specWith({ web: component('web') }), { previous: null, appIdentity: IDENTITY, messageHash: H1 });
+
+      const keys = await componentKeyMap.keysForVersion(await registered(H2, { site: component('site', 'web'), db: component('db') }));
+
+      expect([...keys.keys()]).to.have.members(['site', 'db']);
+      expect(keys.get('site'), 'the renamed component keeps the key the registration minted').to.equal(atRegistration.get('web'));
+      expect(flux.isComponentKey(keys.get('db'))).to.equal(true);
     });
   });
 
