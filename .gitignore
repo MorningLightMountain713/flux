@@ -420,6 +420,9 @@ ZelBack/config/local-*.js
 # artifacts above - never commit it
 test-infra/flux-spec/dist/
 
+# FluxDrive's API vendored at test-infra/fluxdrive/pin for the real-FluxDrive image
+test-infra/fluxdrive/src/
+
 # Derived from the chain, not from this repo: scripts/export-pricing-rows.js
 # rebuilds it, and its content changes whenever the chain does. The suite that
 # reads it skips when it is absent.

@@ -71,6 +71,11 @@ build_fluxos() {
 }
 
 build_stub() {
+  # A stub built from a vendored source is vendored first; vendor.sh skips when
+  # the vendor already matches the pin. Before the digest, like the test-app binary.
+  if [ -f "test-infra/$1/vendor.sh" ]; then
+    bash "test-infra/$1/vendor.sh"
+  fi
   echo "==> flux-e2e-$1:${TAG}"
   # The tag reaches every stub so one can build FROM the node image under the same
   # tag; a stub whose Dockerfile declares no such ARG ignores it. external-http-stub
