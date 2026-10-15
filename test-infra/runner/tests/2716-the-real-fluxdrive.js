@@ -146,13 +146,14 @@ describe('the real FluxDrive', function () {
     expect(registration.status, `the registration is accepted: ${JSON.stringify(registration).slice(0, 300)}`).to.equal('success');
 
     const waiting = await fluxDrivePending(harnessNow());
-    expect(waiting, 'the manifest put and the reconcile wait on the registration').to.include({ pending: 2, kept: 2, applied: 0 });
+    // A registration's first manifest supersedes nothing, so it carries no reconcile.
+    expect(waiting, 'the manifest put waits on the registration').to.include({ pending: 1, kept: 1, applied: 0 });
     expect(await fluxDriveManifests(name), 'FluxDrive serves no manifest while the writes wait').to.deep.equal([]);
 
     await confirmOnChain(registration.data, RUNNING.map((i) => env.clients[i]));
     await decidedEverywhere(registration.data, 'applied', 'every node decides the registration applied');
     const decided = await fluxDrivePending(harnessNow());
-    expect(decided, 'both writes apply once the nodes answer').to.include({ pending: 2, applied: 2 });
+    expect(decided, 'the manifest put applies once the nodes answer').to.include({ pending: 1, applied: 1 });
 
     ({ identity } = await manifestStanding(url(registrar), name));
     const served = await fluxDriveManifests(name);
