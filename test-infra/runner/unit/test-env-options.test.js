@@ -16,6 +16,7 @@ describe('createTestEnv options', () => {
     ['shutdownd', ['none', 'stub', 'real'], true],
     ['telemetryd', ['none', 'stub', 'real'], 'mock'],
     ['dnsd', ['none', 'real'], 'stub'],
+    ['fluxDrive', ['stub', 'real'], 'mock'],
   ]) {
     it(`refuses a ${name} other than ${allowed.join(', ')}`, async () => {
       await assert.rejects(createTestEnv({ [name]: refused }), new RegExp(`${name} must be ${allowed.map((a) => `'${a}'`).join(' or ')}, got '${refused}'`));
