@@ -26,6 +26,7 @@ const log = require('../../lib/log');
 const appsRepository = require('../appDatabase/appsRepository');
 const appRecords = require('../appDatabase/appRecords');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
+const componentKeyMap = require('../appLifecycle/componentKeyMap');
 const dockerService = require('../dockerService');
 const daemonStatus = require('../daemonService/daemonStatus');
 const daemonServiceBlockchainRpcs = require('../daemonService/daemonServiceBlockchainRpcs');
@@ -395,12 +396,14 @@ function buildSnapshotApp(app, ctx) {
   [...componentNames].sort().forEach((component) => {
     const meshPorts = app.view.components?.[component]?.meshPorts ?? {};
     const portNames = Object.keys(meshPorts).sort();
-    if (portNames.length === 0) return;
+    const formerNames = app.formerNames.get(component) ?? [];
+    if (portNames.length === 0 && formerNames.length === 0) return;
     components[component] = {
       ports: Object.fromEntries(portNames.map((portName) => [portName, {
         port: meshPorts[portName].containerPort,
         proto: meshPorts[portName].protocol ?? 'tcp',
       }])),
+      formerNames,
     };
   });
   return {
@@ -589,6 +592,24 @@ async function collectStrayMesh(claimedIdentities) {
   }
 }
 
+// The former names of each mesh app's components, by identity, for the version
+// they were worked out for: an app's history changes only with its version.
+const formerNamesByIdentity = new Map();
+
+/**
+ * The names each component of an installed mesh app held before its current
+ * one, which the resolver keeps answering for the component's life.
+ * @param {object} registered - the installed record's registered record
+ * @returns {Promise<Map<string, string[]>>} by current component name
+ */
+async function formerNamesOf(registered) {
+  const known = formerNamesByIdentity.get(registered.identity);
+  if (known?.hash === registered.hash) return known.names;
+  const names = await componentKeyMap.formerNamesForVersion(registered);
+  formerNamesByIdentity.set(registered.identity, { hash: registered.hash, names });
+  return names;
+}
+
 async function runReconcilePass() {
   const synced = daemonStatus.isDaemonSynced();
   if (synced?.data?.synced !== true) {
@@ -599,6 +620,9 @@ async function runReconcilePass() {
   const gathered = new Set(apps.map((app) => app.name));
   [...lastPassByApp.keys()].forEach((name) => {
     if (!gathered.has(name)) lastPassByApp.delete(name);
+  });
+  [...formerNamesByIdentity.keys()].forEach((identity) => {
+    if (!claimedIdentities.has(identity)) formerNamesByIdentity.delete(identity);
   });
   await collectStrayMesh(claimedIdentities);
   if (apps.length === 0) {
@@ -635,6 +659,8 @@ async function runReconcilePass() {
       const deployment = await deploymentProvider.buildDeployment(app.install, { replica: app.install.replica });
       app.slots = new Map(deployment.componentEntries()
         .map(([component, { componentKey }]) => [component, meshComponentSlot(app.name, componentKey)]));
+      // eslint-disable-next-line no-await-in-loop
+      app.formerNames = await formerNamesOf(app.install.record);
       // eslint-disable-next-line no-await-in-loop
       app.material = await reconcileAppMaterial(app, ctx);
       // eslint-disable-next-line no-await-in-loop

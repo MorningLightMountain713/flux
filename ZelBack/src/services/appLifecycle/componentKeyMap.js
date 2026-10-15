@@ -52,15 +52,17 @@ async function keysForUpdate(install, registered) {
 }
 
 /**
- * The keys of a version of an app: the app's versions applied before it, in
- * chain order, opened with the keys carried from each to the next, and then
- * the version itself. The version need not be recorded as applied yet: the
- * registry stores a version before its decision is written, and a version is
- * the latest of its app when either reads its keys.
+ * A version of an app's components through its history: the app's versions
+ * applied before it, in chain order, opened with the keys carried from each to
+ * the next, and then the version itself. The version need not be recorded as
+ * applied yet: the registry stores a version before its decision is written,
+ * and a version is the latest of its app when its keys are read.
  * @param {object} registered - InstantiatedSpec of the version
- * @returns {Promise<Map<string, string>>}
+ * @returns {Promise<{keys: Map<string, string>, namesByKey: Map<string, string[]>}>}
+ *   the version's keys by component name, and every name each key has held, in
+ *   the order it first held them
  */
-async function keysForVersion(registered) {
+async function componentHistory(registered) {
   const { componentKeysFor } = await getSpec();
   const appIdentity = registered.identity ?? registered.name;
   // The app is the one this version belongs to: a name registered again after
@@ -71,15 +73,46 @@ async function keysForVersion(registered) {
     if (version.decision.hash === registered.hash) break;
     if (version.decision.uuid === registered.uuid) before.push(version);
   }
+  const namesByKey = new Map();
+  const record = (keys) => keys.forEach((key, name) => {
+    const names = namesByKey.get(key) ?? [];
+    if (!names.includes(name)) names.push(name);
+    namesByKey.set(key, names);
+  });
   let keys = null;
   // eslint-disable-next-line no-restricted-syntax
   for (const { message, decision } of before) {
     // eslint-disable-next-line no-await-in-loop
     const spec = await opened(await specCutover.resolveSpec(message.appSpecifications), registered.name);
     keys = componentKeysFor(spec, { previous: keys, appIdentity, messageHash: decision.hash });
+    record(keys);
   }
   const own = await opened(await specCutover.resolveInstantiatedSpec(registered), registered.name);
-  return componentKeysFor(own, { previous: keys, appIdentity, messageHash: registered.hash });
+  keys = componentKeysFor(own, { previous: keys, appIdentity, messageHash: registered.hash });
+  record(keys);
+  return { keys, namesByKey };
+}
+
+/**
+ * The keys of a version of an app (componentHistory).
+ * @param {object} registered - InstantiatedSpec of the version
+ * @returns {Promise<Map<string, string>>}
+ */
+async function keysForVersion(registered) {
+  return (await componentHistory(registered)).keys;
+}
+
+/**
+ * The names each component of a version of an app held before its current
+ * one, in the order it held them: what a cluster that stored a member by an
+ * earlier name still asks for. A name a removed component held is not a
+ * former name of a component added later under it.
+ * @param {object} registered - InstantiatedSpec of the version
+ * @returns {Promise<Map<string, string[]>>} by current component name
+ */
+async function formerNamesForVersion(registered) {
+  const { keys, namesByKey } = await componentHistory(registered);
+  return new Map([...keys].map(([name, key]) => [name, namesByKey.get(key).filter((held) => held !== name)]));
 }
 
 /**
@@ -115,6 +148,7 @@ async function keyInstalledByName() {
 
 module.exports = {
   keysForVersion,
+  formerNamesForVersion,
   keysForUpdate,
   keyInstalledByName,
 };

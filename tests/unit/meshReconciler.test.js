@@ -127,6 +127,10 @@ describe('meshReconciler', () => {
       installedApps: [await installedRow(spec)],
       // The component keys the installed record holds; none by default.
       installedKeys: null,
+      // The names each component held before its current one; none by default.
+      formerNamesForVersion: sinon.stub().callsFake(async (registered) => new Map(
+        registered.spec.componentNames().map((name) => [name, []]),
+      )),
       listInstalledApps: sinon.stub().callsFake(async () => stubs.installedApps),
       deployments: [deploymentFor(spec)],
       // The mesh member name the ledger holds for each component; none by default.
@@ -204,6 +208,9 @@ describe('meshReconciler', () => {
             return stubs.ledgerFor(name, replica);
           },
         }),
+      },
+      '../appLifecycle/componentKeyMap': {
+        formerNamesForVersion: (...args) => stubs.formerNamesForVersion(...args),
       },
       '../appRuntime/deploymentProvider': {
         getInstalledDeployments: sinon.stub().callsFake(async () => stubs.deployments),
@@ -528,6 +535,37 @@ describe('meshReconciler', () => {
       expect(taygaText).to.include(`map ${addresses.get(`myblog|${OWN_NODE_ID}|web`)} ${meshDerivation.memberAddress(APP_UUID, OWN_OUTPOINT, keySlot)}`);
       expect(taygaText).to.include(`map ${addresses.get(`myblog|${PEER_NODE_ID}|web`)} ${meshDerivation.memberAddress(APP_UUID, PEER_OUTPOINT, keySlot)}`);
       expect(stubs.attachments.map((a) => a.linkId)).to.deep.equal([keySlot.toString(16).padStart(8, '0')]);
+    });
+
+    it('writes each component\'s former names into the snapshot, worked out once per version', async () => {
+      stubs.formerNamesForVersion = sinon.stub().resolves(new Map([['web', ['blog', 'www']]]));
+
+      await meshReconciler.reconcileAllMeshApps();
+      await meshReconciler.reconcileAllMeshApps();
+
+      expect(stubs.writeSnapshotCalls[0].apps[0].components).to.deep.equal({
+        web: { ports: {}, formerNames: ['blog', 'www'] },
+      });
+      sinon.assert.calledOnce(stubs.formerNamesForVersion);
+      expect(stubs.formerNamesForVersion.firstCall.args[0].hash).to.equal(stubs.installedApps[0].hash);
+    });
+
+    it('works the former names out again for a new version', async () => {
+      await meshReconciler.reconcileAllMeshApps();
+      stubs.installedApps = [await makeApp({}, { hash: 'f'.repeat(64) })];
+      await meshReconciler.reconcileAllMeshApps();
+      sinon.assert.calledTwice(stubs.formerNamesForVersion);
+      expect(stubs.formerNamesForVersion.secondCall.args[0].hash).to.equal('f'.repeat(64));
+    });
+
+    it('forgets the former names of an app no longer installed', async () => {
+      const installed = stubs.installedApps;
+      await meshReconciler.reconcileAllMeshApps();
+      stubs.installedApps = [];
+      await meshReconciler.reconcileAllMeshApps();
+      stubs.installedApps = installed;
+      await meshReconciler.reconcileAllMeshApps();
+      sinon.assert.calledTwice(stubs.formerNamesForVersion);
     });
 
     it('with no default-route interface: converges locally, chains empty, degradation loud and visible', async () => {
@@ -1022,16 +1060,18 @@ describe('meshReconciler', () => {
         view: spec,
         material: { members: [{ nodeId: PEER_NODE_ID }] },
         containers: [],
+        formerNames: new Map(),
       };
       const snapApp = meshReconciler.buildSnapshotApp(app, { ownNodeId: OWN_NODE_ID });
-      // Only components that declare mesh ports appear; the protocol falls
-      // back to tcp; keys are deterministically ordered.
+      // Only components that declare mesh ports or held other names appear;
+      // the protocol falls back to tcp; keys are deterministically ordered.
       expect(snapApp.components).to.deep.equal({
         mysql: {
           ports: {
             galera: { port: 4567, proto: 'tcp' },
             sst: { port: 4444, proto: 'tcp' },
           },
+          formerNames: [],
         },
       });
       expect(snapApp.members).to.have.length(4);
@@ -1043,6 +1083,7 @@ describe('meshReconciler', () => {
         view: await meshSpec(),
         material: { members: [] },
         containers: [],
+        formerNames: new Map(),
       };
       const snapApp = meshReconciler.buildSnapshotApp(app, { ownNodeId: OWN_NODE_ID });
       expect(snapApp.components).to.deep.equal({});
@@ -1061,6 +1102,7 @@ describe('meshReconciler', () => {
           ],
         },
         containers: [],
+        formerNames: new Map(),
       };
       const snapApp = meshReconciler.buildSnapshotApp(app, {
         ownNodeId: OWN_NODE_ID, ownOutpoint: OWN_OUTPOINT,
