@@ -681,6 +681,75 @@ export async function pushBusybox(repo, tag = 'v1', markerContent = 'busybox') {
   return manifestRes.headers['docker-content-digest'];
 }
 
+// etcd as published (gcr.io/etcd-development/etcd v3.5.17, the linux/amd64
+// entry of its index), byte for byte, under one more layer: busybox as /bin/sh
+// and the member and client scripts of test-infra/etcd-fixture. The published
+// image has no shell, and a member names itself from the mesh identity FluxOS
+// puts in its environment.
+const ETCD_SOURCE = Object.freeze({
+  registry: 'gcr.io',
+  repo: 'etcd-development/etcd',
+  index: 'sha256:15b1882f07aeaf357a48fbbcf35a566ae3ea110395704711488ea263fa86838d',
+});
+const ETCD_FIXTURE_DIR = join(__dirname, '..', '..', 'etcd-fixture');
+
+async function fetchEtcdJson(kind, digest) {
+  return JSON.parse((await fetchByDigest(ETCD_SOURCE.registry, ETCD_SOURCE.repo, kind, digest)).toString());
+}
+
+/**
+ * Push the etcd fixture image. Its default command starts a member
+ * (etcd-member.sh); a component that runs `/usr/local/bin/etcd-client` instead
+ * is a client writing through ENDPOINTS.
+ * @param {string} repo
+ * @param {string} [tag]
+ * @returns {Promise<string>} the image reference in the harness registry
+ */
+export async function pushEtcdImage(repo, tag = 'v1') {
+  const index = await fetchEtcdJson('manifests', ETCD_SOURCE.index);
+  const entry = index.manifests.find((m) => m.platform?.os === 'linux' && m.platform?.architecture === 'amd64');
+  const manifest = await fetchEtcdJson('manifests', entry.digest);
+  const config = await fetchEtcdJson('blobs', manifest.config.digest);
+  // eslint-disable-next-line no-restricted-syntax
+  for (const layer of manifest.layers) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await blobExists(repo, layer.digest)) continue;
+    // eslint-disable-next-line no-await-in-loop
+    await uploadBlob(repo, await fetchByDigest(ETCD_SOURCE.registry, ETCD_SOURCE.repo, 'blobs', layer.digest));
+  }
+
+  const busybox = readFileSync(BUSYBOX_BIN);
+  const shellTar = Buffer.concat([
+    tarEntry('bin/busybox', busybox),
+    tarEntry('bin/sh', busybox),
+    tarEntry('usr/local/bin/etcd-member', readFileSync(join(ETCD_FIXTURE_DIR, 'etcd-member.sh'))),
+    tarEntry('usr/local/bin/etcd-client', readFileSync(join(ETCD_FIXTURE_DIR, 'etcd-client.sh'))),
+    Buffer.alloc(1024),
+  ]);
+  const shellLayer = zlib.gzipSync(shellTar);
+  const shellDigest = await uploadBlob(repo, shellLayer);
+
+  const imageConfig = Buffer.from(JSON.stringify({
+    ...config,
+    config: { ...config.config, Entrypoint: ['/bin/sh'], Cmd: ['/usr/local/bin/etcd-member'] },
+    rootfs: { type: 'layers', diff_ids: [...config.rootfs.diff_ids, `sha256:${sha256(shellTar)}`] },
+    history: [...(config.history ?? []), { created_by: 'flux harness: busybox shell, etcd member and client scripts' }],
+  }));
+  const configDigest = await uploadBlob(repo, imageConfig);
+
+  const imageManifest = {
+    schemaVersion: 2,
+    mediaType: manifest.mediaType,
+    config: { mediaType: manifest.config.mediaType, size: imageConfig.length, digest: configDigest },
+    layers: [
+      ...manifest.layers,
+      { mediaType: manifest.layers[0].mediaType, size: shellLayer.length, digest: shellDigest },
+    ],
+  };
+  await putManifest(repo, tag, Buffer.from(JSON.stringify(imageManifest)), manifest.mediaType);
+  return `${REGISTRY_REPO_HOST}/${repo}:${tag}`;
+}
+
 export async function pushUpdatedImage(repo, tag) {
   const marker = `updated-${Date.now()}-${crypto.randomBytes(8).toString('hex')}`;
   return pushImage(repo, tag, marker);
