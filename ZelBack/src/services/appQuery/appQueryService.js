@@ -46,7 +46,8 @@ async function installedApps(req, res) {
     const installed = filter.name
       ? [await appRecords.installed().byName(filter.name)].filter(Boolean)
       : await appRecords.installed().apps();
-    const apps = installed.map((app) => app.serialize());
+    // An app's registered record: the installed record's own fields stay on the node.
+    const apps = installed.map((app) => app.record.serialize());
     const dataResponse = messageHelper.createDataMessage(apps);
     return res ? res.json(dataResponse) : dataResponse;
   } catch (error) {

@@ -18,6 +18,7 @@ describe('appIdentityMove tests', () => {
   let appIdentityMove;
   // The world the move acts on, as the stubs hold it.
   let db; // `${name}|${replica}` -> installed row
+  let lastPut; // the installed record last written
   let moves; // `${name}|${replica}` -> the move in progress
   let containers; // docker names present -> { running }
   let mounts; // mounted directories
@@ -73,10 +74,10 @@ describe('appIdentityMove tests', () => {
   }
 
   // The stored row as the installed collection hands it back: the registered
-  // fields, the record beneath them.
+  // fields, the registered record beneath them.
   function rowView(row) {
     return {
-      ...row, record: row, owed: null, serialize: () => ({ ...row }),
+      ...row, record: { ...row, serialize: () => ({ ...row }) }, owed: null,
     };
   }
 
@@ -104,6 +105,7 @@ describe('appIdentityMove tests', () => {
           return row ? rowView(row) : null;
         },
         put: async (rec) => {
+          lastPut = rec;
           record('put', rec.record.name, rec.replica, rec.record.identity);
           Object.assign(db.get(key(rec.record.name, rec.replica)), rec.record);
         },
@@ -286,6 +288,15 @@ describe('appIdentityMove tests', () => {
         moved: [], deferred: [], skipped: [], held: [],
       });
       expect(indexOf('byReplica')).to.equal(-1);
+    });
+
+    it('keeps the component keys the node derived when it rewrites the row', async () => {
+      const keys = new Map([[NAME, NAME]]);
+      seedRunningUnderName(NAME, { componentKeys: keys });
+
+      await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(lastPut.componentKeys).to.equal(keys);
     });
 
     it('reads the uuid off the applied decision of the row\'s message and records it on the row', async () => {

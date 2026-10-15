@@ -150,7 +150,9 @@ async function adoptInstalledLedgers() {
       if (move) await appIdentityMoveStore.begin(record.name, record.replica, move.to, move.since);
       if (move || registered !== record.record) {
         // eslint-disable-next-line no-await-in-loop
-        await installed.put(new InstalledSpec({ record: registered, replica: record.replica, owed: record.owed }));
+        await installed.put(new InstalledSpec({
+          record: registered, replica: record.replica, owed: record.owed, componentKeys: record.componentKeys,
+        }));
       }
       // eslint-disable-next-line no-await-in-loop
       const registrationVersion = await appHistory.registrationVersionOf(record.name, registered.uuid) ?? undefined;

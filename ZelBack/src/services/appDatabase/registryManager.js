@@ -1007,7 +1007,8 @@ async function availableApps(_req, res) {
   try {
     const globalApps = await appRecords.registry().all();
     const localApps = await appRecords.installed().apps();
-    const allApps = [...globalApps, ...localApps].map((app) => app.serialize());
+    // Each app's registered record: an installed record's own fields stay on the node.
+    const allApps = [...globalApps, ...localApps.map((app) => app.record)].map((app) => app.serialize());
 
     if (res) {
       const resultsResponse = messageHelper.createDataMessage(allApps);
