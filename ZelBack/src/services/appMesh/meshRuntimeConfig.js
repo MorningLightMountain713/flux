@@ -19,7 +19,9 @@ const { MAX_PORT } = require('../utils/socketAddressUtils');
 // The overlay tun carries 1420 so that the IPv4 face's 1400 always fits after
 // the 20-byte IPv6 growth — with both faces fixed, no packet can ever exceed
 // either side, and the translator never needs to send packet-too-big across
-// the overlay.
+// the overlay. Every peer is off-link to the translator, so it is told the
+// overlay's MTU; its own default for off-link destinations is 1280, which
+// holds back every packet between 1280 and 1420 bytes.
 const OVERLAY_MTU = 1420;
 const IPV4_FACE_MTU = 1400;
 const NEBULA_TUN_DEVICE = 'mesh0';
@@ -212,6 +214,7 @@ function taygaConfig({
     `tun-device ${TAYGA_TUN_DEVICE}`,
     `ipv4-addr ${TAYGA_IPV4_ADDR}`,
     `ipv6-addr ${meshDerivation.translatorAddress(appUuid, outpoint)}`,
+    `offlink-mtu ${OVERLAY_MTU}`,
     ...sorted.map((entry) => `map ${entry.ipv4} ${entry.ipv6}`),
   ];
   return `${lines.join('\n')}\n`;
