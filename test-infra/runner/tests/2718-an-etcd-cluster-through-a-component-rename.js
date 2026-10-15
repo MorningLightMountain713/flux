@@ -16,7 +16,9 @@
  *   - a client connecting by the old names reaches every member;
  *   - a member restarted after the rename rejoins.
  */
-import { describe, it, before, after } from 'mocha';
+import {
+  describe, it, before, after, afterEach,
+} from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
@@ -163,6 +165,29 @@ describe('an etcd cluster through a component rename', function () {
     await confirmOnChain(reg.data, env.clients);
     app = { identity: appIdentityFromUuid(appUuid(name, reg.data)), componentKeys: reg.componentKeys };
     await view.installedEverywhere(reg.data, [0, 1, 2], 'every node installs the app');
+  });
+
+  // A failed test keeps what only the nodes hold: each node's resolver feed and
+  // the logs of the app's containers, etcd's own account among them.
+  afterEach(async function () {
+    if (this.currentTest.state !== 'failed' || !env) return;
+    this.timeout(120000);
+    // eslint-disable-next-line no-restricted-syntax
+    for (const index of [0, 1, 2]) {
+      const { container } = env.clients[index];
+      // eslint-disable-next-line no-await-in-loop
+      const feed = await execInContainer(container, 'cat /var/lib/flux-mesh/resolver/membership.json').catch(() => null);
+      console.log(`--- node ${index} membership.json ---\n${feed?.stdout ?? '(none)'}`);
+      // eslint-disable-next-line no-restricted-syntax
+      for (const component of ['db', 'database', 'client']) {
+        // eslint-disable-next-line no-await-in-loop
+        const app = await requireAppContainerName(container, name, component).catch(() => null);
+        if (!app) continue; // eslint-disable-line no-continue
+        // eslint-disable-next-line no-await-in-loop
+        const logs = await execInContainer(container, `docker logs --tail 150 ${app} 2>&1`).catch(() => null);
+        console.log(`--- node ${index} ${component} (${app}) ---\n${logs?.stdout ?? '(none)'}`);
+      }
+    }
   });
 
   after(async function () {
