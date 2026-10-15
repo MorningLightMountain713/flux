@@ -65,6 +65,10 @@ export function getSubnetConfig(base = resolveBase()) {
     // size whenever it is paid, so paying it before there is a second claimant is
     // work for a need that does not exist yet.
     haproxy: `${base}.9`,
+    // Services beyond .2-.9 take addresses down from .254, clear of the nodes:
+    // the real FluxDrive's GC runner (fluxdrive-real.js), started only by a
+    // suite that runs the real FluxDrive.
+    fluxDriveGc: `${base}.254`,
     // nodes occupy .10+ (gateway .1, services .2-.9); node number is 1-based
     nodeIp: (num) => `${base}.${num + 9}`,
   };

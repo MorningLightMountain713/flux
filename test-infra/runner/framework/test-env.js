@@ -30,6 +30,9 @@ import {
 import { acquireBootLock, releaseBootLock, BOOT_LOCK_MAX_WAIT_MS } from './boot-lock.js';
 import { stubPeerClient } from './stub-peer-helper.js';
 import { harnessClockFor } from './harness-clock.js';
+import { fluxDriveEnv } from './fluxdrive-env.js';
+import { fluxDriveApiUrl, FLUXDRIVE_GC_PORT } from './fluxdrive-real.js';
+import { blobUploadPublicKey } from './daemon-control.js';
 import { derivePeerThresholds, ringArc, dialerCount } from './peer-topology.js';
 import { pushImage } from './registry-helper.js';
 import { defaultGroupGrantDoc } from './policy-helper.js';
@@ -346,6 +349,7 @@ export class StaticIpContainer extends GenericContainer {
   #aliases = [];
   #dnsServer;
   #stopSignal;
+  #privateNetwork;
 
   withStaticIp(networkName, ip, aliases = []) {
     this.#staticIp = ip;
@@ -356,6 +360,14 @@ export class StaticIpContainer extends GenericContainer {
 
   withDnsServer(ip) {
     this.#dnsServer = ip;
+    return this;
+  }
+
+  // A second network the container joins once created and before it starts,
+  // beside its static address: where a service's own backends live, out of the
+  // fleet's reach (createPrivateNetwork).
+  withPrivateNetwork(networkName) {
+    this.#privateNetwork = networkName;
     return this;
   }
 
@@ -399,6 +411,12 @@ export class StaticIpContainer extends GenericContainer {
       };
     }
   }
+
+  async containerCreated(containerId) {
+    if (!this.#privateNetwork) return;
+    const client = await getContainerRuntimeClient();
+    await client.container.dockerode.getNetwork(this.#privateNetwork).connect({ Container: containerId });
+  }
 }
 
 async function createNetwork() {
@@ -423,6 +441,87 @@ async function createNetwork() {
     },
   });
   return networkName;
+}
+
+// A network for one service's own backends, joined by the service and nothing
+// else in the fleet. Internal, like the fleet's, and labelled the same way, so
+// the run's cleanup finds it; its containers reach each other by name.
+async function createPrivateNetwork(fleetNetworkName, service) {
+  const client = await getContainerRuntimeClient();
+  const reaper = await getReaper(client);
+  const networkName = `${fleetNetworkName}-${service}`;
+  await client.container.dockerode.createNetwork({
+    Name: networkName,
+    Driver: 'bridge',
+    Internal: true,
+    Labels: { 'org.testcontainers.session-id': reaper.sessionId, ...runLabels() },
+  });
+  return networkName;
+}
+
+// The real FluxDrive: its mongo and kubo on a network of its own, reached by
+// name; the API at the stub's address and the GC runner at its own, both on the
+// fleet's network and FluxDrive's. The API and the runner keep the suite's clock
+// when it has one; mongo keeps real time, which its TTL indexes expire by.
+async function startRealFluxDrive(env, { nodeUrls, onClock, clockMounts }) {
+  const { networkName, containers, started } = env;
+  const backends = await createPrivateNetwork(networkName, 'fluxdrive');
+  env.privateNetworks.push(backends);
+  const mongoName = `${backends}-mongo`;
+  const ipfsName = `${backends}-ipfs`;
+
+  const mongo = await new StaticIpContainer(MONGO_IMAGE)
+    .withName(mongoName)
+    .withNetworkMode(backends)
+    .withCommand(['--wiredTigerCacheSizeGB', '0.25'])
+    .withLogConsumer(infraLog(env, 'fluxDriveMongo'))
+    .withWaitStrategy(Wait.forLogMessage(/Waiting for connections/))
+    .start();
+  started.push(mongo);
+  containers.fluxDriveMongo = mongo;
+  watchInfra(env, 'fluxDriveMongo', mongo);
+
+  const ipfs = await new StaticIpContainer(image('flux-e2e-fluxdrive-ipfs'))
+    .withName(ipfsName)
+    .withNetworkMode(backends)
+    .withLogConsumer(infraLog(env, 'fluxDriveIpfs'))
+    .withWaitStrategy(Wait.forLogMessage(/Daemon is ready/))
+    .start();
+  started.push(ipfs);
+  containers.fluxDriveIpfs = ipfs;
+  watchInfra(env, 'fluxDriveIpfs', ipfs);
+
+  const environment = onClock(fluxDriveEnv({
+    mongoUrl: `mongodb://${mongoName}:27017`,
+    ipfsHost: ipfsName,
+    nodeUrls,
+    arcanePublicKey: await blobUploadPublicKey(),
+  }));
+
+  const api = await new StaticIpContainer(image('flux-e2e-fluxdrive'))
+    .withStaticIp(networkName, FLUXDRIVE_IP)
+    .withPrivateNetwork(backends)
+    .withEnvironment(environment)
+    .withBindMounts(clockMounts)
+    .withLogConsumer(infraLog(env, 'fluxDriveApi'))
+    .withWaitStrategy(new HttpPollWaitStrategy(`${fluxDriveApiUrl()}/api/v1/config`))
+    .start();
+  started.push(api);
+  containers.fluxDriveApi = api;
+  watchInfra(env, 'fluxDriveApi', api);
+
+  const gc = await new StaticIpContainer(image('flux-e2e-fluxdrive'))
+    .withStaticIp(networkName, subnet.fluxDriveGc)
+    .withPrivateNetwork(backends)
+    .withCommand(['node', '/harness/control.mjs'])
+    .withEnvironment({ ...environment, CONTROL_PORT: String(FLUXDRIVE_GC_PORT) })
+    .withBindMounts(clockMounts)
+    .withLogConsumer(infraLog(env, 'fluxDriveGc'))
+    .withWaitStrategy(new HttpPollWaitStrategy(`http://${subnet.fluxDriveGc}:${FLUXDRIVE_GC_PORT}/health`))
+    .start();
+  started.push(gc);
+  containers.fluxDriveGc = gc;
+  watchInfra(env, 'fluxDriveGc', gc);
 }
 
 async function removeNetwork(networkName) {
@@ -604,6 +703,7 @@ function makeEnvShell(networkName) {
 
   const env = {
     networkName,
+    privateNetworks: [], // createPrivateNetwork's, removed after the fleet's network
     containers: {},
     started,
     clients,
@@ -864,7 +964,8 @@ function makeEnvShell(networkName) {
       }
       step(`volumes(${volumeNames.length}, ${helperRuns} needed the flag-strip helper)`);
       await removeNetwork(networkName);
-      step('network');
+      for (const name of env.privateNetworks) await removeNetwork(name);
+      step(`network(+${env.privateNetworks.length} private)`);
       // Once the containers are gone nothing is writing to the journals, so this is
       // the moment to hand them back — see hostJournalChown. Kept off the failure
       // path deliberately: a green run's journals are archived and read too.
@@ -1094,6 +1195,11 @@ export async function createTestEnv({
   // One clock for the chain, the nodes and the runner's signer, which a suite
   // moves forward with advanceHarnessClock (harness-clock.js).
   harnessClock = false,
+  // FluxDrive: 'stub' is test-infra/fluxdrive-stub, driven by fluxdrive-control.js;
+  // 'real' is FluxDrive's API at test-infra/fluxdrive/pin with its own mongo and
+  // kubo, and a GC runner a suite drives through fluxdrive-real.js. On the
+  // harness clock when the suite is.
+  fluxDrive = 'stub',
   ...unknownOptions
 } = {}) {
   const unknown = Object.keys(unknownOptions);
@@ -1106,6 +1212,7 @@ export async function createTestEnv({
   oneOf('telemetryd', telemetryd, ['none', 'stub', 'real']);
   oneOf('dnsd', dnsd, ['none', 'real']);
   oneOf('harnessClock', harnessClock, [false, true]);
+  oneOf('fluxDrive', fluxDrive, ['stub', 'real']);
   // A systemd node hands the container environment to PID 1 and every unit;
   // the clock is proved on the default entrypoint, where it reaches FluxOS.
   if (harnessClock && systemdMode) throw new Error('createTestEnv: harnessClock runs on the default entrypoint, not systemdMode');
@@ -1387,7 +1494,7 @@ export async function createTestEnv({
     // boot's own.
     await startInfraDeathWatch(env);
     await _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNodes, stubPeers, silentSyncPeers, unverifiableSyncPeers, policyUnawarePeers, stubPeerings, mergedOverrides, mergedNodeOverrides, nodeTiers, dataCenter, tickerAutostart, discoveryAutostart, nodeStatusOverrides, rpcFailures, bootContext, initialHeight, syncthing, aptSeeded, aptBadSource, geolocation, locationTable, staticIp, policy, policySeeds, policyReachable, arcane, shutdownd, telemetryd, systemdMode, dnsd, zmqTopics, nodeZmqTopics, {
-      perNodeZmq, seedPolicyGrant, nodeImageTags, ipLocationSeeded, harnessClock,
+      perNodeZmq, seedPolicyGrant, nodeImageTags, ipLocationSeeded, harnessClock, fluxDrive,
     }, stubCapabilities);
     if (env.ipLocationSnapshot) await assertIpLocationSnapshotAdopted(env);
     return env;
@@ -1456,6 +1563,7 @@ async function _buildEnv(
 ) {
   const {
     perNodeZmq = false, seedPolicyGrant = true, nodeImageTags = {}, ipLocationSeeded = true, harnessClock = false,
+    fluxDrive = 'stub',
   } = options;
   // the bind mount and environment that put a container on the suite's clock, or null
   const clock = harnessClockFor(env.networkName, harnessClock);
@@ -1620,25 +1728,29 @@ async function _buildEnv(
   containers.fdmStub = fdmStub;
   watchInfra(env, 'fdmStub', fdmStub);
 
-  // The stub holds a write that names a spec message until the nodes answer
-  // what became of the message, asking the fleet's decision route as the real
-  // service does.
-  const nodeUrls = Array.from({ length: nodes }, (_, i) => `http://${subnet.nodeIp(i + 1)}:16127`).join(',');
-  const fluxDriveStub = await new StaticIpContainer(image('flux-e2e-fluxdrive-stub'))
-    .withLogConsumer(infraLog(env, 'fluxDriveStub'))
-    .withStaticIp(networkName, FLUXDRIVE_IP)
-    .withEnvironment(onClock({ FLUXDRIVE_PORT: '16140', CONTROL_PORT: '16141', FLUX_NODE_URLS: nodeUrls }))
-    .withBindMounts(clockMounts)
-    .withWaitStrategy(new HttpPollWaitStrategy(`http://${FLUXDRIVE_IP}:16141/health`))
-    .withHealthCheck({
-      test: ['CMD', 'node', '-e', "require('http').get('http://localhost:16141/health', r => { r.on('data', () => {}); r.statusCode === 200 ? process.exit(0) : process.exit(1) })"],
-      interval: 3000,
-      timeout: 2000,
-      retries: 10,
-    })
-    .start();
-  started.push(fluxDriveStub);
-  containers.fluxDriveStub = fluxDriveStub;
+  const nodeUrls = Array.from({ length: nodes }, (_, i) => `http://${subnet.nodeIp(i + 1)}:16127`);
+  if (fluxDrive === 'real') {
+    await startRealFluxDrive(env, { nodeUrls, onClock, clockMounts });
+  } else {
+    // The stub holds a write that names a spec message until the nodes answer
+    // what became of the message, asking the fleet's decision route as the real
+    // service does.
+    const fluxDriveStub = await new StaticIpContainer(image('flux-e2e-fluxdrive-stub'))
+      .withLogConsumer(infraLog(env, 'fluxDriveStub'))
+      .withStaticIp(networkName, FLUXDRIVE_IP)
+      .withEnvironment(onClock({ FLUXDRIVE_PORT: '16140', CONTROL_PORT: '16141', FLUX_NODE_URLS: nodeUrls.join(',') }))
+      .withBindMounts(clockMounts)
+      .withWaitStrategy(new HttpPollWaitStrategy(`http://${FLUXDRIVE_IP}:16141/health`))
+      .withHealthCheck({
+        test: ['CMD', 'node', '-e', "require('http').get('http://localhost:16141/health', r => { r.on('data', () => {}); r.statusCode === 200 ? process.exit(0) : process.exit(1) })"],
+        interval: 3000,
+        timeout: 2000,
+        retries: 10,
+      })
+      .start();
+    started.push(fluxDriveStub);
+    containers.fluxDriveStub = fluxDriveStub;
+  }
 
   if (!dataCenter) {
     for (let i = 1; i <= nodes; i++) {
@@ -2069,7 +2181,7 @@ async function _buildEnv(
         // started for the suites that asked for it.
         discoveryAutostart,
       },
-      fluxDrive: { blobApiUrl: `http://${FLUXDRIVE_IP}:16140` },
+      fluxDrive: { blobApiUrl: fluxDrive === 'real' ? fluxDriveApiUrl() : `http://${FLUXDRIVE_IP}:16140` },
     };
     const nodeConfig = mergeConfigs(infraOverride, mergeConfigs(configOverrides, nodeConfigOverrides[i]));
     // Checked on the EFFECTIVE config, per node, before anything boots. A
