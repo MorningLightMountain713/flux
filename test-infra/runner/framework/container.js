@@ -294,19 +294,30 @@ export async function appVolumeFile(container, appName, componentName = appName,
 }
 
 /**
- * The identifier of a component of a BUILT app, `<component>_<identity>`, from
- * the identity its registration mints (seed-helper, app-helper). For what has to
- * be named before any container exists: an event wait on the install itself, or
- * a stub preset the install must find in place. Once a container exists its
- * label states it (appComponentIdentifier), and the registration row answers it
- * on any node (db-client appContainerName). Nothing physical is ever spelled
- * from a name: the identity is minted from the registration's hash.
+ * The identifier of a component of a BUILT app, `<component key>_<identity>`,
+ * from the identity its registration mints (seed-helper, app-helper) and the
+ * component's key. A component of a pre-v9 app is keyed by its name; a v9 app
+ * states its keys as `componentKeys` (component-keys.js, which the v9 builders
+ * in content-helper return). For what has to be named before any container
+ * exists: an event wait on the install itself, or a stub preset the install
+ * must find in place. Once a container exists its label states it
+ * (appComponentIdentifier). Nothing physical is ever spelled from a name: the
+ * identity is minted from the registration's hash.
  */
 export function componentIdentifier(app, componentName = undefined) {
   if (typeof app?.identity !== 'string' || typeof app?.spec?.name !== 'string') {
     throw new Error('componentIdentifier needs a built app: the identifier is derived from the identity its registration mints');
   }
-  return `${componentName ?? app.spec.name}_${app.identity}`;
+  const component = componentName ?? app.spec.name;
+  if (app.componentKeys instanceof Map) {
+    const key = app.componentKeys.get(component);
+    if (!key) throw new Error(`componentIdentifier: ${app.spec.name} has no component ${component}`);
+    return `${key}_${app.identity}`;
+  }
+  if (!(app.spec.version < 9)) {
+    throw new Error(`componentIdentifier: ${app.spec.name} states no componentKeys, and only a pre-v9 app's components are keyed by their names`);
+  }
+  return `${component}_${app.identity}`;
 }
 
 /**

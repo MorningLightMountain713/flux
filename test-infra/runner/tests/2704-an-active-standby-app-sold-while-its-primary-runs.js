@@ -136,7 +136,7 @@ describe('an activeStandby app sold while its primary runs', function () {
 
     await Promise.all([first, second].map((i) => waitForInstallSettled(env.clients[i], name, CONVERGE_MS)));
     await Promise.all([first, second].map((i) => seedData(i)));
-    await setSynced({ folder: await appSyncthingFolderId(env.clients[first], name, null) });
+    await setSynced({ folder: await appSyncthingFolderId(env.clients[first], name, 'web') });
 
     let term = null;
     await waitFor(async () => {

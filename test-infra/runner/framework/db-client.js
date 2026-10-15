@@ -176,18 +176,29 @@ export function dbClient(nodeNum) {
         .findOne({ name: appName }, { projection: { _id: 0 } });
     },
 
-    // The container identifier of one component, `<component>_<identity>[_<replica>]`,
-    // from this node's registration row: the docker name, the appdata directory under
-    // the apps folder and the backing image are all named by it. Answers BEFORE the
-    // app is installed, when no container exists to read a label from. Null while
-    // the node holds no row.
+    // The container identifier of one component, `<component key>_<identity>[_<replica>]`,
+    // from this node's registration row and its installed record: the docker name,
+    // the appdata directory under the apps folder and the backing image are all named
+    // by it. A component of an app registered before v9 is keyed by its name, so its
+    // identifier answers BEFORE the app is installed, when no container exists to read
+    // a label from; a v9 component's key is on the installed record, so it answers
+    // once the node installs the app. Null until then, and while the node holds no row.
     async appContainerName(appName, componentName, replica = null) {
+      if (typeof componentName !== 'string' || componentName === '') {
+        throw new Error(`appContainerName(${appName}): name the component whose container it is`);
+      }
       const app = await this.getGlobalApp(appName);
       if (!app) return null;
       if (typeof app.identity !== 'string') {
         throw new Error(`appContainerName(${appName}): the row states no identity`);
       }
-      const base = `${componentName}_${app.identity}`;
+      let key = componentName;
+      if (await this.registrationVersion(appName) >= 9) {
+        const installed = await this.getLocalApp(appName);
+        key = installed?.componentKeys?.[componentName] ?? null;
+        if (key === null) return null;
+      }
+      const base = `${key}_${app.identity}`;
       return replica != null ? `${base}_${replica}` : base;
     },
 
@@ -217,6 +228,9 @@ export function dbClient(nodeNum) {
     // `flux<component>_<name>[_<replica>]`, so that every node running it names the
     // folder alike; a v9 registration's is its container identifier.
     async appFolderId(appName, componentName, replica = null) {
+      if (typeof componentName !== 'string' || componentName === '') {
+        throw new Error(`appFolderId(${appName}): name the component whose folder it is`);
+      }
       const registrationVersion = await this.registrationVersion(appName);
       if (registrationVersion === null) return null;
       if (registrationVersion < 9) {

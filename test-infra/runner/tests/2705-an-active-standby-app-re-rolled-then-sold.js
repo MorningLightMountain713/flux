@@ -175,14 +175,18 @@ describe('an activeStandby app re-rolled, then sold', function () {
     await confirmOnChain(reg.data, env.clients.filter(Boolean));
     const uuid = appUuid(name, reg.data);
     registered = {
-      spec: { name, owner: seller.zelid, hash: reg.data }, hash: reg.data, uuid, identity: appIdentityFromUuid(uuid),
+      spec: { name, owner: seller.zelid, hash: reg.data },
+      hash: reg.data,
+      uuid,
+      identity: appIdentityFromUuid(uuid),
+      componentKeys: reg.componentKeys,
     };
     key = `${registered.identity}/master`;
     identifier = componentIdentifier(registered, 'web');
 
     await Promise.all([first, second].map((i) => waitForInstallSettled(env.clients[i], name, CONVERGE_MS)));
     await Promise.all([first, second].map((i) => seedData(i)));
-    await setSynced({ folder: await appSyncthingFolderId(env.clients[first], name, null) });
+    await setSynced({ folder: await appSyncthingFolderId(env.clients[first], name, 'web') });
     await waitFor(async () => (await verdict()) !== null, {
       timeout: CONVERGE_MS, interval: 10000, label: 'a term forms',
     });
