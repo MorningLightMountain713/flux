@@ -10,7 +10,9 @@
  * does. A member on that node must still exchange packets as large as its mesh
  * device carries with its peers, in both directions.
  */
-import { describe, it, before, after } from 'mocha';
+import {
+  describe, it, before, after, afterEach,
+} from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
@@ -103,6 +105,28 @@ describe('mesh traffic across a link smaller than the overlay', function () {
     // which a real node has and the harness network does not.
     await Promise.all(env.clients.map((c) => execInContainer(c.container, `ip route replace default via ${GATEWAY} dev eth0`)));
     ownerAuths = await Promise.all(env.clients.map(async (c) => (await authenticate(c.url, appOwnerKey())).zelidauth));
+  });
+
+  // A failed test keeps how the node behind the small link treats the overlay's
+  // outer packets: the path MTU its mesh namespace holds for each peer node,
+  // whether it may fragment, and its fragmentation and ICMP counters.
+  afterEach(async function () {
+    if (this.currentTest.state !== 'failed' || !env) return;
+    this.timeout(120000);
+    const peers = [0, 2].map((i) => getSubnetConfig().nodeIp(i + 1));
+    const script = [
+      'ns=$(ip netns list | grep -o "flux-mesh-[a-z0-9]*" | head -1)',
+      'echo "ns=$ns"',
+      'sysctl net.ipv4.ip_no_pmtu_disc net.ipv4.ip_forward_use_pmtu',
+      'ip netns exec "$ns" sysctl net.ipv4.ip_no_pmtu_disc',
+      ...peers.map((peer) => `ip netns exec "$ns" ip route get ${peer}`),
+      'ip netns exec "$ns" ip route show cache',
+      'nstat -az 2>/dev/null | grep -E "IpFrag|IcmpOutDestUnreachs|IcmpInDestUnreachs|IpReasm|IpOutDiscards|IpInDiscards"',
+      'ip netns exec "$ns" nstat -az 2>/dev/null | grep -E "IpFrag|IcmpInDestUnreachs|IcmpOutDestUnreachs|IpReasm"',
+      'iptables -S FLUX-MESH-FWD; iptables -t nat -S FLUX-MESH-POST',
+    ].join('; ');
+    const out = await execInContainer(env.clients[BEHIND].container, script).catch((e) => ({ stdout: String(e) }));
+    console.log(`--- node ${BEHIND}, behind the small link ---\n${out.stdout}\n${out.stderr ?? ''}`);
   });
 
   after(async function () {
