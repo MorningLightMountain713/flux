@@ -522,6 +522,15 @@ export async function benchRpc(method, params = []) {
 }
 
 /**
+ * The public half of the key the benchmark channel signs FluxDrive writes with
+ * (raw Ed25519, base64): what FluxDrive verifies the arcane signature against.
+ */
+export async function blobUploadPublicKey() {
+  const { publicKey } = await benchRpc('blobuploadpublickey');
+  return publicKey;
+}
+
+/**
  * An app's backend-TLS CA certificate (PEM), fetched the way FDM fetches it: the
  * CA is keyed by the app's identity and named after the app.
  */

@@ -615,6 +615,7 @@ const benchHandlers = {
   bloblocator: (params) => JSON.stringify({ status: 'ok', locator: benchCrypto.locatorFor(JSON.parse(params[0])) }),
   contentkey: (params) => JSON.stringify({ status: 'ok', key: benchCrypto.contentKeyFor(JSON.parse(params[0])) }),
   signblobupload: (params) => JSON.stringify({ status: 'ok', signature: benchCrypto.signBlobUpload(JSON.parse(params[0])) }),
+  blobuploadpublickey: () => JSON.stringify({ status: 'ok', publicKey: benchCrypto.blobUploadPubkeyB64 }),
   attest: (params) => {
     const { message, purpose } = JSON.parse(params[0]);
     // Purpose selects both the key and the domain the signer prepends, exactly
