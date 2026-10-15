@@ -25,6 +25,7 @@
  */
 
 const fs = require('node:fs/promises');
+const config = require('config');
 const os = require('node:os');
 const log = require('../lib/log');
 const messageHelper = require('./messageHelper');
@@ -63,9 +64,6 @@ const ICMP_OVERHEAD = 28;
 // IPv4 header + TCP header + timestamps option: what separates the segment
 // size `ss` reports from the packet size.
 const TCP_OVERHEAD = 52;
-// Unrelated anycast networks: a limit near this node caps all of them, one at a
-// target's end caps only that target, so the largest result is this node's.
-const PROBE_TARGETS = ['1.1.1.1', '8.8.8.8', '9.9.9.9'];
 // Fewer distinct peers than this and one peer's own small link could set the
 // highest segment size seen.
 const MIN_TCP_PEERS = 3;
@@ -204,7 +202,7 @@ async function probeTarget(target) {
  */
 async function probePathMtu() {
   let best = null;
-  for (const target of PROBE_TARGETS) {
+  for (const target of config.get('uplink.probeTargets')) {
     // eslint-disable-next-line no-await-in-loop
     const result = await probeTarget(target);
     if (result && (!best || result.value > best.value)) best = result;

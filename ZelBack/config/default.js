@@ -132,6 +132,12 @@ module.exports = {
   // pipe through pino-pretty).
   logLevel: 'info',
   logConsole: false,
+  uplink: {
+    // Where a node measures its link's MTU: unrelated anycast networks, so a
+    // limit near the node caps all of them, one at a target's end caps only
+    // that target, and the largest result is the node's.
+    probeTargets: ['1.1.1.1', '8.8.8.8', '9.9.9.9'],
+  },
   upnp: {
     gatewayUrl: '',
     nodeIp: '',

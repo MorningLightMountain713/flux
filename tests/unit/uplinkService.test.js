@@ -3,6 +3,7 @@ const net = require('node:net');
 const os = require('node:os');
 const chai = require('chai');
 const sinon = require('sinon');
+const config = require('config');
 
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
@@ -150,6 +151,19 @@ describe('uplinkService tests', () => {
         probe: (size, target) => pingPath({ pathMtu: target === '8.8.8.8' ? 1420 : 1500, namesSize: true })(size),
       });
       expect(await uplinkService.probePathMtu()).to.eql({ value: 1500, method: ProbeMethod.FULL });
+    });
+
+    it('probes the targets the node is configured with', async () => {
+      const probed = new Set();
+      stubTools({
+        probe: (size, target) => {
+          probed.add(target);
+          return pingPath({ pathMtu: 1420, namesSize: true })(size);
+        },
+      });
+      sinon.stub(config, 'get').callThrough().withArgs('uplink.probeTargets').returns(['198.18.0.1']);
+      expect(await uplinkService.probePathMtu()).to.eql({ value: 1420, method: ProbeMethod.FRAG_NEEDED });
+      expect([...probed]).to.eql(['198.18.0.1']);
     });
   });
 
