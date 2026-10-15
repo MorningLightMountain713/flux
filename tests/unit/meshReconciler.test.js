@@ -96,8 +96,8 @@ describe('meshReconciler', () => {
   );
 
   /** The deployment view of an installed spec — one loose instance. */
-  const deploymentFor = (spec, replica = null) => flux.DeploymentSpec.fromSpec(
-    spec, appsFolder, { replica, identity: IDENTITY },
+  const deploymentFor = (spec, replica = null, componentKeys = null) => flux.DeploymentSpec.fromSpec(
+    spec, appsFolder, { replica, identity: IDENTITY, ...(componentKeys === null ? {} : { componentKeys }) },
   );
 
   /**
@@ -125,6 +125,8 @@ describe('meshReconciler', () => {
 
     stubs = {
       installedApps: [await installedRow(spec)],
+      // The component keys the installed record holds; none by default.
+      installedKeys: null,
       listInstalledApps: sinon.stub().callsFake(async () => stubs.installedApps),
       deployments: [deploymentFor(spec)],
       // The mesh member name the ledger holds for each component; none by default.
@@ -192,7 +194,8 @@ describe('meshReconciler', () => {
       },
       '../appDatabase/appRecords': {
         installed: () => ({
-          apps: async (...args) => (await stubs.listInstalledApps(...args)).map((record) => installedRecord(record)),
+          apps: async (...args) => (await stubs.listInstalledApps(...args))
+            .map((record) => installedRecord(record, { componentKeys: stubs.installedKeys })),
           byName: async (name) => installedRecord(stubs.installedApps.find((app) => app.name === name) ?? null),
         }),
         ledgers: () => ({
@@ -204,6 +207,9 @@ describe('meshReconciler', () => {
       },
       '../appRuntime/deploymentProvider': {
         getInstalledDeployments: sinon.stub().callsFake(async () => stubs.deployments),
+        buildDeployment: sinon.stub().callsFake(async (install, { replica }) => deploymentFor(
+          install.record.spec, replica, install.componentKeys,
+        )),
       },
       '../dockerService': {
         dockerContainerInspect: sinon.stub().callsFake(async () => stubs.containerInspect ?? {
@@ -506,6 +512,22 @@ describe('meshReconciler', () => {
         '-j', 'DNAT', '--to-destination', `${TRANSIT.namespaceIp}:16230`,
       ]]);
       expect(meshReconciler.lastPassStatus('myblog').externalInterface).to.equal('eth0');
+    });
+
+    it('places each component at the overlay address of its key, not its name', async () => {
+      const key = `c${'a'.repeat(52)}`;
+      stubs.installedKeys = new Map([['web', key]]);
+      stubs.deployments = [deploymentFor(stubs.installedApps[0].spec, null, stubs.installedKeys)];
+      const keySlot = flux.meshComponentSlot('myblog', key);
+      expect(keySlot).to.not.equal(SLOT);
+
+      await meshReconciler.reconcileAllMeshApps();
+
+      const addresses = realSnapshot.assignMemberAddresses(null, stubs.writeSnapshotCalls[0].apps);
+      const taygaText = await realFsp.readFile(path.join(tmpRoot, IDENTITY, 'tayga.conf'), 'utf8');
+      expect(taygaText).to.include(`map ${addresses.get(`myblog|${OWN_NODE_ID}|web`)} ${meshDerivation.memberAddress(APP_UUID, OWN_OUTPOINT, keySlot)}`);
+      expect(taygaText).to.include(`map ${addresses.get(`myblog|${PEER_NODE_ID}|web`)} ${meshDerivation.memberAddress(APP_UUID, PEER_OUTPOINT, keySlot)}`);
+      expect(stubs.attachments.map((a) => a.linkId)).to.deep.equal([keySlot.toString(16).padStart(8, '0')]);
     });
 
     it('with no default-route interface: converges locally, chains empty, degradation loud and visible', async () => {
