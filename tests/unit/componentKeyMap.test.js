@@ -5,6 +5,8 @@ const sinon = require('sinon');
 
 const componentKeyMap = require('../../ZelBack/src/services/appLifecycle/componentKeyMap');
 const appHistory = require('../../ZelBack/src/services/appDecisions/appHistory');
+const specCutover = require('../../ZelBack/src/services/utils/specCutover');
+const { inMemoryInstalled } = require('./fixtures/appRecords');
 const domain = require('./fixtures/appDomain');
 const { loadSpecLibrary } = require('./fixtures/fluxSpec');
 
@@ -101,6 +103,53 @@ describe('componentKeyMap', () => {
         previous: new Map([['web', 'web']]), appIdentity: IDENTITY, messageHash: H2,
       });
       expect(keys.get('db'), 'the one the update adds is minted from the app\'s identity and the update').to.equal(minted.get('db'));
+    });
+  });
+
+  // The boot step: a record stored before records held keys gets its
+  // components' names, which is what its containers, data and folders are named by.
+  describe('keyInstalledByName', () => {
+    const instance = async (name, components, own = {}) => new flux.InstalledSpec({
+      record: await domain.instantiatedSpec({
+        event: await domain.confirmedEvent({ spec: await domain.v9Spec({ name, components }), hash: H1, type: 'fluxappregister' }),
+        identity: IDENTITY,
+        uuid: `u-${name}`,
+      }),
+      ...own,
+    });
+
+    it('keys each component of a record that holds no keys by its name, and leaves a keyed record as it is', async () => {
+      const { installed } = await inMemoryInstalled();
+      const minted = new Map([['web', `c${'b'.repeat(51)}a`]]);
+      await installed.put(await instance('unkeyed', { web: component('web'), db: component('db') }, { replica: 'r1' }));
+      await installed.put(await instance('keyed', { web: component('web') }, { componentKeys: minted }));
+
+      const results = await componentKeyMap.keyInstalledByName();
+
+      expect(results).to.deep.equal({ keyed: [{ name: 'unkeyed', replica: 'r1' }], skipped: [] });
+      const unkeyed = await installed.byReplica('unkeyed', 'r1');
+      expect([...unkeyed.componentKeys]).to.have.deep.members([['web', 'web'], ['db', 'db']]);
+      expect(unkeyed.record.hash, 'the registered record is kept').to.equal(H1);
+      expect([...(await installed.byName('keyed')).componentKeys]).to.deep.equal([...minted]);
+
+      expect(await componentKeyMap.keyInstalledByName(), 'nothing is left to key').to.deep.equal({ keyed: [], skipped: [] });
+    });
+
+    it('leaves a record whose spec it cannot open without keys, and keys the rest', async () => {
+      const { installed } = await inMemoryInstalled();
+      await installed.put(await instance('sealed', { web: component('web') }));
+      await installed.put(await instance('open', { web: component('web') }));
+      const resolve = specCutover.resolveInstantiatedSpec;
+      sinon.stub(specCutover, 'resolveInstantiatedSpec').callsFake(async (record) => (record.name === 'sealed' ? null : resolve(record)));
+
+      const results = await componentKeyMap.keyInstalledByName();
+
+      expect(results.keyed).to.deep.equal([{ name: 'open', replica: null }]);
+      expect(results.skipped).to.have.length(1);
+      expect(results.skipped[0]).to.include({ name: 'sealed', replica: null });
+      expect(results.skipped[0].reason).to.match(/^component keys for sealed: its spec cannot be opened on this node$/);
+      expect((await installed.byName('sealed')).componentKeys).to.equal(null);
+      expect([...(await installed.byName('open')).componentKeys]).to.deep.equal([['web', 'web']]);
     });
   });
 });
