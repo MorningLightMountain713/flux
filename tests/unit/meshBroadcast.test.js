@@ -28,12 +28,15 @@ describe('meshBroadcast', () => {
       mint: sinon.stub().resolves('voucher-b64'),
       bundle: sinon.stub().resolves('CA-PEM'),
       getPort: sinon.stub().resolves(16_230),
+      // This node's measured link MTU; none until the first measurement.
+      uplinkMtu: null,
     };
     meshBroadcast = proxyquire('../../ZelBack/src/services/appMesh/meshBroadcast', {
       '../generalService': { obtainNodeCollateralInformation: stubs.collateral },
       './meshVoucher': { fetchVoucherAnchor: stubs.anchor, mintVoucher: stubs.mint },
       './meshCertificates': { authorityBundle: stubs.bundle },
       './meshPorts': { getPort: stubs.getPort },
+      '../uplinkService': { getUplinkSummary: () => ({ tunnel: 'none', mtu: stubs.uplinkMtu, rttMs: 1 }) },
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
     });
   });
@@ -56,6 +59,14 @@ describe('meshBroadcast', () => {
     expect(result.perApp.has('plain')).to.equal(false);
     expect(stubs.mint.firstCall.args[0]).to.deep.equal({
       meshCa: 'CA-PEM', appUuid: UUID, outpoint: `${TXHASH}:0`, blockHash: ANCHOR.hash,
+    });
+  });
+
+  it('announces the link MTU this node measured, once it has one', async () => {
+    stubs.uplinkMtu = 1420;
+    const result = await meshBroadcast.meshBroadcastFields([meshApp], views(['myblog']));
+    expect(result.perApp.get('myblog')).to.deep.equal({
+      meshCa: 'CA-PEM', meshVoucher: 'voucher-b64', meshPort: 16_230, meshMtu: 1420,
     });
   });
 

@@ -127,6 +127,8 @@ describe('meshReconciler', () => {
       installedApps: [await installedRow(spec)],
       // The component keys the installed record holds; none by default.
       installedKeys: null,
+      // This node's measured link MTU; none until the first measurement.
+      uplinkMtu: null,
       // The names each component held before its current one; none by default.
       formerNamesForVersion: sinon.stub().callsFake(async (registered) => new Map(
         registered.spec.componentNames().map((name) => [name, []]),
@@ -209,6 +211,7 @@ describe('meshReconciler', () => {
           },
         }),
       },
+      '../uplinkService': { getUplinkSummary: () => ({ tunnel: 'none', mtu: stubs.uplinkMtu, rttMs: 1 }) },
       '../appLifecycle/componentKeyMap': {
         formerNamesForVersion: (...args) => stubs.formerNamesForVersion(...args),
       },
@@ -576,6 +579,13 @@ describe('meshReconciler', () => {
       stubs.installedApps = installed;
       await meshReconciler.reconcileAllMeshApps();
       sinon.assert.calledTwice(stubs.formerNamesForVersion);
+    });
+
+    it('sizes the route to every peer by this node\'s measured link', async () => {
+      stubs.uplinkMtu = 1420;
+      await meshReconciler.reconcileAllMeshApps();
+      const configText = await realFsp.readFile(path.join(tmpRoot, IDENTITY, 'config.yml'), 'utf8');
+      expect(configText).to.include(`    - route: "${PEER_MEMBER.block}"\n      via: "${PEER_MEMBER.address}"\n      mtu: 1360\n`);
     });
 
     it('with no default-route interface: converges locally, chains empty, degradation loud and visible', async () => {

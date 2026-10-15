@@ -24,6 +24,14 @@ const { MAX_PORT } = require('../utils/socketAddressUtils');
 // holds back every packet between 1280 and 1420 bytes.
 const OVERLAY_MTU = 1420;
 const IPV4_FACE_MTU = 1400;
+// What nebula wraps each overlay packet in on an IPv4 link: its 16-byte header,
+// the cipher's 16-byte tag, and the UDP and IPv4 headers.
+const NEBULA_OVERHEAD = 16 + 16 + 8 + 20;
+// The smallest packet an IPv6 link carries, and so the least any overlay route
+// can be sized to.
+const IPV6_MIN_MTU = 1280;
+// A link that has not been measured is taken to carry this.
+const FULL_LINK_MTU = 1500;
 const NEBULA_TUN_DEVICE = 'mesh0';
 const TAYGA_TUN_DEVICE = 'siit0';
 // The per-app IPv4 view: local components' presented addresses and remote
@@ -66,6 +74,22 @@ function assertMembers(members) {
 }
 
 /**
+ * The MTU of the overlay route to one peer: the largest packet whose nebula
+ * wrapping fits the smaller of this node's link and the peer's, so nothing sent
+ * that way needs splitting or a "too big" reply from the network. A packet over
+ * it is refused on this node, whose answer reaches the sender through the
+ * translator. Bounded by the overlay's own MTU and by IPv6's least.
+ *
+ * @param {number|null} ownMtu this node's measured link MTU, null when unmeasured
+ * @param {number|null} peerMtu the peer's announced link MTU, null when unknown
+ * @returns {number}
+ */
+function peerRouteMtu(ownMtu, peerMtu) {
+  const link = Math.min(ownMtu ?? FULL_LINK_MTU, peerMtu ?? FULL_LINK_MTU);
+  return Math.min(OVERLAY_MTU, Math.max(IPV6_MIN_MTU, link - NEBULA_OVERHEAD));
+}
+
+/**
  * The nebula configuration for one mesh app on this node.
  *
  * Every choice here that is not obvious carries its reason:
@@ -94,16 +118,19 @@ function assertMembers(members) {
  *   container address is outside this node's own certificate networks (its base
  *   only), so nebula routes it to the owning peer through the gateway rather than
  *   dialing it directly.
+ *   A route to a peer whose link or this node's is smaller than 1500 carries
+ *   its own `mtu` (peerRouteMtu).
  *
  * @param {{instance: string, appUuid: string, outpoint: string, listenPort: number,
- *   members: Array<{address: string, block: string, endpoint: string, caShas: string[]}>,
- *   sshClientPublicKey: string}} app
- *   members are the accepted peers, this node excluded; sshClientPublicKey is
- *   the node-wide OpenSSH public key line the detector authenticates with
+ *   members: Array<{address: string, block: string, endpoint: string, caShas: string[],
+ *   mtu?: number|null}>, sshClientPublicKey: string, ownMtu?: number|null}} app
+ *   members are the accepted peers, this node excluded, each with the link MTU
+ *   it announced; sshClientPublicKey is the node-wide OpenSSH public key line
+ *   the detector authenticates with; ownMtu is this node's measured link MTU
  * @returns {string} config.yml text
  */
 function nebulaConfig({
-  instance, appUuid, outpoint, listenPort, members, sshClientPublicKey,
+  instance, appUuid, outpoint, listenPort, members, sshClientPublicKey, ownMtu = null,
 }) {
   if (!Number.isInteger(listenPort) || listenPort < 1 || listenPort > MAX_PORT) {
     throw new TypeError('listenPort must be a valid port number');
@@ -163,6 +190,8 @@ function nebulaConfig({
     peers.forEach((m) => {
       lines.push(`    - route: ${quoted(m.block)}`);
       lines.push(`      via: ${quoted(m.address)}`);
+      const mtu = peerRouteMtu(ownMtu, m.mtu ?? null);
+      if (mtu < OVERLAY_MTU) lines.push(`      mtu: ${mtu}`);
     });
   }
   lines.push('firewall:');
@@ -268,6 +297,7 @@ module.exports = {
   MESH_IPV4_RANGE,
   OVERLAY_MTU,
   IPV4_FACE_MTU,
+  peerRouteMtu,
   NEBULA_TUN_DEVICE,
   TAYGA_TUN_DEVICE,
   SSHD_LISTEN,

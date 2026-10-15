@@ -114,7 +114,41 @@ map 10.127.1.12 fdb2:8fa9:3450:98e6:a9ff:3df9:b62:a5e7
 `;
 
 describe('meshRuntimeConfig', () => {
+  describe('peerRouteMtu', () => {
+    it('carries the whole overlay across links that carry 1500', () => {
+      expect(meshRuntimeConfig.peerRouteMtu(1500, 1500)).to.equal(1420);
+    });
+
+    it('carries the whole overlay when neither end has measured its link', () => {
+      expect(meshRuntimeConfig.peerRouteMtu(null, null)).to.equal(1420);
+    });
+
+    it('fits nebula\'s packets to the smaller link, at either end', () => {
+      expect(meshRuntimeConfig.peerRouteMtu(1420, 1500)).to.equal(1360);
+      expect(meshRuntimeConfig.peerRouteMtu(1500, 1420)).to.equal(1360);
+      expect(meshRuntimeConfig.peerRouteMtu(null, 1420)).to.equal(1360);
+    });
+
+    it('never goes below the smallest packet IPv6 carries', () => {
+      expect(meshRuntimeConfig.peerRouteMtu(1300, 1500)).to.equal(1280);
+    });
+  });
+
   describe('nebulaConfig', () => {
+    it('sizes the route to a peer behind a smaller link, and leaves a full one as it is', () => {
+      const [small, full] = PEERS_BY_ADDR;
+      const text = meshRuntimeConfig.nebulaConfig({
+        ...APP,
+        listenPort: 16_230,
+        members: PEERS.map((p) => ({ ...p, mtu: p.address === small.address ? 1420 : null })),
+        sshClientPublicKey: CLIENT_PUBKEY,
+        ownMtu: 1500,
+      });
+      expect(text).to.include(`    - route: "${small.block}"\n      via: "${small.address}"\n      mtu: 1360\n`);
+      expect(text).to.include(`    - route: "${full.block}"\n      via: "${full.address}"\n`);
+      expect(text.match(/^ {6}mtu:/gm)).to.have.length(1);
+    });
+
     it('matches the golden config, members sorted by address, one rule pair per authority', () => {
       const text = meshRuntimeConfig.nebulaConfig({
         ...APP, listenPort: 16_230, members: PEERS, sshClientPublicKey: CLIENT_PUBKEY,
