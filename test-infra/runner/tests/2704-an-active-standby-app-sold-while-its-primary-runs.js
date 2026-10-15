@@ -31,8 +31,7 @@ import { registerEncryptedV9App, updateEncryptedV9App } from '../framework/conte
 import { pushImage } from '../framework/registry-helper.js';
 import { nodeOutpoint } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
-import { appDataRoot, appSyncthingFolderId, execInContainer } from '../framework/container.js';
-import { setSynced } from '../framework/syncthing-control.js';
+import { appDataRoot, execInContainer } from '../framework/container.js';
 import { grantPlaneOverrides, grantVerdict } from '../framework/grant-record.js';
 import { appView } from '../framework/app-view.js';
 import {
@@ -140,7 +139,6 @@ describe('an activeStandby app sold while its primary runs', function () {
 
     await Promise.all([first, second].map((i) => waitForInstallSettled(env.clients[i], name, CONVERGE_MS)));
     await Promise.all([first, second].map((i) => seedData(i)));
-    await setSynced({ folder: await appSyncthingFolderId(env.clients[first], name, 'web') });
 
     let term = null;
     await waitFor(async () => {
