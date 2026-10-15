@@ -859,11 +859,62 @@ describe('imageVerifier tests', () => {
       });
     };
 
+    let axiosHeadStub;
+
     beforeEach(() => {
       axiosGetStub = sinon.stub(serviceHelper, 'axiosGet');
+      axiosHeadStub = sinon.stub();
       sinon.stub(serviceHelper, 'axiosInstance').returns({
         get: axiosGetStub,
+        head: axiosHeadStub,
         interceptors: { request: { use: sinon.stub() } },
+      });
+    });
+
+    describe('an image pinned by its digest', () => {
+      const pin = `sha256:${'9'.repeat(64)}`;
+      const otherLayerDigest = `sha256:${'8'.repeat(64)}`;
+
+      // The pinned manifest is one small layer; whatever the tag names now is
+      // another, much larger.
+      const serveByReference = () => {
+        axiosGetStub.callsFake(async (url) => {
+          if (url === `megachips/ipshow/manifests/${pin}`) {
+            return { data: manifestOf([{ mediaType: gzipMediaType, size: 3_630_321, digest: layerDigest }]) };
+          }
+          if (url === 'megachips/ipshow/manifests/web') {
+            return { data: manifestOf([{ mediaType: gzipMediaType, size: 1_523_059_351, digest: otherLayerDigest }]) };
+          }
+          if (url === `megachips/ipshow/blobs/${configDigest}`) return { data: registryResponses.imageConfigAmd64 };
+          if (url === `megachips/ipshow/blobs/${layerDigest}`) return { status: 206, data: gzipTrailer(8_092_160) };
+          if (url === `megachips/ipshow/blobs/${otherLayerDigest}`) return { status: 206, data: gzipTrailer(3_723_050_496) };
+          return { data: null };
+        });
+      };
+
+      it('checks an image named by its digest alone', async () => {
+        serveByReference();
+        const verifier = new ImageVerifier(`megachips/ipshow@${pin}`, { maxImageSize });
+        await verifier.verifyImage();
+        expect(verifier.error, verifier.errorDetail).to.equal(false);
+        expect(verifier.useable).to.equal(true);
+        expect(verifier.decompressedSizeBytes).to.equal(8_092_160);
+      });
+
+      it('checks an image pinned beside its tag by the digest, not by what the tag names now', async () => {
+        serveByReference();
+        const verifier = new ImageVerifier(`megachips/ipshow:web@${pin}`, { maxImageSize });
+        await verifier.verifyImage();
+        expect(verifier.error, verifier.errorDetail).to.equal(false);
+        expect(verifier.decompressedSizeBytes).to.equal(8_092_160);
+      });
+
+      it('answers the digest of the pinned manifest', async () => {
+        axiosHeadStub.callsFake(async (url) => ({
+          headers: { 'docker-content-digest': url === `megachips/ipshow/manifests/${pin}` ? pin : `sha256:${'7'.repeat(64)}` },
+        }));
+        const verifier = new ImageVerifier(`megachips/ipshow:web@${pin}`, { maxImageSize });
+        expect(await verifier.fetchManifestDigestOnly()).to.equal(pin);
       });
     });
 

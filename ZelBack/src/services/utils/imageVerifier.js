@@ -307,7 +307,7 @@ class ImageVerifier {
 
   get useable() {
     // Namespace is optional (only Docker Hub uses it), so check for required fields only
-    return !!this.provider && !!this.repository && !!this.tag;
+    return !!this.provider && !!this.repository && !!this.#manifestReference();
   }
 
   /**
@@ -489,7 +489,17 @@ class ImageVerifier {
     this.namespace = parsed.namespace;
     this.repository = parsed.repository;
     this.tag = parsed.tag;
+    this.digest = parsed.digest;
     this.ambiguous = parsed.ambiguous;
+  }
+
+  /**
+   * The manifest the reference names: the one its digest pins, else the one its
+   * tag points to now.
+   * @returns {string|null}
+   */
+  #manifestReference() {
+    return this.digest ?? this.tag;
   }
 
   /**
@@ -953,15 +963,16 @@ class ImageVerifier {
   }
 
   /**
-   * Performs a HEAD request to get the manifest digest without downloading the full manifest.
+   * Performs a HEAD request to get the digest of the manifest the reference
+   * names (#manifestReference) without downloading it.
    * @returns {Promise<string|null>} Docker-Content-Digest header value (sha256:xxx) or null on error
    */
   async fetchManifestDigestOnly() {
     if (this.error) return null;
 
     const manifestEndpoint = this.namespace
-      ? `${this.namespace}/${this.repository}/manifests/${this.tag}`
-      : `${this.repository}/manifests/${this.tag}`;
+      ? `${this.namespace}/${this.repository}/manifests/${this.#manifestReference()}`
+      : `${this.repository}/manifests/${this.#manifestReference()}`;
 
     const response = await this
       .#guardedRequest(() => this.#axiosInstance.head(manifestEndpoint))
@@ -1050,7 +1061,7 @@ class ImageVerifier {
   async verifyImage() {
     if (this.error) return false;
 
-    const imageManifest = await this.#fetchManifest(this.tag);
+    const imageManifest = await this.#fetchManifest(this.#manifestReference());
 
     if (!imageManifest) return false;
 
