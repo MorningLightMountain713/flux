@@ -49,10 +49,6 @@ const QUORUM = 5;
 const DRAIN_BLOCKS = 20;
 const CONVERGE_MS = 300000;
 const DOOR_REFUSAL = /does not correspond with Flux App owner/;
-// The answers a grantor gives only past its return gate, so only while it
-// referees: every earlier refusal (stale chain, boot sync incomplete, record not
-// re-fetched since it returned) comes before these.
-const REFEREEING = new Set(['refusedCommittee', 'refusedUnadopted', 'refusedHolder', 'served']);
 const OUTAGE_LIMIT_MS = (loadSharedConfig().fluxapps.nodeDownGraceS - 20) * 1000;
 
 describe('an activeStandby app sold while its primary runs', function () {
@@ -169,7 +165,6 @@ describe('an activeStandby app sold while its primary runs', function () {
     this.timeout(1200000);
     await env.disconnectNode(standby);
     const wentAway = Date.now();
-    const awayFrom = env.clients[standby].getLastEventId();
     const stayers = env.clients.map((c, i) => (c && i !== standby ? i : -1)).filter((i) => i >= 0);
     const result = await transferApp(env.clients[registrar].url, seller, registered, stayers.map((i) => env.clients[i]), {
       v9: shape,
@@ -183,22 +178,6 @@ describe('an activeStandby app sold while its primary runs', function () {
     await view.installedEverywhere(sold.spec.hash, [primary], 'the primary adopts the sale');
     expect((await view.installedOn(primary)).owner, 'the primary\'s record names the buyer').to.equal(buyer.zelid);
 
-    // A grantor back from an outage referees a key only once it has re-fetched
-    // the published record, and refuses every ask until then: a witness poll
-    // counts no vouch from it. The chain is held while it returns, so the drain
-    // the sale started cannot end before it referees again.
-    await stopTicker();
-    try {
-      await env.clients[standby].waitForEvent(
-        'quorumGrant:served',
-        (data) => data?.key === key && REFEREEING.has(data?.outcome),
-        CONVERGE_MS,
-        { afterId: awayFrom },
-      );
-    } finally {
-      await startTicker();
-    }
-
     // The drain's lift lands inside one of the primary's passes, between its
     // step into the sale's world (refused: the cells still drain) and its
     // witness poll. The chain is held one block short of the lift; the first
@@ -207,14 +186,28 @@ describe('an activeStandby app sold while its primary runs', function () {
     const client = env.clients[primary];
     const DRAINING = /is draining until height (\d+)/;
     const drainingAsk = (type) => (data) => data?.type === type && DRAINING.test(data?.reason ?? '');
+    // Whether the standby lists the sale within a block's settling time.
+    const standbyListsTheSale = () => waitFor(async () => (await view.listedOn(standby))?.hash === sold.spec.hash, {
+      timeout: 15000, interval: 1000, label: 'the standby lists the sale',
+    }).then(() => true, () => false);
     const first = await client.waitForEvent('quorumGrant:askRefused', drainingAsk('probe'), CONVERGE_MS);
     const liftAt = Number(DRAINING.exec(first.data.reason)[1]);
     await stopTicker();
     let lift;
     let verdictAtLift;
     try {
-      const { currentHeight } = await getState();
+      let { currentHeight } = await getState();
       expect(currentHeight, 'the chain is held short of the lift').to.be.below(liftAt);
+      // The standby stands in the sale's world, as the witness poll requires,
+      // once it lists the sale; back from its outage it learns the blocks it
+      // missed only as new ones arrive, so the chain steps toward the lift until
+      // it does.
+      while (!(await standbyListsTheSale())) { // eslint-disable-line no-await-in-loop
+        expect(currentHeight, 'the returning standby lists the sale before the lift').to.be.below(liftAt - 1);
+        await advanceBlocks(1); // eslint-disable-line no-await-in-loop
+        currentHeight += 1;
+        await env.clients[standby].waitForEvent('block:processed', (data) => data?.height === currentHeight, CONVERGE_MS); // eslint-disable-line no-await-in-loop
+      }
       await advanceBlocks(liftAt - 1 - currentHeight);
       const heldAt = await client.waitForEvent('block:processed', (data) => data?.height === liftAt - 1, CONVERGE_MS);
       const refused = await client.waitForEvent('quorumGrant:askRefused', drainingAsk('prepare'), CONVERGE_MS, { afterId: heldAt.id });
