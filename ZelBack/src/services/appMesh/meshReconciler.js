@@ -372,14 +372,17 @@ function buildSnapshotApp(app, ctx) {
   const members = [];
   const componentNames = app.view.componentNames();
   componentNames.forEach((component) => {
+    const componentKey = app.componentKeys.get(component);
     members.push({
       component,
+      componentKey,
       nodeId: ctx.ownNodeId,
       ...(ordinals.has(ctx.ownNodeId) ? { ordinal: ordinals.get(ctx.ownNodeId) } : {}),
     });
     app.material.members.forEach((member) => {
       members.push({
         component,
+        componentKey,
         nodeId: member.nodeId,
         ...(ordinals.has(member.nodeId) ? { ordinal: ordinals.get(member.nodeId) } : {}),
       });
@@ -657,8 +660,10 @@ async function runReconcilePass() {
       // A component's overlay address follows its key, so a rename keeps it.
       // eslint-disable-next-line no-await-in-loop
       const deployment = await deploymentProvider.buildDeployment(app.install, { replica: app.install.replica });
-      app.slots = new Map(deployment.componentEntries()
-        .map(([component, { componentKey }]) => [component, meshComponentSlot(app.name, componentKey)]));
+      app.componentKeys = new Map(deployment.componentEntries()
+        .map(([component, { componentKey }]) => [component, componentKey]));
+      app.slots = new Map([...app.componentKeys]
+        .map(([component, componentKey]) => [component, meshComponentSlot(app.name, componentKey)]));
       // eslint-disable-next-line no-await-in-loop
       app.formerNames = await formerNamesOf(app.install.record);
       // eslint-disable-next-line no-await-in-loop

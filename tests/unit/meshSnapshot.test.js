@@ -43,9 +43,9 @@ describe('meshSnapshot', () => {
       mysql: { ports: { galera: { port: 4567, proto: 'tcp' } } },
     },
     members: [
-      { component: 'web', nodeId: '6f6437c5' },
-      { component: 'web', nodeId: '57eac747' },
-      { component: 'mysql', nodeId: '6f6437c5', ordinal: 0 },
+      { component: 'web', componentKey: 'kweb', nodeId: '6f6437c5' },
+      { component: 'web', componentKey: 'kweb', nodeId: '57eac747' },
+      { component: 'mysql', componentKey: 'kmysql', nodeId: '6f6437c5', ordinal: 0 },
     ],
     containers: [
       { component: 'web', sourceIp: '172.23.0.2' },
@@ -75,7 +75,7 @@ describe('meshSnapshot', () => {
     const first = await meshSnapshot.writeSnapshot('6f6437c5', APPS);
     const grown = [{
       ...APPS[0],
-      members: [...APPS[0].members, { component: 'mysql', nodeId: '57eac747' }],
+      members: [...APPS[0].members, { component: 'mysql', componentKey: 'kmysql', nodeId: '57eac747' }],
     }];
     const second = await meshSnapshot.writeSnapshot('6f6437c5', grown);
     expect(second.generation).to.equal(2);
@@ -103,6 +103,26 @@ describe('meshSnapshot', () => {
       (m) => m.component === 'web' && m.nodeId === '6f6437c5',
     );
     expect(survivor.ip).to.equal(second.snapshot.apps[0].members[0].ip);
+  });
+
+  it('a renamed component\'s members keep their addresses, and a new component under its old name gets new ones', async () => {
+    const first = await meshSnapshot.writeSnapshot('6f6437c5', APPS);
+    const renamed = [{
+      ...APPS[0],
+      members: [
+        { component: 'site', componentKey: 'kweb', nodeId: '6f6437c5' },
+        { component: 'site', componentKey: 'kweb', nodeId: '57eac747' },
+        { component: 'web', componentKey: 'knewweb', nodeId: '6f6437c5' },
+        { component: 'mysql', componentKey: 'kmysql', nodeId: '6f6437c5', ordinal: 0 },
+      ],
+    }];
+    const second = await meshSnapshot.writeSnapshot('6f6437c5', renamed);
+    const ipOf = (snapshot, component, nodeId) => snapshot.apps[0].members
+      .find((m) => m.component === component && m.nodeId === nodeId).ip;
+    expect(ipOf(second.snapshot, 'site', '6f6437c5')).to.equal(ipOf(first.snapshot, 'web', '6f6437c5'));
+    expect(ipOf(second.snapshot, 'site', '57eac747')).to.equal(ipOf(first.snapshot, 'web', '57eac747'));
+    expect(first.snapshot.apps[0].members.map((m) => m.ip)).to.not.include(ipOf(second.snapshot, 'web', '6f6437c5'));
+    expect(second.addresses.get('myblog|6f6437c5|site')).to.equal(ipOf(first.snapshot, 'web', '6f6437c5'));
   });
 
   it('liveness never enters the snapshot — DNS carries membership only', async () => {
