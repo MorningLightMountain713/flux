@@ -5,7 +5,7 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 
 const { expect } = require('chai');
 const sinon = require('sinon');
-const { stubInstalled, installedRecord } = require('./fixtures/appRecords');
+const { stubInstalled, stubLedgers, installedRecord } = require('./fixtures/appRecords');
 const path = require('node:path');
 
 const IOUtils = require('../../ZelBack/src/services/IOUtils');
@@ -64,6 +64,8 @@ describe('IOUtils getVolumeInfo tests', () => {
     // whose identity is their own name.
     stubInstalled().byName.callsFake(async (name) => installedRecord(installedApps.get(name) ?? null));
     stubInstalled().keys.callsFake(async (name) => [{ name, replica: null }]);
+    // No component recorded a name of its own: each is named by its deployment.
+    stubLedgers();
   });
 
   afterEach(() => {

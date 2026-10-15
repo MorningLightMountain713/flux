@@ -6,7 +6,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const domain = require('./fixtures/appDomain');
 const { loadSpecLibrary } = require('./fixtures/fluxSpec');
-const { installedRecord } = require('./fixtures/appRecords');
+const { installedRecord, stubLedgers } = require('./fixtures/appRecords');
 const { APP_VOLUME_MOUNT_OPTIONS } = require('../../ZelBack/src/services/utils/appConstants');
 
 chai.use(chaiAsPromised);
@@ -111,17 +111,6 @@ describe('volumeService tests', () => {
         installed: () => ({
           byName: async (name) => installedRecord(await appsRepositoryStub.getInstalledApp(name)),
           keys: async (name) => (await appsRepositoryStub.listInstalledIdentities(name)).map((replica) => ({ name, replica })),
-        }),
-      },
-      // The real containerIdentifierFor: this is the forward derivation under
-      // test, so a stub would be the test naming the paths it then finds.
-      './specLibs': {
-        getSpecBackend: async () => ({
-          DeploymentSpec: {
-            containerIdentifierFor: (component, identity, replica) => (
-              replica != null ? `${component}_${identity}_${replica}` : `${component}_${identity}`
-            ),
-          },
         }),
       },
       fs: { promises: fsStub.promises },
@@ -1252,6 +1241,8 @@ describe('volumeService tests', () => {
 
     beforeEach(() => {
       dockerServiceStub.getAppIdentifier.callsFake((id) => `flux${id}`);
+      // The real deployment names each component: no component recorded a name of its own.
+      stubLedgers();
     });
 
     it('answers nothing for an app this node has not installed', async () => {

@@ -7,7 +7,6 @@ const deviceHelper = require('../deviceHelper');
 const serviceHelper = require('../serviceHelper');
 const appRecords = require('../appDatabase/appRecords');
 const log = require('../../lib/log');
-const { getSpecBackend } = require('./specLibs');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const {
   appsFolder, appVolumesPath, legacyAppVolumesPath, APP_VOLUME_MOUNT_OPTIONS,
@@ -326,7 +325,6 @@ async function eligibleHostMounts() {
  *   availableBytes: number, capacity: number}>>}
  */
 async function listComponentVolumeMounts(appName, componentName) {
-  const { DeploymentSpec } = await getSpecBackend();
   const installed = await appRecords.installed().byName(appName);
   if (!installed) return [];
 
@@ -334,10 +332,6 @@ async function listComponentVolumeMounts(appName, componentName) {
     appName, componentName, Object.keys(installed.spec.components),
   );
 
-  // Null identity is an app installed before identities were stored: its
-  // artifacts are named from the app name, which is exactly what fromSpec falls
-  // back to, so the same expression covers both.
-  const identity = installed.identity ?? appName;
   const replicas = (await appRecords.installed().keys(appName)).map((key) => key.replica);
 
   const filesystems = await deviceHelper.listMountedFilesystems();
@@ -361,18 +355,16 @@ async function listComponentVolumeMounts(appName, componentName) {
     byName.set(name, entry);
   }
 
-  return replicas.flatMap((replica) => {
-    // Two shapes are possible and only one exists on disk. A v4+ component is
-    // `component_identity`; a v1-3 flat app IS its single component, so its
-    // identifier is the bare identity. The two are told apart by looking, not by
-    // guessing from the name — a compose app may legitimately have a component
-    // named after itself, which no rule about the string can distinguish.
-    const candidates = [DeploymentSpec.containerIdentifierFor(component, identity, replica)];
-    if (component === appName) {
-      candidates.push(replica != null ? `${identity}_${replica}` : identity);
-    }
-    const identifier = candidates.find((id) => byName.has(dockerService.getAppIdentifier(id)));
-    if (!identifier) return [];
+  // The deployment names each identity's component, so the identifier is
+  // asked of it rather than built here: a flat (v1-3) app's is its bare
+  // identity, a compose app's is built from the component's key.
+  const identifiers = await Promise.all(replicas.map(async (replica) => {
+    const deployment = await deploymentProvider.buildDeployment(installed.record, { replica });
+    return { replica, identifier: deployment.getComponent(component)?.identifier ?? null };
+  }));
+
+  return identifiers.flatMap(({ replica, identifier }) => {
+    if (identifier === null || !byName.has(dockerService.getAppIdentifier(identifier))) return [];
     const entry = byName.get(dockerService.getAppIdentifier(identifier));
     // A row outside the apps folder is not an app volume, whatever its basename
     // says. Refused rather than skipped: every caller here addresses real data,
