@@ -202,6 +202,22 @@ describe('appQueryService tests', () => {
       });
     });
 
+    // The installed record is this node's: its replica, a removal in progress and
+    // the component keys it derived never leave the node, and the keys hold
+    // component names an encrypted app keeps sealed.
+    it('serves each app\'s registered record, none of the installed record\'s own fields', async () => {
+      const row = await instantiatedSpec(await v9Spec({ name: 'apptwo' }), { hash: 'h2', height: 200 });
+      installedStub.apps.resolves([new flux.InstalledSpec({
+        record: row, replica: 'r1', owed: { since: 1, reason: 'expired' }, componentKeys: new Map([['web', `c${'b'.repeat(51)}a`]]),
+      })]);
+      messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
+
+      const result = await appQueryService.installedApps();
+
+      expect(result.data).to.deep.equal([row.serialize()]);
+      for (const field of flux.INSTALLED_FIELDS) expect(result.data[0], field).to.not.have.property(field);
+    });
+
     // An enterprise app is stored node-sealed. The endpoint must be able to answer
     // for it, and the answer must stay sealed.
     it('serves a node-sealed app without leaking its cleartext', async () => {

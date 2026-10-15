@@ -235,8 +235,12 @@ function installedRecord(record, { replica = null, owed = null } = {}) {
   if (!record) return null;
   const { InstalledSpec, InstantiatedSpec } = specLibrary.loaded();
   if (record instanceof InstantiatedSpec) return new InstalledSpec({ record, replica, owed });
+  // A plain row answers serialize() as a registered record does.
+  const registered = typeof record.serialize === 'function'
+    ? record
+    : Object.defineProperty({ ...record }, 'serialize', { value: () => ({ ...record }), enumerable: false });
   return {
-    record,
+    record: registered,
     replica,
     owed,
     spec: record.spec,

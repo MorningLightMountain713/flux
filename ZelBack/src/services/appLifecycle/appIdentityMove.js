@@ -141,15 +141,15 @@ async function attempt(label, step) {
  */
 /**
  * Writes an instance's record with the registered fields changed, keeping its
- * replica and its removal owed.
+ * replica, its removal owed and its component keys.
  * @param {object} installed - the InstalledSpec
  * @param {object} fields - the registered fields to change
  */
 async function putRecord(installed, fields) {
   const { InstalledSpec, InstantiatedSpec } = specLibrary.loaded();
-  const registered = InstantiatedSpec.deserialize({ ...installed.serialize(), ...fields }, { chain: nodeChain() });
+  const registered = InstantiatedSpec.deserialize({ ...installed.record.serialize(), ...fields }, { chain: nodeChain() });
   await appRecords.installed().put(new InstalledSpec({
-    record: registered, replica: installed.replica, owed: installed.owed,
+    record: registered, replica: installed.replica, owed: installed.owed, componentKeys: installed.componentKeys,
   }));
 }
 
