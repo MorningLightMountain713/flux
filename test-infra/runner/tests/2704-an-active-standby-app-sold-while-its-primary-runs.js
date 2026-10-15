@@ -50,6 +50,10 @@ const QUORUM = 5;
 const DRAIN_BLOCKS = 20;
 const CONVERGE_MS = 300000;
 const DOOR_REFUSAL = /does not correspond with Flux App owner/;
+// The answers a grantor gives only past its return gate, so only while it
+// referees: every earlier refusal (stale chain, boot sync incomplete, record not
+// re-fetched since it returned) comes before these.
+const REFEREEING = new Set(['refusedCommittee', 'refusedUnadopted', 'refusedHolder', 'served']);
 const OUTAGE_LIMIT_MS = (loadSharedConfig().fluxapps.nodeDownGraceS - 20) * 1000;
 
 describe('an activeStandby app sold while its primary runs', function () {
@@ -167,6 +171,7 @@ describe('an activeStandby app sold while its primary runs', function () {
     this.timeout(1200000);
     await env.disconnectNode(standby);
     const wentAway = Date.now();
+    const awayFrom = env.clients[standby].getLastEventId();
     const stayers = env.clients.map((c, i) => (c && i !== standby ? i : -1)).filter((i) => i >= 0);
     const result = await transferApp(env.clients[registrar].url, seller, registered, stayers.map((i) => env.clients[i]), {
       v9: shape,
@@ -179,6 +184,22 @@ describe('an activeStandby app sold while its primary runs', function () {
     await view.listedEverywhere(sold.spec.hash, stayers, 'every node that stayed lists the sale');
     await view.installedEverywhere(sold.spec.hash, [primary], 'the primary adopts the sale');
     expect((await view.installedOn(primary)).owner, 'the primary\'s record names the buyer').to.equal(buyer.zelid);
+
+    // A grantor back from an outage referees a key only once it has re-fetched
+    // the published record, and refuses every ask until then: a witness poll
+    // counts no vouch from it. The chain is held while it returns, so the drain
+    // the sale started cannot end before it referees again.
+    await stopTicker();
+    try {
+      await env.clients[standby].waitForEvent(
+        'quorumGrant:served',
+        (data) => data?.key === key && REFEREEING.has(data?.outcome),
+        CONVERGE_MS,
+        { afterId: awayFrom },
+      );
+    } finally {
+      await startTicker();
+    }
 
     // The drain's lift lands inside one of the primary's passes, between its
     // step into the sale's world (refused: the cells still drain) and its
