@@ -8,9 +8,23 @@ import { appOwnerKey, userKey } from './keys.js';
 import * as benchCrypto from '../../daemon-stub/benchCrypto.js';
 import * as tk from './content-crypto-v9.js';
 import { harnessNow } from './harness-clock.js';
+import { registrationKeys, updateKeys } from './component-keys.js';
 
 // The node's per-app transport pubkey (the real frontend fetches this before sealing).
 // The route wraps the benchmark reply as { status:'success', data:{ status:'ok', publicKey } }.
+// The component keys of a registration the door accepted, by name: its data is
+// the registration's message hash.
+function keysOfRegistration(data, submissionSpec) {
+  return data.status === 'success' ? { componentKeys: registrationKeys(submissionSpec, data.data) } : {};
+}
+
+// The component keys of an update the door accepted, carried from the keys of
+// the version it updates (opts.previousKeys) for the app's identity (opts.identity).
+function keysOfUpdate(data, submissionSpec, opts) {
+  if (data.status !== 'success' || opts.previousKeys === undefined) return {};
+  return { componentKeys: updateKeys(submissionSpec, data.data, { previous: opts.previousKeys, identity: opts.identity }) };
+}
+
 export async function fetchTransportPubKey(nodeUrl, appName, owner) {
   const res = await fetch(`${nodeUrl}/apps/transportpubkey/${encodeURIComponent(appName)}?fluxid=${encodeURIComponent(owner)}`);
   const body = await res.json();
@@ -47,7 +61,8 @@ export async function manifestStanding(nodeUrl, name) {
  * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?, placement?,
  *   assignment?, contentRef?: Buffer, contentSlots?: [{ name, destination, bytes, onUpdate?, atomic? }],
  *   ownerKey?, timestamp? }
- * @returns {Promise<object>} the /apps/appregister response + { contentHash, appName }
+ * @returns {Promise<object>} the /apps/appregister response + { contentHash, appName,
+ *   componentKeys } (componentKeys once the door accepts it)
  */
 export async function deployContentApp(nodeUrl, opts) {
   const ownerKey = opts.ownerKey || appOwnerKey();
@@ -130,7 +145,9 @@ export async function deployContentApp(nodeUrl, opts) {
     body: form,
   });
   const data = await res.json();
-  return { ...data, contentHash, appName: name };
+  return {
+    ...data, contentHash, appName: name, ...keysOfRegistration(data, submissionSpec),
+  };
 }
 
 /**
@@ -144,7 +161,8 @@ export async function deployContentApp(nodeUrl, opts) {
  * @param {string} nodeUrl
  * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?, placement?, assignment?, ownerKey?, timestamp? }
  *   `components` is the full v9 components map (pass shutdown/preStop/etc. on a component here).
- * @returns {Promise<object>} the /apps/appregister response + { contentHash, appName }
+ * @returns {Promise<object>} the /apps/appregister response + { contentHash, appName,
+ *   componentKeys } (componentKeys once the door accepts it)
  */
 export async function registerEncryptedV9App(nodeUrl, opts) {
   const ownerKey = opts.ownerKey || appOwnerKey();
@@ -181,7 +199,9 @@ export async function registerEncryptedV9App(nodeUrl, opts) {
     body: form,
   });
   const data = await res.json();
-  return { ...data, contentHash, appName: name };
+  return {
+    ...data, contentHash, appName: name, ...keysOfRegistration(data, submissionSpec),
+  };
 }
 
 /**
@@ -192,8 +212,11 @@ export async function registerEncryptedV9App(nodeUrl, opts) {
  * as a registration, then the fleet converges on the new spec.
  *
  * @param {string} nodeUrl
- * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?, placement?, assignment?, ownerKey?, timestamp? }
- * @returns {Promise<object>} the /apps/appupdate response + { contentHash, appName }
+ * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?, placement?, assignment?, ownerKey?, timestamp?,
+ *   previousKeys?, identity? } - previousKeys (the keys of the version it updates) and
+ *   the app's identity give the update's componentKeys
+ * @returns {Promise<object>} the /apps/appupdate response + { contentHash, appName,
+ *   componentKeys? }
  */
 export async function updateEncryptedV9App(nodeUrl, opts) {
   const ownerKey = opts.ownerKey || appOwnerKey();
@@ -230,7 +253,9 @@ export async function updateEncryptedV9App(nodeUrl, opts) {
     body: form,
   });
   const data = await res.json();
-  return { ...data, contentHash, appName: name };
+  return {
+    ...data, contentHash, appName: name, ...keysOfUpdate(data, submissionSpec, opts),
+  };
 }
 
 // A cleartext v9 register or update through its door: the spec is signed and sent
@@ -263,7 +288,10 @@ async function submitCleartextV9App(nodeUrl, opts, type) {
     body: form,
   });
   const data = await res.json();
-  return { ...data, contentHash, appName: opts.name };
+  const keys = type === 'fluxappupdate' ? keysOfUpdate(data, submissionSpec, opts) : keysOfRegistration(data, submissionSpec);
+  return {
+    ...data, contentHash, appName: opts.name, ...keys,
+  };
 }
 
 /**
@@ -273,7 +301,8 @@ async function submitCleartextV9App(nodeUrl, opts, type) {
  * @param {string} nodeUrl
  * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?, placement?,
  *   assignment?, specOverrides?, ownerKey?, timestamp? }
- * @returns {Promise<object>} the /apps/appregister response + { contentHash, appName }
+ * @returns {Promise<object>} the /apps/appregister response + { contentHash, appName,
+ *   componentKeys } (componentKeys once the door accepts it)
  */
 export async function registerCleartextV9App(nodeUrl, opts) {
   return submitCleartextV9App(nodeUrl, opts, 'fluxappregister');
@@ -284,8 +313,10 @@ export async function registerCleartextV9App(nodeUrl, opts) {
  * signed by `ownerKey` and naming `owner`, which for a sale is the buyer.
  *
  * @param {string} nodeUrl
- * @param {object} opts - as registerCleartextV9App
- * @returns {Promise<object>} the /apps/appupdate response + { contentHash, appName }
+ * @param {object} opts - as registerCleartextV9App, and previousKeys? and identity? as
+ *   updateEncryptedV9App's
+ * @returns {Promise<object>} the /apps/appupdate response + { contentHash, appName,
+ *   componentKeys? } (componentKeys as updateEncryptedV9App's)
  */
 export async function updateCleartextV9App(nodeUrl, opts) {
   return submitCleartextV9App(nodeUrl, opts, 'fluxappupdate');
@@ -308,9 +339,10 @@ export async function updateCleartextV9App(nodeUrl, opts) {
  * @param {string} nodeUrl
  * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?, placement?,
  *   assignment?, contentRef?: Buffer, contentSlots: [{ name, destination, bytes | hash, onUpdate?, atomic? }],
- *   specOverrides?, version?, ownerKey?, timestamp? }
+ *   specOverrides?, version?, ownerKey?, timestamp?, previousKeys?, identity? }
  * @returns {Promise<object>} the /apps/appupdate response (its data is the update's
- *   message hash) + { contentHash, appName, manifest }
+ *   message hash) + { contentHash, appName, manifest, componentKeys? } (componentKeys
+ *   as updateEncryptedV9App's)
  */
 export async function updateContentApp(nodeUrl, opts) {
   const ownerKey = opts.ownerKey || appOwnerKey();
@@ -391,7 +423,7 @@ export async function updateContentApp(nodeUrl, opts) {
   });
   const data = await res.json();
   return {
-    ...data, contentHash, appName: name, manifest,
+    ...data, contentHash, appName: name, manifest, ...keysOfUpdate(data, submissionSpec, opts),
   };
 }
 
