@@ -47,7 +47,7 @@ import {
   advanceBlocks, getState, queueAppTx, reorgChain, startTicker, stopTicker,
 } from '../framework/daemon-control.js';
 import {
-  waitFor, waitForDaemonReady, waitForInstallSettled, waitForReorg,
+  waitFor, waitForChainFollowed, waitForDaemonReady, waitForInstallSettled, waitForReorg,
 } from '../framework/wait.js';
 import { appIdentityFromUuid, appUuid } from '@runonflux/flux-spec';
 
@@ -318,7 +318,7 @@ describe('a sale of every app kind that carries no content', function () {
 
   it('brings the node that was off the network through the sale to the buyer once it returns, restarting nothing', async function () {
     this.timeout(CONVERGE_MS * 2);
-    await waitForDaemonReady(env.clients[away]);
+    await waitForChainFollowed(env.clients[away]);
     for (const kind of kinds) {
       // eslint-disable-next-line no-await-in-loop
       await installedEverywhere(kind, kind.sold.spec.hash, [away], 'the returning node adopts the sale');

@@ -37,9 +37,7 @@ import { appView } from '../framework/app-view.js';
 import {
   advanceBlocks, getState, queueAppTx, reorgChain, startTicker, stopTicker,
 } from '../framework/daemon-control.js';
-import {
-  waitFor, waitForAppInstalled, waitForDaemonReady, waitForReorg,
-} from '../framework/wait.js';
+import { waitFor, waitForAppInstalled, waitForChainFollowed, waitForReorg } from '../framework/wait.js';
 import { appIdentityFromUuid, appUuid, generationRecordHash } from '@runonflux/flux-spec';
 
 const NODES = 3;
@@ -195,7 +193,7 @@ describe('a mesh app re-rolled, then sold', function () {
     expect(result.status, `the sale is accepted: ${JSON.stringify(result).slice(0, 300)}`).to.equal('success');
     sold = result.app;
 
-    await waitForDaemonReady(env.clients[away]);
+    await waitForChainFollowed(env.clients[away]);
     await view.installedEverywhere(sold.spec.hash, all(), 'every node adopts the sale');
     expect(await founderOf('web'), 'the founder of the re-rolled world').to.equal(webFounder);
   });

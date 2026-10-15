@@ -41,7 +41,7 @@ import {
   advanceBlocks, getState, queueAppTx, reorgChain, startTicker, stopTicker,
 } from '../framework/daemon-control.js';
 import {
-  waitFor, waitForDaemonReady, waitForReconcileActuated, waitForReorg,
+  waitFor, waitForChainFollowed, waitForDaemonReady, waitForReconcileActuated, waitForReorg,
 } from '../framework/wait.js';
 import { generationRecordHash } from '@runonflux/flux-spec';
 
@@ -232,7 +232,7 @@ describe('a v8 activeStandby app re-rolled, then sold', function () {
 
   it('brings the standby back holding the sale, still a standby', async function () {
     this.timeout(CONVERGE_MS * 2);
-    await waitForDaemonReady(env.clients[standby]);
+    await waitForChainFollowed(env.clients[standby]);
     await view.installedEverywhere(sold.spec.hash, [standby], 'the standby adopts the sale');
     await standingEverywhere(null, [standby], 'the standby stands on the registration');
     expect((await view.containerOn(standby)).running, 'the standby is stopped').to.equal(false);

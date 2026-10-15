@@ -37,7 +37,7 @@ import {
   advanceBlocks, getState, queueAppTx, reorgChain, startTicker, stopTicker,
 } from '../framework/daemon-control.js';
 import {
-  waitFor, waitForDaemonReady, waitForInstallSettled, waitForReorg,
+  waitFor, waitForChainFollowed, waitForDaemonReady, waitForInstallSettled, waitForReorg,
 } from '../framework/wait.js';
 import { appIdentityFromUuid, appUuid } from '@runonflux/flux-spec';
 
@@ -177,7 +177,7 @@ describe('an app with a content blob sold while it runs', function () {
 
   it('brings the returning host to the sale with the same blob', async function () {
     this.timeout(CONVERGE_MS * 2);
-    await waitForDaemonReady(env.clients[away]);
+    await waitForChainFollowed(env.clients[away]);
     await view.installedEverywhere(sold.spec.hash, [away], 'the returning node adopts the sale');
     expect(await blobOn(away), 'the returning node\'s blob').to.equal(v1.toString());
   });

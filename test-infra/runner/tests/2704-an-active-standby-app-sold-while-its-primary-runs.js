@@ -39,7 +39,7 @@ import {
   advanceBlocks, getState, queueAppTx, reorgChain, startTicker, stopTicker,
 } from '../framework/daemon-control.js';
 import {
-  waitFor, waitForDaemonReady, waitForInstallSettled, waitForReorg,
+  waitFor, waitForChainFollowed, waitForDaemonReady, waitForInstallSettled, waitForReorg,
 } from '../framework/wait.js';
 import { appIdentityFromUuid, appUuid } from '@runonflux/flux-spec';
 
@@ -248,7 +248,7 @@ describe('an activeStandby app sold while its primary runs', function () {
 
   it('brings the standby back holding the sale, still a standby', async function () {
     this.timeout(CONVERGE_MS * 2);
-    await waitForDaemonReady(env.clients[standby]);
+    await waitForChainFollowed(env.clients[standby]);
     await view.installedEverywhere(sold.spec.hash, [standby], 'the standby adopts the sale');
     expect((await view.installedOn(standby)).owner, 'the standby\'s record names the buyer').to.equal(buyer.zelid);
     expect((await view.containerOn(standby)).running, 'the standby is stopped').to.equal(false);
