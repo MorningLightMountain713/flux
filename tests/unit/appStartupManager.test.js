@@ -42,6 +42,9 @@ describe('appStartupManager tests', () => {
     appsRepositoryStub = {
       appLocationFromEvents: sinon.stub().resolves([]),
       sweepOffListRows: sinon.stub().resolves(0),
+      placementEvidence: sinon.stub().resolves({
+        now: new Date(0), events: [], offList: false, returnedBefore: null, superseded: false,
+      }),
     };
 
     dockerServiceStub = {
@@ -637,6 +640,41 @@ describe('appStartupManager tests', () => {
       expect(appUninstallerStub.uninstallApplication.calledWith('AppB', REMOVE)).to.equal(true);
     });
 
+    it('says what it held for its own address when no row places it: each event and the address rules', async () => {
+      installedStub.names.resolves(['AppA']);
+      appsRepositoryStub.appLocationFromEvents.resolves([]);
+      appsRepositoryStub.placementEvidence.resolves({
+        now: new Date('2026-10-16T17:16:05.090Z'),
+        events: [{
+          type: 'apprunning',
+          dedupKey: 'v2',
+          broadcastedAt: new Date('2026-10-16T17:15:00.018Z'),
+          expireAt: new Date('2026-10-16T17:18:00.018Z'),
+          receivedAt: new Date('2026-10-16T17:15:54.095Z'),
+          data: { apps: [{ name: 'AppA' }] },
+        }],
+        offList: true,
+        returnedBefore: null,
+        superseded: false,
+      });
+
+      await appStartupManager.enforceNodePlacement('boot');
+
+      sinon.assert.calledOnceWithExactly(appsRepositoryStub.placementEvidence, '10.0.0.1:16127');
+      const line = logStub.warn.getCalls().map((c) => c.args[0]).find((m) => m.includes('held for'));
+      expect(line).to.equal('appStartupManager - placement check (boot): held for 10.0.0.1:16127 at now=2026-10-16T17:16:05.090Z: '
+        + 'apprunning v2 broadcastedAt=2026-10-16T17:15:00.018Z expireAt=2026-10-16T17:18:00.018Z receivedAt=2026-10-16T17:15:54.095Z apps=[AppA]; '
+        + 'offList=yes; returned=none; superseded=no');
+    });
+
+    it('removes the apps still when what it held cannot be read, and says so', async () => {
+      installedStub.names.resolves(['AppA']);
+      appsRepositoryStub.appLocationFromEvents.resolves([]);
+      appsRepositoryStub.placementEvidence.rejects(new Error('DB error'));
+      expect(await appStartupManager.enforceNodePlacement('boot')).to.deep.equal({ placed: false, removed: ['AppA'], failed: [] });
+      expect(logStub.warn.getCalls().some((c) => c.args[0].includes('could not be read: DB error'))).to.equal(true);
+    });
+
     it('a locked-out node removes every app though its rows still stand: the lockout\'s self-uninstall is this branch', async () => {
       installedStub.names.resolves(['AppA']);
       appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA' }]);
@@ -644,6 +682,7 @@ describe('appStartupManager tests', () => {
       expect(await appStartupManager.enforceNodePlacement('certificate')).to.deep.equal({ placed: false, removed: ['AppA'], failed: [] });
       sinon.assert.calledOnceWithExactly(nodeDownStoreStub.lockoutForAddress, '10.0.0.1:16127');
       expect(appUninstallerStub.uninstallApplication.calledWith('AppA', REMOVE)).to.equal(true);
+      expect(appsRepositoryStub.placementEvidence.called, 'a lockout is not a missing row').to.equal(false);
     });
 
     it('isolated for the grace: every app removed without a row read, no broadcast', async () => {

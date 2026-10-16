@@ -1810,6 +1810,35 @@ describe('registryManager tests', () => {
       departures.resetForTests();
     });
 
+    it('answers what it holds for one address: every stored event, expired too, and the address rules that deny its rows', async () => {
+      departures.resetForTests();
+      const listed = Array.from({ length: 20 }, (_, i) => `10.7.0.${i + 1}:16127`);
+      const expired = { ...makeV2Event('10.7.0.20:16127', [{ name: 'AppA', hash: 'h1' }], now - 60_000), expireAt: new Date(now - 1000) };
+      await database.collection(eventsCollection).insertMany([
+        expired,
+        makeV2Event('10.7.0.19:16127', [{ name: 'AppB', hash: 'h2' }], now - 60_000),
+      ]);
+
+      let evidence = await appsRepository.placementEvidence('10.7.0.20:16127');
+      expect(evidence.events).to.have.lengthOf(1);
+      expect(evidence.events[0]).to.include({ type: 'apprunning', dedupKey: 'v2' });
+      expect(evidence.events[0].expireAt.getTime()).to.equal(now - 1000);
+      expect(evidence.events[0].data.apps.map((app) => app.name)).to.deep.equal(['AppA']);
+      expect(evidence).to.include({ offList: false, returnedBefore: null, superseded: false });
+      expect(await appsRepository.appLocationFromEvents({ ip: '10.7.0.20:16127' }), 'the expired row places nothing').to.deep.equal([]);
+
+      const clock = Date.now();
+      departures.noteList(listed, clock - 10 * 60_000);
+      departures.noteList(listed.slice(0, 19), clock - OFF_LIST_GRACE_MS - 1000);
+      evidence = await appsRepository.placementEvidence('10.7.0.20:16127');
+      expect(evidence.offList, 'gone from the list past the grace').to.equal(true);
+      departures.noteList(listed, Date.now());
+      evidence = await appsRepository.placementEvidence('10.7.0.20:16127');
+      expect(evidence.offList).to.equal(false);
+      expect(evidence.returnedBefore, 'back on the list: its earlier rows are denied').to.be.a('number');
+      departures.resetForTests();
+    });
+
     it('the boot sweep: a row address the current list does not carry starts its grace from the sweep, and nothing is negated before it', async () => {
       departures.resetForTests();
       const listed = Array.from({ length: 20 }, (_, i) => `10.7.0.${i + 1}:16127`);

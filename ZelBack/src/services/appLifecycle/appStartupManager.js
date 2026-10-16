@@ -120,6 +120,31 @@ async function getStoppedFluxContainers() {
  * - Expired/missing location: app removed locally (node was reassigned).
  * @returns {Promise<Object>} Results of the reconciliation
  */
+const iso = (value) => (value ? new Date(value).toISOString() : 'none');
+
+/**
+ * What this node held for its own address when it found no row placing it:
+ * each stored event and the address rules the derivation applied.
+ * @param {string} address
+ * @returns {Promise<string>}
+ */
+async function describePlacementEvidence(address) {
+  try {
+    const {
+      now, events, offList, returnedBefore, superseded,
+    } = await appsRepository.placementEvidence(address);
+    const held = events.length === 0 ? 'no events' : events.map((event) => {
+      const apps = event.type === 'apprunning' ? ` apps=[${(event.data?.apps ?? []).map((a) => a.name).join(',')}]` : '';
+      const app = event.data?.appName ? ` app=${event.data.appName}` : '';
+      const since = event.since ? ` since=${iso(event.since)}` : '';
+      return `${event.type} ${event.dedupKey} broadcastedAt=${iso(event.broadcastedAt)} expireAt=${iso(event.expireAt)} receivedAt=${iso(event.receivedAt)}${apps}${app}${since}`;
+    }).join('; ');
+    return `held for ${address} at now=${iso(now)}: ${held}; offList=${offList ? 'yes' : 'no'}; returned=${iso(returnedBefore)}; superseded=${superseded ? 'yes' : 'no'}`;
+  } catch (error) {
+    return `what this node holds for ${address} could not be read: ${error.message}`;
+  }
+}
+
 /**
  * The one question a node asks after its sync and before any announce: do
  * my own derived rows still place me? The rows a certificate negated once
@@ -167,6 +192,7 @@ async function enforceNodePlacement(trigger) {
     why = lockout.lockedOut
       ? `locked out (${lockout.count} certifications standing)`
       : `no row places ${localSocketAddr} any more, the network has moved on`;
+    if (!lockout.lockedOut) log.warn(`appStartupManager - placement check (${trigger}): ${await describePlacementEvidence(localSocketAddr)}`);
   }
   log.warn(`appStartupManager - placement check (${trigger}): ${why}; removing ${installedApps.length} app(s), no broadcast`);
   const removed = [];

@@ -665,6 +665,38 @@ async function appLocationFromEvents(options = {}) {
 }
 
 /**
+ * What this node holds about one address's rows: every stored location event
+ * for it, unfiltered, and whether the derivation's address rules deny it. The
+ * inputs appLocationFromEvents({ ip }) decides on, for a caller that must say
+ * why it found no row.
+ *
+ * @param {string} ip - the address as rows carry it
+ * @returns {Promise<{now: Date, events: object[], offList: boolean, returnedBefore: ?number, superseded: boolean}>}
+ *   `returnedBefore`: the address came back on the list then, and its rows from
+ *   before it are denied; null when it has no return
+ */
+async function placementEvidence(ip) {
+  const dbopen = dbHelper.databaseConnection();
+  const database = dbopen.db(config.get('database.appsglobal.database'));
+  const collection = database.collection(globalAppStateEvents);
+  const now = new Date();
+  const events = await collection.find({ ip }, {
+    projection: {
+      _id: 0, type: 1, dedupKey: 1, broadcastedAt: 1, expireAt: 1, receivedAt: 1, since: 1, 'data.apps.name': 1, 'data.appName': 1,
+    },
+  }).toArray();
+  const { supersededIps } = await resolveAddressMoves(collection, now);
+  const { absent, returned } = departures.denySet(now.getTime());
+  return {
+    now,
+    events,
+    offList: absent.includes(ip),
+    returnedBefore: returned.find(({ keys }) => keys.includes(ip))?.before ?? null,
+    superseded: supersededIps.includes(ip),
+  };
+}
+
+/**
  * How many replicas of each app are running network-wide, keyed by lowercased name.
  *
  * The same derivation as appLocationFromEvents — one shared set of rules, so the two
@@ -771,6 +803,7 @@ module.exports = {
   upsertAppInstallingErrorLocations,
   // the running set, derived from the app state event log
   appLocationFromEvents,
+  placementEvidence,
   countRunningByApp,
   removeInstallingLocation,
   // conflict checks
