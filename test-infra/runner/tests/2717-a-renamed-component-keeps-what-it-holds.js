@@ -10,6 +10,9 @@
  *   - an update renaming `web` to `site` recreates the component's container
  *     under the identifier it had, its label and network aliases the new name's,
  *     on the data and the Syncthing folder it had;
+ *   - an archive backup wrote of `web` before the rename is what a local restore
+ *     of `site` reads: the node finds the volume from the component's key without
+ *     opening the sealed spec, and the archive under the name it held;
  *   - an update dropping `db` removes its container, data and volume image, and
  *     one declaring `db` again installs a new component, on an empty volume;
  *   - the node that boots afterwards names every container as the hosts do: it
@@ -33,6 +36,8 @@ import { getSyncthingState } from '../framework/syncthing-control.js';
 import { appView } from '../framework/app-view.js';
 import { waitFor, waitForDaemonReady, waitForInstallSettled } from '../framework/wait.js';
 import { appIdentityFromUuid, appUuid } from '@runonflux/flux-spec';
+import { authenticate } from '../auth.js';
+import { appOwnerKey } from '../framework/keys.js';
 
 const NODES = 5;
 const FRESH = 4; // boots after the updates
@@ -47,6 +52,7 @@ describe('a renamed component keeps what it holds', function () {
   let image;
   let app; // the built app: identity and the keys of the version last applied
   let latest; // the hash of the version last applied
+  let auth; // the owner, on the first host
   const installedAs = new Map(); // `${index}:${component}` -> identifier at registration
   const name = `rename${Date.now()}`;
   const url = (i) => env.clients[i].url;
@@ -142,6 +148,7 @@ describe('a renamed component keeps what it holds', function () {
     const uuid = appUuid(name, reg.data);
     app = { spec: { name }, identity: appIdentityFromUuid(uuid), componentKeys: reg.componentKeys };
     latest = reg.data;
+    auth = await authenticate(url(hosts[0]), appOwnerKey());
 
     await Promise.all(hosts.map((i) => waitForInstallSettled(env.clients[i], name, CONVERGE_MS)));
     // eslint-disable-next-line no-restricted-syntax
@@ -164,6 +171,16 @@ describe('a renamed component keeps what it holds', function () {
   after(async function () {
     this.timeout(120000);
     await env?.teardown();
+  });
+
+  it('backs up web before it is renamed', async function () {
+    this.timeout(300000);
+    const index = hosts[0];
+    // Forced: the archive's name is under test, not whether the copy is complete.
+    const body = await env.clients[index].appendBackupTask(name, ['web'], auth.zelidauth, { force: true });
+    expect(body, body.slice(-500)).to.match(/Finalizing/);
+    const archive = `${await appDataRoot(env.clients[index].container, name, 'web')}/backup/local/backup_web.tar.gz`;
+    expect((await run(index, `test -s ${archive}`)).ok, `node ${index} holds web's archive on its volume`).to.equal(true);
   });
 
   it('recreates a renamed component under the identifier it had, on the data and the folder it had', async function () {
@@ -206,6 +223,20 @@ describe('a renamed component keeps what it holds', function () {
       // eslint-disable-next-line no-await-in-loop
       expect(await foldersOn(index), `node ${index}: the same Syncthing folder, and no other`).to.deep.equal(was.get(index).folders);
     }
+  });
+
+  it('restores the renamed component from the archive taken under its former name', async function () {
+    this.timeout(CONVERGE_MS);
+    const index = hosts[0];
+    const marker = await markerPath(index, 'site');
+    expect((await run(index, `echo changed > ${marker}`)).ok, `node ${index} changes site's data`).to.equal(true);
+
+    const body = await env.clients[index].appendRestoreTask(name, [{ component: 'site', restore: true }], 'local', auth.zelidauth);
+
+    expect(body, body.slice(-500)).to.match(/Finalizing/);
+    await waitFor(async () => (await run(index, `cat ${marker}`)).out === `web-${index}`, {
+      timeout: CONVERGE_MS, interval: 3000, label: `node ${index}: site holds the data web's archive held`,
+    });
   });
 
   it('removes a component dropped, and installs one declared again under its name on an empty volume', async function () {
