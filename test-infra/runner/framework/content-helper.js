@@ -323,6 +323,49 @@ export async function updateCleartextV9App(nodeUrl, opts) {
 }
 
 /**
+ * Move an app registered before v9 onto v9 the way its owner does: ask a node to
+ * convert it (GET /apps/appconvert/:name, as the owner), edit the draft as the owner
+ * must (a contact where the legacy spec had none, placement where the conversion
+ * dropped a node list), and submit it as the app's v9 update through the cleartext
+ * door.
+ *
+ * @param {string} nodeUrl
+ * @param {object} opts - { name, edit?: (draft) => draft, ownerKey?, timestamp?,
+ *   previousKeys?, identity? } - previousKeys and identity as updateEncryptedV9App's;
+ *   for a v1-v8 predecessor the keys are its component names
+ * @returns {Promise<object>} the /apps/appupdate response + { conversion: { spec,
+ *   complete, errors, warnings }, contentHash, appName, componentKeys? }
+ */
+export async function convertToV9(nodeUrl, opts) {
+  const ownerKey = opts.ownerKey || appOwnerKey();
+  const auth = await authenticate(nodeUrl, ownerKey);
+  const res = await fetch(`${nodeUrl}/apps/appconvert/${encodeURIComponent(opts.name)}`, {
+    headers: { zelidauth: auth.zelidauth },
+  });
+  const body = await res.json();
+  if (body.status !== 'success' || body.data.encrypted) {
+    throw new Error(`appconvert ${opts.name}: ${JSON.stringify(body).slice(0, 500)}`);
+  }
+  const conversion = body.data;
+  const submissionSpec = opts.edit ? opts.edit(structuredClone(conversion.spec)) : conversion.spec;
+  const { specField, contentHash } = await tk.buildSignedCleartextSubmission({
+    submissionSpec, ownerKey, timestamp: opts.timestamp || harnessNow(), type: 'fluxappupdate',
+  });
+
+  const form = new FormData();
+  form.append('spec', JSON.stringify(specField));
+  const submitted = await submitToNode(`${nodeUrl}/apps/appupdate`, {
+    method: 'POST',
+    headers: { zelidauth: auth.zelidauth },
+    body: form,
+  });
+  const data = await submitted.json();
+  return {
+    conversion, ...data, contentHash, appName: opts.name, ...keysOfUpdate(data, submissionSpec, opts),
+  };
+}
+
+/**
  * Update a v9 content app's SPEC with its content (POST /apps/appupdate, multipart):
  * a signed fluxappupdate carrying the full new submission spec and one sealed content
  * envelope - deployContentApp's update sibling. A spec that declares slots carries the
