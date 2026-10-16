@@ -30,6 +30,7 @@ import { mirrorImage } from '../framework/registry-helper.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 import { execInContainer, requireAppContainerName } from '../framework/container.js';
 import { appView } from '../framework/app-view.js';
+import { NotPresentError } from '../framework/errors.js';
 import { waitFor } from '../framework/wait.js';
 import { appIdentityFromUuid, appUuid } from '@runonflux/flux-spec';
 
@@ -128,6 +129,20 @@ describe('a Mongo replica set through a component rename', function () {
     const inspected = JSON.parse(r.stdout);
     const envOf = (key) => inspected.Config.Env.find((e) => e.startsWith(`${key}=`))?.slice(key.length + 1) ?? null;
     return { startedAt: Date.parse(inspected.State.StartedAt), self: envOf('FLUX_MESH_SELF') };
+  }
+
+  // An update writes a node's installed record before it recreates the renamed
+  // member, so the member is read once it runs again, started after its old one.
+  async function recreatedOn(index, component, after) {
+    let found = null;
+    await waitFor(async () => {
+      found = await containerOf(index, component).catch((error) => {
+        if (error instanceof NotPresentError) return null;
+        throw error;
+      });
+      return found !== null && found.startedAt > after;
+    }, { timeout: CONVERGE_MS, interval: 2000, label: `node ${index} runs its ${component} member again` });
+    return found;
   }
 
   // A client's record: [{at: epoch seconds, ok: boolean, n}], and its name.
@@ -249,9 +264,8 @@ describe('a Mongo replica set through a component rename', function () {
     await view.installedEverywhere(res.data, [0, 1, 2], 'every node applies the rename');
     app = { ...app, componentKeys: res.componentKeys };
 
-    const now = await Promise.all([0, 1, 2].map((i) => containerOf(i, 'database')));
+    const now = await Promise.all([0, 1, 2].map((i) => recreatedOn(i, 'database', was[i].startedAt)));
     now.forEach((c, i) => {
-      expect(c.startedAt, `node ${i}: its member is recreated`).to.be.above(was[i].startedAt);
       expect(c.self, `node ${i}: the member carries its new mesh name`).to.match(/^database-[0-2]$/);
     });
     const starts = now.map((c) => c.startedAt).sort((a, b) => a - b);
