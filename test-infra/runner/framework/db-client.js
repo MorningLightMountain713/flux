@@ -176,13 +176,26 @@ export function dbClient(nodeNum) {
         .findOne({ name: appName }, { projection: { _id: 0 } });
     },
 
+    // A component's key, as this node names it. The installed record keys each
+    // component it holds; one stored before keys is keyed by its names. Before the
+    // node installs the app, a component of an app whose spec is still v1-v8 is
+    // keyed by its name, since only a v9 update continues a component under a new
+    // one. Null otherwise, and while the node holds no row.
+    async componentKey(appName, componentName) {
+      const installed = await this.getLocalApp(appName);
+      if (installed) return installed.componentKeys ? (installed.componentKeys[componentName] ?? null) : componentName;
+      const app = await this.getGlobalApp(appName);
+      if (!app) return null;
+      if (!Number.isInteger(app.version)) {
+        throw new Error(`componentKey(${appName}): the row states no spec version`);
+      }
+      return app.version < 9 ? componentName : null;
+    },
+
     // The container identifier of one component, `<component key>_<identity>[_<replica>]`,
-    // from this node's registration row and its installed record: the docker name,
-    // the appdata directory under the apps folder and the backing image are all named
-    // by it. A component of an app registered before v9 is keyed by its name, so its
-    // identifier answers BEFORE the app is installed, when no container exists to read
-    // a label from; a v9 component's key is on the installed record, so it answers
-    // once the node installs the app. Null until then, and while the node holds no row.
+    // from this node's registration row and the component's key: the docker name, the
+    // appdata directory under the apps folder and the backing image are all named by
+    // it. Null while the node holds no row or the component has no key.
     async appContainerName(appName, componentName, replica = null) {
       if (typeof componentName !== 'string' || componentName === '') {
         throw new Error(`appContainerName(${appName}): name the component whose container it is`);
@@ -192,12 +205,8 @@ export function dbClient(nodeNum) {
       if (typeof app.identity !== 'string') {
         throw new Error(`appContainerName(${appName}): the row states no identity`);
       }
-      let key = componentName;
-      if (await this.registrationVersion(appName) >= 9) {
-        const installed = await this.getLocalApp(appName);
-        key = installed?.componentKeys?.[componentName] ?? null;
-        if (key === null) return null;
-      }
+      const key = await this.componentKey(appName, componentName);
+      if (key === null) return null;
       const base = `${key}_${app.identity}`;
       return replica != null ? `${base}_${replica}` : base;
     },
@@ -224,9 +233,10 @@ export function dbClient(nodeNum) {
     },
 
     // The syncthing folder id of one component, fixed by the version the app was
-    // registered with: an app registered before v9 keeps its 8.x container name,
-    // `flux<component>_<name>[_<replica>]`, so that every node running it names the
-    // folder alike; a v9 registration's is its container identifier.
+    // registered with and built from the component's key: an app registered before
+    // v9 keeps its 8.x container name, `flux<key>_<name>[_<replica>]`, so that every
+    // node running it names the folder alike; a v9 registration's is its container
+    // identifier.
     async appFolderId(appName, componentName, replica = null) {
       if (typeof componentName !== 'string' || componentName === '') {
         throw new Error(`appFolderId(${appName}): name the component whose folder it is`);
@@ -234,7 +244,9 @@ export function dbClient(nodeNum) {
       const registrationVersion = await this.registrationVersion(appName);
       if (registrationVersion === null) return null;
       if (registrationVersion < 9) {
-        const base = `flux${componentName}_${appName}`;
+        const key = await this.componentKey(appName, componentName);
+        if (key === null) return null;
+        const base = `flux${key}_${appName}`;
         return replica != null ? `${base}_${replica}` : base;
       }
       return this.appContainerName(appName, componentName, replica);
