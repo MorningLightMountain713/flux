@@ -2787,6 +2787,51 @@ describe('appOperations tests', () => {
       expect(failure, `the restore must complete: ${failure?.message}`).to.equal(null);
     });
 
+    describe('the local archive of a renamed component', () => {
+      const KEY = `c${'k'.repeat(51)}a`;
+      const archive = (name) => `/vol/site/backup/local/backup_${name}.tar.gz`;
+
+      /** A restore of `site`, which held `formerNames` before, with archives on its volume under `present`. */
+      async function restoreSite(formerNames, present, type = 'local') {
+        const stubs = await restoreStubs('myapp', await oneComponentDeployment('myapp', 'site'));
+        stubInstalled().byReplica.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: 'myapp' })), {
+          componentKeys: new Map([['site', KEY]]),
+          formerNames: formerNames.length ? new Map([[KEY, formerNames]]) : new Map(),
+        }));
+        sinon.stub(IOUtils, 'checkFileExists').callsFake(async (file) => present.map(archive).includes(file));
+        const failure = await runRestore('myapp', [{ component: 'site', restore: true }], type);
+        expect(failure, `the restore must complete: ${failure?.message}`).to.equal(null);
+        return stubs;
+      }
+
+      it('restores from the archive taken under its former name', async () => {
+        const { inspect, restoreAppData } = await restoreSite(['web'], ['web']);
+        expect(inspect.firstCall.args[0]).to.equal(archive('web'));
+        expect(restoreAppData.firstCall.args[1]).to.equal(archive('web'));
+      });
+
+      it('prefers the archive under its current name', async () => {
+        const { inspect } = await restoreSite(['web'], ['web', 'site']);
+        expect(inspect.firstCall.args[0]).to.equal(archive('site'));
+      });
+
+      it('takes the most recent former name that has an archive', async () => {
+        expect((await restoreSite(['web', 'www'], ['web', 'www'])).inspect.firstCall.args[0]).to.equal(archive('www'));
+        sinon.restore();
+        expect((await restoreSite(['web', 'www'], ['web'])).inspect.firstCall.args[0]).to.equal(archive('web'));
+      });
+
+      it('reads no archive under a name the component never held', async () => {
+        const { inspect } = await restoreSite([], ['web']);
+        expect(inspect.firstCall.args[0]).to.equal(archive('site'));
+      });
+
+      it('reads an uploaded archive under the current name only', async () => {
+        const { inspect } = await restoreSite(['web'], ['web'], 'upload');
+        expect(inspect.firstCall.args[0]).to.equal('/vol/site/backup/upload/backup_site.tar.gz');
+      });
+    });
+
     it('refuses a restore on a node that is not the live copy of an active-standby component', async () => {
       const { drive, pause } = await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'activeStandby' }));
       sinon.stub(serviceHelper, 'axiosGet').resolves({ data: { status: 'success', data: { ips: ['203.0.113.9'] } } });
