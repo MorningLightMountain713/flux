@@ -10,14 +10,16 @@
  * v9 update. Then:
  *   - every host recreates the component under the identifier it had, labelled
  *     `myweb`, on the data and the Syncthing folder it had;
- *   - a node that boots afterwards installs it under the same identifier and
- *     receives the hosts' data through that folder;
+ *   - a node that boots afterwards installs it under the same identifier, on the
+ *     Syncthing folder the hosts share;
  *   - a second v7 app making the same move with `renamedFrom` taken out of its draft
  *     installs `myweb` as a new component on an empty volume: what this suite would
  *     see if the move did not carry the component.
  *
  * Each app names exactly as many nodes as it has instances, so every named node's
- * spawner places it. The two hosts are chosen outside env.establishedNodes.
+ * spawner places it. The two hosts are chosen outside env.establishedNodes. The
+ * harness's Syncthing carries no data between nodes, so the suite reports each app's
+ * folder synced, which is what lets a follower of the syncFirst volume start.
  */
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
@@ -27,8 +29,10 @@ import { buildAppSpec, registerAndConfirm, confirmOnChain } from '../framework/a
 import { convertToV9 } from '../framework/content-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
-import { appComponentIdentifier, appDataRoot, execInContainer, requireAppContainerName } from '../framework/container.js';
-import { getSyncthingState } from '../framework/syncthing-control.js';
+import {
+  appComponentIdentifier, appDataRoot, appSyncthingFolderId, execInContainer, requireAppContainerName,
+} from '../framework/container.js';
+import { getSyncthingState, setSynced } from '../framework/syncthing-control.js';
 import { appView } from '../framework/app-view.js';
 import {
   START_ACTIONS, waitFor, waitForDaemonReady, waitForInstallSettled, waitForReconcileActuated,
@@ -107,6 +111,8 @@ describe('a v7 app moves to v9 with its data', function () {
     Object.assign(app, { identity: registered.app.identity, view: appView(env, app.name, { component: LEGACY, timeout: CONVERGE_MS }) });
 
     await Promise.all(hosts.map((i) => waitForInstallSettled(env.clients[i], app.name, CONVERGE_MS)));
+    app.folder = await appSyncthingFolderId(env.clients[hosts[0]], app.name, LEGACY);
+    await setSynced({ folder: app.folder });
     app.installedAs = new Map();
     // A syncFirst volume is cleared on its first install and its component started
     // again; data written before that start is cleared with it.
@@ -235,7 +241,7 @@ describe('a v7 app moves to v9 with its data', function () {
     }
   });
 
-  it('installs the moved component on a node that boots afterwards, with the hosts\' data', async function () {
+  it('installs the moved component on a node that boots afterwards, on the folder the hosts share', async function () {
     this.timeout(CONVERGE_MS * 2);
     const fresh = await env.startNode(FRESH);
     await waitForDaemonReady(fresh);
@@ -245,8 +251,7 @@ describe('a v7 app moves to v9 with its data', function () {
       timeout: CONVERGE_MS, interval: 3000, label: `the late node runs ${V9}`,
     });
     expect(await identifierOn(FRESH, moved, V9), 'the late node names the component as the hosts do').to.equal(moved.installedAs.get(hosts[0]));
-    await waitFor(async () => (await run(FRESH, `cat ${await dataOf(FRESH, moved, V9)}/marker-${hosts[0]}`)).out === String(hosts[0]), {
-      timeout: CONVERGE_MS, interval: 3000, label: 'the late node receives the hosts\' data through the folder',
-    });
+    expect(await appSyncthingFolderId(env.clients[FRESH], moved.name, V9), 'and shares its data under the hosts\' folder')
+      .to.equal(moved.folder);
   });
 });
