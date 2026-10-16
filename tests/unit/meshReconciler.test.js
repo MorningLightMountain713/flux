@@ -129,10 +129,8 @@ describe('meshReconciler', () => {
       installedKeys: null,
       // This node's measured link MTU; none until the first measurement.
       uplinkMtu: null,
-      // The names each component held before its current one; none by default.
-      formerNamesForVersion: sinon.stub().callsFake(async (registered) => new Map(
-        registered.spec.componentNames().map((name) => [name, []]),
-      )),
+      // The names each component held before its current one, by key; none by default.
+      installedFormerNames: new Map(),
       listInstalledApps: sinon.stub().callsFake(async () => stubs.installedApps),
       deployments: [deploymentFor(spec)],
       // The mesh member name the ledger holds for each component; none by default.
@@ -201,7 +199,7 @@ describe('meshReconciler', () => {
       '../appDatabase/appRecords': {
         installed: () => ({
           apps: async (...args) => (await stubs.listInstalledApps(...args))
-            .map((record) => installedRecord(record, { componentKeys: stubs.installedKeys })),
+            .map((record) => installedRecord(record, { componentKeys: stubs.installedKeys, formerNames: stubs.installedFormerNames })),
           byName: async (name) => installedRecord(stubs.installedApps.find((app) => app.name === name) ?? null),
         }),
         ledgers: () => ({
@@ -212,9 +210,6 @@ describe('meshReconciler', () => {
         }),
       },
       '../uplinkService': { getUplinkSummary: () => ({ tunnel: 'none', mtu: stubs.uplinkMtu, rttMs: 1 }) },
-      '../appLifecycle/componentKeyMap': {
-        formerNamesForVersion: (...args) => stubs.formerNamesForVersion(...args),
-      },
       '../appRuntime/deploymentProvider': {
         getInstalledDeployments: sinon.stub().callsFake(async () => stubs.deployments),
         buildDeployment: sinon.stub().callsFake(async (install, { replica }) => deploymentFor(
@@ -541,25 +536,17 @@ describe('meshReconciler', () => {
       expect(stubs.attachments.map((a) => a.linkId)).to.deep.equal([keySlot.toString(16).padStart(8, '0')]);
     });
 
-    it('writes each component\'s former names into the snapshot, worked out once per version', async () => {
-      stubs.formerNamesForVersion = sinon.stub().resolves(new Map([['web', ['blog', 'www']]]));
+    it('writes each component\'s former names into the snapshot, read off the installed record by its key', async () => {
+      const key = `c${'a'.repeat(52)}`;
+      stubs.installedKeys = new Map([['web', key]]);
+      stubs.installedFormerNames = new Map([[key, ['blog', 'www']]]);
+      stubs.deployments = [deploymentFor(stubs.installedApps[0].spec, null, stubs.installedKeys)];
 
-      await meshReconciler.reconcileAllMeshApps();
       await meshReconciler.reconcileAllMeshApps();
 
       expect(stubs.writeSnapshotCalls[0].apps[0].components).to.deep.equal({
         web: { ports: {}, formerNames: ['blog', 'www'] },
       });
-      sinon.assert.calledOnce(stubs.formerNamesForVersion);
-      expect(stubs.formerNamesForVersion.firstCall.args[0].hash).to.equal(stubs.installedApps[0].hash);
-    });
-
-    it('works the former names out again for a new version', async () => {
-      await meshReconciler.reconcileAllMeshApps();
-      stubs.installedApps = [await makeApp({}, { hash: 'f'.repeat(64) })];
-      await meshReconciler.reconcileAllMeshApps();
-      sinon.assert.calledTwice(stubs.formerNamesForVersion);
-      expect(stubs.formerNamesForVersion.secondCall.args[0].hash).to.equal('f'.repeat(64));
     });
 
     it('names each member in the snapshot by its component\'s key, which holds its address', async () => {
@@ -569,16 +556,6 @@ describe('meshReconciler', () => {
       await meshReconciler.reconcileAllMeshApps();
       const { members } = stubs.writeSnapshotCalls[0].apps[0];
       expect(members.map((m) => m.componentKey)).to.deep.equal(members.map(() => key));
-    });
-
-    it('forgets the former names of an app no longer installed', async () => {
-      const installed = stubs.installedApps;
-      await meshReconciler.reconcileAllMeshApps();
-      stubs.installedApps = [];
-      await meshReconciler.reconcileAllMeshApps();
-      stubs.installedApps = installed;
-      await meshReconciler.reconcileAllMeshApps();
-      sinon.assert.calledTwice(stubs.formerNamesForVersion);
     });
 
     it('sizes the route to every peer by this node\'s measured link', async () => {

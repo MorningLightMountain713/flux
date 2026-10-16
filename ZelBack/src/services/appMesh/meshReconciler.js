@@ -26,7 +26,6 @@ const log = require('../../lib/log');
 const appsRepository = require('../appDatabase/appsRepository');
 const appRecords = require('../appDatabase/appRecords');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
-const componentKeyMap = require('../appLifecycle/componentKeyMap');
 const uplinkService = require('../uplinkService');
 const dockerService = require('../dockerService');
 const daemonStatus = require('../daemonService/daemonStatus');
@@ -597,24 +596,6 @@ async function collectStrayMesh(claimedIdentities) {
   }
 }
 
-// The former names of each mesh app's components, by identity, for the version
-// they were worked out for: an app's history changes only with its version.
-const formerNamesByIdentity = new Map();
-
-/**
- * The names each component of an installed mesh app held before its current
- * one, which the resolver keeps answering for the component's life.
- * @param {object} registered - the installed record's registered record
- * @returns {Promise<Map<string, string[]>>} by current component name
- */
-async function formerNamesOf(registered) {
-  const known = formerNamesByIdentity.get(registered.identity);
-  if (known?.hash === registered.hash) return known.names;
-  const names = await componentKeyMap.formerNamesForVersion(registered);
-  formerNamesByIdentity.set(registered.identity, { hash: registered.hash, names });
-  return names;
-}
-
 async function runReconcilePass() {
   const synced = daemonStatus.isDaemonSynced();
   if (synced?.data?.synced !== true) {
@@ -625,9 +606,6 @@ async function runReconcilePass() {
   const gathered = new Set(apps.map((app) => app.name));
   [...lastPassByApp.keys()].forEach((name) => {
     if (!gathered.has(name)) lastPassByApp.delete(name);
-  });
-  [...formerNamesByIdentity.keys()].forEach((identity) => {
-    if (!claimedIdentities.has(identity)) formerNamesByIdentity.delete(identity);
   });
   await collectStrayMesh(claimedIdentities);
   if (apps.length === 0) {
@@ -666,8 +644,8 @@ async function runReconcilePass() {
         .map(([component, { componentKey }]) => [component, componentKey]));
       app.slots = new Map([...app.componentKeys]
         .map(([component, componentKey]) => [component, meshComponentSlot(app.name, componentKey)]));
-      // eslint-disable-next-line no-await-in-loop
-      app.formerNames = await formerNamesOf(app.install.record);
+      app.formerNames = new Map([...app.componentKeys.keys()]
+        .map((component) => [component, app.install.formerNamesOf(component)]));
       // eslint-disable-next-line no-await-in-loop
       app.material = await reconcileAppMaterial(app, ctx);
       // eslint-disable-next-line no-await-in-loop

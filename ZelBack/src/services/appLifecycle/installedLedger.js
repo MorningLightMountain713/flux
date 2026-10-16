@@ -151,7 +151,7 @@ async function adoptInstalledLedgers() {
       let install = record;
       if (move || registered !== record.record) {
         install = new InstalledSpec({
-          record: registered, replica: record.replica, owed: record.owed, componentKeys: record.componentKeys,
+          record: registered, replica: record.replica, owed: record.owed, componentKeys: record.componentKeys, formerNames: record.formerNames,
         });
         // eslint-disable-next-line no-await-in-loop
         await installed.put(install);
