@@ -19,7 +19,7 @@ import http from 'node:http';
 import { nodeClient } from './node-client.js';
 import { execInContainer, restartFluxos } from './container.js';
 import { thawEveryNode } from './host-stall.js';
-import { waitFor } from './wait.js';
+import { waitFor, waitForCapabilityUp } from './wait.js';
 import { HttpPollWaitStrategy } from './http-wait-strategy.js';
 import { TcpPollWaitStrategy } from './tcp-wait-strategy.js';
 import { getSubnetConfig, REGISTRY_ALIAS, STORAGE_HOST } from './subnet-config.js';
@@ -2642,14 +2642,20 @@ async function _buildEnv(env, nodes, deferredNodes, legacyNodes, unprivilegedNod
       if (await fluxosCodeDigest(node.container) === codeBefore) {
         throw new Error(`upgradeNode: ${nodeImageRef(tag)} holds the FluxOS code node ${index} already ran, so nothing was upgraded`);
       }
+      const client = clients[index];
+      const afterId = client?.getLastEventId();
       await restartFluxos(node.container, { readyTimeoutMs });
       node.imageTag = tag;
       // A production node starts discovery at boot (discoveryAutostart); this fleet
       // starts it by API, and a node restarted on code that never started it here
       // holds no record that it did. Left to its peers, it dials once one of their
       // ring sweeps asks it to, up to a sweep interval after it is back, which can
-      // outlast its boot sync bound and remove its apps.
-      await env.startDiscovery([index]);
+      // outlast its boot sync bound and remove its apps. The API logs in, which
+      // needs the node's database.
+      if (client) {
+        await waitForCapabilityUp(client, 'localDbPrepared', readyTimeoutMs, { afterId });
+        await env.startDiscovery([index]);
+      }
     },
 
 
