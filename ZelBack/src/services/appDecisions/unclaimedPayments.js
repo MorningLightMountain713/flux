@@ -2,7 +2,6 @@
 
 const config = require('config');
 const dbHelper = require('../dbHelper');
-const decisionStore = require('./decisionStore');
 const appRecords = require('../appDatabase/appRecords');
 const { getSpecPolicy } = require('../utils/specLibs');
 const { compareChainOrder } = require('../utils/chainOrder');
@@ -96,7 +95,7 @@ async function applyVoid(message, height, wake) {
     return false;
   }
   await markVoided(message.hashHex, true);
-  await decisionStore.undecide([message.hashHex]);
+  await appRecords.decisions().undecide([message.hashHex]);
   log.info(`unclaimedPayments - ${message.hashHex} voided by the message at ${height}; its payment at ${record.height}`);
   wake([message.hashHex]);
   return true;
@@ -130,7 +129,7 @@ async function onRewind(height, wake) {
     // eslint-disable-next-line no-await-in-loop
     await markVoided(hash, false);
     // eslint-disable-next-line no-await-in-loop
-    await decisionStore.undecide([hash]);
+    await appRecords.decisions().undecide([hash]);
     given.push(hash);
   }
   if (given.length) {

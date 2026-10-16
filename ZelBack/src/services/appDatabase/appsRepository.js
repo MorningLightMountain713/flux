@@ -17,7 +17,6 @@ const {
   NODE_DOWN_GRACE_MS,
 } = require('../utils/appConstants');
 const { departures } = require('./offListDepartures');
-const decisionStore = require('../appDecisions/decisionStore');
 const { nodeChain } = require('../utils/nodeChain');
 
 // The content manifests a node holds, one row per manifest. Not in appConstants
@@ -645,7 +644,7 @@ async function appLocationFromEvents(options = {}) {
   } = options;
   let { excludeHashes } = options;
   if (!excludeHashes) {
-    excludeHashes = ip || host ? [] : await decisionStore.earlierAppsHashes(appname ? [appname.toLowerCase()] : undefined);
+    excludeHashes = ip || host ? [] : await appRecords.decisions().earlierAppsHashes(appname ? [appname.toLowerCase()] : undefined);
   }
   const dbopen = dbHelper.databaseConnection();
   const database = dbopen.db(config.get('database.appsglobal.database'));
@@ -685,7 +684,7 @@ async function countRunningByApp() {
   const now = new Date();
 
   const [{ supersededIps }, excludeHashes] = await Promise.all([
-    resolveAddressMoves(collection, now), decisionStore.earlierAppsHashes(),
+    resolveAddressMoves(collection, now), appRecords.decisions().earlierAppsHashes(),
   ]);
   const { absent: offListIps, returned: offListReturned } = departures.denySet(now.getTime());
   const counts = await collection.aggregate([

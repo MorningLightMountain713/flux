@@ -12,6 +12,7 @@ const messageHelper = require('../../ZelBack/src/services/messageHelper');
 const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const appRecords = require('../../ZelBack/src/services/appDatabase/appRecords');
+const appDomain = require('./fixtures/appDomain');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/fluxCommunicationMessagesSender');
@@ -1657,16 +1658,16 @@ describe('registryManager tests', () => {
     // (app "second"); 1.1.1.1 runs the second app, 2.2.2.2 still announces the
     // first, 3.3.3.3 runs a spec this node has not decided yet.
     async function seedReusedName() {
-      await database.collection(decisionsCollection).insertMany([
-        {
-          hash: 'earlier', name: 'appa', decision: 'applied', uuid: 'first', identity: 'bfirst', height: 100, txIndex: 0,
-        },
-        {
-          hash: 'current', name: 'appa', decision: 'applied', uuid: 'second', identity: 'bsecond', height: 900, txIndex: 0,
-        },
-        {
-          hash: 'refused', name: 'appa', decision: 'refused', uuid: null, identity: null, height: 950, txIndex: 0,
-        },
+      await appRecords.decisions().write([
+        await appDomain.appDecision({
+          hash: 'earlier', name: 'appa', uuid: 'first', identity: 'bfirst', height: 100,
+        }),
+        await appDomain.appDecision({
+          hash: 'current', name: 'appa', uuid: 'second', identity: 'bsecond', height: 900,
+        }),
+        await appDomain.appDecision({
+          hash: 'refused', name: 'appa', decision: 'refused', height: 950,
+        }),
       ]);
       await database.collection(eventsCollection).insertMany([
         makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'current' }], now),
@@ -1705,13 +1706,13 @@ describe('registryManager tests', () => {
     });
 
     it('a name with one app excludes nothing', async () => {
-      await database.collection(decisionsCollection).insertMany([
-        {
-          hash: 'r', name: 'appa', decision: 'applied', uuid: 'only', identity: 'AppA', height: 100, txIndex: 0,
-        },
-        {
-          hash: 'u', name: 'appa', decision: 'applied', uuid: 'only', identity: 'AppA', height: 200, txIndex: 0,
-        },
+      await appRecords.decisions().write([
+        await appDomain.appDecision({
+          hash: 'r', name: 'appa', uuid: 'only', identity: 'AppA', height: 100,
+        }),
+        await appDomain.appDecision({
+          hash: 'u', name: 'appa', uuid: 'only', identity: 'AppA', height: 200, type: 'update',
+        }),
       ]);
       await database.collection(eventsCollection).insertMany([
         makeV2Event('1.1.1.1', [{ name: 'AppA', hash: 'r' }], now),

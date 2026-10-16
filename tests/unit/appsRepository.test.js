@@ -26,7 +26,7 @@ describe('appsRepository', () => {
   let messages;
   let dbHelperStub;
   let specLibsStub;
-  let decisionStoreStub;
+  let decisionsStub;
   let logStub;
   let mockDb;
   let eventCollection;
@@ -147,11 +147,10 @@ describe('appsRepository', () => {
     };
 
     // The applied specs of earlier apps of a name: none unless a test says so.
-    decisionStoreStub = { earlierAppsHashes: sinon.stub().resolves([]) };
+    decisionsStub = { earlierAppsHashes: sinon.stub().resolves([]) };
 
     appsRepository = proxyquire('../../ZelBack/src/services/appDatabase/appsRepository', {
       config: asConfig(configStub),
-      '../appDecisions/decisionStore': decisionStoreStub,
       '../../lib/log': logStub,
       '../dbHelper': dbHelperStub,
       '../utils/specLibs': specLibsStub,
@@ -163,7 +162,9 @@ describe('appsRepository', () => {
         globalAppsInstallingErrorsLocations: 'appsinstallingerrorslocations',
         globalAppsInstallingErrorsBroadcasts: 'appsinstallingerrorsbroadcasts',
       },
-      './appRecords': { registry: () => registryStub, installed: () => installedStub, messages: () => messages },
+      './appRecords': {
+        registry: () => registryStub, installed: () => installedStub, messages: () => messages, decisions: () => decisionsStub,
+      },
     });
   });
 
@@ -382,7 +383,7 @@ describe('appsRepository', () => {
   describe('countRunningByApp', () => {
     it('counts the running instances of each app by lower-cased name, leaving out those running an earlier app of the name', async () => {
       runningCounts = [{ _id: 'TestApp', count: 2 }];
-      decisionStoreStub.earlierAppsHashes.resolves(['earlierhash']);
+      decisionsStub.earlierAppsHashes.resolves(['earlierhash']);
 
       const counts = await appsRepository.countRunningByApp();
 

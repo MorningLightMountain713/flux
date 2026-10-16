@@ -22,7 +22,6 @@ const nodeDosState = require('./nodeDosState');
 // App modular services - replacing appsService
 const decider = require('./appDecisions/decider');
 const appRegistry = require('./appDatabase/appRegistry');
-const decisionStore = require('./appDecisions/decisionStore');
 const appInstaller = require('./appLifecycle/appInstaller');
 const appUninstaller = require('./appLifecycle/appUninstaller');
 const localRemovalQueue = require('./appLifecycle/localRemovalQueue');
@@ -233,7 +232,7 @@ async function prepareDatabaseSchema() {
   // The app messages: the indexes their queries are answered by.
   await appRecords.messages().ensureIndexes();
   log.info('App messages prepared');
-  await decisionStore.prepareCollection();
+  await appRecords.decisions().ensureIndexes();
   // The app registry: one row per listed app. Its own indexes answer its
   // queries; `name` serves completeDerivedFields' rewrite of a row stored
   // without the derived fields.

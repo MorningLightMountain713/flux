@@ -8,10 +8,9 @@ const verifyPool = require('../utils/verifyPool');
 const { compareChainOrder, isPositioned } = require('../utils/chainOrder');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const confirmedMessageStore = require('../appMessaging/confirmedMessageStore');
-const decisionStore = require('./decisionStore');
 const appRecords = require('../appDatabase/appRecords');
-const { createJudge } = require('./decisionJudge');
-const { decideName, RULE_VERSION } = require('./decisionRule');
+const specLibrary = require('../utils/specLibrary');
+const { createChain } = require('./decisionChain');
 
 /**
  * Decides stored app messages.
@@ -92,7 +91,7 @@ function onFullPass(fn) {
 async function undecidedNames() {
   const [summaries, decided] = await Promise.all([
     appRecords.messages().confirmedSummaries(),
-    decisionStore.decidedHashes(RULE_VERSION),
+    appRecords.decisions().decidedHashes(specLibrary.loaded().RULE_VERSION),
   ]);
   const names = new Set();
   for (const { hash, name } of summaries) {
@@ -176,6 +175,7 @@ async function entriesOf(messages, records, decisions) {
       decision: decisions.get(message.hash) ?? null,
     });
   }
+  const { RULE_VERSION } = specLibrary.loaded();
   const from = entries.findIndex((entry) => entry.decision?.ruleVersion !== RULE_VERSION);
   return from === -1 ? null : { entries, from };
 }
@@ -183,21 +183,22 @@ async function entriesOf(messages, records, decisions) {
 /**
  * Decides one name and writes its decisions in the crash-safe order.
  */
-async function decideAndWrite(name, { entries, from }, judge) {
-  const { decisions, blocked } = await decideName({
-    name, entries, from, judge,
+async function decideAndWrite(name, { entries, from }, chain) {
+  const { decisions, blocked } = await specLibrary.loaded().decideName({
+    name, entries, from, chain,
   });
+  const store = appRecords.decisions();
   const trigger = entries[from].hash;
   const blockedIndex = blocked ? entries.findIndex((entry) => entry.hash === blocked.hash) : entries.length;
 
-  await decisionStore.undecide([trigger]);
-  await decisionStore.write(decisions.filter((decision) => decision.hash !== trigger));
-  await decisionStore.undecide(entries.slice(blockedIndex).filter((entry) => entry.decision).map((entry) => entry.hash));
+  await store.undecide([trigger]);
+  await store.write(decisions.filter((decision) => decision.hash !== trigger));
+  await store.undecide(entries.slice(blockedIndex).filter((entry) => entry.decision).map((entry) => entry.hash));
   for (const fn of decidedListeners) {
     // eslint-disable-next-line no-await-in-loop
     await fn(name, decisions);
   }
-  await decisionStore.write(decisions.filter((decision) => decision.hash === trigger));
+  await store.write(decisions.filter((decision) => decision.hash === trigger));
 
   if (blocked) {
     log.warn(`decider - ${name}: ${blocked.hash} not decided, this node could not evaluate it: ${blocked.error.message}`);
@@ -214,10 +215,10 @@ async function decideAndWrite(name, { entries, from }, judge) {
 async function decideNames(batch) {
   return chainState.exclusive(async () => {
     const hashes = batch.flatMap(([, messages]) => messages.map((message) => message.hash));
-    const [records, decisions, judge] = await Promise.all([
+    const [records, decisions, chain] = await Promise.all([
       confirmedMessageStore.paymentRecords(hashes),
-      decisionStore.decisionsFor(hashes),
-      createJudge(),
+      appRecords.decisions().byHashes(hashes),
+      createChain(),
     ]);
 
     const work = [];
@@ -241,7 +242,7 @@ async function decideNames(batch) {
     for (const { name, pending } of work) {
       try {
         // eslint-disable-next-line no-await-in-loop
-        written += await decideAndWrite(name, pending, judge);
+        written += await decideAndWrite(name, pending, chain);
       } catch (error) {
         log.error(`decider - ${name}: not decided: ${error.message}`);
       }

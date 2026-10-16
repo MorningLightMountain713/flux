@@ -4,7 +4,6 @@ const config = require('config');
 const dbHelper = require('../dbHelper');
 const appsRepository = require('./appsRepository');
 const appRecords = require('./appRecords');
-const decisionStore = require('../appDecisions/decisionStore');
 const foundingCommittee = require('../appMesh/foundingCommittee');
 const componentKeyMap = require('../appLifecycle/componentKeyMap');
 const log = require('../../lib/log');
@@ -157,9 +156,9 @@ async function appLocation(appname) {
  * @returns {Promise<Array>} location rows
  */
 async function appLocationOf(identity) {
-  const app = await decisionStore.appOf(identity);
+  const app = await appRecords.decisions().appOf(identity);
   if (!app) return [];
-  const excludeHashes = await decisionStore.otherAppsHashes(app.name, app.uuid);
+  const excludeHashes = await appRecords.decisions().otherAppsHashes(app.name, app.uuid);
   return appsRepository.appLocationFromEvents({ appname: app.name, excludeHashes });
 }
 

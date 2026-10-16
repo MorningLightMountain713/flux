@@ -8,8 +8,9 @@ const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const { requireMongo } = require('./dbTestHelper');
 const appRecords = require('../../ZelBack/src/services/appDatabase/appRecords');
 const { migrateAppMessages } = require('../../ZelBack/src/services/migrations/appMessages');
-const { PAYMENT_WINDOW_MS } = require('../../ZelBack/src/services/appDecisions/decisionRule');
 const { loadSpecLibrary } = require('./fixtures/fluxSpec');
+
+let PAYMENT_WINDOW_MS;
 
 function db(name) {
   return dbHelper.databaseConnection().db(config.get(name));
@@ -34,7 +35,7 @@ describe('the app-messages migration', function () {
   this.timeout(30_000);
 
   before(async function setup() {
-    await loadSpecLibrary();
+    ({ PAYMENT_WINDOW_MS } = await loadSpecLibrary());
     await requireMongo.call(this);
     await dropAll();
   });

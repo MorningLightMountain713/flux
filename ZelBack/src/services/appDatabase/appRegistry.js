@@ -15,7 +15,6 @@ const foundingCommittee = require('../appMesh/foundingCommittee');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const decider = require('../appDecisions/decider');
 const messageStore = require('../appMessaging/messageStore');
-const decisionStore = require('../appDecisions/decisionStore');
 const { processPendingUpdates } = require('../appMessaging/messageStore');
 const { lookupBlockTime } = require('../appMessaging/confirmedMessageStore');
 
@@ -230,7 +229,7 @@ async function settle(name, instance, carried = null) {
 async function applyDecided(name, decisions) {
   const run = new Set(decisions.map((decision) => decision.hash));
   const candidates = [
-    ...(await decisionStore.appliedFor(name)).filter((decision) => !run.has(decision.hash)),
+    ...(await appRecords.decisions().appliedFor(name)).filter((decision) => !run.has(decision.hash)),
     ...decisions.filter((decision) => decision.decision === 'applied'),
   ];
   const latest = candidates.reduce((held, decision) => (!held || compareChainOrder(held, decision) < 0 ? decision : held), null);
@@ -249,7 +248,7 @@ async function applyDecided(name, decisions) {
 async function reconcile({ unpositioned = 0 } = {}) {
   if (!capabilities.isUp('explorerSynced')) return;
   const counts = await chainState.exclusive(async () => {
-    const { rows, carried } = await rowsFor(await decisionStore.latestApplied());
+    const { rows, carried } = await rowsFor(await appRecords.decisions().latestApplied());
     const live = await appRecords.registry().names();
     const names = new Set([...rows.keys(), ...live.map((n) => n.toLowerCase())]);
     const tally = {};

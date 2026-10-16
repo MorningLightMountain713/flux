@@ -12,13 +12,13 @@ const { requireMongo } = require('./dbTestHelper');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const chainState = require('../../ZelBack/src/services/chainState');
 const confirmedMessageStore = require('../../ZelBack/src/services/appMessaging/confirmedMessageStore');
-const decisionStore = require('../../ZelBack/src/services/appDecisions/decisionStore');
-const { RULE_VERSION } = require('../../ZelBack/src/services/appDecisions/decisionRule');
 const appRecords = require('../../ZelBack/src/services/appDatabase/appRecords');
+const specLibrary = require('../../ZelBack/src/services/utils/specLibrary');
 const { loadSpecLibrary } = require('./fixtures/fluxSpec');
+const appDomain = require('./fixtures/appDomain');
 
-const OWNER = '1OwnerAddress';
-const BUYER = '1BuyerAddress';
+const OWNER = '1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm';
+const BUYER = '1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2';
 
 // The app messages, over the unit database.
 function appMessages() {
@@ -30,8 +30,8 @@ function decisions() {
     .collection(config.get('database.appsglobal.collections.appDecisions'));
 }
 
-// A stored message, as the fake parser below reads it: its spec names an owner,
-// and its signature says who signed it.
+// A stored v8 message. Its signature field holds the address that signed it,
+// which is what the stubbed recovery below answers.
 async function store({
   hash, name = 'MyApp', type = 'fluxappregister', height, txIndex = 0, owner = OWNER, signer = OWNER, paid = true, positioned = true, timestamp,
 }) {
@@ -40,51 +40,37 @@ async function store({
       hash, txid: `tx-${hash}`, height, ...(positioned ? { txIndex } : {}), value: 100,
     });
   }
+  const spec = await appDomain.v8Spec({ name, owner });
   await appRecords.messages().storeContents({
-    hash, type, version: 1, timestamp: timestamp ?? height * 1000 + txIndex, signature: signer, appSpecifications: { name, owner, version: 8 },
+    hash, type, version: 1, timestamp: timestamp ?? height * 1000 + txIndex, signature: signer, appSpecifications: spec.serialize(),
   }, { receivedAt: new Date() });
 }
 
-// Parsed events the rule can read: the spec's term is 1000 blocks.
-function fakeEvent(doc) {
-  return {
-    spec: {
-      version: 8,
-      name: doc.appSpecifications.name,
-      owner: doc.appSpecifications.owner,
-      isExpired: (state, clock) => clock.currentHeight >= state.height + 1000,
-    },
-    signature: doc.signature,
-    signaturePayloads: () => ['payload'],
-  };
-}
-
-function fakeJudge(overrides = {}) {
+// This node's chain state, as the rule asks it.
+function fakeChain(overrides = {}) {
   return {
     activationHeight: () => 0,
     registrationFee: async () => 10n,
     pricedAt: async () => true,
     updateFee: async () => 10n,
     entitlementRefusal: async () => null,
-    authorized: async (entry, { previousState }) => entry.signers.includes(previousState.owner),
-    assertCompatible: () => {},
-    mintUuid: (name, registrationHash) => `uuid-${registrationHash}`,
-    identityFor: (spec) => spec.name,
-    isAppIdentity: () => false,
+    updateSignersAt: () => [],
+    renewalSignersAt: () => [],
+    historicalV7SecretsBefore: async () => [],
     blockTime: async () => 0,
-    isValidationError: () => false,
+    blockTimeAtHeight: async () => 0,
+    nameReservedActivation: () => null,
     ...overrides,
   };
 }
 
-function loadDecider(judge = fakeJudge()) {
+function loadDecider(chain = fakeChain()) {
   return proxyquire('../../ZelBack/src/services/appDecisions/decider', {
-    './decisionJudge': { createJudge: async () => judge },
+    './decisionChain': { createChain: async () => chain },
     '../utils/verifyPool': {
       // The signature field holds the signer's address.
       recover: async (items) => items.map((item) => [item.signature]),
     },
-    '../appMessaging/appEventVerifier': { deserializeMessage: async (doc) => fakeEvent(doc) },
   });
 }
 
@@ -98,6 +84,29 @@ async function verdict(hash) {
   return d.decision === 'applied' ? 'applied' : d.reason;
 }
 
+// A decision as the rule makes one.
+function decision(hash, fields) {
+  const { AppDecision } = specLibrary.loaded();
+  const applied = (fields.decision ?? 'applied') === 'applied';
+  return new AppDecision({
+    hash,
+    name: 'myapp',
+    txIndex: 0,
+    txid: `tx-${hash}`,
+    valueSat: 100,
+    blockTime: null,
+    type: 'registration',
+    decision: 'applied',
+    reason: applied ? null : 'underpaid',
+    fee: '10',
+    uuid: applied ? 'uuid' : null,
+    identity: applied ? 'MyApp' : null,
+    termStart: null,
+    ruleVersion: specLibrary.loaded().RULE_VERSION,
+    ...fields,
+  });
+}
+
 describe('decider', function () {
   this.timeout(20_000);
 
@@ -105,7 +114,7 @@ describe('decider', function () {
     this.timeout(30_000);
     await loadSpecLibrary();
     await requireMongo.call(this);
-    await decisionStore.prepareCollection();
+    await appRecords.decisions().ensureIndexes();
   });
 
   beforeEach(async () => {
@@ -133,7 +142,7 @@ describe('decider', function () {
     expect(await verdict('a1')).to.equal('applied');
     expect(await verdict('b1')).to.equal('applied');
     expect(await decisionOf('c1')).to.equal(null);
-    expect(await decisionOf('a1')).to.include({ name: 'alpha', ruleVersion: RULE_VERSION });
+    expect(await decisionOf('a1')).to.include({ name: 'alpha', ruleVersion: specLibrary.loaded().RULE_VERSION });
   });
 
   it('decides the names a wake names, and no other', async () => {
@@ -186,15 +195,15 @@ describe('decider', function () {
 
   it('decides again what an earlier rule version decided', async () => {
     await store({ hash: 'r', height: 100 });
-    await decisions().insertOne({
-      hash: 'r', name: 'myapp', decision: 'refused', reason: 'underpaid', ruleVersion: RULE_VERSION - 1, height: 100,
-    });
+    await appRecords.decisions().write([decision('r', {
+      decision: 'refused', ruleVersion: specLibrary.loaded().RULE_VERSION - 1, height: 100,
+    })]);
     const decider = loadDecider();
 
     decider.wakeAll();
     await decider.idle();
 
-    expect(await decisionOf('r')).to.include({ decision: 'applied', ruleVersion: RULE_VERSION });
+    expect(await decisionOf('r')).to.include({ decision: 'applied', ruleVersion: specLibrary.loaded().RULE_VERSION });
   });
 
   it('leaves a message it cannot evaluate, and every later one for the name, undecided', async () => {
@@ -208,7 +217,7 @@ describe('decider', function () {
 
     // A late message before them: the price history is now unavailable at 200.
     await store({ hash: 'u0', type: 'fluxappupdate', height: 150 });
-    const blocked = loadDecider(fakeJudge({
+    const blocked = loadDecider(fakeChain({
       updateFee: async (spec, prevSpec, ctx) => {
         if (ctx.height === 200) throw new Error('price history not in force');
         return 10n;
@@ -377,69 +386,41 @@ describe('decider', function () {
   });
 
   it('answers the app with an identity: its name and its latest applied message\'s uuid', async () => {
-    await decisionStore.write([
-      {
-        hash: 'r', name: 'myapp', decision: 'applied', identity: 'MyApp', uuid: 'first', height: 1, txIndex: 0,
-      },
-      {
-        hash: 'r2', name: 'myapp', decision: 'applied', identity: 'MyApp', uuid: 'second', height: 4, txIndex: 0,
-      },
-      {
-        hash: 'u2', name: 'myapp', decision: 'applied', identity: 'MyApp', uuid: 'second', height: 4, txIndex: 1,
-      },
-      {
-        hash: 'x', name: 'myapp', decision: 'refused', identity: null, uuid: null, height: 5, txIndex: 0,
-      },
+    await appRecords.decisions().write([
+      decision('r', { uuid: 'first', height: 1 }),
+      decision('r2', { uuid: 'second', height: 4 }),
+      decision('u2', { uuid: 'second', height: 4, txIndex: 1, type: 'update' }),
+      decision('x', { decision: 'refused', height: 5 }),
     ]);
 
-    expect(await decisionStore.appOf('MyApp')).to.deep.equal({ name: 'myapp', uuid: 'second' });
-    expect(await decisionStore.appOf('nothing')).to.equal(null);
+    expect(await appRecords.decisions().appOf('MyApp')).to.deep.equal({ name: 'myapp', uuid: 'second' });
+    expect(await appRecords.decisions().appOf('nothing')).to.equal(null);
   });
 
   it('answers the applied messages of every app of a name but one', async () => {
-    await decisionStore.write([
-      {
-        hash: 'r', name: 'myapp', decision: 'applied', uuid: 'first', height: 1, txIndex: 0,
-      },
-      {
-        hash: 'u', name: 'myapp', decision: 'applied', uuid: 'first', height: 2, txIndex: 0,
-      },
-      {
-        hash: 'r2', name: 'myapp', decision: 'applied', uuid: 'second', height: 4, txIndex: 0,
-      },
-      {
-        hash: 'x', name: 'myapp', decision: 'refused', uuid: null, height: 5, txIndex: 0,
-      },
+    await appRecords.decisions().write([
+      decision('r', { uuid: 'first', height: 1 }),
+      decision('u', { uuid: 'first', height: 2, type: 'update' }),
+      decision('r2', { uuid: 'second', height: 4 }),
+      decision('x', { decision: 'refused', height: 5 }),
     ]);
 
-    expect((await decisionStore.otherAppsHashes('myapp', 'second')).sort()).to.deep.equal(['r', 'u']);
-    expect(await decisionStore.otherAppsHashes('myapp', 'first')).to.deep.equal(['r2']);
+    expect((await appRecords.decisions().otherAppsHashes('myapp', 'second')).sort()).to.deep.equal(['r', 'u']);
+    expect(await appRecords.decisions().otherAppsHashes('myapp', 'first')).to.deep.equal(['r2']);
   });
 
   it('answers the applied messages of the earlier apps of each name, in chain order not storage order', async () => {
-    await decisionStore.write([
-      {
-        hash: 'r2', name: 'myapp', decision: 'applied', uuid: 'second', height: 4, txIndex: 1,
-      },
-      {
-        hash: 'r', name: 'myapp', decision: 'applied', uuid: 'first', height: 1, txIndex: 0,
-      },
-      {
-        hash: 'u', name: 'myapp', decision: 'applied', uuid: 'first', height: 4, txIndex: 0,
-      },
-      {
-        hash: 'o', name: 'other', decision: 'applied', uuid: 'only', height: 2, txIndex: 0,
-      },
-      {
-        hash: 'o2', name: 'other', decision: 'applied', uuid: 'only', height: 3, txIndex: 0,
-      },
-      {
-        hash: 'x', name: 'other', decision: 'refused', uuid: null, height: 6, txIndex: 0,
-      },
+    await appRecords.decisions().write([
+      decision('r2', { uuid: 'second', height: 4, txIndex: 1 }),
+      decision('r', { uuid: 'first', height: 1 }),
+      decision('u', { uuid: 'first', height: 4, type: 'update' }),
+      decision('o', { name: 'other', uuid: 'only', height: 2 }),
+      decision('o2', { name: 'other', uuid: 'only', height: 3, type: 'update' }),
+      decision('x', { name: 'other', decision: 'refused', height: 6 }),
     ]);
 
-    expect((await decisionStore.earlierAppsHashes()).sort()).to.deep.equal(['r', 'u']);
-    expect((await decisionStore.earlierAppsHashes(['myapp'])).sort()).to.deep.equal(['r', 'u']);
-    expect(await decisionStore.earlierAppsHashes(['other'])).to.deep.equal([]);
+    expect((await appRecords.decisions().earlierAppsHashes()).sort()).to.deep.equal(['r', 'u']);
+    expect((await appRecords.decisions().earlierAppsHashes(['myapp'])).sort()).to.deep.equal(['r', 'u']);
+    expect(await appRecords.decisions().earlierAppsHashes(['other'])).to.deep.equal([]);
   });
 });

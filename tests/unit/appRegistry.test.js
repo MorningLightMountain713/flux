@@ -10,7 +10,7 @@ const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const {
   loadSpecLibrary, v8Spec, v9Spec, instantiatedSpec,
 } = require('./fixtures/fluxSpec');
-const { inMemoryRegistry } = require('./fixtures/appRecords');
+const { inMemoryRegistry, stubDecisions } = require('./fixtures/appRecords');
 
 // The spec library is real: every row and message below is one the library
 // builds, so expiry is the library's rule and not a stub that agrees with
@@ -29,6 +29,7 @@ describe('appRegistry', () => {
   let mem;
   let messages;
   let stubs;
+  let decisionsStub;
 
   before(async function loadLibrary() {
     this.timeout(30_000);
@@ -92,13 +93,10 @@ describe('appRegistry', () => {
       '../appMesh/foundingCommittee': { forget: sinon.stub().resolves(), retract: sinon.stub().resolves() },
       '../utils/fluxEventBus': { publish: sinon.stub() },
       '../appDecisions/decider': { onDecided: sinon.stub(), onFullPass: sinon.stub() },
-      '../appDecisions/decisionStore': {
-        appliedFor: sinon.stub().resolves([]),
-        latestApplied: sinon.stub().resolves(new Map()),
-      },
       '../appMessaging/messageStore': { processPendingUpdates: sinon.stub().resolves(), rejudgeGenerationRecords: sinon.stub().resolves() },
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
     };
+    decisionsStub = stubDecisions();
     registry = proxyquire('../../ZelBack/src/services/appDatabase/appRegistry', stubs);
   });
 
@@ -118,7 +116,7 @@ describe('appRegistry', () => {
       messages.push(message(name, spec));
       applied.set(name, decision(name, { name, ...fields }));
     }
-    stubs['../appDecisions/decisionStore'].latestApplied.resolves(applied);
+    decisionsStub.latestApplied.resolves(applied);
     capabilities.setForTests(['explorerSynced', 'appMessagesSynced'], true);
     await registry.reconcile();
     mem.remove.resetHistory();
@@ -362,7 +360,7 @@ describe('appRegistry', () => {
     it('stands on the latest applied decision in chain order, stored or made in this run', async () => {
       const spec = await v8Spec({ name: 'MyApp' });
       messages = [message('stored-later', spec), message('run-earlier', spec)];
-      stubs['../appDecisions/decisionStore'].appliedFor.resolves([decision('stored-later', { height: 990_100 })]);
+      decisionsStub.appliedFor.resolves([decision('stored-later', { height: 990_100 })]);
 
       await registry.applyDecided('myapp', [decision('run-earlier', { height: 990_000 })]);
 
@@ -373,7 +371,7 @@ describe('appRegistry', () => {
       const spec = await v8Spec({ name: 'MyApp' });
       messages = [message('r', spec)];
       await seed([(await instantiatedSpec(spec, { hash: 'r', height: 990_000 })).serialize()]);
-      stubs['../appDecisions/decisionStore'].appliedFor.resolves([decision('r')]);
+      decisionsStub.appliedFor.resolves([decision('r')]);
 
       // The message is refused on this run: the name has no applied message.
       await registry.applyDecided('myapp', [decision('r', { decision: 'refused', reason: 'unauthorized' })]);
@@ -449,7 +447,7 @@ describe('appRegistry', () => {
       const spec = await v8Spec({ name: 'MyApp' });
       messages = [message('r', spec)];
       await seed([(await instantiatedSpec(await v8Spec({ name: 'claimcalc' }), { hash: 'old' })).serialize()]);
-      stubs['../appDecisions/decisionStore'].latestApplied.resolves(new Map([['myapp', decision('r')]]));
+      decisionsStub.latestApplied.resolves(new Map([['myapp', decision('r')]]));
       capabilities.setForTests(['explorerSynced', 'appMessagesSynced'], true);
 
       await registry.reconcile();
@@ -468,7 +466,7 @@ describe('appRegistry', () => {
     it('writes the rows it can, and leaves the capability down until a pass leaves none', async () => {
       const spec = await v8Spec({ name: 'MyApp' });
       messages = [message('r', spec)];
-      stubs['../appDecisions/decisionStore'].latestApplied.resolves(new Map([['myapp', decision('r')]]));
+      decisionsStub.latestApplied.resolves(new Map([['myapp', decision('r')]]));
       capabilities.setForTests(['explorerSynced', 'appMessagesSynced'], true);
 
       await registry.reconcile({ unpositioned: 1 });
@@ -491,7 +489,7 @@ describe('appRegistry', () => {
 
       await registry.reconcile();
 
-      sinon.assert.notCalled(stubs['../appDecisions/decisionStore'].latestApplied);
+      sinon.assert.notCalled(decisionsStub.latestApplied);
       sinon.assert.notCalled(mem.remove);
       expect(capabilities.isUp('appRegistryConsistent')).to.equal(false);
     });

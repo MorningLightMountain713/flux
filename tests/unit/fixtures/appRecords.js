@@ -8,11 +8,11 @@ const { loadSpecLibrary } = require('./fluxSpec');
 
 /**
  * The app registry, the installed apps, the installed ledgers, the app
- * messages and the content manifests a unit test's subject reads: a real
- * collection held in memory, or one whose every operation is a stub. Either is
- * installed as appRecords.registry(), appRecords.installed(),
- * appRecords.ledgers(), appRecords.messages() or appRecords.manifests() until
- * sinon.restore().
+ * messages, the content manifests and the decisions a unit test's subject
+ * reads: a real collection held in memory, or one whose every operation is a
+ * stub. Either is installed as appRecords.registry(), appRecords.installed(),
+ * appRecords.ledgers(), appRecords.messages(), appRecords.manifests() or
+ * appRecords.decisions() until sinon.restore().
  */
 
 // What each operation answers until a test says otherwise.
@@ -134,6 +134,39 @@ async function inMemoryLedgers() {
   const { InMemoryStorageProvider } = await moduleLoader.importModule('@runonflux/flux-spec-backend/testing');
   const provider = new InMemoryStorageProvider();
   return { ledgers: install('ledgers', new InstalledLedgers(provider)), provider };
+}
+
+// What each decisions operation answers until a test says otherwise.
+const DECISION_ANSWERS = {
+  byHashes: new Map(),
+  decidedHashes: new Set(),
+  latestApplied: new Map(),
+  appliedFor: [],
+  appOf: null,
+  otherAppsHashes: [],
+  earlierAppsHashes: [],
+};
+
+/**
+ * The decisions with every operation a sinon stub, installed as
+ * appRecords.decisions(); calling it again in the same test returns it.
+ * @returns {Object<string, sinon.SinonStub>}
+ */
+function stubDecisions() {
+  if (appRecords.decisions.restore) return appRecords.decisions();
+  return install('decisions', stubbed(specLibrary.loaded().AppDecisions, DECISION_ANSWERS));
+}
+
+/**
+ * A real AppDecisions over flux-spec's in-memory store, installed as
+ * appRecords.decisions(), with the store beside it.
+ * @returns {Promise<{decisions: import('@runonflux/flux-spec-backend').AppDecisions, provider: object}>}
+ */
+async function inMemoryDecisions() {
+  const { AppDecisions } = await loadSpecLibrary();
+  const { InMemoryStorageProvider } = await moduleLoader.importModule('@runonflux/flux-spec-backend/testing');
+  const provider = new InMemoryStorageProvider();
+  return { decisions: install('decisions', new AppDecisions(provider)), provider };
 }
 
 // What each app-messages operation answers until a test says otherwise.
@@ -268,5 +301,5 @@ function installedRecord(record, {
 }
 
 module.exports = {
-  stubRegistry, inMemoryRegistry, stubInstalled, inMemoryInstalled, stubLedgers, inMemoryLedgers, stubMessages, inMemoryMessages, stubManifests, inMemoryManifests, installedRecord,
+  stubRegistry, inMemoryRegistry, stubInstalled, inMemoryInstalled, stubLedgers, inMemoryLedgers, stubMessages, inMemoryMessages, stubManifests, inMemoryManifests, stubDecisions, inMemoryDecisions, installedRecord,
 };
