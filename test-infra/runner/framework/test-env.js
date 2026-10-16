@@ -2516,6 +2516,12 @@ async function _buildEnv(
       }
       await restartFluxos(node.container, { readyTimeoutMs });
       node.imageTag = tag;
+      // A production node starts discovery at boot (discoveryAutostart); this fleet
+      // starts it by API, and a node restarted on code that never started it here
+      // holds no record that it did. Left to its peers, it dials once one of their
+      // ring sweeps asks it to, up to a sweep interval after it is back, which can
+      // outlast its boot sync bound and remove its apps.
+      await env.startDiscovery([index]);
     },
 
     async restartNode(index, { timeout = 15000, ready = 'fit' } = {}) {
