@@ -32,6 +32,10 @@ async function createJudge() {
       return (await pricingRegime.regimeFor(spec)).registrationFee(spec, height);
     },
 
+    async pricedAt(spec, height) {
+      return (await pricingRegime.regimeFor(spec)).pricedAt(height);
+    },
+
     async updateFee(spec, prevSpec, ctx) {
       return pricingRegime.updateFee(spec, prevSpec, ctx);
     },
