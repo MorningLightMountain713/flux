@@ -1506,6 +1506,30 @@ async function holdPartialRestore(appname, swaps) {
  * @param {{force?: boolean}} [opts] - force restores onto a copy the election does not name as the writer
  * @returns {Promise<boolean>}
  */
+/**
+ * The local archive a restore of one component's volume reads. Backup writes
+ * it under the component's name in the volume the component's key names, so
+ * an archive taken before a rename is under a former name: the current name's
+ * is read when present, else the most recent former name's that is.
+ *
+ * @param {string} appname
+ * @param {object} volume - a volume row, tagged with its replica
+ * @param {string} label - the archive name the request addresses the component by
+ * @param {string} componentName - the component's current name
+ * @returns {Promise<string>} the archive path; the current name's when none is present
+ */
+async function localArchivePath(appname, volume, label, componentName) {
+  const pathOf = (name) => `${volume.mount}/backup/local/backup_${name.toLowerCase()}.tar.gz`;
+  const install = await appRecords.installed().byReplica(appname, volume.replica ?? null);
+  const formerNames = install ? install.formerNamesOf(componentName) : [];
+  // eslint-disable-next-line no-restricted-syntax
+  for (const name of [label, ...formerNames.reverse()]) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await IOUtils.checkFileExists(pathOf(name))) return pathOf(name);
+  }
+  return pathOf(label);
+}
+
 async function runRestoreTask(appname, restore, type, zelidauth, report, { force = false } = {}) {
   // Hoisted so the catch releases ONLY a lease this call acquired (null = no-op),
   // and beside it the folders this call held, for the same reason: the catch
@@ -1606,12 +1630,14 @@ async function runRestoreTask(appname, restore, type, zelidauth, report, { force
       const label = target.name.toLowerCase();
       // eslint-disable-next-line no-await-in-loop
       target.volumes = await taskVolumes(appname, target.name, target.replica);
-      target.volumes.forEach((volume) => {
-        // eslint-disable-next-line no-param-reassign
-        volume.archivePath = `${volume.mount}/backup/${type}/backup_${label}.tar.gz`;
-        // eslint-disable-next-line no-param-reassign
+      // eslint-disable-next-line no-restricted-syntax
+      for (const volume of target.volumes) {
+        volume.archivePath = type === 'local'
+          // eslint-disable-next-line no-await-in-loop
+          ? await localArchivePath(appname, volume, label, target.comp.name)
+          : `${volume.mount}/backup/${type}/backup_${label}.tar.gz`;
         volume.forWhich = volume.replica ? `${label} (replica ${volume.replica})` : label;
-      });
+      }
     }
 
     if (type === 'remote') {
