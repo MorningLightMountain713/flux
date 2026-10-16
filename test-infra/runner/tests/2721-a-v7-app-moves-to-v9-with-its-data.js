@@ -220,6 +220,8 @@ describe('a v7 app moves to v9 with its data', function () {
       expect(marker.out, `node ${index}: the data is the data ${LEGACY} held`).to.equal(String(index));
       // eslint-disable-next-line no-await-in-loop
       expect(await foldersOn(index), `node ${index}: the same Syncthing folders`).to.deep.equal(was.get(index));
+      // eslint-disable-next-line no-await-in-loop
+      expect(await appSyncthingFolderId(env.clients[index], moved.name, V9), `node ${index}: ${V9}'s folder is the one ${LEGACY} had`).to.equal(moved.folder);
     }
   });
 
@@ -254,5 +256,6 @@ describe('a v7 app moves to v9 with its data', function () {
     await waitFor(async () => (await foldersOn(FRESH)).includes(moved.folder), {
       timeout: CONVERGE_MS, interval: 3000, label: 'the late node shares its data under the hosts\' folder',
     });
+    expect(await appSyncthingFolderId(env.clients[FRESH], moved.name, V9), `the late node's ${V9} is on that folder`).to.equal(moved.folder);
   });
 });
