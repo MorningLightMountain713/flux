@@ -250,7 +250,9 @@ describe('a v7 app moves to v9 with its data', function () {
       timeout: CONVERGE_MS, interval: 3000, label: `the late node runs ${V9}`,
     });
     expect(await identifierOn(FRESH, moved, V9), 'the late node names the component as the hosts do').to.equal(moved.installedAs.get(hosts[0]));
-    expect(await appSyncthingFolderId(env.clients[FRESH], moved.name, V9), 'and shares its data under the hosts\' folder')
-      .to.equal(moved.folder);
+    // The folder is configured on the monitor's pass after the install.
+    await waitFor(async () => (await foldersOn(FRESH)).includes(moved.folder), {
+      timeout: CONVERGE_MS, interval: 3000, label: 'the late node shares its data under the hosts\' folder',
+    });
   });
 });
