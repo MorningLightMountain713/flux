@@ -18,8 +18,9 @@
  *
  * Each app names exactly as many nodes as it has instances, so every named node's
  * spawner places it. The two hosts are chosen outside env.establishedNodes. The
- * harness's Syncthing carries no data between nodes, so the suite reports each app's
- * folder synced, which is what lets a follower of the syncFirst volume start.
+ * harness's Syncthing carries no data between nodes, so the suite puts each host's
+ * marker on its disk and reports that host's folder synced, which is what lets every
+ * host of the syncFirst volume start.
  */
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
@@ -112,10 +113,10 @@ describe('a v7 app moves to v9 with its data', function () {
 
     await Promise.all(hosts.map((i) => waitForInstallSettled(env.clients[i], app.name, CONVERGE_MS)));
     app.folder = await appSyncthingFolderId(env.clients[hosts[0]], app.name, LEGACY);
-    await setSynced({ folder: app.folder });
     app.installedAs = new Map();
-    // A syncFirst volume is cleared on its first install and its component started
-    // again; data written before that start is cleared with it.
+    // A syncFirst volume is cleared on its first install, directory included; data
+    // written before the clear goes with it. A host starts once its folder reads
+    // synced, and promotes only if its disk holds data the index claims.
     await Promise.all(hosts.map(async (index) => {
       let identifier = null;
       await waitFor(async () => { identifier = await identifierOn(index, app, LEGACY); return identifier !== null; }, {
@@ -123,14 +124,12 @@ describe('a v7 app moves to v9 with its data', function () {
       });
       app.installedAs.set(index, identifier);
       const cleared = await waitForReconcileActuated(env.clients[index], identifier, 'dataCleared', CONVERGE_MS, { afterId: anchors.get(index) });
+      const data = await dataOf(index, app, LEGACY);
+      const written = await run(index, `mkdir -p ${data} && echo ${index} > ${data}/marker-${index}`);
+      expect(written.ok, `${app.name}: node ${index} holds a marker in ${LEGACY}'s data: ${written.err}`).to.equal(true);
+      await setSynced({ ip: ip(index), folder: app.folder });
       await waitForReconcileActuated(env.clients[index], identifier, START_ACTIONS, CONVERGE_MS, { afterId: cleared.id });
     }));
-    // eslint-disable-next-line no-restricted-syntax
-    for (const index of hosts) {
-      // eslint-disable-next-line no-await-in-loop
-      const written = await run(index, `echo ${index} > ${await dataOf(index, app, LEGACY)}/marker-${index}`);
-      expect(written.ok, `${app.name}: node ${index} holds a marker in ${LEGACY}'s data: ${written.err}`).to.equal(true);
-    }
   }
 
   // The owner's move: the node's conversion, with the contact and placement the owner
