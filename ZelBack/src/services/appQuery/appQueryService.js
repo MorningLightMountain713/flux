@@ -191,6 +191,40 @@ async function listRunningApps(req, res) {
 }
 
 /**
+ * What this node is doing with each installed app's activeStandby component, for a
+ * balancer choosing where to route it: `running`, or `held` - stopped by its
+ * operator, or one the reconciler is starting. A component in neither state is
+ * absent. An app this node cannot read right now is listed by identity in
+ * `unreadable`, so absence from `components` means "not here" and never "could not
+ * tell". Components are named by their app's identity and replica only, never by
+ * component name, which an encrypted spec keeps to itself.
+ *
+ * @returns {Promise<{components: Array<{identity: string, replica: (string|null),
+ *   state: ('running'|'held')}>, unreadable: string[]}>}
+ */
+async function activeStandbyComponents() {
+  const { LABEL_KEYS, readLabel } = await getSpecBackend();
+  const running = new Set((await listRunningContainers()).map((container) => dockerService.containerIdentifier(
+    { labels: container.Labels, name: container.Names?.[0] }, { LABEL_KEYS, readLabel },
+  )));
+  const held = new Set([
+    ...appReconciler.committedIdentifiers(),
+    ...(await appsRuntimeState.operatorStoppedIdentifiers()),
+  ]);
+
+  const { deployments, unreadableApps } = await deploymentProvider.listInstalledDeploymentsDetailed();
+  const components = [];
+  deployments.forEach((deployment) => deployment.componentEntries().forEach(([, component]) => {
+    if (!component.hasActiveStandbySyncthing()) return;
+    let state = null;
+    if (running.has(component.identifier)) state = 'running';
+    else if (held.has(component.identifier)) state = 'held';
+    if (state) components.push({ identity: component.identity, replica: component.replica ?? null, state });
+  }));
+  return { components, unreadable: [...unreadableApps.keys()] };
+}
+
+/**
  * Get application usage statistics
  * @param {import('express').Request} req
  * @param {import('express').Response} res
@@ -622,6 +656,7 @@ module.exports = {
   listRunningContainers,
   listRunningApps,
   heldComponents,
+  activeStandbyComponents,
   promotedFolders,
   promotedFolderHoldings,
   listAllApps,

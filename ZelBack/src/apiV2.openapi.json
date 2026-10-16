@@ -527,6 +527,105 @@
           }
         }
       }
+    },
+    "/apps/activestandby": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "operationId": "getAppsActiveStandby",
+        "summary": "The activeStandby components this node runs or holds",
+        "description": "Each installed app's activeStandby component that this node is running, or holding (stopped by its operator, or being started by the reconciler), named by the app's identity and replica and never by component name. A component in neither state is absent. An app this node cannot read right now is listed by identity in `unreadable`, so absence from `components` means the component is not here.",
+        "parameters": [
+          {
+            "name": "X-Request-Id",
+            "in": "header",
+            "required": false,
+            "description": "Echoed back on the response and in meta.requestId. Minted when absent.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The components, and the apps this node cannot read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "components",
+                        "unreadable"
+                      ],
+                      "properties": {
+                        "components": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "identity",
+                              "replica",
+                              "state"
+                            ],
+                            "properties": {
+                              "identity": {
+                                "type": "string",
+                                "description": "The app's identity."
+                              },
+                              "replica": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "description": "The named replica, null for a loose instance."
+                              },
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "running",
+                                  "held"
+                                ]
+                              }
+                            }
+                          }
+                        },
+                        "unreadable": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Identities of installed apps this node cannot read right now."
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The node's local database is not ready.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {

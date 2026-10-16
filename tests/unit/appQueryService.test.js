@@ -103,6 +103,12 @@ describe('appQueryService tests', () => {
       getAppIdentifier: (identifier) => identifier,
       // mirrors the real ownership test: the identity label is authoritative, the
       // name test survives only for containers created before labels shipped
+      // mirrors the real helper: the identifier label is authoritative, the name is
+      // read only for a container created before labels shipped
+      containerIdentifier: ({ labels, name }, { LABEL_KEYS: labelKeys }) => {
+        if (labels && labels[labelKeys.IDENTIFIER]) return labels[labelKeys.IDENTIFIER];
+        return name ? name.replace(/^\//, '').replace(/^flux/, '') : null;
+      },
       isManagedContainer: ({ labels, name }, labelKeys) => {
         if (labels && labels[labelKeys.IDENTIFIER]) return true;
         if (!name) return false;
@@ -563,6 +569,102 @@ describe('appQueryService tests', () => {
       await appQueryService.listRunningApps({}, res);
 
       expect(res.json.calledOnceWith({ status: 'error', data: { message: 'Docker error' } })).to.be.true;
+    });
+  });
+
+  describe('activeStandbyComponents', () => {
+    // What a balancer routing an activeStandby app is told: which of these components
+    // this node runs or holds, named by the app's identity and never by component name.
+    const IDENTITY = `b${'c'.repeat(52)}`;
+    const activeStandbyV9 = async () => flux.DeploymentSpec.fromSpec(await v9Spec({
+      components: {
+        db: {
+          name: 'db',
+          description: 'the store one node writes',
+          image: 'postgres:16',
+          cpu: 0.5,
+          memory: 300,
+          rootFsGb: 2,
+          persistentStorage: {
+            sizeGb: 5,
+            mounts: { '/var/lib/postgresql/data': { source: 'data', destination: '/var/lib/postgresql/data' } },
+            sync: { mode: 'activeStandby' },
+          },
+        },
+        web: {
+          name: 'web',
+          description: 'runs on every instance',
+          image: 'nginx:latest',
+          cpu: 0.5,
+          memory: 300,
+          rootFsGb: 2,
+          ports: { http: { containerPort: 80, hostPort: 31_000 } },
+        },
+      },
+    }), '/apps/', { replica: null, identity: IDENTITY, registrationVersion: 9 });
+
+    const identifierOf = (deployment, name) => deployment.componentEntries()
+      .find(([componentName]) => componentName === name)[1].identifier;
+
+    const report = async ({
+      deployments, running = [], committed = [], stopped = [], unreadable = new Map(),
+    }) => {
+      deploymentProviderStub.listInstalledDeploymentsDetailed.resolves({ deployments, unreadableApps: unreadable });
+      dockerServiceStub.dockerListContainers.resolves(
+        running.map((name) => ({ Names: [`/${name}`], Labels: { 'io.runonflux.identifier': name } })),
+      );
+      sinon.stub(appReconciler, 'committedIdentifiers').returns(committed);
+      sinon.stub(appsRuntimeState, 'operatorStoppedIdentifiers').resolves(stopped);
+      return appQueryService.activeStandbyComponents();
+    };
+
+    it('reports a running activeStandby component by identity, and not the components every instance runs', async () => {
+      const deployment = await activeStandbyV9();
+      const result = await report({
+        deployments: [deployment],
+        running: [identifierOf(deployment, 'db'), identifierOf(deployment, 'web')],
+      });
+
+      expect(result).to.deep.equal({ components: [{ identity: IDENTITY, replica: null, state: 'running' }], unreadable: [] });
+    });
+
+    it('reports one its operator stopped as held', async () => {
+      const deployment = await activeStandbyV9();
+      const result = await report({ deployments: [deployment], stopped: [identifierOf(deployment, 'db')] });
+
+      expect(result.components).to.deep.equal([{ identity: IDENTITY, replica: null, state: 'held' }]);
+    });
+
+    it('reports one the reconciler is starting as held', async () => {
+      const deployment = await activeStandbyV9();
+      const result = await report({ deployments: [deployment], committed: [identifierOf(deployment, 'db')] });
+
+      expect(result.components).to.deep.equal([{ identity: IDENTITY, replica: null, state: 'held' }]);
+    });
+
+    it('leaves out one this node neither runs nor holds', async () => {
+      const deployment = await activeStandbyV9();
+      const result = await report({ deployments: [deployment], running: [identifierOf(deployment, 'web')] });
+
+      expect(result.components).to.deep.equal([]);
+    });
+
+    it('lists an app it cannot read by identity, so absence is never mistaken for "not here"', async () => {
+      const result = await report({ deployments: [], unreadable: new Map([[IDENTITY, 'myapp']]) });
+
+      expect(result).to.deep.equal({ components: [], unreadable: [IDENTITY] });
+    });
+
+    it('reports an app registered before v9 by its identity too', async () => {
+      const deployment = flux.DeploymentSpec.fromSpec(
+        await v8Spec({ compose: [{ ...V8_SUBMISSION.compose[0], containerData: 'g:/tmp' }] }),
+        '/apps/',
+        { replica: null, identity: IDENTITY, registrationVersion: 8 },
+      );
+      const [[, component]] = deployment.componentEntries();
+      const result = await report({ deployments: [deployment], running: [component.identifier] });
+
+      expect(result.components).to.deep.equal([{ identity: IDENTITY, replica: null, state: 'running' }]);
     });
   });
 

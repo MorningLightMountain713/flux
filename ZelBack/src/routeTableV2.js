@@ -28,6 +28,11 @@ module.exports = [
   },
   // How this process came up: the capability registry's states and transitions,
   // which exist before anything else does. For the node's operator and the team.
+  // Which activeStandby components this node runs or holds, for a balancer routing
+  // them: it reads the installed records.
+  {
+    method: 'get', path: '/apps/activestandby', needs: ['localDbPrepared'], handler: 'apiV2/apps#activeStandby',
+  },
   {
     method: 'get', path: '/node/boot', guards: ['nodeOperatorOrFluxTeam'], none: 'reads the capability registry this process holds', handler: 'apiV2/node#boot',
   },
