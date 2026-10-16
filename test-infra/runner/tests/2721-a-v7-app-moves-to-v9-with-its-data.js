@@ -71,7 +71,8 @@ describe('a v7 app moves to v9 with its data', function () {
   }
 
   // A v7 app as an owner registered one: its one component named with capitals, its
-  // volume synced, pinned to the hosts and the node that boots later.
+  // volume synced, pinned to the hosts and the node that boots later. Every field a v7
+  // component carries is present, in its order: the signature is over this string.
   async function registerV7(app) {
     await pushImage(app.name, 'v1');
     const base = buildAppSpec({
@@ -90,6 +91,7 @@ describe('a v7 app moves to v9 with its data', function () {
         cpu: 0.5,
         ram: 300,
         hdd: 1,
+        tiered: false,
         repoauth: '',
         secrets: '',
       }],
