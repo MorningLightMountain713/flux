@@ -9,7 +9,7 @@ import { execInContainer } from './container.js';
 import { waitFor } from './wait.js';
 
 const FLUXOS_UNIT = 'fluxos';
-export const DOCKERD_UNIT = 'dockerd';
+export const DOCKERD_UNIT = 'docker';
 
 // Single-quote for `sh -c`: end the quote, escape the quote, reopen.
 const shQuote = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;

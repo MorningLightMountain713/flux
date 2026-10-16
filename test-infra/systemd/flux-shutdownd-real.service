@@ -4,8 +4,8 @@
 # live in the node's inner dockerd. It treats failing to own its dbus name as
 # fatal, so the system bus comes first.
 Description=flux-shutdownd (harness node, pinned build)
-After=dockerd.service dbus.service
-Wants=dockerd.service dbus.service
+After=docker.service dbus.service
+Wants=docker.service dbus.service
 # Listening before FluxOS starts, which may ask it to stop an app at boot.
 Before=fluxos.service pm2-fluxuser.service
 

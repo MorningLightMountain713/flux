@@ -1,8 +1,8 @@
 [Unit]
 # The unit carries the production unit's name.
 Description=FluxOS (harness node)
-After=dockerd.service flux-node-network.service
-Wants=dockerd.service
+After=docker.service flux-node-network.service
+Wants=docker.service
 Requires=flux-node-network.service
 # Restarted as often as a suite asks: a test that restarts it repeatedly is not a
 # unit failing.

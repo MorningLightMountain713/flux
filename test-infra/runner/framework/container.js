@@ -431,7 +431,7 @@ export async function getAppContainerExitCode(container, appName, componentName)
 
 /**
  * Kill the inner dockerd under a running FluxOS and return at once; systemd
- * restarts it (dockerd.service). Without --live-restore this stops dockerd's
+ * restarts it (docker.service). Without --live-restore this stops dockerd's
  * containers, leaving them 'exited' for the reconnect sweep to recover.
  * @returns {Promise<string>} the killed daemon's pid, for a caller that waits
  *   for a different one

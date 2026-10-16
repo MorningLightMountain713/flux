@@ -4,8 +4,8 @@
 # npm install, then FluxOS - from the account's home, with the flags the multitool
 # gives it. The kill timeout is the fleet's to choose; unset, pm2 uses its own default.
 Description=PM2 process manager
-After=dockerd.service flux-node-network.service
-Wants=dockerd.service
+After=docker.service flux-node-network.service
+Wants=docker.service
 Requires=flux-node-network.service
 
 [Service]

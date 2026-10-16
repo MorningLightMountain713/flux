@@ -1,4 +1,6 @@
 [Unit]
+# Named as on an Arcane node, so every unit ordered after docker.service is
+# ordered after this one, and it is ready only once dockerd says so.
 Description=Inner Docker daemon (harness node)
 After=network.target
 # Restarted as often as a suite asks: a test that restarts it repeatedly is not a
@@ -6,6 +8,7 @@ After=network.target
 StartLimitIntervalSec=0
 
 [Service]
+Type=notify
 ExecStartPre=/bin/rm -f /var/run/docker.pid
 # No flags: /etc/docker/daemon.json (written by the entrypoint) owns the
 # configuration — dockerd refuses the same directive from

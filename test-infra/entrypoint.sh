@@ -291,7 +291,7 @@ node -e '
 
 cp /flux/test-infra/systemd/*.service /flux/test-infra/systemd/*.slice /etc/systemd/system/
 mkdir -p /etc/systemd/system/multi-user.target.wants
-for unit in dockerd flux-node-network; do
+for unit in docker flux-node-network; do
   ln -sf "/etc/systemd/system/$unit.service" "/etc/systemd/system/multi-user.target.wants/$unit.service"
 done
 # A legacy node the multitool installed runs FluxOS under pm2 as the operator's
@@ -386,11 +386,9 @@ ln -sf /dev/null /etc/systemd/system/tmp.mount
 # containerd under the data-root.
 ln -sf /dev/null /etc/systemd/system/containerd.service
 
-# docker-ce's own docker.service and docker.socket start a second dockerd on
-# the same daemon.json. It takes the volume store's lock, then waits for the
-# masked containerd, and dockerd.service can never open the store. Masked,
-# dockerd.service is the node's only daemon.
-ln -sf /dev/null /etc/systemd/system/docker.service
+# The harness's docker.service (copied above) replaces the packaged one and
+# listens on its own socket; the packaged socket unit would hold that socket
+# and hand docker.service a listener it was not started for.
 ln -sf /dev/null /etc/systemd/system/docker.socket
 
 # The data-root, in the file the dockerd unit reads its configuration from.
