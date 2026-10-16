@@ -6,7 +6,7 @@ const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
 const chainState = require('../chainState');
 const appRecords = require('../appDatabase/appRecords');
-const { PAYMENT_WINDOW_MS } = require('../appDecisions/decisionRule');
+const specLibrary = require('../utils/specLibrary');
 
 /**
  * The temporary pool, swept by the chain.
@@ -62,7 +62,7 @@ function unpayable() {
  * @returns {Date}
  */
 function payableUntil(timestamp) {
-  return new Date(timestamp + PAYMENT_WINDOW_MS);
+  return new Date(timestamp + specLibrary.loaded().PAYMENT_WINDOW_MS);
 }
 
 /** Asserts the unpayable records' indexes; a no-op when they exist. */

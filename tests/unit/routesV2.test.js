@@ -26,7 +26,8 @@ const routeTable = require('../../ZelBack/src/routeTableV2');
 const routesV2 = require('../../ZelBack/src/routesV2');
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const confirmedMessageStore = require('../../ZelBack/src/services/appMessaging/confirmedMessageStore');
-const decisionStore = require('../../ZelBack/src/services/appDecisions/decisionStore');
+const { stubDecisions } = require('./fixtures/appRecords');
+const appDomain = require('./fixtures/appDomain');
 const messageDelivery = require('../../ZelBack/src/services/appMessaging/messageDelivery');
 const temporaryPoolSweep = require('../../ZelBack/src/services/appMessaging/temporaryPoolSweep');
 const operationsController = require('../../ZelBack/src/services/appManagement/operationsController');
@@ -239,7 +240,7 @@ describe('routesV2 - the /v2 surface', () => {
     let paymentRecords;
 
     beforeEach(() => {
-      decisionsFor = sinon.stub(decisionStore, 'decisionsFor').resolves(new Map());
+      decisionsFor = stubDecisions().byHashes.resolves(new Map());
       unpayableRecord = sinon.stub(temporaryPoolSweep, 'unpayableRecord').resolves(null);
       getPermanentMessage = sinon.stub(appsRepository, 'getPermanentMessage').resolves(null);
       getTempMessage = sinon.stub(appsRepository, 'getTempMessage').resolves(null);
@@ -258,7 +259,7 @@ describe('routesV2 - the /v2 surface', () => {
     const read = () => supertest(app).get('/v2/apps/messages/abc123/decision');
 
     it('answers the decision of a message this node applied, with the owner and the identity it gave the app', async () => {
-      decisionsFor.resolves(new Map([['abc123', { hash: 'abc123', decision: 'applied', height: 500, identity: 'bident' }]]));
+      decisionsFor.resolves(new Map([['abc123', await appDomain.appDecision({ hash: 'abc123', height: 500, identity: 'bident' })]]));
       getPermanentMessage.resolves({ hash: 'abc123', appSpecifications: { name: 'app', owner: '1OwnerAddress' } });
 
       const res = await read();
@@ -269,7 +270,7 @@ describe('routesV2 - the /v2 surface', () => {
     });
 
     it('answers an applied decision whose message it no longer holds with no owner', async () => {
-      decisionsFor.resolves(new Map([['abc123', { hash: 'abc123', decision: 'applied', identity: 'bident' }]]));
+      decisionsFor.resolves(new Map([['abc123', await appDomain.appDecision({ hash: 'abc123', identity: 'bident' })]]));
 
       const res = await read();
 
@@ -277,7 +278,7 @@ describe('routesV2 - the /v2 surface', () => {
     });
 
     it('answers a refusal with its reason', async () => {
-      decisionsFor.resolves(new Map([['abc123', { hash: 'abc123', decision: 'refused', reason: 'paid-late' }]]));
+      decisionsFor.resolves(new Map([['abc123', await appDomain.appDecision({ hash: 'abc123', decision: 'refused', reason: 'paid-late' })]]));
 
       const res = await read();
 

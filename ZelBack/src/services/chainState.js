@@ -8,7 +8,6 @@ const capabilities = require('./utils/capabilities');
 const entitlementsState = require('./entitlementsState');
 const priceOracleState = require('./pricing/priceOracleState');
 const unclaimedPayments = require('./appDecisions/unclaimedPayments');
-const decisionStore = require('./appDecisions/decisionStore');
 const appRecords = require('./appDatabase/appRecords');
 
 /**
@@ -156,7 +155,7 @@ async function deleteAbove(height) {
   const query = { height: { $gt: height } };
 
   await appRecords.messages().removePaymentsAbove(height);
-  await decisionStore.deleteAbove(height);
+  await appRecords.decisions().undecideAbove(height);
   await dbHelper.removeDocumentsFromCollection(databaseUpdates, chainParamsMessagesCollection, query);
   for (const collection of softForkCollections) {
     // eslint-disable-next-line no-await-in-loop

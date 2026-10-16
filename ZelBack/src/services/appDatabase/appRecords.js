@@ -33,6 +33,10 @@ const STORES = Object.freeze({
     database: config.get('database.appsglobal.database'),
     collection: config.get('database.appsglobal.collections.appContentManifests'),
   }),
+  appDecisions: Object.freeze({
+    database: config.get('database.appsglobal.database'),
+    collection: config.get('database.appsglobal.collections.appDecisions'),
+  }),
 });
 
 let storage = null;
@@ -41,6 +45,7 @@ let installedApps = null;
 let installedLedgers = null;
 let appMessages = null;
 let contentManifests = null;
+let appDecisions = null;
 
 function provider() {
   if (!storage) storage = MongoStorageProvider.create(STORES);
@@ -123,6 +128,21 @@ function manifests() {
 }
 
 /**
+ * The decisions: one per decided app message, applied or refused with its
+ * reason, keyed by the message's hash.
+ * @returns {import('@runonflux/flux-spec-backend').AppDecisions}
+ */
+function decisions() {
+  if (!appDecisions) {
+    const { AppDecisions } = specLibrary.loaded();
+    appDecisions = new AppDecisions(provider(), {
+      onUnreadable: (stored, error) => log.warn(`appDecisions: a stored decision cannot be read: ${error.message} (hash=${stored.hash})`),
+    });
+  }
+  return appDecisions;
+}
+
+/**
  * The installed record of the instance one of whose containers has an
  * identifier, found through its ledger; null when no ledger names it.
  * @param {string} identifier
@@ -144,5 +164,5 @@ function instanceKey({ name, replica }) {
 }
 
 module.exports = {
-  registry, installed, ledgers, messages, manifests, installedByIdentifier, instanceKey, STORES,
+  registry, installed, ledgers, messages, manifests, decisions, installedByIdentifier, instanceKey, STORES,
 };

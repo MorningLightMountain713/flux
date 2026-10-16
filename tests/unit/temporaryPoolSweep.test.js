@@ -9,7 +9,6 @@ const config = require('config');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const { requireMongo } = require('./dbTestHelper');
 const chainState = require('../../ZelBack/src/services/chainState');
-const { PAYMENT_WINDOW_MS } = require('../../ZelBack/src/services/appDecisions/decisionRule');
 const temporaryPoolSweep = require('../../ZelBack/src/services/appMessaging/temporaryPoolSweep');
 const appRecords = require('../../ZelBack/src/services/appDatabase/appRecords');
 const { loadSpecLibrary } = require('./fixtures/fluxSpec');
@@ -19,7 +18,8 @@ const { MAX_REORG_LENGTH, UNPAYABLE_RECORD_MS } = temporaryPoolSweep;
 // Block stamps are seconds. A message signed at SIGNED can be paid by a block
 // stamped up to SIGNED + WINDOW_S, and not by one stamped after.
 const SIGNED = 1_700_000_000;
-const WINDOW_S = PAYMENT_WINDOW_MS / 1000;
+let PAYMENT_WINDOW_MS;
+let WINDOW_S;
 
 function appsGlobal() {
   return dbHelper.databaseConnection().db(config.get('database.appsglobal.database'));
@@ -65,7 +65,8 @@ async function clear() {
 describe('temporaryPoolSweep', () => {
   before(async function loadLibrary() {
     this.timeout(30_000);
-    await loadSpecLibrary();
+    ({ PAYMENT_WINDOW_MS } = await loadSpecLibrary());
+    WINDOW_S = PAYMENT_WINDOW_MS / 1000;
     await requireMongo.call(this);
     await clear();
   });

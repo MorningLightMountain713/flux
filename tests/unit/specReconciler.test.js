@@ -9,7 +9,7 @@ const {
   loadSpecLibrary, V9_SUBMISSION, v8Spec, v9Spec, instantiatedSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 const {
-  stubRegistry, stubInstalled, stubLedgers, installedRecord,
+  stubRegistry, stubInstalled, stubLedgers, stubDecisions, installedRecord,
 } = require('./fixtures/appRecords');
 const specReconciler = require('../../ZelBack/src/services/appLifecycle/specReconciler');
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
@@ -20,7 +20,7 @@ const generalService = require('../../ZelBack/src/services/generalService');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
-const decisionStore = require('../../ZelBack/src/services/appDecisions/decisionStore');
+const appDomain = require('./fixtures/appDomain');
 const imageManager = require('../../ZelBack/src/services/appSecurity/imageManager');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const dockerService = require('../../ZelBack/src/services/dockerService');
@@ -162,7 +162,7 @@ describe('specReconciler tests', () => {
   function setup({
     installed = [], globalRows = [], synced = true, registryConsistent = true, bootDecided = true,
   } = {}) {
-    decisionsForStub = sinon.stub(decisionStore, 'decisionsFor').resolves(new Map());
+    decisionsForStub = stubDecisions().byHashes.resolves(new Map());
     sinon.stub(serviceHelper, 'delay').resolves();
     sinon.stub(generalService, 'checkSynced').resolves(synced);
     sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: OUTPOINT_TXID, txindex: 0 });
@@ -278,7 +278,7 @@ describe('specReconciler tests', () => {
     it('keeps an install that recorded no uuid when its spec\'s decision names the row\'s app', async () => {
       const installed = await specWith({}, { name: 'released', uuid: null });
       setup({ installed: [installed], globalRows: [await specWith({}, { name: 'released' })] });
-      decisionsForStub.resolves(new Map([[installed.hash, { hash: installed.hash, decision: 'applied', uuid: APP_UUID }]]));
+      decisionsForStub.resolves(new Map([[installed.hash, await appDomain.appDecision({ hash: installed.hash, uuid: APP_UUID })]]));
       await specReconciler.requestFullConvergence({ reason: 'test' });
       expect(decisionsForStub.calledOnceWith([installed.hash])).to.equal(true);
       expect(uninstallStub.called).to.equal(false);
@@ -287,7 +287,7 @@ describe('specReconciler tests', () => {
     it('removes an install that recorded no uuid when its spec\'s decision names another app', async () => {
       const installed = await specWith({}, { name: 'released', uuid: null });
       setup({ installed: [installed], globalRows: [await specWith({}, { name: 'released' })] });
-      decisionsForStub.resolves(new Map([[installed.hash, { hash: installed.hash, decision: 'applied', uuid: OTHER_UUID }]]));
+      decisionsForStub.resolves(new Map([[installed.hash, await appDomain.appDecision({ hash: installed.hash, uuid: OTHER_UUID })]]));
       await specReconciler.requestFullConvergence({ reason: 'test' });
       expect(uninstallStub.calledOnceWith('released')).to.equal(true);
     });
@@ -295,7 +295,7 @@ describe('specReconciler tests', () => {
     it('removes an install that recorded no uuid when its spec was refused', async () => {
       const installed = await specWith({}, { name: 'released', uuid: null });
       setup({ installed: [installed], globalRows: [await specWith({}, { name: 'released' })] });
-      decisionsForStub.resolves(new Map([[installed.hash, { hash: installed.hash, decision: 'refused', reason: 'underpaid', uuid: null }]]));
+      decisionsForStub.resolves(new Map([[installed.hash, await appDomain.appDecision({ hash: installed.hash, decision: 'refused', reason: 'underpaid' })]]));
       await specReconciler.requestFullConvergence({ reason: 'test' });
       expect(uninstallStub.calledOnceWith('released')).to.equal(true);
     });

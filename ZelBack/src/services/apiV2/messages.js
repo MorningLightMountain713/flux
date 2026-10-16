@@ -1,11 +1,10 @@
 'use strict';
 
 const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const confirmedMessageStore = require('../appMessaging/confirmedMessageStore');
 const messageDelivery = require('../appMessaging/messageDelivery');
 const temporaryPoolSweep = require('../appMessaging/temporaryPoolSweep');
-const decisionStore = require('../appDecisions/decisionStore');
-const { REFUSED } = require('../appDecisions/decisionRule');
 
 /**
  * POST /v2/apps/messages - the contents of a paid app message this node is
@@ -37,8 +36,8 @@ async function deliver(req, res) {
  */
 async function decision(req, res) {
   const { hash } = req.params;
-  const decided = (await decisionStore.decisionsFor([hash])).get(hash);
-  if (decided && decided.decision === REFUSED) return res.ok({ hash, decision: REFUSED, reason: decided.reason });
+  const decided = (await appRecords.decisions().byHashes([hash])).get(hash);
+  if (decided && !decided.isApplied) return res.ok({ hash, decision: decided.decision, reason: decided.reason });
   if (decided) {
     const message = await appsRepository.getPermanentMessage(hash);
     return res.ok({ hash, decision: decided.decision, owner: message?.appSpecifications?.owner ?? null, identity: decided.identity ?? null });

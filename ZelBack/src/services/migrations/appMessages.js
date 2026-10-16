@@ -4,7 +4,7 @@ const config = require('config');
 const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
 const appRecords = require('../appDatabase/appRecords');
-const { PAYMENT_WINDOW_MS } = require('../appDecisions/decisionRule');
+const specLibrary = require('../utils/specLibrary');
 
 const BATCH = 5000;
 
@@ -113,7 +113,7 @@ async function migrateAppMessages() {
       if (typeof doc.hash !== 'string' || typeof doc.signature !== 'string') continue;
       const pool = {
         receivedAt: doc.receivedAt ?? new Date(),
-        payableUntil: doc.payableUntil ?? new Date(doc.timestamp + PAYMENT_WINDOW_MS),
+        payableUntil: doc.payableUntil ?? new Date(doc.timestamp + specLibrary.loaded().PAYMENT_WINDOW_MS),
         ...(doc.windowClosedAt === undefined ? {} : { windowClosedAt: doc.windowClosedAt }),
       };
       // eslint-disable-next-line no-await-in-loop

@@ -26,8 +26,8 @@ describe('appHistory', () => {
         messages: () => ({
           confirmedByHashes: async (hashes) => stored.filter((m) => hashes.includes(m.hash)).map((m) => ({ hash: m.hash, permanentForm: () => m })),
         }),
+        decisions: () => ({ appliedFor: async (name) => applied.filter((d) => d.name === name) }),
       },
-      './decisionStore': { appliedFor: sinon.stub().callsFake(async (name) => applied.filter((d) => d.name === name)) },
       '../appMessaging/confirmedMessageStore': { lookupBlockTime },
     });
   });

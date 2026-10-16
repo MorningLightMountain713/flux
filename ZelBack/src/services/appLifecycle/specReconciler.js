@@ -6,7 +6,6 @@ const serviceHelper = require('../serviceHelper');
 const log = require('../../lib/log');
 const { AsyncLock } = require('../utils/asyncLock');
 const appRecords = require('../appDatabase/appRecords');
-const decisionStore = require('../appDecisions/decisionStore');
 const registryManager = require('../appDatabase/registryManager');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const hwRequirements = require('../appRequirements/hwRequirements');
@@ -139,7 +138,7 @@ function scheduleAdoption(appName, registryHash, delayMs) {
  */
 async function installedUuid(installed) {
   if (installed.uuid) return installed.uuid;
-  const decision = (await decisionStore.decisionsFor([installed.hash])).get(installed.hash);
+  const decision = (await appRecords.decisions().byHashes([installed.hash])).get(installed.hash);
   return decision?.uuid ?? null;
 }
 

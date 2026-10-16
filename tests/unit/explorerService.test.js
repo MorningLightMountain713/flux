@@ -18,7 +18,7 @@ const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonSta
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
-const { stubMessages } = require('./fixtures/appRecords');
+const { stubMessages, stubDecisions } = require('./fixtures/appRecords');
 const log = require('../../ZelBack/src/lib/log');
 const { requireMongo } = require('./dbTestHelper');
 
@@ -42,7 +42,10 @@ const { expect } = chai;
 describe('explorerService tests', () => {
   // The app messages every block of tests reads and writes: a stub per test.
   let messages;
-  beforeEach(() => { messages = stubMessages(); });
+  beforeEach(() => {
+    messages = stubMessages();
+    stubDecisions();
+  });
 
   // The daemon is synced and the local database prepared unless a test says otherwise.
   beforeEach(() => {

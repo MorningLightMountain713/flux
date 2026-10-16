@@ -3,7 +3,6 @@
 const appRecords = require('../appDatabase/appRecords');
 const { compareChainOrder } = require('../utils/chainOrder');
 const { lookupBlockTime } = require('../appMessaging/confirmedMessageStore');
-const decisionStore = require('./decisionStore');
 
 /**
  * An app's history as the chain accepted it: the messages the decider applied
@@ -22,7 +21,7 @@ const decisionStore = require('./decisionStore');
  * @returns {Promise<Array<{message: object, decision: object}>>}
  */
 async function appliedMessages(name) {
-  const decisions = (await decisionStore.appliedFor(String(name).toLowerCase())).sort(compareChainOrder);
+  const decisions = (await appRecords.decisions().appliedFor(String(name).toLowerCase())).sort(compareChainOrder);
   if (decisions.length === 0) return [];
   const messages = await appRecords.messages().confirmedByHashes(decisions.map((d) => d.hash));
   const byHash = new Map(messages.map((record) => [record.hash, record.permanentForm()]));

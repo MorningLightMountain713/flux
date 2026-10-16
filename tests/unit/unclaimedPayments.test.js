@@ -57,6 +57,7 @@ describe('unclaimedPayments', () => {
         findInDatabase: async () => voidRows.map((row) => ({ ...row })),
       },
       '../appDatabase/appRecords': {
+        decisions: () => ({ undecide: async (hashes) => undecided.push(...hashes) }),
         messages: () => ({
           payment: async (hash) => {
             const record = records.get(hash);
@@ -76,7 +77,6 @@ describe('unclaimedPayments', () => {
           },
         }),
       },
-      './decisionStore': { undecide: async (hashes) => undecided.push(...hashes) },
       '../utils/specLibs': {
         getSpecPolicy: async () => {
           if (duringLibraryLoad) duringLibraryLoad();

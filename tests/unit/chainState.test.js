@@ -7,7 +7,7 @@ const sinon = require('sinon');
 
 const chainState = require('../../ZelBack/src/services/chainState');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
-const { stubMessages } = require('./fixtures/appRecords');
+const { stubMessages, stubDecisions } = require('./fixtures/appRecords');
 const entitlementsState = require('../../ZelBack/src/services/entitlementsState');
 const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
 const unclaimedPayments = require('../../ZelBack/src/services/appDecisions/unclaimedPayments');
@@ -30,6 +30,7 @@ describe('chainState', () => {
   let events;
   let removeStub;
   let messages;
+  let decisions;
   let updateStub;
   let builtPolicyGroups;
   let builtPrices;
@@ -48,6 +49,8 @@ describe('chainState', () => {
       events.push(`cursor ${update.$set.generalScannedHeight}`);
     });
     messages = stubMessages();
+    decisions = stubDecisions();
+    decisions.undecideAbove.callsFake(async () => { events.push('delete appdecisions'); });
     removeStub = sinon.stub(dbHelper, 'removeDocumentsFromCollection').callsFake(async (_db, collection) => {
       events.push(`delete ${collection}`);
     });
@@ -99,7 +102,8 @@ describe('chainState', () => {
 
       const query = { height: { $gt: 900 } };
       sinon.assert.calledOnceWithExactly(messages.removePaymentsAbove, 900);
-      for (const collection of ['appdecisions', 'chainmessages', ...V9_SOFT_FORK_COLLECTIONS]) {
+      sinon.assert.calledOnceWithExactly(decisions.undecideAbove, 900);
+      for (const collection of ['chainmessages', ...V9_SOFT_FORK_COLLECTIONS]) {
         sinon.assert.calledWithMatch(removeStub, sinon.match.object, collection, query);
       }
       sinon.assert.neverCalledWithMatch(removeStub, sinon.match.object, 'zelappsinformation');

@@ -282,8 +282,36 @@ async function paidTempMessage(overrides = {}) {
   return message;
 }
 
+/**
+ * The real AppDecision. Applied by default, naming an app; `decision: 'refused'`
+ * gives a refusal with a reason and no app. Any field can be set.
+ */
+async function appDecision(fields = {}) {
+  const { AppDecision, RULE_VERSION } = await load();
+  const applied = (fields.decision ?? 'applied') === 'applied';
+  return new AppDecision({
+    hash: 'fixtureHash',
+    name: 'testapp',
+    height: 2_000_000,
+    txIndex: 0,
+    txid: 'fixtureTxid',
+    valueSat: 100_000_000,
+    blockTime: null,
+    type: 'registration',
+    decision: 'applied',
+    reason: applied ? null : 'underpaid',
+    fee: '100000000',
+    uuid: applied ? 'fixtureUuid' : null,
+    identity: applied ? 'testapp' : null,
+    termStart: null,
+    ruleVersion: RULE_VERSION,
+    ...fields,
+  });
+}
+
 module.exports = {
   OWNER,
+  appDecision,
   paidTempMessage,
   submission,
   submissionV8,
