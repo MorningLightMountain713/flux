@@ -224,7 +224,7 @@ module.exports = {
   ],
   deterministicNodesStart: 558_000,
   fluxapps: {
-    latestSupportedSpecVersion: 8, // version changes on app updates must target this version
+    latestSupportedSpecVersion: 9, // version changes on app updates must target this version
     // reconciler crash-recovery backoff: ladder of waits between restart attempts,
     // and the run length that counts as stable (resets the ladder)
     crashBackoffDelaysMs: [0, 30_000, 300_000, 900_000, 1_800_000],

@@ -12,6 +12,7 @@ const {
 } = require('./fixtures/fluxSpec');
 const { FluxPeerManager, PEER_SOURCE } = require('../../ZelBack/src/services/utils/FluxPeerManager');
 const { asConfig } = require('./fixtures/config');
+const { fluxapps: shippedFluxapps } = require('../../ZelBack/config/default');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 
@@ -737,6 +738,21 @@ describe('appSubmission tests', () => {
       // the gate is delegated to flux-spec with the prior spec, the proposed
       // spec, and the network's latest supported version.
       sinon.assert.calledOnceWithExactly(assertVersionTransition, previousSpec, updateSpec, 9);
+    });
+
+    it('lets a v7 or v8 app move to v9 under the shipped config, and to no other version', async () => {
+      const latest = shippedFluxapps.latestSupportedSpecVersion;
+      const ofVersion = (version) => {
+        const blob = { ...V8_SUBMISSION, version };
+        delete blob.enterprise; // v8's field
+        return flux.FluxAppSpecBase.getVersionClass(version).fromSubmission(blob, { chain: flux.Chain.MAIN });
+      };
+      const v7 = ofVersion(7);
+      const v8 = await v8Spec();
+      const v9 = flux.FluxAppSpecBase.getVersionClass(9).fromSubmission(V9_SUBMISSION, { chain: flux.Chain.MAIN });
+      expect(() => flux.UpdatePolicy.assertVersionTransition(v7, v9, latest)).to.not.throw();
+      expect(() => flux.UpdatePolicy.assertVersionTransition(v8, v9, latest)).to.not.throw();
+      expect(() => flux.UpdatePolicy.assertVersionTransition(v7, v8, latest)).to.throw(/Version changes are only allowed/);
     });
   });
 
