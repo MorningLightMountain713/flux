@@ -65,8 +65,8 @@ describe('pricingRegime', () => {
       }
     });
 
-    it('exposes the same six operations on both regimes', () => {
-      const ops = ['onChainDisplayPrice', 'fiatAndFluxDisplayPrice', 'registrationFee', 'termCost', 'updateFee', 'entitlementRefusal'];
+    it('exposes the same seven operations on both regimes', () => {
+      const ops = ['onChainDisplayPrice', 'fiatAndFluxDisplayPrice', 'pricedAt', 'registrationFee', 'termCost', 'updateFee', 'entitlementRefusal'];
       for (const op of ops) {
         expect(legacyPricingRegime[op], `legacy.${op}`).to.be.a('function');
         expect(v9PricingRegime[op], `v9.${op}`).to.be.a('function');
@@ -167,6 +167,45 @@ describe('pricingRegime', () => {
       try { await loadWith(null).entitlementRefusal({ owner: OWNER, isEncrypted: false }, 1); } catch (error) { thrown = error; }
       expect(thrown).to.be.an('error');
     });
+  });
+
+  describe('v9 pricedAt', () => {
+    const MINED = 1000;
+
+    async function loadWith(priceMessages) {
+      const { PriceMessageHistory, SOFT_FORK_EFFECTIVE_DEPTH } = await specLibs.getSpecPolicy();
+      let history = null;
+      if (priceMessages) {
+        history = new PriceMessageHistory();
+        priceMessages.forEach((fields, i) => history.add({ fields }, MINED, i));
+      }
+      const regime = proxyquire('../../ZelBack/src/services/pricing/v9PricingRegime', {
+        './priceOracleState': { getPriceMessageHistory: () => history },
+      });
+      return { regime, effective: MINED + SOFT_FORK_EFFECTIVE_DEPTH };
+    }
+
+    it('is false at a height no price message is in force at', async () => {
+      const { regime } = await loadWith([]);
+      expect(await regime.pricedAt(MINED)).to.equal(false);
+    });
+
+    it('is false before a mined price message takes effect, and true from then on', async () => {
+      const { regime, effective } = await loadWith([{ minPrice: 1_000_000 }]);
+      expect(await regime.pricedAt(effective - 1)).to.equal(false);
+      expect(await regime.pricedAt(effective)).to.equal(true);
+    });
+
+    it('cannot answer before the price message history is built', async () => {
+      const { regime } = await loadWith(null);
+      let thrown = null;
+      try { await regime.pricedAt(MINED); } catch (error) { thrown = error; }
+      expect(thrown).to.be.an('error');
+    });
+  });
+
+  it('a v1-v8 spec is priced at every height', async () => {
+    expect(await legacyRegime.pricedAt(0)).to.equal(true);
   });
 
   it('legacy owners are entitled to everything a v1-v8 spec can use', async () => {

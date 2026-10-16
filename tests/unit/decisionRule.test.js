@@ -62,6 +62,7 @@ function makeJudge(overrides = {}) {
   const judge = {
     activationHeight: (version) => ({ 7: 0, 8: 0, 9: 0 })[version],
     registrationFee: async () => 10n,
+    pricedAt: async () => true,
     updateFee: async (spec, prevSpec, ctx) => {
       calls.updateFee.push(ctx);
       return 10n;
@@ -226,6 +227,25 @@ describe('decisionRule', () => {
         entry({ hash: 'u', type: 'update', height: 200, spec: v9Spec() }),
       ], judge);
       expect(result.decisions[1]).to.include({ decision: 'applied', termStart: 1000, fee: '0' });
+    });
+
+    it('is refused as pricing-unavailable when its regime has no price at its block, though it would cost nothing', async () => {
+      const asked = [];
+      const { judge } = makeJudge({
+        pricedAt: async (spec, height) => {
+          asked.push({ spec, height });
+          return height >= 300;
+        },
+        updateFee: async () => 0n,
+      });
+      const unpriced = v9Spec();
+      const result = await decide([
+        entry({ hash: 'r', height: 100 }),
+        entry({ hash: 'u', type: 'update', height: 200, spec: unpriced }),
+        entry({ hash: 'later', type: 'update', height: 300, spec: v9Spec() }),
+      ], judge);
+      expect(verdicts(result)).to.deep.equal(['applied', 'pricing-unavailable', 'applied']);
+      expect(asked[0], 'asked of the update, at its confirming height').to.deep.equal({ spec: unpriced, height: 200 });
     });
 
     it('is refused with nothing to update when it comes before its registration, in the same block', async () => {

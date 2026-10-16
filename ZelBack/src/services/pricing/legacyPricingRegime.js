@@ -288,6 +288,14 @@ async function updateFee(spec, prevSpec, { height, prevHeight }) {
 }
 
 /**
+ * A v1-v8 spec is priced by the chain parameters' price schedule, which covers every height.
+ * @returns {Promise<true>}
+ */
+async function pricedAt() {
+  return true;
+}
+
+/**
  * v1-v8 specs use no feature a policy group gates, so every owner is entitled.
  * @returns {Promise<null>}
  */
@@ -299,6 +307,7 @@ module.exports = {
   entitlementRefusal,
   onChainDisplayPrice,
   fiatAndFluxDisplayPrice,
+  pricedAt,
   registrationFee,
   termCost,
   updateFee,

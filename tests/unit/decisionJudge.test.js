@@ -9,6 +9,8 @@ const proxyquire = require('proxyquire');
 const { load } = require('@runonflux/flux-spec-cjs');
 
 const appDomain = require('./fixtures/appDomain');
+const legacyPricingRegime = require('../../ZelBack/src/services/pricing/legacyPricingRegime');
+const v9PricingRegime = require('../../ZelBack/src/services/pricing/v9PricingRegime');
 
 const OWNER = '1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm';
 const RENEWER = '1MCBJn6qsy3YRY2YasdYMYdJcdhy1ev8Rd';
@@ -46,6 +48,16 @@ describe('decisionJudge', () => {
       expect(await judge.authorized(await updateEntry(renewal, [RENEWER]), { height: 2_000_000, previousState })).to.equal(true);
       expect(await judge.authorized(await updateEntry(changed, [RENEWER]), { height: 2_000_000, previousState })).to.equal(false);
     });
+  });
+
+  it('asks a spec\'s own regime whether it is priced at the height', async () => {
+    const judge = await loadJudge().createJudge();
+    const v9 = sinon.stub(v9PricingRegime, 'pricedAt').resolves(false);
+    const legacy = sinon.stub(legacyPricingRegime, 'pricedAt').resolves(true);
+    expect(await judge.pricedAt(await appDomain.v9Spec(), 1234)).to.equal(false);
+    expect(await judge.pricedAt(await appDomain.v8Spec(), 1234)).to.equal(true);
+    sinon.assert.calledOnceWithExactly(v9, 1234);
+    sinon.assert.calledOnceWithExactly(legacy, 1234);
   });
 
   it('names every registration\'s app by its uuid\'s identity, whatever version registered it, and knows a name in that form', async () => {

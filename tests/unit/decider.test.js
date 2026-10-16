@@ -63,6 +63,7 @@ function fakeJudge(overrides = {}) {
   return {
     activationHeight: () => 0,
     registrationFee: async () => 10n,
+    pricedAt: async () => true,
     updateFee: async () => 10n,
     entitlementRefusal: async () => null,
     authorized: async (entry, { previousState }) => entry.signers.includes(previousState.owner),

@@ -234,6 +234,9 @@ async function decideOne(entries, i, name, judge) {
     return refused(entry, name, 'incompatible');
   }
 
+  // An update its regime cannot price costs 0 and would apply as a free one.
+  if (!(await judge.pricedAt(spec, record.height))) return refused(entry, name, 'pricing-unavailable');
+
   const blockTime = await blockTimeAgainst(entry, predecessor, judge);
   const fee = await judge.updateFee(spec, predecessor.spec, {
     height: record.height,

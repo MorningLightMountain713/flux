@@ -32,8 +32,27 @@ function isOnChainPricingActive() {
   if (!priceHistory) return false;
   const syncStatus = daemonStatus.isDaemonSynced();
   if (!syncStatus.data.synced) return false;
-  const resolved = priceHistory.resolveAt(syncStatus.data.height);
-  return resolved && Object.keys(resolved).length > 0;
+  return pricesInForce(priceHistory, syncStatus.data.height);
+}
+
+function pricesInForce(priceHistory, height) {
+  const resolved = priceHistory.resolveAt(height);
+  return Boolean(resolved) && Object.keys(resolved).length > 0;
+}
+
+/**
+ * Whether a v9 spec has a price at `height`: a PriceMessage is in force there.
+ * Without one every rate reads 0 and the engine prices any v9 term at nothing.
+ *
+ * @param {number} height - confirming block height
+ * @returns {Promise<boolean>}
+ * @throws {Error} while the price message history is not built: the question
+ *   has an answer this node cannot give yet
+ */
+async function pricedAt(height) {
+  const priceHistory = priceOracleState.getPriceMessageHistory();
+  if (!priceHistory) throw new Error('price message history is not built');
+  return pricesInForce(priceHistory, height);
 }
 
 /**
@@ -329,6 +348,7 @@ module.exports = {
   entitlementRefusal,
   onChainDisplayPrice,
   fiatAndFluxDisplayPrice,
+  pricedAt,
   registrationFee,
   termCost,
   updateFee,
