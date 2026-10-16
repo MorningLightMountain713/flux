@@ -134,6 +134,31 @@ async function openInstalledAppPorts() {
 }
 
 
+const iso = (value) => (value ? new Date(value).toISOString() : 'none');
+
+/**
+ * What this node held for its own address when it found no row placing it:
+ * each stored event and the address rules the derivation applied.
+ * @param {string} address
+ * @returns {Promise<string>}
+ */
+async function describePlacementEvidence(address) {
+  try {
+    const {
+      now, events, offList, returnedBefore, superseded,
+    } = await appsRepository.placementEvidence(address);
+    const held = events.length === 0 ? 'no events' : events.map((event) => {
+      const apps = event.type === 'apprunning' ? ` apps=[${(event.data?.apps ?? []).map((a) => a.name).join(',')}]` : '';
+      const app = event.data?.appName ? ` app=${event.data.appName}` : '';
+      const since = event.since ? ` since=${iso(event.since)}` : '';
+      return `${event.type} ${event.dedupKey} broadcastedAt=${iso(event.broadcastedAt)} expireAt=${iso(event.expireAt)} receivedAt=${iso(event.receivedAt)}${apps}${app}${since}`;
+    }).join('; ');
+    return `held for ${address} at now=${iso(now)}: ${held}; offList=${offList ? 'yes' : 'no'}; returned=${iso(returnedBefore)}; superseded=${superseded ? 'yes' : 'no'}`;
+  } catch (error) {
+    return `what this node holds for ${address} could not be read: ${error.message}`;
+  }
+}
+
 /**
  * Whether this node's own derived rows still place it: the one question a node
  * asks after its sync and before any announce. The rows a certificate negated
@@ -141,7 +166,8 @@ async function openInstalledAppPorts() {
  * never existed all answer no together. A locked-out node — four certifications
  * standing — is not placed whatever its rows say: the lockout's self-uninstall.
  * @param {string} localSocketAddr
- * @returns {Promise<{placed: boolean, why: string}>} `why` says what a no rests on
+ * @returns {Promise<{placed: boolean, why: string, lockedOut: boolean}>} `why`
+ *   says what a no rests on
  * @throws {Error} When the rows cannot be read.
  */
 async function readPlacement(localSocketAddr) {
@@ -149,9 +175,9 @@ async function readPlacement(localSocketAddr) {
     appsRepository.appLocationFromEvents({ ip: localSocketAddr }),
     nodeDownStore.lockoutForAddress(localSocketAddr),
   ]);
-  if (lockout.lockedOut) return { placed: false, why: `locked out (${lockout.count} certifications standing)` };
-  if (rows.length > 0) return { placed: true, why: '' };
-  return { placed: false, why: `no row places ${localSocketAddr} any more, the network has moved on` };
+  if (lockout.lockedOut) return { placed: false, why: `locked out (${lockout.count} certifications standing)`, lockedOut: true };
+  if (rows.length > 0) return { placed: true, why: '', lockedOut: false };
+  return { placed: false, why: `no row places ${localSocketAddr} any more, the network has moved on`, lockedOut: false };
 }
 
 /**
@@ -246,6 +272,7 @@ async function enforceNodePlacement(trigger) {
   }
   if (placement.placed) return { placed: true, removed: [], failed: [] };
 
+  if (!placement.lockedOut) log.warn(`appStartupManager - placement check (${trigger}): ${await describePlacementEvidence(localSocketAddr)}`);
   log.warn(`appStartupManager - placement check (${trigger}): ${placement.why}; removing ${installedApps.length} app(s), no broadcast`);
   return { placed: false, ...await removeUnplacedApps(installedApps) };
 }
