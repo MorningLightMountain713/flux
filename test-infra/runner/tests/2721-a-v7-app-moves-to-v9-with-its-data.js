@@ -2,7 +2,7 @@
 /*
  * A v7 app moves to v9 with its data.
  *
- * A v7 app whose component is `MyWeb`, its volume synced, runs on two hosts, each
+ * A v7 app whose component is `MyWeb`, its volume syncFirst, runs on two hosts, each
  * holding a marker in its data. Its owner moves it to v9 the way an owner does: a
  * node converts the app (GET /apps/appconvert), which lowercases the component to
  * `myweb` and continues it by `renamedFrom: "MyWeb"`; the owner adds the contact and
@@ -30,7 +30,9 @@ import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.
 import { appComponentIdentifier, appDataRoot, execInContainer, requireAppContainerName } from '../framework/container.js';
 import { getSyncthingState } from '../framework/syncthing-control.js';
 import { appView } from '../framework/app-view.js';
-import { waitFor, waitForDaemonReady, waitForInstallSettled } from '../framework/wait.js';
+import {
+  START_ACTIONS, waitFor, waitForDaemonReady, waitForInstallSettled, waitForReconcileActuated,
+} from '../framework/wait.js';
 import { nodeKey } from '../framework/keys.js';
 
 const NODES = 5;
@@ -53,7 +55,7 @@ describe('a v7 app moves to v9 with its data', function () {
 
   async function run(index, command) {
     const r = await execInContainer(env.clients[index].container, `sh -c '${command}'`);
-    return { ok: r.exitCode === 0, out: (r.stdout ?? '').trim() };
+    return { ok: r.exitCode === 0, out: (r.stdout ?? '').trim(), err: (r.stderr ?? r.output ?? '').trim() };
   }
 
   const identifierOn = (index, app, component) => appComponentIdentifier(env.clients[index].container, app.name, component);
@@ -71,8 +73,8 @@ describe('a v7 app moves to v9 with its data', function () {
   }
 
   // A v7 app as an owner registered one: its one component named with capitals, its
-  // volume synced, pinned to the hosts and the node that boots later. Every field a v7
-  // component carries is present, in its order: the signature is over this string.
+  // volume syncFirst, pinned to the hosts and the node that boots later. Every field a
+  // v7 component carries is present, in its order: the signature is over this string.
   async function registerV7(app) {
     await pushImage(app.name, 'v1');
     const base = buildAppSpec({
@@ -99,19 +101,29 @@ describe('a v7 app moves to v9 with its data', function () {
       nodes: targets.map((i) => `${ip(i)}:16127`),
     });
     const { enterprise, ...spec } = base;
+    const anchors = new Map(hosts.map((i) => [i, env.clients[i].getLastEventId()]));
     const registered = await registerAndConfirm(url(registrar), nodeKey(registrar), spec, env.clients.filter(Boolean));
     expect(registered.status, `${app.name}: the v7 registration is accepted: ${JSON.stringify(registered).slice(0, 300)}`).to.equal('success');
     Object.assign(app, { identity: registered.app.identity, view: appView(env, app.name, { component: LEGACY, timeout: CONVERGE_MS }) });
 
     await Promise.all(hosts.map((i) => waitForInstallSettled(env.clients[i], app.name, CONVERGE_MS)));
     app.installedAs = new Map();
+    // A syncFirst volume is cleared on its first install and its component started
+    // again; data written before that start is cleared with it.
+    await Promise.all(hosts.map(async (index) => {
+      let identifier = null;
+      await waitFor(async () => { identifier = await identifierOn(index, app, LEGACY); return identifier !== null; }, {
+        timeout: CONVERGE_MS, interval: 2000, label: `${app.name}: node ${index} has ${LEGACY}'s container`,
+      });
+      app.installedAs.set(index, identifier);
+      const cleared = await waitForReconcileActuated(env.clients[index], identifier, 'dataCleared', CONVERGE_MS, { afterId: anchors.get(index) });
+      await waitForReconcileActuated(env.clients[index], identifier, START_ACTIONS, CONVERGE_MS, { afterId: cleared.id });
+    }));
     // eslint-disable-next-line no-restricted-syntax
     for (const index of hosts) {
       // eslint-disable-next-line no-await-in-loop
-      app.installedAs.set(index, await identifierOn(index, app, LEGACY));
-      // eslint-disable-next-line no-await-in-loop
       const written = await run(index, `echo ${index} > ${await dataOf(index, app, LEGACY)}/marker-${index}`);
-      expect(written.ok, `${app.name}: node ${index} holds a marker in ${LEGACY}'s data`).to.equal(true);
+      expect(written.ok, `${app.name}: node ${index} holds a marker in ${LEGACY}'s data: ${written.err}`).to.equal(true);
     }
   }
 
