@@ -5,8 +5,8 @@ const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const domain = require('./fixtures/appDomain');
-const { loadSpecLibrary } = require('./fixtures/fluxSpec');
-const { installedRecord, stubLedgers } = require('./fixtures/appRecords');
+const { loadSpecLibrary, sealedV9Spec, instantiatedSpec } = require('./fixtures/fluxSpec');
+const { inMemoryInstalled, inMemoryLedgers } = require('./fixtures/appRecords');
 const { APP_VOLUME_MOUNT_OPTIONS } = require('../../ZelBack/src/services/utils/appConstants');
 
 chai.use(chaiAsPromised);
@@ -27,7 +27,7 @@ describe('volumeService tests', () => {
   let fsStub;
   let deviceHelperStub;
   let ledgersStub;
-  let appsRepositoryStub;
+  let installedStub;
   let logStub;
   let volumeService;
   let InstalledLedger;
@@ -81,10 +81,8 @@ describe('volumeService tests', () => {
       },
     };
     deviceHelperStub = { listMountedFilesystems: sinon.stub().resolves([]), listAllMounts: sinon.stub().resolves([]), mountForTarget: sinon.stub() };
-    appsRepositoryStub = {
-      getInstalledApp: sinon.stub().resolves(null),
-      listInstalledIdentities: sinon.stub().resolves([null]),
-    };
+    // No app is installed unless a test says so.
+    installedStub = { instancesOf: sinon.stub().resolves([]) };
     // The ledger names nothing unless a test says so.
     ledgersStub = { byIdentifier: sinon.stub().resolves(null) };
     logStub = {
@@ -108,10 +106,7 @@ describe('volumeService tests', () => {
       '../deviceHelper': deviceHelperStub,
       '../appDatabase/appRecords': {
         ledgers: () => ledgersStub,
-        installed: () => ({
-          byName: async (name) => installedRecord(await appsRepositoryStub.getInstalledApp(name)),
-          keys: async (name) => (await appsRepositoryStub.listInstalledIdentities(name)).map((replica) => ({ name, replica })),
-        }),
+        installed: () => installedStub,
       },
       fs: { promises: fsStub.promises },
     });
@@ -1228,21 +1223,29 @@ describe('volumeService tests', () => {
       source: '/dev/loop3', target, fstype: 'ext4', sizeBytes: 2e9, usedBytes: 1e9, availableBytes: 1e9, usePercent: 50,
     });
     const WEB = domain.submission().components.web;
+    const KEY = `c${'k'.repeat(51)}a`;
 
-    // The record appsRepository returns: an InstantiatedSpec, carrying the stored
-    // identity its volumes were named from.
-    const installed = async ({ spec, identity }) => domain.instantiatedSpec({
+    const registered = async ({ spec, identity }) => domain.instantiatedSpec({
       event: spec.version >= 9 ? await domain.confirmedEvent({ spec }) : await domain.legacyEvent({ spec }),
       identity,
     });
-    const installedMyapp = async (identity, components = { web: WEB }) => installed({
-      spec: await domain.v9Spec({ name: 'myapp', components }), identity,
+    const block = (identifier) => ({
+      identifier, image: { reference: 'img', digest: null }, hostPorts: [], volume: null, mountSources: [], syncFolder: null, aliases: [], mesh: null, tls: null,
     });
 
-    beforeEach(() => {
-      dockerServiceStub.getAppIdentifier.callsFake((id) => `flux${id}`);
-      // The real deployment names each component: no component recorded a name of its own.
-      stubLedgers();
+    let flux;
+    before(async () => { flux = await loadSpecLibrary(); });
+
+    // An instance as the node records it: its installed record, and the ledger
+    // naming what it created for each component key.
+    async function install(name, replica, { record, componentKeys = null, blocks }) {
+      await installedStub.put(new flux.InstalledSpec({ record, replica, componentKeys }));
+      await ledgersStub.put(new flux.InstalledLedger({ name, replica, components: blocks }));
+    }
+
+    beforeEach(async () => {
+      ({ installed: installedStub } = await inMemoryInstalled());
+      ({ ledgers: ledgersStub } = await inMemoryLedgers());
     });
 
     it('answers nothing for an app this node has not installed', async () => {
@@ -1251,8 +1254,9 @@ describe('volumeService tests', () => {
     });
 
     it('resolves each installed replica to its own mount', async () => {
-      appsRepositoryStub.getInstalledApp.resolves(await installedMyapp('myapp'));
-      appsRepositoryStub.listInstalledIdentities.resolves(['s1', 's2']);
+      const record = await registered({ spec: await domain.v9Spec({ name: 'myapp', components: { web: WEB } }), identity: 'myapp' });
+      await install('myapp', 's1', { record, blocks: { web: block('web_myapp_s1') } });
+      await install('myapp', 's2', { record, blocks: { web: block('web_myapp_s2') } });
       deviceHelperStub.listMountedFilesystems.resolves([
         mountRow(`${APPS_FOLDER}fluxweb_myapp_s1`),
         mountRow(`${APPS_FOLDER}fluxweb_myapp_s2`),
@@ -1260,44 +1264,87 @@ describe('volumeService tests', () => {
 
       const volumes = await volumeService.listComponentVolumeMounts('myapp', 'web');
 
-      expect(volumes.map((v) => v.replica)).to.deep.equal(['s1', 's2']);
-      expect(volumes.map((v) => v.mount)).to.deep.equal([
-        `${APPS_FOLDER}fluxweb_myapp_s1`, `${APPS_FOLDER}fluxweb_myapp_s2`,
+      expect(volumes.map((v) => [v.replica, v.identifier, v.mount])).to.have.deep.members([
+        ['s1', 'web_myapp_s1', `${APPS_FOLDER}fluxweb_myapp_s1`],
+        ['s2', 'web_myapp_s2', `${APPS_FOLDER}fluxweb_myapp_s2`],
       ]);
     });
 
-    // The identity is what the volumes were NAMED from, and it stops being the
-    // app's name the moment one is minted. Reading the app name instead finds
-    // nothing - which is the half of D16 the entry did not record.
-    it('reads the stored identity, not the app name', async () => {
-      appsRepositoryStub.getInstalledApp.resolves(await installedMyapp('a1b2c3'));
-      appsRepositoryStub.listInstalledIdentities.resolves([null]);
-      deviceHelperStub.listMountedFilesystems.resolves([
-        mountRow(`${APPS_FOLDER}fluxweb_a1b2c3`),
-        mountRow(`${APPS_FOLDER}fluxweb_myapp`),
-      ]);
+    it('finds a renamed component\'s volume by its key, and none by its former name', async () => {
+      const record = await registered({ spec: await domain.v9Spec({ name: 'myapp', components: { site: { ...WEB, name: 'site' } } }), identity: 'a1b2c3' });
+      await install('myapp', null, { record, componentKeys: new Map([['site', KEY]]), blocks: { [KEY]: block(`${KEY}_a1b2c3`) } });
+      deviceHelperStub.listMountedFilesystems.resolves([mountRow(`${APPS_FOLDER}flux${KEY}_a1b2c3`)]);
+
+      const volumes = await volumeService.listComponentVolumeMounts('myapp', 'site');
+
+      expect(volumes.map((v) => v.mount)).to.deep.equal([`${APPS_FOLDER}flux${KEY}_a1b2c3`]);
+      expect(await volumeService.listComponentVolumeMounts('myapp', 'web')).to.deep.equal([]);
+    });
+
+    it('finds a sealed app\'s volume from the record and the ledger alone', async () => {
+      const record = await instantiatedSpec(await sealedV9Spec({ name: 'myapp' }), { hash: 'h1', identity: 'a1b2c3' });
+      expect(record.isEncrypted, 'the record is sealed').to.equal(true);
+      await install('myapp', null, { record, componentKeys: new Map([['web', KEY]]), blocks: { [KEY]: block(`${KEY}_a1b2c3`) } });
+      deviceHelperStub.listMountedFilesystems.resolves([mountRow(`${APPS_FOLDER}flux${KEY}_a1b2c3`)]);
 
       const volumes = await volumeService.listComponentVolumeMounts('myapp', 'web');
 
-      expect(volumes).to.have.lengthOf(1);
-      expect(volumes[0].mount).to.equal(`${APPS_FOLDER}fluxweb_a1b2c3`);
+      expect(volumes.map((v) => v.mount)).to.deep.equal([`${APPS_FOLDER}flux${KEY}_a1b2c3`]);
+    });
+
+    it('answers no volume for a name that is no component, whatever the ledger holds', async () => {
+      const record = await registered({ spec: await domain.v9Spec({ name: 'myapp', components: { web: WEB } }), identity: 'myapp' });
+      await install('myapp', null, {
+        record,
+        componentKeys: new Map([['undefined', 'undefined'], ['web', 'web']]),
+        blocks: { undefined: block('undefined_myapp'), web: block('web_myapp') },
+      });
+      deviceHelperStub.listMountedFilesystems.resolves([mountRow(`${APPS_FOLDER}fluxundefined_myapp`)]);
+
+      expect(await volumeService.listComponentVolumeMounts('myapp', 'db')).to.deep.equal([]);
+    });
+
+    it('answers no volume for an instance whose ledger is not written yet', async () => {
+      const record = await registered({ spec: await domain.v9Spec({ name: 'myapp', components: { web: WEB } }), identity: 'myapp' });
+      await installedStub.put(new flux.InstalledSpec({ record, replica: null, componentKeys: new Map([['web', 'web']]) }));
+      deviceHelperStub.listMountedFilesystems.resolves([mountRow(`${APPS_FOLDER}fluxweb_myapp`)]);
+
+      expect(await volumeService.listComponentVolumeMounts('myapp', 'web')).to.deep.equal([]);
+    });
+
+    it('resolves a record that holds no keys by its components\' names', async () => {
+      const record = await registered({ spec: await domain.v9Spec({ name: 'myapp', components: { web: WEB } }), identity: 'myapp' });
+      await install('myapp', null, { record, blocks: { web: block('web_myapp') } });
+      deviceHelperStub.listMountedFilesystems.resolves([mountRow(`${APPS_FOLDER}fluxweb_myapp`)]);
+
+      expect((await volumeService.listComponentVolumeMounts('myapp', 'web')).map((v) => v.mount))
+        .to.deep.equal([`${APPS_FOLDER}fluxweb_myapp`]);
+    });
+
+    it("resolves a component named 'null' of a record that holds no keys to itself", async () => {
+      const record = await registered({ spec: await domain.v9Spec({ name: 'myapp', components: { null: { ...WEB, name: 'null' } } }), identity: 'myapp' });
+      await install('myapp', null, { record, blocks: { null: block('null_myapp') } });
+      deviceHelperStub.listMountedFilesystems.resolves([mountRow(`${APPS_FOLDER}fluxnull_myapp`)]);
+
+      expect((await volumeService.listComponentVolumeMounts('myapp', 'null')).map((v) => v.mount))
+        .to.deep.equal([`${APPS_FOLDER}fluxnull_myapp`]);
     });
 
     // A v1-3 app has no compose array and one implicit component, addressed as
     // the literal 'null' by every caller that speaks the v1 API.
     it("resolves a flat app addressed as the literal 'null' to its bare-identity mount", async () => {
-      appsRepositoryStub.getInstalledApp.resolves(await installed({ spec: await domain.v3Spec(), identity: null }));
-      appsRepositoryStub.listInstalledIdentities.resolves([null]);
+      const record = await registered({ spec: await domain.v3Spec(), identity: null });
+      await install('legacyapp', null, { record, componentKeys: new Map([['legacyapp', 'legacyapp']]), blocks: { legacyapp: block('legacyapp') } });
       deviceHelperStub.listMountedFilesystems.resolves([mountRow(`${APPS_FOLDER}fluxlegacyapp`)]);
 
       const volumes = await volumeService.listComponentVolumeMounts('legacyapp', 'null');
 
-      expect(volumes).to.have.lengthOf(1);
-      expect(volumes[0].mount).to.equal(`${APPS_FOLDER}fluxlegacyapp`);
+      expect(volumes.map((v) => v.mount)).to.deep.equal([`${APPS_FOLDER}fluxlegacyapp`]);
     });
 
     it("resolves a component named 'null' to itself, not to the app", async () => {
-      appsRepositoryStub.getInstalledApp.resolves(await installedMyapp('myapp', { null: { ...WEB, name: 'null' } }));
+      const record = await registered({ spec: await domain.v9Spec({ name: 'myapp', components: { null: { ...WEB, name: 'null' } } }), identity: 'myapp' });
+      await install('myapp', null, { record, componentKeys: new Map([['null', 'null']]), blocks: { null: block('null_myapp') } });
       deviceHelperStub.listMountedFilesystems.resolves([
         mountRow(`${APPS_FOLDER}fluxnull_myapp`),
         mountRow(`${APPS_FOLDER}fluxmyapp`),
@@ -1305,41 +1352,44 @@ describe('volumeService tests', () => {
 
       const volumes = await volumeService.listComponentVolumeMounts('myapp', 'null');
 
-      expect(volumes).to.have.lengthOf(1);
-      expect(volumes[0].mount).to.equal(`${APPS_FOLDER}fluxnull_myapp`);
+      expect(volumes.map((v) => v.mount)).to.deep.equal([`${APPS_FOLDER}fluxnull_myapp`]);
     });
 
-    it('refuses to guess when one directory name is mounted twice', async () => {
-      // Never last-wins. Two filesystems sharing a directory name break the
-      // assumption the lookup rests on, and every caller addresses real data.
-      appsRepositoryStub.getInstalledApp.resolves(await installedMyapp('myapp'));
-      deviceHelperStub.listMountedFilesystems.resolves([
-        mountRow(`${APPS_FOLDER}fluxweb_myapp`),
-        mountRow(`/elsewhere/fluxweb_myapp`),
-      ]);
+    describe('a mount the lookup cannot trust', () => {
+      beforeEach(async () => {
+        const record = await registered({ spec: await domain.v9Spec({ name: 'myapp', components: { web: WEB } }), identity: 'myapp' });
+        await install('myapp', null, { record, componentKeys: new Map([['web', 'web']]), blocks: { web: block('web_myapp') } });
+      });
 
-      await expect(volumeService.listComponentVolumeMounts('myapp', 'web'))
-        .to.be.rejectedWith(/mounted at both .* refusing to guess/);
-    });
+      it('refuses to guess when one directory name is mounted twice', async () => {
+        // Never last-wins. Two filesystems sharing a directory name break the
+        // assumption the lookup rests on, and every caller addresses real data.
+        deviceHelperStub.listMountedFilesystems.resolves([
+          mountRow(`${APPS_FOLDER}fluxweb_myapp`),
+          mountRow(`/elsewhere/fluxweb_myapp`),
+        ]);
 
-    it('refuses a mount carrying the identifier from outside the apps folder', async () => {
-      appsRepositoryStub.getInstalledApp.resolves(await installedMyapp('myapp'));
-      deviceHelperStub.listMountedFilesystems.resolves([mountRow('/elsewhere/fluxweb_myapp')]);
+        await expect(volumeService.listComponentVolumeMounts('myapp', 'web'))
+          .to.be.rejectedWith(/mounted at both .* refusing to guess/);
+      });
 
-      await expect(volumeService.listComponentVolumeMounts('myapp', 'web'))
-        .to.be.rejectedWith(/outside the apps folder/);
-    });
+      it('refuses a mount carrying the identifier from outside the apps folder', async () => {
+        deviceHelperStub.listMountedFilesystems.resolves([mountRow('/elsewhere/fluxweb_myapp')]);
 
-    // Containment is a directory, not a string prefix: a sibling whose name
-    // merely begins with the apps folder's is a different directory.
-    it('refuses a mount under a sibling directory sharing the apps folder prefix', async () => {
-      appsRepositoryStub.getInstalledApp.resolves(await installedMyapp('myapp'));
-      deviceHelperStub.listMountedFilesystems.resolves([
-        mountRow(`${APPS_FOLDER.replace(/\/$/, '')}-backup/fluxweb_myapp`),
-      ]);
+        await expect(volumeService.listComponentVolumeMounts('myapp', 'web'))
+          .to.be.rejectedWith(/outside the apps folder/);
+      });
 
-      await expect(volumeService.listComponentVolumeMounts('myapp', 'web'))
-        .to.be.rejectedWith(/outside the apps folder/);
+      // Containment is a directory, not a string prefix: a sibling whose name
+      // merely begins with the apps folder's is a different directory.
+      it('refuses a mount under a sibling directory sharing the apps folder prefix', async () => {
+        deviceHelperStub.listMountedFilesystems.resolves([
+          mountRow(`${APPS_FOLDER.replace(/\/$/, '')}-backup/fluxweb_myapp`),
+        ]);
+
+        await expect(volumeService.listComponentVolumeMounts('myapp', 'web'))
+          .to.be.rejectedWith(/outside the apps folder/);
+      });
     });
   });
 

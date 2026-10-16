@@ -307,15 +307,14 @@ async function eligibleHostMounts() {
  * Every mounted app volume on this node belonging to one component, tagged with
  * the identity that owns it.
  *
- * A co-located app mounts one volume per replica, so (app, component) stopped
- * naming a single thing — the replica rides on each row instead of being lost.
+ * A co-located app mounts one volume per replica, so (app, component) names one
+ * volume per installed instance, and the replica rides on each row.
  *
- * Derived FORWARD: the row states the app-identity its volumes were named from
- * and which replicas are installed here, so this builds the paths it expects and
- * looks them up. It used to walk the mount table and decode each directory name
- * back into an app and component, which asks a filesystem path to answer a
- * question only the app's row can — and stops working entirely once an identity
- * is no longer the app's name.
+ * Read off what the node recorded, never off the spec: each instance's
+ * installed record maps the component's current name to its key, and the
+ * instance's ledger holds the identifier its container and volume were created
+ * under for that key. A rename changes neither the key nor the ledger, and a
+ * sealed app is found without being opened.
  *
  * @param {string} appName
  * @param {string} componentName - the component, or the app name for the
@@ -325,14 +324,20 @@ async function eligibleHostMounts() {
  *   availableBytes: number, capacity: number}>>}
  */
 async function listComponentVolumeMounts(appName, componentName) {
-  const installed = await appRecords.installed().byName(appName);
-  if (!installed) return [];
+  const instances = await appRecords.installed().instancesOf(appName);
+  if (instances.length === 0) return [];
 
-  const component = deploymentProvider.componentNameFromRequest(
-    appName, componentName, Object.keys(installed.spec.components),
-  );
-
-  const replicas = (await appRecords.installed().keys(appName)).map((key) => key.replica);
+  const identifiers = await Promise.all(instances.map(async (install) => {
+    const ledger = await appRecords.ledgers().byInstance(appName, install.replica);
+    // A record holding no keys keys each component by its name, which is how
+    // its ledger names the blocks.
+    const names = install.componentKeys === null
+      ? Object.keys(ledger?.components ?? {})
+      : [...install.componentKeys.keys()];
+    const component = deploymentProvider.componentNameFromRequest(appName, componentName, names);
+    const key = install.componentKeys === null ? component : install.componentKeys.get(component);
+    return { replica: install.replica, identifier: (key === undefined ? null : ledger?.component(key)?.identifier) ?? null };
+  }));
 
   const filesystems = await deviceHelper.listMountedFilesystems();
   // Matched on the mount's own directory name, not on its full path: the apps
@@ -354,14 +359,6 @@ async function listComponentVolumeMounts(appName, componentName) {
     }
     byName.set(name, entry);
   }
-
-  // The deployment names each identity's component, so the identifier is
-  // asked of it rather than built here: a flat (v1-3) app's is its bare
-  // identity, a compose app's is built from the component's key.
-  const identifiers = await Promise.all(replicas.map(async (replica) => {
-    const deployment = await deploymentProvider.buildDeployment(installed, { replica });
-    return { replica, identifier: deployment.getComponent(component)?.identifier ?? null };
-  }));
 
   return identifiers.flatMap(({ replica, identifier }) => {
     if (identifier === null || !byName.has(dockerService.getAppIdentifier(identifier))) return [];
