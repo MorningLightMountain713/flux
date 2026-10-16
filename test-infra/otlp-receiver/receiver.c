@@ -18,8 +18,13 @@
  * this payload" case, which the daemon must drop rather than retry. Inert when
  * REJECT_SUBSTR is unset or absent from the body.
  *
+ * When BODY_DIR is set, each accepted body is also kept as
+ * <BODY_DIR>/<last path segment>.bin (logs.bin, metrics.bin), replaced by the
+ * next one on the same path, so a suite can look for a value it learns only
+ * after install.
+ *
  * Env: RECEIVER_PORT (default 4318), MARK1, MARK2, REJECT_SUBSTR (optional
- * substrings).
+ * substrings), BODY_DIR (optional).
  *
  * Compiled to a small static linux/amd64 binary (see build.sh) and pushed
  * as a single-layer image by registry-helper.pushOtlpReceiver.
@@ -31,6 +36,7 @@
 #include <strings.h>
 #include <unistd.h>
 #include <signal.h>
+#include <sys/stat.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 
@@ -39,11 +45,29 @@
 static const char *mark1;
 static const char *mark2;
 static const char *reject_substr;
+static const char *body_dir;
 
 static int contains(const char *body, size_t len, const char *needle)
 {
     if (!needle || !*needle || !body) return 0;
     return memmem(body, len, needle, strlen(needle)) != NULL;
+}
+
+/* Keep a body as <body_dir>/<last path segment>.bin. Written to a per-process
+ * temporary and renamed, so a reader never sees a partial body. */
+static void keep_body(const char *path, const char *body, long len)
+{
+    if (!body_dir || !body) return;
+    const char *slash = strrchr(path, '/');
+    const char *name = slash ? slash + 1 : path;
+    char tmp[1400], dst[1400];
+    snprintf(tmp, sizeof(tmp), "%s/.%s.%d", body_dir, name, (int)getpid());
+    snprintf(dst, sizeof(dst), "%s/%s.bin", body_dir, name);
+    FILE *f = fopen(tmp, "w");
+    if (!f) return;
+    size_t w = fwrite(body, 1, (size_t)len, f);
+    if (fclose(f) == 0 && w == (size_t)len) rename(tmp, dst);
+    else unlink(tmp);
 }
 
 /* Serve one connection: a loop of requests (HTTP/1.1 keep-alive). */
@@ -106,6 +130,7 @@ static void serve(int fd)
                          contains(body, (size_t)got, mark1),
                          contains(body, (size_t)got, mark2));
         if (n > 0) { ssize_t w = write(1, out, (size_t)n); (void)w; }
+        keep_body(path, body, got);
         free(body);
 
         const char *resp = "HTTP/1.1 200 OK\r\n"
@@ -126,6 +151,8 @@ int main(void)
     mark1 = getenv("MARK1");
     mark2 = getenv("MARK2");
     reject_substr = getenv("REJECT_SUBSTR");
+    body_dir = getenv("BODY_DIR");
+    if (body_dir) mkdir(body_dir, 0755);
     const char *portEnv = getenv("RECEIVER_PORT");
     int port = portEnv ? atoi(portEnv) : 4318;
 

@@ -119,6 +119,7 @@ const buildComponents = ({
       MARK1: LOG_MARKER,
       MARK2: appRepo,
       REJECT_SUBSTR: POISON_MARKER,
+      BODY_DIR: '/bodies',
     },
   },
 });
@@ -280,6 +281,37 @@ describe('flux-telemetryd e2e: the real daemon against real FluxOS on an Arcane-
     // mark2 = the app name riding the resource attributes.
     const attributed = await receiverLogGrep('OTLP-RECV path=/v1/metrics .*mark2=1');
     expect(attributed.stdout.trim(), 'metrics payload carries the app attribution').to.not.equal('');
+  });
+
+  it('attributes metrics and logs to the component by its identifier and identity', async function () {
+    this.timeout(120000);
+    const label = async (key) => (
+      await X(`docker inspect -f '{{index .Config.Labels "${key}"}}' ${webContainer}`)
+    ).stdout.trim();
+    const identifier = await label('io.runonflux.identifier');
+    const identity = await label('io.runonflux.identity');
+    expect(identifier, 'the web container carries its identifier label').to.not.equal('');
+    expect(identity, 'the web container carries its identity label').to.not.equal('');
+
+    // The collector keeps the last body it accepted on each path; OTLP carries
+    // attribute keys and string values as plain UTF-8.
+    const bodyHas = async (path, needle) => (
+      await X(`docker cp ${collectorContainer}:/bodies/${path}.bin - 2>/dev/null | grep -qaF -- '${needle}' && echo yes`)
+    ).stdout.trim() === 'yes';
+    for (const path of ['metrics', 'logs']) {
+      // eslint-disable-next-line no-await-in-loop
+      await waitFor(() => bodyHas(path, 'flux.identifier'), {
+        timeout: 90000, interval: 3000, label: `a ${path} body carrying flux.identifier`,
+      });
+      // eslint-disable-next-line no-await-in-loop
+      expect(await bodyHas(path, identifier), `${path} carry the web container's identifier`).to.equal(true);
+      // eslint-disable-next-line no-await-in-loop
+      expect(await bodyHas(path, 'flux.identity'), `${path} carry flux.identity`).to.equal(true);
+      // eslint-disable-next-line no-await-in-loop
+      expect(await bodyHas(path, identity), `${path} carry the app's identity`).to.equal(true);
+      // eslint-disable-next-line no-await-in-loop
+      expect(await bodyHas(path, 'flux.replica'), `a loose instance's ${path} carry no replica`).to.equal(false);
+    }
   });
 
   it('tails the container json-log and ships provoked log lines', async function () {
