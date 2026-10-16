@@ -86,7 +86,7 @@ async function materializeFoundingView(record) {
   try {
     const view = await specCutover.resolveInstantiatedSpec(record);
     if (view?.network?.mesh !== true) return;
-    const componentKeys = await componentKeyMap.keysForVersion(record);
+    const { componentKeys } = await componentKeyMap.namingForVersion(record);
     await foundingCommittee.applyComponentView({
       identity: record.identity,
       height: record.height,

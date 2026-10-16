@@ -1482,13 +1482,13 @@ async function stageContent(deployment, ctx, deps = {}) {
  * missing.
  *
  * @param {object} instance - the InstantiatedSpec the row stands on
- * @param {object} deps - { getInstalled?, keysForUpdate?, planDeployments?, registrationVersionOf?, stage? }
+ * @param {object} deps - { getInstalled?, namingForUpdate?, planDeployments?, registrationVersionOf?, stage? }
  * @returns {Promise<boolean>} whether the listed spec's content is in the store
  */
 async function prefetchListedContent(instance, deps = {}) {
   const {
     getInstalled = (name) => appRecords.installed().byName(name),
-    keysForUpdate = componentKeyMap.keysForUpdate,
+    namingForUpdate = componentKeyMap.namingForUpdate,
     planDeployments = deploymentProvider.planDeployments,
     registrationVersionOf = appHistory.registrationVersionOf,
     stage = stageContent,
@@ -1505,7 +1505,7 @@ async function prefetchListedContent(instance, deps = {}) {
     const deployments = await planDeployments(instance, {
       identity,
       registrationVersion: await registrationVersionOf(appName, uuid) ?? undefined,
-      componentKeys: await keysForUpdate(installed, instance),
+      componentKeys: (await namingForUpdate(installed, instance)).componentKeys,
     });
     // eslint-disable-next-line no-restricted-syntax
     for (const deployment of deployments) {

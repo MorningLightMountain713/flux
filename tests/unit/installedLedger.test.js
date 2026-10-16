@@ -334,10 +334,10 @@ describe('installedLedger', () => {
       sinon.assert.calledWithMatch(stubs.log.info, /2 of 2 installed instance\(s\) adopted a ledger/);
     });
 
-    it('keeps the component keys the node derived when it names an identity-less instance', async () => {
+    it('keeps the component keys and former names the node derived when it names an identity-less instance', async () => {
       const { installed, provider } = await inMemoryInstalled();
       await inMemoryLedgers();
-      await provider.insert(installed.constructor.STORE, [legacyRow((await v8Spec({ name: 'legacy' })).serialize(), { componentKeys: { web: 'web' } })]);
+      await provider.insert(installed.constructor.STORE, [legacyRow((await v8Spec({ name: 'legacy' })).serialize(), { componentKeys: { web: 'web' }, formerNames: { web: ['site'] } })]);
       await installed.completeDerivedFields();
       buildsRealDeployments();
       host.files.add('/dat/appvolumes/legacy');
@@ -347,6 +347,7 @@ describe('installedLedger', () => {
       const legacy = await installed.byReplica('legacy', null);
       expect(legacy.identity, 'the record was rewritten').to.equal('legacy');
       expect([...legacy.componentKeys]).to.deep.equal([['web', 'web']]);
+      expect(legacy.formerNamesOf('web')).to.deep.equal(['site']);
     });
 
     it('leaves an instance it cannot adopt as it is, says so, and adopts the rest', async () => {

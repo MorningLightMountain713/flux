@@ -1135,7 +1135,7 @@ describe('contentSlotService', () => {
     function prefetchDeps(overrides = {}) {
       return {
         getInstalled: async () => installedAt(EARLIER_SPEC_HASH),
-        keysForUpdate: sinon.stub().resolves(KEYS),
+        namingForUpdate: sinon.stub().resolves({ componentKeys: KEYS, formerNames: new Map() }),
         planDeployments: sinon.stub().resolves([slotDeployment]),
         registrationVersionOf: sinon.stub().resolves(9),
         stage: sinon.stub().resolves(1),
@@ -1152,7 +1152,7 @@ describe('contentSlotService', () => {
       expect(await service.prefetchListedContent(instance, deps)).to.equal(true);
 
       sinon.assert.calledOnceWithExactly(deps.registrationVersionOf, APP, 'uuid-app');
-      sinon.assert.calledOnceWithExactly(deps.keysForUpdate, installed, instance);
+      sinon.assert.calledOnceWithExactly(deps.namingForUpdate, installed, instance);
       sinon.assert.calledOnceWithExactly(deps.planDeployments, instance, { identity: IDENTITY, registrationVersion: 9, componentKeys: KEYS });
       sinon.assert.calledOnce(deps.stage);
       expect(deps.stage.firstCall.args[0]).to.equal(slotDeployment);

@@ -2118,9 +2118,10 @@ async function contentBlobServeApi(req, res) {
  * @param {object} oldDeployment - the installed view of this identity
  * @param {object} newDeployment - the listed spec's view of it
  * @param {object} registrySpec - the listed row
- * @param {Map<string, string>} componentKeys - the listed spec's component keys, as this node derived them
+ * @param {{componentKeys: Map<string, string>, formerNames: Map<string, string[]>}} naming - the
+ *   listed spec's component keys and former names, as this node derived them
  */
-async function reconcileComponents(appName, oldDeployment, newDeployment, registrySpec, componentKeys) {
+async function reconcileComponents(appName, oldDeployment, newDeployment, registrySpec, naming) {
   const byKey = (deployment) => new Map(deployment.componentEntries().map(([, comp]) => [comp.componentKey, comp]));
   const oldByKey = byKey(oldDeployment);
   const newByKey = byKey(newDeployment);
@@ -2228,7 +2229,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
     await appVolumeService.removeOrphanedInjectedContent(oldByKey.get(key), newByKey.get(key));
   }
 
-  await appRecords.installed().updateRecord(registrySpec, { componentKeys });
+  await appRecords.installed().updateRecord(registrySpec, naming);
   log.info(`Database updated for ${appName}`);
 
   // THIS identity's view of the update - handing a co-located sibling's view to
@@ -2238,7 +2239,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
     identity: newDeployment.identity ?? null,
     // A component the update adds is named by the registration.
     registrationVersion: await appHistory.registrationVersionOf(appName, registrySpec.uuid) ?? undefined,
-    componentKeys,
+    componentKeys: naming.componentKeys,
   };
   // A renamed component's container is recreated under its new name, so the
   // aliases the ledger recorded for it are its new name's, not its old ones.
@@ -2359,11 +2360,11 @@ async function reconcileApp(installed, registrySpec) {
   // app was installed with, or the diff's new side spells <component>_<appName>
   // and matches nothing (no component ever redeploys, and the row's identifier
   // list is rewritten wrong).
-  const componentKeys = await componentKeyMap.keysForUpdate(installed, registrySpec);
+  const naming = await componentKeyMap.namingForUpdate(installed, registrySpec);
   const newDeployments = await deploymentProvider.planDeployments(registrySpec, {
     identity: installed.identity ?? null,
     registrationVersion: await appHistory.registrationVersionOf(installed.name, installed.uuid) ?? undefined,
-    componentKeys,
+    componentKeys: naming.componentKeys,
   });
   if (oldDeployments.length === 0 || newDeployments.length === 0) return;
 
@@ -2388,7 +2389,7 @@ async function reconcileApp(installed, registrySpec) {
       const newDeployment = newByReplica.get(oldDeployment.replica ?? null);
       if (!newDeployment) continue;
       // eslint-disable-next-line no-await-in-loop
-      await reconcileComponents(installed.name, oldDeployment, newDeployment, registrySpec, componentKeys);
+      await reconcileComponents(installed.name, oldDeployment, newDeployment, registrySpec, naming);
     }
     log.info(`Application ${installed.name} reconciliation complete`);
   } catch (error) {

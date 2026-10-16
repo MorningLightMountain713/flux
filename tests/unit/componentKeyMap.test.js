@@ -49,7 +49,7 @@ describe('componentKeyMap', () => {
     sinon.restore();
   });
 
-  describe('keysForVersion', () => {
+  describe('namingForVersion', () => {
     it('replays the app\'s applied versions in order: a rename keeps the key, an added component mints one', async () => {
       sinon.stub(appHistory, 'appliedMessages').resolves([
         await applied(HX, { web: component('web') }, 'u-earlier-app'),
@@ -59,7 +59,7 @@ describe('componentKeyMap', () => {
       ]);
       const atRegistration = flux.componentKeysFor(await specWith({ web: component('web') }), { previous: null, appIdentity: IDENTITY, messageHash: H1 });
 
-      const keys = await componentKeyMap.keysForVersion(await registered(H2, { frontend: component('frontend', 'web'), db: component('db') }));
+      const { componentKeys: keys } = await componentKeyMap.namingForVersion(await registered(H2, { frontend: component('frontend', 'web'), db: component('db') }));
 
       expect([...keys.keys()]).to.have.members(['frontend', 'db']);
       expect(keys.get('frontend'), 'the renamed component keeps the key the registration minted').to.equal(atRegistration.get('web'));
@@ -73,8 +73,9 @@ describe('componentKeyMap', () => {
         await applied(H2, { site: component('site', 'web'), web: component('web') }),
       ]);
       const atRegistration = flux.componentKeysFor(await specWith({ web: component('web') }), { previous: null, appIdentity: IDENTITY, messageHash: H1 });
-      const keys = await componentKeyMap.keysForVersion(await registered(H1, { web: component('web') }, 'fluxappregister'));
-      expect([...keys]).to.deep.equal([['web', atRegistration.get('web')]]);
+      const naming = await componentKeyMap.namingForVersion(await registered(H1, { web: component('web') }, 'fluxappregister'));
+      expect([...naming.componentKeys]).to.deep.equal([['web', atRegistration.get('web')]]);
+      expect([...naming.formerNames]).to.deep.equal([]);
     });
 
     it('keys a version whose decision is not stored yet from the versions applied before it', async () => {
@@ -84,23 +85,21 @@ describe('componentKeyMap', () => {
       ]);
       const atRegistration = flux.componentKeysFor(await specWith({ web: component('web') }), { previous: null, appIdentity: IDENTITY, messageHash: H1 });
 
-      const keys = await componentKeyMap.keysForVersion(await registered(H2, { site: component('site', 'web'), db: component('db') }));
+      const { componentKeys: keys } = await componentKeyMap.namingForVersion(await registered(H2, { site: component('site', 'web'), db: component('db') }));
 
       expect([...keys.keys()]).to.have.members(['site', 'db']);
       expect(keys.get('site'), 'the renamed component keeps the key the registration minted').to.equal(atRegistration.get('web'));
       expect(flux.isComponentKey(keys.get('db'))).to.equal(true);
     });
-  });
 
-  describe('formerNamesForVersion', () => {
-    it('gives each component every name its key held before, once each, in the order it held them', async () => {
+    it('gives each component the names its key held before, in the order it last held them', async () => {
       sinon.stub(appHistory, 'appliedMessages').resolves([
         await applied(H1, { web: component('web'), db: component('db') }),
         await applied(H2, { site: component('site', 'web'), db: component('db') }),
         await applied(H3, { web: component('web', 'site'), db: component('db') }),
       ]);
-      const names = await componentKeyMap.formerNamesForVersion(await registered(HX, { www: component('www', 'web'), db: component('db') }));
-      expect([...names]).to.have.deep.members([['www', ['web', 'site']], ['db', []]]);
+      const { componentKeys, formerNames } = await componentKeyMap.namingForVersion(await registered(HX, { www: component('www', 'web'), db: component('db') }));
+      expect([...formerNames]).to.deep.equal([[componentKeys.get('www'), ['site', 'web']]]);
     });
 
     it('gives a re-added name nothing of the component that held it before', async () => {
@@ -108,23 +107,38 @@ describe('componentKeyMap', () => {
         await applied(H1, { web: component('web') }),
         await applied(H2, { site: component('site', 'web') }),
       ]);
-      const names = await componentKeyMap.formerNamesForVersion(await registered(H3, { site: component('site'), web: component('web') }));
-      expect([...names]).to.have.deep.members([['site', ['web']], ['web', []]]);
+      const { componentKeys, formerNames } = await componentKeyMap.namingForVersion(await registered(H3, { site: component('site'), web: component('web') }));
+      expect([...formerNames]).to.deep.equal([[componentKeys.get('site'), ['web']]]);
     });
   });
 
-  describe('keysForUpdate', () => {
-    it('carries the installed record\'s keys onto the update: a rename keeps its key', async () => {
+  describe('namingForUpdate', () => {
+    const KEY = `c${'b'.repeat(51)}a`;
+
+    it('carries the installed record\'s keys onto the update: a rename keeps its key and gains its former name', async () => {
+      const appliedMessages = sinon.stub(appHistory, 'appliedMessages').rejects(new Error('the history is not read'));
       const install = new flux.InstalledSpec({
-        record: await registered(H1, { web: component('web') }, 'fluxappregister'), componentKeys: new Map([['web', `c${'b'.repeat(51)}a`]]),
+        record: await registered(H1, { web: component('web') }, 'fluxappregister'), componentKeys: new Map([['web', KEY]]),
       });
-      const keys = await componentKeyMap.keysForUpdate(install, await registered(H2, { frontend: component('frontend', 'web') }));
-      expect([...keys]).to.deep.equal([['frontend', `c${'b'.repeat(51)}a`]]);
+      const naming = await componentKeyMap.namingForUpdate(install, await registered(H2, { frontend: component('frontend', 'web') }));
+      expect([...naming.componentKeys]).to.deep.equal([['frontend', KEY]]);
+      expect([...naming.formerNames]).to.deep.equal([[KEY, ['web']]]);
+      expect(appliedMessages.called).to.equal(false);
+    });
+
+    it('carries the installed record\'s former names through an update that renames nothing', async () => {
+      const install = new flux.InstalledSpec({
+        record: await registered(H1, { frontend: component('frontend') }),
+        componentKeys: new Map([['frontend', KEY]]),
+        formerNames: new Map([[KEY, ['web']]]),
+      });
+      const naming = await componentKeyMap.namingForUpdate(install, await registered(H2, { frontend: component('frontend'), db: component('db') }));
+      expect([...naming.formerNames]).to.deep.equal([[KEY, ['web']]]);
     });
 
     it('keys a record stored before keys by the names its components run under', async () => {
       const install = new flux.InstalledSpec({ record: await registered(H1, { web: component('web') }, 'fluxappregister') });
-      const keys = await componentKeyMap.keysForUpdate(install, await registered(H2, { web: component('web'), db: component('db') }));
+      const { componentKeys: keys } = await componentKeyMap.namingForUpdate(install, await registered(H2, { web: component('web'), db: component('db') }));
       expect(keys.get('web'), 'a component the node already runs keeps its name as its key').to.equal('web');
       const minted = flux.componentKeysFor(await specWith({ web: component('web'), db: component('db') }), {
         previous: new Map([['web', 'web']]), appIdentity: IDENTITY, messageHash: H2,

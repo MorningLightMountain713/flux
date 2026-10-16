@@ -149,7 +149,7 @@ async function putRecord(installed, fields) {
   const { InstalledSpec, InstantiatedSpec } = specLibrary.loaded();
   const registered = InstantiatedSpec.deserialize({ ...installed.record.serialize(), ...fields }, { chain: nodeChain() });
   await appRecords.installed().put(new InstalledSpec({
-    record: registered, replica: installed.replica, owed: installed.owed, componentKeys: installed.componentKeys,
+    record: registered, replica: installed.replica, owed: installed.owed, componentKeys: installed.componentKeys, formerNames: installed.formerNames,
   }));
 }
 

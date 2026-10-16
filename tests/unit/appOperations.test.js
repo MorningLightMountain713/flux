@@ -2167,6 +2167,7 @@ describe('appOperations tests', () => {
 
     /** Each component's key in a deployment, by name: what the update carries. */
     const keysOf = (deployment) => new Map(deployment.componentEntries().map(([, comp]) => [comp.name, comp.componentKey]));
+    const namingOf = (deployment, formerNames = new Map()) => ({ componentKeys: keysOf(deployment), formerNames });
 
     /** The registry side of a reconcile is an InstantiatedSpec (a hydrated row). */
     let registrySpec;
@@ -2182,14 +2183,15 @@ describe('appOperations tests', () => {
       const oldDeployment = await makeDeployment({ hostPorts: [80, 443], storage: 5 });
       const newDeployment = await makeDeployment({ hostPorts: [443, 8080], storage: 10 });
 
-      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+      const formerNames = new Map([['web', ['site']]]);
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment, formerNames));
 
       expect(uninstallComponentStub.calledWith(sinon.match.any, sinon.match({ skipPorts: true })), 'teardown skips ports').to.be.true;
       expect(denyPortsStub.calledOnceWith([{ port: 80, opened: ['ufw', 'upnp'] }], 'myapp'), 'closes only the dropped port, by the methods it was opened with').to.be.true;
       expect(openHostPortsStub.calledOnceWith([8080], 'myapp'), 'opens only the added port').to.be.true;
       // The registry record is what every instance's record becomes, with the
-      // component keys the update carries.
-      sinon.assert.calledOnceWithExactly(stubInstalled().updateRecord, registrySpec, { componentKeys: keysOf(newDeployment) });
+      // component keys and former names the update carries.
+      sinon.assert.calledOnceWithExactly(stubInstalled().updateRecord, registrySpec, { componentKeys: keysOf(newDeployment), formerNames });
 
       // The uninstaller stays stubbed: assert the component it was handed carries
       // the two fields the real teardown reads off it (container name, port set).
@@ -2215,13 +2217,13 @@ describe('appOperations tests', () => {
       deploymentProvider.getInstalledDeployments.resolves([]);
       deploymentProvider.planDeployments.resolves([]);
       const keys = new Map([['web', `c${'k'.repeat(52)}`]]);
-      sinon.stub(componentKeyMap, 'keysForUpdate').resolves(keys);
+      sinon.stub(componentKeyMap, 'namingForUpdate').resolves({ componentKeys: keys, formerNames: new Map() });
       const installed = { name: 'myapp', uuid: 'u-myapp', identity: 'idmyapp' };
 
       await appOperations.reconcileApp(installed, registrySpec);
 
       sinon.assert.calledOnceWithExactly(appHistory.registrationVersionOf, 'myapp', 'u-myapp');
-      sinon.assert.calledOnceWithExactly(componentKeyMap.keysForUpdate, installed, registrySpec);
+      sinon.assert.calledOnceWithExactly(componentKeyMap.namingForUpdate, installed, registrySpec);
       sinon.assert.calledOnceWithExactly(deploymentProvider.planDeployments, registrySpec, { identity: 'idmyapp', registrationVersion: 9, componentKeys: keys });
     });
 
@@ -2237,7 +2239,7 @@ describe('appOperations tests', () => {
       expect(oldDeployment.getComponent('web').requiresDaemonShutdown()).to.be.true;
       expect(oldDeployment.getComponent('web').equals(newDeployment.getComponent('web')), 'the component must read as changed').to.be.false;
 
-      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
 
       expect(beginAppStop.calledOnce, 'the daemon owns the graceful stop').to.be.true;
       const [identity, app, reason, opts] = beginAppStop.firstCall.args;
@@ -2256,7 +2258,7 @@ describe('appOperations tests', () => {
       const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, cpu: 0.7 });
       expect(oldDeployment.getComponent('web').requiresDaemonShutdown(), 'no shutdown/preStop/drain declared').to.be.false;
 
-      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
 
       expect(beginAppStop.called, 'docker SIGTERM+grace IS this component contract').to.be.false;
       expect(uninstallComponentStub.calledWith(sinon.match.any, sinon.match({ stopHandled: true }))).to.be.false;
@@ -2270,7 +2272,7 @@ describe('appOperations tests', () => {
       const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
       const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
 
-      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
 
       expect(uninstallComponentStub.called, 'an unchanged component must not be torn down').to.be.false;
       expect(denyPortsStub.called, 'and its ports must not move').to.be.false;
@@ -2295,7 +2297,7 @@ describe('appOperations tests', () => {
         setup();
         const { oldDeployment, newDeployment } = await update({}, { cpu: 0.7 });
 
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
 
         sinon.assert.calledOnceWithExactly(stageContentStub, newDeployment, { appName: 'myapp' });
         sinon.assert.calledOnce(uninstallComponentStub);
@@ -2307,7 +2309,7 @@ describe('appOperations tests', () => {
         const { oldDeployment, newDeployment } = await update({}, { cpu: 0.7 });
         stageContentStub.rejects(new Error('contentBlob: no source for sha256:x'));
 
-        const failure = await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment)).then(() => null, (error) => error);
+        const failure = await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment)).then(() => null, (error) => error);
 
         expect(failure?.message).to.match(/no source/);
         sinon.assert.notCalled(uninstallComponentStub);
@@ -2320,7 +2322,7 @@ describe('appOperations tests', () => {
         setup();
         const { oldDeployment, newDeployment } = await update({}, { cpu: 0.7 });
 
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
 
         sinon.assert.calledOnceWithExactly(provisionContentSlotsStub, newDeployment, { appName: 'myapp', created: ['web'] });
         expect(provisionContentSlotsStub.calledAfter(installComponent)).to.equal(true);
@@ -2330,7 +2332,7 @@ describe('appOperations tests', () => {
         setup();
         const { oldDeployment, newDeployment } = await update({}, {});
 
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
 
         sinon.assert.notCalled(installComponent);
         sinon.assert.calledOnceWithExactly(provisionContentSlotsStub, newDeployment, { appName: 'myapp', created: [] });
@@ -2341,7 +2343,7 @@ describe('appOperations tests', () => {
         const { oldDeployment, newDeployment } = await update({}, { cpu: 0.7 });
         provisionContentSlotsStub.rejects(new Error('contentSlot: no manifest covering every declared slot'));
 
-        const failure = await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment)).then(() => null, (error) => error);
+        const failure = await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment)).then(() => null, (error) => error);
 
         expect(failure?.message).to.match(/covering every declared slot/);
       });
@@ -2357,7 +2359,7 @@ describe('appOperations tests', () => {
         const newDeployment = await makeDeployment({ hostPorts: [80], ...newShape }, { identity: IDENTITY });
         deploymentProvider.planDeployment.resolves(newDeployment);
         installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
         return newDeployment.getComponent('web');
       }
 
@@ -2403,7 +2405,7 @@ describe('appOperations tests', () => {
         deploymentProvider.planDeployment.resolves(newDeployment);
         installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
 
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
 
         sinon.assert.calledOnce(installComponent);
         sinon.assert.notCalled(ensureSourcesStub);
@@ -2421,7 +2423,7 @@ describe('appOperations tests', () => {
         const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, ...newShape }, { identity: IDENTITY, ...depOpts });
         deploymentProvider.planDeployment.resolves(newDeployment);
 
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
       }
 
       it('is pushed under the app\'s identity for an app that stops through the daemon, and none is deleted', async () => {
@@ -2466,7 +2468,7 @@ describe('appOperations tests', () => {
         sinon.stub(fluxShutdowndClient, 'upsertAppPlanBestEffort').resolves();
         sinon.stub(fluxShutdowndClient, 'deleteAppPlanBestEffort').resolves();
         sinon.stub(appReconciler, 'enqueueApp');
-        sinon.stub(componentKeyMap, 'keysForUpdate').resolves(keysOf(newDeployment));
+        sinon.stub(componentKeyMap, 'namingForUpdate').resolves(namingOf(newDeployment));
         expect(registrySpec.owner, 'the fixture names two owners').to.not.equal(SELLER);
 
         await appOperations.reconcileApp({
@@ -2477,7 +2479,7 @@ describe('appOperations tests', () => {
       it('recreates no container, and the installed record takes the buyer', async () => {
         await adoptSale();
 
-        sinon.assert.calledOnceWithExactly(stubInstalled().updateRecord, registrySpec, { componentKeys: new Map([['web', 'web']]) });
+        sinon.assert.calledOnceWithExactly(stubInstalled().updateRecord, registrySpec, { componentKeys: new Map([['web', 'web']]), formerNames: new Map() });
         sinon.assert.notCalled(uninstallComponentStub);
         sinon.assert.notCalled(installComponent);
         expect(denyPortsStub.called, 'its ports do not move').to.be.false;
@@ -2506,7 +2508,7 @@ describe('appOperations tests', () => {
       const oldDeployment = await makeDeployment({ hostPorts: [80, 443], storage: 5 });
       const newDeployment = await makeDeployment({ hostPorts: [443, 8080], storage: 10 });
 
-      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
 
       sinon.assert.calledOnceWithExactly(ledgers.byInstance, 'myapp', null);
       sinon.assert.calledOnceWithExactly(ledgers.setComponent, 'myapp', null, 'web', 'hostPorts', [
@@ -2522,7 +2524,7 @@ describe('appOperations tests', () => {
       const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
       const newDeployment = await makeDeployment({ hostPorts: [80, 81], storage: 5 });
 
-      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
 
       sinon.assert.calledOnceWithExactly(ledgers.setComponent, 'myapp', null, 'web', 'hostPorts', [
         { port: 80, opened: ['ufw'] }, { port: 81, opened: ['ufw'] },
@@ -2539,7 +2541,7 @@ describe('appOperations tests', () => {
         web: { ports: { p80: { containerPort: 80, hostPort: 80 } } },
       }));
 
-      await appOperations.reconcileComponents('myapp', both, webOnly, registrySpec, keysOf(webOnly));
+      await appOperations.reconcileComponents('myapp', both, webOnly, registrySpec, namingOf(webOnly));
 
       sinon.assert.calledOnceWithExactly(ledgers.removeComponent, 'myapp', null, 'db');
       const dbTeardown = uninstallComponentStub.getCalls().find((c) => c.args[0].name === 'db');
@@ -2554,7 +2556,7 @@ describe('appOperations tests', () => {
       const oldDeployment = await makeDeployment({ hostPorts: [80, 443], storage: 5 });
       const newDeployment = await makeDeployment({ hostPorts: [443, 8080], storage: 10 });
 
-      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
 
       expect(teardownOwedForStub.calledWith('myapp')).to.be.true;
       expect(openHostPortsStub.called, 'a raced cancel must skip the port-open (no orphaned rules)').to.be.false;
@@ -2592,7 +2594,7 @@ describe('appOperations tests', () => {
         const newDeployment = await keyed('site', KEY);
         deploymentProvider.planDeployment.resolves(newDeployment);
 
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
 
         sinon.assert.calledOnce(uninstallComponentStub);
         const [torn, tornOpts] = uninstallComponentStub.firstCall.args;
@@ -2617,7 +2619,7 @@ describe('appOperations tests', () => {
         const newDeployment = await keyed('site', KEY);
         deploymentProvider.planDeployment.resolves(newDeployment);
 
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
 
         const derived = deploymentProvider.planDeployment.getCalls().find((call) => call.args[1].recordedNames === false);
         expect(derived, 'the new name\'s aliases are derived, not read from the ledger').to.not.equal(undefined);
@@ -2633,7 +2635,7 @@ describe('appOperations tests', () => {
         const newDeployment = await keyed('web', KEY, { cpu: 0.7 });
         deploymentProvider.planDeployment.resolves(newDeployment);
 
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
 
         sinon.assert.calledOnce(installComponent);
         expect(ledgers.setComponent.getCalls().some((call) => call.args[3] === 'aliases')).to.equal(false);
@@ -2645,7 +2647,7 @@ describe('appOperations tests', () => {
         const newDeployment = await keyed('web', OTHER_KEY);
         deploymentProvider.planDeployment.resolves(newDeployment);
 
-        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, keysOf(newDeployment));
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
 
         sinon.assert.calledOnce(uninstallComponentStub);
         const [torn, tornOpts] = uninstallComponentStub.firstCall.args;

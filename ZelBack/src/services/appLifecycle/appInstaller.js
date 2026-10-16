@@ -197,8 +197,8 @@ async function attemptInstallApplication(instantiated, options = {}) {
     // The version the app was registered with names its components: read once,
     // from the registration message, for every view this install provisions from.
     const registrationVersion = await appHistory.registrationVersionOf(appName, instantiated.uuid) ?? undefined;
-    // The keys of the version installed, from the app's applied history.
-    const componentKeys = await componentKeyMap.keysForVersion(instantiated);
+    // The keys and former names of the version installed, from the app's applied history.
+    const { componentKeys, formerNames } = await componentKeyMap.namingForVersion(instantiated);
     deployment = await deploymentProvider.planDeployment(instantiated, { replica, registrationVersion, componentKeys });
     // Check resources and reserve them atomically: two concurrent installs of
     // different apps must not both pass before either is accounted (the in-flight
@@ -278,7 +278,9 @@ async function attemptInstallApplication(instantiated, options = {}) {
     // to create. A stale pair for the SAME identity is replaced; a co-located
     // sibling's is a different key entirely and is never touched.
     const { InstalledSpec, InstalledLedger } = specLibrary.loaded();
-    await appRecords.installed().put(new InstalledSpec({ record: instantiated, replica: replica ?? null, componentKeys }));
+    await appRecords.installed().put(new InstalledSpec({
+      record: instantiated, replica: replica ?? null, componentKeys, formerNames,
+    }));
     await appRecords.ledgers().put(new InstalledLedger({ name: appName, replica: replica ?? null }));
     log.info(`Database entry created for ${appName} BEFORE Docker container creation`);
     // Now counted by appsResources (it is in the DB); drop the pending reservation

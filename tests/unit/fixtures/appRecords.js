@@ -228,15 +228,18 @@ async function inMemoryManifests() {
  * real InstalledSpec when the record is a real InstantiatedSpec, else a
  * stand-in with the same shape over a plain object.
  * @param {object|null} record - an InstantiatedSpec, a plain stand-in, or null
- * @param {{replica?: string|null, owed?: object|null, componentKeys?: Map<string, string>|null}} [own]
+ * @param {{replica?: string|null, owed?: object|null, componentKeys?: Map<string, string>|null,
+ *   formerNames?: Map<string, string[]>}} [own]
  * @returns {object|null}
  */
-function installedRecord(record, { replica = null, owed = null, componentKeys = null } = {}) {
+function installedRecord(record, {
+  replica = null, owed = null, componentKeys = null, formerNames = new Map(),
+} = {}) {
   if (!record) return null;
   const { InstalledSpec, InstantiatedSpec } = specLibrary.loaded();
   if (record instanceof InstantiatedSpec) {
     return new InstalledSpec({
-      record, replica, owed, componentKeys,
+      record, replica, owed, componentKeys, formerNames,
     });
   }
   // A plain row answers serialize() as a registered record does.
@@ -247,6 +250,9 @@ function installedRecord(record, { replica = null, owed = null, componentKeys = 
     record: registered,
     replica,
     owed,
+    componentKeys,
+    formerNames,
+    formerNamesOf: (name) => [...(formerNames.get(componentKeys === null ? name : componentKeys.get(name)) ?? [])],
     spec: record.spec,
     name: record.name,
     identity: record.identity ?? null,

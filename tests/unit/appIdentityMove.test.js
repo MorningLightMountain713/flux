@@ -77,7 +77,7 @@ describe('appIdentityMove tests', () => {
   // fields, the registered record beneath them.
   function rowView(row) {
     return {
-      ...row, record: { ...row, serialize: () => ({ ...row }) }, owed: null, componentKeys: row.componentKeys ?? null,
+      ...row, record: { ...row, serialize: () => ({ ...row }) }, owed: null, componentKeys: row.componentKeys ?? null, formerNames: row.formerNames ?? new Map(),
     };
   }
 
@@ -294,13 +294,14 @@ describe('appIdentityMove tests', () => {
       expect(indexOf('byReplica')).to.equal(-1);
     });
 
-    it('keeps the component keys the node derived when it rewrites the row', async () => {
+    it('keeps the component keys and former names the node derived when it rewrites the row', async () => {
       const keys = new Map([[NAME, NAME]]);
-      seedRunningUnderName(NAME, { componentKeys: keys });
+      seedRunningUnderName(NAME, { componentKeys: keys, formerNames: new Map([[NAME, ['old']]]) });
 
       await appIdentityMove.moveInstalledAppsOntoIdentity();
 
       expect(lastPut.componentKeys).to.equal(keys);
+      expect([...lastPut.formerNames]).to.deep.equal([[NAME, ['old']]]);
       expect(calls[indexOf('planDeployment')][2].componentKeys, 'the view under the identity is keyed as installed').to.deep.equal(keys);
     });
 
