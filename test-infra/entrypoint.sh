@@ -186,7 +186,7 @@ if [ "$FLUX_SYSTEMD_MODE" = "true" ]; then
 
   cp /flux/test-infra/systemd/*.service /flux/test-infra/systemd/*.slice /etc/systemd/system/
   mkdir -p /etc/systemd/system/multi-user.target.wants
-  ln -sf /etc/systemd/system/dockerd.service /etc/systemd/system/multi-user.target.wants/dockerd.service
+  ln -sf /etc/systemd/system/docker.service /etc/systemd/system/multi-user.target.wants/docker.service
   ln -sf /etc/systemd/system/fluxos.service /etc/systemd/system/multi-user.target.wants/fluxos.service
   if [ -n "$FLUX_SYNCTHING_HOST" ]; then
     ln -sf /etc/systemd/system/syncthing-forward.service /etc/systemd/system/multi-user.target.wants/syncthing-forward.service
@@ -211,6 +211,10 @@ if [ "$FLUX_SYSTEMD_MODE" = "true" ]; then
   # (EINVAL on overlay-on-overlay). Masked, dockerd spawns its own
   # containerd under the data-root, exactly like the default mode.
   ln -sf /dev/null /etc/systemd/system/containerd.service
+  # The harness's docker.service (copied above) replaces the packaged one and
+  # listens on its own socket; the packaged socket unit would hold that socket
+  # and hand docker.service a listener it was not started for.
+  ln -sf /dev/null /etc/systemd/system/docker.socket
 
   # The Arcane docker data-root on a real xfs+prjquota filesystem: docker's
   # overlay2 cannot back onto the container's own overlayfs, so the fs is a

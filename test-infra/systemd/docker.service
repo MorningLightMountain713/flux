@@ -1,8 +1,11 @@
 [Unit]
+# Named as on an Arcane node, so every unit ordered after docker.service is
+# ordered after this one, and it is ready only once dockerd says so.
 Description=Inner Docker daemon (harness node, systemd mode)
 After=network.target
 
 [Service]
+Type=notify
 ExecStartPre=/bin/rm -f /var/run/docker.pid
 # No flags: /etc/docker/daemon.json (written by the entrypoint's systemd
 # branch, Arcane shape) owns the configuration — dockerd refuses the same

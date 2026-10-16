@@ -3,8 +3,8 @@
 # with `journalctl -u fluxos`, so the harness unit must carry the same name
 # as the production one.
 Description=FluxOS (harness node, systemd mode)
-After=dockerd.service
-Wants=dockerd.service
+After=docker.service
+Wants=docker.service
 
 [Service]
 WorkingDirectory=/flux
