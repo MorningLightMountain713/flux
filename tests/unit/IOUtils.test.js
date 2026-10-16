@@ -5,7 +5,8 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 
 const { expect } = require('chai');
 const sinon = require('sinon');
-const { stubInstalled, stubLedgers, installedRecord } = require('./fixtures/appRecords');
+const { inMemoryInstalled, inMemoryLedgers } = require('./fixtures/appRecords');
+const { loadSpecLibrary } = require('./fixtures/fluxSpec');
 const path = require('node:path');
 
 const IOUtils = require('../../ZelBack/src/services/IOUtils');
@@ -40,7 +41,7 @@ describe('IOUtils getVolumeInfo tests', () => {
 
   let listStub;
 
-  // The installed records appsRepository returns: pre-mint apps, whose identity is
+  // The installed apps' registered records: pre-mint apps, whose identity is
   // their own name - a v9 app with two components, and a flat v3 app.
   const installedApps = new Map();
   before(async () => {
@@ -57,15 +58,21 @@ describe('IOUtils getVolumeInfo tests', () => {
     installedApps.set('singleapp', await domain.instantiatedSpec({ event: await domain.legacyEvent({ spec: singleapp }) }));
   });
 
-  beforeEach(() => {
+  // Each instance as the node records it: its installed record, and the ledger
+  // naming the identifier it created for each component, which names the volume.
+  const block = (identifier) => ({
+    identifier, image: { reference: 'img', digest: null }, hostPorts: [], volume: null, mountSources: [], syncFolder: null, aliases: [], mesh: null, tls: null,
+  });
+
+  beforeEach(async () => {
     listStub = sinon.stub(deviceHelper, 'listMountedFilesystems').resolves(filesystems);
-    // Volume paths are now built FORWARD from the app's stored identity rather
-    // than decoded back out of the mount table. These fixtures are pre-mint apps,
-    // whose identity is their own name.
-    stubInstalled().byName.callsFake(async (name) => installedRecord(installedApps.get(name) ?? null));
-    stubInstalled().keys.callsFake(async (name) => [{ name, replica: null }]);
-    // No component recorded a name of its own: each is named by its deployment.
-    stubLedgers();
+    const { InstalledSpec, InstalledLedger } = await loadSpecLibrary();
+    const { installed } = await inMemoryInstalled();
+    const { ledgers } = await inMemoryLedgers();
+    await installed.put(new InstalledSpec({ record: installedApps.get('myapp') }));
+    await ledgers.put(new InstalledLedger({ name: 'myapp', replica: null, components: { web: block('web_myapp'), db: block('db_myapp') } }));
+    await installed.put(new InstalledSpec({ record: installedApps.get('singleapp') }));
+    await ledgers.put(new InstalledLedger({ name: 'singleapp', replica: null, components: { singleapp: block('singleapp') } }));
   });
 
   afterEach(() => {
