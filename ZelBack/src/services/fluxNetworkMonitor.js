@@ -56,7 +56,7 @@ async function ipChangesOverLimit() {
         maxNumberOfIpChanges = ipChangeData.count;
       }
       if (ipChangeData.count >= 2) {
-        let names = await appRecords.hostedInstances().names();
+        let names = [];
         try {
           names = await appRecords.hostedInstances().names();
         } catch (error) {
