@@ -7,6 +7,7 @@ const operationRegistry = require('../utils/operationRegistry');
 const fluxEventBus = require('../utils/fluxEventBus');
 const dockerService = require('../dockerService');
 const appsRepository = require('../appDatabase/appsRepository');
+const appRecords = require('../appDatabase/appRecords');
 const { getSpec, getSpecBackend } = require('../utils/specLibs');
 const appQueryService = require('../appQuery/appQueryService');
 const appDockerNetwork = require('../appNetwork/appDockerNetwork');
@@ -19,6 +20,21 @@ const contentSlotService = require('./contentSlotService');
 // row referring to them. Anything a row DOES refer to belongs to the
 // specReconciler ladder - the janitor never interprets desired state.
 
+/**
+ * The apps this node hosts, or null when they cannot be read: a sweep that
+ * cannot read them must skip, because every container and network would look
+ * unowned.
+ * @param {string} sweep the sweep asking, for the log
+ * @returns {Promise<import('@runonflux/flux-spec-backend').HostedInstance[]|null>}
+ */
+async function hostedApps(sweep) {
+  try {
+    return await appRecords.hostedInstances().apps();
+  } catch (error) {
+    log.warn(`appJanitor - ${sweep} sweep skipped: unable to list installed apps: ${error.message}`);
+    return null;
+  }
+}
 
 /**
  * Remove docker containers whose app has no installed-app row: crash debris,
@@ -48,12 +64,8 @@ async function dockerOrphanSweep() {
     log.warn('appJanitor - orphan sweep skipped: unable to list docker apps');
     return { skipped: 'docker list failed' };
   }
-  const installedAppsRes = await appQueryService.installedApps();
-  if (installedAppsRes.status !== 'success') {
-    log.warn('appJanitor - orphan sweep skipped: unable to list installed apps');
-    return { skipped: 'installed list failed' };
-  }
-  const appsInstalled = installedAppsRes.data;
+  const appsInstalled = await hostedApps('orphan');
+  if (!appsInstalled) return { skipped: 'installed list failed' };
 
   // Playground containers are orphans by definition - a session deliberately has
   // no installed-app row - so they would match this sweep exactly, and it would
@@ -141,19 +153,14 @@ async function dockerDebrisSweep() {
     return { skipped: 'operation in flight' };
   }
 
-  const installedAppsRes = await appQueryService.installedApps();
-  if (installedAppsRes.status !== 'success') {
-    // Without the installed set every network on the node looks unowned.
-    // Skipping is the only safe reading of an unavailable database.
-    log.warn('appJanitor - debris sweep skipped: unable to list installed apps');
-    return { skipped: 'installed list failed' };
-  }
+  const appsInstalled = await hostedApps('debris');
+  if (!appsInstalled) return { skipped: 'installed list failed' };
   // Session networks are outside the app namespace and carry the session's own
   // ownership label, so this sweep cannot see them and needs no exception for
   // them. playgroundRunner's own sweep collects the ones a restart or a failed
   // teardown left.
   const { appNetworkNameFor } = await getSpec();
-  const ownedNetworks = new Set(installedAppsRes.data.map(
+  const ownedNetworks = new Set(appsInstalled.map(
     (app) => appNetworkNameFor({ identity: app.identity ?? null, appName: app.name }),
   ));
 
