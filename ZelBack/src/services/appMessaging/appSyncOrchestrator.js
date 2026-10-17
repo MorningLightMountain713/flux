@@ -1547,6 +1547,8 @@ class AppSyncOrchestrator {
     const prev = this.#canSendMessages;
     this.#canSendMessages = capable;
     if (prev === capable) return;
+    // READY needs the capability, so either edge can change the state.
+    this.#own(this.#evaluate());
     if (capable) {
       log.info('AppSyncOrchestrator - Message capability gained');
       // Re-run whatever is still incomplete (hash and/or manifest), not just when
@@ -1562,7 +1564,6 @@ class AppSyncOrchestrator {
       });
     } else {
       log.info('AppSyncOrchestrator - Message capability lost');
-      this.#own(this.#evaluate());
     }
   }
 
