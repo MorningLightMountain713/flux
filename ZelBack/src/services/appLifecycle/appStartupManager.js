@@ -41,7 +41,6 @@ const { NODE_DOWN_GRACE_MS } = require('../utils/appConstants');
 const { parseContainerName } = require('../utils/appUtilities');
 const { untilSucceeds, BOOT_STEP_RETRY_MS } = require('../utils/untilSucceeds');
 const nodeDownStore = require('../appMessaging/nodeDownStore');
-const appQueryService = require('../appQuery/appQueryService');
 
 const SYNC_TIMEOUT_MS = config.get('system.bootSyncTimeoutMs');
 
@@ -502,15 +501,11 @@ async function reconcileAppsOnBoot({ placement: decided = null } = {}) {
  */
 async function removeAllApps(reason) {
   const removed = [];
-  const installedAppsRes = await appQueryService.installedApps();
-  if (installedAppsRes.status === 'success') {
-    for (const app of installedAppsRes.data) {
-      log.warn(`REMOVAL REASON: ${reason} - removing ${app.name}`);
-      // One removal that never returns must not hold boot, or every app after it.
-      // eslint-disable-next-line no-await-in-loop
-      await appUninstaller.uninstallApplication(app.name, { forceKill: true, broadcastRemoval: true });
-      removed.push(app.name);
-    }
+  for (const name of await getInstalledAppNamesFromDb()) {
+    log.warn(`REMOVAL REASON: ${reason} - removing ${name}`);
+    // eslint-disable-next-line no-await-in-loop
+    await appUninstaller.uninstallApplication(name, { forceKill: true, broadcastRemoval: true });
+    removed.push(name);
   }
   return removed;
 }
