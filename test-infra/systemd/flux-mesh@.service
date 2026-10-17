@@ -9,6 +9,7 @@ Documentation=https://github.com/RunOnFlux/flux
 # namespace path that does not exist yet.
 ConditionPathExists=/run/netns/flux-mesh-%i
 ConditionPathExists=/dat/var/lib/flux-mesh/%i/config.yml
+RequiresMountsFor=/dat
 # A namespace that has gone away would otherwise restart forever.
 StartLimitIntervalSec=60
 StartLimitBurst=5
