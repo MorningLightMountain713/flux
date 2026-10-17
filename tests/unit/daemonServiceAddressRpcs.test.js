@@ -70,80 +70,37 @@ describe('daemonServiceAddressRpcs tests', () => {
     let daemonServiceUtilsStub;
 
     beforeEach(() => {
-      daemonServiceUtilsStub = sinon.stub(daemonServiceUtils, 'executeCall');
+      daemonServiceUtilsStub = sinon.stub(daemonServiceUtils, 'executeCall').resolves({ status: 'success', data: 'answer' });
     });
 
     afterEach(() => {
       sinon.restore();
     });
 
-    it('should execute RPC if parameters are passed in params, no response passed', async () => {
-      const req = {
-        params: {
-          address: '12QSasdfggYy4sditOpQzsee',
-          start: 1_670_654_443,
-          end: 167_068_000,
-        },
-      };
-      daemonServiceUtilsStub.returns('success');
-      const expectedParams = {
-        addresses: [req.params.address],
-        start: req.params.start,
-        end: req.params.end,
-      };
-
-      const result = await daemonServiceAddressRpcs.getSingleAddresssTxids(req);
-
-      expect(result).to.eql('success');
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getaddresstxids', [expectedParams]);
+    it('asks the daemon about the address', async () => {
+      expect(await daemonServiceAddressRpcs.getSingleAddresssTxids('t1abc', 100, 200)).to.deep.equal({ value: 'answer' });
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getaddresstxids', [{ addresses: ['t1abc'], start: 100, end: 200 }]);
     });
 
-    it('should execute RPC if parameters are passed in query, response passed', async () => {
-      const req = {
-        params: {
-          test: 'test',
-        },
-        query: {
-          address: '12QSasdfggYy4sditOpQzsee',
-          start: 1_670_654_443,
-          end: 167_068_000,
-        },
-      };
-      daemonServiceUtilsStub.returns('success');
-      const expectedParams = {
-        addresses: [req.query.address],
-        start: req.query.start,
-        end: req.query.end,
-      };
-      const res = generateResponse();
+    it('answers why there is no value when the daemon refuses', async () => {
+      daemonServiceUtilsStub.resolves({ status: 'error', data: { code: -5, message: 'Invalid address' } });
 
-      const result = await daemonServiceAddressRpcs.getSingleAddresssTxids(req, res);
-
-      expect(result).to.eql('success');
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getaddresstxids', [expectedParams]);
-      sinon.assert.calledOnceWithExactly(res.json, 'success');
+      expect(await daemonServiceAddressRpcs.getSingleAddresssTxids('t1abc', 100, 200)).to.deep.equal({ value: null, reason: { code: -5, message: 'Invalid address' } });
     });
 
-    it('should execute RPC if no params are given', async () => {
-      const req = {
-        params: {
-          test: 'test',
-        },
-        query: {
-          test2: 'test2',
-        },
-      };
-      daemonServiceUtilsStub.returns('NoParams');
-      const expectedParams = {
-        addresses: [req.query.address],
-      };
-      const res = generateResponse();
+    it('takes what its route is asked for', async () => {
+      const res = { json: sinon.stub() };
 
-      const result = await daemonServiceAddressRpcs.getSingleAddresssTxids(req, res);
+      await daemonServiceAddressRpcs.getSingleAddresssTxidsAPI({ params: { address: 't1abc' }, query: { start: '100', end: '200' } }, res);
 
-      expect(result).to.eql('NoParams');
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getaddresstxids', [expectedParams]);
-      sinon.assert.calledOnceWithExactly(res.json, 'NoParams');
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getaddresstxids', [{ addresses: ['t1abc'], start: 100, end: 200 }]);
+      sinon.assert.calledOnceWithExactly(res.json, { status: 'success', data: 'answer' });
+    });
+
+    it('asks for every height when none is given', async () => {
+      await daemonServiceAddressRpcs.getSingleAddresssTxids('t1abc');
+
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getaddresstxids', [{ addresses: ['t1abc'] }]);
     });
   });
 
@@ -200,73 +157,31 @@ describe('daemonServiceAddressRpcs tests', () => {
     let daemonServiceUtilsStub;
 
     beforeEach(() => {
-      daemonServiceUtilsStub = sinon.stub(daemonServiceUtils, 'executeCall');
+      daemonServiceUtilsStub = sinon.stub(daemonServiceUtils, 'executeCall').resolves({ status: 'success', data: 'answer' });
     });
 
     afterEach(() => {
       sinon.restore();
     });
 
-    it('should execute RPC if parameters are passed in params, no response passed', async () => {
-      const req = {
-        params: {
-          address: '12QSasdfggYy4sditOpQzsee',
-        },
-      };
-      daemonServiceUtilsStub.returns('success');
-      const expectedParams = {
-        addresses: [req.params.address],
-      };
-
-      const result = await daemonServiceAddressRpcs.getSingleAddressBalance(req);
-
-      expect(result).to.eql('success');
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getaddressbalance', [expectedParams]);
+    it('asks the daemon about the address', async () => {
+      expect(await daemonServiceAddressRpcs.getSingleAddressBalance('t1abc')).to.deep.equal({ value: 'answer' });
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getaddressbalance', [{ addresses: ['t1abc'] }]);
     });
 
-    it('should execute RPC if parameters are passed in query, response passed', async () => {
-      const req = {
-        params: {
-          test: 'test',
-        },
-        query: {
-          address: '12QSasdfggYy4sditOpQzsee',
-        },
-      };
-      daemonServiceUtilsStub.returns('success');
-      const expectedParams = {
-        addresses: [req.query.address],
-      };
-      const res = generateResponse();
+    it('answers why there is no value when the daemon refuses', async () => {
+      daemonServiceUtilsStub.resolves({ status: 'error', data: { code: -5, message: 'Invalid address' } });
 
-      const result = await daemonServiceAddressRpcs.getSingleAddressBalance(req, res);
-
-      expect(result).to.eql('success');
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getaddressbalance', [expectedParams]);
-      sinon.assert.calledOnceWithExactly(res.json, 'success');
+      expect(await daemonServiceAddressRpcs.getSingleAddressBalance('t1abc')).to.deep.equal({ value: null, reason: { code: -5, message: 'Invalid address' } });
     });
 
-    it('should execute RPC if no params are given', async () => {
-      const req = {
-        params: {
-          test: 'test',
-        },
-        query: {
-          test2: 'test2',
+    it('takes what its route is asked for', async () => {
+      const res = { json: sinon.stub() };
 
-        },
-      };
-      daemonServiceUtilsStub.returns('NoParams');
-      const expectedParams = {
-        addresses: [req.query.address],
-      };
-      const res = generateResponse();
+      await daemonServiceAddressRpcs.getSingleAddressBalanceAPI({ params: {}, query: { address: 't1abc' } }, res);
 
-      const result = await daemonServiceAddressRpcs.getSingleAddressBalance(req, res);
-
-      expect(result).to.eql('NoParams');
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getaddressbalance', [expectedParams]);
-      sinon.assert.calledOnceWithExactly(res.json, 'NoParams');
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getaddressbalance', [{ addresses: ['t1abc'] }]);
+      sinon.assert.calledOnceWithExactly(res.json, { status: 'success', data: 'answer' });
     });
   });
 
@@ -474,78 +389,31 @@ describe('daemonServiceAddressRpcs tests', () => {
     let daemonServiceUtilsStub;
 
     beforeEach(() => {
-      daemonServiceUtilsStub = sinon.stub(daemonServiceUtils, 'executeCall');
+      daemonServiceUtilsStub = sinon.stub(daemonServiceUtils, 'executeCall').resolves({ status: 'success', data: 'answer' });
     });
 
     afterEach(() => {
       sinon.restore();
     });
 
-    it('should execute RPC if parameters are passed in params, no response passed', async () => {
-      const req = {
-        params: {
-          address: '12QSasdfggYy4sditOpQzsee',
-          chaininfo: true,
-        },
-      };
-      daemonServiceUtilsStub.returns('success');
-      const expectedParams = {
-        addresses: [req.params.address],
-        chainInfo: req.params.chaininfo,
-      };
-
-      const result = await daemonServiceAddressRpcs.getSingleAddressUtxos(req);
-
-      expect(result).to.eql('success');
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getaddressutxos', [expectedParams]);
+    it('asks the daemon about the address', async () => {
+      expect(await daemonServiceAddressRpcs.getSingleAddressUtxos('t1abc', true)).to.deep.equal({ value: 'answer' });
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getaddressutxos', [{ addresses: ['t1abc'], chainInfo: true }]);
     });
 
-    it('should execute RPC if parameters are passed in query, response passed', async () => {
-      const req = {
-        params: {
-          test: 'test',
-        },
-        query: {
-          address: '12QSasdfggYy4sditOpQzsee',
-          chaininfo: true,
-        },
-      };
-      daemonServiceUtilsStub.returns('success');
-      const expectedParams = {
-        addresses: [req.query.address],
-        chainInfo: req.query.chaininfo,
-      };
-      const res = generateResponse();
+    it('answers why there is no value when the daemon refuses', async () => {
+      daemonServiceUtilsStub.resolves({ status: 'error', data: { code: -5, message: 'Invalid address' } });
 
-      const result = await daemonServiceAddressRpcs.getSingleAddressUtxos(req, res);
-
-      expect(result).to.eql('success');
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getaddressutxos', [expectedParams]);
-      sinon.assert.calledOnceWithExactly(res.json, 'success');
+      expect(await daemonServiceAddressRpcs.getSingleAddressUtxos('t1abc', true)).to.deep.equal({ value: null, reason: { code: -5, message: 'Invalid address' } });
     });
 
-    it('should execute RPC if no params are given', async () => {
-      const req = {
-        params: {
-          test: 'test',
-        },
-        query: {
-          test2: 'test2',
+    it('takes what its route is asked for', async () => {
+      const res = { json: sinon.stub() };
 
-        },
-      };
-      daemonServiceUtilsStub.returns('NoParams');
-      const expectedParams = {
-        addresses: [req.query.address],
-        chainInfo: req.query.chaininfo,
-      };
-      const res = generateResponse();
+      await daemonServiceAddressRpcs.getSingleAddressUtxosAPI({ params: { address: 't1abc', chaininfo: 'true' }, query: {} }, res);
 
-      const result = await daemonServiceAddressRpcs.getSingleAddressUtxos(req, res);
-
-      expect(result).to.eql('NoParams');
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getaddressutxos', [expectedParams]);
-      sinon.assert.calledOnceWithExactly(res.json, 'NoParams');
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getaddressutxos', [{ addresses: ['t1abc'], chainInfo: 'true' }]);
+      sinon.assert.calledOnceWithExactly(res.json, { status: 'success', data: 'answer' });
     });
   });
 
