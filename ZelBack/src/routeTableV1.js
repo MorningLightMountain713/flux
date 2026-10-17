@@ -84,7 +84,7 @@ module.exports = [
   { method: 'get', path: '/daemon/createrawtransaction/:transactions?/:addresses?/:locktime?/:expiryheight?', needs: DAEMON, handler: 'daemonService/daemonServiceTransactionRpcs#createRawTransaction' },
   { method: 'get', path: '/daemon/decoderawtransaction/:hexstring?', needs: DAEMON, cache: '30 seconds', handler: 'daemonService/daemonServiceTransactionRpcs#decodeRawTransaction' },
   { method: 'get', path: '/daemon/decodescript/:hex?', needs: DAEMON, cache: '30 seconds', handler: 'daemonService/daemonServiceTransactionRpcs#decodeScript' },
-  { method: 'get', path: '/daemon/getrawtransaction/:txid?/:verbose?', needs: DAEMON, handler: 'daemonService/daemonServiceTransactionRpcs#getRawTransaction' },
+  { method: 'get', path: '/daemon/getrawtransaction/:txid?/:verbose?', needs: DAEMON, handler: 'daemonService/daemonServiceTransactionRpcs#getRawTransactionAPI' },
   { method: 'get', path: '/daemon/sendrawtransaction/:hexstring?/:allowhighfees?', needs: DAEMON, handler: 'daemonService/daemonServiceTransactionRpcs#sendRawTransaction' },
   { method: 'get', path: '/daemon/getaddresstxids/:address?/:start?/:end?', needs: DAEMON, handler: 'daemonService/daemonServiceAddressRpcs#getSingleAddresssTxids' },
   { method: 'get', path: '/daemon/getaddressbalance/:address?', needs: DAEMON, handler: 'daemonService/daemonServiceAddressRpcs#getSingleAddressBalance' },

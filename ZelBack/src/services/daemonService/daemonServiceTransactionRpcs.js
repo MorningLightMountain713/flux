@@ -180,26 +180,25 @@ async function decodeScriptPost(req, res) {
 
 
 /**
- * To get raw transaction. Transaction ID and verbose (defaults to value of 0) required as parameters for RPC call.
+ * A transaction as the daemon holds it: hex, or decoded with a verbose of 1.
+ * @param {string} txid
+ * @param {number} [verbose]
+ * @returns {Promise<{value: string|object|null, reason?: object}>}
+ */
+async function getRawTransaction(txid, verbose = 0) {
+  const rpcparameters = txid ? [txid, verbose] : [];
+  return messageHelper.answerOf(await daemonServiceUtils.executeCall('getRawTransaction', rpcparameters));
+}
+
+/**
+ * GET /daemon/getrawtransaction/:txid?/:verbose?
  * @param {import('express').Request} req
  * @param {import('express').Response} res
- * @returns {object} Message.
  */
-async function getRawTransaction(req, res) {
-  let { txid } = req.params;
-  txid = txid || req.query.txid;
-  let { verbose } = req.params;
-  verbose = verbose || req.query.verbose || 0;
-
-  const rpccall = 'getRawTransaction';
-  let rpcparameters = [];
-  if (txid) {
-    verbose = serviceHelper.ensureNumber(verbose);
-    rpcparameters = [txid, verbose];
-  }
-  response = await daemonServiceUtils.executeCall(rpccall, rpcparameters);
-
-  return res ? res.json(response) : response;
+async function getRawTransactionAPI(req, res) {
+  const txid = req.params.txid || req.query.txid;
+  const verbose = serviceHelper.ensureNumber(req.params.verbose || req.query.verbose || 0);
+  res.json(messageHelper.messageOf(await getRawTransaction(txid, verbose)));
 }
 
 /**
@@ -264,6 +263,7 @@ module.exports = {
   decodeScript,
   decodeScriptPost,
   getRawTransaction,
+  getRawTransactionAPI,
   sendRawTransaction,
   sendRawTransactionPost,
 };

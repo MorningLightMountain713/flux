@@ -74,24 +74,16 @@ describe('generalService tests', () => {
           },
         },
       );
-      getRawTransactionStub.returns({
-        status: 'error',
-        data: {
-          message: 'This is some error2!',
-        },
-      });
+      getRawTransactionStub.returns({ value: null, reason: {
+        message: 'This is some error2!',
+      } });
 
       await expect(generalService.nodeTier()).to.eventually.be.rejectedWith({
         data: {
           message: 'This is some error2!',
         },
       });
-      sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
-        params: {
-          txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
-          verbose: 1,
-        },
-      });
+      sinon.assert.calledOnceWithExactly(getRawTransactionStub, '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d', 1);
     });
 
     it('should return proper tier for 10000 - basic', async () => {
@@ -103,23 +95,15 @@ describe('generalService tests', () => {
           },
         },
       );
-      getRawTransactionStub.returns({
-        status: 'success',
-        data: {
-          vout: [{ value: 10_000 }],
-        },
-      });
+      getRawTransactionStub.returns({ value: {
+        vout: [{ value: 10_000 }],
+      } });
 
       const result = await generalService.nodeTier();
 
       expect(result).to.equal('basic');
       expect(generalService.getStoredCollateral()).to.eql(10_000);
-      sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
-        params: {
-          txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
-          verbose: 1,
-        },
-      });
+      sinon.assert.calledOnceWithExactly(getRawTransactionStub, '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d', 1);
     });
 
     it('should return proper tier for 1000 - basic', async () => {
@@ -131,23 +115,15 @@ describe('generalService tests', () => {
           },
         },
       );
-      getRawTransactionStub.returns({
-        status: 'success',
-        data: {
-          vout: [{ value: 1000 }],
-        },
-      });
+      getRawTransactionStub.returns({ value: {
+        vout: [{ value: 1000 }],
+      } });
 
       const result = await generalService.nodeTier();
 
       expect(result).to.equal('basic');
       expect(generalService.getStoredCollateral()).to.eql(1000);
-      sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
-        params: {
-          txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
-          verbose: 1,
-        },
-      });
+      sinon.assert.calledOnceWithExactly(getRawTransactionStub, '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d', 1);
     });
 
     it('should return proper tier for 25000 - super', async () => {
@@ -159,23 +135,15 @@ describe('generalService tests', () => {
           },
         },
       );
-      getRawTransactionStub.returns({
-        status: 'success',
-        data: {
-          vout: [{ value: 25_000 }],
-        },
-      });
+      getRawTransactionStub.returns({ value: {
+        vout: [{ value: 25_000 }],
+      } });
 
       const result = await generalService.nodeTier();
 
       expect(result).to.equal('super');
       expect(generalService.getStoredCollateral()).to.eql(25_000);
-      sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
-        params: {
-          txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
-          verbose: 1,
-        },
-      });
+      sinon.assert.calledOnceWithExactly(getRawTransactionStub, '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d', 1);
     });
 
     it('should return proper tier for 12500 - super', async () => {
@@ -187,23 +155,15 @@ describe('generalService tests', () => {
           },
         },
       );
-      getRawTransactionStub.returns({
-        status: 'success',
-        data: {
-          vout: [{ value: 12_500 }],
-        },
-      });
+      getRawTransactionStub.returns({ value: {
+        vout: [{ value: 12_500 }],
+      } });
 
       const result = await generalService.nodeTier();
 
       expect(result).to.equal('super');
       expect(generalService.getStoredCollateral()).to.eql(12_500);
-      sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
-        params: {
-          txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
-          verbose: 1,
-        },
-      });
+      sinon.assert.calledOnceWithExactly(getRawTransactionStub, '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d', 1);
     });
 
     it('should return proper tier for 100000 - bamf', async () => {
@@ -215,23 +175,15 @@ describe('generalService tests', () => {
           },
         },
       );
-      getRawTransactionStub.returns({
-        status: 'success',
-        data: {
-          vout: [{ value: 100_000 }],
-        },
-      });
+      getRawTransactionStub.returns({ value: {
+        vout: [{ value: 100_000 }],
+      } });
 
       const result = await generalService.nodeTier();
 
       expect(result).to.equal('bamf');
       expect(generalService.getStoredCollateral()).to.eql(100_000);
-      sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
-        params: {
-          txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
-          verbose: 1,
-        },
-      });
+      sinon.assert.calledOnceWithExactly(getRawTransactionStub, '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d', 1);
     });
 
     it('should return proper tier for 40000 - bamf', async () => {
@@ -243,23 +195,15 @@ describe('generalService tests', () => {
           },
         },
       );
-      getRawTransactionStub.returns({
-        status: 'success',
-        data: {
-          vout: [{ value: 40_000 }],
-        },
-      });
+      getRawTransactionStub.returns({ value: {
+        vout: [{ value: 40_000 }],
+      } });
 
       const result = await generalService.nodeTier();
 
       expect(result).to.equal('bamf');
       expect(generalService.getStoredCollateral()).to.eql(40_000);
-      sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
-        params: {
-          txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
-          verbose: 1,
-        },
-      });
+      sinon.assert.calledOnceWithExactly(getRawTransactionStub, '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d', 1);
     });
 
     it('should throw errror for improper collateral', async () => {
@@ -271,21 +215,13 @@ describe('generalService tests', () => {
           },
         },
       );
-      getRawTransactionStub.returns({
-        status: 'success',
-        data: {
-          vout: [{ value: 12_345 }],
-        },
-      });
+      getRawTransactionStub.returns({ value: {
+        vout: [{ value: 12_345 }],
+      } });
 
       await expect(generalService.nodeTier()).to.eventually.be.rejectedWith('Unrecognised Flux Node tier');
       expect(generalService.getStoredCollateral()).to.eql(null);
-      sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
-        params: {
-          txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
-          verbose: 1,
-        },
-      });
+      sinon.assert.calledOnceWithExactly(getRawTransactionStub, '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d', 1);
     });
   });
 
@@ -307,7 +243,7 @@ describe('generalService tests', () => {
 
     function holds(value) {
       getFluxNodeStatusStub.resolves({ status: 'success', data: { collateral: outpoint } });
-      getRawTransactionStub.resolves({ status: 'success', data: { vout: [{ value }] } });
+      getRawTransactionStub.resolves({ value: { vout: [{ value }] } });
     }
 
     it('answers every collateral amount with its tier', async () => {
@@ -352,7 +288,7 @@ describe('generalService tests', () => {
 
     it('answers a collateral output the transaction does not have by naming it, and asks again next time', async () => {
       getFluxNodeStatusStub.resolves({ status: 'success', data: { collateral: outpoint.replace(', 0)', ', 3)') } });
-      getRawTransactionStub.resolves({ status: 'success', data: { vout: [{ value: 1000 }] } });
+      getRawTransactionStub.resolves({ value: { vout: [{ value: 1000 }] } });
 
       expect(await generalService.nodeCollateralTier()).to.eql({
         collateral: null, tier: null, missingOutput: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d:3',
@@ -362,7 +298,7 @@ describe('generalService tests', () => {
     });
 
     it('answers an index one past the last output as missing, and the last output as held', async () => {
-      getRawTransactionStub.resolves({ status: 'success', data: { vout: [{ value: 0.5 }, { value: 1000 }] } });
+      getRawTransactionStub.resolves({ value: { vout: [{ value: 0.5 }, { value: 1000 }] } });
 
       getFluxNodeStatusStub.resolves({ status: 'success', data: { collateral: outpoint.replace(', 0)', ', 2)') } });
       expect((await generalService.nodeCollateralTier()).missingOutput).to.equal('6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d:2');
@@ -456,24 +392,16 @@ describe('generalService tests', () => {
           },
         },
       );
-      getRawTransactionStub.returns({
-        status: 'error',
-        data: {
-          message: 'This is some error2!',
-        },
-      });
+      getRawTransactionStub.returns({ value: null, reason: {
+        message: 'This is some error2!',
+      } });
 
       await expect(generalService.nodeCollateral()).to.eventually.be.rejectedWith({
         data: {
           message: 'This is some error2!',
         },
       });
-      sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
-        params: {
-          txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
-          verbose: 1,
-        },
-      });
+      sinon.assert.calledOnceWithExactly(getRawTransactionStub, '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d', 1);
     });
 
     it('should return proper collateral of 10000 - basic', async () => {
@@ -485,23 +413,15 @@ describe('generalService tests', () => {
           },
         },
       );
-      getRawTransactionStub.returns({
-        status: 'success',
-        data: {
-          vout: [{ value: 10_000 }],
-        },
-      });
+      getRawTransactionStub.returns({ value: {
+        vout: [{ value: 10_000 }],
+      } });
 
       const result = await generalService.nodeCollateral();
 
       expect(result).to.equal(10_000);
       expect(generalService.getStoredTier()).to.eql('basic');
-      sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
-        params: {
-          txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
-          verbose: 1,
-        },
-      });
+      sinon.assert.calledOnceWithExactly(getRawTransactionStub, '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d', 1);
     });
 
     it('should return proper collateral of 1000 - basic', async () => {
@@ -513,23 +433,15 @@ describe('generalService tests', () => {
           },
         },
       );
-      getRawTransactionStub.returns({
-        status: 'success',
-        data: {
-          vout: [{ value: 1000 }],
-        },
-      });
+      getRawTransactionStub.returns({ value: {
+        vout: [{ value: 1000 }],
+      } });
 
       const result = await generalService.nodeCollateral();
 
       expect(result).to.equal(1000);
       expect(generalService.getStoredTier()).to.eql('basic');
-      sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
-        params: {
-          txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
-          verbose: 1,
-        },
-      });
+      sinon.assert.calledOnceWithExactly(getRawTransactionStub, '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d', 1);
     });
 
     it('should return proper collateral of 25000 - super', async () => {
@@ -541,23 +453,15 @@ describe('generalService tests', () => {
           },
         },
       );
-      getRawTransactionStub.returns({
-        status: 'success',
-        data: {
-          vout: [{ value: 25_000 }],
-        },
-      });
+      getRawTransactionStub.returns({ value: {
+        vout: [{ value: 25_000 }],
+      } });
 
       const result = await generalService.nodeCollateral();
 
       expect(result).to.equal(25_000);
       expect(generalService.getStoredTier()).to.eql('super');
-      sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
-        params: {
-          txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
-          verbose: 1,
-        },
-      });
+      sinon.assert.calledOnceWithExactly(getRawTransactionStub, '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d', 1);
     });
 
     it('should return proper collateral of 12500 - super', async () => {
@@ -569,23 +473,15 @@ describe('generalService tests', () => {
           },
         },
       );
-      getRawTransactionStub.returns({
-        status: 'success',
-        data: {
-          vout: [{ value: 12_500 }],
-        },
-      });
+      getRawTransactionStub.returns({ value: {
+        vout: [{ value: 12_500 }],
+      } });
 
       const result = await generalService.nodeCollateral();
 
       expect(result).to.equal(12_500);
       expect(generalService.getStoredTier()).to.eql('super');
-      sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
-        params: {
-          txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
-          verbose: 1,
-        },
-      });
+      sinon.assert.calledOnceWithExactly(getRawTransactionStub, '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d', 1);
     });
 
     it('should return proper collateral of 100000 - bamf', async () => {
@@ -597,23 +493,15 @@ describe('generalService tests', () => {
           },
         },
       );
-      getRawTransactionStub.returns({
-        status: 'success',
-        data: {
-          vout: [{ value: 100_000 }],
-        },
-      });
+      getRawTransactionStub.returns({ value: {
+        vout: [{ value: 100_000 }],
+      } });
 
       const result = await generalService.nodeCollateral();
 
       expect(result).to.equal(100_000);
       expect(generalService.getStoredTier()).to.eql('bamf');
-      sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
-        params: {
-          txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
-          verbose: 1,
-        },
-      });
+      sinon.assert.calledOnceWithExactly(getRawTransactionStub, '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d', 1);
     });
 
     it('should return proper collateral of 40000 - bamf', async () => {
@@ -625,23 +513,15 @@ describe('generalService tests', () => {
           },
         },
       );
-      getRawTransactionStub.returns({
-        status: 'success',
-        data: {
-          vout: [{ value: 40_000 }],
-        },
-      });
+      getRawTransactionStub.returns({ value: {
+        vout: [{ value: 40_000 }],
+      } });
 
       const result = await generalService.nodeCollateral();
 
       expect(result).to.equal(40_000);
       expect(generalService.getStoredTier()).to.eql('bamf');
-      sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
-        params: {
-          txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
-          verbose: 1,
-        },
-      });
+      sinon.assert.calledOnceWithExactly(getRawTransactionStub, '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d', 1);
     });
 
     it('should throw errror for improper collateral', async () => {
@@ -653,21 +533,13 @@ describe('generalService tests', () => {
           },
         },
       );
-      getRawTransactionStub.returns({
-        status: 'success',
-        data: {
-          vout: [{ value: 12_345 }],
-        },
-      });
+      getRawTransactionStub.returns({ value: {
+        vout: [{ value: 12_345 }],
+      } });
 
       await expect(generalService.nodeCollateral()).to.eventually.be.rejectedWith('Unrecognised Flux Node Collateral');
       expect(generalService.getStoredTier()).to.eql(null);
-      sinon.assert.calledOnceWithExactly(getRawTransactionStub, {
-        params: {
-          txid: '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d',
-          verbose: 1,
-        },
-      });
+      sinon.assert.calledOnceWithExactly(getRawTransactionStub, '6b2f0b581698337758cd045ead702f4cf6d9c96e8a0288bed526146a005ddd0d', 1);
     });
   });
 

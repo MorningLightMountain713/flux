@@ -94,11 +94,11 @@ async function nodeCollateralTier() {
   if (!nodeStatus.data.collateral) return { collateral: null, tier: null };
 
   const { txhash, txindex } = getCollateralInfo(nodeStatus.data.collateral);
-  const txInformation = await daemonServiceTransactionRpcs.getRawTransaction({ params: { txid: txhash, verbose: 1 } });
-  if (txInformation.status === 'error') {
-    throw txInformation.data;
+  const transaction = await daemonServiceTransactionRpcs.getRawTransaction(txhash, 1);
+  if (transaction.reason) {
+    throw transaction.reason;
   }
-  const output = txInformation.data.vout[txindex];
+  const output = transaction.value.vout[txindex];
   if (!output) return { collateral: null, tier: null, missingOutput: `${txhash}:${txindex}` };
 
   const collateralTier = { collateral: output.value, tier: COLLATERAL_TIERS[output.value] || null };
