@@ -111,7 +111,6 @@ describe('appJanitor tests', () => {
     contentSlotServiceStub = { reapDisplacedManifests: sinon.stub().resolves({ reaped: 0, orphans: [] }) };
     appQueryServiceStub = {
       listAllApps: sinon.stub().resolves({ status: 'success', data: [] }),
-      listRunningApps: sinon.stub().resolves({ status: 'success', data: [] }),
     };
     appUninstallerStub = {
       uninstallApplication: sinon.stub().resolves({ status: 'removed', reason: null }),
