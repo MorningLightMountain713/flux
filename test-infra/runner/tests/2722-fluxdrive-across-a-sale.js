@@ -28,7 +28,9 @@ import { pushBusybox } from '../framework/registry-helper.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
 import { appView } from '../framework/app-view.js';
 import { harnessNow } from '../framework/harness-clock.js';
-import { fluxDriveHolds, fluxDriveManifests, fluxDriveSweep } from '../framework/fluxdrive-real.js';
+import {
+  fluxDriveHolds, fluxDriveManifests, fluxDrivePending, fluxDriveSweep,
+} from '../framework/fluxdrive-real.js';
 import { waitFor, waitForInstallSettled } from '../framework/wait.js';
 
 const NODES = 3;
@@ -91,6 +93,12 @@ describe('the real FluxDrive across a sale', function () {
     return status === 200 ? data.data.decision : null;
   }
 
+  async function decidedEverywhere(hash, label) {
+    await waitFor(async () => (await Promise.all(RUNNING.map((i) => decisionOn(i, hash)))).every((d) => d === 'applied'), {
+      timeout: CONVERGE_MS, interval: 3000, label,
+    });
+  }
+
   async function sweep(now) {
     const pass = await fluxDriveSweep(now);
     expect(pass.skipped, `the pass at ${new Date(now).toISOString()} reads the live set: ${JSON.stringify(pass)}`).to.not.equal(true);
@@ -137,6 +145,8 @@ describe('the real FluxDrive across a sale', function () {
     });
     expect(registration.status, `the registration is accepted: ${JSON.stringify(registration).slice(0, 300)}`).to.equal('success');
     await confirmOnChain(registration.data, RUNNING.map((i) => env.clients[i]));
+    await decidedEverywhere(registration.data, 'every node decides the registration applied');
+    expect(await fluxDrivePending(harnessNow()), 'the registration\'s manifest put applies').to.include({ applied: 1 });
     await waitForInstallSettled(env.clients[host], name, CONVERGE_MS);
 
     const update = await pushContentUpdate(url(registrar), { name, slots: [{ name: SLOT, bytes: v2 }], ownerKey: seller });
@@ -162,9 +172,7 @@ describe('the real FluxDrive across a sale', function () {
     });
     expect(sale.status, `the sale is accepted: ${JSON.stringify(sale).slice(0, 300)}`).to.equal('success');
     await confirmOnChain(sale.data, RUNNING.map((i) => env.clients[i]));
-    await waitFor(async () => (await Promise.all(RUNNING.map((i) => decisionOn(i, sale.data)))).every((d) => d === 'applied'), {
-      timeout: CONVERGE_MS, interval: 3000, label: 'every node decides the sale applied',
-    });
+    await decidedEverywhere(sale.data, 'every node decides the sale applied');
     await view.listedEverywhere(sale.data, RUNNING, 'every node lists the sale');
 
     await sweep(harnessNow());
