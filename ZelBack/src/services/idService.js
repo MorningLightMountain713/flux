@@ -13,6 +13,7 @@ const generalService = require('./generalService');
 const dockerService = require('./dockerService');
 const syncthingService = require('./syncthingService');
 const nodeDosState = require('./nodeDosState');
+const capabilities = require('./utils/capabilities');
 const appInspector = require('./appManagement/appInspector');
 const signatureVerifier = require('./signatureVerifier');
 const { Privilege, authOf } = require('./utils/privileges');
@@ -182,7 +183,10 @@ function fit(checks) {
 async function checkNodeFitness() {
   const checks = {};
 
-  // db: a fast read proves the local database answers
+  // db: a fast read proves the local database answers, once it is prepared
+  if (!capabilities.isUp('localDbPrepared')) {
+    return unfit('db', { message: 'The local database is not ready', name: 'DatabaseNotReady' }, checks);
+  }
   try {
     const db = dbHelper.databaseConnection();
     const database = db.db(config.get('database.local.database'));

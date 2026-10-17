@@ -10,6 +10,7 @@ const appInspector = require('../../ZelBack/src/services/appManagement/appInspec
 const appController = require('../../ZelBack/src/services/appManagement/appController');
 const monitoringOrchestrator = require('../../ZelBack/src/services/appMonitoring/monitoringOrchestrator');
 const moduleLoader = require('../../ZelBack/src/lib/moduleLoader');
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 
 // Every module a route names, loaded once: the names are data, so the modules are
 // found by name. Loading a module runs none of its handlers.
@@ -163,6 +164,40 @@ describe('routes tests', () => {
 
     it('should keep the backend folder local only', () => {
       expect(routeFor('/flux/backendfolder').handlers).to.include(isLocal);
+    });
+  });
+
+  describe('the login phrases', () => {
+    afterEach(() => {
+      capabilities.resetForTests();
+    });
+
+    // Runs the chain in front of the handler, as express would.
+    function call(prefix) {
+      const { handlers } = routeFor(prefix);
+      const res = { setHeader: sinon.stub(), json: sinon.stub() };
+      res.status = sinon.stub().returns(res);
+      let reached = 0;
+      handlers.slice(0, -1).every((middleware) => {
+        let passed = false;
+        middleware({}, res, () => { passed = true; });
+        if (passed) reached += 1;
+        return passed;
+      });
+      return { res, passedEvery: reached === handlers.length - 1 };
+    }
+
+    ['/id/loginphrase', '/id/emergencyphrase', '/zelid/loginphrase', '/zelid/emergencyphrase'].forEach((prefix) => {
+      it(`should refuse ${prefix} until the local database is prepared`, () => {
+        capabilities.setForTests('localDbPrepared', false);
+        const refused = call(prefix);
+        expect(refused.passedEvery).to.equal(false);
+        sinon.assert.calledOnceWithExactly(refused.res.status, 503);
+        expect(refused.res.json.firstCall.args[0].data.message).to.equal('Node is still preparing its database (localDbPrepared is not up)');
+
+        capabilities.setForTests('localDbPrepared', true);
+        expect(call(prefix).passedEvery).to.equal(true);
+      });
     });
   });
 });

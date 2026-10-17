@@ -33,6 +33,7 @@ const GUARDS = Object.freeze({
 // wait. The wait paces a client's polling; the capability's owner decides when
 // it rises.
 const REFUSALS = Object.freeze({
+  localDbPrepared: { message: 'Node is still preparing its database', retryAfterSeconds: 15 },
   bootReconcileDecided: { message: 'Node is still reconciling its applications after boot', retryAfterSeconds: 15 },
   policyVerified: { message: 'Node has not yet obtained the network policy', retryAfterSeconds: 30 },
   policyCurrent: { message: 'Node has not yet obtained the network policy', retryAfterSeconds: 30 },

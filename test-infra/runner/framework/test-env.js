@@ -1112,9 +1112,9 @@ async function seedMongo(mongoIp, nodeCount, bootContext = 'running', { dataCent
 
 // A node is ready when it can SERVE AUTH, not merely HTTP: the first thing every
 // suite does against a fresh or restarted node is authenticate (startDiscovery),
-// and /id/loginphrase needs the mongo connection, which comes up after express
-// starts answering /flux/version. During that window the route returns 200 with
-// an error body, so readiness must validate the body, not just res.ok.
+// and /id/loginphrase answers 503 until the local database is prepared, which
+// is after express starts answering /flux/version. A prepared node that is not
+// fit answers 200 with an error body, so readiness validates the body as well.
 function nodeReadyWaitStrategy(nodeIp) {
   const validate = async (res) => {
     if (!res.ok) return false;
