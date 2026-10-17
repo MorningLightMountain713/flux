@@ -615,4 +615,33 @@ describe('contentBlobService', () => {
       );
     });
   });
+
+  describe('signManifestPut', () => {
+    const { signManifestPut } = contentBlobService;
+
+    it('hands the benchmark channel the manifest text\'s typed fields: identity, ownership, version, time, kept list and message', async () => {
+      const calls = [];
+      const benchmark = makeBenchmark({
+        signBlobUpload: async (fields) => { calls.push(fields); return ok({ signature: 'arc' }); },
+      });
+      const sig = await signManifestPut({
+        identity: IDENTITY, ownedFrom: 2_952_000, version: 1, timestamp: 1_700_000_000_000, keptLocators: ['l2', 'l1'], pendingMessageHash: 'f'.repeat(64),
+      }, { benchmark });
+      expect(sig).to.equal('arc');
+      expect(calls).to.deep.equal([{
+        kind: 'manifest', identity: IDENTITY, ownedFrom: 2_952_000, version: 1, timestamp: 1_700_000_000_000, keptLocators: ['l2', 'l1'], pendingMessageHash: 'f'.repeat(64),
+      }]);
+    });
+
+    it('names no message for a content update with no spec change', async () => {
+      const calls = [];
+      const benchmark = makeBenchmark({
+        signBlobUpload: async (fields) => { calls.push(fields); return ok({ signature: 'arc' }); },
+      });
+      await signManifestPut({
+        identity: IDENTITY, ownedFrom: 0, version: 2, timestamp: 1, keptLocators: ['l1'],
+      }, { benchmark });
+      expect(calls[0].pendingMessageHash).to.equal(null);
+    });
+  });
 });
