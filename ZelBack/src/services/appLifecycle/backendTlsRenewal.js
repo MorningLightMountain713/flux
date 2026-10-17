@@ -16,10 +16,18 @@
 const config = require('config');
 const log = require('../../lib/log');
 const dockerService = require('../dockerService');
-const appQueryService = require('../appQuery/appQueryService');
+const appRecords = require('../appDatabase/appRecords');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const operationRegistry = require('../utils/operationRegistry');
 const backendTlsService = require('./backendTlsService');
+
+/**
+ * The apps this node hosts, one instance per name.
+ * @returns {Promise<import('@runonflux/flux-spec-backend').HostedInstance[]>}
+ */
+function hostedApps() {
+  return appRecords.hostedInstances().apps();
+}
 
 /**
  * Run the owner's reload reaction for a component whose cert was just replaced.
@@ -71,7 +79,7 @@ async function fireReload(deployComp, deps = {}) {
  */
 async function renewalSweep(deps = {}) {
   const {
-    listInstalled = appQueryService.installedApps,
+    listInstalled = hostedApps,
     getDeployments = deploymentProvider.getInstalledDeployments,
     needsRenewal = backendTlsService.needsRenewal,
     provisionCert = backendTlsService.provisionCert,
@@ -86,15 +94,17 @@ async function renewalSweep(deps = {}) {
     return { skipped: 'operation in flight' };
   }
 
-  const installedRes = await listInstalled();
-  if (installedRes.status !== 'success') {
-    log.warn('backendTls: renewal sweep skipped - unable to list installed apps');
+  let installed;
+  try {
+    installed = await listInstalled();
+  } catch (error) {
+    log.warn(`backendTls: renewal sweep skipped - unable to list installed apps: ${error.message}`);
     return { skipped: 'installed list failed' };
   }
 
   let checked = 0;
   let renewed = 0;
-  for (const app of installedRes.data) {
+  for (const app of installed) {
     // One deployment per identity installed here: co-located replicas each run
     // their own container with their own cert, so each needs its own check.
     // eslint-disable-next-line no-await-in-loop

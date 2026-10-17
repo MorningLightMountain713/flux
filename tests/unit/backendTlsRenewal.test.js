@@ -11,6 +11,7 @@ const backendTlsRenewal = require('../../ZelBack/src/services/appLifecycle/backe
 const {
   loadSpecLibrary, V9_SUBMISSION, v9Spec, registeredSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
+const { stubHostedInstances, installedRecord } = require('./fixtures/appRecords');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. Every deployment the sweep walks is a real DeploymentSpec over a real
@@ -85,10 +86,9 @@ function deploymentFor(spec, replica = null) {
   return flux.DeploymentSpec.fromSpec(spec, APPS_FOLDER, { replica, identity: identityOf(spec.name) });
 }
 
-/** The installed-list row appQueryService.installedApps actually produces: a
- *  real RegisteredSpec's own serialization, not a `{ name }` literal. */
+/** A real hosted instance over a real RegisteredSpec. */
 async function installedRow(spec) {
-  return (await registeredSpec(spec)).serialize();
+  return installedRecord(await registeredSpec(spec));
 }
 
 describe('backendTlsRenewal.renewalSweep', () => {
@@ -106,7 +106,7 @@ describe('backendTlsRenewal.renewalSweep', () => {
     anyHeld = sinon.stub(operationRegistry, 'anyHeld').returns(false);
     managedSpec = await specOf({ web: MANAGED });
     deps = {
-      listInstalled: sinon.stub().resolves({ status: 'success', data: [await installedRow(managedSpec)] }),
+      listInstalled: sinon.stub().resolves([await installedRow(managedSpec)]),
       getDeployments: sinon.stub().resolves([deploymentFor(managedSpec)]),
       needsRenewal: sinon.stub().resolves(true),
       provisionCert: sinon.stub().resolves(),
@@ -204,10 +204,7 @@ describe('backendTlsRenewal.renewalSweep', () => {
   it('isolates a failed re-issue: the rest of the node still renews', async () => {
     const bad = await specOf({ web: MANAGED }, 'bad');
     const good = await specOf({ web: MANAGED }, 'good');
-    deps.listInstalled.resolves({
-      status: 'success',
-      data: [await installedRow(bad), await installedRow(good)],
-    });
+    deps.listInstalled.resolves([await installedRow(bad), await installedRow(good)]);
     deps.getDeployments
       .withArgs('bad').resolves([deploymentFor(bad)])
       .withArgs('good').resolves([deploymentFor(good)]);
@@ -239,8 +236,18 @@ describe('backendTlsRenewal.renewalSweep', () => {
     expect(deps.listInstalled.called).to.equal(false);
   });
 
+  it('reads the hosted apps from their store when no lister is given', async () => {
+    const { listInstalled, ...rest } = deps;
+    stubHostedInstances().apps.resolves([await installedRow(managedSpec)]);
+
+    const result = await backendTlsRenewal.renewalSweep(rest);
+
+    expect(result).to.deep.equal({ checked: 1, renewed: 1 });
+    expect(listInstalled.called).to.equal(false);
+  });
+
   it('skips the pass rather than guessing when the installed list is unavailable', async () => {
-    deps.listInstalled.resolves({ status: 'error' });
+    deps.listInstalled.rejects(new Error('mongo down'));
 
     const result = await backendTlsRenewal.renewalSweep(deps);
 
