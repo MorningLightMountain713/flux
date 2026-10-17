@@ -18,7 +18,6 @@ const geolocationService = require('../../ZelBack/src/services/geolocationServic
 const fluxNetworkMonitor = require('../../ZelBack/src/services/fluxNetworkMonitor');
 const nodeDosState = require('../../ZelBack/src/services/nodeDosState');
 const nodeIdentityRepository = require('../../ZelBack/src/services/appDatabase/nodeIdentityRepository');
-const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
 const { getSpecBackend } = require('../../ZelBack/src/services/utils/specLibs');
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
 const { requireMongo } = require('./dbTestHelper');
@@ -50,7 +49,6 @@ describe('fluxNetworkMonitor tests', () => {
       // An IP change here must never remove an app: the list is this test's, not
       // whatever another suite left in the shared database, and the uninstaller
       // is a canary asserted untouched.
-      sinon.stub(appQueryService, 'installedApps').resolves({ status: 'success', data: [] });
       stubHostedInstances().apps.resolves([]);
       uninstallApplication = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
       fluxNetworkHelper.setStoredFluxBenchAllowed('6.2.0');
@@ -813,6 +811,48 @@ describe('fluxNetworkMonitor tests', () => {
       expect(axiosGetStub.calledTwice).to.be.true;
       // DOS state should remain at 0 since this is not an error condition
       expect(nodeDosState.getDosStateValue()).to.equal(0);
+    });
+  });
+
+  describe('ipChangesOverLimit', () => {
+    let uninstallApplication;
+    let hosted;
+
+    beforeEach(() => {
+      hosted = stubHostedInstances();
+      uninstallApplication = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      sinon.stub(serviceHelper, 'delay').resolves();
+    });
+
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    it('a first change within the window removes nothing', async () => {
+      hosted.names.resolves(['alpha']);
+
+      expect(await fluxNetworkMonitor.ipChangesOverLimit()).to.equal(false);
+      sinon.assert.notCalled(uninstallApplication);
+    });
+
+    it('a second change within the window removes every hosted app without a broadcast', async () => {
+      hosted.names.resolves(['alpha', 'beta']);
+
+      await fluxNetworkMonitor.ipChangesOverLimit();
+      expect(await fluxNetworkMonitor.ipChangesOverLimit()).to.equal(true);
+
+      expect(uninstallApplication.args).to.deep.equal([['alpha', { forceKill: true }], ['beta', { forceKill: true }]]);
+    });
+
+    it('a second change when the hosted apps cannot be read removes nothing, logs it and still reports the limit', async () => {
+      hosted.names.rejects(new Error('mongo down'));
+      const logError = sinon.stub(log, 'error');
+
+      await fluxNetworkMonitor.ipChangesOverLimit();
+      expect(await fluxNetworkMonitor.ipChangesOverLimit()).to.equal(true);
+
+      sinon.assert.notCalled(uninstallApplication);
+      sinon.assert.calledWithMatch(logError, /cannot list the hosted apps: mongo down/);
     });
   });
 });

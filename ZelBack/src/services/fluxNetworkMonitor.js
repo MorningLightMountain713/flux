@@ -22,7 +22,6 @@ const {
 // App-lifecycle dependencies. This service sits above both the network
 // primitives (fluxNetworkHelper) and app-lifecycle, so it requires the
 // orchestrators directly at the top level.
-const appQueryService = require('./appQuery/appQueryService');
 const appUninstaller = require('./appLifecycle/appUninstaller');
 const registryManager = require('./appDatabase/registryManager');
 const appRecords = require('./appDatabase/appRecords');
@@ -57,17 +56,19 @@ async function ipChangesOverLimit() {
         maxNumberOfIpChanges = ipChangeData.count;
       }
       if (ipChangeData.count >= 2) {
-        let apps = await appQueryService.installedApps();
-        if (apps.status === 'success' && apps.data.length > 0) {
-          apps = apps.data;
-          // eslint-disable-next-line no-restricted-syntax
-          for (const app of apps) {
-            log.warn(`REMOVAL REASON: Too many IP changes - ${app.name} being removed due to ${ipChangeData.count} IP changes in ${timeDifference}ms (DoS protection)`);
-            // eslint-disable-next-line no-await-in-loop
-            await appUninstaller.uninstallApplication(app.name, { forceKill: true }).catch((error) => log.error(error)); // we will not send appremove messages because they will not be accepted by the other nodes
-            // eslint-disable-next-line no-await-in-loop
-            await serviceHelper.delay(500);
-          }
+        let names = await appRecords.hostedInstances().names();
+        try {
+          names = await appRecords.hostedInstances().names();
+        } catch (error) {
+          log.error(`ipChangesOverLimit - cannot list the hosted apps: ${error.message}`);
+        }
+        // eslint-disable-next-line no-restricted-syntax
+        for (const name of names) {
+          log.warn(`REMOVAL REASON: Too many IP changes - ${name} being removed due to ${ipChangeData.count} IP changes in ${timeDifference}ms (DoS protection)`);
+          // eslint-disable-next-line no-await-in-loop
+          await appUninstaller.uninstallApplication(name, { forceKill: true }).catch((error) => log.error(error)); // we will not send appremove messages because they will not be accepted by the other nodes
+          // eslint-disable-next-line no-await-in-loop
+          await serviceHelper.delay(500);
         }
         dosTooManyIpChanges = true;
         return true;
