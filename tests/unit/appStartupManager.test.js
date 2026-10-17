@@ -22,7 +22,6 @@ describe('appStartupManager tests', () => {
   let appUninstallerStub;
   let globalStateStub;
   let whenUpStub;
-  let appQueryServiceStub;
 
   beforeEach(() => {
     logStub = {
@@ -92,10 +91,6 @@ describe('appStartupManager tests', () => {
     capabilities.resetForTests();
     capabilities.setForTests(['mongoReachable', 'dockerReachable', 'daemonReachable', 'confirmationStatusKnown'], true);
 
-    appQueryServiceStub = {
-      installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
-    };
-
     appUtilities = proxyquire('../../ZelBack/src/services/utils/appUtilities', {
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../appDatabase/appRecords': { hostedInstances: () => installedStub },
@@ -118,7 +113,6 @@ describe('appStartupManager tests', () => {
       '../appDatabase/appRecords': { hostedInstances: () => installedStub },
       './appUninstaller': appUninstallerStub,
       '../utils/globalState': globalStateStub,
-      '../appQuery/appQueryService': appQueryServiceStub,
       '../utils/appConstants': { localAppsInformation: 'localAppsInformation', NODE_DOWN_GRACE_MS: 420_000, RUNNING_EXPIRY_MS: 7_500_000 },
       '../utils/appUtilities': appUtilities,
       '../appMessaging/nodeDownStore': nodeDownStoreStub,
@@ -169,7 +163,6 @@ describe('appStartupManager tests', () => {
         '../appDatabase/appRecords': { hostedInstances: () => installedStub },
         './appUninstaller': appUninstallerStub,
         '../utils/globalState': globalStateStub,
-        '../appQuery/appQueryService': appQueryServiceStub,
         '../utils/appConstants': { localAppsInformation: 'localAppsInformation', NODE_DOWN_GRACE_MS: 420_000, RUNNING_EXPIRY_MS: 7_500_000 },
         '../utils/appUtilities': appUtilities,
         '../nodeConfirmationService': {
@@ -388,7 +381,6 @@ describe('appStartupManager tests', () => {
       '../appDatabase/appRecords': { hostedInstances: () => installedStub },
       './appUninstaller': appUninstallerStub,
       '../utils/globalState': globalStateStub,
-      '../appQuery/appQueryService': appQueryServiceStub,
       '../utils/appConstants': { localAppsInformation: 'localAppsInformation', NODE_DOWN_GRACE_MS: 420_000, RUNNING_EXPIRY_MS: 7_500_000 },
       '../utils/appUtilities': appUtilities,
       '../appMessaging/nodeDownStore': nodeDownStoreStub,
@@ -416,7 +408,6 @@ describe('appStartupManager tests', () => {
       fluxNetworkHelperStub.getLocalSocketAddress.resolves('10.0.0.1:16127');
       installedStub.names.resolves(['AppA', 'AppB']);
       appsRepositoryStub.appLocationFromEvents.resolves([{ name: 'AppA', ip: '10.0.0.1:16127' }]);
-      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [{ name: 'AppA' }, { name: 'AppB' }] });
       dockerServiceStub.dockerListContainers.resolves([]);
     });
 
@@ -724,10 +715,7 @@ describe('appStartupManager tests', () => {
       const bootContext = {
         machineRebooted: true, downtimeMs: 500_000, cleanShutdown: true,
       };
-      appQueryServiceStub.installedApps.resolves({
-        status: 'success',
-        data: [{ name: 'app1' }, { name: 'app2' }],
-      });
+      installedStub.names.resolves(['app1', 'app2']);
 
       await appStartupManager.manageAppsOnBoot(bootContext);
 
@@ -740,10 +728,7 @@ describe('appStartupManager tests', () => {
       const bootContext = {
         machineRebooted: true, downtimeMs: 500_000, cleanShutdown: false,
       };
-      appQueryServiceStub.installedApps.resolves({
-        status: 'success',
-        data: [{ name: 'app1' }],
-      });
+      installedStub.names.resolves(['app1']);
 
       await appStartupManager.manageAppsOnBoot(bootContext);
 
@@ -819,7 +804,7 @@ describe('appStartupManager tests', () => {
 
       // Expired locations path
       capabilities.setForTests('bootReconcileDecided', false);
-      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [] });
+      installedStub.names.resolves([]);
       await appStartupManager.manageAppsOnBoot({
         machineRebooted: true, downtimeMs: 8_000_000, cleanShutdown: false,
       });
