@@ -7,7 +7,7 @@ const sinon = require('sinon');
 
 const fluxCommunicationUtils = require('../../ZelBack/src/services/fluxCommunicationUtils');
 const enterpriseNodesService = require('../../ZelBack/src/services/enterpriseNodesService');
-const { v8Spec, v9Spec, instantiatedSpec } = require('./fixtures/fluxSpec');
+const { v8Spec, v9Spec, registeredSpec } = require('./fixtures/fluxSpec');
 const { stubRegistry } = require('./fixtures/appRecords');
 
 describe('enterpriseNodesService', () => {
@@ -23,8 +23,8 @@ describe('enterpriseNodesService', () => {
       node({ ip: '1.2.3.4', txhash: TXHASH, outidx: 0 }),
       node({ ip: '5.6.7.8', txhash: 'b'.repeat(64), outidx: 1 }),
     ]);
-    const byAddress = await instantiatedSpec(await v9Spec({ name: 'byaddress', placement: { targetIps: ['1.2.3.4'] } }), { hash: 'h1' });
-    const byOutpoint = await instantiatedSpec(await v8Spec({ name: 'byoutpoint', nodes: [`${TXHASH}:0`] }, { encrypted: true }), { hash: 'h2' });
+    const byAddress = await registeredSpec(await v9Spec({ name: 'byaddress', placement: { targetIps: ['1.2.3.4'] } }), { hash: 'h1' });
+    const byOutpoint = await registeredSpec(await v8Spec({ name: 'byoutpoint', nodes: [`${TXHASH}:0`] }, { encrypted: true }), { hash: 'h2' });
     expect(byOutpoint.placement.targetOutpoints, 'the legacy node list names the outpoint').to.deep.equal([`${TXHASH}:0`]);
     stubRegistry().pinned.resolves([byAddress, byOutpoint]);
 

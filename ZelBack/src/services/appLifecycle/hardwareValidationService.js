@@ -37,7 +37,7 @@ async function performBootTimeHardwareValidation() {
     log.info('hardwareValidationService - Starting boot-time hardware validation');
 
     // STEP 1: Get all installed apps
-    const installedApps = (await appRecords.installed().apps()).map((record) => record.record);
+    const installedApps = (await appRecords.hostedInstances().apps()).map((record) => record.record);
 
     if (!installedApps || installedApps.length === 0) {
       log.info('hardwareValidationService - No installed apps found');

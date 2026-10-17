@@ -62,10 +62,10 @@ async function replicaFromIdentifier(identifier) {
  * reconcile and handed to everything below, so no two steps of one pass can
  * disagree about whose container they are acting on.
  *
- * The installed record, through the ledger that names the container, for as
+ * The hosted instance, through the resources that name the container, for as
  * long as the instance is here: hosted, or marked owed by a removal, in which
  * case the record is what still names a component the reconciler must drive
- * to gone. An owed-teardown record a release before the ledger left names a
+ * to gone. An owed-teardown record a release before instance resources left names a
  * component the same way until its teardown clears it.
  *
  * Neither is a guess. A component in neither belongs to no app this node knows
@@ -77,15 +77,15 @@ async function replicaFromIdentifier(identifier) {
  *   owedTeardown: the reference driveOwedTeardown takes, when a removal is owed
  */
 async function appFor(identifier) {
-  // The ledger names the identifiers the instance's containers are named by, so
+  // The resources name the identifiers the instance's containers are named by, so
   // this is a lookup. Taking the identifier apart is the fallback for an
-  // instance whose ledger the node never wrote; info.apps.installedLedger counts
+  // instance whose resources the node never wrote; info.apps.instanceResources counts
   // how many still need it, and that figure reaching zero fleet-wide is what
   // licenses deleting it.
-  let installed = await appRecords.installedByIdentifier(identifier);
+  let installed = await appRecords.hostedInstanceByIdentifier(identifier);
   if (!installed) {
     const identity = await identityFromIdentifier(identifier);
-    installed = await appRecords.installed().byIdentity(identity, { includeOwed: true });
+    installed = await appRecords.hostedInstances().byIdentity(identity, { includeOwed: true });
   }
   if (installed?.owed) return { installed: null, name: installed.name, owedTeardown: { name: installed.name, replica: installed.replica } };
   if (installed) return { installed, name: installed.name, owedTeardown: null };
@@ -376,7 +376,7 @@ function policyAllowsRun(policy, exitCode) {
  * containerData parsing — the reconciler never reads raw spec documents.
  *
  * @param {string} identifier
- * @param {object} inst - InstalledSpec of the app that owns this component
+ * @param {object} inst - HostedInstance of the app that owns this component
  */
 async function getLocalComponentSpec(identifier, inst) {
   const mainAppName = inst.name;
@@ -2222,9 +2222,9 @@ async function drive(ids, state) {
 async function enqueueApp(name) {
   let identifiers = [];
   try {
-    identifiers = (await appRecords.ledgers().instancesOf(name)).flatMap((ledger) => ledger.identifiers());
+    identifiers = (await appRecords.instanceResources().instancesOf(name)).flatMap((resources) => resources.identifiers());
     if (identifiers.length === 0) {
-      const inst = await appRecords.installed().byName(name);
+      const inst = await appRecords.hostedInstances().byName(name);
       // Not installed here: nothing to converge. A row-deleted app mid-removal is
       // driven per component by the uninstaller and replayed at boot from the owed
       // records, neither of which needs this path.
@@ -2251,7 +2251,7 @@ async function enqueueApp(name) {
 async function enqueueAll(reason = 'resync') {
   let installed;
   try {
-    installed = (await appRecords.installed().apps()).map((record) => record.record);
+    installed = (await appRecords.hostedInstances().apps()).map((record) => record.record);
   } catch (error) {
     log.error(`appReconciler - cannot read the installed apps for the ${reason} sweep: ${error.message}`);
     return;
@@ -2268,7 +2268,7 @@ async function enqueueAll(reason = 'resync') {
 
 /**
  * Enqueue every component of a removal still owed: an instance marked owed in
- * the ledger, and a legacy owed-teardown record. A removal is a desired state
+ * the resources, and a legacy owed-teardown record. A removal is a desired state
  * the sweep converges like any other, whatever backoff its last partial pass
  * left it with, so the sweep docker's return runs drives it on at once.
  *
@@ -2279,7 +2279,7 @@ async function enqueueOwedTeardowns(reason) {
   let owed;
   let legacy;
   try {
-    owed = await appRecords.installed().owed();
+    owed = await appRecords.hostedInstances().owed();
     legacy = await pendingTeardownStore.readAllTeardowns();
   } catch (error) {
     log.warn(`appReconciler - cannot read the owed teardowns for the ${reason} sweep: ${error.message}`);
@@ -2288,8 +2288,8 @@ async function enqueueOwedTeardowns(reason) {
   const identifiers = [];
   for (const instance of owed) {
     // eslint-disable-next-line no-await-in-loop
-    const ledger = await appRecords.ledgers().byInstance(instance.name, instance.replica);
-    identifiers.push(...(ledger?.identifiers() ?? []));
+    const resources = await appRecords.instanceResources().byInstance(instance.name, instance.replica);
+    identifiers.push(...(resources?.identifiers() ?? []));
   }
   for (const doc of legacy) {
     identifiers.push(...(doc.components || []).map((component) => component.identifier));
@@ -2371,7 +2371,7 @@ async function enqueueDependents(identifier) {
 async function enqueueAppDependents(appName) {
   let installed;
   try {
-    installed = (await appRecords.installed().apps()).map((record) => record.record);
+    installed = (await appRecords.hostedInstances().apps()).map((record) => record.record);
   } catch (err) {
     log.warn(`appReconciler - enqueueAppDependents ${appName} read failed: ${err.message}`);
     return;

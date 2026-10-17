@@ -78,7 +78,7 @@ const submissionSpec = (...mounts) => v9Spec({ components: webWith(...mounts) },
  * The `priorSpec` an UPDATE carries — a different class from the one above.
  * appOperations reads the superseded spec off the registry (sealed, because any
  * content mount forces encryption) and decrypts it before forwarding, so what
- * arrives is a DecryptedCanonicalSpec: `isEncrypted === true`, `sealed === false`.
+ * arrives is a OpenedSpec: `isEncrypted === true`, `sealed === false`.
  */
 const priorSpecOf = (...mounts) => decryptedV9Spec({ components: webWith(...mounts) });
 

@@ -12,7 +12,7 @@
  * The cost was concrete. A hand-written double is always a SUBSET of the real
  * class, and production code gets written to the subset: appSubmission carried
  * `spec.spec || spec` for months because a test double's inner spec had only
- * `serialize` and `version`, a shape the real DecryptedCanonicalSpec has never
+ * `serialize` and `version`, a shape the real OpenedSpec has never
  * had — it delegates contentHash, and its own comment says reaching through
  * `.spec` is the thing not to do.
  *
@@ -59,8 +59,8 @@ async function loadSpecLibrary() {
   // sealed fixtures tried to reach the network — which tests/init.js correctly
   // fails the run over. Alphabetical order decides who poisons whom, which is
   // not a property a suite should have.
-  flux.EncryptedSpecV8.registerProvider(() => new InsecureLegacyTestCryptoProvider());
-  flux.EncryptedSpecV9.registerProvider(() => new InsecureTestCryptoProvider());
+  flux.SealedSpecV8.registerProvider(() => new InsecureLegacyTestCryptoProvider());
+  flux.SealedSpecV9.registerProvider(() => new InsecureTestCryptoProvider());
   cached = flux;
   return cached;
 }
@@ -192,7 +192,7 @@ async function v1Spec(overrides = {}) {
   }, { chain: flux.Chain.MAIN });
 }
 
-/** A real EncryptedSpecV9 — the node-sealed form a v9 app is stored and
+/** A real SealedSpecV9 — the node-sealed form a v9 app is stored and
  * gossiped as. In production the NODE produces this, after validating cleartext
  * that arrived HPKE-sealed; the owner never holds it. */
 async function sealedV9Spec(overrides = {}) {
@@ -201,13 +201,13 @@ async function sealedV9Spec(overrides = {}) {
   // the encryption-forcing rules refuse exactly the specs this helper exists to
   // produce — the ones carrying the fields the envelope protects.
   const spec = await v9Spec(overrides, { encrypted: true });
-  return flux.EncryptedSpecV9.fromSpec(
-    spec, await flux.EncryptedSpecV9.createProviderFor(spec.name, spec.owner),
+  return flux.SealedSpecV9.fromSpec(
+    spec, await flux.SealedSpecV9.createProviderFor(spec.name, spec.owner),
   );
 }
 
 /**
- * A real EncryptedSpecV8 — the enterprise blob an owner seals and submits.
+ * A real SealedSpecV8 — the enterprise blob an owner seals and submits.
  *
  * Sealed with the legacy provider, so this survives serialize() ->
  * deserialize() -> decrypt() the way a production one does. It did not before:
@@ -216,28 +216,28 @@ async function sealedV9Spec(overrides = {}) {
 async function sealedV8Spec(overrides = {}) {
   const flux = await loadSpecLibrary();
   const spec = await v8Spec(overrides, { encrypted: true });
-  return flux.EncryptedSpecV8.fromSpec(
-    spec, await flux.EncryptedSpecV8.createProviderFor(spec.name, spec.owner),
+  return flux.SealedSpecV8.fromSpec(
+    spec, await flux.SealedSpecV8.createProviderFor(spec.name, spec.owner),
   );
 }
 
-/** A real DecryptedCanonicalSpec — what a node holds after opening a sealed
+/** A real OpenedSpec — what a node holds after opening a sealed
  * spec. Note `serialize()` is blocked on it by design; `toCanonical()` is not. */
 async function decryptedV9Spec(overrides = {}) {
   const sealed = await sealedV9Spec(overrides);
   return sealed.decrypt(await sealed.createProvider());
 }
 
-/** A real DecryptedCanonicalSpec over a v8 enterprise blob. */
+/** A real OpenedSpec over a v8 enterprise blob. */
 async function decryptedV8Spec(overrides = {}) {
   const sealed = await sealedV8Spec(overrides);
   return sealed.decrypt(await sealed.createProvider());
 }
 
-/** A real InstantiatedSpec — a stored spec plus its chain state. */
-async function instantiatedSpec(spec, state = {}) {
+/** A real RegisteredSpec — a stored spec plus its chain state. */
+async function registeredSpec(spec, state = {}) {
   const flux = await loadSpecLibrary();
-  return flux.InstantiatedSpec.fromEvent({
+  return flux.RegisteredSpec.fromEvent({
     spec,
     hash: state.hash ?? 'a'.repeat(64),
     height: state.height ?? 2_500_000,
@@ -255,7 +255,7 @@ async function instantiatedSpec(spec, state = {}) {
  * stubbed — the entitlements gate, the image validator, the registry — nothing
  * exercises what it does with the object it was handed, so a delegation can
  * disappear from flux-spec with the suite still green. That happened: removing
- * `toCanonical` from DecryptedCanonicalSpec left appSubmission's 21 tests
+ * `toCanonical` from OpenedSpec left appSubmission's 21 tests
  * passing even after they were rewritten to use real objects.
  *
  * So read the argument back off the stub and call what the real collaborator
@@ -296,6 +296,6 @@ module.exports = {
   sealedV8Spec,
   decryptedV9Spec,
   decryptedV8Spec,
-  instantiatedSpec,
+  registeredSpec,
   assertAnswers,
 };

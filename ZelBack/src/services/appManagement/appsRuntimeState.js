@@ -571,7 +571,7 @@ async function recordExit(identifier, exitCode) {
  * here. The run facts are this node's evidence that the component has run
  * here, which the recovery gate reads to keep an established component rather
  * than remove it over a rebuild that fails; they are cleared only by remove().
- * The volume record is what a release before the installed ledger wrote about
+ * The volume record is what a release before instance resources wrote about
  * the component's image; the adoption of an instance installed under that
  * release reads it once, and it is kept until then.
  */
@@ -631,7 +631,7 @@ async function remove(identifier) {
 }
 
 /**
- * The volume image a release before the installed ledger recorded for a
+ * The volume image a release before instance resources recorded for a
  * component, or null when none was recorded. Read by the adoption of an
  * instance installed under that release, once.
  *

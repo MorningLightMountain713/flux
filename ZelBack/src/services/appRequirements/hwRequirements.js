@@ -21,7 +21,7 @@ async function systemArchitecture() {
 }
 
 // ── Placement checks ────────────────────────────────────────────────
-// Accept anything with .placement, .name, .version (InstantiatedSpec
+// Accept anything with .placement, .name, .version (RegisteredSpec
 // or a bare spec class instance after decrypt).
 
 async function checkPlacement(spec) {

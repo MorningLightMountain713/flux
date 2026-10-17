@@ -34,7 +34,7 @@ const generalService = require('../generalService');
 const networkStateService = require('../networkStateService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const { getSpec } = require('../utils/specLibs');
-const { resolveInstantiatedSpec } = require('../utils/specCutover');
+const { resolveRegisteredSpec } = require('../utils/specCutover');
 
 const meshDerivation = require('./meshDerivation');
 const meshCertificates = require('./meshCertificates');
@@ -211,14 +211,14 @@ function lastPassStatus(appName) {
 }
 
 async function gatherMeshApps() {
-  const installs = await appRecords.installed().apps();
+  const installs = await appRecords.hostedInstances().apps();
   const claimedIdentities = new Set(installs.map((install) => install.record.identity).filter(Boolean));
   const apps = [];
   // eslint-disable-next-line no-restricted-syntax
   for (const install of installs) {
     const inst = install.record;
     // eslint-disable-next-line no-await-in-loop
-    const view = await resolveInstantiatedSpec(inst);
+    const view = await resolveRegisteredSpec(inst);
     if (view?.network?.mesh !== true) continue; // eslint-disable-line no-continue
     if (!inst.uuid || !inst.identity) {
       log.warn(`meshReconciler - ${inst.name} is mesh-enabled but carries no registration uuid; skipped`);
@@ -316,11 +316,11 @@ async function gatherContainers(app) {
   const deployments = await deploymentProvider.getInstalledDeployments(app.name);
   // eslint-disable-next-line no-restricted-syntax
   for (const deployment of deployments) {
-    // The member name each container was created with is the ledger's, written
+    // The member name each container was created with is the resources', written
     // by the install before the create; the slot-drift check compares it with
     // the name the register resolves now.
     // eslint-disable-next-line no-await-in-loop
-    const ledger = await appRecords.ledgers().byInstance(deployment.appName, deployment.replica ?? null);
+    const resources = await appRecords.instanceResources().byInstance(deployment.appName, deployment.replica ?? null);
     // eslint-disable-next-line no-restricted-syntax
     for (const [componentName, component] of deployment.componentEntries()) {
       // eslint-disable-next-line no-await-in-loop
@@ -342,7 +342,7 @@ async function gatherContainers(app) {
         identifier: component.identifier,
         pid,
         sourceIp: bridge?.IPAddress || null,
-        meshSelf: ledger?.component(component.componentKey)?.mesh?.name ?? null,
+        meshSelf: resources?.component(component.componentKey)?.mesh?.name ?? null,
       });
     }
   }
@@ -800,9 +800,9 @@ function reconcileAllMeshApps() {
  * @returns {Promise<{presentedIp: string, env: string[], dns: string[]}|null>}
  */
 async function prepareComponentMesh(appName, componentName) {
-  const inst = (await appRecords.installed().byName(appName))?.record;
+  const inst = (await appRecords.hostedInstances().byName(appName))?.record;
   if (!inst) return null;
-  const view = await resolveInstantiatedSpec(inst);
+  const view = await resolveRegisteredSpec(inst);
   if (view?.network?.mesh !== true) return null;
   if (!inst.uuid || !inst.identity) {
     throw new Error(`${appName} is mesh-enabled but carries no registration uuid`);

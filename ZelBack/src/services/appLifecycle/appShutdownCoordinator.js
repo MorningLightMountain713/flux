@@ -57,7 +57,7 @@ async function requestGracefulStop(identifier, reconcilerReason) {
   // the minted identity and cannot be taken apart into a name. A row the boot
   // backfill has not resolved yet does not answer, and the local stop below is
   // exactly what such rows get today.
-  const install = await appRecords.installedByIdentifier(identifier);
+  const install = await appRecords.hostedInstanceByIdentifier(identifier);
   if (!install) return false;
   const appName = install.name;
 

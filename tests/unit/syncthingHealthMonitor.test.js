@@ -34,15 +34,15 @@ const stateMachineMock = {
   nudgeFolderDevices: sinon.stub().resolves(),
 };
 
-// The installed ledgers: none holds a folder unless a test says so.
-const ledgersMock = {
+// The instance resources: none holds a folder unless a test says so.
+const instanceResourcesMock = {
   bySyncFolderId: sinon.stub().resolves(null),
 };
 
 // Load module with mocked dependencies
 const healthMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/syncthingHealthMonitor', {
   '../syncthingService': syncthingServiceMock,
-  '../appDatabase/appRecords': { ledgers: () => ledgersMock },
+  '../appDatabase/appRecords': { instanceResources: () => instanceResourcesMock },
   '../../lib/log': logMock,
   './syncthingMonitorConstants': constantsMock,
   './syncthingFolderStateMachine': stateMachineMock,
@@ -58,8 +58,8 @@ describe('syncthingHealthMonitor tests', () => {
     stateMachineMock.nudgeFolderDevices.resolves();
     stateMachineMock.isPathMounted.reset();
     stateMachineMock.isPathMounted.resolves(false);
-    ledgersMock.bySyncFolderId.reset();
-    ledgersMock.bySyncFolderId.resolves(null);
+    instanceResourcesMock.bySyncFolderId.reset();
+    instanceResourcesMock.bySyncFolderId.resolves(null);
     logMock.info.reset();
     logMock.warn.reset();
     logMock.error.reset();
@@ -226,7 +226,7 @@ describe('syncthingHealthMonitor tests', () => {
       removeAppLocallyFn = sinon.stub().resolves();
     });
 
-    // A folder's directory is the one the installed ledger records for it. For
+    // A folder's directory is the one the instance's resources record for it. For
     // an app registered before v9 the folder's id is the 8.x container name and
     // the directory is named by the component's identifier.
     describe('a folder whose volume is not mounted', () => {
@@ -240,11 +240,11 @@ describe('syncthingHealthMonitor tests', () => {
         existingDir = os.tmpdir();
       });
 
-      // The ledger of the app whose component shares its data under the folder.
-      const ledgerRecording = (directory) => new flux.InstalledLedger({
+      // The resources of the app whose component shares its data under the folder.
+      const resourcesRecording = (directory) => new flux.InstanceResources({
         name: 'myapp',
         components: {
-          web: flux.InstalledLedger.newBlock({ identifier: 'web_bident', image: 'img', syncFolder: { id: FOLDER_ID, path: directory } }),
+          web: flux.InstanceResources.newBlock({ identifier: 'web_bident', image: 'img', syncFolder: { id: FOLDER_ID, path: directory } }),
         },
       });
 
@@ -267,8 +267,8 @@ describe('syncthingHealthMonitor tests', () => {
         });
       };
 
-      it('is skipped while the directory the ledger records for it exists unmounted', async () => {
-        ledgersMock.bySyncFolderId.withArgs(FOLDER_ID).resolves(ledgerRecording(existingDir));
+      it('is skipped while the directory the resources record for it exists unmounted', async () => {
+        instanceResourcesMock.bySyncFolderId.withArgs(FOLDER_ID).resolves(resourcesRecording(existingDir));
         stateMachineMock.isPathMounted.resolves(false);
 
         const result = await monitor();
@@ -279,7 +279,7 @@ describe('syncthingHealthMonitor tests', () => {
       });
 
       it('is checked once that directory is mounted', async () => {
-        ledgersMock.bySyncFolderId.withArgs(FOLDER_ID).resolves(ledgerRecording(existingDir));
+        instanceResourcesMock.bySyncFolderId.withArgs(FOLDER_ID).resolves(resourcesRecording(existingDir));
         stateMachineMock.isPathMounted.resolves(true);
 
         const result = await monitor();
@@ -287,8 +287,8 @@ describe('syncthingHealthMonitor tests', () => {
         expect(result.foldersHealthy).to.equal(1);
       });
 
-      it('is checked when the directory the ledger records does not exist', async () => {
-        ledgersMock.bySyncFolderId.withArgs(FOLDER_ID).resolves(ledgerRecording(path.join(existingDir, 'no-such-directory-web_bident')));
+      it('is checked when the directory the resources record does not exist', async () => {
+        instanceResourcesMock.bySyncFolderId.withArgs(FOLDER_ID).resolves(resourcesRecording(path.join(existingDir, 'no-such-directory-web_bident')));
         stateMachineMock.isPathMounted.resolves(false);
 
         const result = await monitor();
@@ -296,10 +296,10 @@ describe('syncthingHealthMonitor tests', () => {
         expect(result.foldersHealthy).to.equal(1);
       });
 
-      it('is checked, and no directory is probed, for a folder no ledger holds', async () => {
+      it('is checked, and no directory is probed, for a folder no resources hold', async () => {
         const result = await monitor();
 
-        sinon.assert.calledOnceWithExactly(ledgersMock.bySyncFolderId, FOLDER_ID);
+        sinon.assert.calledOnceWithExactly(instanceResourcesMock.bySyncFolderId, FOLDER_ID);
         sinon.assert.notCalled(stateMachineMock.isPathMounted);
         expect(result.foldersHealthy).to.equal(1);
       });

@@ -26,10 +26,10 @@ async function hydrate(doc) {
   if (!doc) return null;
 
   await getSpec();
-  const { InstantiatedSpec } = await getSpecBackend();
+  const { RegisteredSpec } = await getSpecBackend();
 
   try {
-    return InstantiatedSpec.deserialize(doc, { chain: nodeChain() });
+    return RegisteredSpec.deserialize(doc, { chain: nodeChain() });
   } catch (err) {
     log.warn(`appsRepository.hydrate: ${err.message} (name=${doc.name}, version=${doc.version})`);
     return null;
@@ -49,7 +49,7 @@ function globalDb() {
 async function getApplicationOwner(name) {
   const listed = await appRecords.registry().byName(name);
   if (listed) return listed.owner;
-  const installed = await appRecords.installed().byName(name);
+  const installed = await appRecords.hostedInstances().byName(name);
   return installed ? installed.owner : null;
 }
 
@@ -67,7 +67,7 @@ async function getApplicationOwner(name) {
 async function getApplicationOwnerByIdentity(identity) {
   const listed = await appRecords.registry().byIdentity(identity);
   if (listed) return listed.owner;
-  const installed = await appRecords.installed().byIdentity(identity);
+  const installed = await appRecords.hostedInstances().byIdentity(identity);
   if (installed) return installed.owner;
   const { isAppIdentity } = await getSpecBackend();
   return isAppIdentity(identity) ? null : getApplicationOwner(identity);

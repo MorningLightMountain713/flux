@@ -21,7 +21,7 @@ const appHistory = require('../appDecisions/appHistory');
 /**
  * The manifest the listed spec names, or null. The `content` block is in the
  * sealed set, so an encrypted spec is opened under its own provider.
- * @param {object} app - the listed app (InstantiatedSpec)
+ * @param {object} app - the listed app (RegisteredSpec)
  * @returns {Promise<?string>}
  */
 async function namedManifestOf(app) {

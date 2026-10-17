@@ -7,7 +7,7 @@ const proxyquire = require('proxyquire').noCallThru();
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 const { asConfig } = require('./fixtures/config');
 const {
-  loadSpecLibrary, V8_SUBMISSION, v8Spec, v9Spec, sealedV9Spec, instantiatedSpec, assertAnswers,
+  loadSpecLibrary, V8_SUBMISSION, v8Spec, v9Spec, sealedV9Spec, registeredSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 const { installedRecord } = require('./fixtures/appRecords');
 const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
@@ -16,7 +16,7 @@ const globalState = require('../../ZelBack/src/services/utils/globalState');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js.
 // This is the query layer over stored app state, so what appsRepository hands back
-// is what it really hands back: hydrated InstantiatedSpec objects, cleartext or
+// is what it really hands back: hydrated RegisteredSpec objects, cleartext or
 // node-sealed. What stays stubbed is I/O and policy — mongo through dbHelper,
 // docker, the repository itself, and the message wrapper.
 //
@@ -158,7 +158,7 @@ describe('appQueryService tests', () => {
       '../dockerService': dockerServiceStub,
       '../appRuntime/deploymentProvider': deploymentProviderStub,
       '../appDatabase/registryManager': registryManagerStub,
-      '../appDatabase/appRecords': { installed: () => installedStub },
+      '../appDatabase/appRecords': { hostedInstances: () => installedStub },
       '../appRequirements/nodeSpecs': nodeSpecsStub,
       '../../lib/log': logStub,
       '../utils/specLibs': {
@@ -175,12 +175,12 @@ describe('appQueryService tests', () => {
 
   describe('installedApps', () => {
     it('should return installed apps from database', async () => {
-      // What listInstalledApps really resolves: hydrated InstantiatedSpec objects,
+      // What listInstalledApps really resolves: hydrated RegisteredSpec objects,
       // version-mixed the way the local collection is. installedApps maps
       // serialize() over them, so the answer is the stored wire form, not a summary.
       const rows = [
-        await instantiatedSpec(await v8Spec({ name: 'appone' }), { hash: 'h1', height: 100 }),
-        await instantiatedSpec(await v9Spec({ name: 'apptwo' }), { hash: 'h2', height: 200 }),
+        await registeredSpec(await v8Spec({ name: 'appone' }), { hash: 'h1', height: 100 }),
+        await registeredSpec(await v9Spec({ name: 'apptwo' }), { hash: 'h2', height: 200 }),
       ];
       const expected = rows.map((row) => row.serialize());
 
@@ -204,16 +204,16 @@ describe('appQueryService tests', () => {
       // comes from, and a shape hydrate cannot read is a shape nobody can consume.
       const [payload] = messageHelperStub.createDataMessage.firstCall.args;
       payload.forEach((doc) => {
-        expect(flux.InstantiatedSpec.deserialize(doc, { chain: flux.Chain.MAIN })).to.be.instanceOf(flux.InstantiatedSpec);
+        expect(flux.RegisteredSpec.deserialize(doc, { chain: flux.Chain.MAIN })).to.be.instanceOf(flux.RegisteredSpec);
       });
     });
 
-    // The installed record is this node's: its replica, a removal in progress and
+    // The hosted instance is this node's: its replica, a removal in progress and
     // the component keys it derived never leave the node, and the keys hold
     // component names an encrypted app keeps sealed.
-    it('serves each app\'s registered record, none of the installed record\'s own fields', async () => {
-      const row = await instantiatedSpec(await v9Spec({ name: 'apptwo' }), { hash: 'h2', height: 200 });
-      installedStub.apps.resolves([new flux.InstalledSpec({
+    it('serves each app\'s registered record, none of the hosted instance\'s own fields', async () => {
+      const row = await registeredSpec(await v9Spec({ name: 'apptwo' }), { hash: 'h2', height: 200 });
+      installedStub.apps.resolves([new flux.HostedInstance({
         record: row, replica: 'r1', owed: { since: 1, reason: 'expired' }, componentKeys: new Map([['web', `c${'b'.repeat(51)}a`]]),
       })]);
       messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
@@ -221,13 +221,13 @@ describe('appQueryService tests', () => {
       const result = await appQueryService.installedApps();
 
       expect(result.data).to.deep.equal([row.serialize()]);
-      for (const field of flux.INSTALLED_FIELDS) expect(result.data[0], field).to.not.have.property(field);
+      for (const field of flux.HOSTED_FIELDS) expect(result.data[0], field).to.not.have.property(field);
     });
 
     // An enterprise app is stored node-sealed. The endpoint must be able to answer
     // for it, and the answer must stay sealed.
     it('serves a node-sealed app without leaking its cleartext', async () => {
-      const row = await instantiatedSpec(
+      const row = await registeredSpec(
         await sealedV9Spec({ name: 'sealedapp' }), { hash: 'hs9', height: 900 },
       );
 
@@ -242,17 +242,17 @@ describe('appQueryService tests', () => {
       expect(doc, 'the cleartext component set must not be served').to.not.have.property('components');
       // The cleartext summary survives, which is what a caller sizes the app from.
       expect(doc.resources).to.exist;
-      expect(flux.InstantiatedSpec.deserialize(doc, { chain: flux.Chain.MAIN }).spec).to.be.instanceOf(flux.EncryptedSpecV9);
+      expect(flux.RegisteredSpec.deserialize(doc, { chain: flux.Chain.MAIN }).spec).to.be.instanceOf(flux.SealedSpecV9);
       // And the round-trip above is not vacuous: a sealed row binds its cleartext
       // metadata into the AAD, so one extra storage field is refused outright.
       expect(
-        () => flux.InstantiatedSpec.deserialize({ ...doc, replica: 'r1' }, { chain: flux.Chain.MAIN }),
+        () => flux.RegisteredSpec.deserialize({ ...doc, replica: 'r1' }, { chain: flux.Chain.MAIN }),
         'a decorated sealed doc must be refused, or the round-trip proves nothing',
       ).to.throw(/unexpected fields/);
     });
 
     it('should return installed apps with specific appname from query', async () => {
-      const row = await instantiatedSpec(await v8Spec({ name: 'appone' }), { hash: 'h1', height: 100 });
+      const row = await registeredSpec(await v8Spec({ name: 'appone' }), { hash: 'h1', height: 100 });
       const req = {
         params: { appname: 'appone' },
         query: {},
@@ -272,7 +272,7 @@ describe('appQueryService tests', () => {
     });
 
     it('should handle string parameter for appname', async () => {
-      const row = await instantiatedSpec(await v8Spec({ name: 'appone' }), { hash: 'h1', height: 100 });
+      const row = await registeredSpec(await v8Spec({ name: 'appone' }), { hash: 'h1', height: 100 });
 
       installedStub.byName.resolves(installedRecord(row));
       messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
@@ -298,8 +298,8 @@ describe('appQueryService tests', () => {
 
     it('should return apps data with response passed', async () => {
       const rows = [
-        await instantiatedSpec(await v8Spec({ name: 'appone' }), { hash: 'h1', height: 100 }),
-        await instantiatedSpec(await v9Spec({ name: 'apptwo' }), { hash: 'h2', height: 200 }),
+        await registeredSpec(await v8Spec({ name: 'appone' }), { hash: 'h1', height: 100 }),
+        await registeredSpec(await v9Spec({ name: 'apptwo' }), { hash: 'h2', height: 200 }),
       ];
       const expected = rows.map((row) => row.serialize());
       const res = {
@@ -860,7 +860,7 @@ describe('appQueryService tests', () => {
           '../dockerService': dockerServiceStub,
           '../appRuntime/deploymentProvider': deploymentProviderStub,
           '../appDatabase/registryManager': registryManagerStub,
-          '../appDatabase/appRecords': { installed: () => installedStub },
+          '../appDatabase/appRecords': { hostedInstances: () => installedStub },
           '../../lib/log': logStub,
           '../verificationHelper': verificationHelperStub,
           '../fluxNetworkHelper': fluxNetworkHelperStub,

@@ -300,7 +300,7 @@ describe('pricingRegime', () => {
         },
         '../utils/specCutover': {
           resolveSpec: sinon.stub().resolves(null),
-          resolveInstantiatedSpec: sinon.stub().resolves(null),
+          resolveRegisteredSpec: sinon.stub().resolves(null),
         },
       });
       return { regime, get };

@@ -7,13 +7,13 @@ const proxyquire = require('proxyquire').noCallThru();
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 const { asConfig } = require('./fixtures/config');
 const {
-  loadSpecLibrary, v9Spec, sealedV9Spec, instantiatedSpec, assertAnswers,
+  loadSpecLibrary, v9Spec, sealedV9Spec, registeredSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 const { InstallStatus } = require('../../ZelBack/src/services/appLifecycle/installStatus');
 const admissionControl = require('../../ZelBack/src/services/utils/admissionControl');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
-// for why. The installer receives an InstantiatedSpec and works through a
+// for why. The installer receives an RegisteredSpec and works through a
 // DeploymentSpec built from it, so both are the real classes. What stays stubbed
 // is I/O and FluxOS policy: docker, mongo, the daemon RPCs, the reconciler.
 let flux;
@@ -31,20 +31,20 @@ describe('appInstaller tests', () => {
   let hwRequirementsStub;
 
   // Real objects, built once — the first fromSubmission compiles the ajv schemas.
-  let testappInstantiated; // cleartext v9, name 'testapp'
-  let newappSpec; // the cleartext v9 spec behind newappInstantiated
-  let newappInstantiated; // cleartext v9, name 'newapp', hash 'hash1'
-  let arcaneInstantiated; // node-sealed v9 over the same app — genuinely Arcane-only
+  let testappRegistered; // cleartext v9, name 'testapp'
+  let newappSpec; // the cleartext v9 spec behind newappRegistered
+  let newappRegistered; // cleartext v9, name 'newapp', hash 'hash1'
+  let arcaneRegistered; // node-sealed v9 over the same app — genuinely Arcane-only
 
   before(async function loadLibrary() {
     this.timeout(60_000);
     flux = await loadSpecLibrary();
-    testappInstantiated = await instantiatedSpec(await v9Spec({ name: 'testapp' }), { hash: 'hash0' });
+    testappRegistered = await registeredSpec(await v9Spec({ name: 'testapp' }), { hash: 'hash0' });
     newappSpec = await v9Spec({ name: 'newapp' });
-    newappInstantiated = await instantiatedSpec(newappSpec, { hash: 'hash1' });
+    newappRegistered = await registeredSpec(newappSpec, { hash: 'hash1' });
     // NOT a stubbed requiresArcane(): an encrypted spec IS Arcane-only, and
-    // InstantiatedSpec freezes itself, so the real answer is the only one on offer.
-    arcaneInstantiated = await instantiatedSpec(await sealedV9Spec({ name: 'newapp' }), { hash: 'hash1' });
+    // RegisteredSpec freezes itself, so the real answer is the only one on offer.
+    arcaneRegistered = await registeredSpec(await sealedV9Spec({ name: 'newapp' }), { hash: 'hash1' });
   });
 
   beforeEach(() => {
@@ -158,8 +158,8 @@ describe('appInstaller tests', () => {
       '../../lib/log': logStub,
       '../appDatabase/appRecords': {
         registry: () => ({ byName: sinon.stub().resolves(null) }),
-        installed: () => ({ put: sinon.stub().resolves(), byReplica: sinon.stub().resolves(null), keys: sinon.stub().resolves([]) }),
-        ledgers: () => ({ put: sinon.stub().resolves(), setNetwork: sinon.stub().resolves() }),
+        hostedInstances: () => ({ put: sinon.stub().resolves(), byReplica: sinon.stub().resolves(null), keys: sinon.stub().resolves([]) }),
+        instanceResources: () => ({ put: sinon.stub().resolves(), setNetwork: sinon.stub().resolves() }),
       },
       '../appRuntime/deploymentProvider': {
         listInstalledDeployments: sinon.stub().resolves([]),
@@ -335,7 +335,7 @@ describe('appInstaller tests', () => {
     it('defers when the app already holds an operation lease', async () => {
       operationRegistry.acquire('testapp', 'remove', 'test');
 
-      const result = await appInstaller.installApplication(testappInstantiated);
+      const result = await appInstaller.installApplication(testappRegistered);
 
       expect(logStub.error.called).to.be.true;
       expect(result.status).to.equal(appInstaller.InstallStatus.DEFERRED);
@@ -402,10 +402,10 @@ describe('appInstaller tests', () => {
       // read-back is the real record class over the spec being installed.
       const installedStub = {
         put: sinon.stub().resolves(),
-        byReplica: sinon.stub().resolves(new flux.InstalledSpec({ record: newappInstantiated, replica: null, componentKeys })),
+        byReplica: sinon.stub().resolves(new flux.HostedInstance({ record: newappRegistered, replica: null, componentKeys })),
         keys: sinon.stub().resolves(alreadyInstalled ? [{ name: 'newapp', replica: null }] : []),
       };
-      const ledgersStub = { put: sinon.stub().resolves(), setNetwork: sinon.stub().resolves() };
+      const instanceResourcesStub = { put: sinon.stub().resolves(), setNetwork: sinon.stub().resolves() };
       const ensureAppDockerNetwork = sinon.stub().resolves('net');
 
       const appInstallerFresh = proxyquire.noCallThru().load('../../ZelBack/src/services/appLifecycle/appInstaller', {
@@ -444,8 +444,8 @@ describe('appInstaller tests', () => {
         '../../lib/log': logStub,
         '../appDatabase/appRecords': {
           registry: () => ({ byName: sinon.stub().resolves(globalAppInfo) }),
-          installed: () => installedStub,
-          ledgers: () => ledgersStub,
+          hostedInstances: () => installedStub,
+          instanceResources: () => instanceResourcesStub,
         },
         '../appRuntime/deploymentProvider': {
           listInstalledDeployments: sinon.stub().resolves([]),
@@ -486,14 +486,14 @@ describe('appInstaller tests', () => {
         resolveDeploymentIdentity,
         isImageBlocked,
         installedStub,
-        ledgersStub,
+        instanceResourcesStub,
         ensureAppDockerNetwork,
         checkAppDependencyRequirements,
         connectComponentToLinkedApps,
       };
     }
 
-    // Every test below installs `newappInstantiated` — a real InstantiatedSpec over a
+    // Every test below installs `newappRegistered` — a real RegisteredSpec over a
     // real cleartext FluxAppSpecV9. Its name, owner, hash, placement, requiresArcane()
     // and serialize() are the classes' own, so nothing here can be written to a shape
     // the real object does not have.
@@ -502,7 +502,7 @@ describe('appInstaller tests', () => {
       const { installer, installComponent } = loadFresh({ converge: { converged: true, failed: [] } });
 
       // A node-sealed spec, not a stubbed predicate: encrypted IS Arcane-only.
-      const result = await installer.installApplication(arcaneInstantiated, {});
+      const result = await installer.installApplication(arcaneRegistered, {});
 
       expect(result.status).to.equal(installer.InstallStatus.REJECTED);
       expect(result.reason).to.include('ArcaneOS');
@@ -514,7 +514,7 @@ describe('appInstaller tests', () => {
         installer, onInstallComplete, fluxEventBusPublish, appReconcilerAwaitConvergence,
       } = loadFresh({ converge: { converged: true, failed: [] } });
 
-      const result = await installer.installApplication(newappInstantiated, {});
+      const result = await installer.installApplication(newappRegistered, {});
 
       expect(result.status, 'install succeeded').to.equal(appInstaller.InstallStatus.INSTALLED);
       expect(onInstallComplete.calledOnce, 'post-install broadcast fired').to.be.true;
@@ -531,7 +531,7 @@ describe('appInstaller tests', () => {
 
       it('is not published for an install, which has app:installed', async () => {
         const { installer, fluxEventBusPublish } = loadFresh();
-        const result = await installer.installApplication(newappInstantiated, {});
+        const result = await installer.installApplication(newappRegistered, {});
         expect(result.status).to.equal(appInstaller.InstallStatus.INSTALLED);
         expect(fluxEventBusPublish.calledWith('app:installed')).to.equal(true);
         expect(outcomesPublished(fluxEventBusPublish)).to.deep.equal([]);
@@ -539,7 +539,7 @@ describe('appInstaller tests', () => {
 
       it('says SKIPPED when the node already holds the app', async () => {
         const { installer, fluxEventBusPublish } = loadFresh({ alreadyInstalled: true });
-        const result = await installer.installApplication(newappInstantiated, {});
+        const result = await installer.installApplication(newappRegistered, {});
         expect(result.status).to.equal(appInstaller.InstallStatus.SKIPPED);
         expect(outcomesPublished(fluxEventBusPublish)).to.deep.equal([
           { name: 'newapp', outcome: appInstaller.InstallStatus.SKIPPED },
@@ -548,7 +548,7 @@ describe('appInstaller tests', () => {
 
       it('says DEFERRED when the install cannot proceed yet', async () => {
         const { installer, fluxEventBusPublish } = loadFresh({ policyReady: false });
-        const result = await installer.installApplication(newappInstantiated, {});
+        const result = await installer.installApplication(newappRegistered, {});
         expect(result.status).to.equal(appInstaller.InstallStatus.DEFERRED);
         expect(outcomesPublished(fluxEventBusPublish)).to.deep.equal([
           { name: 'newapp', outcome: appInstaller.InstallStatus.DEFERRED },
@@ -557,16 +557,16 @@ describe('appInstaller tests', () => {
 
       it('says REJECTED when the node will not take the app', async () => {
         const { installer, fluxEventBusPublish } = loadFresh();
-        const result = await installer.installApplication(arcaneInstantiated, {});
+        const result = await installer.installApplication(arcaneRegistered, {});
         expect(result.status).to.equal(appInstaller.InstallStatus.REJECTED);
         expect(outcomesPublished(fluxEventBusPublish)).to.deep.equal([
-          { name: arcaneInstantiated.name, outcome: appInstaller.InstallStatus.REJECTED },
+          { name: arcaneRegistered.name, outcome: appInstaller.InstallStatus.REJECTED },
         ]);
       });
 
       it('says FAILED when the install rolled back', async () => {
         const { installer, fluxEventBusPublish } = loadFresh({ converge: { converged: false, failed: ['web_newapp'] } });
-        const result = await installer.installApplication(newappInstantiated, {});
+        const result = await installer.installApplication(newappRegistered, {});
         expect(result.status).to.equal(appInstaller.InstallStatus.FAILED);
         expect(outcomesPublished(fluxEventBusPublish)).to.deep.equal([
           { name: 'newapp', outcome: appInstaller.InstallStatus.FAILED },
@@ -576,7 +576,7 @@ describe('appInstaller tests', () => {
       it('says FAILED for an attempt that throws, and still throws', async () => {
         const { installer, fluxEventBusPublish } = loadFresh({ convergeError: new Error('reconciler gone') });
         let thrown = null;
-        await installer.installApplication(newappInstantiated, {}).catch((error) => { thrown = error; });
+        await installer.installApplication(newappRegistered, {}).catch((error) => { thrown = error; });
         expect(thrown && thrown.message).to.equal('reconciler gone');
         expect(outcomesPublished(fluxEventBusPublish)).to.deep.equal([
           { name: 'newapp', outcome: appInstaller.InstallStatus.FAILED },
@@ -597,10 +597,10 @@ describe('appInstaller tests', () => {
       const {
         installer, deployment, installComponent, buildDeployment, planDeployment, namingForVersion, componentKeys, formerNames, registrationVersionOf, resolveDeploymentIdentity,
         checkAppDependencyRequirements, connectComponentToLinkedApps, isImageBlocked,
-        installedStub, ledgersStub, ensureAppDockerNetwork, appReconcilerAwaitConvergence, provisionContentSlots,
+        installedStub, instanceResourcesStub, ensureAppDockerNetwork, appReconcilerAwaitConvergence, provisionContentSlots,
       } = loadFresh({ converge: { converged: true, failed: [] } });
 
-      const result = await installer.installApplication(newappInstantiated, {});
+      const result = await installer.installApplication(newappRegistered, {});
       expect(result.status, 'the whole install path must run for these to mean anything')
         .to.equal(appInstaller.InstallStatus.INSTALLED);
 
@@ -625,17 +625,17 @@ describe('appInstaller tests', () => {
       const [built, buildOpts] = planDeployment.firstCall.args;
       expect(buildOpts).to.have.property('replica', null);
       // The version installed is planned with the keys derived for it.
-      sinon.assert.calledOnceWithExactly(namingForVersion, newappInstantiated);
+      sinon.assert.calledOnceWithExactly(namingForVersion, newappRegistered);
       expect(buildOpts.componentKeys).to.equal(componentKeys);
       // Every view the install provisions from is named by the version the
       // registration message states, read once.
       sinon.assert.calledOnce(registrationVersionOf);
       expect(buildOpts).to.have.property('registrationVersion', 8);
       expect(buildDeployment.lastCall.args[1]).to.have.property('registrationVersion', 8);
-      // The build after the records are put is from the installed record read back.
+      // The build after the records are put is from the hosted instance read back.
       const [readBack] = buildDeployment.lastCall.args;
-      expect(readBack).to.be.instanceOf(flux.InstalledSpec);
-      expect(readBack.record).to.equal(newappInstantiated);
+      expect(readBack).to.be.instanceOf(flux.HostedInstance);
+      expect(readBack.record).to.equal(newappRegistered);
       expect(() => flux.DeploymentSpec.fromSpec(built.spec, APPS_FOLDER, { replica: null }))
         .to.not.throw();
 
@@ -674,26 +674,26 @@ describe('appInstaller tests', () => {
       expect(linkedDeployment.appName).to.equal('newapp');
       expect(aliases).to.be.an('array');
 
-      // The installed record is the spec being installed, as the loose instance;
-      // the ledger starts empty beside it; the network is named in the ledger
+      // The hosted instance is the spec being installed, as the loose instance;
+      // the resources starts empty beside it; the network is named in the resources
       // before it is created; and the identifiers the reconciler is later
       // asked to converge come from the same deployment.
       const [installed] = installedStub.put.firstCall.args;
-      expect(installed).to.be.instanceOf(flux.InstalledSpec);
-      expect(installed.record).to.equal(newappInstantiated);
+      expect(installed).to.be.instanceOf(flux.HostedInstance);
+      expect(installed.record).to.equal(newappRegistered);
       expect(installed.replica).to.equal(null);
       // It holds the component keys and former names the install derived for it.
       expect(installed.componentKeys).to.deep.equal(componentKeys);
       expect(installed.formerNames).to.deep.equal(formerNames);
-      const [ledger] = ledgersStub.put.firstCall.args;
-      expect(ledger).to.be.instanceOf(flux.InstalledLedger);
-      expect(ledger.serialize()).to.deep.equal({
+      const [resources] = instanceResourcesStub.put.firstCall.args;
+      expect(resources).to.be.instanceOf(flux.InstanceResources);
+      expect(resources.serialize()).to.deep.equal({
         name: 'newapp', replica: null, network: null, components: {},
       });
-      expect(installedStub.put.calledBefore(ledgersStub.put)).to.equal(true);
-      sinon.assert.calledOnceWithExactly(ledgersStub.setNetwork, 'newapp', null, { name: deployment.networkName });
-      expect(ledgersStub.setNetwork.calledBefore(ensureAppDockerNetwork), 'named before created').to.equal(true);
-      expect(ledgersStub.put.calledBefore(ledgersStub.setNetwork)).to.equal(true);
+      expect(installedStub.put.calledBefore(instanceResourcesStub.put)).to.equal(true);
+      sinon.assert.calledOnceWithExactly(instanceResourcesStub.setNetwork, 'newapp', null, { name: deployment.networkName });
+      expect(instanceResourcesStub.setNetwork.calledBefore(ensureAppDockerNetwork), 'named before created').to.equal(true);
+      expect(instanceResourcesStub.put.calledBefore(instanceResourcesStub.setNetwork)).to.equal(true);
       expect(deployment.componentEntries().map(([name]) => name)).to.deep.equal(['web']);
       expect(appReconcilerAwaitConvergence.firstCall.args[0]).to.deep.equal(['web_newapp']);
     });
@@ -702,7 +702,7 @@ describe('appInstaller tests', () => {
     // after it fails takes back the claim an announcement made meanwhile.
     it('tells the network when an install asked for by hand is torn down', async () => {
       const { installer, uninstallApplication } = loadFresh({
-        converge: { converged: false, failed: ['web_newapp'] }, globalAppInfo: newappInstantiated,
+        converge: { converged: false, failed: ['web_newapp'] }, globalAppInfo: newappRegistered,
       });
       verificationHelperStub.verifyPrivilege.resolves(true);
       const res = {
@@ -720,7 +720,7 @@ describe('appInstaller tests', () => {
     it('leaves the network uninformed when the caller keeps the app', async () => {
       const { installer, uninstallApplication } = loadFresh({ converge: { converged: false, failed: ['web_newapp'] } });
 
-      await installer.installApplication(newappInstantiated, {});
+      await installer.installApplication(newappRegistered, {});
 
       expect(uninstallApplication.calledWith('newapp'), 'the failed install was not torn down').to.equal(true);
       expect(uninstallApplication.firstCall.args[1].broadcastRemoval, 'a kept claim was withdrawn').to.equal(false);
@@ -729,7 +729,7 @@ describe('appInstaller tests', () => {
     it('rolls back and returns PROVISIONED-BUT-NOT-RUNNING when a component fails to converge', async () => {
       const { installer, uninstallApplication } = loadFresh({ converge: { converged: false, failed: ['web_newapp'] } });
 
-      const result = await installer.installApplication(newappInstantiated, {});
+      const result = await installer.installApplication(newappRegistered, {});
 
       expect(result.status, 'install failed the converge-wait').to.equal(appInstaller.InstallStatus.FAILED);
       expect(result.reason).to.include('PROVISIONED-BUT-NOT-RUNNING');
@@ -741,7 +741,7 @@ describe('appInstaller tests', () => {
         installer, storeAppInstallingErrorMessage, broadcastMessageToAll,
       } = loadFresh({ converge: { converged: false, failed: ['web_newapp'] } });
 
-      await installer.installApplication(newappInstantiated, {});
+      await installer.installApplication(newappRegistered, {});
 
       expect(storeAppInstallingErrorMessage.calledOnce, 'error stored locally (feeds error counting)').to.be.true;
       const stored = storeAppInstallingErrorMessage.firstCall.args[0];
@@ -760,7 +760,7 @@ describe('appInstaller tests', () => {
     it('defers, touching nothing, while the network policy is unconfirmed', async () => {
       const { installer, installComponent, isImageBlocked } = loadFresh({ policyReady: false });
 
-      const result = await installer.installApplication(newappInstantiated, {});
+      const result = await installer.installApplication(newappRegistered, {});
 
       expect(result.status).to.equal(appInstaller.InstallStatus.DEFERRED);
       expect(result.reason).to.include('network policy not yet obtained');
@@ -772,7 +772,7 @@ describe('appInstaller tests', () => {
       it('install-side interlock: defers (not installs) when a teardown is already owed', async () => {
         const { installer, installComponent } = loadFresh({ teardownOwed: true });
 
-        const result = await installer.installApplication(newappInstantiated, {});
+        const result = await installer.installApplication(newappRegistered, {});
 
         expect(result.status, 'deferred, not installed/failed').to.equal(appInstaller.InstallStatus.DEFERRED);
         expect(installComponent.called, 'never provisioned anything').to.be.false;
@@ -786,7 +786,7 @@ describe('appInstaller tests', () => {
           installComponentError: new Error('pull aborted'),
         });
 
-        const result = await installer.installApplication(newappInstantiated, {});
+        const result = await installer.installApplication(newappRegistered, {});
 
         expect(result.status, 'a cancel-unwind defers, never fails').to.equal(appInstaller.InstallStatus.DEFERRED);
         expect(uninstallApplication.called, 'does NOT run its own teardown (the cancel owns it)').to.be.false;
@@ -801,7 +801,7 @@ describe('appInstaller tests', () => {
           installComponentError: Object.assign(new Error('dial tcp: connection refused'), { registryErrorClass: 'transient' }),
         });
 
-        const result = await installer.installApplication(newappInstantiated, {});
+        const result = await installer.installApplication(newappRegistered, {});
 
         expect(result.status, 'a could-not-ask answer defers, never fails').to.equal(appInstaller.InstallStatus.DEFERRED);
         expect(uninstallApplication.called, 'the partial install is still cleaned up').to.be.true;
@@ -820,7 +820,7 @@ describe('appInstaller tests', () => {
           installComponentError: Object.assign(new Error('Could not provision the backend-TLS certificate for web_newapp: signer unreachable'), { code: 'BACKEND_TLS_UNAVAILABLE' }),
         });
 
-        const result = await installer.installApplication(newappInstantiated, {});
+        const result = await installer.installApplication(newappRegistered, {});
 
         expect(result.status, 'a node that cannot sign defers, never fails').to.equal(appInstaller.InstallStatus.DEFERRED);
         expect(uninstallApplication.called, 'the partial install is still cleaned up').to.be.true;
@@ -837,7 +837,7 @@ describe('appInstaller tests', () => {
           installComponentError: new Error('image pull 500'),
         });
 
-        const result = await installer.installApplication(newappInstantiated, {});
+        const result = await installer.installApplication(newappRegistered, {});
 
         expect(result.status, 'a real failure fails').to.equal(appInstaller.InstallStatus.FAILED);
         expect(uninstallApplication.calledWith('newapp'), 'a real failure rolls back').to.be.true;
@@ -863,7 +863,7 @@ describe('appInstaller tests', () => {
           admissionControl.setReclaimer(async (totals) => { asked.push(totals); });
 
           const { installer, installComponent } = loadFresh();
-          const result = await installer.installApplication(newappInstantiated, {});
+          const result = await installer.installApplication(newappRegistered, {});
 
           expect(result.status, 'DEFERRED — FAILED is the 7-day poison').to.equal(appInstaller.InstallStatus.DEFERRED);
           expect(asked.length, 'asked for the capacity back').to.equal(1);
@@ -877,7 +877,7 @@ describe('appInstaller tests', () => {
           admissionControl.setReclaimer(async (totals) => { asked.push(totals); });
 
           const { installer } = loadFresh();
-          const result = await installer.installApplication(newappInstantiated, {});
+          const result = await installer.installApplication(newappRegistered, {});
 
           expect(result.status).to.equal(appInstaller.InstallStatus.FAILED);
           expect(asked.length, 'nothing to reclaim, so nothing asked').to.equal(0);
@@ -896,7 +896,7 @@ describe('appInstaller tests', () => {
           });
 
           const { installer } = loadFresh();
-          await installer.installApplication(newappInstantiated, {});
+          await installer.installApplication(newappRegistered, {});
 
           expect(lockWasFree, 'the lock was free while reclaiming').to.equal(true);
         });
@@ -910,7 +910,7 @@ describe('appInstaller tests', () => {
           checkAppDependencyRequirements: sinon.stub().rejects(notReady),
         });
 
-        const result = await installer.installApplication(newappInstantiated, {});
+        const result = await installer.installApplication(newappRegistered, {});
 
         expect(result.status, 'a missing dependency defers, never fails').to.equal(appInstaller.InstallStatus.DEFERRED);
         expect(result.reason).to.include('is not installed on this node');
@@ -924,7 +924,7 @@ describe('appInstaller tests', () => {
           checkAppDependencyRequirements: sinon.stub().rejects(new Error("App 'collector' that 'newapp' depends on is owned by a different owner. Installation aborted.")),
         });
 
-        const result = await installer.installApplication(newappInstantiated, {});
+        const result = await installer.installApplication(newappRegistered, {});
 
         expect(result.status, 'a misconfiguration is a real failure').to.equal(appInstaller.InstallStatus.FAILED);
         expect(installComponent.called, 'never provisioned anything').to.be.false;
@@ -942,7 +942,7 @@ describe('appInstaller tests', () => {
           connectComponentToLinkedApps: sinon.stub().rejects(notReady),
         });
 
-        const result = await installer.installApplication(newappInstantiated, {});
+        const result = await installer.installApplication(newappRegistered, {});
 
         expect(result.status, 'a mid-install dep-vanish defers, never fails').to.equal(appInstaller.InstallStatus.DEFERRED);
         expect(uninstallApplication.calledWith('newapp'), 'the partial install is cleaned up').to.be.true;
@@ -957,7 +957,7 @@ describe('appInstaller tests', () => {
           teardownOwed: [false, true],
         });
 
-        const result = await installer.installApplication(newappInstantiated, {});
+        const result = await installer.installApplication(newappRegistered, {});
 
         expect(result.status, 'cancel during converge defers').to.equal(appInstaller.InstallStatus.DEFERRED);
         expect(uninstallApplication.called, 'no rollback teardown — the cancel owns it').to.be.false;

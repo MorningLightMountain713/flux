@@ -294,7 +294,7 @@ async function broadcastInstallingCleared(name, ip, replica = null) {
  * log, by name in any letter case.
  * @param {number} currentHeight
  * @param {number} nowSeconds
- * @returns {Promise<Array<{instantiated: object, actual: number, required: number}>>}
+ * @returns {Promise<Array<{registered: object, actual: number, required: number}>>}
  */
 async function underProvisionedApps(currentHeight, nowSeconds) {
   const marginBlocks = config.get('fluxapps.spawnAllowanceBlocks');
@@ -305,10 +305,10 @@ async function underProvisionedApps(currentHeight, nowSeconds) {
     }),
     appsRepository.countRunningByApp(),
   ]);
-  return alive.flatMap((instantiated) => {
-    const actual = runningByApp.get(instantiated.name.toLowerCase()) || 0;
-    const required = instantiated.spec.instances;
-    return actual >= required ? [] : [{ instantiated, actual, required }];
+  return alive.flatMap((registered) => {
+    const actual = runningByApp.get(registered.name.toLowerCase()) || 0;
+    const required = registered.spec.instances;
+    return actual >= required ? [] : [{ registered, actual, required }];
   });
 }
 /**
@@ -428,7 +428,7 @@ async function trySpawningGlobalApplication() {
     // (not running), and an app is one-or-more containers, so "installed" is the clean
     // per-app unit: a running-container count over-counts multi-component apps and
     // miscounts during the install->settle window.
-    const installedApps = await appRecords.installed().apps();
+    const installedApps = await appRecords.hostedInstances().apps();
     if (installedApps.length >= config.get('fluxapps.maxAppsPerNode')) {
       log.info(`trySpawningGlobalApplication - Node at max apps capacity (${installedApps.length}/${config.get('fluxapps.maxAppsPerNode')})`);
       return delayTime;
@@ -524,7 +524,7 @@ async function trySpawningGlobalApplication() {
       // that is indistinguishable from an app nobody wanted, which is how a port
       // collision looked like a placement failure for a whole day.
       const survivors = { found: globalAppNamesLocation.length };
-      const nameSet = () => new Set(globalAppNamesLocation.map((c) => c.instantiated.name));
+      const nameSet = () => new Set(globalAppNamesLocation.map((c) => c.registered.name));
       const stages = [['found', nameSet()]];
 
       // A blocked application is short of instances forever - it has none and can
@@ -544,7 +544,7 @@ async function trySpawningGlobalApplication() {
       }
       globalAppNamesLocation = globalAppNamesLocation.filter(
         (c) => !imageManager.blockedReasonFor(blocklist, {
-          name: c.instantiated.name, owner: c.instantiated.owner, hash: c.instantiated.hash, images: null,
+          name: c.registered.name, owner: c.registered.owner, hash: c.registered.hash, images: null,
         }),
       );
       survivors.afterBlocklist = globalAppNamesLocation.length;
@@ -558,24 +558,24 @@ async function trySpawningGlobalApplication() {
       const installedNames = new Set(installedApps.map((a) => a.name));
       const owesAnIdentity = new Map();
       for (const candidate of globalAppNamesLocation) {
-        const { instantiated } = candidate;
-        if (!installedNames.has(instantiated.name)) continue;
+        const { registered } = candidate;
+        if (!installedNames.has(registered.name)) continue;
         // eslint-disable-next-line no-await-in-loop
-        const assigned = await deploymentProvider.assignedIdentities(instantiated);
+        const assigned = await deploymentProvider.assignedIdentities(registered);
         // eslint-disable-next-line no-await-in-loop
-        const installed = new Set((await appRecords.installed().keys(instantiated.name)).map((key) => key.replica));
-        owesAnIdentity.set(instantiated.name, !assigned.every((identity) => installed.has(identity ?? null)));
+        const installed = new Set((await appRecords.hostedInstances().keys(registered.name)).map((key) => key.replica));
+        owesAnIdentity.set(registered.name, !assigned.every((identity) => installed.has(identity ?? null)));
       }
       globalAppNamesLocation = globalAppNamesLocation.filter((c) => (
-        (!installedNames.has(c.instantiated.name) || owesAnIdentity.get(c.instantiated.name))
-        && !globalState.spawnErrorsLongerAppCache.has(c.instantiated.hash)
-        && !globalState.trySpawningGlobalAppCache.has(c.instantiated.hash)
-        && !appsToBeCheckedLater.some((appAux) => appAux.appName === c.instantiated.name)));
+        (!installedNames.has(c.registered.name) || owesAnIdentity.get(c.registered.name))
+        && !globalState.spawnErrorsLongerAppCache.has(c.registered.hash)
+        && !globalState.trySpawningGlobalAppCache.has(c.registered.hash)
+        && !appsToBeCheckedLater.some((appAux) => appAux.appName === c.registered.name)));
       survivors.afterAlreadyHeldOrTried = globalAppNamesLocation.length;
       stages.push(['afterAlreadyHeldOrTried', nameSet()]);
       globalAppNamesLocation = globalAppNamesLocation.filter((c) => {
         try {
-          return c.instantiated.spec.placement.matches(nodeInfo);
+          return c.registered.spec.placement.matches(nodeInfo);
         } catch (error) {
           // Per app, not per pass. A legacy spec whose region name the location
           // table cannot resolve refuses the geo question rather than widening
@@ -585,14 +585,14 @@ async function trySpawningGlobalApplication() {
           // placement cannot be decided is the answer; not spawning anything is
           // not. The node retries each cycle, and recovers by itself once the
           // table arrives.
-          log.warn(`trySpawningGlobalApplication - cannot decide placement for ${c.instantiated.name}, skipping it this cycle: ${error.message}`);
+          log.warn(`trySpawningGlobalApplication - cannot decide placement for ${c.registered.name}, skipping it this cycle: ${error.message}`);
           return false;
         }
       });
       survivors.afterGeolocation = globalAppNamesLocation.length;
       stages.push(['afterGeolocation', nameSet()]);
       globalAppNamesLocation = globalAppNamesLocation.filter((c) => {
-        const { owner } = c.instantiated;
+        const { owner } = c.registered;
         const isEnterpriseOwner = enterpriseNetwork.isEnterpriseAppOwner(owner);
         const eligible = isEnterpriseNode ? isEnterpriseOwner : !isEnterpriseOwner;
         return eligible;
@@ -603,7 +603,7 @@ async function trySpawningGlobalApplication() {
       // and every owner: the targets are the set the network arranges the instances
       // within, so a node outside them has nothing to take and nothing to hold for later.
       globalAppNamesLocation = globalAppNamesLocation.filter(
-        (c) => c.instantiated.spec.placement.matchesTarget(targetInfo),
+        (c) => c.registered.spec.placement.matchesTarget(targetInfo),
       );
       survivors.afterNodePin = globalAppNamesLocation.length;
       stages.push(['afterNodePin', nameSet()]);
@@ -621,8 +621,8 @@ async function trySpawningGlobalApplication() {
       // exempt: nobody else can fill that seat, whatever the global count says.
       const claimsByApp = await registryManager.installingCountsByApp();
       globalAppNamesLocation = globalAppNamesLocation.filter(
-        (c) => owesAnIdentity.get(c.instantiated.name)
-          || c.actual + (claimsByApp.get(c.instantiated.name.toLowerCase()) ?? 0) < c.required,
+        (c) => owesAnIdentity.get(c.registered.name)
+          || c.actual + (claimsByApp.get(c.registered.name.toLowerCase()) ?? 0) < c.required,
       );
 
       // Whether a candidate is PINNED to this node, decided from cleartext
@@ -630,7 +630,7 @@ async function trySpawningGlobalApplication() {
       // nothing and can be established before deciding whether to decrypt
       // anything. The same three predicates build the selection tiers below, so
       // "pinned here" means exactly one thing in both places.
-      const placementOf = (c) => c.instantiated.spec.placement;
+      const placementOf = (c) => c.registered.spec.placement;
       const targetsThisNodeByIp = (c) => placementOf(c).targetIps.length > 0
         && placementOf(c).matchesTarget({ ip: localSocketAddr });
       const targetsThisNodeByOutpoint = (c) => placementOf(c).targetOutpoints.length > 0
@@ -641,7 +641,7 @@ async function trySpawningGlobalApplication() {
         || targetsThisNodeByOutpoint(c)
         || targetsThisNodeByOperator(c);
       const pinnedHere = new Set(
-        globalAppNamesLocation.filter(targetsThisNode).map((c) => c.instantiated.name),
+        globalAppNamesLocation.filter(targetsThisNode).map((c) => c.registered.name),
       );
 
       // Suppress pure-follower apps (activation.standalone false — shared
@@ -663,11 +663,11 @@ async function trySpawningGlobalApplication() {
           // fully for a cleartext app; an encrypted app in the general pool
           // keeps its activation sealed and is treated as standalone.
           const followerNames = await relationshipResolver.pureFollowerNames(
-            globalAppNamesLocation.map((c) => c.instantiated),
+            globalAppNamesLocation.map((c) => c.registered),
             (app) => pinnedHere.has(app.name),
           );
-          globalAppNamesLocation = globalAppNamesLocation.filter((c) => !followerNames.has(c.instantiated.name)
-            || requiredDependencyNames.has(c.instantiated.name));
+          globalAppNamesLocation = globalAppNamesLocation.filter((c) => !followerNames.has(c.registered.name)
+            || requiredDependencyNames.has(c.registered.name));
         } catch (error) {
           log.error(`trySpawningGlobalApplication - could not compute required dependencies, not suppressing collectors this cycle: ${error.message}`);
         }
@@ -696,19 +696,19 @@ async function trySpawningGlobalApplication() {
           globalAppNamesLocation = globalAppNamesLocation.filter((c) => {
             let totals;
             try {
-              totals = c.instantiated.resourceTotals();
+              totals = c.registered.resourceTotals();
             } catch (error) {
               // A spec whose resources cannot be computed at all (a malformed
               // legacy containerData reaches this) must not take down the sweep
               // for every other candidate.
-              log.warn(`trySpawningGlobalApplication - could not size ${c.instantiated.name}, leaving it to the install-time check: ${error.message}`);
+              log.warn(`trySpawningGlobalApplication - could not size ${c.registered.name}, leaving it to the install-time check: ${error.message}`);
               return true;
             }
             if (!totals) return true;
             const shortfall = hwRequirements.capacityShortfall(capacity, totals)
               || hwRequirements.burstHeadroomShortfall(capacity, totals);
             if (shortfall) {
-              log.info(`trySpawningGlobalApplication - Skipping ${c.instantiated.name} this cycle: ${shortfall}`);
+              log.info(`trySpawningGlobalApplication - Skipping ${c.registered.name} this cycle: ${shortfall}`);
               return false;
             }
             return true;
@@ -732,7 +732,7 @@ async function trySpawningGlobalApplication() {
           // still draining, so re-selecting would race the removal (the port probe
           // hits the draining docker-proxy and reads the port as busy). Reconsidered
           // once the teardown clears.
-          if (await owedRemovals.removalOwedFor(c.instantiated.name)) {
+          if (await owedRemovals.removalOwedFor(c.registered.name)) {
             return false;
           }
           try {
@@ -747,8 +747,8 @@ async function trySpawningGlobalApplication() {
             // placement metadata is for. An encrypted app there reports no links
             // and is treated as ready; the install-time gate does the real check.
             await (targetsThisNode(c)
-              ? relationshipResolver.checkAppDependencyRequirements(c.instantiated)
-              : relationshipResolver.dependenciesReadyForSelection(c.instantiated));
+              ? relationshipResolver.checkAppDependencyRequirements(c.registered)
+              : relationshipResolver.dependenciesReadyForSelection(c.registered));
             return true;
           } catch (error) {
             // Dependency not ready yet -> skip this cycle. Any other error (e.g.
@@ -789,8 +789,8 @@ async function trySpawningGlobalApplication() {
 
       selectedCandidate = pool[Math.floor(Math.random() * pool.length)];
 
-      appToRun = selectedCandidate.instantiated.name;
-      appHash = selectedCandidate.instantiated.hash;
+      appToRun = selectedCandidate.registered.name;
+      appHash = selectedCandidate.registered.hash;
       minInstances = selectedCandidate.required;
 
       log.info(`trySpawningGlobalApplication - Application ${appToRun} selected to try to spawn. Reported as been running in ${selectedCandidate.actual} instances and ${selectedCandidate.required} are required.`);
@@ -806,7 +806,7 @@ async function trySpawningGlobalApplication() {
       // shutdown, preStop) — can only install on an attested ArcaneOS node.
       // The verdict is resolved before this runs, so a non-arcane verdict is
       // definitive: refuse and remember (long-error cache).
-      if (selectedCandidate.instantiated.requiresArcane() && !globalState.isArcane()) {
+      if (selectedCandidate.registered.requiresArcane() && !globalState.isArcane()) {
         log.info(`trySpawningGlobalApplication - Application ${appToRun} requires ArcaneOS; refusing on this node`);
         globalState.spawnErrorsLongerAppCache.set(appHash, '');
         return shortDelayTime;
@@ -830,10 +830,10 @@ async function trySpawningGlobalApplication() {
     runningAppList = await registryManager.appLocation(appToRun);
 
 
-    const instantiated = selectedCandidate
-      ? selectedCandidate.instantiated
+    const registered = selectedCandidate
+      ? selectedCandidate.registered
       : await appRecords.registry().byName(appToRun);
-    if (!instantiated) {
+    if (!registered) {
       throw new Error(`trySpawningGlobalApplication - Specifications for application ${appToRun} were not found!`);
     }
 
@@ -843,7 +843,7 @@ async function trySpawningGlobalApplication() {
     // identity nothing ever provisions. Presence rows carry their replica, so
     // "already here" means every identity this node is assigned is accounted
     // for, not merely that one of them is.
-    const assigned = await deploymentProvider.assignedIdentities(instantiated);
+    const assigned = await deploymentProvider.assignedIdentities(registered);
     // Only rows on this node's own IP count toward its identities.
     const everyAssignedIdentityPresentIn = (documents) => {
       const present = new Set(documents
@@ -862,9 +862,9 @@ async function trySpawningGlobalApplication() {
       return delayTime;
     }
 
-    const installed = new Set((await appRecords.installed().keys(instantiated.name)).map((key) => key.replica));
+    const installed = new Set((await appRecords.hostedInstances().keys(registered.name)).map((key) => key.replica));
     if (assigned.every((identity) => installed.has(identity ?? null))) {
-      log.info(`trySpawningGlobalApplication - Application ${instantiated.name} is already installed`);
+      log.info(`trySpawningGlobalApplication - Application ${registered.name} is already installed`);
       return shortDelayTime;
     }
 
@@ -875,27 +875,27 @@ async function trySpawningGlobalApplication() {
     // arrives. Best-effort: a registry-read failure falls back to allowing the
     // spawn.
     if (config.get('fluxapps.manageCollectorLifecycle')
-      && await relationshipResolver.isPureFollowerApp(instantiated)) {
+      && await relationshipResolver.isPureFollowerApp(registered)) {
       let requiredDeps = null;
       try {
         requiredDeps = await relationshipResolver.getRequiredDependencyNamesForNode({
           ip: localSocketAddr, outpoint: nodeOutpoint, operator: nodeOperator,
         });
       } catch (error) {
-        log.error(`trySpawningGlobalApplication - could not check dependency requirement for ${instantiated.name}: ${error.message}`);
+        log.error(`trySpawningGlobalApplication - could not check dependency requirement for ${registered.name}: ${error.message}`);
       }
-      if (requiredDeps && !requiredDeps.has(instantiated.name)) {
-        log.info(`trySpawningGlobalApplication - ${instantiated.name} is a pure follower and nothing on this node requires it; skipping spawn`);
+      if (requiredDeps && !requiredDeps.has(registered.name)) {
+        log.info(`trySpawningGlobalApplication - ${registered.name} is a pure follower and nothing on this node requires it; skipping spawn`);
         return shortDelayTime;
       }
     }
 
-    let { spec } = instantiated;
-    if (instantiated.isEncrypted) {
+    let { spec } = registered;
+    if (registered.isEncrypted) {
       try {
         const provider = await spec.createProvider();
         // The decrypted view itself, not something reached through it. decrypt()
-        // answers a DecryptedCanonicalSpec, which delegates the version's whole
+        // answers a OpenedSpec, which delegates the version's whole
         // surface - components, placement, componentEntries, hasSyncthing - and
         // deliberately exposes no accessor for the instance inside it. This line
         // predates that: it was written as `.spec` when the accessor existed, and
@@ -928,7 +928,7 @@ async function trySpawningGlobalApplication() {
     const deployments = (identitiesToInstall.length ? identitiesToInstall : [null])
       .map((replica) => DeploymentSpec.fromSpec(spec, appsFolder, {
         replica,
-        identity: instantiated.identity ?? null,
+        identity: registered.identity ?? null,
       }));
     // Images are spec-level — identical across identities — so any view answers
     // for the blocklist.
@@ -936,16 +936,16 @@ async function trySpawningGlobalApplication() {
     const appPorts = [...new Set(deployments.flatMap((d) => d.allHostPorts()))];
 
     // verify app compliance
-    const blockResult = await imageManager.isImageBlocked(instantiated.name, deployment.allImages(), { owner: instantiated.owner, hash: instantiated.hash });
+    const blockResult = await imageManager.isImageBlocked(registered.name, deployment.allImages(), { owner: registered.owner, hash: registered.hash });
     if (blockResult.blocked) {
-      log.info(`trySpawningGlobalApplication - App ${instantiated.name} image is blocked: ${blockResult.reason}. Adding to error cache.`);
+      log.info(`trySpawningGlobalApplication - App ${registered.name} image is blocked: ${blockResult.reason}. Adding to error cache.`);
       globalState.spawnErrorsLongerAppCache.set(appHash, '');
       return shortDelayTime;
     }
     if (blockResult.undetermined) {
       // Blocklist unreachable (transient) - don't admit something we couldn't check.
       // Defer to next cycle without the longer back-off so a brief outage can't lock it out.
-      log.warn(`trySpawningGlobalApplication - image blocklist unreachable for ${instantiated.name}, deferring spawn to next cycle`);
+      log.warn(`trySpawningGlobalApplication - image blocklist unreachable for ${registered.name}, deferring spawn to next cycle`);
       return shortDelayTime;
     }
 
@@ -1002,12 +1002,12 @@ async function trySpawningGlobalApplication() {
     // because nothing changes here until the sibling gives the port up.
     const sibling = await portManager.siblingHoldingPort(appPorts, localSocketAddr);
     if (sibling) {
-      log.error(`trySpawningGlobalApplication - ${instantiated.name} port ${sibling.port} is held by the Flux node at ${sibling.address}, which shares this public address. Installation aborted.`);
+      log.error(`trySpawningGlobalApplication - ${registered.name} port ${sibling.port} is held by the Flux node at ${sibling.address}, which shares this public address. Installation aborted.`);
       // A deferral, published as one: this stands the node down and returns
       // shortDelayTime exactly as the seven reasons below it do, so it belongs
       // in that vocabulary rather than in an event of its own.
       fluxEventBus.publish('spawner:deferred', {
-        appName: instantiated.name,
+        appName: registered.name,
         reason: 'sibling_holds_port',
         delayMs: shortDelayTime,
         port: sibling.port,
@@ -1032,11 +1032,11 @@ async function trySpawningGlobalApplication() {
     // Check if ports are publicly available - critical for proper Flux network operation
     const portVerdict = await portManager.checkInstallingAppPortAvailable(appPorts);
     if (portVerdict.ok === false) {
-      log.error(`trySpawningGlobalApplication - Some of application ports of ${instantiated.name} are not available publicly. Installation aborted.`);
+      log.error(`trySpawningGlobalApplication - Some of application ports of ${registered.name} are not available publicly. Installation aborted.`);
       // The cause lives in portManager, which says which port and which peers;
       // this says the spawner deferred, and on which of its verdicts.
       fluxEventBus.publish('spawner:deferred', {
-        appName: instantiated.name,
+        appName: registered.name,
         reason: 'ports_not_available',
         portVerdict: portVerdict.reason,
         delayMs: shortDelayTime,
@@ -1114,7 +1114,7 @@ async function trySpawningGlobalApplication() {
         computation = await placementFeasibility.placementComputation(spec, minInstances);
       } catch (error) {
         if (error.statusCode !== 503) throw error;
-        log.info(`trySpawningGlobalApplication - ${instantiated.name} deferred: ${error.message}`);
+        log.info(`trySpawningGlobalApplication - ${registered.name} deferred: ${error.message}`);
         return shortDelayTime;
       }
       placementShare = computation.feasibility;
@@ -1177,7 +1177,7 @@ async function trySpawningGlobalApplication() {
     }
 
     const specPlacement = spec.placement;
-    const isEncryptedApp = instantiated.isEncrypted;
+    const isEncryptedApp = registered.isEncrypted;
 
     if (!isEnterpriseNode && !appFromAppsToBeCheckedLater && !appFromAppsSyncthingToBeCheckedLater) {
       const tier = await generalService.nodeTier();
@@ -1277,9 +1277,9 @@ async function trySpawningGlobalApplication() {
       // eslint-disable-next-line no-await-in-loop
       await imageManager.verifyRepository(component.image, {
         repoauth: component.imageAuth,
-        specVersion: instantiated.version,
+        specVersion: registered.version,
         architecture,
-        appName: instantiated.name,
+        appName: registered.name,
       }).catch((error) => {
         // The verifier's class routes the back-off: a transient failure (registry
         // unreachable/rate-limited) is a could-not-ask answer - minutes, matching
@@ -1352,7 +1352,7 @@ async function trySpawningGlobalApplication() {
         const withdrawal = {
           type: 'fluxappinstalling',
           version: 2,
-          name: instantiated.name,
+          name: registered.name,
           ip: localSocketAddr,
           broadcastedAt: Date.now(),
           withdrawn: true,
@@ -1376,7 +1376,7 @@ async function trySpawningGlobalApplication() {
     // (named placement), or the single untagged claim (loose). Resolved through the
     // same provider helper the install fan-out uses, so announce/renew/clear and
     // installAssignedReplicas agree on the set by construction.
-    const assignedReplicas = await deploymentProvider.assignedIdentities(instantiated);
+    const assignedReplicas = await deploymentProvider.assignedIdentities(registered);
     if (assignedReplicas.length === 0) {
       // Named placement that no longer targets this node - reachable when a parked
       // deferred entry outlives a spec change (fresh passes are placement-filtered).
@@ -1390,7 +1390,7 @@ async function trySpawningGlobalApplication() {
     const newAppInstallingMessage = {
       type: 'fluxappinstalling',
       version: 1,
-      name: instantiated.name,
+      name: registered.name,
       ip: localSocketAddr,
       broadcastedAt,
     };
@@ -1406,7 +1406,7 @@ async function trySpawningGlobalApplication() {
     const installingClaims = assignedReplicas.map((replica) => ({
       type: 'fluxappinstalling',
       version: 2,
-      name: instantiated.name,
+      name: registered.name,
       ip: localSocketAddr,
       ...(replica != null ? { replica } : {}),
       announcedAt,
@@ -1446,8 +1446,8 @@ async function trySpawningGlobalApplication() {
       // installing store applies only a strictly-newer broadcastedAt, so a late/duplicate can never
       // clobber a newer state - the appremoved model.
       await storeOwnClaims();
-      installingRecordKey = { name: instantiated.name, ip: localSocketAddr, replicas: assignedReplicas };
-      renewalTimer = startInstallingRenewal(instantiated.name, localSocketAddr, announcedAt, assignedReplicas);
+      installingRecordKey = { name: registered.name, ip: localSocketAddr, replicas: assignedReplicas };
+      renewalTimer = startInstallingRenewal(registered.name, localSocketAddr, announcedAt, assignedReplicas);
       broadcastAnnounce()
         .catch((e) => log.error(`installing broadcast for ${appToRun} failed: ${e.message}`));
     } else if (pinnedContended && !collisionWindowElapsed) {
@@ -1462,7 +1462,7 @@ async function trySpawningGlobalApplication() {
       // them): they ARE this node's election entries, and elections order on the immutable
       // announcedAt.
       await storeOwnClaims();
-      installingRecordKey = { name: instantiated.name, ip: localSocketAddr, replicas: assignedReplicas };
+      installingRecordKey = { name: registered.name, ip: localSocketAddr, replicas: assignedReplicas };
       await broadcastAnnounce();
       appsToBeCheckedLater.push({
         appName: appToRun,
@@ -1480,8 +1480,8 @@ async function trySpawningGlobalApplication() {
       // Non-pinned app (open contention - any node may install): keep the legacy inline election.
       // Store + broadcast, then wait inline for peers' broadcasts to propagate.
       await storeOwnClaims();
-      installingRecordKey = { name: instantiated.name, ip: localSocketAddr, replicas: assignedReplicas };
-      renewalTimer = startInstallingRenewal(instantiated.name, localSocketAddr, announcedAt, assignedReplicas);
+      installingRecordKey = { name: registered.name, ip: localSocketAddr, replicas: assignedReplicas };
+      renewalTimer = startInstallingRenewal(registered.name, localSocketAddr, announcedAt, assignedReplicas);
       await broadcastAnnounce();
       await serviceHelper.delay(collisionWaitMs); // give it 1.5m so messages are propagated on the network
     }
@@ -1491,8 +1491,8 @@ async function trySpawningGlobalApplication() {
       // paths below must retract them, and a long install must renew them under their
       // original announce time so the election ordering never moves. The identities are
       // the first pass's (what actually exists as rows), not a re-resolve.
-      installingRecordKey = { name: instantiated.name, ip: localSocketAddr, replicas: deferredReplicas ?? assignedReplicas };
-      renewalTimer = startInstallingRenewal(instantiated.name, localSocketAddr, deferredAnnouncedAt ?? announcedAt, installingRecordKey.replicas);
+      installingRecordKey = { name: registered.name, ip: localSocketAddr, replicas: deferredReplicas ?? assignedReplicas };
+      renewalTimer = startInstallingRenewal(registered.name, localSocketAddr, deferredAnnouncedAt ?? announcedAt, installingRecordKey.replicas);
     }
 
     // double check if app is installed in more of the instances requested
@@ -1567,7 +1567,7 @@ async function trySpawningGlobalApplication() {
     try {
       // This node did not hold the app, so a teardown after a failed install takes back
       // the claim an announcement made while it ran.
-      installResult = await appInstaller.installAssignedReplicas(instantiated, { sendRemovalMessage: true });
+      installResult = await appInstaller.installAssignedReplicas(registered, { sendRemovalMessage: true });
     } catch (error) {
       log.error(error);
       installError = error.message ?? String(error);
@@ -1662,14 +1662,14 @@ function wakeIdleLoop() {
  * required instances). Every other spec is left to the normal poll cadence.
  * Best-effort: it only ever ends an idle wait early, never installs directly, and
  * never throws into the caller (the spec-store path). The raw stored doc is hydrated
- * into an InstantiatedSpec at the perimeter so the gate reads domain accessors +
+ * into an RegisteredSpec at the perimeter so the gate reads domain accessors +
  * Placement domain methods, never raw doc fields.
  * @param {object} specDoc - spec doc just committed to globalAppsInformation
  */
-async function notifySpecStored(instantiated) {
+async function notifySpecStored(registered) {
   try {
-    if (!instantiated || globalState.spawnerPaused) return;
-    const { placement } = instantiated;
+    if (!registered || globalState.spawnerPaused) return;
+    const { placement } = registered;
     // Pinned to THIS node (by IP - the conservative subset; an outpoint/operator-only
     // pin simply rides the normal cadence). lastKnownLocalSocketAddr is null until the
     // first spawn cycle resolves this node's address, before which isPinnedTo yields
@@ -1682,10 +1682,10 @@ async function notifySpecStored(instantiated) {
     // than required instances.
     if (placement.mode() !== 'pinned') {
       if (enterpriseNetwork.getCachedEnterpriseIdentity() !== true) return;
-      if (!enterpriseNetwork.isEnterpriseAppOwner(instantiated.owner)) return;
-      if (!isSoleRequiredInstaller(placement, instantiated.spec.instances)) return;
+      if (!enterpriseNetwork.isEnterpriseAppOwner(registered.owner)) return;
+      if (!isSoleRequiredInstaller(placement, registered.spec.instances)) return;
     }
-    log.info(`notifySpecStored - ${instantiated.name} is pinned to this node and contention-free; waking spawn loop`);
+    log.info(`notifySpecStored - ${registered.name} is pinned to this node and contention-free; waking spawn loop`);
     wakeIdleLoop();
   } catch (error) {
     log.error(`notifySpecStored - ${error.message}`);

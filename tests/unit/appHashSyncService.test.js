@@ -34,7 +34,7 @@ function makeStreamResponse(data) {
  * `specCutover.deserializeSpec` stays stubbed because the wrapper registers the
  * node's crypto providers, which are I/O. The parse behind it is the real
  * library's, so what comes back is a real FluxAppSpecV8 — the class production
- * hands to InstantiatedSpec.fromEvent — rather than a literal that answers only
+ * hands to RegisteredSpec.fromEvent — rather than a literal that answers only
  * the four members this service happens to read today.
  */
 function makeDeserializeSpecStub() {
@@ -139,7 +139,7 @@ describe('appHashSyncService tests', () => {
       './messageVerifier': messageVerifierStub,
       './appEventVerifier': appEventVerifierStub,
       '../utils/specCutover': { deserializeSpec: deserializeSpecStub },
-      // The real library behind FluxOS's own accessor, so InstantiatedSpec is
+      // The real library behind FluxOS's own accessor, so RegisteredSpec is
       // the real class. assertVersionActivated stays stubbed: it is FluxOS
       // policy about fork heights, not spec shape.
       '../utils/specLibs': {

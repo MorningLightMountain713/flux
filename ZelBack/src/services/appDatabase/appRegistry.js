@@ -93,12 +93,12 @@ function endedAt(row, clock) {
  * manifest the message carries, when it carries one.
  * @param {Map<string, object>} applied - latest applied decision by name
  * @returns {Promise<{rows: Map<string, object>, carried: Map<string, object>}>}
- *   InstantiatedSpec rows and carried manifests, by name
+ *   RegisteredSpec rows and carried manifests, by name
  */
 async function rowsFor(applied) {
   const carried = new Map();
   if (applied.size === 0) return { rows: new Map(), carried };
-  const { InstantiatedSpec } = await getSpecBackend();
+  const { RegisteredSpec } = await getSpecBackend();
   const clock = await chainClock();
   const messages = await appRecords.messages().confirmedByHashes([...applied.values()].map((d) => d.hash));
   const byHash = new Map(messages.map((record) => [record.hash, record.permanentForm()]));
@@ -109,7 +109,7 @@ async function rowsFor(applied) {
     if (!message) continue;
     // eslint-disable-next-line no-await-in-loop
     const { spec } = await appEventVerifier.deserializeMessage(message);
-    const row = InstantiatedSpec.fromEvent({
+    const row = RegisteredSpec.fromEvent({
       spec,
       hash: decision.hash,
       height: decision.height,
@@ -136,7 +136,7 @@ async function rowsFor(applied) {
  * name's other specs are deleted; those about the spec the row now stands on
  * are kept, so a node that learns the app after others failed to install it
  * does not try what they already reported.
- * @param {object} instance - the InstantiatedSpec the row stands on
+ * @param {object} instance - the RegisteredSpec the row stands on
  * @param {?object} carried - the manifest the row's message carries, or null
  */
 async function writeWithEffects(instance, carried) {
@@ -179,7 +179,7 @@ async function removeRow({ name, identity }) {
 /**
  * Makes a name's row what its latest applied decision says.
  * @param {string} name - lower-cased
- * @param {?object} instance - the InstantiatedSpec it should have, or null for none
+ * @param {?object} instance - the RegisteredSpec it should have, or null for none
  * @param {?object} [carried] - the manifest its message carries, or null
  * @returns {Promise<'added'|'changed'|'restamped'|'removed'|null>}
  */

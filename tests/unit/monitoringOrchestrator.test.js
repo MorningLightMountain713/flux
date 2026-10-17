@@ -4,7 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const {
-  loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION, v9Spec, instantiatedSpec,
+  loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION, v9Spec, registeredSpec,
 } = require('./fixtures/fluxSpec');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
@@ -173,7 +173,7 @@ describe('monitoringOrchestrator tests', () => {
   describe('startMonitoringOfApps tests', () => {
     it('should start monitoring for single-component apps', async () => {
       const specs = ['App1', 'App2', 'App3'].map(legacySpec);
-      const apps = await Promise.all(specs.map((spec) => instantiatedSpec(spec)));
+      const apps = await Promise.all(specs.map((spec) => registeredSpec(spec)));
       specs.forEach((spec) => installed.set(spec.name, [deploymentOf(spec)]));
 
       await monitoringOrchestrator.startMonitoringOfApps(apps);
@@ -186,7 +186,7 @@ describe('monitoringOrchestrator tests', () => {
 
     it('should start monitoring for multi-component apps', async () => {
       const spec = composedSpec('ComposedApp', ['Component1', 'Component2']);
-      const apps = [await instantiatedSpec(spec)];
+      const apps = [await registeredSpec(spec)];
       installed.set(spec.name, [deploymentOf(spec)]);
 
       await monitoringOrchestrator.startMonitoringOfApps(apps);
@@ -210,7 +210,7 @@ describe('monitoringOrchestrator tests', () => {
     it('should skip apps that fail to resolve', async () => {
       const good = legacySpec('GoodApp');
       const bad = legacySpec('BadApp');
-      const apps = await Promise.all([good, bad].map((spec) => instantiatedSpec(spec)));
+      const apps = await Promise.all([good, bad].map((spec) => registeredSpec(spec)));
       // GoodApp is installed here; BadApp is a spec this node holds no
       // deployment for, which is what the real provider answers with [] for.
       installed.set(good.name, [deploymentOf(good)]);
@@ -238,7 +238,7 @@ describe('monitoringOrchestrator tests', () => {
       // outright — so two replicas sharing an identifier would mean the second
       // silently replacing the first's monitoring.
       const spec = await coLocatedSpec();
-      const stored = await instantiatedSpec(spec, { identity: 'deadbeef' });
+      const stored = await registeredSpec(spec, { identity: 'deadbeef' });
       expect(stored.identity, 'the identity is read off the row, never recomputed').to.equal('deadbeef');
       installed.set(spec.name, [
         deploymentOf(spec, { replica: 'r1', identity: stored.identity }),

@@ -7,17 +7,17 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire');
 
 const {
-  loadSpecLibrary, V9_SUBMISSION, v8Spec, v9Spec, instantiatedSpec,
+  loadSpecLibrary, V9_SUBMISSION, v8Spec, v9Spec, registeredSpec,
 } = require('./fixtures/fluxSpec');
-const { inMemoryInstalled, inMemoryLedgers } = require('./fixtures/appRecords');
+const { inMemoryHostedInstances, inMemoryInstanceResources } = require('./fixtures/appRecords');
 
 const APPS_FOLDER = '/dat/var/lib/fluxos/flux-apps/';
 const IDENTITY = 'a1b2c3d4e5f6';
 
-describe('installedLedger', () => {
+describe('instanceResourceObserver', () => {
   let flux;
   let stubs;
-  let installedLedger;
+  let instanceResourceObserver;
   let volumeOf;
   // The host: what is mounted where, what the kernel backs each mount with,
   // which files exist, and what blkid reads from each.
@@ -57,7 +57,7 @@ describe('installedLedger', () => {
       moveStore: { begin: sinon.stub().resolves() },
       log: { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
     };
-    installedLedger = proxyquire('../../ZelBack/src/services/appLifecycle/installedLedger', {
+    instanceResourceObserver = proxyquire('../../ZelBack/src/services/appLifecycle/instanceResourceObserver', {
       '../dockerService': stubs.dockerService,
       '../utils/volumeService': stubs.volumeService,
       'node:fs/promises': stubs.fs,
@@ -74,16 +74,16 @@ describe('installedLedger', () => {
 
   afterEach(() => sinon.restore());
 
-  describe('observeLedger', () => {
+  describe('observeResources', () => {
     it('reads a real deployment\'s names, the volume the reader answers, the daemon\'s digest and the ports as the node opens them', async () => {
-      const spec = await v9Spec({ name: 'ledgered' });
+      const spec = await v9Spec({ name: 'observed' });
       const deployment = flux.DeploymentSpec.fromSpec(spec, APPS_FOLDER, { replica: null, identity: IDENTITY });
       volumeOf.resolves({ path: `/dat/appvolumes/web_${IDENTITY}FLUXFSVOL`, fsUuid: 'uuid-1' });
 
-      const ledger = await installedLedger.observeLedger(deployment, volumeOf);
+      const resources = await instanceResourceObserver.observeResources(deployment, volumeOf);
 
-      expect(ledger.network).to.deep.equal({ name: deployment.networkName });
-      const { web } = ledger.components;
+      expect(resources.network).to.deep.equal({ name: deployment.networkName });
+      const { web } = resources.components;
       expect(web.identifier).to.equal(`web_${IDENTITY}`);
       expect(web.image).to.deep.equal({ reference: 'nginx:latest', digest: 'sha256:deadbeef' });
       sinon.assert.calledOnceWithExactly(stubs.dockerService.appDockerImageDigest, 'nginx:latest');
@@ -98,16 +98,16 @@ describe('installedLedger', () => {
       expect(web.aliases).to.deep.equal(deployment.getComponent('web').networkAliases);
       expect(web.mesh).to.equal(null);
       expect(web.tls).to.equal(null);
-      expect(Object.keys(web).sort()).to.deep.equal([...flux.COMPONENT_LEDGER_FIELDS].sort());
-      expect(() => new flux.InstalledLedger({ name: 'ledgered', ...ledger }), 'a ledger the record accepts').to.not.throw();
+      expect(Object.keys(web).sort()).to.deep.equal([...flux.COMPONENT_RESOURCE_FIELDS].sort());
+      expect(() => new flux.InstanceResources({ name: 'withResources', ...resources }), 'resources the record accepts').to.not.throw();
     });
 
     it('records each port as opened by UPnP too when the node maps ports, and nothing when the firewall is off', async () => {
       const deployment = flux.DeploymentSpec.fromSpec(await v9Spec({ name: 'ports' }), APPS_FOLDER, { replica: null, identity: IDENTITY });
       stubs.upnpService.isUPNP.returns(true);
-      expect((await installedLedger.observeLedger(deployment, volumeOf)).components.web.hostPorts[0].opened).to.deep.equal(['ufw', 'upnp']);
+      expect((await instanceResourceObserver.observeResources(deployment, volumeOf)).components.web.hostPorts[0].opened).to.deep.equal(['ufw', 'upnp']);
       stubs.fluxNetworkHelper.isFirewallActive.resolves(false);
-      expect((await installedLedger.observeLedger(deployment, volumeOf)).components.web.hostPorts[0].opened).to.deep.equal(['upnp']);
+      expect((await instanceResourceObserver.observeResources(deployment, volumeOf)).components.web.hostPorts[0].opened).to.deep.equal(['upnp']);
     });
 
     it('keys each component\'s block by its key, never its name', async () => {
@@ -117,7 +117,7 @@ describe('installedLedger', () => {
       });
       volumeOf.resolves(null);
 
-      const { components } = await installedLedger.observeLedger(deployment, volumeOf);
+      const { components } = await instanceResourceObserver.observeResources(deployment, volumeOf);
 
       expect(Object.keys(components)).to.deep.equal([key]);
       expect(components[key].identifier).to.equal(`${key}_${IDENTITY}`);
@@ -127,7 +127,7 @@ describe('installedLedger', () => {
       const deployment = flux.DeploymentSpec.fromSpec(await v9Spec({ name: 'bare' }), APPS_FOLDER, { replica: null, identity: IDENTITY });
       volumeOf.resolves(null);
       stubs.dockerService.appDockerImageDigest.resolves(null);
-      const { web } = (await installedLedger.observeLedger(deployment, volumeOf)).components;
+      const { web } = (await instanceResourceObserver.observeResources(deployment, volumeOf)).components;
       expect(web.volume).to.deep.equal({
         file: null, disk: null, fsUuid: null, mountDir: `${APPS_FOLDER}web_${IDENTITY}`,
       });
@@ -140,7 +140,7 @@ describe('installedLedger', () => {
           identifier: 'job_x', image: 'busybox', hostPorts: [], isStateless: true, mounts: [], networkAliases: ['job'], hasSyncthing: () => false, requiresBackendTls: () => false,
         }]],
       };
-      const { job } = (await installedLedger.observeLedger(stateless, volumeOf)).components;
+      const { job } = (await instanceResourceObserver.observeResources(stateless, volumeOf)).components;
       expect(job.volume).to.equal(null);
       sinon.assert.calledOnceWithExactly(volumeOf, `web_${IDENTITY}`);
     });
@@ -163,7 +163,7 @@ describe('installedLedger', () => {
           requiresBackendTls: () => true,
         }]],
       };
-      const { db } = (await installedLedger.observeLedger(deployment, volumeOf)).components;
+      const { db } = (await instanceResourceObserver.observeResources(deployment, volumeOf)).components;
       expect(db.syncFolder).to.deep.equal({ id: 'db_x', path: `${APPS_FOLDER}db_x` });
       expect(db.mesh).to.deep.equal({ name: 'db-0' });
       expect(db.tls).to.deep.equal({ dir: flux.hostTlsDir(`${APPS_FOLDER}db_x`) });
@@ -178,77 +178,77 @@ describe('installedLedger', () => {
 
     it('takes the file the kernel mounts at the component\'s directory, under either name, with the record\'s stamp when it names that file', async () => {
       host.mounted.set(`${APPS_FOLDER}${ID}`, '/dat/appvolumes/recorded');
-      expect(await installedLedger.discoverVolumeImage(ID, recorded)).to.deep.equal(recorded);
+      expect(await instanceResourceObserver.discoverVolumeImage(ID, recorded)).to.deep.equal(recorded);
       sinon.assert.notCalled(stubs.volumeService.imageFsUuid);
 
       host.mounted.clear();
       host.mounted.set(`${APPS_FOLDER}flux${ID}`, '/dat/appvolumes/elsewhere');
       host.stamps.set('/dat/appvolumes/elsewhere', 'uuid-read');
-      expect(await installedLedger.discoverVolumeImage(ID, recorded)).to.deep.equal({ path: '/dat/appvolumes/elsewhere', fsUuid: 'uuid-read' });
+      expect(await instanceResourceObserver.discoverVolumeImage(ID, recorded)).to.deep.equal({ path: '/dat/appvolumes/elsewhere', fsUuid: 'uuid-read' });
     });
 
     it('takes the record when its file is there, reading the stamp the record lacks', async () => {
       host.files.add(recorded.path);
-      expect(await installedLedger.discoverVolumeImage(ID, recorded)).to.deep.equal(recorded);
+      expect(await instanceResourceObserver.discoverVolumeImage(ID, recorded)).to.deep.equal(recorded);
       host.stamps.set(recorded.path, 'uuid-read');
-      expect(await installedLedger.discoverVolumeImage(ID, { path: recorded.path, fsUuid: null })).to.deep.equal({ path: recorded.path, fsUuid: 'uuid-read' });
+      expect(await instanceResourceObserver.discoverVolumeImage(ID, { path: recorded.path, fsUuid: null })).to.deep.equal({ path: recorded.path, fsUuid: 'uuid-read' });
       sinon.assert.notCalled(stubs.volumeService.getVolumeFilePath);
     });
 
     it('searches by the identifier, then by its 8.x name, when nothing is mounted and the record names nothing there', async () => {
       host.files.add(`/dat/appvolumes/flux${ID}FLUXFSVOL`);
       host.stamps.set(`/dat/appvolumes/flux${ID}FLUXFSVOL`, 'uuid-found');
-      expect(await installedLedger.discoverVolumeImage(ID, recorded)).to.deep.equal({ path: `/dat/appvolumes/flux${ID}FLUXFSVOL`, fsUuid: 'uuid-found' });
+      expect(await instanceResourceObserver.discoverVolumeImage(ID, recorded)).to.deep.equal({ path: `/dat/appvolumes/flux${ID}FLUXFSVOL`, fsUuid: 'uuid-found' });
       expect(stubs.volumeService.getVolumeFilePath.getCalls().map((c) => c.args[0])).to.deep.equal([ID, `flux${ID}`]);
 
       host.files.add(`/dat/appvolumes/${ID}FLUXFSVOL`);
-      expect((await installedLedger.discoverVolumeImage(ID, null)).path, 'the identifier\'s own name first').to.equal(`/dat/appvolumes/${ID}FLUXFSVOL`);
+      expect((await instanceResourceObserver.discoverVolumeImage(ID, null)).path, 'the identifier\'s own name first').to.equal(`/dat/appvolumes/${ID}FLUXFSVOL`);
     });
 
     it('answers null when the host holds nothing, with a stamp it cannot read as null', async () => {
-      expect(await installedLedger.discoverVolumeImage(ID, null)).to.equal(null);
+      expect(await instanceResourceObserver.discoverVolumeImage(ID, null)).to.equal(null);
       host.files.add(`/dat/appvolumes/${ID}FLUXFSVOL`);
-      expect(await installedLedger.discoverVolumeImage(ID, null)).to.deep.equal({ path: `/dat/appvolumes/${ID}FLUXFSVOL`, fsUuid: null });
+      expect(await instanceResourceObserver.discoverVolumeImage(ID, null)).to.deep.equal({ path: `/dat/appvolumes/${ID}FLUXFSVOL`, fsUuid: null });
     });
 
     it('looks only at the directories it is given, when given', async () => {
       host.mounted.set(`${APPS_FOLDER}${ID}`, '/dat/appvolumes/own');
       host.mounted.set('/elsewhere/dir', '/dat/appvolumes/other');
-      expect((await installedLedger.discoverVolumeImage(ID, null, ['/elsewhere/dir'])).path).to.equal('/dat/appvolumes/other');
+      expect((await instanceResourceObserver.discoverVolumeImage(ID, null, ['/elsewhere/dir'])).path).to.equal('/dat/appvolumes/other');
     });
   });
 
-  describe('adoptInstalledLedgers', () => {
+  describe('adoptInstanceResources', () => {
     const legacyRow = (spec, extra = {}) => ({
       ...(spec), hash: `h-${spec.name}`, height: 100, replica: null, componentIdentifiers: [`web_${spec.name}`], ...extra,
     });
 
-    // The provider builds only from an installed record, keyed by its component keys.
+    // The provider builds only from a hosted instance, keyed by its component keys.
     function buildsRealDeployments() {
       stubs.deploymentProvider.buildDeployment.callsFake(async (install, { replica, registrationVersion }) => {
-        if (!(install instanceof flux.InstalledSpec)) throw new Error('buildDeployment builds from an installed record');
+        if (!(install instanceof flux.HostedInstance)) throw new Error('buildDeployment builds from a hosted instance');
         return flux.DeploymentSpec.fromSpec(install.spec, APPS_FOLDER, {
           replica, identity: install.identity, registrationVersion, ...(install.componentKeys ? { componentKeys: install.componentKeys } : {}),
         });
       });
     }
 
-    it('keys the ledger it writes by the installed record\'s component keys', async () => {
+    it('keys the resources it writes by the hosted instance\'s component keys', async () => {
       const key = `c${'k'.repeat(52)}`;
-      const { installed, provider } = await inMemoryInstalled();
-      const { ledgers } = await inMemoryLedgers();
+      const { installed, provider } = await inMemoryHostedInstances();
+      const { instanceResources } = await inMemoryInstanceResources();
       await provider.insert(installed.constructor.STORE, [legacyRow((await v9Spec({ name: 'keyed' })).serialize(), {
         identity: IDENTITY, uuid: 'u-keyed', componentKeys: { web: key },
       })]);
       await installed.completeDerivedFields();
       buildsRealDeployments();
 
-      const results = await installedLedger.adoptInstalledLedgers();
+      const results = await instanceResourceObserver.adoptInstanceResources();
 
       expect(results.adopted).to.deep.equal([{ name: 'keyed', replica: null }]);
-      const ledger = await ledgers.byInstance('keyed', null);
-      expect(Object.keys(ledger.components)).to.deep.equal([key]);
-      expect(ledger.component(key).identifier).to.equal(`${key}_${IDENTITY}`);
+      const resources = await instanceResources.byInstance('keyed', null);
+      expect(Object.keys(resources.components)).to.deep.equal([key]);
+      expect(resources.component(key).identifier).to.equal(`${key}_${IDENTITY}`);
     });
 
     /** A v9 app whose one component shares its data: the folder it is named under is the registration's. */
@@ -262,42 +262,42 @@ describe('installedLedger', () => {
       },
     })).serialize();
 
-    it('names the ledger it writes by the version the registration message states, read for the record\'s app', async () => {
-      const { installed, provider } = await inMemoryInstalled();
-      const { ledgers } = await inMemoryLedgers();
+    it('names the resources it writes by the version the registration message states, read for the record\'s app', async () => {
+      const { installed, provider } = await inMemoryHostedInstances();
+      const { instanceResources } = await inMemoryInstanceResources();
       const synced = await syncedSpec('shared');
       await provider.insert(installed.constructor.STORE, [legacyRow(synced, { identity: IDENTITY, uuid: 'u-shared' })]);
       await installed.completeDerivedFields();
       buildsRealDeployments();
 
-      const results = await installedLedger.adoptInstalledLedgers();
+      const results = await instanceResourceObserver.adoptInstanceResources();
 
       expect(results.adopted).to.deep.equal([{ name: 'shared', replica: null }]);
       sinon.assert.calledOnceWithExactly(stubs.appHistory.registrationVersionOf, 'shared', 'u-shared');
-      const ledger = await ledgers.byInstance('shared', null);
-      expect(ledger.component('web').syncFolder.id, 'the 8.x name, as a registration before v9 fixes it').to.equal('fluxweb_shared');
+      const resources = await instanceResources.byInstance('shared', null);
+      expect(resources.component('web').syncFolder.id, 'the 8.x name, as a registration before v9 fixes it').to.equal('fluxweb_shared');
     });
 
     it('leaves an instance no applied message registers as it is, and says so', async () => {
-      const { installed, provider } = await inMemoryInstalled();
-      const { ledgers } = await inMemoryLedgers();
+      const { installed, provider } = await inMemoryHostedInstances();
+      const { instanceResources } = await inMemoryInstanceResources();
       const synced = await syncedSpec('orphan');
       await provider.insert(installed.constructor.STORE, [legacyRow(synced, { identity: IDENTITY })]);
       await installed.completeDerivedFields();
       buildsRealDeployments();
       stubs.appHistory.registrationVersionOf.resolves(null);
 
-      const results = await installedLedger.adoptInstalledLedgers();
+      const results = await instanceResourceObserver.adoptInstanceResources();
 
       expect(results.adopted).to.deep.equal([]);
       expect(results.skipped.map((s) => s.name)).to.deep.equal(['orphan']);
-      expect(await ledgers.byInstance('orphan', null)).to.equal(null);
+      expect(await instanceResources.byInstance('orphan', null)).to.equal(null);
       sinon.assert.calledWithMatch(stubs.log.warn, /orphan not adopted/);
     });
 
-    it('writes a ledger for every instance without one, finding its volume from the runtime-state record, names an identity-less one by its name, and hands over its move', async () => {
-      const { installed, provider } = await inMemoryInstalled();
-      const { ledgers } = await inMemoryLedgers();
+    it('writes resources for every instance without one, finding its volume from the runtime-state record, names an identity-less one by its name, and hands over its move', async () => {
+      const { installed, provider } = await inMemoryHostedInstances();
+      const { instanceResources } = await inMemoryInstanceResources();
       const v8 = (await v8Spec({ name: 'legacy' })).serialize();
       const v9 = (await v9Spec({ name: 'moving' })).serialize();
       await provider.insert(installed.constructor.STORE, [
@@ -310,39 +310,39 @@ describe('installedLedger', () => {
       host.files.add(`/dat/appvolumes/web_${IDENTITY}FLUXFSVOL`);
       host.stamps.set(`/dat/appvolumes/web_${IDENTITY}FLUXFSVOL`, 'uuid-found');
 
-      const results = await installedLedger.adoptInstalledLedgers();
+      const results = await instanceResourceObserver.adoptInstanceResources();
 
       expect(results.adopted).to.deep.equal([{ name: 'legacy', replica: null }, { name: 'moving', replica: null }]);
       expect(results.skipped).to.deep.equal([]);
       const legacy = await installed.byReplica('legacy', null);
       expect(legacy.identity, 'named by its name').to.equal('legacy');
-      const legacyLedger = await ledgers.byInstance('legacy', null);
-      expect(legacyLedger.component('web').identifier).to.equal('web_legacy');
-      expect(legacyLedger.component('web').volume).to.include({ file: '/dat/appvolumes/legacy', fsUuid: 'uuid-legacy' });
+      const legacyResources = await instanceResources.byInstance('legacy', null);
+      expect(legacyResources.component('web').identifier).to.equal('web_legacy');
+      expect(legacyResources.component('web').volume).to.include({ file: '/dat/appvolumes/legacy', fsUuid: 'uuid-legacy' });
       sinon.assert.calledWithExactly(stubs.appsRuntimeState.getVolumeImage, 'web_legacy');
-      const movingLedger = await ledgers.byInstance('moving', null);
-      expect(movingLedger.component('web').volume, 'no record: the image found on the disks, with its stamp read').to.include({
+      const movingResources = await instanceResources.byInstance('moving', null);
+      expect(movingResources.component('web').volume, 'no record: the image found on the disks, with its stamp read').to.include({
         file: `/dat/appvolumes/web_${IDENTITY}FLUXFSVOL`, fsUuid: 'uuid-found',
       });
       const moving = await installed.byReplica('moving', null);
       expect(moving.identity).to.equal(IDENTITY);
-      expect((await ledgers.byIdentifier(`web_${IDENTITY}`)).name, 'found by the ledger\'s identifier').to.equal('moving');
+      expect((await instanceResources.byIdentifier(`web_${IDENTITY}`)).name, 'found by the resources\'s identifier').to.equal('moving');
       sinon.assert.calledOnceWithExactly(stubs.moveStore.begin, 'moving', null, 'idnext', 7);
       expect(await installed.legacyMoves(), 'the move left the record with the put').to.deep.equal([]);
       const [stored] = await provider.find(installed.constructor.STORE, { nameKey: 'moving' });
       expect(stored).to.not.have.any.keys('move', 'componentIdentifiers');
-      sinon.assert.calledWithMatch(stubs.log.info, /2 of 2 installed instance\(s\) adopted a ledger/);
+      sinon.assert.calledWithMatch(stubs.log.info, /2 of 2 installed instance\(s\) adopted resources/);
     });
 
     it('keeps the component keys and former names the node derived when it names an identity-less instance', async () => {
-      const { installed, provider } = await inMemoryInstalled();
-      await inMemoryLedgers();
+      const { installed, provider } = await inMemoryHostedInstances();
+      await inMemoryInstanceResources();
       await provider.insert(installed.constructor.STORE, [legacyRow((await v8Spec({ name: 'legacy' })).serialize(), { componentKeys: { web: 'web' }, formerNames: { web: ['site'] } })]);
       await installed.completeDerivedFields();
       buildsRealDeployments();
       host.files.add('/dat/appvolumes/legacy');
 
-      await installedLedger.adoptInstalledLedgers();
+      await instanceResourceObserver.adoptInstanceResources();
 
       const legacy = await installed.byReplica('legacy', null);
       expect(legacy.identity, 'the record was rewritten').to.equal('legacy');
@@ -351,8 +351,8 @@ describe('installedLedger', () => {
     });
 
     it('leaves an instance it cannot adopt as it is, says so, and adopts the rest', async () => {
-      const { installed, provider } = await inMemoryInstalled();
-      const { ledgers } = await inMemoryLedgers();
+      const { installed, provider } = await inMemoryHostedInstances();
+      const { instanceResources } = await inMemoryInstanceResources();
       const v8 = (await v8Spec({ name: 'good' })).serialize();
       const bad = (await v8Spec({ name: 'bad' })).serialize();
       await provider.insert(installed.constructor.STORE, [legacyRow(v8), legacyRow(bad)]);
@@ -362,43 +362,43 @@ describe('installedLedger', () => {
         return flux.DeploymentSpec.fromSpec(record.spec, APPS_FOLDER, { replica, identity: record.identity });
       });
 
-      const results = await installedLedger.adoptInstalledLedgers();
+      const results = await instanceResourceObserver.adoptInstanceResources();
 
       expect(results.adopted).to.deep.equal([{ name: 'good', replica: null }]);
       expect(results.skipped).to.deep.equal([{ name: 'bad', replica: null, reason: 'cannot decrypt' }]);
-      expect((await ledgers.keys()).map((k) => k.name)).to.deep.equal(['good']);
+      expect((await instanceResources.keys()).map((k) => k.name)).to.deep.equal(['good']);
       sinon.assert.calledWithMatch(stubs.log.warn, /bad not adopted: cannot decrypt/);
     });
 
-    it('does nothing on a node whose every instance has a ledger', async () => {
-      const { installed } = await inMemoryInstalled();
-      const { ledgers } = await inMemoryLedgers();
-      const { InstalledSpec, InstalledLedger } = flux;
-      const record = await instantiatedSpec(await v8Spec({ name: 'Done' }), { identity: 'done' });
-      await installed.put(new InstalledSpec({ record, replica: 'r1' }));
-      await ledgers.put(new InstalledLedger({ name: 'done', replica: 'r1', network: { name: 'n' }, components: { web: { identifier: 'web_done' } } }));
-      expect(await installedLedger.adoptInstalledLedgers()).to.deep.equal({ adopted: [], skipped: [] });
+    it('does nothing on a node whose every instance has resources', async () => {
+      const { installed } = await inMemoryHostedInstances();
+      const { instanceResources } = await inMemoryInstanceResources();
+      const { HostedInstance, InstanceResources } = flux;
+      const record = await registeredSpec(await v8Spec({ name: 'Done' }), { identity: 'done' });
+      await installed.put(new HostedInstance({ record, replica: 'r1' }));
+      await instanceResources.put(new InstanceResources({ name: 'done', replica: 'r1', network: { name: 'n' }, components: { web: { identifier: 'web_done' } } }));
+      expect(await instanceResourceObserver.adoptInstanceResources()).to.deep.equal({ adopted: [], skipped: [] });
       sinon.assert.notCalled(stubs.deploymentProvider.buildDeployment);
       sinon.assert.notCalled(stubs.log.info);
     });
 
-    it('writes the ledger of an instance whose sibling replica has one', async () => {
-      const { installed, provider } = await inMemoryInstalled();
-      const { ledgers } = await inMemoryLedgers();
-      const { InstalledLedger } = flux;
+    it('writes the resources of an instance whose sibling replica has one', async () => {
+      const { installed, provider } = await inMemoryHostedInstances();
+      const { instanceResources } = await inMemoryInstanceResources();
+      const { InstanceResources } = flux;
       const v8 = (await v8Spec({ name: 'pair' })).serialize();
       await provider.insert(installed.constructor.STORE, [
         legacyRow(v8, { identity: IDENTITY, replica: 'r1' }), legacyRow(v8, { identity: IDENTITY, replica: 'r2' }),
       ]);
       await installed.completeDerivedFields();
-      await ledgers.put(new InstalledLedger({ name: 'pair', replica: 'r1' }));
+      await instanceResources.put(new InstanceResources({ name: 'pair', replica: 'r1' }));
       buildsRealDeployments();
 
-      const results = await installedLedger.adoptInstalledLedgers();
+      const results = await instanceResourceObserver.adoptInstanceResources();
 
       expect(results.adopted).to.deep.equal([{ name: 'pair', replica: 'r2' }]);
-      expect((await ledgers.byInstance('pair', 'r1')).components, 'the sibling\'s ledger is left').to.deep.equal({});
-      expect((await ledgers.byInstance('pair', 'r2')).identifiers()).to.have.length(1);
+      expect((await instanceResources.byInstance('pair', 'r1')).components, 'the sibling\'s resources is left').to.deep.equal({});
+      expect((await instanceResources.byInstance('pair', 'r2')).identifiers()).to.have.length(1);
     });
   });
 });

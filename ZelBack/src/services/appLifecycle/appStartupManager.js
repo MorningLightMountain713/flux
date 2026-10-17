@@ -71,7 +71,7 @@ async function awaitWithin(work, timeoutMs, reason) {
  */
 async function getInstalledAppNamesFromDb() {
   try {
-    return await appRecords.installed().names();
+    return await appRecords.hostedInstances().names();
   } catch (error) {
     log.error(`appStartupManager - Error getting installed apps: ${error.message}`);
     return [];

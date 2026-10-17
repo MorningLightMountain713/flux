@@ -5,7 +5,7 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 
 const { expect } = require('chai');
 const sinon = require('sinon');
-const { inMemoryInstalled, inMemoryLedgers } = require('./fixtures/appRecords');
+const { inMemoryHostedInstances, inMemoryInstanceResources } = require('./fixtures/appRecords');
 const { loadSpecLibrary } = require('./fixtures/fluxSpec');
 const path = require('node:path');
 
@@ -53,12 +53,12 @@ describe('IOUtils getVolumeInfo tests', () => {
         db: { ...web, name: 'db', ports: { tcp_81: { containerPort: 81, hostPort: 31_001, protocol: 'tcp' } } },
       },
     });
-    installedApps.set('myapp', await domain.instantiatedSpec({ event: await domain.confirmedEvent({ spec: myapp }) }));
+    installedApps.set('myapp', await domain.registeredSpec({ event: await domain.confirmedEvent({ spec: myapp }) }));
     const singleapp = await domain.v3Spec({ name: 'singleapp' });
-    installedApps.set('singleapp', await domain.instantiatedSpec({ event: await domain.legacyEvent({ spec: singleapp }) }));
+    installedApps.set('singleapp', await domain.registeredSpec({ event: await domain.legacyEvent({ spec: singleapp }) }));
   });
 
-  // Each instance as the node records it: its installed record, and the ledger
+  // Each instance as the node records it: its hosted instance, and the resources
   // naming the identifier it created for each component, which names the volume.
   const block = (identifier) => ({
     identifier, image: { reference: 'img', digest: null }, hostPorts: [], volume: null, mountSources: [], syncFolder: null, aliases: [], mesh: null, tls: null,
@@ -66,13 +66,13 @@ describe('IOUtils getVolumeInfo tests', () => {
 
   beforeEach(async () => {
     listStub = sinon.stub(deviceHelper, 'listMountedFilesystems').resolves(filesystems);
-    const { InstalledSpec, InstalledLedger } = await loadSpecLibrary();
-    const { installed } = await inMemoryInstalled();
-    const { ledgers } = await inMemoryLedgers();
-    await installed.put(new InstalledSpec({ record: installedApps.get('myapp') }));
-    await ledgers.put(new InstalledLedger({ name: 'myapp', replica: null, components: { web: block('web_myapp'), db: block('db_myapp') } }));
-    await installed.put(new InstalledSpec({ record: installedApps.get('singleapp') }));
-    await ledgers.put(new InstalledLedger({ name: 'singleapp', replica: null, components: { singleapp: block('singleapp') } }));
+    const { HostedInstance, InstanceResources } = await loadSpecLibrary();
+    const { installed } = await inMemoryHostedInstances();
+    const { instanceResources } = await inMemoryInstanceResources();
+    await installed.put(new HostedInstance({ record: installedApps.get('myapp') }));
+    await instanceResources.put(new InstanceResources({ name: 'myapp', replica: null, components: { web: block('web_myapp'), db: block('db_myapp') } }));
+    await installed.put(new HostedInstance({ record: installedApps.get('singleapp') }));
+    await instanceResources.put(new InstanceResources({ name: 'singleapp', replica: null, components: { singleapp: block('singleapp') } }));
   });
 
   afterEach(() => {

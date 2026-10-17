@@ -18,13 +18,13 @@ describe('relationshipResolver tests', () => {
   let dockerServiceStub;
   let logStub;
 
-  // Build a minimal InstantiatedSpec-shaped object whose spec mimics the
+  // Build a minimal RegisteredSpec-shaped object whose spec mimics the
   // domain-class surface: dependencyEntries() returns MATERIALIZED edges
   // (fillDefaults semantics — strength requires, unordered, no network,
   // onRemove detach unless the test says otherwise) and linkedAppNames() is
   // the network-bearing projection, exactly as FluxAppSpecBase derives it.
   // activation is the v9 lifecycle dial pair; placement mimics the
-  // InstantiatedSpec delegating getter.
+  // RegisteredSpec delegating getter.
   function instSpec({
     name, owner = 'owner1', dependencies, encrypted = false, activation, placement,
   } = {}) {
@@ -37,7 +37,7 @@ describe('relationshipResolver tests', () => {
       name,
       owner,
       // `sealed` is the readability question, and the held spec answers it:
-      // true on a raw EncryptedSpec, false on a cleartext one. Callers that
+      // true on a raw SealedSpec, false on a cleartext one. Callers that
       // must not decrypt branch on this, so the mock has to carry it.
       sealed: encrypted,
       dependencyEntries: () => entries.map(([n, e]) => [n, { ...e }]),
@@ -50,7 +50,7 @@ describe('relationshipResolver tests', () => {
       isEncrypted: encrypted,
       spec,
       placement,
-      // InstantiatedSpec sealed-vantage accessor: none when encrypted, else the spec's.
+      // RegisteredSpec sealed-vantage accessor: none when encrypted, else the spec's.
       linkedAppNames() { return encrypted ? [] : spec.linkedAppNames(); },
     };
   }
@@ -82,7 +82,7 @@ describe('relationshipResolver tests', () => {
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../appDatabase/appRecords': {
         registry: () => registryStub,
-        installed: () => ({ byName: async (name) => installedRecord(await appsRepositoryStub.getInstalledApp(name)), apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)) }),
+        hostedInstances: () => ({ byName: async (name) => installedRecord(await appsRepositoryStub.getInstalledApp(name)), apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)) }),
       },
       '../utils/specCutover': specCutoverStub,
       '../dockerService': dockerServiceStub,
@@ -104,7 +104,7 @@ describe('relationshipResolver tests', () => {
       // Resolves an app to its readable view: a cleartext app is readable as
       // itself, an encrypted one only once decrypted — null here unless a test
       // says the node holds its key.
-      resolveInstantiatedSpec: sinon.stub().callsFake(async (app) => (app.isEncrypted ? null : app.spec)),
+      resolveRegisteredSpec: sinon.stub().callsFake(async (app) => (app.isEncrypted ? null : app.spec)),
     };
     dockerServiceStub = {
       getAppContainerObjects: sinon.stub().resolves([]),
@@ -164,13 +164,13 @@ describe('relationshipResolver tests', () => {
     });
 
     it('checks an ENCRYPTED consumer\'s edges, which the sealed accessor hides', async () => {
-      // Read off the sealed InstantiatedSpec these edges are [], so the gate
+      // Read off the sealed RegisteredSpec these edges are [], so the gate
       // passed vacuously and the app installed with none of its dependencies
       // verified. Resolved, the missing dependency is caught.
       const enc = instSpec({
         name: 'appB', owner: 'owner1', dependencies: linkedTo('appA'), encrypted: true,
       });
-      specCutoverStub.resolveInstantiatedSpec.withArgs(enc).resolves(enc.spec);
+      specCutoverStub.resolveRegisteredSpec.withArgs(enc).resolves(enc.spec);
       appsRepositoryStub.getInstalledApp.resolves(null);
       const error = await expect(relationshipResolver.checkAppDependencyRequirements(enc))
         .to.be.rejectedWith(/is not installed on this node/);
@@ -181,7 +181,7 @@ describe('relationshipResolver tests', () => {
       const enc = instSpec({
         name: 'appB', owner: 'owner1', dependencies: linkedTo('appA'), encrypted: true,
       });
-      specCutoverStub.resolveInstantiatedSpec.withArgs(enc).resolves(enc.spec);
+      specCutoverStub.resolveRegisteredSpec.withArgs(enc).resolves(enc.spec);
       appsRepositoryStub.getInstalledApp.resolves(instSpec({ name: 'appA', owner: 'owner1' }));
       expect(await relationshipResolver.checkAppDependencyRequirements(enc)).to.equal(true);
     });
@@ -190,7 +190,7 @@ describe('relationshipResolver tests', () => {
       const enc = instSpec({
         name: 'appB', owner: 'owner1', dependencies: linkedTo('appA'), encrypted: true,
       });
-      specCutoverStub.resolveInstantiatedSpec.withArgs(enc).resolves(null);
+      specCutoverStub.resolveRegisteredSpec.withArgs(enc).resolves(null);
       const error = await expect(relationshipResolver.checkAppDependencyRequirements(enc))
         .to.be.rejectedWith(/could not be decrypted on this node/);
       expect(error.code).to.equal('NETWORK_DEPENDENCY_NOT_READY');
@@ -219,14 +219,14 @@ describe('relationshipResolver tests', () => {
   describe('dependenciesReadyForSelection (never decrypts)', () => {
     it('true when the app declares no dependencies', async () => {
       expect(await relationshipResolver.dependenciesReadyForSelection(instSpec({ name: 'appB' }))).to.equal(true);
-      sinon.assert.notCalled(specCutoverStub.resolveInstantiatedSpec);
+      sinon.assert.notCalled(specCutoverStub.resolveRegisteredSpec);
     });
 
     it('true when a cleartext app\'s dependencies are satisfied', async () => {
       appsRepositoryStub.getInstalledApp.resolves(instSpec({ name: 'appA', owner: 'owner1' }));
       const ok = await relationshipResolver.dependenciesReadyForSelection(instSpec({ name: 'appB', owner: 'owner1', dependencies: linkedTo('appA') }));
       expect(ok).to.equal(true);
-      sinon.assert.notCalled(specCutoverStub.resolveInstantiatedSpec);
+      sinon.assert.notCalled(specCutoverStub.resolveRegisteredSpec);
     });
 
     it('NOT_READY when a cleartext app\'s dependency is missing — general-pool ordering still works', async () => {
@@ -234,7 +234,7 @@ describe('relationshipResolver tests', () => {
       const error = await expect(relationshipResolver.dependenciesReadyForSelection(instSpec({ name: 'appB', dependencies: linkedTo('appA') })))
         .to.be.rejectedWith(/is not installed on this node/);
       expect(error.code).to.equal('NETWORK_DEPENDENCY_NOT_READY');
-      sinon.assert.notCalled(specCutoverStub.resolveInstantiatedSpec);
+      sinon.assert.notCalled(specCutoverStub.resolveRegisteredSpec);
     });
 
     it('treats an encrypted app as ready and does NOT decrypt it', async () => {
@@ -243,7 +243,7 @@ describe('relationshipResolver tests', () => {
       // and the install-time gate does the real check.
       const enc = instSpec({ name: 'appB', dependencies: linkedTo('missing'), encrypted: true });
       expect(await relationshipResolver.dependenciesReadyForSelection(enc)).to.equal(true);
-      sinon.assert.notCalled(specCutoverStub.resolveInstantiatedSpec);
+      sinon.assert.notCalled(specCutoverStub.resolveRegisteredSpec);
       sinon.assert.notCalled(appsRepositoryStub.getInstalledApp);
     });
   });
@@ -251,7 +251,7 @@ describe('relationshipResolver tests', () => {
   describe('pureFollowerNames (resolve only where told)', () => {
     it('detects an ENCRYPTED follower when told to resolve it', async () => {
       const enc = follower({ name: 'collector', encrypted: true });
-      specCutoverStub.resolveInstantiatedSpec.withArgs(enc).resolves(enc.spec);
+      specCutoverStub.resolveRegisteredSpec.withArgs(enc).resolves(enc.spec);
       const names = await relationshipResolver.pureFollowerNames([enc], () => true);
       expect([...names]).to.eql(['collector']);
     });
@@ -260,25 +260,25 @@ describe('relationshipResolver tests', () => {
       const plain = follower({ name: 'collector' });
       const names = await relationshipResolver.pureFollowerNames([plain], () => false);
       expect([...names]).to.eql(['collector']);
-      sinon.assert.notCalled(specCutoverStub.resolveInstantiatedSpec);
+      sinon.assert.notCalled(specCutoverStub.resolveRegisteredSpec);
     });
 
     it('reports an ENCRYPTED follower standalone when not told to resolve — the price of not decrypting', async () => {
       const enc = follower({ name: 'collector', encrypted: true });
       const names = await relationshipResolver.pureFollowerNames([enc], () => false);
       expect([...names]).to.eql([]);
-      sinon.assert.notCalled(specCutoverStub.resolveInstantiatedSpec);
+      sinon.assert.notCalled(specCutoverStub.resolveRegisteredSpec);
     });
 
     it('resolves only the apps the predicate names', async () => {
       const pinned = follower({ name: 'pinned', encrypted: true });
       const general = follower({ name: 'general', encrypted: true });
-      specCutoverStub.resolveInstantiatedSpec.withArgs(pinned).resolves(pinned.spec);
+      specCutoverStub.resolveRegisteredSpec.withArgs(pinned).resolves(pinned.spec);
       const names = await relationshipResolver.pureFollowerNames(
         [pinned, general], (app) => app.name === 'pinned',
       );
       expect([...names]).to.eql(['pinned']);
-      expect(specCutoverStub.resolveInstantiatedSpec.getCalls().map((c) => c.args[0].name)).to.eql(['pinned']);
+      expect(specCutoverStub.resolveRegisteredSpec.getCalls().map((c) => c.args[0].name)).to.eql(['pinned']);
     });
   });
 
@@ -548,7 +548,7 @@ describe('relationshipResolver tests', () => {
       // This node holds the key, so the encrypted consumer resolves to its real
       // spec and its edge to the collector is visible; the sealed accessor
       // (encWorkload.linkedAppNames()) reports none.
-      specCutoverStub.resolveInstantiatedSpec.withArgs(encWorkload).resolves(encWorkload.spec);
+      specCutoverStub.resolveRegisteredSpec.withArgs(encWorkload).resolves(encWorkload.spec);
       const orphans = await relationshipResolver.findUnrequiredInstalledDependencies();
       expect(orphans.map((a) => a.name)).to.eql([]);
     });
@@ -560,7 +560,7 @@ describe('relationshipResolver tests', () => {
       const datadog = follower({ name: 'datadog', dependencies: linkedTo('alloy'), encrypted: true });
       const alloy = follower({ name: 'alloy' });
       appsRepositoryStub.listInstalledApps.resolves([alloy, datadog]);
-      specCutoverStub.resolveInstantiatedSpec.withArgs(datadog).resolves(datadog.spec);
+      specCutoverStub.resolveRegisteredSpec.withArgs(datadog).resolves(datadog.spec);
       const orphans = await relationshipResolver.findUnrequiredInstalledDependencies();
       expect(orphans.map((a) => a.name)).to.eql(['datadog', 'alloy']);
     });
@@ -571,7 +571,7 @@ describe('relationshipResolver tests', () => {
       // looked standalone, so an orphaned one was never reaped.
       const encFollower = follower({ name: 'collector', encrypted: true });
       appsRepositoryStub.listInstalledApps.resolves([encFollower]);
-      specCutoverStub.resolveInstantiatedSpec.withArgs(encFollower).resolves(encFollower.spec);
+      specCutoverStub.resolveRegisteredSpec.withArgs(encFollower).resolves(encFollower.spec);
       const orphans = await relationshipResolver.findUnrequiredInstalledDependencies();
       expect(orphans.map((a) => a.name)).to.eql(['collector']);
     });
@@ -579,7 +579,7 @@ describe('relationshipResolver tests', () => {
     it('does not reap when spec visibility is incomplete (undecryptable app)', async () => {
       const encWorkload = instSpec({ name: 'game', encrypted: true });
       appsRepositoryStub.listInstalledApps.resolves([encWorkload, follower({ name: 'orphaned' })]);
-      specCutoverStub.resolveInstantiatedSpec.withArgs(encWorkload).resolves(null);
+      specCutoverStub.resolveRegisteredSpec.withArgs(encWorkload).resolves(null);
       const orphans = await relationshipResolver.findUnrequiredInstalledDependencies();
       expect(orphans).to.eql([]);
     });
@@ -587,7 +587,7 @@ describe('relationshipResolver tests', () => {
     it('refuses the required-set (falls back to not suppressing) when an assigned app is undecryptable', async () => {
       const enc = instSpec({ name: 'game', encrypted: true, placement: { hasTargets: () => true, matchesTarget: () => true, isPinnedTo: () => true } });
       registryStub.pinnedTo.resolves([enc]);
-      specCutoverStub.resolveInstantiatedSpec.withArgs(enc).resolves(null);
+      specCutoverStub.resolveRegisteredSpec.withArgs(enc).resolves(null);
       await expect(relationshipResolver.getRequiredDependencyNamesForNode({ ip: '7.7.7.7:16127' })).to.be.rejected;
     });
   });

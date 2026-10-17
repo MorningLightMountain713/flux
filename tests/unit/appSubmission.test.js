@@ -99,7 +99,7 @@ describe('appSubmission tests', () => {
         ensureProvidersRegistered: sinon.stub().resolves(),
         // the row's spec, cleartext — an update's prior state comes from the
         // active registry row, sealed for an enterprise app
-        resolveInstantiatedSpec: sinon.stub().callsFake((row) => Promise.resolve(row?.spec ?? null)),
+        resolveRegisteredSpec: sinon.stub().callsFake((row) => Promise.resolve(row?.spec ?? null)),
       },
       specLibs: {
         // Real library behind FluxOS's own wrappers. assertVersionActivated stays
@@ -128,14 +128,14 @@ describe('appSubmission tests', () => {
     // resolveSubmission parses via the strict backend deserializer; the default
     // backend carries only that (a test needing sealForStorage adds it).
     stubs.parseSpec = sinon.stub();
-    // EncryptedSpecV8 is the REAL class, not a stub of it. resolveSubmission
+    // SealedSpecV8 is the REAL class, not a stub of it. resolveSubmission
     // asks it whether a submission is a v8 enterprise envelope and holds it to
     // the sentinels if so; a hand-written stand-in here would be a second
     // statement of that shape, and the test would keep passing after the real
     // one changed underneath it.
     stubs.specLibs.getSpecBackend.resolves({
       deserializeSpec: stubs.parseSpec,
-      EncryptedSpecV8: flux.EncryptedSpecV8,
+      SealedSpecV8: flux.SealedSpecV8,
     });
   });
 
@@ -435,7 +435,7 @@ describe('appSubmission tests', () => {
       const encryptedSpec = await sealedV9Spec({ name: V9_SUBMISSION.name });
       const sealForStorage = sinon.stub().resolves(encryptedSpec);
       stubs.specLibs.getSpecBackend.resolves({
-        deserializeSpec: stubs.parseSpec, sealForStorage, EncryptedSpecV8: flux.EncryptedSpecV8,
+        deserializeSpec: stubs.parseSpec, sealForStorage, SealedSpecV8: flux.SealedSpecV8,
       });
 
       const result = await appSubmission.resolveSubmission(submission, {
@@ -461,8 +461,8 @@ describe('appSubmission tests', () => {
       // reading it back. Held to the sentinels here, at the submission door only.
       appSubmission = load();
       const cleartext = await v8Spec({}, { encrypted: true });
-      const wireSpec = await flux.EncryptedSpecV8.fromSpec(
-        cleartext, await flux.EncryptedSpecV8.createProviderFor(cleartext.name, cleartext.owner),
+      const wireSpec = await flux.SealedSpecV8.fromSpec(
+        cleartext, await flux.SealedSpecV8.createProviderFor(cleartext.name, cleartext.owner),
       );
       const submission = wireSpec.serialize();
       expect(submission.compose, 'the honest form leaves it empty').to.deep.equal([]);
@@ -487,8 +487,8 @@ describe('appSubmission tests', () => {
       // down with it.
       appSubmission = load();
       const cleartext = await v8Spec({}, { encrypted: true });
-      const wireSpec = await flux.EncryptedSpecV8.fromSpec(
-        cleartext, await flux.EncryptedSpecV8.createProviderFor(cleartext.name, cleartext.owner),
+      const wireSpec = await flux.SealedSpecV8.fromSpec(
+        cleartext, await flux.SealedSpecV8.createProviderFor(cleartext.name, cleartext.owner),
       );
       const submission = wireSpec.serialize();
       stubs.transportHelper.openTransportEnvelope.resolves(submission);
@@ -505,19 +505,19 @@ describe('appSubmission tests', () => {
       // A REAL sealed v8, decrypted by the real classes through the registered
       // provider. The double this replaced gave its inner spec only `serialize`
       // and `version`, and appSubmission grew `spec.spec || spec` to cope with a
-      // wrapper shaped like that — a shape the real DecryptedCanonicalSpec has
+      // wrapper shaped like that — a shape the real OpenedSpec has
       // never had.
       const cleartext = await v8Spec({}, { encrypted: true });
-      const wireSpec = await flux.EncryptedSpecV8.fromSpec(
-        cleartext, await flux.EncryptedSpecV8.createProviderFor(cleartext.name, cleartext.owner),
+      const wireSpec = await flux.SealedSpecV8.fromSpec(
+        cleartext, await flux.SealedSpecV8.createProviderFor(cleartext.name, cleartext.owner),
       );
-      const validateContents = sinon.spy(flux.DecryptedCanonicalSpec.prototype, 'validateContents');
+      const validateContents = sinon.spy(flux.OpenedSpec.prototype, 'validateContents');
       const submission = wireSpec.serialize();
       stubs.transportHelper.openTransportEnvelope.resolves(submission);
       stubs.parseSpec.resolves(wireSpec);
 
       // With a signed contentHash, so the guard actually runs against a
-      // DecryptedCanonicalSpec — the only path that uses its contentHash
+      // OpenedSpec — the only path that uses its contentHash
       // delegation, and otherwise unexercised anywhere in this repo.
       const result = await appSubmission.resolveSubmission(submission, {
         contentHash: cleartext.contentHash(),
@@ -557,7 +557,7 @@ describe('appSubmission tests', () => {
 
       // Stubbing a collaborator hides whether what we hand it is usable. The
       // gate calls toCanonical() on whatever arrives, and what arrives here is a
-      // DecryptedCanonicalSpec — so assert it can answer, or a delegation could
+      // OpenedSpec — so assert it can answer, or a delegation could
       // disappear from flux-spec with this suite still green. It did, and this
       // suite was.
       //

@@ -30,7 +30,7 @@
 
 const config = require('config');
 const appRecords = require('../appDatabase/appRecords');
-const { resolveInstantiatedSpec } = require('../utils/specCutover');
+const { resolveRegisteredSpec } = require('../utils/specCutover');
 const dockerService = require('../dockerService');
 const { NodeCondition } = require('./nodeConditions');
 const log = require('../../lib/log');
@@ -58,13 +58,13 @@ async function isAppRunning(appName) {
  * same-owner app there declares an edge to it (the successor to the v8
  * dependencyOnly marker, e.g. a shared stats collector).
  *
- * Takes a READABLE spec view, not an InstantiatedSpec: whether the spec had
+ * Takes a READABLE spec view, not an RegisteredSpec: whether the spec had
  * to be decrypted was settled by whoever resolved the view, so this stays a
  * plain question about a spec's fields. A null view is an app whose spec
  * could not be read here — standalone, which is the fail-toward-keeping
  * answer (never reap or suppress on incomplete visibility).
  *
- * @param {object|null} view - readable spec view (FluxAppSpec* | DecryptedCanonicalSpec)
+ * @param {object|null} view - readable spec view (FluxAppSpec* | OpenedSpec)
  * @returns {boolean}
  */
 function isPureFollower(view) {
@@ -97,7 +97,7 @@ function isStopWhenUnneeded(view) {
  * for the reap/suppression callers to fail toward keeping rather than act
  * blind.
  *
- * @param {Array<object>} apps - InstantiatedSpec instances
+ * @param {Array<object>} apps - RegisteredSpec instances
  * @returns {Promise<{ viewsByName: Map<string, object|null>, complete: boolean }>}
  */
 async function buildViewsByName(apps) {
@@ -110,7 +110,7 @@ async function buildViewsByName(apps) {
       continue;
     }
     // eslint-disable-next-line no-await-in-loop
-    const view = await resolveInstantiatedSpec(app).catch(() => null);
+    const view = await resolveRegisteredSpec(app).catch(() => null);
     viewsByName.set(app.name.toLowerCase(), view || null);
     if (!view) complete = false;
   }
@@ -133,15 +133,15 @@ function edgesOf(viewsByName, nameLower) {
 
 /**
  * Whether one app is a pure follower, resolving its spec first. For callers
- * holding an InstantiatedSpec rather than a view; an app whose spec cannot
+ * holding an RegisteredSpec rather than a view; an app whose spec cannot
  * be read here answers false (standalone), the fail-toward-keeping answer.
  *
- * @param {object} instantiated - InstantiatedSpec instance
+ * @param {object} registered - RegisteredSpec instance
  * @returns {Promise<boolean>}
  */
-async function isPureFollowerApp(instantiated) {
-  if (!instantiated) return false;
-  const view = await resolveInstantiatedSpec(instantiated).catch(() => null);
+async function isPureFollowerApp(registered) {
+  if (!registered) return false;
+  const view = await resolveRegisteredSpec(registered).catch(() => null);
   return isPureFollower(view);
 }
 
@@ -155,11 +155,11 @@ async function isPureFollowerApp(instantiated) {
  * installing and must not pay a decrypt. A cleartext app answers fully here;
  * an encrypted one answers nothing, which is the price of not decrypting.
  *
- * @param {object} instantiated - InstantiatedSpec instance
+ * @param {object} registered - RegisteredSpec instance
  * @returns {object|null}
  */
-function readableViewOrNull(instantiated) {
-  const spec = instantiated && instantiated.spec;
+function readableViewOrNull(registered) {
+  const spec = registered && registered.spec;
   return spec && !spec.sealed ? spec : null;
 }
 
@@ -173,7 +173,7 @@ function readableViewOrNull(instantiated) {
  * is neither pinned nor readable is reported standalone — the
  * fail-toward-keeping answer.
  *
- * @param {Array<object>} apps - InstantiatedSpec instances
+ * @param {Array<object>} apps - RegisteredSpec instances
  * @param {(app: object) => boolean} [shouldResolve] - defaults to resolving all
  * @returns {Promise<Set<string>>} original-cased follower names
  */
@@ -185,7 +185,7 @@ async function pureFollowerNames(apps, shouldResolve = () => true) {
     if (app && app.name) {
       // eslint-disable-next-line no-await-in-loop
       const view = shouldResolve(app)
-        ? await resolveInstantiatedSpec(app).catch(() => null)
+        ? await resolveRegisteredSpec(app).catch(() => null)
         : readableViewOrNull(app);
       if (isPureFollower(view)) followers.add(app.name);
     }
@@ -211,7 +211,7 @@ async function pureFollowerNames(apps, shouldResolve = () => true) {
  * Pure over its inputs: every spec read comes from `viewsByName` (resolved
  * by the async caller), never fetched here.
  *
- * @param {Array<object>} apps - InstantiatedSpec instances to reason over
+ * @param {Array<object>} apps - RegisteredSpec instances to reason over
  * @param {Map<string, object|null>} viewsByName - lowercased-name -> readable view
  * @returns {Set<string>} required follower app names
  */
@@ -255,9 +255,9 @@ function computeRequiredDependencyNames(apps, viewsByName) {
  * `hopQualifies`, when given, restricts which edges count (the cascade
  * closure passes the onRemove predicate).
  *
- * @param {object} workload - root InstantiatedSpec
+ * @param {object} workload - root RegisteredSpec
  * @param {string} depNameLower - lowercased target name to look for
- * @param {Map<string, object>} byName - lowercased-name -> InstantiatedSpec
+ * @param {Map<string, object>} byName - lowercased-name -> RegisteredSpec
  * @param {Map<string, object|null>} viewsByName - lowercased-name -> readable view
  * @param {(edge: object) => boolean} [hopQualifies] - defaults to every edge
  * @returns {boolean}
@@ -312,10 +312,10 @@ function appTransitivelyRequires(workload, depNameLower, byName, viewsByName, ho
  * uninstaller flow).
  *
  * @param {string} depName - app name being removed
- * @returns {Promise<Array<object>>} requiring InstantiatedSpecs, cascade-bound
+ * @returns {Promise<Array<object>>} requiring RegisteredSpecs, cascade-bound
  */
 async function findCascadeWorkloadsRequiring(depName) {
-  const installed = (await appRecords.installed().apps()).map((record) => record.record);
+  const installed = (await appRecords.hostedInstances().apps()).map((record) => record.record);
   if (!installed || !installed.length) {
     return [];
   }
@@ -389,11 +389,11 @@ async function getRequiredDependencyNamesForNode(nodeIdentity) {
  *
  * @param {object} [options]
  * @param {object} [options.nodeIdentity] - { ip, outpoint, operator } of this node
- * @returns {Promise<Array<object>>} orphaned follower InstantiatedSpecs, consumers first
+ * @returns {Promise<Array<object>>} orphaned follower RegisteredSpecs, consumers first
  */
 async function findUnrequiredInstalledDependencies(options = {}) {
   const { nodeIdentity } = options;
-  const installed = (await appRecords.installed().apps()).map((record) => record.record);
+  const installed = (await appRecords.hostedInstances().apps()).map((record) => record.record);
   if (!installed || !installed.length) {
     return [];
   }
@@ -462,7 +462,7 @@ async function verifyDependencies(appName, owner, entries) {
       continue;
     }
     // eslint-disable-next-line no-await-in-loop
-    const installed = await appRecords.installed().byName(targetName);
+    const installed = await appRecords.hostedInstances().byName(targetName);
     if (!installed) {
       // Transient ordering condition, not a misconfiguration: the dependency
       // may simply not be installed yet. Tagged so callers can defer and
@@ -506,16 +506,16 @@ async function verifyDependencies(appName, owner, entries) {
  * `checkAppDependencyRequirements`, which runs once the node has committed
  * and is decrypting the app anyway.
  *
- * @param {object} instantiated - InstantiatedSpec instance of the candidate
+ * @param {object} registered - RegisteredSpec instance of the candidate
  * @returns {Promise<boolean>} true when the app may be selected this cycle
  */
-async function dependenciesReadyForSelection(instantiated) {
-  const view = instantiated ? readableViewOrNull(instantiated) : null;
+async function dependenciesReadyForSelection(registered) {
+  const view = registered ? readableViewOrNull(registered) : null;
   const entries = view && typeof view.dependencyEntries === 'function' ? view.dependencyEntries() : [];
   if (!entries.length) {
     return true;
   }
-  return verifyDependencies(instantiated.name, instantiated.owner, entries);
+  return verifyDependencies(registered.name, registered.owner, entries);
 }
 
 /**
@@ -530,18 +530,18 @@ async function dependenciesReadyForSelection(instantiated) {
  * anyway, so the resolve costs nothing extra — keep it that way: this must
  * not be called from a selection or polling loop.
  *
- * @param {object} instantiated - InstantiatedSpec instance of the parent app
+ * @param {object} registered - RegisteredSpec instance of the parent app
  * @returns {Promise<boolean>} true when all gating edges are satisfied
  */
-async function checkAppDependencyRequirements(instantiated) {
-  if (!instantiated) return true;
+async function checkAppDependencyRequirements(registered) {
+  if (!registered) return true;
 
-  const view = await resolveInstantiatedSpec(instantiated).catch(() => null);
+  const view = await resolveRegisteredSpec(registered).catch(() => null);
   if (!view) {
     // The node installing an app can normally decrypt it. Failing here means
     // the edges cannot be checked at all, so defer rather than install blind:
     // tagged transient, like a dependency that has not arrived yet.
-    const error = new Error(`App '${instantiated.name}' could not be decrypted on this node to check its dependencies. Installation deferred.`);
+    const error = new Error(`App '${registered.name}' could not be decrypted on this node to check its dependencies. Installation deferred.`);
     error.code = NodeCondition.NETWORK_DEPENDENCY_NOT_READY;
     throw error;
   }

@@ -291,7 +291,7 @@ function emitFolderStatus(report, status) {
  * where throwing would replace the error that brought it there.
  *
  * @param {string|null} folderId - the component's syncthing folder id as the
- *   installed ledger records it; null for a component that shares none
+ *   instance resources record it; null for a component that shares none
  * @param {boolean} paused - the state to leave the folder in
  * @param {function(string): void} [report] - told what happened
  * @returns {Promise<'held'|'resumed'|'absent'|'failed'>} 'held' or 'resumed' when
@@ -329,7 +329,7 @@ async function setSyncthingFolderPaused(folderId, paused, report) {
 
 /**
  * Remove a component's syncthing folder registration by the id the installed
- * ledger records for it (config-plane only: the on-disk volume is untouched;
+ * resources record for it (config-plane only: the on-disk volume is untouched;
  * the monitor re-adds the folder while the spec still declares sync). A folder
  * syncthing does not list is already gone, and nothing is reported.
  *

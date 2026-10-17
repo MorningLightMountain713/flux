@@ -6,7 +6,7 @@
  *
  * These exist because a double cannot enforce an invariant it does not know
  * about. ConfirmedAppEvent rejects a registration without extend=true and
- * freezes itself; InstantiatedSpec decides expiry from the term start it was
+ * freezes itself; RegisteredSpec decides expiry from the term start it was
  * built with. A stub returning {} satisfies every assertion and states none of
  * that, so a test written against one proves the wiring and nothing about the
  * type it stands in for.
@@ -99,10 +99,10 @@ async function v8Spec(overrides = {}) {
 
 /**
  * A real ENCRYPTED v8 spec. No key material is needed: the enterprise blob stays
- * opaque, so this deserializes to a genuine EncryptedSpecV8 and an
- * InstantiatedSpec built from it reports isEncrypted truthfully. Opening the
+ * opaque, so this deserializes to a genuine SealedSpecV8 and an
+ * RegisteredSpec built from it reports isEncrypted truthfully. Opening the
  * blob is the part that needs the benchmark channel — a test covering that
- * stubs resolveInstantiatedSpec, and only that.
+ * stubs resolveRegisteredSpec, and only that.
  */
 async function encryptedV8Spec(overrides = {}) {
   const { deserializeSpec, Chain } = await load();
@@ -197,26 +197,26 @@ async function confirmedEvent(overrides = {}) {
   });
 }
 
-/** The real InstantiatedSpec, projected from a real event the way production does. */
-async function instantiatedSpec(overrides = {}) {
-  const { InstantiatedSpec } = await load();
+/** The real RegisteredSpec, projected from a real event the way production does. */
+async function registeredSpec(overrides = {}) {
+  const { RegisteredSpec } = await load();
   const { event, ...rest } = overrides;
   const source = event ?? await confirmedEvent();
-  return InstantiatedSpec.fromEvent({ ...source.toInstantiatedSpec(), ...rest });
+  return RegisteredSpec.fromEvent({ ...source.toRegisteredSpec(), ...rest });
 }
 
 /**
- * The real InstalledSpec: a registered record this node runs, the replica it
+ * The real HostedInstance: a registered record this node runs, the replica it
  * runs as, and the component keys it derived for it. `record` defaults to
- * instantiatedSpec(rest).
+ * registeredSpec(rest).
  */
-async function installedSpec(overrides = {}) {
-  const { InstalledSpec } = await load();
+async function hostedInstance(overrides = {}) {
+  const { HostedInstance } = await load();
   const {
     record, replica = null, owed = null, componentKeys = null, ...rest
   } = overrides;
-  return new InstalledSpec({
-    record: record ?? await instantiatedSpec(rest), replica, owed, componentKeys,
+  return new HostedInstance({
+    record: record ?? await registeredSpec(rest), replica, owed, componentKeys,
   });
 }
 
@@ -321,7 +321,7 @@ module.exports = {
   encryptedV8Spec,
   confirmedEvent,
   legacyEvent,
-  instantiatedSpec,
-  installedSpec,
+  registeredSpec,
+  hostedInstance,
   tempMessage,
 };

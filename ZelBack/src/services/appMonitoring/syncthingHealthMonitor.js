@@ -145,11 +145,11 @@ async function monitorFolderHealth(params) {
       const folderId = folderConfig.id;
 
       // Skip folders whose mounts are not ready. A folder's directory is the
-      // one the installed ledger records for it: for an app registered before
+      // one the instance's resources record for it: for an app registered before
       // v9 it is not named by the folder's id.
       // eslint-disable-next-line no-await-in-loop
-      const ledger = await appRecords.ledgers().bySyncFolderId(folderId);
-      const folderPath = ledger?.blockOfSyncFolder(folderId)?.syncFolder.path ?? null;
+      const resources = await appRecords.instanceResources().bySyncFolderId(folderId);
+      const folderPath = resources?.blockOfSyncFolder(folderId)?.syncFolder.path ?? null;
       // eslint-disable-next-line no-await-in-loop
       const isMounted = folderPath ? await isPathMounted(folderPath) : null;
       if (isMounted === false) {

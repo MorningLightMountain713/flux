@@ -302,7 +302,7 @@ describe('a sale of every app kind that carries no content', function () {
       // eslint-disable-next-line no-await-in-loop
       expect((await listedOn(host, kind.name)).owner, `${kind.label}: the registry names the buyer`).to.equal(buyer.zelid);
       // eslint-disable-next-line no-await-in-loop
-      expect((await installedOn(host, kind.name)).owner, `${kind.label}: the installed record names the buyer`).to.equal(buyer.zelid);
+      expect((await installedOn(host, kind.name)).owner, `${kind.label}: the hosted instance names the buyer`).to.equal(buyer.zelid);
     }
   });
 

@@ -12,11 +12,11 @@ const operationRegistry = require('../../ZelBack/src/services/utils/operationReg
 // agree on which playground sessions are live.
 const playgroundSessionRegistry = require('../../ZelBack/src/services/appPlayground/playgroundSessionRegistry');
 const {
-  loadSpecLibrary, v9Spec, instantiatedSpec,
+  loadSpecLibrary, v9Spec, registeredSpec,
 } = require('./fixtures/fluxSpec');
 
 // The spec library is real here, not stubbed - see tests/unit/fixtures/fluxSpec.js
-// for why. Every registry and installed row below is a real InstantiatedSpec, so
+// for why. Every registry and installed row below is a real RegisteredSpec, so
 // the expiry sweep runs the LIBRARY's rule (v9: registeredAt + ttl against the
 // tip block time; v1-v8: the block height, with the PON fork's 4x) rather than a
 // hand-written `isExpired: () => true` that can only ever agree with itself.
@@ -47,18 +47,18 @@ describe('appJanitor tests', () => {
   });
 
   /**
-   * A real global-registry row: an InstantiatedSpec. Its isExpired(tipBlockTime,
+   * A real global-registry row: an RegisteredSpec. Its isExpired(tipBlockTime,
    * currentHeight) adapts the two numbers appJanitor has into the
    * {state},{clock} pair the inner spec wants - the adaptation the sweep
    * depends on and a literal cannot have.
    */
   async function v9Row(name, { registeredAt = LONG_EXPIRED_AT, height = 2_500_000, identity = null } = {}) {
-    return instantiatedSpec(await v9Spec({ name }), { registeredAt, height, identity });
+    return registeredSpec(await v9Spec({ name }), { registeredAt, height, identity });
   }
 
   /**
    * A real installed-app row as appQueryService.installedApps() returns it:
-   * the SERIALIZED form of the stored InstantiatedSpec, since that endpoint
+   * the SERIALIZED form of the stored RegisteredSpec, since that endpoint
    * maps `app.serialize()` over the repository's rows. The janitor matches
    * docker containers against `row.name`, so what serialize() actually emits
    * is the thing under test, not a literal that agrees by construction.
@@ -177,7 +177,7 @@ describe('appJanitor tests', () => {
         status: 'success',
         data: [container('/fluxweb_owned', { [flux.LABEL_KEYS.APP]: 'owned' })],
       });
-      // A real serialized InstantiatedSpec, so the name the janitor matches on is
+      // A real serialized RegisteredSpec, so the name the janitor matches on is
       // the one serialize() actually emits.
       appQueryServiceStub.installedApps.resolves({ status: 'success', data: [await installedRow('owned')] });
 

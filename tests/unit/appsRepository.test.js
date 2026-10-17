@@ -5,14 +5,14 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { asConfig } = require('./fixtures/config');
 const {
-  loadSpecLibrary, v8Spec, v9Spec, sealedV8Spec, sealedV9Spec, instantiatedSpec,
+  loadSpecLibrary, v8Spec, v9Spec, sealedV8Spec, sealedV9Spec, registeredSpec,
 } = require('./fixtures/fluxSpec');
 const { installedRecord } = require('./fixtures/appRecords');
 const moduleLoader = require('../../ZelBack/src/lib/moduleLoader');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. This is the repository layer, so what the tests hand it are real STORED
-// forms: an InstantiatedSpec's serialization, cleartext or node-sealed. What stays
+// forms: an RegisteredSpec's serialization, cleartext or node-sealed. What stays
 // stubbed is I/O — mongo through dbHelper, and the event-log collection handle the
 // running-set derivation reads directly. The app messages are a real collection
 // over the library's in-memory store.
@@ -59,19 +59,19 @@ describe('appsRepository', () => {
 
   /**
    * The stored form of a legacy (v1–v8) app: the spec's wire form plus the chain
-   * state InstantiatedSpec appends. `registeredAt` is dropped because a legacy row
-   * carries none — it anchors v9's time-based TTL, and InstantiatedSpec.serialize
+   * state RegisteredSpec appends. `registeredAt` is dropped because a legacy row
+   * carries none — it anchors v9's time-based TTL, and RegisteredSpec.serialize
    * omits it when it is null.
    */
   async function legacyDoc(spec, { hash = 'h1', height = 2_550_000 } = {}) {
-    const doc = (await instantiatedSpec(spec, { hash, height })).serialize();
+    const doc = (await registeredSpec(spec, { hash, height })).serialize();
     delete doc.registeredAt;
     return doc;
   }
 
   /** The stored form of a v9 app, cleartext or node-sealed. */
   async function modernDoc(spec, { hash = 'h9', height = 2_550_000, registeredAt = 1_751_628_800 } = {}) {
-    return (await instantiatedSpec(spec, { hash, height, registeredAt })).serialize();
+    return (await registeredSpec(spec, { hash, height, registeredAt })).serialize();
   }
 
   beforeEach(() => {
@@ -112,7 +112,7 @@ describe('appsRepository', () => {
     // specLibs is FluxOS's own bridge to the spec library, and both accessors
     // return the same flattened namespace (ZelBack/src/services/utils/specLibs.js),
     // so the stub hands back the real one. hydrate() then runs the real
-    // InstantiatedSpec.deserialize over the real version registry — which is the
+    // RegisteredSpec.deserialize over the real version registry — which is the
     // whole of this module's read path.
     specLibsStub = {
       getSpec: sinon.stub().callsFake(async () => flux),
@@ -163,7 +163,7 @@ describe('appsRepository', () => {
         globalAppsInstallingErrorsBroadcasts: 'appsinstallingerrorsbroadcasts',
       },
       './appRecords': {
-        registry: () => registryStub, installed: () => installedStub, messages: () => messages, decisions: () => decisionsStub,
+        registry: () => registryStub, hostedInstances: () => installedStub, messages: () => messages, decisions: () => decisionsStub,
       },
     });
   });
@@ -171,7 +171,7 @@ describe('appsRepository', () => {
   afterEach(() => sinon.restore());
 
   // hydrate is the one door from a stored message's spec document to an
-  // InstantiatedSpec; getAppMessage is the read that goes through it.
+  // RegisteredSpec; getAppMessage is the read that goes through it.
   describe('hydration', () => {
     const messageWith = (doc) => {
       const { hash, height, ...appSpecifications } = doc;
@@ -182,13 +182,13 @@ describe('appsRepository', () => {
       expect(await appsRepository.getAppMessage('unknown')).to.be.null;
     });
 
-    it('dispatches to the registered version class and wraps in InstantiatedSpec', async () => {
+    it('dispatches to the registered version class and wraps in RegisteredSpec', async () => {
       const doc = await legacyDoc(await v8Spec({ name: 'example' }), { hash: 'h', height: 100 });
       const deserialize = sinon.spy(flux.FluxAppSpecV8, 'deserialize');
       await confirm(messageWith(doc));
 
       const { spec: result } = await appsRepository.getAppMessage('h');
-      expect(result).to.be.instanceOf(flux.InstantiatedSpec);
+      expect(result).to.be.instanceOf(flux.RegisteredSpec);
       expect(result.spec).to.be.instanceOf(flux.FluxAppSpecV8);
       expect(result.hash).to.equal('h');
       expect(result.height).to.equal(100);
@@ -213,7 +213,7 @@ describe('appsRepository', () => {
       expect(logStub.warn.firstCall.args[0]).to.include('version 99');
     });
 
-    it('hydrates v9 documents through InstantiatedSpec.deserialize', async () => {
+    it('hydrates v9 documents through RegisteredSpec.deserialize', async () => {
       const doc = await modernDoc(await v9Spec({ name: 'modern' }), { hash: 'h', height: 100 });
       await confirm(messageWith(doc));
       const { spec: result } = await appsRepository.getAppMessage('h');
@@ -229,7 +229,7 @@ describe('appsRepository', () => {
       await confirm(messageWith(doc));
 
       const { spec: result } = await appsRepository.getAppMessage('hs9');
-      expect(result.spec).to.be.instanceOf(flux.EncryptedSpecV9);
+      expect(result.spec).to.be.instanceOf(flux.SealedSpecV9);
       expect(result.isEncrypted).to.be.true;
       expect(result.requiresArcane(), 'only an Arcane node can unseal it').to.be.true;
       // Judging fitness without unsealing is what the cleartext summary is for, and
@@ -242,7 +242,7 @@ describe('appsRepository', () => {
       await confirm(messageWith(doc));
 
       const { spec: result } = await appsRepository.getAppMessage('hs8');
-      expect(result.spec).to.be.instanceOf(flux.EncryptedSpecV8);
+      expect(result.spec).to.be.instanceOf(flux.SealedSpecV8);
       expect(result.isEncrypted).to.be.true;
       // v8's blob carries no cleartext summary at all: "I cannot tell from here".
       expect(result.resourceTotals()).to.be.null;
@@ -258,7 +258,7 @@ describe('appsRepository', () => {
     });
 
     it('falls back to an app this node has installed under the name', async () => {
-      const installed = await instantiatedSpec(await v8Spec({ name: 'LocalOnly' }), { hash: 'hl', height: 100 });
+      const installed = await registeredSpec(await v8Spec({ name: 'LocalOnly' }), { hash: 'hl', height: 100 });
       installedStub.byName.withArgs('localonly').resolves(installedRecord(installed));
       expect(await appsRepository.getApplicationOwner('localonly')).to.equal(installed.owner);
     });
@@ -303,7 +303,7 @@ describe('appsRepository', () => {
     });
 
     it('falls back to the app this node has installed with the identity', async () => {
-      const installed = await instantiatedSpec(await v8Spec({ name: 'LocalOnly' }), { hash: 'hl', height: 100, identity: IDENTITY });
+      const installed = await registeredSpec(await v8Spec({ name: 'LocalOnly' }), { hash: 'hl', height: 100, identity: IDENTITY });
       installedStub.byIdentity.withArgs(IDENTITY).resolves(installedRecord(installed));
       expect(await appsRepository.getApplicationOwnerByIdentity(IDENTITY)).to.equal(installed.owner);
     });
@@ -360,7 +360,7 @@ describe('appsRepository', () => {
       expect(result).to.be.null;
     });
 
-    it('hydrates the nested appSpecifications into InstantiatedSpec', async () => {
+    it('hydrates the nested appSpecifications into RegisteredSpec', async () => {
       // A permanent message stores the spec's own wire form and nothing else: the
       // chain state lives on the message, and hydrate is what puts the two together.
       const spec = await v8Spec({ name: 'legacyapp' });

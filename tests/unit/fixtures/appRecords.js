@@ -7,11 +7,11 @@ const moduleLoader = require('../../../ZelBack/src/lib/moduleLoader');
 const { loadSpecLibrary } = require('./fluxSpec');
 
 /**
- * The app registry, the installed apps, the installed ledgers, the app
+ * The app registry, the hosted instances, the instance resources, the app
  * messages, the content manifests and the decisions a unit test's subject
  * reads: a real collection held in memory, or one whose every operation is a
- * stub. Either is installed as appRecords.registry(), appRecords.installed(),
- * appRecords.ledgers(), appRecords.messages(), appRecords.manifests() or
+ * stub. Either is installed as appRecords.registry(), appRecords.hostedInstances(),
+ * appRecords.instanceResources(), appRecords.messages(), appRecords.manifests() or
  * appRecords.decisions() until sinon.restore().
  */
 
@@ -55,8 +55,8 @@ function stubRegistry() {
   return install('registry', stubbed(specLibrary.loaded().AppRegistry, DEFAULT_ANSWERS));
 }
 
-// What each installed-apps operation answers until a test says otherwise.
-const INSTALLED_ANSWERS = {
+// What each hosted-instances operation answers until a test says otherwise.
+const HOSTED_ANSWERS = {
   byName: null,
   byReplica: null,
   byIdentity: null,
@@ -70,8 +70,8 @@ const INSTALLED_ANSWERS = {
   completeDerivedFields: 0,
 };
 
-// What each installed-ledgers operation answers until a test says otherwise.
-const LEDGER_ANSWERS = {
+// What each instance-resources operation answers until a test says otherwise.
+const RESOURCES_ANSWERS = {
   byInstance: null,
   byIdentifier: null,
   instancesOf: [],
@@ -81,23 +81,23 @@ const LEDGER_ANSWERS = {
 };
 
 /**
- * The installed apps with every operation a sinon stub, installed as
- * appRecords.installed(); calling it again in the same test returns it.
+ * The hosted instances with every operation a sinon stub, installed as
+ * appRecords.hostedInstances(); calling it again in the same test returns it.
  * @returns {Object<string, sinon.SinonStub>}
  */
-function stubInstalled() {
-  if (appRecords.installed.restore) return appRecords.installed();
-  return install('installed', stubbed(specLibrary.loaded().InstalledApps, INSTALLED_ANSWERS));
+function stubHostedInstances() {
+  if (appRecords.hostedInstances.restore) return appRecords.hostedInstances();
+  return install('hostedInstances', stubbed(specLibrary.loaded().HostedInstances, HOSTED_ANSWERS));
 }
 
 /**
- * The installed ledgers with every operation a sinon stub, installed as
- * appRecords.ledgers(); calling it again in the same test returns it.
+ * The instance resources with every operation a sinon stub, installed as
+ * appRecords.instanceResources(); calling it again in the same test returns it.
  * @returns {Object<string, sinon.SinonStub>}
  */
-function stubLedgers() {
-  if (appRecords.ledgers.restore) return appRecords.ledgers();
-  return install('ledgers', stubbed(specLibrary.loaded().InstalledLedgers, LEDGER_ANSWERS));
+function stubInstanceResources() {
+  if (appRecords.instanceResources.restore) return appRecords.instanceResources();
+  return install('instanceResources', stubbed(specLibrary.loaded().InstanceResourceStore, RESOURCES_ANSWERS));
 }
 
 /**
@@ -112,28 +112,28 @@ async function inMemoryRegistry() {
 }
 
 /**
- * A real InstalledApps over flux-spec's in-memory store, installed as
- * appRecords.installed(), with the store beside it so a test can seed a stored
+ * A real HostedInstances over flux-spec's in-memory store, installed as
+ * appRecords.hostedInstances(), with the store beside it so a test can seed a stored
  * form the collection would not write itself.
- * @returns {Promise<{installed: import('@runonflux/flux-spec-backend').InstalledApps, provider: object}>}
+ * @returns {Promise<{installed: import('@runonflux/flux-spec-backend').HostedInstances, provider: object}>}
  */
-async function inMemoryInstalled() {
-  const { InstalledApps, Chain } = await loadSpecLibrary();
+async function inMemoryHostedInstances() {
+  const { HostedInstances, Chain } = await loadSpecLibrary();
   const { InMemoryStorageProvider } = await moduleLoader.importModule('@runonflux/flux-spec-backend/testing');
   const provider = new InMemoryStorageProvider();
-  return { installed: install('installed', new InstalledApps(provider, { chain: Chain.MAIN })), provider };
+  return { installed: install('hostedInstances', new HostedInstances(provider, { chain: Chain.MAIN })), provider };
 }
 
 /**
- * A real InstalledLedgers over flux-spec's in-memory store, installed as
- * appRecords.ledgers(), with the store beside it.
- * @returns {Promise<{ledgers: import('@runonflux/flux-spec-backend').InstalledLedgers, provider: object}>}
+ * A real InstanceResourceStore over flux-spec's in-memory store, installed as
+ * appRecords.instanceResources(), with the store beside it.
+ * @returns {Promise<{instanceResources: import('@runonflux/flux-spec-backend').InstanceResourceStore, provider: object}>}
  */
-async function inMemoryLedgers() {
-  const { InstalledLedgers } = await loadSpecLibrary();
+async function inMemoryInstanceResources() {
+  const { InstanceResourceStore } = await loadSpecLibrary();
   const { InMemoryStorageProvider } = await moduleLoader.importModule('@runonflux/flux-spec-backend/testing');
   const provider = new InMemoryStorageProvider();
-  return { ledgers: install('ledgers', new InstalledLedgers(provider)), provider };
+  return { instanceResources: install('instanceResources', new InstanceResourceStore(provider)), provider };
 }
 
 // What each decisions operation answers until a test says otherwise.
@@ -257,10 +257,10 @@ async function inMemoryManifests() {
 }
 
 /**
- * An installed record over a registered record, for a stub to answer with: the
- * real InstalledSpec when the record is a real InstantiatedSpec, else a
+ * A hosted instance over a registered record, for a stub to answer with: the
+ * real HostedInstance when the record is a real RegisteredSpec, else a
  * stand-in with the same shape over a plain object.
- * @param {object|null} record - an InstantiatedSpec, a plain stand-in, or null
+ * @param {object|null} record - an RegisteredSpec, a plain stand-in, or null
  * @param {{replica?: string|null, owed?: object|null, componentKeys?: Map<string, string>|null,
  *   formerNames?: Map<string, string[]>}} [own]
  * @returns {object|null}
@@ -269,9 +269,9 @@ function installedRecord(record, {
   replica = null, owed = null, componentKeys = null, formerNames = new Map(),
 } = {}) {
   if (!record) return null;
-  const { InstalledSpec, InstantiatedSpec } = specLibrary.loaded();
-  if (record instanceof InstantiatedSpec) {
-    return new InstalledSpec({
+  const { HostedInstance, RegisteredSpec } = specLibrary.loaded();
+  if (record instanceof RegisteredSpec) {
+    return new HostedInstance({
       record, replica, owed, componentKeys, formerNames,
     });
   }
@@ -301,5 +301,5 @@ function installedRecord(record, {
 }
 
 module.exports = {
-  stubRegistry, inMemoryRegistry, stubInstalled, inMemoryInstalled, stubLedgers, inMemoryLedgers, stubMessages, inMemoryMessages, stubManifests, inMemoryManifests, stubDecisions, inMemoryDecisions, installedRecord,
+  stubRegistry, inMemoryRegistry, stubHostedInstances, inMemoryHostedInstances, stubInstanceResources, inMemoryInstanceResources, stubMessages, inMemoryMessages, stubManifests, inMemoryManifests, stubDecisions, inMemoryDecisions, installedRecord,
 };

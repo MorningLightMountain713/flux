@@ -154,7 +154,7 @@ async function isInstalledApp(installed, registrySpec) {
 }
 
 async function fireAdoption(appName) {
-  const installed = await appRecords.installed().byName(appName);
+  const installed = await appRecords.hostedInstances().byName(appName);
   if (!installed) return;
   const registrySpec = await appRecords.registry().byName(appName);
   if (!registrySpec || registrySpec.hash === installed.hash) return;
@@ -374,7 +374,7 @@ async function fullConvergence({ reason, atBoot = false } = {}) {
   }
   try {
     if (!await convergenceAllowed({ atBoot })) return;
-    const installedApps = await appRecords.installed().apps();
+    const installedApps = await appRecords.hostedInstances().apps();
     if (!installedApps.length) return;
     const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
     const globalRows = await appRecords.registry().byNames(installedApps.map((app) => app.name));
@@ -429,7 +429,7 @@ async function requestAppConvergence(appName, { reason, delayMs = 0 } = {}) {
   try {
     if (delayMs) await serviceHelper.delay(delayMs);
     if (!await convergenceAllowed()) return;
-    const installed = await appRecords.installed().byName(appName);
+    const installed = await appRecords.hostedInstances().byName(appName);
     if (!installed) return;
     const registrySpec = await appRecords.registry().byName(appName);
     const ctx = { localSocketAddr: await fluxNetworkHelper.getLocalSocketAddress() };
@@ -449,7 +449,7 @@ async function requestAppConvergence(appName, { reason, delayMs = 0 } = {}) {
 async function notifySpecStored(specDoc) {
   try {
     if (!specDoc || !specDoc.name) return;
-    const installedHere = (await appRecords.installed().keys(specDoc.name)).length > 0;
+    const installedHere = (await appRecords.hostedInstances().keys(specDoc.name)).length > 0;
     if (!installedHere) return;
     await requestAppConvergence(specDoc.name, { reason: 'specStored' });
   } catch (error) {

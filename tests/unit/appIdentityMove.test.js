@@ -18,7 +18,7 @@ describe('appIdentityMove tests', () => {
   let appIdentityMove;
   // The world the move acts on, as the stubs hold it.
   let db; // `${name}|${replica}` -> installed row
-  let lastPut; // the installed record last written
+  let lastPut; // the hosted instance last written
   let moves; // `${name}|${replica}` -> the move in progress
   let containers; // docker names present -> { running }
   let mounts; // mounted directories
@@ -110,22 +110,22 @@ describe('appIdentityMove tests', () => {
           Object.assign(db.get(key(rec.record.name, rec.replica)), rec.record);
         },
       },
-      ledgers: {
-        put: async (ledger) => { record('putLedger', ledger.name, ledger.replica, ledger.network, ledger.components); },
+      instanceResources: {
+        put: async (resources) => { record('putResources', resources.name, resources.replica, resources.network, resources.components); },
       },
       moveStore: {
         begin: async (name, replica, to) => { record('begin', name, replica, to); moves.set(key(name, replica), { to }); },
         end: async (name, replica) => { record('end', name, replica); moves.delete(key(name, replica)); },
       },
-      installedLedger: {
-        observeLedger: async (dep, volumeOf) => {
-          record('observeLedger', dep.networkName, volumeOf);
+      instanceResourceObserver: {
+        observeResources: async (dep, volumeOf) => {
+          record('observeResources', dep.networkName, volumeOf);
           return {
             network: { name: dep.networkName },
             components: Object.fromEntries(dep.componentEntries().map(([n, c]) => [n, { identifier: c.identifier }])),
           };
         },
-        // The move's own former-image lookup stands in: the ledger's record, else
+        // The move's own former-image lookup stands in: the resources' record, else
         // the file mounted at the former directory, else the 8.x and bare names.
         discoverVolumeImage: async (identifier, recorded, dirs) => {
           // eslint-disable-next-line no-restricted-syntax
@@ -148,9 +148,9 @@ describe('appIdentityMove tests', () => {
       // deserializable specs, and what the move writes is what is asserted.
       specLibrary: {
         loaded: () => ({
-          InstalledSpec: function InstalledSpec(fields) { Object.assign(this, fields); },
-          InstalledLedger: function InstalledLedger(fields) { Object.assign(this, fields); },
-          InstantiatedSpec: { deserialize: (doc) => ({ ...doc }) },
+          HostedInstance: function HostedInstance(fields) { Object.assign(this, fields); },
+          InstanceResources: function InstanceResources(fields) { Object.assign(this, fields); },
+          RegisteredSpec: { deserialize: (doc) => ({ ...doc }) },
         }),
       },
       appHistory: {
@@ -239,9 +239,9 @@ describe('appIdentityMove tests', () => {
 
     appIdentityMove = proxyquire('../../ZelBack/src/services/appLifecycle/appIdentityMove', {
       'node:fs/promises': stubs.fs,
-      '../appDatabase/appRecords': { installed: () => stubs.installed, ledgers: () => stubs.ledgers },
+      '../appDatabase/appRecords': { hostedInstances: () => stubs.installed, instanceResources: () => stubs.instanceResources },
       './appIdentityMoveStore': stubs.moveStore,
-      './installedLedger': stubs.installedLedger,
+      './instanceResourceObserver': stubs.instanceResourceObserver,
       '../utils/specLibrary': stubs.specLibrary,
       '../appDecisions/appHistory': stubs.appHistory,
       '../appRuntime/deploymentProvider': stubs.deploymentProvider,
@@ -490,13 +490,13 @@ describe('appIdentityMove tests', () => {
       expect(calls[indexOf('chattr')].slice(1)).to.deep.equal(['-i', `${APPS}${NAME}_${NAME}`]);
       expect(calls[mvDir].slice(1)).to.deep.equal([`${APPS}${NAME}_${NAME}`, `${APPS}${newIdentifier()}`]);
       expect(indexOf('chattr')).to.be.lessThan(mvDir);
-      // The ledger names the image under the identity with the stamp it carries,
+      // The resources name the image under the identity with the stamp it carries,
       // and the volume is mounted only once it does.
-      const volumeOf = calls[indexOf('observeLedger')][2];
+      const volumeOf = calls[indexOf('observeResources')][2];
       expect(await volumeOf(newIdentifier())).to.deep.equal({ path: `/vol/${newIdentifier()}FLUXFSVOL`, fsUuid: 'uuid-recorded' });
       expect(await volumeOf('nothing')).to.equal(null);
       expect(calls[indexOf('ensureAppVolumeMounted')].slice(1)).to.deep.equal([newIdentifier()]);
-      expect(indexOf('ensureAppVolumeMounted')).to.be.greaterThan(indexOf('putLedger'));
+      expect(indexOf('ensureAppVolumeMounted')).to.be.greaterThan(indexOf('putResources'));
       expect(indexOf('cp'), 'nothing is copied').to.equal(-1);
     });
 
@@ -518,17 +518,17 @@ describe('appIdentityMove tests', () => {
         expect(indexOf('umount'), `${c.name}: nothing to unmount`).to.equal(-1);
         expect(calls[indexOf('mv')].slice(1), c.name).to.deep.equal([c.from, c.to]);
         // eslint-disable-next-line no-await-in-loop
-        expect(await calls[indexOf('observeLedger')][2](newIdentifier()), c.name).to.deep.equal({ path: c.to, fsUuid: c.stamp });
+        expect(await calls[indexOf('observeResources')][2](newIdentifier()), c.name).to.deep.equal({ path: c.to, fsUuid: c.stamp });
       }
     });
 
-    it('rekeys the runtime state before the ledger is written under the identity', async () => {
+    it('rekeys the runtime state before the resources are written under the identity', async () => {
       seedRunningUnderName();
 
       await appIdentityMove.moveInstalledAppsOntoIdentity();
 
       expect(calls[indexOf('rekey')].slice(1)).to.deep.equal([`${NAME}_${NAME}`, newIdentifier()]);
-      expect(indexOf('rekey')).to.be.lessThan(indexOf('putLedger'));
+      expect(indexOf('rekey')).to.be.lessThan(indexOf('putResources'));
     });
 
     it('names and mounts an image already in place without renaming it', async () => {
@@ -540,8 +540,8 @@ describe('appIdentityMove tests', () => {
 
       expect(results.moved).to.have.lengthOf(1);
       expect(indexOf('mv')).to.equal(-1);
-      expect(await calls[indexOf('observeLedger')][2](newIdentifier())).to.deep.equal({ path: `/vol/${newIdentifier()}FLUXFSVOL`, fsUuid: 'uuid-probed' });
-      expect(indexOf('ensureAppVolumeMounted')).to.be.greaterThan(indexOf('putLedger'));
+      expect(await calls[indexOf('observeResources')][2](newIdentifier())).to.deep.equal({ path: `/vol/${newIdentifier()}FLUXFSVOL`, fsUuid: 'uuid-probed' });
+      expect(indexOf('ensureAppVolumeMounted')).to.be.greaterThan(indexOf('putResources'));
     });
 
     // FluxOS 8.x names a component's container, its directory and its image
@@ -632,7 +632,7 @@ describe('appIdentityMove tests', () => {
   });
 
   describe('the row, the network and the recreate', () => {
-    it('records the move before anything goes, names the identity, and writes the ledger of what it left before the containers are recreated', async () => {
+    it('records the move before anything goes, names the identity, and writes the resources of what it left before the containers are recreated', async () => {
       seedRunningUnderName();
 
       await appIdentityMove.moveInstalledAppsOntoIdentity();
@@ -641,12 +641,12 @@ describe('appIdentityMove tests', () => {
       expect(indexOf('begin')).to.be.lessThan(indexOf('appDockerRemove'));
       const flip = indexOf('put', (name, replica, identity) => identity === IDENTITY);
       expect(calls[flip].slice(1)).to.deep.equal([NAME, null, IDENTITY]);
-      const ledger = indexOf('putLedger');
-      expect(calls[ledger].slice(1)).to.deep.equal([NAME, null, { name: `fluxDockerNetwork_${IDENTITY}` }, { [NAME]: { identifier: newIdentifier() } }]);
-      expect(await calls[indexOf('observeLedger')][2](newIdentifier()), 'observed with the volume the move left').to.deep.equal({ path: `/vol/${newIdentifier()}FLUXFSVOL`, fsUuid: 'uuid-probed' });
-      expect(ledger).to.be.greaterThan(flip);
-      expect(ledger).to.be.lessThan(indexOf('installComponent'));
-      expect(indexOf('end'), 'the move record ends with the ledger').to.be.greaterThan(ledger);
+      const resources = indexOf('putResources');
+      expect(calls[resources].slice(1)).to.deep.equal([NAME, null, { name: `fluxDockerNetwork_${IDENTITY}` }, { [NAME]: { identifier: newIdentifier() } }]);
+      expect(await calls[indexOf('observeResources')][2](newIdentifier()), 'observed with the volume the move left').to.deep.equal({ path: `/vol/${newIdentifier()}FLUXFSVOL`, fsUuid: 'uuid-probed' });
+      expect(resources).to.be.greaterThan(flip);
+      expect(resources).to.be.lessThan(indexOf('installComponent'));
+      expect(indexOf('end'), 'the move record ends with the resources').to.be.greaterThan(resources);
       expect(moves.has(key(NAME, null))).to.equal(false);
     });
 

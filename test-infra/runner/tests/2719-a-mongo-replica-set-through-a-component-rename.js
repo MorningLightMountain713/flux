@@ -131,7 +131,7 @@ describe('a Mongo replica set through a component rename', function () {
     return { startedAt: Date.parse(inspected.State.StartedAt), self: envOf('FLUX_MESH_SELF') };
   }
 
-  // An update writes a node's installed record before it recreates the renamed
+  // An update writes a node's hosted instance before it recreates the renamed
   // member, so the member is read once it runs again, started after its old one.
   async function recreatedOn(index, component, after) {
     let found = null;

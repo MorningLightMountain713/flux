@@ -27,7 +27,7 @@ describe('appUninstaller tests', () => {
   let dockerServiceStub;
   let installedStub;
   let registryStub;
-  let ledgersStub;
+  let instanceResourcesStub;
   let fluxNetworkHelperStub;
   let upnpServiceStub;
   let syncthingMonitorHelpersStub;
@@ -122,7 +122,7 @@ describe('appUninstaller tests', () => {
     };
 
     registryStub = { byName: sinon.stub().resolves(null) };
-    // Nothing installed until a test says otherwise, and no ledger for what is.
+    // Nothing installed until a test says otherwise, and no resources for what is.
     installedStub = {
       byName: sinon.stub().resolves(null),
       byReplica: sinon.stub().resolves(null),
@@ -133,7 +133,7 @@ describe('appUninstaller tests', () => {
       markOwed: sinon.stub().resolves(),
       remove: sinon.stub().resolves(),
     };
-    ledgersStub = { byInstance: sinon.stub().resolves(null), remove: sinon.stub().resolves() };
+    instanceResourcesStub = { byInstance: sinon.stub().resolves(null), remove: sinon.stub().resolves() };
 
     relationshipResolverStub = {
       isPureFollowerApp: sinon.stub().resolves(false),
@@ -203,8 +203,8 @@ describe('appUninstaller tests', () => {
       },
       '../appDatabase/appRecords': {
         registry: () => registryStub,
-        ledgers: () => ledgersStub,
-        installed: () => installedStub,
+        instanceResources: () => instanceResourcesStub,
+        hostedInstances: () => installedStub,
         instanceKey: ({ name, replica }) => `${String(name).toLowerCase()}\u0000${replica ?? ''}`,
       },
       '../appMonitoring/syncthingMonitorHelpers': syncthingMonitorHelpersStub,
@@ -231,7 +231,7 @@ describe('appUninstaller tests', () => {
     sinon.restore();
   });
 
-  /** A teardown's target: the records' facts and one block per component the ledger names. */
+  /** A teardown's target: the records' facts and one block per component the resources name. */
   const target = (doc) => ({
     name: doc.name,
     replica: doc.replica ?? null,
@@ -255,8 +255,8 @@ describe('appUninstaller tests', () => {
     source: 'record',
   });
 
-  /** A ledger stand-in holding the given blocks. */
-  const ledgerOf = (components, network = { name: 'fluxDockerNetwork_TestApp' }) => ({
+  /** resources stand-in holding the given blocks. */
+  const resourcesOf = (components, network = { name: 'fluxDockerNetwork_TestApp' }) => ({
     network,
     components,
     component: (name) => components[name] ?? null,
@@ -362,7 +362,7 @@ describe('appUninstaller tests', () => {
   });
 
   describe('uninstallComponent: the grant release keys on the data', () => {
-    // The component's key, deliberately unlike its name: the ledger is keyed by it.
+    // The component's key, deliberately unlike its name: the resources are keyed by it.
     const COMPONENT_KEY = `c${'k'.repeat(52)}`;
     const component = () => ({
       identifier: 'web_TestApp',
@@ -423,15 +423,15 @@ describe('appUninstaller tests', () => {
       });
     });
 
-    // What goes with the component is what the ledger names for it: its ports
+    // What goes with the component is what the resources name for it: its ports
     // by the methods they were opened with, its folder by its id, its image file.
-    describe('what the ledger names for the component', () => {
+    describe('what the resources name for the component', () => {
       const imageRemovals = () => runCommandStub.getCalls()
         .filter((c) => c.args[0] === 'rm' && String(c.args[1].params[1]).endsWith('FLUXFSVOL'))
         .map((c) => c.args[1].params[1]);
 
       it('tears down the ports, the folder and the image file the block names', async () => {
-        ledgersStub.byInstance.resolves(ledgerOf({
+        instanceResourcesStub.byInstance.resolves(resourcesOf({
           [COMPONENT_KEY]: {
             identifier: 'web_TestApp',
             image: { reference: 'img', digest: null },
@@ -449,21 +449,21 @@ describe('appUninstaller tests', () => {
 
         await appUninstaller.uninstallComponent(component(), { removeVolumes: true });
 
-        sinon.assert.calledOnceWithExactly(ledgersStub.byInstance, 'TestApp', null);
+        sinon.assert.calledOnceWithExactly(instanceResourcesStub.byInstance, 'TestApp', null);
         sinon.assert.calledOnceWithExactly(upnpServiceStub.removeMapUpnpPort, 31_001, 'Flux_App_TestApp');
         sinon.assert.calledOnceWithExactly(fluxNetworkHelperStub.deleteAllowPortRule, 31_002);
         sinon.assert.calledOnceWithExactly(syncthingMonitorHelpersStub.removeSyncthingFolder, 'fluxweb_TestApp');
         expect(imageRemovals()).to.deep.equal(['/dat/fluxweb_TestAppFLUXFSVOL']);
       });
 
-      it('removes no port, no folder and no image file when the ledger names no block for it', async () => {
+      it('removes no port, no folder and no image file when the resources name no block for it', async () => {
         await appUninstaller.uninstallComponent(component(), { removeVolumes: true });
 
         sinon.assert.notCalled(upnpServiceStub.removeMapUpnpPort);
         sinon.assert.notCalled(fluxNetworkHelperStub.deleteAllowPortRule);
         sinon.assert.notCalled(syncthingMonitorHelpersStub.removeSyncthingFolder);
         expect(imageRemovals()).to.deep.equal([]);
-        sinon.assert.calledWithMatch(logStub.warn, /names no block/);
+        sinon.assert.calledWithMatch(logStub.warn, /name no block/);
       });
     });
 
@@ -510,7 +510,7 @@ describe('appUninstaller tests', () => {
     });
   });
 
-  describe('the teardown removes the image file the ledger names', () => {
+  describe('the teardown removes the image file the resources name', () => {
     const teardown = (volume) => appUninstaller.runTeardown(target({
       name: 'myapp',
       networkName: 'myapp',
@@ -528,14 +528,14 @@ describe('appUninstaller tests', () => {
       fluxShutdowndClientStub.beginAppStop.resolves({ outcome: 'complete' });
     });
 
-    it('removes the file the ledger names, and looks nowhere else', async () => {
+    it('removes the file the resources name, and looks nowhere else', async () => {
       await teardown({
         file: '/mnt/data2/fluxweb_myappFLUXFSVOL', disk: '/mnt/data2', fsUuid: 'u', mountDir: '/x/web_myapp',
       });
       expect(imageRemovals().map((c) => c.args[1].params)).to.deep.equal([['-rf', '/mnt/data2/fluxweb_myappFLUXFSVOL']]);
     });
 
-    it('says the image is left on disk when the ledger names a volume with no file', async () => {
+    it('says the image is left on disk when the resources name a volume with no file', async () => {
       await teardown({
         file: null, disk: null, fsUuid: null, mountDir: '/x/web_myapp',
       });

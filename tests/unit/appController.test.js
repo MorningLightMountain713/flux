@@ -22,15 +22,15 @@ const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const { requireMongo } = require('./dbTestHelper');
 const {
-  loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION, v1Spec, v8Spec, v9Spec, instantiatedSpec,
+  loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION, v1Spec, v8Spec, v9Spec, registeredSpec,
 } = require('./fixtures/fluxSpec');
-const { stubInstalled, installedRecord } = require('./fixtures/appRecords');
+const { stubHostedInstances, installedRecord } = require('./fixtures/appRecords');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 
 // The spec library is REAL here, and so is the whole resolution chain beneath
 // these handlers — see tests/unit/fixtures/fluxSpec.js for why. Every handler
 // resolves its targets through deploymentProvider, which builds a real
-// DeploymentSpec from a real InstantiatedSpec, so the container identifiers
+// DeploymentSpec from a real RegisteredSpec, so the container identifiers
 // asserted below are MINTED by flux-spec rather than stated by the test.
 //
 // That is the whole point of this file: the bug it exists to catch is a handler
@@ -67,7 +67,7 @@ describe('appController tests', () => {
    * something a literal can be trusted to reproduce.
    */
   async function flatApp(name = 'TestApp', state = {}) {
-    return instantiatedSpec(await v1Spec({ name }), state);
+    return registeredSpec(await v1Spec({ name }), state);
   }
 
   /**
@@ -86,7 +86,7 @@ describe('appController tests', () => {
         containerPorts: [80 + index],
       })),
     });
-    return instantiatedSpec(spec, state);
+    return registeredSpec(spec, state);
   }
 
   /**
@@ -109,7 +109,7 @@ describe('appController tests', () => {
       assignment: { targetIps: { [THIS_NODE]: replicas } },
       components: { web: { ...base, replicaOverrides } },
     });
-    return instantiatedSpec(spec);
+    return registeredSpec(spec);
   }
 
   /** A real v9 app whose single component replicates active/standby. */
@@ -125,16 +125,16 @@ describe('appController tests', () => {
         },
       },
     });
-    return instantiatedSpec(spec, state);
+    return registeredSpec(spec, state);
   }
 
   /**
    * The one mongo read these handlers make, on the way into the real resolver:
-   * the installed record over the app, which names this node's containers.
+   * the hosted instance over the app, which names this node's containers.
    */
-  function installedHolds(instantiated) {
-    const install = installedRecord(instantiated);
-    stubInstalled().byName.resolves(install);
+  function installedHolds(registered) {
+    const install = installedRecord(registered);
+    stubHostedInstances().byName.resolves(install);
     return install;
   }
 

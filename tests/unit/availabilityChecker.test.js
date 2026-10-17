@@ -21,9 +21,9 @@ const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonSta
 const upnpService = require('../../ZelBack/src/services/upnpService');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
 const {
-  loadSpecLibrary, V8_SUBMISSION, instantiatedSpec, assertAnswers,
+  loadSpecLibrary, V8_SUBMISSION, registeredSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
-const { stubInstalled, installedRecord } = require('./fixtures/appRecords');
+const { stubHostedInstances, installedRecord } = require('./fixtures/appRecords');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. This checker asks each installed app for the host ports it occupies
@@ -83,8 +83,8 @@ describe('availabilityChecker tests', () => {
 
   /**
    * deploymentProvider stays stubbed, so nothing here exercises what the real
-   * one does with the InstalledSpec it is handed. buildDeployments reads
-   * `.isEncrypted` and `.spec` (through resolveInstantiatedSpec), `.name` for
+   * one does with the HostedInstance it is handed. buildDeployments reads
+   * `.isEncrypted` and `.spec` (through resolveRegisteredSpec), `.name` for
    * its error messages and `.identity` for every container name it derives,
    * then asks the resolved spec's placement for its mode. Assert all of that
    * off the object that actually arrived: the `{ name: 'App1' }` literal this
@@ -95,10 +95,10 @@ describe('availabilityChecker tests', () => {
     const [handed] = buildDeploymentStub.firstCall.args;
     expect(handed, 'nothing was handed to the deployment provider').to.be.an('object');
     expect(handed.name, 'the provider names the app in every failure it logs').to.equal(expected.name);
-    expect(handed.isEncrypted, 'resolveInstantiatedSpec branches on this').to.be.a('boolean');
+    expect(handed.isEncrypted, 'resolveRegisteredSpec branches on this').to.be.a('boolean');
     expect(handed.identity, 'read off the row, never recomputed - it names every container')
       .to.satisfy((id) => id === null || typeof id === 'string');
-    expect(handed.spec, 'resolveInstantiatedSpec returns this for a cleartext row').to.be.an('object');
+    expect(handed.spec, 'resolveRegisteredSpec returns this for a cleartext row').to.be.an('object');
     // resolveLocalReplicas asks the RESOLVED spec's placement for its mode
     // before it will build anything.
     assertAnswers(handed.spec.placement, ['mode', 'hasTargets']);
@@ -106,7 +106,7 @@ describe('availabilityChecker tests', () => {
 
   beforeEach(() => {
     listInstalledAppsStub = sinon.stub().resolves([]);
-    stubInstalled().apps.callsFake(async () => (await listInstalledAppsStub()).map((record) => installedRecord(record)));
+    stubHostedInstances().apps.callsFake(async () => (await listInstalledAppsStub()).map((record) => installedRecord(record)));
     buildDeploymentStub = sinon.stub(deploymentProvider, 'buildDeployment');
     // Delegates at call time so per-test overrides of buildDeployment flow
     // through the plural entry the checker uses.
@@ -197,13 +197,13 @@ describe('availabilityChecker tests', () => {
 
     it('should collect ports via DeploymentSpec.allHostPorts', async () => {
       const spec = multiPortSpec('App1', [31_001, 31_002, 31_003]);
-      const instantiated = await instantiatedSpec(spec);
+      const registered = await registeredSpec(spec);
       const deployment = deploymentOf(spec);
       // The ports are the library's, derived from the components, not a
       // fixture's claim about them.
       expect(deployment.allHostPorts()).to.deep.equal([31_001, 31_002, 31_003]);
 
-      listInstalledAppsStub.resolves([instantiated]);
+      listInstalledAppsStub.resolves([registered]);
       buildDeploymentStub.resolves(deployment);
 
       sinon.stub(daemonStatus, 'isDaemonSynced').returns({
@@ -222,7 +222,7 @@ describe('availabilityChecker tests', () => {
 
       sinon.assert.calledOnce(listInstalledAppsStub);
       sinon.assert.calledOnce(buildDeploymentStub);
-      sinon.assert.calledWith(buildDeploymentStub, sinon.match.instanceOf(flux.InstalledSpec).and(sinon.match.has('record', instantiated)));
+      sinon.assert.calledWith(buildDeploymentStub, sinon.match.instanceOf(flux.HostedInstance).and(sinon.match.has('record', registered)));
       assertBuildDeploymentGotARealSpec(spec);
       expect(waitMs).to.equal(240_000);
     });
@@ -276,8 +276,8 @@ describe('availabilityChecker tests', () => {
       // to, was overwritten on the next line of production code and the branch
       // never ran. `nextTestingPort` is the field that actually steers it.
       const spec = multiPortSpec('App1', [31_001, 31_002, 31_003]);
-      const instantiated = await instantiatedSpec(spec);
-      listInstalledAppsStub.resolves([instantiated]);
+      const registered = await registeredSpec(spec);
+      listInstalledAppsStub.resolves([registered]);
       buildDeploymentStub.resolves(deploymentOf(spec));
       mockDosState.nextTestingPort = 31_002;
 
@@ -309,8 +309,8 @@ describe('availabilityChecker tests', () => {
       // stubs, one port outside the set the real deployment reports. This one
       // gets as far as picking a peer.
       const spec = multiPortSpec('App1', [31_001, 31_002, 31_003]);
-      const instantiated = await instantiatedSpec(spec);
-      listInstalledAppsStub.resolves([instantiated]);
+      const registered = await registeredSpec(spec);
+      listInstalledAppsStub.resolves([registered]);
       buildDeploymentStub.resolves(deploymentOf(spec));
       mockDosState.nextTestingPort = 31_009;
 
@@ -340,12 +340,12 @@ describe('availabilityChecker tests', () => {
       // port an app is listening on and DOS itself over the failure.
       const broken = multiPortSpec('BrokenApp', [31_005]);
       const healthy = multiPortSpec('HealthyApp', [31_002]);
-      const brokenInstantiated = await instantiatedSpec(broken);
-      const healthyInstantiated = await instantiatedSpec(healthy);
-      listInstalledAppsStub.resolves([brokenInstantiated, healthyInstantiated]);
-      // sinon's withArgs cannot tell two frozen InstantiatedSpec instances
+      const brokenRegistered = await registeredSpec(broken);
+      const healthyRegistered = await registeredSpec(healthy);
+      listInstalledAppsStub.resolves([brokenRegistered, healthyRegistered]);
+      // sinon's withArgs cannot tell two frozen RegisteredSpec instances
       // apart, so the answer is keyed off an identity Map instead.
-      const answers = new Map([[healthyInstantiated, deploymentOf(healthy)]]);
+      const answers = new Map([[healthyRegistered, deploymentOf(healthy)]]);
       buildDeploymentStub.callsFake(async (install) => {
         const deployment = answers.get(install.record);
         if (!deployment) throw new Error(`Could not resolve spec for ${install.name}`);

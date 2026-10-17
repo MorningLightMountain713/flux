@@ -8,13 +8,13 @@ const { expect } = require('chai');
 const shutdownPlan = require('../../ZelBack/src/services/appLifecycle/shutdownPlan');
 const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
 const {
-  loadSpecLibrary, V9_SUBMISSION, v9Spec, decryptedV9Spec, instantiatedSpec, assertAnswers,
+  loadSpecLibrary, V9_SUBMISSION, v9Spec, decryptedV9Spec, registeredSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. shutdownPlan is pure: no daemon socket, no mongo, no docker, so nothing
 // in this file is stubbed at all. Every object it reads is the real class the
-// runtime hands it — DeploymentSpec, DeploymentComponent, InstantiatedSpec — and
+// runtime hands it — DeploymentSpec, DeploymentComponent, RegisteredSpec — and
 // the shutdown fields are declared in a real v9 submission the schema accepted,
 // not asserted onto a literal.
 let flux;
@@ -83,7 +83,7 @@ describe('shutdownPlan', () => {
   }
 
   /**
-   * A real DecryptedCanonicalSpec — the readable form a node holds after opening
+   * A real OpenedSpec — the readable form a node holds after opening
    * a sealed v9 app, and the spec DeploymentSpec.fromSpec is fed in production.
    */
   function specFor(roles, overrides = {}) {
@@ -108,7 +108,7 @@ describe('shutdownPlan', () => {
   // left here is the fold across an app's components and the plan's wire shape.
 
   describe('buildShutdownPlan', () => {
-    it('builds the plan from instantiated + deployment via domain getters', async () => {
+    it('builds the plan from registered + deployment via domain getters', async () => {
       // web depends on worker, so startup_order is the real topological order the
       // deployment derived — not a list handed to it.
       const spec = await specFor({
@@ -116,14 +116,14 @@ describe('shutdownPlan', () => {
         web: { ...GRACEFUL, dependsOn: { worker: { condition: 'started' } } },
       });
       const deployment = deploymentFor(spec, { identity: IDENTITY });
-      const instantiated = await instantiatedSpec(spec, { identity: IDENTITY });
+      const registered = await registeredSpec(spec, { identity: IDENTITY });
 
-      const plan = shutdownPlan.buildShutdownPlan(instantiated, deployment);
+      const plan = shutdownPlan.buildShutdownPlan(registered, deployment);
 
       expect(plan.app_name).to.equal('myapp');
       expect(plan.identity, 'the plan is keyed by the identity the app\'s containers carry').to.equal(IDENTITY);
       expect(plan, 'the plan names no owner').to.not.have.property('owner_flux_id');
-      expect(plan.spec_hash).to.equal(instantiated.hash);
+      expect(plan.spec_hash).to.equal(registered.hash);
       expect(plan.startup_order).to.deep.equal(['worker', 'web']);
       // worker: 0+0+10, web: 180+30+60 → 280
       expect(plan.shutdown_budget_app_wide_s).to.equal(280);
@@ -151,7 +151,7 @@ describe('shutdownPlan', () => {
     it('keys the plan of an app with no identity minted by its name, as its containers carry it', async () => {
       const spec = await specFor({ web: GRACEFUL });
 
-      const plan = shutdownPlan.buildShutdownPlan(await instantiatedSpec(spec), deploymentFor(spec));
+      const plan = shutdownPlan.buildShutdownPlan(await registeredSpec(spec), deploymentFor(spec));
 
       expect(plan.identity).to.equal('myapp');
     });
@@ -165,29 +165,29 @@ describe('shutdownPlan', () => {
         assignment: { targetIps: { '1.2.3.4': ['s1'], '5.6.7.8': ['s2'] } },
       });
       const deployment = deploymentFor(spec, { replica: 's1' });
-      const instantiated = await instantiatedSpec(spec);
+      const registered = await registeredSpec(spec);
 
-      const plan = shutdownPlan.buildShutdownPlan(instantiated, deployment);
+      const plan = shutdownPlan.buildShutdownPlan(registered, deployment);
 
       expect(plan.replica).to.equal('s1');
       // the replica really is bound: its container identifier is qualified
       expect(deployment.getComponent('web').identifier).to.equal('web_myapp_s1');
     });
 
-    it('reads the deployment and the instantiated spec through the domain API alone', async () => {
+    it('reads the deployment and the registered spec through the domain API alone', async () => {
       // Real objects are not sufficient on their own: a getter can be dropped from
       // flux-spec with a test still green if nothing reads it back. These are the
       // members buildShutdownPlan actually calls on what it is handed.
       const spec = await specFor({ web: GRACEFUL, worker: PLAIN });
       const deployment = deploymentFor(spec);
-      const instantiated = await instantiatedSpec(spec);
+      const registered = await registeredSpec(spec);
 
       assertAnswers(deployment, ['componentEntries']);
       expect(deployment.appName, 'buildShutdownPlan reads deployment.appName').to.be.a('string');
       expect(deployment.startupOrder, 'buildShutdownPlan spreads deployment.startupOrder').to.be.an('array');
       expect(deployment, 'replica is required-and-nullable, so it must be present').to.have.property('replica');
       expect(deployment.identity, 'buildShutdownPlan reads deployment.identity').to.be.a('string');
-      expect(instantiated.hash, 'buildShutdownPlan reads instantiated.hash').to.be.a('string');
+      expect(registered.hash, 'buildShutdownPlan reads registered.hash').to.be.a('string');
 
       // and per component, the four fields the plan is assembled from
       for (const [, component] of deployment.componentEntries()) {
@@ -210,12 +210,12 @@ describe('shutdownPlan', () => {
       expect(shutdownPlan.daemonIdentity({ name: 'myapp' })).to.equal('myapp');
     });
 
-    it('answers for a real installed record what its deployment answers', async () => {
+    it('answers for a real hosted instance what its deployment answers', async () => {
       const spec = await specFor({ web: GRACEFUL });
       for (const identity of [IDENTITY, null]) {
         // eslint-disable-next-line no-await-in-loop
-        const instantiated = await instantiatedSpec(spec, { identity });
-        expect(shutdownPlan.daemonIdentity(instantiated)).to.equal(deploymentFor(spec, { identity }).identity);
+        const registered = await registeredSpec(spec, { identity });
+        expect(shutdownPlan.daemonIdentity(registered)).to.equal(deploymentFor(spec, { identity }).identity);
       }
     });
   });
@@ -268,10 +268,10 @@ describe('shutdownPlan', () => {
     it('equals buildShutdownPlan.shutdown_budget_app_wide_s (guards drift)', async () => {
       const spec = await specFor({ worker: PLAIN, web: GRACEFUL });
       const deployment = deploymentFor(spec);
-      const instantiated = await instantiatedSpec(spec);
+      const registered = await registeredSpec(spec);
 
       expect(shutdownPlan.appShutdownBudgetSeconds(deployment))
-        .to.equal(shutdownPlan.buildShutdownPlan(instantiated, deployment).shutdown_budget_app_wide_s);
+        .to.equal(shutdownPlan.buildShutdownPlan(registered, deployment).shutdown_budget_app_wide_s);
     });
 
     it('sums drain + preStop + graceful per component (10s default)', async () => {

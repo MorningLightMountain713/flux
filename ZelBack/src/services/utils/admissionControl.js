@@ -7,7 +7,7 @@ const { AsyncLock } = require('./asyncLock');
 // resourceQueryService.appsResources() sums the resource footprint of only the
 // apps already in the DB (listInstalledDeployments). An install resource-checks
 // (hwRequirements.checkNodeResources) well before it lands in the DB
-// (the put of its installed record), so the check->put window is unaccounted:
+// (the put of its hosted instance), so the check->put window is unaccounted:
 // two concurrent installs of DIFFERENT apps would each pass their check before
 // either is counted, and the node double-admits cpu/ram/hdd. (Today this is masked
 // because installationInProgress serializes installs node-wide; it appears the

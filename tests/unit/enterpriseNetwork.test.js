@@ -73,7 +73,7 @@ function loadModule(overrides = {}) {
       getEnterpriseNodesPublicKeys: () => NODE_PUBKEYS,
       getAllowedOwnersForNode: (pubKey) => NODE_OWNER_MAP[pubKey] || [],
     },
-    '../appDatabase/appRecords': { installed: () => ({ apps: async () => (await dbHelper.findInDatabase()).map((app) => installedRecord(app)) }) },
+    '../appDatabase/appRecords': { hostedInstances: () => ({ apps: async () => (await dbHelper.findInDatabase()).map((app) => installedRecord(app)) }) },
     '../fluxNetworkHelper': overrides.fluxNetworkHelper || {
       getFluxNodePublicKey: sinon.stub().resolves('pubA'),
     },

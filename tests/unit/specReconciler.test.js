@@ -6,10 +6,10 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const { expect } = require('chai');
 const sinon = require('sinon');
 const {
-  loadSpecLibrary, V9_SUBMISSION, v8Spec, v9Spec, instantiatedSpec, assertAnswers,
+  loadSpecLibrary, V9_SUBMISSION, v8Spec, v9Spec, registeredSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 const {
-  stubRegistry, stubInstalled, stubLedgers, stubDecisions, installedRecord,
+  stubRegistry, stubHostedInstances, stubInstanceResources, stubDecisions, installedRecord,
 } = require('./fixtures/appRecords');
 const specReconciler = require('../../ZelBack/src/services/appLifecycle/specReconciler');
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
@@ -28,15 +28,15 @@ const appGiveUp = require('../../ZelBack/src/services/appLifecycle/appGiveUp');
 const appEvacuationSafety = require('../../ZelBack/src/services/appLifecycle/appEvacuationSafety');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
-// for why. Every installed/registry row below is a real InstantiatedSpec over a
+// for why. Every installed/registry row below is a real RegisteredSpec over a
 // real FluxAppSpecV9, so the whole ladder reads the fields production reads:
 // placement.mode(), assignment.replicasFor(), requiresArcane(), isExpired(),
 // spec.instances. What stays stubbed is I/O and the actuators — mongo through
 // appsRepository, docker, the uninstaller, the blocklist and reconcileApp.
 describe('specReconciler tests', () => {
-  // Every deployment view here is built for real, from records with no ledger:
+  // Every deployment view here is built for real, from records with no resources:
   // the registration names every component.
-  beforeEach(() => { stubLedgers(); });
+  beforeEach(() => { stubInstanceResources(); });
 
   const LOCAL_IP = '44.55.66.77:16127';
   const LOCAL_TARGET = '44.55.66.77';
@@ -81,7 +81,7 @@ describe('specReconciler tests', () => {
   }
 
   /**
-   * A real InstantiatedSpec over a real FluxAppSpecV9, from the terse targeting
+   * A real RegisteredSpec over a real FluxAppSpecV9, from the terse targeting
    * shorthand the old hand-written double used: an entry `{ identity: null }` is
    * a candidate (loose) target, `{ identity: [names] }` pins those named
    * replicas.
@@ -144,7 +144,7 @@ describe('specReconciler tests', () => {
     }
 
     const spec = await v9Spec(overrides);
-    return instantiatedSpec(spec, {
+    return registeredSpec(spec, {
       hash: hash ?? spec.contentHash(),
       height,
       registeredAt: expired ? LONG_EXPIRED_AT : Math.floor(Date.now() / 1000),
@@ -169,7 +169,7 @@ describe('specReconciler tests', () => {
     sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(LOCAL_IP);
     sinon.stub(capabilities, 'isUp').callsFake((name) => (name === 'appRegistryConsistent' && registryConsistent)
       || (name === 'bootReconcileDecided' && bootDecided));
-    stubInstalled().apps.resolves(installed.map((record) => installedRecord(record)));
+    stubHostedInstances().apps.resolves(installed.map((record) => installedRecord(record)));
     stubRegistry().byNames.resolves(globalRows);
     sinon.stub(registryManager, 'getScannedHeight').resolves(1_000_000);
     // The per-identity diff enumerates this app's containers; no real docker in
@@ -254,8 +254,8 @@ describe('specReconciler tests', () => {
     it('finds an installed v1-v8 app\'s row whatever the letter case of either name', async () => {
       const state = { hash: 'h', height: 990_000, uuid: APP_UUID };
       setup({
-        installed: [await instantiatedSpec(await v8Spec({ name: 'MyApp' }), state)],
-        globalRows: [await instantiatedSpec(await v8Spec({ name: 'myapp' }), state)],
+        installed: [await registeredSpec(await v8Spec({ name: 'MyApp' }), state)],
+        globalRows: [await registeredSpec(await v8Spec({ name: 'myapp' }), state)],
       });
       await specReconciler.requestFullConvergence({ reason: 'test' });
       expect(uninstallStub.called).to.equal(false);
@@ -527,7 +527,7 @@ describe('specReconciler tests', () => {
     // A record this node holds and cannot read is not a record saying it is gone.
     it('re-reads one row, telling a row it cannot read from one it does not hold', async () => {
       const row = await specWith({});
-      const installedApps = stubInstalled();
+      const installedApps = stubHostedInstances();
       const { readInstalled } = imageManager.nodeComplianceDeps();
 
       const install = installedRecord(row);
@@ -594,7 +594,7 @@ describe('specReconciler tests', () => {
       // fireAdoption's first act is to re-read the installed row, so these
       // staying untouched across the whole stagger window is what "nothing was
       // scheduled" means.
-      const getInstalled = stubInstalled().byName.resolves(installedRecord(installedRow));
+      const getInstalled = stubHostedInstances().byName.resolves(installedRecord(installedRow));
       stubRegistry().byName.resolves(registryRow);
       clock = sinon.useFakeTimers();
 
@@ -610,7 +610,7 @@ describe('specReconciler tests', () => {
       const registryRow = await specWith({ targetIps: { [LOCAL_TARGET]: ['s1'] } }, { cpu: 1 });
       expect(registryRow.hash, 'a real spec change moves the content hash').to.not.equal(installedRow.hash);
       setup({ installed: [installedRow], globalRows: [registryRow] });
-      stubInstalled().byName.resolves(installedRecord(installedRow));
+      stubHostedInstances().byName.resolves(installedRecord(installedRow));
       stubRegistry().byName.resolves(registryRow);
       clock = sinon.useFakeTimers();
 
@@ -627,14 +627,14 @@ describe('specReconciler tests', () => {
       expect([...sweepStub.firstCall.args[0]]).to.deep.equal(['myapp']);
 
       // reconcileApp stays stubbed, so nothing else proves what it was handed.
-      // It reads name/identity off the installed record and plans the registry
+      // It reads name/identity off the hosted instance and plans the registry
       // row with deploymentProvider.planDeployments.
       const [handedInstalled, handedRegistry] = reconcileAppStub.firstCall.args;
       assertAnswers(handedInstalled, ['serialize']);
       assertAnswers(handedRegistry, ['serialize']);
       expect(handedInstalled.name).to.equal('myapp');
       expect(handedRegistry.hash).to.equal(registryRow.hash);
-      expect(handedInstalled.componentKeys, 'the installed record, which carries its component keys').to.equal(null);
+      expect(handedInstalled.componentKeys, 'the hosted instance, which carries its component keys').to.equal(null);
       const deployments = await deploymentProvider.planDeployments(
         handedRegistry, { identity: handedInstalled.identity ?? null, componentKeys: handedInstalled.componentKeys },
       );
@@ -647,7 +647,7 @@ describe('specReconciler tests', () => {
       const v2 = await specWith(loose, { cpu: 1 });
       const v3 = await specWith(loose, { cpu: 1.5 });
       setup({ installed: [installedRow] });
-      stubInstalled().byName.resolves(installedRecord(installedRow));
+      stubHostedInstances().byName.resolves(installedRecord(installedRow));
       const getGlobal = stubRegistry().byName;
       getGlobal.onFirstCall().resolves(v2);
       getGlobal.onSecondCall().resolves(v3);
@@ -669,7 +669,7 @@ describe('specReconciler tests', () => {
       const staleRow = await specWith(loose, { cpu: 0.5 });
       const registryRow = await specWith(loose, { cpu: 1 });
       setup({ installed: [staleRow] });
-      const getInstalled = stubInstalled().byName;
+      const getInstalled = stubHostedInstances().byName;
       // The scheduling read sees the stale row; by the time the timer fires,
       // another path (install, reconcile) has already stored the new spec.
       getInstalled.onFirstCall().resolves(installedRecord(staleRow));
@@ -692,7 +692,7 @@ describe('specReconciler tests', () => {
       const update = await specWith(loose, { cpu: 1 });
       const reregistered = await specWith(loose, { cpu: 1.5, uuid: 'd'.repeat(64) });
       setup({ installed: [installedRow] });
-      const getInstalled = stubInstalled().byName.resolves(installedRecord(installedRow));
+      const getInstalled = stubHostedInstances().byName.resolves(installedRecord(installedRow));
       const getGlobal = stubRegistry().byName;
       getGlobal.onFirstCall().resolves(update);
       getGlobal.resolves(reregistered);
@@ -715,7 +715,7 @@ describe('specReconciler tests', () => {
       });
       // The deployment view is built for real; this app declares no shutdown
       // feature, so the step keeps the configured 60s.
-      stubInstalled().byName.resolves(installedRecord(registryRow));
+      stubHostedInstances().byName.resolves(installedRecord(registryRow));
       const delay = await specReconciler.adoptionDelayMs(registryRow, LOCAL_IP);
       expect(delay).to.equal(60_000);
     });
@@ -729,7 +729,7 @@ describe('specReconciler tests', () => {
       const registryRow = await specWith({
         targetIps: { [LOCAL_TARGET]: ['s2'], [OTHER_TARGET]: ['s1'] },
       }, { preStop: true });
-      stubInstalled().byName.resolves(installedRecord(registryRow));
+      stubHostedInstances().byName.resolves(installedRecord(registryRow));
       const delay = await specReconciler.adoptionDelayMs(registryRow, LOCAL_IP);
       expect(delay).to.equal(120_000 + 15_000); // ordinal 1 x (budget + start margin)
     });
@@ -747,10 +747,10 @@ describe('specReconciler tests', () => {
   describe('notifySpecStored', () => {
     it('ignores specs for apps not installed here', async () => {
       setup();
-      // The exact bytes the store writes: an InstantiatedSpec's serialization.
+      // The exact bytes the store writes: an RegisteredSpec's serialization.
       const doc = (await specWith({}, { name: 'foreign' })).serialize();
-      const exists = stubInstalled().keys.resolves([]);
-      const getInstalled = stubInstalled().byName;
+      const exists = stubHostedInstances().keys.resolves([]);
+      const getInstalled = stubHostedInstances().byName;
       specReconciler.notifySpecStored(doc);
       await new Promise((resolve) => { setImmediate(resolve); });
       expect(exists.calledOnceWith('foreign')).to.equal(true);

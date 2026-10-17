@@ -9,7 +9,7 @@ chai.use(chaiAsPromised);
 const { expect } = chai;
 
 describe('FluxOSCryptoProvider', () => {
-  // Any non-empty AAD; what it contains is EncryptedSpecV9's business, not this
+  // Any non-empty AAD; what it contains is SealedSpecV9's business, not this
   // provider's. That it is always present is this provider's business.
   const AAD = Buffer.from('aad-bytes');
 

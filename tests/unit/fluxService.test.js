@@ -30,7 +30,7 @@ const appInspector = require('../../ZelBack/src/services/appManagement/appInspec
 const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
 const resourceQueryService = require('../../ZelBack/src/services/appQuery/resourceQueryService');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
-const { stubInstalled, stubLedgers } = require('./fixtures/appRecords');
+const { stubHostedInstances, stubInstanceResources } = require('./fixtures/appRecords');
 const daemonServiceControlRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceControlRpcs');
 // eslint-disable-next-line no-unused-vars
 const daemonServiceBenchmarkRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceBenchmarkRpcs');
@@ -2136,14 +2136,14 @@ describe('fluxService tests', () => {
       });
     });
 
-    // calledOnceWithMatch is a partial match, so it would pass on a resources
+    // calledOnceWithMatch is a partial match, so it would pass on resources
     // object that also carried the list of apps this node cannot read. Their
     // names are public on chain, but "this node is holding an application it
     // cannot read" is a statement about its health that nobody outside needs.
     // The counts the fleet is read by for the two derivations that recover an
     // app from a container name or from image filenames on disk: they can go
-    // only once every installed instance holds its ledger.
-    it('reports how many installed instances there are and how many hold a ledger', async () => {
+    // only once every installed instance holds its resources.
+    it('reports how many installed instances there are and how many hold resources', async () => {
       daemonServiceControlRpcsStub.returns({ status: 'success', data: 'info data' });
       daemonServiceFluxnodeRpcsStub.returns({ status: 'success', data: 'status data' });
       benchmarkServiceGetInfoStub.returns({ status: 'success', data: 'info2 data' });
@@ -2157,12 +2157,12 @@ describe('fluxService tests', () => {
       fluxCommunicationStub.returns({ status: 'success', data: 'connectedPeersInfo data' });
       fluxNetworkHelperStub.returns({ status: 'success', data: 'getIncomingConnectionsInfo data' });
       syncthingServiceStub.returns({ status: 'success', data: 'syncthingVersion data' });
-      stubInstalled().all.resolves([{ name: 'Alpha', replica: null }, { name: 'pair', replica: 'r1' }, { name: 'pair', replica: 'r2' }]);
-      stubLedgers().keys.resolves([{ name: 'alpha', replica: null }, { name: 'pair', replica: 'r2' }]);
+      stubHostedInstances().all.resolves([{ name: 'Alpha', replica: null }, { name: 'pair', replica: 'r1' }, { name: 'pair', replica: 'r2' }]);
+      stubInstanceResources().keys.resolves([{ name: 'alpha', replica: null }, { name: 'pair', replica: 'r2' }]);
 
       const result = await fluxService.getFluxInfo();
 
-      expect(result.data.apps.installedLedger).to.deep.equal({ instances: 3, adopted: 2 });
+      expect(result.data.apps.instanceResources).to.deep.equal({ instances: 3, adopted: 2 });
     });
 
     it('publishes the three resource totals and no more', async () => {

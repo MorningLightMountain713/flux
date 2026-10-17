@@ -55,9 +55,9 @@ describe('meshOperatorService', () => {
       '../generalService': {
         obtainNodeCollateralInformation: sinon.stub().resolves({ txhash: OWN_TX, txindex: 0 }),
       },
-      '../appDatabase/appRecords': { installed: () => ({ byName: stubs.getInstalledApp }) },
+      '../appDatabase/appRecords': { hostedInstances: () => ({ byName: stubs.getInstalledApp }) },
       '../appRuntime/deploymentProvider': { appNameFromRequest: (name) => name.split('_')[1] || name },
-      '../utils/specCutover': { resolveInstantiatedSpec: async (inst) => inst.view },
+      '../utils/specCutover': { resolveRegisteredSpec: async (inst) => inst.view },
       '../appMessaging/peerNotification': { checkAndNotifyPeersOfRunningApps: stubs.rebroadcast },
       './meshCertificates': {
         meshAppDir: (instance) => `/dat/var/lib/flux-mesh/${instance}`,

@@ -152,7 +152,7 @@ describe('appVolumeService.removeOrphanedInjectedContent', () => {
 });
 
 describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', () => {
-  // The component's key, deliberately unlike its name: the ledger is keyed by it.
+  // The component's key, deliberately unlike its name: the resources are keyed by it.
   const COMPONENT_KEY = `c${'k'.repeat(52)}`;
   const deployComp = {
     identifier: 'web_testapp', name: 'web', componentKey: COMPONENT_KEY, appName: 'testapp', replica: null, storage: 10, mounts: [],
@@ -173,7 +173,7 @@ describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', 
       '../serviceHelper': { ensureString: (x) => x, runCommand },
       '../dockerService': { getAppIdentifier: (id) => `flux${id}` },
       '../utils/volumeService': { placementVolumesInGib: sinon.stub().resolves(disks) },
-      '../appDatabase/appRecords': { ledgers: () => ({ setComponent }) },
+      '../appDatabase/appRecords': { instanceResources: () => ({ setComponent }) },
       '../utils/hostMutationLock': { withHostMutationLock: (fn) => fn() },
       '../appManagement/appsRuntimeState': { isCondemned: sinon.stub().resolves(condemned) },
       './owedRemovals': { removalOwedFor: sinon.stub().resolves(teardownOwed) },
@@ -203,9 +203,9 @@ describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', 
   });
 
   // The file, its disk and its mount directory are the node's choices, in the
-  // ledger before the file exists; the UUID is the node's stamp, in the ledger
+  // resources before the file exists; the UUID is the node's stamp, in the resources
   // once the filesystem carries it.
-  it('names the volume in the ledger before allocating the file, and its stamp once the filesystem is made', async () => {
+  it('names the volume in the resources before allocating the file, and its stamp once the filesystem is made', async () => {
     const { svc, runCommand, setComponent } = load({ disks: [disk('/dat', 500)] });
     await svc.createAppVolume(deployComp, null, false);
     const calls = runCommand.getCalls();

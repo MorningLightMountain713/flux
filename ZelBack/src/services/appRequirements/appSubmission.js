@@ -18,7 +18,7 @@ const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArc
 const {
   validateSubmissionSpec, getSpec, getSpecBackend, assertUpdateInvariants, assertVersionActivated,
 } = require('../utils/specLibs');
-const { ensureProvidersRegistered, resolveInstantiatedSpec } = require('../utils/specCutover');
+const { ensureProvidersRegistered, resolveRegisteredSpec } = require('../utils/specCutover');
 const transportHelper = require('../utils/transportHelper');
 const appsRepository = require('../appDatabase/appsRepository');
 const appRecords = require('../appDatabase/appRecords');
@@ -247,13 +247,13 @@ async function resolveSubmission(appSpecification, {
   // crash a loop; a submission error must reach the submitter with the
   // validator's field-precise message, so the validation error propagates.
   await ensureProvidersRegistered();
-  const { deserializeSpec: parseSubmission, EncryptedSpecV8 } = await getSpecBackend();
+  const { deserializeSpec: parseSubmission, SealedSpecV8 } = await getSpecBackend();
   const wireSpec = await parseSubmission(submissionBlob, { chain: nodeChain() });
   if (!wireSpec) throw new Error('Could not deserialize app specifications');
 
   // The ENVELOPE of a v8 enterprise submission, which nothing else checks.
   // `deserializeSpec` dispatches every read — stored row, gossiped message,
-  // chain replay — through EncryptedSpecV8.deserialize, which takes the
+  // chain replay — through SealedSpecV8.deserialize, which takes the
   // ciphertext and the named metadata and drops the rest. So a submission could
   // carry a populated `compose` beside its blob and be accepted: signed onto the
   // chain, then ignored by every node that read it back. Not a way to run
@@ -271,8 +271,8 @@ async function resolveSubmission(appSpecification, {
   // permanent-message corpus pass `fromSubmission`, so this rejects nothing that
   // has ever been registered. The return value is discarded — `wireSpec` is
   // already built and is what flows on; this call is the assertion.
-  if (EncryptedSpecV8.matchesWire(submissionBlob)) {
-    EncryptedSpecV8.fromSubmission(submissionBlob, { chain: nodeChain() });
+  if (SealedSpecV8.matchesWire(submissionBlob)) {
+    SealedSpecV8.fromSubmission(submissionBlob, { chain: nodeChain() });
   }
 
   // Computed BEFORE validation, because validation needs it. `wasTransportEncrypted`
@@ -344,7 +344,7 @@ async function resolveSubmission(appSpecification, {
   // so both calls are a no-op for legacy specs — no version branch needed.
   //
   // `spec` directly, not `spec.spec || spec`. A decrypted spec is a
-  // DecryptedCanonicalSpec that delegates toCanonical/matchesTemplate/marketplace,
+  // OpenedSpec that delegates toCanonical/matchesTemplate/marketplace,
   // so the wrapper answers everything both gates ask. Unwrapping discarded the
   // type guarantee the wrapper exists to hold, and made every caller responsible
   // for knowing which half of the `||` applied.
@@ -432,7 +432,7 @@ async function validateAppUpdate(appSpecification, meta = {}) {
   if (!appInfo) {
     throw new Error(`Flux App ${spec.name} does not exist and cannot be updated`);
   }
-  const previousSpec = await resolveInstantiatedSpec(appInfo);
+  const previousSpec = await resolveRegisteredSpec(appInfo);
   if (!previousSpec) {
     throw new Error(`Flux App ${spec.name} specifications cannot be read on this node`);
   }

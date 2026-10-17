@@ -8,7 +8,7 @@ const proxyquire = require('proxyquire');
 
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const {
-  loadSpecLibrary, v8Spec, v9Spec, instantiatedSpec,
+  loadSpecLibrary, v8Spec, v9Spec, registeredSpec,
 } = require('./fixtures/fluxSpec');
 const { inMemoryRegistry, stubDecisions } = require('./fixtures/appRecords');
 
@@ -60,7 +60,7 @@ describe('appRegistry', () => {
   /** Stores rows in the registry as a node would hold them. */
   async function seed(docs) {
     const flux = await loadSpecLibrary();
-    for (const doc of docs) await mem.put(flux.InstantiatedSpec.deserialize(doc, { chain: flux.Chain.MAIN })); // eslint-disable-line no-await-in-loop
+    for (const doc of docs) await mem.put(flux.RegisteredSpec.deserialize(doc, { chain: flux.Chain.MAIN })); // eslint-disable-line no-await-in-loop
     mem.put.resetHistory();
   }
 
@@ -264,7 +264,7 @@ describe('appRegistry', () => {
       const spec = await v8Spec({ name: 'MyApp' });
       const carried = { appName: 'MyApp', identity: 'MyApp', version: 2, slots: { sealed: { ciphertext: 'c' } } };
       messages = [message('u', spec, { contentManifest: carried }), message('r', spec)];
-      await seed([{ ...(await instantiatedSpec(spec, { hash: 'r', height: 980_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }]);
+      await seed([{ ...(await registeredSpec(spec, { hash: 'r', height: 980_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }]);
       const order = [];
       const contentSlotService = stubs['../appLifecycle/contentSlotService'];
       contentSlotService.storeCarriedManifest.callsFake(async () => order.push('manifest'));
@@ -280,7 +280,7 @@ describe('appRegistry', () => {
       expect(order.slice(0, 2)).to.deep.equal(['manifest', 'app:specStored']);
 
       contentSlotService.storeCarriedManifest.resetHistory();
-      await seed([{ ...(await instantiatedSpec(spec, { hash: 'u', height: 985_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }]);
+      await seed([{ ...(await registeredSpec(spec, { hash: 'u', height: 985_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }]);
       await registry.applyDecided('myapp', [decision('r', { uuid: 'uuid-r', height: 990_000 })]);
       sinon.assert.notCalled(contentSlotService.storeCarriedManifest);
     });
@@ -300,7 +300,7 @@ describe('appRegistry', () => {
     it('moves its row to a later applied message, and replays nothing', async () => {
       const spec = await v8Spec({ name: 'MyApp' });
       messages = [message('u', spec)];
-      await seed([{ ...(await instantiatedSpec(spec, { hash: 'r', height: 980_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }]);
+      await seed([{ ...(await registeredSpec(spec, { hash: 'r', height: 980_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }]);
 
       await registry.applyDecided('myapp', [decision('u', { uuid: 'uuid-r' })]);
 
@@ -313,7 +313,7 @@ describe('appRegistry', () => {
       const seller = await v8Spec({ name: 'MyApp' });
       const buyer = await v8Spec({ name: 'MyApp', owner: '1F1tAaz5x1HUXrCNLbtMDqcw6o5GNn4xqX' });
       messages = [message('t', buyer), message('u', seller)];
-      await seed([{ ...(await instantiatedSpec(seller, { hash: 'r', height: 980_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }]);
+      await seed([{ ...(await registeredSpec(seller, { hash: 'r', height: 980_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }]);
 
       await registry.applyDecided('myapp', [decision('u', { uuid: 'uuid-r' })]);
       await new Promise((resolve) => { setImmediate(resolve); });
@@ -328,7 +328,7 @@ describe('appRegistry', () => {
       const seller = await v8Spec({ name: 'MyApp' });
       const buyer = await v8Spec({ name: 'MyApp', owner: '1F1tAaz5x1HUXrCNLbtMDqcw6o5GNn4xqX' });
       messages = [message('t', buyer), message('u', seller)];
-      await seed([{ ...(await instantiatedSpec(seller, { hash: 'r', height: 980_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }]);
+      await seed([{ ...(await registeredSpec(seller, { hash: 'r', height: 980_000 })).serialize(), uuid: 'uuid-r', identity: 'MyApp' }]);
       const heard = [];
       registry.onOwnerChanged(async (app) => {
         heard.push({ ...app, ownerOnTheRow: stubs['./registryManager'].storeGlobalSpec.lastCall.args[0].owner });
@@ -346,7 +346,7 @@ describe('appRegistry', () => {
     it('restamps a row whose message is unchanged without running any effect', async () => {
       const spec = await v8Spec({ name: 'MyApp' });
       messages = [message('r', spec)];
-      await seed([(await instantiatedSpec(spec, { hash: 'r', height: 990_000 })).serialize()]);
+      await seed([(await registeredSpec(spec, { hash: 'r', height: 990_000 })).serialize()]);
 
       await registry.applyDecided('myapp', [decision('r')]);
 
@@ -370,7 +370,7 @@ describe('appRegistry', () => {
     it('reads this run\'s decision over a stored one for the same message', async () => {
       const spec = await v8Spec({ name: 'MyApp' });
       messages = [message('r', spec)];
-      await seed([(await instantiatedSpec(spec, { hash: 'r', height: 990_000 })).serialize()]);
+      await seed([(await registeredSpec(spec, { hash: 'r', height: 990_000 })).serialize()]);
       decisionsStub.appliedFor.resolves([decision('r')]);
 
       // The message is refused on this run: the name has no applied message.
@@ -382,7 +382,7 @@ describe('appRegistry', () => {
     it('loses its row when its latest applied app has expired', async () => {
       const spec = await v9Spec({ name: 'myapp' });
       messages = [message('r', spec)];
-      await seed([(await instantiatedSpec(spec, { hash: 'r', registeredAt: LONG_EXPIRED_AT })).serialize()]);
+      await seed([(await registeredSpec(spec, { hash: 'r', registeredAt: LONG_EXPIRED_AT })).serialize()]);
 
       await registry.applyDecided('myapp', [decision('r', { termStart: LONG_EXPIRED_AT })]);
 
@@ -405,7 +405,7 @@ describe('appRegistry', () => {
     it('is forgotten when another app takes the name, and the displaced app\'s manifests are left to the reaper', async () => {
       const spec = await v9Spec({ name: 'myapp' });
       messages = [message('new', spec)];
-      await seed([{ ...(await instantiatedSpec(spec, { hash: 'old', height: 980_000 })).serialize(), identity: 'aaaaaaaaaaaa' }]);
+      await seed([{ ...(await registeredSpec(spec, { hash: 'old', height: 980_000 })).serialize(), identity: 'aaaaaaaaaaaa' }]);
 
       await registry.applyDecided('myapp', [decision('new', { identity: 'bbbbbbbbbbbb', height: 990_000 })]);
 
@@ -430,12 +430,12 @@ describe('appRegistry', () => {
     it('is wound back when the app goes back to an earlier spec, and left alone when it moves forward', async () => {
       const spec = await v9Spec({ name: 'myapp' });
       messages = [message('earlier', spec), message('later', spec)];
-      await seed([{ ...(await instantiatedSpec(spec, { hash: 'refused-later', height: 995_000 })).serialize(), identity: 'aaaaaaaaaaaa' }]);
+      await seed([{ ...(await registeredSpec(spec, { hash: 'refused-later', height: 995_000 })).serialize(), identity: 'aaaaaaaaaaaa' }]);
 
       await registry.applyDecided('myapp', [decision('earlier', { identity: 'aaaaaaaaaaaa', height: 990_000 })]);
       sinon.assert.calledOnceWithExactly(stubs['../appMesh/foundingCommittee'].retract, 'aaaaaaaaaaaa', 990_000);
 
-      await seed([{ ...(await instantiatedSpec(spec, { hash: 'earlier', height: 990_000 })).serialize(), identity: 'aaaaaaaaaaaa' }]);
+      await seed([{ ...(await registeredSpec(spec, { hash: 'earlier', height: 990_000 })).serialize(), identity: 'aaaaaaaaaaaa' }]);
       await registry.applyDecided('myapp', [decision('later', { identity: 'aaaaaaaaaaaa', height: 999_000 })]);
       sinon.assert.calledOnce(stubs['../appMesh/foundingCommittee'].retract);
       sinon.assert.notCalled(stubs['../appMesh/foundingCommittee'].forget);
@@ -446,7 +446,7 @@ describe('appRegistry', () => {
     it('writes every row the decisions stand for, removes every row they do not, and raises the capability', async () => {
       const spec = await v8Spec({ name: 'MyApp' });
       messages = [message('r', spec)];
-      await seed([(await instantiatedSpec(await v8Spec({ name: 'claimcalc' }), { hash: 'old' })).serialize()]);
+      await seed([(await registeredSpec(await v8Spec({ name: 'claimcalc' }), { hash: 'old' })).serialize()]);
       decisionsStub.latestApplied.resolves(new Map([['myapp', decision('r')]]));
       capabilities.setForTests(['explorerSynced', 'appMessagesSynced'], true);
 
@@ -484,7 +484,7 @@ describe('appRegistry', () => {
 
   describe('reconcile before the scan has caught up', () => {
     it('writes and removes nothing, and leaves the capability down', async () => {
-      await seed([(await instantiatedSpec(await v8Spec({ name: 'recent' }), { hash: 'r' })).serialize()]);
+      await seed([(await registeredSpec(await v8Spec({ name: 'recent' }), { hash: 'r' })).serialize()]);
       capabilities.setForTests('appMessagesSynced', true);
 
       await registry.reconcile();

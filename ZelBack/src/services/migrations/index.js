@@ -4,7 +4,7 @@ const log = require('../../lib/log');
 const nodeIdentityMigration = require('../appDatabase/nodeIdentityMigration');
 const containerLabelBackfill = require('../appLifecycle/containerLabelBackfill');
 const appIdentityMove = require('../appLifecycle/appIdentityMove');
-const installedLedger = require('../appLifecycle/installedLedger');
+const instanceResourceObserver = require('../appLifecycle/instanceResourceObserver');
 const componentKeyMap = require('../appLifecycle/componentKeyMap');
 const retiredSchema = require('./retiredSchema');
 const appRecords = require('../appDatabase/appRecords');
@@ -76,12 +76,12 @@ const migrations = [
     run: () => paymentPositions.backfillPaymentPositions(),
   },
   {
-    id: 'installed-ledger',
-    // Before the move onto the identity, which writes the ledger of what it
-    // moves, and before the boot reconcile reads the ledger.
+    id: 'installed-resources',
+    // Before the move onto the identity, which writes the resources of what it
+    // moves, and before the boot reconcile reads the resources.
     before: 'bootReconcileDecided',
-    description: 'write the ledger of every app installed before the node kept one',
-    run: () => installedLedger.adoptInstalledLedgers(),
+    description: 'write the resources of every app installed before the node kept one',
+    run: () => instanceResourceObserver.adoptInstanceResources(),
   },
   {
     id: 'app-identity',

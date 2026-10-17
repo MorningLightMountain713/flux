@@ -27,7 +27,7 @@ function stubAppliedHistory(messages) {
     .map((message) => ({ type: 'fluxappupdate', timestamp: message.timestamp })));
 }
 const {
-  loadSpecLibrary, V8_SUBMISSION, v1Spec, v8Spec, v9Spec, sealedV9Spec, instantiatedSpec,
+  loadSpecLibrary, V8_SUBMISSION, v1Spec, v8Spec, v9Spec, sealedV9Spec, registeredSpec,
 } = require('./fixtures/fluxSpec');
 const { stubRegistry } = require('./fixtures/appRecords');
 const legacyPricingRegime = require('../../ZelBack/src/services/pricing/legacyPricingRegime');
@@ -80,13 +80,13 @@ async function legacySpec({
 }
 
 /**
- * A real InstantiatedSpec — the app's current registration. `expiresAtHeight`
+ * A real RegisteredSpec — the app's current registration. `expiresAtHeight`
  * is the library's own, PON-fork adjustment included, so the free-update
  * extension bar is measured against the real expiry rather than a copy of the
  * arithmetic kept in the test file.
  */
 async function registered(spec, height, registeredAt) {
-  return instantiatedSpec(spec, { height, registeredAt });
+  return registeredSpec(spec, { height, registeredAt });
 }
 
 // appSpecHelpers reads resolveSpec; the regimes read it one module deeper under
@@ -120,18 +120,18 @@ describe('appSpecHelpers tests', () => {
 
   describe('checkLegacyFreeUpdate tests', () => {
     let legacyRegime;
-    let resolveInstantiatedSpecStub;
+    let resolveRegisteredSpecStub;
     let logInfo;
 
     beforeEach(() => {
       // The seam that decrypts the held registration. Cleartext resolves to the
       // row's own spec, which is what the real one returns for a cleartext app.
-      resolveInstantiatedSpecStub = sinon.stub().callsFake(async (inst) => inst.spec);
+      resolveRegisteredSpecStub = sinon.stub().callsFake(async (inst) => inst.spec);
       // The refusals are only distinguishable by what they say, so the log is
       // part of this function's contract here rather than incidental output.
       logInfo = sinon.stub();
       legacyRegime = proxyquire('../../ZelBack/src/services/pricing/legacyPricingRegime', {
-        '../utils/specCutover': { resolveInstantiatedSpec: resolveInstantiatedSpecStub },
+        '../utils/specCutover': { resolveRegisteredSpec: resolveRegisteredSpecStub },
         '../../lib/log': { info: logInfo, warn: sinon.stub(), error: sinon.stub() },
       });
     });
@@ -188,7 +188,7 @@ describe('appSpecHelpers tests', () => {
 
     // The registration is handed to the decrypt seam, and the rule reads
     // `expiresAtHeight` straight off it. Both are properties of a real
-    // InstantiatedSpec, and an absent expiresAtHeight makes blocksToExtend NaN —
+    // RegisteredSpec, and an absent expiresAtHeight makes blocksToExtend NaN —
     // which compares false against the 8-block bar and quietly calls every
     // update paid. So read the argument back and assert the properties the real
     // collaborators read.
@@ -203,7 +203,7 @@ describe('appSpecHelpers tests', () => {
 
       await legacyRegime.checkLegacyFreeUpdate(spec, daemonHeight);
 
-      const [handed] = resolveInstantiatedSpecStub.firstCall.args;
+      const [handed] = resolveRegisteredSpecStub.firstCall.args;
       expect(handed, 'nothing reached the decrypt seam').to.be.an('object');
       expect(handed.expiresAtHeight, 'the rule measures the extension against this')
         .to.be.a('number');
@@ -547,8 +547,8 @@ describe('appSpecHelpers tests', () => {
       const {
         InsecureTestCryptoProvider, InsecureLegacyTestCryptoProvider,
       } = await moduleLoader.importModule('@runonflux/flux-spec-backend/testing');
-      flux.EncryptedSpecV8.registerProvider(() => new InsecureLegacyTestCryptoProvider());
-      flux.EncryptedSpecV9.registerProvider(() => new InsecureTestCryptoProvider());
+      flux.SealedSpecV8.registerProvider(() => new InsecureLegacyTestCryptoProvider());
+      flux.SealedSpecV9.registerProvider(() => new InsecureTestCryptoProvider());
     });
 
     it('should throw error when daemon not synced', async () => {
@@ -686,10 +686,10 @@ describe('appSpecHelpers tests', () => {
       newSpec, prevSpec, messages = [], open = null,
     }) {
       const existing = await registrationOf(prevSpec);
-      const resolveInstantiatedSpec = open ?? sinon.stub().resolves(prevSpec);
+      const resolveRegisteredSpec = open ?? sinon.stub().resolves(prevSpec);
       const helpers = buildAppSpecHelpers({
         resolveSpec: sinon.stub().resolves(newSpec),
-        resolveInstantiatedSpec,
+        resolveRegisteredSpec,
       });
       sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 200 } });
       stubRegistry().byName.resolves(existing);
@@ -697,7 +697,7 @@ describe('appSpecHelpers tests', () => {
       sinon.stub(priceOracleState, 'getPriceMessageHistory').returns({ resolveAt: () => priceFields });
       sinon.stub(priceOracleState, 'getRateMessageHistory').returns({ resolveAt: () => ({ fluxUsdPriceE4: 10_000 }) });
       sinon.stub(priceOracleState, 'getPriceModifierHistory').returns({ resolveAt: () => ({}) });
-      return { helpers, existing, resolveInstantiatedSpec };
+      return { helpers, existing, resolveRegisteredSpec };
     }
 
     const updatesAt = (count, msAgo) => Array.from({ length: count }, () => ({
@@ -722,9 +722,9 @@ describe('appSpecHelpers tests', () => {
       const { helpers } = await buildHelpers({
         newSpec: await v9SpecWith({ network: { mesh: true } }),
         prevSpec,
-        open: specCutover.resolveInstantiatedSpec,
+        open: specCutover.resolveRegisteredSpec,
       });
-      const open = sinon.stub(flux.EncryptedSpecV9.prototype, 'createProvider')
+      const open = sinon.stub(flux.SealedSpecV9.prototype, 'createProvider')
         .rejects(new Error('no secure backend'));
 
       const result = await helpers.getAppFiatAndFluxPrice(await v9SpecWith({ network: { mesh: true } }));
@@ -844,7 +844,7 @@ describe('appSpecHelpers tests', () => {
       }];
       const helpers = buildAppSpecHelpers({
         resolveSpec: sinon.stub().resolves(legacyApp),
-        resolveInstantiatedSpec: sinon.stub().callsFake(async (inst) => inst.spec),
+        resolveRegisteredSpec: sinon.stub().callsFake(async (inst) => inst.spec),
       }, { '../utils/chainUtilities': { getChainParamsPriceUpdates: async () => chainRates } });
       sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: daemonHeight } });
       stubRegistry().byName
@@ -868,7 +868,7 @@ describe('appSpecHelpers tests', () => {
       };
       const helpers = buildAppSpecHelpers({
         resolveSpec: sinon.stub().resolves(legacyApp),
-        resolveInstantiatedSpec: sinon.stub().callsFake(async (inst) => inst.spec),
+        resolveRegisteredSpec: sinon.stub().callsFake(async (inst) => inst.spec),
       }, { '../utils/chainUtilities': { getChainParamsPriceUpdates: async () => [{ height: 0, ...card }] } });
       sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: daemonHeight } });
       stubRegistry().byName
@@ -904,7 +904,7 @@ describe('appSpecHelpers tests', () => {
       const chainRates = [{ height: 0, ...cheap }, { height: daemonHeight - 1, ...cheap, cpu: 3, ram: 0.06, hdd: 0.15 }];
       const helpers = buildAppSpecHelpers({
         resolveSpec: sinon.stub().resolves(legacyApp),
-        resolveInstantiatedSpec: sinon.stub().callsFake(async (inst) => inst.spec),
+        resolveRegisteredSpec: sinon.stub().callsFake(async (inst) => inst.spec),
       }, { '../utils/chainUtilities': { getChainParamsPriceUpdates: async () => chainRates } });
       sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: daemonHeight } });
       stubRegistry().byName.resolves(await registered(prev, daemonHeight - 2));

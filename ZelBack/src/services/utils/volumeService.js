@@ -311,9 +311,9 @@ async function eligibleHostMounts() {
  * volume per installed instance, and the replica rides on each row.
  *
  * Read off what the node recorded, never off the spec: each instance's
- * installed record maps the component's current name to its key, and the
- * instance's ledger holds the identifier its container and volume were created
- * under for that key. A rename changes neither the key nor the ledger, and a
+ * hosted instance maps the component's current name to its key, and the
+ * instance's resources hold the identifier its container and volume were created
+ * under for that key. A rename changes neither the key nor the resources, and a
  * sealed app is found without being opened.
  *
  * @param {string} appName
@@ -324,19 +324,19 @@ async function eligibleHostMounts() {
  *   availableBytes: number, capacity: number}>>}
  */
 async function listComponentVolumeMounts(appName, componentName) {
-  const instances = await appRecords.installed().instancesOf(appName);
+  const instances = await appRecords.hostedInstances().instancesOf(appName);
   if (instances.length === 0) return [];
 
   const identifiers = await Promise.all(instances.map(async (install) => {
-    const ledger = await appRecords.ledgers().byInstance(appName, install.replica);
+    const resources = await appRecords.instanceResources().byInstance(appName, install.replica);
     // A record holding no keys keys each component by its name, which is how
-    // its ledger names the blocks.
+    // its resources name the blocks.
     const names = install.componentKeys === null
-      ? Object.keys(ledger?.components ?? {})
+      ? Object.keys(resources?.components ?? {})
       : [...install.componentKeys.keys()];
     const component = deploymentProvider.componentNameFromRequest(appName, componentName, names);
     const key = install.componentKeys === null ? component : install.componentKeys.get(component);
-    return { replica: install.replica, identifier: (key === undefined ? null : ledger?.component(key)?.identifier) ?? null };
+    return { replica: install.replica, identifier: (key === undefined ? null : resources?.component(key)?.identifier) ?? null };
   }));
 
   const filesystems = await deviceHelper.listMountedFilesystems();
@@ -547,17 +547,17 @@ async function mountedImagePath(dirPath) {
 
 /**
  * The image file this node placed a component's volume in, and the filesystem
- * UUID it stamped it with, from the installed ledger: where the node put the
- * image, which is the only place it is looked for. Null when the ledger names
+ * UUID it stamped it with, from the instance's resources: where the node put the
+ * image, which is the only place it is looked for. Null when the resources name
  * no file for the component, or holds no block for its identifier.
  *
  * @param {string} identifier Component identifier or docker app id.
  * @returns {Promise<{path: string, fsUuid: string|null}|null>}
- * @throws When the ledger cannot be read.
+ * @throws When the resources cannot be read.
  */
 async function recordedVolumeImage(identifier) {
-  const ledger = await appRecords.ledgers().byIdentifier(identifier);
-  const volume = ledger?.blockOf(identifier)?.volume;
+  const resources = await appRecords.instanceResources().byIdentifier(identifier);
+  const volume = resources?.blockOf(identifier)?.volume;
   if (!volume?.file) return null;
   return { path: volume.file, fsUuid: volume.fsUuid };
 }
@@ -775,8 +775,8 @@ async function getComponentAppIdsFromVolumeFiles(appName, identity = null) {
 /**
  * Ensures an app component's data volume is loop-mounted at its app dir - the
  * level-based desired state FluxOS itself owns (a rw mount replays a dirty
- * ext4 journal automatically). The image is the file the installed ledger
- * names and nothing else, checked against the stamp the ledger holds.
+ * ext4 journal automatically). The image is the file the instance's resources
+ * names and nothing else, checked against the stamp the resources hold.
  * Idempotent: a mounted volume is a no-op. Never deletes anything: content
  * found on the bare mountpoint is shadowed by the mount, loudly, so it stays
  * recoverable underneath.
@@ -791,7 +791,7 @@ async function ensureAppVolumeMounted(identifier) {
     return { mounted: true, alreadyMounted: true };
   }
 
-  // A ledger that would not read has not said the image is absent, and
+  // resources that would not read has not said the image is absent, and
   // reporting it absent is how a database fault becomes a tampering event
   // against the operator.
   let recorded;
@@ -870,9 +870,9 @@ async function ensureAppVolumeMounted(identifier) {
     log.warn(`ensureAppVolumeMounted - ${mountPoint} is not mounted but holds ${mountPointEntries.length} entries; they were written while unmounted and will be shadowed by the volume`);
   }
 
-  // The stamp is the ledger's claim about the file: that the one sitting where
+  // The stamp is the resources' claim about the file: that the one sitting where
   // this node put its image is the one it formatted. A file substituted there
-  // is refused. A stamp the ledger does not hold is a volume formatted before
+  // is refused. A stamp the resources do not hold is a volume formatted before
   // the node kept one, or an install that died before formatting; neither
   // refuses the mount, and the mount itself refuses anything that is not a
   // filesystem.
@@ -925,7 +925,7 @@ async function ensureAppVolumeMounted(identifier) {
     if (kind) {
       return { mounted: false, reason: `mount_host_refused: ${mountRes.error.message}` };
     }
-    // The image holds no filesystem. A stamp in the ledger says this node
+    // The image holds no filesystem. A stamp in the resources says this node
     // formatted the file, so it has been overwritten, which is evidence about
     // the volume. No stamp says the install died between allocating the file
     // and formatting it - the node's own unfinished work, not the operator's,

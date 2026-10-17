@@ -25,15 +25,15 @@ const { RUNNING_EXPIRY_MS } = require('../../ZelBack/src/services/utils/appConst
 const { requireMongo } = require('./dbTestHelper');
 const {
   loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION,
-  v8Spec, v9Spec, sealedV8Spec, sealedV9Spec, instantiatedSpec, assertAnswers,
+  v8Spec, v9Spec, sealedV8Spec, sealedV9Spec, registeredSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
-const { stubRegistry, stubInstalled, installedRecord } = require('./fixtures/appRecords');
+const { stubRegistry, stubHostedInstances, installedRecord } = require('./fixtures/appRecords');
 const { NODE_DOWN_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
 const { departures, OFF_LIST_GRACE_MS } = require('../../ZelBack/src/services/appDatabase/offListDepartures');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. This module owns the registry and the app-spec view API, so what it is
-// handed are real STORED forms (an InstantiatedSpec's serialization, cleartext or
+// handed are real STORED forms (an RegisteredSpec's serialization, cleartext or
 // node-sealed) and what it hands back is produced by the real classes. What stays
 // stubbed is I/O and FluxOS policy: the daemon sync RPC, the privilege check, and
 // the two transport providers that talk to the benchmark channel.
@@ -62,7 +62,7 @@ describe('registryManager tests', () => {
   });
 
   /**
-   * What the registry's `byName` hands the module: a real InstantiatedSpec.
+   * What the registry's `byName` hands the module: a real RegisteredSpec.
    * Only the registry read is stubbed.
    *
    * It is built through the STORED doc, so the object under test is what a node
@@ -70,7 +70,7 @@ describe('registryManager tests', () => {
    * `registeredAt` is dropped for a legacy app because a v1-v8 row carries none.
    *
    * One form cannot make that trip: a v8 ENTERPRISE spec. v8's wire slot for the
-   * ciphertext is a single opaque `enterprise` string, so `EncryptedSpecV8.
+   * ciphertext is a single opaque `enterprise` string, so `SealedSpecV8.
    * deserialize` rebuilds `{ algorithm, ciphertext }` and nothing else.
    * Production is fine — FluxOSLegacyCryptoProvider packs the wrapped key, nonce
    * and tag *inside* that string and unpacks them on the way back — but the spec
@@ -80,12 +80,12 @@ describe('registryManager tests', () => {
    * on the wire and round-trips intact.
    */
   async function registryHolds(spec, { hash = 'storedhash', height = 1_700_000, identity = null } = {}) {
-    const instantiated = await instantiatedSpec(spec, { hash, height, identity });
-    let stored = instantiated;
-    if (!(spec instanceof flux.EncryptedSpecV8)) {
-      const doc = instantiated.serialize();
+    const registered = await registeredSpec(spec, { hash, height, identity });
+    let stored = registered;
+    if (!(spec instanceof flux.SealedSpecV8)) {
+      const doc = registered.serialize();
       if (spec.version < 9) delete doc.registeredAt;
-      stored = flux.InstantiatedSpec.deserialize(doc, { chain: flux.Chain.MAIN });
+      stored = flux.RegisteredSpec.deserialize(doc, { chain: flux.Chain.MAIN });
     }
     stubRegistry().byName.resolves(stored);
     return stored;
@@ -99,7 +99,7 @@ describe('registryManager tests', () => {
       } catch (err) {
         // Collection doesn't exist
       }
-      await appRecords.registry().put(await instantiatedSpec(
+      await appRecords.registry().put(await registeredSpec(
         await v8Spec({ name: 'TestApp', owner: '196GJWyLxzAw3MirTT7Bqs2iGpUQio29GH' }), { hash: 'h-testapp', height: 1 },
       ));
     });
@@ -783,9 +783,9 @@ describe('registryManager tests', () => {
 
     // The doubles these replaced carried `version` and `isEncrypted` as writable
     // literals, so a "v8 test" and a "v9 test" differed by an assignment rather
-    // than by the class that actually arrives. A real InstantiatedSpec derives
+    // than by the class that actually arrives. A real RegisteredSpec derives
     // both from the spec it wraps, so the branch under test is now chosen by the
-    // object — an EncryptedSpecV9 or an EncryptedSpecV8 — and cannot be faked
+    // object — an SealedSpecV9 or an SealedSpecV8 — and cannot be faked
     // into the wrong one. The old double also could not answer `serialize()`
     // with anything but `{ sparse: true }`, which is not a shape any stored spec
     // has ever had.
@@ -809,9 +809,9 @@ describe('registryManager tests', () => {
         sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
         // The instances are Object.freeze'd, so the call counters go on the
         // prototypes; sinon.restore() in the outer afterEach puts them back.
-        decryptV9 = sinon.spy(flux.EncryptedSpecV9.prototype, 'decrypt');
-        decryptV8 = sinon.spy(flux.EncryptedSpecV8.prototype, 'decrypt');
-        reencrypt = sinon.spy(flux.DecryptedCanonicalSpec.prototype, 'reencrypt');
+        decryptV9 = sinon.spy(flux.SealedSpecV9.prototype, 'decrypt');
+        decryptV8 = sinon.spy(flux.SealedSpecV8.prototype, 'decrypt');
+        reencrypt = sinon.spy(flux.OpenedSpec.prototype, 'reencrypt');
       });
 
       it('should require a view credential when decrypt is requested', async () => {
@@ -872,9 +872,9 @@ describe('registryManager tests', () => {
         await registryHolds(sealed);
         // The legacy transport provider wraps an AES key under the caller's RSA
         // key off the benchmark channel, so it stays stubbed — but it must hand
-        // back a real CryptoProvider, because EncryptedSpecV8.reencryptFrom
+        // back a real CryptoProvider, because SealedSpecV8.reencryptFrom
         // refuses anything else. The library's own registered test factory is it.
-        const provider = await flux.EncryptedSpecV8.createProviderFor(sealed.name, sealed.owner);
+        const provider = await flux.SealedSpecV8.createProviderFor(sealed.name, sealed.owner);
         const legacyCreate = sinon.stub(legacyTransportProvider, 'create').resolves(provider);
         const res = { json: sinon.fake((param) => param) };
 
@@ -883,18 +883,18 @@ describe('registryManager tests', () => {
         const result = res.json.firstCall.args[0];
         expect(result.status).to.equal('success');
         // Same property guard as the v9 channel: the stubbed provider is told
-        // which app and owner to wrap for, off the InstantiatedSpec's accessors.
+        // which app and owner to wrap for, off the RegisteredSpec's accessors.
         sinon.assert.calledOnceWithExactly(legacyCreate, 'myapp', V8_SUBMISSION.owner, 'wrappedKeyBase64');
         sinon.assert.calledOnce(decryptV8);
         sinon.assert.calledOnce(reencrypt);
         // v8's own enterprise wire form came back, not a passthrough of the
         // stored row and not a literal: ciphertext present, cleartext absent.
         expect(result.data.version).to.equal(8);
-        expect(flux.EncryptedSpecV8.matchesWire(result.data)).to.be.true;
+        expect(flux.SealedSpecV8.matchesWire(result.data)).to.be.true;
         expect(result.data.enterprise).to.be.a('string').and.not.equal('');
         expect(result.data.compose, 'cleartext components never reach the caller').to.deep.equal([]);
         expect(result.data.contacts).to.deep.equal([]);
-        expect(await reencrypt.firstCall.returnValue).to.be.instanceOf(flux.EncryptedSpecV8);
+        expect(await reencrypt.firstCall.returnValue).to.be.instanceOf(flux.SealedSpecV8);
       });
 
       it('should reject a v9 app that arrives on the legacy enterprise channel', async () => {
@@ -961,7 +961,7 @@ describe('registryManager tests', () => {
     let decryptV8;
 
     beforeEach(() => {
-      decryptV8 = sinon.spy(flux.EncryptedSpecV8.prototype, 'decrypt');
+      decryptV8 = sinon.spy(flux.SealedSpecV8.prototype, 'decrypt');
     });
 
     it('converts a cleartext legacy app into a signable v9 draft', async () => {
@@ -1154,7 +1154,7 @@ describe('registryManager tests', () => {
   // The record seeded here is a real one, written through the registry: this
   // check reads it back through the registry, and the hash branch below then
   // asks it two questions (`expiresAtHeight` and `serialize`) that only the real
-  // InstantiatedSpec can answer.
+  // RegisteredSpec can answer.
   describe('checkApplicationRegistrationNameConflicts tests', () => {
     const EXISTING_HEIGHT = 1_700_000;
     // v8's `expire` of 88000 blocks from EXISTING_HEIGHT, as the real class
@@ -1163,7 +1163,7 @@ describe('registryManager tests', () => {
 
     beforeEach(async () => {
       const collection = config.database.appsglobal.collections.appsInformation;
-      const stored = await instantiatedSpec(
+      const stored = await registeredSpec(
         await v8Spec({ name: 'existingapp' }),
         { hash: 'testhash123', height: EXISTING_HEIGHT },
       );
@@ -1264,7 +1264,7 @@ describe('registryManager tests', () => {
 
   describe('the v1 list routes', () => {
     it('getGlobalAppsSpecifications asks the registry for the records matching the hash, owner and name given, and serves each as registered', async () => {
-      const app = await instantiatedSpec(await v8Spec({ name: 'listed' }), { hash: 'h-listed', height: 10 });
+      const app = await registeredSpec(await v8Spec({ name: 'listed' }), { hash: 'h-listed', height: 10 });
       const registry = stubRegistry();
       registry.find.resolves([app]);
       const res = { json: sinon.fake((param) => param) };
@@ -1282,10 +1282,10 @@ describe('registryManager tests', () => {
     });
 
     it('availableApps serves every registry record and every app installed here, each as registered', async () => {
-      const listed = await instantiatedSpec(await v8Spec({ name: 'listed' }), { hash: 'h-listed', height: 10 });
-      const installed = await instantiatedSpec(await v9Spec({ name: 'installed' }), { hash: 'h-installed', height: 11 });
+      const listed = await registeredSpec(await v8Spec({ name: 'listed' }), { hash: 'h-listed', height: 10 });
+      const installed = await registeredSpec(await v9Spec({ name: 'installed' }), { hash: 'h-installed', height: 11 });
       stubRegistry().all.resolves([listed]);
-      stubInstalled().apps.resolves([installedRecord(installed)]);
+      stubHostedInstances().apps.resolves([installedRecord(installed)]);
 
       expect(await registryManager.availableApps(null, null)).to.deep.equal([listed.serialize(), installed.serialize()]);
     });
@@ -1301,8 +1301,8 @@ describe('registryManager tests', () => {
     });
 
     it('answers the app with that identity, never another app whose name matches the string', async () => {
-      const app = await instantiatedSpec(await v8Spec({ name: 'myapp' }), { hash: 'h', identity: 'ab12cd34ef56' });
-      const namedLikeIt = await instantiatedSpec(await v8Spec({ name: 'ab12cd34ef56', owner: '1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2' }), { hash: 'h2', identity: 'ab12cd34ef56x' });
+      const app = await registeredSpec(await v8Spec({ name: 'myapp' }), { hash: 'h', identity: 'ab12cd34ef56' });
+      const namedLikeIt = await registeredSpec(await v8Spec({ name: 'ab12cd34ef56', owner: '1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2' }), { hash: 'h2', identity: 'ab12cd34ef56x' });
       await appRecords.registry().put(app);
       await appRecords.registry().put(namedLikeIt);
 
@@ -1940,18 +1940,18 @@ describe('registryManager tests', () => {
 
     /** The record of an app at a given chain position. */
     async function storedRecord(name, { hash, height }) {
-      return instantiatedSpec(await v9Spec({ name }), { hash, height });
+      return registeredSpec(await v9Spec({ name }), { hash, height });
     }
 
     /**
      * The registry's `put` is stubbed here, so nothing in this suite reads the
      * record back. The registry keys a record on its name and stores its
-     * serialized form, which InstantiatedSpec.deserialize reads back on the next
+     * serialized form, which RegisteredSpec.deserialize reads back on the next
      * boot: assert that pair, which the stub would otherwise hide.
      */
     function assertStorable(record, name) {
       expect(record.name, 'the registry keys the record on its name').to.equal(name);
-      const rehydrated = flux.InstantiatedSpec.deserialize(record.serialize(), { chain: flux.Chain.MAIN });
+      const rehydrated = flux.RegisteredSpec.deserialize(record.serialize(), { chain: flux.Chain.MAIN });
       expect(rehydrated.spec).to.be.instanceOf(flux.FluxAppSpecV9);
       expect(rehydrated.name).to.equal(name);
       return rehydrated;
@@ -2006,9 +2006,9 @@ describe('registryManager tests', () => {
       const stored = await registryHolds(sealed, { hash: 'hm', height: 2_500_000, identity: 'ab12cd34ef56' });
       // The resolver decrypts through the benchmark channel, so it stays
       // stubbed — and it hands back what the real one hands back for a sealed
-      // app: a DecryptedCanonicalSpec, never a raw serializable spec.
+      // app: a OpenedSpec, never a raw serializable spec.
       const view = await sealed.decrypt(await sealed.createProvider());
-      const resolve = sinon.stub(specCutover, 'resolveInstantiatedSpec').resolves(view);
+      const resolve = sinon.stub(specCutover, 'resolveRegisteredSpec').resolves(view);
       const applyComponentView = sinon.stub(foundingCommittee, 'applyComponentView').resolves();
       const webKey = `c${'w'.repeat(52)}`;
       const namingForVersion = sinon.stub(componentKeyMap, 'namingForVersion').resolves({ componentKeys: new Map([['web', webKey]]), formerNames: new Map() });
@@ -2037,7 +2037,7 @@ describe('registryManager tests', () => {
     it('maps nothing, and walks no history, for an app off the mesh', async () => {
       const spec = await v9Spec({ name: 'plainapp' });
       const stored = await registryHolds(spec, { hash: 'hp', height: 2_500_000, identity: 'ab12cd34ef57' });
-      sinon.stub(specCutover, 'resolveInstantiatedSpec').resolves(spec);
+      sinon.stub(specCutover, 'resolveRegisteredSpec').resolves(spec);
       const applyComponentView = sinon.stub(foundingCommittee, 'applyComponentView').resolves();
       const namingForVersion = sinon.stub(componentKeyMap, 'namingForVersion').resolves({ componentKeys: new Map(), formerNames: new Map() });
 

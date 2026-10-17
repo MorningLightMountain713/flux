@@ -5,8 +5,8 @@ const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const domain = require('./fixtures/appDomain');
-const { loadSpecLibrary, sealedV9Spec, instantiatedSpec } = require('./fixtures/fluxSpec');
-const { inMemoryInstalled, inMemoryLedgers } = require('./fixtures/appRecords');
+const { loadSpecLibrary, sealedV9Spec, registeredSpec } = require('./fixtures/fluxSpec');
+const { inMemoryHostedInstances, inMemoryInstanceResources } = require('./fixtures/appRecords');
 const { APP_VOLUME_MOUNT_OPTIONS } = require('../../ZelBack/src/services/utils/appConstants');
 
 chai.use(chaiAsPromised);
@@ -26,20 +26,20 @@ describe('volumeService tests', () => {
   let mountParserStub;
   let fsStub;
   let deviceHelperStub;
-  let ledgersStub;
+  let instanceResourcesStub;
   let installedStub;
   let logStub;
   let volumeService;
-  let InstalledLedger;
+  let InstanceResources;
 
   before(async function loadLibrary() {
     this.timeout(30_000);
-    ({ InstalledLedger } = await loadSpecLibrary());
+    ({ InstanceResources } = await loadSpecLibrary());
   });
 
-  // The ledger names a component's image: the file and the stamp, or nothing.
-  const ledgerNames = (file, fsUuid, identifier = 'app1') => {
-    ledgersStub.byIdentifier.resolves(new InstalledLedger({
+  // The resources name a component's image: the file and the stamp, or nothing.
+  const resourcesNames = (file, fsUuid, identifier = 'app1') => {
+    instanceResourcesStub.byIdentifier.resolves(new InstanceResources({
       name: 'app1',
       components: {
         web: {
@@ -83,8 +83,8 @@ describe('volumeService tests', () => {
     deviceHelperStub = { listMountedFilesystems: sinon.stub().resolves([]), listAllMounts: sinon.stub().resolves([]), mountForTarget: sinon.stub() };
     // No app is installed unless a test says so.
     installedStub = { instancesOf: sinon.stub().resolves([]) };
-    // The ledger names nothing unless a test says so.
-    ledgersStub = { byIdentifier: sinon.stub().resolves(null) };
+    // The resources name nothing unless a test says so.
+    instanceResourcesStub = { byIdentifier: sinon.stub().resolves(null) };
     logStub = {
       info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(), debug: sinon.stub(),
     };
@@ -105,8 +105,8 @@ describe('volumeService tests', () => {
       '../../lib/log': logStub,
       '../deviceHelper': deviceHelperStub,
       '../appDatabase/appRecords': {
-        ledgers: () => ledgersStub,
-        installed: () => installedStub,
+        instanceResources: () => instanceResourcesStub,
+        hostedInstances: () => installedStub,
       },
       fs: { promises: fsStub.promises },
     });
@@ -434,20 +434,20 @@ describe('volumeService tests', () => {
   // What the node wrote down when it made the volume. A lookup cannot be
   // answered by a file somebody else named, which is the weakness every
   // exclusion rule in the search exists to compensate for.
-  describe('the image the ledger names', () => {
+  describe('the image the resources name', () => {
     beforeEach(() => {
       dockerServiceStub.getAppIdentifier.returns('fluxapp1');
     });
 
-    it('is the file of the block whose identifier is asked for, with its stamp, and nothing when the ledger names no file', async () => {
-      ledgerNames('/mnt/data/fluxapp1FLUXFSVOL', 'u-1');
+    it('is the file of the block whose identifier is asked for, with its stamp, and nothing when the resources name no file', async () => {
+      resourcesNames('/mnt/data/fluxapp1FLUXFSVOL', 'u-1');
       expect(await volumeService.recordedVolumeImage('app1')).to.deep.equal({ path: '/mnt/data/fluxapp1FLUXFSVOL', fsUuid: 'u-1' });
-      sinon.assert.calledOnceWithExactly(ledgersStub.byIdentifier, 'app1');
-      ledgerNames('/mnt/data/fluxapp1FLUXFSVOL', 'u-1', 'other');
-      expect(await volumeService.recordedVolumeImage('app1'), 'a ledger found by another block').to.equal(null);
-      ledgerNames(null, null);
+      sinon.assert.calledOnceWithExactly(instanceResourcesStub.byIdentifier, 'app1');
+      resourcesNames('/mnt/data/fluxapp1FLUXFSVOL', 'u-1', 'other');
+      expect(await volumeService.recordedVolumeImage('app1'), 'resources found by another block').to.equal(null);
+      resourcesNames(null, null);
       expect(await volumeService.recordedVolumeImage('app1'), 'a block naming no file').to.equal(null);
-      ledgersStub.byIdentifier.resolves(null);
+      instanceResourcesStub.byIdentifier.resolves(null);
       expect(await volumeService.recordedVolumeImage('app1')).to.equal(null);
     });
 
@@ -455,7 +455,7 @@ describe('volumeService tests', () => {
     // whatever the database is doing - but it cannot settle whether what it
     // finds is the one this node put there, and it says so.
     it('searches on, and says the record was not read', async () => {
-      ledgersStub.byIdentifier.rejects(new Error('MongoNetworkError'));
+      instanceResourcesStub.byIdentifier.rejects(new Error('MongoNetworkError'));
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs('/test/flux/appvolumes/fluxapp1FLUXFSVOL').resolves();
 
@@ -467,7 +467,7 @@ describe('volumeService tests', () => {
     });
 
     it('says the record is settled when it read', async () => {
-      ledgersStub.byIdentifier.resolves(null);
+      instanceResourcesStub.byIdentifier.resolves(null);
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs('/test/flux/appvolumes/fluxapp1FLUXFSVOL').resolves();
 
@@ -477,7 +477,7 @@ describe('volumeService tests', () => {
     });
 
     it('is used without searching the disks at all', async () => {
-      ledgerNames('/mnt/data/fluxapp1FLUXFSVOL', 'u-1');
+      resourcesNames('/mnt/data/fluxapp1FLUXFSVOL', 'u-1');
       fsStub.promises.access.resolves();
 
       const result = await volumeService.getVolumeFilePath('app1');
@@ -488,7 +488,7 @@ describe('volumeService tests', () => {
     });
 
     it('falls back to the search when the recorded image is gone', async () => {
-      ledgerNames('/mnt/gone/fluxapp1FLUXFSVOL', 'u-1');
+      resourcesNames('/mnt/gone/fluxapp1FLUXFSVOL', 'u-1');
       deviceHelperStub.listMountedFilesystems.resolves([{ source: '/dev/sda1', target: '/dat' }]);
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs('/dat/fluxapp1FLUXFSVOL').resolves();
@@ -516,7 +516,7 @@ describe('volumeService tests', () => {
     // cache disabled the check reports a match for exactly the substitution it
     // exists to catch.
     it('probes the image with the blkid cache disabled', async () => {
-      ledgerNames('/dat/fluxapp1FLUXFSVOL', 'ours-1');
+      resourcesNames('/dat/fluxapp1FLUXFSVOL', 'ours-1');
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs('/dev/loop-control').resolves();
       fsStub.promises.access.withArgs('/dat/fluxapp1FLUXFSVOL').resolves();
@@ -529,7 +529,7 @@ describe('volumeService tests', () => {
     });
 
     it('refuses a file that is not the image this node created', async () => {
-      ledgerNames('/dat/fluxapp1FLUXFSVOL', 'ours-1');
+      resourcesNames('/dat/fluxapp1FLUXFSVOL', 'ours-1');
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs('/dev/loop-control').resolves();
       fsStub.promises.access.withArgs('/dat/fluxapp1FLUXFSVOL').resolves();
@@ -540,10 +540,10 @@ describe('volumeService tests', () => {
       expect(callsFor('mount')).to.have.lengthOf(0);
     });
 
-    // The ledger is where the node put the image, and the only place it is
+    // The resources are where the node put the image, and the only place it is
     // looked for: a file under the same name elsewhere is not this volume.
-    it('reports the image missing when the ledger names a path that is gone, and searches nowhere', async () => {
-      ledgerNames('/mnt/gone/fluxapp1FLUXFSVOL', 'from-a-volume-that-went');
+    it('reports the image missing when the resources name a path that is gone, and searches nowhere', async () => {
+      resourcesNames('/mnt/gone/fluxapp1FLUXFSVOL', 'from-a-volume-that-went');
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs('/dev/loop-control').resolves();
       fsStub.promises.access.withArgs('/dat/fluxapp1FLUXFSVOL').resolves();
@@ -556,7 +556,7 @@ describe('volumeService tests', () => {
     });
 
     it('mounts the image whose stamp matches', async () => {
-      ledgerNames('/dat/fluxapp1FLUXFSVOL', 'someone-elses-uuid');
+      resourcesNames('/dat/fluxapp1FLUXFSVOL', 'someone-elses-uuid');
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs('/dev/loop-control').resolves();
       fsStub.promises.access.withArgs('/dat/fluxapp1FLUXFSVOL').resolves();
@@ -570,7 +570,7 @@ describe('volumeService tests', () => {
     // A stamp that cannot be read is not a mismatch, and the mount refuses
     // anything that is not a filesystem anyway.
     it('does not refuse on a stamp it cannot read', async () => {
-      ledgerNames('/dat/fluxapp1FLUXFSVOL', 'ours-1');
+      resourcesNames('/dat/fluxapp1FLUXFSVOL', 'ours-1');
       dispatchRunCommand({
         mountpoint: async () => ({ error: new Error('not mounted'), stdout: '', stderr: '' }),
         blkid: async () => ({ error: new Error('cannot open'), stdout: '', stderr: '' }),
@@ -585,10 +585,10 @@ describe('volumeService tests', () => {
     });
   });
 
-  // The ledger is written as a volume is created and adopted once at boot for
-  // one created before the node kept a ledger; the mount pass learns nothing.
+  // The resources are written as a volume is created and adopted once at boot for
+  // one created before the node kept resources; the mount pass learns nothing.
   describe('a mounted volume', () => {
-    it('is left as it is, without reading the ledger', async () => {
+    it('is left as it is, without reading the resources', async () => {
       dockerServiceStub.getAppIdentifier.returns('fluxapp1');
       fsStub.promises.readFile.withArgs('/proc/self/mountinfo', 'utf8')
         .resolves(mountinfoWith(`${APPS_FOLDER}fluxapp1`));
@@ -596,7 +596,7 @@ describe('volumeService tests', () => {
       const result = await volumeService.ensureAppVolumeMounted('app1');
 
       expect(result).to.deep.equal({ mounted: true, alreadyMounted: true });
-      sinon.assert.notCalled(ledgersStub.byIdentifier);
+      sinon.assert.notCalled(instanceResourcesStub.byIdentifier);
       expect(callsFor('blkid')).to.have.lengthOf(0);
     });
   });
@@ -817,9 +817,9 @@ describe('volumeService tests', () => {
       // the ordinary host: the kernel offers loop devices. A test about a host
       // that does not is the one that says so.
       fsStub.promises.access.withArgs('/dev/loop-control').resolves();
-      // the ordinary ledger: it names the image, unstamped unless a test
+      // the ordinary resources: it names the image, unstamped unless a test
       // says otherwise
-      ledgerNames('/dat/fluxapp1FLUXFSVOL', null);
+      resourcesNames('/dat/fluxapp1FLUXFSVOL', null);
     });
 
     it('should be a no-op when the app dir is already a mountpoint', async () => {
@@ -926,16 +926,16 @@ describe('volumeService tests', () => {
     // is decided from both: the path to mount comes from one, the stamp it is
     // held to from the other. A record that changed between them, or a second
     // read that failed where the first did not, skips the check entirely.
-    it('decides the mount from a single read of the ledger', async () => {
+    it('decides the mount from a single read of the resources', async () => {
       dispatchRunCommand({
         mountpoint: async () => ({ error: new Error('not mounted'), stdout: '', stderr: '' }),
       });
-      ledgerNames('/mnt/data/fluxapp1FLUXFSVOL', 'u-1');
+      resourcesNames('/mnt/data/fluxapp1FLUXFSVOL', 'u-1');
       fsStub.promises.access.resolves();
 
       await volumeService.ensureAppVolumeMounted('app1');
 
-      sinon.assert.calledOnce(ledgersStub.byIdentifier);
+      sinon.assert.calledOnce(instanceResourcesStub.byIdentifier);
     });
 
     // The read-only check gates the mount, so a table that did not arrive
@@ -945,7 +945,7 @@ describe('volumeService tests', () => {
       dispatchRunCommand({
         mountpoint: async () => ({ error: new Error('not mounted'), stdout: '', stderr: '' }),
       });
-      ledgerNames('/mnt/data/fluxapp1FLUXFSVOL', 'u-1');
+      resourcesNames('/mnt/data/fluxapp1FLUXFSVOL', 'u-1');
       fsStub.promises.access.resolves();
       deviceHelperStub.listAllMounts.rejects(new Error('findmnt failed'));
 
@@ -958,13 +958,13 @@ describe('volumeService tests', () => {
       ).to.equal(false);
     });
 
-    // A ledger that would not read has not said the image is absent, and
+    // resources that would not read has not said the image is absent, and
     // reporting it absent is how a database fault becomes a tampering event.
-    it('does not mount when the ledger could not be read', async () => {
+    it('does not mount when the resources could not be read', async () => {
       dispatchRunCommand({
         mountpoint: async () => ({ error: new Error('not mounted'), stdout: '', stderr: '' }),
       });
-      ledgersStub.byIdentifier.rejects(new Error('MongoNetworkError'));
+      instanceResourcesStub.byIdentifier.rejects(new Error('MongoNetworkError'));
       fsStub.promises.access.resolves();
 
       const result = await volumeService.ensureAppVolumeMounted('app1');
@@ -975,7 +975,7 @@ describe('volumeService tests', () => {
 
     // The file answering EIO is not the file being absent: the image may still
     // be there, and the reason is what an operator reads.
-    it('names the unreadable path when the file the ledger names cannot be read', async () => {
+    it('names the unreadable path when the file the resources name cannot be read', async () => {
       dispatchRunCommand({
         mountpoint: async () => ({ error: new Error('not mounted'), stdout: '', stderr: '' }),
       });
@@ -989,11 +989,11 @@ describe('volumeService tests', () => {
       expect(callsFor('mount')).to.have.lengthOf(0);
     });
 
-    it('reports the image missing when the ledger names no file for the component', async () => {
+    it('reports the image missing when the resources name no file for the component', async () => {
       dispatchRunCommand({
         mountpoint: async () => ({ error: new Error('not mounted'), stdout: '', stderr: '' }),
       });
-      ledgersStub.byIdentifier.resolves(null);
+      instanceResourcesStub.byIdentifier.resolves(null);
       fsStub.promises.access.resolves();
 
       const result = await volumeService.ensureAppVolumeMounted('app1');
@@ -1003,7 +1003,7 @@ describe('volumeService tests', () => {
       sinon.assert.notCalled(deviceHelperStub.listMountedFilesystems);
     });
 
-    it('reports the image missing when the file the ledger names is not there', async () => {
+    it('reports the image missing when the file the resources name is not there', async () => {
       dispatchRunCommand({
         mountpoint: async () => ({ error: new Error('not mounted'), stdout: '', stderr: '' }),
       });
@@ -1135,7 +1135,7 @@ describe('volumeService tests', () => {
     // that this node stamped an image at this path, that IS about the image: it
     // has been overwritten.
     it('names the image when a stamped image holds no filesystem', async () => {
-      ledgerNames('/dat/fluxapp1FLUXFSVOL', 'ours-1');
+      resourcesNames('/dat/fluxapp1FLUXFSVOL', 'ours-1');
       dispatchRunCommand({
         mountpoint: async () => ({ error: new Error('not mounted'), stdout: '', stderr: '' }),
         mount: async () => ({ error: new Error('bad superblock'), stdout: '', stderr: '' }),
@@ -1180,7 +1180,7 @@ describe('volumeService tests', () => {
     });
 
     it('should report mount_failed when a stamped image fails to mount and the dir stays unmounted', async () => {
-      ledgerNames('/dat/fluxapp1FLUXFSVOL', 'ours-1');
+      resourcesNames('/dat/fluxapp1FLUXFSVOL', 'ours-1');
       dispatchRunCommand({
         mountpoint: async () => ({ error: new Error('not mounted'), stdout: '', stderr: '' }),
         mount: async () => ({ error: new Error('bad superblock'), stdout: '', stderr: '' }),
@@ -1200,7 +1200,7 @@ describe('volumeService tests', () => {
     // between allocating the file and formatting it - the node's own unfinished
     // work, not an image an owner overwrote, so it is not scored as one.
     it('reports an incomplete install when an unstamped image holds no filesystem', async () => {
-      ledgerNames('/dat/fluxapp1FLUXFSVOL', null);
+      resourcesNames('/dat/fluxapp1FLUXFSVOL', null);
       dispatchRunCommand({
         mountpoint: async () => ({ error: new Error('not mounted'), stdout: '', stderr: '' }),
         mount: async () => ({ error: new Error('bad superblock'), stdout: '', stderr: '' }),
@@ -1225,7 +1225,7 @@ describe('volumeService tests', () => {
     const WEB = domain.submission().components.web;
     const KEY = `c${'k'.repeat(51)}a`;
 
-    const registered = async ({ spec, identity }) => domain.instantiatedSpec({
+    const registered = async ({ spec, identity }) => domain.registeredSpec({
       event: spec.version >= 9 ? await domain.confirmedEvent({ spec }) : await domain.legacyEvent({ spec }),
       identity,
     });
@@ -1236,16 +1236,16 @@ describe('volumeService tests', () => {
     let flux;
     before(async () => { flux = await loadSpecLibrary(); });
 
-    // An instance as the node records it: its installed record, and the ledger
+    // An instance as the node records it: its hosted instance, and the resources
     // naming what it created for each component key.
     async function install(name, replica, { record, componentKeys = null, blocks }) {
-      await installedStub.put(new flux.InstalledSpec({ record, replica, componentKeys }));
-      await ledgersStub.put(new flux.InstalledLedger({ name, replica, components: blocks }));
+      await installedStub.put(new flux.HostedInstance({ record, replica, componentKeys }));
+      await instanceResourcesStub.put(new flux.InstanceResources({ name, replica, components: blocks }));
     }
 
     beforeEach(async () => {
-      ({ installed: installedStub } = await inMemoryInstalled());
-      ({ ledgers: ledgersStub } = await inMemoryLedgers());
+      ({ installed: installedStub } = await inMemoryHostedInstances());
+      ({ instanceResources: instanceResourcesStub } = await inMemoryInstanceResources());
     });
 
     it('answers nothing for an app this node has not installed', async () => {
@@ -1281,8 +1281,8 @@ describe('volumeService tests', () => {
       expect(await volumeService.listComponentVolumeMounts('myapp', 'web')).to.deep.equal([]);
     });
 
-    it('finds a sealed app\'s volume from the record and the ledger alone', async () => {
-      const record = await instantiatedSpec(await sealedV9Spec({ name: 'myapp' }), { hash: 'h1', identity: 'a1b2c3' });
+    it('finds a sealed app\'s volume from the record and the resources alone', async () => {
+      const record = await registeredSpec(await sealedV9Spec({ name: 'myapp' }), { hash: 'h1', identity: 'a1b2c3' });
       expect(record.isEncrypted, 'the record is sealed').to.equal(true);
       await install('myapp', null, { record, componentKeys: new Map([['web', KEY]]), blocks: { [KEY]: block(`${KEY}_a1b2c3`) } });
       deviceHelperStub.listMountedFilesystems.resolves([mountRow(`${APPS_FOLDER}flux${KEY}_a1b2c3`)]);
@@ -1292,7 +1292,7 @@ describe('volumeService tests', () => {
       expect(volumes.map((v) => v.mount)).to.deep.equal([`${APPS_FOLDER}flux${KEY}_a1b2c3`]);
     });
 
-    it('answers no volume for a name that is no component, whatever the ledger holds', async () => {
+    it('answers no volume for a name that is no component, whatever the resources hold', async () => {
       const record = await registered({ spec: await domain.v9Spec({ name: 'myapp', components: { web: WEB } }), identity: 'myapp' });
       await install('myapp', null, {
         record,
@@ -1304,9 +1304,9 @@ describe('volumeService tests', () => {
       expect(await volumeService.listComponentVolumeMounts('myapp', 'db')).to.deep.equal([]);
     });
 
-    it('answers no volume for an instance whose ledger is not written yet', async () => {
+    it('answers no volume for an instance whose resources is not written yet', async () => {
       const record = await registered({ spec: await domain.v9Spec({ name: 'myapp', components: { web: WEB } }), identity: 'myapp' });
-      await installedStub.put(new flux.InstalledSpec({ record, replica: null, componentKeys: new Map([['web', 'web']]) }));
+      await installedStub.put(new flux.HostedInstance({ record, replica: null, componentKeys: new Map([['web', 'web']]) }));
       deviceHelperStub.listMountedFilesystems.resolves([mountRow(`${APPS_FOLDER}fluxweb_myapp`)]);
 
       expect(await volumeService.listComponentVolumeMounts('myapp', 'web')).to.deep.equal([]);

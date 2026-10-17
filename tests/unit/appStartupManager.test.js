@@ -98,7 +98,7 @@ describe('appStartupManager tests', () => {
 
     appUtilities = proxyquire('../../ZelBack/src/services/utils/appUtilities', {
       '../appDatabase/appsRepository': appsRepositoryStub,
-      '../appDatabase/appRecords': { installed: () => installedStub },
+      '../appDatabase/appRecords': { hostedInstances: () => installedStub },
       '../../lib/log': logStub,
     });
 
@@ -115,7 +115,7 @@ describe('appStartupManager tests', () => {
       '../nodeDosState': { isNodeDos: sinon.stub().returns(false) },
       '../appMonitoring/appReconciler': appReconcilerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
-      '../appDatabase/appRecords': { installed: () => installedStub },
+      '../appDatabase/appRecords': { hostedInstances: () => installedStub },
       './appUninstaller': appUninstallerStub,
       '../utils/globalState': globalStateStub,
       '../appQuery/appQueryService': appQueryServiceStub,
@@ -166,7 +166,7 @@ describe('appStartupManager tests', () => {
         '../nodeDosState': { isNodeDos: sinon.stub().returns(false) },
         '../appMonitoring/appReconciler': appReconcilerStub,
         '../appDatabase/appsRepository': appsRepositoryStub,
-        '../appDatabase/appRecords': { installed: () => installedStub },
+        '../appDatabase/appRecords': { hostedInstances: () => installedStub },
         './appUninstaller': appUninstallerStub,
         '../utils/globalState': globalStateStub,
         '../appQuery/appQueryService': appQueryServiceStub,
@@ -385,7 +385,7 @@ describe('appStartupManager tests', () => {
       '../nodeDosState': { isNodeDos: sinon.stub().returns(false) },
       '../appMonitoring/appReconciler': appReconcilerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
-      '../appDatabase/appRecords': { installed: () => installedStub },
+      '../appDatabase/appRecords': { hostedInstances: () => installedStub },
       './appUninstaller': appUninstallerStub,
       '../utils/globalState': globalStateStub,
       '../appQuery/appQueryService': appQueryServiceStub,

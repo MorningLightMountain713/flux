@@ -314,7 +314,7 @@ async function redeployComponent(appName, componentName, options = {}) {
       await serviceHelper.delay(config.get('fluxapps.redeploy.composedDelay') * 1000);
 
       // eslint-disable-next-line no-await-in-loop
-      const install = await appRecords.installed().byName(appName);
+      const install = await appRecords.hostedInstances().byName(appName);
       // eslint-disable-next-line no-await-in-loop
       const freshDeployment = await deploymentProvider.buildDeployment(install, { replica: deployComp.replica ?? null });
       // eslint-disable-next-line no-await-in-loop
@@ -431,7 +431,7 @@ async function redeployApplication(appName, options = {}) {
     // containers are already destroyed; failing here keeps the old version running
     // untouched (degraded at worst — reconnectLinkedApps re-attaches it when the
     // dependency returns).
-    const preTeardownSpec = (await appRecords.installed().byName(appName))?.record;
+    const preTeardownSpec = (await appRecords.hostedInstances().byName(appName))?.record;
     if (!preTeardownSpec) {
       throw new Error(`Application ${appName} not found in database`);
     }
@@ -500,7 +500,7 @@ async function redeployApplication(appName, options = {}) {
       status(`${unitLabel} removed. Awaiting installation...`);
 
       // eslint-disable-next-line no-await-in-loop
-      const install = await appRecords.installed().byName(appName);
+      const install = await appRecords.hostedInstances().byName(appName);
       if (!install) {
         throw new Error(`Application ${appName} not found in database after removal`);
       }
@@ -757,19 +757,19 @@ function messageReporter(res) {
 
 /**
  * The syncthing folder a component's data is shared under, as the installed
- * ledger records it: the folder's id and its directory. Null for a component
- * that shares none, and for one this node holds no ledger of.
+ * resources record it: the folder's id and its directory. Null for a component
+ * that shares none, and for one this node holds no resources of.
  * @param {string} identifier - the component's container identifier
  * @returns {Promise<{id: string, path: string}|null>}
  */
 async function recordedSyncFolder(identifier) {
-  const ledger = await appRecords.ledgers().byIdentifier(identifier);
-  return ledger?.blockOf(identifier)?.syncFolder ?? null;
+  const resources = await appRecords.instanceResources().byIdentifier(identifier);
+  return resources?.blockOf(identifier)?.syncFolder ?? null;
 }
 
 /**
  * Changes the type of a syncthing folder.
- * @param {string} folderId - the folder's id, as the installed ledger records
+ * @param {string} folderId - the folder's id, as the instance's resources record
  *   it. For an app registered before v9 it is not the name of the component's
  *   directory.
  * @param {string} folderType - 'receiveonly' or 'sendreceive'
@@ -876,8 +876,8 @@ async function applyPermissionsFix(appname, appId) {
  */
 async function componentIdentifiersFor(appname) {
   if (appname.includes('_')) return [appname];
-  // The containers are this node's, named by its installed record.
-  const install = await appRecords.installed().byName(appname);
+  // The containers are this node's, named by its hosted instance.
+  const install = await appRecords.hostedInstances().byName(appname);
   if (!install) {
     throw new Error('Application not found');
   }
@@ -1029,7 +1029,7 @@ async function stopApplication(appname, onWait) {
  *
  * The component names both things the workflow touches: its directory, named
  * by its identifier, and its syncthing folder, under the id the installed
- * ledger records, which for an app registered before v9 is another name.
+ * resources record, which for an app registered before v9 is another name.
  * @param {object} comp - the DeploymentComponent of an installed deployment
  * @returns {Promise<void>}
  */
@@ -1467,7 +1467,7 @@ async function appendRestoreTask(req, res) {
  * the rest of the app restarts on data the restore never touched.
  * @param {string} appname
  * @param {Array<{identifier: string, folderId: ?string, synced: boolean}>} swaps components whose clear
- *   began, each synced one with the id of its syncthing folder as the installed ledger records it
+ *   began, each synced one with the id of its syncthing folder as the instance's resources record it
  */
 async function holdPartialRestore(appname, swaps) {
   for (const swap of swaps) {
@@ -1520,7 +1520,7 @@ async function holdPartialRestore(appname, swaps) {
  */
 async function localArchivePath(appname, volume, label, componentName) {
   const pathOf = (name) => `${volume.mount}/backup/local/backup_${name.toLowerCase()}.tar.gz`;
-  const install = await appRecords.installed().byReplica(appname, volume.replica ?? null);
+  const install = await appRecords.hostedInstances().byReplica(appname, volume.replica ?? null);
   const formerNames = install ? install.formerNamesOf(componentName) : [];
   // eslint-disable-next-line no-restricted-syntax
   for (const name of [label, ...formerNames.reverse()]) {
@@ -2106,7 +2106,7 @@ async function contentBlobServeApi(req, res) {
     activeContentServes += 1;
     try {
       const { appName, locator } = req.params;
-      const installed = await appRecords.installed().byName(appName);
+      const installed = await appRecords.hostedInstances().byName(appName);
       if (!installed) {
         res.status(404).end();
         return;
@@ -2204,11 +2204,11 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   const newPorts = collectHostPorts(newDeployment);
   const portsToClose = [...oldPorts].filter((port) => !newPorts.has(port));
   const portsToOpen = [...newPorts].filter((port) => !oldPorts.has(port));
-  // The ledger names each port with the methods it was opened by, which is
+  // The resources name each port with the methods it was opened by, which is
   // what closing one and recording a kept one read.
   const replica = newDeployment.replica ?? null;
-  const ledger = await appRecords.ledgers().byInstance(appName, replica);
-  const recordedPorts = Object.values(ledger?.components ?? {}).flatMap((block) => block.hostPorts ?? []);
+  const resources = await appRecords.instanceResources().byInstance(appName, replica);
+  const recordedPorts = Object.values(resources?.components ?? {}).flatMap((block) => block.hostPorts ?? []);
 
   const toUninstall = [...removed, ...recreateVolume, ...keepVolume];
   if (toUninstall.length > 0) {
@@ -2231,7 +2231,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
       // with it. One rebuilt or reinstalled keeps its block for the ports and
       // the volume the reinstall does not recreate.
       // eslint-disable-next-line no-await-in-loop
-      if (removed.includes(key)) await appRecords.ledgers().removeComponent(appName, oldDeployment.replica ?? null, key);
+      if (removed.includes(key)) await appRecords.instanceResources().removeComponent(appName, oldDeployment.replica ?? null, key);
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(config.get('fluxapps.redeploy.composedDelay') * 1000);
     }
@@ -2255,7 +2255,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
     await appVolumeService.removeOrphanedInjectedContent(oldByKey.get(key), newByKey.get(key));
   }
 
-  await appRecords.installed().updateRecord(registrySpec, naming);
+  await appRecords.hostedInstances().updateRecord(registrySpec, naming);
   log.info(`Database updated for ${appName}`);
 
   // THIS identity's view of the update - handing a co-located sibling's view to
@@ -2268,12 +2268,12 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
     componentKeys: naming.componentKeys,
   };
   // A renamed component's container is recreated under its new name, so the
-  // aliases the ledger recorded for it are its new name's, not its old ones.
+  // aliases the resources recorded for it are its new name's, not its old ones.
   if (renamed.length > 0) {
     const derived = byKey(await deploymentProvider.planDeployment(registrySpec, { ...planned, recordedNames: false }));
     for (const key of renamed) {
       // eslint-disable-next-line no-await-in-loop
-      await appRecords.ledgers().setComponent(appName, planned.replica, key, 'aliases', derived.get(key).networkAliases);
+      await appRecords.instanceResources().setComponent(appName, planned.replica, key, 'aliases', derived.get(key).networkAliases);
     }
   }
   const freshDeployment = await deploymentProvider.planDeployment(registrySpec, planned);
@@ -2326,16 +2326,16 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
   // at its create step.
   if (freshDeployment) await contentSlotService.provisionContentSlots(freshDeployment, { appName, created });
 
-  // Each component's ports as the ledger names them, before any is opened: a
+  // Each component's ports as the resources name them, before any is opened: a
   // port kept from the old spec keeps the methods it was opened by, an added
   // one takes the methods the node opens ports by now.
   const opened = await componentProvisioner.portOpenMethods();
   // eslint-disable-next-line no-restricted-syntax
   for (const [key, comp] of newByKey) {
-    const before = ledger?.component(key)?.hostPorts ?? [];
+    const before = resources?.component(key)?.hostPorts ?? [];
     const hostPorts = (comp.hostPorts ?? []).map((port) => ({ port, opened: before.find((p) => p.port === port)?.opened ?? opened }));
     // eslint-disable-next-line no-await-in-loop
-    await appRecords.ledgers().setComponent(appName, replica, key, 'hostPorts', hostPorts);
+    await appRecords.instanceResources().setComponent(appName, replica, key, 'hostPorts', hostPorts);
   }
 
   // Open the added ports now that the new containers are up. Gate the open on the same
@@ -2455,7 +2455,7 @@ async function shutdownPlanResync() {
   }
 
   try {
-    const installedApps = await appRecords.installed().apps();
+    const installedApps = await appRecords.hostedInstances().apps();
     // One plan per deployment, as the daemon keys them: the app's identity, and
     // a named replica's segment after it (neither can contain ':').
     const planKey = (identity, replica) => (replica != null ? `${identity}:${replica}` : identity);

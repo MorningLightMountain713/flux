@@ -15,7 +15,7 @@ const verificationHelper = require('../verificationHelper');
 const generalService = require('../generalService');
 const appRecords = require('../appDatabase/appRecords');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
-const { resolveInstantiatedSpec } = require('../utils/specCutover');
+const { resolveRegisteredSpec } = require('../utils/specCutover');
 const peerNotification = require('../appMessaging/peerNotification');
 
 const meshDerivation = require('./meshDerivation');
@@ -37,11 +37,11 @@ async function resolveMeshApp(appnameRaw) {
     throw new Error('No application name specified');
   }
   const appName = deploymentProvider.appNameFromRequest(appnameRaw);
-  const inst = (await appRecords.installed().byName(appName))?.record;
+  const inst = (await appRecords.hostedInstances().byName(appName))?.record;
   if (!inst) {
     throw new Error('Application not found');
   }
-  const view = await resolveInstantiatedSpec(inst);
+  const view = await resolveRegisteredSpec(inst);
   const meshEnabled = view?.network?.mesh === true;
   if (!meshEnabled) {
     return { appName, meshEnabled: false };

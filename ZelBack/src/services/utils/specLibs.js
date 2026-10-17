@@ -42,7 +42,7 @@ async function getSpecPolicy() { return load(); }
  *
  * Enforcement heights are chain policy, so they stay here rather than in
  * flux-spec. Split out because a DECRYPTED spec is validated through
- * `DecryptedCanonicalSpec.validateContents()` — which deliberately produces no
+ * `OpenedSpec.validateContents()` — which deliberately produces no
  * blob, so it cannot be routed through validateSubmissionSpec — and the height
  * gate still has to apply to it.
  *

@@ -176,7 +176,7 @@ export function dbClient(nodeNum) {
         .findOne({ name: appName }, { projection: { _id: 0 } });
     },
 
-    // A component's key, as this node names it. The installed record keys each
+    // A component's key, as this node names it. The hosted instance keys each
     // component it holds; one stored before keys is keyed by its names. Before the
     // node installs the app, a component of an app whose spec is still v1-v8 is
     // keyed by its name, since only a v9 update continues a component under a new

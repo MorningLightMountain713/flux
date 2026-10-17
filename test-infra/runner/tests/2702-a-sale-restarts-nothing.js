@@ -277,7 +277,7 @@ describe('an app sold while it runs is restarted by nothing, and its terminal an
       { blocks: 108, label: 'the node adopts the sale' },
     );
 
-    expect((await localSpec()).owner, 'the installed record names the buyer').to.equal(buyerKey().zelid);
+    expect((await localSpec()).owner, 'the hosted instance names the buyer').to.equal(buyerKey().zelid);
     const listed = await client.getAppSpecs(appName);
     expect(listed.data?.owner, 'the registry names the buyer').to.equal(buyerKey().zelid);
   });

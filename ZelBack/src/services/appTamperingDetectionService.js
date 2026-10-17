@@ -250,7 +250,7 @@ async function getAppAttribution(appName) {
   const cached = appAttributionCache.get(appName);
   if (cached && Date.now() - cached.cachedAt < ATTRIBUTION_TTL_MS) return cached;
   try {
-    const app = await appRecords.installed().byName(appName);
+    const app = await appRecords.hostedInstances().byName(appName);
     const attribution = {
       ownerZelid: app?.owner ?? null,
       appHash: app?.hash ?? null,

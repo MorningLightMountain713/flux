@@ -43,6 +43,6 @@ describe('peerNotification presence guard', () => {
   });
 
   it('reads presence from the installed set', () => {
-    expect(source).to.match(/appRecords\.installed\(\)\.keys\(/);
+    expect(source).to.match(/appRecords\.hostedInstances\(\)\.keys\(/);
   });
 });

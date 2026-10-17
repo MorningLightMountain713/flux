@@ -8,7 +8,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { asConfig } = require('./fixtures/config');
 const {
-  loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec,
+  loadSpecLibrary, V9_SUBMISSION, v9Spec, registeredSpec,
 } = require('./fixtures/fluxSpec');
 const { installedRecord } = require('./fixtures/appRecords');
 
@@ -208,14 +208,14 @@ describe('appOperations application lifecycle tests', () => {
 
     // deploymentProvider stays stubbed because the real one resolves this node's
     // identity through two daemon RPCs and the docker socket. What it does with the
-    // InstantiatedSpec it is handed is NOT stubbed: the fake runs the real
+    // RegisteredSpec it is handed is NOT stubbed: the fake runs the real
     // DeploymentSpec.fromSpec on it, exactly as toDeployment does, so a row this
     // module hands over that the real provider could not build from fails here.
-    buildDeploymentStub = sinon.stub().callsFake(async (instantiated) => {
-      if (!instantiated) return null;
-      // Cleartext specs resolve to themselves (resolveInstantiatedSpec); the
+    buildDeploymentStub = sinon.stub().callsFake(async (registered) => {
+      if (!registered) return null;
+      // Cleartext specs resolve to themselves (resolveRegisteredSpec); the
       // identity is READ off the row, never recomputed from the name.
-      return deploymentFor(instantiated.spec, { identity: instantiated.identity ?? null });
+      return deploymentFor(registered.spec, { identity: registered.identity ?? null });
     });
 
     appVolumeServiceStub = {
@@ -274,7 +274,7 @@ describe('appOperations application lifecycle tests', () => {
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../appDatabase/appRecords': {
         registry: () => registryStub,
-        installed: () => ({
+        hostedInstances: () => ({
           apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)),
           keys: sinon.stub().resolves([]),
           byName: installedByName,
@@ -572,7 +572,7 @@ describe('appOperations application lifecycle tests', () => {
 
     it('should drive all components of a whole app to stopped', async () => {
       const { spec, deployment } = await twoComponentApp();
-      installedByName.resolves(installedRecord(await instantiatedSpec(spec)));
+      installedByName.resolves(installedRecord(await registeredSpec(spec)));
 
       await appOperations.stopApplication(spec.name);
 
@@ -587,10 +587,10 @@ describe('appOperations application lifecycle tests', () => {
       // readable spec it builds from, the name it reports, and the stored identity
       // it reads rather than recomputing.
       const [handed] = buildDeploymentStub.firstCall.args;
-      expect(handed.isEncrypted, 'resolveInstantiatedSpec branches on this').to.be.a('boolean');
+      expect(handed.isEncrypted, 'resolveRegisteredSpec branches on this').to.be.a('boolean');
       expect(handed.name).to.equal(spec.name);
       expect(handed).to.have.property('identity');
-      expect(handed, 'the installed record, whose keys name the containers').to.have.property('componentKeys');
+      expect(handed, 'the hosted instance, whose keys name the containers').to.have.property('componentKeys');
       expect(flux.DeploymentSpec.fromSpec(handed.spec, APPS_FOLDER, { replica: null, identity: handed.identity ?? null })
         .componentEntries().map(([, comp]) => comp.identifier), 'the real provider must be able to build from what it was handed')
         .to.deep.equal(identifiers);
@@ -623,7 +623,7 @@ describe('appOperations application lifecycle tests', () => {
 
     it('should drive all components of a whole app to running', async () => {
       const { spec, deployment } = await twoComponentApp();
-      installedByName.resolves(installedRecord(await instantiatedSpec(spec)));
+      installedByName.resolves(installedRecord(await registeredSpec(spec)));
 
       await appOperations.startApplication(spec.name);
 

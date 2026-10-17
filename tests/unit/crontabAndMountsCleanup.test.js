@@ -9,13 +9,13 @@ const proxyquire = require('proxyquire').noCallThru();
 const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
 const {
   loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION, v1Spec, v9Spec, sealedV8Spec,
-  instantiatedSpec, assertAnswers,
+  registeredSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 const { installedRecord } = require('./fixtures/appRecords');
 const { classifyVolumeFault } = require('../../ZelBack/src/services/appTamperingDetectionService');
 
 // The spec library is real here, not stubbed - see tests/unit/fixtures/fluxSpec.js
-// for why. Every installed row is a real InstantiatedSpec and every deployment a
+// for why. Every installed row is a real RegisteredSpec and every deployment a
 // real DeploymentSpec, so the docker identifiers this module enumerates are the
 // ones the deployment layer MINTS (`myapp` flat for v1-v3, `comp_app` for
 // composed specs) rather than a `${c.name}_${app.name}` reimplementation living
@@ -75,8 +75,8 @@ const crontabAndMountsCleanup = proxyquire('../../ZelBack/src/services/appLifecy
   crontab: crontabMock,
   '../../lib/log': logMock,
   '../appDatabase/appRecords': {
-    installed: () => ({ apps: async () => (await appsRepositoryMock.listInstalledApps()).map((record) => installedRecord(record)) }),
-    ledgers: () => ({
+    hostedInstances: () => ({ apps: async () => (await appsRepositoryMock.listInstalledApps()).map((record) => installedRecord(record)) }),
+    instanceResources: () => ({
       instancesOf: async (name) => {
         const identifiers = await appsRepositoryMock.listComponentIdentifiers(name);
         return [{ identifiers: () => identifiers }];
@@ -98,7 +98,7 @@ describe('crontabAndMountsCleanup tests', () => {
   let soloWordpress;
   let enterpriseHermes;
 
-  // row (InstantiatedSpec) -> DeploymentSpec, or an Error to reject with.
+  // row (RegisteredSpec) -> DeploymentSpec, or an Error to reject with.
   // Keyed by object IDENTITY rather than sinon's withArgs, whose structural
   // match cannot tell two frozen domain instances apart (their state lives in
   // private fields, which are not enumerable).
@@ -107,7 +107,7 @@ describe('crontabAndMountsCleanup tests', () => {
   /** A real installed row + the deployment deploymentProvider builds from it. */
   async function appFixture(spec, deploymentSource = spec) {
     return {
-      row: await instantiatedSpec(spec),
+      row: await registeredSpec(spec),
       deployment: flux.DeploymentSpec.fromSpec(deploymentSource, appsFolder, { replica: null }),
     };
   }
@@ -164,7 +164,7 @@ describe('crontabAndMountsCleanup tests', () => {
     });
     const decrypted = await sealed.decrypt(await sealed.createProvider());
     enterpriseHermes = {
-      row: await instantiatedSpec(sealed),
+      row: await registeredSpec(sealed),
       deployment: flux.DeploymentSpec.fromSpec(decrypted, appsFolder, { replica: null }),
     };
 
@@ -339,13 +339,13 @@ describe('crontabAndMountsCleanup tests', () => {
       await crontabAndMountsCleanup.getInstalledAppIds();
 
       // buildDeployments -> toDeployments reads these PROPERTIES off the row
-      // (specCutover.resolveInstantiatedSpec, then DeploymentSpec.fromSpec).
+      // (specCutover.resolveRegisteredSpec, then DeploymentSpec.fromSpec).
       const [handedRow] = deploymentProviderMock.buildDeployment.firstCall.args;
-      expect(handedRow.isEncrypted, 'resolveInstantiatedSpec branches on it').to.be.a('boolean');
+      expect(handedRow.isEncrypted, 'resolveRegisteredSpec branches on it').to.be.a('boolean');
       expect(handedRow.spec, 'and unwraps this when it is encrypted').to.be.an('object');
       expect(handedRow.name, 'which this module keys the map by').to.equal('wordpress123');
       expect(handedRow, 'identity is READ off the row, never recomputed').to.have.property('identity');
-      expect(handedRow, 'the installed record, whose keys name the containers').to.have.property('componentKeys');
+      expect(handedRow, 'the hosted instance, whose keys name the containers').to.have.property('componentKeys');
 
       // and what comes back is walked by componentEntries(), one identifier each
       const handedDeployment = await deploymentProviderMock.buildDeployment.firstCall.returnValue;
@@ -409,7 +409,7 @@ describe('crontabAndMountsCleanup tests', () => {
       expect(result.failed).to.deep.equal([{ appId: 'fluxapp1', reason: 'volume_file_missing' }]);
       // the incident is keyed by the APP, not the component's docker id — the
       // reconciler emits the same app's events under that name, and the name
-      // comes off the real InstantiatedSpec
+      // comes off the real RegisteredSpec
       expect(appTamperingDetectionServiceMock.recordEvent.calledWith('app1', 'volume_missing')).to.be.true;
     });
 

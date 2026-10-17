@@ -234,7 +234,7 @@ async function cleanupOwnershipViolations() {
   const enterprise = await isEnterpriseNode();
   const allowedOwners = getCachedAllowedOwnersForNode() || [];
 
-  const apps = (await appRecords.installed().apps()).map((record) => ({ name: record.name, owner: record.owner }));
+  const apps = (await appRecords.hostedInstances().apps()).map((record) => ({ name: record.name, owner: record.owner }));
 
   const offenders = apps.filter((app) => (
     enterprise

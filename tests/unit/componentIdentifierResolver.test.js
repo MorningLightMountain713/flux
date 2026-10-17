@@ -9,7 +9,7 @@ const proxyquire = require('proxyquire').noCallThru();
 
 const dockerService = require('../../ZelBack/src/services/dockerService');
 const {
-  loadSpecLibrary, V9_SUBMISSION, v9Spec, sealedV9Spec, instantiatedSpec,
+  loadSpecLibrary, V9_SUBMISSION, v9Spec, sealedV9Spec, registeredSpec,
 } = require('./fixtures/fluxSpec');
 const { installedRecord } = require('./fixtures/appRecords');
 
@@ -80,7 +80,7 @@ describe('componentIdentifierResolver', () => {
       getComponentAppIdsFromVolumeFiles: sinon.stub().resolves({ appIds: [], conclusive: true }),
     };
     return proxyquire.load('../../ZelBack/src/services/appLifecycle/componentIdentifierResolver', {
-      '../appDatabase/appRecords': { installed: () => ({ byName: async (name) => installedRecord(await stubs.getInstalledApp(name)) }) },
+      '../appDatabase/appRecords': { hostedInstances: () => ({ byName: async (name) => installedRecord(await stubs.getInstalledApp(name)) }) },
       '../appRuntime/deploymentProvider': { buildDeployment: stubs.buildDeployment },
       '../utils/volumeService': {
         getComponentAppIdsFromVolumeFiles: stubs.getComponentAppIdsFromVolumeFiles,
@@ -91,13 +91,13 @@ describe('componentIdentifierResolver', () => {
   /**
    * The row handed to the (stubbed) provider must answer what the REAL
    * toDeployment reads off it. These are properties, not methods:
-   * resolveInstantiatedSpec branches on `isEncrypted`, DeploymentSpec.fromSpec
+   * resolveRegisteredSpec branches on `isEncrypted`, DeploymentSpec.fromSpec
    * takes `spec`, the identifier's identity segment comes from `identity`, and
    * the error paths name the app by `name`.
    */
   function assertRowAnswersTheProvider(installed, appName) {
     expect(installed, 'nothing was handed to the provider').to.be.an('object');
-    expect(installed.isEncrypted, 'resolveInstantiatedSpec branches on this').to.be.a('boolean');
+    expect(installed.isEncrypted, 'resolveRegisteredSpec branches on this').to.be.a('boolean');
     expect(installed.name, 'toDeployment names the app by this').to.equal(appName);
     expect(installed, 'the identity is read off the row, never recomputed').to.have.property('identity');
     expect(installed.spec, 'DeploymentSpec.fromSpec is fed this').to.be.an('object');
@@ -108,7 +108,7 @@ describe('componentIdentifierResolver', () => {
 
   it('takes the identifiers from the deployment when the spec can be read', async () => {
     const spec = await specWithComponents('app', ['web', 'db']);
-    stubs.getInstalledApp.resolves(await instantiatedSpec(spec));
+    stubs.getInstalledApp.resolves(await registeredSpec(spec));
 
     // The expectation is the real minting rule's output, asserted against the
     // literal so the rule itself is pinned: `<component>_<app>` for v4+.
@@ -131,10 +131,10 @@ describe('componentIdentifierResolver', () => {
   it('reads the images on disk for a sealed spec it cannot open', async () => {
     // The one case disk can answer: an enterprise app stores `compose` empty, so
     // with the benchmark channel down nothing else records its components. The
-    // row is a really sealed EncryptedSpecV9, so `isEncrypted` is derived from
+    // row is a really sealed SealedSpecV9, so `isEncrypted` is derived from
     // the stored spec's type rather than asserted onto a literal.
     const spec = await specWithComponents('ent', ['web']);
-    const installed = await instantiatedSpec(await sealedV9Spec({
+    const installed = await registeredSpec(await sealedV9Spec({
       name: spec.name, components: V9_SUBMISSION.components,
     }));
     expect(installed.isEncrypted, 'a sealed row is what this branch is for').to.equal(true);
@@ -154,7 +154,7 @@ describe('componentIdentifierResolver', () => {
 
   it('keeps a disk id made since the app moved onto its identity as it is, a component named flux* included', async () => {
     const identity = `b${'a'.repeat(51)}q`;
-    const installed = await instantiatedSpec(await sealedV9Spec({ name: 'ent' }), { identity });
+    const installed = await registeredSpec(await sealedV9Spec({ name: 'ent' }), { identity });
     stubs.getInstalledApp.resolves(installed);
     stubs.buildDeployment.rejects(new Error('benchd unavailable'));
     stubs.getComponentAppIdsFromVolumeFiles.withArgs('ent', identity)
@@ -166,7 +166,7 @@ describe('componentIdentifierResolver', () => {
 
   it('does not guess from disk for a plain spec that failed to build', async () => {
     // A plain spec failed for some other reason; filenames would paper over it.
-    const installed = await instantiatedSpec(await specWithComponents('plain', ['web']));
+    const installed = await registeredSpec(await specWithComponents('plain', ['web']));
     expect(installed.isEncrypted, 'a cleartext row must report itself as such').to.equal(false);
     stubs.getInstalledApp.resolves(installed);
     stubs.buildDeployment.rejects(new Error('something else'));
@@ -176,7 +176,7 @@ describe('componentIdentifierResolver', () => {
   });
 
   it('answers null rather than an empty list when disk holds nothing either', async () => {
-    stubs.getInstalledApp.resolves(await instantiatedSpec(await sealedV9Spec({ name: 'ent' })));
+    stubs.getInstalledApp.resolves(await registeredSpec(await sealedV9Spec({ name: 'ent' })));
     stubs.buildDeployment.rejects(new Error('benchd unavailable'));
     stubs.getComponentAppIdsFromVolumeFiles.resolves({ appIds: [], conclusive: true });
 
@@ -185,7 +185,7 @@ describe('componentIdentifierResolver', () => {
   });
 
   it('answers null rather than part of the list when the disk search could not look everywhere', async () => {
-    stubs.getInstalledApp.resolves(await instantiatedSpec(await sealedV9Spec({ name: 'ent' })));
+    stubs.getInstalledApp.resolves(await registeredSpec(await sealedV9Spec({ name: 'ent' })));
     stubs.buildDeployment.rejects(new Error('benchd unavailable'));
     stubs.getComponentAppIdsFromVolumeFiles.resolves({ appIds: ['fluxweb_ent'], conclusive: false });
 
@@ -201,7 +201,7 @@ describe('componentIdentifierResolver', () => {
 
   it('resolves the replica it was asked about', async () => {
     const spec = await specWithComponents('app', ['web']);
-    stubs.getInstalledApp.resolves(await instantiatedSpec(spec));
+    stubs.getInstalledApp.resolves(await registeredSpec(spec));
 
     // A named replica qualifies the identifier — `<component>_<app>_<replica>` —
     // and that third segment only appears if the replica actually reached the

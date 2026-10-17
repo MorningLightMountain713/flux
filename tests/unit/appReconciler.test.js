@@ -15,7 +15,7 @@ const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
 const {
   loadSpecLibrary, V9_SUBMISSION, V8_SUBMISSION, v1Spec, v8Spec, v8SpecFromChain, v9Spec,
   sealedV8Spec,
-  instantiatedSpec, assertAnswers,
+  registeredSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 const { installedRecord } = require('./fixtures/appRecords');
 const realDockerService = require('../../ZelBack/src/services/dockerService');
@@ -31,7 +31,7 @@ const UninstallStatus = Object.freeze({
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. The reconciler drives run-state over a DeploymentSpec and the
-// InstantiatedSpec its app row hydrates to, so those are the two real classes the
+// RegisteredSpec its app row hydrates to, so those are the two real classes the
 // fixtures below build; what stays stubbed is I/O (docker, mongo, the volume
 // layer) and FluxOS policy.
 let flux;
@@ -44,7 +44,7 @@ const OWNER = V9_SUBMISSION.owner;
 describe('appReconciler tests', () => {
   let appReconciler;
   let stubs;
-  // The app installed on this node: a real InstantiatedSpec (what appsRepository
+  // The app installed on this node: a real RegisteredSpec (what appsRepository
   // hydrates a row to) and the real DeploymentSpec the deployment layer projects
   // from it. Either may be null — an app that is not installed here.
   let localInst;
@@ -111,27 +111,27 @@ describe('appReconciler tests', () => {
   const STATELESS = { persistentStorage: undefined };
 
   /**
-   * Install an app on this node: the real InstantiatedSpec the row hydrates to,
+   * Install an app on this node: the real RegisteredSpec the row hydrates to,
    * plus the real DeploymentSpec built from it. `identity` is the app-identity
    * segment container identifiers and the docker network are named from — stated,
    * never derived, exactly as DeploymentSpec.fromSpec demands.
    */
   const installApp = async (spec, { identity = null } = {}) => {
-    localInst = await instantiatedSpec(spec, { identity });
+    localInst = await registeredSpec(spec, { identity });
     localDeployment = flux.DeploymentSpec.fromSpec(spec, appsFolder, { replica: null, identity });
     return localDeployment;
   };
 
   /**
-   * Install a real ENTERPRISE app: the row hydrates to an InstantiatedSpec over a
-   * real EncryptedSpecV8, so `isEncrypted` is the class's own answer rather than a
+   * Install a real ENTERPRISE app: the row hydrates to an RegisteredSpec over a
+   * real SealedSpecV8, so `isEncrypted` is the class's own answer rather than a
    * flag a fixture set. The deployment is projected from the CLEARTEXT of the same
    * app — exactly what the deployment layer produces once it has decrypted, and the
    * only thing anything downstream is ever allowed to read.
    */
   const installSealedV8App = async (appName, components) => {
     const compose = v8Compose(components);
-    localInst = await instantiatedSpec(await sealedV8Spec({ name: appName, compose }));
+    localInst = await registeredSpec(await sealedV8Spec({ name: appName, compose }));
     localDeployment = flux.DeploymentSpec.fromSpec(
       await v8Spec({ name: appName, compose }), appsFolder, { replica: null },
     );
@@ -163,21 +163,21 @@ describe('appReconciler tests', () => {
         // No removal owed by default; the sweep's owed re-drive has its own test.
         owed: sinon.stub().resolves([]),
       },
-      // The ledger of an owed instance, which the sweep's re-drive reads for its
+      // The resources of an owed instance, which the sweep's re-drive reads for its
       // components; none by default.
-      ledgerByInstance: sinon.stub().resolves(null),
+      resourcesByInstance: sinon.stub().resolves(null),
       // Null by default, so every test below drives the fallback that rows
-      // predating the ledger still need. The ledger path has its own test
+      // predating the resources still need. The resources path has its own test
       // rather than being the silent default here.
-      installedByIdentifier: sinon.stub().resolves(null),
-      // The identifiers the ledger names for an app, which the app fan-out
+      hostedInstanceByIdentifier: sinon.stub().resolves(null),
+      // The identifiers the resources name for an app, which the app fan-out
       // reads first: empty by default, so the fixtures drive the
-      // deployment-layer fallback that instances without a ledger need.
-      ledgerIdentifiers: sinon.stub().resolves([]),
+      // deployment-layer fallback that instances without resources need.
+      resourcesIdentifiers: sinon.stub().resolves([]),
       appsRepository: {
       },
       // Nothing owed by default: an owed-teardown record a release before the
-      // ledger left is the last thing that can still name a component.
+      // resources left is the last thing that can still name a component.
       pendingTeardownStore: {
         teardownForComponent: sinon.stub().resolves(null),
         readAllTeardowns: sinon.stub().resolves([]),
@@ -349,7 +349,7 @@ describe('appReconciler tests', () => {
       '../appManagement/appInspector': stubs.appInspector,
       '../appDatabase/appsRepository': stubs.appsRepository,
       '../appDatabase/appRecords': {
-        installed: () => ({
+        hostedInstances: () => ({
           byIdentity: async (identity, opts) => {
             const answer = await stubs.installed.byIdentity(identity, opts);
             return answer && answer.record ? answer : installedRecord(answer);
@@ -358,16 +358,16 @@ describe('appReconciler tests', () => {
           apps: async () => (await stubs.installed.apps()).map((record) => installedRecord(record)),
           owed: async () => stubs.installed.owed(),
         }),
-        installedByIdentifier: async (identifier) => {
-          const answer = await stubs.installedByIdentifier(identifier);
+        hostedInstanceByIdentifier: async (identifier) => {
+          const answer = await stubs.hostedInstanceByIdentifier(identifier);
           return answer && answer.record ? answer : installedRecord(answer);
         },
-        ledgers: () => ({
+        instanceResources: () => ({
           instancesOf: async (name) => {
-            const identifiers = await stubs.ledgerIdentifiers(name);
+            const identifiers = await stubs.resourcesIdentifiers(name);
             return [{ identifiers: () => identifiers }];
           },
-          byInstance: async (name, replica) => stubs.ledgerByInstance(name, replica),
+          byInstance: async (name, replica) => stubs.resourcesByInstance(name, replica),
         }),
       },
       '../appRuntime/deploymentProvider': stubs.deploymentProvider,
@@ -801,9 +801,9 @@ describe('appReconciler tests', () => {
     it('a container milestone in a dependency app re-enqueues its requirers (cross-app fan-out)', async () => {
       await installApp(await v9App('app', { www: {} }));
       stubs.dockerService.dockerContainerInspect.resolves(running);
-      // listInstalledApps hydrates its rows, so the fan-out walks InstantiatedSpecs.
+      // listInstalledApps hydrates its rows, so the fan-out walks RegisteredSpecs.
       stubs.installed.apps.resolves([
-        await instantiatedSpec(await v9App('requirer', { www: {} })),
+        await registeredSpec(await v9App('requirer', { www: {} })),
       ]);
       stubs.relationshipResolver.edgesOf.callsFake((views, nameLower) => (nameLower === 'requirer'
         ? [['app', edge()]] : []));
@@ -813,7 +813,7 @@ describe('appReconciler tests', () => {
 
       // The requirer is held as an APP name, so the fan-out resolves it by name and
       // by the identifier index — never by asking whether a name is an identity.
-      const fannedOut = stubs.ledgerIdentifiers.getCalls()
+      const fannedOut = stubs.resourcesIdentifiers.getCalls()
         .some((c) => c.args[0] === 'requirer');
       expect(fannedOut, 'the requirer app was fanned out to its components').to.be.true;
       expect(
@@ -1006,11 +1006,11 @@ describe('appReconciler tests', () => {
     it('drives an owed instance\'s teardown to completion and does not retry once converged (desired = gone)', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
       installNothing();
-      stubs.installedByIdentifier.resolves(installedRecord({ name: 'app', owner: 'o' }, { replica: 'r1', owed: { since: 1, reason: null, force: false, broadcast: true, budgetSeconds: 0, attempts: 0 } }));
+      stubs.hostedInstanceByIdentifier.resolves(installedRecord({ name: 'app', owner: 'o' }, { replica: 'r1', owed: { since: 1, reason: null, force: false, broadcast: true, budgetSeconds: 0, attempts: 0 } }));
       stubs.appUninstaller.driveOwedTeardown.resolves({ status: 'removed', attempts: 0 });
 
       await appReconciler.reconcile('www_app');
-      expect(stubs.appUninstaller.driveOwedTeardown.calledOnceWith({ name: 'app', replica: 'r1' }), 'driven by the instance the ledger names').to.be.true;
+      expect(stubs.appUninstaller.driveOwedTeardown.calledOnceWith({ name: 'app', replica: 'r1' }), 'driven by the instance the resources name').to.be.true;
       expect(stubs.pendingTeardownStore.teardownForComponent.called, 'an instance that is here is not looked for in the legacy records').to.be.false;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
       clock.tick(60 * 60 * 1000); // an hour: a converged removal must not re-drive
@@ -1019,9 +1019,9 @@ describe('appReconciler tests', () => {
       clock.restore();
     });
 
-    // An instance the node wrote no ledger for is found through its identity;
+    // An instance the node wrote no resources for is found through its identity;
     // marked owed, its teardown is driven like any other.
-    it('drives the owed teardown of an instance with no ledger, found by its identity', async () => {
+    it('drives the owed teardown of an instance with no resources, found by its identity', async () => {
       installNothing();
       const owedMark = {
         since: 1, reason: null, force: false, broadcast: true, budgetSeconds: 0, attempts: 0,
@@ -1033,15 +1033,15 @@ describe('appReconciler tests', () => {
 
       await appReconciler.reconcile('www_app');
 
-      expect(stubs.installedByIdentifier.calledOnceWith('www_app'), 'the ledger was asked first').to.be.true;
+      expect(stubs.hostedInstanceByIdentifier.calledOnceWith('www_app'), 'the resources were asked first').to.be.true;
       expect(stubs.appUninstaller.driveOwedTeardown.calledOnceWith({ name: 'app', replica: null })).to.be.true;
       expect(stubs.dockerService.appDockerStart.called).to.be.false;
     });
 
-    // An owed-teardown record a release before the ledger left still names a
+    // An owed-teardown record a release before instance resources left still names a
     // component until its teardown clears it; it is driven by its own key, which
     // a replica-targeted removal of that release made `<app>_<replica>`.
-    it('drives a teardown a release before the ledger left by that record\'s key', async () => {
+    it('drives a teardown a release before instance resources left by that record\'s key', async () => {
       installNothing();
       stubs.pendingTeardownStore.teardownForComponent.resolves({ key: 'app_r1', name: 'app' });
       stubs.appUninstaller.driveOwedTeardown.resolves({ status: 'removed', attempts: 0 });
@@ -1061,7 +1061,7 @@ describe('appReconciler tests', () => {
     it('retries an owed teardown with backoff when it has not converged (attempt count paces it)', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
       installNothing();
-      stubs.installedByIdentifier.resolves(installedRecord({ name: 'app', owner: 'o' }, { owed: { since: 1, reason: null, force: false, broadcast: true, budgetSeconds: 0, attempts: 0 } }));
+      stubs.hostedInstanceByIdentifier.resolves(installedRecord({ name: 'app', owner: 'o' }, { owed: { since: 1, reason: null, force: false, broadcast: true, budgetSeconds: 0, attempts: 0 } }));
       stubs.appUninstaller.driveOwedTeardown.resolves({ status: 'deferred', attempts: 1 });
 
       await appReconciler.reconcile('www_app');
@@ -1085,7 +1085,7 @@ describe('appReconciler tests', () => {
       // over a CLEARTEXT row, which is exactly the structural (never-retryable) shape
       // this branch classifies.
       const badSpec = await v8AppFromChain('app', { www: { containerData: '/data|g:/var/roundcube/db' } });
-      localInst = await instantiatedSpec(badSpec);
+      localInst = await registeredSpec(badSpec);
       localDeployment = null;
       stubs.deploymentProvider.buildDeployment.callsFake(
         async () => flux.DeploymentSpec.fromSpec(badSpec, appsFolder, { replica: null }),
@@ -1260,7 +1260,7 @@ describe('appReconciler tests', () => {
       expect(stubs.appsRuntimeState.recordRestart.called, 'a clean first start does not seed the crash-backoff ladder').to.be.false;
       // deploymentProvider stays stubbed, so nothing here exercises what the real one
       // does with the row it is handed. Read it back and ask it what the real provider
-      // asks: resolveInstantiatedSpec branches on isEncrypted and takes `.spec`, then
+      // asks: resolveRegisteredSpec branches on isEncrypted and takes `.spec`, then
       // DeploymentSpec.fromSpec projects that spec's own linkedAppNames/dependencyEntries.
       const [handedRow] = stubs.deploymentProvider.buildDeployment.firstCall.args;
       expect(handedRow.name).to.equal('app');
@@ -1811,9 +1811,9 @@ describe('appReconciler tests', () => {
       // NAME it recreates under, the IDENTITY its containers are named from, and the
       // inner spec, which it re-projects through deploymentProvider.installedDeployments.
       const [, handedRow] = stubs.containerHealthMonitor.recreateMissingContainers.firstCall.args;
-      expect(handedRow.name, 'the recreate reads instantiated.name').to.equal('app');
-      expect(handedRow.identity ?? handedRow.name, 'and instantiated.identity ?? name').to.equal('app');
-      expect(handedRow.isEncrypted, 'resolveInstantiatedSpec branches on isEncrypted').to.equal(false);
+      expect(handedRow.name, 'the recreate reads registered.name').to.equal('app');
+      expect(handedRow.identity ?? handedRow.name, 'and registered.identity ?? name').to.equal('app');
+      expect(handedRow.isEncrypted, 'resolveRegisteredSpec branches on isEncrypted').to.equal(false);
       assertAnswers(handedRow.spec, ['linkedAppNames', 'dependencyEntries']);
     });
 
@@ -1950,7 +1950,7 @@ describe('appReconciler tests', () => {
       expect(stubs.appUninstaller.uninstallApplication.called, 'must not remove - the container exists').to.be.false;
       const recordedFailure = stubs.appTamperingDetectionService.recordEvent.getCalls()
         .some((c) => c.args[1] === 'recreation_failed');
-      expect(recordedFailure, 'a moot recreate failure must not pollute the tamper ledger').to.be.false;
+      expect(recordedFailure, 'a moot recreate failure must not pollute the tamper resources').to.be.false;
     });
 
     it('defers (never recreates/uninstalls) when docker is unreachable', async () => {
@@ -2572,8 +2572,8 @@ describe('appReconciler tests', () => {
     it('enqueues the components of a removal still owed, so the sweep after docker\'s return drives it on', async () => {
       installNothing();
       stubs.installed.owed.resolves([{ name: 'gone', replica: null, owed: { attempts: 12 } }]);
-      stubs.ledgerByInstance.resolves({ identifiers: () => ['www_gone'] });
-      stubs.installedByIdentifier.resolves({
+      stubs.resourcesByInstance.resolves({ identifiers: () => ['www_gone'] });
+      stubs.hostedInstanceByIdentifier.resolves({
         record: {}, owed: true, name: 'gone', replica: null,
       });
       stubs.appUninstaller.driveOwedTeardown.resolves({ status: 'removed', attempts: 0 });
@@ -2613,8 +2613,8 @@ describe('appReconciler tests', () => {
 
     it('one app failing to resolve does not abort the sweep for the others', async () => {
       // Two real installed apps: one sealed (its decrypt will fail), one cleartext.
-      const sealedApp = await instantiatedSpec(await sealedV8Spec({ name: 'entapp' }));
-      const plainApp = await instantiatedSpec(await v9App('plain', { www: {} }));
+      const sealedApp = await registeredSpec(await sealedV8Spec({ name: 'entapp' }));
+      const plainApp = await registeredSpec(await v9App('plain', { www: {} }));
       const plainDeployment = flux.DeploymentSpec.fromSpec(plainApp.spec, appsFolder, { replica: null });
       // the failing app FIRST: a sweep that died on it would never reach plain
       stubs.installed.apps.resolves([sealedApp, plainApp]);
@@ -2640,13 +2640,13 @@ describe('appReconciler tests', () => {
     it('resolves the app from the recorded identifiers, without taking the name apart', async () => {
       await installApp(await v9App('minted', { www: {} }));
       stubs.installed.apps.resolves([localInst]);
-      stubs.installedByIdentifier.resolves(localInst);
+      stubs.hostedInstanceByIdentifier.resolves(localInst);
 
       await appReconciler.enqueueAll('test');
       await flush();
 
       expect(
-        stubs.installedByIdentifier.called,
+        stubs.hostedInstanceByIdentifier.called,
         'the index must be consulted',
       ).to.equal(true);
       expect(
@@ -2680,7 +2680,7 @@ describe('appReconciler tests', () => {
       const row = localInst;
       stubs.installed.apps.resolves([localInst]);
       // What the row actually records for an app installed today.
-      stubs.ledgerIdentifiers.callsFake(
+      stubs.resourcesIdentifiers.callsFake(
         async (name) => (name === 'minted' ? ['www_933b4b9a0af3'] : []),
       );
       // The identity lookup answers an IDENTITY - never a name. This is the fidelity
@@ -2688,7 +2688,7 @@ describe('appReconciler tests', () => {
       stubs.installed.byIdentity.callsFake(
         async (identity) => (identity === '933b4b9a0af3' ? row : null),
       );
-      stubs.installedByIdentifier.callsFake(
+      stubs.hostedInstanceByIdentifier.callsFake(
         async (identifier) => (identifier === 'www_933b4b9a0af3' ? row : null),
       );
       stubs.installed.byName.callsFake(

@@ -5,20 +5,20 @@ const { resolveSpec } = require('../utils/specCutover');
 const { getSpecBackend } = require('../utils/specLibs');
 
 /**
- * An applied message hydrated into an InstantiatedSpec with its decision's term
+ * An applied message hydrated into an RegisteredSpec with its decision's term
  * start, uuid and identity, so callers get the resolved (cleartext) spec
  * together with the message's hash, height and, for v9, its contentHash (the
  * content identity the renewal authority compares against). Null when the spec
  * cannot be resolved on this node.
  * @param {?{message: object, decision: object}} latest
- * @returns {Promise<import('@runonflux/flux-spec-backend').InstantiatedSpec|null>}
+ * @returns {Promise<import('@runonflux/flux-spec-backend').RegisteredSpec|null>}
  */
 async function stateOf(latest) {
   if (!latest) return null;
   const resolved = await resolveSpec(latest.message.appSpecifications);
   if (!resolved) return null;
-  const { InstantiatedSpec } = await getSpecBackend();
-  return InstantiatedSpec.fromEvent({
+  const { RegisteredSpec } = await getSpecBackend();
+  return RegisteredSpec.fromEvent({
     spec: resolved,
     hash: latest.decision.hash,
     height: latest.decision.height,
@@ -43,7 +43,7 @@ async function stateOf(latest) {
  *
  * @param {string} name - App name
  * @param {number} height - Block height of the message being judged
- * @returns {Promise<import('@runonflux/flux-spec-backend').InstantiatedSpec|null>}
+ * @returns {Promise<import('@runonflux/flux-spec-backend').RegisteredSpec|null>}
  */
 async function getStateBeforeHeight(name, height) {
   return stateOf(await appHistory.latestApplied(name, { before: height }));
@@ -59,7 +59,7 @@ async function getStateBeforeHeight(name, height) {
  * for the name or the spec cannot be resolved on this node.
  *
  * @param {string} name - App name
- * @returns {Promise<import('@runonflux/flux-spec-backend').InstantiatedSpec|null>}
+ * @returns {Promise<import('@runonflux/flux-spec-backend').RegisteredSpec|null>}
  */
 async function latestAppliedState(name) {
   return stateOf(await appHistory.latestApplied(name));

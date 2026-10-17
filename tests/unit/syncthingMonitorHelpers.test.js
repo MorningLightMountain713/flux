@@ -343,7 +343,7 @@ describe('syncthingMonitorHelpers tests', () => {
 
   // An app registered before v9: its folder id is its 8.x name while its
   // directory is the component's identifier, so a lookup by directory finds
-  // nothing and only the id the ledger records finds the folder.
+  // nothing and only the id the resources record finds the folder.
   const appsBase = `${process.env.FLUX_APPS_FOLDER || path.join(process.env.HOME, 'zelflux', 'ZelApps')}/`;
   // Another app's folder is listed first, so the first row is never the one.
   const beforeV9 = () => [
@@ -352,7 +352,7 @@ describe('syncthingMonitorHelpers tests', () => {
   ];
 
   describe('setSyncthingFolderPaused', () => {
-    it('pauses the folder with the id the ledger records, by that id, and says so', async () => {
+    it('pauses the folder with the id the resources record, by that id, and says so', async () => {
       sandbox.stub(syncthingService, 'getConfigFolders').resolves(beforeV9());
       const adjust = sandbox.stub(syncthingService, 'adjustConfigFolders').resolves({ status: 'success', data: {} });
       const emitted = [];
@@ -416,7 +416,7 @@ describe('syncthingMonitorHelpers tests', () => {
   });
 
   describe('removeSyncthingFolder', () => {
-    it('removes the folder with the id the ledger records, whose directory is the component\'s identifier for a v9 registration', async () => {
+    it('removes the folder with the id the resources record, whose directory is the component\'s identifier for a v9 registration', async () => {
       // getConfigFolders answers the rows themselves; the envelope goes back on
       // only in the Api half.
       sandbox.stub(syncthingService, 'getConfigFolders')

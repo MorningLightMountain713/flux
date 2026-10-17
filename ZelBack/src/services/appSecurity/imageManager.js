@@ -384,9 +384,9 @@ function owedAfterRemoval(outcome) {
  * @param {Function} deps.listInstalled Answers {specs, unreadable}: the installed
  *   records, and the names of rows that could not be read. Rejects when the
  *   table cannot be read at all.
- * @param {Function} deps.readInstalled One installed record by name, null when
+ * @param {Function} deps.readInstalled One hosted instance by name, null when
  *   the node does not hold it. Rejects when the record cannot be read.
- * @param {Function} deps.imagesOf The images an installed record runs, or null when its
+ * @param {Function} deps.imagesOf The images a hosted instance runs, or null when its
  *   components cannot be read (an enterprise specification that did not decrypt)
  * @param {Function} deps.uninstall Removes an application, answering {status} with an
  *   appUninstaller UninstallStatus value
@@ -776,15 +776,15 @@ function nodeComplianceDeps() {
   return {
     // A record this node holds and cannot read is not a record it does not hold.
     listInstalled: async () => {
-      const apps = await appRecords.installed().apps();
+      const apps = await appRecords.hostedInstances().apps();
       const readable = new Set(apps.map((record) => record.name.toLowerCase()));
-      const unreadable = (await appRecords.installed().names()).filter((name) => !readable.has(name.toLowerCase()));
+      const unreadable = (await appRecords.hostedInstances().names()).filter((name) => !readable.has(name.toLowerCase()));
       return { specs: apps, unreadable };
     },
     readInstalled: async (name) => {
-      const record = await appRecords.installed().byName(name);
+      const record = await appRecords.hostedInstances().byName(name);
       if (record) return record;
-      if ((await appRecords.installed().keys(name)).length) throw new Error(`the installed record of ${name} could not be read`);
+      if ((await appRecords.hostedInstances().keys(name)).length) throw new Error(`the hosted instance of ${name} could not be read`);
       return null;
     },
     // Images are spec-level, so every identity's deployment view carries the same set.

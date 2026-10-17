@@ -22,7 +22,7 @@ let started = false;
  */
 async function removeAllApps(reason) {
   try {
-    const installedApps = (await appRecords.installed().apps()).map((record) => record.record);
+    const installedApps = (await appRecords.hostedInstances().apps()).map((record) => record.record);
 
     if (!installedApps || installedApps.length === 0) {
       log.info('No apps installed, nothing to remove');

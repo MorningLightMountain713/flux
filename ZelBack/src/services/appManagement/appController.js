@@ -191,13 +191,13 @@ async function appStart(req, res) {
 
     const isComponent = appname.includes('_');
     let appRes;
-    const { instantiated, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
+    const { registered, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
     if (isComponent) {
       appRes = `Component ${appname} started`;
     } else {
       appRes = replica != null
-        ? `Replica ${replica} of ${instantiated.name} started`
-        : `Application ${instantiated.name} started`;
+        ? `Replica ${replica} of ${registered.name} started`
+        : `Application ${registered.name} started`;
     }
     // clear the operator stop lock; the reconciler then (re)starts each component,
     // honouring its own election/dependency gates (a non-elected activeStandby
@@ -274,13 +274,13 @@ async function appStop(req, res) {
 
     const isComponent = appname.includes('_'); // it is a component stop
     let appRes;
-    const { instantiated, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
+    const { registered, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
     if (isComponent) {
       appRes = `Component ${appname} stopped`;
     } else {
       appRes = replica != null
-        ? `Replica ${replica} of ${instantiated.name} stopped`
-        : `Application ${instantiated.name} stopped`;
+        ? `Replica ${replica} of ${registered.name} stopped`
+        : `Application ${registered.name} stopped`;
     }
     // operator stop persists (the reconciler will not restart a stopped app); the
     // reconciler does the actual stop + stops monitoring on its stop branch.
@@ -335,15 +335,15 @@ async function appYield(appname, { replica = null } = {}) {
   if (!appname) {
     throw new Error('No Flux App specified');
   }
-  const { instantiated, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
+  const { registered, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
 
   // A yield IS a stop, so it goes down in the reverse of the order it came up,
   // exactly like appstop. THE ORDER AGAINST THE RELEASE IS SEPARATE and stated
   // above: stop first, then release.
   await driveOperatorCommand(ids, (id) => appsRuntimeState.setOperatorStopped(id, true), { stopped: true });
-  const { held } = await mastershipGrantGate.yieldMastership(instantiated.identity);
+  const { held } = await mastershipGrantGate.yieldMastership(registered.identity);
 
-  return { name: instantiated.name, held };
+  return { name: registered.name, held };
 }
 
 /**
@@ -433,13 +433,13 @@ async function appRestart(req, res) {
 
     const isComponent = appname.includes('_');
     let appRes;
-    const { instantiated, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
+    const { registered, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
     if (isComponent) {
       appRes = `Component ${appname} restarted`;
     } else {
       appRes = replica != null
-        ? `Replica ${replica} of ${instantiated.name} restarted`
-        : `Application ${instantiated.name} restarted`;
+        ? `Replica ${replica} of ${registered.name} restarted`
+        : `Application ${registered.name} restarted`;
     }
     // user-initiated restart = "make it run now": clear the operator stop lock AND
     // bump the durable restart generation, so the reconciler restarts a running
@@ -501,13 +501,13 @@ async function appKill(req, res) {
     const replica = req.query.replica || null;
     const isComponent = appname.includes('_');
     let appRes;
-    const { instantiated, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
+    const { registered, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
     if (isComponent) {
       appRes = `Component ${appname} killed`;
     } else {
       appRes = replica != null
-        ? `Replica ${replica} of ${instantiated.name} killed`
-        : `Application ${instantiated.name} killed`;
+        ? `Replica ${replica} of ${registered.name} killed`
+        : `Application ${registered.name} killed`;
     }
     // operator kill = force-stop now: durable operatorStopped carrying the force
     // mode (so a crash never downgrades it to the app's graceful window); the

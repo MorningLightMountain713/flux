@@ -16,7 +16,7 @@ const path = require('node:path');
 //
 // The spec library is real here too — see tests/unit/fixtures/fluxSpec.js for
 // why. Everything this module reads a spec for is a real object: the installed
-// row is an InstantiatedSpec, its resolved view a FluxAppSpecV9 (so
+// row is an RegisteredSpec, its resolved view a FluxAppSpecV9 (so
 // `network.mesh`, `componentNames()`, `instances` and `components[].meshPorts`
 // are the spec's own answers), the placement a real Placement (so `mode()` and
 // `hasTargets()` are the class's, for v9 AND for the legacy v8 conversion), the
@@ -27,7 +27,7 @@ const meshDerivation = require('../../ZelBack/src/services/appMesh/meshDerivatio
 const realSnapshot = require('../../ZelBack/src/services/appMesh/meshSnapshot');
 const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
 const {
-  loadSpecLibrary, V9_SUBMISSION, v9Spec, v8Spec, instantiatedSpec,
+  loadSpecLibrary, V9_SUBMISSION, v9Spec, v8Spec, registeredSpec,
 } = require('./fixtures/fluxSpec');
 const { installedRecord } = require('./fixtures/appRecords');
 const meshIdentityDrift = require('../../ZelBack/src/services/appMesh/meshIdentityDrift');
@@ -86,7 +86,7 @@ describe('meshReconciler', () => {
 
   /** The installed row a mesh spec hydrates to — identity and uuid are node-side
    * columns stated on the row, exactly as appsRepository stores them. */
-  const installedRow = (spec, state = {}) => instantiatedSpec(spec, {
+  const installedRow = (spec, state = {}) => registeredSpec(spec, {
     identity: IDENTITY, uuid: APP_UUID, ...state,
   });
 
@@ -101,17 +101,17 @@ describe('meshReconciler', () => {
   );
 
   /**
-   * The ledger the install wrote for a deployment: every block projected off the
+   * The resources the install wrote for a deployment: every block projected off the
    * real DeploymentSpec and keyed by each component's key, the mesh member name
    * each container was created with as given by component name, null for a
    * component created with none.
    */
-  const ledgerNaming = (deployment, meshNames) => new flux.InstalledLedger({
+  const resourcesNaming = (deployment, meshNames) => new flux.InstanceResources({
     name: deployment.appName,
     replica: deployment.replica ?? null,
     network: { name: deployment.networkName },
     components: Object.fromEntries(deployment.componentEntries().map(([name, c]) => [c.componentKey, {
-      ...flux.InstalledLedger.newBlock({ identifier: c.identifier, image: c.image }),
+      ...flux.InstanceResources.newBlock({ identifier: c.identifier, image: c.image }),
       mesh: meshNames[name] ? { name: meshNames[name] } : null,
     }])),
   });
@@ -125,7 +125,7 @@ describe('meshReconciler', () => {
 
     stubs = {
       installedApps: [await installedRow(spec)],
-      // The component keys the installed record holds; none by default.
+      // The component keys the hosted instance holds; none by default.
       installedKeys: null,
       // This node's measured link MTU; none until the first measurement.
       uplinkMtu: null,
@@ -133,17 +133,17 @@ describe('meshReconciler', () => {
       installedFormerNames: new Map(),
       listInstalledApps: sinon.stub().callsFake(async () => stubs.installedApps),
       deployments: [deploymentFor(spec)],
-      // The mesh member name the ledger holds for each component; none by default.
+      // The mesh member name the resources hold for each component; none by default.
       meshNames: {},
-      ledgerCalls: [],
-      ledgerFor: (name, replica) => {
+      resourcesCalls: [],
+      resourcesFor: (name, replica) => {
         const deployment = stubs.deployments.find((d) => d.appName === name && (d.replica ?? null) === replica);
-        return deployment ? ledgerNaming(deployment, stubs.meshNames) : null;
+        return deployment ? resourcesNaming(deployment, stubs.meshNames) : null;
       },
-      // Mirrors specCutover.resolveInstantiatedSpec for a cleartext row: the
+      // Mirrors specCutover.resolveRegisteredSpec for a cleartext row: the
       // held spec instance itself. Stubbed only because the encrypted branch
       // would register FluxOS's own crypto providers, which need a node.
-      resolveInstantiated: sinon.stub().callsFake(async (inst) => inst.spec),
+      resolveRegistered: sinon.stub().callsFake(async (inst) => inst.spec),
       rows: [{
         ip: '203.0.113.7:16240',
         outpoint: PEER_OUTPOINT,
@@ -197,15 +197,15 @@ describe('meshReconciler', () => {
         appLocationFromEvents: sinon.stub().callsFake(async () => stubs.rows),
       },
       '../appDatabase/appRecords': {
-        installed: () => ({
+        hostedInstances: () => ({
           apps: async (...args) => (await stubs.listInstalledApps(...args))
             .map((record) => installedRecord(record, { componentKeys: stubs.installedKeys, formerNames: stubs.installedFormerNames })),
           byName: async (name) => installedRecord(stubs.installedApps.find((app) => app.name === name) ?? null),
         }),
-        ledgers: () => ({
+        instanceResources: () => ({
           byInstance: async (name, replica) => {
-            stubs.ledgerCalls.push([name, replica]);
-            return stubs.ledgerFor(name, replica);
+            stubs.resourcesCalls.push([name, replica]);
+            return stubs.resourcesFor(name, replica);
           },
         }),
       },
@@ -255,7 +255,7 @@ describe('meshReconciler', () => {
       // ../utils/specLibs is NOT stubbed: the component slot every overlay
       // address and link id is derived from comes from the real library.
       '../utils/specCutover': {
-        resolveInstantiatedSpec: (...args) => stubs.resolveInstantiated(...args),
+        resolveRegisteredSpec: (...args) => stubs.resolveRegistered(...args),
       },
       './meshCertificates': {
         HostCertificateAction: { DEPLOYED: 'deployed', PARKED: 'parked', NONE: 'none' },
@@ -454,9 +454,9 @@ describe('meshReconciler', () => {
     it('converges one app end to end: material, snapshot, tayga, runtime, chains, detector', async () => {
       await meshReconciler.reconcileAllMeshApps();
 
-      // The row handed to the cutover seam is the stored InstantiatedSpec, and
-      // it answers what the REAL resolveInstantiatedSpec reads off it.
-      const [handedRow] = stubs.resolveInstantiated.firstCall.args;
+      // The row handed to the cutover seam is the stored RegisteredSpec, and
+      // it answers what the REAL resolveRegisteredSpec reads off it.
+      const [handedRow] = stubs.resolveRegistered.firstCall.args;
       expect(handedRow, 'specCutover reads row.isEncrypted').to.have.property('isEncrypted', false);
       expect(handedRow, 'specCutover returns row.spec').to.have.property('spec');
       expect(handedRow.spec.network.mesh).to.equal(true);
@@ -536,7 +536,7 @@ describe('meshReconciler', () => {
       expect(stubs.attachments.map((a) => a.linkId)).to.deep.equal([keySlot.toString(16).padStart(8, '0')]);
     });
 
-    it('writes each component\'s former names into the snapshot, read off the installed record by its key', async () => {
+    it('writes each component\'s former names into the snapshot, read off the hosted instance by its key', async () => {
       const key = `c${'a'.repeat(52)}`;
       stubs.installedKeys = new Map([['web', key]]);
       stubs.installedFormerNames = new Map([[key, ['blog', 'www']]]);
@@ -807,7 +807,7 @@ describe('meshReconciler', () => {
     });
 
     it('surfaces slot-identity drift, and enqueues the rebuild only once confirmed', async () => {
-      // The container was created as a standby (nodeid identity), as its ledger
+      // The container was created as a standby (nodeid identity), as its resources
       // block records; the passes resolve slot 1 — drift. One pass records it,
       // the second confirms and hands the identifier to the app reconciler's
       // queue. The identifier is the DeploymentSpec's own, built from the app
@@ -816,7 +816,7 @@ describe('meshReconciler', () => {
       expect(component.identifier).to.equal(`web_${IDENTITY}`);
       stubs.ordinals = { own: 1, byNode: new Map([[OWN_NODE_ID, 1]]) };
       stubs.meshNames = { web: `web-${OWN_NODE_ID}` };
-      // The name is the ledger's, not the container's environment: an
+      // The name is the resources', not the container's environment: an
       // environment that already says the slot name changes nothing.
       stubs.containerInspect = {
         State: { Pid: 4242 },
@@ -851,13 +851,13 @@ describe('meshReconciler', () => {
       }]);
     });
 
-    it('reads the ledger of the instance the deployment is, replica included', async () => {
+    it('reads the resources of the instance the deployment is, replica included', async () => {
       stubs.deployments = [deploymentFor(stubs.installedApps[0].spec, 's1')];
       await meshReconciler.reconcileAllMeshApps();
-      expect(stubs.ledgerCalls).to.deep.equal([['myblog', 's1']]);
+      expect(stubs.resourcesCalls).to.deep.equal([['myblog', 's1']]);
     });
 
-    it('records no created-with name for a component whose ledger block names none', async () => {
+    it('records no created-with name for a component whose resources block names none', async () => {
       stubs.ordinals = { own: 1, byNode: new Map([[OWN_NODE_ID, 1]]) };
       stubs.containerInspect = {
         State: { Pid: 4242 },

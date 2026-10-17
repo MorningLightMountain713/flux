@@ -8,7 +8,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
 const {
-  loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
+  loadSpecLibrary, V9_SUBMISSION, v9Spec, registeredSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 
 // containerHealthMonitor's monitorAndRecoverApps (the old hourly restart
@@ -20,7 +20,7 @@ const {
 // inside deploymentProvider.buildDeployment, so it is covered there, not here.
 //
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
-// for why. The InstantiatedSpec, the DeploymentSpec and its DeploymentComponents
+// for why. The RegisteredSpec, the DeploymentSpec and its DeploymentComponents
 // are the real classes, so `identifier`, `dir`, `owner` and `isStateless` are all
 // derived by the library from one submission rather than asserted onto literals.
 // What stays stubbed is I/O and FluxOS policy: docker (componentProvisioner),
@@ -35,15 +35,15 @@ describe('containerHealthMonitor tests', () => {
   let appVolumeServiceStub;
   let volumeServiceStub;
   let appDockerNetworkStub;
-  let instantiated;
+  let registered;
   let deployment;
-  let statelessInstantiated;
+  let statelessRegistered;
   let statelessDeployment;
   let webComp;
   let dbComp;
 
   /**
-   * A real DeploymentSpec + its InstantiatedSpec, built from ONE v9 submission —
+   * A real DeploymentSpec + its RegisteredSpec, built from ONE v9 submission —
    * exactly the pair deploymentProvider.installedDeployments hands the monitor in
    * production, and built the same way (same appsFolder, `replica` stated rather
    * than defaulted, as DeploymentSpec.fromSpec demands).
@@ -51,7 +51,7 @@ describe('containerHealthMonitor tests', () => {
   async function appFor(components) {
     const spec = await v9Spec({ name: 'testapp', components });
     return {
-      instantiated: await instantiatedSpec(spec),
+      registered: await registeredSpec(spec),
       deployment: flux.DeploymentSpec.fromSpec(spec, appsFolder, { replica: null, registrationVersion: 9 }),
     };
   }
@@ -61,7 +61,7 @@ describe('containerHealthMonitor tests', () => {
     this.timeout(30_000);
     flux = await loadSpecLibrary();
 
-    ({ instantiated, deployment } = await appFor({
+    ({ registered, deployment } = await appFor({
       web: V9_SUBMISSION.components.web,
       // A second component so the whole-app path recreates more than one
       // container. Two components may not share a hostPort.
@@ -79,7 +79,7 @@ describe('containerHealthMonitor tests', () => {
     // A component with no persistent storage at all — the v9 stateless form.
     // Its volume is absent BY DESIGN, which is the other side of the
     // isStateless gate below.
-    ({ instantiated: statelessInstantiated, deployment: statelessDeployment } = await appFor({
+    ({ registered: statelessRegistered, deployment: statelessDeployment } = await appFor({
       web: { ...V9_SUBMISSION.components.web, persistentStorage: { sizeGb: 0 } },
     }));
 
@@ -87,8 +87,8 @@ describe('containerHealthMonitor tests', () => {
     // onto the fixture here.
     expect(webComp.identifier).to.equal('web_testapp');
     expect(dbComp.identifier).to.equal('db_testapp');
-    expect(instantiated.name).to.equal('testapp');
-    expect(instantiated.identity, 'no identity stored, so the bare name is the app-level identifier').to.equal(null);
+    expect(registered.name).to.equal('testapp');
+    expect(registered.identity, 'no identity stored, so the bare name is the app-level identifier').to.equal(null);
     expect(webComp.isStateless, 'persistentStorage.sizeGb 5 is stateful').to.be.false;
     expect(webComp.dir, 'and a stateful component always has a host directory').to.equal(`${appsFolder}${webComp.identifier}`);
     expect(statelessDeployment.getComponent('web').isStateless, 'sizeGb 0 is stateless').to.be.true;
@@ -145,7 +145,7 @@ describe('containerHealthMonitor tests', () => {
         volumeServiceStub.verifyAppVolumeMount.resolves(false);
         let err;
         try {
-          await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated, { allowVolumeCreation: false });
+          await containerHealthMonitor.recreateMissingContainers('web_testapp', registered, { allowVolumeCreation: false });
         } catch (e) { err = e; }
 
         expect(err).to.be.an('error');
@@ -157,7 +157,7 @@ describe('containerHealthMonitor tests', () => {
         volumeServiceStub.verifyAppVolumeMount.resolves(false);
         let err;
         try {
-          await containerHealthMonitor.recreateMissingContainers('testapp', instantiated, { allowVolumeCreation: false });
+          await containerHealthMonitor.recreateMissingContainers('testapp', registered, { allowVolumeCreation: false });
         } catch (e) { err = e; }
 
         expect(err).to.be.an('error');
@@ -177,7 +177,7 @@ describe('containerHealthMonitor tests', () => {
         deploymentProviderStub.installedDeployments.resolves([statelessDeployment]);
         volumeServiceStub.verifyAppVolumeMount.resolves(false);
 
-        await containerHealthMonitor.recreateMissingContainers('web_testapp', statelessInstantiated, { allowVolumeCreation: false });
+        await containerHealthMonitor.recreateMissingContainers('web_testapp', statelessRegistered, { allowVolumeCreation: false });
 
         expect(componentProvisionerStub.installComponent.calledOnce, 'a component with no data cannot have its data reformatted').to.be.true;
         // and nothing was remade on disk for a component that owns no directory
@@ -187,7 +187,7 @@ describe('containerHealthMonitor tests', () => {
       it('still recreates normally (no volume creation) when the volume is verified', async () => {
         volumeServiceStub.verifyAppVolumeMount.resolves(true);
 
-        await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated, { allowVolumeCreation: false });
+        await containerHealthMonitor.recreateMissingContainers('web_testapp', registered, { allowVolumeCreation: false });
 
         expect(componentProvisionerStub.installComponent.calledOnce).to.be.true;
         expect(componentProvisionerStub.installComponent.firstCall.args[1].createVolumes).to.be.false;
@@ -196,7 +196,7 @@ describe('containerHealthMonitor tests', () => {
       it('leaves the default (vanished-container) path free to create the volume', async () => {
         volumeServiceStub.verifyAppVolumeMount.resolves(false);
 
-        await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
+        await containerHealthMonitor.recreateMissingContainers('web_testapp', registered);
 
         expect(componentProvisionerStub.installComponent.calledOnce, 'a container that is gone anyway may still be rebuilt from scratch').to.be.true;
         expect(componentProvisionerStub.installComponent.firstCall.args[1].createVolumes).to.be.true;
@@ -218,7 +218,7 @@ describe('containerHealthMonitor tests', () => {
     it('throws when the component is not part of the app', async () => {
       let err;
       try {
-        await containerHealthMonitor.recreateMissingContainers('ghost_testapp', instantiated);
+        await containerHealthMonitor.recreateMissingContainers('ghost_testapp', registered);
       } catch (e) { err = e; }
       expect(err).to.be.an('error');
       // Reports the identifier it was asked for, not a component name carved
@@ -229,7 +229,7 @@ describe('containerHealthMonitor tests', () => {
 
     it('keeps existing volumes when the component volume is still mounted', async () => {
       volumeServiceStub.verifyAppVolumeMount.resolves(true);
-      await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
+      await containerHealthMonitor.recreateMissingContainers('web_testapp', registered);
       expect(componentProvisionerStub.installComponent.calledOnce).to.be.true;
       const [deployComp, opts] = componentProvisionerStub.installComponent.firstCall.args;
       expect(deployComp.name).to.equal('web');
@@ -241,14 +241,14 @@ describe('containerHealthMonitor tests', () => {
       // handed is the one the volume actually lives under. It is read off the
       // real DeploymentComponent, never carved out of the app name.
       volumeServiceStub.verifyAppVolumeMount.resolves(true);
-      await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
+      await containerHealthMonitor.recreateMissingContainers('web_testapp', registered);
       expect(volumeServiceStub.verifyAppVolumeMount.calledOnceWithExactly(webComp.identifier)).to.be.true;
       expect(volumeServiceStub.verifyAppVolumeMount.calledWith('testapp'), 'never probes by app name').to.be.false;
     });
 
     it('remakes vanished bind-mount sources before a recreate that keeps the volume', async () => {
       volumeServiceStub.verifyAppVolumeMount.resolves(true);
-      await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
+      await containerHealthMonitor.recreateMissingContainers('web_testapp', registered);
       expect(appVolumeServiceStub.ensureMountSourcesExist.calledOnce).to.be.true;
       expect(appVolumeServiceStub.ensureMountSourcesExist.firstCall.args[0]).to.equal(webComp);
       // the sources must exist before the container is recreated
@@ -257,7 +257,7 @@ describe('containerHealthMonitor tests', () => {
 
     it('recreates volumes when the component volume is gone', async () => {
       volumeServiceStub.verifyAppVolumeMount.resolves(false);
-      await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
+      await containerHealthMonitor.recreateMissingContainers('web_testapp', registered);
       expect(componentProvisionerStub.installComponent.calledOnce).to.be.true;
       const [, opts] = componentProvisionerStub.installComponent.firstCall.args;
       expect(opts.createVolumes).to.be.true;
@@ -265,19 +265,19 @@ describe('containerHealthMonitor tests', () => {
 
     it('does not remake sources on a rebuild (the fresh volume creates them)', async () => {
       volumeServiceStub.verifyAppVolumeMount.resolves(false);
-      await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
+      await containerHealthMonitor.recreateMissingContainers('web_testapp', registered);
       expect(appVolumeServiceStub.ensureMountSourcesExist.called).to.be.false;
     });
 
     it('treats an unreadable volume state as not mounted', async () => {
       volumeServiceStub.verifyAppVolumeMount.rejects(new Error('mount probe failed'));
-      await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
+      await containerHealthMonitor.recreateMissingContainers('web_testapp', registered);
       const [, opts] = componentProvisionerStub.installComponent.firstCall.args;
       expect(opts.createVolumes).to.be.true;
     });
 
     it('hands the create path nothing that says who owns the app', async () => {
-      await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
+      await containerHealthMonitor.recreateMissingContainers('web_testapp', registered);
       sinon.assert.calledOnce(componentProvisionerStub.installComponent);
       const [, opts] = componentProvisionerStub.installComponent.firstCall.args;
       expect(opts).to.not.have.property('owner');
@@ -285,7 +285,7 @@ describe('containerHealthMonitor tests', () => {
 
     it('recomputes the graceful-shutdown gate and forwards it, so a recreate keeps its budget labels', async () => {
       shutdownPlanStub.appRequiresDaemonShutdown.returns(true);
-      await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
+      await containerHealthMonitor.recreateMissingContainers('web_testapp', registered);
       expect(shutdownPlanStub.appRequiresDaemonShutdown.calledWith(deployment)).to.be.true;
       const [, opts] = componentProvisionerStub.installComponent.firstCall.args;
       expect(opts.requiresEncryption).to.equal(true);
@@ -293,7 +293,7 @@ describe('containerHealthMonitor tests', () => {
 
     it('forwards requiresEncryption=false for a non-graceful app (budget labels skipped)', async () => {
       shutdownPlanStub.appRequiresDaemonShutdown.returns(false);
-      await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
+      await containerHealthMonitor.recreateMissingContainers('web_testapp', registered);
       const [, opts] = componentProvisionerStub.installComponent.firstCall.args;
       expect(opts.requiresEncryption).to.equal(false);
     });
@@ -302,7 +302,7 @@ describe('containerHealthMonitor tests', () => {
       // The network is still a precondition of the recreate, but it is
       // guaranteed once above every path that runs a container. Two owners of
       // one guarantee is how they drift apart, so this path must not re-ensure.
-      await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
+      await containerHealthMonitor.recreateMissingContainers('web_testapp', registered);
 
       expect(componentProvisionerStub.installComponent.called).to.be.true;
       expect(appDockerNetworkStub.ensureAppDockerNetwork.called).to.be.false;
@@ -310,7 +310,7 @@ describe('containerHealthMonitor tests', () => {
     });
 
     it('recreates every component for a whole-app identifier', async () => {
-      await containerHealthMonitor.recreateMissingContainers('testapp', instantiated);
+      await containerHealthMonitor.recreateMissingContainers('testapp', registered);
       expect(componentProvisionerStub.installComponent.callCount).to.equal(2);
       const recreated = componentProvisionerStub.installComponent.getCalls().map((c) => c.args[0].name);
       // startupOrder, derived by the library from the dependency graph.
@@ -322,13 +322,13 @@ describe('containerHealthMonitor tests', () => {
       // Nothing else exercises what the REAL ones do with it, so a delegation
       // could disappear from flux-spec with this suite still green.
       volumeServiceStub.verifyAppVolumeMount.resolves(true);
-      await containerHealthMonitor.recreateMissingContainers('web_testapp', instantiated);
+      await containerHealthMonitor.recreateMissingContainers('web_testapp', registered);
 
       // deploymentProvider.installedDeployments resolves the row: it reads
       // `isEncrypted`, `spec`, `name` and `identity` off it (specCutover
-      // .resolveInstantiatedSpec + toDeployment), so assert the PROPERTIES.
+      // .resolveRegisteredSpec + toDeployment), so assert the PROPERTIES.
       const [handedRow] = deploymentProviderStub.installedDeployments.firstCall.args;
-      expect(handedRow.isEncrypted, 'resolveInstantiatedSpec branches on it').to.be.a('boolean');
+      expect(handedRow.isEncrypted, 'resolveRegisteredSpec branches on it').to.be.a('boolean');
       expect(handedRow.spec, 'and unwraps this when it is encrypted').to.be.an('object');
       expect(handedRow.name).to.be.a('string');
       expect(handedRow, 'identity is READ off the row, never recomputed').to.have.property('identity');

@@ -12,7 +12,7 @@ describe('componentProvisioner tests', () => {
   let allowPortStub;
   let mapUpnpPortStub;
   let provisionCertStub;
-  let ledgersStub;
+  let instanceResourcesStub;
   let appDockerImageDigestStub;
   let verifyAppVolumeMountStub;
   let provisionComponentContentStub;
@@ -37,7 +37,7 @@ describe('componentProvisioner tests', () => {
     appDockerImageDigestStub = sinon.stub().resolves('sha256:pulled');
     verifyAppVolumeMountStub = sinon.stub().resolves();
     provisionComponentContentStub = sinon.stub().resolves();
-    ledgersStub = { addComponent: sinon.stub().resolves(true), setComponent: sinon.stub().resolves() };
+    instanceResourcesStub = { addComponent: sinon.stub().resolves(true), setComponent: sinon.stub().resolves() };
     return proxyquire.load('../../ZelBack/src/services/appLifecycle/componentProvisioner', {
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
       '../dockerService': {
@@ -47,7 +47,7 @@ describe('componentProvisioner tests', () => {
         appDockerStart: appDockerStartStub,
         dockerPullStream: sinon.stub(),
       },
-      '../appDatabase/appRecords': { ledgers: () => ledgersStub },
+      '../appDatabase/appRecords': { instanceResources: () => instanceResourcesStub },
       '../utils/appConstants': { appsFolder: APPS_FOLDER },
       '../fluxNetworkHelper': { isFirewallActive: sinon.stub().resolves(firewallActive), allowPort: allowPortStub },
       '../upnpService': { isUPNP: sinon.stub().returns(isUPNP), mapUpnpPort: mapUpnpPortStub },
@@ -67,7 +67,7 @@ describe('componentProvisioner tests', () => {
     });
   }
 
-  // The component's key, deliberately unlike its name: the ledger is keyed by it.
+  // The component's key, deliberately unlike its name: the resources are keyed by it.
   const COMPONENT_KEY = `c${'k'.repeat(52)}`;
 
   function makeComponent(syncMode, overrides = {}) {
@@ -97,9 +97,9 @@ describe('componentProvisioner tests', () => {
     };
   }
 
-  // The ledger writes of one install, as [field, value] in the order made.
-  const ledgerWrites = () => ledgersStub.setComponent.getCalls().map((c) => c.args.slice(3));
-  const ledgerWrite = (field) => ledgersStub.setComponent.getCalls().find((c) => c.args[3] === field);
+  // The resources writes of one install, as [field, value] in the order made.
+  const resourcesWrites = () => instanceResourcesStub.setComponent.getCalls().map((c) => c.args.slice(3));
+  const resourcesWrite = (field) => instanceResourcesStub.setComponent.getCalls().find((c) => c.args[3] === field);
 
   // A verify:required component as flux-spec resolves it. backendTlsPaths() is
   // the domain type's own accessor - the runtime never rebuilds these paths, so
@@ -124,36 +124,36 @@ describe('componentProvisioner tests', () => {
     await provisioner.installComponent(makeComponent(syncMode), { createVolumes });
   }
 
-  // Every entry is in the ledger before the step that creates what it names.
-  describe('the ledger', () => {
+  // Every entry is in the resources before the step that creates what it names.
+  describe('the resources', () => {
     it('adds the component\'s block before anything is provisioned, with its identifier, image reference, sync folder and aliases', async () => {
       const provisioner = loadProvisioner({ firewallActive: true });
       await provisioner.installComponent(makeComponent(null, {
         hostPorts: [31_000], hasSyncthing: () => true, syncFolderId: 'fluxweb_synchold',
       }), { createVolumes: true });
 
-      sinon.assert.calledOnceWithExactly(ledgersStub.addComponent, 'syncholdapp', null, COMPONENT_KEY, {
+      sinon.assert.calledOnceWithExactly(instanceResourcesStub.addComponent, 'syncholdapp', null, COMPONENT_KEY, {
         identifier: 'web_syncholdapp', image: 'nginx:latest', syncFolder: { id: 'fluxweb_synchold', path: '/apps/web_syncholdapp' }, aliases: ['web'],
       });
-      expect(ledgersStub.addComponent.calledBefore(allowPortStub), 'the block precedes the first port').to.equal(true);
-      expect(ledgersStub.addComponent.calledBefore(createAppVolumeStub)).to.equal(true);
-      expect(ledgersStub.addComponent.calledBefore(appDockerCreateStub)).to.equal(true);
+      expect(instanceResourcesStub.addComponent.calledBefore(allowPortStub), 'the block precedes the first port').to.equal(true);
+      expect(instanceResourcesStub.addComponent.calledBefore(createAppVolumeStub)).to.equal(true);
+      expect(instanceResourcesStub.addComponent.calledBefore(appDockerCreateStub)).to.equal(true);
     });
 
     it('names no sync folder for a component without syncthing, and carries the replica of a named instance', async () => {
       const provisioner = loadProvisioner();
       await provisioner.installComponent(makeComponent(null, { replica: 'r1' }));
-      sinon.assert.calledOnceWithExactly(ledgersStub.addComponent, 'syncholdapp', 'r1', COMPONENT_KEY, {
+      sinon.assert.calledOnceWithExactly(instanceResourcesStub.addComponent, 'syncholdapp', 'r1', COMPONENT_KEY, {
         identifier: 'web_syncholdapp', image: 'nginx:latest', syncFolder: null, aliases: ['web'],
       });
-      expect(ledgersStub.setComponent.getCalls().every((c) => c.args[1] === 'r1'), 'every entry is the replica\'s').to.equal(true);
+      expect(instanceResourcesStub.setComponent.getCalls().every((c) => c.args[1] === 'r1'), 'every entry is the replica\'s').to.equal(true);
     });
 
     it('records each port with the methods that will open it, before it is opened', async () => {
       const provisioner = loadProvisioner({ firewallActive: true, isUPNP: true });
       await provisioner.installComponent(makeComponent(null, { hostPorts: [31_000, 31_001] }));
 
-      const ports = ledgerWrite('hostPorts');
+      const ports = resourcesWrite('hostPorts');
       expect(ports.args).to.deep.equal(['syncholdapp', null, COMPONENT_KEY, 'hostPorts', [
         { port: 31_000, opened: ['ufw', 'upnp'] }, { port: 31_001, opened: ['ufw', 'upnp'] },
       ]]);
@@ -166,7 +166,7 @@ describe('componentProvisioner tests', () => {
     it('records a port as opened by nothing on a node with no firewall and no UPnP, and opens it by nothing', async () => {
       const provisioner = loadProvisioner();
       await provisioner.installComponent(makeComponent(null, { hostPorts: [31_000] }));
-      expect(ledgerWrite('hostPorts').args[4]).to.deep.equal([{ port: 31_000, opened: [] }]);
+      expect(resourcesWrite('hostPorts').args[4]).to.deep.equal([{ port: 31_000, opened: [] }]);
       sinon.assert.notCalled(allowPortStub);
       sinon.assert.notCalled(mapUpnpPortStub);
     });
@@ -174,14 +174,14 @@ describe('componentProvisioner tests', () => {
     it('leaves the ports entry as it is on a redeploy, which opens none', async () => {
       const provisioner = loadProvisioner({ firewallActive: true });
       await provisioner.installComponent(makeComponent(null, { hostPorts: [31_000] }), { skipPorts: true });
-      expect(ledgerWrite('hostPorts')).to.equal(undefined);
+      expect(resourcesWrite('hostPorts')).to.equal(undefined);
       sinon.assert.notCalled(allowPortStub);
     });
 
     it('records the image with the digest the daemon holds after the pull, before the volume is built', async () => {
       const provisioner = loadProvisioner();
       await provisioner.installComponent(makeComponent(null), { createVolumes: true });
-      const image = ledgerWrite('image');
+      const image = resourcesWrite('image');
       expect(image.args[4]).to.deep.equal({ reference: 'nginx:latest', digest: 'sha256:pulled' });
       sinon.assert.calledOnceWithExactly(appDockerImageDigestStub, 'nginx:latest');
       expect(image.calledBefore(createAppVolumeStub.firstCall)).to.equal(true);
@@ -192,7 +192,7 @@ describe('componentProvisioner tests', () => {
       await provisioner.installComponent(makeComponent(null, {
         mounts: [{ Source: '/apps/web_syncholdapp/appdata', sourceType: 'directory' }, { Source: '/apps/web_syncholdapp/conf.toml', sourceType: 'file' }],
       }), { createVolumes: true });
-      const sources = ledgerWrite('mountSources');
+      const sources = resourcesWrite('mountSources');
       expect(sources.args[4]).to.deep.equal([
         { path: '/apps/web_syncholdapp/appdata', kind: 'dir' }, { path: '/apps/web_syncholdapp/conf.toml', kind: 'file' },
       ]);
@@ -202,7 +202,7 @@ describe('componentProvisioner tests', () => {
     it('records the TLS directory before the certificate is issued', async () => {
       const provisioner = loadProvisioner();
       await provisioner.installComponent(makeTlsComponent(), { createVolumes: true });
-      const tls = ledgerWrite('tls');
+      const tls = resourcesWrite('tls');
       expect(tls.args[4]).to.deep.equal({ dir: TLS_DIR });
       expect(tls.calledBefore(provisionCertStub.firstCall)).to.equal(true);
     });
@@ -214,10 +214,10 @@ describe('componentProvisioner tests', () => {
       const provisioner = loadProvisioner({ meshPrepareStub });
       await provisioner.installComponent(makeComponent(null, { networkAliases: ['web', 'web.syncholdapp'] }));
 
-      const mesh = ledgerWrite('mesh');
+      const mesh = resourcesWrite('mesh');
       expect(mesh.args[4]).to.deep.equal({ name: 'web-0' });
       expect(mesh.calledBefore(appDockerCreateStub.firstCall)).to.equal(true);
-      const aliases = ledgerWrite('aliases');
+      const aliases = resourcesWrite('aliases');
       expect(aliases.args[4]).to.deep.equal(['web', 'web.syncholdapp', 'web-0']);
       expect(aliases.calledBefore(appDockerCreateStub.firstCall)).to.equal(true);
       expect(appDockerCreateStub.firstCall.args[1].networkAliases, 'created with the aliases recorded').to.deep.equal(['web', 'web.syncholdapp', 'web-0']);
@@ -226,15 +226,15 @@ describe('componentProvisioner tests', () => {
     it('records no mesh name and no TLS directory for a component that has neither', async () => {
       const provisioner = loadProvisioner();
       await provisioner.installComponent(makeComponent(null));
-      expect(ledgerWrites().map(([field]) => field)).to.deep.equal(['hostPorts', 'image', 'mountSources', 'aliases']);
+      expect(resourcesWrites().map(([field]) => field)).to.deep.equal(['hostPorts', 'image', 'mountSources', 'aliases']);
     });
 
     it('fails the install when an entry cannot be written, before the step that uses it', async () => {
       const provisioner = loadProvisioner({ firewallActive: true });
-      ledgersStub.setComponent.withArgs('syncholdapp', null, COMPONENT_KEY, 'hostPorts').rejects(new Error('ledger down'));
+      instanceResourcesStub.setComponent.withArgs('syncholdapp', null, COMPONENT_KEY, 'hostPorts').rejects(new Error('resources down'));
       let threw = null;
       await provisioner.installComponent(makeComponent(null, { hostPorts: [31_000] })).catch((e) => { threw = e; });
-      expect(threw.message).to.equal('ledger down');
+      expect(threw.message).to.equal('resources down');
       sinon.assert.notCalled(allowPortStub);
       sinon.assert.notCalled(appDockerCreateStub);
     });

@@ -44,9 +44,9 @@ async function installedApps(req, res) {
     }
 
     const installed = filter.name
-      ? [await appRecords.installed().byName(filter.name)].filter(Boolean)
-      : await appRecords.installed().apps();
-    // An app's registered record: the installed record's own fields stay on the node.
+      ? [await appRecords.hostedInstances().byName(filter.name)].filter(Boolean)
+      : await appRecords.hostedInstances().apps();
+    // An app's registered record: the hosted instance's own fields stay on the node.
     const apps = installed.map((app) => app.record.serialize());
     const dataResponse = messageHelper.createDataMessage(apps);
     return res ? res.json(dataResponse) : dataResponse;
@@ -232,7 +232,7 @@ async function activeStandbyComponents() {
  */
 async function fluxUsage(req, res) {
   try {
-    const totalApps = (await appRecords.installed().names()).length;
+    const totalApps = (await appRecords.hostedInstances().names()).length;
     const runningApps = await listRunningApps();
     const totalRunning = runningApps.data ? runningApps.data.length : 0;
 

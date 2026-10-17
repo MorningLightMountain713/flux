@@ -43,7 +43,7 @@ describe('daemonHealthMonitor tests', () => {
 
     daemonHealthMonitor = proxyquire.noCallThru()('../../ZelBack/src/services/appMonitoring/daemonHealthMonitor', {
       '../../lib/log': logStub,
-      '../appDatabase/appRecords': { installed: () => ({ apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)) }) },
+      '../appDatabase/appRecords': { hostedInstances: () => ({ apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)) }) },
       '../appLifecycle/appUninstaller': appUninstallerStub,
     });
   });
