@@ -2101,7 +2101,7 @@ async function reconcile(identifier) {
  *
  * The listing is taken once for the whole set, and only if something failed.
  *
- * @param {Array<object>} installed Records from appQueryService.installedApps().
+ * @param {Array<import('@runonflux/flux-spec-backend').RegisteredSpec>} installed The registered record of each app this node hosts.
  * @returns {Promise<string[]>} Bare component identifiers across every app given
  *   - one spelling whichever source they came from, and the same one the
  *   reconciler queue and appsRuntimeState are keyed on.
@@ -2362,7 +2362,7 @@ async function enqueueOwedTeardowns(reason) {
  * request is independent: one component that cannot be recorded must not cost the
  * others theirs.
  *
- * @param {Array<object>} installed Records from appQueryService.installedApps().
+ * @param {Array<import('@runonflux/flux-spec-backend').RegisteredSpec>} installed The registered record of each app this node hosts.
  * @param {string} reason Why, for the log.
  * @param {string} [key] What the restart is for: a repeat of the key restarts
  *   nothing again (appsRuntimeState.requestRestart).
