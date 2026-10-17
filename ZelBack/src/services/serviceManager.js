@@ -63,7 +63,6 @@ const enterpriseConfig = require('./utils/enterpriseConfig');
 const policyStore = require('./policyStore');
 // The typed-document store v9's readers consult; one store replaces both at P-20.
 const fluxCommunicationMessagesSender = require('./fluxCommunicationMessagesSender');
-const appQueryService = require('./appQuery/appQueryService');
 const chainTipSource = require('./daemonService/chainTipSource');
 const daemonStatus = require('./daemonService/daemonStatus');
 const daemonSubscriptionService = require('./daemonService/daemonSubscriptionService');
@@ -865,7 +864,7 @@ async function startFluxFunctions() {
           appEnforcement.monitorSharedDBApps();
           // Judges an hour of samples, so its first pass is one interval out.
           setInterval(() => {
-            appInspector.checkApplicationsCpuUSage(globalState.appsMonitored, appQueryService.installedApps);
+            appInspector.checkApplicationsCpuUSage(globalState.appsMonitored);
           }, cpuCheckIntervalMs);
           imageReaper.pruneUnusedImages().catch((err) => log.error(`imageReaper boot run error: ${err.message}`));
           setInterval(() => {
