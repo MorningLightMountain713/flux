@@ -8,7 +8,7 @@ const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/fluxCommunicationMessagesSender');
 const transportCryptoProvider = require('../../ZelBack/src/services/providers/FluxOSTransportProvider');
 const {
-  loadSpecLibrary, V8_SUBMISSION, v8Spec, v9Spec, sealedV8Spec, instantiatedSpec,
+  loadSpecLibrary, V8_SUBMISSION, v8Spec, v9Spec, sealedV8Spec, registeredSpec,
 } = require('./fixtures/fluxSpec');
 const { stubRegistry } = require('./fixtures/appRecords');
 const moduleLoader = require('../../ZelBack/src/lib/moduleLoader');
@@ -52,11 +52,11 @@ describe('appConvert (registryManager) tests', () => {
 
   /**
    * What `stubRegistry().byName` hands the module: a real
-   * InstantiatedSpec over a real stored spec. Only the mongo read is stubbed.
-   * @returns {Promise<object>} the InstantiatedSpec the stub will return
+   * RegisteredSpec over a real stored spec. Only the mongo read is stubbed.
+   * @returns {Promise<object>} the RegisteredSpec the stub will return
    */
   async function registryHolds(spec, { height = 1_700_000 } = {}) {
-    const held = await instantiatedSpec(spec, { height });
+    const held = await registeredSpec(spec, { height });
     stubRegistry().byName.resolves(held);
     return held;
   }
@@ -131,7 +131,7 @@ describe('appConvert (registryManager) tests', () => {
     // Guard on the stubbed repository. It is the producer here, so the risk is
     // the opposite way round: convert reads five PROPERTIES off whatever
     // the registry returns and never calls a method on it, so what has to be
-    // asserted is that the real InstantiatedSpec answers those five. Any of them
+    // asserted is that the real RegisteredSpec answers those five. Any of them
     // renamed in flux-spec and convert reads `undefined` — encrypting nothing,
     // converting at height undefined — with no error anywhere.
     expect(held.version, 'convert routes on .version').to.equal(8);
@@ -270,8 +270,8 @@ describe('appConvert (registryManager) tests', () => {
 
   it('decrypts an encrypted source before converting, then seals', async () => {
     await registryHolds(await sealedV8Spec({ name: 'convertme', contacts: ['ops@example.com'] }));
-    const createProvider = sinon.spy(flux.EncryptedSpecV8.prototype, 'createProvider');
-    const decrypt = sinon.spy(flux.EncryptedSpecV8.prototype, 'decrypt');
+    const createProvider = sinon.spy(flux.SealedSpecV8.prototype, 'createProvider');
+    const decrypt = sinon.spy(flux.SealedSpecV8.prototype, 'decrypt');
     const frontend = await frontendRecipient();
 
     const result = await registryManager.convertApplicationSpecification('convertme', {

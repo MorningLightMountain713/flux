@@ -138,7 +138,7 @@ async function priceAgainstPredecessor(spec, prevSpec, {
  * block time is unknown at preview time.
  *
  * @param {object} spec - resolved new v9 spec
- * @param {object} existing - InstantiatedSpec of the prior registration
+ * @param {object} existing - RegisteredSpec of the prior registration
  * @param {number} daemonHeight - current chain height
  * @param {(spec: object, height: number) => Promise<object>} termCost - the
  *   predecessor's term cost, from its own regime
@@ -209,7 +209,7 @@ async function onChainDisplayPrice(spec, { termCost }) {
     height: daemonHeight,
     duration: spec.ttl || 0,
     // Real encryption bit drives the encryptedSpec fee: a cleartext spec reports
-    // false, a DecryptedCanonicalSpec (decrypted-from-encrypted) reports true.
+    // false, a OpenedSpec (decrypted-from-encrypted) reports true.
     isEncrypted: spec.isEncrypted,
   });
   return breakdown.total / 1e8;
@@ -255,7 +255,7 @@ async function registrationFee(spec, height) {
     height,
     duration: spec.ttl || 0,
     // Real encryption bit drives the encryptedSpec fee: a cleartext spec reports
-    // false, a DecryptedCanonicalSpec (decrypted-from-encrypted) reports true.
+    // false, a OpenedSpec (decrypted-from-encrypted) reports true.
     isEncrypted: spec.isEncrypted,
   });
   return BigInt(breakdown.total);

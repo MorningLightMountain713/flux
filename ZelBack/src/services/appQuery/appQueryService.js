@@ -36,7 +36,7 @@ const nodeSpecs = require('../appRequirements/nodeSpecs');
  * @returns {Promise<string[]>}
  */
 async function installedAppsListedAt(socketAddress) {
-  const names = new Set(await appRecords.installed().names());
+  const names = new Set(await appRecords.hostedInstances().names());
   return (await registryManager.appsListedAt(socketAddress)).filter((name) => names.has(name));
 }
 
@@ -60,9 +60,9 @@ async function installedApps(req, res) {
     }
 
     const installed = filter.name
-      ? [await appRecords.installed().byName(filter.name)].filter(Boolean)
-      : await appRecords.installed().apps();
-    // An app's registered record: the installed record's own fields stay on the node.
+      ? [await appRecords.hostedInstances().byName(filter.name)].filter(Boolean)
+      : await appRecords.hostedInstances().apps();
+    // An app's registered record: the hosted instance's own fields stay on the node.
     const apps = installed.map((app) => app.record.serialize());
     const dataResponse = messageHelper.createDataMessage(apps);
     return res ? res.json(dataResponse) : dataResponse;
@@ -208,8 +208,9 @@ async function listRunningApps(req, res) {
 
 /**
  * What this node is doing with each installed app's activeStandby component, for a
- * balancer choosing where to route it: `running`, or `held` - stopped by its
- * operator, or one the reconciler is starting. A component in neither state is
+ * balancer choosing where to route it: `running`, or `held` - under an operator
+ * stop lock that holds it here (appsRuntimeState.operatorHeldIdentifiers), or one
+ * the reconciler is starting. A component in neither state is
  * absent. An app this node cannot read right now is listed by identity in
  * `unreadable`, so absence from `components` means "not here" and never "could not
  * tell". Components are named by their app's identity and replica only, never by
@@ -225,7 +226,7 @@ async function activeStandbyComponents() {
   )));
   const held = new Set([
     ...appReconciler.committedIdentifiers(),
-    ...(await appsRuntimeState.operatorStoppedIdentifiers()),
+    ...(await appsRuntimeState.operatorHeldIdentifiers()),
   ]);
 
   const { deployments, unreadableApps } = await deploymentProvider.listInstalledDeploymentsDetailed();
@@ -248,7 +249,7 @@ async function activeStandbyComponents() {
  */
 async function fluxUsage(req, res) {
   try {
-    const totalApps = (await appRecords.installed().names()).length;
+    const totalApps = (await appRecords.hostedInstances().names()).length;
     const runningApps = await listRunningApps();
     const totalRunning = runningApps.data ? runningApps.data.length : 0;
 

@@ -108,7 +108,7 @@ async function pathValidation(filepath, appname) {
   // An app volume is mounted at `<appsFolder>/<identifier>` and sanitizePath has
   // already refused any traversal leaving it, so the first segment of the
   // relative path is the volume the request would reach.
-  const installed = await appRecords.installed().byName(appname);
+  const installed = await appRecords.hostedInstances().byName(appname);
   if (!volumeDirectoryBelongsToApp(appVolumeDir(filepath), appname, installed?.identity ?? null)) {
     return false;
   }

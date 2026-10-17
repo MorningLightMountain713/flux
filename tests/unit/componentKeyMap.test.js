@@ -6,7 +6,7 @@ const sinon = require('sinon');
 const componentKeyMap = require('../../ZelBack/src/services/appLifecycle/componentKeyMap');
 const appHistory = require('../../ZelBack/src/services/appDecisions/appHistory');
 const specCutover = require('../../ZelBack/src/services/utils/specCutover');
-const { inMemoryInstalled } = require('./fixtures/appRecords');
+const { inMemoryHostedInstances } = require('./fixtures/appRecords');
 const domain = require('./fixtures/appDomain');
 const { loadSpecLibrary } = require('./fixtures/fluxSpec');
 
@@ -37,7 +37,7 @@ describe('componentKeyMap', () => {
 
   async function registered(hash, components, type = 'fluxappupdate') {
     const event = await domain.confirmedEvent({ spec: await specWith(components), hash, type });
-    return domain.instantiatedSpec({ event, identity: IDENTITY, uuid: UUID });
+    return domain.registeredSpec({ event, identity: IDENTITY, uuid: UUID });
   }
 
   before(async function loadLibrary() {
@@ -115,9 +115,9 @@ describe('componentKeyMap', () => {
   describe('namingForUpdate', () => {
     const KEY = `c${'b'.repeat(51)}a`;
 
-    it('carries the installed record\'s keys onto the update: a rename keeps its key and gains its former name', async () => {
+    it('carries the hosted instance\'s keys onto the update: a rename keeps its key and gains its former name', async () => {
       const appliedMessages = sinon.stub(appHistory, 'appliedMessages').rejects(new Error('the history is not read'));
-      const install = new flux.InstalledSpec({
+      const install = new flux.HostedInstance({
         record: await registered(H1, { web: component('web') }, 'fluxappregister'), componentKeys: new Map([['web', KEY]]),
       });
       const naming = await componentKeyMap.namingForUpdate(install, await registered(H2, { frontend: component('frontend', 'web') }));
@@ -126,8 +126,8 @@ describe('componentKeyMap', () => {
       expect(appliedMessages.called).to.equal(false);
     });
 
-    it('carries the installed record\'s former names through an update that renames nothing', async () => {
-      const install = new flux.InstalledSpec({
+    it('carries the hosted instance\'s former names through an update that renames nothing', async () => {
+      const install = new flux.HostedInstance({
         record: await registered(H1, { frontend: component('frontend') }),
         componentKeys: new Map([['frontend', KEY]]),
         formerNames: new Map([[KEY, ['web']]]),
@@ -137,7 +137,7 @@ describe('componentKeyMap', () => {
     });
 
     it('keys a record stored before keys by the names its components run under', async () => {
-      const install = new flux.InstalledSpec({ record: await registered(H1, { web: component('web') }, 'fluxappregister') });
+      const install = new flux.HostedInstance({ record: await registered(H1, { web: component('web') }, 'fluxappregister') });
       const { componentKeys: keys } = await componentKeyMap.namingForUpdate(install, await registered(H2, { web: component('web'), db: component('db') }));
       expect(keys.get('web'), 'a component the node already runs keeps its name as its key').to.equal('web');
       const minted = flux.componentKeysFor(await specWith({ web: component('web'), db: component('db') }), {
@@ -150,8 +150,8 @@ describe('componentKeyMap', () => {
   // The boot step: a record stored before records held keys gets its
   // components' names, which is what its containers, data and folders are named by.
   describe('keyInstalledByName', () => {
-    const instance = async (name, components, own = {}) => new flux.InstalledSpec({
-      record: await domain.instantiatedSpec({
+    const instance = async (name, components, own = {}) => new flux.HostedInstance({
+      record: await domain.registeredSpec({
         event: await domain.confirmedEvent({ spec: await domain.v9Spec({ name, components }), hash: H1, type: 'fluxappregister' }),
         identity: IDENTITY,
         uuid: `u-${name}`,
@@ -160,7 +160,7 @@ describe('componentKeyMap', () => {
     });
 
     it('keys each component of a record that holds no keys by its name, and leaves a keyed record as it is', async () => {
-      const { installed } = await inMemoryInstalled();
+      const { installed } = await inMemoryHostedInstances();
       const minted = new Map([['web', `c${'b'.repeat(51)}a`]]);
       await installed.put(await instance('unkeyed', { web: component('web'), db: component('db') }, { replica: 'r1' }));
       await installed.put(await instance('keyed', { web: component('web') }, { componentKeys: minted }));
@@ -177,11 +177,11 @@ describe('componentKeyMap', () => {
     });
 
     it('leaves a record whose spec it cannot open without keys, and keys the rest', async () => {
-      const { installed } = await inMemoryInstalled();
+      const { installed } = await inMemoryHostedInstances();
       await installed.put(await instance('sealed', { web: component('web') }));
       await installed.put(await instance('open', { web: component('web') }));
-      const resolve = specCutover.resolveInstantiatedSpec;
-      sinon.stub(specCutover, 'resolveInstantiatedSpec').callsFake(async (record) => (record.name === 'sealed' ? null : resolve(record)));
+      const resolve = specCutover.resolveRegisteredSpec;
+      sinon.stub(specCutover, 'resolveRegisteredSpec').callsFake(async (record) => (record.name === 'sealed' ? null : resolve(record)));
 
       const results = await componentKeyMap.keyInstalledByName();
 

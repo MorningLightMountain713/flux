@@ -367,7 +367,7 @@ async function checkAndGiveUpAnApp(deps = {}) {
     // eslint-disable-next-line no-await-in-loop
     const locations = await registryManager.appLocation(appName);
     // eslint-disable-next-line no-await-in-loop
-    const installed = await appRecords.installed().byName(appName);
+    const installed = await appRecords.hostedInstances().byName(appName);
     if (!installed) continue;
 
     const decision = {

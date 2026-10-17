@@ -85,7 +85,7 @@ async function storeAndBroadcastInstallError(appName, hash, error) {
  * To register an app locally. Runs the admission checks (resources, image blocklist)
  * before any state is mutated, then registers the app in the database and performs the
  * install. If the install fails after it has started, the app is removed locally.
- * @param {object} instantiated Instantiated app spec.
+ * @param {object} registered Registered app spec.
  * @param {object} [options] onStatus stream callback, createVolumes, sendRemovalMessage.
  *   sendRemovalMessage: whether the teardown broadcasts the removal. True wherever this
  *   node does not already hold the app: an announcement landing during the install claims
@@ -96,7 +96,7 @@ async function storeAndBroadcastInstallError(appName, hash, error) {
  *   unreachable or node busy, retry later), REJECTED (blocked image - won't change on retry),
  *   FAILED (install started then errored; local cleanup already done).
  */
-async function attemptInstallApplication(instantiated, options = {}) {
+async function attemptInstallApplication(registered, options = {}) {
   const onStatus = options.onStatus || null;
   const createVolumes = options.createVolumes !== false;
   const sendRemovalMessage = options.sendRemovalMessage || false;
@@ -104,7 +104,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
   // null (loose). Normalized to a definite value right after the lease, so
   // every downstream build/uninstall passes a uniform { replica }.
   let replica = 'replica' in options ? options.replica : undefined;
-  const appName = instantiated.name;
+  const appName = registered.name;
   // Hoisted out of the try so the post-finally converge-wait can read its components.
   let deployment;
   // Hoisted so the finally releases ONLY a lease this call actually acquired — the
@@ -141,7 +141,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
     }
 
     if (replica === undefined) {
-      replica = await deploymentProvider.resolveDeploymentIdentity(instantiated);
+      replica = await deploymentProvider.resolveDeploymentIdentity(registered);
     }
 
     log.info('Running initial checks for Flux App...');
@@ -151,7 +151,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
     if (onStatus) onStatus({ status: 'Checking database...' });
     // Installed state is keyed per identity, so this asks about THIS replica and
     // a co-located sibling's row never masks it.
-    if ((await appRecords.installed().keys(appName)).some((key) => key.replica === (replica ?? null))) {
+    if ((await appRecords.hostedInstances().keys(appName)).some((key) => key.replica === (replica ?? null))) {
       const subject = replica == null ? `Flux App ${appName}` : `Flux App ${appName} replica ${replica}`;
       log.error(`${subject} already installed`);
       return { status: InstallStatus.SKIPPED, reason: `${subject} already installed` };
@@ -180,7 +180,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
       return { status: InstallStatus.DEFERRED, reason };
     }
 
-    await checkPlacement(instantiated);
+    await checkPlacement(registered);
 
     // Apps whose spec demands Arcane — an encrypted envelope, or any
     // Arcane-requiring feature (telemetry, content delivery, graceful
@@ -188,7 +188,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
     // The spawner refuses these before selection; this covers direct and
     // targeted installs, and turns the encrypted case's decrypt failure
     // into a clean rejection.
-    if (instantiated.requiresArcane() && !globalState.isArcane()) {
+    if (registered.requiresArcane() && !globalState.isArcane()) {
       const reason = `Flux App ${appName} requires an attested ArcaneOS node`;
       if (onStatus) onStatus(messageHelper.createErrorMessage(reason));
       return { status: InstallStatus.REJECTED, reason };
@@ -196,10 +196,10 @@ async function attemptInstallApplication(instantiated, options = {}) {
 
     // The version the app was registered with names its components: read once,
     // from the registration message, for every view this install provisions from.
-    const registrationVersion = await appHistory.registrationVersionOf(appName, instantiated.uuid) ?? undefined;
+    const registrationVersion = await appHistory.registrationVersionOf(appName, registered.uuid) ?? undefined;
     // The keys and former names of the version installed, from the app's applied history.
-    const { componentKeys, formerNames } = await componentKeyMap.namingForVersion(instantiated);
-    deployment = await deploymentProvider.planDeployment(instantiated, { replica, registrationVersion, componentKeys });
+    const { componentKeys, formerNames } = await componentKeyMap.namingForVersion(registered);
+    deployment = await deploymentProvider.planDeployment(registered, { replica, registrationVersion, componentKeys });
     // Check resources and reserve them atomically: two concurrent installs of
     // different apps must not both pass before either is accounted (the in-flight
     // double-admit race). The reservation is released once the app is durably in
@@ -243,7 +243,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
     // Admission decision, taken before any state is mutated so neither outcome needs
     // cleanup: a blocked image is a rejection (won't change on retry); an unreachable
     // blocklist is a deferral (transient - retry rather than admit something unchecked).
-    const blockResult = await isImageBlocked(appName, deployment.allImages(), { owner: instantiated.owner, hash: instantiated.hash });
+    const blockResult = await isImageBlocked(appName, deployment.allImages(), { owner: registered.owner, hash: registered.hash });
     if (blockResult.blocked) {
       if (onStatus) onStatus(messageHelper.createErrorMessage(blockResult.reason));
       return { status: InstallStatus.REJECTED, reason: blockResult.reason };
@@ -261,7 +261,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
     // a failure would bury this app in the spawner's 7-day error cache and keep
     // it locked out long after the dependency arrives.
     try {
-      await relationshipResolver.checkAppDependencyRequirements(instantiated);
+      await relationshipResolver.checkAppDependencyRequirements(registered);
     } catch (error) {
       if (error.code === NodeCondition.NETWORK_DEPENDENCY_NOT_READY) {
         if (onStatus) onStatus(messageHelper.createErrorMessage(error.message));
@@ -273,25 +273,25 @@ async function attemptInstallApplication(instantiated, options = {}) {
     log.info(`Initiating Flux App ${appName} installation...`);
     if (onStatus) onStatus({ status: `Initiating Flux App ${appName} installation...` });
 
-    // This identity's records: the spec this node runs, and the ledger of
+    // This identity's records: the spec this node runs, and the resources of
     // what it creates for it, empty until each step writes what it is about
     // to create. A stale pair for the SAME identity is replaced; a co-located
     // sibling's is a different key entirely and is never touched.
-    const { InstalledSpec, InstalledLedger } = specLibrary.loaded();
-    await appRecords.installed().put(new InstalledSpec({
-      record: instantiated, replica: replica ?? null, componentKeys, formerNames,
+    const { HostedInstance, InstanceResources } = specLibrary.loaded();
+    await appRecords.hostedInstances().put(new HostedInstance({
+      record: registered, replica: replica ?? null, componentKeys, formerNames,
     }));
-    await appRecords.ledgers().put(new InstalledLedger({ name: appName, replica: replica ?? null }));
+    await appRecords.instanceResources().put(new InstanceResources({ name: appName, replica: replica ?? null }));
     log.info(`Database entry created for ${appName} BEFORE Docker container creation`);
     // Now counted by appsResources (it is in the DB); drop the pending reservation
     // so it is not double-counted. The finally releases it on any earlier failure.
     admissionControl.release(appName);
 
-    await appRecords.ledgers().setNetwork(appName, replica ?? null, { name: deployment.networkName });
+    await appRecords.instanceResources().setNetwork(appName, replica ?? null, { name: deployment.networkName });
     await appDockerNetwork.ensureAppDockerNetwork(appName, { onStatus, networkName: deployment.networkName });
 
     try {
-      const freshInst = await appRecords.installed().byReplica(appName, replica ?? null);
+      const freshInst = await appRecords.hostedInstances().byReplica(appName, replica ?? null);
       if (!freshInst) throw new Error(`Failed to read back installed spec for ${appName}`);
       const deployment = await deploymentProvider.buildDeployment(freshInst, { replica, registrationVersion });
       if (!deployment) throw new Error(`Failed to build deployment for ${appName}`);
@@ -301,7 +301,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
       const telemetrySink = telemetrySinkCache.extractSink(deployment);
       telemetrySinkCache.setSink(appName, telemetrySink);
 
-      const { owner } = instantiated;
+      const { owner } = registered;
       const burstEligible = owner
         && cpuBurstHelper.isEnterpriseOwner(owner)
         && await cpuBurstHelper.isCpuBurstSupported();
@@ -319,7 +319,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
           createVolumes,
           burstEligible,
           restartPolicy,
-          uuid: instantiated.uuid,
+          uuid: registered.uuid,
           requiresEncryption,
           // Abort the in-flight image pull if a concurrent cancel/removal of this app
           // fires (globalState.abortInstall).
@@ -348,7 +348,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
       if (shutdownPlan.appRequiresDaemonShutdown(deployment)) {
         try {
           await fluxShutdowndClient.upsertAppPlanBestEffort(
-            shutdownPlan.buildShutdownPlan(instantiated, deployment),
+            shutdownPlan.buildShutdownPlan(registered, deployment),
           );
         } catch (error) {
           log.warn(`flux-shutdownd plan handoff skipped: ${error.message}`);
@@ -375,7 +375,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
       // nothing is wrong with the app, this node just cannot serve it right now.
       if (!cancelInFlight && !isNodeCondition(error)
         && error.registryErrorClass !== 'transient') {
-        await storeAndBroadcastInstallError(appName, instantiated.hash, error);
+        await storeAndBroadcastInstallError(appName, registered.hash, error);
       }
       throw error;
     }
@@ -395,7 +395,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
     // so running it here is safe.
     if (onInstallComplete) {
       await onInstallComplete();
-      fluxEventBus.publish('app:installed', { name: appName, hash: instantiated.hash });
+      fluxEventBus.publish('app:installed', { name: appName, hash: registered.hash });
     }
   } catch (error) {
     log.error(error.message || error);
@@ -494,7 +494,7 @@ async function attemptInstallApplication(instantiated, options = {}) {
     // A failed install trial is an install failure the network must learn about,
     // exactly like a provisioning failure - without this, every node re-discovers
     // the broken app from scratch.
-    await storeAndBroadcastInstallError(appName, instantiated.hash,
+    await storeAndBroadcastInstallError(appName, registered.hash,
       new Error(`App ${appName} failed its install trial: ${failed.join(', ')} never completed a successful run`));
     // cascade:false - a failed trial's cleanup, not the end of the app's
     // presence: the spawner retries, so its consumers stay.
@@ -512,18 +512,18 @@ async function attemptInstallApplication(instantiated, options = {}) {
  * the app being here (SKIPPED) from asking again (DEFERRED) from its not being here
  * (REJECTED, FAILED) without reading the response stream's wording. A throw is
  * published as FAILED and rethrown.
- * @param {object} instantiated Instantiated app spec.
+ * @param {object} registered Registered app spec.
  * @param {object} [options] As attemptInstallApplication takes them.
  * @returns {Promise<{status: string, reason: string|null}>} status is an InstallStatus value.
  */
-async function installApplication(instantiated, options = {}) {
+async function installApplication(registered, options = {}) {
   const announce = (outcome) => {
     if (outcome === InstallStatus.INSTALLED) return;
-    fluxEventBus.publish('app:installOutcome', { name: instantiated?.name, outcome });
+    fluxEventBus.publish('app:installOutcome', { name: registered?.name, outcome });
   };
   let result;
   try {
-    result = await attemptInstallApplication(instantiated, options);
+    result = await attemptInstallApplication(registered, options);
   } catch (error) {
     announce(InstallStatus.FAILED);
     throw error;
@@ -554,8 +554,8 @@ async function installApplicationAPI(req, res) {
       return;
     }
 
-    const instantiated = await appRecords.registry().byName(appname);
-    if (!instantiated) {
+    const registered = await appRecords.registry().byName(appname);
+    if (!registered) {
       throw new Error(`Application Specifications of ${appname} not found`);
     }
 
@@ -566,7 +566,7 @@ async function installApplicationAPI(req, res) {
       if (res.flush) res.flush();
     };
     // An install asked for by hand is of an app this node did not hold.
-    await installApplication(instantiated, { onStatus, sendRemovalMessage: true });
+    await installApplication(registered, { onStatus, sendRemovalMessage: true });
     res.end();
   } catch (error) {
     log.error(error);
@@ -643,22 +643,22 @@ const STATUS_SEVERITY = [
  * the one installer entry a driver (spawner, adoption) needs. Loose placement
  * installs the single unqualified identity, exactly today's install.
  *
- * @param {object} instantiated - InstantiatedSpec
+ * @param {object} registered - RegisteredSpec
  * @param {object} [options] - forwarded to installApplication per identity
  * @returns {Promise<{status: string, reason: string|null, results: object[]}>}
  *   the worst per-identity outcome, with every identity's result attached
  */
-async function installAssignedReplicas(instantiated, options = {}) {
-  const identities = await deploymentProvider.assignedIdentities(instantiated);
+async function installAssignedReplicas(registered, options = {}) {
+  const identities = await deploymentProvider.assignedIdentities(registered);
   const results = [];
   // eslint-disable-next-line no-restricted-syntax
   for (const identity of identities) {
     // eslint-disable-next-line no-await-in-loop
-    const result = await installApplication(instantiated, { ...options, replica: identity });
+    const result = await installApplication(registered, { ...options, replica: identity });
     results.push({ replica: identity, ...result });
   }
   if (results.length === 0) {
-    return { status: InstallStatus.SKIPPED, reason: `${instantiated.name} names no replicas for this node`, results };
+    return { status: InstallStatus.SKIPPED, reason: `${registered.name} names no replicas for this node`, results };
   }
   const worst = results.reduce((acc, r) => (
     STATUS_SEVERITY.indexOf(r.status) < STATUS_SEVERITY.indexOf(acc.status) ? r : acc

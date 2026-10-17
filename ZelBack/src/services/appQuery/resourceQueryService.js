@@ -47,10 +47,10 @@ async function appsResources({ excludeApp } = {}) {
   // records rather than from a second listing that reads every one again.
   // This runs on every admission decision and every spawn cycle. A record
   // this node holds and cannot read is named by the collection and not read.
-  const records = await appRecords.installed().apps();
+  const records = await appRecords.hostedInstances().apps();
   const installed = records.filter((record) => record.name !== excludeApp);
   const readable = new Set(records.map((record) => record.name.toLowerCase()));
-  const unhydrated = (await appRecords.installed().names()).filter((name) => !readable.has(name.toLowerCase()));
+  const unhydrated = (await appRecords.hostedInstances().names()).filter((name) => !readable.has(name.toLowerCase()));
   const deployments = await deploymentProvider.listInstalledDeployments(installed);
   // An app whose deployment could not be built (its components are inside a
   // blob this node cannot read) is absent from `deployments`, not zero-sized:

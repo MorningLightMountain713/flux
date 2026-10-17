@@ -145,7 +145,7 @@ async function adjustExternalIP(ip) {
         nodeDosState.setDosMessage('IP changes over the limit allowed, one in 20 hours');
         log.error(nodeDosState.getRawDosMessage());
       }
-      const apps = (await appRecords.installed().apps()).map((record) => record.record);
+      const apps = (await appRecords.hostedInstances().apps()).map((record) => record.record);
       let appsHeld = 0;
       let appsRemoved = 0;
       if (apps.length > 0) {

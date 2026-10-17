@@ -13,18 +13,18 @@ const { asConfig } = require('./fixtures/config');
 const { AsyncLock } = require('../../ZelBack/src/services/utils/asyncLock');
 const { departingApps: realDepartingApps } = require('../../ZelBack/src/services/utils/globalState');
 const {
-  loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
+  loadSpecLibrary, V9_SUBMISSION, v9Spec, registeredSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 const { installedRecord } = require('./fixtures/appRecords');
 
 // Tombstoning teardown: the removal prelude marks each instance's record owed +
 // condemns, and the deferred worker (runTeardown) stops, removes, tears down what
-// the ledger names, and takes the records LAST. The order is load-bearing (see
+// the resources name, and takes the records LAST. The order is load-bearing (see
 // the adversarial-gate checklist).
 //
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
-// for why. The prelude reads an InstalledSpec (owner, identity, placement) and the
-// teardown reads an InstalledLedger built from a DeploymentSpec, so those are the
+// for why. The prelude reads an HostedInstance (owner, identity, placement) and the
+// teardown reads an InstanceResources built from a DeploymentSpec, so those are the
 // real classes below; what stays stubbed is I/O and FluxOS policy (docker, mongo,
 // the firewall, flux-shutdownd, the registry).
 
@@ -32,9 +32,9 @@ describe('appUninstaller tombstoning teardown', () => {
   let appUninstaller;
   let stubs;
   let flux;
-  // The app being removed: the real InstantiatedSpec its local row hydrates to,
+  // The app being removed: the real RegisteredSpec its local row hydrates to,
   // and the real DeploymentSpec the deployment layer projects from it.
-  let installedSpec;
+  let hostedInstance;
   let deployment;
   // The globally-registered row for the same app, pinned to this node.
   let globalPinnedSpec;
@@ -78,16 +78,16 @@ describe('appUninstaller tombstoning teardown', () => {
   const onlyComponent = () => deployment.componentEntries()[0][1];
 
   /**
-   * The ledger the install wrote for a deployment — every block projected off the
+   * The resources the install wrote for a deployment — every block projected off the
    * real DeploymentSpec rather than spelled out, so an identifier, host-port set or
    * image the library would not produce cannot appear in a fixture.
    */
-  const ledgerFor = (dep, blockOverrides = {}) => new flux.InstalledLedger({
+  const resourcesFor = (dep, blockOverrides = {}) => new flux.InstanceResources({
     name: dep.appName,
     replica: dep.replica ?? null,
     network: { name: dep.networkName },
     components: Object.fromEntries(dep.componentEntries().map(([name, c]) => [name, {
-      ...flux.InstalledLedger.newBlock({ identifier: c.identifier, image: c.image }),
+      ...flux.InstanceResources.newBlock({ identifier: c.identifier, image: c.image }),
       hostPorts: c.hostPorts.map((port) => ({ port, opened: ['ufw'] })),
       ...blockOverrides,
     }])),
@@ -98,39 +98,39 @@ describe('appUninstaller tombstoning teardown', () => {
     since: 1, reason: null, force: false, broadcast: false, budgetSeconds: shutdownPlan.appShutdownBudgetSeconds(dep), attempts: 0, ...overrides,
   });
 
-  /** The teardown's target: the records' facts and the ledger's blocks. */
+  /** The teardown's target: the records' facts and the resources' blocks. */
   const targetFor = (dep, { owed = {}, block = {}, ...overrides } = {}) => {
-    const ledger = ledgerFor(dep, block);
+    const resources = resourcesFor(dep, block);
     return {
       name: dep.appName,
       replica: dep.replica ?? null,
-      owner: installedSpec.owner,
-      identity: installedSpec.identity,
-      networkName: ledger.network.name,
-      components: Object.entries(ledger.components).map(([componentName, b]) => ({ componentName, ...b })),
+      owner: hostedInstance.owner,
+      identity: hostedInstance.identity,
+      networkName: resources.network.name,
+      components: Object.entries(resources.components).map(([componentName, b]) => ({ componentName, ...b })),
       owed: owedFor(dep, owed),
       source: 'record',
       ...overrides,
     };
   };
 
-  // This node's records: one installed record per instance, marked owed by the
-  // prelude and taken by the teardown, and its ledger beside it.
+  // This node's records: one hosted instance per instance, marked owed by the
+  // prelude and taken by the teardown, and its resources beside it.
   let records;
-  let ledgers;
+  let instanceResources;
   const recordKey = (name, replica) => `${name.toLowerCase()}\u0000${replica ?? ''}`;
-  const installedAt = (name, replica, owedOrNull) => installedRecord(installedSpec, { replica, owed: owedOrNull });
+  const installedAt = (name, replica, owedOrNull) => installedRecord(hostedInstance, { replica, owed: owedOrNull });
 
   beforeEach(async () => {
     const spec = await v9App('app', { web: {} });
-    installedSpec = await instantiatedSpec(spec);
+    hostedInstance = await registeredSpec(spec);
     deployment = deploymentFor(spec);
     // The GLOBAL registry row the prelude reads for the spawn-throttle clear: a
-    // real InstantiatedSpec whose real Placement targets this node's socket
+    // real RegisteredSpec whose real Placement targets this node's socket
     // address, so hasTargets() and isPinnedTo() are the library's own answers.
     // Legacy specs answered both of these wrongly, which is why nothing here
     // stands in for a Placement.
-    globalPinnedSpec = await instantiatedSpec(
+    globalPinnedSpec = await registeredSpec(
       await v9App('app', { web: {} }, { placement: { targetIps: [LOCAL_SOCKET] } }),
       { hash: 'p'.repeat(64) },
     );
@@ -141,7 +141,7 @@ describe('appUninstaller tombstoning teardown', () => {
     sinon.stub(serviceHelper, 'runCommand').resolves({ error: null, stdout: '', stderr: '' });
     const fakeCrontab = { jobs: () => [], remove: () => {}, save: () => {} };
     records = new Map([[recordKey('app', null), { replica: null, owed: null }]]);
-    ledgers = new Map([[recordKey('app', null), ledgerFor(deployment)]]);
+    instanceResources = new Map([[recordKey('app', null), resourcesFor(deployment)]]);
     const installed = (name, replica) => {
       const entry = records.get(recordKey(name, replica));
       return entry ? installedAt(name, replica, entry.owed) : null;
@@ -165,9 +165,9 @@ describe('appUninstaller tombstoning teardown', () => {
         markOwed: sinon.stub().callsFake(async (name, replica, owed) => { records.get(recordKey(name, replica)).owed = owed; }),
         remove: sinon.stub().callsFake(async (name, replica) => { records.delete(recordKey(name, replica)); }),
       },
-      installedLedgers: {
-        byInstance: sinon.stub().callsFake(async (name, replica) => ledgers.get(recordKey(name, replica)) ?? null),
-        remove: sinon.stub().callsFake(async (name, replica) => { ledgers.delete(recordKey(name, replica)); }),
+      instanceResources: {
+        byInstance: sinon.stub().callsFake(async (name, replica) => instanceResources.get(recordKey(name, replica)) ?? null),
+        remove: sinon.stub().callsFake(async (name, replica) => { instanceResources.delete(recordKey(name, replica)); }),
       },
       dockerService: {
         appDockerStop: sinon.stub().resolves(),
@@ -195,7 +195,7 @@ describe('appUninstaller tombstoning teardown', () => {
         getTeardown: sinon.stub().resolves(null),
         bumpAttempts: sinon.stub().resolves(),
       },
-      installedLedger: { discoverVolumeImage: sinon.stub().resolves(null) },
+      instanceResourceObserver: { discoverVolumeImage: sinon.stub().resolves(null) },
       // Hands back the REAL DeploymentSpec built for the installed app — the same
       // class the real provider projects. Identifiers, host ports, images, the
       // network name and the shutdown budget are all the library's answers.
@@ -204,8 +204,8 @@ describe('appUninstaller tombstoning teardown', () => {
       },
       appRecords: {
         registry: () => ({ byName: sinon.stub().callsFake(async () => globalPinnedSpec) }),
-        ledgers: () => stubs.installedLedgers,
-        installed: () => stubs.installedApps,
+        instanceResources: () => stubs.instanceResources,
+        hostedInstances: () => stubs.installedApps,
         instanceKey: ({ name, replica }) => recordKey(name, replica),
       },
       fluxNetworkHelper: {
@@ -264,7 +264,7 @@ describe('appUninstaller tombstoning teardown', () => {
       '../fluxNetworkHelper': stubs.fluxNetworkHelper,
       '../fluxCommunicationMessagesSender': stubs.fluxCommunicationMessagesSender,
       '../appDatabase/appRecords': stubs.appRecords,
-      './installedLedger': stubs.installedLedger,
+      './instanceResourceObserver': stubs.instanceResourceObserver,
       '../appRuntime/deploymentProvider': stubs.deploymentProvider,
       '../appMonitoring/syncthingMonitorHelpers': stubs.syncthingMonitorHelpers,
       '../utils/volumeService': stubs.volumeService,
@@ -283,7 +283,7 @@ describe('appUninstaller tombstoning teardown', () => {
   afterEach(() => sinon.restore());
 
   describe('runTeardown (the deferred worker)', () => {
-    // The target the prelude built: the records' facts and the ledger's blocks.
+    // The target the prelude built: the records' facts and the resources' blocks.
     const target = (opts) => targetFor(deployment, opts);
 
     // A teardown runs only for an instance the prelude marked owed.
@@ -301,10 +301,10 @@ describe('appUninstaller tombstoning teardown', () => {
       expect(stubs.dockerService.appDockerKill.called, 'no kill on a graceful teardown').to.be.false;
       expect(appDockerRemove.calledOnce, 'container removed').to.be.true;
       expect(stubs.appsRuntimeState.remove.calledOnce, 'runtime state dropped').to.be.true;
-      expect(stubs.installedApps.remove.calledOnceWith('app', null), 'the installed record taken').to.be.true;
-      expect(stubs.installedLedgers.remove.calledOnceWith('app', null), 'its ledger taken with it').to.be.true;
+      expect(stubs.installedApps.remove.calledOnceWith('app', null), 'the hosted instance taken').to.be.true;
+      expect(stubs.instanceResources.remove.calledOnceWith('app', null), 'its resources taken with it').to.be.true;
       expect(records.size, 'no record left').to.equal(0);
-      expect(ledgers.size, 'no ledger left').to.equal(0);
+      expect(instanceResources.size, 'no resources left').to.equal(0);
       // ORDER (load-bearing): stop -> remove -> drop runtime state (condemned) -> take the records
       expect(appDockerStop.calledBefore(appDockerRemove)).to.be.true;
       expect(appDockerRemove.calledBefore(stubs.appsRuntimeState.remove)).to.be.true;
@@ -324,7 +324,7 @@ describe('appUninstaller tombstoning teardown', () => {
       await appUninstaller.runTeardown(target());
       // Even a graceful teardown force-removes: any endpoints left are foreign linked
       // consumers, and a plain removal would leak the network on "active endpoints".
-      // The target carries the network name the ledger holds; removal takes it as
+      // The target carries the network name the resources hold; removal takes it as
       // the option. The name is the real DeploymentSpec's, derived from the app
       // identity, not a string spelled out here.
       expect(stubs.dockerService.forceRemoveFluxAppDockerNetwork.calledOnceWith(
@@ -348,7 +348,7 @@ describe('appUninstaller tombstoning teardown', () => {
       stubs.appsRuntimeState.remove.resolves(false);
       await appUninstaller.runTeardown(target());
       expect(stubs.installedApps.remove.called).to.be.false;
-      expect(stubs.installedLedgers.remove.called).to.be.false;
+      expect(stubs.instanceResources.remove.called).to.be.false;
     });
 
     // A throw from unmount / appdata / crontab / volume-file removal after the
@@ -373,7 +373,7 @@ describe('appUninstaller tombstoning teardown', () => {
       ['the volume image', (c) => c.args[0] === 'rm' && String(c.args[1].params[1]).endsWith('FLUXFSVOL')],
     ].forEach(([what, isThatRemoval]) => {
       it(`keeps the records when removing ${what} fails`, async () => {
-        // The image file is where the ledger says the node put it.
+        // The image file is where the resources say the node put it.
         const block = { volume: { file: '/dat/fluxweb_appFLUXFSVOL', disk: '/dat', fsUuid: 'u', mountDir: `${appsFolder}${onlyComponent().identifier}` } };
         serviceHelper.runCommand.callsFake(async (cmd, opts) => (
           isThatRemoval({ args: [cmd, opts] }) ? { error: new Error('rm: cannot remove: Device or resource busy') } : { error: null, stdout: '', stderr: '' }
@@ -449,7 +449,7 @@ describe('appUninstaller tombstoning teardown', () => {
   });
 
   describe('uninstallApplication (the removal prelude)', () => {
-    it('marks the instance owed BEFORE condemning, condemns what the ledger names, and awaits the teardown (foreground)', async () => {
+    it('marks the instance owed BEFORE condemning, condemns what the resources name, and awaits the teardown (foreground)', async () => {
       const res = await appUninstaller.uninstallApplication('app', { broadcastRemoval: true });
       expect(res.status).to.equal(appUninstaller.UninstallStatus.REMOVED);
       expect(stubs.installedApps.markOwed.calledOnce, 'the instance marked owed').to.be.true;
@@ -492,8 +492,8 @@ describe('appUninstaller tombstoning teardown', () => {
       ).to.deep.equal(deployment.componentEntries().map(([, c]) => c.identifier));
 
       // The teardown took both records.
-      expect(records.size, 'the installed record is gone').to.equal(0);
-      expect(ledgers.size, 'and its ledger').to.equal(0);
+      expect(records.size, 'the hosted instance is gone').to.equal(0);
+      expect(instanceResources.size, 'and its resources').to.equal(0);
 
       // The spawn-throttle clear ran against a REAL Placement: hasTargets() and
       // isPinnedTo() answered for a v9 candidate placement naming this node's
@@ -507,7 +507,7 @@ describe('appUninstaller tombstoning teardown', () => {
     it('leaves the spawn throttle alone when the real placement does not target this node', async () => {
       // Same code path, opposite real answer: an untargeted placement — mode
       // 'none', hasTargets() false — must not read as pinned here.
-      globalPinnedSpec = await instantiatedSpec(await v9App('app', { web: {} }), { hash: 'q'.repeat(64) });
+      globalPinnedSpec = await registeredSpec(await v9App('app', { web: {} }), { hash: 'q'.repeat(64) });
       stubs.globalState.trySpawningGlobalAppCache = new Map([[globalPinnedSpec.hash, Date.now()]]);
 
       await appUninstaller.uninstallApplication('app', { broadcastRemoval: true });
@@ -526,7 +526,7 @@ describe('appUninstaller tombstoning teardown', () => {
       expect(stubs.appsRuntimeState.setCondemned.called, 'nothing condemned without the durable mark').to.be.false;
       expect(stubs.dockerService.appDockerRemove.called, 'nothing torn down').to.be.false;
       expect(records.size, 'the record stays').to.equal(1);
-      expect(ledgers.size, 'and its ledger').to.equal(1);
+      expect(instanceResources.size, 'and its resources').to.equal(1);
     });
 
     // A removal whose prelude marked the instance and then died before its
@@ -567,7 +567,7 @@ describe('appUninstaller tombstoning teardown', () => {
     });
   });
 
-  // The owed-teardown record a release before the ledger wrote for a removal
+  // The owed-teardown record a release before instance resources wrote for a removal
   // whose teardown it did not finish: driven once through this teardown, then
   // cleared.
   const legacyDoc = () => ({
@@ -596,7 +596,7 @@ describe('appUninstaller tombstoning teardown', () => {
       }
     };
 
-    it('re-condemns every component an owed instance\'s ledger names, then hands them to the reconciler to converge', async () => {
+    it('re-condemns every component an owed instance\'s resources name, then hands them to the reconciler to converge', async () => {
       records.get(recordKey('app', null)).owed = owedFor(deployment);
       await appUninstaller.recoverOwedTeardowns();
       expect(stubs.appsRuntimeState.setCondemned.calledWith(onlyComponent().identifier, true)).to.be.true;
@@ -608,11 +608,11 @@ describe('appUninstaller tombstoning teardown', () => {
       expect(records.size, 'the records stay until the reconciler drives the teardown').to.equal(1);
     });
 
-    // An owed instance whose ledger names no component gives the reconciler
+    // An owed instance whose resources name no component gives the reconciler
     // nothing to drive by, so its teardown runs here and takes the records.
-    it('drives the teardown of an owed instance the node wrote no ledger for, and takes its record', async () => {
+    it('drives the teardown of an owed instance the node wrote no resources for, and takes its record', async () => {
       records.get(recordKey('app', null)).owed = owedFor(deployment);
-      ledgers.delete(recordKey('app', null));
+      instanceResources.delete(recordKey('app', null));
       await appUninstaller.recoverOwedTeardowns();
       await settled(() => records.size === 0);
       expect(stubs.installedApps.remove.calledOnceWith('app', null), 'the record taken').to.be.true;
@@ -631,7 +631,7 @@ describe('appUninstaller tombstoning teardown', () => {
       expect(records.size, 'the record kept for the next boot').to.equal(1);
     });
 
-    it('re-condemns the components of an owed-teardown record a release before the ledger left, and enqueues them', async () => {
+    it('re-condemns the components of an owed-teardown record a release before instance resources left, and enqueues them', async () => {
       stubs.pendingTeardownStore.readAllTeardowns.resolves([legacyDoc()]);
       await appUninstaller.recoverOwedTeardowns();
       expect(stubs.appsRuntimeState.setCondemned.calledOnceWith('web_old', true, { force: false })).to.be.true;
@@ -670,7 +670,7 @@ describe('appUninstaller tombstoning teardown', () => {
       expect(records.get(recordKey('app', null)).owed.attempts).to.equal(1);
     });
 
-    describe('an owed-teardown record a release before the ledger left', () => {
+    describe('an owed-teardown record a release before instance resources left', () => {
       beforeEach(() => {
         stubs.pendingTeardownStore.getTeardown.callsFake(async (key) => (
           key === 'old' && !stubs.pendingTeardownStore.clearTeardown.called ? legacyDoc() : null
@@ -679,7 +679,7 @@ describe('appUninstaller tombstoning teardown', () => {
 
       it('tears down what the record names, each port as the node opens ports now and the image found once, then clears it', async () => {
         stubs.fluxNetworkHelper.isFirewallActive.resolves(true);
-        stubs.installedLedger.discoverVolumeImage.resolves({ path: '/dat/fluxweb_oldFLUXFSVOL', fsUuid: 'u' });
+        stubs.instanceResourceObserver.discoverVolumeImage.resolves({ path: '/dat/fluxweb_oldFLUXFSVOL', fsUuid: 'u' });
 
         const verdict = await appUninstaller.driveOwedTeardown({ legacyKey: 'old' });
 
@@ -687,14 +687,14 @@ describe('appUninstaller tombstoning teardown', () => {
         expect(stubs.dockerService.appDockerRemove.calledOnceWith('web_old')).to.be.true;
         expect(stubs.fluxNetworkHelper.deleteAllowPortRule.calledOnceWith(31_001), 'closed on the firewall the node runs').to.be.true;
         expect(stubs.upnpService.removeMapUpnpPort.called, 'no UPnP here').to.be.false;
-        expect(stubs.installedLedger.discoverVolumeImage.calledOnceWith('web_old', null)).to.be.true;
+        expect(stubs.instanceResourceObserver.discoverVolumeImage.calledOnceWith('web_old', null)).to.be.true;
         expect(
           serviceHelper.runCommand.getCalls().filter((c) => c.args[0] === 'rm').map((c) => c.args[1].params[1]),
           'the image found is the file removed',
         ).to.include('/dat/fluxweb_oldFLUXFSVOL');
         expect(stubs.dockerService.forceRemoveFluxAppDockerNetwork.calledOnceWith(null, { networkName: 'fluxDockerNetwork_old' })).to.be.true;
         expect(stubs.pendingTeardownStore.clearTeardown.calledOnceWith('old')).to.be.true;
-        expect(stubs.installedApps.remove.called, 'no installed record to take').to.be.false;
+        expect(stubs.installedApps.remove.called, 'no hosted instance to take').to.be.false;
       });
 
       it('returns deferred and counts the pass on the record when the teardown did not converge', async () => {

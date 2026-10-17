@@ -91,7 +91,7 @@ function cleartextSpec(components) {
 }
 
 /**
- * The sealed EncryptedSpecV9 the REGISTRY hands back — `byName().spec`
+ * The sealed SealedSpecV9 the REGISTRY hands back — `byName().spec`
  * for an encrypted app, which every content-slot app is. Only its public metadata
  * (name/owner/instances/version) is readable; verifyManifest has to decrypt it
  * itself before it can see a single declared slot.
@@ -172,7 +172,7 @@ function load(repo = fakeRepo(), {
   const records = {
     registry: () => registry,
     manifests: () => manifests,
-    installed: () => ({ byName: repo.getInstalledApp, apps: async () => (await repo.listInstalledApps()).map((record) => installedRecord(record)) }),
+    hostedInstances: () => ({ byName: repo.getInstalledApp, apps: async () => (await repo.listInstalledApps()).map((record) => installedRecord(record)) }),
   };
   // The standing rule reads the same collections the service does.
   const standingModule = proxyquire('../../ZelBack/src/services/appLifecycle/manifestStanding', {
@@ -391,10 +391,10 @@ describe('contentSlotService', () => {
       sinon.assert.notCalled(verify);
     });
 
-    it('decrypts a sealed (isEncrypted) spec to its DecryptedCanonicalSpec before checking slots', async () => {
+    it('decrypts a sealed (isEncrypted) spec to its OpenedSpec before checking slots', async () => {
       const { service } = load();
-      // The registry hands back the sealed EncryptedSpecV9 for an encrypted app — its
-      // declared slots are visible only after decrypt -> DecryptedCanonicalSpec.
+      // The registry hands back the sealed SealedSpecV9 for an encrypted app — its
+      // declared slots are visible only after decrypt -> OpenedSpec.
       expect(service.specSlotNames(slotSpecSealed).size, 'a sealed spec declares nothing readable')
         .to.equal(0);
       await service.verifyManifest(manifest(), { owner: OWNER, spec: slotSpecSealed, identity: IDENTITY, ownedFrom: 2_400_000 }, { verify: () => true });
@@ -1129,7 +1129,7 @@ describe('contentSlotService', () => {
     let slotDeployment;
     before(async () => { slotDeployment = await deploymentOf(webWith(slotMount('app-config'))); });
 
-    // The keys the update carries from the installed record, each unlike its name.
+    // The keys the update carries from the hosted instance, each unlike its name.
     const KEYS = new Map([['web', `c${'k'.repeat(52)}`]]);
 
     function prefetchDeps(overrides = {}) {
@@ -1190,7 +1190,7 @@ describe('contentSlotService', () => {
       expect(await service.prefetchListedContent(listed(), deps)).to.equal(false);
     });
 
-    it('reads the app this node runs off its installed record', async () => {
+    it('reads the app this node runs off its hosted instance', async () => {
       const getInstalledApp = sinon.stub().resolves(installedAt(EARLIER_SPEC_HASH));
       const { service } = load(fakeRepo({ getInstalledApp }));
       const deps = prefetchDeps();
@@ -1856,7 +1856,7 @@ describe('contentSlotService', () => {
       sinon.assert.calledWith(bus.publish, 'content:slotApplySkipped', sinon.match({ appName: APP, reason: 'not_standing' }));
     });
 
-    // An install has an installed record long before it has a mounted volume: the container
+    // An install has a hosted instance long before it has a mounted volume: the container
     // doesn't exist while the component's filesystem is still being made, and writing a slot
     // then lands on an unmounted path. The installer stages the content itself once the
     // volume is there, so skipping costs nothing.
@@ -2155,7 +2155,7 @@ describe('contentSlotService', () => {
       sinon.assert.notCalled(deps.schedule);
     });
 
-    it('reads the spec this node runs off its installed record', async () => {
+    it('reads the spec this node runs off its hosted instance', async () => {
       const getInstalledApp = sinon.stub().resolves({ hash: EARLIER_SPEC_HASH });
       const { service } = load(fakeRepo({ getInstalledApp }));
       const deps = baseDeps();

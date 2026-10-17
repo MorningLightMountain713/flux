@@ -34,7 +34,7 @@ let onSpecStored = null;
 /**
  * Register the spec-stored control hook. Single-slot (last wins), matching the
  * setOn* idiom used by appInstaller/appReconciler/appUninstaller.
- * @param {(record: object) => void} callback - handed the InstantiatedSpec stored
+ * @param {(record: object) => void} callback - handed the RegisteredSpec stored
  */
 function setOnSpecStored(callback) {
   onSpecStored = callback;
@@ -43,7 +43,7 @@ function setOnSpecStored(callback) {
 /**
  * Fire the spec-stored hook with the record stored. Best-effort: a throwing
  * hook is logged and swallowed so it can never break the spec-store path.
- * @param {object} record - the InstantiatedSpec just stored
+ * @param {object} record - the RegisteredSpec just stored
  */
 function emitSpecStored(record) {
   if (!onSpecStored) return;
@@ -58,7 +58,7 @@ function emitSpecStored(record) {
  * Writes a registry record whose spec changed, then runs the effects every such
  * write carries: the founding anchor and component view, and the spawner wake.
  * Called by the registry owner (appRegistry) alone.
- * @param {object} record - the InstantiatedSpec
+ * @param {object} record - the RegisteredSpec
  * @returns {Promise<void>}
  */
 async function storeGlobalSpec(record) {
@@ -83,7 +83,7 @@ async function storeGlobalSpec(record) {
  */
 async function materializeFoundingView(record) {
   try {
-    const view = await specCutover.resolveInstantiatedSpec(record);
+    const view = await specCutover.resolveRegisteredSpec(record);
     if (view?.network?.mesh !== true) return;
     const { componentKeys } = await componentKeyMap.namingForVersion(record);
     await foundingCommittee.applyComponentView({
@@ -573,24 +573,24 @@ async function getAppInstallingLocation(req, res) {
 async function getApplicationSpecification(appname, opts = {}) {
   const { recipientPubkeyBase64, enterpriseKey } = opts;
 
-  const instantiated = await appRecords.registry().byName(appname);
-  if (!instantiated) {
+  const registered = await appRecords.registry().byName(appname);
+  if (!registered) {
     throw new Error(`Application: ${appname} not found`);
   }
 
-  if ((!recipientPubkeyBase64 && !enterpriseKey) || !instantiated.isEncrypted) {
-    return instantiated.spec.serialize();
+  if ((!recipientPubkeyBase64 && !enterpriseKey) || !registered.isEncrypted) {
+    return registered.spec.serialize();
   }
 
   // A v9 owner always presents flux-transport-pubkey; reject a v9 app on the
   // legacy enterprise-key channel before doing any crypto work.
-  if (!recipientPubkeyBase64 && instantiated.version >= 9) {
+  if (!recipientPubkeyBase64 && registered.version >= 9) {
     throw new Error('A version 9 application must be viewed via the flux-transport-pubkey channel.');
   }
 
   // Storage decrypt is polymorphic — the spec's own provider matches its version.
-  const backendProvider = await instantiated.spec.createProvider();
-  const decrypted = await instantiated.spec.decrypt(backendProvider);
+  const backendProvider = await registered.spec.createProvider();
+  const decrypted = await registered.spec.decrypt(backendProvider);
 
   if (recipientPubkeyBase64) {
     // v9 transport layer: seal the canonical cleartext toward the caller's
@@ -613,7 +613,7 @@ async function getApplicationSpecification(appname, opts = {}) {
   // Legacy v8 channel: v8's single shared encryption form, reapplied toward the
   // caller. Removed when v8 is retired.
   const transportProvider = await legacyTransportProvider.create(
-    instantiated.name, instantiated.owner, enterpriseKey,
+    registered.name, registered.owner, enterpriseKey,
   );
   const reencrypted = await decrypted.reencrypt(transportProvider);
   return reencrypted.serialize();
@@ -722,29 +722,29 @@ function regionUnresolvedMessage(u) {
 async function convertApplicationSpecification(appname, opts = {}) {
   const { recipientPubkeyBase64 } = opts;
 
-  const instantiated = await appRecords.registry().byName(appname);
-  if (!instantiated) {
+  const registered = await appRecords.registry().byName(appname);
+  if (!registered) {
     throw new Error(`Application: ${appname} not found`);
   }
-  if (instantiated.version >= 9) {
+  if (registered.version >= 9) {
     throw new Error(`Application ${appname} is already on spec version 9`);
   }
 
   // The node can decrypt a stored enterprise spec via its own provider; the
   // cleartext legacy instance is what fromLegacy converts.
-  let legacySpec = instantiated.spec;
-  if (instantiated.isEncrypted) {
-    const backendProvider = await instantiated.spec.createProvider();
-    const decrypted = await instantiated.spec.decrypt(backendProvider);
+  let legacySpec = registered.spec;
+  if (registered.isEncrypted) {
+    const backendProvider = await registered.spec.createProvider();
+    const decrypted = await registered.spec.decrypt(backendProvider);
     legacySpec = decrypted;
   }
 
   const { fromLegacy } = await getSpecBackend();
   const { FluxAppSpecV9, buildSpecViewAad, SPEC_VIEW_INFO } = await getSpec();
 
-  const { spec: v9Blob, warnings, unresolvedRegions } = fromLegacy(legacySpec, { confirmationHeight: instantiated.height });
+  const { spec: v9Blob, warnings, unresolvedRegions } = fromLegacy(legacySpec, { confirmationHeight: registered.height });
 
-  const inlinedSensitive = await resolveStorageRefs(v9Blob.components, instantiated.name);
+  const inlinedSensitive = await resolveStorageRefs(v9Blob.components, registered.name);
 
   // Convert is a draft generator, so validate without throwing: a fixable gap
   // (e.g. a contacts-less v8 app) returns a fillable draft with inline errors
@@ -773,7 +773,7 @@ async function convertApplicationSpecification(appname, opts = {}) {
   const draft = valid ? FluxAppSpecV9.fromSubmission(v9Blob).toCanonical() : v9Blob;
   const { name, owner } = v9Blob;
 
-  const mustEncrypt = instantiated.isEncrypted || inlinedSensitive;
+  const mustEncrypt = registered.isEncrypted || inlinedSensitive;
   if (!mustEncrypt) {
     return {
       encrypted: false, spec: draft, complete, errors: allErrors, warnings,
@@ -907,13 +907,13 @@ async function getApplicationComponentNamesAPI(req, res) {
       return res.json(messageHelper.errUnauthorizedMessage());
     }
 
-    const instantiated = await appRecords.registry().byName(mainAppName);
-    if (!instantiated) {
+    const registered = await appRecords.registry().byName(mainAppName);
+    if (!registered) {
       throw new Error(`Application: ${mainAppName} not found`);
     }
 
-    let { spec } = instantiated;
-    if (instantiated.isEncrypted) {
+    let { spec } = registered;
+    if (registered.isEncrypted) {
       // Node-side, with the node's own key. A node that cannot read the spec
       // cannot name its components, and says so rather than answering an empty
       // list that reads as "this app has none".
@@ -1008,8 +1008,8 @@ async function getGlobalAppsSpecifications(req, res) {
 async function availableApps(_req, res) {
   try {
     const globalApps = await appRecords.registry().all();
-    const localApps = await appRecords.installed().apps();
-    // Each app's registered record: an installed record's own fields stay on the node.
+    const localApps = await appRecords.hostedInstances().apps();
+    // Each app's registered record: a hosted instance's own fields stay on the node.
     const allApps = [...globalApps, ...localApps.map((app) => app.record)].map((app) => app.serialize());
 
     if (res) {

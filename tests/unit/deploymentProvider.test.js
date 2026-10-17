@@ -6,7 +6,7 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
-const { stubInstalled, stubLedgers, stubRegistry } = require('./fixtures/appRecords');
+const { stubHostedInstances, stubInstanceResources, stubRegistry } = require('./fixtures/appRecords');
 const appDomain = require('./fixtures/appDomain');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const generalService = require('../../ZelBack/src/services/generalService');
@@ -124,7 +124,7 @@ describe('deploymentProvider tests', () => {
       // must not read and deserialize the same collection a second time — it
       // runs on every admission decision and every spawn cycle. Nothing about
       // the ANSWER changes, so only the read itself can be asserted.
-      const listed = stubInstalled().apps;
+      const listed = stubHostedInstances().apps;
 
       const deployments = await deploymentProvider.listInstalledDeployments([]);
 
@@ -157,14 +157,14 @@ describe('deploymentProvider tests', () => {
       return { Labels: { 'io.runonflux.app': 'myapp', ...(replica ? { 'io.runonflux.replica': replica } : {}) } };
     }
 
-    // localIdentities takes an InstantiatedSpec, not a bare spec: a cleartext
+    // localIdentities takes an RegisteredSpec, not a bare spec: a cleartext
     // one resolves to its own `spec`.
-    async function instantiatedWith(placementBlob) {
+    async function registeredWith(placementBlob) {
       return { name: 'myapp', isEncrypted: false, spec: await specWithPlacement(placementBlob) };
     }
 
     it('loose placement owes the unqualified identity', async () => {
-      const spec = await instantiatedWith({ targetIps: { '44.55.66.77': null } });
+      const spec = await registeredWith({ targetIps: { '44.55.66.77': null } });
       dockerStub.resolves([container(null)]);
       expect(await deploymentProvider.localIdentities(spec)).to.deep.equal([null]);
     });
@@ -172,31 +172,31 @@ describe('deploymentProvider tests', () => {
     it('loose placement also owes a qualified container left from a named phase', async () => {
       // Without this the teardown builds only the unqualified view, and the
       // replica's container, volume and appdata dir are orphaned.
-      const spec = await instantiatedWith({ targetIps: { '44.55.66.77': null } });
+      const spec = await registeredWith({ targetIps: { '44.55.66.77': null } });
       dockerStub.resolves([container('m1')]);
       expect(await deploymentProvider.localIdentities(spec)).to.have.members([null, 'm1']);
     });
 
     it('named placement owes its assigned replicas', async () => {
-      const spec = await instantiatedWith({ targetIps: { '44.55.66.77': ['s1', 's2'] } });
+      const spec = await registeredWith({ targetIps: { '44.55.66.77': ['s1', 's2'] } });
       dockerStub.resolves([container('s1'), container('s2')]);
       expect(await deploymentProvider.localIdentities(spec)).to.have.members(['s1', 's2']);
     });
 
     it('named placement also owes an orphan sibling the maps no longer name', async () => {
-      const spec = await instantiatedWith({ targetIps: { '44.55.66.77': ['s1'] } });
+      const spec = await registeredWith({ targetIps: { '44.55.66.77': ['s1'] } });
       dockerStub.resolves([container('s1'), container('s2')]);
       expect(await deploymentProvider.localIdentities(spec)).to.have.members(['s1', 's2']);
     });
 
     it('owes what is present when named placement no longer targets this node', async () => {
-      const spec = await instantiatedWith({ targetIps: { '9.9.9.9': ['s1'] } });
+      const spec = await registeredWith({ targetIps: { '9.9.9.9': ['s1'] } });
       dockerStub.resolves([container('s1')]);
       expect(await deploymentProvider.localIdentities(spec)).to.deep.equal(['s1']);
     });
 
     it('falls back to the unqualified identity when neither the spec nor docker has anything to say', async () => {
-      const spec = await instantiatedWith({ targetIps: { '9.9.9.9': ['s1'] } });
+      const spec = await registeredWith({ targetIps: { '9.9.9.9': ['s1'] } });
       expect(await deploymentProvider.localIdentities(spec)).to.deep.equal([null]);
     });
   });
@@ -208,7 +208,7 @@ describe('deploymentProvider tests', () => {
   // the result misses.
   describe('building from installed records', () => {
     let provider;
-    let ledgers;
+    let instanceResources;
     let resolved;
     // A minted key, deliberately unlike the component's name.
     const WEB_KEY = `c${'k'.repeat(52)}`;
@@ -238,22 +238,22 @@ describe('deploymentProvider tests', () => {
       });
     }
 
-    const registered = (identity = 'a1b2c3d4e5f6') => appDomain.instantiatedSpec({ event: null, spec: resolved, identity });
-    const install = async ({ identity, componentKeys = null, replica = null } = {}) => appDomain.installedSpec({
+    const registered = (identity = 'a1b2c3d4e5f6') => appDomain.registeredSpec({ event: null, spec: resolved, identity });
+    const install = async ({ identity, componentKeys = null, replica = null } = {}) => appDomain.hostedInstance({
       record: await registered(identity), componentKeys, replica,
     });
     const identifiers = (deployments) => deployments.flatMap((d) => d.componentEntries().map(([, c]) => c.identifier));
 
     beforeEach(async () => {
       resolved = await specFixture();
-      // resolveInstantiatedSpec is destructured at module load, so it is replaced
+      // resolveRegisteredSpec is destructured at module load, so it is replaced
       // here rather than stubbed on the module object
       provider = proxyquire('../../ZelBack/src/services/appRuntime/deploymentProvider', {
-        '../utils/specCutover': { resolveInstantiatedSpec: async (record) => (record.name === 'sealed' ? null : resolved) },
+        '../utils/specCutover': { resolveRegisteredSpec: async (record) => (record.name === 'sealed' ? null : resolved) },
       });
-      // No ledger until a test writes one: the registration names everything.
-      ledgers = stubLedgers();
-      stubInstalled();
+      // No resources until a test writes one: the registration names everything.
+      instanceResources = stubInstanceResources();
+      stubHostedInstances();
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('44.55.66.77:16127');
       sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
         txhash: OUTPOINT_TXID, txindex: 0,
@@ -265,14 +265,14 @@ describe('deploymentProvider tests', () => {
     });
 
     describe('what each entry point takes', () => {
-      it('builds only from an installed record: a registered record is refused', async () => {
+      it('builds only from a hosted instance: a registered record is refused', async () => {
         const record = await registered();
         await expect(provider.buildDeployment(record, { replica: null }))
-          .to.eventually.be.rejectedWith(/^buildDeployment builds from an installed record/);
+          .to.eventually.be.rejectedWith(/^buildDeployment builds from a hosted instance/);
         await expect(provider.buildDeployments(record))
-          .to.eventually.be.rejectedWith(/^buildDeployments builds from an installed record/);
+          .to.eventually.be.rejectedWith(/^buildDeployments builds from a hosted instance/);
         await expect(provider.installedDeployments(record))
-          .to.eventually.be.rejectedWith(/^installedDeployments builds from an installed record/);
+          .to.eventually.be.rejectedWith(/^installedDeployments builds from a hosted instance/);
       });
 
       it('refuses an omitted replica - a caller that cannot name its identity must not receive an arbitrary one', async () => {
@@ -292,7 +292,7 @@ describe('deploymentProvider tests', () => {
       });
     });
 
-    it('names containers by the installed record\'s component keys', async () => {
+    it('names containers by the hosted instance\'s component keys', async () => {
       const keyed = await install({ componentKeys: new Map([['web', WEB_KEY]]) });
 
       expect(identifiers(await provider.buildDeployments(keyed))).to.deep.equal([`${WEB_KEY}_a1b2c3d4e5f6`]);
@@ -341,9 +341,9 @@ describe('deploymentProvider tests', () => {
     });
 
     it('lists an installed app it cannot read by its identity, or its name where it has none', async () => {
-      const { InstantiatedSpec } = await specLibs.getSpecBackend();
-      const sealed = (identity) => appDomain.installedSpec({
-        record: new InstantiatedSpec({
+      const { RegisteredSpec } = await specLibs.getSpecBackend();
+      const sealed = (identity) => appDomain.hostedInstance({
+        record: new RegisteredSpec({
           spec: { name: 'sealed' }, hash: 'h', height: 1, identity,
         }),
       });
@@ -354,8 +354,8 @@ describe('deploymentProvider tests', () => {
     });
 
     describe('the containers a request names', () => {
-      it('are this node\'s, addressed through its installed record whatever version the registry lists', async () => {
-        stubInstalled().byName.resolves(await install({ componentKeys: new Map([['web', WEB_KEY]]) }));
+      it('are this node\'s, addressed through its hosted instance whatever version the registry lists', async () => {
+        stubHostedInstances().byName.resolves(await install({ componentKeys: new Map([['web', WEB_KEY]]) }));
         stubRegistry().byName.resolves(await registered('ffffffffffff'));
 
         expect((await provider.resolveRequestTargets('myapp')).ids).to.deep.equal([`${WEB_KEY}_a1b2c3d4e5f6`]);
@@ -372,24 +372,24 @@ describe('deploymentProvider tests', () => {
     // The names recorded for a component the node has started on are the
     // deployment's; the registration names only what the node has not.
     describe('the names a deployment of an installed instance carries', () => {
-      let InstalledLedger;
+      let InstanceResources;
       const RECORDED = { id: 'fluxweb_myapp', aliases: ['web', 'web.myapp', 'fluxweb_myapp'] };
-      const ledgerWith = (replica, blockKey) => new InstalledLedger({
+      const resourcesWith = (replica, blockKey) => new InstanceResources({
         name: 'myapp',
         replica,
         components: blockKey ? {
-          [blockKey]: InstalledLedger.newBlock({
+          [blockKey]: InstanceResources.newBlock({
             identifier: 'web_a1b2c3d4e5f6', image: 'nginx:latest', syncFolder: { id: RECORDED.id, path: '/x' }, aliases: RECORDED.aliases,
           }),
         } : {},
       });
 
       beforeEach(async () => {
-        ({ InstalledLedger } = await specLibs.getSpecBackend());
+        ({ InstanceResources } = await specLibs.getSpecBackend());
       });
 
-      it('names a component the ledger holds as recorded, whatever the registration says', async () => {
-        ledgers.byInstance.resolves(ledgerWith(null, 'web'));
+      it('names a component the resources hold as recorded, whatever the registration says', async () => {
+        instanceResources.byInstance.resolves(resourcesWith(null, 'web'));
         const row = await install();
 
         const [fromSet] = await provider.buildDeployments(row, { registrationVersion: 9 });
@@ -399,24 +399,24 @@ describe('deploymentProvider tests', () => {
           expect(web.syncFolderId).to.equal('fluxweb_myapp');
           expect(web.networkAliases).to.deep.equal(RECORDED.aliases);
         }
-        sinon.assert.alwaysCalledWithExactly(ledgers.byInstance, 'myapp', null);
+        sinon.assert.alwaysCalledWithExactly(instanceResources.byInstance, 'myapp', null);
       });
 
       it('finds a component\'s recorded names by its key, never by its name', async () => {
         const keyed = await install({ componentKeys: new Map([['web', WEB_KEY]]) });
 
-        ledgers.byInstance.resolves(ledgerWith(null, WEB_KEY));
+        instanceResources.byInstance.resolves(resourcesWith(null, WEB_KEY));
         const byKey = (await provider.buildDeployment(keyed, { replica: null, registrationVersion: 9 })).getComponent('web');
         expect(byKey.syncFolderId).to.equal('fluxweb_myapp');
         expect(byKey.networkAliases).to.deep.equal(RECORDED.aliases);
 
-        ledgers.byInstance.resolves(ledgerWith(null, 'web'));
+        instanceResources.byInstance.resolves(resourcesWith(null, 'web'));
         const byName = (await provider.buildDeployment(keyed, { replica: null, registrationVersion: 9 })).getComponent('web');
         expect(byName.syncFolderId).to.equal(`${WEB_KEY}_a1b2c3d4e5f6`);
       });
 
       it('plans the names the spec derives when asked to ignore the recorded ones', async () => {
-        ledgers.byInstance.resolves(ledgerWith(null, 'web'));
+        instanceResources.byInstance.resolves(resourcesWith(null, 'web'));
         const derived = (await provider.planDeployment(await registered(), {
           replica: null, registrationVersion: 9, componentKeys: null, recordedNames: false,
         })).getComponent('web');
@@ -424,26 +424,26 @@ describe('deploymentProvider tests', () => {
         expect(derived.networkAliases).to.not.include('fluxweb_myapp');
       });
 
-      it('names a component the ledger holds no block for, and an instance with no ledger, by the registration', async () => {
-        ledgers.byInstance.resolves(ledgerWith(null, null));
+      it('names a component the resources hold no block for, and an instance with no resources, by the registration', async () => {
+        instanceResources.byInstance.resolves(resourcesWith(null, null));
         const noBlock = (await provider.buildDeployment(await install(), { replica: null, registrationVersion: 8 })).getComponent('web');
         expect(noBlock.syncFolderId).to.equal('fluxweb_myapp');
         expect(noBlock.networkAliases).to.include('fluxweb_myapp');
 
-        ledgers.byInstance.resolves(null);
-        const [noLedger] = await provider.buildDeployments(await install(), { registrationVersion: 9 });
-        expect(noLedger.getComponent('web').syncFolderId).to.equal('web_a1b2c3d4e5f6');
+        instanceResources.byInstance.resolves(null);
+        const [noResources] = await provider.buildDeployments(await install(), { registrationVersion: 9 });
+        expect(noResources.getComponent('web').syncFolderId).to.equal('web_a1b2c3d4e5f6');
       });
 
-      it('holds no folder id for a component the ledger does not hold when a reader states no version', async () => {
-        ledgers.byInstance.resolves(ledgerWith(null, null));
+      it('holds no folder id for a component the resources do not hold when a reader states no version', async () => {
+        instanceResources.byInstance.resolves(resourcesWith(null, null));
         const unstarted = (await provider.buildDeployment(await install(), { replica: null })).getComponent('web');
         expect(unstarted.syncFolderId).to.equal(null);
       });
 
-      it('reads the ledger of the instance being built, by its replica', async () => {
+      it('reads the resources of the instance being built, by its replica', async () => {
         await provider.buildDeployment(await install({ replica: 's1' }), { replica: 's1' });
-        sinon.assert.calledWith(ledgers.byInstance, 'myapp', 's1');
+        sinon.assert.calledWith(instanceResources.byInstance, 'myapp', 's1');
       });
     });
   });

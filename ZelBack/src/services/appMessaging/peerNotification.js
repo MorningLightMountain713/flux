@@ -13,7 +13,7 @@ const globalState = require('../utils/globalState');
 const appsRepository = require('../appDatabase/appsRepository');
 const appRecords = require('../appDatabase/appRecords');
 const appReconciler = require('../appMonitoring/appReconciler');
-const { resolveInstantiatedSpec } = require('../utils/specCutover');
+const { resolveRegisteredSpec } = require('../utils/specCutover');
 
 const fluxEventBus = require('../utils/fluxEventBus');
 const { nodeSigner } = require('../utils/nodeSigner');
@@ -218,18 +218,18 @@ async function checkAndNotifyPeersOfRunningApps() {
     // here and peers order it against other nodes' messages, so a stamp taken after
     // the reads below would out-rank a removal that happened while they ran.
     const snapshotAt = Date.now();
-    const installedSpecs = (await appRecords.installed().apps()).map((record) => record.record);
+    const hostedInstances = (await appRecords.hostedInstances().apps()).map((record) => record.record);
 
     // Resolve each installed spec to its cleartext view for component/syncthing
     // introspection. Enterprise (encrypted) apps must be decrypted first — the
-    // EncryptedSpecV8 wrapper has no componentNames()/hasSyncthing(). The node
+    // SealedSpecV8 wrapper has no componentNames()/hasSyncthing(). The node
     // installed these apps, so it can decrypt them. One that fails to resolve is logged
     // and still announced (below); only what needs its readable view is left off.
     const resolvedViews = new Map();
     // eslint-disable-next-line no-restricted-syntax
-    for (const inst of installedSpecs) {
+    for (const inst of hostedInstances) {
       // eslint-disable-next-line no-await-in-loop
-      const view = await resolveInstantiatedSpec(inst);
+      const view = await resolveRegisteredSpec(inst);
       if (view) {
         resolvedViews.set(inst.name, view);
       } else {
@@ -254,7 +254,7 @@ async function checkAndNotifyPeersOfRunningApps() {
     //
     // An app a broadcast removal is handing back is not held any more, from the
     // decision onwards (globalState.departingApps), and neither is a replica of one.
-    const applicationsToBroadcast = installedSpecs.filter(
+    const applicationsToBroadcast = hostedInstances.filter(
       (inst) => !globalState.departingApps.has(inst.name),
     );
     const mesh = await meshBroadcast.meshBroadcastFields(
@@ -272,7 +272,7 @@ async function checkAndNotifyPeersOfRunningApps() {
         // what the node is assigned, and assignment does not change when a container
         // stops, dies or is rebuilt.
         // eslint-disable-next-line no-await-in-loop
-        const replicas = (await appRecords.installed().keys(appName)).map((key) => key.replica);
+        const replicas = (await appRecords.hostedInstances().keys(appName)).map((key) => key.replica);
         const identities = (replicas.length > 0 ? replicas : [null])
           .filter((identity) => !globalState.departingApps.has(appName, identity));
         // What we last told the network about ourselves. runningSince originates

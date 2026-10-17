@@ -25,7 +25,7 @@ let started = false;
 async function removeAllApps(reason) {
   let installedApps;
   try {
-    installedApps = (await appRecords.installed().apps()).map((record) => record.record);
+    installedApps = (await appRecords.hostedInstances().apps()).map((record) => record.record);
   } catch (error) {
     log.error(`Failed to read the installed apps during daemon failure cleanup: ${error.message}`);
     return false;

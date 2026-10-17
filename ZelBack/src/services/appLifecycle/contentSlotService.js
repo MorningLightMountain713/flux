@@ -105,9 +105,9 @@ async function verifyManifest(manifest, ctx, deps = {}) {
   const { verify = signatureVerifier.verifySignature } = deps;
   const { assertValidContentManifest, contentManifestHash, ownerSignedIsValid } = await getSpec();
 
-  // A spec read from the registry is the sealed EncryptedSpec for an encrypted app
+  // A spec read from the registry is the sealed SealedSpec for an encrypted app
   // (all content-slot apps are encrypted), whose declared slots aren't visible while
-  // sealed. Decrypt it to its DecryptedCanonicalSpec and operate through that class.
+  // sealed. Decrypt it to its OpenedSpec and operate through that class.
   // The submission path passes an already-cleartext spec, which is left untouched.
   //
   // `sealed`, not `isEncrypted`. They are different questions and only one of
@@ -343,7 +343,7 @@ async function isSealedForm(gossipManifest) {
  * its height exists.
  *
  * @param {object} plaintext - the opened manifest
- * @param {object} app - the listed app (InstantiatedSpec)
+ * @param {object} app - the listed app (RegisteredSpec)
  * @param {object} [deps] - { ownerships?, verify? }
  * @returns {Promise<{signer: ?string, reason: ?string}>}
  */
@@ -630,7 +630,7 @@ async function reapDisplacedManifests(deps = {}) {
  * touches nothing running: it brings the files the listed spec declares into
  * its store, and they reach its containers when it adopts the update.
  *
- * @param {object} instance - the InstantiatedSpec the row stands on
+ * @param {object} instance - the RegisteredSpec the row stands on
  * @param {object} [opts] - { specChanged?: boolean }
  * @param {object} [deps] - { resolveHeld?, refresh?, applyBehind?, standing?, prefetch? }
  */
@@ -665,7 +665,7 @@ async function rejudgeManifests(instance, opts = {}, deps = {}) {
  */
 async function receiveManifest(msgObj, deps = {}) {
   const {
-    isInstalledHere = (name) => appRecords.installed().byName(name),
+    isInstalledHere = (name) => appRecords.hostedInstances().byName(name),
     rebroadcast = fluxCommunicationMessagesSender.broadcastMessageToAll,
     schedule = scheduleContentApplication,
     take = takeManifest,
@@ -733,7 +733,7 @@ async function storeBatchContentManifests(broadcasts, deps = {}) {
  * `content` block names. Runs when the row is written, before anything that
  * recreates a component for the new spec, so the slot it adds is filled first.
  *
- * @param {object} instance - the InstantiatedSpec the row stands on
+ * @param {object} instance - the RegisteredSpec the row stands on
  * @param {object} gossipManifest - the manifest as carried: slots sealed for an encrypted app
  * @param {object} [deps] - { take?, verify?, provider? }
  * @returns {Promise<boolean>} kept
@@ -1116,7 +1116,7 @@ async function scheduleContentApplication(manifest, spec, deps = {}) {
   // stopped validating this one, supersedes a timer armed for it), that this node runs the
   // app at the spec the registry lists (the adoption of an update delivers the content of
   // one it has yet to adopt), and that it is actually up.
-  // An installed record says only that this node owns the app — during an install it exists
+  // A hosted instance says only that this node owns the app — during an install it exists
   // while the component's volume is still being made, so writing the slot then lands on a
   // path that isn't mounted yet. Whatever we skip here is delivered by the two paths that own
   // content for a not-running app: the installer stages it once the volume exists and before
@@ -1221,7 +1221,7 @@ async function contentComponentsRunning(deployment, deps = {}) {
  * @returns {Promise<boolean>}
  */
 async function runsListedSpec(appName, app, deps = {}) {
-  const { installedHash = async (name) => (await appRecords.installed().byName(name))?.hash ?? null } = deps;
+  const { installedHash = async (name) => (await appRecords.hostedInstances().byName(name))?.hash ?? null } = deps;
   return (await installedHash(appName)) === app.hash;
 }
 
@@ -1278,7 +1278,7 @@ async function applyStoredIfBehind(appName, deps = {}) {
  * @returns {Promise<number>} count of apps caught up
  */
 async function applyBehindContentApps(deps = {}) {
-  const { listInstalled = () => appRecords.installed().apps().then((records) => records.map((record) => record.record)), applyBehind = applyStoredIfBehind } = deps;
+  const { listInstalled = () => appRecords.hostedInstances().apps().then((records) => records.map((record) => record.record)), applyBehind = applyStoredIfBehind } = deps;
   let installed;
   try {
     installed = await listInstalled();
@@ -1481,13 +1481,13 @@ async function stageContent(deployment, ctx, deps = {}) {
  * Best-effort: the adoption stages the same files itself and holds while one is
  * missing.
  *
- * @param {object} instance - the InstantiatedSpec the row stands on
+ * @param {object} instance - the RegisteredSpec the row stands on
  * @param {object} deps - { getInstalled?, namingForUpdate?, planDeployments?, registrationVersionOf?, stage? }
  * @returns {Promise<boolean>} whether the listed spec's content is in the store
  */
 async function prefetchListedContent(instance, deps = {}) {
   const {
-    getInstalled = (name) => appRecords.installed().byName(name),
+    getInstalled = (name) => appRecords.hostedInstances().byName(name),
     namingForUpdate = componentKeyMap.namingForUpdate,
     planDeployments = deploymentProvider.planDeployments,
     registrationVersionOf = appHistory.registrationVersionOf,
@@ -1501,7 +1501,7 @@ async function prefetchListedContent(instance, deps = {}) {
   try {
     // The listed spec's view of each identity this node runs, named as the
     // adoption names it: by the identity the app was installed with, and the
-    // component keys the update carries from the installed record.
+    // component keys the update carries from the hosted instance.
     const deployments = await planDeployments(instance, {
       identity,
       registrationVersion: await registrationVersionOf(appName, uuid) ?? undefined,
@@ -1818,7 +1818,7 @@ async function submitContentUpdate(body, deps = {}) {
     getApp = (name) => appRecords.registry().byName(name),
     ownerships = appHistory.ownerships,
     waitingTransfer = messageStore.waitingTransfer,
-    isInstalledHere = (name) => appRecords.installed().byName(name),
+    isInstalledHere = (name) => appRecords.hostedInstances().byName(name),
     openEnvelope = transportHelper.openContentEnvelope,
     processSubmission = processManifestSubmission,
     broadcast = fluxCommunicationMessagesSender.broadcastMessageToAll,

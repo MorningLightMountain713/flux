@@ -5,7 +5,7 @@ const axios = require('axios');
 const daemonStatus = require('../daemonService/daemonStatus');
 const appRecords = require('../appDatabase/appRecords');
 const appHistory = require('../appDecisions/appHistory');
-const { resolveInstantiatedSpec } = require('../utils/specCutover');
+const { resolveRegisteredSpec } = require('../utils/specCutover');
 const { getSpec } = require('../utils/specLibs');
 const { getChainParamsPriceUpdates } = require('../utils/chainUtilities');
 const { isMarketplaceApp } = require('../utils/marketplaceApps');
@@ -160,7 +160,7 @@ async function fluxUsdRate() {
 async function listedPredecessor(name) {
   const row = await appRecords.registry().byName(name);
   if (!row) return null;
-  return { spec: await resolveInstantiatedSpec(row), height: row.height };
+  return { spec: await resolveRegisteredSpec(row), height: row.height };
 }
 
 /** The engine, built with whatever this call needs fetched. */
@@ -189,15 +189,15 @@ async function engineFor({ quote = false, name = null } = {}) {
  */
 async function checkLegacyFreeUpdate(spec, daemonHeight) {
   const { checkLegacyFreeUpdate: rule } = await getSpec();
-  const instantiated = await appRecords.registry().byName(spec.name);
+  const registered = await appRecords.registry().byName(spec.name);
   // Only this app's applied updates count against the allowance: a refused one
   // never happened, and an earlier app of the name is another app.
-  const applied = instantiated ? await appHistory.currentAppMessages(spec.name) : [];
+  const applied = registered ? await appHistory.currentAppMessages(spec.name) : [];
 
   const { free, reason } = rule({
-    oldSpec: instantiated ? await resolveInstantiatedSpec(instantiated) : null,
+    oldSpec: registered ? await resolveRegisteredSpec(registered) : null,
     newSpec: spec,
-    expiresAtHeight: instantiated && instantiated.expiresAtHeight,
+    expiresAtHeight: registered && registered.expiresAtHeight,
     recentEvents: applied
       .filter(({ decision }) => decision.type === 'update')
       .map(({ decision }) => decision.height),

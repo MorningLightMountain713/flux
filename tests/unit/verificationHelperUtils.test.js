@@ -30,7 +30,7 @@ const verificationHelperUtils = proxyquire(
 const { signMessage } = require('../../ZelBack/src/services/verificationHelper');
 const { requireMongo } = require('./dbTestHelper');
 const { asConfig } = require('./fixtures/config');
-const { v8Spec, instantiatedSpec } = require('./fixtures/fluxSpec');
+const { v8Spec, registeredSpec } = require('./fixtures/fluxSpec');
 const appRecords = require('../../ZelBack/src/services/appDatabase/appRecords');
 
 const insertUsers = [
@@ -65,7 +65,7 @@ const POLKADOT_IDENTITY = `b${'a'.repeat(52)}`;
 
 /** Lists PolkadotNode in the registry under its identity, owned by the app owner unless told otherwise. */
 async function listPolkadotNode(owner = '1KPKzyp9VyB9ouAA4spZ48x8g32sxLVK6W') {
-  await appRecords.registry().put(await instantiatedSpec(
+  await appRecords.registry().put(await registeredSpec(
     await v8Spec({ name: 'PolkadotNode', owner }), { hash: 'h-polkadot', height: 1, identity: POLKADOT_IDENTITY },
   ));
 }
@@ -787,7 +787,7 @@ describe('verificationHelperUtils tests', () => {
       const UNHELD_IDENTITY = `b${'d'.repeat(52)}`;
 
       beforeEach(async () => {
-        await appRecords.registry().put(await instantiatedSpec(
+        await appRecords.registry().put(await registeredSpec(
           await v8Spec({ name: 'UsersApp', owner: userSession.zelid }), { hash: 'h-usersapp', height: 1, identity: USERS_APP_IDENTITY },
         ));
       });
@@ -828,7 +828,7 @@ describe('verificationHelperUtils tests', () => {
       // A missing name reads as the text `undefined`, which is a name an app can
       // be registered under: its owner is not thereby the owner of no app.
       it('verifyAppOwnerSession: false with neither, for the owner of an app registered under the text a missing name reads as', async () => {
-        await appRecords.registry().put(await instantiatedSpec(
+        await appRecords.registry().put(await registeredSpec(
           await v8Spec({ name: 'undefined', owner: ownerSession.zelid }), { hash: 'h-undefined', height: 1 },
         ));
         expect(await verificationHelperUtils.verifyAppOwnerSession(ownerSession, 'undefined'), 'the app is listed under that name').to.be.true;

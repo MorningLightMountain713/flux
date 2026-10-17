@@ -9,12 +9,12 @@ const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
 // the coordinator budgets for the app it is actually stopping.
 const shutdownPlan = require('../../ZelBack/src/services/appLifecycle/shutdownPlan');
 const {
-  loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
+  loadSpecLibrary, V9_SUBMISSION, v9Spec, registeredSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 const { installedRecord } = require('./fixtures/appRecords');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
-// for why. The coordinator reads an InstantiatedSpec off the identifier index and
+// for why. The coordinator reads an RegisteredSpec off the identifier index and
 // budgets over the DeploymentSpecs projected from it, so those are the two real
 // classes below; what stays stubbed is I/O and FluxOS policy (mongo, the
 // flux-shutdownd socket, the reconciler queue, the Arcane check).
@@ -36,7 +36,7 @@ describe('appShutdownCoordinator', () => {
   let flux;
 
   // The local install rows as the coordinator sees them: per app, the real
-  // InstantiatedSpec the row hydrates to plus the real DeploymentSpec the
+  // RegisteredSpec the row hydrates to plus the real DeploymentSpec the
   // deployment layer projects from it; and the identifier index that maps a
   // component identifier back to its app (the only way an identifier resolves —
   // a minted identity cannot be split back into a name).
@@ -70,7 +70,7 @@ describe('appShutdownCoordinator', () => {
   };
 
   /**
-   * Install an app on this node: the real InstantiatedSpec + the real
+   * Install an app on this node: the real RegisteredSpec + the real
    * DeploymentSpec, registered in the identifier index the same way a row's
    * recorded component identifiers are.
    *
@@ -79,7 +79,7 @@ describe('appShutdownCoordinator', () => {
    */
   const install = async (appName, { identity = null, components = { web: {} } } = {}) => {
     const spec = await v9App(appName, components);
-    const inst = await instantiatedSpec(spec, { identity });
+    const inst = await registeredSpec(spec, { identity });
     const deployment = flux.DeploymentSpec.fromSpec(spec, appsFolder, { replica: null, identity });
     apps.set(appName, { inst, deployment });
     for (const [, c] of deployment.componentEntries()) identifierIndex.set(c.identifier, appName);
@@ -140,7 +140,7 @@ describe('appShutdownCoordinator', () => {
     };
     coordinator = proxyquire('../../ZelBack/src/services/appLifecycle/appShutdownCoordinator', {
       '../../lib/log': stubs.log,
-      '../appDatabase/appRecords': { installedByIdentifier: async (id) => installedRecord(await stubs.appsRepository.getInstalledAppByComponentIdentifier(id)) },
+      '../appDatabase/appRecords': { hostedInstanceByIdentifier: async (id) => installedRecord(await stubs.appsRepository.getInstalledAppByComponentIdentifier(id)) },
       '../appRuntime/deploymentProvider': stubs.deploymentProvider,
       '../utils/globalState': stubs.globalState,
       '../utils/fluxShutdowndClient': stubs.fluxShutdowndClient,

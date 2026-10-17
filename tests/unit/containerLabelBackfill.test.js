@@ -49,7 +49,7 @@ describe('containerLabelBackfill tests', () => {
 
     containerLabelBackfill = proxyquire('../../ZelBack/src/services/appLifecycle/containerLabelBackfill', {
       '../dockerService': stubs.dockerService,
-      '../appDatabase/appRecords': { installed: () => stubs.installed },
+      '../appDatabase/appRecords': { hostedInstances: () => stubs.installed },
       '../appRuntime/deploymentProvider': stubs.deploymentProvider,
       './appOperations': stubs.appOperations,
       '../utils/specLibs': stubs.specLibs,

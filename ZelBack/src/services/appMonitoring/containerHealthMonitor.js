@@ -23,7 +23,7 @@ const { verifyAppVolumeMount } = require('../utils/volumeService');
  * retry rather than reformat.
  *
  * @param {string} componentIdentifier
- * @param {object|null} install - InstalledSpec of the app that owns this
+ * @param {object|null} install - HostedInstance of the app that owns this
  *   component, resolved by the caller. Taken rather than looked up: this used to
  *   recover the app by splitting the identifier, which yields the APP-IDENTITY
  *   SEGMENT and not a name — the two coincide only for an app whose identity was

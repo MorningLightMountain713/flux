@@ -6,7 +6,7 @@ const proxyquire = require('proxyquire').noCallThru();
 const realSpecLibs = require('../../ZelBack/src/services/utils/specLibs');
 const { asConfig } = require('./fixtures/config');
 const {
-  loadSpecLibrary, v8Spec, v9Spec, sealedV8Spec, sealedV9Spec, instantiatedSpec, assertAnswers,
+  loadSpecLibrary, v8Spec, v9Spec, sealedV8Spec, sealedV9Spec, registeredSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
@@ -30,7 +30,7 @@ describe('messageStore tests', () => {
   let configStub;
   let registryManagerStub;
   let assertVersionActivatedStub;
-  // What the registry's byName / getStateBeforeHeight really return: an InstantiatedSpec,
+  // What the registry's byName / getStateBeforeHeight really return: an RegisteredSpec,
   // a stored spec plus its chain state. messageStore reads .owner and .spec off it.
   let priorState;
 
@@ -161,7 +161,7 @@ describe('messageStore tests', () => {
 
   beforeEach(async () => {
     // The app that holds the name now, as the registry really answers it.
-    priorState = await instantiatedSpec(await v8Spec({ name: 'test' }), { height: 400 });
+    priorState = await registeredSpec(await v8Spec({ name: 'test' }), { height: 400 });
 
     // Stubs
     dbHelperStub = {
@@ -577,7 +577,7 @@ describe('messageStore tests', () => {
 
     describe('arcane attestation gate', () => {
       // A real v9 (envelope version 2) encrypted event: a node-sealed
-      // EncryptedSpecV9 inside a real SignedAppEvent, whose isEncrypted and
+      // SealedSpecV9 inside a real SignedAppEvent, whose isEncrypted and
       // requiresArcaneAttestation() follow from the spec class rather than from
       // a flag. The decrypt branch downstream is short-circuited by
       // isSystemSecure resolving false, so these tests isolate the gate itself.
@@ -880,9 +880,9 @@ describe('messageStore tests', () => {
       it('stores a message whose decrypted content matches', async () => {
         const decryptAndVerify = sinon.spy(flux.SignedAppEvent.prototype, 'decryptAndVerify');
         // The decrypted spec is validated for real on the way in — a
-        // DecryptedCanonicalSpec has no wire form, so validateContents is the
+        // OpenedSpec has no wire form, so validateContents is the
         // only way to ask it the gossip question.
-        const validateContents = sinon.spy(flux.DecryptedCanonicalSpec.prototype, 'validateContents');
+        const validateContents = sinon.spy(flux.OpenedSpec.prototype, 'validateContents');
         appEventVerifierStub.deserializeTempMessage.resolves(await secureEvent({ reconciles: true }));
         messageStore = buildSecure();
 
@@ -898,7 +898,7 @@ describe('messageStore tests', () => {
       // message is opened and stored on a secure node; there is no separate
       // reconciliation, and the class has none.
       it('stores a sealed v8 (envelope version 1) message on a secure node', async () => {
-        const decrypt = sinon.spy(flux.EncryptedSpecV8.prototype, 'decrypt');
+        const decrypt = sinon.spy(flux.SealedSpecV8.prototype, 'decrypt');
         const legacyMessage = { ...secureMessage, version: 1 };
         appEventVerifierStub.deserializeTempMessage.resolves(
           legacyEvent(legacyMessage, await sealedV8Spec({ name: 'enc-app' })),
@@ -931,7 +931,7 @@ describe('messageStore tests', () => {
             '../utils/specCutover': { ensureProvidersRegistered: registration },
           }),
         );
-        flux.EncryptedSpecV8.registerProvider(null);
+        flux.SealedSpecV8.registerProvider(null);
         try {
           const result = await messageStore.storeAppTemporaryMessage(legacyMessage);
 
@@ -986,7 +986,7 @@ describe('messageStore tests', () => {
         dbHelperStub.databaseConnection.returns({ db: sinon.stub().returns('database') });
         dbHelperStub.findOneInDatabase.resolves(null);
         dbHelperStub.insertOneToDatabase.resolves();
-        decrypt = sinon.spy(flux.EncryptedSpecV8.prototype, 'decrypt');
+        decrypt = sinon.spy(flux.SealedSpecV8.prototype, 'decrypt');
         // A node that can open a sealed spec.
         stubs = buildProxyquireStubs({
           '../benchmarkService': { isSystemSecure: sinon.stub().resolves(true) },

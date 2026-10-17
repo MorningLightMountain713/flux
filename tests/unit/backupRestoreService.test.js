@@ -1,7 +1,7 @@
 const chai = require('chai');
 const fs = require('fs');
 const sinon = require('sinon');
-const { stubInstalled } = require('./fixtures/appRecords');
+const { stubHostedInstances } = require('./fixtures/appRecords');
 const backupRestoreService = require('../../ZelBack/src/services/backupRestoreService');
 const IOUtils = require('../../ZelBack/src/services/IOUtils');
 const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
@@ -32,7 +32,7 @@ const OTHER_IDENTITY = `b${'c'.repeat(51)}a`;
 
 describe('backupRestoreService tests', () => {
   beforeEach(() => {
-    stubInstalled().byName.callsFake(async (name) => (name === 'myapp' ? { identity: IDENTITY } : null));
+    stubHostedInstances().byName.callsFake(async (name) => (name === 'myapp' ? { identity: IDENTITY } : null));
   });
 
   afterEach(() => {

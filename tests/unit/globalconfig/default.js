@@ -127,7 +127,7 @@ const harnessOverrides = {
         appsRuntimeState: 'zelappsruntimestate',
         appsPlacements: 'zelappsplacements',
         appIdentityMoves: 'zelappsidentitymoves',
-        installedLedgers: 'zelappsinstalledledgers',
+        instanceResources: 'zelappsinstanceresources',
         cachedImages: 'cachedimages',
       },
     },

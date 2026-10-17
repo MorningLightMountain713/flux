@@ -5,7 +5,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { asConfig } = require('./fixtures/config');
 const {
-  loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION, v8Spec, v9Spec, instantiatedSpec,
+  loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION, v8Spec, v9Spec, registeredSpec,
 } = require('./fixtures/fluxSpec');
 const admissionControl = require('../../ZelBack/src/services/utils/admissionControl');
 
@@ -488,14 +488,14 @@ describe('hwRequirements', () => {
       });
     });
 
-    describe('the InstantiatedSpec vantage', () => {
+    describe('the RegisteredSpec vantage', () => {
       it('reads placement off a stored spec plus its chain state', async () => {
-        // checkPlacement is documented to accept either an InstantiatedSpec or a
+        // checkPlacement is documented to accept either an RegisteredSpec or a
         // bare spec class instance, and the spawner hands it the former. The
         // delegation is real (name/version/owner/placement all forward to the
         // inner spec), so walk it rather than assuming.
         const hw = buildHw();
-        const stored = await instantiatedSpec(await v9PinnedSpec({ targetIps: { [`${OTHER_IP}:16127`]: ['r1'] } }));
+        const stored = await registeredSpec(await v9PinnedSpec({ targetIps: { [`${OTHER_IP}:16127`]: ['r1'] } }));
         expect(stored.version).to.equal(9);
         expect(stored.placement.hasTargets()).to.be.true;
         await rejectsWith(hw.checkPlacement(stored), 'not allowed to run');

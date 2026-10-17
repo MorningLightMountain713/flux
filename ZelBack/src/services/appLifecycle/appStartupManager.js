@@ -74,7 +74,7 @@ async function awaitWithin(work, timeoutMs, reason) {
  * @returns {Promise<Array<string>>}
  */
 async function getInstalledAppNamesFromDb() {
-  return appRecords.installed().names();
+  return appRecords.hostedInstances().names();
 }
 
 /**

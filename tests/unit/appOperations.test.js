@@ -31,10 +31,10 @@ const proxyquire = require('proxyquire');
 const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
 const { Privilege } = require('../../ZelBack/src/services/utils/privileges');
 const {
-  loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
+  loadSpecLibrary, V9_SUBMISSION, v9Spec, registeredSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 const {
-  stubRegistry, stubLedgers, inMemoryLedgers, stubInstalled, installedRecord,
+  stubRegistry, stubInstanceResources, inMemoryInstanceResources, stubHostedInstances, installedRecord,
 } = require('./fixtures/appRecords');
 const specLibrary = require('../../ZelBack/src/services/utils/specLibrary');
 const domain = require('./fixtures/appDomain');
@@ -49,7 +49,7 @@ const globalCommand = require('../../ZelBack/src/services/appManagement/globalCo
 const syncthingFolderStateMachine = require('../../ZelBack/src/services/appMonitoring/syncthingFolderStateMachine');
 const hwRequirements = require('../../ZelBack/src/services/appRequirements/hwRequirements');
 const fluxShutdowndClient = require('../../ZelBack/src/services/utils/fluxShutdowndClient');
-const { resolveInstantiatedSpec } = require('../../ZelBack/src/services/utils/specCutover');
+const { resolveRegisteredSpec } = require('../../ZelBack/src/services/utils/specCutover');
 const volumeService = require('../../ZelBack/src/services/utils/volumeService');
 const IOUtils = require('../../ZelBack/src/services/IOUtils');
 const syncthingMonitorHelpers = require('../../ZelBack/src/services/appMonitoring/syncthingMonitorHelpers');
@@ -157,10 +157,10 @@ describe('appOperations tests', () => {
 
     it('serves the blob from the installed app store, by the installed app\'s identity', async () => {
       sinon.stub(globalState, 'isArcane').returns(true);
-      // The installed row hydrates to an InstantiatedSpec; its identity is what
+      // The installed row hydrates to an RegisteredSpec; its identity is what
       // the locator was derived for and what keys the artifact store.
-      const installed = await instantiatedSpec(await v9Spec(), { identity: `b${'a'.repeat(52)}` });
-      stubInstalled().byName.resolves(installedRecord(installed));
+      const installed = await registeredSpec(await v9Spec(), { identity: `b${'a'.repeat(52)}` });
+      stubHostedInstances().byName.resolves(installedRecord(installed));
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(await oneComponentDeployment('myapp', 'web'));
       const framed = Buffer.from('cipher');
       const serveBlob = sinon.stub(contentBlobService, 'serveBlob').resolves(framed);
@@ -175,7 +175,7 @@ describe('appOperations tests', () => {
 
     it('returns 404 when the app is not installed on this node', async () => {
       sinon.stub(globalState, 'isArcane').returns(true);
-      stubInstalled().byName.resolves(installedRecord(null));
+      stubHostedInstances().byName.resolves(installedRecord(null));
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(null);
       const res = makeRes();
       await appOperations.contentBlobServeApi({ params: { appName: 'ghost', locator: 'loc' } }, res);
@@ -184,7 +184,7 @@ describe('appOperations tests', () => {
 
     it('returns 404 when no local mount matches the requested locator', async () => {
       sinon.stub(globalState, 'isArcane').returns(true);
-      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec())));
+      stubHostedInstances().byName.resolves(installedRecord(await registeredSpec(await v9Spec())));
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(await oneComponentDeployment('myapp', 'web'));
       sinon.stub(contentBlobService, 'serveBlob').resolves(null);
       const res = makeRes();
@@ -333,7 +333,7 @@ describe('appOperations tests', () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
-      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec())));
+      stubHostedInstances().byName.resolves(installedRecord(await registeredSpec(await v9Spec())));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' }));
       sinon.stub(hwRequirements, 'checkNodeResourcesReclaiming').resolves();
       sinon.stub(appUninstaller, 'uninstallComponent').resolves();
@@ -473,7 +473,7 @@ describe('appOperations tests', () => {
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       const stage = sinon.stub(contentSlotService, 'stageComponentContent').resolves(1);
       sinon.stub(serviceHelper, 'delay').resolves();
-      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec())));
+      stubHostedInstances().byName.resolves(installedRecord(await registeredSpec(await v9Spec())));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' }));
       sinon.stub(hwRequirements, 'checkNodeResourcesReclaiming').resolves();
       const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
@@ -519,7 +519,7 @@ describe('appOperations tests', () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
-      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec())));
+      stubHostedInstances().byName.resolves(installedRecord(await registeredSpec(await v9Spec())));
       const freshDeployment = await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' });
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(freshDeployment);
       sinon.stub(hwRequirements, 'checkNodeResources').resolves();
@@ -555,7 +555,7 @@ describe('appOperations tests', () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
-      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec())));
+      stubHostedInstances().byName.resolves(installedRecord(await registeredSpec(await v9Spec())));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(
         await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1', shutdown: { gracefulTimeout: 290 } }),
       );
@@ -584,7 +584,7 @@ describe('appOperations tests', () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
-      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec())));
+      stubHostedInstances().byName.resolves(installedRecord(await registeredSpec(await v9Spec())));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
       sinon.stub(hwRequirements, 'checkNodeResourcesReclaiming').resolves();
       const beginAppStop = sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
@@ -613,7 +613,7 @@ describe('appOperations tests', () => {
       );
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
-      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec())));
+      stubHostedInstances().byName.resolves(installedRecord(await registeredSpec(await v9Spec())));
       const checkDeps = sinon.stub(relationshipResolver, 'checkAppDependencyRequirements').rejects(
         Object.assign(new Error("App 'collector' that 'myapp' depends on is not installed on this node. Installation aborted."), { code: 'NETWORK_DEPENDENCY_NOT_READY' }),
       );
@@ -623,11 +623,11 @@ describe('appOperations tests', () => {
 
       await appOperations.redeployApplication('myapp', { onStatus: () => {} });
 
-      // The dependency gate stays stubbed. The real one resolves the instantiated
+      // The dependency gate stays stubbed. The real one resolves the registered
       // spec to its readable view and reads the edges off that, so both steps have
       // to work on the object it was actually handed.
       const [handedSpec] = checkDeps.firstCall.args;
-      assertAnswers(await resolveInstantiatedSpec(handedSpec), ['dependencyEntries']);
+      assertAnswers(await resolveRegisteredSpec(handedSpec), ['dependencyEntries']);
 
       expect(uninstallComponent.called, 'must NOT tear down the old version when a dependency is missing').to.be.false;
       expect(uninstallApplication.called, 'and must NOT destroy the app').to.be.false;
@@ -649,8 +649,8 @@ describe('appOperations tests', () => {
 
       it('hands the app back instead of tearing it down to rebuild', async () => {
         sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: 'b'.repeat(64), txindex: 0 });
-        stubInstalled().byName.resolves(installedRecord(
-          await instantiatedSpec(await v9Spec({ placement: { targetIps: ['9.9.9.9'] } })),
+        stubHostedInstances().byName.resolves(installedRecord(
+          await registeredSpec(await v9Spec({ placement: { targetIps: ['9.9.9.9'] } })),
         ));
 
         await appOperations.redeployApplication('myapp', { onStatus: () => {} });
@@ -662,8 +662,8 @@ describe('appOperations tests', () => {
 
       it('leaves the app as it is when it cannot read the collateral the spec names nodes by', async () => {
         sinon.stub(generalService, 'obtainNodeCollateralInformation').rejects(new Error('daemon down'));
-        stubInstalled().byName.resolves(installedRecord(
-          await instantiatedSpec(await v9Spec({ placement: { targetIps: ['9.9.9.9'], targetOutpoints: [`${'c'.repeat(64)}:0`] } })),
+        stubHostedInstances().byName.resolves(installedRecord(
+          await registeredSpec(await v9Spec({ placement: { targetIps: ['9.9.9.9'], targetOutpoints: [`${'c'.repeat(64)}:0`] } })),
         ));
 
         await appOperations.redeployApplication('myapp', { onStatus: () => {} });
@@ -679,8 +679,8 @@ describe('appOperations tests', () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
-      const installed = await instantiatedSpec(await v9Spec(), { identity: IDENTITY });
-      const getInstalledApp = stubInstalled().byName;
+      const installed = await registeredSpec(await v9Spec(), { identity: IDENTITY });
+      const getInstalledApp = stubHostedInstances().byName;
       getInstalledApp.onFirstCall().resolves(installedRecord(installed));
       getInstalledApp.onSecondCall().resolves(null);
       sinon.stub(relationshipResolver, 'checkAppDependencyRequirements').resolves(true);
@@ -709,8 +709,8 @@ describe('appOperations tests', () => {
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       const stage = sinon.stub(contentSlotService, 'stageContent').resolves(2);
       sinon.stub(serviceHelper, 'delay').resolves();
-      const getInstalledApp = stubInstalled().byName;
-      getInstalledApp.onFirstCall().resolves(installedRecord(await instantiatedSpec(await v9Spec())));
+      const getInstalledApp = stubHostedInstances().byName;
+      getInstalledApp.onFirstCall().resolves(installedRecord(await registeredSpec(await v9Spec())));
       getInstalledApp.onSecondCall().resolves(null);
       sinon.stub(relationshipResolver, 'checkAppDependencyRequirements').resolves(true);
       const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
@@ -749,8 +749,8 @@ describe('appOperations tests', () => {
       sinon.stub(serviceHelper, 'delay').resolves();
       // First read feeds the pre-teardown check; the post-teardown read returns null so
       // the run settles through the catch without exercising the full reinstall path.
-      const getInstalledApp = stubInstalled().byName;
-      getInstalledApp.onFirstCall().resolves(installedRecord(await instantiatedSpec(await v9Spec())));
+      const getInstalledApp = stubHostedInstances().byName;
+      getInstalledApp.onFirstCall().resolves(installedRecord(await registeredSpec(await v9Spec())));
       getInstalledApp.onSecondCall().resolves(null);
       sinon.stub(relationshipResolver, 'checkAppDependencyRequirements').resolves(true);
       const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
@@ -768,8 +768,8 @@ describe('appOperations tests', () => {
       );
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       const delay = sinon.stub(serviceHelper, 'delay').resolves();
-      const getInstalledApp = stubInstalled().byName;
-      getInstalledApp.onFirstCall().resolves(installedRecord(await instantiatedSpec(await v9Spec())));
+      const getInstalledApp = stubHostedInstances().byName;
+      getInstalledApp.onFirstCall().resolves(installedRecord(await registeredSpec(await v9Spec())));
       getInstalledApp.onSecondCall().resolves(null);
       sinon.stub(relationshipResolver, 'checkAppDependencyRequirements').resolves(true);
       sinon.stub(appUninstaller, 'uninstallComponent').resolves();
@@ -851,7 +851,7 @@ describe('appOperations tests', () => {
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       const stage = sinon.stub(contentSlotService, 'stageComponentContent').resolves(1);
       sinon.stub(serviceHelper, 'delay').resolves();
-      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec())));
+      stubHostedInstances().byName.resolves(installedRecord(await registeredSpec(await v9Spec())));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' }));
       sinon.stub(hwRequirements, 'checkNodeResourcesReclaiming').resolves();
       const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
@@ -901,7 +901,7 @@ describe('appOperations tests', () => {
       sinon.stub(componentProvisioner2, 'installComponent').resolves();
       sinon.stub(hwRequirements, 'checkNodeResourcesReclaiming').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
-      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec())));
+      stubHostedInstances().byName.resolves(installedRecord(await registeredSpec(await v9Spec())));
       sinon.stub(appUninstaller, 'uninstallComponent').resolves();
       sinon.stub(appReconciler, 'enqueueApp');
       const publish = sinon.stub(fluxEventBus, 'publish');
@@ -949,7 +949,7 @@ describe('appOperations tests', () => {
   });
 
   // The active-standby component of an installed app registered before v9, as
-  // the deployment view built over its ledger names it: its directory by its
+  // the deployment view built over its resources names it: its directory by its
   // identifier, its syncthing folder by the 8.x container name.
   const STANDBY_IDENTIFIER = `web_${IDENTITY}`;
   const STANDBY_FOLDER_ID = 'fluxweb_primaryapp';
@@ -1639,7 +1639,7 @@ describe('appOperations tests', () => {
     });
 
     // Readiness without a synced mark is read off syncthing's folder list by the
-    // id the ledger records, never by the directory a name would build.
+    // id the resources record, never by the directory a name would build.
     describe('the readiness fallback when no synced mark is held', () => {
       // An app registered before v9: the folder id is its 8.x name, the
       // directory the component's identifier, so a match by one cannot pass
@@ -1831,9 +1831,9 @@ describe('appOperations tests', () => {
     // The identity of an app whose plan the daemon holds and this node no longer runs.
     const GONE = `b${'c'.repeat(52)}`;
 
-    /** A real InstantiatedSpec — what listInstalledApps hydrates each row into. */
+    /** A real RegisteredSpec — what listInstalledApps hydrates each row into. */
     async function installedRow(name, hash, identity = IDENTITY) {
-      return instantiatedSpec(await v9Spec({ name }), { hash, identity });
+      return registeredSpec(await v9Spec({ name }), { hash, identity });
     }
 
     async function loadWith({
@@ -1878,7 +1878,7 @@ describe('appOperations tests', () => {
       const mod = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
         'node:fs/promises': fsPromises,
         '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
-        '../appDatabase/appRecords': { installed: () => ({ apps: async () => installed.map((record) => installedRecord(record)) }) },
+        '../appDatabase/appRecords': { hostedInstances: () => ({ apps: async () => installed.map((record) => installedRecord(record)) }) },
         '../appRuntime/deploymentProvider': providerStub,
         './shutdownPlan': shutdownPlanStub,
         '../utils/fluxShutdowndClient': client,
@@ -1905,7 +1905,7 @@ describe('appOperations tests', () => {
       // The provider is stubbed, so nothing else proves the installed row it was
       // handed is one the real provider could resolve and build a deployment from.
       const [handedRow] = buildDeploymentsSpy.firstCall.args;
-      const rebuilt = deploymentFor(await resolveInstantiatedSpec(handedRow));
+      const rebuilt = deploymentFor(await resolveRegisteredSpec(handedRow));
       expect(rebuilt.appName).to.equal('app1');
 
       // shutdownPlan is stubbed too; both of its entry points walk the deployment's
@@ -2068,13 +2068,13 @@ describe('appOperations tests', () => {
   });
 
   describe('the containers an app-wide start drives', () => {
-    it('are this node\'s, named by its installed record whatever version the registry lists', async () => {
+    it('are this node\'s, named by its hosted instance whatever version the registry lists', async () => {
       const KEY = `c${'k'.repeat(52)}`;
-      const install = installedRecord(await instantiatedSpec(await v9Spec({ name: 'myapp' }), { identity: IDENTITY }), {
+      const install = installedRecord(await registeredSpec(await v9Spec({ name: 'myapp' }), { identity: IDENTITY }), {
         componentKeys: new Map([['web', KEY]]),
       });
-      stubInstalled().byName.resolves(install);
-      stubRegistry().byName.resolves(await instantiatedSpec(await v9Spec({ name: 'myapp' }), { identity: `b${'f'.repeat(52)}` }));
+      stubHostedInstances().byName.resolves(install);
+      stubRegistry().byName.resolves(await registeredSpec(await v9Spec({ name: 'myapp' }), { identity: `b${'f'.repeat(52)}` }));
       sinon.stub(deploymentProvider, 'buildDeployment').callsFake(async (record) => deploymentFor(record.spec, {
         identity: record.identity, componentKeys: record.componentKeys,
       }));
@@ -2118,13 +2118,13 @@ describe('appOperations tests', () => {
     let denyPortsStub;
     let openHostPortsStub;
     let teardownOwedForStub;
-    let ledgers;
+    let instanceResources;
     let stageContentStub;
     let provisionContentSlotsStub;
     let ensureSourcesStub;
 
     function setup({ teardownOwed = false } = {}) {
-      ledgers = stubLedgers();
+      instanceResources = stubInstanceResources();
       // The content service and the host's filesystem: every file is to be had,
       // and every mount source can be made.
       stageContentStub = sinon.stub(contentSlotService, 'stageContent').resolves(0);
@@ -2133,7 +2133,7 @@ describe('appOperations tests', () => {
       sinon.stub(componentProvisioner, 'portOpenMethods').resolves(['ufw']);
       sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
       sinon.stub(serviceHelper, 'delay').resolves();
-      stubInstalled();
+      stubHostedInstances();
       // freshDeployment = null short-circuits the install loop, telemetry and shutdown-plan
       // blocks, leaving the port close + gated open as the only port effects under test.
       sinon.stub(deploymentProvider, 'planDeployment').resolves(null);
@@ -2151,14 +2151,14 @@ describe('appOperations tests', () => {
       sinon.stub(appHistory, 'registrationVersionOf').resolves(9);
     }
 
-    /** The ledger naming the component's ports, each opened by both methods. */
-    const ledgerNaming = (ports) => {
-      const { InstalledLedger } = specLibrary.loaded();
-      return new InstalledLedger({
+    /** The resources naming the component's ports, each opened by both methods. */
+    const resourcesNaming = (ports) => {
+      const { InstanceResources } = specLibrary.loaded();
+      return new InstanceResources({
         name: 'myapp',
         components: {
           web: {
-            ...InstalledLedger.newBlock({ identifier: 'web_myapp', image: 'img' }),
+            ...InstanceResources.newBlock({ identifier: 'web_myapp', image: 'img' }),
             hostPorts: ports.map((port) => ({ port, opened: ['ufw', 'upnp'] })),
           },
         },
@@ -2169,16 +2169,16 @@ describe('appOperations tests', () => {
     const keysOf = (deployment) => new Map(deployment.componentEntries().map(([, comp]) => [comp.name, comp.componentKey]));
     const namingOf = (deployment, formerNames = new Map()) => ({ componentKeys: keysOf(deployment), formerNames });
 
-    /** The registry side of a reconcile is an InstantiatedSpec (a hydrated row). */
+    /** The registry side of a reconcile is an RegisteredSpec (a hydrated row). */
     let registrySpec;
 
     beforeEach(async () => {
-      registrySpec = await instantiatedSpec(await v9Spec());
+      registrySpec = await registeredSpec(await v9Spec());
     });
 
     it('closes only the dropped ports, opens only the added ones, and skips ports in the loops', async () => {
       setup();
-      ledgers.byInstance.resolves(ledgerNaming([80, 443]));
+      instanceResources.byInstance.resolves(resourcesNaming([80, 443]));
       // old: 80,443 ; new: 443,8080 -> drop 80, add 8080, keep 443.
       const oldDeployment = await makeDeployment({ hostPorts: [80, 443], storage: 5 });
       const newDeployment = await makeDeployment({ hostPorts: [443, 8080], storage: 10 });
@@ -2191,7 +2191,7 @@ describe('appOperations tests', () => {
       expect(openHostPortsStub.calledOnceWith([8080], 'myapp'), 'opens only the added port').to.be.true;
       // The registry record is what every instance's record becomes, with the
       // component keys and former names the update carries.
-      sinon.assert.calledOnceWithExactly(stubInstalled().updateRecord, registrySpec, { componentKeys: keysOf(newDeployment), formerNames });
+      sinon.assert.calledOnceWithExactly(stubHostedInstances().updateRecord, registrySpec, { componentKeys: keysOf(newDeployment), formerNames });
 
       // The uninstaller stays stubbed: assert the component it was handed carries
       // the two fields the real teardown reads off it (container name, port set).
@@ -2204,7 +2204,7 @@ describe('appOperations tests', () => {
       // could resolve and build from. The view is named by the version the
       // registration message states, so a component the update adds is named right.
       const [handedRegistrySpec, buildOpts] = deploymentProvider.planDeployment.firstCall.args;
-      expect(deploymentFor(await resolveInstantiatedSpec(handedRegistrySpec)).appName).to.equal('myapp');
+      expect(deploymentFor(await resolveRegisteredSpec(handedRegistrySpec)).appName).to.equal('myapp');
       sinon.assert.calledOnceWithExactly(appHistory.registrationVersionOf, 'myapp', registrySpec.uuid);
       expect(buildOpts).to.have.property('registrationVersion', 9);
       expect(buildOpts.componentKeys).to.deep.equal(keysOf(newDeployment));
@@ -2304,7 +2304,7 @@ describe('appOperations tests', () => {
         expect(stageContentStub.calledBefore(uninstallComponentStub)).to.equal(true);
       });
 
-      it('leaves the old version as it is when a file cannot be had: nothing torn down, the installed record unchanged', async () => {
+      it('leaves the old version as it is when a file cannot be had: nothing torn down, the hosted instance unchanged', async () => {
         setup();
         const { oldDeployment, newDeployment } = await update({}, { cpu: 0.7 });
         stageContentStub.rejects(new Error('contentBlob: no source for sha256:x'));
@@ -2313,7 +2313,7 @@ describe('appOperations tests', () => {
 
         expect(failure?.message).to.match(/no source/);
         sinon.assert.notCalled(uninstallComponentStub);
-        sinon.assert.notCalled(stubInstalled().updateRecord);
+        sinon.assert.notCalled(stubHostedInstances().updateRecord);
         sinon.assert.notCalled(installComponent);
         sinon.assert.notCalled(provisionContentSlotsStub);
       });
@@ -2476,10 +2476,10 @@ describe('appOperations tests', () => {
         }, registrySpec);
       }
 
-      it('recreates no container, and the installed record takes the buyer', async () => {
+      it('recreates no container, and the hosted instance takes the buyer', async () => {
         await adoptSale();
 
-        sinon.assert.calledOnceWithExactly(stubInstalled().updateRecord, registrySpec, { componentKeys: new Map([['web', 'web']]), formerNames: new Map() });
+        sinon.assert.calledOnceWithExactly(stubHostedInstances().updateRecord, registrySpec, { componentKeys: new Map([['web', 'web']]), formerNames: new Map() });
         sinon.assert.notCalled(uninstallComponentStub);
         sinon.assert.notCalled(installComponent);
         expect(denyPortsStub.called, 'its ports do not move').to.be.false;
@@ -2499,34 +2499,34 @@ describe('appOperations tests', () => {
       });
     });
 
-    // The ledger names each component's ports before any is opened: a kept
+    // The resources name each component's ports before any is opened: a kept
     // port keeps the methods it was opened by, an added one takes the methods
     // the node opens ports by now.
     it('records each component\'s ports with their methods before opening the added ones', async () => {
       setup();
-      ledgers.byInstance.resolves(ledgerNaming([80, 443]));
+      instanceResources.byInstance.resolves(resourcesNaming([80, 443]));
       const oldDeployment = await makeDeployment({ hostPorts: [80, 443], storage: 5 });
       const newDeployment = await makeDeployment({ hostPorts: [443, 8080], storage: 10 });
 
       await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
 
-      sinon.assert.calledOnceWithExactly(ledgers.byInstance, 'myapp', null);
-      sinon.assert.calledOnceWithExactly(ledgers.setComponent, 'myapp', null, 'web', 'hostPorts', [
+      sinon.assert.calledOnceWithExactly(instanceResources.byInstance, 'myapp', null);
+      sinon.assert.calledOnceWithExactly(instanceResources.setComponent, 'myapp', null, 'web', 'hostPorts', [
         { port: 443, opened: ['ufw', 'upnp'] }, { port: 8080, opened: ['ufw'] },
       ]);
-      expect(ledgers.setComponent.calledBefore(openHostPortsStub), 'recorded before opened').to.equal(true);
+      expect(instanceResources.setComponent.calledBefore(openHostPortsStub), 'recorded before opened').to.equal(true);
       sinon.assert.calledOnceWithExactly(openHostPortsStub, [8080], 'myapp', ['ufw']);
-      sinon.assert.notCalled(ledgers.removeComponent);
+      sinon.assert.notCalled(instanceResources.removeComponent);
     });
 
-    it('records an instance\'s ports as newly opened when it has no ledger to carry them from', async () => {
+    it('records an instance\'s ports as newly opened when it has no resources to carry them from', async () => {
       setup();
       const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
       const newDeployment = await makeDeployment({ hostPorts: [80, 81], storage: 5 });
 
       await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
 
-      sinon.assert.calledOnceWithExactly(ledgers.setComponent, 'myapp', null, 'web', 'hostPorts', [
+      sinon.assert.calledOnceWithExactly(instanceResources.setComponent, 'myapp', null, 'web', 'hostPorts', [
         { port: 80, opened: ['ufw'] }, { port: 81, opened: ['ufw'] },
       ]);
     });
@@ -2543,16 +2543,16 @@ describe('appOperations tests', () => {
 
       await appOperations.reconcileComponents('myapp', both, webOnly, registrySpec, namingOf(webOnly));
 
-      sinon.assert.calledOnceWithExactly(ledgers.removeComponent, 'myapp', null, 'db');
+      sinon.assert.calledOnceWithExactly(instanceResources.removeComponent, 'myapp', null, 'db');
       const dbTeardown = uninstallComponentStub.getCalls().find((c) => c.args[0].name === 'db');
       expect(dbTeardown, 'the leaving component was torn down').to.not.equal(undefined);
-      expect(ledgers.removeComponent.firstCall.calledAfter(dbTeardown), 'the block goes once the component has').to.equal(true);
-      expect(ledgers.setComponent.getCalls().map((c) => c.args[2]), 'only the components that remain have ports recorded').to.deep.equal(['web']);
+      expect(instanceResources.removeComponent.firstCall.calledAfter(dbTeardown), 'the block goes once the component has').to.equal(true);
+      expect(instanceResources.setComponent.getCalls().map((c) => c.args[2]), 'only the components that remain have ports recorded').to.deep.equal(['web']);
     });
 
     it('skips the port-open (but still closes) when a cancel teardown is owed', async () => {
       setup({ teardownOwed: true });
-      ledgers.byInstance.resolves(ledgerNaming([80, 443]));
+      instanceResources.byInstance.resolves(resourcesNaming([80, 443]));
       const oldDeployment = await makeDeployment({ hostPorts: [80, 443], storage: 5 });
       const newDeployment = await makeDeployment({ hostPorts: [443, 8080], storage: 10 });
 
@@ -2577,19 +2577,19 @@ describe('appOperations tests', () => {
       beforeEach(() => {
         setup();
         installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
-        const { InstalledLedger } = specLibrary.loaded();
-        ledgers.byInstance.resolves(new InstalledLedger({
+        const { InstanceResources } = specLibrary.loaded();
+        instanceResources.byInstance.resolves(new InstanceResources({
           name: 'myapp',
           components: {
             [KEY]: {
-              ...InstalledLedger.newBlock({ identifier: `${KEY}_${IDENTITY}`, image: 'img' }),
+              ...InstanceResources.newBlock({ identifier: `${KEY}_${IDENTITY}`, image: 'img' }),
               hostPorts: [{ port: 80, opened: ['ufw', 'upnp'] }],
             },
           },
         }));
       });
 
-      it('recreates a renamed component under its new name on the volume it had, its ledger block kept', async () => {
+      it('recreates a renamed component under its new name on the volume it had, its resources block kept', async () => {
         const oldDeployment = await keyed('web', KEY);
         const newDeployment = await keyed('site', KEY);
         deploymentProvider.planDeployment.resolves(newDeployment);
@@ -2600,7 +2600,7 @@ describe('appOperations tests', () => {
         const [torn, tornOpts] = uninstallComponentStub.firstCall.args;
         expect(torn.name).to.equal('web');
         expect(tornOpts.removeVolumes, 'a rename keeps the volume').to.equal(false);
-        sinon.assert.notCalled(ledgers.removeComponent);
+        sinon.assert.notCalled(instanceResources.removeComponent);
 
         sinon.assert.calledOnce(installComponent);
         const [made, madeOpts] = installComponent.firstCall.args;
@@ -2609,7 +2609,7 @@ describe('appOperations tests', () => {
         expect(madeOpts.createVolumes).to.equal(false);
 
         // Its ports carry the methods they were opened with, by its key.
-        sinon.assert.calledWithExactly(ledgers.setComponent, 'myapp', null, KEY, 'hostPorts', [{ port: 80, opened: ['ufw', 'upnp'] }]);
+        sinon.assert.calledWithExactly(instanceResources.setComponent, 'myapp', null, KEY, 'hostPorts', [{ port: 80, opened: ['ufw', 'upnp'] }]);
         expect(denyPortsStub.called, 'a rename moves no port').to.be.false;
         expect(openHostPortsStub.called).to.be.false;
       });
@@ -2622,9 +2622,9 @@ describe('appOperations tests', () => {
         await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
 
         const derived = deploymentProvider.planDeployment.getCalls().find((call) => call.args[1].recordedNames === false);
-        expect(derived, 'the new name\'s aliases are derived, not read from the ledger').to.not.equal(undefined);
+        expect(derived, 'the new name\'s aliases are derived, not read from the resources').to.not.equal(undefined);
         expect(derived.args[1].componentKeys).to.deep.equal(keysOf(newDeployment));
-        const aliases = ledgers.setComponent.getCalls().find((call) => call.args[3] === 'aliases');
+        const aliases = instanceResources.setComponent.getCalls().find((call) => call.args[3] === 'aliases');
         expect(aliases.args).to.deep.equal(['myapp', null, KEY, 'aliases', newDeployment.getComponent('site').networkAliases]);
         expect(aliases.calledBefore(installComponent.firstCall)).to.equal(true);
         expect(newDeployment.getComponent('site').networkAliases).to.include('site');
@@ -2638,7 +2638,7 @@ describe('appOperations tests', () => {
         await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
 
         sinon.assert.calledOnce(installComponent);
-        expect(ledgers.setComponent.getCalls().some((call) => call.args[3] === 'aliases')).to.equal(false);
+        expect(instanceResources.setComponent.getCalls().some((call) => call.args[3] === 'aliases')).to.equal(false);
         sinon.assert.alwaysCalledWith(deploymentProvider.planDeployment, registrySpec, sinon.match((opts) => opts.recordedNames === undefined));
       });
 
@@ -2653,7 +2653,7 @@ describe('appOperations tests', () => {
         const [torn, tornOpts] = uninstallComponentStub.firstCall.args;
         expect(torn.identifier).to.equal(`${KEY}_${IDENTITY}`);
         expect(tornOpts.removeVolumes).to.equal(true);
-        sinon.assert.calledOnceWithExactly(ledgers.removeComponent, 'myapp', null, KEY);
+        sinon.assert.calledOnceWithExactly(instanceResources.removeComponent, 'myapp', null, KEY);
 
         sinon.assert.calledOnce(installComponent);
         const [made, madeOpts] = installComponent.firstCall.args;
@@ -2696,10 +2696,10 @@ describe('appOperations tests', () => {
   describe('runRestoreTask rules', () => {
 
     let reported;
-    let InstalledLedger;
+    let InstanceResources;
     beforeEach(() => {
       reported = [];
-      ({ InstalledLedger } = specLibrary.loaded());
+      ({ InstanceResources } = specLibrary.loaded());
     });
     const runRestore = (appName, restore, type, opts) => appOperations
       .runRestoreTask(appName, restore, type, 'auth', (line) => reported.push(String(line)), opts)
@@ -2709,7 +2709,7 @@ describe('appOperations tests', () => {
     async function restoreStubs(appName, deployment) {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
-      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: appName }))));
+      stubHostedInstances().byName.resolves(installedRecord(await registeredSpec(await v9Spec({ name: appName }))));
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       sinon.stub(appReconciler, 'observedContainerState').resolves({
         reachable: true, exists: true, running: false, indeterminate: false,
@@ -2726,25 +2726,25 @@ describe('appOperations tests', () => {
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('10.0.0.1:16127');
       // What the node recorded when it installed the app: a block per component,
       // a synced one with the folder its data is shared under.
-      const { ledgers } = await inMemoryLedgers();
-      await ledgers.put(new InstalledLedger({
+      const { instanceResources } = await inMemoryInstanceResources();
+      await instanceResources.put(new InstanceResources({
         name: appName,
-        components: Object.fromEntries(deployment.componentEntries().map(([name, comp]) => [name, InstalledLedger.newBlock({
+        components: Object.fromEntries(deployment.componentEntries().map(([name, comp]) => [name, InstanceResources.newBlock({
           identifier: `${name}_${appName}`,
           image: 'img',
           syncFolder: comp.hasSyncthing() ? { id: comp.syncFolderId, path: `/apps/${name}_${appName}` } : null,
         })])),
       }));
       return {
-        drive, restoreAppData, inspect, removeFile, pause, peers, ledgers,
+        drive, restoreAppData, inspect, removeFile, pause, peers, instanceResources,
       };
     }
 
-    /** The ledger of an instance whose one synced component shares its data under a folder id. */
-    const ledgerSharing = (appName, replica, identifier, folderId) => new InstalledLedger({
+    /** The resources of an instance whose one synced component shares its data under a folder id. */
+    const resourcesSharing = (appName, replica, identifier, folderId) => new InstanceResources({
       name: appName,
       replica,
-      components: { web: InstalledLedger.newBlock({ identifier, image: 'img', syncFolder: { id: folderId, path: `/apps/${identifier}` } }) },
+      components: { web: InstanceResources.newBlock({ identifier, image: 'img', syncFolder: { id: folderId, path: `/apps/${identifier}` } }) },
     });
     // Each component on its own host port, as the spec requires of siblings.
     const syncedApp = async (appName, modes, depOpts = {}) => deploymentFor(await specWithComponents(appName, Object.fromEntries(
@@ -2794,7 +2794,7 @@ describe('appOperations tests', () => {
       /** A restore of `site`, which held `formerNames` before, with archives on its volume under `present`. */
       async function restoreSite(formerNames, present, type = 'local') {
         const stubs = await restoreStubs('myapp', await oneComponentDeployment('myapp', 'site'));
-        stubInstalled().byReplica.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: 'myapp' })), {
+        stubHostedInstances().byReplica.resolves(installedRecord(await registeredSpec(await v9Spec({ name: 'myapp' })), {
           componentKeys: new Map([['site', KEY]]),
           formerNames: formerNames.length ? new Map([[KEY, formerNames]]) : new Map(),
         }));
@@ -2875,13 +2875,13 @@ describe('appOperations tests', () => {
     });
 
     // The folder a restored volume is shared under is the one the installed
-    // ledger records for the volume's component, replica by replica.
-    it('marks the restored synced folder of a named replica by the folder id the ledger records for it', async () => {
-      const { ledgers } = await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'syncFirst' }));
+    // resources record for the volume's component, replica by replica.
+    it('marks the restored synced folder of a named replica by the folder id the resources record for it', async () => {
+      const { instanceResources } = await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'syncFirst' }));
       volumeService.listComponentVolumeMounts.callsFake(async (app, comp) => [
         { replica: 's1', mount: `/vol/${comp}`, identifier: `${comp}_bident_s1` },
       ]);
-      await ledgers.put(ledgerSharing('bkapp', 's1', 'web_bident_s1', 'web_bident_s1'));
+      await instanceResources.put(resourcesSharing('bkapp', 's1', 'web_bident_s1', 'web_bident_s1'));
       const setSyncedMark = sinon.stub(appCaches, 'setSyncedMark').resolves();
 
       const failure = await runRestore('bkapp', [{ component: 'web', restore: true }], 'local');
@@ -2892,11 +2892,11 @@ describe('appOperations tests', () => {
     });
 
     it('holds and marks the restored synced folder of an app registered before v9 by its 8.x folder id, not by its directory\'s name', async () => {
-      const { ledgers, pause } = await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'syncFirst' }, { registrationVersion: 8 }));
+      const { instanceResources, pause } = await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'syncFirst' }, { registrationVersion: 8 }));
       volumeService.listComponentVolumeMounts.callsFake(async (app, comp) => [
         { replica: null, mount: `/vol/${comp}`, identifier: `${comp}_bident` },
       ]);
-      await ledgers.put(ledgerSharing('bkapp', null, 'web_bident', 'fluxweb_bkapp'));
+      await instanceResources.put(resourcesSharing('bkapp', null, 'web_bident', 'fluxweb_bkapp'));
       const setSyncedMark = sinon.stub(appCaches, 'setSyncedMark').resolves();
 
       const failure = await runRestore('bkapp', [{ component: 'web', restore: true }], 'local');
@@ -2907,9 +2907,9 @@ describe('appOperations tests', () => {
       expect(marked).to.deep.equal(['fluxweb_bkapp']);
     });
 
-    it('refuses to clear a synced volume whose folder the ledger does not record, with its data intact', async () => {
-      const { ledgers, restoreAppData } = await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'syncFirst' }));
-      await ledgers.remove('bkapp', null);
+    it('refuses to clear a synced volume whose folder the resources do not record, with its data intact', async () => {
+      const { instanceResources, restoreAppData } = await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'syncFirst' }));
+      await instanceResources.remove('bkapp', null);
 
       const failure = await runRestore('bkapp', [{ component: 'web', restore: true }], 'local');
 
@@ -2921,12 +2921,12 @@ describe('appOperations tests', () => {
     // neither copy, shared with every peer: its folder is demoted so the peers
     // are never offered it. For an app registered before v9 the folder's id is
     // the 8.x name and its directory is named by the identifier.
-    it('demotes the folder of a half-cleared synced component by the id the ledger records, and holds it stopped', async () => {
-      const { ledgers, restoreAppData } = await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'syncFirst' }));
+    it('demotes the folder of a half-cleared synced component by the id the resources record, and holds it stopped', async () => {
+      const { instanceResources, restoreAppData } = await restoreStubs('bkapp', await syncedApp('bkapp', { web: 'syncFirst' }));
       volumeService.listComponentVolumeMounts.callsFake(async (app, comp) => [
         { replica: null, mount: `/vol/${comp}`, identifier: `${comp}_bident` },
       ]);
-      await ledgers.put(ledgerSharing('bkapp', null, 'web_bident', 'fluxweb_bkapp'));
+      await instanceResources.put(resourcesSharing('bkapp', null, 'web_bident', 'fluxweb_bkapp'));
       restoreAppData.resolves({ status: false, error: 'could not clear /vol/web before unpacking' });
       sinon.stub(syncthingService, 'getConfigFolders').resolves([
         { id: 'fluxweb_bkapp', path: `${appsFolder}web_bident`, type: 'sendreceive' },
@@ -3002,7 +3002,7 @@ describe('appOperations tests', () => {
     it('holds the component whose data could not be cleared, in those words', async () => {
       const deployment = await oneComponentDeployment('myapp', 'web');
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
-      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: 'myapp' }))));
+      stubHostedInstances().byName.resolves(installedRecord(await registeredSpec(await v9Spec({ name: 'myapp' }))));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       sinon.stub(appReconciler, 'observedContainerState').resolves({
@@ -3069,7 +3069,7 @@ describe('appOperations tests', () => {
         : { status: { isSynced: false, globalBytes: 100, inSyncBytes: 40, syncPercentage: 40 }, reason: 'ok' },
     );
 
-    it('holds and gives back the synced component\'s folder by the id the ledger records, never by its directory\'s name', async () => {
+    it('holds and gives back the synced component\'s folder by the id the resources record, never by its directory\'s name', async () => {
       const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
       // An app registered before v9: the folder id is the 8.x name while the
@@ -3092,7 +3092,7 @@ describe('appOperations tests', () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(composed);
       copyIs(true);
       const pauseFolder = sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves('held');
-      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: 'bkapp' }))));
+      stubHostedInstances().byName.resolves(installedRecord(await registeredSpec(await v9Spec({ name: 'bkapp' }))));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(composed);
       sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       // The stop is proved against docker, not against the drive's verdict: the
@@ -3134,7 +3134,7 @@ describe('appOperations tests', () => {
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
       const deployment = await oneComponentDeployment('bkapp', 'comp1');
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
-      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: 'bkapp' }))));
+      stubHostedInstances().byName.resolves(installedRecord(await registeredSpec(await v9Spec({ name: 'bkapp' }))));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       // The gate stands for two reads, and the container is up for exactly as long.
@@ -3200,7 +3200,7 @@ describe('appOperations tests', () => {
           },
         }));
         sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(composed);
-        stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: 'bkapp' }))));
+        stubHostedInstances().byName.resolves(installedRecord(await registeredSpec(await v9Spec({ name: 'bkapp' }))));
         sinon.stub(deploymentProvider, 'buildDeployment').resolves(composed);
         sinon.stub(syncthingFolderStateMachine, 'probeFolderSyncCompletion').resolves(probe);
         sinon.stub(syncthingMonitorHelpers, 'setSyncthingFolderPaused').resolves('held');
@@ -3300,7 +3300,7 @@ describe('appOperations tests', () => {
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
       const deployment = await oneComponentDeployment('bkapp', 'comp1');
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
-      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: 'bkapp' }))));
+      stubHostedInstances().byName.resolves(installedRecord(await registeredSpec(await v9Spec({ name: 'bkapp' }))));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
       // drive() awaits convergence but ANSWERS whether it happened. A component
       // that ran out the converge backstop comes back unconverged, and archiving
@@ -3341,7 +3341,7 @@ describe('appOperations tests', () => {
       // somewhere else, which is what it did on the first attempt.
       const deployment = await oneComponentDeployment('bkapp', 'comp1');
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
-      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: 'bkapp' }))));
+      stubHostedInstances().byName.resolves(installedRecord(await registeredSpec(await v9Spec({ name: 'bkapp' }))));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
       sinon.stub(volumeService, 'listComponentVolumeMounts').resolves([{ replica: null, mount: '/vol' }]);
       sinon.stub(IOUtils, 'checkFileExists').resolves(false);
@@ -3376,7 +3376,7 @@ describe('appOperations tests', () => {
       const deployment = await oneComponentDeployment('bkapp', 'comp1');
       expect(deployment.getComponent('comp1').hasSyncthing()).to.be.false;
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(deployment);
-      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: 'bkapp' }))));
+      stubHostedInstances().byName.resolves(installedRecord(await registeredSpec(await v9Spec({ name: 'bkapp' }))));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(deployment);
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       // The stop is proved against docker, not against the drive's verdict: the
@@ -3423,7 +3423,7 @@ describe('appOperations tests', () => {
       expect(composed.getComponent('web').hasActiveStandbySyncthing(), 'fixture must be activeStandby').to.be.true;
       expect(composed.getComponent('worker').hasActiveStandbySyncthing()).to.be.false;
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(composed);
-      stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: 'bkapp' }))));
+      stubHostedInstances().byName.resolves(installedRecord(await registeredSpec(await v9Spec({ name: 'bkapp' }))));
       sinon.stub(deploymentProvider, 'buildDeployment').resolves(composed);
       const drive = sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
       // The stop is proved against docker, not against the drive's verdict: the
@@ -3485,11 +3485,11 @@ describe('appOperations tests', () => {
       async function setupBackup(volumes) {
         sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
         sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(await oneComponentDeployment('bkapp', 'web'));
-        // A real InstantiatedSpec: the (unstubbed) buildDeployment behind
+        // A real RegisteredSpec: the (unstubbed) buildDeployment behind
         // componentIdentifiersFor resolves and builds from it for real, with no
-        // ledger, so the registration names its components.
-        stubInstalled().byName.resolves(installedRecord(await instantiatedSpec(await v9Spec({ name: 'bkapp' }))));
-        stubLedgers();
+        // resources, so the registration names its components.
+        stubHostedInstances().byName.resolves(installedRecord(await registeredSpec(await v9Spec({ name: 'bkapp' }))));
+        stubInstanceResources();
         sinon.stub(appReconciler, 'drive').resolves({ converged: true, failed: [] });
         // The stop is proved against docker, not against the drive's verdict: the
         // converge backstop answers 'provisional' and that is not counted, so

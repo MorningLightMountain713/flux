@@ -8,13 +8,13 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { asConfig } = require('./fixtures/config');
 const {
-  loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
+  loadSpecLibrary, V9_SUBMISSION, v9Spec, registeredSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 const { installedRecord } = require('./fixtures/appRecords');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. Everything this module does arithmetic on comes off real objects: the
-// installed rows are real InstantiatedSpecs (the class appsRepository.hydrate
+// installed rows are real RegisteredSpecs (the class appsRepository.hydrate
 // produces), and every figure it sums is a real DeploymentSpec's own
 // resourceTotals()/reservableHostDiskGb(). The host-disk overhead in particular
 // is the spec's to state — a fake that added a flat 12GB was asserting the
@@ -89,9 +89,9 @@ describe('hardwareValidationService tests', () => {
       // eslint-disable-next-line no-await-in-loop
       const spec = await specSized(entry.name, entry.sizing);
       const row = entry.height === undefined
-        ? flux.InstantiatedSpec.deserialize({ ...spec.serialize(), hash: 'a'.repeat(64) }, { chain: flux.Chain.MAIN })
+        ? flux.RegisteredSpec.deserialize({ ...spec.serialize(), hash: 'a'.repeat(64) }, { chain: flux.Chain.MAIN })
         // eslint-disable-next-line no-await-in-loop
-        : await instantiatedSpec(spec, { height: entry.height });
+        : await registeredSpec(spec, { height: entry.height });
       rows.push(row);
       deploymentProviderStub.getInstalledDeployments
         .withArgs(entry.name).resolves(deploymentsFor(spec, entry.replicas ?? [null]));
@@ -155,7 +155,7 @@ describe('hardwareValidationService tests', () => {
       './appUninstaller': appUninstallerStub,
       '../serviceHelper': serviceHelperStub,
       '../appRuntime/deploymentProvider': deploymentProviderStub,
-      '../appDatabase/appRecords': { installed: () => ({ apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)) }) },
+      '../appDatabase/appRecords': { hostedInstances: () => ({ apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)) }) },
     });
   });
 
@@ -353,7 +353,7 @@ describe('hardwareValidationService tests', () => {
     it('should handle apps with missing height field (treat as 0)', async () => {
       fourCoreNode();
       // app1 is a row stored before the height column existed - the real
-      // InstantiatedSpec built from that document reports no height at all.
+      // RegisteredSpec built from that document reports no height at all.
       const rows = await installAll([
         { name: 'app1', height: undefined, sizing: FITS },
         { name: 'app2', height: 1000, sizing: FITS },

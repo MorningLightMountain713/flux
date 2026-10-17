@@ -4,7 +4,7 @@ const path = require('node:path');
 const fs = require('node:fs/promises');
 const appRecords = require('../appDatabase/appRecords');
 const appIdentityMoveStore = require('./appIdentityMoveStore');
-const installedLedger = require('./installedLedger');
+const instanceResourceObserver = require('./instanceResourceObserver');
 const specLibrary = require('../utils/specLibrary');
 const appHistory = require('../appDecisions/appHistory');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
@@ -136,19 +136,19 @@ async function attempt(label, step) {
  * it. Null when no applied decision names the row's message: the app is
  * leaving the list, and the boot reconcile removes it.
  *
- * @param {object} installed - InstantiatedSpec of the row
+ * @param {object} installed - RegisteredSpec of the row
  * @returns {Promise<{uuid: string, registrationVersion: number, fromRow: boolean}|null>}
  */
 /**
  * Writes an instance's record with the registered fields changed, keeping its
  * replica, its removal owed and its component keys.
- * @param {object} installed - the InstalledSpec
+ * @param {object} installed - the HostedInstance
  * @param {object} fields - the registered fields to change
  */
 async function putRecord(installed, fields) {
-  const { InstalledSpec, InstantiatedSpec } = specLibrary.loaded();
-  const registered = InstantiatedSpec.deserialize({ ...installed.record.serialize(), ...fields }, { chain: nodeChain() });
-  await appRecords.installed().put(new InstalledSpec({
+  const { HostedInstance, RegisteredSpec } = specLibrary.loaded();
+  const registered = RegisteredSpec.deserialize({ ...installed.record.serialize(), ...fields }, { chain: nodeChain() });
+  await appRecords.hostedInstances().put(new HostedInstance({
     record: registered, replica: installed.replica, owed: installed.owed, componentKeys: installed.componentKeys, formerNames: installed.formerNames,
   }));
 }
@@ -180,14 +180,14 @@ async function registrationOf(installed) {
  */
 async function planRow(row, { isAppIdentity, appIdentityFromUuid }) {
   const { name, replica } = row;
-  let installed = await appRecords.installed().byReplica(name, replica);
+  let installed = await appRecords.hostedInstances().byReplica(name, replica);
   if (!installed) return { name, replica, skipped: 'the row cannot be read yet' };
   if (isAppIdentity(installed.identity)) return { name, replica, done: true };
   const registration = await registrationOf(installed);
   if (!registration) return { name, replica, skipped: 'no applied registration names its uuid and version' };
   if (!registration.fromRow) {
     await putRecord(installed, { uuid: registration.uuid });
-    installed = await appRecords.installed().byReplica(name, replica);
+    installed = await appRecords.hostedInstances().byReplica(name, replica);
   }
   const to = appIdentityFromUuid(registration.uuid);
   const token = operationRegistry.acquire(name, 'move', 'appIdentityMove', `moving ${name} onto ${to}`);
@@ -258,7 +258,7 @@ async function removeFormerContainer(formerComp) {
 /**
  * The backing image of a component's volume under its former identifier: the
  * file the kernel mounts at the former directory when it is mounted, else the
- * image the ledger names, else the image found by its 8.x name, else by its
+ * image the resources name, else the image found by its 8.x name, else by its
  * bare one. Null when none is there.
  *
  * @param {string} formerIdentifier
@@ -267,14 +267,14 @@ async function removeFormerContainer(formerComp) {
  */
 async function formerImage(formerIdentifier, formerDir) {
   const recorded = await volumeService.recordedVolumeImage(formerIdentifier);
-  return installedLedger.discoverVolumeImage(formerIdentifier, recorded, [formerDir]);
+  return instanceResourceObserver.discoverVolumeImage(formerIdentifier, recorded, [formerDir]);
 }
 
 /**
  * Moves a component's volume onto its identity: the former directory is
  * unmounted, the image is renamed beside itself, and the directory is
  * renamed. An image already in place is left where it is. The volume is
- * mounted once the ledger names it, after the record flips.
+ * mounted once the resources name it, after the record flips.
  *
  * @param {object} formerComp
  * @param {object} comp - the same component of the deployment built under the identity
@@ -340,7 +340,7 @@ async function repointFolder(comp) {
  * @param {string} uuid
  */
 async function recreate(name, replica, uuid) {
-  const installed = await appRecords.installed().byReplica(name, replica);
+  const installed = await appRecords.hostedInstances().byReplica(name, replica);
   const deployment = await deploymentProvider.buildDeployment(installed, { replica });
   const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(deployment);
   // eslint-disable-next-line no-restricted-syntax
@@ -400,16 +400,16 @@ async function executePlan(plan) {
   }
 
   await attempt(`network of ${name}`, () => appDockerNetwork.ensureAppDockerNetwork(name, { networkName: next.networkName }));
-  // The record names the identity, the ledger holds what the move left on the
+  // The record names the identity, the resources hold what the move left on the
   // host under it, and the move's own record ends with them.
-  const { InstalledLedger } = specLibrary.loaded();
+  const { InstanceResources } = specLibrary.loaded();
   await putRecord(plan.installed, { identity: to });
-  await appRecords.ledgers().put(new InstalledLedger({
-    name, replica, ...(await installedLedger.observeLedger(next, async (identifier) => volumes.get(identifier) ?? null)),
+  await appRecords.instanceResources().put(new InstanceResources({
+    name, replica, ...(await instanceResourceObserver.observeResources(next, async (identifier) => volumes.get(identifier) ?? null)),
   }));
   await appIdentityMoveStore.end(name, replica);
 
-  // Mounted now that the ledger names each image, through the one path every
+  // Mounted now that the resources name each image, through the one path every
   // mount takes. A volume that will not mount is left for the reconciler,
   // which mounts every volume before it starts an app and reports one that
   // will not.
@@ -524,7 +524,7 @@ async function moveInstalledAppsOntoIdentity() {
   };
   held.clear();
   const spec = await getSpec();
-  const rows = await appRecords.installed().all();
+  const rows = await appRecords.hostedInstances().all();
   const due = rows.filter((row) => !spec.isAppIdentity(row.identity));
   if (due.length === 0) {
     log.info(`appIdentityMove - every installed app (${rows.length}) is on its identity`);

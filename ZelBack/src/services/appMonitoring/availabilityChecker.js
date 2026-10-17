@@ -110,7 +110,7 @@ async function runAvailabilityCheckOnce(dosState, portsNotWorking, failedNodesTe
       return timeouts.appError;
     }
 
-    const installedApps = await appRecords.installed().apps();
+    const installedApps = await appRecords.hostedInstances().apps();
     const appPorts = [];
 
     for (const install of installedApps) {

@@ -2,9 +2,9 @@
 
 /**
  * Builds the per-app shutdown plan handed to flux-shutdownd, joining provenance
- * (InstantiatedSpec: owner, message hash) with operational data
+ * (RegisteredSpec: owner, message hash) with operational data
  * (DeploymentComponent: shutdown, preStop, loadBalancing, ports). Everything is
- * read through domain-class getters — no raw `instantiated.spec.components[...]`
+ * read through domain-class getters — no raw `registered.spec.components[...]`
  * reach-ins.
  *
  * The shutdown ARITHMETIC is not done here either. Drain, budget and whether a
@@ -86,11 +86,11 @@ function buildPorts(deployComp) {
  * plan per replica (their effective host ports differ). `replica` is
  * required-and-nullable: always present, null for loose placement.
  *
- * @param {object} instantiated - an InstantiatedSpec
+ * @param {object} registered - an RegisteredSpec
  * @param {object} deployment - a DeploymentSpec (one identity's view)
  * @returns {object}
  */
-function buildShutdownPlan(instantiated, deployment) {
+function buildShutdownPlan(registered, deployment) {
   const components = [];
   let budget = 0;
   for (const [, deployComp] of deployment.componentEntries()) {
@@ -114,7 +114,7 @@ function buildShutdownPlan(instantiated, deployment) {
     app_name: deployment.appName,
     identity: deployment.identity,
     replica: deployment.replica ?? null,
-    spec_hash: instantiated.hash,
+    spec_hash: registered.hash,
     shutdown_budget_app_wide_s: budget,
     startup_order: [...deployment.startupOrder],
     components,
@@ -125,7 +125,7 @@ function buildShutdownPlan(instantiated, deployment) {
  * The identity flux-shutdownd knows an app by: the one stamped on every
  * container of the app as a label, which for an app installed before
  * identities were minted is its name.
- * @param {{identity?: ?string, name: string}} app - a row, an installed record
+ * @param {{identity?: ?string, name: string}} app - a row, a hosted instance
  *   or a teardown target
  * @returns {string}
  */

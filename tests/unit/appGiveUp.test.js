@@ -18,7 +18,7 @@ const peerComponentProbe = require('../../ZelBack/src/services/appLifecycle/peer
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const domain = require('./fixtures/appDomain');
 const { loadSpecLibrary, v9Spec, V9_SUBMISSION } = require('./fixtures/fluxSpec');
-const { stubInstalled, installedRecord } = require('./fixtures/appRecords');
+const { stubHostedInstances, installedRecord } = require('./fixtures/appRecords');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -44,12 +44,12 @@ describe('appGiveUp - handing an app back', () => {
   const eventsOf = (name) => publish.getCalls()
     .filter((c) => c.args[0] === name).map((c) => c.args[1]);
 
-  // The record appsRepository returns: an InstantiatedSpec, whose instance count
+  // The record appsRepository returns: an RegisteredSpec, whose instance count
   // lives on its spec.
   let installedAppOne;
   before(async () => {
     const spec = await domain.v9Spec({ name: 'appone', instances: 5 });
-    installedAppOne = await domain.instantiatedSpec({ event: await domain.confirmedEvent({ spec }) });
+    installedAppOne = await domain.registeredSpec({ event: await domain.confirmedEvent({ spec }) });
   });
 
   beforeEach(() => {
@@ -61,7 +61,7 @@ describe('appGiveUp - handing an app back', () => {
     noteEvacuated = sinon.stub(residentialNodeDosService, 'noteEvacuated');
     sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(LOCAL);
     sinon.stub(registryManager, 'appLocation').resolves([{ ip: LOCAL }, { ip: '5.6.7.8:16127' }]);
-    stubInstalled().byName.resolves(installedRecord(installedAppOne));
+    stubHostedInstances().byName.resolves(installedRecord(installedAppOne));
     safety = sinon.stub(appEvacuationSafety, 'canSafelyRemoveApp').resolves(safe);
     uninstall = sinon.stub(appUninstaller, 'uninstallApplication')
       .resolves({ status: appUninstaller.UninstallStatus.REMOVED, reason: null });

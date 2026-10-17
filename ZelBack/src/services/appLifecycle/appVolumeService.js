@@ -88,23 +88,23 @@ async function createAppVolume(deployComp, res) {
       // be undone: every abort above leaves the volume and its data as they were.
       globalState.folderHoldings?.delete(appId);
       // The image's file, its disk and its mount directory are this node's
-      // choices, in the ledger before the file exists: a later boot mounts the
-      // file the ledger names and nothing else. The filesystem is stamped with
-      // a UUID this node chooses, in the ledger once the filesystem carries it,
+      // choices, in the resources before the file exists: a later boot mounts the
+      // file the resources name and nothing else. The filesystem is stamped with
+      // a UUID this node chooses, in the resources once the filesystem carries it,
       // so the boot tells this image from a file left under the same name and
-      // an image never formatted from one overwritten. A ledger that cannot be
+      // an image never formatted from one overwritten. resources that cannot be
       // written fails the install, since nothing later could find the image.
       const volumeFsUuid = crypto.randomUUID();
       const volume = {
         file: volumeFile, disk: useThisVolume.mount, fsUuid: null, mountDir: appsFolder + appId,
       };
-      await appRecords.ledgers().setComponent(deployComp.appName, deployComp.replica ?? null, deployComp.componentKey, 'volume', volume);
+      await appRecords.instanceResources().setComponent(deployComp.appName, deployComp.replica ?? null, deployComp.componentKey, 'volume', volume);
       await serviceHelper.runCommand('fallocate', { params: ['-l', `${requiredGb}G`, volumeFile], runAsRoot: true });
       emitStatus(res, { status: 'Space allocated' });
 
       emitStatus(res, { status: 'Creating filesystem...' });
       await serviceHelper.runCommand('mke2fs', { params: ['-t', 'ext4', '-U', volumeFsUuid, volumeFile], runAsRoot: true });
-      await appRecords.ledgers().setComponent(deployComp.appName, deployComp.replica ?? null, deployComp.componentKey, 'volume', { ...volume, fsUuid: volumeFsUuid });
+      await appRecords.instanceResources().setComponent(deployComp.appName, deployComp.replica ?? null, deployComp.componentKey, 'volume', { ...volume, fsUuid: volumeFsUuid });
       emitStatus(res, { status: 'Filesystem created' });
 
       emitStatus(res, { status: 'Making directory...' });

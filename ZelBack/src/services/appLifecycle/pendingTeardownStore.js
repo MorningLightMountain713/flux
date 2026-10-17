@@ -4,7 +4,7 @@ const config = require('config');
 const log = require('../../lib/log');
 const dbHelper = require('../dbHelper');
 
-// The owed-teardown records a release before the installed ledger wrote: the
+// The owed-teardown records a release before instance resources wrote: the
 // removal prelude of that release wrote one before it deleted the local row,
 // and boot recovery and the reconciler re-drive each until its teardown
 // finishes and clears it. Nothing writes one; the collection is dropped once

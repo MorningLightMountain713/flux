@@ -17,7 +17,7 @@ describe('appNetworkLinker tests', () => {
   let dockerServiceStub;
   let logStub;
 
-  // Build a minimal InstantiatedSpec-shaped object whose spec mimics the
+  // Build a minimal RegisteredSpec-shaped object whose spec mimics the
   // domain-class surface: dependencyEntries() returns MATERIALIZED edges and
   // linkedAppNames() is the network-bearing projection, exactly as
   // FluxAppSpecBase derives it. The graph semantics live in
@@ -66,18 +66,18 @@ describe('appNetworkLinker tests', () => {
   // Loads the module against the shared stubs. The linker imports
   // buildViewsByName from the resolver, so the resolver is proxied over the
   // SAME stubs — its view resolution then honours each test's
-  // resolveInstantiatedSpec behaviour rather than being separately faked.
+  // resolveRegisteredSpec behaviour rather than being separately faked.
   function loadLinker() {
     const relationshipResolver = proxyquire('../../ZelBack/src/services/appLifecycle/relationshipResolver', {
       '../appDatabase/appsRepository': appsRepositoryStub,
-      '../appDatabase/appRecords': { installed: () => ({ byName: async (name) => installedRecord(await appsRepositoryStub.getInstalledApp(name)), apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)) }), },
+      '../appDatabase/appRecords': { hostedInstances: () => ({ byName: async (name) => installedRecord(await appsRepositoryStub.getInstalledApp(name)), apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)) }), },
       '../utils/specCutover': specCutoverStub,
       '../dockerService': dockerServiceStub,
       '../../lib/log': logStub,
     });
     return proxyquire('../../ZelBack/src/services/appLifecycle/appNetworkLinker', {
       '../appDatabase/appsRepository': appsRepositoryStub,
-      '../appDatabase/appRecords': { installed: () => ({ byName: async (name) => installedRecord(await appsRepositoryStub.getInstalledApp(name)), apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)) }), },
+      '../appDatabase/appRecords': { hostedInstances: () => ({ byName: async (name) => installedRecord(await appsRepositoryStub.getInstalledApp(name)), apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)) }), },
       '../dockerService': dockerServiceStub,
       './relationshipResolver': relationshipResolver,
       '../../lib/log': logStub,
@@ -90,7 +90,7 @@ describe('appNetworkLinker tests', () => {
       listInstalledApps: sinon.stub(),
     };
     specCutoverStub = {
-      resolveInstantiatedSpec: sinon.stub().callsFake(async (app) => (app.isEncrypted ? null : app.spec)),
+      resolveRegisteredSpec: sinon.stub().callsFake(async (app) => (app.isEncrypted ? null : app.spec)),
     };
     dockerServiceStub = {
       appDockerNetworkConnect: sinon.stub().resolves(),
@@ -276,7 +276,7 @@ describe('appNetworkLinker tests', () => {
       // so it was never reattached when its dependency's network was recreated.
       const enc = instSpec({ name: 'appB', dependencies: linkedTo('appA'), encrypted: true });
       appsRepositoryStub.listInstalledApps.resolves([enc, instSpec({ name: 'appA' })]);
-      specCutoverStub.resolveInstantiatedSpec.withArgs(enc).resolves(enc.spec);
+      specCutoverStub.resolveRegisteredSpec.withArgs(enc).resolves(enc.spec);
       dockerServiceStub.getAppContainerNames.withArgs('appB').resolves(['fluxweb_appB']);
 
       await appNetworkLinker.reconnectLinkedApps('appA');
@@ -287,7 +287,7 @@ describe('appNetworkLinker tests', () => {
     it('leaves an undecryptable consumer alone rather than guessing', async () => {
       const enc = instSpec({ name: 'appB', dependencies: linkedTo('appA'), encrypted: true });
       appsRepositoryStub.listInstalledApps.resolves([enc, instSpec({ name: 'appA' })]);
-      specCutoverStub.resolveInstantiatedSpec.withArgs(enc).resolves(null);
+      specCutoverStub.resolveRegisteredSpec.withArgs(enc).resolves(null);
       dockerServiceStub.getAppContainerNames.withArgs('appB').resolves(['fluxweb_appB']);
 
       await appNetworkLinker.reconnectLinkedApps('appA');
@@ -328,7 +328,7 @@ describe('appNetworkLinker tests', () => {
     it('bridges an ENCRYPTED app at boot, whose edges live in the ciphertext', async () => {
       const enc = instSpec({ name: 'appB', dependencies: linkedTo('appA'), encrypted: true });
       appsRepositoryStub.listInstalledApps.resolves([enc]);
-      specCutoverStub.resolveInstantiatedSpec.withArgs(enc).resolves(enc.spec);
+      specCutoverStub.resolveRegisteredSpec.withArgs(enc).resolves(enc.spec);
       appsRepositoryStub.getInstalledApp.withArgs('appA').resolves(instSpec({ name: 'appA', owner: 'owner1' }));
       dockerServiceStub.getAppContainerNames.withArgs('appB').resolves(['fluxweb_appB']);
 

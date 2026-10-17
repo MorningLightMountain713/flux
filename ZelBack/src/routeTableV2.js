@@ -29,7 +29,7 @@ module.exports = [
   // How this process came up: the capability registry's states and transitions,
   // which exist before anything else does. For the node's operator and the team.
   // Which activeStandby components this node runs or holds, for a balancer routing
-  // them: it reads the installed records.
+  // them: it reads the hosted instances.
   {
     method: 'get', path: '/apps/activestandby', needs: ['localDbPrepared'], handler: 'apiV2/apps#activeStandby',
   },

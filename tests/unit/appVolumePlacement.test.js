@@ -162,7 +162,7 @@ describe('app volume placement', () => {
         info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(), debug: sinon.stub(),
       },
       '../deviceHelper': deviceHelperStub,
-      '../appDatabase/appRecords': { ledgers: () => ({ byIdentifier: sinon.stub().resolves(null) }) },
+      '../appDatabase/appRecords': { instanceResources: () => ({ byIdentifier: sinon.stub().resolves(null) }) },
       fs: { promises: { stat: statStub } },
     });
   });

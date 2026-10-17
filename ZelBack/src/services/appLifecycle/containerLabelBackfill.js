@@ -104,7 +104,7 @@ async function resolveContainer(container) {
   const { DeploymentSpec } = await getSpecBackend();
   const identity = DeploymentSpec.identityFromIdentifier(identifier);
 
-  const installed = await appRecords.installed().byIdentity(identity);
+  const installed = await appRecords.hostedInstances().byIdentity(identity);
   if (!installed) return null;
 
   const deployments = await deploymentProvider.getInstalledDeployments(installed.name);

@@ -45,10 +45,10 @@ describe('every call FluxOS and its harness make to a door that builds a legacy 
   const ROOT = path.join(__dirname, '../..');
   const SOURCES = [path.join(ROOT, 'ZelBack/src'), path.join(ROOT, 'test-infra/runner/framework')];
   const DOORS = new RegExp(`\\b(${[
-    'deserializeSpec', 'parseSubmission', 'InstantiatedSpec\\.deserialize', 'InstalledSpec\\.deserialize',
-    'AppEventLegacy\\.deserialize', 'EncryptedSpecV8\\.(?:deserialize|fromSubmission)',
+    'deserializeSpec', 'parseSubmission', 'RegisteredSpec\\.deserialize', 'HostedInstance\\.deserialize',
+    'AppEventLegacy\\.deserialize', 'SealedSpecV8\\.(?:deserialize|fromSubmission)',
     'VersionClass\\.(?:deserialize|fromSubmission)', 'FluxAppSpecV[1-8]\\.(?:deserialize|fromSubmission)',
-    'new AppRegistry', 'new InstalledApps',
+    'new AppRegistry', 'new HostedInstances',
   ].join('|')})\\(`, 'g');
   // FluxOS's own wrapper of the library door, which passes the node's chain
   // inside: its definition and its one call are not calls to the library.

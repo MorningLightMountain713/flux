@@ -41,7 +41,7 @@ describe('fluxNodeService — the mesh surface', () => {
       founderAsk: sinon.stub().resolves({ answer: 'wait' }),
       // The app installed here under the caller's name.
       getInstalledApp: sinon.stub().callsFake(async (name) => (name === 'myblog' ? { name, identity: 'ab12cd34ef56', replica: null } : null)),
-      // Its deployment: each component's key, as the installed record gives it.
+      // Its deployment: each component's key, as the hosted instance gives it.
       buildDeployment: sinon.stub().callsFake(async () => ({
         getComponent: (name) => (name === 'db' ? { componentKey: DB_KEY } : undefined),
       })),
@@ -54,7 +54,7 @@ describe('fluxNodeService — the mesh surface', () => {
       './appMesh/foundingService': {
         founderAsk: stubs.founderAsk,
       },
-      './appDatabase/appRecords': { installed: () => ({ byName: stubs.getInstalledApp }) },
+      './appDatabase/appRecords': { hostedInstances: () => ({ byName: stubs.getInstalledApp }) },
       './appRuntime/deploymentProvider': { buildDeployment: stubs.buildDeployment },
     });
   });

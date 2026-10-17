@@ -81,7 +81,7 @@ function legacyRow(submission) {
  * row the library refuses fails LOUDLY at the fixture.
  */
 function storedRow(doc) {
-  flux.InstantiatedSpec.deserialize(doc, { chain: flux.Chain.MAIN });
+  flux.RegisteredSpec.deserialize(doc, { chain: flux.Chain.MAIN });
   return doc;
 }
 
@@ -134,9 +134,9 @@ describe('resourceQueryService tests', () => {
       // eslint-disable-next-line no-restricted-syntax
       for (const row of rows) {
         let record = null;
-        try { record = flux.InstantiatedSpec.deserialize(row, { chain: flux.Chain.MAIN }); } catch { record = null; }
+        try { record = flux.RegisteredSpec.deserialize(row, { chain: flux.Chain.MAIN }); } catch { record = null; }
         // eslint-disable-next-line no-await-in-loop
-        if (record) await appRecords.installed().put(new flux.InstalledSpec({ record }));
+        if (record) await appRecords.hostedInstances().put(new flux.HostedInstance({ record }));
         // eslint-disable-next-line no-await-in-loop
         else await dbHelper.insertOneToDatabase(database, collection, { ...row, nameKey: String(row.name).toLowerCase(), replica: null, owed: null });
       }
@@ -144,7 +144,7 @@ describe('resourceQueryService tests', () => {
 
     async function insertApps(rows) {
       await seedRows(rows);
-      const installed = (await appRecords.installed().apps()).map((record) => record.record);
+      const installed = (await appRecords.hostedInstances().apps()).map((record) => record.record);
       expect(
         installed.length,
         'every fixture row must survive the real deserializer - hydrate() drops a refused row silently',
@@ -615,7 +615,7 @@ describe('resourceQueryService tests', () => {
     it('drops a stored row the real library refuses, and still counts the rest', async () => {
       // The case this replaces asserted "0 locked" for a row with cpu, ram, hdd,
       // description, owner and repotag all missing, and read that 0 as "missing
-      // values default to zero". They do not: InstantiatedSpec.deserialize
+      // values default to zero". They do not: RegisteredSpec.deserialize
       // refuses the row outright ("cpu: Missing cpu"), hydrate() logs and returns
       // null, and the app never becomes a deployment at all. The 0 was the app
       // disappearing.
@@ -627,7 +627,7 @@ describe('resourceQueryService tests', () => {
       };
       let threw = null;
       try {
-        flux.InstantiatedSpec.deserialize(malformed, { chain: flux.Chain.MAIN });
+        flux.RegisteredSpec.deserialize(malformed, { chain: flux.Chain.MAIN });
       } catch (err) {
         threw = err;
       }
@@ -652,7 +652,7 @@ describe('resourceQueryService tests', () => {
       });
 
       await seedRows([good, malformed]);
-      const installed = (await appRecords.installed().apps()).map((record) => record.record);
+      const installed = (await appRecords.hostedInstances().apps()).map((record) => record.record);
       expect(installed.map((spec) => spec.name), 'only the well-formed row hydrates')
         .to.deep.equal(['GoodApp']);
 

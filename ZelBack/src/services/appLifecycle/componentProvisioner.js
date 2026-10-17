@@ -109,7 +109,7 @@ async function verifyComponentImage(component) {
 
 /**
  * The methods this node opens a host port by: the firewall when it is active,
- * UPnP when the node maps ports. What the ledger records against each port.
+ * UPnP when the node maps ports. What the resources record against each port.
  * @returns {Promise<Array<'ufw'|'upnp'>>}
  */
 async function portOpenMethods() {
@@ -152,9 +152,9 @@ async function openHostPorts(ports, appName, opened, status = null) {
 }
 
 /**
- * Install a single app component: its block in the instance's ledger, its
+ * Install a single app component: its block in the instance's resources, its
  * ports, image, volume, certificate and mesh runtime, and the container, left
- * in Docker `created`. Each thing is recorded in the ledger before the step
+ * in Docker `created`. Each thing is recorded in the resources before the step
  * that creates it; a redeploy keeps the ports and the volume it does not
  * recreate.
  * @param {object} component - DeploymentComponent to install
@@ -202,10 +202,10 @@ async function installComponent(component, options = {}) {
     if (onStatus) onStatus(msg);
   };
 
-  const ledgers = appRecords.ledgers();
-  const entry = (field, value) => ledgers.setComponent(appName, replica, component.componentKey, field, value);
+  const instanceResources = appRecords.instanceResources();
+  const entry = (field, value) => instanceResources.setComponent(appName, replica, component.componentKey, field, value);
   const compDir = path.join(appsFolder, id);
-  await ledgers.addComponent(appName, replica, component.componentKey, {
+  await instanceResources.addComponent(appName, replica, component.componentKey, {
     identifier: id,
     image: component.image,
     syncFolder: component.hasSyncthing() ? { id: component.syncFolderId, path: compDir } : null,

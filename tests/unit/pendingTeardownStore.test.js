@@ -5,7 +5,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { asConfig } = require('./fixtures/config');
 
-// The records a release before the installed ledger left: read until each is
+// The records a release before instance resources left: read until each is
 // cleared by its teardown, written by nothing.
 describe('pendingTeardownStore tests', () => {
   let store; // key -> doc

@@ -9,7 +9,7 @@ const sinon = require('sinon');
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
 const backendTlsRenewal = require('../../ZelBack/src/services/appLifecycle/backendTlsRenewal');
 const {
-  loadSpecLibrary, V9_SUBMISSION, v9Spec, instantiatedSpec, assertAnswers,
+  loadSpecLibrary, V9_SUBMISSION, v9Spec, registeredSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
@@ -86,9 +86,9 @@ function deploymentFor(spec, replica = null) {
 }
 
 /** The installed-list row appQueryService.installedApps actually produces: a
- *  real InstantiatedSpec's own serialization, not a `{ name }` literal. */
+ *  real RegisteredSpec's own serialization, not a `{ name }` literal. */
 async function installedRow(spec) {
-  return (await instantiatedSpec(spec)).serialize();
+  return (await registeredSpec(spec)).serialize();
 }
 
 describe('backendTlsRenewal.renewalSweep', () => {

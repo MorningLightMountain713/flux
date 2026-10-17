@@ -134,7 +134,7 @@ describe('manifestStanding', () => {
     });
 
     it('opens an encrypted spec for the name it carries only when a row the listed owner did not sign needs it', async () => {
-      // The sealed spec's own open: what a real EncryptedSpecV9 answers, as a seam.
+      // The sealed spec's own open: what a real SealedSpecV9 answers, as a seam.
       const decrypt = sinon.stub().resolves({ content: null });
       const sealed = { sealed: true, createProvider: async () => ({}), decrypt };
       const app = { name: 'myapp', identity: IDENTITY, owner: BUYER, spec: sealed };

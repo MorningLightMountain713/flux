@@ -17,13 +17,13 @@ const STORES = Object.freeze({
     database: config.get('database.appsglobal.database'),
     collection: config.get('database.appsglobal.collections.appsInformation'),
   }),
-  installedApps: Object.freeze({
+  hostedInstances: Object.freeze({
     database: config.get('database.appslocal.database'),
     collection: config.get('database.appslocal.collections.appsInformation'),
   }),
-  installedLedgers: Object.freeze({
+  instanceResources: Object.freeze({
     database: config.get('database.appslocal.database'),
-    collection: config.get('database.appslocal.collections.installedLedgers'),
+    collection: config.get('database.appslocal.collections.instanceResources'),
   }),
   appMessages: Object.freeze({
     database: config.get('database.appsglobal.database'),
@@ -41,8 +41,8 @@ const STORES = Object.freeze({
 
 let storage = null;
 let appRegistry = null;
-let installedApps = null;
-let installedLedgers = null;
+let hostedInstanceStore = null;
+let instanceResourceStore = null;
 let appMessages = null;
 let contentManifests = null;
 let appDecisions = null;
@@ -68,33 +68,33 @@ function registry() {
 }
 
 /**
- * The installed apps: this node's record of each instance it runs.
- * @returns {import('@runonflux/flux-spec-backend').InstalledApps}
+ * The hosted instances: this node's record of each instance it runs.
+ * @returns {import('@runonflux/flux-spec-backend').HostedInstances}
  */
-function installed() {
-  if (!installedApps) {
-    const { InstalledApps } = specLibrary.loaded();
-    installedApps = new InstalledApps(provider(), {
+function hostedInstances() {
+  if (!hostedInstanceStore) {
+    const { HostedInstances } = specLibrary.loaded();
+    hostedInstanceStore = new HostedInstances(provider(), {
       chain: nodeChain(),
-      onUnreadable: (stored, error) => log.warn(`installedApps: a stored record cannot be read: ${error.message} (name=${stored.name}, replica=${stored.replica ?? null}, version=${stored.version})`),
+      onUnreadable: (stored, error) => log.warn(`hostedInstances: a stored record cannot be read: ${error.message} (name=${stored.name}, replica=${stored.replica ?? null}, version=${stored.version})`),
     });
   }
-  return installedApps;
+  return hostedInstanceStore;
 }
 
 /**
- * The installed ledgers: what this node created for each instance it runs,
- * keyed as the installed record is.
- * @returns {import('@runonflux/flux-spec-backend').InstalledLedgers}
+ * The instance resources: what this node created for each instance it runs,
+ * keyed as the hosted instance is.
+ * @returns {import('@runonflux/flux-spec-backend').InstanceResourceStore}
  */
-function ledgers() {
-  if (!installedLedgers) {
-    const { InstalledLedgers } = specLibrary.loaded();
-    installedLedgers = new InstalledLedgers(provider(), {
-      onUnreadable: (stored, error) => log.warn(`installedLedgers: a stored ledger cannot be read: ${error.message} (name=${stored.name}, replica=${stored.replica ?? null})`),
+function instanceResources() {
+  if (!instanceResourceStore) {
+    const { InstanceResourceStore } = specLibrary.loaded();
+    instanceResourceStore = new InstanceResourceStore(provider(), {
+      onUnreadable: (stored, error) => log.warn(`instanceResources: a stored record cannot be read: ${error.message} (name=${stored.name}, replica=${stored.replica ?? null})`),
     });
   }
-  return installedLedgers;
+  return instanceResourceStore;
 }
 
 /**
@@ -143,18 +143,18 @@ function decisions() {
 }
 
 /**
- * The installed record of the instance one of whose containers has an
- * identifier, found through its ledger; null when no ledger names it.
+ * The hosted instance one of whose containers has an identifier, found through
+ * its resources; null when no instance's resources name it.
  * @param {string} identifier
- * @returns {Promise<import('@runonflux/flux-spec-backend').InstalledSpec|null>}
+ * @returns {Promise<import('@runonflux/flux-spec-backend').HostedInstance|null>}
  */
-async function installedByIdentifier(identifier) {
-  const ledger = await ledgers().byIdentifier(identifier);
-  return ledger ? installed().byReplica(ledger.name, ledger.replica, { includeOwed: true }) : null;
+async function hostedInstanceByIdentifier(identifier) {
+  const resources = await instanceResources().byIdentifier(identifier);
+  return resources ? hostedInstances().byReplica(resources.name, resources.replica, { includeOwed: true }) : null;
 }
 
 /**
- * The key an installed record and its ledger share, as one string: the name
+ * The key a hosted instance and its resources share, as one string: the name
  * in any letter case, and the replica.
  * @param {{name: string, replica: string|null}} instance
  * @returns {string}
@@ -164,5 +164,5 @@ function instanceKey({ name, replica }) {
 }
 
 module.exports = {
-  registry, installed, ledgers, messages, manifests, decisions, installedByIdentifier, instanceKey, STORES,
+  registry, hostedInstances, instanceResources, messages, manifests, decisions, hostedInstanceByIdentifier, instanceKey, STORES,
 };

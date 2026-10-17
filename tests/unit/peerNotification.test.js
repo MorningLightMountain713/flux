@@ -7,15 +7,15 @@ const { AsyncLock } = require('../../ZelBack/src/services/utils/asyncLock');
 const { asConfig } = require('./fixtures/config');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const {
-  loadSpecLibrary, v9Spec, sealedV8Spec, instantiatedSpec, assertAnswers,
+  loadSpecLibrary, v9Spec, sealedV8Spec, registeredSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 const { installedRecord } = require('./fixtures/appRecords');
 const { departingApps } = require('../../ZelBack/src/services/utils/globalState');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. What this module actually handles is the row appsRepository hydrates
-// (a real InstantiatedSpec) and the cleartext view the cutover seam resolves it
-// to (a real FluxAppSpecV9, or a real DecryptedCanonicalSpec for an enterprise
+// (a real RegisteredSpec) and the cleartext view the cutover seam resolves it
+// to (a real FluxAppSpecV9, or a real OpenedSpec for an enterprise
 // app). Both are built for real below; what stays stubbed is I/O — the peer
 // transport, mongo, the mesh material — and the cutover seam itself, because
 // FluxOS's own crypto providers need a benchmark channel.
@@ -42,7 +42,7 @@ describe('peerNotification tests', () => {
   let logStub;
   let enqueueAllStub;
   let getAppLocationStub;
-  let resolveInstantiatedStub;
+  let resolveRegisteredStub;
   let listInstalledAppsStub;
   let listInstalledIdentitiesStub;
   let broadcastAllStub;
@@ -56,7 +56,7 @@ describe('peerNotification tests', () => {
   });
 
   /** The installed row for a real spec — what listInstalledApps hydrates to. */
-  const installedRow = (spec, state = {}) => instantiatedSpec(spec, {
+  const installedRow = (spec, state = {}) => registeredSpec(spec, {
     hash: APP_HASH, identity: APP_IDENTITY, uuid: APP_UUID, ...state,
   });
 
@@ -97,7 +97,7 @@ describe('peerNotification tests', () => {
       appLocationFromEvents: getAppLocationStub,
     },
     '../appDatabase/appRecords': {
-      installed: () => ({
+      hostedInstances: () => ({
         apps: async () => (await listInstalledAppsStub()).map((record) => installedRecord(record)),
         keys: async (name) => (await listInstalledIdentitiesStub(name)).map((replica) => ({ name, replica })),
       }),
@@ -106,7 +106,7 @@ describe('peerNotification tests', () => {
       meshBroadcastFields: meshFieldsStub,
     },
     '../utils/specCutover': {
-      resolveInstantiatedSpec: resolveInstantiatedStub,
+      resolveRegisteredSpec: resolveRegisteredStub,
     },
     '../nodeConfirmationService': {
       canSendMessages: sinon.stub().returns(true),
@@ -156,11 +156,11 @@ describe('peerNotification tests', () => {
 
     enqueueAllStub = sinon.stub().resolves();
     getAppLocationStub = sinon.stub().resolves([]);
-    // Mirrors specCutover.resolveInstantiatedSpec exactly: a cleartext row
+    // Mirrors specCutover.resolveRegisteredSpec exactly: a cleartext row
     // yields its own spec, an encrypted one is decrypted through the wrapper's
     // own provider. Only the seam is a stub — the decrypt it performs is the
     // library's real one, against the fixture's test crypto provider.
-    resolveInstantiatedStub = sinon.stub().callsFake(async (inst) => {
+    resolveRegisteredStub = sinon.stub().callsFake(async (inst) => {
       if (!inst.isEncrypted) return inst.spec;
       const provider = await inst.spec.createProvider();
       return inst.spec.decrypt(provider);
@@ -265,7 +265,7 @@ describe('peerNotification tests', () => {
     it('announces an enterprise app whose spec cannot be decrypted', async () => {
       const encInst = await installedRow(await sealedV8Spec({ name: 'encapp' }), { hash: ENC_HASH });
       listInstalledAppsStub.resolves([await installedRow(await v9Spec({ name: 'app1' })), encInst]);
-      resolveInstantiatedStub.withArgs(sinon.match.same(encInst)).resolves(null);
+      resolveRegisteredStub.withArgs(sinon.match.same(encInst)).resolves(null);
 
       await peerNotification.checkAndNotifyPeersOfRunningApps();
 
@@ -365,7 +365,7 @@ describe('peerNotification tests', () => {
     });
 
     it('resolves an encrypted installed app to its decrypted view and broadcasts it by name+hash', async () => {
-      // A real enterprise row: EncryptedSpecV8 under a real InstantiatedSpec, so
+      // A real enterprise row: SealedSpecV8 under a real RegisteredSpec, so
       // isEncrypted is the class's own answer and the decrypt is the library's.
       const encInst = await installedRow(
         await sealedV8Spec({ name: 'encapp' }),
@@ -377,10 +377,10 @@ describe('peerNotification tests', () => {
       await peerNotification.checkAndNotifyPeersOfRunningApps();
 
       // the encrypted instance is passed straight to the seam for decryption
-      expect(resolveInstantiatedStub.calledOnceWith(encInst)).to.be.true;
+      expect(resolveRegisteredStub.calledOnceWith(encInst)).to.be.true;
       // and what came back is the readable wrapper, not the sealed row: it can
       // answer the introspection the resolved view exists for.
-      const view = await resolveInstantiatedStub.firstCall.returnValue;
+      const view = await resolveRegisteredStub.firstCall.returnValue;
       expect(view.sealed).to.equal(false);
       assertAnswers(view, ['componentNames']);
       expect(view.componentNames()).to.deep.equal(['web']);
@@ -441,7 +441,7 @@ describe('peerNotification tests', () => {
       expect(message.apps.map((a) => a.name)).to.deep.equal(['app1']);
       expect(message.apps[0].state).to.equal('active');
       // The name and hash on the wire are the ROW's, read off the real
-      // InstantiatedSpec rather than restated by the message builder.
+      // RegisteredSpec rather than restated by the message builder.
       expect(message.apps[0].hash).to.equal(APP_HASH);
     });
 

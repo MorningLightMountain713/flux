@@ -27,7 +27,7 @@ describe('appSpecHistory tests', () => {
       '../utils/specCutover': { resolveSpec: resolveSpecStub },
       '../utils/specLibs': {
         getSpecBackend: sinon.stub().resolves({
-          InstantiatedSpec: { fromEvent: (event) => ({ ...event, owner: event.spec.owner }) },
+          RegisteredSpec: { fromEvent: (event) => ({ ...event, owner: event.spec.owner }) },
         }),
       },
     });

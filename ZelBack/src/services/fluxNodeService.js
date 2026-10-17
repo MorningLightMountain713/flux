@@ -220,7 +220,7 @@ async function postMeshFounder(req, res) {
       return;
     }
     // The app installed here under the caller's name is the caller's app.
-    const installed = await appRecords.installed().byName(scoped.app.name);
+    const installed = await appRecords.hostedInstances().byName(scoped.app.name);
     if (!installed?.identity) {
       res.json(messageHelper.errUnauthorizedMessage());
       return;
