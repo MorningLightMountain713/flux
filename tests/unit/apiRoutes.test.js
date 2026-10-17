@@ -163,33 +163,31 @@ describe('loading express', () => {
       .trustLocalhost(true)
       .expect(404, done);
   });
-  it('http /id/loginphrase', (done) => {
+  it('http /id/loginphrase', async () => {
     syncthingService.setSyncthingRunningState(true);
-    request(serverHttp)
-      .get('/id/loginphrase')
-      .expect(200)
-      .end((err, res) => {
-        if (err) {
-          return done(err);
-        }
-        expect(JSON.parse(res.text).status).to.be.equal('success');
-        expect(JSON.parse(res.text).data.charAt(0)).to.be.equal('1');
-        return done();
-      });
+    capabilities.setForTests('localDbPrepared', true);
+    try {
+      const res = await request(serverHttp)
+        .get('/id/loginphrase')
+        .expect(200);
+      expect(JSON.parse(res.text).status).to.be.equal('success');
+      expect(JSON.parse(res.text).data.charAt(0)).to.be.equal('1');
+    } finally {
+      capabilities.resetForTests();
+    }
   });
-  it('https /id/loginphrase', (done) => {
+  it('https /id/loginphrase', async () => {
     syncthingService.setSyncthingRunningState(true);
-    request(serverHttps)
-      .get('/id/loginphrase')
-      .trustLocalhost(true)
-      .expect(200)
-      .end((err, res) => {
-        if (err) {
-          return done(err);
-        }
-        expect(JSON.parse(res.text).status).to.be.equal('success');
-        expect(JSON.parse(res.text).data.charAt(0)).to.be.equal('1');
-        return done();
-      });
+    capabilities.setForTests('localDbPrepared', true);
+    try {
+      const res = await request(serverHttps)
+        .get('/id/loginphrase')
+        .trustLocalhost(true)
+        .expect(200);
+      expect(JSON.parse(res.text).status).to.be.equal('success');
+      expect(JSON.parse(res.text).data.charAt(0)).to.be.equal('1');
+    } finally {
+      capabilities.resetForTests();
+    }
   });
 });

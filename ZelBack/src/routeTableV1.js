@@ -23,7 +23,8 @@ const EXPLORER = ['explorerSynced'];
 // Pricing, entitlement and submission read the live row for name conflicts,
 // update authority and the update quote.
 const PRICING = ['appRegistryConsistent', 'explorerSynced', 'chainStateConsistent'];
-// The quorum grant journal and the founding records live in the local database.
+// The quorum grant journal, the founding records and the login phrases live in
+// the local database.
 const LOCAL_DB = ['localDbPrepared'];
 
 // Why a route reads no capability.
@@ -99,10 +100,10 @@ module.exports = [
   { method: 'get', path: '/daemon/zvalidateaddress/:zaddr?', needs: DAEMON, cache: '30 seconds', handler: 'daemonService/daemonServiceUtilityRpcs#zValidateAddress' },
   { method: 'get', path: '/daemon/getbenchmarks', needs: DAEMON, cache: '30 seconds', handler: 'daemonService/daemonServiceBenchmarkRpcs#getBenchmarks' },
   { method: 'get', path: '/daemon/getbenchstatus', needs: DAEMON, cache: '30 seconds', handler: 'daemonService/daemonServiceBenchmarkRpcs#getBenchStatus' },
-  { method: 'get', path: '/id/loginphrase', none: NONE.OWN_ANSWER, handler: 'idService#loginPhrase' },
-  { method: 'get', path: '/id/emergencyphrase', none: NONE.OWN_ANSWER, handler: 'idService#emergencyPhrase' },
-  { method: 'get', path: '/zelid/loginphrase', none: NONE.OWN_ANSWER, handler: 'idService#loginPhrase' }, // DEPRECATED
-  { method: 'get', path: '/zelid/emergencyphrase', none: NONE.OWN_ANSWER, handler: 'idService#emergencyPhrase' }, // DEPRECATED
+  { method: 'get', path: '/id/loginphrase', needs: LOCAL_DB, handler: 'idService#loginPhrase' },
+  { method: 'get', path: '/id/emergencyphrase', needs: LOCAL_DB, handler: 'idService#emergencyPhrase' },
+  { method: 'get', path: '/zelid/loginphrase', needs: LOCAL_DB, handler: 'idService#loginPhrase' }, // DEPRECATED
+  { method: 'get', path: '/zelid/emergencyphrase', needs: LOCAL_DB, handler: 'idService#emergencyPhrase' }, // DEPRECATED
   { method: 'get', path: '/flux/nodetier', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxService#getNodeTier' },
   { method: 'get', path: '/flux/info', none: NONE.PROCESS, cache: '60 seconds', handler: 'fluxService#getFluxInfoAPI' },
   // Uncached: the answer depends on who is asking.

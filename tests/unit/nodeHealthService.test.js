@@ -12,6 +12,7 @@ const dockerService = require('../../ZelBack/src/services/dockerService');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
 const nodeHealthService = require('../../ZelBack/src/services/nodeHealthService');
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 
 const { expect } = chai;
 
@@ -369,11 +370,28 @@ describe('nodeHealthService tests', () => {
       daemonSynced(true);
       syncthingService.setSyncthingRunningState(true);
       sinon.stub(dockerService, 'dockerListImages').returns(true);
+      capabilities.setForTests('localDbPrepared', true);
     });
 
     afterEach(() => {
       syncthingService.setSyncthingRunningState(true);
+      capabilities.resetForTests();
       sinon.restore();
+    });
+
+    it('reports the database not ready while the local database is being prepared, without reading it', async () => {
+      healthyHardware();
+      capabilities.setForTests('localDbPrepared', false);
+      const connection = sinon.spy(dbHelper, 'databaseConnection');
+      const res = generateResponse();
+
+      await nodeHealthService.nodeHealth(undefined, res);
+
+      sinon.assert.calledOnceWithMatch(res.json, {
+        status: 'error',
+        data: { name: 'DatabaseNotReady', message: 'The local database is not ready', failed: 'db' },
+      });
+      sinon.assert.notCalled(connection);
     });
 
     it('nodeHealth reports success with per-check data when the node is fit', async () => {

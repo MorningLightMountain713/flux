@@ -10,6 +10,7 @@ const syncthingService = require('./syncthingService');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const nodeDosState = require('./nodeDosState');
 const appInspector = require('./appManagement/appInspector');
+const capabilities = require('./utils/capabilities');
 const { isDaemonUnavailable } = require('./utils/routeGuards');
 
 /**
@@ -148,7 +149,10 @@ function fit(checks) {
 async function checkNodeFitness() {
   const checks = {};
 
-  // db: a fast read proves the local database answers
+  // db: a fast read proves the local database answers, once it is prepared
+  if (!capabilities.isUp('localDbPrepared')) {
+    return unfit('db', { message: 'The local database is not ready', name: 'DatabaseNotReady' }, checks);
+  }
   try {
     const db = dbHelper.databaseConnection();
     const database = db.db(config.database.local.database);

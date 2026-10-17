@@ -20,6 +20,7 @@ const dockerService = require('../../ZelBack/src/services/dockerService');
 const nodeDosState = require('../../ZelBack/src/services/nodeDosState');
 const appInspector = require('../../ZelBack/src/services/appManagement/appInspector');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
+const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 
 const adminConfig = {
@@ -60,6 +61,11 @@ describe('idService tests', () => {
   // idService reads the node's config off globalThis when it is called.
   beforeEach(() => {
     globalThis.userconfig = adminConfig;
+    capabilities.setForTests('localDbPrepared', true);
+  });
+
+  afterEach(() => {
+    capabilities.resetForTests();
   });
 
   before(requireMongo);
@@ -739,6 +745,21 @@ describe('idService tests', () => {
         expect(fitness.ok, 'the carve-out let a genuinely unfit node through').to.equal(false);
         expect(fitness.error.message).to.equal('Node hardware requirements not met');
       });
+    });
+
+    it('reports the database not ready while the local database is being prepared, without reading it', async () => {
+      healthyHardware();
+      capabilities.setForTests('localDbPrepared', false);
+      const connection = sinon.spy(dbHelper, 'databaseConnection');
+      const res = generateResponse();
+
+      await idService.nodeHealth(undefined, res);
+
+      sinon.assert.calledOnceWithExactly(res.json, {
+        status: 'error',
+        data: { code: undefined, name: 'DatabaseNotReady', message: 'The local database is not ready' },
+      });
+      sinon.assert.notCalled(connection);
     });
 
     // The other side of the same question, and the case that used to be decided
