@@ -13,65 +13,62 @@ const { departures } = require('../../ZelBack/src/services/appDatabase/offListDe
 describe('networkStateService tests', () => {
   let fluxnodeRpcStub;
 
-  const defaultNetworkState = {
-    status: 'success',
-    data: [
-      {
-        collateral: 'COutPoint(38c04da72786b08adb309259cdd6d2128ea9059d0334afca127a5dc4e75bf174, 0)',
-        txhash: '38c04da72786b08adb309259cdd6d2128ea9059d0334afca127a5dc4e75bf174',
-        outidx: '0',
-        ip: '47.199.51.61:16137',
-        network: '',
-        added_height: 1_076_533,
-        confirmed_height: 1_076_535,
-        last_confirmed_height: 1_079_888,
-        last_paid_height: 1_077_653,
-        tier: 'CUMULUS',
-        payment_address: 't1Z6mWoCrFC2g3iTCFdFkYdTfwtG84E3y2o',
-        pubkey: '04378c8585d45861c8783f9c8cd0c85478164c12ce3fd13af1b44ebc8fe1ad6c786e92b211cb9566c596b6e2454d394a06bc44f748afb3c9ee48caa096d704abac',
-        activesince: '1647197272',
-        lastpaid: '1647333786',
-        amount: '1000.00',
-        rank: 0,
-      },
-      {
-        collateral: 'COutPoint(46c9ae0313fc128d0fb4327f5babc7868fe557035b58e0a7cb475cfd8819f8c7, 0)',
-        txhash: '46c9ae0313fc128d0fb4327f5babc7868fe557035b58e0a7cb475cfd8819f8c7',
-        outidx: '0',
-        ip: '47.199.51.61:16147',
-        network: '',
-        added_height: 1_079_638,
-        confirmed_height: 1_079_642,
-        last_confirmed_height: 1_079_889,
-        last_paid_height: 0,
-        tier: 'CUMULUS',
-        payment_address: 't1UHecy6WiSJXs4Zqt5UvVdRDF7PMbZJK7q',
-        pubkey: '04d50620a31f045c61be42bad44b7a9424ffb6de37bf256b88f00e118e59736165255f2f4585b36c7e1f8f3e20db4fa4e55e61cc01dc7a5cd2b2ed0153627588dc',
-        activesince: '1647572455',
-        lastpaid: '1516980000',
-        amount: '1000.00',
-        rank: 1,
-      },
-      {
-        collateral: 'COutPoint(47c9ae0313fc128d0fb4327f5babc7868fe557035b58e0a7cb475cfd8819f8c7, 0)',
-        txhash: '46c9ae0313fc128d0fb4327f5babc7868fe557035b58e0a7cb475cfd8819f8c7',
-        outidx: '0',
-        ip: '47.199.51.62:16147',
-        network: '',
-        added_height: 1_079_638,
-        confirmed_height: 1_079_642,
-        last_confirmed_height: 1_079_889,
-        last_paid_height: 0,
-        tier: 'CUMULUS',
-        payment_address: 't1UHecy6WiSJXs4Zqt5UvVdRDF7PMbZJK7q',
-        pubkey: '04d50620a31f045c61be42bad44b7a9424ffb6de37bf256b88f00e118e59736165255f2f4585b36c7e1f8f3e20db4fa4e55e61cc01dc7a5cd2b2ed0153627588dc',
-        activesince: '1647572455',
-        lastpaid: '1516980000',
-        amount: '1000.00',
-        rank: 2,
-      },
-    ],
-  };
+  const defaultNetworkState = { value: [
+    {
+      collateral: 'COutPoint(38c04da72786b08adb309259cdd6d2128ea9059d0334afca127a5dc4e75bf174, 0)',
+      txhash: '38c04da72786b08adb309259cdd6d2128ea9059d0334afca127a5dc4e75bf174',
+      outidx: '0',
+      ip: '47.199.51.61:16137',
+      network: '',
+      added_height: 1_076_533,
+      confirmed_height: 1_076_535,
+      last_confirmed_height: 1_079_888,
+      last_paid_height: 1_077_653,
+      tier: 'CUMULUS',
+      payment_address: 't1Z6mWoCrFC2g3iTCFdFkYdTfwtG84E3y2o',
+      pubkey: '04378c8585d45861c8783f9c8cd0c85478164c12ce3fd13af1b44ebc8fe1ad6c786e92b211cb9566c596b6e2454d394a06bc44f748afb3c9ee48caa096d704abac',
+      activesince: '1647197272',
+      lastpaid: '1647333786',
+      amount: '1000.00',
+      rank: 0,
+    },
+    {
+      collateral: 'COutPoint(46c9ae0313fc128d0fb4327f5babc7868fe557035b58e0a7cb475cfd8819f8c7, 0)',
+      txhash: '46c9ae0313fc128d0fb4327f5babc7868fe557035b58e0a7cb475cfd8819f8c7',
+      outidx: '0',
+      ip: '47.199.51.61:16147',
+      network: '',
+      added_height: 1_079_638,
+      confirmed_height: 1_079_642,
+      last_confirmed_height: 1_079_889,
+      last_paid_height: 0,
+      tier: 'CUMULUS',
+      payment_address: 't1UHecy6WiSJXs4Zqt5UvVdRDF7PMbZJK7q',
+      pubkey: '04d50620a31f045c61be42bad44b7a9424ffb6de37bf256b88f00e118e59736165255f2f4585b36c7e1f8f3e20db4fa4e55e61cc01dc7a5cd2b2ed0153627588dc',
+      activesince: '1647572455',
+      lastpaid: '1516980000',
+      amount: '1000.00',
+      rank: 1,
+    },
+    {
+      collateral: 'COutPoint(47c9ae0313fc128d0fb4327f5babc7868fe557035b58e0a7cb475cfd8819f8c7, 0)',
+      txhash: '46c9ae0313fc128d0fb4327f5babc7868fe557035b58e0a7cb475cfd8819f8c7',
+      outidx: '0',
+      ip: '47.199.51.62:16147',
+      network: '',
+      added_height: 1_079_638,
+      confirmed_height: 1_079_642,
+      last_confirmed_height: 1_079_889,
+      last_paid_height: 0,
+      tier: 'CUMULUS',
+      payment_address: 't1UHecy6WiSJXs4Zqt5UvVdRDF7PMbZJK7q',
+      pubkey: '04d50620a31f045c61be42bad44b7a9424ffb6de37bf256b88f00e118e59736165255f2f4585b36c7e1f8f3e20db4fa4e55e61cc01dc7a5cd2b2ed0153627588dc',
+      activesince: '1647572455',
+      lastpaid: '1516980000',
+      amount: '1000.00',
+      rank: 2,
+    },
+  ] };
 
   beforeEach(async () => {
     fluxnodeRpcStub = sinon.stub(daemonServiceFluxnodeRpcs, 'viewDeterministicFluxNodeList');
@@ -89,7 +86,7 @@ describe('networkStateService tests', () => {
     await networkStateService.start({ stateEmitter: blockEmitter });
 
     expect(noteList.callCount).to.be.at.least(1);
-    expect(noteList.lastCall.args[0]).to.deep.equal(defaultNetworkState.data.map((node) => node.ip));
+    expect(noteList.lastCall.args[0]).to.deep.equal(defaultNetworkState.value.map((node) => node.ip));
     departures.resetForTests();
     await networkStateService.stop();
   });
@@ -102,7 +99,7 @@ describe('networkStateService tests', () => {
 
     const state = networkStateService.networkState();
 
-    expect(state).to.be.deep.equal(defaultNetworkState.data);
+    expect(state).to.be.deep.equal(defaultNetworkState.value);
     sinon.assert.calledOnce(fluxnodeRpcStub);
     await networkStateService.stop();
   });
@@ -119,7 +116,7 @@ describe('networkStateService tests', () => {
     await networkStateService.waitStarted();
 
     const state = networkStateService.networkState();
-    expect(state).to.be.deep.equal(defaultNetworkState.data);
+    expect(state).to.be.deep.equal(defaultNetworkState.value);
 
     await startPromise;
 
@@ -133,7 +130,7 @@ describe('networkStateService tests', () => {
   // the life of the process, AppSyncOrchestrator.start() among them, so the node
   // never synced app state.
   it('resolves waitStarted on the delta path, which does not fetch', async () => {
-    const snapshot = defaultNetworkState.data;
+    const snapshot = defaultNetworkState.value;
     // The delta path anchors itself with a snapshot and reports that it owns the
     // list; nothing fetches.
     sinon.stub(nodeListSource, 'start').callsFake(async ({ stateManager }) => {
@@ -173,7 +170,7 @@ describe('networkStateService tests', () => {
     await networkStateService.start({ stateEmitter: blockEmitter });
     await waiter;
 
-    expect(networkStateService.networkState()).to.be.deep.equal(defaultNetworkState.data);
+    expect(networkStateService.networkState()).to.be.deep.equal(defaultNetworkState.value);
 
     await networkStateService.stop();
   });
@@ -298,7 +295,7 @@ describe('networkStateService tests', () => {
 
     const state = networkStateService.networkState();
 
-    expect(state).to.not.equal(defaultNetworkState.data);
+    expect(state).to.not.equal(defaultNetworkState.value);
     await networkStateService.stop();
   });
 

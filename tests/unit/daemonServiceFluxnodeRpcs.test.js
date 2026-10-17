@@ -268,89 +268,41 @@ describe('daemonServiceFluxnodeRpcs tests', () => {
     let daemonServiceUtilsStub;
 
     beforeEach(() => {
-      daemonServiceUtilsStub = sinon.stub(daemonServiceUtils, 'executeCall');
+      daemonServiceUtilsStub = sinon.stub(daemonServiceUtils, 'executeCall').resolves({ status: 'success', data: [{ ip: '1.2.3.4' }] });
     });
 
     afterEach(() => {
       sinon.restore();
     });
 
-    it('should trigger rpc, no parameters, no response passed', async () => {
-      daemonServiceUtilsStub.returns('success');
-      const req = {
-        params: {
-          test: 'test',
-        },
-        query: {
-          test2: 'test2',
-        },
-      };
-      const expectedResponse = 'success';
-      const expectedArgs = ['viewdeterministiczelnodelist', []];
-
-      const result = await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList(req);
-
-      expect(result).to.equal(expectedResponse);
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, ...expectedArgs);
+    it('answers the whole list', async () => {
+      expect(await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList()).to.deep.equal({ value: [{ ip: '1.2.3.4' }] });
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'viewdeterministiczelnodelist', []);
     });
 
-    it('should trigger rpc, response passed', async () => {
-      daemonServiceUtilsStub.returns('success');
-      const req = {
-        params: {
-          test: 'test',
-        },
-        query: {
-          test2: 'test2',
-        },
-      };
-      const res = generateResponse();
-      const expectedResponse = 'success';
-      const expectedArgs = ['viewdeterministiczelnodelist', []];
+    it('answers the nodes matching a filter', async () => {
+      await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList('1.2.3.4');
 
-      const result = await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList(req, res);
-
-      expect(result).to.equal(`Response: ${expectedResponse}`);
-      sinon.assert.calledOnceWithExactly(res.json, expectedResponse);
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, ...expectedArgs);
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'viewdeterministiczelnodelist', ['1.2.3.4']);
     });
 
-    it('should trigger rpc, data passed in params, no response passed', async () => {
-      daemonServiceUtilsStub.returns('success');
-      const req = {
-        params: {
-          filter: 'test',
-        },
-        query: {
-          test2: 'test2',
-        },
-      };
-      const expectedResponse = 'success';
-      const expectedArgs = ['viewdeterministiczelnodelist', [req.params.filter]];
+    it('answers why there is no list when the daemon refuses', async () => {
+      daemonServiceUtilsStub.resolves({ status: 'error', data: { code: -28, message: 'Loading block index' } });
 
-      const result = await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList(req);
+      expect(await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList()).to.deep.equal({ value: null, reason: { code: -28, message: 'Loading block index' } });
+    });
+  });
 
-      expect(result).to.equal(expectedResponse);
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, ...expectedArgs);
+  describe('createConfirmationTransaction tests', () => {
+    afterEach(() => {
+      sinon.restore();
     });
 
-    it('should trigger rpc, data passed in query, no response passed', async () => {
-      daemonServiceUtilsStub.returns('success');
-      const req = {
-        params: {
-          test: 'test',
-        },
-        query: {
-          filter: 'test',
-        },
-      };
-      const expectedResponse = 'success';
-      const expectedArgs = ['viewdeterministiczelnodelist', [req.query.filter]];
+    it('answers what the daemon answers', async () => {
+      const executeCall = sinon.stub(daemonServiceUtils, 'executeCall').resolves({ status: 'success', data: 'txid' });
 
-      const result = await daemonServiceFluxnodeRpcs.viewDeterministicFluxNodeList(req);
-
-      expect(result).to.equal(expectedResponse);
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, ...expectedArgs);
+      expect(await daemonServiceFluxnodeRpcs.createConfirmationTransaction()).to.deep.equal({ value: 'txid' });
+      sinon.assert.calledOnceWithExactly(executeCall, 'createconfirmationtransaction');
     });
   });
 
