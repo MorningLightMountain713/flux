@@ -70,19 +70,16 @@ describe('fluxNodeService tests', () => {
           getAppNameByContainerIp: sinon.stub().resolves('myapp'),
         },
         './benchmarkService': {
-          getBenchmarks: sinon.stub().resolves({
-            status: 'success',
-            data: {
-              status: 'CUMULUS',
-              cores: 8,
-              ram: 7.1,
-              disk: 220,
-              diskwritespeed: 540.25,
-              eps: 489.2,
-              download_speed: 150.45,
-              upload_speed: 50.21,
-            },
-          }),
+          getBenchmarks: sinon.stub().resolves({ value: {
+            status: 'CUMULUS',
+            cores: 8,
+            ram: 7.1,
+            disk: 220,
+            diskwritespeed: 540.25,
+            eps: 489.2,
+            download_speed: 150.45,
+            upload_speed: 50.21,
+          } }),
         },
       });
     });

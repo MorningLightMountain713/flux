@@ -20,11 +20,10 @@ async function getNodeSpecs() {
       nodeSpecs.ram = os.totalmem() / 1024 / 1024;
     }
     if (nodeSpecs.ssdStorage === 0) {
-      const benchmarkResponse = await benchmarkService.getBenchmarks();
-      if (benchmarkResponse.status === 'success') {
-        const benchmarkResponseData = benchmarkResponse.data;
-        log.info(`Gathered ssdstorage ${benchmarkResponseData.ssd}`);
-        nodeSpecs.ssdStorage = benchmarkResponseData.ssd;
+      const { value: benchmarks } = await benchmarkService.getBenchmarks();
+      if (benchmarks) {
+        log.info(`Gathered ssdstorage ${benchmarks.ssd}`);
+        nodeSpecs.ssdStorage = benchmarks.ssd;
       } else {
         throw new Error('Error getting ssdstorage from benchmarks');
       }

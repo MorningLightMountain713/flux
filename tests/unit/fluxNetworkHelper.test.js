@@ -239,10 +239,7 @@ describe('fluxNetworkHelper tests', () => {
 
     it('should return IP and Port if benchmark response is correct', async () => {
       const ip = '127.0.0.1:5050';
-      const getBenchmarkResponseData = {
-        status: 'success',
-        data: { ipaddress: ip },
-      };
+      const getBenchmarkResponseData = { value: { ipaddress: ip } };
       benchStub.resolves(getBenchmarkResponseData);
 
       const getIpResult = await fluxNetworkHelper.getLocalSocketAddress();
@@ -252,9 +249,7 @@ describe('fluxNetworkHelper tests', () => {
     });
 
     it('should return null if daemon\'s response is invalid', async () => {
-      const getBenchmarkResponseData = {
-        status: 'error',
-      };
+      const getBenchmarkResponseData = { value: null, reason: {} };
       benchStub.resolves(getBenchmarkResponseData);
 
       const getIpResult = await fluxNetworkHelper.getLocalSocketAddress();
@@ -265,10 +260,7 @@ describe('fluxNetworkHelper tests', () => {
 
     it('should return null if daemon\'s response IP is too short', async () => {
       const ip = '12734';
-      const getBenchmarkResponseData = {
-        status: 'success',
-        data: JSON.stringify({ ipaddress: ip }),
-      };
+      const getBenchmarkResponseData = { value: JSON.stringify({ ipaddress: ip }) };
       benchStub.resolves(getBenchmarkResponseData);
 
       const getIpResult = await fluxNetworkHelper.getLocalSocketAddress();
@@ -278,10 +270,7 @@ describe('fluxNetworkHelper tests', () => {
     });
 
     it('should normalize bare IP from old fluxbench to ip:port', async () => {
-      const getBenchmarkResponseData = {
-        status: 'success',
-        data: { ipaddress: '85.159.213.248' },
-      };
+      const getBenchmarkResponseData = { value: { ipaddress: '85.159.213.248' } };
       benchStub.resolves(getBenchmarkResponseData);
 
       const result = await fluxNetworkHelper.getLocalSocketAddress();
@@ -290,10 +279,7 @@ describe('fluxNetworkHelper tests', () => {
     });
 
     it('should return ip:port as-is from new fluxbench', async () => {
-      const getBenchmarkResponseData = {
-        status: 'success',
-        data: { ipaddress: '85.159.213.248:16127' },
-      };
+      const getBenchmarkResponseData = { value: { ipaddress: '85.159.213.248:16127' } };
       benchStub.resolves(getBenchmarkResponseData);
 
       const result = await fluxNetworkHelper.getLocalSocketAddress();
@@ -302,10 +288,7 @@ describe('fluxNetworkHelper tests', () => {
     });
 
     it('should preserve non-default port from fluxbench', async () => {
-      const getBenchmarkResponseData = {
-        status: 'success',
-        data: { ipaddress: '85.159.213.248:16147' },
-      };
+      const getBenchmarkResponseData = { value: { ipaddress: '85.159.213.248:16147' } };
       benchStub.resolves(getBenchmarkResponseData);
 
       const result = await fluxNetworkHelper.getLocalSocketAddress();
@@ -314,7 +297,7 @@ describe('fluxNetworkHelper tests', () => {
     });
 
     it('serves the cached own-IP without a second benchmark RPC while fresh', async () => {
-      benchStub.resolves({ status: 'success', data: { ipaddress: '85.159.213.248:16127' } });
+      benchStub.resolves({ value: { ipaddress: '85.159.213.248:16127' } });
 
       const first = await fluxNetworkHelper.getLocalSocketAddress();
       const second = await fluxNetworkHelper.getLocalSocketAddress();
@@ -330,7 +313,7 @@ describe('fluxNetworkHelper tests', () => {
     // from memory, a daemon that has died inside the window still produces the last
     // address it ever gave, and the caller reads a dead daemon as a live one.
     it('asks the daemon when the caller wants it fresh, cache or no cache', async () => {
-      benchStub.resolves({ status: 'success', data: { ipaddress: '85.159.213.248:16127' } });
+      benchStub.resolves({ value: { ipaddress: '85.159.213.248:16127' } });
       await fluxNetworkHelper.getLocalSocketAddress();
 
       await fluxNetworkHelper.getLocalSocketAddress({ fresh: true });
@@ -339,16 +322,16 @@ describe('fluxNetworkHelper tests', () => {
     });
 
     it('reports a daemon that stops answering, even inside the freshness window', async () => {
-      benchStub.resolves({ status: 'success', data: { ipaddress: '85.159.213.248:16127' } });
+      benchStub.resolves({ value: { ipaddress: '85.159.213.248:16127' } });
       expect(await fluxNetworkHelper.getLocalSocketAddress()).to.equal('85.159.213.248:16127');
 
-      benchStub.resolves({ status: 'error' });
+      benchStub.resolves({ value: null, reason: {} });
 
       expect(await fluxNetworkHelper.getLocalSocketAddress({ fresh: true })).to.equal(null);
     });
 
     it('re-benchmarks after the cache is invalidated (setLocalSocketAddress null)', async () => {
-      benchStub.resolves({ status: 'success', data: { ipaddress: '85.159.213.248:16127' } });
+      benchStub.resolves({ value: { ipaddress: '85.159.213.248:16127' } });
 
       await fluxNetworkHelper.getLocalSocketAddress();
       fluxNetworkHelper.setLocalSocketAddress(null); // clears the value + the freshness deadline
@@ -358,7 +341,7 @@ describe('fluxNetworkHelper tests', () => {
     });
 
     it('does not cache a null (unresolved) own-IP — keeps probing', async () => {
-      benchStub.resolves({ status: 'error' });
+      benchStub.resolves({ value: null, reason: {} });
 
       const first = await fluxNetworkHelper.getLocalSocketAddress();
       const second = await fluxNetworkHelper.getLocalSocketAddress();
@@ -854,12 +837,9 @@ describe('fluxNetworkHelper tests', () => {
     });
 
     it('should return true if the version is higher than minimal and is not set in cache', async () => {
-      const benchmarkInfoResponse = {
-        status: 'success',
-        data: {
-          version: '6.3.0',
-        },
-      };
+      const benchmarkInfoResponse = { value: {
+        version: '6.3.0',
+      } };
       benchmarkInfoResponseStub.returns(benchmarkInfoResponse);
 
       const isFluxbenchVersionAllowed = await fluxNetworkHelper.checkFluxbenchVersionAllowed();
@@ -869,12 +849,9 @@ describe('fluxNetworkHelper tests', () => {
     });
 
     it('should return true if the version is equal to minimal and is not set in cache', async () => {
-      const benchmarkInfoResponse = {
-        status: 'success',
-        data: {
-          version: '6.2.0',
-        },
-      };
+      const benchmarkInfoResponse = { value: {
+        version: '6.2.0',
+      } };
       benchmarkInfoResponseStub.returns(benchmarkInfoResponse);
 
       const isFluxbenchVersionAllowed = await fluxNetworkHelper.checkFluxbenchVersionAllowed();
@@ -884,12 +861,9 @@ describe('fluxNetworkHelper tests', () => {
     });
 
     it('should return false if the version is lower than minimal and is not set in cache', async () => {
-      const benchmarkInfoResponse = {
-        status: 'success',
-        data: {
-          version: '2.0.0',
-        },
-      };
+      const benchmarkInfoResponse = { value: {
+        version: '2.0.0',
+      } };
       benchmarkInfoResponseStub.returns(benchmarkInfoResponse);
 
       const isFluxbenchVersionAllowed = await fluxNetworkHelper.checkFluxbenchVersionAllowed();
@@ -899,12 +873,9 @@ describe('fluxNetworkHelper tests', () => {
     });
 
     it('should return false if the version is unattainable from benchmarkInfo', async () => {
-      const benchmarkInfoResponse = {
-        status: 'error',
-        data: {
-          test: 'test',
-        },
-      };
+      const benchmarkInfoResponse = { value: null, reason: {
+        test: 'test',
+      } };
       benchmarkInfoResponseStub.returns(benchmarkInfoResponse);
 
       const isFluxbenchVersionAllowed = await fluxNetworkHelper.checkFluxbenchVersionAllowed();

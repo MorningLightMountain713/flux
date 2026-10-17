@@ -155,10 +155,7 @@ function buildHw(opts = {}) {
 
   return proxyquire('../../ZelBack/src/services/appRequirements/hwRequirements', {
     '../benchmarkService': {
-      getBenchmarks: sinon.stub().resolves({
-        status: 'success',
-        data: { cpucores, ram, ssd, architecture: 'amd64' },
-      }),
+      getBenchmarks: sinon.stub().resolves({ value: { cpucores, ram, ssd, architecture: 'amd64' } }),
     },
     '../generalService': {
       nodeTier: sinon.stub().resolves('cumulus'),

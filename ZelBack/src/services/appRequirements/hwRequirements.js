@@ -13,11 +13,11 @@ const nodeSpecs = require('./nodeSpecs');
 const resourceQueryService = require('../appQuery/resourceQueryService');
 
 async function systemArchitecture() {
-  const benchmarkBenchRes = await benchmarkService.getBenchmarks();
-  if (benchmarkBenchRes.status === 'error') {
-    throw benchmarkBenchRes.data;
+  const { value: benchmarks, reason } = await benchmarkService.getBenchmarks();
+  if (!benchmarks) {
+    throw reason;
   }
-  return benchmarkBenchRes.data.architecture;
+  return benchmarks.architecture;
 }
 
 // ── Placement checks ────────────────────────────────────────────────

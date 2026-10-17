@@ -64,9 +64,9 @@ async function getHostInfo(req, res) {
       const validTiers = ['CUMULUS', 'NIMBUS', 'STRATUS'];
       let benchData = null;
 
-      const benchmarkResponse = await benchmarkService.getBenchmarks();
-      if (benchmarkResponse.status === 'success' && benchmarkResponse.data && validTiers.includes(benchmarkResponse.data.status)) {
-        benchData = benchmarkResponse.data;
+      const { value: benchmarks } = await benchmarkService.getBenchmarks();
+      if (benchmarks && validTiers.includes(benchmarks.status)) {
+        benchData = benchmarks;
       } else {
         // Fallback to database if call failed or status is not a valid tier
         log.info('Benchmark call failed or status not a valid tier, fetching from database');

@@ -128,10 +128,23 @@ function errUnauthorizedMessage() {
   return errMessage;
 }
 
+/**
+ * The message a route answers with for a service's answer: its value as data,
+ * or its reason as an error.
+ * @param {{value: *, reason?: {message: string, name?: string, code?: *}}} answer
+ * @returns {object} message
+ */
+function messageOf(answer) {
+  return answer.reason
+    ? createErrorMessage(answer.reason.message, answer.reason.name, answer.reason.code)
+    : createDataMessage(answer.value);
+}
+
 module.exports = {
   createDataMessage,
   createErrorMessage,
   createSuccessMessage,
   createWarningMessage,
   errUnauthorizedMessage,
+  messageOf,
 };

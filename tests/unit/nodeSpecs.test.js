@@ -9,7 +9,7 @@ describe('nodeSpecs tests', () => {
   let logError;
 
   function load() {
-    getBenchmarks = sinon.stub().resolves({ status: 'success', data: { ssd: 480 } });
+    getBenchmarks = sinon.stub().resolves({ value: { ssd: 480 } });
     logError = sinon.stub();
     return proxyquire('../../ZelBack/src/services/appRequirements/nodeSpecs', {
       os: { cpus: () => new Array(8), totalmem: () => 16 * 1024 * 1024 * 1024 },
@@ -32,10 +32,10 @@ describe('nodeSpecs tests', () => {
 
   it('leaves the SSD unread and asks again next time when the benchmark cannot answer', async () => {
     const nodeSpecs = load();
-    getBenchmarks.resolves({ status: 'error', data: 'benchmark down' });
+    getBenchmarks.resolves({ value: null, reason: 'benchmark down' });
     expect((await nodeSpecs.getNodeSpecs()).ssdStorage).to.equal(0);
     sinon.assert.calledOnce(logError);
-    getBenchmarks.resolves({ status: 'success', data: { ssd: 480 } });
+    getBenchmarks.resolves({ value: { ssd: 480 } });
     expect((await nodeSpecs.getNodeSpecs()).ssdStorage).to.equal(480);
   });
 });

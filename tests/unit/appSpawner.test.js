@@ -281,10 +281,7 @@ describe('appSpawner tests', () => {
         obtainNodeCollateralInformation: opts.collateralStub ?? sinon.stub().resolves({ txhash: MY_TXHASH, txindex: 0 }),
       },
       '../benchmarkService': {
-        getBenchmarks: sinon.stub().resolves({
-          status: 'success',
-          data: { ipaddress: MY_ADDR },
-        }),
+        getBenchmarks: opts.getBenchmarks ?? sinon.stub().resolves({ value: { ipaddress: MY_ADDR } }),
       },
       '../fluxNetworkHelper': {
         isPortOpen: sinon.stub().resolves(true),
@@ -501,6 +498,14 @@ describe('appSpawner tests', () => {
       expect(freezeStub.args).to.deep.equal([[MY_ADDR]]);
       expect(aliveStub.callCount).to.equal(0);
       expect(logStub.info.args.some((a) => a[0]?.includes?.('placement freeze'))).to.be.true;
+    });
+
+    it('places nothing while the benchmark cannot answer', async () => {
+      buildModule({ getBenchmarks: sinon.stub().resolves({ value: null, reason: { message: 'benchmark down' } }) });
+      const result = await appSpawner.trySpawningGlobalApplication();
+      expect(result).to.be.a('number');
+      expect(aliveStub.callCount).to.equal(0);
+      expect(logStub.info.args.some((a) => a[0]?.includes?.('FluxBench status Error'))).to.be.true;
     });
 
     it('caps on INSTALLED apps (DB count), not running containers', async () => {

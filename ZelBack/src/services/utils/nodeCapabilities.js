@@ -27,20 +27,20 @@ function delay(ms) {
  * @returns {Promise<'arcane'|'legacy'|'pending'|'unreachable'>}
  */
 async function probeOnce() {
-  const reachable = await benchmarkService.getStatus();
-  if (!reachable || reachable.status !== 'success') return 'unreachable';
+  const status = await benchmarkService.getStatus();
+  if (status.reason) return 'unreachable';
 
-  const response = await benchmarkService.getNodeType();
-  if (response && response.status === 'success' && response.data && typeof response.data.nodetype === 'string') {
-    const { nodetype } = response.data;
+  const nodeType = await benchmarkService.getNodeType();
+  if (typeof nodeType.value?.nodetype === 'string') {
+    const { nodetype } = nodeType.value;
     if (nodetype === 'arcane' || nodetype === 'legacy') return nodetype;
     return 'pending'; // 'pending' or any unexpected value — keep waiting
   }
   // Channel is up (getStatus succeeded) but getnodetype errored. A registered-but-
   // unimplemented method on an older daemon comes back JSON-RPC -32601 / "Method not
   // found" => definitively legacy; anything else is treated as transient => retry.
-  const code = response && response.data && response.data.code;
-  const message = (response && response.data && response.data.message) || '';
+  const code = nodeType.reason?.code;
+  const message = nodeType.reason?.message || '';
   if (code === -32_601 || /method not found/i.test(message) || /invalid method/i.test(message)) {
     return 'legacy';
   }
