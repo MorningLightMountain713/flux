@@ -72,7 +72,7 @@ describe('appRegistry', () => {
     capabilities.resetForTests();
     stubs = {
       // The app messages: the confirmed messages the test holds, by hash.
-      '../appDatabase/appRecords': {
+      './appRecords': {
         messages: () => ({
           confirmedByHashes: async (hashes) => messages.filter((m) => hashes.includes(m.hash)).map((m) => ({ hash: m.hash, permanentForm: () => m })),
         }),
