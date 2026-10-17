@@ -5,13 +5,14 @@
  * The seller registers the app and updates its slot, so FluxDrive holds two of
  * the seller's manifests and two blobs, the first superseded by the second. The
  * seller sells the app, naming the manifest it stands on. Then, with GC passes
- * run at the times the suite names:
+ * run at the times the suite names, once the app list FluxDrive reads from the
+ * nodes names the buyer:
  *   - past every grace, FluxDrive still serves both of the seller's manifests,
  *     the one the sale names among them, and holds both blobs: a change of
  *     holder retires nothing;
  *   - once the buyer updates the slot, a pass inside the grace keeps the
- *     seller's content, and a pass past it leaves only the buyer's manifest and
- *     blob.
+ *     seller's content and confirms the buyer's, and a pass past it leaves only
+ *     the buyer's manifest and blob.
  */
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
@@ -107,6 +108,21 @@ describe('the real FluxDrive across a sale', function () {
 
   const servedBy = async (owner) => (await fluxDriveManifests(name)).filter((m) => m.owner === owner);
 
+  // The owner every node's unfiltered app list names: the list FluxDrive's GC
+  // reads, which a node serves from its route cache.
+  async function listedOwnerOn(index) {
+    const res = await fetch(`${url(index)}/apps/globalappsspecifications`);
+    const body = await res.json();
+    const row = (body.data || []).find((spec) => spec.name === name);
+    return row ? row.owner : null;
+  }
+
+  async function fluxDriveReadsOwner(owner, label) {
+    await waitFor(async () => (await Promise.all(RUNNING.map(listedOwnerOn))).every((o) => o === owner), {
+      timeout: CONVERGE_MS, interval: 3000, label,
+    });
+  }
+
   before(async function () {
     this.timeout(1200000);
     env = await createTestEnv({
@@ -174,9 +190,11 @@ describe('the real FluxDrive across a sale', function () {
     await confirmOnChain(sale.data, RUNNING.map((i) => env.clients[i]));
     await decidedEverywhere(sale.data, 'every node decides the sale applied');
     await view.listedEverywhere(sale.data, RUNNING, 'every node lists the sale');
+    await fluxDriveReadsOwner(buyer.zelid, 'the app list FluxDrive reads names the buyer');
 
     await sweep(harnessNow());
-    await sweep(harnessNow() + LIFECYCLE_GRACE_MS + DAY_MS);
+    const past = await sweep(harnessNow() + LIFECYCLE_GRACE_MS + DAY_MS);
+    expect(past.manifestsSuperseded, `the pass past every grace retires no version: ${JSON.stringify(past)}`).to.equal(0);
 
     const served = await servedBy(seller.zelid);
     expect(served.map((m) => m.version).sort(), 'FluxDrive serves both of the seller\'s manifests').to.deep.equal([1, 2]);
@@ -195,7 +213,8 @@ describe('the real FluxDrive across a sale', function () {
     locators.v3 = await locatorOf(v3, buyer);
     expect(await fluxDriveHolds(locators.v3), 'FluxDrive holds the buyer\'s blob').to.equal(true);
 
-    await sweep(harnessNow());
+    const inside = await sweep(harnessNow());
+    expect((await fluxDriveManifests(name)).find((m) => m.owner === buyer.zelid).confirmed, `the pass confirms the buyer's manifest: ${JSON.stringify(inside)}`).to.equal(true);
     expect((await servedBy(seller.zelid)).length, 'the seller\'s manifests are kept through the grace').to.equal(2);
     expect(await fluxDriveHolds(locators.v1), 'the seller\'s first blob is kept through the grace').to.equal(true);
     expect(await fluxDriveHolds(locators.v2), 'the seller\'s second blob is kept through the grace').to.equal(true);
