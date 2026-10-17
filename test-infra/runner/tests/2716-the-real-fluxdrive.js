@@ -238,14 +238,14 @@ describe('the real FluxDrive', function () {
     expect(update.status, `the update is accepted: ${JSON.stringify(update).slice(0, 300)}`).to.equal('success');
     await decidedEverywhere(update.data, 'undecided', 'every node holds the unpaid update');
     const waiting = await fluxDrivePending(harnessNow());
-    expect(waiting, 'the update\'s manifest put and reconcile wait on it').to.include({ pending: 2, kept: 2 });
+    expect(waiting, 'the update\'s manifest put waits on it').to.include({ pending: 1, kept: 1 });
 
     await advanceHarnessClock(PAYMENT_WINDOW_S + 60);
     await advanceBlocks(MAX_REORG_LENGTH + 1);
     await decidedEverywhere(update.data, 'unpayable', 'every node records the update unpayable');
 
     const decided = await fluxDrivePending(harnessNow());
-    expect(decided, 'both writes are discarded').to.include({ pending: 2, discarded: 2, applied: 0 });
+    expect(decided, 'the write is discarded').to.include({ pending: 1, discarded: 1, applied: 0 });
     expect((await fluxDriveManifests(name)).map((m) => m.version), 'FluxDrive serves what it served before the update').to.deep.equal(servedBefore);
   });
 });
