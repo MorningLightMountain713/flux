@@ -10,6 +10,7 @@ const verificationHelper = require('../verificationHelper');
 const daemonStatus = require('../daemonService/daemonStatus');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const ingressAttestationService = require('../appMessaging/ingressAttestationService');
+const ingressCapture = require('../utils/ingressCapture');
 const registryManager = require('../appDatabase/registryManager');
 const placementFeasibility = require('../appPlacement/placementFeasibility');
 const messageVerifier = require('../appMessaging/messageVerifier');
@@ -607,7 +608,7 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
   };
   await fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage);
   // Record and gossip where this registration entered the network (best-effort).
-  await ingressAttestationService.emit(messageHASH, req);
+  await ingressAttestationService.emit(messageHASH, await ingressCapture.captureIngress(req));
   await serviceHelper.delay(1200);
   await messageVerifier.requestAppMessage(messageHASH);
   await serviceHelper.delay(1200);

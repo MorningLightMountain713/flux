@@ -7,7 +7,6 @@ const { getSpecBackend } = require('../utils/specLibs');
 const appsRepository = require('../appDatabase/appsRepository');
 const fluxEventBus = require('../utils/fluxEventBus');
 const ingressEncryptionKey = require('../utils/ingressEncryptionKey');
-const ingressCapture = require('../utils/ingressCapture');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 
 // Wire message type for the standalone ingress-attestation gossip.
@@ -25,11 +24,12 @@ const QUARANTINE_TTL_MS = 2 * 60 * 60 * 1000;
  * The observed source and asserted headers are sealed to the fluxteam key before
  * signing, so the record carries only ciphertext; the node signs over that
  * envelope, binding the attestation to the exact sealed bytes.
+ * @param {string} hash - the app-message hash
+ * @param {{observed: object, asserted: object}} ingress - as ingressCapture.captureIngress reads it
  */
-async function build(hash, req) {
+async function build(hash, { observed, asserted }) {
   const { buildIngressAttestMessage, sealIngressNote } = await getSpecBackend();
 
-  const { observed, asserted } = await ingressCapture.captureIngress(req);
   if (!observed.ip) return null;
 
   const { kid, publicKey } = ingressEncryptionKey.current();
@@ -83,12 +83,13 @@ async function persist(record) {
  * Record and gossip where a register/update entered the network. Best-effort:
  * attribution must never fail the submission, so all errors are swallowed.
  * @param {string} hash - the app-message hash
- * @param {import('express').Request} req - the ingress HTTP request
+ * @param {{observed: object, asserted: object}} ingress - where the submission came
+ *   from, as ingressCapture.captureIngress reads it off the request
  */
-async function emit(hash, req) {
+async function emit(hash, ingress) {
   try {
-    if (!hash || !req) return;
-    const record = await build(hash, req);
+    if (!hash || !ingress) return;
+    const record = await build(hash, ingress);
     if (!record) return;
 
     await persist(record);

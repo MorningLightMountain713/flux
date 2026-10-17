@@ -34,6 +34,7 @@ const appRecords = require('../appDatabase/appRecords');
 const appSpecHistory = require('../appDatabase/appSpecHistory');
 const appDataEntries = require('../utils/appDataEntries');
 const ingressAttestationService = require('../appMessaging/ingressAttestationService');
+const ingressCapture = require('../utils/ingressCapture');
 const registryManager = require('../appDatabase/registryManager');
 const https = require('https');
 const { getSpec, getSpecBackend, assertUpdateInvariants } = require('../utils/specLibs');
@@ -2029,7 +2030,7 @@ async function submitAppUpdate(req, res, processedBody, contentCtx) {
   });
 
   // Record and gossip where this update entered the network (best-effort).
-  await ingressAttestationService.emit(hash, req);
+  await ingressAttestationService.emit(hash, await ingressCapture.captureIngress(req));
 
   res.json(messageHelper.createDataMessage(hash));
 }

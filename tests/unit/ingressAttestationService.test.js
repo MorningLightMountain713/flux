@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
+const ingressCapture = require('../../ZelBack/src/services/utils/ingressCapture');
 const { loadSpecLibrary } = require('./fixtures/fluxSpec');
 
 // The spec library is REAL here — see tests/unit/fixtures/fluxSpec.js for why.
@@ -51,12 +52,13 @@ describe('ingressAttestationService tests', () => {
     fluxteamKey = flux.generateSealKeypair();
   });
 
-  function makeReq(overrides = {}) {
-    return {
+  // The ingress of a request, read off it the way the submission handlers read it.
+  function ingressOf(overrides = {}) {
+    return ingressCapture.captureIngress({
       socket: { remoteAddress: '203.0.113.7', remotePort: 51_234 },
       headers: { 'user-agent': 'flux-cli/1.0' },
       ...overrides,
-    };
+    });
   }
 
   /** The record the service handed the (stubbed) repository. */
@@ -135,7 +137,7 @@ describe('ingressAttestationService tests', () => {
 
   describe('emit', () => {
     it('captures the socket peer, seals it, stores locally, and broadcasts', async () => {
-      await service.emit('a'.repeat(64), makeReq());
+      await service.emit('a'.repeat(64), await ingressOf());
 
       expect(appsRepositoryStub.storeIngressAttestation.calledOnce).to.equal(true);
       const [record, expireAt] = appsRepositoryStub.storeIngressAttestation.firstCall.args;
@@ -172,7 +174,7 @@ describe('ingressAttestationService tests', () => {
     });
 
     it('publishes a test-observability event carrying the sealing key id, not the source', async () => {
-      await service.emit('a'.repeat(64), makeReq());
+      await service.emit('a'.repeat(64), await ingressOf());
       expect(fluxEventBusStub.publish.calledOnce).to.equal(true);
       const [event, payload] = fluxEventBusStub.publish.firstCall.args;
       expect(event).to.equal('network:ingressattestation');
@@ -181,22 +183,22 @@ describe('ingressAttestationService tests', () => {
 
     it('does not publish when the store was a duplicate', async () => {
       appsRepositoryStub.storeIngressAttestation.resolves({ inserted: false });
-      await service.emit('a'.repeat(64), makeReq());
+      await service.emit('a'.repeat(64), await ingressOf());
       expect(fluxEventBusStub.publish.called).to.equal(false);
     });
 
     it('normalizes an IPv4-mapped IPv6 address, leaving genuine IPv6 intact', async () => {
-      await service.emit('a'.repeat(64), makeReq({ socket: { remoteAddress: '::ffff:198.51.100.9', remotePort: 40_000 } }));
+      await service.emit('a'.repeat(64), await ingressOf({ socket: { remoteAddress: '::ffff:198.51.100.9', remotePort: 40_000 } }));
       expect(opened(storedRecord()).observed.ip).to.equal('198.51.100.9');
 
       appsRepositoryStub.storeIngressAttestation.resetHistory();
-      await service.emit('b'.repeat(64), makeReq({ socket: { remoteAddress: '2001:db8::1', remotePort: 40_000 } }));
+      await service.emit('b'.repeat(64), await ingressOf({ socket: { remoteAddress: '2001:db8::1', remotePort: 40_000 } }));
       expect(opened(storedRecord()).observed.ip).to.equal('2001:db8::1');
     });
 
     it('captures and caps client-asserted headers before sealing', async () => {
       const longUa = 'u'.repeat(flux.USER_AGENT_MAX + 488);
-      await service.emit('a'.repeat(64), makeReq({
+      await service.emit('a'.repeat(64), await ingressOf({
         headers: { 'user-agent': longUa, 'x-forwarded-for': '203.0.113.7, 10.0.0.1' },
       }));
       const { asserted } = opened(storedRecord());
@@ -206,20 +208,20 @@ describe('ingressAttestationService tests', () => {
     });
 
     it('gives an unconfirmed message an orphan TTL', async () => {
-      await service.emit('a'.repeat(64), makeReq());
+      await service.emit('a'.repeat(64), await ingressOf());
       const [, expireAt] = appsRepositoryStub.storeIngressAttestation.firstCall.args;
       expect(expireAt).to.be.a('number').and.greaterThan(Date.now());
     });
 
     it('persists a confirmed message attestation with no TTL', async () => {
       appsRepositoryStub.getPermanentMessage.resolves({ hash: 'a'.repeat(64) });
-      await service.emit('a'.repeat(64), makeReq());
+      await service.emit('a'.repeat(64), await ingressOf());
       const [, expireAt] = appsRepositoryStub.storeIngressAttestation.firstCall.args;
       expect(expireAt).to.equal(null);
     });
 
     it('signs the sealed envelope — the raw source is never in the signed payload', async () => {
-      await service.emit('a'.repeat(64), makeReq());
+      await service.emit('a'.repeat(64), await ingressOf());
       const record = storedRecord();
       const signedMessage = fluxBroadcastHelperStub.getFluxMessageSignature.firstCall.args[0];
       // It is the library's own attestation payload over the SEALED envelope,
@@ -235,7 +237,7 @@ describe('ingressAttestationService tests', () => {
     });
 
     it('skips entirely when the source address cannot be determined', async () => {
-      await service.emit('a'.repeat(64), makeReq({ socket: {} }));
+      await service.emit('a'.repeat(64), await ingressOf({ socket: {} }));
       // nothing sealed, so nothing to sign, store or gossip
       expect(fluxBroadcastHelperStub.getFluxMessageSignature.called).to.equal(false);
       expect(appsRepositoryStub.storeIngressAttestation.called).to.equal(false);
@@ -244,14 +246,14 @@ describe('ingressAttestationService tests', () => {
 
     it('is best-effort — a signing failure never throws or stores', async () => {
       fluxBroadcastHelperStub.getFluxMessageSignature.rejects(new Error('no key'));
-      await service.emit('a'.repeat(64), makeReq());
+      await service.emit('a'.repeat(64), await ingressOf());
       expect(appsRepositoryStub.storeIngressAttestation.called).to.equal(false);
       expect(senderStub.broadcastIngressAttestation.called).to.equal(false);
       expect(logStub.error.calledOnce).to.equal(true);
     });
 
-    it('does nothing without a hash or a request', async () => {
-      await service.emit(null, makeReq());
+    it('does nothing without a hash or an ingress', async () => {
+      await service.emit(null, await ingressOf());
       await service.emit('a'.repeat(64), null);
       expect(appsRepositoryStub.storeIngressAttestation.called).to.equal(false);
     });
