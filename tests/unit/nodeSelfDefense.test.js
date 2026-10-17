@@ -11,7 +11,7 @@ const { asConfig } = require('./fixtures/config');
 describe('nodeSelfDefense', () => {
   let nodeSelfDefense;
   let logStub;
-  let installedApps;
+  let hostedNames;
   let uninstallApplication;
   let listeners;
   const UninstallStatus = Object.freeze({
@@ -20,7 +20,7 @@ describe('nodeSelfDefense', () => {
 
   beforeEach(() => {
     logStub = { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() };
-    installedApps = sinon.stub();
+    hostedNames = sinon.stub();
     uninstallApplication = sinon.stub().resolves({ status: UninstallStatus.REMOVED, reason: null });
     listeners = {
       confirmation: null, confirmationUp: null, stale: null, dos: null,
@@ -39,7 +39,7 @@ describe('nodeSelfDefense', () => {
         canSendMessages: sinon.stub().returns(false),
       },
       '../appLifecycle/appUninstaller': { uninstallApplication, UninstallStatus },
-      '../appQuery/appQueryService': { installedApps },
+      '../appDatabase/appRecords': { hostedInstances: () => ({ names: hostedNames }) },
       '../../lib/log': logStub,
     });
     nodeSelfDefense.initialize();
@@ -49,7 +49,7 @@ describe('nodeSelfDefense', () => {
     sinon.restore();
   });
 
-  const apps = (...names) => ({ status: 'success', data: names.map((name) => ({ name })) });
+  const apps = (...names) => names;
   const removedNames = () => uninstallApplication.args.map(([name]) => name);
 
   it('subscribes to the three membership events and nothing else', () => {
@@ -61,16 +61,16 @@ describe('nodeSelfDefense', () => {
 
   it('losing confirmation removes every installed app, re-listing until nothing is left', async () => {
     // A and B at the first read; C installed while the sweep ran; then nothing.
-    installedApps.onCall(0).resolves(apps('A', 'B'));
-    installedApps.onCall(1).resolves(apps('C'));
-    installedApps.onCall(2).resolves(apps());
+    hostedNames.onCall(0).resolves(apps('A', 'B'));
+    hostedNames.onCall(1).resolves(apps('C'));
+    hostedNames.onCall(2).resolves(apps());
 
     const result = await listeners.confirmation();
 
     expect(removedNames()).to.deep.equal(['A', 'B', 'C']);
     expect(uninstallApplication.firstCall.args[1]).to.deep.equal({ forceKill: true, broadcastRemoval: false });
     expect(result).to.deep.equal({ removed: 3, remaining: [] });
-    expect(installedApps.callCount).to.equal(3);
+    expect(hostedNames.callCount).to.equal(3);
   });
 
   it('gaining confirmation removes nothing: only the down edge is watched', () => {
@@ -78,14 +78,14 @@ describe('nodeSelfDefense', () => {
   });
 
   it('a pass that removes nothing ends the sweep and names what stayed and why', async () => {
-    installedApps.resolves(apps('A', 'B'));
+    hostedNames.resolves(apps('A', 'B'));
     uninstallApplication.withArgs('A').resolves({ status: UninstallStatus.DEFERRED, reason: 'An operation is already in progress for A' });
     uninstallApplication.withArgs('B').resolves({ status: UninstallStatus.FAILED, reason: 'teardown errored' });
 
     const result = await listeners.confirmation();
 
     // one pass, not a spin
-    expect(installedApps.callCount).to.equal(1);
+    expect(hostedNames.callCount).to.equal(1);
     expect(result.removed).to.equal(0);
     expect(result.remaining).to.deep.equal([
       { name: 'A', status: 'deferred', reason: 'An operation is already in progress for A' },
@@ -97,31 +97,31 @@ describe('nodeSelfDefense', () => {
   });
 
   it('an app the uninstaller no longer finds is not counted as remaining, and does not keep the sweep going', async () => {
-    installedApps.resolves(apps('A'));
+    hostedNames.resolves(apps('A'));
     uninstallApplication.resolves({ status: UninstallStatus.SKIPPED, reason: 'Flux App not found' });
 
     const result = await listeners.confirmation();
 
-    expect(installedApps.callCount).to.equal(1);
+    expect(hostedNames.callCount).to.equal(1);
     expect(result).to.deep.equal({ removed: 0, remaining: [] });
   });
 
   it('a daemon gone stale removes every app', async () => {
-    installedApps.onCall(0).resolves(apps('A'));
-    installedApps.onCall(1).resolves(apps());
+    hostedNames.onCall(0).resolves(apps('A'));
+    hostedNames.onCall(1).resolves(apps());
     await listeners.stale();
     expect(removedNames()).to.deep.equal(['A']);
   });
 
   it('the DOS score crossing the limit removes every app', async () => {
-    installedApps.onCall(0).resolves(apps('A'));
-    installedApps.onCall(1).resolves(apps());
+    hostedNames.onCall(0).resolves(apps('A'));
+    hostedNames.onCall(1).resolves(apps());
     await listeners.dos();
     expect(removedNames()).to.deep.equal(['A']);
   });
 
   it('a sweep that cannot list the apps is logged, and the trigger never rejects', async () => {
-    installedApps.rejects(new Error('db down'));
+    hostedNames.rejects(new Error('db down'));
     const outcome = await listeners.confirmation();
     expect(outcome).to.equal(undefined);
     expect(logStub.error.args.some(([line]) => line.includes('db down'))).to.equal(true);
@@ -129,8 +129,8 @@ describe('nodeSelfDefense', () => {
 
   it('a second trigger during a sweep is folded into it', async () => {
     let releaseFirst;
-    installedApps.onCall(0).returns(new Promise((resolve) => { releaseFirst = () => resolve(apps('A')); }));
-    installedApps.onCall(1).resolves(apps());
+    hostedNames.onCall(0).returns(new Promise((resolve) => { releaseFirst = () => resolve(apps('A')); }));
+    hostedNames.onCall(1).resolves(apps());
 
     const first = listeners.confirmation();
     const second = await listeners.stale();

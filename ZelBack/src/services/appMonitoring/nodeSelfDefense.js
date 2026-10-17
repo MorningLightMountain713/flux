@@ -21,7 +21,7 @@ const nodeConfirmationService = require('../nodeConfirmationService');
 const capabilities = require('../utils/capabilities');
 const log = require('../../lib/log');
 const appUninstaller = require('../appLifecycle/appUninstaller');
-const appQueryService = require('../appQuery/appQueryService');
+const appRecords = require('../appDatabase/appRecords');
 
 let removalInProgress = false;
 
@@ -48,24 +48,20 @@ async function removeAllAppsLocally(reason) {
   try {
     for (;;) {
       // eslint-disable-next-line no-await-in-loop
-      const installedAppsRes = await appQueryService.installedApps();
-      if (installedAppsRes.status !== 'success') {
-        throw new Error(`failed to list installed apps: ${installedAppsRes.data?.message ?? installedAppsRes.data}`);
-      }
-      const apps = installedAppsRes.data;
-      if (apps.length === 0) break;
+      const names = await appRecords.hostedInstances().names();
+      if (names.length === 0) break;
 
       let removedThisPass = 0;
       remaining = [];
-      for (const app of apps) {
-        log.warn(`nodeSelfDefense - removing ${app.name}: ${reason}`);
+      for (const name of names) {
+        log.warn(`nodeSelfDefense - removing ${name}: ${reason}`);
         // eslint-disable-next-line no-await-in-loop
-        const result = await appUninstaller.uninstallApplication(app.name, { forceKill: true, broadcastRemoval: canBroadcast });
+        const result = await appUninstaller.uninstallApplication(name, { forceKill: true, broadcastRemoval: canBroadcast });
         if (result.status === appUninstaller.UninstallStatus.REMOVED) {
           removedThisPass += 1;
-          log.warn(`nodeSelfDefense - ${app.name} removed`);
+          log.warn(`nodeSelfDefense - ${name} removed`);
         } else if (result.status !== appUninstaller.UninstallStatus.SKIPPED) {
-          remaining.push({ name: app.name, status: result.status, reason: result.reason ?? null });
+          remaining.push({ name, status: result.status, reason: result.reason ?? null });
         }
         // eslint-disable-next-line no-await-in-loop
         await serviceHelper.delay(config.get('fluxapps.nodeMonitorRemovalDelayMs'));
