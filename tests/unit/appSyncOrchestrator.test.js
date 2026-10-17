@@ -1390,6 +1390,21 @@ describe('AppSyncOrchestrator', () => {
       expect(answersPeers(), 'a node told to wait no blocks still declined').to.equal(true);
     });
 
+    it('promotes a node below the floor to READY when it gains message capability after its epoch started', async () => {
+      const mod = loadWithConfig({ appSyncFallbackMinutes: 0 });
+      const orchestrator = new mod.AppSyncOrchestrator({
+        blockEmitter, ...makePeerOptions(),
+      });
+      await orchestrator.start(defaultBootContext);
+      await clock.tickAsync(0);
+      expect(orchestrator.state, 'held for the message capability').to.equal(mod.STATES.SYNCING);
+
+      orchestrator.onMessageCapabilityChange(true);
+      await clock.tickAsync(0);
+
+      expect(orchestrator.state).to.equal(mod.STATES.READY);
+    });
+
     it('is not authoritative at start on the production budget', async () => {
       const mod = loadWithConfig({ appSyncFallbackMinutes: 125 });
       const orchestrator = new mod.AppSyncOrchestrator({
