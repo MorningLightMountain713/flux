@@ -17,8 +17,8 @@ const { nodeChain } = require('../utils/nodeChain');
 async function deploymentInformation(req, res) {
   try {
     // respond with information needed for application deployment regarding specification limitation and prices
-    const syncStatus = daemonStatus.isDaemonSynced();
-    const daemonHeight = syncStatus.data.height;
+    const syncStatus = daemonStatus.daemonSyncState();
+    const daemonHeight = syncStatus.height;
     const deployAddr = chainUtilities.currentAppPaymentAddress(daemonHeight);
     // search in chainparams db for chainmessages of p version
     const appPrices = await chainUtilities.getChainParamsPriceUpdates();

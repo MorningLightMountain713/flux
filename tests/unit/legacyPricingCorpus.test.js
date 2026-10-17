@@ -156,7 +156,7 @@ describe('the early-update credit, over every update on chain', function corpus(
         resolveRegisteredSpec: async () => APP,
       },
       '../daemonService/daemonStatus': {
-        isDaemonSynced: () => ({ data: { synced: true, height: UPDATE_HEIGHT } }),
+        daemonSyncState: () => ({ synced: true, height: UPDATE_HEIGHT }),
       },
       '../appDatabase/appRecords': { registry: () => ({ byName: async () => ({ height: PREV_HEIGHT, name: 'app' }) }) },
     });
@@ -177,7 +177,7 @@ describe('the early-update credit, over every update on chain', function corpus(
         '../utils/chainUtilities': { getChainParamsPriceUpdates: async () => [CARD] },
         '../utils/specCutover': { resolveSpec: async () => APP, resolveRegisteredSpec: async () => APP },
         '../daemonService/daemonStatus': {
-          isDaemonSynced: () => ({ data: { synced: true, height: UPDATE_HEIGHT } }),
+          daemonSyncState: () => ({ synced: true, height: UPDATE_HEIGHT }),
         },
         '../appDatabase/appRecords': { registry: () => ({ byName: async () => null }) },
       });

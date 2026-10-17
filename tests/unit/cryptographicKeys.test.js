@@ -228,10 +228,7 @@ describe('cryptographicKeys tests', () => {
         owner: '1ABC123',
         name: 'TestApp',
       });
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        status: 'success',
-        data: { synced: false, height: 1000 },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: false, height: 1000 });
       sinon.stub(messageHelper, 'createErrorMessage').callsFake((msg) => ({
         status: 'error',
         data: { message: msg },
@@ -258,10 +255,7 @@ describe('cryptographicKeys tests', () => {
         owner: '1ABC123',
         name: 'TestApp',
       });
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        status: 'success',
-        data: { synced: true, height: 2000 },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: 2000 });
       sinon.stub(benchmarkService, 'getPublicKey').resolves({
         status: 'success',
         data: JSON.stringify({
@@ -298,10 +292,7 @@ describe('cryptographicKeys tests', () => {
         owner: '1ABC123',
         name: 'TestApp',
       });
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        status: 'success',
-        data: { synced: true, height: 2000 },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: 2000 });
       sinon.stub(benchmarkService, 'getPublicKey').resolves({
         status: 'success',
         data: JSON.stringify({
@@ -329,10 +320,7 @@ describe('cryptographicKeys tests', () => {
         owner: '1ABC123',
         name: 'TestApp',
       });
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        status: 'success',
-        data: { synced: true, height: 2000 },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: 2000 });
       sinon.stub(benchmarkService, 'getPublicKey').resolves({
         status: 'success',
         data: JSON.stringify({
@@ -365,10 +353,7 @@ describe('cryptographicKeys tests', () => {
         owner: '1ABC123',
         name: 'TestApp',
       });
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        status: 'success',
-        data: { synced: true, height: daemonHeight },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: daemonHeight });
       const getPublicKeyStub = sinon.stub(benchmarkService, 'getPublicKey').resolves({
         status: 'success',
         data: JSON.stringify({
@@ -402,10 +387,7 @@ describe('cryptographicKeys tests', () => {
         owner: '1ABC123',
         name: 'TestApp',
       });
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        status: 'success',
-        data: { synced: true, height: 2000 },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: 2000 });
       sinon.stub(benchmarkService, 'getPublicKey').resolves({
         status: 'error',
         data: 'Service error',

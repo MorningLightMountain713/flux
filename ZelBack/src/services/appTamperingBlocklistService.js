@@ -131,8 +131,8 @@ async function enforceBlocklist() {
     return;
   }
 
-  const syncStatus = daemonStatus.isDaemonSynced();
-  if (!syncStatus || !syncStatus.data || !syncStatus.data.synced) {
+  const syncStatus = daemonStatus.daemonSyncState();
+  if (!syncStatus.synced) {
     log.info('appTamperingBlocklist - daemon not synced, skipping this tick');
     return;
   }

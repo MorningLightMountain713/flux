@@ -75,11 +75,11 @@ async function getPublicKey(req, res) {
       if (!appSpecification.owner || !appSpecification.name) {
         throw new Error('Input parameters missing.');
       }
-      const syncStatus = daemonStatus.isDaemonSynced();
-      if (!syncStatus.data.synced) {
+      const syncStatus = daemonStatus.daemonSyncState();
+      if (!syncStatus.synced) {
         throw new Error('Daemon not yet synced.');
       }
-      const daemonHeight = syncStatus.data.height;
+      const daemonHeight = syncStatus.height;
 
       const publicKey = await getAppPublicKey(appSpecification.owner, appSpecification.name, daemonHeight);
       // respond with formatted specifications

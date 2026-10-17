@@ -1007,7 +1007,7 @@ describe('fluxCommunication tests', () => {
       peerManager.reset();
       peerManager.setOwnSocketAddress(null);
       sinon.stub(rateLimit, 'lruRateLimit').returns(true);
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: false, height: 0 } });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: false, height: 0 });
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').returns('44.192.51.11:16127');
       ({ port } = localWsServer.address());
       key = `127.0.0.1:${port}`;
@@ -1157,7 +1157,7 @@ describe('fluxCommunication tests', () => {
     // control say what it means: the other node is actually connected to.
     it('still connects to a different node at the same port', async () => {
       peerManager.reset();
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: false, height: 0 } });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: false, height: 0 });
       // An ephemeral port on 127.0.0.1, because 127.0.0.2 is not bound by
       // default on macOS. The guard allows any port THIS process is listening
       // on, which is the whole point of dialling our own server.
@@ -1249,7 +1249,7 @@ describe('fluxCommunication tests', () => {
       lruRateLimitStub = sinon.stub(rateLimit, 'lruRateLimit').returns(true);
       ensureObjectSpy = sinon.spy(serviceHelper, 'ensureObject');
       peerManager.reset();
-      daemonStatusStub = sinon.stub(daemonStatus, 'isDaemonSynced');
+      daemonStatusStub = sinon.stub(daemonStatus, 'daemonSyncState');
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').returns('44.192.51.11:16127');
     });
 
@@ -1900,7 +1900,7 @@ describe('fluxCommunication tests', () => {
       // the existing instead kills both ends' connections in the crossing
       // race and the pair re-dials forever.
       sinon.stub(rateLimit, 'lruRateLimit').returns(true);
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: false, height: 0 } });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: false, height: 0 });
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').returns('44.192.51.11:16127');
       peerManager.reset();
 
@@ -1934,7 +1934,7 @@ describe('fluxCommunication tests', () => {
 
     it('a probe in flight to a peer does not refuse the duty dial to it, nor the reverse: each guards its own duplicate', async () => {
       sinon.stub(rateLimit, 'lruRateLimit').returns(true);
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: false, height: 0 } });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: false, height: 0 });
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').returns('44.192.51.11:16127');
       peerManager.reset();
       const { port } = localWsServer.address();
@@ -1993,7 +1993,7 @@ describe('fluxCommunication tests', () => {
       // manager closes it with the stop code instead, the dial settles with
       // no evidence, and once the stop has begun no further dial is made.
       sinon.stub(rateLimit, 'lruRateLimit').returns(true);
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: false, height: 0 } });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: false, height: 0 });
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').returns('44.192.51.11:16127');
       peerManager.reset();
 

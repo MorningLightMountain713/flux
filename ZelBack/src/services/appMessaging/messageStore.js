@@ -143,8 +143,8 @@ async function storeAppTemporaryMessage(message, options = {}) {
   // The chain's payment for a hash whose contents the node lacks: this message
   // answers a request for it.
   const result = held?.isPaid ? held.payment : null;
-  const syncStatus = daemonStatus.isDaemonSynced();
-  const daemonHeight = syncStatus.data.height;
+  const syncStatus = daemonStatus.daemonSyncState();
+  const daemonHeight = syncStatus.height;
   let block = daemonHeight;
   if (result) {
     isAppRequested = true;

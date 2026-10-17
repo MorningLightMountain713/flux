@@ -288,7 +288,7 @@ describe('pricingRegime', () => {
           findOneInDatabase: sinon.stub().resolves(null),
         },
         '../daemonService/daemonStatus': {
-          isDaemonSynced: () => ({ data: { synced: true, height: HEIGHT } }),
+          daemonSyncState: () => ({ synced: true, height: HEIGHT }),
         },
         '../appDatabase/appRecords': { registry: () => ({ byName: sinon.stub().resolves(null) }) },
         '../appDatabase/appsRepository': {

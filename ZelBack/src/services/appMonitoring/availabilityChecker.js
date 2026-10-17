@@ -93,8 +93,8 @@ async function runAvailabilityCheckOnce(dosState, portsNotWorking, failedNodesTe
   };
 
   try {
-    const syncStatus = daemonStatus.isDaemonSynced();
-    if (!syncStatus.data.synced) {
+    const syncStatus = daemonStatus.daemonSyncState();
+    if (!syncStatus.synced) {
       log.info('Flux Node daemon not synced. Application checks are disabled');
       return timeouts.appError;
     }

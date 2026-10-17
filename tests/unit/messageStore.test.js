@@ -124,7 +124,7 @@ describe('messageStore tests', () => {
       '../../lib/log': logStub,
       '../fluxService': { isSystemSecure: sinon.stub().resolves(false) },
       '../daemonService/daemonStatus': {
-        isDaemonSynced: sinon.stub().returns({ data: { height: 1000 } }),
+        daemonSyncState: sinon.stub().returns({ height: 1000 }),
       },
       '../appDatabase/registryManager': registryManagerStub,
       '../appDatabase/appSpecHistory': {

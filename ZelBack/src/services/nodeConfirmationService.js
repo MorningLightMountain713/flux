@@ -91,7 +91,7 @@ function isDaemonReachable() {
  * The tip arrives on the push socket, so it survives the status RPC failing — which is
  * the window this exists to answer in. A tip that stopped arriving is a different
  * matter: it would freeze the count wherever it stood when the daemon went quiet and
- * read as comfortably inside the limit forever. isDaemonSynced already withdraws its
+ * read as comfortably inside the limit forever. daemonSyncState already withdraws its
  * claim once nothing recent has landed, so that is what gates this.
  *
  * @returns {number|null}
@@ -100,7 +100,7 @@ function blocksSinceConfirmation() {
   const lastConfirmed = nodeStatus?.last_confirmed_height;
   if (!Number.isFinite(lastConfirmed) || lastConfirmed <= 0) return null;
 
-  const { height, synced } = daemonStatus.isDaemonSynced().data;
+  const { height, synced } = daemonStatus.daemonSyncState();
   if (!synced || !Number.isFinite(height) || height <= 0) return null;
 
   return height - lastConfirmed;
@@ -129,7 +129,7 @@ function blocksAtFrozenTip() {
   const lastConfirmed = nodeStatus?.last_confirmed_height;
   if (!Number.isFinite(lastConfirmed) || lastConfirmed <= 0) return null;
 
-  const { height } = daemonStatus.isDaemonSynced().data;
+  const { height } = daemonStatus.daemonSyncState();
   if (!Number.isFinite(height) || height <= 0) return null;
 
   return height - lastConfirmed;

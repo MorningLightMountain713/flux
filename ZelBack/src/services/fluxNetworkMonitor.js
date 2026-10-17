@@ -397,8 +397,8 @@ async function checkDeterministicNodesCollisions() {
     // another precatuion might be comparing node list on multiple nodes. evaulate in the future
     const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
     if (localSocketAddr) {
-      const syncStatus = daemonStatus.isDaemonSynced();
-      if (!syncStatus.data.synced) {
+      const syncStatus = daemonStatus.daemonSyncState();
+      if (!syncStatus.synced) {
         setTimeout(() => {
           checkDeterministicNodesCollisions();
         }, 120 * 1000);

@@ -39,8 +39,8 @@ async function getAppFiatAndFluxPrice(appSpecification) {
     throw new Error('Invalid application specification provided.');
   }
 
-  const syncStatus = daemonStatus.isDaemonSynced();
-  if (!syncStatus.data.synced) {
+  const syncStatus = daemonStatus.daemonSyncState();
+  if (!syncStatus.synced) {
     throw new Error('Daemon not yet synced.');
   }
   const spec = await resolveSpec(appSpecification);

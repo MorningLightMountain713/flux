@@ -1,7 +1,6 @@
 'use strict';
 
 const config = require('config');
-const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const daemonServiceUtils = require('./daemonServiceUtils');
 const daemonServiceBlockchainRpcs = require('./daemonServiceBlockchainRpcs');
@@ -37,7 +36,7 @@ function elapsedSinceChainUpdateMs() {
 let staleTimer = null;
 
 /**
- * Publish `daemonSynced` from the readings `isDaemonSynced` answers from. Called on
+ * Publish `daemonSynced` from the readings `daemonSyncState` answers from. Called on
  * every new reading, and once more when the last one ages past the stale bound: a
  * daemon that has gone quiet is no longer known to be synced, and no reading
  * arrives to say so.
@@ -45,7 +44,7 @@ let staleTimer = null;
 function publishDaemonSynced() {
   const handle = capabilities.claim('daemonSynced', 'daemonStatus');
   // eslint-disable-next-line no-use-before-define
-  const { synced } = isDaemonSynced().data;
+  const { synced } = daemonSyncState();
   if (synced) handle.raise(`at ${currentDaemonHeight} of ${currentDaemonHeader}`);
   else handle.lower(`at ${currentDaemonHeight} of ${currentDaemonHeader}, or no recent reading`);
   if (staleTimer) clearTimeout(staleTimer);
@@ -105,29 +104,19 @@ function isInsightExplorer() {
 
 // == NON Daemon ==
 /**
- * To check if daemon is synced.
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- * @returns {object} Message.
+ * The daemon's chain as this node last read it, and whether it is synced: within
+ * five blocks of the headers, and read recently. With no recent reading it is
+ * not synced, whatever the heights say.
+ * @returns {{header: number, height: number, synced: boolean}}
  */
-function isDaemonSynced(req, res) {
-  const isSynced = {
+function daemonSyncState() {
+  const elapsed = elapsedSinceChainUpdateMs();
+  const recent = elapsed !== null && elapsed <= CHAIN_STALE_AFTER_MS;
+  return {
     header: currentDaemonHeader,
     height: currentDaemonHeight,
-    synced: false,
+    synced: recent && currentDaemonHeight > currentDaemonHeader - 5,
   };
-
-  const elapsed = elapsedSinceChainUpdateMs();
-
-  if (elapsed === null || elapsed > CHAIN_STALE_AFTER_MS) {
-    // Nothing recent from either the socket or RPC, so we cannot claim to know.
-    isSynced.synced = false;
-  } else if (currentDaemonHeight > currentDaemonHeader - 5) {
-    isSynced.synced = true;
-  }
-
-  const successResponse = messageHelper.createDataMessage(isSynced);
-  return res ? res.json(successResponse) : successResponse;
 }
 
 /**
@@ -272,7 +261,7 @@ function setLastChainUpdateAgeMs(ageMs) {
 module.exports = {
   isInsightExplorer,
   // == NON Daemon ==
-  isDaemonSynced,
+  daemonSyncState,
   daemonBlockchainInfoService,
   recordChainTip,
   waitForDaemonRpc,

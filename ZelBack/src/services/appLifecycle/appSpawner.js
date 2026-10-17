@@ -434,8 +434,8 @@ async function trySpawningGlobalApplication() {
       return delayTime;
     }
 
-    const syncStatus = daemonStatus.isDaemonSynced();
-    const currentHeight = syncStatus.data.height;
+    const syncStatus = daemonStatus.daemonSyncState();
+    const currentHeight = syncStatus.height;
     const nowSeconds = Math.floor(Date.now() / 1000);
 
     log.info('trySpawningGlobalApplication - Checking for apps that are missing instances on the network.');

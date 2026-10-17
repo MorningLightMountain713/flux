@@ -7,13 +7,6 @@ const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonSta
 const log = require('../../ZelBack/src/lib/log');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 
-const generateResponse = () => {
-  const res = { test: 'testing' };
-  res.status = sinon.stub().returns(res);
-  res.json = sinon.fake((param) => `Response: ${param}`);
-  return res;
-};
-
 describe('daemonStatus tests', () => {
   describe('isInsightExplorer tests', () => {
     let serviceUtilsStub;
@@ -67,7 +60,7 @@ describe('daemonStatus tests', () => {
     });
   });
 
-  describe('isDaemonSynced tests', () => {
+  describe('daemonSyncState tests', () => {
     beforeEach(() => {
       daemonStatus.setCurrentDaemonHeight(0);
       daemonStatus.setLastChainUpdateAgeMs(0);
@@ -77,60 +70,46 @@ describe('daemonStatus tests', () => {
       sinon.restore();
     });
 
-    it('should return isDaemonSynced message if current height is less than header height, no response passed', () => {
+    it('is not synced far below the headers', () => {
       daemonStatus.setCurrentDaemonHeight(0);
       daemonStatus.setCurrentDaemonHeader(249_187);
       daemonStatus.setLastChainUpdateAgeMs(0);
-      const expectedResponse = {
-        status: 'success',
-        data: { header: 249_187, height: 0, synced: false },
-      };
+      const expectedResponse = { header: 249_187, height: 0, synced: false };
 
-      const result = daemonStatus.isDaemonSynced();
+      const result = daemonStatus.daemonSyncState();
 
       expect(result).to.eql(expectedResponse);
     });
 
-    it('should return isDaemonSynced message if current height is more than header height, no response passed', () => {
+    it('is synced above the headers', () => {
       daemonStatus.setCurrentDaemonHeight(259_187);
       daemonStatus.setCurrentDaemonHeader(249_187);
       daemonStatus.setLastChainUpdateAgeMs(0);
-      const expectedResponse = {
-        status: 'success',
-        data: { header: 249_187, height: 259_187, synced: true },
-      };
+      const expectedResponse = { header: 249_187, height: 259_187, synced: true };
 
-      const result = daemonStatus.isDaemonSynced();
+      const result = daemonStatus.daemonSyncState();
 
       expect(result).to.eql(expectedResponse);
     });
 
-    it('should return isDaemonSynced message if current height is more than header height, response passed', () => {
-      daemonStatus.setCurrentDaemonHeight(249_192);
+    it('is synced four blocks behind the headers and not five', () => {
       daemonStatus.setCurrentDaemonHeader(249_187);
       daemonStatus.setLastChainUpdateAgeMs(0);
-      const expectedResponse = {
-        status: 'success',
-        data: { header: 249_187, height: 249_192, synced: true },
-      };
-      const res = generateResponse();
 
-      const result = daemonStatus.isDaemonSynced(undefined, res);
+      daemonStatus.setCurrentDaemonHeight(249_183);
+      expect(daemonStatus.daemonSyncState().synced).to.equal(true);
 
-      expect(result).to.eql(`Response: ${expectedResponse}`);
-      sinon.assert.calledOnceWithExactly(res.json, expectedResponse);
+      daemonStatus.setCurrentDaemonHeight(249_182);
+      expect(daemonStatus.daemonSyncState().synced).to.equal(false);
     });
 
     it('should return unsynced when the chain has never been updated', () => {
       daemonStatus.setCurrentDaemonHeight(249_192);
       daemonStatus.setCurrentDaemonHeader(249_187);
       daemonStatus.setLastChainUpdateAgeMs(null);
-      const expectedResponse = {
-        status: 'success',
-        data: { header: 249_187, height: 249_192, synced: false },
-      };
+      const expectedResponse = { header: 249_187, height: 249_192, synced: false };
 
-      const result = daemonStatus.isDaemonSynced();
+      const result = daemonStatus.daemonSyncState();
 
       expect(result).to.eql(expectedResponse);
     });
@@ -139,12 +118,9 @@ describe('daemonStatus tests', () => {
       daemonStatus.setCurrentDaemonHeight(249_192);
       daemonStatus.setCurrentDaemonHeader(249_187);
       daemonStatus.setLastChainUpdateAgeMs(301 * 1000);
-      const expectedResponse = {
-        status: 'success',
-        data: { header: 249_187, height: 249_192, synced: false },
-      };
+      const expectedResponse = { header: 249_187, height: 249_192, synced: false };
 
-      const result = daemonStatus.isDaemonSynced();
+      const result = daemonStatus.daemonSyncState();
 
       expect(result).to.eql(expectedResponse);
     });
@@ -153,12 +129,9 @@ describe('daemonStatus tests', () => {
       daemonStatus.setCurrentDaemonHeight(249_192);
       daemonStatus.setCurrentDaemonHeader(249_187);
       daemonStatus.setLastChainUpdateAgeMs(299 * 1000);
-      const expectedResponse = {
-        status: 'success',
-        data: { header: 249_187, height: 249_192, synced: true },
-      };
+      const expectedResponse = { header: 249_187, height: 249_192, synced: true };
 
-      const result = daemonStatus.isDaemonSynced();
+      const result = daemonStatus.daemonSyncState();
 
       expect(result).to.eql(expectedResponse);
     });
@@ -282,7 +255,7 @@ describe('daemonStatus tests', () => {
       daemonStatus.recordChainTip(300_000);
 
       expect(daemonStatus.getCurrentDaemonHeader()).to.eql(300_000);
-      expect(daemonStatus.isDaemonSynced().data.synced).to.eql(true);
+      expect(daemonStatus.daemonSyncState().synced).to.eql(true);
     });
 
     it('should let the tip move down on a reorg without lowering the header', () => {
@@ -301,7 +274,7 @@ describe('daemonStatus tests', () => {
     });
   });
 
-  describe('isDaemonSynced staleness tests', () => {
+  describe('daemonSyncState staleness tests', () => {
     it('should not be aged out by a wall clock jump', () => {
       daemonStatus.setCurrentDaemonHeight(249_192);
       daemonStatus.setCurrentDaemonHeader(249_187);
@@ -309,7 +282,7 @@ describe('daemonStatus tests', () => {
 
       const clock = sinon.useFakeTimers({ now: Date.now() + 3_600_000, toFake: ['Date'] });
       try {
-        expect(daemonStatus.isDaemonSynced().data.synced).to.eql(true);
+        expect(daemonStatus.daemonSyncState().synced).to.eql(true);
       } finally {
         clock.restore();
       }

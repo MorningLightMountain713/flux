@@ -215,9 +215,7 @@ describe('appSpawner tests', () => {
     delayStub.onFirstCall().resolves();
     delayStub.onSecondCall().rejects(new Error('break recursion'));
     delayStub.rejects(new Error('break recursion'));
-    daemonSyncStub = sinon.stub().returns({
-      data: { height: opts.daemonHeight || 2_555_563, synced: true },
-    });
+    daemonSyncStub = sinon.stub().returns({ height: opts.daemonHeight || 2_555_563, synced: true });
     ensureProvidersRegisteredStub = sinon.stub().resolves();
     registryManagerStub = {
       appLocation: sinon.stub().resolves([]),
@@ -304,7 +302,7 @@ describe('appSpawner tests', () => {
         isNodeDos: sinon.stub().returns(false),
       },
       '../daemonService/daemonStatus': {
-        isDaemonSynced: daemonSyncStub,
+        daemonSyncState: daemonSyncStub,
       },
       '../../lib/log': logStub,
       '../appDatabase/registryManager': registryManagerStub,

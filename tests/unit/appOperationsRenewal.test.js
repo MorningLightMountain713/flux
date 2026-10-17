@@ -50,7 +50,7 @@ describe('updateAppGlobaly and the app an update is judged against', () => {
       },
       '../utils/specLibs': { ...specLibs, assertUpdateInvariants },
     });
-    sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 2_600_000 } });
+    sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: 2_600_000 });
     byName = stubRegistry().byName.resolves(null);
     latestAppliedState = sinon.stub(appSpecHistory, 'latestAppliedState').resolves(null);
     sinon.stub(appsRepository, 'getTempMessage').resolves({ hash: 'outbound-hash' });

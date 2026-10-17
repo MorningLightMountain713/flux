@@ -8,7 +8,7 @@ const daemonSubscriptionService = require('./daemonSubscriptionService');
 const fluxEventBus = require('../utils/fluxEventBus');
 
 /**
- * Keeps the daemon's chain tip current for `isDaemonSynced` and its 34 readers.
+ * Keeps the daemon's chain tip current for `daemonSyncState` and its 34 readers.
  *
  * Push supplies the height every block, which is the part that was costing a 30s RPC.
  * It cannot supply `headers` — what the chain claims to be — and the two are not

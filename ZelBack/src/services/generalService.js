@@ -166,11 +166,11 @@ let lastLoggedExplorerSynced = null;
 async function checkSynced() {
   try {
     // check if flux database is synced with daemon database (equal or -1 inheight)
-    const syncStatus = daemonStatus.isDaemonSynced();
-    if (!syncStatus.data.synced) {
+    const syncStatus = daemonStatus.daemonSyncState();
+    if (!syncStatus.synced) {
       throw new Error('Daemon not yet synced.');
     }
-    const daemonHeight = serviceHelper.ensureNumber(syncStatus.data.height);
+    const daemonHeight = serviceHelper.ensureNumber(syncStatus.height);
     const dbopen = dbHelper.databaseConnection();
     const database = dbopen.db(config.get('database.daemon.database'));
     const query = { generalScannedHeight: { $gte: 0 } };

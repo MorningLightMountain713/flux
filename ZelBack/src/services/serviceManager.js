@@ -210,7 +210,7 @@ async function startDaemon() {
   daemonSubscriptionService.start();
   reorgSource.start();
 
-  // awaited so isDaemonSynced is populated before hash sync reads it. Takes the push
+  // awaited so daemonSyncState is populated before hash sync reads it. Takes the push
   // path where the daemon offers it, and the old 30s poll where it does not.
   await chainTipSource.start();
 
@@ -557,7 +557,7 @@ async function startFluxFunctions() {
           catchUpRunningContent: () => contentSlotService.applyBehindContentApps(),
           fluxVersion,
           getScannedHeight: () => chainState.getScannedHeight(),
-          getDaemonHeight: () => daemonStatus.isDaemonSynced()?.data?.height ?? null,
+          getDaemonHeight: () => daemonStatus.daemonSyncState().height ?? null,
         });
         // Whether an arriving sync response is still wanted. THE ROUND ANSWERS IT.
         // Only the orchestrator knows what it asked of whom, and on which socket,

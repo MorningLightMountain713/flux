@@ -66,7 +66,7 @@ describe('appTamperingBlocklistService tests', () => {
     };
 
     daemonMiscStub = {
-      isDaemonSynced: sinon.stub().returns({ data: { synced: true } }),
+      daemonSyncState: sinon.stub().returns({ synced: true }),
     };
     capabilitiesStub = capabilityStub({ daemonSynced: true });
 
@@ -170,7 +170,7 @@ describe('appTamperingBlocklistService tests', () => {
 
   describe('enforceBlocklist', () => {
     it('skips the tick when daemon is not synced', async () => {
-      daemonMiscStub.isDaemonSynced = sinon.stub().returns({ data: { synced: false } });
+      daemonMiscStub.daemonSyncState = sinon.stub().returns({ synced: false });
 
       await service.enforceBlocklist();
 
@@ -320,7 +320,7 @@ describe('appTamperingBlocklistService tests', () => {
 
   describe('start/stop cancellation', () => {
     it('an unsynced boot enforces as soon as the daemon is synced, not on a timer', async () => {
-      daemonMiscStub.isDaemonSynced = sinon.stub().returns({ data: { synced: false } });
+      daemonMiscStub.daemonSyncState = sinon.stub().returns({ synced: false });
       capabilitiesStub.set('daemonSynced', false);
       setBlocklist([MOCK_TXHASH]);
       setTamperScore(100);
@@ -329,7 +329,7 @@ describe('appTamperingBlocklistService tests', () => {
       expect(nodeDosStateStub.setStickyDos.called).to.be.false;
 
       // The daemon reports synced, and the first tick follows immediately.
-      daemonMiscStub.isDaemonSynced = sinon.stub().returns({ data: { synced: true } });
+      daemonMiscStub.daemonSyncState = sinon.stub().returns({ synced: true });
       capabilitiesStub.set('daemonSynced', true);
       await startPromise;
       expect(nodeDosStateStub.setStickyDos.called).to.be.true;
@@ -337,7 +337,7 @@ describe('appTamperingBlocklistService tests', () => {
 
     it('start() aborts without scheduling an interval if stop() is called during daemon-sync wait', async () => {
       // Daemon never reports synced
-      daemonMiscStub.isDaemonSynced = sinon.stub().returns({ data: { synced: false } });
+      daemonMiscStub.daemonSyncState = sinon.stub().returns({ synced: false });
       capabilitiesStub.set('daemonSynced', false);
       const setIntervalSpy = sinon.spy(global, 'setInterval');
 
@@ -349,7 +349,7 @@ describe('appTamperingBlocklistService tests', () => {
       service.stop();
 
       // Now make daemon report synced so a buggy implementation would proceed
-      daemonMiscStub.isDaemonSynced = sinon.stub().returns({ data: { synced: true } });
+      daemonMiscStub.daemonSyncState = sinon.stub().returns({ synced: true });
       capabilitiesStub.set('daemonSynced', true);
       await startPromise;
 

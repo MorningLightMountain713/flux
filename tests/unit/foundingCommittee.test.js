@@ -78,7 +78,7 @@ describe('foundingCommittee', () => {
     sinon.stub(networkStateService, 'membershipFingerprintAt').returns(FP);
     sinon.stub(networkStateService, 'membershipAt').callsFake((fp) => (fp === FP || fp === CURRENT_FP ? fleet(12) : null));
     sinon.stub(networkStateService, 'membershipFingerprint').returns(CURRENT_FP);
-    sinon.stub(daemonStatus, 'isDaemonSynced').returns({ status: 'success', data: { synced: true } });
+    sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
     sinon.stub(daemonStatus, 'getCurrentDaemonHeight').returns(REG_HEIGHT + 10);
   });
 
@@ -488,12 +488,12 @@ describe('foundingCommittee', () => {
       const member = store.get(IDENTITY).anchors[String(REG_HEIGHT)].members[0];
       const collateral = { txhash: member.txhash, txindex: 0 };
 
-      daemonStatus.isDaemonSynced.returns({ status: 'success', data: { synced: false } });
+      daemonStatus.daemonSyncState.returns({ synced: false });
       let verdict = await foundingCommittee.selfOnFoundingCommittee(IDENTITY, REG_HEIGHT, FP, 0, collateral);
       expect(verdict.member).to.equal(false);
       expect(verdict.reason).to.include('stale');
 
-      daemonStatus.isDaemonSynced.returns({ status: 'success', data: { synced: true } });
+      daemonStatus.daemonSyncState.returns({ synced: true });
       networkStateService.membershipAt.callsFake((fp) => {
         if (fp === FP) return fleet(12);
         if (fp === CURRENT_FP) return fleet(12).filter((node) => node.txhash !== member.txhash);

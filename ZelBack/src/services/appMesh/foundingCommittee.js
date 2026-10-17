@@ -639,7 +639,7 @@ async function selfOnFoundingCommittee(identity, anchor, askFingerprint, askGene
   // (the dark-rot arm); one that can SEE itself delisted has no seat to
   // serve from (the collateral-moved arm). Founder registers only — HELD
   // asks pin to current fingerprints and keep their own rules.
-  const synced = daemonStatus.isDaemonSynced()?.data?.synced === true;
+  const { synced } = daemonStatus.daemonSyncState();
   if (!synced) {
     return { member: false, reason: 'own chain view is stale' };
   }

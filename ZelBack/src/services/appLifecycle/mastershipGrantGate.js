@@ -131,7 +131,7 @@ function planeView() {
   if (!timingSafe()) return null;
   const activateAt = activationHeight();
   if (!activateAt) return null;
-  const { height, synced } = daemonStatus.isDaemonSynced().data ?? {};
+  const { height, synced } = daemonStatus.daemonSyncState();
   if (!synced || !Number.isFinite(height)) return null;
   return { height, activateAt };
 }

@@ -118,7 +118,7 @@ describe('appSubmission tests', () => {
         getTemplate: sinon.stub().resolves({ spec: TEMPLATE_BODY, userConfigurable: [] }),
       },
       registryManager: { checkApplicationRegistrationNameConflicts: sinon.stub().resolves() },
-      daemonStatus: { isDaemonSynced: sinon.stub().returns({ data: { synced: true, height: 100 } }) },
+      daemonStatus: { daemonSyncState: sinon.stub().returns({ synced: true, height: 100 }) },
       appsRepository: {},
       registry: { byName: sinon.stub().resolves(null) },
       appHistory: { latestApplied: sinon.stub().resolves(null) },
@@ -797,7 +797,7 @@ describe('appSubmission tests', () => {
     it('the registration preflight asks it before quoting a price', async () => {
       appSubmission = load({
         '../daemonService/daemonStatus': {
-          isDaemonSynced: () => ({ data: { synced: true, height: 2_000_000 } }),
+          daemonSyncState: () => ({ synced: true, height: 2_000_000 }),
         },
       });
       const spec = v9Spec();
@@ -818,7 +818,7 @@ describe('appSubmission tests', () => {
     it('a refused registration is answered as an error, with the reason', async () => {
       appSubmission = load({
         '../daemonService/daemonStatus': {
-          isDaemonSynced: () => ({ data: { synced: true, height: 2_000_000 } }),
+          daemonSyncState: () => ({ synced: true, height: 2_000_000 }),
         },
       });
       stubs.transportHelper.openTransportEnvelope.resolves({ version: 9 });

@@ -41,8 +41,8 @@ async function getAddressUtxos(req, res) {
       query: {},
     };
     const insightResult = await daemonServiceAddressRpcs.getSingleAddressUtxos(daemonRequest);
-    const syncStatus = daemonStatus.isDaemonSynced();
-    const curHeight = syncStatus.data.height;
+    const syncStatus = daemonStatus.daemonSyncState();
+    const curHeight = syncStatus.height;
     const utxos = [];
     insightResult.data.forEach((utxo) => {
       const adjustedUtxo = {

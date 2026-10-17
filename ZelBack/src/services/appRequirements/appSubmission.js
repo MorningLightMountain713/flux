@@ -379,11 +379,11 @@ async function verifyAppRegistrationParameters(req, res) {
     const appSpecification = serviceHelper.ensureObject(processedBody.appSpecification || processedBody);
     const { contentHash, timestamp, type } = processedBody;
 
-    const syncStatus = daemonStatus.isDaemonSynced();
-    if (!syncStatus.data.synced) {
+    const syncStatus = daemonStatus.daemonSyncState();
+    if (!syncStatus.synced) {
       throw new Error('Daemon not yet synced.');
     }
-    const daemonHeight = syncStatus.data.height;
+    const daemonHeight = syncStatus.height;
 
     const { spec, broadcastBlob } = await resolveSubmission(appSpecification, {
       contentHash, timestamp, type: type || 'fluxappregister', daemonHeight,
@@ -411,11 +411,11 @@ async function verifyAppRegistrationParameters(req, res) {
 }
 
 async function validateAppUpdate(appSpecification, meta = {}) {
-  const syncStatus = daemonStatus.isDaemonSynced();
-  if (!syncStatus.data.synced) {
+  const syncStatus = daemonStatus.daemonSyncState();
+  if (!syncStatus.synced) {
     throw new Error('Daemon not yet synced.');
   }
-  const daemonHeight = syncStatus.data.height;
+  const daemonHeight = syncStatus.height;
 
   const { contentHash, timestamp, type } = meta;
   const { spec, broadcastBlob } = await resolveSubmission(appSpecification, {
@@ -525,12 +525,12 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
     throw new Error('Message timestamp from future, not valid. Check if your computer clock is synced and restart the registration process.');
   }
 
-  const syncStatus = daemonStatus.isDaemonSynced();
-  if (!syncStatus.data.synced) {
+  const syncStatus = daemonStatus.daemonSyncState();
+  if (!syncStatus.synced) {
     throw new Error('Daemon not yet synced.');
   }
 
-  const daemonHeight = syncStatus.data.height;
+  const daemonHeight = syncStatus.height;
 
   const { spec, broadcastBlob } = await resolveSubmission(appSpecification, {
     contentHash, timestamp, type: messageType, daemonHeight,

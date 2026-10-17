@@ -13,7 +13,7 @@ describe('nodeConfirmationService', () => {
   let getLocalSocketAddressStub;
   let getFluxNodePublicKeyStub;
   let getFluxnodeBySocketAddressStub;
-  let isDaemonSyncedStub;
+  let daemonSyncStateStub;
   let logStub;
   let publishStub;
 
@@ -29,7 +29,7 @@ describe('nodeConfirmationService', () => {
     getFluxnodeBySocketAddressStub = sinon.stub();
     // No chain view by default, so the estimate path is what runs unless a test
     // supplies a tip.
-    isDaemonSyncedStub = sinon.stub().returns({ data: { height: 0, synced: false } });
+    daemonSyncStateStub = sinon.stub().returns({ height: 0, synced: false });
     logStub = { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() };
     publishStub = sinon.stub();
     // The node list is in hand unless a test says otherwise.
@@ -38,7 +38,7 @@ describe('nodeConfirmationService', () => {
 
     service = proxyquire('../../ZelBack/src/services/nodeConfirmationService', {
       './daemonService/daemonServiceFluxnodeRpcs': { getFluxNodeStatus: getFluxNodeStatusStub },
-      './daemonService/daemonStatus': { isDaemonSynced: isDaemonSyncedStub },
+      './daemonService/daemonStatus': { daemonSyncState: daemonSyncStateStub },
       './daemonService/daemonSubscriptionService': { daemonAlive: () => true },
       './fluxNetworkHelper': {
         getLocalSocketAddress: getLocalSocketAddressStub,
@@ -522,13 +522,13 @@ describe('nodeConfirmationService', () => {
       onEdges('nodeConfirmed', confirmCb);
 
       setupConfirmed();
-      isDaemonSyncedStub.returns({ data: { height: 1200, synced: true } });
+      daemonSyncStateStub.returns({ height: 1200, synced: true });
       await service.start();
       expect(confirmCb.calledOnce).to.be.true;
 
       // The status RPC is down but the push socket keeps delivering the tip.
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
-      isDaemonSyncedStub.returns({ data: { height: 1641, synced: true } });
+      daemonSyncStateStub.returns({ height: 1641, synced: true });
       await setStatusAgeMinutes(10);
 
       expect(service.isConfirmed()).to.be.false;
@@ -539,12 +539,12 @@ describe('nodeConfirmationService', () => {
 
     it('should keep confirmation while the chain is short of the expiration height', async () => {
       setupConfirmed();
-      isDaemonSyncedStub.returns({ data: { height: 1200, synced: true } });
+      daemonSyncStateStub.returns({ height: 1200, synced: true });
       await service.start();
 
       // Hours unreachable, but the chain says we are still inside the window.
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
-      isDaemonSyncedStub.returns({ data: { height: 1639, synced: true } });
+      daemonSyncStateStub.returns({ height: 1639, synced: true });
       await setStatusAgeMinutes(600);
 
       expect(service.isConfirmed()).to.be.true;
@@ -557,11 +557,11 @@ describe('nodeConfirmationService', () => {
     // so ~220 minutes at 30s a block.
     it('should estimate the deadline from the blocks left when the chain view is gone', async () => {
       setupConfirmed();
-      isDaemonSyncedStub.returns({ data: { height: 1200, synced: true } });
+      daemonSyncStateStub.returns({ height: 1200, synced: true });
       await service.start();
 
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
-      isDaemonSyncedStub.returns({ data: { height: 1200, synced: false } });
+      daemonSyncStateStub.returns({ height: 1200, synced: false });
 
       await setStatusAgeMinutes(219);
       expect(service.isConfirmed()).to.be.true;
@@ -575,7 +575,7 @@ describe('nodeConfirmationService', () => {
     // that frozen tip is the count as of last contact.
     it('should estimate the deadline from the frozen tip when no count was recorded at last contact', async () => {
       setupConfirmed();
-      isDaemonSyncedStub.returns({ data: { height: 1200, synced: false } });
+      daemonSyncStateStub.returns({ height: 1200, synced: false });
       await service.start();
       expect(service.isConfirmed()).to.be.true;
       getFluxNodeStatusStub.rejects(new Error('connection refused'));
@@ -737,11 +737,11 @@ describe('nodeConfirmationService', () => {
       // No new status arrives — the node simply stopped confirming, and it is the
       // chain advancing that has to notice.
       setupConfirmed();
-      isDaemonSyncedStub.returns({ data: { height: 1200, synced: true } });
+      daemonSyncStateStub.returns({ height: 1200, synced: true });
       await service.start();
       expect(service.isConfirmed()).to.be.true;
 
-      isDaemonSyncedStub.returns({ data: { height: 1641, synced: true } });
+      daemonSyncStateStub.returns({ height: 1641, synced: true });
       await service.reevaluate();
 
       expect(service.isConfirmed()).to.be.false;
@@ -749,10 +749,10 @@ describe('nodeConfirmationService', () => {
 
     it('should leave a confirmation inside its deadline alone', async () => {
       setupConfirmed();
-      isDaemonSyncedStub.returns({ data: { height: 1200, synced: true } });
+      daemonSyncStateStub.returns({ height: 1200, synced: true });
       await service.start();
 
-      isDaemonSyncedStub.returns({ data: { height: 1639, synced: true } });
+      daemonSyncStateStub.returns({ height: 1639, synced: true });
       await service.reevaluate();
 
       expect(service.isConfirmed()).to.be.true;

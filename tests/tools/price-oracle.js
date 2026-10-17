@@ -113,8 +113,8 @@ async function main() {
   sinon.stub(dbHelper, 'databaseConnection').returns(fakeDb);
   // chainparams price messages: none, so the config-declared price forks apply.
   sinon.stub(dbHelper, 'findInDatabase').resolves([]);
-  sinon.stub(daemonStatus, 'isDaemonSynced')
-    .returns({ data: { synced: true, height: HEIGHT } });
+  sinon.stub(daemonStatus, 'daemonSyncState')
+    .returns({ synced: true, height: HEIGHT });
 
   sinon.stub(priceOracleState, 'getPriceMessageHistory')
     .returns({ resolveAt: () => V9_RATES });

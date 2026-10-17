@@ -1288,16 +1288,16 @@ function scheduleScan(delayMs, reason) {
  * @returns {Promise<void>} Resolves when caught up, stopped, or backed off.
  */
 async function drainToTip() {
-  const syncStatus = daemonStatus.isDaemonSynced();
+  const syncStatus = daemonStatus.daemonSyncState();
 
-  if (!syncStatus.data.synced) {
+  if (!syncStatus.synced) {
     scheduleScan(config.get('fluxapps.explorerUnsyncedRetryMs'), 'daemon unsynced');
     return;
   }
 
   const pushedTip = pushedTipHeight;
   pushedTipHeight = 0;
-  const daemonHeight = Math.max(syncStatus.data.height, pushedTip);
+  const daemonHeight = Math.max(syncStatus.height, pushedTip);
   const db = dbHelper.databaseConnection();
   const database = db.db(config.get('database.daemon.database'));
   // A rewind between this read and a block moves the cursor under the drain; the

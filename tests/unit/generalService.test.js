@@ -583,11 +583,11 @@ describe('generalService tests', () => {
   });
 
   describe('checkSynced tests', () => {
-    let isDaemonSyncedStub;
+    let daemonSyncStateStub;
     let dbStub;
 
     beforeEach(async () => {
-      isDaemonSyncedStub = sinon.stub(daemonStatus, 'isDaemonSynced');
+      daemonSyncStateStub = sinon.stub(daemonStatus, 'daemonSyncState');
       dbStub = sinon.stub(dbHelper, 'findOneInDatabase');
       await dbHelper.initiateDB();
       dbHelper.databaseConnection();
@@ -597,12 +597,10 @@ describe('generalService tests', () => {
       sinon.restore();
     });
 
-    it('should return false if isDaemonSynced returns false', async () => {
-      isDaemonSyncedStub.returns(
+    it('should return false if daemonSyncState returns false', async () => {
+      daemonSyncStateStub.returns(
         {
-          data: {
-            synced: false,
-          },
+          synced: false,
         },
       );
 
@@ -612,12 +610,10 @@ describe('generalService tests', () => {
     });
 
     it('should return false if db returns no data', async () => {
-      isDaemonSyncedStub.returns(
+      daemonSyncStateStub.returns(
         {
-          data: {
-            synced: true,
-            height: '12345667',
-          },
+          synced: true,
+          height: '12345667',
         },
       );
       dbStub.returns({});
@@ -628,12 +624,10 @@ describe('generalService tests', () => {
     });
 
     it('should return true if explorerHeight == daemonHeight', async () => {
-      isDaemonSyncedStub.returns(
+      daemonSyncStateStub.returns(
         {
-          data: {
-            synced: true,
-            height: 10,
-          },
+          synced: true,
+          height: 10,
         },
       );
       dbStub.returns({
@@ -646,12 +640,10 @@ describe('generalService tests', () => {
     });
 
     it('should return true if explorerHeight + 1 == daemonHeight', async () => {
-      isDaemonSyncedStub.returns(
+      daemonSyncStateStub.returns(
         {
-          data: {
-            synced: true,
-            height: 10,
-          },
+          synced: true,
+          height: 10,
         },
       );
       dbStub.returns({
@@ -664,12 +656,10 @@ describe('generalService tests', () => {
     });
 
     it('should return true if explorerHeight - 1 == daemonHeight', async () => {
-      isDaemonSyncedStub.returns(
+      daemonSyncStateStub.returns(
         {
-          data: {
-            synced: true,
-            height: 10,
-          },
+          synced: true,
+          height: 10,
         },
       );
       dbStub.returns({
@@ -682,12 +672,10 @@ describe('generalService tests', () => {
     });
 
     it('should return false if explorerHeight + 6 == daemonHeight', async () => {
-      isDaemonSyncedStub.returns(
+      daemonSyncStateStub.returns(
         {
-          data: {
-            synced: true,
-            height: 10,
-          },
+          synced: true,
+          height: 10,
         },
       );
       dbStub.returns({
@@ -700,12 +688,10 @@ describe('generalService tests', () => {
     });
 
     it('should return false if explorerHeight - 6 == daemonHeight', async () => {
-      isDaemonSyncedStub.returns(
+      daemonSyncStateStub.returns(
         {
-          data: {
-            synced: true,
-            height: 10,
-          },
+          synced: true,
+          height: 10,
         },
       );
       dbStub.returns({

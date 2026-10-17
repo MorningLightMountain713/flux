@@ -166,7 +166,7 @@ async function askOrdinal(identity, ordinal) {
   const recorded = await recordedHolder(identity, ordinal, basis.generation);
   if (recorded === self) return { answer: 'yes' };
 
-  if (daemonStatus.isDaemonSynced()?.data?.synced !== true) {
+  if (!daemonStatus.daemonSyncState().synced) {
     return { answer: 'wait', reason: 'own chain view stale' };
   }
   if (basis.armed) {

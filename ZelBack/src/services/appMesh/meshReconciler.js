@@ -597,8 +597,8 @@ async function collectStrayMesh(claimedIdentities) {
 }
 
 async function runReconcilePass() {
-  const synced = daemonStatus.isDaemonSynced();
-  if (synced?.data?.synced !== true) {
+  const syncState = daemonStatus.daemonSyncState();
+  if (!syncState.synced) {
     log.info('meshReconciler - daemon not synced; membership judgments deferred');
     return;
   }
@@ -628,7 +628,7 @@ async function runReconcilePass() {
   const ctx = {
     ownOutpoint,
     ownNodeId: meshDerivation.nodeId(ownOutpoint),
-    tipHeight: synced.data.height,
+    tipHeight: syncState.height,
     sshClientPublicKey: await meshSsh.ensureClientKeypair(),
   };
 

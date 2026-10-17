@@ -534,11 +534,9 @@ describe('registryManager tests', () => {
 
   describe('getApplicationSpecificationAPI tests', () => {
     beforeEach(() => {
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        data: {
-          synced: true,
-          height: 1000,
-        },
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({
+        synced: true,
+        height: 1000,
       });
     });
 
@@ -556,11 +554,9 @@ describe('registryManager tests', () => {
     });
 
     it('should return error if daemon not synced', async () => {
-      daemonStatus.isDaemonSynced.returns({
-        data: {
-          synced: false,
-          height: 0,
-        },
+      daemonStatus.daemonSyncState.returns({
+        synced: false,
+        height: 0,
       });
 
       const req = { params: { appname: 'TestApp' }, query: {} };
@@ -805,7 +801,7 @@ describe('registryManager tests', () => {
         // unsynced, so without this every test here asserts that refusal instead
         // of the channel negotiation it describes. It was standing on a stub
         // another test left behind, which is why it depended on what else ran.
-        sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 1000 } });
+        sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: 1000 });
         sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
         // The instances are Object.freeze'd, so the call counters go on the
         // prototypes; sinon.restore() in the outer afterEach puts them back.
@@ -1111,7 +1107,7 @@ describe('registryManager tests', () => {
     });
 
     it('appConvertApi refuses an unprivileged caller before reading the app', async () => {
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 1000 } });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: 1000 });
       sinon.stub(verificationHelper, 'verifyPrivilege').resolves(false);
       const getInfo = stubRegistry().byName.resolves(null);
       const res = { json: sinon.fake((param) => param) };
@@ -1132,7 +1128,7 @@ describe('registryManager tests', () => {
     // calling convention; converting those strings without reading what the
     // endpoint returns would have opened a customer's secrets to the team.
     it('asks for the owner alone, not a privilege that admits the flux team', async () => {
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 1000 } });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: 1000 });
       const verify = sinon.stub(verificationHelper, 'verifyPrivilege').resolves(false);
       const res = { json: sinon.fake((param) => param) };
 

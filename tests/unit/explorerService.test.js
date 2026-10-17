@@ -319,7 +319,7 @@ describe('explorerService tests', () => {
       restorePortsSupportStub = sinon.stub(portManager, 'restorePortsSupport');
       await dbHelper.initiateDB();
       dbHelper.databaseConnection();
-      daemonStatusStub = sinon.stub(daemonStatus, 'isDaemonSynced');
+      daemonStatusStub = sinon.stub(daemonStatus, 'daemonSyncState');
       daemonServiceBlockchainRpcsStub = sinon.stub(daemonServiceBlockchainRpcs, 'getBlock');
       logInfoSpy = sinon.spy(log, 'info');
       capabilities.setForTests('appRegistryConsistent', true);
@@ -341,10 +341,7 @@ describe('explorerService tests', () => {
         avgObjSize: 1111,
       });
       daemonStatusStub.returns({
-        data:
-        {
-          synced: true,
-        },
+        synced: true,
       });
       daemonServiceBlockchainRpcsStub.returns({
         status: 'success',
@@ -399,7 +396,7 @@ describe('explorerService tests', () => {
       const giveUpStub = sinon.stub(appGiveUp, 'checkAndGiveUpAnApp').resolves();
       dbStubUpdate.returns(true);
       dbStubCollectionStats.returns({ size: 10_000, count: 15, avgObjSize: 1111 });
-      daemonStatusStub.returns({ data: { synced: true } });
+      daemonStatusStub.returns({ synced: true });
       daemonServiceBlockchainRpcsStub.returns({
         status: 'success',
         data: {
@@ -420,7 +417,7 @@ describe('explorerService tests', () => {
       const giveUpStub = sinon.stub(appGiveUp, 'checkAndGiveUpAnApp').resolves();
       dbStubUpdate.returns(true);
       dbStubCollectionStats.returns({ size: 10_000, count: 15, avgObjSize: 1111 });
-      daemonStatusStub.returns({ data: { synced: true } });
+      daemonStatusStub.returns({ synced: true });
       for (const blockHeight of [2_020_007, 2_020_040]) {
         daemonServiceBlockchainRpcsStub.returns({
           status: 'success',
@@ -447,10 +444,7 @@ describe('explorerService tests', () => {
         avgObjSize: 1111,
       });
       daemonStatusStub.returns({
-        data:
-        {
-          synced: true,
-        },
+        synced: true,
       });
       daemonServiceBlockchainRpcsStub.returns({
         status: 'success',
@@ -500,7 +494,7 @@ describe('explorerService tests', () => {
     // (500 here), and each write names the block the registry's clock moves to.
     it('reports a block the scan catches up past only when it writes the cursor', async () => {
       dbStubCollectionStats.returns({ size: 10_000, count: 15, avgObjSize: 1111 });
-      daemonStatusStub.returns({ data: { synced: false } });
+      daemonStatusStub.returns({ synced: false });
       const block = (height) => ({
         status: 'success', data: { tx: [], height, time: 1_700_000_000, confirmations: 10 },
       });
@@ -526,10 +520,7 @@ describe('explorerService tests', () => {
         avgObjSize: 1111,
       });
       daemonStatusStub.returns({
-        data:
-        {
-          synced: true,
-        },
+        synced: true,
       });
       daemonServiceBlockchainRpcsStub.returns({
         status: 'success',
@@ -589,7 +580,7 @@ describe('explorerService tests', () => {
     beforeEach(async () => {
       findInDatabaseStub = sinon.stub(dbHelper, 'findOneInDatabase');
       dropCollectionStub = sinon.stub(dbHelper, 'dropCollection');
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true } });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
       getBlockCountStub = sinon.stub(daemonServiceBlockchainRpcs, 'getBlockCount');
       sinon.stub(daemonServiceUtils, 'getConfigValue').returns('5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ'); // Valid WIF private key
       await dbHelper.initiateDB();
@@ -1803,7 +1794,7 @@ describe('explorerService tests', () => {
       removeStub = sinon.stub(dbHelper, 'removeDocumentsFromCollection').resolves();
       sinon.stub(dbHelper, 'findInDatabase').resolves([]);
       sinon.stub(dbHelper, 'insertManyToDatabase').resolves();
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 1005 } });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: 1005 });
       sinon.stub(daemonStatus, 'isInsightExplorer').returns(false);
       sinon.stub(daemonSubscriptionService, 'isTopicAvailable').returns(true);
       sinon.stub(daemonServiceBlockchainRpcs, 'getBlock').callsFake(async ({ hashheight }) => {
@@ -1832,7 +1823,7 @@ describe('explorerService tests', () => {
     it('drops the payment records it buffered for blocks a rewind takes away', async () => {
       const PAYMENT_HEIGHT = 983_001;
       cursor = PAYMENT_HEIGHT - 1;
-      daemonStatus.isDaemonSynced.returns({ data: { synced: true, height: PAYMENT_HEIGHT + 3 } });
+      daemonStatus.daemonSyncState.returns({ synced: true, height: PAYMENT_HEIGHT + 3 });
       blockAt = (height) => ({
         height,
         time: 1_700_000_000,
@@ -1881,7 +1872,7 @@ describe('explorerService tests', () => {
     it('records a hash paid twice as its first payment only, in one block and across blocks', async () => {
       const PAYMENT_HEIGHT = 983_001;
       cursor = PAYMENT_HEIGHT - 1;
-      daemonStatus.isDaemonSynced.returns({ data: { synced: true, height: PAYMENT_HEIGHT + 1 } });
+      daemonStatus.daemonSyncState.returns({ synced: true, height: PAYMENT_HEIGHT + 1 });
       blockAt = (height) => ({
         height,
         time: 1_700_000_000,
@@ -1897,7 +1888,7 @@ describe('explorerService tests', () => {
     it('fails the block, rather than dropping the payment, when the record lookup fails', async () => {
       const PAYMENT_HEIGHT = 983_001;
       cursor = PAYMENT_HEIGHT - 1;
-      daemonStatus.isDaemonSynced.returns({ data: { synced: true, height: PAYMENT_HEIGHT } });
+      daemonStatus.daemonSyncState.returns({ synced: true, height: PAYMENT_HEIGHT });
       blockAt = (height) => ({ height, time: 1_700_000_000, tx: [paymentTx('only')] });
       messages.byHash.rejects(new Error('test: mongo read failed'));
       const errorSpy = sinon.spy(log, 'error');
@@ -2006,7 +1997,7 @@ describe('explorerService tests', () => {
 
   describe('initiateBlockProcessor never rejects', () => {
     beforeEach(async () => {
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true } });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
       await dbHelper.initiateDB();
       dbHelper.databaseConnection();
       sinon.stub(dbHelper, 'countInDatabase').resolves(1);
@@ -2041,7 +2032,7 @@ describe('explorerService tests', () => {
   describe('the hashblockheight subscriber', () => {
     it('carries the pushed height into the scan request, so the drain never trusts the cache alone', async () => {
       // The push handler chain is synchronous and ordered by registration:
-      // the explorer's drain reads isDaemonSynced() before chainTipSource's
+      // the explorer's drain reads daemonSyncState() before chainTipSource's
       // sibling handler records the new height, so the drain sees the
       // pre-block tip and returns without scanning — and nothing re-arms in
       // push mode. The message itself carries the freshest fact; the
