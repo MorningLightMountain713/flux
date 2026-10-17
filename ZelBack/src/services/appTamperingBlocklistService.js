@@ -4,7 +4,7 @@ const config = require('config');
 const log = require('../lib/log');
 const appTamperingRepository = require('./appDatabase/appTamperingRepository');
 const nodeDosState = require('./nodeDosState');
-const generalService = require('./generalService');
+const nodeConfirmationService = require('./nodeConfirmationService');
 const daemonStatus = require('./daemonService/daemonStatus');
 const capabilities = require('./utils/capabilities');
 const globalState = require('./utils/globalState');
@@ -95,7 +95,7 @@ async function computeTamperScore() {
  */
 async function getMyTxhash() {
   try {
-    const info = await generalService.obtainNodeCollateralInformation();
+    const info = await nodeConfirmationService.ownCollateral();
     return info && info.txhash ? info.txhash : null;
   } catch (error) {
     log.warn(`appTamperingBlocklist - failed to read node collateral: ${error.message}`);

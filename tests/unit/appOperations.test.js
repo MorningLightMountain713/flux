@@ -22,7 +22,7 @@ const contentBlobService = require('../../ZelBack/src/services/appLifecycle/cont
 const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsRuntimeState');
 const dockerService = require('../../ZelBack/src/services/dockerService');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
-const generalService = require('../../ZelBack/src/services/generalService');
+const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirmationService');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
@@ -648,7 +648,7 @@ describe('appOperations tests', () => {
       });
 
       it('hands the app back instead of tearing it down to rebuild', async () => {
-        sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: 'b'.repeat(64), txindex: 0 });
+        sinon.stub(nodeConfirmationService, 'ownCollateral').resolves({ txhash: 'b'.repeat(64), txindex: 0 });
         stubHostedInstances().byName.resolves(installedRecord(
           await registeredSpec(await v9Spec({ placement: { targetIps: ['9.9.9.9'] } })),
         ));
@@ -661,7 +661,7 @@ describe('appOperations tests', () => {
       });
 
       it('leaves the app as it is when it cannot read the collateral the spec names nodes by', async () => {
-        sinon.stub(generalService, 'obtainNodeCollateralInformation').rejects(new Error('daemon down'));
+        sinon.stub(nodeConfirmationService, 'ownCollateral').rejects(new Error('daemon down'));
         stubHostedInstances().byName.resolves(installedRecord(
           await registeredSpec(await v9Spec({ placement: { targetIps: ['9.9.9.9'], targetOutpoints: [`${'c'.repeat(64)}:0`] } })),
         ));

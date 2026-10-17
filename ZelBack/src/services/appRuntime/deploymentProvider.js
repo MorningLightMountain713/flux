@@ -6,7 +6,7 @@ const { appsFolder } = require('../utils/appConstants');
 const { getSpecBackend } = require('../utils/specLibs');
 const { resolveRegisteredSpec } = require('../utils/specCutover');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
-const generalService = require('../generalService');
+const nodeConfirmationService = require('../nodeConfirmationService');
 const log = require('../../lib/log');
 
 /**
@@ -26,7 +26,7 @@ async function resolveLocalReplicas(spec) {
   if (spec.placement.mode() !== 'pinned') return null;
 
   const ip = await fluxNetworkHelper.getLocalSocketAddress();
-  const collateral = await generalService.obtainNodeCollateralInformation();
+  const collateral = await nodeConfirmationService.ownCollateral();
   const outpoint = `${collateral.txhash}:${collateral.txindex}`;
 
   const names = spec.assignment.replicasFor({ ip, outpoint });

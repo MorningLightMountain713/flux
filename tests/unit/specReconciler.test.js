@@ -17,6 +17,7 @@ const appOperations = require('../../ZelBack/src/services/appLifecycle/appOperat
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const generalService = require('../../ZelBack/src/services/generalService');
+const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirmationService');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
@@ -165,7 +166,7 @@ describe('specReconciler tests', () => {
     decisionsForStub = stubDecisions().byHashes.resolves(new Map());
     sinon.stub(serviceHelper, 'delay').resolves();
     sinon.stub(generalService, 'checkSynced').resolves(synced);
-    sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: OUTPOINT_TXID, txindex: 0 });
+    sinon.stub(nodeConfirmationService, 'ownCollateral').resolves({ txhash: OUTPOINT_TXID, txindex: 0 });
     sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(LOCAL_IP);
     sinon.stub(capabilities, 'isUp').callsFake((name) => (name === 'appRegistryConsistent' && registryConsistent)
       || (name === 'bootReconcileDecided' && bootDecided));
@@ -329,7 +330,7 @@ describe('specReconciler tests', () => {
         installed: [await specWith({ targetOutpoints: { [`${OUTPOINT_TXID}:0`]: [] } })],
         globalRows: [await specWith({ targetOutpoints: { [`${OUTPOINT_TXID}:1`]: [] } })],
       });
-      generalService.obtainNodeCollateralInformation.rejects(new Error('daemon down'));
+      nodeConfirmationService.ownCollateral.rejects(new Error('daemon down'));
       await specReconciler.requestFullConvergence({ reason: 'test' });
       expect(uninstallStub.called).to.equal(false);
     });
@@ -707,7 +708,7 @@ describe('specReconciler tests', () => {
 
   describe('adoptionDelayMs (stagger math)', () => {
     it('rolls named replicas by ordinal in sorted name order', async () => {
-      sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: OUTPOINT_TXID, txindex: 0 });
+      sinon.stub(nodeConfirmationService, 'ownCollateral').resolves({ txhash: OUTPOINT_TXID, txindex: 0 });
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(LOCAL_IP);
       // this node holds s2 - ordinal 1 of [s1, s2, s3] -> one step
       const registryRow = await specWith({
@@ -721,7 +722,7 @@ describe('specReconciler tests', () => {
     });
 
     it('floors the named step at the graceful-shutdown budget', async () => {
-      sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: OUTPOINT_TXID, txindex: 0 });
+      sinon.stub(nodeConfirmationService, 'ownCollateral').resolves({ txhash: OUTPOINT_TXID, txindex: 0 });
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(LOCAL_IP);
       // preStop 110s + docker's 10s default grace = a real 120s drain budget,
       // read back out of the real DeploymentSpec by shutdownPlan — no stub in

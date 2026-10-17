@@ -85,9 +85,7 @@ function load(overrides = {}) {
     './utils/fluxEventBus': eventBus,
     './appDatabase/policyArtifactRepository': repo,
     // The tick's phase is derived from this node's collateral, read from the daemon.
-    './generalService': {
-      obtainNodeCollateralInformation: sinon.stub().resolves({ txhash: 'aa'.repeat(32), txindex: 0 }),
-    },
+    './nodeConfirmationService': { ownCollateral: sinon.stub().resolves({ txhash: 'aa'.repeat(32), txindex: 0 }) },
   });
   return {
     module, log, state, repo, serviceHelper, eventBus,

@@ -15,7 +15,7 @@ describe('appTamperingBlocklistService tests', () => {
   let policyStoreStub;
   let tamperingRepositoryStub;
   let nodeDosStateStub;
-  let generalServiceStub;
+  let nodeConfirmationServiceStub;
   let daemonMiscStub;
   let capabilitiesStub;
 
@@ -34,7 +34,7 @@ describe('appTamperingBlocklistService tests', () => {
       },
       './appDatabase/appTamperingRepository': tamperingRepositoryStub,
       './nodeDosState': nodeDosStateStub,
-      './generalService': generalServiceStub,
+      './nodeConfirmationService': nodeConfirmationServiceStub,
       './daemonService/daemonStatus': daemonMiscStub,
       './utils/capabilities': capabilitiesStub,
       './utils/globalState': { isArcane: () => arcane },
@@ -61,8 +61,8 @@ describe('appTamperingBlocklistService tests', () => {
     // make has to be able to fail.
     nodeDosStateStub = makeStickyDosDouble();
 
-    generalServiceStub = {
-      obtainNodeCollateralInformation: sinon.stub().resolves({ txhash: MOCK_TXHASH, txindex: 0 }),
+    nodeConfirmationServiceStub = {
+      ownCollateral: sinon.stub().resolves({ txhash: MOCK_TXHASH, txindex: 0 }),
     };
 
     daemonMiscStub = {
@@ -152,7 +152,7 @@ describe('appTamperingBlocklistService tests', () => {
     });
 
     it('returns null if collateral lookup throws', async () => {
-      generalServiceStub.obtainNodeCollateralInformation = sinon.stub().rejects(new Error('no daemon'));
+      nodeConfirmationServiceStub.ownCollateral = sinon.stub().rejects(new Error('no daemon'));
 
       const result = await service.getMyTxhash();
 
@@ -160,7 +160,7 @@ describe('appTamperingBlocklistService tests', () => {
     });
 
     it('returns null if collateral info lacks txhash', async () => {
-      generalServiceStub.obtainNodeCollateralInformation = sinon.stub().resolves({});
+      nodeConfirmationServiceStub.ownCollateral = sinon.stub().resolves({});
 
       const result = await service.getMyTxhash();
 
@@ -179,7 +179,7 @@ describe('appTamperingBlocklistService tests', () => {
     });
 
     it('skips when own txhash cannot be determined', async () => {
-      generalServiceStub.obtainNodeCollateralInformation = sinon.stub().resolves({});
+      nodeConfirmationServiceStub.ownCollateral = sinon.stub().resolves({});
 
       await service.enforceBlocklist();
 
@@ -392,7 +392,7 @@ describe('appTamperingBlocklistService tests', () => {
       await arcaneService.enforceBlocklist();
 
       expect(policyStoreStub.getDocument.called).to.be.false;
-      expect(generalServiceStub.obtainNodeCollateralInformation.called).to.be.false;
+      expect(nodeConfirmationServiceStub.ownCollateral.called).to.be.false;
     });
 
     it('start() does not install the interval when ArcaneOS', async () => {

@@ -472,7 +472,7 @@ async function trySpawningGlobalApplication() {
     let deferredReplicas = null;
     // A pin naming this node by address needs nothing from the daemon, so a collateral
     // that cannot be read narrows the match to addresses rather than ending the pass.
-    const collateral = await generalService.obtainNodeCollateralInformation().catch((error) => {
+    const collateral = await nodeConfirmationService.ownCollateral().catch((error) => {
       log.warn(`trySpawningGlobalApplication - could not resolve node collateral, pins naming this node by collateral will not match: ${error.message}`);
       return null;
     });

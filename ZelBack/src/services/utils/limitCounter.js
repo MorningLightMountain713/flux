@@ -4,7 +4,7 @@ const config = require('config');
 const crypto = require('crypto');
 const axios = require('axios');
 const fluxCommunicationUtils = require('../fluxCommunicationUtils');
-const generalService = require('../generalService');
+const nodeConfirmationService = require('../nodeConfirmationService');
 const log = require('../../lib/log');
 const limitCounterStore = require('./limitCounterStore');
 const limitCounterRecords = require('./limitCounterRecords');
@@ -100,7 +100,7 @@ async function localRoleForKey(purpose, key) {
   const { counter, deputy } = await countersForKey(purpose, key);
   if (!counter && !deputy) return null;
 
-  const collateral = await generalService.obtainNodeCollateralInformation();
+  const collateral = await nodeConfirmationService.ownCollateral();
   const isSelf = (node) => node
     && node.txhash === collateral.txhash
     && String(node.outidx) === String(collateral.txindex);

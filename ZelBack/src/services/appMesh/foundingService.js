@@ -1,7 +1,7 @@
 'use strict';
 
 const config = require('config');
-const generalService = require('../generalService');
+const nodeConfirmationService = require('../nodeConfirmationService');
 const messageStore = require('../appMessaging/messageStore');
 const grantClient = require('../quorumGrant/grantClient');
 const registryManager = require('../appDatabase/registryManager');
@@ -72,7 +72,7 @@ async function founderAsk(identity, componentKey) {
   // answers a founded world from its own database.
   const recorded = await recordedFounderInWorld(identity, token, generation);
   if (recorded) {
-    const collateral = await generalService.obtainNodeCollateralInformation();
+    const collateral = await nodeConfirmationService.ownCollateral();
     const self = `${collateral.txhash}:${collateral.txindex}`;
     return settled(identity, componentKey, recorded === self ? 'yes' : 'no');
   }

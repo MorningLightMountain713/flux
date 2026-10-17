@@ -26,7 +26,7 @@ const config = require('config');
 const log = require('../../lib/log');
 const fluxCommunicationUtils = require('../fluxCommunicationUtils');
 const networkStateService = require('../networkStateService');
-const generalService = require('../generalService');
+const nodeConfirmationService = require('../nodeConfirmationService');
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const cidrUtils = require('../utils/cidrUtils');
@@ -324,7 +324,7 @@ async function specNamesThisNode(spec, localSocketAddr) {
   // collateral lookup only happens when the address did not settle it.
   if (placement.isPinnedTo({ ip: localSocketAddr })) return true;
   try {
-    const collateral = await generalService.obtainNodeCollateralInformation();
+    const collateral = await nodeConfirmationService.ownCollateral();
     return placement.isPinnedTo({ outpoint: `${collateral.txhash}:${collateral.txindex}` });
   } catch (error) {
     log.warn(`placementFeasibility - could not resolve node collateral: ${error.message}`);

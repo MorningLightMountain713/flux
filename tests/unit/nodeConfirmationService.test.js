@@ -637,6 +637,39 @@ describe('nodeConfirmationService', () => {
       expect(generalService.getCollateralInfo(collateral)).to.eql({ txhash, txindex: 3 });
     });
 
+    it('answers this node\'s collateral from the status it holds, and asks the daemon nothing', async () => {
+      setupConfirmed();
+      await service.start();
+      await service.applyPushedStatus(pushed({ outidx: 3 }));
+      getFluxNodeStatusStub.resetHistory();
+
+      expect(await service.ownCollateral()).to.eql({ txhash, txindex: 3 });
+      sinon.assert.notCalled(getFluxNodeStatusStub);
+    });
+
+    it('answers the collateral it holds while the daemon cannot answer', async () => {
+      setupConfirmed();
+      await service.start();
+      await service.applyPushedStatus(pushed({ outidx: 2 }));
+      getFluxNodeStatusStub.rejects(new Error('connection refused'));
+
+      expect(await service.ownCollateral()).to.eql({ txhash, txindex: 2 });
+    });
+
+    it('asks the daemon before any status is held', async () => {
+      getFluxNodeStatusStub.resolves({ status: 'success', data: { status: 'STARTED', txhash, outidx: '1' } });
+
+      expect(await service.ownCollateral()).to.eql({ txhash, txindex: 1 });
+    });
+
+    it('throws the daemon\'s reason when no status is held and the daemon refuses', async () => {
+      getFluxNodeStatusStub.resolves({ status: 'error', data: { message: 'daemon loading' } });
+
+      let thrown = null;
+      try { await service.ownCollateral(); } catch (error) { thrown = error; }
+      expect(thrown).to.eql({ message: 'daemon loading' });
+    });
+
     it('should not reverse the transaction hash', async () => {
       setupConfirmed();
       await service.start();

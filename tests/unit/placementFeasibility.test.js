@@ -151,7 +151,7 @@ describe('placementFeasibility tests', () => {
       // node list is unknown; these cases are all about what they answer once
       // it IS known.
       '../networkStateService': { isReady: networkStateReadyStub },
-      '../generalService': { obtainNodeCollateralInformation: collateralStub },
+      '../nodeConfirmationService': { ownCollateral: collateralStub },
       '../appRequirements/hwRequirements': { totalAppHWRequirements: totalHWStub },
       './ipLocationStore': storeStub,
       '../verificationHelper': { verifyPrivilege: verifyPrivilegeStub },

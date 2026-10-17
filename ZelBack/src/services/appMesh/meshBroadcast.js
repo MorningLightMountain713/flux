@@ -13,7 +13,7 @@
 // overlay yet. The reconciler prepares the material; the broadcast only
 // reports it. One failing app never blocks the others or the broadcast.
 const log = require('../../lib/log');
-const generalService = require('../generalService');
+const nodeConfirmationService = require('../nodeConfirmationService');
 const meshCertificates = require('./meshCertificates');
 const meshDerivation = require('./meshDerivation');
 const meshVoucher = require('./meshVoucher');
@@ -41,7 +41,7 @@ async function meshBroadcastFields(installedSpecs, resolvedViews) {
   let outpoint;
   let anchor;
   try {
-    const collateral = await generalService.obtainNodeCollateralInformation();
+    const collateral = await nodeConfirmationService.ownCollateral();
     outpoint = meshDerivation.canonicalOutpoint(collateral.txhash, collateral.txindex);
     anchor = await meshVoucher.fetchVoucherAnchor();
   } catch (error) {

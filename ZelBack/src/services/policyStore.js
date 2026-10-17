@@ -10,7 +10,7 @@ const capabilities = require('./utils/capabilities');
 const policyArtifactRepository = require('./appDatabase/policyArtifactRepository');
 const fluxEventBus = require('./utils/fluxEventBus');
 const { verifyBundle, MAX_BUNDLE_BYTES } = require('./utils/policySignature');
-const generalService = require('./generalService');
+const nodeConfirmationService = require('./nodeConfirmationService');
 
 // The network's policy documents, as one signed bundle.
 //
@@ -759,7 +759,7 @@ function backstopPhaseMs(identity, periodMs) {
  */
 async function nodePhaseIdentity() {
   try {
-    const collateral = await generalService.obtainNodeCollateralInformation();
+    const collateral = await nodeConfirmationService.ownCollateral();
     if (collateral && collateral.txhash) return `${collateral.txhash}:${collateral.txindex}`;
   } catch (error) {
     log.warn(`policyStore - could not read collateral for tick phasing: ${error.message}`);

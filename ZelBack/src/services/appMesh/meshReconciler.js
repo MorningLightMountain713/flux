@@ -30,7 +30,7 @@ const uplinkService = require('../uplinkService');
 const dockerService = require('../dockerService');
 const daemonStatus = require('../daemonService/daemonStatus');
 const daemonServiceBlockchainRpcs = require('../daemonService/daemonServiceBlockchainRpcs');
-const generalService = require('../generalService');
+const nodeConfirmationService = require('../nodeConfirmationService');
 const networkStateService = require('../networkStateService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const { getSpec } = require('../utils/specLibs');
@@ -614,7 +614,7 @@ async function runReconcilePass() {
     // naming apps, so a node that never ran mesh executes nothing here.
     const previous = await meshSnapshot.readCurrentSnapshot();
     if (previous?.apps?.length) {
-      const shedCollateral = await generalService.obtainNodeCollateralInformation();
+      const shedCollateral = await nodeConfirmationService.ownCollateral();
       const shedOutpoint = meshDerivation.canonicalOutpoint(shedCollateral.txhash, shedCollateral.txindex);
       await meshSnapshot.writeSnapshot(meshDerivation.nodeId(shedOutpoint), []);
       await meshNamespace.ensureMeshChains();
@@ -623,7 +623,7 @@ async function runReconcilePass() {
     return;
   }
 
-  const collateral = await generalService.obtainNodeCollateralInformation();
+  const collateral = await nodeConfirmationService.ownCollateral();
   const ownOutpoint = meshDerivation.canonicalOutpoint(collateral.txhash, collateral.txindex);
   const ctx = {
     ownOutpoint,
@@ -810,7 +810,7 @@ async function prepareComponentMesh(appName, componentName) {
 
   await reconcileAllMeshApps();
 
-  const collateral = await generalService.obtainNodeCollateralInformation();
+  const collateral = await nodeConfirmationService.ownCollateral();
   const ownOutpoint = meshDerivation.canonicalOutpoint(collateral.txhash, collateral.txindex);
   const ownNodeId = meshDerivation.nodeId(ownOutpoint);
   const snapshot = await meshSnapshot.readCurrentSnapshot();

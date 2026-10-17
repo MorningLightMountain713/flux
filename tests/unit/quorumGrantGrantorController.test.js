@@ -11,7 +11,7 @@ const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonSta
 const fluxCommunicationUtils = require('../../ZelBack/src/services/fluxCommunicationUtils');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
-const generalService = require('../../ZelBack/src/services/generalService');
+const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirmationService');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
 const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCommittee');
@@ -44,7 +44,7 @@ const ASKER = `${ASKER_TXHASH}:0`;
 const FINGERPRINT = 'c'.repeat(64);
 
 // Five distinct owners across five /16s: a 5-committee seats all of them, so
-// committee membership is decided by whose collateral generalService reports.
+// committee membership is decided by whose collateral nodeConfirmationService reports.
 function fixtureFleet() {
   const filler = [1, 2, 3, 4].map((i) => ({
     txhash: String(i).repeat(64).slice(0, 64),
@@ -124,7 +124,7 @@ describe('quorumGrant grantorController', () => {
 
     sinon.stub(fluxCommunicationUtils, 'deterministicFluxList').resolves(fixtureFleet());
     sinon.stub(networkStateService, 'membershipAt').returns(fixtureFleet());
-    sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
+    sinon.stub(nodeConfirmationService, 'ownCollateral').resolves({
       txhash: ASKER_TXHASH, txindex: 0,
     });
     sinon.stub(registryManager, 'appLocationOf').resolves([
@@ -343,7 +343,7 @@ describe('quorumGrant grantorController', () => {
 
   describe('committee membership — answering only for what this node is', () => {
     it('409 when this node does not sit on the committee for the key', async () => {
-      generalService.obtainNodeCollateralInformation.resolves({
+      nodeConfirmationService.ownCollateral.resolves({
         txhash: 'f'.repeat(64), txindex: 7,
       });
       const res = fakeRes();
@@ -1037,7 +1037,7 @@ describe('quorumGrant grantorController', () => {
     // before it answers anything, or it is exactly the swing vote a challenger
     // needs. It used to answer straight away; that is the defect.
     it('a freshly seated replacement ADOPTS the standing term before it answers', async () => {
-      generalService.obtainNodeCollateralInformation.resolves({
+      nodeConfirmationService.ownCollateral.resolves({
         txhash: added.txhash, txindex: added.outidx,
       });
       // its committee tells it a term stands
@@ -1064,7 +1064,7 @@ describe('quorumGrant grantorController', () => {
     // FAILS CLOSED. A fresh seat with no state and no way to get any must not
     // answer: answering from that position is the whole defect.
     it('a freshly seated replacement REFUSES when it cannot reach a quorum to adopt', async () => {
-      generalService.obtainNodeCollateralInformation.resolves({
+      nodeConfirmationService.ownCollateral.resolves({
         txhash: added.txhash, txindex: added.outidx,
       });
       sinon.stub(serviceHelper, 'axiosGet').rejects(new Error('unreachable'));
@@ -1080,7 +1080,7 @@ describe('quorumGrant grantorController', () => {
     // round that reached one grantor and died names a node that never won, and
     // a fresh seat adopting it would shield a master that does not exist.
     it('does NOT adopt a term only a minority reports', async () => {
-      generalService.obtainNodeCollateralInformation.resolves({
+      nodeConfirmationService.ownCollateral.resolves({
         txhash: added.txhash, txindex: added.outidx,
       });
       let call = 0;
@@ -1106,7 +1106,7 @@ describe('quorumGrant grantorController', () => {
     // A quorum answering "no term stands" is an ANSWER, not an outage: the seat
     // may serve. Distinct from being unable to ask, which refuses above.
     it('a freshly seated replacement serves when a quorum says no term stands', async () => {
-      generalService.obtainNodeCollateralInformation.resolves({
+      nodeConfirmationService.ownCollateral.resolves({
         txhash: added.txhash, txindex: added.outidx,
       });
       sinon.stub(serviceHelper, 'axiosGet').resolves({
@@ -1121,7 +1121,7 @@ describe('quorumGrant grantorController', () => {
     });
 
     it('a displaced seat stops answering the moment the chain reaches it', async () => {
-      generalService.obtainNodeCollateralInformation.resolves({
+      nodeConfirmationService.ownCollateral.resolves({
         txhash: removed.txhash, txindex: removed.outidx,
       });
 
@@ -1139,7 +1139,7 @@ describe('quorumGrant grantorController', () => {
         accepted: { epoch: 3, grantee: ASKER, mode: 'held' },
         roster: { fingerprint: FINGERPRINT, changedAt: 1, chain },
       });
-      generalService.obtainNodeCollateralInformation.resolves({
+      nodeConfirmationService.ownCollateral.resolves({
         txhash: added.txhash, txindex: added.outidx,
       });
       const res = fakeRes();
@@ -1375,7 +1375,7 @@ describe('quorumGrant grantorController', () => {
     }];
 
     function selfIs(node) {
-      generalService.obtainNodeCollateralInformation.resolves({
+      nodeConfirmationService.ownCollateral.resolves({
         txhash: node.txhash, txindex: node.outidx,
       });
     }

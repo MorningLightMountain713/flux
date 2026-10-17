@@ -72,6 +72,22 @@ function getNodeStatus() {
 }
 
 /**
+ * This node's collateral, from the status this service holds: the daemon pushes
+ * it on every change, and it stands while the daemon cannot answer. The daemon
+ * is asked only before a first status has been read.
+ * @returns {Promise<{txhash: string, txindex: number}>}
+ */
+async function ownCollateral() {
+  let status = nodeStatus;
+  if (!status) {
+    const answer = await daemonServiceFluxnodeRpcs.getFluxNodeStatus();
+    if (answer.status === 'error') throw answer.data;
+    status = answer.data;
+  }
+  return { txhash: status.txhash, txindex: Number(status.outidx) };
+}
+
+/**
  * Whether the daemon answered the most recent status poll. Callers whose work is only
  * meaningful against current daemon data — collision detection reads the node list and
  * this status together — should skip rather than re-derive last poll's conclusion.
@@ -406,6 +422,7 @@ function setLastStatusAgeMs(ageMs) {
 module.exports = {
   isConfirmed,
   getNodeStatus,
+  ownCollateral,
   isDaemonReachable,
   isDaemonStale,
   canSendMessages,

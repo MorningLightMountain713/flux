@@ -15,13 +15,13 @@ describe('limitCounter tests', () => {
   function load(opts = {}) {
     stubs = {
       deterministicFluxList: sinon.stub().resolves(opts.nodes ?? FLEET),
-      obtainNodeCollateralInformation: sinon.stub().resolves(
+      ownCollateral: sinon.stub().resolves(
         opts.collateral ?? { txhash: 'not-in-the-list', txindex: 0 },
       ),
     };
     return proxyquire('../../ZelBack/src/services/utils/limitCounter', {
       '../fluxCommunicationUtils': { deterministicFluxList: stubs.deterministicFluxList },
-      '../generalService': { obtainNodeCollateralInformation: stubs.obtainNodeCollateralInformation },
+      '../nodeConfirmationService': { ownCollateral: stubs.ownCollateral },
     });
   }
 

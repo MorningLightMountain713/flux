@@ -52,9 +52,7 @@ describe('meshOperatorService', () => {
         info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(), debug: sinon.stub(),
       },
       '../verificationHelper': { verifyPrivilege: stubs.privilege },
-      '../generalService': {
-        obtainNodeCollateralInformation: sinon.stub().resolves({ txhash: OWN_TX, txindex: 0 }),
-      },
+      '../nodeConfirmationService': { ownCollateral: sinon.stub().resolves({ txhash: OWN_TX, txindex: 0 }) },
       '../appDatabase/appRecords': { hostedInstances: () => ({ byName: stubs.getInstalledApp }) },
       '../appRuntime/deploymentProvider': { appNameFromRequest: (name) => name.split('_')[1] || name },
       '../utils/specCutover': { resolveRegisteredSpec: async (inst) => inst.view },

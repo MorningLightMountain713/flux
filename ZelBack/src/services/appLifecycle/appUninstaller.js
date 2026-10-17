@@ -18,7 +18,7 @@ const fluxNetworkHelper = require('../fluxNetworkHelper');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const appRecords = require('../appDatabase/appRecords');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
-const generalService = require('../generalService');
+const nodeConfirmationService = require('../nodeConfirmationService');
 const mastershipGrantGate = require('./mastershipGrantGate');
 const relationshipResolver = require('./relationshipResolver');
 const contentStore = require('./contentStore');
@@ -716,7 +716,7 @@ async function removeUnrequiredDependencies() {
     let nodeIdentity;
     try {
       const ip = await fluxNetworkHelper.getLocalSocketAddress();
-      const collateral = await generalService.obtainNodeCollateralInformation();
+      const collateral = await nodeConfirmationService.ownCollateral();
       const operator = await fluxNetworkHelper.getFluxNodePublicKey();
       nodeIdentity = {
         ip: ip || undefined,

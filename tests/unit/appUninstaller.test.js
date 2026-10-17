@@ -193,9 +193,7 @@ describe('appUninstaller tests', () => {
       },
       '../upnpService': upnpServiceStub,
       '../fluxNetworkHelper': fluxNetworkHelperStub,
-      '../generalService': {
-        obtainNodeCollateralInformation: sinon.stub().resolves({ txhash: 'txh', txindex: 0 }),
-      },
+      '../nodeConfirmationService': { ownCollateral: sinon.stub().resolves({ txhash: 'txh', txindex: 0 }) },
       '../fluxCommunicationMessagesSender': {
         broadcastMessageToOutgoing: sinon.stub().resolves(),
         broadcastMessageToIncoming: sinon.stub().resolves(),

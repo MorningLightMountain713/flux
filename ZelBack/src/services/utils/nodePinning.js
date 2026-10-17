@@ -15,7 +15,7 @@ const { socketAddressesMatch } = require('./socketAddressUtils');
 /**
  * This node's collateral as a `nodes` entry, or null when it cannot be formed.
  * @param {{txhash: string, txindex: number|string}} [collateral] From
- *   generalService.obtainNodeCollateralInformation().
+ *   nodeConfirmationService.ownCollateral().
  * @returns {string|null}
  */
 function collateralOutpoint(collateral) {

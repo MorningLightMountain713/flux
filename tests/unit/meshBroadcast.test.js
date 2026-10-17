@@ -32,7 +32,7 @@ describe('meshBroadcast', () => {
       uplinkMtu: null,
     };
     meshBroadcast = proxyquire('../../ZelBack/src/services/appMesh/meshBroadcast', {
-      '../generalService': { obtainNodeCollateralInformation: stubs.collateral },
+      '../nodeConfirmationService': { ownCollateral: stubs.collateral },
       './meshVoucher': { fetchVoucherAnchor: stubs.anchor, mintVoucher: stubs.mint },
       './meshCertificates': { authorityBundle: stubs.bundle },
       './meshPorts': { getPort: stubs.getPort },

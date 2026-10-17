@@ -3,7 +3,7 @@
 const config = require('config');
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
-const generalService = require('../generalService');
+const nodeConfirmationService = require('../nodeConfirmationService');
 const fluxCommunicationUtils = require('../fluxCommunicationUtils');
 const registryManager = require('../appDatabase/registryManager');
 const { extractIp } = require('../utils/socketAddressUtils');
@@ -68,7 +68,7 @@ async function selfHoldsApp(key) {
   const nodes = await fluxCommunicationUtils.deterministicFluxList();
   // location rows carry addresses, so holdership is answered by this node's
   // own listed address, resolved through its collateral
-  const self = await generalService.obtainNodeCollateralInformation();
+  const self = await nodeConfirmationService.ownCollateral();
   const selfNode = (nodes || []).find(
     (node) => node.txhash === self.txhash && String(node.outidx) === String(self.txindex),
   );

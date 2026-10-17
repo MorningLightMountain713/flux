@@ -4,7 +4,7 @@ const config = require('config');
 const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const daemonStatus = require('../daemonService/daemonStatus');
-const generalService = require('../generalService');
+const nodeConfirmationService = require('../nodeConfirmationService');
 const fluxCommunicationUtils = require('../fluxCommunicationUtils');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const networkStateService = require('../networkStateService');
@@ -528,7 +528,7 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain,
     // Component-blind: the token is opaque to a referee, and the anchor is
     // served iff this node photographed that spec height — which components
     // exist is knowledge only the hosts hold, and a referee never needs it.
-    const collateral = await generalService.obtainNodeCollateralInformation();
+    const collateral = await nodeConfirmationService.ownCollateral();
     const founding = await foundingCommittee.selfOnFoundingCommittee(
       key.slice(0, key.indexOf('/')), Number(founderRole[2]), fingerprint, generation, collateral,
     );
@@ -663,7 +663,7 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain,
     ));
   }
 
-  const collateral = await generalService.obtainNodeCollateralInformation();
+  const collateral = await nodeConfirmationService.ownCollateral();
   const member = members.some(
     (node) => node.txhash === collateral.txhash
       && String(node.outidx) === String(collateral.txindex),
@@ -714,7 +714,7 @@ async function adoptStandingTerm(ask, committee) {
   // would be a fresh seat overwriting a row it earned.
   if (stored?.accepted) return { ok: true, reason: null };
 
-  const self = await generalService.obtainNodeCollateralInformation();
+  const self = await nodeConfirmationService.ownCollateral();
   const peers = (committee.members || []).filter(
     (node) => !(node.txhash === self.txhash && String(node.outidx) === String(self.txindex)),
   );
@@ -773,7 +773,7 @@ async function resyncReturnedKey(ask) {
     { generationHeight: ask.generationHeight },
   );
   if (!committee.members || !committee.quorum) return false;
-  const self = await generalService.obtainNodeCollateralInformation();
+  const self = await nodeConfirmationService.ownCollateral();
   const peers = committee.members.filter(
     (node) => !(node.txhash === self.txhash && String(node.outidx) === String(self.txindex)),
   );
@@ -1138,7 +1138,7 @@ async function withTermAcceptance(ask, reply) {
   if (!signed) {
     return { ok: false, code: 'unavailable' };
   }
-  const collateral = await generalService.obtainNodeCollateralInformation();
+  const collateral = await nodeConfirmationService.ownCollateral();
   return {
     ...reply,
     acceptance: {
@@ -1240,7 +1240,7 @@ async function operateRoster(ask) {
 
   if (!reply.ok) return reply;
 
-  const collateral = await generalService.obtainNodeCollateralInformation();
+  const collateral = await nodeConfirmationService.ownCollateral();
   const wif = await fluxNetworkHelper.getFluxNodePrivateKey();
   const fields = signedEnvelope.fieldsFor('rosteraccept', {
     key: ask.key,

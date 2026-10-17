@@ -1,6 +1,6 @@
 'use strict';
 
-const generalService = require('./generalService');
+const nodeConfirmationService = require('./nodeConfirmationService');
 const workerRunner = require('./utils/workerRunner');
 const nodeIdentityRepository = require('./appDatabase/nodeIdentityRepository');
 const log = require('../lib/log');
@@ -91,7 +91,7 @@ async function generateIdentity() {
       log.info('Adopted the PGP keypair from the config file');
       return;
     }
-    const collateralInfo = await generalService.obtainNodeCollateralInformation();
+    const collateralInfo = await nodeConfirmationService.ownCollateral();
     // userId name is our txid:outputid
     // userId email is our zelid@runonflux.io
     const email = `${userconfig.initial.zelid}@runonflux.io`; // 1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC@runonflux.io
