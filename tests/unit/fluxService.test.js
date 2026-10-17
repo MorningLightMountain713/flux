@@ -98,10 +98,7 @@ describe('fluxService tests', () => {
     function setup(blocksSinceConfirmed) {
       sinon.stub(serviceHelper, 'isPrivateAddress').returns(true);
       sinon.stub(serviceHelper, 'runCommand').resolves({ error: new Error('stopped here') });
-      sinon.stub(daemonServiceBlockchainRpcs, 'getBlockchainInfo').resolves({
-        status: 'success',
-        data: { bestblockhash: 'aa'.repeat(32), blocks: LAST_CONFIRMED + blocksSinceConfirmed },
-      });
+      sinon.stub(daemonServiceBlockchainRpcs, 'getBlockchainInfo').resolves({ value: { bestblockhash: 'aa'.repeat(32), blocks: LAST_CONFIRMED + blocksSinceConfirmed } });
       sinon.stub(daemonServiceBlockchainRpcs, 'getBlock').resolves({
         status: 'success',
         data: { time: Math.floor(Date.now() / 1000) },

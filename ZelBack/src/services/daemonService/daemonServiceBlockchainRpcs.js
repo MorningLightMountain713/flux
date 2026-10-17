@@ -55,31 +55,37 @@ async function getBlockApi(req, res) {
 }
 
 /**
- * To get blockchain info.
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- * @returns {object} Message.
+ * The daemon's blockchain info.
+ * @returns {Promise<{value: object|null, reason?: object}>}
  */
-async function getBlockchainInfo(req, res) {
-  const rpccall = 'getBlockchainInfo';
-
-  response = await daemonServiceUtils.executeCall(rpccall);
-
-  return res ? res.json(response) : response;
+async function getBlockchainInfo() {
+  return messageHelper.answerOf(await daemonServiceUtils.executeCall('getBlockchainInfo'));
 }
 
 /**
- * To get block count.
+ * GET /daemon/getblockchaininfo
  * @param {import('express').Request} req
  * @param {import('express').Response} res
- * @returns {object} Message.
  */
-async function getBlockCount(req, res) {
-  const rpccall = 'getBlockCount';
+async function getBlockchainInfoAPI(req, res) {
+  res.json(messageHelper.messageOf(await getBlockchainInfo()));
+}
 
-  response = await daemonServiceUtils.executeCall(rpccall);
+/**
+ * The daemon's block height.
+ * @returns {Promise<{value: number|null, reason?: object}>}
+ */
+async function getBlockCount() {
+  return messageHelper.answerOf(await daemonServiceUtils.executeCall('getBlockCount'));
+}
 
-  return res ? res.json(response) : response;
+/**
+ * GET /daemon/getblockcount
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+async function getBlockCountAPI(req, res) {
+  res.json(messageHelper.messageOf(await getBlockCount()));
 }
 
 /**
@@ -217,26 +223,24 @@ async function getBlockHeader(req, res) {
 }
 
 /**
- * To get chain tips.
+ * The chain tips the daemon knows, from a height when one is given.
+ * @param {number|null} [minheight]
+ * @returns {Promise<{value: object[]|null, reason?: object}>}
+ */
+async function getChainTips(minheight = null) {
+  const rpcparameters = minheight === null ? [] : [minheight];
+  return messageHelper.answerOf(await daemonServiceUtils.executeCall('getChainTips', rpcparameters));
+}
+
+/**
+ * GET /daemon/getchaintips
  * @param {import('express').Request} req
  * @param {import('express').Response} res
- * @returns {object} Message.
  */
-async function getChainTips(req, res) {
-  let { minheight } = req?.params || {};
-  minheight = minheight || req?.query?.minheight;
-
-  const rpccall = 'getChainTips';
-  const rpcparameters = [];
-
-  if (minheight !== undefined && minheight !== null) {
-    minheight = serviceHelper.ensureNumber(minheight);
-    rpcparameters.push(minheight);
-  }
-
-  response = await daemonServiceUtils.executeCall(rpccall, rpcparameters);
-
-  return res ? res.json(response) : response;
+async function getChainTipsAPI(req, res) {
+  const minheight = req.params.minheight || req.query.minheight;
+  const given = minheight !== undefined && minheight !== null;
+  res.json(messageHelper.messageOf(await getChainTips(given ? serviceHelper.ensureNumber(minheight) : null)));
 }
 
 /**
@@ -456,13 +460,16 @@ module.exports = {
   getBlock,
   getBlockApi,
   getBlockchainInfo,
+  getBlockchainInfoAPI,
   getBlockCount,
+  getBlockCountAPI,
   getBlockDeltas, // experimental feataure, insight explorer
   getBlockHashes, // experimental feataure, insight explorer
   getBlockHashesPost, // experimental feataure, insight explorer
   getBlockHash,
   getBlockHeader,
   getChainTips,
+  getChainTipsAPI,
   getDifficulty,
   getMempoolInfo,
   getRawMemPool,

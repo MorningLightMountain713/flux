@@ -1200,17 +1200,12 @@ async function checkAndHandleReorgs(database, scannedBlockHeight) {
 
   log.info(`Explorer - Checking for chain reorganisations - lastchainTipCheck: ${lastchainTipCheck} scannedBlockHeight: ${scannedBlockHeight}`);
   const daemonVersion = await getDaemonVersion();
-  let daemonGetChainTips;
-  if (daemonVersion > 7_020_050) {
-    daemonGetChainTips = await daemonServiceBlockchainRpcs.getChainTips({ params: { minheight: lastchainTipCheck + 1 } });
-  } else {
-    daemonGetChainTips = await daemonServiceBlockchainRpcs.getChainTips();
-  }
-  if (daemonGetChainTips.status !== 'success') {
-    throw new Error(daemonGetChainTips.data.message || daemonGetChainTips.data);
+  const daemonGetChainTips = await daemonServiceBlockchainRpcs.getChainTips(daemonVersion > 7_020_050 ? lastchainTipCheck + 1 : null);
+  if (daemonGetChainTips.reason) {
+    throw new Error(daemonGetChainTips.reason.message);
   }
 
-  const reorganisations = daemonGetChainTips.data;
+  const reorganisations = daemonGetChainTips.value;
   let reorgs = reorganisations.filter((reorg) => reorg.status === 'valid-fork' && reorg.height >= lastchainTipCheck + 1);
   if (reorgs.length > 1) {
     reorgs = reorgs.sort((a, b) => a.height - b.height);
@@ -1599,10 +1594,10 @@ async function initiateBlockProcessor(options = {}) {
     await waitForScanPrerequisites();
 
     const daemonBlockCount = await daemonServiceBlockchainRpcs.getBlockCount();
-    if (daemonBlockCount.status !== 'success') {
-      throw new Error(daemonBlockCount.data.message || daemonBlockCount.data);
+    if (daemonBlockCount.reason) {
+      throw new Error(daemonBlockCount.reason.message);
     }
-    const daemonHeight = daemonBlockCount.data;
+    const daemonHeight = daemonBlockCount.value;
     const isInsightExplorer = daemonStatus.isInsightExplorer();
 
     if (daemonHeight <= scannedBlockHeight) {
@@ -1884,6 +1879,7 @@ module.exports = {
   restartBlockProcessingApi,
   blockInFlight,
   getBlockEmitter,
+  checkAndHandleReorgs,
   onNewBlock,
   requestScan,
   scanning,

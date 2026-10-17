@@ -111,16 +111,13 @@ describe('meshVoucher', () => {
 
   describe('fetchVoucherAnchor', () => {
     it('returns the tip height and hash', async () => {
-      sinon.stub(daemonServiceBlockchainRpcs, 'getBlockchainInfo').resolves({
-        status: 'success',
-        data: { blocks: 2_843_890, bestblockhash: FIELDS.blockHash },
-      });
+      sinon.stub(daemonServiceBlockchainRpcs, 'getBlockchainInfo').resolves({ value: { blocks: 2_843_890, bestblockhash: FIELDS.blockHash } });
       const anchor = await meshVoucher.fetchVoucherAnchor();
       expect(anchor).to.deep.equal({ height: 2_843_890, hash: FIELDS.blockHash });
     });
 
     it('throws when the daemon cannot provide a tip', async () => {
-      sinon.stub(daemonServiceBlockchainRpcs, 'getBlockchainInfo').resolves({ status: 'error', data: {} });
+      sinon.stub(daemonServiceBlockchainRpcs, 'getBlockchainInfo').resolves({ value: null, reason: {} });
       try {
         await meshVoucher.fetchVoucherAnchor();
         expect.fail('should throw');

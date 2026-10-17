@@ -184,15 +184,15 @@ async function waitForDaemonRpc() {
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const result = await daemonServiceBlockchainRpcs.getBlockchainInfo();
-    if (result.status === 'success') {
-      log.info(`Daemon RPC available at block height ${result.data.blocks} on chain ${result.data.chain}`);
+    if (!result.reason) {
+      log.info(`Daemon RPC available at block height ${result.value.blocks} on chain ${result.value.chain}`);
       publishDaemonReachable(true);
-      return { blocks: result.data.blocks, chain: result.data.chain };
+      return { blocks: result.value.blocks, chain: result.value.chain };
     }
     const now = Date.now();
     if (!lastLogAt || now - lastLogAt >= LOG_INTERVAL_MS) {
-      const reason = result.data?.code === RPC_IN_WARMUP
-        ? result.data.message
+      const reason = result.reason.code === RPC_IN_WARMUP
+        ? result.reason.message
         : 'daemon not reachable';
       log.info(`Waiting for daemon RPC... (${reason})`);
       lastLogAt = now;

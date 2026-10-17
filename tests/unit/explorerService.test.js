@@ -643,12 +643,9 @@ describe('explorerService tests', () => {
 
     it('should throw and log error if getBlockCount does not return success', async () => {
       sinon.stub(dbHelper, 'countInDatabase').resolves(1);
-      getBlockCountStub.returns({
-        status: 'error',
-        data: {
-          message: 'message',
-        },
-      });
+      getBlockCountStub.returns({ value: null, reason: {
+        message: 'message',
+      } });
 
       await explorerService.initiateBlockProcessor({});
       await serviceHelper.delay(200);
@@ -667,10 +664,7 @@ describe('explorerService tests', () => {
       const collectionFake = sinon.fake.returns({ createIndex: createIndexFake, updateMany: sinon.fake.resolves({ modifiedCount: 0 }), indexes: sinon.fake.resolves([]) });
       const dbFake = sinon.fake.returns({ collection: collectionFake });
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: dbFake });
-      getBlockCountStub.returns({
-        status: 'success',
-        data: 200_000,
-      });
+      getBlockCountStub.returns({ value: 200_000 });
       sinon.stub(daemonStatus, 'isInsightExplorer').returns(true);
       sinon.stub(daemonServiceUtils, 'executeCall').resolves({ status: 'success', data: [] });
       sinon.stub(daemonServiceUtils, 'executeBatchCall').resolves({ status: 'success', data: [] });
@@ -695,7 +689,7 @@ describe('explorerService tests', () => {
       const collectionFake = sinon.fake.returns({ createIndex: createIndexFake, updateMany: sinon.fake.resolves({ modifiedCount: 0 }), indexes: sinon.fake.resolves([]) });
       const dbFake = sinon.fake.returns({ collection: collectionFake });
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: dbFake });
-      getBlockCountStub.returns({ status: 'success', data: 200_000 });
+      getBlockCountStub.returns({ value: 200_000 });
       sinon.stub(daemonStatus, 'isInsightExplorer').returns(true);
       sinon.stub(daemonServiceUtils, 'executeCall').resolves({ status: 'error', data: { message: 'RPC unavailable' } });
 
@@ -719,10 +713,7 @@ describe('explorerService tests', () => {
       const collectionFake = sinon.fake.returns({ createIndex: createIndexFake, updateMany: sinon.fake.resolves({ modifiedCount: 0 }), indexes: sinon.fake.resolves([]) });
       const dbFake = sinon.fake.returns({ collection: collectionFake });
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: dbFake });
-      getBlockCountStub.returns({
-        status: 'success',
-        data: 200_000,
-      });
+      getBlockCountStub.returns({ value: 200_000 });
       sinon.stub(daemonStatus, 'isInsightExplorer').returns(true);
 
       await explorerService.initiateBlockProcessor();
@@ -742,7 +733,7 @@ describe('explorerService tests', () => {
       findInDatabaseStub.returns({ generalScannedHeight: 1000 });
       const dbFake = sinon.fake.returns({ collection: sinon.fake.returns({ indexes: sinon.fake.resolves([]) }) });
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: dbFake });
-      getBlockCountStub.returns({ status: 'success', data: 1000 });
+      getBlockCountStub.returns({ value: 1000 });
       sinon.stub(daemonStatus, 'isInsightExplorer').returns(false);
 
       const started = explorerService.initiateBlockProcessor();
@@ -765,7 +756,7 @@ describe('explorerService tests', () => {
       findInDatabaseStub.returns({ generalScannedHeight: 1000 });
       const dbFake = sinon.fake.returns({ collection: sinon.fake.returns({ indexes: sinon.fake.resolves([]) }) });
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: dbFake });
-      getBlockCountStub.returns({ status: 'success', data: 1000 });
+      getBlockCountStub.returns({ value: 1000 });
       sinon.stub(daemonStatus, 'isInsightExplorer').returns(false);
 
       const started = explorerService.initiateBlockProcessor();
@@ -801,10 +792,7 @@ describe('explorerService tests', () => {
       const collectionFake = sinon.fake.returns({ createIndex: createIndexFake, updateMany: sinon.fake.resolves({ modifiedCount: 0 }), indexes: sinon.fake.resolves([]) });
       const dbFake = sinon.fake.returns({ collection: collectionFake });
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: dbFake });
-      getBlockCountStub.returns({
-        status: 'success',
-        data: 200_000,
-      });
+      getBlockCountStub.returns({ value: 200_000 });
       sinon.stub(daemonStatus, 'isInsightExplorer').returns(true);
 
       await explorerService.initiateBlockProcessor({ deepRestore: true });
@@ -827,10 +815,7 @@ describe('explorerService tests', () => {
       const collectionFake = sinon.fake.returns({ createIndex: createIndexFake, updateMany: sinon.fake.resolves({ modifiedCount: 0 }), indexes: sinon.fake.resolves([]) });
       const dbFake = sinon.fake.returns({ collection: collectionFake });
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: dbFake });
-      getBlockCountStub.returns({
-        status: 'success',
-        data: 200_000,
-      });
+      getBlockCountStub.returns({ value: 200_000 });
       sinon.stub(daemonStatus, 'isInsightExplorer').returns(true);
       sinon.stub(daemonServiceUtils, 'executeCall').resolves({ status: 'success', data: [] });
       sinon.stub(daemonServiceUtils, 'executeBatchCall').resolves({ status: 'success', data: [] });
@@ -2016,9 +2001,7 @@ describe('explorerService tests', () => {
       const errorSpy = sinon.spy(log, 'error');
       sinon.stub(dbHelper, 'findOneInDatabase').resolves({ generalScannedHeight: 700_000 });
       // The body fails...
-      sinon.stub(daemonServiceBlockchainRpcs, 'getBlockCount').returns({
-        status: 'error', data: { message: 'daemon is down' },
-      });
+      sinon.stub(daemonServiceBlockchainRpcs, 'getBlockCount').returns({ value: null, reason: { message: 'daemon is down' } });
       // ...and so does the recovery it triggers.
       const rewind = sinon.stub(chainState, 'rewind');
       rewind.onFirstCall().resolves(700_000);
@@ -2051,6 +2034,32 @@ describe('explorerService tests', () => {
       handler.onMessage({ height: 2_100_777 });
       expect(fresh.pushedTip(), 'the drain floors on the height the push carried').to.equal(2_100_777);
       await fresh.stopScanning();
+    });
+  });
+
+  describe('checkAndHandleReorgs', () => {
+    const START = 2_000_000;
+
+    // A fresh module: no tip checked yet and no daemon version cached.
+    async function tipsAskedFrom(version) {
+      const getChainTips = sinon.stub().resolves({ value: [] });
+      const fresh = proxyquire('../../ZelBack/src/services/explorerService', {
+        './daemonService/daemonServiceControlRpcs': { getInfo: sinon.stub().resolves({ status: 'success', data: { version } }) },
+        './daemonService/daemonServiceBlockchainRpcs': { ...daemonServiceBlockchainRpcs, getChainTips },
+      });
+      await fresh.checkAndHandleReorgs(null, START);
+      await fresh.checkAndHandleReorgs(null, START + 200);
+      return getChainTips.args;
+    }
+
+    afterEach(() => sinon.restore());
+
+    it('asks a daemon that takes a height for the tips above the last check', async () => {
+      expect(await tipsAskedFrom(7_020_051)).to.deep.equal([[START]]);
+    });
+
+    it('asks an older daemon for every tip', async () => {
+      expect(await tipsAskedFrom(7_020_050)).to.deep.equal([[null]]);
     });
   });
 

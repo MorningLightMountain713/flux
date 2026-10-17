@@ -1856,9 +1856,9 @@ async function streamChainPreparation(req, res) {
     log.info(`Stream chain preparation request received from: ${ip}`);
 
     // Check if local daemon is synced using local RPC only (no external explorer dependency)
-    const { status: chainInfoStatus, data: chainInfo } = await daemonServiceBlockchainRpcs.getBlockchainInfo();
+    const { value: chainInfo } = await daemonServiceBlockchainRpcs.getBlockchainInfo();
 
-    if (chainInfoStatus !== 'success' || !chainInfo?.bestblockhash) {
+    if (!chainInfo?.bestblockhash) {
       safeSetResponseStatus(res, 503, 'Error getting blockchain info from local Flux Daemon.');
       return;
     }

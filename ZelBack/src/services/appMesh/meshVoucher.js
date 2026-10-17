@@ -90,11 +90,11 @@ function buildVoucherMessage({
  * @returns {Promise<{height: number, hash: string}>}
  */
 async function fetchVoucherAnchor() {
-  const info = await daemonServiceBlockchainRpcs.getBlockchainInfo();
-  if (!info || info.status !== 'success' || !info.data || !HEX64_RE.test(info.data.bestblockhash)) {
+  const { value: info } = await daemonServiceBlockchainRpcs.getBlockchainInfo();
+  if (!info || !HEX64_RE.test(info.bestblockhash)) {
     throw new Error('The daemon did not return a usable chain tip for the mesh voucher anchor');
   }
-  return { height: info.data.blocks, hash: info.data.bestblockhash };
+  return { height: info.blocks, hash: info.bestblockhash };
 }
 
 /**
