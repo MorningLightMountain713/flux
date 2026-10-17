@@ -148,4 +148,15 @@ describe('messageHelper tests', () => {
     });
   });
 
+  describe('answerOf', () => {
+    it('is the data as the value of a success message', () => {
+      expect(messageHelper.answerOf({ status: 'success', data: 0 })).to.deep.equal({ value: 0 });
+    });
+
+    it('is the data as the reason of an error message, with no value', () => {
+      expect(messageHelper.answerOf({ status: 'error', data: { message: 'down', code: 'EDOWN' } }))
+        .to.deep.equal({ value: null, reason: { message: 'down', code: 'EDOWN' } });
+    });
+  });
+
 });

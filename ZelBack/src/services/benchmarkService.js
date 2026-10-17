@@ -114,8 +114,7 @@ async function executeCall(rpc, params) {
  * @returns {Promise<{value: *, reason?: {message: string, name?: string, code?: *}}>}
  */
 async function answer(rpc) {
-  const message = await executeCall(rpc);
-  return message.status === 'success' ? { value: message.data } : { value: null, reason: message.data };
+  return messageHelper.answerOf(await executeCall(rpc));
 }
 
 /**
