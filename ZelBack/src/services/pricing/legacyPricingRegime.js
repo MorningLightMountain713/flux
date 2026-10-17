@@ -44,9 +44,9 @@ let lastGoodMarketplaceApps = null;
 
 /** The height the daemon is synced to, or a refusal to price without one. */
 function syncedHeight() {
-  const syncStatus = daemonStatus.isDaemonSynced();
-  if (!syncStatus.data.synced) throw new Error('Daemon not yet synced.');
-  return syncStatus.data.height;
+  const syncStatus = daemonStatus.daemonSyncState();
+  if (!syncStatus.synced) throw new Error('Daemon not yet synced.');
+  return syncStatus.height;
 }
 
 /**

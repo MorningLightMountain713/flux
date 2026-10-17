@@ -25,10 +25,7 @@ describe('deploymentInfoService tests', () => {
         json: sinon.stub(),
       };
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        status: 'success',
-        data: { height: 100_000, synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ height: 100_000, synced: true });
 
       sinon.stub(chainUtilities, 'getChainParamsPriceUpdates').resolves([
         { height: 0, price: 1000 },
@@ -54,10 +51,7 @@ describe('deploymentInfoService tests', () => {
 
       const enforcementHeight = config.fluxapps.appSpecsEnforcementHeights[6];
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        status: 'success',
-        data: { height: enforcementHeight + 1000, synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ height: enforcementHeight + 1000, synced: true });
 
       sinon.stub(chainUtilities, 'getChainParamsPriceUpdates').resolves([
         { height: 0, price: 1000 },
@@ -80,10 +74,7 @@ describe('deploymentInfoService tests', () => {
 
       const changeHeight = config.fluxapps.appPaymentAddresses[2].activeFromHeight;
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        status: 'success',
-        data: { height: changeHeight + 1000, synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ height: changeHeight + 1000, synced: true });
 
       sinon.stub(chainUtilities, 'getChainParamsPriceUpdates').resolves([
         { height: 0, price: 1000 },
@@ -104,10 +95,7 @@ describe('deploymentInfoService tests', () => {
         json: sinon.stub(),
       };
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        status: 'success',
-        data: { height: 100_000, synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ height: 100_000, synced: true });
 
       sinon.stub(chainUtilities, 'getChainParamsPriceUpdates').resolves([
         { height: 0, price: 1000 },
@@ -152,10 +140,7 @@ describe('deploymentInfoService tests', () => {
 
       const forkHeight = MAINNET_PON_HEIGHT;
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        status: 'success',
-        data: { height: forkHeight + 1000, synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ height: forkHeight + 1000, synced: true });
 
       sinon.stub(chainUtilities, 'getChainParamsPriceUpdates').resolves([
         { height: 0, price: 1000 },
@@ -176,7 +161,7 @@ describe('deploymentInfoService tests', () => {
         '../utils/nodeChain': { nodeChain: () => Chain.LABNET },
       });
       const res = { json: sinon.stub() };
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ status: 'success', data: { height: 10, synced: true } });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ height: 10, synced: true });
       sinon.stub(chainUtilities, 'getChainParamsPriceUpdates').resolves([{ height: 0, price: 1000 }]);
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
 
@@ -197,10 +182,7 @@ describe('deploymentInfoService tests', () => {
 
       const forkHeight = MAINNET_PON_HEIGHT;
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        status: 'success',
-        data: { height: forkHeight - 1000, synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ height: forkHeight - 1000, synced: true });
 
       sinon.stub(chainUtilities, 'getChainParamsPriceUpdates').resolves([
         { height: 0, price: 1000 },
@@ -221,7 +203,7 @@ describe('deploymentInfoService tests', () => {
         json: sinon.stub(),
       };
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').throws(new Error('Daemon error'));
+      sinon.stub(daemonStatus, 'daemonSyncState').throws(new Error('Daemon error'));
       sinon.stub(messageHelper, 'createErrorMessage').returns({ status: 'error' });
 
       await deploymentInfoService.deploymentInformation(req, res);
@@ -236,10 +218,7 @@ describe('deploymentInfoService tests', () => {
         json: sinon.stub(),
       };
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        status: 'success',
-        data: { height: 100_000, synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ height: 100_000, synced: true });
 
       sinon.stub(chainUtilities, 'getChainParamsPriceUpdates').rejects(new Error('Price error'));
       sinon.stub(messageHelper, 'createErrorMessage').returns({ status: 'error' });
@@ -256,10 +235,7 @@ describe('deploymentInfoService tests', () => {
         json: sinon.stub(),
       };
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        status: 'success',
-        data: { height: 100_000, synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ height: 100_000, synced: true });
 
       sinon.stub(chainUtilities, 'getChainParamsPriceUpdates').resolves([]);
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
@@ -278,10 +254,7 @@ describe('deploymentInfoService tests', () => {
         json: sinon.stub(),
       };
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        status: 'success',
-        data: { height: 100_000, synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ height: 100_000, synced: true });
 
       sinon.stub(chainUtilities, 'getChainParamsPriceUpdates').resolves([]);
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));
@@ -306,10 +279,7 @@ describe('deploymentInfoService tests', () => {
         { height: 100_000, price: 3000 },
       ];
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        status: 'success',
-        data: { height: 100_000, synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ height: 100_000, synced: true });
 
       sinon.stub(chainUtilities, 'getChainParamsPriceUpdates').resolves(priceUpdates);
       sinon.stub(messageHelper, 'createDataMessage').callsFake((data) => ({ status: 'success', data }));

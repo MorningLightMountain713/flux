@@ -147,7 +147,7 @@ describe('appHashSyncService tests', () => {
         getSpec: sinon.stub().callsFake(async () => flux),
         getSpecBackend: sinon.stub().callsFake(async () => flux),
       },
-      '../daemonService/daemonStatus': { isDaemonSynced: sinon.stub().returns({ data: { height: 2_555_000 } }) },
+      '../daemonService/daemonStatus': { daemonSyncState: sinon.stub().returns({ height: 2_555_000 }) },
       '../utils/fluxBroadcastHelper': fluxBroadcastHelperStub,
       '../invalidMessages': { invalidMessages: [] },
       '../utils/peerState': { peerManager: peerManagerStub },

@@ -58,7 +58,7 @@ describe('fluxNetworkHelper own standing tests', () => {
     sinon.stub(networkStateService, 'getRandomExternalObserver').resolves('1.2.3.4:16127');
     sinon.stub(daemonServiceFluxnodeRpcs, 'getFluxNodeStatus').resolves({ status: 'error' });
     sinon.stub(daemonServiceFluxnodeRpcs, 'createConfirmationTransaction').resolves({ status: 'success' });
-    sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true } });
+    sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
     sinon.stub(fluxCommunicationUtils, 'socketAddressInFluxList').resolves(false);
     sinon.stub(fluxCommunicationUtils, 'getNodeCount').resolves(0);
     sinon.stub(fluxCommunicationUtils, 'deterministicFluxList').resolves([listing(OWN)]);

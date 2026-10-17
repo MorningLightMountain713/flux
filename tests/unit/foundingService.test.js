@@ -43,7 +43,7 @@ describe('foundingService', () => {
       intro: 500_000, rungs: [500_000], armed: false,
     });
     sinon.stub(foundingCommittee, 'refereeCommittee').resolves(COMMITTEE);
-    sinon.stub(daemonStatus, 'isDaemonSynced').returns({ status: 'success', data: { synced: true } });
+    sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
     sinon.stub(messageStore, 'getMasterleaseRecordsByRolePrefix').resolves([]);
     sinon.stub(messageStore, 'getGrantGenerationRecord').resolves({ data: { generation: 2 } });
     sinon.stub(grantClient, 'acquire').resolves({ granted: true, founder: SELF });
@@ -69,10 +69,10 @@ describe('foundingService', () => {
   });
 
   it('the asker gates hold the round: a stale chain view waits, an armed world waits', async () => {
-    daemonStatus.isDaemonSynced.returns({ status: 'success', data: { synced: false } });
+    daemonStatus.daemonSyncState.returns({ synced: false });
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
 
-    daemonStatus.isDaemonSynced.returns({ status: 'success', data: { synced: true } });
+    daemonStatus.daemonSyncState.returns({ synced: true });
     foundingCommittee.componentWorld.resolves({ intro: 500_000, rungs: [500_000], armed: true });
     expect(await foundingService.founderAsk('myapp', 'db')).to.deep.equal({ answer: 'wait' });
     expect(grantClient.acquire.called).to.equal(false);

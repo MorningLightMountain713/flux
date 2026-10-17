@@ -81,7 +81,7 @@ async function founderAsk(identity, componentKey) {
   // model-forced): a stale chain view cannot know the current basis, and
   // an ARMED world (rot sustained, flip within the quiet zone) refuses to
   // start a founding that would race the flip's one-block gossip window.
-  if (daemonStatus.isDaemonSynced()?.data?.synced !== true) {
+  if (!daemonStatus.daemonSyncState().synced) {
     log.info(`foundingService - ${identity}/${componentKey}: wait (own chain view stale)`);
     return { answer: 'wait' };
   }

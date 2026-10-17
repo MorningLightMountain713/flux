@@ -342,13 +342,13 @@ describe('nodeHealthService tests', () => {
     let osCpusStub;
     let collateralTierStub;
     let getDOSStateStub;
-    let isDaemonSyncedStub;
+    let daemonSyncStateStub;
 
     before(async () => {
       await dbHelper.initiateDB();
     });
 
-    const daemonSynced = (synced) => isDaemonSyncedStub.returns({ status: 'success', data: { synced } });
+    const daemonSynced = (synced) => daemonSyncStateStub.returns({ synced });
 
     const healthyHardware = () => {
       collateralTierStub.resolves({ collateral: 1000, tier: generalService.COLLATERAL_TIERS[1000] });
@@ -365,7 +365,7 @@ describe('nodeHealthService tests', () => {
       osCpusStub = sinon.stub(os, 'cpus');
       collateralTierStub = sinon.stub(generalService, 'nodeCollateralTier');
       getDOSStateStub = sinon.stub(fluxNetworkHelper, 'getDOSState');
-      isDaemonSyncedStub = sinon.stub(daemonStatus, 'isDaemonSynced');
+      daemonSyncStateStub = sinon.stub(daemonStatus, 'daemonSyncState');
       daemonSynced(true);
       syncthingService.setSyncthingRunningState(true);
       sinon.stub(dockerService, 'dockerListImages').returns(true);

@@ -49,7 +49,7 @@ describe('updateAppGlobaly and the manifest an update carries', () => {
       },
       '../utils/specLibs': { ...specLibs, assertUpdateInvariants: sinon.stub().resolves() },
     });
-    sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 2_600_000 } });
+    sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: 2_600_000 });
     stubRegistry().byName.resolves({ spec, owner: spec.owner, identity: IDENTITY });
     sinon.stub(appsRepository, 'getTempMessage').resolves({ hash: 'outbound-hash' });
     sinon.stub(placementFeasibility, 'checkPlacementFeasibility').resolves(null);

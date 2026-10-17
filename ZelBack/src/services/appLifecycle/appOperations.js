@@ -1846,11 +1846,11 @@ async function updateAppGlobaly(params) {
     throw new Error('Message timestamp from future, not valid. Check if your computer clock is synced and restart the registration process.');
   }
 
-  const syncStatus = daemonStatus.isDaemonSynced();
-  if (!syncStatus.data.synced) {
+  const syncStatus = daemonStatus.daemonSyncState();
+  if (!syncStatus.synced) {
     throw new Error('Daemon not yet synced.');
   }
-  const daemonHeight = syncStatus.data.height;
+  const daemonHeight = syncStatus.height;
 
   const appSpecObj = serviceHelper.ensureObject(appSpecification);
   const cleanContentHash = params.contentHash;

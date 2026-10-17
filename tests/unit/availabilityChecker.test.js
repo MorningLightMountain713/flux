@@ -133,9 +133,7 @@ describe('availabilityChecker tests', () => {
 
   describe('checkMyAppsAvailability tests', () => {
     it('should return early if daemon not synced', async () => {
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        data: { synced: false },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: false });
 
       waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
@@ -148,9 +146,7 @@ describe('availabilityChecker tests', () => {
     });
 
     it('should return early if node not confirmed', async () => {
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        data: { synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(false);
 
       waitMs = await availabilityChecker.runAvailabilityCheckOnce(
@@ -163,9 +159,7 @@ describe('availabilityChecker tests', () => {
     });
 
     it('should return early if no public IP found', async () => {
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        data: { synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(null);
 
@@ -179,9 +173,7 @@ describe('availabilityChecker tests', () => {
     });
 
     it('should return early if failed to get installed apps', async () => {
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        data: { synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       listInstalledAppsStub.rejects(new Error('Failed'));
@@ -206,9 +198,7 @@ describe('availabilityChecker tests', () => {
       listInstalledAppsStub.resolves([registered]);
       buildDeploymentStub.resolves(deployment);
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        data: { synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
@@ -230,9 +220,7 @@ describe('availabilityChecker tests', () => {
     it('should skip banned ports', async () => {
       const apps = [];
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        data: { synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       listInstalledAppsStub.resolves(apps);
@@ -250,9 +238,7 @@ describe('availabilityChecker tests', () => {
     it('should skip UPNP banned ports when UPNP enabled', async () => {
       const apps = [];
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        data: { synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       listInstalledAppsStub.resolves(apps);
@@ -281,9 +267,7 @@ describe('availabilityChecker tests', () => {
       buildDeploymentStub.resolves(deploymentOf(spec));
       mockDosState.nextTestingPort = 31_002;
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        data: { synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
@@ -314,9 +298,7 @@ describe('availabilityChecker tests', () => {
       buildDeploymentStub.resolves(deploymentOf(spec));
       mockDosState.nextTestingPort = 31_009;
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        data: { synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
@@ -353,9 +335,7 @@ describe('availabilityChecker tests', () => {
       });
       mockDosState.nextTestingPort = 31_002;
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        data: { synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       sinon.stub(fluxNetworkHelper, 'isPortBanned').returns(false);
@@ -375,9 +355,7 @@ describe('availabilityChecker tests', () => {
     it('should skip if remote socket address not available', async () => {
       const apps = [];
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        data: { synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       listInstalledAppsStub.resolves(apps);
@@ -397,9 +375,7 @@ describe('availabilityChecker tests', () => {
       const apps = [];
       mockFailedNodesCache.set('192.168.1.200:16127', '');
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        data: { synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       listInstalledAppsStub.resolves(apps);
@@ -418,9 +394,7 @@ describe('availabilityChecker tests', () => {
     it('should handle UPNP mapping failures', async () => {
       const apps = [];
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        data: { synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       listInstalledAppsStub.resolves(apps);
@@ -450,9 +424,7 @@ describe('availabilityChecker tests', () => {
       const apps = [];
       mockDosState.lastUPNPMapFailed = true; // Already failed once
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        data: { synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       listInstalledAppsStub.resolves(apps);
@@ -479,7 +451,7 @@ describe('availabilityChecker tests', () => {
     });
 
     it('should handle errors gracefully and retry', async () => {
-      sinon.stub(daemonStatus, 'isDaemonSynced').throws(new Error('Service error'));
+      sinon.stub(daemonStatus, 'daemonSyncState').throws(new Error('Service error'));
 
       waitMs = await availabilityChecker.runAvailabilityCheckOnce(
         mockDosState,
@@ -493,9 +465,7 @@ describe('availabilityChecker tests', () => {
     it('should use random port from config range when nextTestingPort not set', async () => {
       const apps = [];
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        data: { synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       listInstalledAppsStub.resolves(apps);
@@ -517,9 +487,7 @@ describe('availabilityChecker tests', () => {
       const apps = [];
       mockDosState.nextTestingPort = 31_050;
 
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        data: { synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
       sinon.stub(nodeConfirmationService, 'isConfirmed').returns(true);
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.100:16127');
       listInstalledAppsStub.resolves(apps);

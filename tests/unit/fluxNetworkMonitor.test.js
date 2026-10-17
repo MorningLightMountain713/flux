@@ -414,7 +414,7 @@ describe('fluxNetworkMonitor tests', () => {
 
   describe('checkDeterministicNodesCollisions tests', () => {
     let getBenchmarksStub;
-    let isDaemonSyncedStub;
+    let daemonSyncStateStub;
     let deterministicFluxListStub;
     let getNodeStatusStub;
     let isDaemonReachableStub;
@@ -457,7 +457,7 @@ describe('fluxNetworkMonitor tests', () => {
           rank: 0,
         }];
       getBenchmarksStub = sinon.stub(benchmarkService, 'getBenchmarks');
-      isDaemonSyncedStub = sinon.stub(daemonStatus, 'isDaemonSynced');
+      daemonSyncStateStub = sinon.stub(daemonStatus, 'daemonSyncState');
       deterministicFluxListStub = sinon.stub(fluxCommunicationUtils, 'deterministicFluxList');
       getNodeStatusStub = sinon.stub(nodeConfirmationService, 'getNodeStatus');
       isDaemonReachableStub = sinon.stub(nodeConfirmationService, 'isDaemonReachable').returns(true);
@@ -481,7 +481,7 @@ describe('fluxNetworkMonitor tests', () => {
     });
 
     it('should skip the check entirely when the daemon is unreachable', async () => {
-      isDaemonSyncedStub.returns({ data: { synced: true } });
+      daemonSyncStateStub.returns({ synced: true });
       isDaemonReachableStub.returns(false);
 
       await fluxNetworkMonitor.checkDeterministicNodesCollisions();
@@ -494,7 +494,7 @@ describe('fluxNetworkMonitor tests', () => {
     });
 
     it('should skip the check entirely until the network state is ready', async () => {
-      isDaemonSyncedStub.returns({ data: { synced: true } });
+      daemonSyncStateStub.returns({ synced: true });
       isReadyStub.returns(false);
 
       await fluxNetworkMonitor.checkDeterministicNodesCollisions();
@@ -514,7 +514,7 @@ describe('fluxNetworkMonitor tests', () => {
         data: { ipaddress: ip },
       };
       getBenchmarksStub.resolves(getBenchmarkResponseData);
-      isDaemonSyncedStub.returns({ data: { synced: true } });
+      daemonSyncStateStub.returns({ synced: true });
       deterministicFluxListStub.returns(deterministicFluxnodeListResponse);
       getNodeStatusStub.returns({
         status: 'CONFIRMED',
@@ -534,7 +534,7 @@ describe('fluxNetworkMonitor tests', () => {
         data: { ipaddress: ip },
       };
       getBenchmarksStub.resolves(getBenchmarkResponseData);
-      isDaemonSyncedStub.returns({ data: { synced: true } });
+      daemonSyncStateStub.returns({ synced: true });
       // Node is not in the deterministic list (expired)
       deterministicFluxListStub.returns([]);
       getNodeStatusStub.returns({
@@ -556,7 +556,7 @@ describe('fluxNetworkMonitor tests', () => {
         data: { ipaddress: ip },
       };
       getBenchmarksStub.resolves(getBenchmarkResponseData);
-      isDaemonSyncedStub.returns({ data: { synced: true } });
+      daemonSyncStateStub.returns({ synced: true });
       deterministicFluxListStub.returns(deterministicFluxnodeListResponse);
       getNodeStatusStub.returns({
         status: 'CONFIRMED',
@@ -601,7 +601,7 @@ describe('fluxNetworkMonitor tests', () => {
         data: { ipaddress: ip },
       };
       getBenchmarksStub.resolves(getBenchmarkResponseData);
-      isDaemonSyncedStub.returns({ data: { synced: true } });
+      daemonSyncStateStub.returns({ synced: true });
       deterministicFluxListStub.returns(multipleNodesList);
       getNodeStatusStub.returns({
         collateral: 'COutPoint(38c04da72786b08adb309259cdd6d2128ea9059d0334afca127a5dc4e75bf174, 0)',
@@ -621,7 +621,7 @@ describe('fluxNetworkMonitor tests', () => {
         data: { ipaddress: ip },
       };
       getBenchmarksStub.resolves(getBenchmarkResponseData);
-      isDaemonSyncedStub.returns({ data: { synced: true } });
+      daemonSyncStateStub.returns({ synced: true });
       deterministicFluxListStub.returns(deterministicFluxnodeListResponse);
       getNodeStatusStub.returns({
         collateral: 'COutPoint(38c04da72786b08adb309259cdd6d2128ea9059d0334afca127a5dc4e123556, 0)',
@@ -681,7 +681,7 @@ describe('fluxNetworkMonitor tests', () => {
         data: { ipaddress: myIp },
       };
       getBenchmarksStub.resolves(getBenchmarkResponseData);
-      isDaemonSyncedStub.returns({ data: { synced: true } });
+      daemonSyncStateStub.returns({ synced: true });
       deterministicFluxListStub.returns(nodeListWithDifferentIp);
       getNodeStatusStub.returns({
         status: 'CONFIRMED',
@@ -747,7 +747,7 @@ describe('fluxNetworkMonitor tests', () => {
         data: { ipaddress: myIp },
       };
       getBenchmarksStub.resolves(getBenchmarkResponseData);
-      isDaemonSyncedStub.returns({ data: { synced: true } });
+      daemonSyncStateStub.returns({ synced: true });
       deterministicFluxListStub.returns(nodeListWithDifferentIp);
       getNodeStatusStub.returns({
         status: 'CONFIRMED',
@@ -812,7 +812,7 @@ describe('fluxNetworkMonitor tests', () => {
         data: { ipaddress: myIp },
       };
       getBenchmarksStub.resolves(getBenchmarkResponseData);
-      isDaemonSyncedStub.returns({ data: { synced: true } });
+      daemonSyncStateStub.returns({ synced: true });
       deterministicFluxListStub.returns(nodeListWithDifferentIp);
       getNodeStatusStub.returns({
         status: 'CONFIRMED',

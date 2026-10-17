@@ -566,7 +566,7 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain,
   }
   const until = retired ? null : drainUntil(current);
   if (until !== null) {
-    const height = daemonStatus.isDaemonSynced()?.data?.height ?? 0;
+    const height = daemonStatus.daemonSyncState().height ?? 0;
     if (height < until) {
       return {
         member: false,
@@ -594,7 +594,7 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain,
   // cannot demote a fleet.
   const activateAt = activationHeight();
   if (activateAt !== null) {
-    const height = daemonStatus.isDaemonSynced()?.data?.height ?? 0;
+    const height = daemonStatus.daemonSyncState().height ?? 0;
     const opensAt = activateAt - preWindowBlocks();
     if (height < opensAt) {
       const stored = await grantRegister.read(key);
@@ -951,13 +951,13 @@ async function serve(req, res, type, operate) {
       // "never heard" cell — whatever it failed to hear, it stops answering
       // when its tip does. Reads stay open; the founder plane is exempt
       // (write-once registers cannot go stale).
-      const sync = daemonStatus.isDaemonSynced();
+      const sync = daemonStatus.daemonSyncState();
       const booted = syncReady();
       // the refereeing-return anchor observes the WHOLE gate: a cell coming
       // back from daemon staleness or from an incomplete boot sync is
       // returning to refereeing either way
-      observeSynced(sync?.data?.synced === true && booted);
-      if (!sync?.data?.synced) {
+      observeSynced(sync.synced === true && booted);
+      if (!sync.synced) {
         report('refusedStale');
         return refuse(res, 503, 'chain view stale — this grantor is not refereeing', ask.key);
       }
@@ -1312,7 +1312,7 @@ async function record(req, res) {
     // upgrade wave) reads as committee-down and the incumbent COASTS —
     // reads answering must never talk a witness out of the coast that
     // keeps the app alive.
-    const daemonSynced = daemonStatus.isDaemonSynced()?.data?.synced === true;
+    const daemonSynced = daemonStatus.daemonSyncState().synced;
     const booted = syncReady();
     // the read observes the serve gates anyway — feed the refereeing-return
     // anchor, so a stall witnessed only by record reads still re-anchors the
@@ -1332,7 +1332,7 @@ async function record(req, res) {
     if (!founderShaped(key)) {
       const known = await heldGeneration(key);
       const until = drainUntil(known);
-      const height = daemonStatus.isDaemonSynced()?.data?.height ?? 0;
+      const height = daemonStatus.daemonSyncState().height ?? 0;
       keyClosed = known.aside || (until !== null && height < until);
     }
     const serving = refereeing && grantRegister.drainRemainingMs() === 0 && !keyClosed;

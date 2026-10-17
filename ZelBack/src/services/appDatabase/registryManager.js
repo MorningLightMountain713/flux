@@ -621,8 +621,8 @@ async function getApplicationSpecification(appname, opts = {}) {
 
 async function getApplicationSpecificationAPI(req, res) {
   try {
-    const syncStatus = daemonStatus.isDaemonSynced();
-    if (!syncStatus.data.synced) {
+    const syncStatus = daemonStatus.daemonSyncState();
+    if (!syncStatus.synced) {
       throw new Error('Daemon not yet synced.');
     }
 
@@ -804,8 +804,8 @@ async function convertApplicationSpecification(appname, opts = {}) {
  */
 async function appConvertApi(req, res) {
   try {
-    const syncStatus = daemonStatus.isDaemonSynced();
-    if (!syncStatus.data.synced) {
+    const syncStatus = daemonStatus.daemonSyncState();
+    if (!syncStatus.synced) {
       throw new Error('Daemon not yet synced.');
     }
 

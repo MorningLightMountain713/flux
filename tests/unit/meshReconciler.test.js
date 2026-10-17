@@ -225,8 +225,8 @@ describe('meshReconciler', () => {
         }),
       },
       '../daemonService/daemonStatus': {
-        isDaemonSynced: sinon.stub().callsFake(() => stubs.synced
-          ?? { status: 'success', data: { synced: true, height: 1000 } }),
+        daemonSyncState: sinon.stub().callsFake(() => stubs.synced
+          ?? { synced: true, height: 1000 }),
       },
       '../daemonService/daemonServiceBlockchainRpcs': { getBlock: (...args) => stubs.getBlock(...args) },
       '../generalService': {
@@ -430,7 +430,7 @@ describe('meshReconciler', () => {
 
   describe('reconcileAllMeshApps', () => {
     it('defers everything while the daemon is not synced', async () => {
-      stubs.synced = { status: 'success', data: { synced: false } };
+      stubs.synced = { synced: false };
       await meshReconciler.reconcileAllMeshApps();
       expect(stubs.writeSnapshotCalls).to.have.length(0);
       expect(stubs.namespaceCalls).to.have.length(0);

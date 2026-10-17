@@ -156,7 +156,7 @@ describe('quorumGrant mastershipGrantGate', () => {
           },
         }),
         '../daemonService/daemonStatus': {
-          isDaemonSynced: () => ({ data: { height, synced } }),
+          daemonSyncState: () => ({ height, synced }),
         },
       });
     }
@@ -232,7 +232,7 @@ describe('quorumGrant mastershipGrantGate', () => {
           },
         }),
         '../daemonService/daemonStatus': {
-          isDaemonSynced: () => ({ data: { height, synced } }),
+          daemonSyncState: () => ({ height, synced }),
         },
       });
     }
@@ -339,7 +339,7 @@ describe('quorumGrant mastershipGrantGate', () => {
           },
         }),
         '../daemonService/daemonStatus': {
-          isDaemonSynced: () => ({ data: { height, synced: true } }),
+          daemonSyncState: () => ({ height, synced: true }),
         },
       });
     }
@@ -484,7 +484,7 @@ describe('quorumGrant mastershipGrantGate', () => {
           },
         }),
         '../daemonService/daemonStatus': {
-          isDaemonSynced: () => ({ data: { height, synced: true } }),
+          daemonSyncState: () => ({ height, synced: true }),
         },
       });
     }
@@ -620,7 +620,7 @@ describe('quorumGrant mastershipGrantGate', () => {
           },
         }),
         '../daemonService/daemonStatus': {
-          isDaemonSynced: () => ({ data: { height: 2_100_000, synced: true } }),
+          daemonSyncState: () => ({ height: 2_100_000, synced: true }),
         },
       });
     }

@@ -568,7 +568,7 @@ describe('fluxNetworkHelper own address tests', () => {
   describe('the collision check', () => {
     beforeEach(() => {
       sinon.useFakeTimers({ toFake: ['setTimeout'], shouldAdvanceTime: true });
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true } });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
       sinon.stub(networkStateService, 'isReady').returns(true);
     });
 

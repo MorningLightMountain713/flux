@@ -557,9 +557,7 @@ describe('appSpecHelpers tests', () => {
       const appSpec = (await v8Spec()).serialize();
 
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        data: { synced: false },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: false });
 
       try {
         await appSpecHelpers.getAppFluxOnChainPrice(appSpec);
@@ -589,7 +587,7 @@ describe('appSpecHelpers tests', () => {
       appSpecHelpers = proxyquire('../../ZelBack/src/services/utils/appSpecHelpers', {
         './specCutover': { resolveSpec: sinon.stub().resolves(markupSpec) },
       });
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 200 } });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: 200 });
       // No existing global app -> the registration path runs, so the markup is visible.
       stubRegistry().byName.resolves(null);
       sinon.stub(priceOracleState, 'getPriceMessageHistory').returns({ resolveAt: () => priceFields });
@@ -722,7 +720,7 @@ describe('appSpecHelpers tests', () => {
         resolveSpec: sinon.stub().resolves(newSpec),
         resolveRegisteredSpec,
       });
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: 200 } });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: 200 });
       stubRegistry().byName.resolves(existing);
       stubAppliedHistory(messages);
       sinon.stub(priceOracleState, 'getPriceMessageHistory').returns({ resolveAt: () => priceFields });
@@ -877,7 +875,7 @@ describe('appSpecHelpers tests', () => {
         resolveSpec: sinon.stub().resolves(legacyApp),
         resolveRegisteredSpec: sinon.stub().callsFake(async (inst) => inst.spec),
       }, { '../utils/chainUtilities': { getChainParamsPriceUpdates: async () => chainRates } });
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: daemonHeight } });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: daemonHeight });
       stubRegistry().byName
         .resolves(await registered(prev, daemonHeight + 44_000 - legacyApp.expire));
       stubAppliedHistory([]);
@@ -901,7 +899,7 @@ describe('appSpecHelpers tests', () => {
         resolveSpec: sinon.stub().resolves(legacyApp),
         resolveRegisteredSpec: sinon.stub().callsFake(async (inst) => inst.spec),
       }, { '../utils/chainUtilities': { getChainParamsPriceUpdates: async () => [{ height: 0, ...card }] } });
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: daemonHeight } });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: daemonHeight });
       stubRegistry().byName
         .resolves(await registered(prev, daemonHeight + 44_000 - legacyApp.expire));
       // Eleven updates in the window: the free-update rule refuses.
@@ -937,7 +935,7 @@ describe('appSpecHelpers tests', () => {
         resolveSpec: sinon.stub().resolves(legacyApp),
         resolveRegisteredSpec: sinon.stub().callsFake(async (inst) => inst.spec),
       }, { '../utils/chainUtilities': { getChainParamsPriceUpdates: async () => chainRates } });
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({ data: { synced: true, height: daemonHeight } });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: daemonHeight });
       stubRegistry().byName.resolves(await registered(prev, daemonHeight - 2));
       stubAppliedHistory([]);
       cacheManager.appPriceBlockedRepoCache.set('appPrices', {

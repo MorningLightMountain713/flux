@@ -32,10 +32,7 @@ describe('chainReadApi tests', () => {
 
     beforeEach(() => {
       getSingleAddressUtxosStub = sinon.stub(daemonServiceAddressRpcs, 'getSingleAddressUtxos');
-      sinon.stub(daemonStatus, 'isDaemonSynced').returns({
-        status: 'success',
-        data: { height: 100, header: 100, synced: true },
-      });
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ height: 100, header: 100, synced: true });
     });
 
     it('should return an error message when no address is provided', async () => {

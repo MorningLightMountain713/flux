@@ -30,9 +30,9 @@ const entitlementsState = require('../entitlementsState');
 function isOnChainPricingActive() {
   const priceHistory = priceOracleState.getPriceMessageHistory();
   if (!priceHistory) return false;
-  const syncStatus = daemonStatus.isDaemonSynced();
-  if (!syncStatus.data.synced) return false;
-  return pricesInForce(priceHistory, syncStatus.data.height);
+  const syncStatus = daemonStatus.daemonSyncState();
+  if (!syncStatus.synced) return false;
+  return pricesInForce(priceHistory, syncStatus.height);
 }
 
 function pricesInForce(priceHistory, height) {
@@ -63,9 +63,9 @@ async function pricedAt(height) {
 function getOracleFluxUsdRate() {
   const rateHistory = priceOracleState.getRateMessageHistory();
   if (!rateHistory) return null;
-  const syncStatus = daemonStatus.isDaemonSynced();
-  if (!syncStatus.data.synced) return null;
-  const rateMsg = rateHistory.resolveAt(syncStatus.data.height);
+  const syncStatus = daemonStatus.daemonSyncState();
+  if (!syncStatus.synced) return null;
+  const rateMsg = rateHistory.resolveAt(syncStatus.height);
   if (!rateMsg || !rateMsg.fluxUsdPriceE4) return null;
   return rateMsg.fluxUsdPriceE4 / 10_000;
 }
@@ -84,11 +84,11 @@ function getFiatMarkupBp() {
   if (!modifierHistory) {
     throw new Error('Price modifier history is not available.');
   }
-  const syncStatus = daemonStatus.isDaemonSynced();
-  if (!syncStatus.data.synced) {
+  const syncStatus = daemonStatus.daemonSyncState();
+  if (!syncStatus.synced) {
     throw new Error('Daemon not yet synced.');
   }
-  const resolved = modifierHistory.resolveAt(syncStatus.data.height);
+  const resolved = modifierHistory.resolveAt(syncStatus.height);
   return resolved.fiatMarkupBp || 0;
 }
 
@@ -189,11 +189,11 @@ async function onChainDisplayPrice(spec, { termCost }) {
     throw new Error('On-chain pricing is not yet active (no PriceMessage in force).');
   }
 
-  const syncStatus = daemonStatus.isDaemonSynced();
-  if (!syncStatus.data.synced) {
+  const syncStatus = daemonStatus.daemonSyncState();
+  if (!syncStatus.synced) {
     throw new Error('Daemon not yet synced.');
   }
-  const daemonHeight = syncStatus.data.height;
+  const daemonHeight = syncStatus.height;
 
   // Display == consensus: if an app of this name already exists, this preview
   // is an update, so price it through priceUpdate (with the unused-time credit)

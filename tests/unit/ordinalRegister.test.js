@@ -62,7 +62,7 @@ describe('quorumGrant ordinalRegister', () => {
     sinon.stub(messageStore, 'getMasterleaseRecordsByRolePrefix').resolves([]);
     sinon.stub(messageStore, 'getMasterleaseRecordsByGrantee').resolves([]);
     sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: SELF_TXHASH, txindex: 0 });
-    sinon.stub(daemonStatus, 'isDaemonSynced').returns({ status: 'success', data: { synced: true } });
+    sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
     sinon.stub(grantClient, 'probeOneshot').resolves({ decided: true, holder: null, named: [], epoch: 0 });
     sinon.stub(grantClient, 'acquire').resolves({ granted: true, founder: SELF });
     sinon.stub(grantClient, 'releaseOneshot').resolves(true);
@@ -151,9 +151,9 @@ describe('quorumGrant ordinalRegister', () => {
     });
 
     it('the asker gates hold the round: no basis, a stale chain view, an armed world', async () => {
-      daemonStatus.isDaemonSynced.returns({ status: 'success', data: { synced: false } });
+      daemonStatus.daemonSyncState.returns({ synced: false });
       expect(await ordinalRegister.askOrdinal('myapp', 0)).to.deep.equal({ answer: 'wait', reason: 'own chain view stale' });
-      daemonStatus.isDaemonSynced.returns({ status: 'success', data: { synced: true } });
+      daemonStatus.daemonSyncState.returns({ synced: true });
       foundingCommittee.appWorld.resolves({ intro: RUNG, rungs: [RUNG], armed: true });
       expect(await ordinalRegister.askOrdinal('myapp', 0)).to.deep.equal({ answer: 'wait', reason: 'world armed' });
       foundingCommittee.refereeCommittee.resolves(null);

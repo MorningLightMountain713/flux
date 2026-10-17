@@ -194,7 +194,7 @@ async function checkNodeFitness() {
   // daemon: whether fluxd answers and has caught up with the chain. Reported,
   // never refused on: a daemon catching up after a restart reads the same as one
   // that has stopped answering, and daemonHealthMonitor acts on one that stays so.
-  checks.daemon = daemonStatus.isDaemonSynced().data.synced ? CHECK.OK : CHECK.DEGRADED;
+  checks.daemon = daemonStatus.daemonSyncState().synced ? CHECK.OK : CHECK.DEGRADED;
 
   // udp: whether this node's ports answer over UDP, as the availability check
   // last established it. Reported, never refused on here: whether a port closed

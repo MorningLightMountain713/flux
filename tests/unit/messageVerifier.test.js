@@ -91,7 +91,7 @@ function makeBaseStubs(overrides = {}) {
       delay: sinon.stub().resolves(),
     },
     '../daemonService/daemonStatus': {
-      isDaemonSynced: sinon.stub().returns({ data: { height: 2_000_000, synced: true } }),
+      daemonSyncState: sinon.stub().returns({ height: 2_000_000, synced: true }),
     },
     '../daemonService/daemonServiceBlockchainRpcs': {
       getBlock: sinon.stub().resolves({ status: 'success', data: { time: 1_750_000_000 } }),
