@@ -492,86 +492,40 @@ describe('daemonServiceTransactionRpcs tests', () => {
     let daemonServiceUtilsStub;
 
     beforeEach(() => {
-      daemonServiceUtilsStub = sinon.stub(daemonServiceUtils, 'executeCall');
+      daemonServiceUtilsStub = sinon.stub(daemonServiceUtils, 'executeCall').resolves({ status: 'success', data: 'raw' });
     });
 
     afterEach(() => {
       sinon.restore();
     });
 
-    it('should execute RPC if parameters are passed in params, no response passed', async () => {
-      const req = {
-        params: {
-          txid: '0x412368904412378BAF',
-          verbose: 1,
-        },
-      };
-      daemonServiceUtilsStub.returns('success');
-      const expectedParams = [req.params.txid, req.params.verbose];
-
-      const result = await daemonServiceTransactionRpcs.getRawTransaction(req);
-
-      expect(result).to.eql('success');
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getRawTransaction', expectedParams);
+    it('asks for a transaction, as hex unless verbose', async () => {
+      expect(await daemonServiceTransactionRpcs.getRawTransaction('0x41')).to.deep.equal({ value: 'raw' });
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getRawTransaction', ['0x41', 0]);
     });
 
-    it('should execute RPC if parameters are passed in query, no verbose param, no response passed', async () => {
-      const req = {
-        params: {
-          test: 'test',
-        },
-        query: {
-          txid: '0x412368904412378BAF',
-        },
-      };
-      daemonServiceUtilsStub.returns('success');
-      const expectedParams = [req.query.txid, 0];
+    it('asks for it decoded at a verbose of 1', async () => {
+      await daemonServiceTransactionRpcs.getRawTransaction('0x41', 1);
 
-      const result = await daemonServiceTransactionRpcs.getRawTransaction(req);
-
-      expect(result).to.eql('success');
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getRawTransaction', expectedParams);
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getRawTransaction', ['0x41', 1]);
     });
 
-    it('should execute RPC if parameters are passed in query, response passed', async () => {
-      const req = {
-        params: {
-          test: 'test',
-        },
-        query: {
-          txid: '0x412368904412378BAF',
-          verbose: 1,
-        },
-      };
-      daemonServiceUtilsStub.returns('success');
-      const expectedParams = [req.query.txid, req.query.verbose];
+    it('answers why there is none when the daemon has not got it', async () => {
+      daemonServiceUtilsStub.resolves({ status: 'error', data: { code: -5, message: 'No such mempool or blockchain transaction' } });
 
-      const res = generateResponse();
-
-      const result = await daemonServiceTransactionRpcs.getRawTransaction(req, res);
-
-      expect(result).to.eql('Response: success');
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getRawTransaction', expectedParams);
-      sinon.assert.calledOnceWithExactly(res.json, 'success');
+      expect(await daemonServiceTransactionRpcs.getRawTransaction('0x41')).to.deep.equal({
+        value: null, reason: { code: -5, message: 'No such mempool or blockchain transaction' },
+      });
     });
 
-    it('should execute RPC if no params are given', async () => {
-      const req = {
-        params: {
-          test: 'test',
-        },
-        query: {
-          test2: 'test2',
-        },
-      };
-      daemonServiceUtilsStub.returns('NoParams');
-      const res = generateResponse();
+    it('takes the transaction and verbose its route is asked for, from the path or the query', async () => {
+      const res = { json: sinon.stub() };
 
-      const result = await daemonServiceTransactionRpcs.getRawTransaction(req, res);
+      await daemonServiceTransactionRpcs.getRawTransactionAPI({ params: { txid: '0x41', verbose: '1' }, query: {} }, res);
+      await daemonServiceTransactionRpcs.getRawTransactionAPI({ params: {}, query: { txid: '0x42' } }, res);
 
-      expect(result).to.eql('Response: NoParams');
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getRawTransaction', []);
-      sinon.assert.calledOnceWithExactly(res.json, 'NoParams');
+      expect(daemonServiceUtilsStub.args).to.deep.equal([['getRawTransaction', ['0x41', 1]], ['getRawTransaction', ['0x42', 0]]]);
+      sinon.assert.alwaysCalledWithExactly(res.json, { status: 'success', data: 'raw' });
     });
   });
 
@@ -660,93 +614,6 @@ describe('daemonServiceTransactionRpcs tests', () => {
 
       expect(result).to.eql('Response: NoParams');
       sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'sendRawTransaction', []);
-      sinon.assert.calledOnceWithExactly(res.json, 'NoParams');
-    });
-  });
-
-
-  describe('getRawTransaction tests', () => {
-    let daemonServiceUtilsStub;
-
-    beforeEach(() => {
-      daemonServiceUtilsStub = sinon.stub(daemonServiceUtils, 'executeCall');
-    });
-
-    afterEach(() => {
-      sinon.restore();
-    });
-
-    it('should execute RPC if parameters are passed in params, no response passed', async () => {
-      const req = {
-        params: {
-          txid: '0x412368904412378BAF',
-          verbose: 1,
-        },
-      };
-      daemonServiceUtilsStub.returns('success');
-      const expectedParams = [req.params.txid, req.params.verbose];
-
-      const result = await daemonServiceTransactionRpcs.getRawTransaction(req);
-
-      expect(result).to.eql('success');
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getRawTransaction', expectedParams);
-    });
-
-    it('should execute RPC if parameters are passed in query, no verbose param, no response passed', async () => {
-      const req = {
-        params: {
-          test: 'test',
-        },
-        query: {
-          txid: '0x412368904412378BAF',
-        },
-      };
-      daemonServiceUtilsStub.returns('success');
-      const expectedParams = [req.query.txid, 0];
-
-      const result = await daemonServiceTransactionRpcs.getRawTransaction(req);
-
-      expect(result).to.eql('success');
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getRawTransaction', expectedParams);
-    });
-
-    it('should execute RPC if parameters are passed in query, response passed', async () => {
-      const req = {
-        params: {
-          test: 'test',
-        },
-        query: {
-          txid: '0x412368904412378BAF',
-          verbose: 1,
-        },
-      };
-      daemonServiceUtilsStub.returns('success');
-      const expectedParams = [req.query.txid, req.query.verbose];
-      const res = generateResponse();
-
-      const result = await daemonServiceTransactionRpcs.getRawTransaction(req, res);
-
-      expect(result).to.eql('Response: success');
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getRawTransaction', expectedParams);
-      sinon.assert.calledOnceWithExactly(res.json, 'success');
-    });
-
-    it('should execute RPC if no params are given', async () => {
-      const req = {
-        params: {
-          test: 'test',
-        },
-        query: {
-          test2: 'test2',
-        },
-      };
-      daemonServiceUtilsStub.returns('NoParams');
-      const res = generateResponse();
-
-      const result = await daemonServiceTransactionRpcs.getRawTransaction(req, res);
-
-      expect(result).to.eql('Response: NoParams');
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getRawTransaction', []);
       sinon.assert.calledOnceWithExactly(res.json, 'NoParams');
     });
   });

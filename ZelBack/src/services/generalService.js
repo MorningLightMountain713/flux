@@ -64,18 +64,12 @@ async function nodeTier() {
   }
   const collateralInformation = getCollateralInfo(nodeStatus.data.collateral);
   // get transaction information about collateralInformation.txhash
-  const request = {
-    params: {
-      txid: collateralInformation.txhash,
-      verbose: 1,
-    },
-  };
-  const txInformation = await daemonServiceTransactionRpcs.getRawTransaction(request);
-  if (txInformation.status === 'error') {
-    throw txInformation.data;
+  const transaction = await daemonServiceTransactionRpcs.getRawTransaction(collateralInformation.txhash, 1);
+  if (transaction.reason) {
+    throw transaction.reason;
   }
   // get collateralInformation.txindex vout
-  const { value } = txInformation.data.vout[collateralInformation.txindex];
+  const { value } = transaction.value.vout[collateralInformation.txindex];
   if (value === 10_000 || value === 1000) {
     storedTier = 'basic';
     storedCollateral = value;
@@ -125,18 +119,12 @@ async function nodeCollateral() {
   }
   const collateralInformation = getCollateralInfo(nodeStatus.data.collateral);
   // get transaction information about collateralInformation.txhash
-  const request = {
-    params: {
-      txid: collateralInformation.txhash,
-      verbose: 1,
-    },
-  };
-  const txInformation = await daemonServiceTransactionRpcs.getRawTransaction(request);
-  if (txInformation.status === 'error') {
-    throw txInformation.data;
+  const transaction = await daemonServiceTransactionRpcs.getRawTransaction(collateralInformation.txhash, 1);
+  if (transaction.reason) {
+    throw transaction.reason;
   }
   // get collateralInformation.txindex vout
-  const { value } = txInformation.data.vout[collateralInformation.txindex];
+  const { value } = transaction.value.vout[collateralInformation.txindex];
   if (value === 10_000 || value === 1000) {
     storedTier = 'basic';
     storedCollateral = value;
