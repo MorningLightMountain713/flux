@@ -784,7 +784,7 @@ describe('fluxNetworkHelper tests', () => {
         ],
       };
 
-      fluxNetworkHelper.getIncomingConnectionsInfo(undefined, res);
+      fluxNetworkHelper.getIncomingConnectionsInfoAPI({}, res);
 
       sinon.assert.calledOnceWithExactly(res.json, expectedCallArgumeent);
     });
@@ -793,7 +793,7 @@ describe('fluxNetworkHelper tests', () => {
       const res = generateResponse();
       const expeectedCallArgumeent = { status: 'success', data: [] };
 
-      fluxNetworkHelper.getIncomingConnectionsInfo(undefined, res);
+      fluxNetworkHelper.getIncomingConnectionsInfoAPI({}, res);
 
       sinon.assert.calledOnceWithExactly(res.json, expeectedCallArgumeent);
     });

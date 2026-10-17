@@ -23,7 +23,7 @@ const MODULE = path.join(
 
 const FORBIDDEN = [
   ['../dockerService', 'docker is liveness; presence is assignment'],
-  ['../appQuery/appQueryService', 'listRunningApps is liveness; presence is assignment'],
+  ['../appQuery/appQueryService', 'the running containers are liveness; presence is assignment'],
 ];
 
 describe('peerNotification presence guard', () => {

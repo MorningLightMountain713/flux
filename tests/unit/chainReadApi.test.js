@@ -185,24 +185,23 @@ describe('chainReadApi tests', () => {
       sinon.stub(dbHelper, 'databaseConnection').returns({ db: () => ({}) });
     });
 
-    it('should return an error when scanning has not been initiated', async () => {
+    it('answers its route that scanning has not started, without logging an error', async () => {
       const res = generateResponse();
       findOneInDatabaseStub.returns(null);
 
-      await chainReadApi.getScannedHeight(undefined, res);
+      await chainReadApi.getScannedHeightAPI({}, res);
 
-      sinon.assert.calledOnce(logErrorSpy);
       sinon.assert.calledOnceWithExactly(res.json, {
         status: 'error',
-        data: { code: undefined, name: 'Error', message: 'Scanning not initiated' },
+        data: { code: undefined, name: undefined, message: 'Scanning not initiated' },
       });
     });
 
-    it('should return the cursor when a response is passed', async () => {
+    it('answers its route with the cursor', async () => {
       const res = generateResponse();
       findOneInDatabaseStub.returns({ generalScannedHeight: 200_000 });
 
-      await chainReadApi.getScannedHeight(undefined, res);
+      await chainReadApi.getScannedHeightAPI({}, res);
 
       sinon.assert.calledOnceWithExactly(res.json, {
         status: 'success',
@@ -210,15 +209,10 @@ describe('chainReadApi tests', () => {
       });
     });
 
-    it('should return the cursor directly when no response is passed', async () => {
+    it('answers the cursor as a value', async () => {
       findOneInDatabaseStub.returns({ generalScannedHeight: 200_000 });
 
-      const result = await chainReadApi.getScannedHeight();
-
-      expect(result).to.eql({
-        status: 'success',
-        data: { generalScannedHeight: 200_000 },
-      });
+      expect(await chainReadApi.getScannedHeight()).to.eql({ value: { generalScannedHeight: 200_000 } });
     });
   });
 });

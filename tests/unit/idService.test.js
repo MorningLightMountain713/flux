@@ -18,6 +18,7 @@ const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const generalService = require('../../ZelBack/src/services/generalService');
 const dockerService = require('../../ZelBack/src/services/dockerService');
 const nodeDosState = require('../../ZelBack/src/services/nodeDosState');
+const appInspector = require('../../ZelBack/src/services/appManagement/appInspector');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
 const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 
@@ -457,6 +458,23 @@ describe('idService tests', () => {
       sinon.assert.calledOnceWithExactly(res.json, {
         status: 'error',
         data: { code: 0, name: 'DOS', message: 'Flux IP detection failed' },
+      });
+    });
+
+    it('fails while the apps are denied service', async () => {
+      const res = generateResponse();
+      tierStub.resolves('basic');
+      collateralStub.resolves(1000);
+      osTotalmemStub.returns(8 * 1024 ** 3);
+      osCpusStub.returns([1, 1, 1, 1]);
+      getDosDataStub.returns({ dosState: 0, dosMessage: null });
+      sinon.stub(appInspector, 'getAppsDOSState').returns({ dosState: 100, dosMessage: 'apps over their limits' });
+
+      await idService.loginPhrase(undefined, res);
+
+      sinon.assert.calledOnceWithExactly(res.json, {
+        status: 'error',
+        data: { code: 100, name: 'DOS', message: 'apps over their limits' },
       });
     });
 

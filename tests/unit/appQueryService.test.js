@@ -337,7 +337,7 @@ describe('appQueryService tests', () => {
       messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
       const res = { json: sinon.stub() };
 
-      await appQueryService.fluxUsage({}, res);
+      await appQueryService.fluxUsageAPI({}, res);
 
       const { data } = res.json.firstCall.args[0];
       expect(data).to.deep.equal({
@@ -352,8 +352,7 @@ describe('appQueryService tests', () => {
 
       const result = await appQueryService.fluxUsage();
 
-      expect(result.status).to.equal('success');
-      expect(result.data.totalApps).to.equal(0);
+      expect(result.totalApps).to.equal(0);
     });
 
     it('counts no running apps when the container list cannot be read', async () => {
@@ -363,7 +362,7 @@ describe('appQueryService tests', () => {
       messageHelperStub.createErrorMessage.returns({ status: 'error' });
       const res = { json: sinon.stub() };
 
-      await appQueryService.fluxUsage({}, res);
+      await appQueryService.fluxUsageAPI({}, res);
 
       expect(res.json.firstCall.args[0].data.runningApps).to.equal(0);
     });
@@ -373,13 +372,13 @@ describe('appQueryService tests', () => {
       messageHelperStub.createErrorMessage.returns({ status: 'error' });
       const res = { json: sinon.stub() };
 
-      await appQueryService.fluxUsage({}, res);
+      await appQueryService.fluxUsageAPI({}, res);
 
       expect(res.json.firstCall.args[0].status).to.equal('error');
     });
   });
 
-  describe('listRunningApps', () => {
+  describe('listRunningContainers', () => {
     it('should return running flux apps', async () => {
       const mockContainers = [
         {
@@ -392,42 +391,30 @@ describe('appQueryService tests', () => {
           Names: ['/other_app'], HostConfig: {}, NetworkSettings: {}, Mounts: [],
         },
       ];
-      const expectedApps = [
-        { Names: ['/flux_app1'] },
-        { Names: ['/zel_app2'] },
-      ];
-
       dockerServiceStub.dockerListContainers.resolves(mockContainers);
-      messageHelperStub.createDataMessage.returns({ status: 'success', data: expectedApps });
 
-      const result = await appQueryService.listRunningApps();
+      const result = await appQueryService.listRunningContainers();
 
-      expect(result).to.deep.equal({ status: 'success', data: expectedApps });
+      expect(result.map((app) => app.Names[0])).to.deep.equal(['/flux_app1', '/zel_app2']);
       expect(dockerServiceStub.dockerListContainers.calledWith(false)).to.be.true;
     });
 
     it('should return empty array when no flux apps are running', async () => {
       dockerServiceStub.dockerListContainers.resolves([]);
-      messageHelperStub.createDataMessage.returns({ status: 'success', data: [] });
 
-      const result = await appQueryService.listRunningApps();
-
-      expect(result).to.deep.equal({ status: 'success', data: [] });
+      expect(await appQueryService.listRunningContainers()).to.deep.equal([]);
     });
 
-    it('should handle docker service errors', async () => {
-      const error = new Error('Docker error');
+    it('throws when docker cannot list the containers', async () => {
+      dockerServiceStub.dockerListContainers.rejects(new Error('Docker error'));
 
-      dockerServiceStub.dockerListContainers.rejects(error);
-      messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'Docker error' } });
+      let thrown = null;
+      try { await appQueryService.listRunningContainers(); } catch (error) { thrown = error; }
 
-      const result = await appQueryService.listRunningApps();
-
-      expect(result.status).to.equal('error');
-      expect(logStub.error.calledWith(error)).to.be.true;
+      expect(thrown?.message).to.equal('Docker error');
     });
 
-    // listRunningApps must report an app under backup/restore as running even
+    // The running containers must report an app under backup/restore as running even
     // though its container is deliberately stopped, so the network (FDM, peers)
     // does not react to the stop. The backup/restore leases are keyed by bare MAIN
     // APP name (exactly as appendBackupTask acquires them); container names are
@@ -448,12 +435,9 @@ describe('appQueryService tests', () => {
         };
         dockerServiceStub.dockerListContainers.withArgs(false).resolves([]); // nothing running
         dockerServiceStub.dockerListContainers.withArgs(true).resolves([stoppedContainer]);
-        messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
+        const result = await appQueryService.listRunningContainers();
 
-        const result = await appQueryService.listRunningApps();
-
-        expect(result.status).to.equal('success');
-        const names = result.data.map((app) => app.Names[0]);
+        const names = result.map((app) => app.Names[0]);
         expect(names, 'backed-up app must still be reported as running').to.include('/fluxwww_a1b2c3d4e5f6');
       } finally {
         operationRegistry.release('App');
@@ -523,15 +507,13 @@ describe('appQueryService tests', () => {
     });
   });
 
-  // v9 folded the API handler into listRunningApps: called with a `res` it projects
-  // through publicContainerView, and without one it answers the internal callers.
-  describe('listRunningApps as a route handler', () => {
+  describe('listRunningAppsAPI', () => {
     it('answers with the public view rather than the container object', async () => {
       dockerServiceStub.dockerListContainers.resolves([dockerContainer]);
       messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
       const res = { json: sinon.stub() };
 
-      await appQueryService.listRunningApps({}, res);
+      await appQueryService.listRunningAppsAPI({}, res);
 
       expect(res.json.calledOnce).to.be.true;
       expect(res.json.firstCall.args[0]).to.deep.equal({
@@ -549,18 +531,18 @@ describe('appQueryService tests', () => {
       const anonymous = { json: sinon.stub() };
       const authenticated = { json: sinon.stub() };
 
-      await appQueryService.listRunningApps({ headers: {} }, anonymous);
-      await appQueryService.listRunningApps({ headers: { zelidauth: 'zelid=x&signature=y' } }, authenticated);
+      await appQueryService.listRunningAppsAPI({ headers: {} }, anonymous);
+      await appQueryService.listRunningAppsAPI({ headers: { zelidauth: 'zelid=x&signature=y' } }, authenticated);
 
       expect(authenticated.json.firstCall.args[0]).to.deep.equal(anonymous.json.firstCall.args[0]);
     });
 
-    it('hands an error envelope back as it is', async () => {
+    it('answers docker\'s error as an error message', async () => {
       dockerServiceStub.dockerListContainers.rejects(new Error('Docker error'));
       messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'Docker error' } });
       const res = { json: sinon.stub() };
 
-      await appQueryService.listRunningApps({}, res);
+      await appQueryService.listRunningAppsAPI({}, res);
 
       expect(res.json.calledOnceWith({ status: 'error', data: { message: 'Docker error' } })).to.be.true;
     });
@@ -1037,7 +1019,7 @@ describe('appQueryService tests', () => {
       });
     });
 
-    it('hands an error envelope back as it is', async () => {
+    it('answers docker\'s error as an error message', async () => {
       const error = new Error('Docker error');
 
       dockerServiceStub.dockerListContainers.rejects(error);

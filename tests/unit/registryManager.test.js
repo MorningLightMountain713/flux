@@ -131,7 +131,8 @@ describe('registryManager tests', () => {
         json: sinon.fake((param) => param),
       };
 
-      const result = await registryManager.getAppHashes(undefined, res);
+      await registryManager.getAppHashesAPI({}, res);
+      const [result] = res.json.firstCall.args;
 
       sinon.assert.calledOnce(res.json);
       expect(result.status).to.equal('success');
@@ -145,7 +146,8 @@ describe('registryManager tests', () => {
 
       sinon.stub(dbHelper, 'databaseConnection').throws(new Error('Database error'));
 
-      const result = await registryManager.getAppHashes(undefined, res);
+      await registryManager.getAppHashesAPI({}, res);
+      const [result] = res.json.firstCall.args;
 
       expect(result.status).to.equal('error');
       expect(result.data.message).to.include('Database error');
@@ -1283,7 +1285,7 @@ describe('registryManager tests', () => {
       stubRegistry().all.resolves([listed]);
       stubHostedInstances().apps.resolves([installedRecord(installed)]);
 
-      expect(await registryManager.availableApps(null, null)).to.deep.equal([listed.serialize(), installed.serialize()]);
+      expect(await registryManager.availableApps()).to.deep.equal([listed.serialize(), installed.serialize()]);
     });
   });
 

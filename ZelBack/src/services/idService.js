@@ -258,8 +258,8 @@ async function checkNodeFitness() {
 
   // Apps DOS state
   const dosAppsState = appInspector.getAppsDOSState();
-  if (dosAppsState.status === 'success' && dosAppsState.data.dosState >= 100) {
-    return unfit('appsDos', { message: dosAppsState.data.dosMessage, name: 'DOS', code: dosAppsState.data.dosState }, checks);
+  if (dosAppsState.dosState >= 100) {
+    return unfit('appsDos', { message: dosAppsState.dosMessage, name: 'DOS', code: dosAppsState.dosState }, checks);
   }
   checks.appsDos = 'ok';
 

@@ -807,52 +807,71 @@ async function reindexDaemon(req, res) {
 }
 
 /**
- * To show FluxOS version.
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- * @returns {object} Message.
+ * This FluxOS's version.
+ * @returns {string}
  */
-function getFluxVersion(req, res) {
-  const { version } = packageJson;
-  const message = messageHelper.createDataMessage(version);
-  return res ? res.json(message) : message;
+function getFluxVersion() {
+  return packageJson.version;
 }
 
 /**
- * To show NodeJS version.
+ * GET /flux/version
  * @param {import('express').Request} req
  * @param {import('express').Response} res
- * @returns {object} Message.
  */
-function getNodeJsVersions(req, res) {
-  const { versions } = process;
-  const message = messageHelper.createDataMessage(versions);
-  return res ? res.json(message) : message;
+function getFluxVersionAPI(req, res) {
+  res.json(messageHelper.createDataMessage(getFluxVersion()));
 }
 
 /**
- * To show FluxOS IP address.
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- * @returns {Promise<object>} Message.
+ * The versions of Node.js and its components this FluxOS runs on.
+ * @returns {object}
  */
-async function getFluxIP(req, res) {
-  const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
-  const message = messageHelper.createDataMessage(localSocketAddr);
-  return res ? res.json(message) : message;
+function getNodeJsVersions() {
+  return process.versions;
 }
 
 /**
- * To show the current user's Flux ID that is being used to access FluxOS.
+ * GET /flux/nodejsversions
  * @param {import('express').Request} req
  * @param {import('express').Response} res
- * @returns {object} Message.
  */
-function getFluxZelID(req, res) {
-  const { userconfig } = globalThis;
-  const zelID = userconfig.initial.zelid;
-  const message = messageHelper.createDataMessage(zelID);
-  return res ? res.json(message) : message;
+function getNodeJsVersionsAPI(req, res) {
+  res.json(messageHelper.createDataMessage(getNodeJsVersions()));
+}
+
+/**
+ * This node's address, or null while the benchmark has not reported one.
+ * @returns {Promise<string|null>}
+ */
+async function getFluxIP() {
+  return fluxNetworkHelper.getLocalSocketAddress();
+}
+
+/**
+ * GET /flux/ip
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+async function getFluxIPAPI(req, res) {
+  res.json(messageHelper.createDataMessage(await getFluxIP()));
+}
+
+/**
+ * The node operator's Flux ID.
+ * @returns {string}
+ */
+function getFluxZelID() {
+  return globalThis.userconfig.initial.zelid;
+}
+
+/**
+ * GET /flux/zelid and /flux/id
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+function getFluxZelIDAPI(req, res) {
+  res.json(messageHelper.createDataMessage(getFluxZelID()));
 }
 
 /**
@@ -898,15 +917,21 @@ async function getFluxGeolocation(req, res) {
 }
 
 /**
- * To show the node pgp public key
+ * This node's PGP public key, or '' when it has none.
+ * @returns {Promise<string>}
+ */
+async function getFluxPGPidentity() {
+  const identity = await nodeIdentityRepository.getPgpIdentity();
+  return identity ? identity.publicKey : '';
+}
+
+/**
+ * GET /flux/pgp
  * @param {import('express').Request} req
  * @param {import('express').Response} res
- * @returns {object} Message.
  */
-async function getFluxPGPidentity(req, res) {
-  const identity = await nodeIdentityRepository.getPgpIdentity();
-  const message = messageHelper.createDataMessage(identity ? identity.publicKey : '');
-  return res ? res.json(message) : message;
+async function getFluxPGPidentityAPI(req, res) {
+  res.json(messageHelper.createDataMessage(await getFluxPGPidentity()));
 }
 
 /**
@@ -1411,21 +1436,25 @@ async function tailFluxDebugLog(req, res) {
 }
 
 /**
- * To get FluxOS time zone.
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- * @returns {Promise<object>} Message.
+ * This node's time zone, or 'Unknown' when the runtime cannot say.
+ * @returns {string}
  */
-function getFluxTimezone(req, res) {
+function getFluxTimezone() {
   try {
-    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const message = messageHelper.createDataMessage(timezone);
-    return res ? res.json(message) : message;
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
   } catch (error) {
     log.error(error);
-    const message = 'Unknown';
-    return res ? res.json(message) : message;
+    return 'Unknown';
   }
+}
+
+/**
+ * GET /flux/timezone
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+function getFluxTimezoneAPI(req, res) {
+  res.json(messageHelper.createDataMessage(getFluxTimezone()));
 }
 
 /**
@@ -1477,210 +1506,166 @@ async function getOSDistributionInfo() {
 }
 
 /**
- * To get info (version, status etc.) for daemon, node, benchmark, FluxOS and apps.
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- * @returns {Promise<object>} Message.
+ * This node's daemon, node, benchmark, FluxOS and app state, as /flux/info
+ * serves it. Throws the reason when a source it needs cannot answer.
+ * @returns {Promise<object>}
  */
-async function getFluxInfo(req, res) {
-  try {
-    const info = {
-      daemon: {},
-      node: {},
-      benchmark: {},
-      flux: {},
-      apps: {},
-      geolocation: await geolocationService.getNodeGeolocation(),
-    };
-    const versionRes = await getFluxVersion();
-    if (versionRes.status === 'error') {
-      throw versionRes.data;
+async function getFluxInfo() {
+  const info = {
+    daemon: {},
+    node: {},
+    benchmark: {},
+    flux: {},
+    apps: {},
+    geolocation: await geolocationService.getNodeGeolocation(),
+  };
+  info.flux.version = getFluxVersion();
+  info.flux.nodeJsVersion = getNodeJsVersions().node;
+  const syncthingVersion = await syncthingService.systemVersion();
+  info.flux.syncthingVersion = syncthingVersion.version;
+  const dockerVersion = await dockerService.dockerVersion();
+  info.flux.dockerVersion = dockerVersion.Version;
+  info.flux.mongoDbVersion = await dbHelper.getMongoDbVersion();
+  const osDistInfo = await getOSDistributionInfo();
+  // Never allowed to break the endpoint: a source that has not started yet reports
+  // null rather than throwing, and getFluxInfo already fails hard on enough of its
+  // other lookups.
+  const subscriptionMode = (source) => {
+    try {
+      return source.currentMode() ?? 'unstarted';
+    } catch {
+      return 'unknown';
     }
-    info.flux.version = versionRes.data;
-    const nodeJsVersionsRes = await getNodeJsVersions();
-    if (nodeJsVersionsRes.status === 'error') {
-      throw nodeJsVersionsRes.data;
-    }
-    info.flux.nodeJsVersion = nodeJsVersionsRes.data.node;
-    const syncthingVersion = await syncthingService.systemVersion();
-    info.flux.syncthingVersion = syncthingVersion.version;
-    const dockerVersion = await dockerService.dockerVersion();
-    info.flux.dockerVersion = dockerVersion.Version;
-    info.flux.mongoDbVersion = await dbHelper.getMongoDbVersion();
-    const osDistInfo = await getOSDistributionInfo();
-    // Never allowed to break the endpoint: a source that has not started yet reports
-    // null rather than throwing, and getFluxInfo already fails hard on enough of its
-    // other lookups.
-    const subscriptionMode = (source) => {
-      try {
-        return source.currentMode() ?? 'unstarted';
-      } catch {
-        return 'unknown';
-      }
-    };
-    info.daemon.subscriptions = {
-      chainTip: subscriptionMode(chainTipSource),
-      fluxnodeStatus: subscriptionMode(fluxnodeStatusSource),
-      reorg: subscriptionMode(reorgSource),
-      nodeList: subscriptionMode(nodeListSource),
-    };
-    info.flux.os = osDistInfo.distribution;
-    info.flux.osVersion = osDistInfo.version;
-    info.flux.osPrettyName = osDistInfo.prettyName;
-    const ipRes = await getFluxIP();
-    if (ipRes.status === 'error') {
-      throw ipRes.data;
-    }
-    info.flux.ip = ipRes.data;
-    info.flux.staticIp = geolocationService.isStaticIP();
-    info.flux.uplink = uplinkService.getUplinkSummary();
-    // How far this node is through being staged out of service, or null. Read
-    // beside `dos` below, which reports the last stage: the three read together
-    // as HOLD, then EVACUATE, then EVACUATE with a DOS.
-    //
-    // Reported at all because the first stage is otherwise invisible. A held
-    // node stops taking new apps and looks in every other way like one that has
-    // simply not been given work - and that stage is the whole settling window,
-    // the only part of this where an operator can still put the node right and
-    // lose nothing.
-    info.flux.dosStaging = residentialNodeDosService.getDosStaging();
-    info.flux.upnp = upnpService.isUPNP();
-    info.flux.maxNumberOfIpChanges = fluxNetworkMonitor.getMaxNumberOfIpChanges();
-    const zelidRes = await getFluxZelID();
-    if (zelidRes.status === 'error') {
-      throw zelidRes.data;
-    }
-    info.flux.zelid = zelidRes.data;
-    const pgp = await getFluxPGPidentity();
-    if (pgp.status === 'error') {
-      throw pgp.data;
-    }
-    const timeResult = await getFluxTimezone();
-    if (timeResult.status === 'error') {
-      throw timeResult.data;
-    }
-    info.flux.timezone = timeResult.data;
-    info.flux.dos = nodeDosState.getDosData();
-    const dosAppsResult = await appInspector.getAppsDOSState();
-    if (dosAppsResult.status === 'error') {
-      throw dosAppsResult.data;
-    }
-    const arcaneHumanVersion = process.env.FLUXOS_HUMAN_VERSION;
-    const arcaneVersion = process.env.FLUXOS_VERSION;
-    if (arcaneVersion) {
-      info.flux.arcaneVersion = arcaneVersion;
-    }
-    if (arcaneHumanVersion) {
-      info.flux.arcaneHumanVersion = arcaneHumanVersion;
-    }
-    info.flux.appsDos = dosAppsResult.data;
-    const { userconfig } = globalThis;
-    info.flux.development = userconfig.initial.development || false;
-    const daemonInfo = await daemonServiceControlRpcs.getInfo();
-    if (daemonInfo.reason) {
-      throw daemonInfo.reason;
-    }
-    info.daemon.info = daemonInfo.value;
-    const zmqEnabled = Boolean(daemonServiceUtils.getConfigValue('zmqpubhashblock'));
-    info.daemon.zmqEnabled = zmqEnabled;
-    const daemonNodeStatusRes = await daemonServiceFluxnodeRpcs.getFluxNodeStatus();
-    if (daemonNodeStatusRes.status === 'error') {
-      throw daemonNodeStatusRes.data;
-    }
-    info.node.status = daemonNodeStatusRes.data;
-    const benchmarkInfo = await benchmarkService.getInfo();
-    if (benchmarkInfo.reason) {
-      throw benchmarkInfo.reason;
-    }
-    info.benchmark.info = benchmarkInfo.value;
-    const benchmarkStatus = await benchmarkService.getStatus();
-    if (benchmarkStatus.reason) {
-      throw benchmarkStatus.reason;
-    }
-    info.benchmark.status = benchmarkStatus.value;
-    const benchmarks = await benchmarkService.getBenchmarks();
-    if (benchmarks.reason) {
-      throw benchmarks.reason;
-    }
-    info.benchmark.bench = benchmarks.value;
+  };
+  info.daemon.subscriptions = {
+    chainTip: subscriptionMode(chainTipSource),
+    fluxnodeStatus: subscriptionMode(fluxnodeStatusSource),
+    reorg: subscriptionMode(reorgSource),
+    nodeList: subscriptionMode(nodeListSource),
+  };
+  info.flux.os = osDistInfo.distribution;
+  info.flux.osVersion = osDistInfo.version;
+  info.flux.osPrettyName = osDistInfo.prettyName;
+  info.flux.ip = await getFluxIP();
+  info.flux.staticIp = geolocationService.isStaticIP();
+  info.flux.uplink = uplinkService.getUplinkSummary();
+  // How far this node is through being staged out of service, or null. Read
+  // beside `dos` below, which reports the last stage: the three read together
+  // as HOLD, then EVACUATE, then EVACUATE with a DOS.
+  //
+  // Reported at all because the first stage is otherwise invisible. A held
+  // node stops taking new apps and looks in every other way like one that has
+  // simply not been given work - and that stage is the whole settling window,
+  // the only part of this where an operator can still put the node right and
+  // lose nothing.
+  info.flux.dosStaging = residentialNodeDosService.getDosStaging();
+  info.flux.upnp = upnpService.isUPNP();
+  info.flux.maxNumberOfIpChanges = fluxNetworkMonitor.getMaxNumberOfIpChanges();
+  info.flux.zelid = getFluxZelID();
+  info.flux.timezone = getFluxTimezone();
+  info.flux.dos = nodeDosState.getDosData();
+  const dosApps = appInspector.getAppsDOSState();
+  const arcaneHumanVersion = process.env.FLUXOS_HUMAN_VERSION;
+  const arcaneVersion = process.env.FLUXOS_VERSION;
+  if (arcaneVersion) {
+    info.flux.arcaneVersion = arcaneVersion;
+  }
+  if (arcaneHumanVersion) {
+    info.flux.arcaneHumanVersion = arcaneHumanVersion;
+  }
+  info.flux.appsDos = dosApps;
+  const { userconfig } = globalThis;
+  info.flux.development = userconfig.initial.development || false;
+  const daemonInfo = await daemonServiceControlRpcs.getInfo();
+  if (daemonInfo.reason) {
+    throw daemonInfo.reason;
+  }
+  info.daemon.info = daemonInfo.value;
+  const zmqEnabled = Boolean(daemonServiceUtils.getConfigValue('zmqpubhashblock'));
+  info.daemon.zmqEnabled = zmqEnabled;
+  const daemonNodeStatusRes = await daemonServiceFluxnodeRpcs.getFluxNodeStatus();
+  if (daemonNodeStatusRes.status === 'error') {
+    throw daemonNodeStatusRes.data;
+  }
+  info.node.status = daemonNodeStatusRes.data;
+  const benchmarkInfo = await benchmarkService.getInfo();
+  if (benchmarkInfo.reason) {
+    throw benchmarkInfo.reason;
+  }
+  info.benchmark.info = benchmarkInfo.value;
+  const benchmarkStatus = await benchmarkService.getStatus();
+  if (benchmarkStatus.reason) {
+    throw benchmarkStatus.reason;
+  }
+  info.benchmark.status = benchmarkStatus.value;
+  const benchmarks = await benchmarkService.getBenchmarks();
+  if (benchmarks.reason) {
+    throw benchmarks.reason;
+  }
+  info.benchmark.bench = benchmarks.value;
 
-    const apppsFluxUsage = await appQueryService.fluxUsage();
-    if (apppsFluxUsage.status === 'error') {
-      throw apppsFluxUsage.data;
-    }
-    info.apps.fluxusage = apppsFluxUsage.data;
-    const appsRunning = await appQueryService.listRunningApps();
-    if (appsRunning.status === 'error') {
-      throw appsRunning.data;
-    }
-    // The same public view /apps/listrunningapps serves, from the same function.
-    // This endpoint carries the container listing too, and a projection applied
-    // at one exit and not the other is the shape it exists to avoid.
-    info.apps.runningapps = appQueryService.publicContainerView(appsRunning.data);
-    const appsResources = await resourceQueryService.appsResources();
-    if (appsResources.status === 'error') {
-      throw appsResources.data;
-    }
-    // The same three numbers /apps/appsresources publishes. This endpoint embeds
-    // them, and a field kept from one exit and not the other is the shape that
-    // catches this file out.
-    info.apps.resources = resourceQueryService.publicResourceView(appsResources.data);
-    // How much of this node's container population carries the identity label.
-    // Every consumer that reads identity off a label still carries a name-parsing
-    // fallback for the containers that predate it; those fallbacks can only be
-    // deleted once the whole fleet reports covered, so the figure is published
-    // rather than only logged. Best-effort: a docker read failure must not fail
-    // the whole info payload.
-    info.apps.containerLabels = await containerLabelBackfill.labelCoverage().catch((error) => {
-      log.warn(`getFluxInfo - container label coverage unavailable: ${error.message}`);
+  info.apps.fluxusage = await appQueryService.fluxUsage();
+  // The same public view /apps/listrunningapps serves, from the same function.
+  // This endpoint carries the container listing too, and a projection applied
+  // at one exit and not the other is the shape it exists to avoid.
+  info.apps.runningapps = appQueryService.publicContainerView(await appQueryService.listRunningContainers());
+  const appsResources = await resourceQueryService.appsResources();
+  if (appsResources.status === 'error') {
+    throw appsResources.data;
+  }
+  // The same three numbers /apps/appsresources publishes. This endpoint embeds
+  // them, and a field kept from one exit and not the other is the shape that
+  // catches this file out.
+  info.apps.resources = resourceQueryService.publicResourceView(appsResources.data);
+  // How much of this node's container population carries the identity label.
+  // Every consumer that reads identity off a label still carries a name-parsing
+  // fallback for the containers that predate it; those fallbacks can only be
+  // deleted once the whole fleet reports covered, so the figure is published
+  // rather than only logged. Best-effort: a docker read failure must not fail
+  // the whole info payload.
+  info.apps.containerLabels = await containerLabelBackfill.labelCoverage().catch((error) => {
+    log.warn(`getFluxInfo - container label coverage unavailable: ${error.message}`);
+    return null;
+  });
+  // Same reason: the two derivations that recover an app from a container name
+  // or from image filenames on disk can only be deleted once the fleet reports
+  // every installed instance holds its resources.
+  info.apps.instanceResources = await Promise.all([appRecords.hostedInstances().all(), appRecords.instanceResources().keys()])
+    .then(([instances, keys]) => {
+      const withResources = new Set(keys.map(appRecords.instanceKey));
+      return { instances: instances.length, adopted: instances.filter((instance) => withResources.has(appRecords.instanceKey(instance))).length };
+    })
+    .catch((error) => {
+      log.warn(`getFluxInfo - instance resources coverage unavailable: ${error.message}`);
       return null;
     });
-    // Same reason: the two derivations that recover an app from a container name
-    // or from image filenames on disk can only be deleted once the fleet reports
-    // every installed instance holds its resources.
-    info.apps.instanceResources = await Promise.all([appRecords.hostedInstances().all(), appRecords.instanceResources().keys()])
-      .then(([instances, keys]) => {
-        const withResources = new Set(keys.map(appRecords.instanceKey));
-        return { instances: instances.length, adopted: instances.filter((instance) => withResources.has(appRecords.instanceKey(instance))).length };
-      })
-      .catch((error) => {
-        log.warn(`getFluxInfo - instance resources coverage unavailable: ${error.message}`);
-        return null;
-      });
-    const appHashes = await registryManager.getAppHashes();
-    if (appHashes.status === 'error') {
-      throw appHashes.data;
-    }
-    const hashesOk = appHashes.data.filter((data) => data.height >= 694_000);
-    info.appsHashesTotal = hashesOk.length;
-    const mesOK = hashesOk.filter((mes) => mes.message === true);
-    info.hashesPresent = mesOK.length;
-    const explorerScannedHeight = await chainReadApi.getScannedHeight();
-    if (explorerScannedHeight.status === 'error') {
-      throw explorerScannedHeight.data;
-    }
-    info.flux.explorerScannedHeigth = explorerScannedHeight.data;
-    const connectionsOut = fluxCommunication.connectedPeersInfo();
-    if (connectionsOut.status === 'error') {
-      throw connectionsOut.data;
-    }
-    info.flux.numberOfConnectionsOut = connectionsOut.data.length;
-    const connectionsIn = fluxNetworkHelper.getIncomingConnectionsInfo();
-    if (connectionsIn.status === 'error') {
-      throw connectionsIn.data;
-    }
-    info.flux.numberOfConnectionsIn = connectionsIn.data.length;
+  const appHashes = await registryManager.getAppHashes();
+  const hashesOk = appHashes.filter((data) => data.height >= 694_000);
+  info.appsHashesTotal = hashesOk.length;
+  const mesOK = hashesOk.filter((mes) => mes.message === true);
+  info.hashesPresent = mesOK.length;
+  const explorerScannedHeight = await chainReadApi.getScannedHeight();
+  if (explorerScannedHeight.reason) {
+    throw explorerScannedHeight.reason;
+  }
+  info.flux.explorerScannedHeigth = explorerScannedHeight.value;
+  info.flux.numberOfConnectionsOut = fluxCommunication.connectedPeersInfo().length;
+  info.flux.numberOfConnectionsIn = fluxNetworkHelper.getIncomingConnectionsInfo().length;
 
-    const response = messageHelper.createDataMessage(info);
-    return res ? res.json(response) : response;
+  return info;
+}
+
+/**
+ * GET /flux/info
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+async function getFluxInfoAPI(req, res) {
+  try {
+    res.json(messageHelper.createDataMessage(await getFluxInfo()));
   } catch (error) {
     log.error(error);
-    const errorResponse = messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-    return res ? res.json(errorResponse) : errorResponse;
+    res.json(messageHelper.createErrorMessage(error.message || error, error.name, error.code));
   }
 }
 
@@ -2220,14 +2205,21 @@ module.exports = {
   getCurrentCommitIdApi,
   getFluxGeolocation,
   getFluxInfo,
+  getFluxInfoAPI,
   getFluxIP,
+  getFluxIPAPI,
   getFluxPGPidentity,
+  getFluxPGPidentityAPI,
   getFluxTimezone,
+  getFluxTimezoneAPI,
   getFluxVersion,
+  getFluxVersionAPI,
   getFluxZelID,
+  getFluxZelIDAPI,
   getFluxIds,
   getMarketplaceURL,
   getNodeJsVersions,
+  getNodeJsVersionsAPI,
   getNodeTier,
   getRouterIP,
   hardUpdateFlux,

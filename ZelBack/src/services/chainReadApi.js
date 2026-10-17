@@ -126,31 +126,27 @@ async function getAddressBalance(req, res) {
 }
 
 /**
- * To get scanned block height.
+ * The height the explorer has scanned to, or why there is none.
+ * @returns {Promise<{value: {generalScannedHeight: number}|null, reason?: {message: string}}>}
+ */
+async function getScannedHeight() {
+  const database = dbHelper.databaseConnection().db(config.get('database.daemon.database'));
+  const projection = { projection: { _id: 0, generalScannedHeight: 1 } };
+  const result = await dbHelper.findOneInDatabase(database, scannedHeightCollection, { generalScannedHeight: { $gte: 0 } }, projection);
+  return result ? { value: result } : { value: null, reason: { message: 'Scanning not initiated' } };
+}
+
+/**
+ * GET /explorer/scannedheight
  * @param {import('express').Request} req
  * @param {import('express').Response} res
  */
-async function getScannedHeight(req, res) {
+async function getScannedHeightAPI(req, res) {
   try {
-    const dbopen = dbHelper.databaseConnection();
-    const database = dbopen.db(config.get('database.daemon.database'));
-    const query = { generalScannedHeight: { $gte: 0 } };
-    const projection = {
-      projection: {
-        _id: 0,
-        generalScannedHeight: 1,
-      },
-    };
-    const result = await dbHelper.findOneInDatabase(database, scannedHeightCollection, query, projection);
-    if (!result) {
-      throw new Error('Scanning not initiated');
-    }
-    const resMessage = messageHelper.createDataMessage(result);
-    return res ? res.json(resMessage) : resMessage;
+    res.json(messageHelper.messageOf(await getScannedHeight()));
   } catch (error) {
     log.error(error);
-    const errMessage = messageHelper.createErrorMessage(error.message, error.name, error.code);
-    return res ? res.json(errMessage) : errMessage;
+    res.json(messageHelper.createErrorMessage(error.message, error.name, error.code));
   }
 }
 
@@ -159,4 +155,5 @@ module.exports = {
   getAddressTransactions,
   getAddressUtxos,
   getScannedHeight,
+  getScannedHeightAPI,
 };

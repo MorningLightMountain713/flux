@@ -104,19 +104,19 @@ module.exports = [
   { method: 'get', path: '/zelid/loginphrase', none: NONE.OWN_ANSWER, handler: 'idService#loginPhrase' }, // DEPRECATED
   { method: 'get', path: '/zelid/emergencyphrase', none: NONE.OWN_ANSWER, handler: 'idService#emergencyPhrase' }, // DEPRECATED
   { method: 'get', path: '/flux/nodetier', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxService#getNodeTier' },
-  { method: 'get', path: '/flux/info', none: NONE.PROCESS, cache: '60 seconds', handler: 'fluxService#getFluxInfo' },
+  { method: 'get', path: '/flux/info', none: NONE.PROCESS, cache: '60 seconds', handler: 'fluxService#getFluxInfoAPI' },
   // Uncached: the answer depends on who is asking.
   { method: 'get', path: '/flux/uplink', guards: ['rejectQueryParameters'], none: NONE.PROCESS, handler: 'uplinkService#uplinkAPI' },
-  { method: 'get', path: '/flux/timezone', none: NONE.PROCESS, handler: 'fluxService#getFluxTimezone' },
-  { method: 'get', path: '/flux/version', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxService#getFluxVersion' },
-  { method: 'get', path: '/flux/nodejsversions', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxService#getNodeJsVersions' },
-  { method: 'get', path: '/flux/ip', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxService#getFluxIP' },
+  { method: 'get', path: '/flux/timezone', none: NONE.PROCESS, handler: 'fluxService#getFluxTimezoneAPI' },
+  { method: 'get', path: '/flux/version', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxService#getFluxVersionAPI' },
+  { method: 'get', path: '/flux/nodejsversions', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxService#getNodeJsVersionsAPI' },
+  { method: 'get', path: '/flux/ip', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxService#getFluxIPAPI' },
   { method: 'get', path: '/flux/staticip', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxService#isStaticIPapi' },
   { method: 'get', path: '/flux/geolocation', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxService#getFluxGeolocation' },
-  { method: 'get', path: '/flux/zelid', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxService#getFluxZelID' }, // DEPERCATED
-  { method: 'get', path: '/flux/id', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxService#getFluxZelID' },
+  { method: 'get', path: '/flux/zelid', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxService#getFluxZelIDAPI' }, // DEPERCATED
+  { method: 'get', path: '/flux/id', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxService#getFluxZelIDAPI' },
   { method: 'get', path: '/flux/fluxids', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxService#getFluxIds' },
-  { method: 'get', path: '/flux/pgp', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxService#getFluxPGPidentity' },
+  { method: 'get', path: '/flux/pgp', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxService#getFluxPGPidentityAPI' },
   { method: 'get', path: '/flux/routerip', none: NONE.PROCESS, cache: '1 day', handler: 'fluxService#getRouterIP' },
   { method: 'get', path: '/flux/apiport', none: NONE.PROCESS, cache: '1 day', handler: 'fluxService#getAPIPort' },
   // Withdrawn, answering 410 rather than 404 so a caller learns the list moved
@@ -137,9 +137,9 @@ module.exports = [
   { method: 'get', path: '/flux/networkhealth', none: NONE.PROCESS, cache: '5 seconds', handler: 'fluxCommunication#getNetworkHealth' },
   // Deprecated peer endpoints — kept for backward compatibility
   { method: 'get', path: '/flux/connectedpeers', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxCommunication#connectedPeers' },
-  { method: 'get', path: '/flux/connectedpeersinfo', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxCommunication#connectedPeersInfo' },
+  { method: 'get', path: '/flux/connectedpeersinfo', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxCommunication#connectedPeersInfoAPI' },
   { method: 'get', path: '/flux/incomingconnections', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxNetworkHelper#getIncomingConnections' },
-  { method: 'get', path: '/flux/incomingconnectionsinfo', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxNetworkHelper#getIncomingConnectionsInfo' },
+  { method: 'get', path: '/flux/incomingconnectionsinfo', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxNetworkHelper#getIncomingConnectionsInfoAPI' },
   { method: 'get', path: '/flux/checkfluxavailability/:ip?/:port?', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxNetworkHelper#checkFluxAvailability' },
   { method: 'post', path: '/flux/checkappavailability', none: NONE.PROCESS, handler: 'fluxNetworkHelper#checkAppAvailability' },
   { method: 'post', path: '/flux/keepupnpportsopen', none: NONE.PROCESS, handler: 'fluxNetworkHelper#keepUPNPPortsOpen' },
@@ -176,7 +176,7 @@ module.exports = [
   // on the container, so no caller can derive this list from the one below. FDM's
   // checkAppRunning reads it for every app and matches on Names[0] alone, so dropping a
   // container from here takes that app out of routing.
-  { method: 'get', path: '/apps/listrunningapps', none: NONE.OWN_ANSWER, cache: '15 seconds', handler: 'appQuery/appQueryService#listRunningApps' },
+  { method: 'get', path: '/apps/listrunningapps', none: NONE.OWN_ANSWER, cache: '15 seconds', handler: 'appQuery/appQueryService#listRunningAppsAPI' },
   // Read by peers mid-election. Both are unauthenticated, and the API has no rate
   // limiting, so neither may do unbounded backend work per request.
   //
@@ -212,8 +212,8 @@ module.exports = [
   // one authorised answer to every caller after it.
   { method: 'get', path: '/apps/listappsimages', none: NONE.OWN_ANSWER, handler: 'appManagement/appInspector#listAppsImagesApi' },
   { method: 'get', path: '/apps/installedapps/:appname?', none: NONE.OWN_ANSWER, cache: '30 seconds', handler: 'appQuery/appQueryService#installedAppsAPI' },
-  { method: 'get', path: '/apps/availableapps', needs: APP_REGISTRY, cache: '30 seconds', handler: 'appDatabase/registryManager#availableApps' },
-  { method: 'get', path: '/apps/fluxusage', none: NONE.OWN_ANSWER, cache: '30 seconds', handler: 'appQuery/appQueryService#fluxUsage' },
+  { method: 'get', path: '/apps/availableapps', needs: APP_REGISTRY, cache: '30 seconds', handler: 'appDatabase/registryManager#availableAppsAPI' },
+  { method: 'get', path: '/apps/fluxusage', none: NONE.OWN_ANSWER, cache: '30 seconds', handler: 'appQuery/appQueryService#fluxUsageAPI' },
   { method: 'get', path: '/apps/appsresources', none: NONE.OWN_ANSWER, cache: '30 seconds', handler: 'appQuery/resourceQueryService#appsResourcesApi' },
   { method: 'get', path: '/apps/temporarymessages/:hash?', none: NONE.OWN_ANSWER, cache: '5 seconds', handler: 'appMessaging/messageVerifier#getAppsTemporaryMessages' },
   { method: 'get', path: '/apps/permanentmessages/:hash?/:owner?/:appname?', none: NONE.OWN_ANSWER, cache: '2 minutes', handler: 'appMessaging/messageVerifier#getAppsPermanentMessages' },
@@ -235,7 +235,7 @@ module.exports = [
   { method: 'get', path: '/apps/appowner/:appname?', needs: APP_REGISTRY, cache: '30 seconds', handler: 'appDatabase/registryManager#getApplicationOwnerAPI' },
   { method: 'get', path: '/apps/apporiginalowner/:appname?', needs: APP_REGISTRY, cache: '30 seconds', handler: 'appQuery/appQueryService#getApplicationOriginalOwner' },
   { method: 'get', path: '/apps/messagescount/:appowner?', none: NONE.OWN_ANSWER, cache: '30 seconds', handler: 'appQuery/appQueryService#getAppsMessagesCount' },
-  { method: 'get', path: '/apps/hashes', none: NONE.PROGRESS, cache: '30 seconds', handler: 'appDatabase/registryManager#getAppHashes' },
+  { method: 'get', path: '/apps/hashes', none: NONE.PROGRESS, cache: '30 seconds', handler: 'appDatabase/registryManager#getAppHashesAPI' },
   { method: 'get', path: '/apps/location/:appname?', needs: APP_STATE, cache: '30 seconds', handler: 'appDatabase/registryManager#getAppsLocation' },
   { method: 'get', path: '/apps/locations', needs: APP_STATE, cache: '30 seconds', handler: 'appDatabase/registryManager#getAppsLocations' },
   { method: 'get', path: '/apps/installinglocation/:appname?', needs: APP_STATE, cache: '30 seconds', handler: 'appDatabase/registryManager#getAppInstallingLocation' },
@@ -336,7 +336,7 @@ module.exports = [
   { method: 'get', path: '/explorer/transactions/:address?', needs: EXPLORER, cache: '30 seconds', handler: 'chainReadApi#getAddressTransactions' },
   { method: 'get', path: '/explorer/balance/:address?', needs: EXPLORER, cache: '30 seconds', handler: 'chainReadApi#getAddressBalance' },
   { method: 'get', path: '/explorer/fusion/coinbase/:address?', needs: EXPLORER, handler: 'explorerService#getAddressFusionCoinbase' },
-  { method: 'get', path: '/explorer/scannedheight', none: NONE.PROGRESS, cache: '30 seconds', handler: 'chainReadApi#getScannedHeight' },
+  { method: 'get', path: '/explorer/scannedheight', none: NONE.PROGRESS, cache: '30 seconds', handler: 'chainReadApi#getScannedHeightAPI' },
 
   // GET PROTECTED API - User level
   { method: 'get', path: '/daemon/prioritisetransaction/:txid?/:prioritydelta?/:feedelta?', needs: DAEMON, handler: 'daemonService/daemonServiceMiningRpcs#prioritiseTransaction' },

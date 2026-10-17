@@ -996,12 +996,21 @@ function getIncomingConnections(req, res) {
 }
 
 /**
- * @deprecated Use getPeers with direction=inbound instead.
+ * The peers that dialled this node.
+ * @returns {object[]}
  */
-function getIncomingConnectionsInfo(req, res) {
-  const connections = [...peerManager.inboundValues()].map((p) => p.toPeerInfo());
-  const message = messageHelper.createDataMessage(connections);
-  return res ? res.json(message) : message;
+function getIncomingConnectionsInfo() {
+  return [...peerManager.inboundValues()].map((p) => p.toPeerInfo());
+}
+
+/**
+ * GET /flux/incomingconnectionsinfo
+ * @deprecated Use getPeers with direction=inbound instead.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+function getIncomingConnectionsInfoAPI(req, res) {
+  res.json(messageHelper.createDataMessage(getIncomingConnectionsInfo()));
 }
 
 /**
@@ -1943,6 +1952,7 @@ module.exports = {
   MAX_KEEPALIVE_PORTS,
   getIncomingConnections,
   getIncomingConnectionsInfo,
+  getIncomingConnectionsInfoAPI,
   getDOSState,
   setDOSStateApi,
   getNumberOfPeers,

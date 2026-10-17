@@ -589,7 +589,7 @@ describe('fluxCommunication tests', () => {
 
       const res = generateResponse();
 
-      await fluxCommunication.connectedPeersInfo(undefined, res);
+      await fluxCommunication.connectedPeersInfoAPI({}, res);
 
       sinon.assert.calledOnceWithExactly(res.json, expectedResult);
     });
@@ -598,7 +598,7 @@ describe('fluxCommunication tests', () => {
       const res = generateResponse();
       const expectedResult = { status: 'success', data: [] };
 
-      await fluxCommunication.connectedPeersInfo(undefined, res);
+      await fluxCommunication.connectedPeersInfoAPI({}, res);
 
       sinon.assert.calledOnceWithExactly(res.json, expectedResult);
     });

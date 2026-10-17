@@ -1299,12 +1299,21 @@ function connectedPeers(req, res) {
 }
 
 /**
- * @deprecated Use getPeers with direction=outbound instead.
+ * The peers this node dialled.
+ * @returns {object[]}
  */
-function connectedPeersInfo(req, res) {
-  const connections = [...peerManager.outboundValues()].map((p) => p.toPeerInfo());
-  const message = messageHelper.createDataMessage(connections);
-  return res ? res.json(message) : message;
+function connectedPeersInfo() {
+  return [...peerManager.outboundValues()].map((p) => p.toPeerInfo());
+}
+
+/**
+ * GET /flux/connectedpeersinfo
+ * @deprecated Use getPeers with direction=outbound instead.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+function connectedPeersInfoAPI(req, res) {
+  res.json(messageHelper.createDataMessage(connectedPeersInfo()));
 }
 
 /**
@@ -2146,6 +2155,7 @@ module.exports = {
   removePeer,
   removeIncomingPeer,
   connectedPeersInfo,
+  connectedPeersInfoAPI,
   peerResponsiveness,
   keepConnectionsAlive,
   startDiscovery,

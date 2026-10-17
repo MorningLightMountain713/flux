@@ -154,30 +154,13 @@ async function listRunningContainers() {
  *
  * @param {import('express').Request} req
  * @param {import('express').Response} res
- * @returns {object|undefined} the message when called without a response
  */
-async function listRunningApps(req, res) {
+async function listRunningAppsAPI(req, res) {
   try {
-    const apps = await listRunningContainers();
-    if (res) {
-      return res.json(messageHelper.createDataMessage(publicContainerView(apps)));
-    }
-    const modifiedApps = apps.map((app) => {
-      const copy = { ...app };
-      delete copy.HostConfig;
-      delete copy.NetworkSettings;
-      delete copy.Mounts;
-      return copy;
-    });
-    return messageHelper.createDataMessage(modifiedApps);
+    res.json(messageHelper.createDataMessage(publicContainerView(await listRunningContainers())));
   } catch (error) {
     log.error(error);
-    const errorResponse = messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-    return res ? res.json(errorResponse) : errorResponse;
+    res.json(messageHelper.createErrorMessage(error.message || error, error.name, error.code));
   }
 }
 
@@ -216,37 +199,37 @@ async function activeStandbyComponents() {
 }
 
 /**
- * Get application usage statistics
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- * @returns {object} Message.
+ * How many apps this node hosts, how many of their containers run, and the
+ * node's specs. Containers docker cannot list count as none running.
+ * @returns {Promise<{totalApps: number, runningApps: number, stoppedApps: number, nodeSpecs: object}>}
  */
-async function fluxUsage(req, res) {
+async function fluxUsage() {
+  const totalApps = (await appRecords.hostedInstances().names()).length;
+  let totalRunning = 0;
   try {
-    const totalApps = (await appRecords.hostedInstances().names()).length;
-    const runningApps = await listRunningApps();
-    const totalRunning = runningApps.data ? runningApps.data.length : 0;
-
-    // Ensure node specs are loaded before accessing them
-    const specs = await nodeSpecs.getNodeSpecs();
-
-    const usage = {
-      totalApps,
-      runningApps: totalRunning,
-      stoppedApps: totalApps - totalRunning,
-      nodeSpecs: specs,
-    };
-
-    const dataResponse = messageHelper.createDataMessage(usage);
-    return res ? res.json(dataResponse) : dataResponse;
+    totalRunning = (await listRunningContainers()).length;
   } catch (error) {
     log.error(error);
-    const errorResponse = messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-    return res ? res.json(errorResponse) : errorResponse;
+  }
+  return {
+    totalApps,
+    runningApps: totalRunning,
+    stoppedApps: totalApps - totalRunning,
+    nodeSpecs: await nodeSpecs.getNodeSpecs(),
+  };
+}
+
+/**
+ * GET /apps/fluxusage
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+async function fluxUsageAPI(req, res) {
+  try {
+    res.json(messageHelper.createDataMessage(await fluxUsage()));
+  } catch (error) {
+    log.error(error);
+    res.json(messageHelper.createErrorMessage(error.message || error, error.name, error.code));
   }
 }
 
@@ -642,11 +625,12 @@ async function promotedFolderHoldings(req, res) {
 
 module.exports = {
   fluxUsage,
+  fluxUsageAPI,
   publicContainerView,
   installedApps,
   installedAppsAPI,
   listRunningContainers,
-  listRunningApps,
+  listRunningAppsAPI,
   heldComponents,
   activeStandbyComponents,
   promotedFolders,

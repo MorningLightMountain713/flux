@@ -901,18 +901,11 @@ async function listAppsImagesApi(req, res) {
 }
 
 /**
- * Get Apps DOS (Denial of Service) State
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- * @returns {object} DOS state information
+ * The apps' denial-of-service state.
+ * @returns {{dosState: number, dosMessage: string|null}}
  */
-function getAppsDOSState(req, res) {
-  const data = {
-    dosState,
-    dosMessage,
-  };
-  const response = messageHelper.createDataMessage(data);
-  return res ? res.json(response) : response;
+function getAppsDOSState() {
+  return { dosState, dosMessage };
 }
 
 /**

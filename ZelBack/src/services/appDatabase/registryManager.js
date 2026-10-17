@@ -97,35 +97,35 @@ async function materializeFoundingView(record) {
 }
 
 /**
- * Every app payment the chain scan has recorded, as the v1 route serves it: the
- * payment's facts and whether this node holds the message.
- * @param {object} _req - Request object (unused)
- * @param {import('express').Response} res
- * @returns {Promise<object>} List of app hashes
+ * Every app payment the chain scan has recorded: the payment's facts and whether
+ * this node holds the message.
+ * @returns {Promise<object[]>}
  */
-async function getAppHashes(_req, res) {
+async function getAppHashes() {
+  return (await appRecords.messages().paid()).map((record) => {
+    const { payment } = record;
+    return {
+      txid: payment.txid,
+      hash: record.hash,
+      height: payment.height,
+      value: payment.value,
+      message: record.isHeld,
+      ...(payment.messageNotFound === undefined ? {} : { messageNotFound: payment.messageNotFound }),
+    };
+  });
+}
+
+/**
+ * GET /apps/hashes
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+async function getAppHashesAPI(req, res) {
   try {
-    const results = (await appRecords.messages().paid()).map((record) => {
-      const { payment } = record;
-      return {
-        txid: payment.txid,
-        hash: record.hash,
-        height: payment.height,
-        value: payment.value,
-        message: record.isHeld,
-        ...(payment.messageNotFound === undefined ? {} : { messageNotFound: payment.messageNotFound }),
-      };
-    });
-    const resultsResponse = messageHelper.createDataMessage(results);
-    return res ? res.json(resultsResponse) : resultsResponse;
+    res.json(messageHelper.createDataMessage(await getAppHashes()));
   } catch (error) {
     log.error(error);
-    const errorResponse = messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-    return res ? res.json(errorResponse) : errorResponse;
+    res.json(messageHelper.createErrorMessage(error.message || error, error.name, error.code));
   }
 }
 
@@ -1001,30 +1001,27 @@ async function getGlobalAppsSpecifications(req, res) {
 }
 
 /**
- * Get available apps (both global and local)
- * @param {object} _req - Request object (unused)
+ * Every registered app and every app this node hosts, each as its registered
+ * record: a hosted instance's own fields stay on the node.
+ * @returns {Promise<object[]>}
+ */
+async function availableApps() {
+  const globalApps = await appRecords.registry().all();
+  const localApps = await appRecords.hostedInstances().apps();
+  return [...globalApps, ...localApps.map((app) => app.record)].map((app) => app.serialize());
+}
+
+/**
+ * GET /apps/availableapps
+ * @param {import('express').Request} req
  * @param {import('express').Response} res
  */
-async function availableApps(_req, res) {
+async function availableAppsAPI(req, res) {
   try {
-    const globalApps = await appRecords.registry().all();
-    const localApps = await appRecords.hostedInstances().apps();
-    // Each app's registered record: a hosted instance's own fields stay on the node.
-    const allApps = [...globalApps, ...localApps.map((app) => app.record)].map((app) => app.serialize());
-
-    if (res) {
-      const resultsResponse = messageHelper.createDataMessage(allApps);
-      return res.json(resultsResponse);
-    }
-    return allApps;
+    res.json(messageHelper.createDataMessage(await availableApps()));
   } catch (error) {
     log.error(error);
-    const errorResponse = messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-    return res ? res.json(errorResponse) : errorResponse;
+    res.json(messageHelper.createErrorMessage(error.message || error, error.name, error.code));
   }
 }
 
@@ -1148,6 +1145,7 @@ module.exports = {
   storeGlobalSpec,
   setOnSpecStored,
   getAppHashes,
+  getAppHashesAPI,
   appLocation,
   appLocationOf,
   appInstallingLocation,
@@ -1170,6 +1168,7 @@ module.exports = {
   getApplicationOwnerAPI,
   getGlobalAppsSpecifications,
   availableApps,
+  availableAppsAPI,
   checkApplicationRegistrationNameConflicts,
   getAllAppsInformation,
   getRunningApps,
