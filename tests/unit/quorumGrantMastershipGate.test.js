@@ -5,7 +5,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire');
 
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
-const generalService = require('../../ZelBack/src/services/generalService');
+const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirmationService');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
@@ -52,7 +52,7 @@ describe('quorumGrant mastershipGrantGate', () => {
       { ip: '203.0.113.5:16127', outpoint: null },
       { ip: '10.1.0.1:16127', outpoint: `${'1'.repeat(64)}:0` },
     ]);
-    sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
+    sinon.stub(nodeConfirmationService, 'ownCollateral').resolves({
       txhash: SELF_TXHASH, txindex: 0,
     });
     sinon.stub(networkStateService, 'membershipFingerprint').returns('f'.repeat(64));

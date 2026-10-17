@@ -229,11 +229,9 @@ describe('meshReconciler', () => {
           ?? { synced: true, height: 1000 }),
       },
       '../daemonService/daemonServiceBlockchainRpcs': { getBlock: (...args) => stubs.getBlock(...args) },
-      '../generalService': {
-        obtainNodeCollateralInformation: sinon.stub().resolves({
-          txhash: OWN_OUTPOINT.split(':')[0], txindex: 0,
-        }),
-      },
+      '../nodeConfirmationService': { ownCollateral: sinon.stub().resolves({
+        txhash: OWN_OUTPOINT.split(':')[0], txindex: 0,
+      }) },
       '../networkStateService': {
         getFluxnodeBySocketAddress: sinon.stub().callsFake(async (addr) => stubs.nodeByAddress?.[addr] ?? null),
         getFluxnodesByPubkey: sinon.stub().callsFake(async (key) => stubs.nodesByPubkey?.[key] ?? null),

@@ -4,7 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 
 const fluxCommunicationUtils = require('../../ZelBack/src/services/fluxCommunicationUtils');
-const generalService = require('../../ZelBack/src/services/generalService');
+const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirmationService');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const grantClient = require('../../ZelBack/src/services/quorumGrant/grantClient');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
@@ -50,7 +50,7 @@ describe('quorumGrant grantPeerController', () => {
   beforeEach(() => {
     grantPeerController.reset();
     sinon.stub(fluxCommunicationUtils, 'deterministicFluxList').resolves(fixtureFleet());
-    sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
+    sinon.stub(nodeConfirmationService, 'ownCollateral').resolves({
       txhash: SELF_TXHASH, txindex: 0,
     });
     sinon.stub(registryManager, 'appLocationOf').resolves([{ ip: `${SELF_HOST}:16127` }]);

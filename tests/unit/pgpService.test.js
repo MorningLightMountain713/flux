@@ -7,7 +7,7 @@ const { expect } = chai;
 
 const pgpService = require('../../ZelBack/src/services/pgpService');
 const workerRunner = require('../../ZelBack/src/services/utils/workerRunner');
-const generalService = require('../../ZelBack/src/services/generalService');
+const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirmationService');
 const nodeIdentityRepository = require('../../ZelBack/src/services/appDatabase/nodeIdentityRepository');
 const userconfig = require('../../config/userconfig');
 
@@ -138,7 +138,7 @@ BIscsJYafHuBDymkCDcQ0KPIgFPLHt4qSDBtDg==
       getIdentityStub.resolves(null);
       globalThis.userconfig.initial.pgpPrivateKey = '';
       globalThis.userconfig.initial.pgpPublicKey = '';
-      sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: 'abcd', txindex: 0 });
+      sinon.stub(nodeConfirmationService, 'ownCollateral').resolves({ txhash: 'abcd', txindex: 0 });
       runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'generateKey' }))
         .resolves({ privateKey: 'newPrivateKey', publicKey: 'newPublicKey' });
 
@@ -152,7 +152,7 @@ BIscsJYafHuBDymkCDcQ0KPIgFPLHt4qSDBtDg==
       getIdentityStub.resolves({ privateKey: 'aCorruptPrivateKey', publicKey: 'someoneElsesPublicKey' });
       globalThis.userconfig.initial.pgpPrivateKey = '';
       globalThis.userconfig.initial.pgpPublicKey = '';
-      sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: 'abcd', txindex: 0 });
+      sinon.stub(nodeConfirmationService, 'ownCollateral').resolves({ txhash: 'abcd', txindex: 0 });
       runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'derivePublicKey' })).resolves('aDifferentPublicKey');
       runInWorkerStub.withArgs('pgpWorker', sinon.match({ operation: 'generateKey' }))
         .resolves({ privateKey: 'newPrivateKey', publicKey: 'newPublicKey' });

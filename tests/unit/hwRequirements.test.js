@@ -157,9 +157,9 @@ function buildHw(opts = {}) {
     '../benchmarkService': {
       getBenchmarks: sinon.stub().resolves({ value: { cpucores, ram, ssd, architecture: 'amd64' } }),
     },
+    '../nodeConfirmationService': { ownCollateral: opts.collateralStub ?? sinon.stub().resolves(collateral) },
     '../generalService': {
       nodeTier: sinon.stub().resolves('cumulus'),
-      obtainNodeCollateralInformation: opts.collateralStub ?? sinon.stub().resolves(collateral),
     },
     '../geolocationService': {
       isStaticIP: sinon.stub().returns(isStaticIP),

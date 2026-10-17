@@ -12,7 +12,7 @@ const path = require('node:path');
 const log = require('../../lib/log');
 const messageHelper = require('../messageHelper');
 const verificationHelper = require('../verificationHelper');
-const generalService = require('../generalService');
+const nodeConfirmationService = require('../nodeConfirmationService');
 const appRecords = require('../appDatabase/appRecords');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const { resolveRegisteredSpec } = require('../utils/specCutover');
@@ -49,7 +49,7 @@ async function resolveMeshApp(appnameRaw) {
   if (!inst.uuid || !inst.identity) {
     throw new Error(`${appName} is mesh-enabled but carries no registration uuid`);
   }
-  const collateral = await generalService.obtainNodeCollateralInformation();
+  const collateral = await nodeConfirmationService.ownCollateral();
   return {
     appName,
     meshEnabled: true,

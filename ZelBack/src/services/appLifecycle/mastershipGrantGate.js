@@ -4,7 +4,7 @@ const config = require('config');
 const serviceHelper = require('../serviceHelper');
 const daemonStatus = require('../daemonService/daemonStatus');
 const dockerService = require('../dockerService');
-const generalService = require('../generalService');
+const nodeConfirmationService = require('../nodeConfirmationService');
 const networkStateService = require('../networkStateService');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const messageStore = require('../appMessaging/messageStore');
@@ -375,7 +375,7 @@ async function acquireUnlessSettled(identifier, identity, key) {
     }
     const record = await messageStore.getMasterleaseRecord(identity, ROLE);
     const data = record?.data;
-    const self = await generalService.obtainNodeCollateralInformation();
+    const self = await nodeConfirmationService.ownCollateral();
     ours = Boolean(data?.grantee) && data.grantee === `${self.txhash}:${self.txindex}`;
     if (data?.grantee && data.mode === 'held') {
       if (!ours) {
@@ -503,7 +503,7 @@ async function grantVerdict(identifier, comp) {
     return null;
   }
   if (relearned?.term?.grantee) {
-    const self = await generalService.obtainNodeCollateralInformation();
+    const self = await nodeConfirmationService.ownCollateral();
     if (relearned.term.grantee !== `${self.txhash}:${self.txindex}`) {
       return { desired: false, reason: 'peerHoldsGrant' };
     }
@@ -607,7 +607,7 @@ async function masterIntent(identifier, comp) {
     const key = keyFor(comp.identity);
     let grantee = null;
     if (grantClient.holderFor(key)) {
-      const self = await generalService.obtainNodeCollateralInformation();
+      const self = await nodeConfirmationService.ownCollateral();
       grantee = `${self.txhash}:${self.txindex}`;
     } else {
       const record = await messageStore.getMasterleaseRecord(comp.identity, ROLE);
@@ -817,7 +817,7 @@ async function pursuitWaitMs(key) {
   let ours = false;
   try {
     const record = await messageStore.getMasterleaseRecord(key.slice(0, key.indexOf('/')), ROLE);
-    const self = await generalService.obtainNodeCollateralInformation();
+    const self = await nodeConfirmationService.ownCollateral();
     ours = Boolean(record?.data?.grantee) && record.data.grantee === `${self.txhash}:${self.txindex}`;
   } catch (error) {
     log.warn(`mastershipGrantGate - record read for the pursuit wait of ${key} failed: ${error.message}`);

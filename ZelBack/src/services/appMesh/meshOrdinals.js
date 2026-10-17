@@ -15,7 +15,7 @@
 // from the record: a lagging entry is a temporarily unknown name, never a
 // collision.
 
-const generalService = require('../generalService');
+const nodeConfirmationService = require('../nodeConfirmationService');
 const seam = require('./ordinalRegisterSeam');
 const meshDerivation = require('./meshDerivation');
 
@@ -26,7 +26,7 @@ const CLAIM = Object.freeze({
 });
 
 async function ownOutpoint() {
-  const collateral = await generalService.obtainNodeCollateralInformation();
+  const collateral = await nodeConfirmationService.ownCollateral();
   return `${collateral.txhash}:${collateral.txindex}`;
 }
 

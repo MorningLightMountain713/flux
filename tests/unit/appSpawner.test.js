@@ -272,13 +272,13 @@ describe('appSpawner tests', () => {
       },
       '../nodeConfirmationService': {
         isConfirmed: sinon.stub().returns(true),
+        // A real txid, because a real Placement's targetOutpoints entries are
+        // schema-checked as `txid:vout` — 'aaa:0' cannot be registered.
+        ownCollateral: opts.collateralStub ?? sinon.stub().resolves({ txhash: MY_TXHASH, txindex: 0 }),
       },
       '../generalService': {
         checkSynced: sinon.stub().resolves(true),
         nodeTier: sinon.stub().resolves('cumulus'),
-        // A real txid, because a real Placement's targetOutpoints entries are
-        // schema-checked as `txid:vout` — 'aaa:0' cannot be registered.
-        obtainNodeCollateralInformation: opts.collateralStub ?? sinon.stub().resolves({ txhash: MY_TXHASH, txindex: 0 }),
       },
       '../benchmarkService': {
         getBenchmarks: opts.getBenchmarks ?? sinon.stub().resolves({ value: { ipaddress: MY_ADDR } }),

@@ -1,6 +1,6 @@
 'use strict';
 
-const generalService = require('../generalService');
+const nodeConfirmationService = require('../nodeConfirmationService');
 const messageStore = require('../appMessaging/messageStore');
 const registryManager = require('../appDatabase/registryManager');
 const networkStateService = require('../networkStateService');
@@ -68,7 +68,7 @@ async function currentGeneration(identity) {
 
 async function selfOutpoint() {
   try {
-    const collateral = await generalService.obtainNodeCollateralInformation();
+    const collateral = await nodeConfirmationService.ownCollateral();
     if (!collateral?.txhash) return null;
     return `${collateral.txhash}:${collateral.txindex}`;
   } catch (error) {

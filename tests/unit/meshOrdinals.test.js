@@ -25,9 +25,7 @@ function load(register = {}) {
   };
   const meshOrdinals = proxyquire('../../ZelBack/src/services/appMesh/meshOrdinals', {
     './ordinalRegisterSeam': seam,
-    '../generalService': {
-      obtainNodeCollateralInformation: sinon.stub().resolves({ txhash: 'a'.repeat(64), txindex: 0 }),
-    },
+    '../nodeConfirmationService': { ownCollateral: sinon.stub().resolves({ txhash: 'a'.repeat(64), txindex: 0 }) },
   });
   return { meshOrdinals, seam };
 }

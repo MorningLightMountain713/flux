@@ -3,7 +3,7 @@
 const config = require('config');
 const http = require('http');
 const serviceHelper = require('../serviceHelper');
-const generalService = require('../generalService');
+const nodeConfirmationService = require('../nodeConfirmationService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const networkStateService = require('../networkStateService');
 const registryManager = require('../appDatabase/registryManager');
@@ -142,7 +142,7 @@ const askAgent = new http.Agent({ keepAlive: true, timeout: 60_000, maxFreeSocke
 // identity and committee resolution
 
 async function selfIdentity() {
-  const collateral = await generalService.obtainNodeCollateralInformation();
+  const collateral = await nodeConfirmationService.ownCollateral();
   const wif = await fluxNetworkHelper.getFluxNodePrivateKey();
   if (!collateral?.txhash || !wif) return null;
   return { outpoint: `${collateral.txhash}:${collateral.txindex}`, wif };
@@ -1951,7 +1951,7 @@ async function witnessAnswer(key, mode = 'held') {
   const fingerprint = networkStateService.membershipFingerprint();
   const committee = fingerprint ? await committeeFor(key, mode, fingerprint) : null;
   if (committee) {
-    const self = await generalService.obtainNodeCollateralInformation();
+    const self = await nodeConfirmationService.ownCollateral();
     const candidate = encodeURIComponent(`${self.txhash}:${self.txindex}`);
     const probes = committee.members.map(async (member) => {
       try {
@@ -2159,7 +2159,7 @@ function courierHorizonMs() {
 }
 
 async function selfOutpoint() {
-  const collateral = await generalService.obtainNodeCollateralInformation();
+  const collateral = await nodeConfirmationService.ownCollateral();
   return collateral?.txhash ? `${collateral.txhash}:${collateral.txindex}` : null;
 }
 

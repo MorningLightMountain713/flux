@@ -69,7 +69,7 @@ describe('telemetryIdentityService tests', () => {
       './serviceHelper': { runCommand: runCommandStub },
       './geolocationService': geolocationServiceStub,
       './telemetrySinkCache': sinkCacheStub,
-      './generalService': { obtainNodeCollateralInformation: collateralStub },
+      './nodeConfirmationService': { ownCollateral: collateralStub },
       './utils/dockerEventStream': { createDockerEventStream: () => eventStreamStub },
     });
   });
@@ -321,6 +321,17 @@ describe('telemetryIdentityService tests', () => {
     function fakeSocket() {
       return { destroyed: false, written: [], write(s) { this.written.push(s); } };
     }
+
+    it('rides each sync as the collateral stands then, so a changed collateral is a new id', async () => {
+      const first = fakeSocket();
+      await service.sendSync(first);
+      collateralStub.resolves({ txhash: 'cd'.repeat(32) });
+      const second = fakeSocket();
+      await service.sendSync(second);
+
+      expect(JSON.parse(second.written[0]).opaqueId).to.equal(await service.deriveOpaqueId());
+      expect(JSON.parse(second.written[0]).opaqueId).to.not.equal(JSON.parse(first.written[0]).opaqueId);
+    });
 
     it('announces only telemetry-app containers, each with its sink', async () => {
       dockerServiceStub.dockerListContainers.resolves([

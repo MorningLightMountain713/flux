@@ -7,7 +7,7 @@ const secp256k1 = require('secp256k1');
 const bs58check = require('bs58check').default;
 
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
-const generalService = require('../../ZelBack/src/services/generalService');
+const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirmationService');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
@@ -389,7 +389,7 @@ describe('quorumGrant grantClient', () => {
       }
       return { data: { status: 'success', data: {} } };
     });
-    sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
+    sinon.stub(nodeConfirmationService, 'ownCollateral').resolves({
       txhash: SELF_TXHASH, txindex: 0,
     });
     sinon.stub(fluxNetworkHelper, 'getFluxNodePrivateKey').resolves(WIF);

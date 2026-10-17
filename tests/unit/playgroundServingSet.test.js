@@ -35,7 +35,7 @@ describe('playgroundServingSet', () => {
       config: asConfig(opts.config ?? CONFIG),
       '../../lib/log': { info: sinon.stub(), warn: stubs.warn, error: sinon.stub() },
       '../fluxCommunicationUtils': { deterministicFluxList: stubs.list },
-      '../generalService': { obtainNodeCollateralInformation: stubs.collateral },
+      '../nodeConfirmationService': { ownCollateral: stubs.collateral },
     });
   }
 

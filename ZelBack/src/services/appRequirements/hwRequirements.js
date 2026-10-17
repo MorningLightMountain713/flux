@@ -1,7 +1,7 @@
 'use strict';
 
 const config = require('config');
-const generalService = require('../generalService');
+const nodeConfirmationService = require('../nodeConfirmationService');
 const geolocationService = require('../geolocationService');
 const benchmarkService = require('../benchmarkService');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
@@ -112,7 +112,7 @@ async function targetsNameThisNode(spec) {
     return true;
   }
 
-  const myCollateral = await generalService.obtainNodeCollateralInformation().catch((error) => {
+  const myCollateral = await nodeConfirmationService.ownCollateral().catch((error) => {
     log.warn(`targetsNameThisNode - could not resolve node collateral, targets naming this node by collateral will not match: ${error.message}`);
     return null;
   });

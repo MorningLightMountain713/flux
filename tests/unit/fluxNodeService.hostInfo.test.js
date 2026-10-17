@@ -63,9 +63,7 @@ describe('fluxNodeService tests', () => {
         '../lib/log': logStub,
         './geolocationService': geolocationService,
         './fluxNetworkHelper': { getLocalSocketAddress: sinon.stub().resolves('185.199.108.1:16127') },
-        './generalService': {
-          obtainNodeCollateralInformation: sinon.stub().resolves({ txhash: 'abc123', txindex: 0 }),
-        },
+        './nodeConfirmationService': { ownCollateral: sinon.stub().resolves({ txhash: 'abc123', txindex: 0 }) },
         './dockerService': {
           getAppNameByContainerIp: sinon.stub().resolves('myapp'),
         },

@@ -9,7 +9,7 @@ const sinon = require('sinon');
 const { stubHostedInstances, stubInstanceResources, stubRegistry } = require('./fixtures/appRecords');
 const appDomain = require('./fixtures/appDomain');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
-const generalService = require('../../ZelBack/src/services/generalService');
+const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirmationService');
 const dockerService = require('../../ZelBack/src/services/dockerService');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const proxyquire = require('proxyquire').noCallThru();
@@ -61,7 +61,7 @@ describe('deploymentProvider tests', () => {
 
     beforeEach(() => {
       ipStub = sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('44.55.66.77:16127');
-      collateralStub = sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
+      collateralStub = sinon.stub(nodeConfirmationService, 'ownCollateral').resolves({
         txhash: OUTPOINT_TXID, txindex: 0,
       });
     });
@@ -143,7 +143,7 @@ describe('deploymentProvider tests', () => {
 
     beforeEach(() => {
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('44.55.66.77:16127');
-      sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
+      sinon.stub(nodeConfirmationService, 'ownCollateral').resolves({
         txhash: OUTPOINT_TXID, txindex: 0,
       });
       dockerStub = sinon.stub(dockerService, 'getAppContainerObjects').resolves([]);
@@ -255,7 +255,7 @@ describe('deploymentProvider tests', () => {
       instanceResources = stubInstanceResources();
       stubHostedInstances();
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('44.55.66.77:16127');
-      sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
+      sinon.stub(nodeConfirmationService, 'ownCollateral').resolves({
         txhash: OUTPOINT_TXID, txindex: 0,
       });
     });

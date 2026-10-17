@@ -16,7 +16,7 @@ const reconcilerQueue = require('../../ZelBack/src/services/appMonitoring/reconc
 const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const mastershipGrantGate = require('../../ZelBack/src/services/appLifecycle/mastershipGrantGate');
-const generalService = require('../../ZelBack/src/services/generalService');
+const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirmationService');
 const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
@@ -182,7 +182,7 @@ describe('appController tests', () => {
     // these reach the benchmark daemon and the local node's collateral over the
     // network; the matching itself is the real Placement/Assignment machinery.
     sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(THIS_NODE);
-    sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
+    sinon.stub(nodeConfirmationService, 'ownCollateral').resolves({
       txhash: NODE_OUTPOINT_TXID, txindex: 0,
     });
   });

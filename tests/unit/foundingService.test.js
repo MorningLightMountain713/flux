@@ -3,7 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 
-const generalService = require('../../ZelBack/src/services/generalService');
+const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirmationService');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
 const grantClient = require('../../ZelBack/src/services/quorumGrant/grantClient');
 const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCommittee');
@@ -47,7 +47,7 @@ describe('foundingService', () => {
     sinon.stub(messageStore, 'getMasterleaseRecordsByRolePrefix').resolves([]);
     sinon.stub(messageStore, 'getGrantGenerationRecord').resolves({ data: { generation: 2 } });
     sinon.stub(grantClient, 'acquire').resolves({ granted: true, founder: SELF });
-    sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({
+    sinon.stub(nodeConfirmationService, 'ownCollateral').resolves({
       txhash: SELF_TXHASH, txindex: 0,
     });
     sinon.stub(registryManager, 'appLocationOf').resolves([]);

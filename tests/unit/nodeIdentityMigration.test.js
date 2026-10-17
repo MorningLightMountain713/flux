@@ -92,9 +92,7 @@ describe('node identity adoption', () => {
   function loadPgpService() {
     return proxyquire('../../ZelBack/src/services/pgpService', {
       './appDatabase/nodeIdentityRepository': repository,
-      './generalService': {
-        obtainNodeCollateralInformation: async () => ({ txhash: 'a'.repeat(64), txindex: 0 }),
-      },
+      './nodeConfirmationService': { ownCollateral: async () => ({ txhash: 'a'.repeat(64), txindex: 0 }) },
       '../lib/log': logStub,
     });
   }

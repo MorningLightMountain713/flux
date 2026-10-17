@@ -9,7 +9,7 @@ const dockerService = require('./dockerService');
 const dockerEventStream = require('./utils/dockerEventStream');
 const serviceHelper = require('./serviceHelper');
 const geolocationService = require('./geolocationService');
-const generalService = require('./generalService');
+const nodeConfirmationService = require('./nodeConfirmationService');
 const telemetrySinkCache = require('./telemetrySinkCache');
 const { getSpecBackend } = require('./utils/specLibs');
 
@@ -51,7 +51,6 @@ let connection = null;
 let started = false;
 let reconnectTimer = null;
 let reconnectDelay = RECONNECT_MIN_MS;
-let opaqueId = null;
 
 // Resolved OTLP collector addresses, keyed by the COLLECTOR's identity
 // (`<collectorAppKey>/<componentLower>`) rather than the consumer app — one
@@ -240,7 +239,7 @@ function broadcastUntrack(containerId) {
 }
 
 async function deriveOpaqueId() {
-  const collateralInfo = await generalService.obtainNodeCollateralInformation();
+  const collateralInfo = await nodeConfirmationService.ownCollateral();
   if (!collateralInfo || !collateralInfo.txhash) {
     throw new Error('cannot derive opaqueId: collateral tx hash unavailable');
   }
@@ -252,19 +251,17 @@ async function deriveOpaqueId() {
 }
 
 /**
- * The node's opaque id, derived once. Without it the daemon tracks nothing
- * it can ship, so a failure is an error; the next sync retries.
+ * The node's opaque id, derived from its current collateral. Without it the
+ * daemon tracks nothing it can ship, so a failure is an error; the next sync
+ * retries.
  */
 async function nodeOpaqueId() {
-  if (!opaqueId) {
-    try {
-      opaqueId = await deriveOpaqueId();
-    } catch (err) {
-      log.error(`telemetry identity: ${err.message}; the daemon ships nothing until a sync carries it`);
-      return undefined;
-    }
+  try {
+    return await deriveOpaqueId();
+  } catch (err) {
+    log.error(`telemetry identity: ${err.message}; the daemon ships nothing until a sync carries it`);
+    return undefined;
   }
-  return opaqueId;
 }
 
 /** Send the daemon a full snapshot of every running telemetry-app container. */

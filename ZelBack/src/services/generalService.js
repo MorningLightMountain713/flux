@@ -59,23 +59,6 @@ function getCollateralInfo(collateralOutpoint) {
 }
 
 /**
- * To return a transaction hash and index of our node collateral
- * @returns {object} Collateral info object.
- * @property {string} txhash Transaction hash.
- * @property {number} txindex Transaction index.
- */
-async function obtainNodeCollateralInformation() {
-  // get our collateral information to decide if app specifications are basic, super, bamf
-  // getzlenodestatus.collateral
-  const nodeStatus = await daemonServiceFluxnodeRpcs.getFluxNodeStatus();
-  if (nodeStatus.status === 'error') {
-    throw nodeStatus.data;
-  }
-  const collateralInformation = getCollateralInfo(nodeStatus.data.collateral);
-  return collateralInformation;
-}
-
-/**
  * This node's collateral and the tier it makes the node, as the daemon reports
  * them. Throws only when the daemon cannot say: `collateral` is null when the
  * node holds none, or when the collateral's transaction has no output at its
@@ -252,7 +235,6 @@ module.exports = {
   whitelistedRepositories,
   nodeCollateral,
   nodeCollateralTier,
-  obtainNodeCollateralInformation,
   COLLATERAL_TIERS,
 
   // exported for testing purposes

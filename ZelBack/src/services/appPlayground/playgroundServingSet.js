@@ -3,7 +3,7 @@
 const config = require('config');
 const log = require('../../lib/log');
 const fluxCommunicationUtils = require('../fluxCommunicationUtils');
-const generalService = require('../generalService');
+const nodeConfirmationService = require('../nodeConfirmationService');
 const { rankNodes } = require('../utils/rendezvousRank');
 
 // Which nodes may serve a given caller, decided without asking anyone.
@@ -151,7 +151,7 @@ async function servesLocalNode(caller, options = {}) {
     const set = await servingSet(caller, options);
     if (!set.length) return { serves: false, candidates: [] };
 
-    const collateral = await generalService.obtainNodeCollateralInformation();
+    const collateral = await nodeConfirmationService.ownCollateral();
     const serves = set.some(
       (node) => node.txhash === collateral.txhash
         && String(node.outidx) === String(collateral.txindex),

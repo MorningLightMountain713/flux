@@ -2,7 +2,7 @@
 
 const { expect } = require('chai');
 const sinon = require('sinon');
-const generalService = require('../../ZelBack/src/services/generalService');
+const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirmationService');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
@@ -61,7 +61,7 @@ describe('quorumGrant ordinalRegister', () => {
     sinon.stub(messageStore, 'getGrantGenerationRecord').resolves(null);
     sinon.stub(messageStore, 'getMasterleaseRecordsByRolePrefix').resolves([]);
     sinon.stub(messageStore, 'getMasterleaseRecordsByGrantee').resolves([]);
-    sinon.stub(generalService, 'obtainNodeCollateralInformation').resolves({ txhash: SELF_TXHASH, txindex: 0 });
+    sinon.stub(nodeConfirmationService, 'ownCollateral').resolves({ txhash: SELF_TXHASH, txindex: 0 });
     sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
     sinon.stub(grantClient, 'probeOneshot').resolves({ decided: true, holder: null, named: [], epoch: 0 });
     sinon.stub(grantClient, 'acquire').resolves({ granted: true, founder: SELF });
