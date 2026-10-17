@@ -114,10 +114,27 @@ async function ownerships(name) {
   return owners;
 }
 
+/**
+ * The app that holds a name and who has owned it: its identity and its
+ * ownerships as `ownerships` gives them. What a reader outside the node, which
+ * holds an owner's write keyed by identity and the height its owner took the
+ * app, checks that owner against: a past ownership is chain history and does not
+ * change. Null when nothing applied.
+ * @param {string} name - in any letter case
+ * @returns {Promise<{identity: string, ownerships: Array<{owner: string, from: number}>}|null>}
+ */
+async function ownershipRecord(name) {
+  const messages = await currentAppMessages(name);
+  if (messages.length === 0) return null;
+  const { identity } = messages[messages.length - 1].decision;
+  return { identity, ownerships: (await ownerships(name)).map(({ owner, from }) => ({ owner, from })) };
+}
+
 module.exports = {
   appliedMessages,
   appliedUpdateEvents,
   ownerships,
+  ownershipRecord,
   currentAppMessages,
   registrationVersionOf,
   latestApplied,

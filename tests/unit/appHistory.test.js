@@ -104,6 +104,27 @@ describe('appHistory', () => {
     ]);
   });
 
+  it('answers the identity of the app holding the name and its owners with the height each took it, leaving out an earlier app of the name', async () => {
+    applied = [
+      decision('r1', { type: 'registration', height: 100, uuid: 'first', identity: 'bfirst' }),
+      decision('r2', { type: 'registration', height: 300, uuid: 'second', identity: 'bsecond' }),
+      decision('t', { type: 'update', height: 400, uuid: 'second', identity: 'bsecond' }),
+    ];
+    stored = [
+      { hash: 'r1', appSpecifications: { owner: 'carol' } },
+      { hash: 'r2', appSpecifications: { owner: 'alice' } },
+      { hash: 't', appSpecifications: { owner: 'bob', grants: { master: 'sha256:a1' } } },
+    ];
+    expect(await history.ownershipRecord('MyApp')).to.deep.equal({
+      identity: 'bsecond',
+      ownerships: [{ owner: 'alice', from: 300 }, { owner: 'bob', from: 400 }],
+    });
+  });
+
+  it('answers no ownership record for a name nothing was applied to', async () => {
+    expect(await history.ownershipRecord('myapp')).to.equal(null);
+  });
+
   it('answers the version of the message that registered an app: the first applied message of the app with a uuid, or of the app holding the name', async () => {
     applied = [
       decision('r1', { type: 'registration', height: 100, uuid: 'first' }),

@@ -626,6 +626,104 @@
           }
         }
       }
+    },
+    "/apps/{name}/ownerships": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "operationId": "getAppOwnerships",
+        "summary": "Who has owned the app holding a name",
+        "description": "The identity of the app that holds the name and each of its owners, in order, with the height at which they took it (the registration's height for the first). A past ownership is chain history and does not change, so a reader holding an owner's write, keyed by identity and the height its owner took the app, checks that owner against it.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "The app's name, in any letter case.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The app's identity and its ownerships.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "name",
+                        "identity",
+                        "ownerships"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "identity": {
+                          "type": "string",
+                          "description": "The identity of the app that holds the name."
+                        },
+                        "ownerships": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "owner",
+                              "from"
+                            ],
+                            "properties": {
+                              "owner": {
+                                "type": "string"
+                              },
+                              "from": {
+                                "type": "integer",
+                                "description": "The height at which this owner took the app."
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No app holding the name has applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The node's local database or chain state is not ready.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
