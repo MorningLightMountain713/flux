@@ -8,6 +8,8 @@ const { nodeChain } = require('../../ZelBack/src/services/utils/nodeChain');
 const specLibrary = require('../../ZelBack/src/services/utils/specLibrary');
 const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const daemonServiceBlockchainRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceBlockchainRpcs');
+const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
+const log = require('../../ZelBack/src/lib/log');
 
 describe('the chain this node runs on', () => {
   afterEach(() => sinon.restore());
@@ -29,10 +31,19 @@ describe('the chain this node runs on', () => {
     }
 
     it('reads the daemon\'s chain from the answer that tells it the daemon is up', async () => {
-      sinon.stub(daemonServiceBlockchainRpcs, 'getBlockchainInfo').resolves({
-        status: 'success', data: { blocks: 3_000_000, chain: 'labnet', headers: 3_000_000 },
-      });
+      sinon.stub(daemonServiceBlockchainRpcs, 'getBlockchainInfo').resolves({ value: { blocks: 3_000_000, chain: 'labnet', headers: 3_000_000 } });
       expect(await daemonStatus.waitForDaemonRpc()).to.deep.equal({ blocks: 3_000_000, chain: 'labnet' });
+    });
+
+    it('waits through a daemon still warming up, and says why', async () => {
+      sinon.stub(daemonServiceBlockchainRpcs, 'getBlockchainInfo')
+        .onFirstCall().resolves({ value: null, reason: { code: -28, message: 'Loading block index...' } })
+        .onSecondCall().resolves({ value: { blocks: 5, chain: 'main' } });
+      sinon.stub(serviceHelper, 'delay').resolves();
+      const info = sinon.stub(log, 'info');
+
+      expect(await daemonStatus.waitForDaemonRpc()).to.deep.equal({ blocks: 5, chain: 'main' });
+      sinon.assert.calledWith(info, 'Waiting for daemon RPC... (Loading block index...)');
     });
   });
 });

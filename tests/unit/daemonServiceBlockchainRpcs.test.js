@@ -249,28 +249,26 @@ describe('daemonServiceBlockchainRpcs tests', () => {
       sinon.restore();
     });
 
-    it('should trigger rpc, no response passed', async () => {
-      daemonServiceUtilsStub.returns('success');
+    it('answers the daemon\'s value', async () => {
+      daemonServiceUtilsStub.resolves({ status: 'success', data: 7 });
 
-      const expectedResponse = 'success';
-
-      const result = await daemonServiceBlockchainRpcs.getBlockchainInfo();
-
-      expect(result).to.equal(expectedResponse);
+      expect(await daemonServiceBlockchainRpcs.getBlockchainInfo()).to.deep.equal({ value: 7 });
       sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getBlockchainInfo');
     });
 
-    it('should trigger rpc, response passed', async () => {
-      daemonServiceUtilsStub.returns('success');
+    it('answers why there is no value when the daemon refuses', async () => {
+      daemonServiceUtilsStub.resolves({ status: 'error', data: { code: -28, message: 'Loading block index' } });
 
-      const res = generateResponse();
-      const expectedResponse = 'success';
+      expect(await daemonServiceBlockchainRpcs.getBlockchainInfo()).to.deep.equal({ value: null, reason: { code: -28, message: 'Loading block index' } });
+    });
 
-      const result = await daemonServiceBlockchainRpcs.getBlockchainInfo(undefined, res);
+    it('answers GET /daemon/getblockchaininfo with the daemon\'s message', async () => {
+      daemonServiceUtilsStub.resolves({ status: 'success', data: 7 });
+      const res = { json: sinon.stub() };
 
-      expect(result).to.equal(`Response: ${expectedResponse}`);
-      sinon.assert.calledOnceWithExactly(res.json, expectedResponse);
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getBlockchainInfo');
+      await daemonServiceBlockchainRpcs.getBlockchainInfoAPI({ params: {}, query: {} }, res);
+
+      sinon.assert.calledOnceWithExactly(res.json, { status: 'success', data: 7 });
     });
   });
 
@@ -285,28 +283,26 @@ describe('daemonServiceBlockchainRpcs tests', () => {
       sinon.restore();
     });
 
-    it('should trigger rpc, no response passed', async () => {
-      daemonServiceUtilsStub.returns('success');
+    it('answers the daemon\'s value', async () => {
+      daemonServiceUtilsStub.resolves({ status: 'success', data: 7 });
 
-      const expectedResponse = 'success';
-
-      const result = await daemonServiceBlockchainRpcs.getBlockCount();
-
-      expect(result).to.equal(expectedResponse);
+      expect(await daemonServiceBlockchainRpcs.getBlockCount()).to.deep.equal({ value: 7 });
       sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getBlockCount');
     });
 
-    it('should trigger rpc, response passed', async () => {
-      daemonServiceUtilsStub.returns('success');
+    it('answers why there is no value when the daemon refuses', async () => {
+      daemonServiceUtilsStub.resolves({ status: 'error', data: { code: -28, message: 'Loading block index' } });
 
-      const res = generateResponse();
-      const expectedResponse = 'success';
+      expect(await daemonServiceBlockchainRpcs.getBlockCount()).to.deep.equal({ value: null, reason: { code: -28, message: 'Loading block index' } });
+    });
 
-      const result = await daemonServiceBlockchainRpcs.getBlockCount(undefined, res);
+    it('answers GET /daemon/getblockcount with the daemon\'s message', async () => {
+      daemonServiceUtilsStub.resolves({ status: 'success', data: 7 });
+      const res = { json: sinon.stub() };
 
-      expect(result).to.equal(`Response: ${expectedResponse}`);
-      sinon.assert.calledOnceWithExactly(res.json, expectedResponse);
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getBlockCount');
+      await daemonServiceBlockchainRpcs.getBlockCountAPI({ params: {}, query: {} }, res);
+
+      sinon.assert.calledOnceWithExactly(res.json, { status: 'success', data: 7 });
     });
   });
 
@@ -798,41 +794,42 @@ describe('daemonServiceBlockchainRpcs tests', () => {
       sinon.restore();
     });
 
-    it('should trigger rpc, no response passed', async () => {
-      daemonServiceUtilsStub.returns('success');
+    it('answers the daemon\'s value', async () => {
+      daemonServiceUtilsStub.resolves({ status: 'success', data: 7 });
 
-      const expectedResponse = 'success';
-
-      const result = await daemonServiceBlockchainRpcs.getChainTips();
-
-      expect(result).to.equal(expectedResponse);
+      expect(await daemonServiceBlockchainRpcs.getChainTips()).to.deep.equal({ value: 7 });
       sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getChainTips', []);
     });
 
-    it('should trigger rpc, and pass blockheight parameter', async () => {
-      daemonServiceUtilsStub.returns('success');
+    it('answers why there is no value when the daemon refuses', async () => {
+      daemonServiceUtilsStub.resolves({ status: 'error', data: { code: -28, message: 'Loading block index' } });
 
-      const expectedResponse = 'success';
+      expect(await daemonServiceBlockchainRpcs.getChainTips()).to.deep.equal({ value: null, reason: { code: -28, message: 'Loading block index' } });
+    });
 
-      const req = { params: { minheight: 55_555 } };
+    it('answers GET /daemon/getchaintips with the daemon\'s message', async () => {
+      daemonServiceUtilsStub.resolves({ status: 'success', data: 7 });
+      const res = { json: sinon.stub() };
 
-      const result = await daemonServiceBlockchainRpcs.getChainTips(req);
+      await daemonServiceBlockchainRpcs.getChainTipsAPI({ params: {}, query: {} }, res);
 
-      expect(result).to.equal(expectedResponse);
+      sinon.assert.calledOnceWithExactly(res.json, { status: 'success', data: 7 });
+    });
+
+    it('asks from a height when given one', async () => {
+      daemonServiceUtilsStub.resolves({ status: 'success', data: [] });
+
+      await daemonServiceBlockchainRpcs.getChainTips(55_555);
+
       sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getChainTips', [55_555]);
     });
 
-    it('should trigger rpc, response passed', async () => {
-      daemonServiceUtilsStub.returns('success');
+    it('takes the height its route is asked from', async () => {
+      daemonServiceUtilsStub.resolves({ status: 'success', data: [] });
 
-      const res = generateResponse();
-      const expectedResponse = 'success';
+      await daemonServiceBlockchainRpcs.getChainTipsAPI({ params: {}, query: { minheight: '55555' } }, { json: sinon.stub() });
 
-      const result = await daemonServiceBlockchainRpcs.getChainTips(undefined, res);
-
-      expect(result).to.equal(`Response: ${expectedResponse}`);
-      sinon.assert.calledOnceWithExactly(res.json, expectedResponse);
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getChainTips', []);
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getChainTips', [55_555]);
     });
   });
 

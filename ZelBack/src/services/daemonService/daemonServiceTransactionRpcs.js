@@ -22,14 +22,11 @@ async function createRawTransaction(req, res) {
   addresses = addresses || req.query.addresses;
   let { locktime } = req.params;
   locktime = locktime || req.query.locktime || 0;
-  const blockcount = await daemonServiceBlockchainRpcs.getBlockCount().catch((error) => {
-    response = messageHelper.createErrorMessage(error.message, error.name, error.code);
-  });
-  if (!blockcount) {
-    // getBlockCount rejected the promise - return error message
-    return res.json(response);
+  const blockCount = await daemonServiceBlockchainRpcs.getBlockCount();
+  if (blockCount.reason) {
+    return res.json(messageHelper.messageOf(blockCount));
   }
-  const defaultExpiryHeight = blockcount + 20;
+  const defaultExpiryHeight = blockCount.value + 20;
   let { expiryheight } = req.params;
   expiryheight = expiryheight || req.query.expiryheight || defaultExpiryHeight;
 
@@ -65,14 +62,11 @@ async function createRawTransactionPost(req, res) {
     let { addresses } = processedBody;
     let { locktime } = processedBody;
     locktime = locktime || 0;
-    const blockcount = await daemonServiceBlockchainRpcs.getBlockCount().catch((error) => {
-      response = messageHelper.createErrorMessage(error.message, error.name, error.code);
-    });
-    if (!blockcount) {
-      // getBlockCount rejected the promise - return error message
-      return res.json(response);
+    const blockCount = await daemonServiceBlockchainRpcs.getBlockCount();
+    if (blockCount.reason) {
+      return res.json(messageHelper.messageOf(blockCount));
     }
-    const defaultExpiryHeight = blockcount + 20;
+    const defaultExpiryHeight = blockCount.value + 20;
     let { expiryheight } = processedBody;
     expiryheight = expiryheight || defaultExpiryHeight;
 
