@@ -129,6 +129,16 @@ function errUnauthorizedMessage() {
 }
 
 /**
+ * A service's answer from a message: the message's data as the value, or as
+ * the reason there is none.
+ * @param {{status: string, data: *}} message
+ * @returns {{value: *, reason?: {message: string, name?: string, code?: *}}}
+ */
+function answerOf(message) {
+  return message.status === 'success' ? { value: message.data } : { value: null, reason: message.data };
+}
+
+/**
  * The message a route answers with for a service's answer: its value as data,
  * or its reason as an error.
  * @param {{value: *, reason?: {message: string, name?: string, code?: *}}} answer
@@ -141,6 +151,7 @@ function messageOf(answer) {
 }
 
 module.exports = {
+  answerOf,
   createDataMessage,
   createErrorMessage,
   createSuccessMessage,
