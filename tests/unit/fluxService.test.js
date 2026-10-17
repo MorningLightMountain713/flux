@@ -2081,7 +2081,7 @@ describe('fluxService tests', () => {
       // field is the only thing that says otherwise, and HOLD is the stage where
       // the operator can still put the node right and lose nothing.
       sinon.stub(residentialNodeDosService, 'getDosStaging').returns('HOLD');
-      daemonServiceControlRpcsStub.returns({ status: 'success', data: 'info data' });
+      daemonServiceControlRpcsStub.returns({ value: 'info data' });
       daemonServiceFluxnodeRpcsStub.returns({ status: 'success', data: 'status data' });
       benchmarkServiceGetInfoStub.returns({ value: 'info2 data' });
       benchmarkServiceGetStatusStub.returns({ value: 'status2 data' });
@@ -2104,7 +2104,7 @@ describe('fluxService tests', () => {
     });
 
     it('should return flux info no response passed', async () => {
-      daemonServiceControlRpcsStub.returns({ status: 'success', data: 'info data' });
+      daemonServiceControlRpcsStub.returns({ value: 'info data' });
       daemonServiceFluxnodeRpcsStub.returns({ status: 'success', data: 'status data' });
       benchmarkServiceGetInfoStub.returns({ value: 'info2 data' });
       benchmarkServiceGetStatusStub.returns({ value: 'status2 data' });
@@ -2153,7 +2153,7 @@ describe('fluxService tests', () => {
     });
 
     it('should return flux info response passed', async () => {
-      daemonServiceControlRpcsStub.returns({ status: 'success', data: 'info data' });
+      daemonServiceControlRpcsStub.returns({ value: 'info data' });
       daemonServiceFluxnodeRpcsStub.returns({ status: 'success', data: 'status data' });
       benchmarkServiceGetInfoStub.returns({ value: 'info2 data' });
       benchmarkServiceGetStatusStub.returns({ value: 'status2 data' });
@@ -2208,7 +2208,7 @@ describe('fluxService tests', () => {
     // app from a container name or from image filenames on disk: they can go
     // only once every installed instance holds its resources.
     it('reports how many installed instances there are and how many hold resources', async () => {
-      daemonServiceControlRpcsStub.returns({ status: 'success', data: 'info data' });
+      daemonServiceControlRpcsStub.returns({ value: 'info data' });
       daemonServiceFluxnodeRpcsStub.returns({ status: 'success', data: 'status data' });
       benchmarkServiceGetInfoStub.returns({ value: 'info2 data' });
       benchmarkServiceGetStatusStub.returns({ value: 'status2 data' });
@@ -2230,7 +2230,7 @@ describe('fluxService tests', () => {
     });
 
     it('publishes the three resource totals and no more', async () => {
-      daemonServiceControlRpcsStub.returns({ status: 'success', data: 'info data' });
+      daemonServiceControlRpcsStub.returns({ value: 'info data' });
       daemonServiceFluxnodeRpcsStub.returns({ status: 'success', data: 'status data' });
       benchmarkServiceGetInfoStub.returns({ value: 'info2 data' });
       benchmarkServiceGetStatusStub.returns({ value: 'status2 data' });
@@ -2254,7 +2254,7 @@ describe('fluxService tests', () => {
     // on a runningapps entry that also carried the image. This one reads the key
     // set, which is the property the projection exists to hold.
     it('publishes three container fields and no others', async () => {
-      daemonServiceControlRpcsStub.returns({ status: 'success', data: 'info data' });
+      daemonServiceControlRpcsStub.returns({ value: 'info data' });
       daemonServiceFluxnodeRpcsStub.returns({ status: 'success', data: 'status data' });
       benchmarkServiceGetInfoStub.returns({ value: 'info2 data' });
       benchmarkServiceGetStatusStub.returns({ value: 'status2 data' });
@@ -2276,7 +2276,7 @@ describe('fluxService tests', () => {
     });
 
     it('should return error if control rpcs returns error', async () => {
-      daemonServiceControlRpcsStub.returns({ status: 'error', data: 'info data' });
+      daemonServiceControlRpcsStub.returns({ value: null, reason: 'info data' });
       daemonServiceFluxnodeRpcsStub.returns({ status: 'success', data: 'status data' });
       benchmarkServiceGetInfoStub.returns({ value: 'info2 data' });
       benchmarkServiceGetStatusStub.returns({ value: 'status2 data' });
@@ -2301,7 +2301,7 @@ describe('fluxService tests', () => {
     });
 
     it('should return error if status returns error', async () => {
-      daemonServiceControlRpcsStub.returns({ status: 'success', data: 'info data' });
+      daemonServiceControlRpcsStub.returns({ value: 'info data' });
       daemonServiceFluxnodeRpcsStub.returns({ status: 'error', data: 'status data' });
       benchmarkServiceGetInfoStub.returns({ value: 'info2 data' });
       benchmarkServiceGetStatusStub.returns({ value: 'status2 data' });
@@ -2326,7 +2326,7 @@ describe('fluxService tests', () => {
     });
 
     it('should return error if benchmarkServiceGetInfo returns error', async () => {
-      daemonServiceControlRpcsStub.returns({ status: 'success', data: 'info data' });
+      daemonServiceControlRpcsStub.returns({ value: 'info data' });
       daemonServiceFluxnodeRpcsStub.returns({ status: 'success', data: 'status data' });
       benchmarkServiceGetInfoStub.returns({ value: null, reason: 'info2 data' });
       benchmarkServiceGetStatusStub.returns({ value: 'status2 data' });
@@ -2351,7 +2351,7 @@ describe('fluxService tests', () => {
     });
 
     it('should return error if benchmarkServiceGetStatus returns error', async () => {
-      daemonServiceControlRpcsStub.returns({ status: 'success', data: 'info data' });
+      daemonServiceControlRpcsStub.returns({ value: 'info data' });
       daemonServiceFluxnodeRpcsStub.returns({ status: 'success', data: 'status data' });
       benchmarkServiceGetInfoStub.returns({ value: 'info2 data' });
       benchmarkServiceGetStatusStub.returns({ value: null, reason: 'status2 data' });
@@ -2376,7 +2376,7 @@ describe('fluxService tests', () => {
     });
 
     it('should return error if benchmarkServiceGetBenchmarks returns error', async () => {
-      daemonServiceControlRpcsStub.returns({ status: 'success', data: 'info data' });
+      daemonServiceControlRpcsStub.returns({ value: 'info data' });
       daemonServiceFluxnodeRpcsStub.returns({ status: 'success', data: 'status data' });
       benchmarkServiceGetInfoStub.returns({ value: 'info2 data' });
       benchmarkServiceGetStatusStub.returns({ value: 'status2 data' });
@@ -2401,7 +2401,7 @@ describe('fluxService tests', () => {
     });
 
     it('should return error if appsServiceFluxUsage returns error', async () => {
-      daemonServiceControlRpcsStub.returns({ status: 'success', data: 'info data' });
+      daemonServiceControlRpcsStub.returns({ value: 'info data' });
       daemonServiceFluxnodeRpcsStub.returns({ status: 'success', data: 'status data' });
       benchmarkServiceGetInfoStub.returns({ value: 'info2 data' });
       benchmarkServiceGetStatusStub.returns({ value: 'status2 data' });
@@ -2426,7 +2426,7 @@ describe('fluxService tests', () => {
     });
 
     it('should return error if appsServiceListRunningApps returns error', async () => {
-      daemonServiceControlRpcsStub.returns({ status: 'success', data: 'info data' });
+      daemonServiceControlRpcsStub.returns({ value: 'info data' });
       daemonServiceFluxnodeRpcsStub.returns({ status: 'success', data: 'status data' });
       benchmarkServiceGetInfoStub.returns({ value: 'info2 data' });
       benchmarkServiceGetStatusStub.returns({ value: 'status2 data' });
@@ -2451,7 +2451,7 @@ describe('fluxService tests', () => {
     });
 
     it('should return error if appsServiceAppsResources rejects', async () => {
-      daemonServiceControlRpcsStub.returns({ status: 'success', data: 'info data' });
+      daemonServiceControlRpcsStub.returns({ value: 'info data' });
       daemonServiceFluxnodeRpcsStub.returns({ status: 'success', data: 'status data' });
       benchmarkServiceGetInfoStub.returns({ value: 'info2 data' });
       benchmarkServiceGetStatusStub.returns({ value: 'status2 data' });
@@ -2476,7 +2476,7 @@ describe('fluxService tests', () => {
     });
 
     it('should return error if appsServiceGetAppHashesStub returns error', async () => {
-      daemonServiceControlRpcsStub.returns({ status: 'success', data: 'info data' });
+      daemonServiceControlRpcsStub.returns({ value: 'info data' });
       daemonServiceFluxnodeRpcsStub.returns({ status: 'success', data: 'status data' });
       benchmarkServiceGetInfoStub.returns({ value: 'info2 data' });
       benchmarkServiceGetStatusStub.returns({ value: 'status2 data' });
@@ -2501,7 +2501,7 @@ describe('fluxService tests', () => {
     });
 
     it('should return error if explorerService returns error', async () => {
-      daemonServiceControlRpcsStub.returns({ status: 'success', data: 'info data' });
+      daemonServiceControlRpcsStub.returns({ value: 'info data' });
       daemonServiceFluxnodeRpcsStub.returns({ status: 'success', data: 'status data' });
       benchmarkServiceGetInfoStub.returns({ value: 'info2 data' });
       benchmarkServiceGetStatusStub.returns({ value: 'status2 data' });
@@ -2526,7 +2526,7 @@ describe('fluxService tests', () => {
     });
 
     it('should return error if fluxCommunication returns error', async () => {
-      daemonServiceControlRpcsStub.returns({ status: 'success', data: 'info data' });
+      daemonServiceControlRpcsStub.returns({ value: 'info data' });
       daemonServiceFluxnodeRpcsStub.returns({ status: 'success', data: 'status data' });
       benchmarkServiceGetInfoStub.returns({ value: 'info2 data' });
       benchmarkServiceGetStatusStub.returns({ value: 'status2 data' });
@@ -2551,7 +2551,7 @@ describe('fluxService tests', () => {
     });
 
     it('should return error if fluxNetworkHelperStub returns error', async () => {
-      daemonServiceControlRpcsStub.returns({ status: 'success', data: 'info data' });
+      daemonServiceControlRpcsStub.returns({ value: 'info data' });
       daemonServiceFluxnodeRpcsStub.returns({ status: 'success', data: 'status data' });
       benchmarkServiceGetInfoStub.returns({ value: 'info2 data' });
       benchmarkServiceGetStatusStub.returns({ value: 'status2 data' });

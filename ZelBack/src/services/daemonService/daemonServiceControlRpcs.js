@@ -26,25 +26,25 @@ async function help(req, res) {
 }
 
 /**
- * To get info on daemon version and RPC port. Only accessible by admins.
+ * The daemon's version, RPC port and state. The wallet balance is left out
+ * unless asked for.
+ * @param {{withBalance?: boolean}} [options]
+ * @returns {Promise<{value: object|null, reason?: object}>}
+ */
+async function getInfo({ withBalance = false } = {}) {
+  const info = messageHelper.answerOf(await daemonServiceUtils.executeCall('getInfo'));
+  if (info.value && !withBalance) delete info.value.balance;
+  return info;
+}
+
+/**
+ * GET /daemon/getinfo. The balance is a node operator's to see.
  * @param {import('express').Request} req
  * @param {import('express').Response} res
- * @returns {object} Message.
  */
-async function getInfo(req, res) {
-  const rpccall = 'getInfo';
-
-  response = await daemonServiceUtils.executeCall(rpccall);
-  if (!res) {
-    delete response.data.balance;
-    return response;
-  }
-  const authorized = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR, authOf(req));
-  if (authorized !== true) {
-    delete response.data.balance;
-  }
-
-  return res.json(response);
+async function getInfoAPI(req, res) {
+  const withBalance = await verificationHelper.verifyPrivilege(Privilege.NODE_OPERATOR, authOf(req)) === true;
+  res.json(messageHelper.messageOf(await getInfo({ withBalance })));
 }
 
 /**
@@ -69,5 +69,6 @@ async function stop(req, res) { // practically useless
 module.exports = {
   help,
   getInfo,
+  getInfoAPI,
   stop,
 };

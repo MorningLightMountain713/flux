@@ -160,9 +160,9 @@ async function getDaemonVersion() {
   }
 
   try {
-    const daemonInfo = await daemonServiceControlRpcs.getInfo();
-    if (daemonInfo.status === 'success' && daemonInfo.data && daemonInfo.data.version) {
-      cachedDaemonVersion = daemonInfo.data.version;
+    const { value: daemonInfo } = await daemonServiceControlRpcs.getInfo();
+    if (daemonInfo?.version) {
+      cachedDaemonVersion = daemonInfo.version;
       return cachedDaemonVersion;
     }
   } catch (error) {
