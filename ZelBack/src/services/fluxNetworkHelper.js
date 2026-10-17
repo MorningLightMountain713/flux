@@ -1097,22 +1097,20 @@ async function checkFluxbenchVersionAllowed() {
 }
 
 /**
- * To get node uptime in seconds
+ * How long this FluxOS process has been running.
+ * @returns {number} whole seconds
+ */
+function fluxUptime() {
+  return Math.floor(process.uptime());
+}
+
+/**
+ * GET /flux/uptime
  * @param {import('express').Request} req
  * @param {import('express').Response} res
  */
-function fluxUptime(req, res) {
-  let message;
-  try {
-    const ut = process.uptime();
-    const measureUptime = Math.floor(ut);
-    message = messageHelper.createDataMessage(measureUptime);
-    return res ? res.json(message) : message;
-  } catch (error) {
-    log.error(error);
-    message = messageHelper.createErrorMessage('Error obtaining uptime');
-    return res ? res.json(message) : message;
-  }
+function fluxUptimeAPI(req, res) {
+  res.json(messageHelper.createDataMessage(fluxUptime()));
 }
 
 /**
@@ -1135,33 +1133,41 @@ function fluxSystemUptime(req, res) {
 }
 
 /**
- * To check if sufficient communication is established. Minimum number of outgoing and incoming peers must be met.
+ * Whether this node holds the minimum number of outgoing and incoming peers,
+ * each set from enough distinct addresses.
+ * @returns {{established: true}|{established: false, reason: string}}
+ */
+function isCommunicationEstablished() {
+  const { outboundCount, inboundCount } = peerManager;
+  if (outboundCount < config.get('fluxapps.minOutgoing')) { // easier to establish
+    return { established: false, reason: `Not enough outgoing connections established to Flux network. Minimum required ${config.get('fluxapps.minOutgoing')} found ${outboundCount}` };
+  }
+  if (inboundCount < config.get('fluxapps.minIncoming')) { // depends on other nodes successfully connecting to my node, todo enforcement
+    return { established: false, reason: `Not enough incoming connections from Flux network. Minimum required ${config.get('fluxapps.minIncoming')} found ${inboundCount}` };
+  }
+  const uniqueOutboundIps = new Set();
+  for (const peer of peerManager.outboundValues()) uniqueOutboundIps.add(peer.ip);
+  if (uniqueOutboundIps.size < config.get('fluxapps.minUniqueIpsOutgoing')) {
+    return { established: false, reason: `Not enough outgoing unique ip's connections established to Flux network. Minimum required ${config.get('fluxapps.minUniqueIpsOutgoing')} found ${uniqueOutboundIps.size}` };
+  }
+  const uniqueInboundIps = new Set();
+  for (const peer of peerManager.inboundValues()) uniqueInboundIps.add(peer.ip);
+  if (uniqueInboundIps.size < config.get('fluxapps.minUniqueIpsIncoming')) {
+    return { established: false, reason: `Not enough incoming unique ip's connections from Flux network. Minimum required ${config.get('fluxapps.minUniqueIpsIncoming')} found ${uniqueInboundIps.size}` };
+  }
+  return { established: true };
+}
+
+/**
+ * GET /flux/checkcommunication
  * @param {import('express').Request} req
  * @param {import('express').Response} res
  */
-function isCommunicationEstablished(req, res) {
-  const { outboundCount, inboundCount } = peerManager;
-  let message;
-  if (outboundCount < config.get('fluxapps.minOutgoing')) { // easier to establish
-    message = messageHelper.createErrorMessage(`Not enough outgoing connections established to Flux network. Minimum required ${config.get('fluxapps.minOutgoing')} found ${outboundCount}`);
-  } else if (inboundCount < config.get('fluxapps.minIncoming')) { // depends on other nodes successfully connecting to my node, todo enforcement
-    message = messageHelper.createErrorMessage(`Not enough incoming connections from Flux network. Minimum required ${config.get('fluxapps.minIncoming')} found ${inboundCount}`);
-  } else {
-    const uniqueOutboundIps = new Set();
-    for (const peer of peerManager.outboundValues()) uniqueOutboundIps.add(peer.ip);
-    if (uniqueOutboundIps.size < config.get('fluxapps.minUniqueIpsOutgoing')) {
-      message = messageHelper.createErrorMessage(`Not enough outgoing unique ip's connections established to Flux network. Minimum required ${config.get('fluxapps.minUniqueIpsOutgoing')} found ${uniqueOutboundIps.size}`);
-    } else {
-      const uniqueInboundIps = new Set();
-      for (const peer of peerManager.inboundValues()) uniqueInboundIps.add(peer.ip);
-      if (uniqueInboundIps.size < config.get('fluxapps.minUniqueIpsIncoming')) {
-        message = messageHelper.createErrorMessage(`Not enough incoming unique ip's connections from Flux network. Minimum required ${config.get('fluxapps.minUniqueIpsIncoming')} found ${uniqueInboundIps.size}`);
-      } else {
-        message = messageHelper.createSuccessMessage('Communication to Flux network is properly established');
-      }
-    }
-  }
-  return res ? res.json(message) : message;
+function isCommunicationEstablishedAPI(req, res) {
+  const communication = isCommunicationEstablished();
+  res.json(communication.established
+    ? messageHelper.createSuccessMessage('Communication to Flux network is properly established')
+    : messageHelper.createErrorMessage(communication.reason));
 }
 
 /**
@@ -1967,8 +1973,10 @@ module.exports = {
   getPlacementHold,
   isPlacementHeld,
   fluxUptime,
+  fluxUptimeAPI,
   fluxSystemUptime,
   isCommunicationEstablished,
+  isCommunicationEstablishedAPI,
   lruRateLimit,
   isPortOpen,
   portAnswered,

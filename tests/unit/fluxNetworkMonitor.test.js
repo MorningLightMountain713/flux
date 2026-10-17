@@ -2,6 +2,7 @@
 
 const { expect } = require('chai');
 const sinon = require('sinon');
+const config = require('config');
 const { stubHostedInstances, installedRecord } = require('./fixtures/appRecords');
 const proxyquire = require('proxyquire');
 const chai = require('chai');
@@ -144,6 +145,23 @@ describe('fluxNetworkMonitor tests', () => {
       expect(result).to.be.true;
     });
 
+    it('a node reachable from outside but short of peers past the DOS threshold is held, with the shortfall as the reason', async () => {
+      getRandomExternalObserver.resolves('1.2.3.4:16127');
+      sinon.stub(serviceHelper, 'axiosGet').resolves({ data: { status: 'success', data: { message: 'all is good!' } } });
+      sinon.stub(fluxNetworkHelper, 'fluxUptime').returns(config.get('fluxapps.minUpTime') + 1);
+      sinon.stub(fluxCommunicationUtils, 'getFluxnodeFromFluxList').resolves({ ip: '129.3.3.3' });
+      sinon.stub(fluxCommunicationUtils, 'getNodeCount').resolves(config.get('fluxapps.minIncoming') + config.get('fluxapps.minOutgoing') + 1);
+      sinon.stub(fluxNetworkHelper, 'isCommunicationEstablished').returns({ established: false, reason: 'too few outgoing peers' });
+      nodeDosState.setDosStateValue(11);
+
+      const result = await fluxNetworkMonitor.checkMyFluxAvailability();
+
+      expect(result).to.be.false;
+      expect(nodeDosState.getRawDosMessage()).to.equal('too few outgoing peers');
+      nodeDosState.setDosStateValue(0);
+      nodeDosState.setDosMessage(null);
+    });
+
     it('should return false if getPublicIp status is not a success', async () => {
       const getPublicIptResponse = {
         status: 'error',
@@ -245,7 +263,7 @@ describe('fluxNetworkMonitor tests', () => {
         stubHostedInstances().apps.resolves([installedRecord({ name: 'appx', placement: { staticIp: false } })]);
         sinon.stub(registryManager, 'appLocation').resolves([]);
         sinon.stub(fluxNetworkHelper, 'getCachedLocalSocketAddress').returns('127.0.0.1:16127');
-        sinon.stub(fluxNetworkHelper, 'fluxUptime').returns({ status: 'error' });
+        sinon.stub(fluxNetworkHelper, 'fluxUptime').returns(0);
         ({ waitForPeers } = peerManager);
         waitForPeers.resolves(true);
         broadcast = sinon.stub(fluxCommunicationMessagesSender, 'broadcastMessageToAll').resolves({});

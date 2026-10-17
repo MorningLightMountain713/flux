@@ -1682,86 +1682,82 @@ describe('fluxNetworkHelper tests', () => {
       }
     };
 
-    const expectedSuccesssResponse = {
-      status: 'success',
-      data: {
-        code: undefined,
-        name: undefined,
-        message: 'Communication to Flux network is properly established',
-      },
-    };
-    const expectedErrorResponseOutgoing = {
-      status: 'error',
-      data: {
-        code: undefined,
-        name: undefined,
-        message: 'Not enough outgoing connections established to Flux network. Minimum required 8 found 7',
-      },
-    };
-    const expectedErrorResponseIncoming = {
-      status: 'error',
-      data: {
-        code: undefined,
-        name: undefined,
-        message: 'Not enough incoming connections from Flux network. Minimum required 4 found 3',
-      },
-    };
-
     afterEach(() => {
       peerManager.reset();
       sinon.restore();
     });
 
-    it('should return a positive respone if communication is established properly', () => {
+    it('is established with the minimum of each', () => {
+      populatePeers(minNumberOfIncoming, minNumberOfOutgoing);
+
+      expect(fluxNetworkHelper.isCommunicationEstablished()).to.deep.equal({ established: true });
+    });
+
+    it('is not established with too few incoming peers, and says so', () => {
+      populatePeers(minNumberOfIncoming - 1, minNumberOfOutgoing);
+
+      expect(fluxNetworkHelper.isCommunicationEstablished()).to.deep.equal({
+        established: false, reason: 'Not enough incoming connections from Flux network. Minimum required 4 found 3',
+      });
+    });
+
+    it('is not established with too few outgoing peers, and says so', () => {
+      populatePeers(minNumberOfIncoming, minNumberOfOutgoing - 1);
+
+      expect(fluxNetworkHelper.isCommunicationEstablished()).to.deep.equal({
+        established: false, reason: 'Not enough outgoing connections established to Flux network. Minimum required 8 found 7',
+      });
+    });
+
+    it('names the outgoing shortfall first when both are short', () => {
+      populatePeers(minNumberOfIncoming - 1, minNumberOfOutgoing - 1);
+
+      expect(fluxNetworkHelper.isCommunicationEstablished().reason).to.equal('Not enough outgoing connections established to Flux network. Minimum required 8 found 7');
+    });
+
+    it('answers the route with a success message when established', () => {
       const res = generateResponse();
       populatePeers(minNumberOfIncoming, minNumberOfOutgoing);
 
-      fluxNetworkHelper.isCommunicationEstablished(undefined, res);
+      fluxNetworkHelper.isCommunicationEstablishedAPI({}, res);
 
-      sinon.assert.calledOnceWithExactly(res.json, expectedSuccesssResponse);
+      sinon.assert.calledOnceWithExactly(res.json, {
+        status: 'success', data: { code: undefined, name: undefined, message: 'Communication to Flux network is properly established' },
+      });
     });
 
-    it('should return a negative respone if there are not enough incoming peers', () => {
+    it('answers the route with the shortfall as an error message', () => {
       const res = generateResponse();
       populatePeers(minNumberOfIncoming - 1, minNumberOfOutgoing);
 
-      fluxNetworkHelper.isCommunicationEstablished(undefined, res);
+      fluxNetworkHelper.isCommunicationEstablishedAPI({}, res);
 
-      sinon.assert.calledOnceWithExactly(res.json, expectedErrorResponseIncoming);
-    });
-
-    it('should return a negative respone if there are not enough outgoing peers', () => {
-      const res = generateResponse();
-      populatePeers(minNumberOfIncoming, minNumberOfOutgoing - 1);
-
-      fluxNetworkHelper.isCommunicationEstablished(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.json, expectedErrorResponseOutgoing);
-    });
-
-    it('should return a negative respone if there are not enough incoming or outgoing peers', () => {
-      const res = generateResponse();
-      populatePeers(minNumberOfIncoming - 1, minNumberOfOutgoing - 1);
-
-      fluxNetworkHelper.isCommunicationEstablished(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.json, expectedErrorResponseOutgoing);
+      sinon.assert.calledOnceWithExactly(res.json, {
+        status: 'error', data: { code: undefined, name: undefined, message: 'Not enough incoming connections from Flux network. Minimum required 4 found 3' },
+      });
     });
   });
 
   describe('fluxUptime tests', () => {
     const ut = process.uptime();
 
-    it('should return a positive a bigger uptime than expected', () => {
-      const fluxUptime = fluxNetworkHelper.fluxUptime();
+    it('is the whole seconds this process has run', () => {
+      const uptime = fluxNetworkHelper.fluxUptime();
 
-      expect(fluxUptime.status).to.equal('success');
-      // fluxUptime floors process.uptime(); uptime only increases, so the floored value
-      // at the call is >= the floor of the uptime captured earlier and <= the raw uptime
-      // now. (Comparing to the un-floored earlier value flakes when uptime < 1s: floor->0.)
-      expect(fluxUptime.data).to.be.gte(Math.floor(ut));
-      const utb = process.uptime();
-      expect(fluxUptime.data).to.be.lte(utb);
+      // Floored, and uptime only increases: at least the floor of the earlier
+      // reading, at most the raw reading now.
+      expect(uptime).to.be.gte(Math.floor(ut));
+      expect(uptime).to.be.lte(process.uptime());
+    });
+
+    it('answers the route with it as data', () => {
+      const res = { json: sinon.stub() };
+
+      fluxNetworkHelper.fluxUptimeAPI({}, res);
+
+      const [message] = res.json.firstCall.args;
+      expect(message.status).to.equal('success');
+      expect(message.data).to.be.a('number').and.gte(Math.floor(ut));
     });
   });
 
