@@ -34,6 +34,7 @@ const operationRegistry = require('./utils/operationRegistry');
 const { compareInstanceSeniority } = require('./utils/instanceOrdering');
 const { socketAddressesMatch } = require('./utils/socketAddressUtils');
 const fluxEventBus = require('./utils/fluxEventBus');
+const appRecords = require('./appDatabase/appRecords');
 
 const DOS_MESSAGE_PREFIX = 'Residential node not running ArcaneOS';
 const HOLD_REASON = 'residential node not running ArcaneOS';
@@ -392,14 +393,11 @@ async function clearSettleMarker() {
  * makes nodeStatusMonitor delete every app it holds - the exact outcome this
  * service exists to avoid - so "could not read" must never arrive here as an
  * empty list.
- * @param {Function} installedAppsFn Injected app lister.
  * @returns {Promise<string[]|null>}
  */
-async function listInstalledApps(installedAppsFn) {
+async function listInstalledApps() {
   try {
-    const response = await installedAppsFn();
-    if (!response || response.status !== 'success' || !Array.isArray(response.data)) return null;
-    return response.data.map((app) => app.name);
+    return await appRecords.hostedInstances().names();
   } catch (error) {
     log.warn(`residentialNodeDos - could not list installed apps: ${error.message}`);
     return null;
@@ -633,14 +631,10 @@ function publishDecision(verdict) {
 /**
  * One evaluation of the policy.
  *
- * @param {object} deps Injected collaborators.
- * @param {Function} deps.installedAppsFn Lists apps installed on this node.
  * @returns {Promise<boolean>} True when the tick reached a decision, false when
  *   an input was unavailable and the caller should retry sooner.
  */
-async function runResidentialPolicy(deps) {
-  const { installedAppsFn } = deps;
-
+async function runResidentialPolicy() {
   const [arcane, residential] = await Promise.all([isArcaneOs(), isResidential()]);
 
   // A tick that cannot decide stops the DRAIN but leaves the placement hold.
@@ -694,7 +688,7 @@ async function runResidentialPolicy(deps) {
     return false;
   }
 
-  const installed = await listInstalledApps(installedAppsFn);
+  const installed = await listInstalledApps();
   if (installed === null) {
     evacuating = false;
     log.info('residentialNodeDos - installed app list unavailable, holding placement only this tick');
@@ -779,37 +773,34 @@ function nextDelay(decided, streak) {
  * opposite claims, and nothing outside this module could previously tell them
  * apart without reading the event stream.
  *
- * @param {object} deps Injected collaborators.
  * @returns {Promise<{decided: boolean, decision: object|null}>}
  */
-async function enforceResidentialPolicy(deps) {
+async function enforceResidentialPolicy() {
   lastDecision = null;
-  const decided = await runResidentialPolicy(deps);
+  const decided = await runResidentialPolicy();
   return { decided, decision: lastDecision };
 }
 
 /**
  * Run one tick and schedule the next one.
- * @param {object} deps Injected collaborators, as enforceResidentialPolicy.
  */
-async function tick(deps) {
+async function tick() {
   let decided = false;
   try {
-    ({ decided } = await enforceResidentialPolicy(deps));
+    ({ decided } = await enforceResidentialPolicy());
   } catch (error) {
     log.error(`residentialNodeDos - tick error: ${error.message}`);
   }
   inconclusiveStreak = decided ? 0 : inconclusiveStreak + 1;
   if (stopping) return;
-  timerHandle = setTimeout(() => tick(deps), nextDelay(decided, inconclusiveStreak));
+  timerHandle = setTimeout(tick, nextDelay(decided, inconclusiveStreak));
 }
 
 /**
  * Start the enforcer. Performs the first check immediately, then reschedules
  * itself. Safe to call multiple times.
- * @param {object} deps Injected collaborators, as enforceResidentialPolicy.
  */
-async function start(deps) {
+async function start() {
   // The guard is `started`, not `timerHandle`: the first tick is awaited before
   // any timer exists, so a second start() landing inside it would run a second
   // self-rescheduling chain.
@@ -818,7 +809,7 @@ async function start(deps) {
   stopping = false;
   inconclusiveStreak = 0;
   log.info('residentialNodeDos - enforcer starting');
-  await tick(deps);
+  await tick();
 }
 
 function stop() {

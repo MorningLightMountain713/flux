@@ -24,7 +24,7 @@ describe('residentialNodeDosService tests', () => {
   let dbHelperStub;
   let markerStore;
   let globalStateStub;
-  let deps;
+  let hostedNames;
   let installedApps;
 
   const LOCAL = '1.2.3.4:16127';
@@ -56,6 +56,7 @@ describe('residentialNodeDosService tests', () => {
       './geolocationService': geolocationServiceStub,
       './benchmarkService': benchmarkServiceStub,
       './utils/globalState': globalStateStub,
+      './appDatabase/appRecords': { hostedInstances: () => ({ names: hostedNames }) },
       './utils/capabilities': capabilitiesStub,
     });
   }
@@ -109,9 +110,7 @@ describe('residentialNodeDosService tests', () => {
     };
 
     installedApps = [];
-    deps = {
-      installedAppsFn: sinon.stub().callsFake(async () => ({ status: 'success', data: installedApps })),
-    };
+    hostedNames = sinon.stub().callsFake(async () => installedApps.map((app) => app.name));
 
     capabilitiesStub = capabilityStub({ spawnerReady: true });
     service = loadService();
@@ -181,7 +180,7 @@ describe('residentialNodeDosService tests', () => {
     it('goes on immediately, with no settling period', async () => {
       installedApps = [{ name: 'someapp' }];
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(fluxNetworkHelperStub.isPlacementHeld()).to.equal(true);
       expect(fluxNetworkHelperStub.getPlacementHold()).to.equal(service.HOLD_REASON);
@@ -190,27 +189,27 @@ describe('residentialNodeDosService tests', () => {
     it('never sets a DOS on a node that still holds apps', async () => {
       installedApps = [{ name: 'someapp' }];
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       sinon.assert.notCalled(fluxNetworkHelperStub.setStickyDos);
     });
 
     it('lifts when the node is no longer residential', async () => {
       installedApps = [{ name: 'someapp' }];
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
       geolocationServiceStub.getNetworkClassification.returns({ classification: CLASSIFICATION.DATACENTER });
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(fluxNetworkHelperStub.isPlacementHeld()).to.equal(false);
     });
 
     it('lifts when the node migrates to ArcaneOS', async () => {
       installedApps = [{ name: 'someapp' }];
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
       benchmarkServiceStub.getBenchmarks.resolves({ status: 'success', data: { systemsecure: true } });
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(fluxNetworkHelperStub.isPlacementHeld()).to.equal(false);
     });
@@ -220,7 +219,7 @@ describe('residentialNodeDosService tests', () => {
     it('does not hold or DOS when bench cannot be read', async () => {
       benchmarkServiceStub.getBenchmarks.resolves({ status: 'error', data: 'down' });
 
-      const { decided } = await service.enforceResidentialPolicy(deps);
+      const { decided } = await service.enforceResidentialPolicy();
 
       expect(decided).to.equal(false);
       expect(fluxNetworkHelperStub.isPlacementHeld()).to.equal(false);
@@ -230,7 +229,7 @@ describe('residentialNodeDosService tests', () => {
     it('does not hold or DOS when there is no settled classification', async () => {
       geolocationServiceStub.getNetworkClassification.returns(null);
 
-      const { decided } = await service.enforceResidentialPolicy(deps);
+      const { decided } = await service.enforceResidentialPolicy();
 
       expect(decided).to.equal(false);
       expect(fluxNetworkHelperStub.isPlacementHeld()).to.equal(false);
@@ -241,14 +240,14 @@ describe('residentialNodeDosService tests', () => {
     it('says enforce=false when the node is fit to serve', async () => {
       geolocationServiceStub.getNetworkClassification.returns({ classification: 'DATACENTER' });
 
-      const { decision } = await service.enforceResidentialPolicy(deps);
+      const { decision } = await service.enforceResidentialPolicy();
 
       expect(decision).to.not.equal(null);
       expect(decision).to.include({ enforce: false, residential: false, undecidedBecause: null });
     });
 
     it('says enforce=true when it is not', async () => {
-      const { decision } = await service.enforceResidentialPolicy(deps);
+      const { decision } = await service.enforceResidentialPolicy();
 
       expect(decision).to.include({ enforce: true, residential: true, undecidedBecause: null });
     });
@@ -259,7 +258,7 @@ describe('residentialNodeDosService tests', () => {
       // same way treats an unreadable benchmark as an all-clear.
       benchmarkServiceStub.getBenchmarks.resolves({ status: 'error', data: 'down' });
 
-      const { decision } = await service.enforceResidentialPolicy(deps);
+      const { decision } = await service.enforceResidentialPolicy();
 
       expect(decision).to.include({ enforce: null, undecidedBecause: 'benchmark' });
     });
@@ -273,7 +272,7 @@ describe('residentialNodeDosService tests', () => {
         classification: 'CONFLICTED', source: 'node-veto',
       });
 
-      const { decision } = await service.enforceResidentialPolicy(deps);
+      const { decision } = await service.enforceResidentialPolicy();
 
       expect(decision).to.include({
         enforce: null, classification: 'CONFLICTED', source: 'node-veto',
@@ -283,7 +282,7 @@ describe('residentialNodeDosService tests', () => {
     it('names the classification when that is the missing input', async () => {
       geolocationServiceStub.getNetworkClassification.returns(null);
 
-      const { decision } = await service.enforceResidentialPolicy(deps);
+      const { decision } = await service.enforceResidentialPolicy();
 
       expect(decision).to.include({ enforce: null, undecidedBecause: 'classification' });
     });
@@ -293,7 +292,7 @@ describe('residentialNodeDosService tests', () => {
     it('goes on at once when the node holds no apps', async () => {
       installedApps = [];
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       sinon.assert.calledWith(fluxNetworkHelperStub.setStickyDos, OWNER, sinon.match.string);
       expect(service.isDosActive()).to.equal(true);
@@ -302,7 +301,7 @@ describe('residentialNodeDosService tests', () => {
     it('needs no settling period to do so', async () => {
       installedApps = [];
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       // An empty node never enters the window at all.
       expect(markerStore.size).to.equal(0);
@@ -311,9 +310,9 @@ describe('residentialNodeDosService tests', () => {
     it('is NOT set when the installed-app list cannot be read', async () => {
       // Reading "could not ask" as "holds nothing" would set DOS >= 100 on a
       // node that has apps, and nodeStatusMonitor would then delete every one.
-      deps.installedAppsFn.resolves({ status: 'error', data: 'db down' });
+      hostedNames.rejects(new Error('db down'));
 
-      const { decided } = await service.enforceResidentialPolicy(deps);
+      const { decided } = await service.enforceResidentialPolicy();
 
       expect(decided).to.equal(false);
       sinon.assert.notCalled(fluxNetworkHelperStub.setStickyDos);
@@ -324,7 +323,7 @@ describe('residentialNodeDosService tests', () => {
       capabilitiesStub.set('spawnerReady', false);
       installedApps = [];
 
-      const { decided } = await service.enforceResidentialPolicy(deps);
+      const { decided } = await service.enforceResidentialPolicy();
 
       expect(decided).to.equal(false);
       sinon.assert.notCalled(fluxNetworkHelperStub.setStickyDos);
@@ -333,10 +332,10 @@ describe('residentialNodeDosService tests', () => {
 
     it('is released once the node is no longer a target', async () => {
       installedApps = [];
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
       geolocationServiceStub.getNetworkClassification.returns({ classification: CLASSIFICATION.DATACENTER });
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       sinon.assert.calledWith(fluxNetworkHelperStub.clearStickyDos, OWNER);
       expect(service.isDosActive()).to.equal(false);
@@ -350,7 +349,7 @@ describe('residentialNodeDosService tests', () => {
       installedApps = [];
       fluxNetworkHelperStub.holds.set(TAMPERING, TAMPERING_REASON);
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(service.isDosActive(), 'the verdict was dropped because another owner held one').to.equal(true);
       expect(fluxNetworkHelperStub.getStickyDosMessage(), 'overwrote a verdict it does not own').to.contain('tampering');
@@ -359,11 +358,11 @@ describe('residentialNodeDosService tests', () => {
 
     it("releases its own verdict and leaves another owner's standing", async () => {
       installedApps = [];
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
       fluxNetworkHelperStub.holds.set(TAMPERING, TAMPERING_REASON);
       geolocationServiceStub.getNetworkClassification.returns({ classification: CLASSIFICATION.DATACENTER });
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(fluxNetworkHelperStub.getStickyDosMessage(), "dropped another owner's DOS on the floor").to.contain('tampering');
       expect(service.isDosActive()).to.equal(false);
@@ -374,7 +373,7 @@ describe('residentialNodeDosService tests', () => {
     it('does not begin evacuating on the first evaluation', async () => {
       installedApps = [{ name: 'someapp' }];
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(service.isEvacuating()).to.equal(false);
     });
@@ -382,7 +381,7 @@ describe('residentialNodeDosService tests', () => {
     it('records when the window started', async () => {
       installedApps = [{ name: 'someapp' }];
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(markerStore.get('residentialDos').residentialSince).to.be.a('number');
     });
@@ -391,7 +390,7 @@ describe('residentialNodeDosService tests', () => {
       installedApps = [{ name: 'someapp' }];
       markerStore.set('residentialDos', windowServed());
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(service.isEvacuating()).to.equal(true);
     });
@@ -407,7 +406,7 @@ describe('residentialNodeDosService tests', () => {
       service.stop();
       service = loadService();
       capabilitiesStub.set('spawnerReady', true);
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(markerStore.get('residentialDos').residentialSince).to.equal(seeded.residentialSince);
       // The observed total survived the restart too, which is the half that
@@ -418,11 +417,11 @@ describe('residentialNodeDosService tests', () => {
 
     it('is cleared only by a verdict flip', async () => {
       installedApps = [{ name: 'someapp' }];
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
       expect(markerStore.has('residentialDos')).to.equal(true);
 
       geolocationServiceStub.getNetworkClassification.returns({ classification: CLASSIFICATION.DATACENTER });
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(markerStore.has('residentialDos')).to.equal(false);
       expect(service.isEvacuating()).to.equal(false);
@@ -431,11 +430,11 @@ describe('residentialNodeDosService tests', () => {
     it('stops evacuating when the marker cannot be read', async () => {
       installedApps = [{ name: 'someapp' }];
       markerStore.set('residentialDos', windowServed());
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
       expect(service.isEvacuating()).to.equal(true);
 
       dbHelperStub.databaseConnection.returns(null);
-      const { decided } = await service.enforceResidentialPolicy(deps);
+      const { decided } = await service.enforceResidentialPolicy();
 
       expect(decided).to.equal(false);
       expect(service.isEvacuating()).to.equal(false);
@@ -463,7 +462,7 @@ describe('residentialNodeDosService tests', () => {
         observedMs: 0,
       });
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(service.isEvacuating()).to.equal(false);
       // And the silence bought nothing, so it cannot drain on the next tick either.
@@ -479,7 +478,7 @@ describe('residentialNodeDosService tests', () => {
         observedMs: service.SETTLE_MS - service.CHECK_INTERVAL_MS,
       });
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(markerStore.get('residentialDos').observedMs).to.be.at.least(service.SETTLE_MS);
       expect(service.isEvacuating()).to.equal(true);
@@ -497,7 +496,7 @@ describe('residentialNodeDosService tests', () => {
         observedMs: 0,
       });
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(markerStore.get('residentialDos').observedMs).to.equal(service.CHECK_INTERVAL_MS);
     });
@@ -512,7 +511,7 @@ describe('residentialNodeDosService tests', () => {
         residentialSince: now - (10 * 24 * HOUR),
       });
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(markerStore.get('residentialDos').observedMs).to.equal(0);
       expect(service.isEvacuating()).to.equal(false);
@@ -525,7 +524,7 @@ describe('residentialNodeDosService tests', () => {
         _id: 'residentialDos', residentialSince: firstSeen, lastConfirmedAt: now - HOUR, observedMs: HOUR,
       });
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(markerStore.get('residentialDos').residentialSince).to.equal(firstSeen);
       expect(service.isEvacuating()).to.equal(false);
@@ -549,7 +548,7 @@ describe('residentialNodeDosService tests', () => {
         ...windowServed(now), lastEvacuationAt: now - HOUR,
       });
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
       const verdict = service.mayEvacuateApp('someapp', [{ ip: LOCAL, runningSince: new Date(1) }], LOCAL, now);
 
       expect(verdict.ok).to.equal(false);
@@ -583,7 +582,7 @@ describe('residentialNodeDosService tests', () => {
         observedMs: 'also-not-a-number',
       });
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(service.isEvacuating()).to.equal(false);
     });
@@ -600,7 +599,7 @@ describe('residentialNodeDosService tests', () => {
         observedMs: Infinity,
       });
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(service.isEvacuating()).to.equal(false);
     });
@@ -609,11 +608,11 @@ describe('residentialNodeDosService tests', () => {
       // evacuating was latched, so a node already draining whose bench became
       // unreadable kept handing an app back per interval with no verdict.
       markerStore.set('residentialDos', windowServed());
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
       expect(service.isEvacuating()).to.equal(true);
 
       benchmarkServiceStub.getBenchmarks.resolves({ status: 'error' });
-      const { decided } = await service.enforceResidentialPolicy(deps);
+      const { decided } = await service.enforceResidentialPolicy();
 
       expect(decided).to.equal(false);
       expect(service.isEvacuating()).to.equal(false);
@@ -621,11 +620,11 @@ describe('residentialNodeDosService tests', () => {
 
     it('stops draining when the classification stops answering', async () => {
       markerStore.set('residentialDos', windowServed());
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
       expect(service.isEvacuating()).to.equal(true);
 
       geolocationServiceStub.getNetworkClassification.returns(null);
-      const { decided } = await service.enforceResidentialPolicy(deps);
+      const { decided } = await service.enforceResidentialPolicy();
 
       expect(decided).to.equal(false);
       expect(service.isEvacuating()).to.equal(false);
@@ -639,7 +638,7 @@ describe('residentialNodeDosService tests', () => {
       installedApps = [];
       operationRegistry.acquire('someapp', 'install', 'test');
 
-      const { decided } = await service.enforceResidentialPolicy(deps);
+      const { decided } = await service.enforceResidentialPolicy();
 
       expect(decided).to.equal(false);
       expect(service.isDosActive()).to.equal(false);
@@ -649,7 +648,7 @@ describe('residentialNodeDosService tests', () => {
       installedApps = [];
       operationRegistry.clear();
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(service.isDosActive()).to.equal(true);
     });
@@ -660,7 +659,7 @@ describe('residentialNodeDosService tests', () => {
       geolocationServiceStub.getNetworkClassification.returns({ classification: CLASSIFICATION.DATACENTER });
       installedApps = [{ name: 'someapp' }];
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(service.getDosStaging()).to.equal(null);
     });
@@ -672,7 +671,7 @@ describe('residentialNodeDosService tests', () => {
       // has simply not been given any work.
       installedApps = [{ name: 'someapp' }];
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(service.getDosStaging()).to.equal('HOLD');
       expect(service.isEvacuating()).to.equal(false);
@@ -682,7 +681,7 @@ describe('residentialNodeDosService tests', () => {
       installedApps = [{ name: 'someapp' }];
       markerStore.set('residentialDos', windowServed());
 
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(service.getDosStaging()).to.equal('EVACUATE');
     });
@@ -695,11 +694,11 @@ describe('residentialNodeDosService tests', () => {
       // nothing about the node changed at all.
       installedApps = [{ name: 'someapp' }];
       markerStore.set('residentialDos', windowServed());
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
       expect(service.getDosStaging()).to.equal('EVACUATE');
 
       benchmarkServiceStub.getBenchmarks.resolves({ status: 'error' });
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(service.isEvacuating(), 'the drain stops, which is correct').to.equal(false);
       expect(service.getDosStaging(), 'but the node has not moved back a stage').to.equal('EVACUATE');
@@ -712,11 +711,11 @@ describe('residentialNodeDosService tests', () => {
       // node simply could not write its own note.
       installedApps = [{ name: 'someapp' }];
       markerStore.set('residentialDos', windowServed());
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
       expect(service.getDosStaging()).to.equal('EVACUATE');
 
       dbHelperStub.findOneAndUpdateInDatabase.rejects(new Error('marker write failed'));
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(service.isEvacuating(), 'the drain stops, which is correct').to.equal(false);
       expect(service.getDosStaging(), 'but the node has not moved back a stage').to.equal('EVACUATE');
@@ -725,11 +724,11 @@ describe('residentialNodeDosService tests', () => {
     it('reports nothing again once the node stops being enforced', async () => {
       installedApps = [{ name: 'someapp' }];
       markerStore.set('residentialDos', windowServed());
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
       expect(service.getDosStaging()).to.equal('EVACUATE');
 
       geolocationServiceStub.getNetworkClassification.returns({ classification: CLASSIFICATION.DATACENTER });
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       expect(service.getDosStaging()).to.equal(null);
     });
@@ -747,12 +746,12 @@ describe('residentialNodeDosService tests', () => {
     beforeEach(async () => {
       installedApps = [{ name: 'someapp' }];
       markerStore.set('residentialDos', windowServed());
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
     });
 
     it('refuses while the node is not evacuating', async () => {
       geolocationServiceStub.getNetworkClassification.returns({ classification: CLASSIFICATION.DATACENTER });
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
 
       const result = service.mayEvacuateApp('someapp', locations, LOCAL);
 
@@ -1027,23 +1026,15 @@ describe('residentialNodeDosService tests', () => {
 
   describe('listInstalledApps', () => {
     it('returns null rather than an empty list when the read fails', async () => {
-      const result = await service.listInstalledApps(async () => ({ status: 'error', data: 'nope' }));
+      hostedNames.rejects(new Error('boom'));
 
-      expect(result).to.equal(null);
+      expect(await service.listInstalledApps()).to.equal(null);
     });
 
-    it('returns null when the lister throws', async () => {
-      const result = await service.listInstalledApps(async () => { throw new Error('boom'); });
+    it('returns the names of the hosted apps', async () => {
+      installedApps = [{ name: 'a' }, { name: 'b' }];
 
-      expect(result).to.equal(null);
-    });
-
-    it('returns the app names on success', async () => {
-      const result = await service.listInstalledApps(async () => ({
-        status: 'success', data: [{ name: 'a' }, { name: 'b' }],
-      }));
-
-      expect(result).to.deep.equal(['a', 'b']);
+      expect(await service.listInstalledApps()).to.deep.equal(['a', 'b']);
     });
   });
 
@@ -1052,7 +1043,7 @@ describe('residentialNodeDosService tests', () => {
     // verdict is the only record of why it was taken out of service.
     it('stop() leaves the verdict it reached standing', async () => {
       installedApps = [];
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
       expect(service.isDosActive()).to.equal(true);
 
       service.stop();
@@ -1064,7 +1055,7 @@ describe('residentialNodeDosService tests', () => {
     it('stop() stops evacuating', async () => {
       installedApps = [{ name: 'someapp' }];
       markerStore.set('residentialDos', windowServed());
-      await service.enforceResidentialPolicy(deps);
+      await service.enforceResidentialPolicy();
       expect(service.isEvacuating()).to.equal(true);
 
       service.stop();
@@ -1074,12 +1065,12 @@ describe('residentialNodeDosService tests', () => {
 
     it('a second start() does not run a second self-rescheduling chain', async () => {
       installedApps = [];
-      await service.start(deps);
-      const callsAfterFirst = deps.installedAppsFn.callCount;
+      await service.start();
+      const callsAfterFirst = hostedNames.callCount;
 
-      await service.start(deps);
+      await service.start();
 
-      expect(deps.installedAppsFn.callCount).to.equal(callsAfterFirst);
+      expect(hostedNames.callCount).to.equal(callsAfterFirst);
     });
   });
 });

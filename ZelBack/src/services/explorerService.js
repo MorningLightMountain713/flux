@@ -37,7 +37,6 @@ const unclaimedPayments = require('./appDecisions/unclaimedPayments');
 const appRecords = require('./appDatabase/appRecords');
 const decider = require('./appDecisions/decider');
 const { pubKeyToAddr } = require('./utils/fluxCryptoUtils');
-const appQueryService = require('./appQuery/appQueryService');
 const { nodeChain } = require('./utils/nodeChain');
 const appOperations = require('./appLifecycle/appOperations');
 
@@ -750,7 +749,6 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
           // decide must not stall the block loop.
           try {
             await appGiveUp.checkAndGiveUpAnApp({
-              installedAppsFn: appQueryService.installedApps,
               isElectedPrimary: appOperations.isElectedPrimary,
             });
           } catch (error) {

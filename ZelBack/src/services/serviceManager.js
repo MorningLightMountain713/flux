@@ -725,15 +725,9 @@ async function startFluxFunctions() {
         // Not awaited, and started ahead of setNodeGeolocation below on purpose: the
         // first tick reads geolocation from the db when there is one, and otherwise
         // decides nothing and retries until the lookup this boot has landed.
-        //
-        // Injected the same way nodeStatusMonitor is, and for the same reason: the
-        // app list is read from a query service deep enough in the lifecycle graph
-        // that requiring it here would put geolocation and the network helper on
-        // that load path. Removing the app is not this service's job - the single
-        // give-up-an-app pass in appOperations does that.
-        residentialNodeDosService.start({
-          installedAppsFn: appQueryService.installedApps,
-        }).catch((err) => {
+        // Removing an app is not this service's job - the single give-up-an-app
+        // pass in appGiveUp does that.
+        residentialNodeDosService.start().catch((err) => {
           log.error(`residentialNodeDos start error: ${err.message}`);
         });
         uplinkService.start();

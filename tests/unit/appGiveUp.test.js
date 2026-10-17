@@ -32,7 +32,6 @@ describe('appGiveUp - handing an app back', () => {
   let safety;
 
   const deps = () => ({
-    installedAppsFn: async () => ({ status: 'success', data: [{ name: 'appone' }, { name: 'apptwo' }] }),
     isElectedPrimary: async () => false,
     runningLocally: async () => false,
   });

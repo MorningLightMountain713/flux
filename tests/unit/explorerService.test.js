@@ -11,7 +11,6 @@ const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const specReconciler = require('../../ZelBack/src/services/appLifecycle/specReconciler');
 const appGiveUp = require('../../ZelBack/src/services/appLifecycle/appGiveUp');
 const appOperations = require('../../ZelBack/src/services/appLifecycle/appOperations');
-const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
 const portManager = require('../../ZelBack/src/services/appNetwork/portManager');
 const daemonServiceBlockchainRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceBlockchainRpcs');
 const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
@@ -412,8 +411,7 @@ describe('explorerService tests', () => {
 
       sinon.assert.calledOnce(giveUpStub);
       const [deps] = giveUpStub.firstCall.args;
-      expect(deps.installedAppsFn).to.equal(appQueryService.installedApps);
-      expect(deps.isElectedPrimary).to.equal(appOperations.isElectedPrimary);
+      expect(deps).to.deep.equal({ isElectedPrimary: appOperations.isElectedPrimary });
     });
 
     it('past the Proof of Node height the removal period counts four blocks for each of the chain\'s first', async () => {
