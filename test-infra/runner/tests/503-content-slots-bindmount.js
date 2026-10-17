@@ -150,7 +150,7 @@ describe('content slots + bind mounting: manifest, injection, perms, atomic deli
     expect(rootGate.rootOpsOk, 'root chown+chmod on the appdata volume').to.equal(true);
   });
 
-  it('records the initial manifest at version 1, backstops it to FluxDrive, and pushes no reconcile', async function () {
+  it('records the initial manifest at version 1, and backstops it to FluxDrive with the slot locators it keeps, marking none', async function () {
     this.timeout(60000);
     const ev = await env.clients[0].waitForEvent(
       'content:manifestStored',
@@ -166,11 +166,14 @@ describe('content slots + bind mounting: manifest, injection, perms, atomic deli
     expect(fd.version, 'FluxDrive backstop manifest version').to.equal(1);
     expect(fd.manifest.appName).to.equal(baseApp);
 
-    // Version 1 supersedes nothing, so reconcileSlots is a deliberate no-op — no
-    // GC reconcile is pushed for the app at register.
+    // The backstop names every slot blob the manifest keeps; version 1 supersedes
+    // nothing, so none of the app's slot blobs is marked.
     const state = await getFluxDriveState();
-    const slotReconciles = state.reconciles.filter((r) => r.appName === baseApp);
-    expect(slotReconciles, 'no reconcile at register (v1 supersedes nothing)').to.have.lengthOf(0);
+    const kept = state.keptLists.filter((k) => k.appName === baseApp);
+    expect(kept.map((k) => k.version), 'one kept list, the v1 manifest\'s').to.deep.equal([1]);
+    const slotBlobs = state.blobs.filter((b) => b.appName === baseApp && b.source === 'slot');
+    expect(kept[0].keptLocators.slice().sort()).to.deep.equal(slotBlobs.map((b) => b.locator).sort());
+    expect(slotBlobs.filter((b) => b.tombstoned), 'no slot blob marked at register').to.deep.equal([]);
   });
 
   it('injects each declared slot file into the container at install time', async function () {

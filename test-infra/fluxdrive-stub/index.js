@@ -2,35 +2,37 @@ const express = require('express');
 
 // FluxDrive blob-API stub for the integration harness. Mirrors the real
 // fluxdrive-api endpoints that ZelBack/services/utils/fluxDriveClient.js drives:
-// opaque-ciphertext storage by locator, the owner-signed manifest put, and the
-// slot reconcile. FluxDrive never decrypts — it stores bytes — so this stub
-// keeps raw buffers in memory and lets tests assert exactly what a node
-// uploaded / reconciled.
+// opaque-ciphertext storage by locator and the owner-signed manifest put, which
+// carries the slot locators the manifest keeps. FluxDrive never decrypts — it
+// stores bytes — so this stub keeps raw buffers in memory and lets tests assert
+// exactly what a node uploaded and which slot blobs a manifest marked.
 //
 // Content is keyed by the app's identity, as the real service keys it: a blob
 // row carries the identity the upload names, manifests are kept per (appName,
-// identity), reconcile floors per (identity, source). The stub verifies no
-// signature, so it has no owner.
+// identity, ownership, version). The stub verifies no signature, so it has no
+// owner, and none of its writes is provisional.
 //
 // The real service reads which registration holds a name from the network's
 // spec feed. The stub learns it two ways: a pending write naming a message the
 // nodes answer "applied" makes the write's identity the name's holder, and the
 // control plane can set it (/manifest/:appName/promote). Once a name has a
-// holder, a manifest for another identity is refused 409 and only the holder's
-// is served.
+// holder, only the holder's manifests are served.
 //
-// A manifest put or a reconcile that names a message hash is held pending, as
-// the real service holds it: the stub asks the nodes it is configured with
-// (FLUX_NODE_URLS) what became of the message, on arrival and on a timer, takes
-// the majority of the answers it gets (a node holding nothing about the hash is
-// not an answer), applies the write on "applied", discards it on "refused" or
-// "unpayable" and keeps it otherwise. The control plane can decide a pending
-// write directly (/pending/:hash/decide) for a suite that models an outcome.
+// A manifest stored as its identity's newest version marks the identity's other
+// slot blobs (`tombstoned`) and clears the mark of any it keeps again, as the
+// real service does when it stores one confirmed.
 //
-// Permissive by default; strict mode (control /mode) adds the monotonic version
-// floors (per identity and source, per manifest row), the locator-claim 409 and
-// confirmed-only manifest serving, so the cold-start / go-live gating paths can
-// be exercised.
+// A manifest put that names a message hash is held pending, as the real service
+// holds it: the stub asks the nodes it is configured with (FLUX_NODE_URLS) what
+// became of the message, on arrival and on a timer, takes the majority of the
+// answers it gets (a node holding nothing about the hash is not an answer),
+// applies the write on "applied", discards it on "refused" or "unpayable" and
+// keeps it otherwise. The control plane can decide a pending write directly
+// (/pending/:hash/decide) for a suite that models an outcome.
+//
+// Permissive by default; strict mode (control /mode) adds the version floor per
+// ownership, the locator-claim 409 and confirmed-only manifest serving, so the
+// cold-start / go-live gating paths can be exercised.
 
 const PORT = parseInt(process.env.FLUXDRIVE_PORT || '16140', 10);
 const CONTROL_PORT = parseInt(process.env.CONTROL_PORT || '16141', 10);
@@ -48,16 +50,15 @@ const manifests = new Map();
 const holders = new Map();
 // manifest write order, the tie-break among equally ranked rows
 let manifestSeq = 0;
-// every reconcile call, in arrival order, for assertions
-const reconciles = [];
+// every kept list a stored manifest carried, in arrival order, for assertions:
+// { appName, identity, ownedFrom, version, keptLocators, applied, pendingMessageHash }
+const keptLists = [];
 // every HEAD presence probe on the blob fetch route, in arrival order — the
 // carry-over submission contract asserts on these (a carried-over hash is
 // presence-checked instead of re-uploaded)
 const heads = [];
-// `${identity}:${source}` -> highest accepted version (strict floor)
-const floors = new Map();
 // every pending write, in arrival order:
-// { kind:'manifest'|'reconcile', messageHash, appName, identity, version, source?, body, receivedAt, askedAt, answers }
+// { kind:'manifest', messageHash, appName, identity, version, body, keptLocators, receivedAt, askedAt, answers }
 const pending = [];
 // every decision taken on a pending write, for assertions
 const decisions = [];
@@ -75,9 +76,8 @@ function reset() {
   manifests.clear();
   holders.clear();
   manifestSeq = 0;
-  reconciles.length = 0;
+  keptLists.length = 0;
   heads.length = 0;
-  floors.clear();
   pending.length = 0;
   decisions.length = 0;
   mode.strict = false;
@@ -144,52 +144,32 @@ function promote(appName, identity) {
   }
 }
 
-// The identity a name's content belongs to, as the real service reads it from
-// the spec feed: the holder once the name has one, else the one identity the
-// name's blobs and manifests carry, else null (an unknown app).
-function identityOf(appName) {
-  if (holders.has(appName)) return holders.get(appName);
-  const seen = new Set();
-  for (const row of blobs.values()) if (row.appName === appName && row.identity) seen.add(row.identity);
-  for (const row of manifests.values()) if (row.appName === appName) seen.add(row.identity);
-  return seen.size === 1 ? [...seen][0] : null;
+// Mark the identity's slot blobs a manifest does not keep, and clear the mark
+// of those it keeps again.
+function applyKeptLocators(identity, keptLocators) {
+  const kept = new Set(keptLocators);
+  for (const [loc, entry] of blobs) {
+    if (entry.identity === identity && entry.source === 'slot') entry.tombstoned = !kept.has(loc);
+  }
 }
 
-const floorKeyOf = (identity, source) => `${identity}:${source}`;
-
-// Apply a reconcile: tombstone the identity's other rows of the source, keep
-// the floor, log it.
-function applyReconcile({
-  appName, identity, source, version, arcaneSig, ownerSig, liveLocators, pendingMessageHash,
-}) {
-  const floorKey = floorKeyOf(identity, source);
-  const floor = floors.get(floorKey);
-  if (floor != null && version <= floor) {
-    reconciles.push({
-      appName, identity, source, version, accepted: false, pendingMessageHash: pendingMessageHash ?? null, at: new Date().toISOString(),
-    });
-    return false;
-  }
-  floors.set(floorKey, version);
-  const live = new Set(Array.isArray(liveLocators) ? liveLocators : []);
-  for (const [loc, entry] of blobs) {
-    if (entry.identity === identity && entry.source === source && !live.has(loc)) {
-      entry.tombstoned = true;
-    }
-  }
-  reconciles.push({
-    appName, identity, source, version, arcaneSig, ownerSig, liveLocators: [...live], accepted: true, pendingMessageHash: pendingMessageHash ?? null, at: new Date().toISOString(),
-  });
-  return true;
+// Whether a row is its identity's newest version, by the height its signer took
+// the app and then its version.
+function isNewest(identity, ownedFrom, version) {
+  return ![...manifests.values()].some((row) => row.identity === identity
+    && (ownedFromOf(row.manifest) > ownedFrom || (ownedFromOf(row.manifest) === ownedFrom && Number(row.version) > version)));
 }
 
 // Store a manifest version as its own row; strict refuses a version at or
-// below the ownership's floor. An upload removes no version.
+// below the ownership's floor. An upload removes no version. Stored as its
+// identity's newest version, it marks the slot blobs it does not keep.
 function applyManifestPut({
-  appName, identity, version, timestamp, arcaneSig, ownerSig, manifest,
+  appName, identity, version, timestamp, arcaneSig, ownerSig, manifest, keptLocators, pendingMessageHash = null,
 }) {
-  const floor = manifestFloor(identity, ownedFromOf(manifest));
+  const ownedFrom = ownedFromOf(manifest);
+  const floor = manifestFloor(identity, ownedFrom);
   if (mode.strict && floor != null && Number(version) <= floor) return false;
+  const newest = isNewest(identity, ownedFrom, Number(version));
   const holder = holders.get(appName);
   setManifest(appName, identity, {
     version,
@@ -201,6 +181,10 @@ function applyManifestPut({
     // lands unconfirmed until the name has one. Permissive serves everything.
     confirmed: !mode.strict || holder === identity,
   });
+  if (newest) applyKeptLocators(identity, keptLocators);
+  keptLists.push({
+    appName, identity, ownedFrom, version, keptLocators, applied: newest, pendingMessageHash, at: new Date().toISOString(),
+  });
   return true;
 }
 
@@ -209,8 +193,8 @@ function applyManifestPut({
 const MESSAGE_HASH = /^[0-9a-f]{64}$/;
 
 function recordPending(write) {
-  // A retried request replaces the earlier write of the same kind, identity, source and version.
-  const i = pending.findIndex((p) => p.kind === write.kind && p.identity === write.identity && (p.source ?? null) === (write.source ?? null) && p.version === write.version);
+  // A retried request replaces the earlier write of the same identity, ownership and version.
+  const i = pending.findIndex((p) => p.identity === write.identity && ownedFromOf(p.body) === ownedFromOf(write.body) && p.version === write.version);
   const row = {
     ...write, receivedAt: new Date().toISOString(), askedAt: null, answers: [],
   };
@@ -233,13 +217,9 @@ function settlePending(write, verdict) {
     outcome = 'discarded';
   } else {
     drop();
-    if (write.kind === 'manifest') {
-      // The applied message lists the name under this identity.
-      promote(write.appName, write.identity);
-      outcome = applyManifestPut({ ...write, manifest: write.body }) ? 'applied' : 'discarded';
-    } else {
-      outcome = applyReconcile({ ...write, liveLocators: write.body }) ? 'applied' : 'discarded';
-    }
+    // The applied message lists the name under this identity.
+    promote(write.appName, write.identity);
+    outcome = applyManifestPut({ ...write, manifest: write.body, pendingMessageHash: write.messageHash }) ? 'applied' : 'discarded';
   }
   decisions.push({
     messageHash: write.messageHash, kind: write.kind, appName: write.appName, identity: write.identity, version: write.version, decision: verdict ? verdict.decision : 'no majority', outcome, at: new Date().toISOString(),
@@ -366,55 +346,11 @@ app.get('/api/v1/blob/:locator', (req, res) => {
   res.send(entry.bytes);
 });
 
-// Slot reconcile: the live locator set of an identity and source; the identity's
-// other rows of that source are tombstoned (orphan-with-grace, never a blind
-// replace), behind the version floor per identity and source. A reconcile
-// naming a message is held pending (202) until the nodes decide the message. A
-// name whose identity the stub cannot tell is an unknown app (404).
-app.post('/api/v1/blob/reconcile', express.json(), (req, res) => {
-  const {
-    appName, source, version, arcaneSig, ownerSig, liveLocators, pendingMessageHash,
-  } = req.body || {};
-  if (pendingMessageHash != null && pendingMessageHash !== '' && !MESSAGE_HASH.test(String(pendingMessageHash))) {
-    res.status(400).json({ error: 'pendingMessageHash is not a message hash' });
-    return;
-  }
-  const identity = identityOf(appName);
-  if (!identity) {
-    res.status(404).json({ error: 'Unknown app' });
-    return;
-  }
-  const pendingHash = pendingMessageHash || null;
-  if (pendingHash) {
-    recordPending({
-      kind: 'reconcile', messageHash: pendingHash, appName, identity, source, version, arcaneSig, ownerSig, body: Array.isArray(liveLocators) ? liveLocators : [],
-    });
-    askPending().catch(() => {});
-    res.status(202).json({ status: 'pending', messageHash: pendingHash });
-    return;
-  }
-  if (mode.strict) {
-    const floor = floors.get(floorKeyOf(identity, source));
-    if (floor != null && version <= floor) {
-      reconciles.push({
-        appName, identity, source, version, accepted: false, pendingMessageHash: null, at: new Date().toISOString(),
-      });
-      res.status(409).json({ error: 'version at or below floor' });
-      return;
-    }
-  }
-  applyReconcile({
-    appName, identity, source, version, arcaneSig, ownerSig, liveLocators, pendingMessageHash: null,
-  });
-  res.status(200).json({ ok: true });
-});
-
-// PUT an owner-signed manifest. A manifest must name its identity, and once the
-// name has a holder it must be the holder's (409 otherwise, in either mode). A
-// manifest naming a message is held pending (202) until the nodes decide the
-// message; one for a name with no holder must name one (400 otherwise), as the
-// real service requires of a name its feed does not list. Strict enforces the
-// per-row version floor and serves confirmed-only.
+// PUT an owner-signed manifest with the slot locators it keeps. A manifest must
+// name its identity and keep at least one locator (400 otherwise). A manifest
+// naming a message is held pending (202) until the nodes decide the message;
+// one naming none is stored at once. Strict enforces the version floor per
+// ownership and serves confirmed-only.
 app.put('/api/v1/manifest/:appName', express.json(), (req, res) => {
   const { appName } = req.params;
   // Fail ONLY the manifest PUT — before the version check, so it's independent
@@ -424,37 +360,32 @@ app.put('/api/v1/manifest/:appName', express.json(), (req, res) => {
     return;
   }
   const {
-    version, timestamp, arcaneSig, ownerSig, manifest, pendingMessageHash,
+    version, timestamp, arcaneSig, ownerSig, manifest, keptLocators, pendingMessageHash,
   } = req.body || {};
   const identity = manifest && manifest.identity;
   if (typeof identity !== 'string' || identity.length === 0) {
     res.status(400).json({ error: 'Manifest names no identity' });
     return;
   }
+  if (!Array.isArray(keptLocators) || keptLocators.length === 0) {
+    res.status(400).json({ error: 'A manifest keeps at least one locator' });
+    return;
+  }
   if (pendingMessageHash != null && pendingMessageHash !== '' && !MESSAGE_HASH.test(String(pendingMessageHash))) {
     res.status(400).json({ error: 'pendingMessageHash is not a message hash' });
     return;
   }
-  const holder = holders.get(appName);
-  if (holder != null && holder !== identity) {
-    res.status(409).json({ error: 'Manifest is for another registration of this app name' });
-    return;
-  }
   const pendingHash = pendingMessageHash || null;
-  if (holder == null && !pendingHash) {
-    res.status(400).json({ error: 'A manifest for an app the feed does not list names the message that lists it' });
-    return;
-  }
   if (pendingHash) {
     recordPending({
-      kind: 'manifest', messageHash: pendingHash, appName, identity, version, timestamp, arcaneSig, ownerSig, body: manifest,
+      kind: 'manifest', messageHash: pendingHash, appName, identity, version, timestamp, arcaneSig, ownerSig, body: manifest, keptLocators,
     });
     askPending().catch(() => {});
     res.status(202).json({ status: 'pending', messageHash: pendingHash });
     return;
   }
   if (!applyManifestPut({
-    appName, identity, version, timestamp, arcaneSig, ownerSig, manifest,
+    appName, identity, version, timestamp, arcaneSig, ownerSig, manifest, keptLocators,
   })) {
     res.status(409).json({ error: 'version at or below stored' });
     return;
@@ -488,14 +419,14 @@ control.use(express.json({ limit: '64mb' }));
 control.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 const pendingView = (p) => ({
-  kind: p.kind, messageHash: p.messageHash, appName: p.appName, identity: p.identity, version: p.version, source: p.source ?? null, receivedAt: p.receivedAt, askedAt: p.askedAt, answers: p.answers,
+  kind: p.kind, messageHash: p.messageHash, appName: p.appName, identity: p.identity, version: p.version, keptLocators: p.keptLocators, receivedAt: p.receivedAt, askedAt: p.askedAt, answers: p.answers,
 });
 
 // Full snapshot for assertions: blob metadata (not bytes), the manifest each
 // name serves (`manifests`, by name) and every stored manifest row
-// (`manifestRows`), the name holders, the reconcile log, the HEAD presence-probe
-// log, the strict floors, the pending writes and the decisions taken on them,
-// and the active mode.
+// (`manifestRows`), the name holders, the kept lists manifests carried, the HEAD
+// presence-probe log, the pending writes and the decisions taken on them, and
+// the active mode.
 control.get('/state', (req, res) => {
   res.json({
     blobs: [...blobs.entries()].map(([locator, e]) => ({
@@ -507,9 +438,8 @@ control.get('/state', (req, res) => {
       .filter(([, row]) => row != null)),
     manifestRows: [...manifests.values()],
     holders: Object.fromEntries(holders),
-    reconciles,
+    keptLists,
     heads,
-    floors: Object.fromEntries(floors),
     pending: pending.map(pendingView),
     decisions,
     nodeUrls: NODE_URLS,

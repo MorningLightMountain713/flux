@@ -484,7 +484,6 @@ export function nodeClient(nodeNum) {
         'content:manifestDropped',
         'content:manifestPromoted',
         'content:manifestBackstopped',
-        'content:reconcilePushed',
         'content:slotApplied',
         'content:slotApplySkipped',
         'content:slotsProvisioned',

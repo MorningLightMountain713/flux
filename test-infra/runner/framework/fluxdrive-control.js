@@ -22,8 +22,9 @@ async function get(path) {
 }
 
 // Full snapshot: blob metadata, the manifest each name serves (`manifests`),
-// every stored manifest row (`manifestRows`), the name holders, the reconcile
-// log, strict floors, and the active mode. The primary assertion surface.
+// every stored manifest row (`manifestRows`), the name holders, the kept lists
+// manifests carried (`keptLists`), and the active mode. The primary assertion
+// surface.
 export async function getFluxDriveState() {
   return get('/state');
 }
@@ -73,7 +74,7 @@ export async function askFluxDrivePending() {
   return post('/pending/ask');
 }
 
-// Toggle strict (floors/409s/confirmed-gating), slow (per-request delay ms), or
+// Toggle strict (version floors/409s/confirmed-gating), slow (per-request delay ms), or
 // fail5xx (data plane returns 503).
 export async function setFluxDriveMode(mode) {
   return post('/mode', mode);

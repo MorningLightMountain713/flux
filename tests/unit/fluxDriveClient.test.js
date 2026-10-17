@@ -2,7 +2,7 @@
 
 const { expect } = require('chai');
 const {
-  uploadBlob, fetchBlobByLocator, blobExists, putManifest, reconcile, fetchManifest,
+  uploadBlob, fetchBlobByLocator, blobExists, putManifest, fetchManifest,
 } = require('../../ZelBack/src/services/utils/fluxDriveClient');
 
 const BASE = 'https://drive.example';
@@ -99,12 +99,12 @@ describe('fluxDriveClient', () => {
       const calls = [];
       const http = { put: async (url, body, opts) => { calls.push({ url, body, opts }); return { status: 200 }; } };
       await putManifest('my-app', {
-        version: 3, timestamp: 123, arcaneSig: 'asig', ownerSig: 'osig', manifest: { version: 3, slots: { sealed: {} } },
+        version: 3, timestamp: 123, arcaneSig: 'asig', ownerSig: 'osig', manifest: { version: 3, slots: { sealed: {} } }, keptLocators: ['l1', 'l2'],
       }, { http, baseUrl: BASE });
       expect(calls.length).to.equal(1);
       expect(calls[0].url).to.equal(`${BASE}/api/v1/manifest/my-app`);
       expect(calls[0].body).to.deep.include({
-        version: 3, timestamp: 123, arcaneSig: 'asig', ownerSig: 'osig', pendingMessageHash: null,
+        version: 3, timestamp: 123, arcaneSig: 'asig', ownerSig: 'osig', keptLocators: ['l1', 'l2'], pendingMessageHash: null,
       });
       expect(calls[0].body.manifest).to.deep.equal({ version: 3, slots: { sealed: {} } });
     });
@@ -123,40 +123,6 @@ describe('fluxDriveClient', () => {
       const http = { put: async (url) => { calls.push(url); return {}; } };
       await putManifest('a b/c', { version: 1 }, { http, baseUrl: BASE });
       expect(calls[0]).to.equal(`${BASE}/api/v1/manifest/a%20b%2Fc`);
-    });
-  });
-
-  describe('reconcile', () => {
-    it('POSTs the reconcile body to /api/v1/blob/reconcile', async () => {
-      const calls = [];
-      const http = { post: async (url, body, opts) => { calls.push({ url, body, opts }); return { status: 200 }; } };
-      await reconcile('my-app', {
-        source: 'slot', version: 4, arcaneSig: 'asig', ownerSig: 'osig', liveLocators: ['l1', 'l2'],
-      }, { http, baseUrl: BASE });
-      expect(calls.length).to.equal(1);
-      expect(calls[0].url).to.equal(`${BASE}/api/v1/blob/reconcile`);
-      expect(calls[0].body).to.deep.equal({
-        appName: 'my-app', source: 'slot', version: 4, arcaneSig: 'asig', ownerSig: 'osig', liveLocators: ['l1', 'l2'], pendingMessageHash: null,
-      });
-    });
-
-    it('names the message the reconcile is carried by', async () => {
-      const calls = [];
-      const http = { post: async (url, body) => { calls.push({ url, body }); return { status: 200 }; } };
-      await reconcile('my-app', {
-        source: 'slot', version: 4, arcaneSig: 'asig', ownerSig: 'osig', liveLocators: ['l1'], pendingMessageHash: 'f'.repeat(64),
-      }, { http, baseUrl: BASE });
-      expect(calls[0].body.pendingMessageHash).to.equal('f'.repeat(64));
-    });
-
-    it('throws when the base URL is not configured', async () => {
-      let threw = false;
-      try {
-        await reconcile('app', { source: 'slot', version: 1 }, { http: { post: async () => {} } });
-      } catch (e) {
-        threw = /not configured/.test(e.message);
-      }
-      expect(threw).to.equal(true);
     });
   });
 

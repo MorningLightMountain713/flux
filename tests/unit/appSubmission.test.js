@@ -1063,7 +1063,6 @@ describe('appSubmission tests', () => {
         processManifestSubmission: sinon.stub().resolves({ sealed: true, version: 2 }),
         takeManifest: sinon.stub().resolves({ outcome: 'held' }),
         backstopManifest: sinon.stub().resolves(false),
-        reconcileSlots: sinon.stub().resolves(false),
       };
       const sender = { broadcastMessageToAll: sinon.stub().resolves({ signed: true }) };
       appSubmission = load({ '../appLifecycle/contentSlotService': contentSlotService, '../fluxCommunicationMessagesSender': sender });
@@ -1074,13 +1073,13 @@ describe('appSubmission tests', () => {
       blobs: { [HSLOT]: Buffer.from('slot-bytes').toString('base64') }, manifest,
     })));
 
-    it('verifies a registration\'s first manifest for the identity and owner it was given, hands FluxDrive the writes naming the registration, then stores and gossips it', async () => {
+    it('verifies a registration\'s first manifest for the identity and owner it was given, hands FluxDrive the write naming the registration, then stores and gossips it', async () => {
       const { contentSlotService, sender } = slotPath();
       const firstManifest = {
         appName: 'myapp', version: 1, timestamp: 1_700_000_000_000, slots: { s: { hash: HSLOT } },
       };
       stubs.transportHelper.openContentEnvelope.resolves(Buffer.from(JSON.stringify({
-        blobs: { [HSLOT]: Buffer.from('slot-bytes').toString('base64') }, manifest: firstManifest, manifestPutSig: 'put-sig', reconcileSig: 'rec-sig',
+        blobs: { [HSLOT]: Buffer.from('slot-bytes').toString('base64') }, manifest: firstManifest, manifestPutSig: 'put-sig',
       })));
       const v9 = { name: 'myapp', owner: '1id', version: 9 };
 
@@ -1091,16 +1090,13 @@ describe('appSubmission tests', () => {
       expect(input.owner).to.equal('1id');
       expect(input.ownedFrom, 'a registration\'s manifest is signed before its height exists').to.equal(0);
       expect(input.manifest).to.deep.equal(firstManifest);
-      // FluxDrive holds both writes until the nodes answer that this registration applied.
-      const [putManifest, putCtx] = contentSlotService.backstopManifest.firstCall.args;
+      // FluxDrive holds the write until the nodes answer that this registration applied;
+      // the plaintext manifest is what its kept list is derived from.
+      const [plaintext, putManifest, putCtx] = contentSlotService.backstopManifest.firstCall.args;
+      expect(plaintext).to.deep.equal(firstManifest);
       expect(putManifest).to.deep.equal({ sealed: true, version: 2 });
       expect(putCtx).to.deep.equal({
         appName: 'myapp', identity: IDENTITY, version: 1, timestamp: 1_700_000_000_000, manifestPutSig: 'put-sig', pendingMessageHash: MSG,
-      });
-      const [reconciled, reconcileCtx] = contentSlotService.reconcileSlots.firstCall.args;
-      expect(reconciled).to.deep.equal(firstManifest);
-      expect(reconcileCtx).to.deep.equal({
-        appName: 'myapp', identity: IDENTITY, version: 1, reconcileSig: 'rec-sig', pendingMessageHash: MSG,
       });
       sinon.assert.calledOnce(sender.broadcastMessageToAll);
       // Taken with the broadcast it was gossiped in; this node holds it until the registration applies.
@@ -1108,7 +1104,7 @@ describe('appSubmission tests', () => {
       expect(out.carriedManifest).to.equal(null);
     });
 
-    it('returns an update\'s manifest to ride in the update\'s message, verified for the listed owner, hands FluxDrive the writes naming the update, and stores or gossips nothing', async () => {
+    it('returns an update\'s manifest to ride in the update\'s message, verified for the listed owner, hands FluxDrive the write naming the update, and stores or gossips nothing', async () => {
       const { contentSlotService, sender } = slotPath();
       stubs.appHistory.ownerships = sinon.stub().resolves([{ owner: '1id', from: 2_400_000 }]);
       envelopeWith({ appName: 'myapp', version: 2, slots: { s: { hash: HSLOT } } });
@@ -1123,8 +1119,7 @@ describe('appSubmission tests', () => {
       expect(input.original, 'the first ownership: the registration\'s list counts in the sequence').to.equal(true);
       expect(input.spec).to.equal(buyer);
       expect(out.carriedManifest).to.deep.equal({ sealed: true, version: 2 });
-      expect(contentSlotService.backstopManifest.firstCall.args[1]).to.include({ identity: IDENTITY, pendingMessageHash: MSG });
-      expect(contentSlotService.reconcileSlots.firstCall.args[1]).to.include({ identity: IDENTITY, pendingMessageHash: MSG });
+      expect(contentSlotService.backstopManifest.firstCall.args[2]).to.include({ identity: IDENTITY, pendingMessageHash: MSG });
       sinon.assert.notCalled(sender.broadcastMessageToAll);
       sinon.assert.notCalled(contentSlotService.takeManifest);
     });

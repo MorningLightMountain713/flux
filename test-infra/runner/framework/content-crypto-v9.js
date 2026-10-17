@@ -10,7 +10,7 @@ import {
 import {
   TransportEnvelope, buildTransportAad, buildContentTransportAad, buildSignaturePayloadV2, CONTENT_LOCATOR_AAD_REF,
   FluxAppSpecV9, canonicalContentManifest, TRANSPORT_ALGORITHM, TRANSPORT_INFO, TRANSPORT_EXPORT_LABEL,
-  appUuid, appIdentityFromUuid, blobUploadDigest, manifestPutDigest, slotReconcileDigest,
+  appUuid, appIdentityFromUuid, blobUploadDigest, manifestPutDigest,
 } from '@runonflux/flux-spec';
 import { computeMessageHashV2 } from '@runonflux/flux-spec-backend';
 import { signBtcMessage } from '../auth.js';
@@ -228,7 +228,7 @@ export async function buildOwnerSigs({
 // Seal the ONE content envelope a submission carries: { blobs, manifest?, ... } HPKE-sealed
 // toward the node's transport key (content leg AAD bound to the spec's contentHash via `ref`).
 export async function buildContentEnvelope({
-  blobs, manifest, manifestPutSig, reconcileSig, appName, transportPubB64, ref, timestamp,
+  blobs, manifest, manifestPutSig, appName, transportPubB64, ref, timestamp,
 }) {
   const payload = { blobs: {} };
   for (const [hash, bytes] of Object.entries(blobs || {})) {
@@ -236,7 +236,6 @@ export async function buildContentEnvelope({
   }
   if (manifest) payload.manifest = manifest;
   if (manifestPutSig) payload.manifestPutSig = manifestPutSig;
-  if (reconcileSig) payload.reconcileSig = reconcileSig;
   const aad = buildContentTransportAad({ appName, ref, timestamp });
   return sealExport(Buffer.from(JSON.stringify(payload)), aad, transportPubB64);
 }
@@ -274,24 +273,14 @@ export async function buildOwnerSignedManifest({
 }
 
 // The FluxDrive manifest-PUT dual-sig owner half, over the library's text
-// (`identity:version:timestamp:pendingMessageHash`). A manifest that rides a spec
-// message names that message's hash; a content update with no spec change names
-// none.
+// (`identity:ownedFrom:version:timestamp:keptLocatorsHash:pendingMessageHash`): the
+// slot locators the manifest keeps are bound by their hash, so the node can send
+// no other list. A manifest that rides a spec message names that message's hash;
+// a content update with no spec change names none.
 export async function manifestPutSig({
-  identity, version, timestamp, pendingMessageHash = null, ownerKey,
+  identity, ownedFrom, version, timestamp, keptLocators, pendingMessageHash = null, ownerKey,
 }) {
   return signBtcMessage(manifestPutDigest({
-    identity, version, timestamp, pendingMessageHash,
-  }), ownerKey.privkey);
-}
-
-// The FluxDrive reconcile dual-sig owner half, over the library's text
-// (`identity:source:version:keptLocatorsHash:pendingMessageHash`): the kept
-// locators are bound by their hash, so the node can send no other list.
-export async function reconcileSig({
-  identity, source, version, keptLocators, pendingMessageHash = null, ownerKey,
-}) {
-  return signBtcMessage(slotReconcileDigest({
-    identity, source, version, keptLocators, pendingMessageHash,
+    identity, ownedFrom, version, timestamp, keptLocators, pendingMessageHash,
   }), ownerKey.privkey);
 }

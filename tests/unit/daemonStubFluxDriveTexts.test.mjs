@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { expect } from 'chai';
 import {
-  blobUploadDigest, manifestPutDigest, slotReconcileDigest, arcaneSignedMessage,
+  blobUploadDigest, manifestPutDigest, arcaneSignedMessage,
 } from '@runonflux/flux-spec';
 import * as benchCrypto from '../../test-infra/daemon-stub/benchCrypto.js';
 
@@ -39,24 +39,21 @@ describe('daemon stub: the FluxDrive texts it signs are the library\'s', () => {
     expect(verifies(sig, arcaneSignedMessage('manifest', blobUploadDigest(fields))), 'one kind never verifies as another').to.equal(false);
   });
 
-  it('signs a manifest put over the library\'s text, naming the message or not', () => {
+  it('signs a manifest put over the library\'s text: its ownership, the kept list hashed sorted and each once, naming the message or not', () => {
     for (const pendingMessageHash of [null, undefined, 'f'.repeat(64)]) {
-      const fields = { kind: 'manifest', identity, version: 3, timestamp: fresh, pendingMessageHash };
-      const sig = benchCrypto.signBlobUpload(fields);
-      expect(verifies(sig, arcaneSignedMessage('manifest', manifestPutDigest({ ...fields, pendingMessageHash: pendingMessageHash ?? null }))), String(pendingMessageHash)).to.equal(true);
+      for (const ownedFrom of [0, 2_952_000]) {
+        const fields = {
+          kind: 'manifest', identity, ownedFrom, version: 3, timestamp: fresh, keptLocators: ['loc-b', 'loc-a', 'loc-b'], pendingMessageHash,
+        };
+        const sig = benchCrypto.signBlobUpload(fields);
+        expect(verifies(sig, arcaneSignedMessage('manifest', manifestPutDigest({ ...fields, pendingMessageHash: pendingMessageHash ?? null }))), `${pendingMessageHash} ${ownedFrom}`).to.equal(true);
+      }
     }
-  });
-
-  it('signs a reconcile over the library\'s text, the kept list hashed sorted and each once', () => {
-    for (const vector of [vectors.reconcile, vectors.reconcileCarried]) {
-      const sig = benchCrypto.signBlobUpload({
-        kind: 'reconcile', identity, source: vector.source, version: vector.version, keptLocators: vector.locators, pendingMessageHash: vector.pendingMessageHash,
-      });
-      expect(verifies(sig, arcaneSignedMessage('reconcile', vector.digest))).to.equal(true);
-      expect(slotReconcileDigest({
-        identity, source: vector.source, version: vector.version, keptLocators: vector.locators, pendingMessageHash: vector.pendingMessageHash,
-      })).to.equal(vector.digest);
-    }
+    expect(benchCrypto.signBlobUpload({
+      kind: 'manifest', identity, ownedFrom: 0, version: 3, timestamp: fresh, keptLocators: ['loc-a', 'loc-b'],
+    })).to.equal(benchCrypto.signBlobUpload({
+      kind: 'manifest', identity, ownedFrom: 0, version: 3, timestamp: fresh, keptLocators: ['loc-b', 'loc-a', 'loc-b'],
+    }), 'the kept list is a set');
   });
 
   it('refuses a text naming no identity, another spelling, or a malformed message hash', () => {
@@ -65,8 +62,13 @@ describe('daemon stub: the FluxDrive texts it signs are the library\'s', () => {
       expect(() => benchCrypto.locatorFor({ identity: bad, contentHash: 'h' }), String(bad)).to.throw(/identity invalid/);
       expect(() => benchCrypto.contentKeyFor({ identity: bad, contentHash: 'h' }), String(bad)).to.throw(/identity invalid/);
     }
-    expect(() => benchCrypto.signBlobUpload({ kind: 'manifest', identity, version: 1, timestamp: fresh, pendingMessageHash: 'nope' })).to.throw(/pendingMessageHash invalid/);
-    expect(() => benchCrypto.signBlobUpload({ kind: 'reconcile', identity, source: 'slot', version: 1, keptLocators: [] })).to.throw(/keptLocators invalid/);
+    const manifest = {
+      kind: 'manifest', identity, ownedFrom: 0, version: 1, timestamp: fresh, keptLocators: ['loc-a'],
+    };
+    expect(() => benchCrypto.signBlobUpload({ ...manifest, pendingMessageHash: 'nope' })).to.throw(/pendingMessageHash invalid/);
+    expect(() => benchCrypto.signBlobUpload({ ...manifest, keptLocators: [] })).to.throw(/keptLocators invalid/);
+    expect(() => benchCrypto.signBlobUpload({ ...manifest, ownedFrom: undefined })).to.throw(/ownedFrom invalid/);
+    expect(() => benchCrypto.signBlobUpload({ ...manifest, kind: 'reconcile' })).to.throw(/unknown kind/);
   });
 
   it('derives locators and keys by identity alone: two apps of one name and owner never share them', () => {

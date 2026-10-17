@@ -12,14 +12,15 @@ import { dbClient, closeDb } from '../framework/db-client.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 
 // Content lifecycle GC: the content manifests a node holds are reaped to the
-// live-app set and the FluxDrive blob set is reconciled to the live slot-locator
-// set. One slot app drives its whole lifecycle on the submitting node (node 0):
+// live-app set and the FluxDrive blob set follows the slot locators the newest
+// manifest keeps. One slot app drives its whole lifecycle on the submitting node (node 0):
 //   - register  → the bundled v1 manifest is HELD (signer null) + its slot blob lands
 //                 in FluxDrive (source 'slot'); confirm on-chain so the global spec
 //                 (the live-set membership the reaper keys on) exists and the row
 //                 write resolves the held manifest to its signer.
-//   - update v2 → the GC reconcile is pushed and FluxDrive TOMBSTONES the superseded
-//                 v1 slot blob (the blob-set complement of the manifest rows).
+//   - update v2 → the v2 manifest reaches FluxDrive with the slot locators it keeps,
+//                 and FluxDrive TOMBSTONES the superseded v1 slot blob (the
+//                 blob-set complement of the manifest rows).
 //   - the door  → a higher version (v3) is taken and stands; a version below the
 //                 next within the ownership (v2) is refused at the door.
 //   - reaper    → the janitor's sweep drops the resolved manifest rows of an
@@ -27,7 +28,7 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 //                 that registration is a reorg cap (40 blocks) deep; the listed
 //                 app's own rows stay.
 // Asserts on the SSE event bus + the appcontentmanifests DB row + the FluxDrive stub
-// state (reconciles, tombstoned blobs), never log scraping. Complements suite 53
+// state (kept lists, tombstoned blobs), never log scraping. Complements suite 53
 // (which proves onUpdate reactions on the RUNNING node); this suite is install-free —
 // every assertion is a control-plane fact, so it operates entirely on the submitter.
 //
@@ -35,7 +36,7 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 // ~2 outbound/node — peers connect inbound first and FluxOS dedups); arcane:true so
 // the node accepts content apps, runs the benchmark crypto, and opens sealed content.
 
-describe('content lifecycle GC: manifest reaper, reconcile tombstone, the version door', function () {
+describe('content lifecycle GC: manifest reaper, the kept list\'s tombstone, the version door', function () {
   let env;
 
   const appName = `lifecyclegc${Date.now()}`;
@@ -145,7 +146,7 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, the versio
     expect(res.status).to.equal('success');
 
     // The v2 update uploads a NEW slot blob (distinct locator), applies the update, and
-    // pushes the GC reconcile for the slot source.
+    // backstops the v2 manifest with the slot locators it keeps.
     const uploaded = await node.waitForEvent(
       'content:blobUploaded',
       (d) => d.appName === appName && d.source === 'slot',
@@ -161,32 +162,31 @@ describe('content lifecycle GC: manifest reaper, reconcile tombstone, the versio
       60000,
       { afterId },
     );
-    const pushed = await node.waitForEvent(
-      'content:reconcilePushed',
+    const backstopped = await node.waitForEvent(
+      'content:manifestBackstopped',
       (d) => d.appName === appName && d.version === 2,
       60000,
       { afterId },
     );
-    expect(pushed.data.source).to.equal('slot');
+    expect(backstopped.data.kept).to.equal(1);
 
     // The highest-ranked row this node holds is now v2.
     const row = await dbc.getContentManifest(appName);
     expect(row.version).to.equal(2);
 
-    // FluxDrive recorded an ACCEPTED v2 reconcile whose live set is exactly the v2 slot
-    // locator (not the v1 one), and tombstoned the now-superseded v1 slot blob while
-    // leaving v2 live — the blob-set complement of the new standing manifest.
+    // FluxDrive applied the v2 manifest's kept list, exactly the v2 slot locator (not
+    // the v1 one), and tombstoned the now-superseded v1 slot blob while leaving v2
+    // live — the blob-set complement of the new standing manifest.
     const state = await getFluxDriveState();
-    const rec = state.reconciles.find((r) => r.appName === appName && r.source === 'slot' && r.version === 2);
-    expect(rec, 'v2 slot reconcile recorded').to.exist;
-    expect(rec.accepted).to.equal(true);
-    expect(rec.liveLocators).to.include(v2Locator);
-    expect(rec.liveLocators).to.not.include(v1Locator);
+    const kept = state.keptLists.find((k) => k.appName === appName && k.version === 2);
+    expect(kept, 'v2 kept list recorded').to.exist;
+    expect(kept.applied).to.equal(true);
+    expect(kept.keptLocators).to.deep.equal([v2Locator]);
 
     const v1Blob = state.blobs.find((b) => b.locator === v1Locator);
     const v2Blob = state.blobs.find((b) => b.locator === v2Locator);
     expect(v1Blob, 'v1 slot blob still present').to.exist;
-    expect(v1Blob.tombstoned, 'superseded v1 slot blob tombstoned by the v2 reconcile').to.equal(true);
+    expect(v1Blob.tombstoned, 'superseded v1 slot blob tombstoned by the v2 kept list').to.equal(true);
     expect(v2Blob, 'v2 slot blob present').to.exist;
     expect(v2Blob.tombstoned, 'live v2 slot blob not tombstoned').to.equal(false);
   });
