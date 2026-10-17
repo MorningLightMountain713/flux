@@ -1968,11 +1968,18 @@ describe('explorerService tests', () => {
 
   describe('reindex and rescan rewind through the start path', () => {
     let rewindStub;
+    let rewound;
 
     beforeEach(() => {
-      rewindStub = sinon.stub(chainState, 'rewind').resolves(0);
+      // The processor stops at the rewind: what follows it drops collections and
+      // asks the daemon, and is not these tests' subject.
+      rewound = new Promise((resolve) => {
+        rewindStub = sinon.stub(chainState, 'rewind').callsFake(() => {
+          resolve();
+          return new Promise(() => {});
+        });
+      });
       sinon.stub(dbHelper, 'countInDatabase').resolves(1);
-      sinon.stub(daemonServiceBlockchainRpcs, 'getBlockCount').returns({ status: 'error', data: { message: 'test: stop here' } });
     });
 
     afterEach(() => {
@@ -1982,7 +1989,7 @@ describe('explorerService tests', () => {
 
     it('reindex rewinds to height 0', async () => {
       await explorerService.reindexExplorer({ rescanGlobalApps: true });
-      await serviceHelper.delay(50);
+      await rewound;
 
       sinon.assert.calledWith(rewindStub.firstCall, 'reindex', 0);
     });
@@ -1991,7 +1998,7 @@ describe('explorerService tests', () => {
       sinon.stub(dbHelper, 'findOneInDatabase').resolves({ generalScannedHeight: 2000 });
 
       await explorerService.rescanExplorer({ blockheight: 1500 });
-      await serviceHelper.delay(50);
+      await rewound;
 
       sinon.assert.calledWith(rewindStub.firstCall, 'rescan from 1500', 1500);
     });
