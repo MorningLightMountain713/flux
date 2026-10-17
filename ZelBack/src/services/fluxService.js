@@ -1576,11 +1576,11 @@ async function getFluxInfo(req, res) {
     info.flux.appsDos = dosAppsResult.data;
     const { userconfig } = globalThis;
     info.flux.development = userconfig.initial.development || false;
-    const daemonInfoRes = await daemonServiceControlRpcs.getInfo();
-    if (daemonInfoRes.status === 'error') {
-      throw daemonInfoRes.data;
+    const daemonInfo = await daemonServiceControlRpcs.getInfo();
+    if (daemonInfo.reason) {
+      throw daemonInfo.reason;
     }
-    info.daemon.info = daemonInfoRes.data;
+    info.daemon.info = daemonInfo.value;
     const zmqEnabled = Boolean(daemonServiceUtils.getConfigValue('zmqpubhashblock'));
     info.daemon.zmqEnabled = zmqEnabled;
     const daemonNodeStatusRes = await daemonServiceFluxnodeRpcs.getFluxNodeStatus();

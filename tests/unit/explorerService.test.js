@@ -2044,7 +2044,7 @@ describe('explorerService tests', () => {
     async function tipsAskedFrom(version) {
       const getChainTips = sinon.stub().resolves({ value: [] });
       const fresh = proxyquire('../../ZelBack/src/services/explorerService', {
-        './daemonService/daemonServiceControlRpcs': { getInfo: sinon.stub().resolves({ status: 'success', data: { version } }) },
+        './daemonService/daemonServiceControlRpcs': { getInfo: sinon.stub().resolves({ value: { version } }) },
         './daemonService/daemonServiceBlockchainRpcs': { ...daemonServiceBlockchainRpcs, getChainTips },
       });
       await fresh.checkAndHandleReorgs(null, START);

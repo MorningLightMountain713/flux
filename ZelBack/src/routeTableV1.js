@@ -40,7 +40,7 @@ const NONE = Object.freeze({
 module.exports = [
   // GET PUBLIC methods
   { method: 'get', path: '/daemon/help/:command?', needs: DAEMON, cache: '1 hour', handler: 'daemonService/daemonServiceControlRpcs#help' }, // accept both help/command and ?command=getinfo. If ommited, default help will be displayed. Other calls works in similar way
-  { method: 'get', path: '/daemon/getinfo', needs: DAEMON, handler: 'daemonService/daemonServiceControlRpcs#getInfo' },
+  { method: 'get', path: '/daemon/getinfo', needs: DAEMON, handler: 'daemonService/daemonServiceControlRpcs#getInfoAPI' },
   { method: 'get', path: '/daemon/getfluxnodestatus', needs: DAEMON, cache: '60 seconds', handler: 'daemonService/daemonServiceFluxnodeRpcs#getFluxNodeStatusApi' },
   { method: 'get', path: '/daemon/getzelnodestatus', needs: DAEMON, cache: '60 seconds', handler: 'daemonService/daemonServiceFluxnodeRpcs#getFluxNodeStatusApi' }, // DEPRECATED
   { method: 'get', path: '/daemon/listfluxnodes/:filter?', needs: DAEMON, cache: '30 seconds', handler: 'daemonService/daemonServiceFluxnodeRpcs#listFluxNodes' },

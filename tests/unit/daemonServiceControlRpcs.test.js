@@ -70,12 +70,9 @@ describe('daemonServiceControlRpcs tests', () => {
     let verifyPrivilegeStub;
 
     beforeEach(() => {
-      daemonServiceUtilsStub = sinon.stub(daemonServiceUtils, 'executeCall').returns({
-        data: {
-          test: 'test1',
-          balance: '1234',
-        },
-      });
+      daemonServiceUtilsStub = sinon.stub(daemonServiceUtils, 'executeCall').callsFake(async () => ({
+        status: 'success', data: { version: 7_020_051, balance: '1234' },
+      }));
       verifyPrivilegeStub = sinon.stub(verificationHelper, 'verifyPrivilege');
     });
 
@@ -83,52 +80,37 @@ describe('daemonServiceControlRpcs tests', () => {
       sinon.restore();
     });
 
-    it('should call rpc, no response', async () => {
-      const req = {};
-      const expectedResult = {
-        data: {
-          test: 'test1',
-        },
-      };
-      const result = await daemonServiceControlRpcs.getInfo(req);
-
-      expect(result).to.eql(expectedResult);
+    it('answers the daemon\'s info without the balance', async () => {
+      expect(await daemonServiceControlRpcs.getInfo()).to.deep.equal({ value: { version: 7_020_051 } });
       sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getInfo');
     });
 
-    it('should trigger rpc, response passed, user is not an admin', async () => {
-      verifyPrivilegeStub.returns(false);
-      const req = {};
-      const expectedResult = {
-        data: {
-          test: 'test1',
-        },
-      };
-      const res = generateResponse();
-
-      const result = await daemonServiceControlRpcs.getInfo(req, res);
-
-      expect(result).to.equal(`Response: ${expectedResult}`);
-      sinon.assert.calledOnceWithExactly(res.json, expectedResult);
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getInfo');
+    it('answers it with the balance when asked for', async () => {
+      expect(await daemonServiceControlRpcs.getInfo({ withBalance: true })).to.deep.equal({ value: { version: 7_020_051, balance: '1234' } });
     });
 
-    it('should trigger rpc, response passed, user is an admin', async () => {
-      verifyPrivilegeStub.returns(true);
-      const req = {};
-      const expectedResult = {
-        data: {
-          test: 'test1',
-          balance: '1234',
-        },
-      };
-      const res = generateResponse();
+    it('answers why there is no info when the daemon refuses', async () => {
+      daemonServiceUtilsStub.callsFake(async () => ({ status: 'error', data: { code: -28, message: 'Loading block index' } }));
 
-      const result = await daemonServiceControlRpcs.getInfo(req, res);
+      expect(await daemonServiceControlRpcs.getInfo()).to.deep.equal({ value: null, reason: { code: -28, message: 'Loading block index' } });
+    });
 
-      expect(result).to.equal(`Response: ${expectedResult}`);
-      sinon.assert.calledOnceWithExactly(res.json, expectedResult);
-      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getInfo');
+    it('serves its route without the balance to anyone but a node operator', async () => {
+      verifyPrivilegeStub.resolves(false);
+      const res = { json: sinon.stub() };
+
+      await daemonServiceControlRpcs.getInfoAPI({ headers: {} }, res);
+
+      sinon.assert.calledOnceWithExactly(res.json, { status: 'success', data: { version: 7_020_051 } });
+    });
+
+    it('serves its route with the balance to a node operator', async () => {
+      verifyPrivilegeStub.resolves(true);
+      const res = { json: sinon.stub() };
+
+      await daemonServiceControlRpcs.getInfoAPI({ headers: {} }, res);
+
+      sinon.assert.calledOnceWithExactly(res.json, { status: 'success', data: { version: 7_020_051, balance: '1234' } });
     });
   });
 
