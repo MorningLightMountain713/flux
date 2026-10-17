@@ -885,14 +885,14 @@ async function getLocalSocketAddress(options = {}) {
   if (!fresh && localSocketAddress && process.hrtime.bigint() < localSocketAddressFreshUntil) {
     return localSocketAddress;
   }
-  const benchmarkResponse = await benchmarkService.getBenchmarks();
-  const { status, data: { ipaddress = null } = {} } = benchmarkResponse;
+  const { value: benchmarks } = await benchmarkService.getBenchmarks();
+  const ipaddress = benchmarks?.ipaddress ?? null;
   // The benchmark IP can be a bare IP or ip:port depending on the node's API port,
   // and while fluxbench is still resolving it the value can be empty or a host-less
   // ":<port>" - the latter is truthy but useless. parseSocketAddress accepts a real
   // bare-IP or ip:port and rejects those unresolved forms, so callers (e.g. the
   // masterSlave election) never act on a bogus own-IP.
-  if (status !== 'success' || !parseSocketAddress(ipaddress)) {
+  if (!parseSocketAddress(ipaddress)) {
     setLocalSocketAddress(null);
     return null;
   }
@@ -1069,9 +1069,9 @@ async function checkFluxbenchVersionAllowed() {
     return versionOK;
   }
   try {
-    const benchmarkInfoResponse = await benchmarkService.getInfo();
-    if (benchmarkInfoResponse.status === 'success') {
-      const benchmarkVersion = benchmarkInfoResponse.data.version;
+    const { value: benchmarkInfo } = await benchmarkService.getInfo();
+    if (benchmarkInfo) {
+      const benchmarkVersion = benchmarkInfo.version;
       log.info(`Running benchmark version: ${benchmarkVersion}`);
       setStoredFluxBenchAllowed(benchmarkVersion);
       const versionOK = serviceHelper.minVersionSatisfy(benchmarkVersion, config.get('minimumFluxBenchAllowedVersion'));

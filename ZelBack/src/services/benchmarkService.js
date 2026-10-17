@@ -109,6 +109,16 @@ async function executeCall(rpc, params) {
 }
 
 /**
+ * The benchmark daemon's answer to one call: its value, or why there is none.
+ * @param {string} rpc
+ * @returns {Promise<{value: *, reason?: {message: string, name?: string, code?: *}}>}
+ */
+async function answer(rpc) {
+  const message = await executeCall(rpc);
+  return message.status === 'success' ? { value: message.data } : { value: null, reason: message.data };
+}
+
+/**
  * Stores benchmark data to the database (only if tier is valid and not updated within a day)
  * @param {object} benchmarkData - The benchmark data to store
  * @param {string} tierStatus - The node tier status (CUMULUS, NIMBUS, STRATUS)
@@ -198,17 +208,20 @@ async function getBenchmarkFromDb() {
 
 // == Benchmarks ==
 /**
- * To get benchmark status.
+ * The benchmark daemon's status.
+ * @returns {Promise<{value: object|null, reason?: object}>}
+ */
+async function getStatus() {
+  return answer('getstatus');
+}
+
+/**
+ * GET /benchmark/getstatus
  * @param {import('express').Request} req
  * @param {import('express').Response} res
- * @returns {object} Message.
  */
-async function getStatus(req, res) {
-  const rpccall = 'getstatus';
-
-  const response = await executeCall(rpccall);
-
-  return res ? res.json(response) : response;
+async function getStatusAPI(req, res) {
+  res.json(messageHelper.messageOf(await getStatus()));
 }
 
 /**
@@ -216,16 +229,10 @@ async function getStatus(req, res) {
  * `{ nodetype: 'pending' | 'arcane' | 'legacy' }`. Reads a latch decided once at
  * benchmark-daemon boot, so a definitive `arcane`/`legacy` is stable for the
  * process lifetime; `pending` means the latch has not settled yet (retry).
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- * @returns {object} Message.
+ * @returns {Promise<{value: {nodetype: string}|null, reason?: object}>}
  */
-async function getNodeType(req, res) {
-  const rpccall = 'getnodetype';
-
-  const response = await executeCall(rpccall);
-
-  return res ? res.json(response) : response;
+async function getNodeType() {
+  return answer('getnodetype');
 }
 
 /**
@@ -463,67 +470,60 @@ async function stop(req, res) {
 
 // == Fluxnode ==
 /**
- * To show status of benchmarks.
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- * @returns {object} Message.
+ * This node's benchmarks. A record with a tier is stored, at most once a day for
+ * a valid tier.
+ * @returns {Promise<{value: object|null, reason?: object}>}
  */
-async function getBenchmarks(req, res) {
-  const rpccall = 'getbenchmarks';
-
-  const response = await executeCall(rpccall);
-
-  // Store to database if successful and tier is valid (CUMULUS, NIMBUS, STRATUS)
-  if (response.status === 'success' && response.data && response.data.status) {
-    // Store benchmark data with tier status (only updates once per day for valid tiers)
-    storeBenchmarkToDb(response.data, response.data.status).catch((error) => {
+async function getBenchmarks() {
+  const benchmarks = await answer('getbenchmarks');
+  if (benchmarks.value?.status) {
+    storeBenchmarkToDb(benchmarks.value, benchmarks.value.status).catch((error) => {
       log.error(`Error storing benchmark to database: ${error.message}`);
     });
   }
-
-  return res ? res.json(response) : response;
+  return benchmarks;
 }
 
 /**
- * To get info on benchmark version and RCP port.
+ * GET /benchmark/getbenchmarks
  * @param {import('express').Request} req
  * @param {import('express').Response} res
- * @returns {object} Message.
  */
-async function getInfo(req, res) {
-  const rpccall = 'getInfo';
-
-  const response = await executeCall(rpccall);
-
-  return res ? res.json(response) : response;
+async function getBenchmarksAPI(req, res) {
+  res.json(messageHelper.messageOf(await getBenchmarks()));
 }
 
 /**
- * To show public IP address.
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- * @returns {object} Message.
+ * The benchmark daemon's version and RPC port.
+ * @returns {Promise<{value: object|null, reason?: object}>}
  */
-async function getPublicIp(req, res) {
-  const rpccall = 'getpublicip';
-
-  const response = await executeCall(rpccall);
-
-  return res ? res.json(response) : response;
+async function getInfo() {
+  return answer('getInfo');
 }
 
 /**
- * To execute benchmark at the same time on all upnp nodes.
+ * GET /benchmark/getinfo
  * @param {import('express').Request} req
  * @param {import('express').Response} res
- * @returns {object} Message.
  */
-async function startMultiPortBench(req, res) {
-  const rpccall = 'startmultiportbench';
+async function getInfoAPI(req, res) {
+  res.json(messageHelper.messageOf(await getInfo()));
+}
 
-  const response = await executeCall(rpccall);
+/**
+ * The public address the benchmark daemon has detected.
+ * @returns {Promise<{value: string|null, reason?: object}>}
+ */
+async function getPublicIp() {
+  return answer('getpublicip');
+}
 
-  return res ? res.json(response) : response;
+/**
+ * Asks the benchmark daemon to bench every UPnP node on this address at once.
+ * @returns {Promise<{value: *, reason?: object}>}
+ */
+async function startMultiPortBench() {
+  return answer('startmultiportbench');
 }
 
 /**
@@ -547,11 +547,11 @@ async function executeUpnpBench() {
 
 async function isSystemSecure() {
   try {
-    const benchmarkResponse = await getBenchmarks();
-    if (benchmarkResponse.status === 'error') {
+    const { value: benchmarks } = await getBenchmarks();
+    if (!benchmarks) {
       throw new Error('Not possible to check if node is ArcaneOS.');
     }
-    return benchmarkResponse.data.systemsecure;
+    return benchmarks.systemsecure;
   } catch (error) {
     log.error(error);
     return false;
@@ -567,6 +567,7 @@ module.exports = {
   executeCall,
   // == Benchmarks ==
   getStatus,
+  getStatusAPI,
   getNodeType,
   restartNodeBenchmarks,
   signFluxTransaction,
@@ -580,9 +581,11 @@ module.exports = {
   // == Fluxnode ==
   isSystemSecure,
   getBenchmarks,
+  getBenchmarksAPI,
   getBenchmarkFromDb,
   getStoredBenchmark,
   getInfo,
+  getInfoAPI,
   getPublicIp,
 
   // == UPNP FluxBecnh ==

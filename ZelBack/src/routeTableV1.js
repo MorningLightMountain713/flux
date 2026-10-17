@@ -350,11 +350,11 @@ module.exports = [
   { method: 'get', path: '/zelid/loggedsessions', none: NONE.OWN_ANSWER, handler: 'idService#loggedSessions' }, // DEPRECATED
   { method: 'get', path: '/zelid/logoutcurrentsession', none: NONE.OWN_ANSWER, handler: 'idService#logoutCurrentSession' }, // DEPRECATED
   { method: 'get', path: '/zelid/logoutallsessions', none: NONE.OWN_ANSWER, handler: 'idService#logoutAllSessions' }, // DEPRECATED
-  { method: 'get', path: '/benchmark/getstatus', none: NONE.PROXY, cache: '30 seconds', handler: 'benchmarkService#getStatus' },
+  { method: 'get', path: '/benchmark/getstatus', none: NONE.PROXY, cache: '30 seconds', handler: 'benchmarkService#getStatusAPI' },
   { method: 'get', path: '/benchmark/help/:command?', none: NONE.PROXY, cache: '1 hour', handler: 'benchmarkService#help' },
-  { method: 'get', path: '/benchmark/getbenchmarks', none: NONE.PROXY, cache: '30 seconds', handler: 'benchmarkService#getBenchmarks' },
+  { method: 'get', path: '/benchmark/getbenchmarks', none: NONE.PROXY, cache: '30 seconds', handler: 'benchmarkService#getBenchmarksAPI' },
   { method: 'get', path: '/benchmark/getstoredbenchmark', none: NONE.PROXY, cache: '1 hour', handler: 'benchmarkService#getStoredBenchmark' },
-  { method: 'get', path: '/benchmark/getinfo', none: NONE.PROXY, cache: '30 seconds', handler: 'benchmarkService#getInfo' },
+  { method: 'get', path: '/benchmark/getinfo', none: NONE.PROXY, cache: '30 seconds', handler: 'benchmarkService#getInfoAPI' },
   { method: 'get', path: '/syncthing/deviceid', none: NONE.PROXY, cache: '30 seconds', handler: 'syncthingService#getDeviceIdApi' },
   // BACKUP & RESTORE
 

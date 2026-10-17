@@ -88,7 +88,7 @@ describe('residentialNodeDosService tests', () => {
 
     // Default: bench reachable, node is NOT ArcaneOS.
     benchmarkServiceStub = {
-      getBenchmarks: sinon.stub().resolves({ status: 'success', data: { systemsecure: false } }),
+      getBenchmarks: sinon.stub().resolves({ value: { systemsecure: false } }),
     };
 
     // An install in flight is real before its database record exists, so the
@@ -124,7 +124,7 @@ describe('residentialNodeDosService tests', () => {
 
   describe('isArcaneOs', () => {
     it('returns true when bench reports systemsecure true', async () => {
-      benchmarkServiceStub.getBenchmarks.resolves({ status: 'success', data: { systemsecure: true } });
+      benchmarkServiceStub.getBenchmarks.resolves({ value: { systemsecure: true } });
 
       expect(await service.isArcaneOs()).to.equal(true);
     });
@@ -134,13 +134,13 @@ describe('residentialNodeDosService tests', () => {
     });
 
     it('returns null when bench errors, so an outage never DOSes a real ArcaneOS node', async () => {
-      benchmarkServiceStub.getBenchmarks.resolves({ status: 'error', data: 'benchd down' });
+      benchmarkServiceStub.getBenchmarks.resolves({ value: null, reason: 'benchd down' });
 
       expect(await service.isArcaneOs()).to.equal(null);
     });
 
     it('returns null when systemsecure is not a boolean', async () => {
-      benchmarkServiceStub.getBenchmarks.resolves({ status: 'success', data: { systemsecure: null } });
+      benchmarkServiceStub.getBenchmarks.resolves({ value: { systemsecure: null } });
 
       expect(await service.isArcaneOs()).to.equal(null);
     });
@@ -207,7 +207,7 @@ describe('residentialNodeDosService tests', () => {
     it('lifts when the node migrates to ArcaneOS', async () => {
       installedApps = [{ name: 'someapp' }];
       await service.enforceResidentialPolicy();
-      benchmarkServiceStub.getBenchmarks.resolves({ status: 'success', data: { systemsecure: true } });
+      benchmarkServiceStub.getBenchmarks.resolves({ value: { systemsecure: true } });
 
       await service.enforceResidentialPolicy();
 
@@ -217,7 +217,7 @@ describe('residentialNodeDosService tests', () => {
 
   describe('an unreadable input decides nothing', () => {
     it('does not hold or DOS when bench cannot be read', async () => {
-      benchmarkServiceStub.getBenchmarks.resolves({ status: 'error', data: 'down' });
+      benchmarkServiceStub.getBenchmarks.resolves({ value: null, reason: 'down' });
 
       const { decided } = await service.enforceResidentialPolicy();
 
@@ -256,7 +256,7 @@ describe('residentialNodeDosService tests', () => {
       // null and false are opposite claims: one says nobody knows yet, the
       // other says this node is fit to serve. A consumer that reads them the
       // same way treats an unreadable benchmark as an all-clear.
-      benchmarkServiceStub.getBenchmarks.resolves({ status: 'error', data: 'down' });
+      benchmarkServiceStub.getBenchmarks.resolves({ value: null, reason: 'down' });
 
       const { decision } = await service.enforceResidentialPolicy();
 
@@ -611,7 +611,7 @@ describe('residentialNodeDosService tests', () => {
       await service.enforceResidentialPolicy();
       expect(service.isEvacuating()).to.equal(true);
 
-      benchmarkServiceStub.getBenchmarks.resolves({ status: 'error' });
+      benchmarkServiceStub.getBenchmarks.resolves({ value: null, reason: {} });
       const { decided } = await service.enforceResidentialPolicy();
 
       expect(decided).to.equal(false);
@@ -697,7 +697,7 @@ describe('residentialNodeDosService tests', () => {
       await service.enforceResidentialPolicy();
       expect(service.getDosStaging()).to.equal('EVACUATE');
 
-      benchmarkServiceStub.getBenchmarks.resolves({ status: 'error' });
+      benchmarkServiceStub.getBenchmarks.resolves({ value: null, reason: {} });
       await service.enforceResidentialPolicy();
 
       expect(service.isEvacuating(), 'the drain stops, which is correct').to.equal(false);

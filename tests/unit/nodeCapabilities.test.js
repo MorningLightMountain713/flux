@@ -16,7 +16,7 @@ describe('nodeCapabilities tests', () => {
     });
 
     it('reports the channel unreachable when the reachability call does not succeed', async () => {
-      sinon.stub(benchmarkService, 'getStatus').resolves({ status: 'error', data: { code: 'ECONNREFUSED' } });
+      sinon.stub(benchmarkService, 'getStatus').resolves({ value: null, reason: { code: 'ECONNREFUSED' } });
       const nodeTypeStub = sinon.stub(benchmarkService, 'getNodeType');
 
       const result = await nodeCapabilities.probeOnce();
@@ -27,8 +27,8 @@ describe('nodeCapabilities tests', () => {
     });
 
     it('reports an attested node when the daemon answers arcane', async () => {
-      sinon.stub(benchmarkService, 'getStatus').resolves({ status: 'success', data: {} });
-      sinon.stub(benchmarkService, 'getNodeType').resolves({ status: 'success', data: { nodetype: 'arcane' } });
+      sinon.stub(benchmarkService, 'getStatus').resolves({ value: {} });
+      sinon.stub(benchmarkService, 'getNodeType').resolves({ value: { nodetype: 'arcane' } });
 
       const result = await nodeCapabilities.probeOnce();
 
@@ -36,8 +36,8 @@ describe('nodeCapabilities tests', () => {
     });
 
     it('reports a legacy node when the daemon answers legacy', async () => {
-      sinon.stub(benchmarkService, 'getStatus').resolves({ status: 'success', data: {} });
-      sinon.stub(benchmarkService, 'getNodeType').resolves({ status: 'success', data: { nodetype: 'legacy' } });
+      sinon.stub(benchmarkService, 'getStatus').resolves({ value: {} });
+      sinon.stub(benchmarkService, 'getNodeType').resolves({ value: { nodetype: 'legacy' } });
 
       const result = await nodeCapabilities.probeOnce();
 
@@ -45,8 +45,8 @@ describe('nodeCapabilities tests', () => {
     });
 
     it('keeps waiting while the node-type latch has not settled', async () => {
-      sinon.stub(benchmarkService, 'getStatus').resolves({ status: 'success', data: {} });
-      sinon.stub(benchmarkService, 'getNodeType').resolves({ status: 'success', data: { nodetype: 'pending' } });
+      sinon.stub(benchmarkService, 'getStatus').resolves({ value: {} });
+      sinon.stub(benchmarkService, 'getNodeType').resolves({ value: { nodetype: 'pending' } });
 
       const result = await nodeCapabilities.probeOnce();
 
@@ -54,8 +54,8 @@ describe('nodeCapabilities tests', () => {
     });
 
     it('treats a method-not-found from an older daemon as a definitive legacy verdict', async () => {
-      sinon.stub(benchmarkService, 'getStatus').resolves({ status: 'success', data: {} });
-      sinon.stub(benchmarkService, 'getNodeType').resolves({ status: 'error', data: { code: -32_601, message: 'Method not found' } });
+      sinon.stub(benchmarkService, 'getStatus').resolves({ value: {} });
+      sinon.stub(benchmarkService, 'getNodeType').resolves({ value: null, reason: { code: -32_601, message: 'Method not found' } });
 
       const result = await nodeCapabilities.probeOnce();
 
@@ -63,8 +63,8 @@ describe('nodeCapabilities tests', () => {
     });
 
     it('treats a transport error on the node-type call as transient, not legacy', async () => {
-      sinon.stub(benchmarkService, 'getStatus').resolves({ status: 'success', data: {} });
-      sinon.stub(benchmarkService, 'getNodeType').resolves({ status: 'error', data: { code: 'ECONNABORTED', message: 'timeout of 10000ms exceeded' } });
+      sinon.stub(benchmarkService, 'getStatus').resolves({ value: {} });
+      sinon.stub(benchmarkService, 'getNodeType').resolves({ value: null, reason: { code: 'ECONNABORTED', message: 'timeout of 10000ms exceeded' } });
 
       const result = await nodeCapabilities.probeOnce();
 
@@ -100,8 +100,8 @@ describe('nodeCapabilities tests', () => {
 
     it('resolves arcane when the benchmark channel latches arcane', async () => {
       process.env.FLUX_ARCANE_NODE = '1';
-      sinon.stub(benchmarkService, 'getStatus').resolves({ status: 'success', data: {} });
-      sinon.stub(benchmarkService, 'getNodeType').resolves({ status: 'success', data: { nodetype: 'arcane' } });
+      sinon.stub(benchmarkService, 'getStatus').resolves({ value: {} });
+      sinon.stub(benchmarkService, 'getNodeType').resolves({ value: { nodetype: 'arcane' } });
 
       await nodeCapabilities.resolveNodeCapability();
 
@@ -110,8 +110,8 @@ describe('nodeCapabilities tests', () => {
 
     it('resolves legacy when an Arcane-imaged node attests legacy', async () => {
       process.env.FLUX_ARCANE_NODE = '1';
-      sinon.stub(benchmarkService, 'getStatus').resolves({ status: 'success', data: {} });
-      sinon.stub(benchmarkService, 'getNodeType').resolves({ status: 'success', data: { nodetype: 'legacy' } });
+      sinon.stub(benchmarkService, 'getStatus').resolves({ value: {} });
+      sinon.stub(benchmarkService, 'getNodeType').resolves({ value: { nodetype: 'legacy' } });
 
       await nodeCapabilities.resolveNodeCapability();
 
@@ -121,10 +121,10 @@ describe('nodeCapabilities tests', () => {
     it('keeps polling through pending and never gives up before the verdict latches', async () => {
       process.env.FLUX_ARCANE_NODE = '1';
       const clock = sinon.useFakeTimers();
-      sinon.stub(benchmarkService, 'getStatus').resolves({ status: 'success', data: {} });
+      sinon.stub(benchmarkService, 'getStatus').resolves({ value: {} });
       const nodeType = sinon.stub(benchmarkService, 'getNodeType');
-      nodeType.onFirstCall().resolves({ status: 'success', data: { nodetype: 'pending' } });
-      nodeType.onSecondCall().resolves({ status: 'success', data: { nodetype: 'arcane' } });
+      nodeType.onFirstCall().resolves({ value: { nodetype: 'pending' } });
+      nodeType.onSecondCall().resolves({ value: { nodetype: 'arcane' } });
 
       const resolved = nodeCapabilities.resolveNodeCapability();
       // flush the first (pending) probe, fire the poll delay, run the second (arcane) probe

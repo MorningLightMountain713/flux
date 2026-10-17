@@ -392,16 +392,16 @@ async function trySpawningGlobalApplication() {
     }
     globalState.fluxNodeWasAlreadyConfirmed = true;
 
-    const benchmarkResponse = await benchmarkService.getBenchmarks();
-    if (benchmarkResponse.status === 'error') {
+    const { value: benchmarks } = await benchmarkService.getBenchmarks();
+    if (!benchmarks) {
       log.info('FluxBench status Error. Global applications will not be installed');
       return installDelay;
     }
     // get my external IP and check that it is longer than 5 in length.
     let localSocketAddr = null;
-    if (benchmarkResponse.data.ipaddress) {
-      log.info(`Gathered IP ${benchmarkResponse.data.ipaddress}`);
-      localSocketAddr = benchmarkResponse.data.ipaddress.length > 5 ? normalizeSocketAddress(benchmarkResponse.data.ipaddress) : null;
+    if (benchmarks.ipaddress) {
+      log.info(`Gathered IP ${benchmarks.ipaddress}`);
+      localSocketAddr = benchmarks.ipaddress.length > 5 ? normalizeSocketAddress(benchmarks.ipaddress) : null;
     }
     if (localSocketAddr === null) {
       throw new Error('Unable to detect Flux IP address');

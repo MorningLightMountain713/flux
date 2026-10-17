@@ -162,31 +162,23 @@ describe('fluxNetworkMonitor tests', () => {
       nodeDosState.setDosMessage(null);
     });
 
-    it('should return false if getPublicIp status is not a success', async () => {
-      const getPublicIptResponse = {
-        status: 'error',
-      };
-      sinon.stub(benchmarkService, 'getPublicIp').returns(getPublicIptResponse);
-      const axiosGetResponse = {
-        data: {
-          status: 'error',
-          data: {
-            message: 'all is good!',
-          },
-        },
-      };
-      sinon.stub(serviceHelper, 'axiosGet').resolves(axiosGetResponse);
+    it('an unreachable node whose benchmark cannot say its public IP is held, and says why', async () => {
+      const getPublicIp = sinon.stub(benchmarkService, 'getPublicIp').returns({ value: null, reason: { message: 'benchmark down' } });
+      getRandomExternalObserver.resolves('1.2.3.4:16127');
+      sinon.stub(serviceHelper, 'axiosGet').resolves({ data: { status: 'error', data: { message: 'not reachable' } } });
+      nodeDosState.setDosStateValue(11);
 
       const result = await fluxNetworkMonitor.checkMyFluxAvailability();
 
       expect(result).to.be.false;
+      sinon.assert.calledOnce(getPublicIp);
+      expect(nodeDosState.getRawDosMessage()).to.equal('Error getting publicIp from FluxBench');
+      nodeDosState.setDosStateValue(0);
+      nodeDosState.setDosMessage(null);
     });
 
     it('should return true if getPublicIp status is a success and has a proper ip', async () => {
-      const getPublicIptResponse = {
-        status: 'success',
-        data: '129.0.0.1',
-      };
+      const getPublicIptResponse = { value: '129.0.0.1' };
       sinon.stub(benchmarkService, 'getPublicIp').returns(getPublicIptResponse);
       const axiosGetResponse = {
         data: {
@@ -206,10 +198,7 @@ describe('fluxNetworkMonitor tests', () => {
     });
 
     it('should return false if getPublicIp status is a success but does not have a proper ip', async () => {
-      const getPublicIptResponse = {
-        status: 'success',
-        data: '120',
-      };
+      const getPublicIptResponse = { value: '120' };
       sinon.stub(benchmarkService, 'getPublicIp').returns(getPublicIptResponse);
       const axiosGetResponse = {
         data: {
@@ -509,10 +498,7 @@ describe('fluxNetworkMonitor tests', () => {
 
     it('should not change dosMessage', async () => {
       const ip = '127.0.0.1:5050';
-      const getBenchmarkResponseData = {
-        status: 'success',
-        data: { ipaddress: ip },
-      };
+      const getBenchmarkResponseData = { value: { ipaddress: ip } };
       getBenchmarksStub.resolves(getBenchmarkResponseData);
       daemonSyncStateStub.returns({ synced: true });
       deterministicFluxListStub.returns(deterministicFluxnodeListResponse);
@@ -529,10 +515,7 @@ describe('fluxNetworkMonitor tests', () => {
 
     it('should skip availability check when node status is not CONFIRMED', async () => {
       const ip = '127.0.0.1:5050';
-      const getBenchmarkResponseData = {
-        status: 'success',
-        data: { ipaddress: ip },
-      };
+      const getBenchmarkResponseData = { value: { ipaddress: ip } };
       getBenchmarksStub.resolves(getBenchmarkResponseData);
       daemonSyncStateStub.returns({ synced: true });
       // Node is not in the deterministic list (expired)
@@ -551,10 +534,7 @@ describe('fluxNetworkMonitor tests', () => {
 
     it('should skip availability check when IP is not in confirmed flux list', async () => {
       const ip = '127.0.0.1:5050';
-      const getBenchmarkResponseData = {
-        status: 'success',
-        data: { ipaddress: ip },
-      };
+      const getBenchmarkResponseData = { value: { ipaddress: ip } };
       getBenchmarksStub.resolves(getBenchmarkResponseData);
       daemonSyncStateStub.returns({ synced: true });
       deterministicFluxListStub.returns(deterministicFluxnodeListResponse);
@@ -596,10 +576,7 @@ describe('fluxNetworkMonitor tests', () => {
       ];
       const ip = '127.0.0.1:5050';
       fluxNetworkHelper.setLocalSocketAddress(ip);
-      const getBenchmarkResponseData = {
-        status: 'success',
-        data: { ipaddress: ip },
-      };
+      const getBenchmarkResponseData = { value: { ipaddress: ip } };
       getBenchmarksStub.resolves(getBenchmarkResponseData);
       daemonSyncStateStub.returns({ synced: true });
       deterministicFluxListStub.returns(multipleNodesList);
@@ -616,10 +593,7 @@ describe('fluxNetworkMonitor tests', () => {
     it('should trigger collision detection if the collateral is not matching', async () => {
       const ip = '127.0.0.1:5050';
       fluxNetworkHelper.setLocalSocketAddress(ip);
-      const getBenchmarkResponseData = {
-        status: 'success',
-        data: { ipaddress: ip },
-      };
+      const getBenchmarkResponseData = { value: { ipaddress: ip } };
       getBenchmarksStub.resolves(getBenchmarkResponseData);
       daemonSyncStateStub.returns({ synced: true });
       deterministicFluxListStub.returns(deterministicFluxnodeListResponse);
@@ -676,10 +650,7 @@ describe('fluxNetworkMonitor tests', () => {
           rank: 0,
         },
       ];
-      const getBenchmarkResponseData = {
-        status: 'success',
-        data: { ipaddress: myIp },
-      };
+      const getBenchmarkResponseData = { value: { ipaddress: myIp } };
       getBenchmarksStub.resolves(getBenchmarkResponseData);
       daemonSyncStateStub.returns({ synced: true });
       deterministicFluxListStub.returns(nodeListWithDifferentIp);
@@ -742,10 +713,7 @@ describe('fluxNetworkMonitor tests', () => {
           rank: 0,
         },
       ];
-      const getBenchmarkResponseData = {
-        status: 'success',
-        data: { ipaddress: myIp },
-      };
+      const getBenchmarkResponseData = { value: { ipaddress: myIp } };
       getBenchmarksStub.resolves(getBenchmarkResponseData);
       daemonSyncStateStub.returns({ synced: true });
       deterministicFluxListStub.returns(nodeListWithDifferentIp);
@@ -807,10 +775,7 @@ describe('fluxNetworkMonitor tests', () => {
           rank: 0,
         },
       ];
-      const getBenchmarkResponseData = {
-        status: 'success',
-        data: { ipaddress: myIp },
-      };
+      const getBenchmarkResponseData = { value: { ipaddress: myIp } };
       getBenchmarksStub.resolves(getBenchmarkResponseData);
       daemonSyncStateStub.returns({ synced: true });
       deterministicFluxListStub.returns(nodeListWithDifferentIp);

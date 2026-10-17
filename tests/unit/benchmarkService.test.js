@@ -149,29 +149,34 @@ describe('benchmarkService tests', () => {
       sinon.restore();
     });
 
-    it('should return a sucessful response if called without parameters', async () => {
-      const getStatusResult = await benchmarkService.getStatus();
-
-      expect(getStatusResult).to.be.an('object');
-      expect(getStatusResult.status).to.equal('success');
-      expect(getStatusResult.data).to.equal('called');
+    it('answers the daemon\'s value', async () => {
+      expect(await benchmarkService.getStatus()).to.deep.equal({ value: 'called' });
       sinon.assert.calledOnce(benchmarkStub);
     });
 
-    it('should call getstatus properly if response object is passed', async () => {
-      const generateResponse = () => {
-        const res = { test: 'testing' };
-        res.status = sinon.stub().returns(res);
-        res.json = sinon.stub().returns(res);
-        return res;
-      };
-      const mockResponse = generateResponse();
-      const expectedSuccessMessage = { status: 'success', data: 'called' };
+    it('answers why there is no value when the call fails', async () => {
+      benchmarkStub.rejects(Object.assign(new Error('benchmark down'), { code: 'EDOWN' }));
 
-      await benchmarkService.getStatus(undefined, mockResponse);
+      expect(await benchmarkService.getStatus()).to.deep.equal({
+        value: null, reason: { code: 'EDOWN', name: 'Error', message: 'benchmark down' },
+      });
+    });
 
-      sinon.assert.calledOnce(benchmarkStub);
-      sinon.assert.calledOnceWithExactly(mockResponse.json, expectedSuccessMessage);
+    it('answers its route with the value as data', async () => {
+      const res = { json: sinon.stub() };
+
+      await benchmarkService.getStatusAPI({}, res);
+
+      sinon.assert.calledOnceWithExactly(res.json, { status: 'success', data: 'called' });
+    });
+
+    it('answers its route with the reason as an error', async () => {
+      benchmarkStub.rejects(Object.assign(new Error('benchmark down'), { code: 'EDOWN' }));
+      const res = { json: sinon.stub() };
+
+      await benchmarkService.getStatusAPI({}, res);
+
+      sinon.assert.calledOnceWithExactly(res.json, { status: 'error', data: { code: 'EDOWN', name: 'Error', message: 'benchmark down' } });
     });
   });
 
@@ -593,29 +598,34 @@ describe('benchmarkService tests', () => {
       sinon.restore();
     });
 
-    it('should return a sucessful response if called without parameters', async () => {
-      const getBenchmarksResult = await benchmarkService.getBenchmarks();
-
-      expect(getBenchmarksResult).to.be.an('object');
-      expect(getBenchmarksResult.status).to.equal('success');
-      expect(getBenchmarksResult.data).to.equal('called');
+    it('answers the daemon\'s value', async () => {
+      expect(await benchmarkService.getBenchmarks()).to.deep.equal({ value: 'called' });
       sinon.assert.calledOnce(benchmarkStub);
     });
 
-    it('should call getstatus properly if response object is passed', async () => {
-      const generateResponse = () => {
-        const res = { test: 'testing' };
-        res.status = sinon.stub().returns(res);
-        res.json = sinon.stub().returns(res);
-        return res;
-      };
-      const mockResponse = generateResponse();
-      const expectedSuccessMessage = { status: 'success', data: 'called' };
+    it('answers why there is no value when the call fails', async () => {
+      benchmarkStub.rejects(Object.assign(new Error('benchmark down'), { code: 'EDOWN' }));
 
-      await benchmarkService.getBenchmarks(undefined, mockResponse);
+      expect(await benchmarkService.getBenchmarks()).to.deep.equal({
+        value: null, reason: { code: 'EDOWN', name: 'Error', message: 'benchmark down' },
+      });
+    });
 
-      sinon.assert.calledOnce(benchmarkStub);
-      sinon.assert.calledOnceWithExactly(mockResponse.json, expectedSuccessMessage);
+    it('answers its route with the value as data', async () => {
+      const res = { json: sinon.stub() };
+
+      await benchmarkService.getBenchmarksAPI({}, res);
+
+      sinon.assert.calledOnceWithExactly(res.json, { status: 'success', data: 'called' });
+    });
+
+    it('answers its route with the reason as an error', async () => {
+      benchmarkStub.rejects(Object.assign(new Error('benchmark down'), { code: 'EDOWN' }));
+      const res = { json: sinon.stub() };
+
+      await benchmarkService.getBenchmarksAPI({}, res);
+
+      sinon.assert.calledOnceWithExactly(res.json, { status: 'error', data: { code: 'EDOWN', name: 'Error', message: 'benchmark down' } });
     });
   });
 
@@ -631,29 +641,34 @@ describe('benchmarkService tests', () => {
       sinon.restore();
     });
 
-    it('should return a sucessful response if called without parameters', async () => {
-      const getInfoResult = await benchmarkService.getInfo();
-
-      expect(getInfoResult).to.be.an('object');
-      expect(getInfoResult.status).to.equal('success');
-      expect(getInfoResult.data).to.equal('called');
+    it('answers the daemon\'s value', async () => {
+      expect(await benchmarkService.getInfo()).to.deep.equal({ value: 'called' });
       sinon.assert.calledOnce(benchmarkStub);
     });
 
-    it('should call getstatus properly if response object is passed', async () => {
-      const generateResponse = () => {
-        const res = { test: 'testing' };
-        res.status = sinon.stub().returns(res);
-        res.json = sinon.stub().returns(res);
-        return res;
-      };
-      const mockResponse = generateResponse();
-      const expectedSuccessMessage = { status: 'success', data: 'called' };
+    it('answers why there is no value when the call fails', async () => {
+      benchmarkStub.rejects(Object.assign(new Error('benchmark down'), { code: 'EDOWN' }));
 
-      await benchmarkService.getInfo(undefined, mockResponse);
+      expect(await benchmarkService.getInfo()).to.deep.equal({
+        value: null, reason: { code: 'EDOWN', name: 'Error', message: 'benchmark down' },
+      });
+    });
 
-      sinon.assert.calledOnce(benchmarkStub);
-      sinon.assert.calledOnceWithExactly(mockResponse.json, expectedSuccessMessage);
+    it('answers its route with the value as data', async () => {
+      const res = { json: sinon.stub() };
+
+      await benchmarkService.getInfoAPI({}, res);
+
+      sinon.assert.calledOnceWithExactly(res.json, { status: 'success', data: 'called' });
+    });
+
+    it('answers its route with the reason as an error', async () => {
+      benchmarkStub.rejects(Object.assign(new Error('benchmark down'), { code: 'EDOWN' }));
+      const res = { json: sinon.stub() };
+
+      await benchmarkService.getInfoAPI({}, res);
+
+      sinon.assert.calledOnceWithExactly(res.json, { status: 'error', data: { code: 'EDOWN', name: 'Error', message: 'benchmark down' } });
     });
   });
 
@@ -669,29 +684,17 @@ describe('benchmarkService tests', () => {
       sinon.restore();
     });
 
-    it('should return a sucessful response if called without parameters', async () => {
-      const getPublicIpResult = await benchmarkService.getPublicIp();
-
-      expect(getPublicIpResult).to.be.an('object');
-      expect(getPublicIpResult.status).to.equal('success');
-      expect(getPublicIpResult.data).to.equal('called');
+    it('answers the daemon\'s value', async () => {
+      expect(await benchmarkService.getPublicIp()).to.deep.equal({ value: 'called' });
       sinon.assert.calledOnce(benchmarkStub);
     });
 
-    it('should call getstatus properly if response object is passed', async () => {
-      const generateResponse = () => {
-        const res = { test: 'testing' };
-        res.status = sinon.stub().returns(res);
-        res.json = sinon.stub().returns(res);
-        return res;
-      };
-      const mockResponse = generateResponse();
-      const expectedSuccessMessage = { status: 'success', data: 'called' };
+    it('answers why there is no value when the call fails', async () => {
+      benchmarkStub.rejects(Object.assign(new Error('benchmark down'), { code: 'EDOWN' }));
 
-      await benchmarkService.getPublicIp(undefined, mockResponse);
-
-      sinon.assert.calledOnce(benchmarkStub);
-      sinon.assert.calledOnceWithExactly(mockResponse.json, expectedSuccessMessage);
+      expect(await benchmarkService.getPublicIp()).to.deep.equal({
+        value: null, reason: { code: 'EDOWN', name: 'Error', message: 'benchmark down' },
+      });
     });
   });
 });

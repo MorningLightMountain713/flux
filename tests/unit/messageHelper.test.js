@@ -133,4 +133,19 @@ describe('messageHelper tests', () => {
     });
   });
 
+  describe('messageOf', () => {
+    it('is a data message for an answer with a value', () => {
+      expect(messageHelper.messageOf({ value: { height: 5 } })).to.deep.equal({ status: 'success', data: { height: 5 } });
+    });
+
+    it('is a data message for a value that is falsy', () => {
+      expect(messageHelper.messageOf({ value: 0 })).to.deep.equal({ status: 'success', data: 0 });
+    });
+
+    it('is an error message carrying the reason for an answer without one', () => {
+      expect(messageHelper.messageOf({ value: null, reason: { message: 'down', name: 'Error', code: 'EDOWN' } }))
+        .to.deep.equal({ status: 'error', data: { code: 'EDOWN', name: 'Error', message: 'down' } });
+    });
+  });
+
 });

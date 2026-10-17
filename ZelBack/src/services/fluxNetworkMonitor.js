@@ -317,10 +317,10 @@ async function checkMyFluxAvailability(retryNumber = 0) {
     // Asked Flux cannot reach me lets check if ip changed
     if (retryNumber === 4 || nodeDosState.getDosStateValue() > 10) {
       log.info('Getting publicIp from FluxBench');
-      const benchIpResponse = await benchmarkService.getPublicIp();
-      if (benchIpResponse.status === 'success') {
-        log.info(`FluxBench reported public IP: ${benchIpResponse.data}`);
-        const benchMyIP = benchIpResponse.data.length > 5 ? benchIpResponse.data : null;
+      const { value: benchIp, reason } = await benchmarkService.getPublicIp();
+      if (!reason) {
+        log.info(`FluxBench reported public IP: ${benchIp}`);
+        const benchMyIP = benchIp.length > 5 ? benchIp : null;
         if (benchMyIP && extractIp(benchMyIP) !== localIp) {
           log.info('New IP found... updating network');
           nodeDosState.setDosStateValue(0);
@@ -539,9 +539,9 @@ async function checkDeterministicNodesCollisions() {
       } else {
         const measuredUptime = fluxNetworkHelper.fluxUptime();
         if (measuredUptime > config.get('fluxapps.minUpTime')) {
-          const benchIpResponse = await benchmarkService.getPublicIp();
-          if (benchIpResponse.status === 'success') {
-            log.info(`FluxBench was previoulsy without ip and now reported public IP: ${benchIpResponse.data}`);
+          const { value: benchIp, reason } = await benchmarkService.getPublicIp();
+          if (!reason) {
+            log.info(`FluxBench was previoulsy without ip and now reported public IP: ${benchIp}`);
           }
         }
       }

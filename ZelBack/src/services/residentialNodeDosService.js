@@ -203,11 +203,11 @@ function isOurDosHeld() {
  */
 async function isArcaneOs() {
   try {
-    const benchmarkResponse = await benchmarkService.getBenchmarks();
-    if (!benchmarkResponse || benchmarkResponse.status !== 'success' || !benchmarkResponse.data) {
+    const { value: benchmarks } = await benchmarkService.getBenchmarks();
+    if (!benchmarks) {
       return null;
     }
-    const { systemsecure } = benchmarkResponse.data;
+    const { systemsecure } = benchmarks;
     if (typeof systemsecure !== 'boolean') return null;
     return systemsecure;
   } catch (error) {

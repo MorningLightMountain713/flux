@@ -59,7 +59,7 @@ describe('geolocationService tests', () => {
         reverse: sinon.stub().rejects(Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' })),
       },
     };
-    benchmarkServiceStub = { getBenchmarks: sinon.stub().resolves({ status: 'error', data: null }) };
+    benchmarkServiceStub = { getBenchmarks: sinon.stub().resolves({ value: null, reason: {} }) };
     // The service reschedules itself with setTimeout on every path it takes,
     // including a ten-second retry when no IP is detected. A real timer there
     // outlives this file and re-enters the service against restored stubs, so

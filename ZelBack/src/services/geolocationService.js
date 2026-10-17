@@ -202,13 +202,13 @@ async function publishedClassification(ip) {
  */
 async function benchLinkSpeeds() {
   try {
-    const response = await benchmarkService.getBenchmarks();
-    if (!response || response.status !== 'success' || !response.data) {
+    const { value: benchmarks } = await benchmarkService.getBenchmarks();
+    if (!benchmarks) {
       return { uploadSpeed: 0, downloadSpeed: 0 };
     }
     return {
-      uploadSpeed: response.data.upload_speed || 0,
-      downloadSpeed: response.data.download_speed || 0,
+      uploadSpeed: benchmarks.upload_speed || 0,
+      downloadSpeed: benchmarks.download_speed || 0,
     };
   } catch (error) {
     return { uploadSpeed: 0, downloadSpeed: 0 };

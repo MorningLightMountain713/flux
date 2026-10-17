@@ -1588,21 +1588,21 @@ async function getFluxInfo(req, res) {
       throw daemonNodeStatusRes.data;
     }
     info.node.status = daemonNodeStatusRes.data;
-    const benchmarkInfoRes = await benchmarkService.getInfo();
-    if (benchmarkInfoRes.status === 'error') {
-      throw benchmarkInfoRes.data;
+    const benchmarkInfo = await benchmarkService.getInfo();
+    if (benchmarkInfo.reason) {
+      throw benchmarkInfo.reason;
     }
-    info.benchmark.info = benchmarkInfoRes.data;
-    const benchmarkStatusRes = await benchmarkService.getStatus();
-    if (benchmarkStatusRes.status === 'error') {
-      throw benchmarkStatusRes.data;
+    info.benchmark.info = benchmarkInfo.value;
+    const benchmarkStatus = await benchmarkService.getStatus();
+    if (benchmarkStatus.reason) {
+      throw benchmarkStatus.reason;
     }
-    info.benchmark.status = benchmarkStatusRes.data;
-    const benchmarkBenchRes = await benchmarkService.getBenchmarks();
-    if (benchmarkBenchRes.status === 'error') {
-      throw benchmarkBenchRes.data;
+    info.benchmark.status = benchmarkStatus.value;
+    const benchmarks = await benchmarkService.getBenchmarks();
+    if (benchmarks.reason) {
+      throw benchmarks.reason;
     }
-    info.benchmark.bench = benchmarkBenchRes.data;
+    info.benchmark.bench = benchmarks.value;
 
     const apppsFluxUsage = await appQueryService.fluxUsage();
     if (apppsFluxUsage.status === 'error') {
