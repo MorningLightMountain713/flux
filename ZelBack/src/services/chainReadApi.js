@@ -34,17 +34,15 @@ async function getAddressUtxos(req, res) {
     if (!address) {
       throw new Error('No address provided');
     }
-    const daemonRequest = {
-      params: {
-        address,
-      },
-      query: {},
-    };
-    const insightResult = await daemonServiceAddressRpcs.getSingleAddressUtxos(daemonRequest);
+    const insightResult = await daemonServiceAddressRpcs.getSingleAddressUtxos(address);
+    if (insightResult.reason) {
+      res.json(messageHelper.messageOf(insightResult));
+      return;
+    }
     const syncStatus = daemonStatus.daemonSyncState();
     const curHeight = syncStatus.height;
     const utxos = [];
-    insightResult.data.forEach((utxo) => {
+    insightResult.value.forEach((utxo) => {
       const adjustedUtxo = {
         address: utxo.address,
         txid: utxo.txid,
@@ -79,14 +77,12 @@ async function getAddressTransactions(req, res) {
     if (!address) {
       throw new Error('No address provided');
     }
-    const daemonRequest = {
-      params: {
-        address,
-      },
-      query: {},
-    };
-    const insightResult = await daemonServiceAddressRpcs.getSingleAddresssTxids(daemonRequest);
-    const txids = insightResult.data.reverse(); // newest first
+    const insightResult = await daemonServiceAddressRpcs.getSingleAddresssTxids(address);
+    if (insightResult.reason) {
+      res.json(messageHelper.messageOf(insightResult));
+      return;
+    }
+    const txids = insightResult.value.reverse(); // newest first
     const txidsOK = [];
     txids.forEach((txid) => {
       txidsOK.push({
@@ -114,14 +110,12 @@ async function getAddressBalance(req, res) {
     if (!address) {
       throw new Error('No address provided');
     }
-    const daemonRequest = {
-      params: {
-        address,
-      },
-      query: {},
-    };
-    const insightResult = await daemonServiceAddressRpcs.getSingleAddressBalance(daemonRequest);
-    const { balance } = insightResult.data;
+    const insightResult = await daemonServiceAddressRpcs.getSingleAddressBalance(address);
+    if (insightResult.reason) {
+      res.json(messageHelper.messageOf(insightResult));
+      return;
+    }
+    const { balance } = insightResult.value;
     const resMessage = messageHelper.createDataMessage(balance);
     res.json(resMessage);
   } catch (error) {

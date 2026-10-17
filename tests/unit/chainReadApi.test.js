@@ -49,12 +49,9 @@ describe('chainReadApi tests', () => {
 
     it('should answer from the daemon address index', async () => {
       const res = generateResponse();
-      getSingleAddressUtxosStub.resolves({
-        status: 'success',
-        data: [{
-          address: '1Z123', txid: 'tx1', outputIndex: 2, height: 90, satoshis: 500, script: 'aabb',
-        }],
-      });
+      getSingleAddressUtxosStub.resolves({ value: [{
+        address: '1Z123', txid: 'tx1', outputIndex: 2, height: 90, satoshis: 500, script: 'aabb',
+      }] });
 
       await chainReadApi.getAddressUtxos({ params: { address: '1Z123' }, query: {} }, res);
 
@@ -74,12 +71,9 @@ describe('chainReadApi tests', () => {
 
     it('should recompute confirmations from the current height rather than forward the daemon value', async () => {
       const res = generateResponse();
-      getSingleAddressUtxosStub.resolves({
-        status: 'success',
-        data: [{
-          address: '1Z123', txid: 'tx1', outputIndex: 0, height: 40, satoshis: 1, script: 'cc', confirmations: 99_999,
-        }],
-      });
+      getSingleAddressUtxosStub.resolves({ value: [{
+        address: '1Z123', txid: 'tx1', outputIndex: 0, height: 40, satoshis: 1, script: 'cc', confirmations: 99_999,
+      }] });
 
       await chainReadApi.getAddressUtxos({ params: { address: '1Z123' }, query: {} }, res);
 
@@ -88,11 +82,20 @@ describe('chainReadApi tests', () => {
 
     it('should accept the address from the query string', async () => {
       const res = generateResponse();
-      getSingleAddressUtxosStub.resolves({ status: 'success', data: [] });
+      getSingleAddressUtxosStub.resolves({ value: [] });
 
       await chainReadApi.getAddressUtxos({ params: {}, query: { address: '1Q999' } }, res);
 
-      sinon.assert.calledWithMatch(getSingleAddressUtxosStub, { params: { address: '1Q999' } });
+      sinon.assert.calledOnceWithExactly(getSingleAddressUtxosStub, '1Q999');
+    });
+
+    it('answers the daemon\'s reason when it refuses', async () => {
+      const res = generateResponse();
+      getSingleAddressUtxosStub.resolves({ value: null, reason: { code: -5, message: 'Invalid address' } });
+
+      await chainReadApi.getAddressUtxos({ params: { address: 'bad' }, query: {} }, res);
+
+      sinon.assert.calledOnceWithExactly(res.json, { status: 'error', data: { code: -5, name: undefined, message: 'Invalid address' } });
     });
   });
 
@@ -116,7 +119,7 @@ describe('chainReadApi tests', () => {
 
     it('should return txids newest first, wrapped as objects', async () => {
       const res = generateResponse();
-      getSingleAddresssTxidsStub.resolves({ status: 'success', data: ['oldest', 'middle', 'newest'] });
+      getSingleAddresssTxidsStub.resolves({ value: ['oldest', 'middle', 'newest'] });
 
       await chainReadApi.getAddressTransactions({ params: { address: '1Z123' }, query: {} }, res);
 
@@ -124,6 +127,15 @@ describe('chainReadApi tests', () => {
         status: 'success',
         data: [{ txid: 'newest' }, { txid: 'middle' }, { txid: 'oldest' }],
       });
+    });
+
+    it('answers the daemon\'s reason when it refuses', async () => {
+      const res = generateResponse();
+      getSingleAddresssTxidsStub.resolves({ value: null, reason: { code: -5, message: 'Invalid address' } });
+
+      await chainReadApi.getAddressTransactions({ params: { address: 'bad' }, query: {} }, res);
+
+      sinon.assert.calledOnceWithExactly(res.json, { status: 'error', data: { code: -5, name: undefined, message: 'Invalid address' } });
     });
   });
 
@@ -148,11 +160,20 @@ describe('chainReadApi tests', () => {
 
     it('should return the balance the daemon reports', async () => {
       const res = generateResponse();
-      getSingleAddressBalanceStub.resolves({ status: 'success', data: { balance: 12_345 } });
+      getSingleAddressBalanceStub.resolves({ value: { balance: 12_345 } });
 
       await chainReadApi.getAddressBalance({ params: { address: '1Z123' }, query: {} }, res);
 
       sinon.assert.calledOnceWithExactly(res.json, { status: 'success', data: 12_345 });
+    });
+
+    it('answers the daemon\'s reason when it refuses', async () => {
+      const res = generateResponse();
+      getSingleAddressBalanceStub.resolves({ value: null, reason: { code: -5, message: 'Invalid address' } });
+
+      await chainReadApi.getAddressBalance({ params: { address: 'bad' }, query: {} }, res);
+
+      sinon.assert.calledOnceWithExactly(res.json, { status: 'error', data: { code: -5, name: undefined, message: 'Invalid address' } });
     });
   });
 

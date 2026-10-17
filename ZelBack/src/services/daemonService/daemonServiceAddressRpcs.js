@@ -42,36 +42,33 @@ async function getAddressTxids(req, res) {
 }
 
 /**
- * To get transaction IDs for single specified address. Address, start and end required as parameters for RPC call.
+ * The transaction ids of one address, between two heights when given.
+ * @param {string} address
+ * @param {number|null} [start]
+ * @param {number|null} [end]
+ * @returns {Promise<{value: string[]|null, reason?: object}>}
+ */
+async function getSingleAddresssTxids(address, start = null, end = null) {
+  const options = { addresses: [address] };
+  if (start) options.start = start;
+  if (end) options.end = end;
+  return messageHelper.answerOf(await daemonServiceUtils.executeCall('getaddresstxids', [options]));
+}
+
+/**
+ * GET /daemon/getaddresstxids/:address?/:start?/:end?
  * @param {import('express').Request} req
  * @param {import('express').Response} res
- * @returns {object} Message.
  */
-async function getSingleAddresssTxids(req, res) {
-  let { address } = req.params;
-  address = address || req.query.address;
-  let { start } = req.params;
-  start = start || req.query.start;
-  let { end } = req.params;
-  end = end || req.query.end;
-
-  const options = {
-    addresses: [address],
-  };
-
-  if (start) {
-    options.start = serviceHelper.ensureNumber(start);
-  }
-  if (end) {
-    options.end = serviceHelper.ensureNumber(end);
-  }
-
-  const rpccall = 'getaddresstxids';
-  const rpcparameters = [options];
-
-  response = await daemonServiceUtils.executeCall(rpccall, rpcparameters);
-
-  return res ? res.json(response) : response;
+async function getSingleAddresssTxidsAPI(req, res) {
+  const address = req.params.address || req.query.address;
+  const start = req.params.start || req.query.start;
+  const end = req.params.end || req.query.end;
+  res.json(messageHelper.messageOf(await getSingleAddresssTxids(
+    address,
+    start ? serviceHelper.ensureNumber(start) : null,
+    end ? serviceHelper.ensureNumber(end) : null,
+  )));
 }
 
 /**
@@ -103,25 +100,21 @@ async function getAddressBalance(req, res) {
 }
 
 /**
- * To get balance of a single address. Address required as parameter for RPC call.
+ * The balance of one address.
+ * @param {string} address
+ * @returns {Promise<{value: object|null, reason?: object}>}
+ */
+async function getSingleAddressBalance(address) {
+  return messageHelper.answerOf(await daemonServiceUtils.executeCall('getaddressbalance', [{ addresses: [address] }]));
+}
+
+/**
+ * GET /daemon/getaddressbalance/:address?
  * @param {import('express').Request} req
  * @param {import('express').Response} res
- * @returns {object} Message.
  */
-async function getSingleAddressBalance(req, res) {
-  let { address } = req.params;
-  address = address || req.query.address;
-
-  const options = {
-    addresses: [address],
-  };
-
-  const rpccall = 'getaddressbalance';
-  const rpcparameters = [options];
-
-  response = await daemonServiceUtils.executeCall(rpccall, rpcparameters);
-
-  return res ? res.json(response) : response;
+async function getSingleAddressBalanceAPI(req, res) {
+  res.json(messageHelper.messageOf(await getSingleAddressBalance(req.params.address || req.query.address)));
 }
 
 /**
@@ -236,28 +229,25 @@ async function getAddressUtxos(req, res) {
 }
 
 /**
- * To get UTXOs for a single address. Address and chain info required as parameters for RPC call.
+ * The unspent outputs of one address, with the chain's state when chaininfo is
+ * asked for.
+ * @param {string} address
+ * @param {*} [chaininfo]
+ * @returns {Promise<{value: object[]|object|null, reason?: object}>}
+ */
+async function getSingleAddressUtxos(address, chaininfo) {
+  return messageHelper.answerOf(await daemonServiceUtils.executeCall('getaddressutxos', [{ addresses: [address], chainInfo: chaininfo }]));
+}
+
+/**
+ * GET /daemon/getaddressutxos/:address?/:chaininfo?
  * @param {import('express').Request} req
  * @param {import('express').Response} res
- * @returns {object} Message.
  */
-async function getSingleAddressUtxos(req, res) {
-  let { address } = req.params;
-  address = address || req.query.address;
-  let { chaininfo } = req.params;
-  chaininfo = chaininfo || req.query.chaininfo;
-
-  const options = {
-    addresses: [address],
-    chainInfo: chaininfo,
-  };
-
-  const rpccall = 'getaddressutxos';
-  const rpcparameters = [options];
-
-  response = await daemonServiceUtils.executeCall(rpccall, rpcparameters);
-
-  return res ? res.json(response) : response;
+async function getSingleAddressUtxosAPI(req, res) {
+  const address = req.params.address || req.query.address;
+  const chaininfo = req.params.chaininfo || req.query.chaininfo;
+  res.json(messageHelper.messageOf(await getSingleAddressUtxos(address, chaininfo)));
 }
 
 /**
@@ -315,12 +305,15 @@ async function getSingleAddressMempool(req, res) {
 module.exports = {
   getAddressTxids, // insight explorer
   getSingleAddresssTxids,
+  getSingleAddresssTxidsAPI,
   getAddressBalance, // insight explorer
   getSingleAddressBalance,
+  getSingleAddressBalanceAPI,
   getAddressDeltas, // insight explorer
   getSingleAddressDeltas,
   getAddressUtxos, // insight explorer
   getSingleAddressUtxos,
+  getSingleAddressUtxosAPI,
   getAddressMempool, // insight explorer
   getSingleAddressMempool,
 };
