@@ -33,6 +33,11 @@ module.exports = [
   {
     method: 'get', path: '/apps/activestandby', needs: ['localDbPrepared'], handler: 'apiV2/apps#activeStandby',
   },
+  // Who has owned the app holding a name: it reads the decisions, which are not
+  // whole mid-rewind.
+  {
+    method: 'get', path: '/apps/:name/ownerships', needs: ['localDbPrepared', 'chainStateConsistent'], handler: 'apiV2/apps#ownerships',
+  },
   {
     method: 'get', path: '/node/boot', guards: ['nodeOperatorOrFluxTeam'], none: 'reads the capability registry this process holds', handler: 'apiV2/node#boot',
   },

@@ -30,6 +30,7 @@ const { stubDecisions } = require('./fixtures/appRecords');
 const appDomain = require('./fixtures/appDomain');
 const messageDelivery = require('../../ZelBack/src/services/appMessaging/messageDelivery');
 const temporaryPoolSweep = require('../../ZelBack/src/services/appMessaging/temporaryPoolSweep');
+const appHistory = require('../../ZelBack/src/services/appDecisions/appHistory');
 const operationsController = require('../../ZelBack/src/services/appManagement/operationsController');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
@@ -335,6 +336,47 @@ describe('routesV2 - the /v2 surface', () => {
       expect(res.status).to.equal(503);
       expect(res.body.error.code).to.equal('UNAVAILABLE');
       sinon.assert.notCalled(decisionsFor);
+    });
+  });
+
+  describe('GET /apps/:name/ownerships', () => {
+    let app;
+    let ownershipRecord;
+
+    beforeEach(() => {
+      ownershipRecord = sinon.stub(appHistory, 'ownershipRecord').resolves(null);
+      capabilities.resetForTests();
+      capabilities.setForTests(['localDbPrepared', 'chainStateConsistent'], true);
+      app = express();
+      app.use('/v2', routesV2);
+    });
+
+    afterEach(() => {
+      sinon.restore();
+      capabilities.resetForTests();
+    });
+
+    it('answers the identity of the app holding the name and its owners with the height each took it', async () => {
+      ownershipRecord.resolves({ identity: 'bident', ownerships: [{ owner: '1Seller', from: 100 }, { owner: '1Buyer', from: 400 }] });
+      const res = await supertest(app).get('/v2/apps/MyApp/ownerships');
+      expect(res.status).to.equal(200);
+      expect(res.body.data).to.deep.equal({
+        name: 'MyApp', identity: 'bident', ownerships: [{ owner: '1Seller', from: 100 }, { owner: '1Buyer', from: 400 }],
+      });
+      sinon.assert.calledOnceWithExactly(ownershipRecord, 'MyApp');
+    });
+
+    it('answers 404 for a name no app has applied under', async () => {
+      const res = await supertest(app).get('/v2/apps/nothing/ownerships');
+      expect(res.status).to.equal(404);
+      expect(res.body.error.code).to.equal('NOT_FOUND');
+    });
+
+    it('answers 503 while chain state is rebuilding, and reads nothing', async () => {
+      capabilities.setForTests('chainStateConsistent', false);
+      const res = await supertest(app).get('/v2/apps/MyApp/ownerships');
+      expect(res.status).to.equal(503);
+      sinon.assert.notCalled(ownershipRecord);
     });
   });
 
