@@ -334,7 +334,6 @@ function evacuationVerdict(app, locations, localSocketAddr) {
  */
 async function checkAndGiveUpAnApp(deps = {}) {
   const {
-    installedAppsFn,
     isElectedPrimary,
     runningLocally = isComponentRunningLocally,
   } = deps;
@@ -355,7 +354,7 @@ async function checkAndGiveUpAnApp(deps = {}) {
     return { considered: 0, gaveUp: null };
   }
 
-  const names = await residentialNodeDosService.listInstalledApps(installedAppsFn);
+  const names = await residentialNodeDosService.listInstalledApps();
   ageStandDowns(new Set(names || []));
   if (!names || !names.length) return { considered: 0, gaveUp: null };
 
