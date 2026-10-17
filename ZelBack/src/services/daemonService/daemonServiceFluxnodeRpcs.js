@@ -217,26 +217,14 @@ async function startFluxNode(req, res) {
 }
 
 /**
- * To view list of deterministic nodes. Optional filter can be included as a parameter for RPC call.
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- * @returns {object} Message.
+ * The deterministic node list, or the nodes matching a filter. Always straight
+ * from the daemon: the list is a ~7 MB answer that changes every block.
+ * @param {string|null} [filter]
+ * @returns {Promise<{value: object[]|null, reason?: object}>}
  */
-async function viewDeterministicFluxNodeList(req, res) {
-  let { filter } = req.params;
-  filter = filter || req.query.filter;
-
-  const rpccall = 'viewdeterministiczelnodelist'; // viewdeterministicfluxnodelist
-  const rpcparameters = [];
-  if (filter) {
-    rpcparameters.push(filter);
-  }
-
-  // Always straight from the daemon. The list is a ~7 MB answer that changes every
-  // block, and the route serving it is already response-cached at the API layer.
-  response = await daemonServiceUtils.executeCall(rpccall, rpcparameters);
-
-  return res ? res.json(response) : response;
+async function viewDeterministicFluxNodeList(filter = null) {
+  const rpcparameters = filter ? [filter] : [];
+  return messageHelper.answerOf(await daemonServiceUtils.executeCall('viewdeterministiczelnodelist', rpcparameters));
 }
 
 /**
@@ -257,16 +245,10 @@ async function fluxNodeCurrentWinner(req, res) {
  * To create a fluxnode confirmation transaction. The node re-confirms itself on
  * chain with its own node identity; no wallet funds are involved, which is why
  * this lives here and not with the wallet RPCs FluxOS no longer exposes.
- * @param {object} req Request.
- * @param {object} res Response.
- * @returns {object} Message.
+ * @returns {Promise<{value: *, reason?: object}>}
  */
-async function createConfirmationTransaction(req, res) {
-  const rpccall = 'createconfirmationtransaction';
-
-  response = await daemonServiceUtils.executeCall(rpccall);
-
-  return res ? res.json(response) : response;
+async function createConfirmationTransaction() {
+  return messageHelper.answerOf(await daemonServiceUtils.executeCall('createconfirmationtransaction'));
 }
 
 module.exports = {
