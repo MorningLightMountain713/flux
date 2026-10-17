@@ -14,6 +14,7 @@ const playgroundSessionRegistry = require('../../ZelBack/src/services/appPlaygro
 const {
   loadSpecLibrary, v9Spec, registeredSpec,
 } = require('./fixtures/fluxSpec');
+const { inMemoryHostedInstances, installedRecord } = require('./fixtures/appRecords');
 
 // The spec library is real here, not stubbed - see tests/unit/fixtures/fluxSpec.js
 // for why. Every registry and installed row below is a real RegisteredSpec, so
@@ -35,6 +36,7 @@ describe('appJanitor tests', () => {
   let appQueryServiceStub;
   let appDockerNetworkStub;
   let appUninstallerStub;
+  let hostedInstances;
 
   // V9_SUBMISSION's ttl is 30 days, so a row registered at this timestamp
   // (2025-07-04) is long past it against wall-clock time.
@@ -57,14 +59,13 @@ describe('appJanitor tests', () => {
   }
 
   /**
-   * A real installed-app row as appQueryService.installedApps() returns it:
-   * the SERIALIZED form of the stored RegisteredSpec, since that endpoint
-   * maps `app.serialize()` over the repository's rows. The janitor matches
-   * docker containers against `row.name`, so what serialize() actually emits
-   * is the thing under test, not a literal that agrees by construction.
+   * A real hosted instance over a real RegisteredSpec, stored in the in-memory
+   * collection the janitor reads, so the name and identity it matches on are
+   * the record's own.
    */
-  async function installedRow(name, { identity = null } = {}) {
-    return (await v9Row(name, { registeredAt: Math.floor(Date.now() / 1000), identity })).serialize();
+  async function host(name, { identity = null } = {}) {
+    const record = await v9Row(name, { registeredAt: Math.floor(Date.now() / 1000), identity });
+    await hostedInstances.put(installedRecord(record));
   }
 
   const container = (name, labels = null) => ({
@@ -72,7 +73,8 @@ describe('appJanitor tests', () => {
     ...(labels ? { Labels: labels } : {}),
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    ({ installed: hostedInstances } = await inMemoryHostedInstances());
     logStub = { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() };
     dockerServiceStub = {
       isManagedContainer: ({ labels, name }, labelKeys) => {
@@ -109,7 +111,6 @@ describe('appJanitor tests', () => {
     contentSlotServiceStub = { reapDisplacedManifests: sinon.stub().resolves({ reaped: 0, orphans: [] }) };
     appQueryServiceStub = {
       listAllApps: sinon.stub().resolves({ status: 'success', data: [] }),
-      installedApps: sinon.stub().resolves({ status: 'success', data: [] }),
       listRunningApps: sinon.stub().resolves({ status: 'success', data: [] }),
     };
     appUninstallerStub = {
@@ -177,14 +178,26 @@ describe('appJanitor tests', () => {
         status: 'success',
         data: [container('/fluxweb_owned', { [flux.LABEL_KEYS.APP]: 'owned' })],
       });
-      // A real serialized RegisteredSpec, so the name the janitor matches on is
-      // the one serialize() actually emits.
-      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [await installedRow('owned')] });
+      await host('owned');
 
       const result = await appJanitor.sweepDockerOrphans();
 
       expect(appUninstallerStub.uninstallApplication.called).to.be.false;
       expect(result.removed).to.equal(0);
+    });
+
+    it('skips, removing nothing, when the installed set cannot be read - every container would look orphaned', async () => {
+      appQueryServiceStub.listAllApps.resolves({
+        status: 'success',
+        data: [container('/fluxweb_owned', { [flux.LABEL_KEYS.APP]: 'owned' })],
+      });
+      await host('owned');
+      sinon.stub(hostedInstances, 'apps').rejects(new Error('mongo down'));
+
+      const result = await appJanitor.sweepDockerOrphans();
+
+      expect(result.skipped).to.equal('installed list failed');
+      expect(appUninstallerStub.uninstallApplication.called).to.be.false;
     });
 
     it('removes gracefully and backgrounded, broadcasting only with a location row', async () => {
@@ -243,7 +256,7 @@ describe('appJanitor tests', () => {
     it('runs while an installed app sits stopped - ownership decides, not run state', async () => {
       // The old guard skipped the whole sweep whenever any installed component
       // was down, which on a real node meant it never ran at all.
-      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [await installedRow('stoppedapp')] });
+      await host('stoppedapp');
       appQueryServiceStub.listAllApps.resolves({
         status: 'success', data: [{ ...container('/fluxweb_stoppedapp'), State: 'exited' }],
       });
@@ -258,9 +271,8 @@ describe('appJanitor tests', () => {
     });
 
     it('hands the installed apps\' network names, built from their identities, to the network reap', async () => {
-      appQueryServiceStub.installedApps.resolves({
-        status: 'success', data: [await installedRow('liveapp', { identity: 'bcccccccccccccccccccccccccccccccccccccccccccccccccccc' }), await installedRow('stoppedapp')],
-      });
+      await host('liveapp', { identity: 'bcccccccccccccccccccccccccccccccccccccccccccccccccccc' });
+      await host('stoppedapp');
       appDockerNetworkStub.removeUnownedAppNetworks.resolves({ removed: ['fluxDockerNetwork_goneapp'], unidentified: 0 });
 
       const result = await appJanitor.sweepDockerDebris();
@@ -275,7 +287,7 @@ describe('appJanitor tests', () => {
     // installed apps and nothing else - a live session no longer contributes a
     // name to defend, because there is no longer a name to defend.
     it('protects only installed apps, and never names a live session', async () => {
-      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [await installedRow('liveapp')] });
+      await host('liveapp');
       playgroundSessionRegistry.add({ sessionId: 'op_1', appName: 'guestapp' });
 
       await appJanitor.sweepDockerDebris();
@@ -340,7 +352,6 @@ describe('appJanitor tests', () => {
       // The debris sweep never actuates container run-state: a container with no
       // installed app is the orphan sweep's, which tears it down with its volumes,
       // ports and shutdown budget instead of pulling it out from under docker.
-      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [] });
       appQueryServiceStub.listAllApps.resolves({
         status: 'success', data: [{ ...container('/fluxweb_goneapp'), State: 'exited' }],
       });
@@ -352,7 +363,6 @@ describe('appJanitor tests', () => {
     });
 
     it('reports what it declined to attribute rather than removing it', async () => {
-      appQueryServiceStub.installedApps.resolves({ status: 'success', data: [] });
       appDockerNetworkStub.removeUnownedAppNetworks.resolves({ removed: [], unidentified: 2 });
 
       const result = await appJanitor.sweepDockerDebris();
@@ -362,7 +372,7 @@ describe('appJanitor tests', () => {
     });
 
     it('skips entirely when the installed set cannot be read - everything would look unowned', async () => {
-      appQueryServiceStub.installedApps.resolves({ status: 'error' });
+      sinon.stub(hostedInstances, 'apps').rejects(new Error('mongo down'));
 
       const result = await appJanitor.sweepDockerDebris();
 
@@ -371,13 +381,12 @@ describe('appJanitor tests', () => {
     });
 
     it('logs and absorbs a failure instead of throwing', async () => {
-      appQueryServiceStub.installedApps.rejects(new Error('mongo down'));
+      appDockerNetworkStub.removeUnownedAppNetworks.rejects(new Error('docker down'));
 
       const result = await appJanitor.sweepDockerDebris();
 
       expect(result).to.equal(null);
       expect(logStub.error.calledWithMatch(sinon.match(/dockerDebris sweep failed/))).to.be.true;
-      expect(appDockerNetworkStub.removeUnownedAppNetworks.called).to.be.false;
     });
   });
 
