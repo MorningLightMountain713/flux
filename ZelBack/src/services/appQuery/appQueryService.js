@@ -25,39 +25,30 @@ const nodeSpecs = require('../appRequirements/nodeSpecs');
 // Database collections
 
 /**
- * To list installed apps. Returns apps from local database.
+ * The registered record of each app this node hosts, as the network may read
+ * it: the hosted instance's own fields stay on the node.
+ * @param {string|null} [appname] one app, in any letter case; every app when absent
+ * @returns {Promise<object[]>}
+ */
+async function installedApps(appname = null) {
+  const hosted = appname
+    ? [await appRecords.hostedInstances().byName(appname)].filter(Boolean)
+    : await appRecords.hostedInstances().apps();
+  return hosted.map((app) => app.record.serialize());
+}
+
+/**
+ * GET /apps/installedapps/:appname?
  * @param {import('express').Request} req
  * @param {import('express').Response} res
- * @returns {object} Message.
  */
-async function installedApps(req, res) {
+async function installedAppsAPI(req, res) {
   try {
-    let filter = {};
-    if (req && req.params && req.query) {
-      let { appname } = req.params;
-      appname = appname || req.query.appname;
-      if (appname) {
-        filter = { name: appname };
-      }
-    } else if (req && typeof req === 'string') {
-      filter = { name: req };
-    }
-
-    const installed = filter.name
-      ? [await appRecords.hostedInstances().byName(filter.name)].filter(Boolean)
-      : await appRecords.hostedInstances().apps();
-    // An app's registered record: the hosted instance's own fields stay on the node.
-    const apps = installed.map((app) => app.record.serialize());
-    const dataResponse = messageHelper.createDataMessage(apps);
-    return res ? res.json(dataResponse) : dataResponse;
+    const appname = req.params.appname || req.query.appname || null;
+    res.json(messageHelper.createDataMessage(await installedApps(appname)));
   } catch (error) {
     log.error(error);
-    const errorResponse = messageHelper.createErrorMessage(
-      error.message || error,
-      error.name,
-      error.code,
-    );
-    return res ? res.json(errorResponse) : errorResponse;
+    res.json(messageHelper.createErrorMessage(error.message || error, error.name, error.code));
   }
 }
 
@@ -653,6 +644,7 @@ module.exports = {
   fluxUsage,
   publicContainerView,
   installedApps,
+  installedAppsAPI,
   listRunningContainers,
   listRunningApps,
   heldComponents,

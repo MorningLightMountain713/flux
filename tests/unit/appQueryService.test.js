@@ -185,12 +185,11 @@ describe('appQueryService tests', () => {
       const expected = rows.map((row) => row.serialize());
 
       installedStub.apps.resolves(rows.map((row) => installedRecord(row)));
-      messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
 
       const result = await appQueryService.installedApps();
 
-      expect(result).to.deep.equal({ status: 'success', data: expected });
-      expect(result.data.map((doc) => doc.version), 'the list is version-mixed').to.deep.equal([8, 9]);
+      expect(result).to.deep.equal(expected);
+      expect(result.map((doc) => doc.version), 'the list is version-mixed').to.deep.equal([8, 9]);
       expect(installedStub.apps.calledOnce).to.be.true;
 
       // The repository stays stubbed, so nothing here exercises what the real one
@@ -198,12 +197,10 @@ describe('appQueryService tests', () => {
       // calls on them.
       rows.forEach((row) => assertAnswers(row, ['serialize']));
 
-      // messageHelper stays stubbed too, and the real one only wraps its payload for
-      // res.json. The payload is a stored row, so the real deserializer must read it
-      // straight back: this endpoint is where a peer's `/apps/installedapps` answer
-      // comes from, and a shape hydrate cannot read is a shape nobody can consume.
-      const [payload] = messageHelperStub.createDataMessage.firstCall.args;
-      payload.forEach((doc) => {
+      // Each answer is a stored row, so the real deserializer must read it straight
+      // back: this is where a peer's `/apps/installedapps` answer comes from, and a
+      // shape hydrate cannot read is a shape nobody can consume.
+      result.forEach((doc) => {
         expect(flux.RegisteredSpec.deserialize(doc, { chain: flux.Chain.MAIN })).to.be.instanceOf(flux.RegisteredSpec);
       });
     });
@@ -216,12 +213,11 @@ describe('appQueryService tests', () => {
       installedStub.apps.resolves([new flux.HostedInstance({
         record: row, replica: 'r1', owed: { since: 1, reason: 'expired' }, componentKeys: new Map([['web', `c${'b'.repeat(51)}a`]]),
       })]);
-      messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
 
       const result = await appQueryService.installedApps();
 
-      expect(result.data).to.deep.equal([row.serialize()]);
-      for (const field of flux.HOSTED_FIELDS) expect(result.data[0], field).to.not.have.property(field);
+      expect(result).to.deep.equal([row.serialize()]);
+      for (const field of flux.HOSTED_FIELDS) expect(result[0], field).to.not.have.property(field);
     });
 
     // An enterprise app is stored node-sealed. The endpoint must be able to answer
@@ -232,11 +228,9 @@ describe('appQueryService tests', () => {
       );
 
       installedStub.apps.resolves([installedRecord(row)]);
-      messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
 
-      const result = await appQueryService.installedApps();
+      const [doc] = await appQueryService.installedApps();
 
-      const [doc] = result.data;
       expect(doc.version).to.equal(9);
       expect(doc).to.have.property('encrypted');
       expect(doc, 'the cleartext component set must not be served').to.not.have.property('components');
@@ -251,84 +245,84 @@ describe('appQueryService tests', () => {
       ).to.throw(/unexpected fields/);
     });
 
-    it('should return installed apps with specific appname from query', async () => {
+    it('answers one app by name', async () => {
       const row = await registeredSpec(await v8Spec({ name: 'appone' }), { hash: 'h1', height: 100 });
-      const req = {
-        params: { appname: 'appone' },
-        query: {},
-      };
-      const res = {
-        json: sinon.stub(),
-      };
-
       installedStub.byName.resolves(installedRecord(row));
-      messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
-
-      await appQueryService.installedApps(req, res);
-
-      expect(res.json.calledOnce).to.be.true;
-      sinon.assert.calledOnceWithExactly(installedStub.byName, 'appone');
-      expect(res.json.firstCall.args[0]).to.deep.equal({ status: 'success', data: [row.serialize()] });
-    });
-
-    it('should handle string parameter for appname', async () => {
-      const row = await registeredSpec(await v8Spec({ name: 'appone' }), { hash: 'h1', height: 100 });
-
-      installedStub.byName.resolves(installedRecord(row));
-      messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
 
       const result = await appQueryService.installedApps('appone');
 
-      expect(result).to.deep.equal({ status: 'success', data: [row.serialize()] });
+      expect(result).to.deep.equal([row.serialize()]);
       sinon.assert.calledOnceWithExactly(installedStub.byName, 'appone');
+      sinon.assert.notCalled(installedStub.apps);
     });
 
-    it('should return error message on database failure', async () => {
-      const error = new Error('Database error');
+    it('answers nothing for a name this node does not host', async () => {
+      const result = await appQueryService.installedApps('elsewhere');
 
-      installedStub.apps.rejects(error);
-      messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'Database error' } });
-
-      const result = await appQueryService.installedApps();
-
-      expect(result.status).to.equal('error');
-      expect(messageHelperStub.createErrorMessage.calledOnce).to.be.true;
-      expect(logStub.error.calledWith(error)).to.be.true;
+      expect(result).to.deep.equal([]);
     });
 
-    it('should return apps data with response passed', async () => {
+    it('throws when the hosted instances cannot be read', async () => {
+      installedStub.apps.rejects(new Error('Database error'));
+
+      let thrown = null;
+      try { await appQueryService.installedApps(); } catch (error) { thrown = error; }
+
+      expect(thrown?.message).to.equal('Database error');
+    });
+  });
+
+  describe('installedAppsAPI', () => {
+    const res = () => ({ json: sinon.stub() });
+
+    it('answers the app named in the path', async () => {
+      const row = await registeredSpec(await v8Spec({ name: 'appone' }), { hash: 'h1', height: 100 });
+      installedStub.byName.resolves(installedRecord(row));
+      messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
+      const response = res();
+
+      await appQueryService.installedAppsAPI({ params: { appname: 'appone' }, query: {} }, response);
+
+      sinon.assert.calledOnceWithExactly(installedStub.byName, 'appone');
+      sinon.assert.calledOnceWithExactly(response.json, { status: 'success', data: [row.serialize()] });
+    });
+
+    it('answers the app named in the query', async () => {
+      const row = await registeredSpec(await v8Spec({ name: 'appone' }), { hash: 'h1', height: 100 });
+      installedStub.byName.resolves(installedRecord(row));
+      messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
+      const response = res();
+
+      await appQueryService.installedAppsAPI({ params: {}, query: { appname: 'appone' } }, response);
+
+      sinon.assert.calledOnceWithExactly(installedStub.byName, 'appone');
+      sinon.assert.calledOnceWithExactly(response.json, { status: 'success', data: [row.serialize()] });
+    });
+
+    it('answers every hosted app when none is named', async () => {
       const rows = [
         await registeredSpec(await v8Spec({ name: 'appone' }), { hash: 'h1', height: 100 }),
         await registeredSpec(await v9Spec({ name: 'apptwo' }), { hash: 'h2', height: 200 }),
       ];
-      const expected = rows.map((row) => row.serialize());
-      const res = {
-        json: sinon.stub(),
-      };
-      const req = { params: {}, query: {} };
-
       installedStub.apps.resolves(rows.map((row) => installedRecord(row)));
       messageHelperStub.createDataMessage.callsFake((data) => ({ status: 'success', data }));
+      const response = res();
 
-      await appQueryService.installedApps(req, res);
+      await appQueryService.installedAppsAPI({ params: {}, query: {} }, response);
 
-      expect(res.json.calledOnceWith({ status: 'success', data: expected })).to.be.true;
+      sinon.assert.calledOnceWithExactly(response.json, { status: 'success', data: rows.map((row) => row.serialize()) });
     });
 
-    it('should return error with response passed on database failure', async () => {
+    it('answers an error message when the hosted instances cannot be read', async () => {
       const error = new Error('Database error');
-      const res = {
-        json: sinon.stub(),
-      };
-      const req = 'appName';
-
-      installedStub.byName.rejects(error);
+      installedStub.apps.rejects(error);
       messageHelperStub.createErrorMessage.returns({ status: 'error', data: { message: 'Database error' } });
+      const response = res();
 
-      await appQueryService.installedApps(req, res);
+      await appQueryService.installedAppsAPI({ params: {}, query: {} }, response);
 
-      expect(res.json.calledOnce).to.be.true;
-      expect(logStub.error.calledWith(error)).to.be.true;
+      sinon.assert.calledOnceWithExactly(response.json, { status: 'error', data: { message: 'Database error' } });
+      sinon.assert.calledWith(logStub.error, error);
     });
   });
 

@@ -211,7 +211,7 @@ module.exports = [
   // request URL alone and serves it before the handler runs, which would hand
   // one authorised answer to every caller after it.
   { method: 'get', path: '/apps/listappsimages', none: NONE.OWN_ANSWER, handler: 'appManagement/appInspector#listAppsImagesApi' },
-  { method: 'get', path: '/apps/installedapps/:appname?', none: NONE.OWN_ANSWER, cache: '30 seconds', handler: 'appQuery/appQueryService#installedApps' },
+  { method: 'get', path: '/apps/installedapps/:appname?', none: NONE.OWN_ANSWER, cache: '30 seconds', handler: 'appQuery/appQueryService#installedAppsAPI' },
   { method: 'get', path: '/apps/availableapps', needs: APP_REGISTRY, cache: '30 seconds', handler: 'appDatabase/registryManager#availableApps' },
   { method: 'get', path: '/apps/fluxusage', none: NONE.OWN_ANSWER, cache: '30 seconds', handler: 'appQuery/appQueryService#fluxUsage' },
   { method: 'get', path: '/apps/appsresources', none: NONE.OWN_ANSWER, cache: '30 seconds', handler: 'appQuery/resourceQueryService#appsResourcesApi' },
