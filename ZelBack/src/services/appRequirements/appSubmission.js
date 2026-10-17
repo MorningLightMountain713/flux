@@ -683,9 +683,9 @@ async function parseMultipartSubmission(req) {
  * only new or changed files; a register has no prior and attaches everything.
  *
  * A manifest the envelope carries is verified against the spec submitted, for
- * the app's identity, and its slot blobs are uploaded. Its FluxDrive put and its
- * slot reconcile name the submission's message hash, so FluxDrive holds both
- * until the nodes answer that the message applied: a registration lists the
+ * the app's identity, and its slot blobs are uploaded. Its FluxDrive put, with the
+ * slot locators it keeps, names the submission's message hash, so FluxDrive holds
+ * it until the nodes answer that the message applied: a registration lists the
  * name, an update changes the spec the manifest is judged against. A
  * registration's manifest is stored as the app's and gossiped; an update's is
  * returned to ride in the update's message, held with it on every node and
@@ -720,8 +720,8 @@ async function uploadSealedContent(spec, content, ownerSigs, {
   }, { uploader: fluxDriveClient });
 
   // A slot app bundles its owner-signed manifest with the submission: upload the
-  // slot blobs and hand the manifest and the reconcile to FluxDrive naming this
-  // submission's message. A slot app always forces an encrypted spec (flux-spec
+  // slot blobs and hand the manifest, with the slot locators it keeps, to FluxDrive
+  // naming this submission's message. A slot app always forces an encrypted spec (flux-spec
   // validation), so the slots payload is sealed. The manifest is signed under the
   // listed ownership: the height the chain says the owner took the app, or 0 for
   // a registration, whose height does not exist yet.
@@ -744,21 +744,12 @@ async function uploadSealedContent(spec, content, ownerSigs, {
     // Best-effort, as every FluxDrive write is; the owner's signatures ride the
     // sealed payload (frontend-produced at submission). The first installing
     // instance has no peers, so FluxDrive is its only manifest source.
-    await contentSlotService.backstopManifest(gossipManifest, {
+    await contentSlotService.backstopManifest(payload.manifest, gossipManifest, {
       appName: spec.name,
       identity,
       version: payload.manifest.version,
       timestamp: payload.manifest.timestamp,
       manifestPutSig: payload.manifestPutSig,
-      pendingMessageHash: messageHash,
-    }, {});
-    // The live slot-locator set, so FluxDrive's GC reclaims the blobs this
-    // manifest supersedes (a no-op at register: version 1 supersedes nothing).
-    await contentSlotService.reconcileSlots(payload.manifest, {
-      appName: spec.name,
-      identity,
-      version: payload.manifest.version,
-      reconcileSig: payload.reconcileSig,
       pendingMessageHash: messageHash,
     }, {});
     if (priorSpec) return { payload, blobs, carriedManifest: gossipManifest };

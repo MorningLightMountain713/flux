@@ -1433,35 +1433,45 @@ describe('contentSlotService', () => {
       const deps = subDeps({ openEnvelope: async () => sealedWithSig, backstop });
       await service.submitContentUpdate(subBody(), deps);
       sinon.assert.calledOnce(backstop);
-      const [gossipManifest, ctx] = backstop.firstCall.args;
+      const [plaintext, gossipManifest, ctx] = backstop.firstCall.args;
       expect(ctx).to.include({ appName: APP, version: 2, manifestPutSig: 'owner-put-sig' });
+      expect(plaintext.slots).to.deep.equal({ 'app-config': { hash: CFG_HASH } }); // the plaintext manifest its kept list is derived from
       expect(gossipManifest.slots).to.have.property('sealed'); // the gossip-form (sealed) manifest
     });
   });
 
   describe('backstopManifest', () => {
-    it('mints the arcane sig and PUTs the manifest with the owner PUT-sig', async () => {
+    const gossip = { appName: APP, version: 3, slots: { sealed: {} } };
+    const ctx = (over = {}) => ({
+      appName: APP, identity: IDENTITY, version: 3, timestamp: 1_700_000_000_000, manifestPutSig: 'owner-sig', ...over,
+    });
+
+    it('derives the kept slot locators, sends the typed fields to the signer, and PUTs the gossip manifest with them and the owner PUT-sig', async () => {
       const { service } = load();
       const put = sinon.spy();
       const sign = sinon.stub().resolves('arcane-sig');
-      const okPut = await service.backstopManifest(
-        { appName: APP, version: 2, slots: { sealed: {} } },
-        {
-          appName: APP, identity: IDENTITY, version: 2, timestamp: 1_700_000_000_000, manifestPutSig: 'owner-sig',
-        },
-        { put, sign },
-      );
+      const deriveLocator = sinon.stub().resolves('loc-cfg');
+      const okPut = await service.backstopManifest(manifest({ version: 3 }), gossip, ctx(), { put, sign, deriveLocator });
       expect(okPut).to.equal(true);
-      // The signer is handed the text's fields: the identity, never the name.
-      sinon.assert.calledWithMatch(sign, {
-        identity: IDENTITY, version: 2, timestamp: 1_700_000_000_000, pendingMessageHash: null,
+      sinon.assert.calledWithMatch(deriveLocator, sinon.match.any, { identity: IDENTITY, contentHash: CFG_HASH });
+      // The signer is handed the text's fields: the identity, never the name; the
+      // ownership the manifest names; the very kept list sent.
+      sinon.assert.calledOnceWithMatch(sign, {
+        identity: IDENTITY, ownedFrom: 2_400_000, version: 3, timestamp: 1_700_000_000_000, keptLocators: ['loc-cfg'], pendingMessageHash: null,
       });
       sinon.assert.calledOnce(put);
       const [appName, body] = put.firstCall.args;
       expect(appName).to.equal(APP);
-      expect(body).to.include({
-        version: 2, ownerSig: 'owner-sig', arcaneSig: 'arcane-sig', pendingMessageHash: null,
+      expect(body).to.deep.equal({
+        version: 3, timestamp: 1_700_000_000_000, arcaneSig: 'arcane-sig', ownerSig: 'owner-sig', manifest: gossip, keptLocators: ['loc-cfg'], pendingMessageHash: null,
       });
+    });
+
+    it('signs a registration\'s manifest under ownership 0', async () => {
+      const { service } = load();
+      const sign = sinon.stub().resolves('arcane-sig');
+      await service.backstopManifest(manifest({ version: 1, ownedFrom: 0 }), gossip, ctx({ version: 1 }), { put: sinon.spy(), sign, deriveLocator: sinon.stub().resolves('loc-cfg') });
+      sinon.assert.calledWithMatch(sign, { ownedFrom: 0, version: 1 });
     });
 
     it('names the message a carried manifest rides in, to the signer and to FluxDrive', async () => {
@@ -1469,26 +1479,39 @@ describe('contentSlotService', () => {
       const put = sinon.spy();
       const sign = sinon.stub().resolves('arcane-sig');
       const pending = 'f'.repeat(64);
-      await service.backstopManifest(
-        { appName: APP, version: 2, slots: { sealed: {} } },
-        {
-          appName: APP, identity: IDENTITY, version: 2, timestamp: 1, manifestPutSig: 'owner-sig', pendingMessageHash: pending,
-        },
-        { put, sign },
-      );
+      await service.backstopManifest(manifest({ version: 3 }), gossip, ctx({ pendingMessageHash: pending }), { put, sign, deriveLocator: sinon.stub().resolves('loc-cfg') });
       sinon.assert.calledWithMatch(sign, { pendingMessageHash: pending });
       expect(put.firstCall.args[1].pendingMessageHash).to.equal(pending);
+    });
+
+    it('derives one kept locator per slot for a multi-slot manifest', async () => {
+      const { service } = load();
+      const put = sinon.spy();
+      const deriveLocator = sinon.stub();
+      deriveLocator.onFirstCall().resolves('loc-a').onSecondCall().resolves('loc-b');
+      const m = manifest({
+        version: 3,
+        slots: { a: { hash: `sha256:${'1'.repeat(64)}` }, b: { hash: `sha256:${'2'.repeat(64)}` } },
+      });
+      expect(await service.backstopManifest(m, gossip, ctx(), { put, sign: sinon.stub().resolves('s'), deriveLocator })).to.equal(true);
+      expect(put.firstCall.args[1].keptLocators).to.deep.equal(['loc-a', 'loc-b']);
     });
 
     it('skips the PUT when the frontend supplied no operational owner sig', async () => {
       const { service } = load();
       const put = sinon.spy();
-      const okPut = await service.backstopManifest(
-        {}, {
-          appName: APP, version: 2, timestamp: 1, manifestPutSig: undefined,
-        }, { put },
-      );
+      const okPut = await service.backstopManifest(manifest(), gossip, ctx({ manifestPutSig: undefined }), { put });
       expect(okPut).to.equal(false);
+      sinon.assert.notCalled(put);
+    });
+
+    it('never sends an empty kept list, which FluxDrive refuses as marking every slot blob', async () => {
+      const { service } = load();
+      const put = sinon.spy();
+      const sign = sinon.spy();
+      const okPut = await service.backstopManifest({ ...manifest(), slots: {} }, gossip, ctx(), { put, sign, deriveLocator: sinon.stub().resolves('x') });
+      expect(okPut).to.equal(false);
+      sinon.assert.notCalled(sign);
       sinon.assert.notCalled(put);
     });
 
@@ -1496,136 +1519,8 @@ describe('contentSlotService', () => {
       const { service } = load();
       const put = sinon.stub().rejects(new Error('fluxdrive down'));
       const sign = sinon.stub().resolves('arcane-sig');
-      const okPut = await service.backstopManifest(
-        {}, {
-          appName: APP, version: 2, timestamp: 1, manifestPutSig: 'sig',
-        }, { put, sign },
-      );
+      const okPut = await service.backstopManifest(manifest(), gossip, ctx(), { put, sign, deriveLocator: sinon.stub().resolves('loc-cfg') });
       expect(okPut).to.equal(false);
-    });
-  });
-
-  describe('reconcileSlots', () => {
-    it('derives the live slot locators, sends the typed reconcile fields to the signer, and POSTs the reconcile', async () => {
-      const { service } = load();
-      const reconcile = sinon.spy();
-      const sign = sinon.stub().resolves('arcane-sig');
-      const deriveLocator = sinon.stub().resolves('loc-cfg');
-      const pushed = await service.reconcileSlots(
-        manifest({ version: 3 }),
-        {
-          appName: APP, identity: IDENTITY, version: 3, reconcileSig: 'owner-rsig',
-        },
-        { reconcile, sign, deriveLocator },
-      );
-      expect(pushed).to.equal(true);
-      sinon.assert.calledWithMatch(deriveLocator, sinon.match.any, { identity: IDENTITY, contentHash: CFG_HASH });
-      // The signer binds the kept list by its hash, so it is handed the very list sent.
-      sinon.assert.calledWithMatch(sign, {
-        identity: IDENTITY, source: 'slot', version: 3, keptLocators: ['loc-cfg'], pendingMessageHash: null,
-      });
-      sinon.assert.calledOnce(reconcile);
-      const [appName, body] = reconcile.firstCall.args;
-      expect(appName).to.equal(APP);
-      expect(body).to.deep.equal({
-        source: 'slot', version: 3, arcaneSig: 'arcane-sig', ownerSig: 'owner-rsig', liveLocators: ['loc-cfg'], pendingMessageHash: null,
-      });
-    });
-
-    it('names the message a carried reconcile rides in, to the signer and to FluxDrive', async () => {
-      const { service } = load();
-      const reconcile = sinon.spy();
-      const sign = sinon.stub().resolves('arcane-sig');
-      const pending = 'f'.repeat(64);
-      await service.reconcileSlots(
-        manifest({ version: 3 }),
-        {
-          appName: APP, identity: IDENTITY, version: 3, reconcileSig: 'owner-rsig', pendingMessageHash: pending,
-        },
-        { reconcile, sign, deriveLocator: sinon.stub().resolves('loc-cfg') },
-      );
-      sinon.assert.calledWithMatch(sign, { pendingMessageHash: pending });
-      expect(reconcile.firstCall.args[1].pendingMessageHash).to.equal(pending);
-    });
-
-    it('derives one locator per slot for a multi-slot manifest', async () => {
-      const { service } = load();
-      const reconcile = sinon.spy();
-      const sign = sinon.stub().resolves('arcane-sig');
-      const deriveLocator = sinon.stub();
-      deriveLocator.onFirstCall().resolves('loc-a').onSecondCall().resolves('loc-b');
-      const m = manifest({
-        version: 3,
-        slots: { a: { hash: `sha256:${'1'.repeat(64)}` }, b: { hash: `sha256:${'2'.repeat(64)}` } },
-      });
-      const pushed = await service.reconcileSlots(
-        m, {
-          appName: APP, identity: IDENTITY, version: 3, reconcileSig: 'sig',
-        }, { reconcile, sign, deriveLocator },
-      );
-      expect(pushed).to.equal(true);
-      expect(reconcile.firstCall.args[1].liveLocators).to.deep.equal(['loc-a', 'loc-b']);
-    });
-
-    it('skips when the frontend supplied no owner reconcile-sig', async () => {
-      const { service } = load();
-      const reconcile = sinon.spy();
-      const pushed = await service.reconcileSlots(
-        manifest({ version: 3 }), {
-          appName: APP, identity: IDENTITY, version: 3, reconcileSig: undefined,
-        }, { reconcile },
-      );
-      expect(pushed).to.equal(false);
-      sinon.assert.notCalled(reconcile);
-    });
-
-    it('sends nothing for a registration\'s first manifest, which supersedes nothing, and sends an incoming owner\'s first', async () => {
-      const { service } = load();
-      const reconcile = sinon.spy();
-      const sign = sinon.stub().resolves('arcane-sig');
-      const deriveLocator = sinon.stub().resolves('loc-cfg');
-      const registrations = await service.reconcileSlots(
-        manifest({ version: 1, ownedFrom: 0 }), {
-          appName: APP, identity: IDENTITY, version: 1, reconcileSig: 'sig',
-        }, { reconcile, sign, deriveLocator },
-      );
-      expect(registrations).to.equal(false);
-      sinon.assert.notCalled(reconcile);
-      const buyers = await service.reconcileSlots(
-        manifest({ version: 1, ownedFrom: 2_400_000 }), {
-          appName: APP, identity: IDENTITY, version: 1, reconcileSig: 'sig',
-        }, { reconcile, sign, deriveLocator },
-      );
-      expect(buyers).to.equal(true);
-      sinon.assert.calledOnce(reconcile);
-    });
-
-    it('never pushes an empty live set (would tombstone every slot blob)', async () => {
-      const { service } = load();
-      const reconcile = sinon.spy();
-      const deriveLocator = sinon.stub().resolves('x');
-      const pushed = await service.reconcileSlots(
-        { ...manifest({ version: 3 }), slots: {} },
-        {
-          appName: APP, identity: IDENTITY, version: 3, reconcileSig: 'sig',
-        },
-        { reconcile, deriveLocator },
-      );
-      expect(pushed).to.equal(false);
-      sinon.assert.notCalled(reconcile);
-    });
-
-    it('is best-effort: a failed reconcile returns false and never throws', async () => {
-      const { service } = load();
-      const reconcile = sinon.stub().rejects(new Error('fluxdrive down'));
-      const sign = sinon.stub().resolves('arcane-sig');
-      const deriveLocator = sinon.stub().resolves('loc-cfg');
-      const pushed = await service.reconcileSlots(
-        manifest({ version: 3 }), {
-          appName: APP, identity: IDENTITY, version: 3, reconcileSig: 'sig',
-        }, { reconcile, sign, deriveLocator },
-      );
-      expect(pushed).to.equal(false);
     });
   });
 

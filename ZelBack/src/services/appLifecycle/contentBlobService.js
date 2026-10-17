@@ -115,41 +115,22 @@ async function encryptAndUploadBlob(blob, deps) {
  * Take the arcane (fleet anti-abuse) signature for a manifest PUT. The benchmark
  * channel builds the signed text itself from these typed fields, under its own
  * domain: the library's `manifestPutDigest`,
- * `identity:version:timestamp:pendingMessageHash`, the last empty when the put is
- * not carried by a spec update. It refuses a timestamp outside the freshness
- * window and never signs caller-supplied bytes.
+ * `identity:ownedFrom:version:timestamp:keptLocatorsHash:pendingMessageHash`, the
+ * kept slot locators hashed sorted and each once, so no other list can ride the
+ * signature, and the last field empty when the put is not carried by a spec
+ * update. It refuses a timestamp outside the freshness window and never signs
+ * caller-supplied bytes.
  *
- * @param {object} fields - { identity, version, timestamp, pendingMessageHash? }
+ * @param {object} fields - { identity, ownedFrom, version, timestamp, keptLocators, pendingMessageHash? }
  * @param {object} [deps] - { benchmark? }
  * @returns {Promise<string>} the base64 arcane signature
  */
 async function signManifestPut({
-  identity, version, timestamp, pendingMessageHash = null,
+  identity, ownedFrom, version, timestamp, keptLocators, pendingMessageHash = null,
 }, deps = {}) {
   const { benchmark = benchmarkService } = deps || {};
   return benchmarkField(await benchmark.signBlobUpload({
-    kind: 'manifest', identity: requireIdentity(identity), version, timestamp, pendingMessageHash,
-  }), 'signature');
-}
-
-/**
- * Take the arcane signature for a slot reconcile. The channel builds the signed
- * text itself: the library's `slotReconcileDigest`,
- * `identity:source:version:keptLocatorsHash:pendingMessageHash`, the kept
- * locators hashed sorted and each once, so no other list can ride the
- * signature. No timestamp: FluxDrive's version floor per identity and source
- * bounds replay instead.
- *
- * @param {object} fields - { identity, source, version, keptLocators, pendingMessageHash? }
- * @param {object} [deps] - { benchmark? }
- * @returns {Promise<string>} the base64 arcane signature
- */
-async function signReconcile({
-  identity, source, version, keptLocators, pendingMessageHash = null,
-}, deps = {}) {
-  const { benchmark = benchmarkService } = deps || {};
-  return benchmarkField(await benchmark.signBlobUpload({
-    kind: 'reconcile', identity: requireIdentity(identity), source, version, keptLocators, pendingMessageHash,
+    kind: 'manifest', identity: requireIdentity(identity), ownedFrom, version, timestamp, keptLocators, pendingMessageHash,
   }), 'signature');
 }
 
@@ -408,7 +389,6 @@ module.exports = {
   assertBlobStored,
   deriveLocator,
   signManifestPut,
-  signReconcile,
   decryptAndVerifyBlob,
   resolveBlob,
   serveBlob,

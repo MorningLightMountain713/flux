@@ -122,10 +122,11 @@ function appDecrypt({
 // --- Arcane blob signatures ---
 // The channel builds the signed text itself from typed fields, as the library's
 // fluxDriveWrites does: a per-kind domain prefix over the hex digest of that
-// kind's text. Every text names the app's identity; a manifest or reconcile
-// carried by a spec update names the update's message hash, empty otherwise; a
-// reconcile names the hash of the locators it keeps, sorted and each once, so no
-// caller can have a different list signed. Callers send fields, never a message.
+// kind's text. Every text names the app's identity; a manifest names the height
+// its signer took the app and the hash of the slot locators it keeps, sorted and
+// each once, so no caller can have a different list signed, and, carried by a
+// spec update, the update's message hash, empty otherwise. Callers send fields,
+// never a message.
 function sha256Hex(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
@@ -133,12 +134,9 @@ function sha256Hex(value) {
 const BLOB_SIGNATURE_DOMAINS = {
   upload: 'FLUX_BLOB_UPLOAD_v1:',
   manifest: 'FLUX_BLOB_MANIFEST_v1:',
-  reconcile: 'FLUX_BLOB_RECONCILE_v1:',
 };
 
-// Upload and manifest carry a timestamp and are refused outside this window.
-// Reconcile carries none: the verifier's version floor per identity and source
-// bounds replay there instead.
+// Every write carries a timestamp and is refused outside this window.
 const BLOB_FRESHNESS_WINDOW_MS = 300 * 1000;
 
 function pendingMessageHashField(value) {
@@ -158,9 +156,8 @@ function blobSignedDigest(fields) {
     case 'upload':
       return sha256Hex(`${fields.locator}:${identity}:${fields.timestamp}`);
     case 'manifest':
-      return sha256Hex(`${identity}:${fields.version}:${fields.timestamp}:${pendingMessageHashField(fields.pendingMessageHash)}`);
-    case 'reconcile':
-      return sha256Hex(`${identity}:${fields.source}:${fields.version}:${keptLocatorsHash(fields.keptLocators)}:${pendingMessageHashField(fields.pendingMessageHash)}`);
+      if (!Number.isSafeInteger(fields.ownedFrom) || fields.ownedFrom < 0) throw new Error('signblobupload: ownedFrom invalid');
+      return sha256Hex(`${identity}:${fields.ownedFrom}:${fields.version}:${fields.timestamp}:${keptLocatorsHash(fields.keptLocators)}:${pendingMessageHashField(fields.pendingMessageHash)}`);
     default:
       throw new Error(`signblobupload: unknown kind ${fields.kind}`);
   }
@@ -169,11 +166,9 @@ function blobSignedDigest(fields) {
 function signBlobUpload(fields) {
   const domain = BLOB_SIGNATURE_DOMAINS[fields.kind];
   if (!domain) throw new Error(`signblobupload: unknown kind ${fields.kind}`);
-  if (fields.kind !== 'reconcile') {
-    const skewMs = Math.abs(Date.now() - Number(fields.timestamp));
-    if (!Number.isFinite(skewMs) || skewMs > BLOB_FRESHNESS_WINDOW_MS) {
-      throw new Error('signblobupload: timestamp outside the freshness window');
-    }
+  const skewMs = Math.abs(Date.now() - Number(fields.timestamp));
+  if (!Number.isFinite(skewMs) || skewMs > BLOB_FRESHNESS_WINDOW_MS) {
+    throw new Error('signblobupload: timestamp outside the freshness window');
   }
   return signEd25519(blobUploadKey.privateKey, Buffer.from(domain + blobSignedDigest(fields)));
 }

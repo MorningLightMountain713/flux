@@ -18,10 +18,10 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 // new owner-signed manifest version with fresh slot bytes, sealed as one HPKE
 // content envelope toward the running node's transport key. Proves the update is
 // applied end to end — the version advances, FluxDrive's manifest backstop PUTs
-// the new version, the GC reconcile is pushed, and the running container reacts per
+// the new version with the slot locators it keeps, and the running container reacts per
 // the slot's onUpdate (restart / signal / none). One app per reaction so each
 // reaction is asserted in isolation; the update is POSTed to the node RUNNING the
-// app so it is both the submitter (contentUpdateApplied / reconcilePushed) and the
+// app so it is both the submitter (contentUpdateApplied / manifestBackstopped) and the
 // applier (slotApplied). App D (two slots) pins the carry-over submission contract:
 // rotating one slot attaches one file — the unchanged slot is declared by hash and
 // presence-checked (one HEAD) instead of re-uploaded, and a hash the prior version
@@ -59,7 +59,7 @@ describe('content slot updates (contentupdate): version advance + onUpdate react
   let env;
 
   const base = `slotupd${Date.now()}`;
-  // App A drives the version-advance/FluxDrive/reconcile assertions AND the null
+  // App A drives the version-advance/FluxDrive kept-list assertions AND the null
   // (self-watching, atomic) reaction; B is restart; C is signal (test-app fixture);
   // D (two slots) is the carry-over contract — rotating one slot attaches one file.
   const nameNull = `${base}a`;
@@ -194,7 +194,7 @@ describe('content slot updates (contentupdate): version advance + onUpdate react
     await env?.teardown();
   });
 
-  it('applies a v2 content update: version advances, FluxDrive manifest PUTs v2, reconcile pushed', async function () {
+  it('applies a v2 content update: version advances, FluxDrive manifest PUTs v2 with the slot locator it keeps', async function () {
     this.timeout(120000);
     const client = env.clients[node.null];
     aAfterId = client.getLastEventId();
@@ -206,20 +206,20 @@ describe('content slot updates (contentupdate): version advance + onUpdate react
     expect(res.status).to.equal('success');
 
     // The submitter publishes contentUpdateApplied after it stores + gossips the v2
-    // manifest, and reconcilePushed after it tells FluxDrive's GC the new live set.
+    // manifest, and manifestBackstopped after FluxDrive takes it with its kept list.
     await client.waitForEvent(
       'content:contentUpdateApplied',
       (d) => d.appName === nameNull && d.version === 2,
       60000,
       { afterId: aAfterId },
     );
-    const reconciled = await client.waitForEvent(
-      'content:reconcilePushed',
+    const backstopped = await client.waitForEvent(
+      'content:manifestBackstopped',
       (d) => d.appName === nameNull && d.version === 2,
       60000,
       { afterId: aAfterId },
     );
-    expect(reconciled.data.source).to.equal('slot');
+    expect(backstopped.data.kept, 'the one slot locator v2 keeps').to.equal(1);
 
     // FluxDrive's manifest backstop PUT advanced to v2 (was v1 from register).
     await waitFor(
@@ -227,11 +227,11 @@ describe('content slot updates (contentupdate): version advance + onUpdate react
       { timeout: 30000, interval: 1000, label: 'FluxDrive manifest v2' },
     );
 
-    // The GC reconcile was accepted with the slot source at v2.
+    // The v2 manifest's kept list was applied: it is the identity's newest.
     const state = await getFluxDriveState();
-    const entry = state.reconciles.find((r) => r.appName === nameNull && r.source === 'slot' && r.version === 2);
-    expect(entry, 'slot reconcile v2 recorded').to.exist;
-    expect(entry.accepted).to.equal(true);
+    const entry = state.keptLists.find((k) => k.appName === nameNull && k.version === 2);
+    expect(entry, 'v2 kept list recorded').to.exist;
+    expect(entry.applied).to.equal(true);
 
     // The running node's own appcontentmanifests register advanced to v2.
     const row = await dbClient(client.num).getContentManifest(nameNull);
@@ -381,7 +381,7 @@ describe('content slot updates (contentupdate): version advance + onUpdate react
       { afterId },
     );
     await client.waitForEvent(
-      'content:reconcilePushed',
+      'content:manifestBackstopped',
       (d) => d.appName === nameCarry && d.version === 2,
       60000,
       { afterId },
@@ -406,12 +406,12 @@ describe('content slot updates (contentupdate): version advance + onUpdate react
     const keepAfter = after.find((b) => b.locator === keepLocator);
     expect(keepAfter).to.deep.equal(keepBefore);
 
-    // The GC reconcile carries the FULL v2 live set (carried + rotated); the
+    // The v2 manifest keeps the FULL v2 slot set (carried + rotated); the
     // superseded rotate-v1 blob is tombstoned, the carried blob is not.
-    const rec = state.reconciles.find((r) => r.appName === nameCarry && r.source === 'slot' && r.version === 2);
-    expect(rec, 'slot reconcile v2 recorded').to.exist;
-    expect(rec.accepted).to.equal(true);
-    expect([...rec.liveLocators].sort()).to.deep.equal([keepLocator, rotateV2Locator].sort());
+    const kept = state.keptLists.find((k) => k.appName === nameCarry && k.version === 2);
+    expect(kept, 'v2 kept list recorded').to.exist;
+    expect(kept.applied).to.equal(true);
+    expect([...kept.keptLocators].sort()).to.deep.equal([keepLocator, rotateV2Locator].sort());
     expect(after.find((b) => b.locator === rotateV1Locator).tombstoned).to.equal(true);
 
     // The running node's manifest register advanced to v2.

@@ -92,17 +92,19 @@ async function blobExists(locator, deps = {}) {
 }
 
 /**
- * PUT an owner-signed manifest to FluxDrive. Body is JSON `{ version, timestamp,
- * arcaneSig, ownerSig, manifest, pendingMessageHash }`. FluxDrive verifies the
- * dual signature over `identity:version:timestamp:pendingMessageHash` (the
- * identity is the manifest's own), keeps every version of the identity as its
- * own row behind a floor per ownership, and refuses a listed app's manifest for
- * another identity. A manifest naming a message hash is held until the nodes answer
- * that the message applied; one naming none is stored at once. The manifest for
- * a name FluxDrive does not list must name the registration that lists it.
+ * PUT an owner-signed manifest to FluxDrive with the slot locators it keeps. Body
+ * is JSON `{ version, timestamp, arcaneSig, ownerSig, manifest, keptLocators,
+ * pendingMessageHash }`. FluxDrive verifies the dual signature over
+ * `identity:ownedFrom:version:timestamp:keptLocatorsHash:pendingMessageHash` (the
+ * identity and ownership are the manifest's own, the kept list bound by its hash),
+ * keeps every version of the identity as its own row behind a floor per ownership,
+ * and, storing it as the identity's newest confirmed version, marks the identity's
+ * other slot blobs for deletion. A manifest naming a message hash is held until
+ * the nodes answer that the message applied; one naming none is stored at once,
+ * provisional while FluxDrive's feed does not yet show its signer as the owner.
  *
  * @param {string} appName
- * @param {object} body - { version, timestamp, arcaneSig, ownerSig, manifest, pendingMessageHash? }
+ * @param {object} body - { version, timestamp, arcaneSig, ownerSig, manifest, keptLocators, pendingMessageHash? }
  * @param {object} [deps] - { http, baseUrl }
  */
 async function putManifest(appName, body, deps = {}) {
@@ -116,38 +118,7 @@ async function putManifest(appName, body, deps = {}) {
       arcaneSig: body.arcaneSig,
       ownerSig: body.ownerSig,
       manifest: body.manifest,
-      pendingMessageHash: body.pendingMessageHash ?? null,
-    },
-    { timeout: 30_000 },
-  );
-}
-
-/**
- * Push a slot app's live locator set to FluxDrive's reconcile endpoint. FluxDrive
- * verifies the dual signature over
- * `identity:source:version:keptLocatorsHash:pendingMessageHash` (the kept list is
- * bound by its hash, so the list sent is the list signed), enforces the version
- * floor per identity and source, then tombstones the identity's other locators of
- * that source with grace, never a blind replace. A reconcile naming a message
- * hash is held until the nodes answer that the message applied. A duplicate or
- * stale version is an idempotent 409.
- *
- * @param {string} appName
- * @param {object} body - { source, version, arcaneSig, ownerSig, liveLocators, pendingMessageHash? }
- * @param {object} [deps] - { http, baseUrl }
- */
-async function reconcile(appName, body, deps = {}) {
-  const http = deps.http || axios;
-  const base = blobApiBase(deps.baseUrl);
-  await http.post(
-    `${base}/api/v1/blob/reconcile`,
-    {
-      appName,
-      source: body.source,
-      version: body.version,
-      arcaneSig: body.arcaneSig,
-      ownerSig: body.ownerSig,
-      liveLocators: body.liveLocators,
+      keptLocators: body.keptLocators,
       pendingMessageHash: body.pendingMessageHash ?? null,
     },
     { timeout: 30_000 },
@@ -179,5 +150,5 @@ async function fetchManifest(appName, deps = {}) {
 }
 
 module.exports = {
-  uploadBlob, fetchBlobByLocator, blobExists, putManifest, reconcile, fetchManifest,
+  uploadBlob, fetchBlobByLocator, blobExists, putManifest, fetchManifest,
 };
