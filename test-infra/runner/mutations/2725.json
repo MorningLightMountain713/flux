@@ -10,8 +10,8 @@
       }
     ],
     "red": [
-      "holds a sale signed an hour ahead only on the node whose clock is an hour ahead",
-      "applies the owner's content update on every node on the network's clock while that sale is held"
+      "holds a sale signed an hour ahead on no node on the network's clock",
+      "applies the owner's content update on every node on the network's clock"
     ]
   }
 ]
