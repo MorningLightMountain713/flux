@@ -11,8 +11,8 @@
 // images, and requires every test green. FLUX_E2E_BASE_TAG passes through to a
 // suite that boots a node on a released image.
 //
-// Builds run one at a time; each run starts once its images exist and the box
-// admits its fleet, by run-parallel.sh's rules: the suite's `// fleet: N` plus
+// Builds run one at a time host-wide (BUILD_LOCK, flock); each run starts once
+// its images exist and the box admits its fleet, by run-parallel.sh's rules: the suite's `// fleet: N` plus
 // the nodes in flight within NODE_BUDGET (60), fewer than MAXN (6) runs in
 // flight, MIN_FREE_MB (15000) memory available and 1-minute load under MAX_LOAD
 // (3/4 of the cores). The clone must be clean: the worktrees are HEAD, so an
@@ -42,6 +42,10 @@ const MAXN = Number(process.env.MAXN || 6);
 const MIN_FREE_MB = Number(process.env.MIN_FREE_MB || 15000);
 const MAX_LOAD = Number(process.env.MAX_LOAD || Math.floor((cpus().length * 3) / 4));
 const ADMIT_POLL_MS = 10000;
+// One image build at a time on the host, across every run of this script: two
+// builds at once race in containerd's snapshot store. A base-image build that
+// takes the same lock (flock -x) waits its turn too.
+const BUILD_LOCK = '/tmp/e2e-image-build.lock';
 
 const args = process.argv.slice(2);
 const control = args.includes('--control');
@@ -193,7 +197,8 @@ async function prepare(m) {
       const file = join(tree, edit.file);
       writeFileSync(file, applyEdit(readFileSync(file, 'utf8'), edit));
     }
-    if (await run('bash', [join(tree, 'test-infra/build-images.sh')], { cwd: tree, env: { FLUX_E2E_TAG: tag }, log: buildLog }) !== 0) {
+    const build = ['-x', BUILD_LOCK, 'bash', join(tree, 'test-infra/build-images.sh')];
+    if (await run('flock', build, { cwd: tree, env: { FLUX_E2E_TAG: tag }, log: buildLog }) !== 0) {
       throw new Error(`the images did not build (${buildLog})`);
     }
     return tree;
