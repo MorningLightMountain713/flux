@@ -7,6 +7,7 @@
  * re-rolls its master role to generation 1, then sells it through the door while
  * the standby is off the network; the sale names the generation-1 record in its
  * `grants` block. Then:
+ *   - a sale naming no record, or another, is refused naming the standing one;
  *   - the primary keeps the term, at generation 1, and its container, through the
  *     drain the sale starts;
  *   - the standby returns holding the sale and is still a standby;
@@ -211,6 +212,21 @@ describe('an activeStandby app re-rolled, then sold', function () {
     const term = await verdict();
     masterGrantee = term.grantee;
     expect(term.generation, 'the term stands at generation 1').to.equal(1);
+  });
+
+  it('refuses a sale naming no generation record, or another, naming the standing one', async function () {
+    this.timeout(CONVERGE_MS);
+    const standing = generationRecordHash(sellersRecord);
+    const sell = (grants) => transferApp(url(registrar), seller, registered, live().map((i) => env.clients[i]), {
+      v9: shape, standsOn: grants ? { grants } : {}, pay: false,
+    });
+    const unnamed = await sell(null);
+    expect(unnamed.status, `a sale naming no record: ${JSON.stringify(unnamed).slice(0, 400)}`).to.equal('error');
+    expect(JSON.stringify(unnamed.data), 'the refusal names the standing record').to.include(`grants must name the standing master record, ${standing}`);
+    const another = `sha256:${'cd'.repeat(32)}`;
+    const wrong = await sell({ master: another });
+    expect(wrong.status, `a sale naming another record: ${JSON.stringify(wrong).slice(0, 400)}`).to.equal('error');
+    expect(JSON.stringify(wrong.data), 'the refusal names both records').to.include(`grants names ${another} for master, not the standing record, ${standing}`);
   });
 
   it('keeps the primary\'s term and container through a sale that names the generation-1 record', async function () {
