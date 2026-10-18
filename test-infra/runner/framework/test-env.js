@@ -1568,6 +1568,7 @@ async function _buildEnv(
   // the bind mount and environment that put a container on the suite's clock, or null
   const clock = harnessClockFor(env.networkName, harnessClock);
   const onClock = (environment) => (clock ? { ...environment, ...clock.environment } : environment);
+  const onNodeClock = (index, environment) => (clock ? { ...environment, ...clock.nodeEnvironment(index) } : environment);
   const clockMounts = clock ? [clock.bindMount] : [];
   // Everything built here registers onto the env shell as it comes up, so a
   // boot-phase throw leaves the partial state reachable (see makeEnvShell).
@@ -2222,7 +2223,7 @@ async function _buildEnv(
       .withDnsServer(EXTERNAL_STUB_IP)
       .withBindMounts([...bindMounts, ...clockMounts])
       .withLogConsumer(logCollector)
-      .withEnvironment(onClock(nodeEnv))
+      .withEnvironment(onNodeClock(i, nodeEnv))
       // A bound, not a pace. The wait is an event-driven HTTP poll, so a healthy node
       // costs exactly its boot time whatever this says; the number exists only so a
       // node that will never serve cannot hold a suite open indefinitely. It must sit
