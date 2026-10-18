@@ -1,0 +1,16 @@
+[
+  {
+    "name": "superseded-retired-across-a-holder-change",
+    "breaks": "FluxDrive retires an owner's superseded manifest only while that owner still holds the app",
+    "edits": [
+      {
+        "file": "test-infra/fluxdrive/src/lib/blobStore.js",
+        "from": "    if (!holder || holder.owner !== newest.owner) continue;",
+        "to": "    if (!holder) continue;"
+      }
+    ],
+    "red": [
+      "installs the content the sale names from FluxDrive alone past the grace, on a node held off every node that runs the app"
+    ]
+  }
+]
