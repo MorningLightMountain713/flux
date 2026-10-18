@@ -1,0 +1,31 @@
+[
+  {
+    "name": "former-names-dropped",
+    "breaks": "a v9 node lists a component of an app registered before v9 under its 8.x name too, among the components it holds",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appQuery/appQueryService.js",
+        "from": "    const response = messageHelper.createDataMessage([...new Set([...held, ...(await formerNamesOf(held))])]);",
+        "to": "    const response = messageHelper.createDataMessage(held);"
+      }
+    ],
+    "red": [
+      "installs the app on the 8.20 node and does not start the component the v9 primary holds",
+      "does not start it through a restart of the 8.20 node's FluxOS"
+    ]
+  },
+  {
+    "name": "folder-id-from-the-identity",
+    "breaks": "an app registered before v9 shares its data under the folder id its registration fixed, its 8.x name",
+    "edits": [
+      {
+        "file": "test-infra/flux-spec/dist/packages/spec-backend/src/domain/DeploymentSpec.js",
+        "from": "  return `flux${comp.containerIdentifier(appName, replica, null, key)}`;",
+        "to": "  return comp.containerIdentifier(appName, replica, identity, key);"
+      }
+    ],
+    "red": [
+      "shares the data under the 8.x folder id on a fresh v9 node, syncs the primary's data, and shares the folder with both peers"
+    ]
+  }
+]
