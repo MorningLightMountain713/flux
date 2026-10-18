@@ -29,5 +29,19 @@
       "does not start it through a restart of the 8.20 node's FluxOS",
       "shares the data under the 8.x folder id on a fresh v9 node, syncs the primary's data, and shares the folder with both peers"
     ]
+  },
+  {
+    "name": "v9-folder-id-the-8x-way",
+    "breaks": "an app registered on v9 shares its data under its component identifier, <component>_<identity>",
+    "edits": [
+      {
+        "file": "test-infra/flux-spec/dist/packages/spec-backend/src/domain/DeploymentSpec.js",
+        "from": "  if (registrationVersion >= 9) return comp.containerIdentifier(appName, replica, identity, key);",
+        "to": "  if (false) return comp.containerIdentifier(appName, replica, identity, key);"
+      }
+    ],
+    "red": [
+      "shares a v9 registration's data under its component identifier on the fresh node, and syncs the primary's data"
+    ]
   }
 ]

@@ -18,6 +18,9 @@
  *   - the fresh v9 node shares the component's data under the 8.x folder id the
  *     registration fixes, syncs the primary's data, and shares the folder with
  *     both peers;
+ *   - for an activeStandby app registered on v9, which only the primary and the
+ *     fresh node hold, the fresh node shares the data under the component's
+ *     identifier, <component>_<identity>, and syncs the primary's data;
  *   - when the primary and the 8.20 node leave the network, the fresh node
  *     starts the component with that data.
  *
@@ -32,9 +35,13 @@ import { deliverAppMessage } from '../framework/app-delivery.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import {
-  appDataRoot, appSyncthingFolderId, execInContainer, legacyFolderId, restartFluxos,
+  appDataRoot, appSyncthingFolderId, componentIdentifier, execInContainer, legacyFolderId, restartFluxos,
 } from '../framework/container.js';
 import { appView } from '../framework/app-view.js';
+import { confirmOnChain } from '../framework/app-helper.js';
+import { registerEncryptedV9App } from '../framework/content-helper.js';
+import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
+import { appIdentityFromUuid, appUuid } from '@runonflux/flux-spec';
 import { getDeviceId, getFolders, isDaemonUp } from '../framework/syncthing-real.js';
 import { waitFor, waitForDaemonReady, waitForInstallSettled } from '../framework/wait.js';
 
@@ -54,7 +61,9 @@ describe('an app registered before v9, beside an 8.20 node', function () {
   let view;
   let app;
   let legacyName; // flux<component>_<name>: the 8.x container name and folder id
+  let v9App; // the app registered on v9: { spec, identity, componentKeys }
   const name = `oldbeside${Date.now()}`;
+  const v9Name = `${name}v9`;
 
   // Whether node `index` runs the container named `container`, read off its docker.
   async function running(index, container) {
@@ -64,10 +73,16 @@ describe('an app registered before v9, beside an 8.20 node', function () {
 
   const heldOnPeer = () => env.clients[OLD].getDecisionCount('masterSlave:decision', `${name}_${name}`, 'heldOnPeer');
 
-  async function dataFile(index) {
-    const dir = `${await appDataRoot(env.clients[index].container, name)}/appdata`;
+  async function dataFile(index, appName = name, component = appName) {
+    const dir = `${await appDataRoot(env.clients[index].container, appName, component)}/appdata`;
     const r = await execInContainer(env.clients[index].container, `cat ${dir}/marker 2>/dev/null || true`);
     return r.stdout.trim();
+  }
+
+  async function writeMarker(appName, component) {
+    const dir = `${await appDataRoot(env.clients[PRIMARY].container, appName, component)}/appdata`;
+    const wrote = await execInContainer(env.clients[PRIMARY].container, `sh -c 'mkdir -p ${dir} && echo ${MARKER} > ${dir}/marker'`);
+    expect(wrote.exitCode, `the marker is written on the primary for ${appName}: ${wrote.output}`).to.equal(0);
   }
 
   async function bootLate(index) {
@@ -105,9 +120,40 @@ describe('an app registered before v9, beside an 8.20 node', function () {
     await waitFor(async () => (await view.containerOn(PRIMARY))?.running, {
       timeout: CONVERGE_MS, interval: 3000, label: 'the v9 node runs the component',
     });
-    const dir = `${await appDataRoot(env.clients[PRIMARY].container, name)}/appdata`;
-    const wrote = await execInContainer(env.clients[PRIMARY].container, `sh -c 'mkdir -p ${dir} && echo ${MARKER} > ${dir}/marker'`);
-    expect(wrote.exitCode, `the marker is written on the primary: ${wrote.output}`).to.equal(0);
+    await writeMarker(name, name);
+
+    // Only the primary and the fresh node hold it: the ring nodes have no room, and
+    // an 8.20 node does not run a v9 app.
+    const reg = await registerEncryptedV9App(env.clients[PRIMARY].url, {
+      name: v9Name,
+      instances: 2,
+      components: {
+        web: {
+          name: 'web',
+          description: 'registered on v9',
+          image: `${REGISTRY_REPO_HOST}/${name}:v1`,
+          cpu: 0.1,
+          memory: 100,
+          rootFsGb: 1,
+          persistentStorage: {
+            sizeGb: 1,
+            mounts: { '/appdata': { source: 'appdata', destination: '/appdata' } },
+            sync: { mode: 'activeStandby' },
+          },
+          ports: { http: { containerPort: 80, hostPort: 31263 } },
+        },
+      },
+    });
+    expect(reg.status, `the v9 registration is accepted: ${JSON.stringify(reg).slice(0, 300)}`).to.equal('success');
+    await confirmOnChain(reg.data, env.clients.filter(Boolean));
+    v9App = {
+      spec: { name: v9Name }, identity: appIdentityFromUuid(appUuid(v9Name, reg.data)), componentKeys: reg.componentKeys,
+    };
+    await waitForInstallSettled(env.clients[PRIMARY], v9Name, CONVERGE_MS);
+    await waitFor(async () => (await appView(env, v9Name, { component: 'web' }).containerOn(PRIMARY))?.running, {
+      timeout: CONVERGE_MS, interval: 3000, label: 'the v9 node runs the v9 app\'s component',
+    });
+    await writeMarker(v9Name, null);
   });
 
   after(async function () {
@@ -151,6 +197,16 @@ describe('an app registered before v9, beside an 8.20 node', function () {
       const shared = new Set((row?.devices || []).map((d) => d.deviceID));
       return peers.every((id) => shared.has(id));
     }, { timeout: CONVERGE_MS, interval: 5000, label: 'the fresh node shares the folder with the primary and the 8.20 node' });
+  });
+
+  it('shares a v9 registration\'s data under its component identifier on the fresh node, and syncs the primary\'s data', async function () {
+    this.timeout(CONVERGE_MS * 2);
+    const fresh = env.clients[FRESH];
+    await waitForInstallSettled(fresh, v9Name, CONVERGE_MS);
+    expect(await appSyncthingFolderId(fresh, v9Name, 'web'), 'the fresh node\'s folder id is the component identifier').to.equal(componentIdentifier(v9App, 'web'));
+    await waitFor(async () => (await dataFile(FRESH, v9Name, null)) === MARKER, {
+      timeout: CONVERGE_MS, interval: 3000, label: 'the fresh node holds the primary\'s data for the v9 app',
+    });
   });
 
   it('starts the component with that data on the fresh node when the primary and the 8.20 node leave the network', async function () {
