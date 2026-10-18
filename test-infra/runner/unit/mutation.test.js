@@ -52,8 +52,11 @@ describe('mutationListProblems', () => {
 });
 
 describe('mutationTag', () => {
-  it('names the suite and the mutation', () => {
-    assert.equal(mutationTag('2723', 'keep-list-never-sent'), 'mut-2723-keep-list-never-sent');
+  it('names the suite, the run and the mutation', () => {
+    assert.equal(mutationTag('2723', 4242, 'keep-list-never-sent'), 'mut-2723-4242-keep-list-never-sent');
+  });
+  it('fits a docker tag for the longest name a list may hold', () => {
+    assert.ok(mutationTag('2723', 4194304, 'a'.repeat(100)).length <= 128);
   });
 });
 
