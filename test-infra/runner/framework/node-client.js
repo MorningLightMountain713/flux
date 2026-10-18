@@ -413,6 +413,7 @@ export function nodeClient(nodeNum) {
         'content:manifestDropped',
         'content:manifestPromoted',
         'content:manifestBackstopped',
+        'content:keepListSent',
         'content:slotApplied',
         'content:slotApplySkipped',
         'content:slotsProvisioned',

@@ -532,7 +532,7 @@ export async function blobUploadPublicKey() {
 
 /**
  * The benchmark channel's signature over one FluxDrive write, as a node asks
- * for it: fields { kind: 'upload'|'manifest'|'reconcile', identity, ... } (for
+ * for it: fields { kind: 'upload'|'manifest'|'keep', identity, ... } (for
  * an upload: locator and timestamp).
  */
 export async function signBlobWrite(fields) {

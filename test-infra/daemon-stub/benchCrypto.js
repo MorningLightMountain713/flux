@@ -134,6 +134,7 @@ function sha256Hex(value) {
 const BLOB_SIGNATURE_DOMAINS = {
   upload: 'FLUX_BLOB_UPLOAD_v1:',
   manifest: 'FLUX_BLOB_MANIFEST_v1:',
+  keep: 'FLUX_BLOB_KEEP_v1:',
 };
 
 // Every write carries a timestamp and is refused outside this window.
@@ -145,8 +146,9 @@ function pendingMessageHashField(value) {
   return value;
 }
 
-function keptLocatorsHash(locators) {
-  if (!Array.isArray(locators) || !locators.length) throw new Error('signblobupload: keptLocators invalid');
+// A manifest keeps at least one slot locator; a keep list may keep none.
+function keptLocatorsHash(locators, { mayBeEmpty = false } = {}) {
+  if (!Array.isArray(locators) || (!locators.length && !mayBeEmpty)) throw new Error('signblobupload: keptLocators invalid');
   return sha256Hex([...new Set(locators)].sort().join('\n'));
 }
 
@@ -158,6 +160,12 @@ function blobSignedDigest(fields) {
     case 'manifest':
       if (!Number.isSafeInteger(fields.ownedFrom) || fields.ownedFrom < 0) throw new Error('signblobupload: ownedFrom invalid');
       return sha256Hex(`${identity}:${fields.ownedFrom}:${fields.version}:${fields.timestamp}:${keptLocatorsHash(fields.keptLocators)}:${pendingMessageHashField(fields.pendingMessageHash)}`);
+    case 'keep': {
+      if (!Number.isSafeInteger(fields.ownedFrom) || fields.ownedFrom < 0) throw new Error('signblobupload: ownedFrom invalid');
+      const pending = pendingMessageHashField(fields.pendingMessageHash);
+      if (!pending) throw new Error('signblobupload: a keep list names its update');
+      return sha256Hex(`${identity}:${fields.ownedFrom}:${fields.timestamp}:${keptLocatorsHash(fields.keptLocators, { mayBeEmpty: true })}:${pending}`);
+    }
     default:
       throw new Error(`signblobupload: unknown kind ${fields.kind}`);
   }

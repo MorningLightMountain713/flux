@@ -361,6 +361,17 @@ export async function convertToV9(nodeUrl, opts) {
   };
 }
 
+// The content-ref hashes a submission spec names, across every component's mounts.
+function contentRefHashesOf(submissionSpec) {
+  const hashes = new Set();
+  for (const component of Object.values(submissionSpec.components || {})) {
+    for (const mount of Object.values(component?.persistentStorage?.mounts || {})) {
+      if (mount?.contentRef?.hash) hashes.add(mount.contentRef.hash);
+    }
+  }
+  return [...hashes];
+}
+
 /**
  * Update a v9 content app's SPEC with its content (POST /apps/appupdate, multipart):
  * a signed fluxappupdate carrying the full new submission spec and one sealed content
@@ -373,12 +384,14 @@ export async function convertToV9(nodeUrl, opts) {
  * A slot entry is { name, destination, bytes } (new or rotated: bytes attached and
  * owner-signed) or { name, destination, hash } (kept from the standing manifest).
  * A `contentRef` is the app's immutable blob, attached and owner-signed like a
- * rotated slot.
+ * rotated slot. The envelope carries the owner's keep list over every content-ref
+ * file the new spec names, naming the update, unless `keepList: false`; the node
+ * sends it to FluxDrive when the update changes those files.
  *
  * @param {string} nodeUrl
  * @param {object} opts - { name, owner?, image?, instances?, ttl?, components?, placement?,
  *   assignment?, contentRef?: Buffer, contentSlots: [{ name, destination, bytes | hash, onUpdate?, atomic? }],
- *   specOverrides?, version?, ownerKey?, timestamp?, previousKeys?, identity? }
+ *   specOverrides?, version?, ownerKey?, timestamp?, previousKeys?, identity?, keepList?: false }
  * @returns {Promise<object>} the /apps/appupdate response (its data is the update's
  *   message hash) + { contentHash, appName, manifest, componentKeys? } (componentKeys
  *   as updateEncryptedV9App's)
@@ -441,8 +454,19 @@ export async function updateContentApp(nodeUrl, opts) {
     });
   }
 
+  let keepList;
+  if (opts.keepList !== false) {
+    const keptLocators = contentRefHashesOf(submissionSpec).map(locatorFor);
+    keepList = {
+      timestamp,
+      ownerSig: await tk.keepListSig({
+        identity, ownedFrom: standing.ownership.from, timestamp, keptLocators, pendingMessageHash: messageHash, ownerKey,
+      }),
+    };
+  }
+
   const envelope = await tk.buildContentEnvelope({
-    blobs, manifest, manifestPutSig, appName: name, transportPubB64, ref: contentHash, timestamp,
+    blobs, manifest, manifestPutSig, keepList, appName: name, transportPubB64, ref: contentHash, timestamp,
   });
 
   const auth = await authenticate(nodeUrl, ownerKey);
