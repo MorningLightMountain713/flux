@@ -172,7 +172,10 @@ declared tests fail — a hook failure, an extra red or a declared test that
 passes is not. `--control` first runs the suite unmutated from the clone on
 `FLUX_E2E_TAG`'s images and requires it green. The clone must be clean. Results
 are in `$E2E_LOG_DIR/mutate-<suite>-<utc>/summary`; exit 0 only when every run met
-its declaration. Runs are sequential, one fleet at a time.
+its declaration. Builds run one at a time on the host, under `flock` on
+`/tmp/e2e-image-build.lock`, so several sets can run at once on one box; each
+run starts once its images exist and the box admits its fleet by
+`run-parallel.sh`'s rules (`NODE_BUDGET`, `MAXN`, `MIN_FREE_MB`, `MAX_LOAD`).
 
 ## How isolation works (what you need to know to not fight it)
 
