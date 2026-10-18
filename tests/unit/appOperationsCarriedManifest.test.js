@@ -15,6 +15,7 @@ const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 const appSubmission = require('../../ZelBack/src/services/appRequirements/appSubmission');
+const contentBlobService = require('../../ZelBack/src/services/appLifecycle/contentBlobService');
 const { loadSpecLibrary, v9Spec } = require('./fixtures/fluxSpec');
 const { stubRegistry } = require('./fixtures/appRecords');
 
@@ -123,5 +124,24 @@ describe('updateAppGlobaly and the manifest an update carries', () => {
     await appOperations.updateAppGlobaly(params(null));
     sinon.assert.notCalled(uploadSealedContent);
     expect(broadcast.firstCall.args[0]).to.not.have.property('contentManifest');
+  });
+
+  it('an update with no content is judged for a keep list against the spec it supersedes, and one refused for it is never gossiped', async () => {
+    const judged = sinon.stub(contentBlobService, 'assertKeepListCarried');
+    await appOperations.updateAppGlobaly(params(null));
+    sinon.assert.calledOnceWithExactly(judged, spec, spec, null);
+
+    judged.throws(new Error('contentBlob: an update that changes the app\'s content-ref files carries the owner\'s keep list'));
+    broadcast.resetHistory();
+    const refused = await appOperations.updateAppGlobaly(params(null)).catch((e) => e);
+    expect(refused.message).to.match(/keep list/);
+    sinon.assert.notCalled(broadcast);
+  });
+
+  it('an update with content is judged for its keep list by the content upload, not here', async () => {
+    const judged = sinon.stub(contentBlobService, 'assertKeepListCarried');
+    await appOperations.updateAppGlobaly(params({ content: { sealed: true }, ownerSigs: new Map() }));
+    sinon.assert.notCalled(judged);
+    sinon.assert.calledOnce(uploadSealedContent);
   });
 });

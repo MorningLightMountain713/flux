@@ -716,6 +716,13 @@ async function uploadSealedContent(spec, content, ownerSigs, {
     appName: spec.name, owner: spec.owner, ref, timestamp,
   });
   const payload = serviceHelper.ensureObject(opened.toString('utf8'));
+  // Refused before anything reaches FluxDrive: a manifest without the owner's
+  // FluxDrive signature over it, and an update that changes the content-ref files
+  // without the owner's keep list.
+  if (payload.manifest && !payload.manifestPutSig) {
+    throw new Error('uploadSealedContent: a manifest carries the owner\'s FluxDrive signature over it (manifestPutSig)');
+  }
+  if (priorSpec) contentBlobService.assertKeepListCarried(spec, priorSpec, payload.keepList);
   const blobs = new Map(Object.entries(payload.blobs || {}).map(([h, b64]) => [h, Buffer.from(b64, 'base64')]));
 
   const refHashes = contentBlobService.specContentHashes(spec);

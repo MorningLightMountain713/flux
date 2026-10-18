@@ -1742,8 +1742,8 @@ async function backstopManifest(manifest, gossipManifest, ctx, deps = {}) {
   const {
     sign = contentBlobService.signManifestPut, put = fluxDriveClient.putManifest, deriveLocator, benchmark,
   } = deps;
-  // No operational owner sig (frontend didn't supply it) -> can't authenticate the
-  // PUT. Skip; gossip + peers still carry the manifest.
+  // Every submission refuses a manifest without the owner's signature over its
+  // put; a caller holding none has nothing FluxDrive would accept.
   if (!manifestPutSig) return false;
   try {
     const keptLocators = await keptSlotLocators(manifest, identity, { benchmark, deriveLocator });
@@ -1828,6 +1828,7 @@ async function submitContentUpdate(body, deps = {}) {
   if (manifest.appName !== appName || manifest.version !== ver || manifest.timestamp !== ts) {
     throw new Error('contentSlot: content-update meta does not match the sealed manifest');
   }
+  if (!manifestPutSig) throw new Error('contentSlot: a content update carries the owner\'s FluxDrive signature over its manifest (manifestPutSig)');
 
   const blobs = new Map(Object.entries(blobsObj).map(([h, b64]) => [h, Buffer.from(b64, 'base64')]));
   const ownerSigs = new Map(Object.entries(ownerSigsObj || {}));

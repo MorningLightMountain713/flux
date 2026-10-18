@@ -154,14 +154,38 @@ async function signKeepList({
   }), 'signature');
 }
 
+/** Whether a spec names other content-ref files than the spec it supersedes. */
+function contentRefFilesChanged(spec, priorSpec) {
+  const declared = specContentHashes(spec);
+  const prior = specContentHashes(priorSpec);
+  return declared.size !== prior.size || [...declared].some((hash) => !prior.has(hash));
+}
+
+/**
+ * Refuse an update that changes the content-ref files the app names unless it
+ * carries the owner's keep list over the files the new spec names: without it
+ * FluxDrive never learns which files the update drops.
+ *
+ * @param {object} spec - the decrypted submission spec
+ * @param {object} priorSpec - the decrypted spec it supersedes
+ * @param {?{timestamp:number, ownerSig:string}} keepList - from the sealed payload
+ */
+function assertKeepListCarried(spec, priorSpec, keepList) {
+  if (!contentRefFilesChanged(spec, priorSpec)) return;
+  if (!keepList || !keepList.ownerSig || keepList.timestamp == null) {
+    throw new Error('contentBlob: an update that changes the app\'s content-ref files carries the owner\'s keep list (keepList: { timestamp, ownerSig }) over the files the new spec names');
+  }
+}
+
 /**
  * Send FluxDrive a spec update's keep list when the update changes the
  * content-ref files the app names: the locators of every file the new spec
  * names, none when it names none. FluxDrive holds it until the nodes answer that
  * the update applied, then marks the identity's other content-ref blobs for
  * deletion. The owner's signature over it rides the sealed content payload,
- * signed at submission. Best-effort, as every FluxDrive write is: a failure is
- * logged and leaves the superseded files stored.
+ * signed at submission; the submission refuses an update that changes the files
+ * without one (assertKeepListCarried). Best-effort, as every FluxDrive write is: a
+ * failure to reach FluxDrive is logged and leaves the superseded files stored.
  *
  * @param {object} input - { appName, spec, priorSpec, identity, ownedFrom, keepList, pendingMessageHash }
  *   keepList - { timestamp, ownerSig } from the sealed payload, absent when the owner signed none
@@ -173,10 +197,8 @@ async function sendKeepList(input, deps) {
     appName, spec, priorSpec, identity, ownedFrom, keepList, pendingMessageHash,
   } = input;
   const { uploader, benchmark } = deps || {};
-  if (!keepList || !keepList.ownerSig || keepList.timestamp == null) return false;
+  if (!contentRefFilesChanged(spec, priorSpec)) return false;
   const declared = specContentHashes(spec);
-  const prior = specContentHashes(priorSpec);
-  if (declared.size === prior.size && [...declared].every((hash) => prior.has(hash))) return false;
   try {
     const keptLocators = [];
     for (const contentHash of declared) {
@@ -454,6 +476,7 @@ module.exports = {
   signManifestPut,
   signKeepList,
   sendKeepList,
+  assertKeepListCarried,
   decryptAndVerifyBlob,
   resolveBlob,
   serveBlob,

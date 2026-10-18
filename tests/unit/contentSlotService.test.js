@@ -1290,9 +1290,11 @@ describe('contentSlotService', () => {
   });
 
   describe('submitContentUpdate', () => {
-    const sealedPayload = () => Buffer.from(JSON.stringify({
+    const sealedPayload = (over = {}) => Buffer.from(JSON.stringify({
       manifest: manifest(),
       blobs: { [CFG_HASH]: CFG.toString('base64') },
+      manifestPutSig: 'owner-put-sig',
+      ...over,
     }));
     function subBody(overrides = {}) {
       return {
@@ -1420,6 +1422,17 @@ describe('contentSlotService', () => {
       const out = await service.submitContentUpdate(subBody(), deps);
       expect(out.slots).to.have.property('sealed');
       sinon.assert.calledOnce(deps.broadcast);
+    });
+
+    it('refuses a content update whose payload carries no FluxDrive signature over its manifest, before uploading or gossiping anything', async () => {
+      const { service } = loadSub();
+      const uploader = makeUploader();
+      const deps = subDeps({ openEnvelope: async () => sealedPayload({ manifestPutSig: undefined }), uploader });
+      const error = await service.submitContentUpdate(subBody(), deps).catch((e) => e);
+      expect(error.message).to.match(/carries the owner's FluxDrive signature over its manifest \(manifestPutSig\)/);
+      expect(uploader.calls).to.deep.equal([]);
+      sinon.assert.notCalled(deps.broadcast);
+      sinon.assert.notCalled(deps.take);
     });
 
     it('PUTs the manifest to the FluxDrive backstop with the owner PUT-sig from the sealed payload', async () => {
