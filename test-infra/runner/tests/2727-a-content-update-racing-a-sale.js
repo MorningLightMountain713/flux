@@ -153,6 +153,9 @@ describe('a content update racing a sale, on the real FluxDrive', function () {
     await decidedEverywhere(registration.data, 'every node decides the registration applied');
     expect(await fluxDrivePending(harnessNow()), 'the registration\'s manifest put applies').to.include({ applied: 1 });
     await waitForInstallSettled(env.clients[host], name, CONVERGE_MS);
+    await waitFor(async () => (await Promise.all(RUNNING.map(standingOn))).every((s) => s?.version === 1), {
+      timeout: CONVERGE_MS, interval: 3000, label: 'every node stands on the registration\'s manifest',
+    });
     locators.v1 = await locatorOf(bytes.v1, seller);
   });
 
