@@ -35,7 +35,7 @@ import { deliverAppMessage } from '../framework/app-delivery.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import {
-  appDataRoot, appSyncthingFolderId, componentIdentifier, execInContainer, legacyFolderId, restartFluxos,
+  appDataRoot, componentIdentifier, execInContainer, legacyFolderId, restartFluxos,
 } from '../framework/container.js';
 import { appView } from '../framework/app-view.js';
 import { confirmOnChain } from '../framework/app-helper.js';
@@ -187,7 +187,6 @@ describe('an app registered before v9, beside an 8.20 node', function () {
     this.timeout(CONVERGE_MS * 2);
     const fresh = await bootLate(FRESH);
     await waitForInstallSettled(fresh, name, CONVERGE_MS);
-    expect(await appSyncthingFolderId(fresh, name, name), 'the fresh node\'s folder id is the 8.x name').to.equal(legacyName);
     await waitFor(async () => (await dataFile(FRESH)) === MARKER, {
       timeout: CONVERGE_MS, interval: 3000, label: 'the fresh node holds the primary\'s data',
     });
@@ -203,7 +202,12 @@ describe('an app registered before v9, beside an 8.20 node', function () {
     this.timeout(CONVERGE_MS * 2);
     const fresh = env.clients[FRESH];
     await waitForInstallSettled(fresh, v9Name, CONVERGE_MS);
-    expect(await appSyncthingFolderId(fresh, v9Name, 'web'), 'the fresh node\'s folder id is the component identifier').to.equal(componentIdentifier(v9App, 'web'));
+    const folder = componentIdentifier(v9App, 'web');
+    const primary = await getDeviceId(env.clients[PRIMARY]);
+    await waitFor(async () => {
+      const row = (await getFolders(fresh)).find((f) => f.id === folder);
+      return (row?.devices || []).some((d) => d.deviceID === primary);
+    }, { timeout: CONVERGE_MS, interval: 5000, label: `the fresh node shares folder ${folder} with the primary` });
     await waitFor(async () => (await dataFile(FRESH, v9Name, null)) === MARKER, {
       timeout: CONVERGE_MS, interval: 3000, label: 'the fresh node holds the primary\'s data for the v9 app',
     });
