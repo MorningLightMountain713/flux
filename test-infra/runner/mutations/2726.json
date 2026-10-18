@@ -1,0 +1,46 @@
+[
+  {
+    "name": "name-hold-off",
+    "breaks": "for 30 days after an app's term ends only its last owner may register its name",
+    "edits": [
+      {
+        "file": "test-infra/flux-spec/dist/packages/spec-backend/src/decision/decisionRule.js",
+        "from": "        if (clock.tipBlockTime - ended < NAME_HOLD_SECONDS) return refused(entry, name, 'name-reserved');",
+        "to": "        if (false) return refused(entry, name, 'name-reserved');"
+      }
+    ],
+    "red": [
+      "refuses another owner's registration of the name within 30 days of the term's end, on every node",
+      "lists the app again with its identity and its content when its last owner renews it within 30 days"
+    ]
+  },
+  {
+    "name": "name-held-forever",
+    "breaks": "the name hold ends 30 days after the term",
+    "edits": [
+      {
+        "file": "test-infra/flux-spec/dist/packages/spec-backend/src/decision/decisionRule.js",
+        "from": "        if (clock.tipBlockTime - ended < NAME_HOLD_SECONDS) return refused(entry, name, 'name-reserved');",
+        "to": "        return refused(entry, name, 'name-reserved');"
+      }
+    ],
+    "red": [
+      "applies anyone's registration of the name once 30 days have passed since the term ended"
+    ]
+  },
+  {
+    "name": "no-renewal-of-an-expired-app",
+    "breaks": "an update to an app no longer listed is judged against the state it last held",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appLifecycle/appOperations.js",
+        "from": "  const appInfo = (await appRecords.registry().byName(spec.name)) ?? (await appSpecHistory.latestAppliedState(spec.name));",
+        "to": "  const appInfo = await appRecords.registry().byName(spec.name);"
+      }
+    ],
+    "red": [
+      "lists the app again with its identity and its content when its last owner renews it within 30 days",
+      "lists the app again with its identity and its content when its last owner renews it after 30 days, carrying its file"
+    ]
+  }
+]
