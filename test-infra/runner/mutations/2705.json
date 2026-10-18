@@ -1,0 +1,16 @@
+[
+  {
+    "name": "door-takes-a-sale-naming-no-record",
+    "breaks": "the submission door refuses a sale that does not name the standing generation record",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appLifecycle/appOperations.js",
+        "from": "  await assertNamesWhatStands(spec, appInfo, { carriedManifest });",
+        "to": ""
+      }
+    ],
+    "red": [
+      "refuses a sale naming no generation record, or another, naming the standing one"
+    ]
+  }
+]
