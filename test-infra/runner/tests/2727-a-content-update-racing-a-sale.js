@@ -10,7 +10,7 @@
  * Then, the node back in the fleet and the sale paid:
  *   - every node stands on the manifest the sale names, the node that took the
  *     update among them;
- *   - past the grace, a node held off every node that runs the app installs it
+ *   - past every grace, a node held off every node that runs the app installs it
  *     from FluxDrive alone with the content the sale names: a change of holder
  *     retires none of the seller's versions;
  *   - once the buyer updates the content and the grace has run, FluxDrive holds
@@ -203,10 +203,13 @@ describe('a content update racing a sale, on the real FluxDrive', function () {
     });
   });
 
-  it('installs the content the sale names from FluxDrive alone past the grace, on a node held off every node that runs the app', async function () {
+  it('installs the content the sale names from FluxDrive alone past every grace, on a node held off every node that runs the app', async function () {
     this.timeout(CONVERGE_MS * 2);
-    const past = await sweep(harnessNow() + GRACE_MS + DAY_MS);
-    expect(await fluxDriveHolds(locators.v1), `past the grace FluxDrive holds the content the sale names: ${JSON.stringify(past)}`).to.equal(true);
+    // a pass past the grace retires what it supersedes and tombstones the files
+    // no manifest names; the next pass past their grace deletes them
+    await sweep(harnessNow() + GRACE_MS + DAY_MS);
+    const past = await sweep(harnessNow() + 2 * (GRACE_MS + DAY_MS));
+    expect(await fluxDriveHolds(locators.v1), `past every grace FluxDrive holds the content the sale names: ${JSON.stringify(past)}`).to.equal(true);
 
     await env.holdOutPendingNode(FRESH, [host]);
     const fresh = await env.startNode(FRESH);
