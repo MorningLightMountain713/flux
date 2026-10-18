@@ -25,7 +25,7 @@ const daemonStatus = require('../daemonService/daemonStatus');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 // eslint-disable-next-line no-unused-vars
 const upnpService = require('../upnpService');
-const { appsFolder } = require('../utils/appConstants');
+const { appsFolder, APP_MESSAGE_CLOCK_ALLOWANCE_MS } = require('../utils/appConstants');
 const {
   extractIp, extractPort, ipsMatch,
 } = require('../utils/socketAddressUtils');
@@ -1843,7 +1843,7 @@ async function updateAppGlobaly(params) {
   const timestampNow = Date.now();
   if (cleanTimestamp < timestampNow - 1000 * 3600) {
     throw new Error('Message timestamp is over 1 hour old, not valid. Check if your computer clock is synced and restart the registration process.');
-  } else if (cleanTimestamp > timestampNow + 1000 * 60 * 5) {
+  } else if (cleanTimestamp > timestampNow + APP_MESSAGE_CLOCK_ALLOWANCE_MS) {
     throw new Error('Message timestamp from future, not valid. Check if your computer clock is synced and restart the registration process.');
   }
 

@@ -150,6 +150,7 @@ describe('messageStore tests', () => {
         globalAppsInstallingErrorsBroadcasts: 'appsInstallingErrorsBroadcasts',
         globalAppStateEvents: 'appStateEvents',
         GOSSIP_VALIDITY_MS: 5 * 60 * 1000,
+        APP_MESSAGE_CLOCK_ALLOWANCE_MS: 5 * 60 * 1000,
         RUNNING_EXPIRY_MS: 125 * 60 * 1000,
         INSTALLING_EXPIRY_MS: 15 * 60 * 1000,
         INSTALLING_ERRORS_EXPIRY_MS: 24 * 60 * 60 * 1000,
@@ -573,6 +574,66 @@ describe('messageStore tests', () => {
 
       expect(result).to.deep.equal({ rebroadcast: true });
       expect(dbHelperStub.insertOneToDatabase.calledOnce).to.be.true;
+    });
+
+    describe('the signed timestamp against this node\'s clock', () => {
+      const MINUTE = 60 * 1000;
+      const signedAt = (offsetMs) => ({
+        type: 'fluxappregister',
+        version: 1,
+        appSpecifications: { name: 'test' },
+        hash: 'hash123',
+        timestamp: Date.now() + offsetMs,
+        signature: 'sig123',
+      });
+
+      beforeEach(() => {
+        appsRepositoryStub.getPermanentMessage.resolves(null);
+        appsRepositoryStub.getTempMessage.resolves(null);
+        dbHelperStub.databaseConnection.returns({ db: sinon.stub().returns('database') });
+        dbHelperStub.findOneInDatabase.resolves(null);
+        dbHelperStub.insertOneToDatabase.resolves();
+        messageStore = proxyquire('../../ZelBack/src/services/appMessaging/messageStore', buildProxyquireStubs());
+      });
+
+      it('refuses a message signed more than 65 minutes before it arrives', async () => {
+        const result = await messageStore.storeAppTemporaryMessage(signedAt(-66 * MINUTE));
+
+        expect(result).to.be.instanceOf(Error);
+        expect(result.message).to.equal('Flux App message arrived past its payment window');
+        expect(dbHelperStub.insertOneToDatabase.called).to.be.false;
+      });
+
+      it('takes a message signed 64 minutes before it arrives', async () => {
+        const result = await messageStore.storeAppTemporaryMessage(signedAt(-64 * MINUTE));
+
+        expect(result).to.deep.equal({ rebroadcast: true });
+      });
+
+      it('refuses a message signed more than 5 minutes after it arrives', async () => {
+        const result = await messageStore.storeAppTemporaryMessage(signedAt(6 * MINUTE));
+
+        expect(result).to.be.instanceOf(Error);
+        expect(result.message).to.equal('Flux App message is dated ahead of this node\'s clock');
+        expect(dbHelperStub.insertOneToDatabase.called).to.be.false;
+      });
+
+      it('takes a message signed 4 minutes after it arrives', async () => {
+        const result = await messageStore.storeAppTemporaryMessage(signedAt(4 * MINUTE));
+
+        expect(result).to.deep.equal({ rebroadcast: true });
+      });
+
+      it('does not judge by age a message whose payment the scan recorded', async () => {
+        dbHelperStub.findOneInDatabase.resolves({ txid: 'tx1', height: 990 });
+
+        const old = await messageStore.storeAppTemporaryMessage(signedAt(-3 * 60 * MINUTE));
+        const ahead = await messageStore.storeAppTemporaryMessage(signedAt(60 * MINUTE));
+
+        for (const result of [old, ahead]) {
+          expect(result, JSON.stringify(result)).to.not.be.instanceOf(Error);
+        }
+      });
     });
 
     describe('arcane attestation gate', () => {
