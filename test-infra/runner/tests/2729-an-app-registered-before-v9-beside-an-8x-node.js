@@ -107,7 +107,7 @@ describe('an app registered before v9, beside an 8.20 node', function () {
       syncthing: 'real',
       tickerAutostart: false,
     });
-    await bootAndPeer(env, { minOutbound: 1, minInbound: 1 });
+    await bootAndPeer(env, { minOutbound: 1, minInbound: 1, pricing: true });
     await waitFor(() => isDaemonUp(env.clients[PRIMARY]), { timeout: 180000, interval: 3000, label: 'syncthing up on the primary' });
     view = appView(env, name, { component: name, timeout: CONVERGE_MS });
 
