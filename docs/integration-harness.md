@@ -152,6 +152,28 @@ from host RAM, runs `run-parallel.sh`, posts a summary, and uploads the log
 directory as an artifact. The pre/post cleanup is scoped to harness objects
 only — safe on a shared runner.
 
+### Proving a suite can fail — `mutate.js`
+
+A green suite proves nothing until it has failed with the rule it asserts
+broken. A suite's mutations are data in `test-infra/runner/mutations/<suite>.json`:
+each names the rule it breaks, the exact text it replaces (once, in a file of
+the repo, the vendored FluxDrive source under `test-infra/fluxdrive/src` and the
+runner's framework included), and by `it()` title every test it must fail.
+
+```bash
+FLUX_E2E_TAG=<tag> node test-infra/runner/mutate.js 2723 --control   # every mutation, after a green control
+node test-infra/runner/mutate.js 2723 keep-list-marks-slot-rows      # one
+```
+
+Each mutation runs in a worktree of `HEAD` carrying the clone's build products,
+with every image built from it under `mut-<suite>-<name>`; the worktree and the
+images are removed after its run. A mutation is met only when exactly its
+declared tests fail — a hook failure, an extra red or a declared test that
+passes is not. `--control` first runs the suite unmutated from the clone on
+`FLUX_E2E_TAG`'s images and requires it green. The clone must be clean. Results
+are in `$E2E_LOG_DIR/mutate-<suite>-<utc>/summary`; exit 0 only when every run met
+its declaration. Runs are sequential, one fleet at a time.
+
 ## How isolation works (what you need to know to not fight it)
 
 - **Per-suite `/24`.** Each suite carves a private `/24` from
