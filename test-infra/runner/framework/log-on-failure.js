@@ -7,6 +7,7 @@ import { SYNCTHING_HOME } from './syncthing-real.js';
 import { thawEveryNode } from './host-stall.js';
 import failedHooksModule from './failed-hooks.cjs';
 import { eventLines } from './event-lines.js';
+import { syncthingRecord } from './syncthing-real.js';
 
 const { failedHooks } = failedHooksModule;
 
@@ -161,6 +162,21 @@ function envsFor(suite) {
   return picked.length ? picked : all;
 }
 
+// Each node's own syncthing record (syncthing-real.js), for the nodes that run a
+// daemon: a node on the stub has none to ask, and contributes nothing.
+async function syncthingRecords(env) {
+  const clients = env.clients || [];
+  const records = await Promise.all(clients.map(async (client, index) => {
+    if (!client?.container) return null;
+    try {
+      return { index, text: await syncthingRecord(client) };
+    } catch {
+      return null;
+    }
+  }));
+  return records.filter(Boolean);
+}
+
 // Dump each node's logs and SSE events to its OWN file under test-logs/<label>/,
 // plus one file per infra container (mongo, the stubs, the registry). A merged
 // stdout dump interleaves all nodes, which makes "which node did what" impossible
@@ -201,6 +217,7 @@ async function dump(label, envs) {
     apps: await readFromNodes(env, APP_LOGS),
     network: await readFromNodes(env, NETWORK_STATE),
   })));
+  const syncthingByEnv = await Promise.all(envs.map((env) => syncthingRecords(env)));
 
   const written = [];
   envs.forEach((env, e) => {
@@ -251,6 +268,11 @@ async function dump(label, envs) {
         writeFileSync(file, output.endsWith('\n') ? output : `${output}\n`);
         written.push(`${file} (${output.trimEnd().split('\n').length} lines)`);
       }
+    }
+    for (const { index, text } of syncthingByEnv[e]) {
+      const file = join(dir, `${prefix}node-${String(index).padStart(2, '0')}-syncthing-record.log`);
+      writeFileSync(file, `${text}\n`);
+      written.push(file);
     }
   });
 
