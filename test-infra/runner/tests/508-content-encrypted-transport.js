@@ -11,7 +11,9 @@ import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitForAppInstalled, waitFor } from '../framework/wait.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { dbClient } from '../framework/db-client.js';
-import { readFileInContainer, statFileInContainer, inodeInContainer } from '../framework/container.js';
+import {
+  appComponentIdentifier, readFileInContainer, statFileInContainer, inodeInContainer,
+} from '../framework/container.js';
 
 // The HPKE capstone for v9 content delivery. Every content app the harness deploys
 // is ALWAYS transport-encrypted (the sparse spec is HPKE-sealed toward the node's
@@ -301,13 +303,21 @@ describe('content encrypted transport (HPKE capstone): open, seal-at-rest, multi
 
     // dependsOn ordering: the reconciler holds web at awaitingDependency until dep is
     // running, so dep's firstStart precedes web's (event ids are monotonic). Both are
-    // fresh-install first starts, so match 'firstStart'.
-    // An identifier's second segment is the identity the registration minted,
-    // read off the node that installed the app.
-    const capIdentity = await dbClient(installedIndex + 1).identityOf(capApp);
-    const startMatch = (comp) => (d) => d.identifier === `${comp}_${capIdentity}` && d.action === 'firstStart';
-    const depStart = await node.waitForEvent('reconciler:actuated', startMatch('dep'), 120000, { afterId: afterInstall });
-    const webStart = await node.waitForEvent('reconciler:actuated', startMatch('web'), 120000, { afterId: afterInstall });
+    // fresh-install first starts, so match 'firstStart'. A component's identifier
+    // carries identities minted at registration, so it is read off the
+    // component's container on the node that installed the app; the events wait
+    // replays from the install, so reading it first misses no start.
+    const identifierOf = async (comp) => {
+      let identifier = null;
+      await waitFor(async () => {
+        identifier = await appComponentIdentifier(node.container, capApp, comp);
+        return identifier != null;
+      }, { timeout: 120000, interval: 2000, label: `${comp}'s container exists` });
+      return identifier;
+    };
+    const startMatch = (identifier) => (d) => d.identifier === identifier && d.action === 'firstStart';
+    const depStart = await node.waitForEvent('reconciler:actuated', startMatch(await identifierOf('dep')), 120000, { afterId: afterInstall });
+    const webStart = await node.waitForEvent('reconciler:actuated', startMatch(await identifierOf('web')), 120000, { afterId: afterInstall });
     expect(depStart.id, 'dep must start before web (dependsOn)').to.be.lessThan(webStart.id);
 
     // Install-time content landed (web is up now): every injected file is the cleartext
