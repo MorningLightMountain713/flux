@@ -182,7 +182,7 @@ async function controlRun() {
 
 /** The mutation's worktree with its edits made and its images built, or null when it cannot run. */
 async function prepare(m) {
-  const tag = mutationTag(suite, m.name);
+  const tag = mutationTag(suite, process.pid, m.name);
   const tree = join(out, `${m.name}.tree`);
   const buildLog = join(out, `${m.name}.build.log`);
   try {
@@ -211,7 +211,7 @@ async function prepare(m) {
 
 async function mutationRun(m, tree) {
   try {
-    const verdict = await runSuite(m.name, tree, mutationTag(suite, m.name), m.red);
+    const verdict = await runSuite(m.name, tree, mutationTag(suite, process.pid, m.name), m.red);
     record(m.name, verdict);
     return verdict.ok;
   } finally {
@@ -220,7 +220,7 @@ async function mutationRun(m, tree) {
 }
 
 async function cleanUp(m, tree) {
-  const tag = mutationTag(suite, m.name);
+  const tag = mutationTag(suite, process.pid, m.name);
   const listed = spawnSync('docker', ['images', '--format', '{{.Repository}}:{{.Tag}}', '--filter', `reference=flux-e2e-*:${tag}`], { encoding: 'utf8' });
   const images = listed.stdout.split('\n').filter(Boolean);
   if (images.length) await run('docker', ['rmi', ...images], { log: join(out, `${m.name}.build.log`) });

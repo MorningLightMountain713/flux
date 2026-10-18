@@ -15,7 +15,7 @@
 // mutate.js runs a set.
 
 const NAME = /^[a-z0-9][a-z0-9-]*$/;
-// A docker tag is at most 128 characters; `mut-<suite>-` takes the rest.
+// A docker tag is at most 128 characters; `mut-<suite>-<run>-` takes the rest.
 const NAME_MAX = 100;
 const TAP_LINE = /^(ok|not ok) \d+ (.*)$/;
 
@@ -57,12 +57,14 @@ export function mutationListProblems(list) {
 }
 
 /**
- * The tag a mutation's images are built under.
+ * The tag a mutation's images are built under, one per run, so two runs of the
+ * same suite on one box never share, or remove, each other's images.
  * @param {string} suite - the suite's number
+ * @param {number} run - the run's process id
  * @param {string} name - the mutation's name
  */
-export function mutationTag(suite, name) {
-  return `mut-${suite}-${name}`;
+export function mutationTag(suite, run, name) {
+  return `mut-${suite}-${run}-${name}`;
 }
 
 /**
