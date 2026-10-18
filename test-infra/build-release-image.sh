@@ -33,10 +33,7 @@ for p in "${PRODUCT[@]}"; do
   git archive "$REF" -- "$p" | tar -x
 done
 
-# Whatever the harness built and ignores: vendored libraries, fixture binaries.
-git -C "$CLONE" ls-files --others --ignored --exclude-standard -- test-infra \
-  | grep -v -e '/node_modules/' -e '^test-infra/runner/' \
-  | while read -r f; do mkdir -p "$(dirname "$f")"; cp -p "$CLONE/$f" "$f"; done
+"$CLONE/test-infra/copy-build-products.sh" "$CLONE" "$WORK/tree"
 
 # The per-node configs a node of the ref's code reads, from the ref's production config.
 mkdir -p config
