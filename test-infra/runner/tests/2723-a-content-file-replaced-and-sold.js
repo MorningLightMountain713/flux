@@ -3,8 +3,9 @@
  * The real FluxDrive keeps a v9 app's content-ref files across updates and a
  * sale, and removes each file an applied update drops.
  *
- * The seller registers the app with one file and replaces it by a spec update;
- * then, with GC passes run at the times the suite names:
+ * The seller registers the app with one file. An update that replaces it without
+ * the owner's keep list is refused. The seller replaces it with one; then, with
+ * GC passes run at the times the suite names:
  *   - the replaced file is kept through the grace and removed after it, the file
  *     the app names kept;
  *   - the seller replaces the file again and sells the app before that grace
@@ -187,7 +188,7 @@ describe('a content file replaced and sold, on the real FluxDrive', function () 
     await env?.teardown();
   });
 
-  it('removes the file the seller replaced once the grace has run, and keeps the one the app names', async function () {
+  it('refuses an update that replaces the file without the owner\'s keep list, and removes the file the seller replaced once the grace has run', async function () {
     this.timeout(CONVERGE_MS * 3);
     const registration = await deployContentApp(url(registrar), {
       name, contentRef: files.v1, ...shape(files.v1), ownerKey: seller,
@@ -198,6 +199,12 @@ describe('a content file replaced and sold, on the real FluxDrive', function () 
     await waitForInstallSettled(env.clients[host], name, CONVERGE_MS);
     locators.v1 = await locatorOf(files.v1, seller);
     expect(await holds('v1'), 'FluxDrive holds the registration\'s file').to.deep.equal({ v1: true });
+
+    const unlisted = await updateContentApp(url(registrar), {
+      name, contentRef: files.v2, ...shape(files.v2), owner: seller.zelid, ownerKey: seller, keepList: false,
+    });
+    expect(unlisted.status, `an update replacing the file without a keep list is refused: ${JSON.stringify(unlisted).slice(0, 300)}`).to.equal('error');
+    expect(JSON.stringify(unlisted.data), 'the refusal names the keep list').to.match(/carries the owner's keep list/);
 
     await replaceFile(files.v2, seller, 'the seller\'s update to v2');
     locators.v2 = await locatorOf(files.v2, seller);
