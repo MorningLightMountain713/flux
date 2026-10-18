@@ -1,0 +1,17 @@
+[
+  {
+    "name": "intake-takes-a-message-dated-ahead",
+    "breaks": "a node refuses at intake an app message signed more than five minutes after it arrives",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appMessaging/messageStore.js",
+        "from": "    if (message.timestamp > now + APP_MESSAGE_CLOCK_ALLOWANCE_MS) {",
+        "to": "    if (false) {"
+      }
+    ],
+    "red": [
+      "holds a sale signed an hour ahead only on the node whose clock is an hour ahead",
+      "applies the owner's content update on every node on the network's clock while that sale is held"
+    ]
+  }
+]
