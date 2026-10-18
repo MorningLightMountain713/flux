@@ -16,7 +16,7 @@
   },
   {
     "name": "folder-id-from-the-identity",
-    "breaks": "an app registered before v9 shares its data under the folder id its registration fixed, its 8.x name",
+    "breaks": "an app registered before v9 shares its data under the folder id its registration fixed, its 8.x name, which an 8.x node shares it under too",
     "edits": [
       {
         "file": "test-infra/flux-spec/dist/packages/spec-backend/src/domain/DeploymentSpec.js",
@@ -25,6 +25,8 @@
       }
     ],
     "red": [
+      "installs the app on the 8.20 node and does not start the component the v9 primary holds",
+      "does not start it through a restart of the 8.20 node's FluxOS",
       "shares the data under the 8.x folder id on a fresh v9 node, syncs the primary's data, and shares the folder with both peers"
     ]
   }
