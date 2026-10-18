@@ -8,6 +8,7 @@ const contentStore = require('./contentStore');
 const specLibs = require('../utils/specLibs');
 const { aeadEncrypt, aeadDecrypt } = require('../utils/aeadCrypto');
 const fluxEventBus = require('../utils/fluxEventBus');
+const log = require('../../lib/log');
 
 // The content byte caps are v9 protocol constants (SpecConstraintsV9) — every
 // node must enforce the same values for verification to be meaningful. flux-spec
@@ -132,6 +133,68 @@ async function signManifestPut({
   return benchmarkField(await benchmark.signBlobUpload({
     kind: 'manifest', identity: requireIdentity(identity), ownedFrom, version, timestamp, keptLocators, pendingMessageHash,
   }), 'signature');
+}
+
+/**
+ * Take the arcane signature for a keep list: the content-ref locators a spec
+ * update leaves the app. The benchmark channel builds the library's
+ * `blobKeepDigest`, `identity:ownedFrom:timestamp:keptLocatorsHash:pendingMessageHash`,
+ * under its own domain, and refuses a timestamp outside the freshness window.
+ *
+ * @param {object} fields - { identity, ownedFrom, timestamp, keptLocators, pendingMessageHash }
+ * @param {object} [deps] - { benchmark? }
+ * @returns {Promise<string>} the base64 arcane signature
+ */
+async function signKeepList({
+  identity, ownedFrom, timestamp, keptLocators, pendingMessageHash,
+}, deps = {}) {
+  const { benchmark = benchmarkService } = deps || {};
+  return benchmarkField(await benchmark.signBlobUpload({
+    kind: 'keep', identity: requireIdentity(identity), ownedFrom, timestamp, keptLocators, pendingMessageHash,
+  }), 'signature');
+}
+
+/**
+ * Send FluxDrive a spec update's keep list when the update changes the
+ * content-ref files the app names: the locators of every file the new spec
+ * names, none when it names none. FluxDrive holds it until the nodes answer that
+ * the update applied, then marks the identity's other content-ref blobs for
+ * deletion. The owner's signature over it rides the sealed content payload,
+ * signed at submission. Best-effort, as every FluxDrive write is: a failure is
+ * logged and leaves the superseded files stored.
+ *
+ * @param {object} input - { appName, spec, priorSpec, identity, ownedFrom, keepList, pendingMessageHash }
+ *   keepList - { timestamp, ownerSig } from the sealed payload, absent when the owner signed none
+ * @param {object} deps - { uploader, benchmark? }
+ * @returns {Promise<boolean>} true when the keep list was sent
+ */
+async function sendKeepList(input, deps) {
+  const {
+    appName, spec, priorSpec, identity, ownedFrom, keepList, pendingMessageHash,
+  } = input;
+  const { uploader, benchmark } = deps || {};
+  if (!keepList || !keepList.ownerSig || keepList.timestamp == null) return false;
+  const declared = specContentHashes(spec);
+  const prior = specContentHashes(priorSpec);
+  if (declared.size === prior.size && [...declared].every((hash) => prior.has(hash))) return false;
+  try {
+    const keptLocators = [];
+    for (const contentHash of declared) {
+      // eslint-disable-next-line no-await-in-loop
+      keptLocators.push(await deriveLocator(benchmark, { identity, contentHash }));
+    }
+    const arcaneSig = await signKeepList({
+      identity, ownedFrom, timestamp: keepList.timestamp, keptLocators, pendingMessageHash,
+    }, { benchmark });
+    await uploader.putKeepList(appName, {
+      identity, ownedFrom, timestamp: keepList.timestamp, keptLocators, pendingMessageHash, arcaneSig, ownerSig: keepList.ownerSig,
+    });
+    fluxEventBus.publish('content:keepListSent', { appName, kept: keptLocators.length, pendingMessageHash });
+    return true;
+  } catch (error) {
+    log.warn(`contentBlob: keep list for ${appName} failed (its superseded files stay stored) - ${error.message ?? error}`);
+    return false;
+  }
 }
 
 /**
@@ -389,6 +452,8 @@ module.exports = {
   assertBlobStored,
   deriveLocator,
   signManifestPut,
+  signKeepList,
+  sendKeepList,
   decryptAndVerifyBlob,
   resolveBlob,
   serveBlob,

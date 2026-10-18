@@ -673,8 +673,9 @@ async function parseMultipartSubmission(req) {
 /**
  * Open a submission's HPKE-sealed content envelope toward this node's per-app
  * transport key and upload its content — content never travels in the clear. The
- * envelope seals { blobs: { hash: base64 }, manifest? }; contentRef blobs (declared
- * in the immutable spec) upload here, and the AAD is bound to the submission via
+ * envelope seals { blobs: { hash: base64 }, manifest?, manifestPutSig?, keepList? };
+ * contentRef blobs (declared in the immutable spec) upload here, and the AAD is
+ * bound to the submission via
  * `ref` (the signed contentHash) so a captured envelope can't be replayed onto a
  * different submission. Any non-contentRef blobs belong to content-slot mounts and
  * are returned (with the manifest) for the slot path. Shared by register + update:
@@ -690,6 +691,10 @@ async function parseMultipartSubmission(req) {
  * registration's manifest is stored as the app's and gossiped; an update's is
  * returned to ride in the update's message, held with it on every node and
  * stored when the update applies.
+ *
+ * An update that changes the content-ref files the app names sends FluxDrive the
+ * owner-signed keep list the envelope carries, naming the submission's message
+ * hash, so the files it drops are deleted once the update applies.
  *
  * @param {object} spec - resolved submission spec (name, owner, contentRef mounts)
  * @param {object} content - the sealed TransportEnvelope JSON
@@ -719,20 +724,31 @@ async function uploadSealedContent(spec, content, ownerSigs, {
     spec, identity, priorSpec, blobs: refBlobs, ownerSigs,
   }, { uploader: fluxDriveClient });
 
+  // An update's FluxDrive writes are signed under the listed ownership: the
+  // height the chain says the owner took the app. A registration's are signed
+  // under 0, its height not existing yet.
+  let ownedFrom = 0;
+  let original = false;
+  if (priorSpec && (payload.manifest || payload.keepList)) {
+    const listed = manifestStanding.listedOwnership(await appHistory.ownerships(spec.name));
+    if (!listed || listed.owner !== owner) throw new Error(`uploadSealedContent: ${spec.name} has no applied ownership for ${owner}`);
+    ({ from: ownedFrom, original } = listed);
+  }
+
+  // An update that changes the content-ref files the app names hands FluxDrive
+  // its keep list, naming this submission's message, so the files it drops are
+  // deleted once the update applies.
+  if (priorSpec) {
+    await contentBlobService.sendKeepList({
+      appName: spec.name, spec, priorSpec, identity, ownedFrom, keepList: payload.keepList, pendingMessageHash: messageHash,
+    }, { uploader: fluxDriveClient });
+  }
+
   // A slot app bundles its owner-signed manifest with the submission: upload the
   // slot blobs and hand the manifest, with the slot locators it keeps, to FluxDrive
   // naming this submission's message. A slot app always forces an encrypted spec (flux-spec
-  // validation), so the slots payload is sealed. The manifest is signed under the
-  // listed ownership: the height the chain says the owner took the app, or 0 for
-  // a registration, whose height does not exist yet.
+  // validation), so the slots payload is sealed.
   if (payload.manifest) {
-    let ownedFrom = 0;
-    let original = false;
-    if (priorSpec) {
-      const listed = manifestStanding.listedOwnership(await appHistory.ownerships(spec.name));
-      if (!listed || listed.owner !== owner) throw new Error(`uploadSealedContent: ${spec.name} has no applied ownership for ${owner}`);
-      ({ from: ownedFrom, original } = listed);
-    }
     const slotHashes = new Set(Object.values(payload.manifest.slots || {}).map((s) => s.hash));
     const slotBlobs = new Map([...blobs].filter(([h]) => slotHashes.has(h)));
     const gossipManifest = await contentSlotService.processManifestSubmission(
