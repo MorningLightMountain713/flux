@@ -10,7 +10,7 @@ import {
 import {
   TransportEnvelope, buildTransportAad, buildContentTransportAad, buildSignaturePayloadV2, CONTENT_LOCATOR_AAD_REF,
   FluxAppSpecV9, canonicalContentManifest, TRANSPORT_ALGORITHM, TRANSPORT_INFO, TRANSPORT_EXPORT_LABEL,
-  appUuid, appIdentityFromUuid, blobUploadDigest, manifestPutDigest,
+  appUuid, appIdentityFromUuid, blobUploadDigest, manifestPutDigest, blobKeepDigest,
 } from '@runonflux/flux-spec';
 import { computeMessageHashV2 } from '@runonflux/flux-spec-backend';
 import { signBtcMessage } from '../auth.js';
@@ -228,7 +228,7 @@ export async function buildOwnerSigs({
 // Seal the ONE content envelope a submission carries: { blobs, manifest?, ... } HPKE-sealed
 // toward the node's transport key (content leg AAD bound to the spec's contentHash via `ref`).
 export async function buildContentEnvelope({
-  blobs, manifest, manifestPutSig, appName, transportPubB64, ref, timestamp,
+  blobs, manifest, manifestPutSig, keepList, appName, transportPubB64, ref, timestamp,
 }) {
   const payload = { blobs: {} };
   for (const [hash, bytes] of Object.entries(blobs || {})) {
@@ -236,6 +236,7 @@ export async function buildContentEnvelope({
   }
   if (manifest) payload.manifest = manifest;
   if (manifestPutSig) payload.manifestPutSig = manifestPutSig;
+  if (keepList) payload.keepList = keepList;
   const aad = buildContentTransportAad({ appName, ref, timestamp });
   return sealExport(Buffer.from(JSON.stringify(payload)), aad, transportPubB64);
 }
@@ -282,5 +283,16 @@ export async function manifestPutSig({
 }) {
   return signBtcMessage(manifestPutDigest({
     identity, ownedFrom, version, timestamp, keptLocators, pendingMessageHash,
+  }), ownerKey.privkey);
+}
+
+// The owner half of a spec update's keep list, over the library's text
+// (`identity:ownedFrom:timestamp:keptLocatorsHash:pendingMessageHash`): the
+// content-ref locators the update leaves the app, none when it drops every file.
+export async function keepListSig({
+  identity, ownedFrom, timestamp, keptLocators, pendingMessageHash, ownerKey,
+}) {
+  return signBtcMessage(blobKeepDigest({
+    identity, ownedFrom, timestamp, keptLocators, pendingMessageHash,
   }), ownerKey.privkey);
 }

@@ -41,7 +41,7 @@ const NODE_URLS = (process.env.FLUX_NODE_URLS || '').split(',').map((s) => s.tri
 const PENDING_POLL_MS = parseInt(process.env.PENDING_POLL_MS || '2000', 10);
 const ASK_TIMEOUT_MS = 4000;
 
-// locator -> { bytes:Buffer, appName, identity, source, timestamp, arcaneSig, ownerSig, tombstoned }
+// locator -> { bytes:Buffer, appName, identity, source, timestamp, arcaneSig, ownerSig, tombstoned, receivedAt }
 const blobs = new Map();
 // `${appName}\n${identity}\n${ownedFrom}\n${version}` -> { appName, identity, version, timestamp, arcaneSig, ownerSig, manifest, confirmed, seq }
 // — one row per version of an identity, as the real service keeps them (D4)
@@ -53,12 +53,17 @@ let manifestSeq = 0;
 // every kept list a stored manifest carried, in arrival order, for assertions:
 // { appName, identity, ownedFrom, version, keptLocators, applied, pendingMessageHash }
 const keptLists = [];
+// every keep list a decided spec update carried, in decision order, for assertions:
+// { appName, identity, ownedFrom, timestamp, keptLocators, pendingMessageHash, applied }
+const keepLists = [];
+// identity -> [ownedFrom, timestamp] of its newest applied keep list
+const keepRanks = new Map();
 // every HEAD presence probe on the blob fetch route, in arrival order — the
 // carry-over submission contract asserts on these (a carried-over hash is
 // presence-checked instead of re-uploaded)
 const heads = [];
 // every pending write, in arrival order:
-// { kind:'manifest', messageHash, appName, identity, version, body, keptLocators, receivedAt, askedAt, answers }
+// { kind:'manifest'|'keep', messageHash, appName, identity, version, body?, ownedFrom?, keptLocators, receivedAt, askedAt, answers }
 const pending = [];
 // every decision taken on a pending write, for assertions
 const decisions = [];
@@ -77,6 +82,8 @@ function reset() {
   holders.clear();
   manifestSeq = 0;
   keptLists.length = 0;
+  keepLists.length = 0;
+  keepRanks.clear();
   heads.length = 0;
   pending.length = 0;
   decisions.length = 0;
@@ -153,6 +160,31 @@ function applyKeptLocators(identity, keptLocators) {
   }
 }
 
+// Apply a decided keep list when it outranks the identity's last applied one (by
+// the height its signer took the app, then the time it was signed): mark the
+// identity's content-ref blobs it does not keep that arrived before it, and clear
+// the mark of those it keeps.
+function applyKeepList(write) {
+  const ownedFrom = Number(write.ownedFrom);
+  const timestamp = Number(write.timestamp);
+  const last = keepRanks.get(write.identity);
+  const applied = !last || ownedFrom > last[0] || (ownedFrom === last[0] && timestamp > last[1]);
+  if (applied) {
+    keepRanks.set(write.identity, [ownedFrom, timestamp]);
+    const kept = new Set(write.keptLocators);
+    const arrived = Date.parse(write.receivedAt);
+    for (const [loc, entry] of blobs) {
+      if (entry.identity !== write.identity || entry.source !== 'blob') continue;
+      if (kept.has(loc)) entry.tombstoned = false;
+      else if (entry.receivedAt < arrived) entry.tombstoned = true;
+    }
+  }
+  keepLists.push({
+    appName: write.appName, identity: write.identity, ownedFrom, timestamp, keptLocators: write.keptLocators, pendingMessageHash: write.messageHash, applied, at: new Date().toISOString(),
+  });
+  return applied;
+}
+
 // Whether a row is its identity's newest version, by the height its signer took
 // the app and then its version.
 function isNewest(identity, ownedFrom, version) {
@@ -192,9 +224,11 @@ function applyManifestPut({
 
 const MESSAGE_HASH = /^[0-9a-f]{64}$/;
 
+const pendingOwnedFrom = (write) => (write.kind === 'keep' ? Number(write.ownedFrom) : ownedFromOf(write.body));
+
 function recordPending(write) {
-  // A retried request replaces the earlier write of the same identity, ownership and version.
-  const i = pending.findIndex((p) => p.identity === write.identity && ownedFromOf(p.body) === ownedFromOf(write.body) && p.version === write.version);
+  // A retried request replaces the earlier write of the same kind, identity, ownership and version.
+  const i = pending.findIndex((p) => p.kind === write.kind && p.identity === write.identity && pendingOwnedFrom(p) === pendingOwnedFrom(write) && p.version === write.version);
   const row = {
     ...write, receivedAt: new Date().toISOString(), askedAt: null, answers: [],
   };
@@ -219,7 +253,8 @@ function settlePending(write, verdict) {
     drop();
     // The applied message lists the name under this identity.
     promote(write.appName, write.identity);
-    outcome = applyManifestPut({ ...write, manifest: write.body, pendingMessageHash: write.messageHash }) ? 'applied' : 'discarded';
+    const applied = write.kind === 'keep' ? applyKeepList(write) : applyManifestPut({ ...write, manifest: write.body, pendingMessageHash: write.messageHash });
+    outcome = applied ? 'applied' : 'discarded';
   }
   decisions.push({
     messageHash: write.messageHash, kind: write.kind, appName: write.appName, identity: write.identity, version: write.version, decision: verdict ? verdict.decision : 'no majority', outcome, at: new Date().toISOString(),
@@ -323,6 +358,7 @@ app.post('/api/v1/blob', express.raw({ type: '*/*', limit: '64mb' }), (req, res)
     arcaneSig: req.get('X-Flux-Arcane-Sig') || null,
     ownerSig: req.get('X-Flux-Owner-Sig') || null,
     tombstoned: false,
+    receivedAt: Date.now(),
   });
   res.status(200).json({ ok: true, locator });
 });
@@ -393,6 +429,33 @@ app.put('/api/v1/manifest/:appName', express.json(), (req, res) => {
   res.status(200).json({ ok: true });
 });
 
+// PUT a spec update's keep list: the content-ref locators the update leaves the
+// app, none when it drops every file. It names the update, and is held pending
+// (202) until the nodes decide it.
+app.put('/api/v1/blob/keep/:appName', express.json(), (req, res) => {
+  const { appName } = req.params;
+  const {
+    identity, ownedFrom, timestamp, keptLocators, pendingMessageHash, arcaneSig, ownerSig,
+  } = req.body || {};
+  if (typeof identity !== 'string' || identity.length === 0) {
+    res.status(400).json({ error: 'A keep list names the identity it is for' });
+    return;
+  }
+  if (!Array.isArray(keptLocators)) {
+    res.status(400).json({ error: 'A keep list carries its kept locators' });
+    return;
+  }
+  if (!MESSAGE_HASH.test(String(pendingMessageHash ?? ''))) {
+    res.status(400).json({ error: 'A keep list names the spec update that carries it' });
+    return;
+  }
+  recordPending({
+    kind: 'keep', messageHash: pendingMessageHash, appName, identity, ownedFrom: Number(ownedFrom), version: Number(timestamp), timestamp, arcaneSig, ownerSig, keptLocators,
+  });
+  askPending().catch(() => {});
+  res.status(202).json({ status: 'pending', messageHash: pendingMessageHash });
+});
+
 // Fetch every kept version the name serves, newest first (cold-start fallback).
 // Strict serves confirmed-only; 404 -> the client returns null and falls back to
 // peers. The stub records no owner, so each version's is null.
@@ -424,8 +487,8 @@ const pendingView = (p) => ({
 
 // Full snapshot for assertions: blob metadata (not bytes), the manifest each
 // name serves (`manifests`, by name) and every stored manifest row
-// (`manifestRows`), the name holders, the kept lists manifests carried, the HEAD
-// presence-probe log, the pending writes and the decisions taken on them, and
+// (`manifestRows`), the name holders, the kept lists manifests carried, the keep
+// lists decided spec updates carried, the HEAD presence-probe log, the pending writes and the decisions taken on them, and
 // the active mode.
 control.get('/state', (req, res) => {
   res.json({
@@ -439,6 +502,7 @@ control.get('/state', (req, res) => {
     manifestRows: [...manifests.values()],
     holders: Object.fromEntries(holders),
     keptLists,
+    keepLists,
     heads,
     pending: pending.map(pendingView),
     decisions,
@@ -509,6 +573,7 @@ control.post('/blob/:locator', (req, res) => {
     arcaneSig: null,
     ownerSig: null,
     tombstoned: false,
+    receivedAt: Date.now(),
   });
   res.json({ ok: true });
 });
