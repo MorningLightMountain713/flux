@@ -1,0 +1,41 @@
+[
+  {
+    "name": "fluxdrive-applies-at-once",
+    "breaks": "FluxDrive holds a spec update's writes until the nodes answer that the update applied",
+    "edits": [
+      {
+        "file": "test-infra/fluxdrive/src/lib/pendingWrites.js",
+        "from": "  if (!verdict || verdict.decision === \"undecided\") {",
+        "to": "  if (false) {"
+      },
+      {
+        "file": "test-infra/fluxdrive/src/lib/pendingWrites.js",
+        "from": "  if (verdict.decision !== \"applied\") {",
+        "to": "  if (false) {"
+      },
+      {
+        "file": "test-infra/fluxdrive/src/lib/pendingWrites.js",
+        "from": "  const holder = verdict.holder ?? {};",
+        "to": "  const holder = verdict?.holder ?? { identity: write.identity, owner: write.owner };"
+      }
+    ],
+    "red": [
+      "leaves the slots, the manifest FluxDrive serves and the live blob as they were when an update adding a slot is never paid",
+      "applies the writes of two updates adding a slot in one pass, the first though the app list never named its spec"
+    ]
+  },
+  {
+    "name": "decision-by-the-listed-spec",
+    "breaks": "a node answers whether a message applied by the message's own hash, not by the spec the app list names",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/apiV2/messages.js",
+        "from": "    return res.ok({ hash, decision: decided.decision, owner: message?.appSpecifications?.owner ?? null, identity: decided.identity ?? null });",
+        "to": "    const named = await appsRepository.listAppMessagesByName(message?.appSpecifications?.name);\n    if (named.length && named.reduce((a, b) => (b.height > a.height ? b : a)).hash !== hash) return res.ok({ hash, decision: 'undecided' });\n    return res.ok({ hash, decision: decided.decision, owner: message?.appSpecifications?.owner ?? null, identity: decided.identity ?? null });"
+      }
+    ],
+    "red": [
+      "applies the writes of two updates adding a slot in one pass, the first though the app list never named its spec"
+    ]
+  }
+]
