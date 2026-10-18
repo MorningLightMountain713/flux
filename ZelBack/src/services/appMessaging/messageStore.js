@@ -39,6 +39,7 @@ const {
   INSTALLING_EXPIRY_MS,
   INSTALLING_ERRORS_EXPIRY_MS,
   CLOCK_SKEW_ALLOWANCE_MS,
+  APP_MESSAGE_CLOCK_ALLOWANCE_MS,
 } = require('../utils/appConstants');
 
 const APP_STATE_EVENT_TYPES = Object.freeze({
@@ -156,6 +157,18 @@ async function storeAppTemporaryMessage(message, options = {}) {
   // hash to the paid hash, its attestation verifies) and the decider judges it.
   // The checks below decide whether live traffic is taken and relayed.
   if (furtherVerification && !isAppRequested) {
+    // A message waits for its payment from its signing, judged by this node's
+    // clock: one arriving past its payment window, beyond the allowance for
+    // clocks and relays, can no longer be paid; one dated further ahead than a
+    // submission route accepts would wait longer than one signed now.
+    const now = Date.now();
+    if (now > temporaryPoolSweep.payableUntil(message.timestamp).getTime() + APP_MESSAGE_CLOCK_ALLOWANCE_MS) {
+      return new Error('Flux App message arrived past its payment window');
+    }
+    if (message.timestamp > now + APP_MESSAGE_CLOCK_ALLOWANCE_MS) {
+      return new Error('Flux App message is dated ahead of this node\'s clock');
+    }
+
     // A v9 encrypted spec must carry a valid arcane attestation (an Arcane
     // node's signed receipt that a genuine secure backend validated it), verified locally
     // against the hardcoded network key so non-Arcane nodes reject too. Drop

@@ -106,6 +106,10 @@ const INSTALLING_EXPIRY_MS = (config.get('fluxapps.installingTtlS')) * 1000;
 // Defaulted, not read bare: consumed in arithmetic, so a missing key would become NaN
 // and silently disable every comparison that uses it.
 const CLOCK_SKEW_ALLOWANCE_MS = config.get('fluxapps.clockSkewAllowanceMs');
+// How far an app message's signed timestamp may run ahead of the node that
+// takes it, and how late past its payment window it may still arrive: the
+// signer's clock and a relay's delay, at a submission route and at gossip intake.
+const APP_MESSAGE_CLOCK_ALLOWANCE_MS = 5 * 60 * 1000;
 // Renewal cadence for a long-running install's fluxappinstalling claim: re-broadcast
 // before INSTALLING_EXPIRY_MS lapses so a live install keeps its seat, with slack for
 // gossip propagation. A dead node stops renewing and its claim expires on the TTL.
@@ -207,6 +211,7 @@ module.exports = {
   // Expiry / TTL
   GOSSIP_VALIDITY_MS,
   CLOCK_SKEW_ALLOWANCE_MS,
+  APP_MESSAGE_CLOCK_ALLOWANCE_MS,
   RUNNING_EXPIRY_MS,
   ANNOUNCE_INTERVAL_MS,
   ANNOUNCE_CYCLE_WAIT_MS,
