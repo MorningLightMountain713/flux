@@ -1,0 +1,65 @@
+[
+  {
+    "name": "no-keep-list-sent",
+    "breaks": "FluxOS sends FluxDrive the owner's keep list with an update that changes the content-ref files",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appLifecycle/contentBlobService.js",
+        "from": "  if (!contentRefFilesChanged(spec, priorSpec)) return false;",
+        "to": "  return false;"
+      }
+    ],
+    "red": [
+      "refuses an update that replaces the file without the owner's keep list, and removes the file the seller replaced once the grace has run",
+      "keeps every file past every grace when the seller replaces the file and sells before the grace ends",
+      "installs the file the sale names from FluxDrive alone on a node held off every node that runs the app",
+      "removes both earlier files once the buyer replaces the file and the grace has run, and keeps the buyer's"
+    ]
+  },
+  {
+    "name": "keep-list-marks-slot-rows",
+    "breaks": "a keep list marks the app's content-ref rows, not its slot rows",
+    "edits": [
+      {
+        "file": "test-infra/fluxdrive/src/lib/blobStore.js",
+        "from": "source: \"blob\", keptLocators: write.keptLocators",
+        "to": "source: \"slot\", keptLocators: write.keptLocators"
+      }
+    ],
+    "red": [
+      "refuses an update that replaces the file without the owner's keep list, and removes the file the seller replaced once the grace has run",
+      "removes both earlier files once the buyer replaces the file and the grace has run, and keeps the buyer's"
+    ]
+  },
+  {
+    "name": "mark-deleted-across-a-holder-change",
+    "breaks": "a marked file is deleted only while its marker still holds the app",
+    "edits": [
+      {
+        "file": "test-infra/fluxdrive/src/gc/sweep.js",
+        "from": "if (!holds) {",
+        "to": "if (false) {"
+      }
+    ],
+    "red": [
+      "keeps every file past every grace when the seller replaces the file and sells before the grace ends",
+      "removes both earlier files once the buyer replaces the file and the grace has run, and keeps the buyer's"
+    ]
+  },
+  {
+    "name": "blobs-live-by-name-and-owner",
+    "breaks": "a blob is live by the identity of the app that stores it",
+    "edits": [
+      {
+        "file": "test-infra/fluxdrive/src/gc/liveSet.js",
+        "from": "  if (identity) return Boolean(liveSet.liveIdentities?.has(identity));",
+        "to": "  if (identity && !owner) return Boolean(liveSet.liveIdentities?.has(identity));"
+      }
+    ],
+    "red": [
+      "keeps every file past every grace when the seller replaces the file and sells before the grace ends",
+      "installs the file the sale names from FluxDrive alone on a node held off every node that runs the app",
+      "removes both earlier files once the buyer replaces the file and the grace has run, and keeps the buyer's"
+    ]
+  }
+]
