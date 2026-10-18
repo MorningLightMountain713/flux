@@ -644,4 +644,99 @@ describe('contentBlobService', () => {
       expect(calls[0].pendingMessageHash).to.equal(null);
     });
   });
+
+  describe('signKeepList', () => {
+    const { signKeepList } = contentBlobService;
+
+    it('hands the benchmark channel the keep list\'s typed fields: identity, ownership, time, kept list and update', async () => {
+      const calls = [];
+      const benchmark = makeBenchmark({
+        signBlobUpload: async (fields) => { calls.push(fields); return ok({ signature: 'arc' }); },
+      });
+      const sig = await signKeepList({
+        identity: IDENTITY, ownedFrom: 400, timestamp: 1_700_000_000_000, keptLocators: [], pendingMessageHash: 'f'.repeat(64),
+      }, { benchmark });
+      expect(sig).to.equal('arc');
+      expect(calls).to.deep.equal([{
+        kind: 'keep', identity: IDENTITY, ownedFrom: 400, timestamp: 1_700_000_000_000, keptLocators: [], pendingMessageHash: 'f'.repeat(64),
+      }]);
+    });
+
+    it('refuses to sign for no identity', async () => {
+      await expectReject(signKeepList({
+        ownedFrom: 0, timestamp: 1, keptLocators: [], pendingMessageHash: 'f'.repeat(64),
+      }, { benchmark: makeBenchmark() }), /identity/);
+    });
+  });
+
+  describe('sendKeepList', () => {
+    const { sendKeepList } = contentBlobService;
+    const HA = hashOf(Buffer.from('file a'));
+    const HB = hashOf(Buffer.from('file b'));
+    const MSG = 'f'.repeat(64);
+    // A spec naming these content-ref hashes, one mount each.
+    const specNaming = (...hashes) => ({
+      components: { web: { persistentStorage: { getMountsWithContentRef: () => hashes.map((hash) => ({ contentRef: { hash } })) } } },
+    });
+    const keeper = () => {
+      const puts = [];
+      return { puts, putKeepList: async (appName, body) => { puts.push({ appName, body }); } };
+    };
+    const locating = (signed = []) => makeBenchmark({
+      blobLocator: async ({ contentHash }) => ok({ locator: `loc-${contentHash.slice(7, 11)}` }),
+      signBlobUpload: async (fields) => { signed.push(fields); return ok({ signature: 'arc' }); },
+    });
+    const input = (over = {}) => ({
+      appName: 'myapp', spec: specNaming(HB), priorSpec: specNaming(HA), identity: IDENTITY, ownedFrom: 400, keepList: { timestamp: 1_700_000_000_000, ownerSig: 'osig' }, pendingMessageHash: MSG, ...over,
+    });
+
+    it('sends the locators of every file the new spec names, under the owner\'s signature, naming the update', async () => {
+      const uploader = keeper();
+      const signed = [];
+      expect(await sendKeepList(input({ spec: specNaming(HA, HB) }), { uploader, benchmark: locating(signed) })).to.equal(true);
+      const kept = [`loc-${HA.slice(7, 11)}`, `loc-${HB.slice(7, 11)}`];
+      expect(signed).to.deep.equal([{
+        kind: 'keep', identity: IDENTITY, ownedFrom: 400, timestamp: 1_700_000_000_000, keptLocators: kept, pendingMessageHash: MSG,
+      }]);
+      expect(uploader.puts).to.deep.equal([{
+        appName: 'myapp',
+        body: {
+          identity: IDENTITY, ownedFrom: 400, timestamp: 1_700_000_000_000, keptLocators: kept, pendingMessageHash: MSG, arcaneSig: 'arc', ownerSig: 'osig',
+        },
+      }]);
+    });
+
+    it('keeps nothing when the new spec names no file', async () => {
+      const uploader = keeper();
+      expect(await sendKeepList(input({ spec: specNaming() }), { uploader, benchmark: locating() })).to.equal(true);
+      expect(uploader.puts[0].body.keptLocators).to.deep.equal([]);
+    });
+
+    it('sends nothing when the update names the same files, in any order', async () => {
+      const uploader = keeper();
+      expect(await sendKeepList(input({ spec: specNaming(HB, HA), priorSpec: specNaming(HA, HB) }), { uploader, benchmark: locating() })).to.equal(false);
+      expect(uploader.puts).to.deep.equal([]);
+    });
+
+    it('a file added beside the ones kept is a change', async () => {
+      const uploader = keeper();
+      expect(await sendKeepList(input({ spec: specNaming(HA, HB), priorSpec: specNaming(HA) }), { uploader, benchmark: locating() })).to.equal(true);
+    });
+
+    it('sends nothing when the owner signed no keep list, or signed one with no time', async () => {
+      for (const keepList of [undefined, null, { timestamp: 1 }, { ownerSig: 'osig' }]) {
+        const uploader = keeper();
+        // eslint-disable-next-line no-await-in-loop
+        expect(await sendKeepList(input({ keepList }), { uploader, benchmark: locating() }), JSON.stringify(keepList)).to.equal(false);
+        expect(uploader.puts).to.deep.equal([]);
+      }
+    });
+
+    it('a refused or failed put is not fatal: the update goes on and its dropped files stay stored', async () => {
+      const uploader = { putKeepList: async () => { throw new Error('401 Invalid owner signature'); } };
+      expect(await sendKeepList(input(), { uploader, benchmark: locating() })).to.equal(false);
+      const failingLocator = makeBenchmark({ blobLocator: async () => ({ status: 'error' }) });
+      expect(await sendKeepList(input(), { uploader: keeper(), benchmark: failingLocator })).to.equal(false);
+    });
+  });
 });

@@ -2,7 +2,7 @@
 
 const { expect } = require('chai');
 const {
-  uploadBlob, fetchBlobByLocator, blobExists, putManifest, fetchManifest,
+  uploadBlob, fetchBlobByLocator, blobExists, putManifest, putKeepList, fetchManifest,
 } = require('../../ZelBack/src/services/utils/fluxDriveClient');
 
 const BASE = 'https://drive.example';
@@ -123,6 +123,28 @@ describe('fluxDriveClient', () => {
       const http = { put: async (url) => { calls.push(url); return {}; } };
       await putManifest('a b/c', { version: 1 }, { http, baseUrl: BASE });
       expect(calls[0]).to.equal(`${BASE}/api/v1/manifest/a%20b%2Fc`);
+    });
+  });
+
+  describe('putKeepList', () => {
+    it('PUTs the keep list to /api/v1/blob/keep/:appName, the name url-encoded, with exactly the signed fields', async () => {
+      const calls = [];
+      const http = { put: async (url, body, opts) => { calls.push({ url, body, opts }); return { status: 202 }; } };
+      await putKeepList('a b/c', {
+        identity: 'bident', ownedFrom: 400, timestamp: 123, keptLocators: ['l1'], pendingMessageHash: 'f'.repeat(64), arcaneSig: 'asig', ownerSig: 'osig', extra: 'dropped',
+      }, { http, baseUrl: BASE });
+      expect(calls.length).to.equal(1);
+      expect(calls[0].url).to.equal(`${BASE}/api/v1/blob/keep/a%20b%2Fc`);
+      expect(calls[0].body).to.deep.equal({
+        identity: 'bident', ownedFrom: 400, timestamp: 123, keptLocators: ['l1'], pendingMessageHash: 'f'.repeat(64), arcaneSig: 'asig', ownerSig: 'osig',
+      });
+      expect(calls[0].opts.timeout).to.equal(30_000);
+    });
+
+    it('a refusal reaches the caller', async () => {
+      const http = { put: async () => { throw new Error('401'); } };
+      const error = await putKeepList('app', { keptLocators: [] }, { http, baseUrl: BASE }).catch((e) => e);
+      expect(error.message).to.equal('401');
     });
   });
 

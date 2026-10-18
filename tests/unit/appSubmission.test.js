@@ -93,6 +93,7 @@ describe('appSubmission tests', () => {
         maxBlobBytes: sinon.stub().resolves(2 * 1024 * 1024),
         specContentHashes: sinon.stub().returns(new Set()),
         encryptAndUploadBlobs: sinon.stub().resolves([]),
+        sendKeepList: sinon.stub().resolves(false),
       },
       transportHelper: { openTransportEnvelope: sinon.stub(), openContentEnvelope: sinon.stub() },
       specCutover: {
@@ -1140,6 +1141,43 @@ describe('appSubmission tests', () => {
       const error = await appSubmission.uploadSealedContent(spec, envelope, new Map(), bind({ priorSpec: { name: 'myapp', owner: '1id' } })).catch((e) => e);
       expect(error.message).to.match(/no applied ownership/);
       sinon.assert.notCalled(contentSlotService.processManifestSubmission);
+    });
+
+    it('hands FluxDrive an update\'s keep list under the listed ownership, naming the update', async () => {
+      appSubmission = load();
+      stubs.appHistory.ownerships = sinon.stub().resolves([{ owner: '1first', from: 2_400_000 }, { owner: '1id', from: 2_500_000 }]);
+      const keepList = { timestamp: 1_700_000_000_000, ownerSig: 'osig' };
+      stubs.transportHelper.openContentEnvelope.resolves(Buffer.from(JSON.stringify({ blobs: {}, keepList })));
+      const prior = { name: 'myapp', owner: '1id' };
+      await appSubmission.uploadSealedContent(spec, envelope, new Map(), bind({ priorSpec: prior }));
+      sinon.assert.calledOnce(stubs.contentBlobService.sendKeepList);
+      const [input, deps] = stubs.contentBlobService.sendKeepList.firstCall.args;
+      expect(input).to.deep.equal({
+        appName: 'myapp', spec, priorSpec: prior, identity: IDENTITY, ownedFrom: 2_500_000, keepList, pendingMessageHash: MSG,
+      });
+      expect(deps.uploader).to.have.property('putKeepList');
+    });
+
+    it('refuses an update\'s keep list when the signing owner has no applied ownership of the app', async () => {
+      appSubmission = load();
+      stubs.appHistory.ownerships = sinon.stub().resolves([{ owner: '1other', from: 5 }]);
+      stubs.transportHelper.openContentEnvelope.resolves(Buffer.from(JSON.stringify({ blobs: {}, keepList: { timestamp: 1, ownerSig: 'o' } })));
+      const error = await appSubmission.uploadSealedContent(spec, envelope, new Map(), bind({ priorSpec: { name: 'myapp', owner: '1id' } })).catch((e) => e);
+      expect(error.message).to.match(/no applied ownership/);
+      sinon.assert.notCalled(stubs.contentBlobService.sendKeepList);
+    });
+
+    it('a registration sends no keep list, and an update carrying neither a manifest nor a keep list reads no ownership', async () => {
+      appSubmission = load();
+      stubs.appHistory.ownerships = sinon.stub().resolves([]);
+      stubs.transportHelper.openContentEnvelope.resolves(Buffer.from(JSON.stringify({ blobs: {}, keepList: { timestamp: 1, ownerSig: 'o' } })));
+      await appSubmission.uploadSealedContent(spec, envelope, new Map(), bind());
+      sinon.assert.notCalled(stubs.contentBlobService.sendKeepList);
+
+      stubs.transportHelper.openContentEnvelope.resolves(Buffer.from(JSON.stringify({ blobs: {} })));
+      await appSubmission.uploadSealedContent(spec, envelope, new Map(), bind({ priorSpec: { name: 'myapp', owner: '1id' } }));
+      sinon.assert.notCalled(stubs.appHistory.ownerships);
+      expect(stubs.contentBlobService.sendKeepList.firstCall.args[0]).to.include({ ownedFrom: 0, keepList: undefined });
     });
 
     it('forwards the superseded spec on update so unchanged content is carried over', async () => {

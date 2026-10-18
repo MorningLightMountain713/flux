@@ -149,6 +149,36 @@ async function fetchManifest(appName, deps = {}) {
   }
 }
 
+/**
+ * PUT a spec update's keep list to FluxDrive: the content-ref locators the update
+ * leaves the app. Body is JSON `{ identity, ownedFrom, timestamp, keptLocators,
+ * pendingMessageHash, arcaneSig, ownerSig }`, dual-signed over
+ * `identity:ownedFrom:timestamp:keptLocatorsHash:pendingMessageHash`. FluxDrive
+ * holds it until the nodes answer that the update applied, then marks the
+ * identity's other content-ref blobs for deletion.
+ *
+ * @param {string} appName
+ * @param {object} body - { identity, ownedFrom, timestamp, keptLocators, pendingMessageHash, arcaneSig, ownerSig }
+ * @param {object} [deps] - { http, baseUrl }
+ */
+async function putKeepList(appName, body, deps = {}) {
+  const http = deps.http || axios;
+  const base = blobApiBase(deps.baseUrl);
+  await http.put(
+    `${base}/api/v1/blob/keep/${encodeURIComponent(appName)}`,
+    {
+      identity: body.identity,
+      ownedFrom: body.ownedFrom,
+      timestamp: body.timestamp,
+      keptLocators: body.keptLocators,
+      pendingMessageHash: body.pendingMessageHash,
+      arcaneSig: body.arcaneSig,
+      ownerSig: body.ownerSig,
+    },
+    { timeout: 30_000 },
+  );
+}
+
 module.exports = {
-  uploadBlob, fetchBlobByLocator, blobExists, putManifest, fetchManifest,
+  uploadBlob, fetchBlobByLocator, blobExists, putManifest, putKeepList, fetchManifest,
 };
