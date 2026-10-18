@@ -4,6 +4,7 @@ import { basename } from 'node:path';
 import { activeTestEnvs } from './test-env.js';
 import { execInContainer } from './container.js';
 import { eventLines } from './event-lines.js';
+import { syncthingRecord } from './syncthing-real.js';
 
 // Under the run's own log directory, so a later run of the same test, in this
 // clone or alongside it, never writes over a failure's evidence.
@@ -94,6 +95,21 @@ async function cgroupState(env) {
   return parts.join('\n');
 }
 
+// Each node's own syncthing record (syncthing-real.js), for the nodes that run a
+// daemon: a node on the stub has none to ask, and contributes nothing.
+async function syncthingRecords(env) {
+  const clients = env.clients || [];
+  const records = await Promise.all(clients.map(async (client, index) => {
+    if (!client?.container) return null;
+    try {
+      return { index, text: await syncthingRecord(client) };
+    } catch {
+      return null;
+    }
+  }));
+  return records.filter(Boolean);
+}
+
 // Dump each node's logs and SSE events to its OWN file under test-logs/<label>/.
 // A merged stdout dump interleaves all nodes, which makes "which node did what"
 // impossible to read (every node logs the same identifiers every cycle). Per-node
@@ -119,6 +135,7 @@ async function dump(label, envs) {
   const cgroupsByEnv = await Promise.all(envs.map((env) => cgroupState(env).catch(
     (err) => `cgroup probe failed: ${err.message}\n`,
   )));
+  const syncthingByEnv = await Promise.all(envs.map((env) => syncthingRecords(env)));
 
   const written = [];
   envs.forEach((env, e) => {
@@ -155,6 +172,11 @@ async function dump(label, envs) {
       const file = join(dir, `${prefix}node-${String(index).padStart(2, '0')}.log`);
       writeFileSync(file, `${parts.join('\n')}\n`);
       written.push(`${file} (${lines.length} lines, ${events.length} events${record ? ', record' : ''})`);
+    }
+    for (const { index, text } of syncthingByEnv[e]) {
+      const file = join(dir, `${prefix}syncthing-node-${String(index).padStart(2, '0')}.log`);
+      writeFileSync(file, `${text}\n`);
+      written.push(file);
     }
   });
 

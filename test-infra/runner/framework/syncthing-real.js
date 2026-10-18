@@ -92,3 +92,31 @@ export async function listFolderFiles(client, path) {
   const r = await execInContainer(client.container, `ls -A "${path}" 2>/dev/null | sort | tr '\\n' ' '`);
   return r.stdout.trim();
 }
+
+/**
+ * What a node's own syncthing daemon recorded, for a failure dump: its device,
+ * the devices and folders it is configured with, every change to a folder it
+ * saw, made on its own disk (LocalChangeDetected) or taken from a peer
+ * (RemoteChangeDetected, naming the device that made it), and its recent log.
+ * Throws for a node that runs no daemon.
+ * @returns {Promise<string>}
+ */
+export async function syncthingRecord(client) {
+  const [status, devices, folders, disk, log] = await Promise.all([
+    api(client, '/rest/system/status'),
+    api(client, '/rest/config/devices'),
+    api(client, '/rest/config/folders'),
+    api(client, '/rest/events/disk?since=0&timeout=1'),
+    api(client, '/rest/system/log'),
+  ]);
+  const lines = [`this device ${status.myID}`];
+  for (const d of devices) lines.push(`device ${d.deviceID} ${d.name ?? ''} ${(d.addresses || []).join(',')}`);
+  for (const f of folders) {
+    lines.push(`folder ${f.id} ${f.type} paused=${f.paused} devices=${(f.devices || []).map((x) => x.deviceID).join(',')}`);
+  }
+  lines.push('', '--- folder changes (LocalChangeDetected: made on this node; RemoteChangeDetected: modifiedBy names the device) ---');
+  for (const e of disk || []) lines.push(`${e.time} ${e.type} ${JSON.stringify(e.data)}`);
+  lines.push('', '--- log ---');
+  for (const m of log?.messages || []) lines.push(`${m.when} ${m.message}`);
+  return lines.join('\n');
+}
