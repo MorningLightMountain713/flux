@@ -113,6 +113,27 @@ export function stubPeerClient(ip) {
       return res.json();
     },
 
+    // The app messages nodes gossiped to this peer, in arrival order:
+    // [{ hash, type, name, timestamp }].
+    async appMessagesReceived() {
+      const res = await controlFetch(`${controlUrl}/app-messages`);
+      return res.json();
+    },
+
+    // Relay an app message this peer was gossiped, unchanged, as a peer that took
+    // it would. A message every other node refuses enters a fleet this way from
+    // the one node that sent it. Resolves { status, sent, connected }.
+    async relayAppMessage(hash) {
+      const res = await controlFetch(`${controlUrl}/relay-app-message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hash }),
+      });
+      const body = await res.json();
+      if (res.status !== 200) throw new Error(`stub ${ip}: ${body.error}`);
+      return body;
+    },
+
     // Answer this node's policy asks with a sequence, the way a real peer does -
     // echoing the id of the ask it settles and marking itself an answer. `null`
     // is a peer that holds no policy, which is an answer rather than silence.

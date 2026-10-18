@@ -126,6 +126,12 @@ let portProbeAnswersForeign = false;
 const connectedNodes = new Set();
 let broadcastsSent = 0;
 
+// The app messages nodes gossiped to this peer, by hash, as they arrived. A suite
+// has the peer relay one as a peer that took it would, which is how a message
+// every other node refuses enters a fleet from the one node that sent it.
+const APP_MESSAGE_TYPES = Object.freeze(new Set(['zelappregister', 'zelappupdate', 'fluxappregister', 'fluxappupdate']));
+const appMessagesReceived = new Map();
+
 function hash256(data) {
   return sha256(sha256(data));
 }
@@ -267,6 +273,11 @@ async function handleMessage(ws, rawData) {
 
     if (data && SYNC_RESPONSE_TYPES.has(data.type)) {
       syncResponsesReceived++;
+      return;
+    }
+
+    if (data && APP_MESSAGE_TYPES.has(data.type) && typeof data.hash === 'string') {
+      if (!appMessagesReceived.has(data.hash)) appMessagesReceived.set(data.hash, data);
       return;
     }
 
@@ -607,6 +618,38 @@ const controlServer = http.createServer(async (req, res) => {
     // other peer. The caller supplies the whole message, because what makes a
     // message interesting to a suite is usually the field a real peer would
     // never get wrong.
+    // What this peer was gossiped: each app message's hash, type, app name and
+    // signed timestamp, in arrival order.
+    if (req.method === 'GET' && req.url === '/app-messages') {
+      const received = [...appMessagesReceived.values()].map((m) => ({
+        hash: m.hash, type: m.type, name: m.appSpecifications?.name ?? null, timestamp: m.timestamp,
+      }));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(received));
+      return;
+    }
+
+    // Relay an app message this peer was gossiped, unchanged, signed into this
+    // peer's own broadcast to every node connected to it.
+    if (req.method === 'POST' && req.url === '/relay-app-message') {
+      const { hash } = JSON.parse(await readBody(req));
+      const message = appMessagesReceived.get(hash);
+      if (!message) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'error', error: `no app message ${hash} was gossiped to this peer` }));
+        return;
+      }
+      const wire = await serialiseAndSignBroadcast(message);
+      let sent = 0;
+      for (const ws of connectedNodes) {
+        if (ws.readyState === 1) { ws.send(wire); sent++; }
+      }
+      broadcastsSent += sent;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', sent, connected: connectedNodes.size }));
+      return;
+    }
+
     if (req.method === 'POST' && req.url === '/broadcast') {
       const body = await readBody(req);
       const data = JSON.parse(body);
