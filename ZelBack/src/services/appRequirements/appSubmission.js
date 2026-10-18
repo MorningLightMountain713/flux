@@ -875,7 +875,9 @@ function slotNames(plaintext) {
 /**
  * The facts of the manifest an update stands on: the one it carries, else the
  * one standing for the app, asked of peers and FluxDrive when none stands.
- * Null when the spec declares no slot, or when there is still none.
+ * Standing is judged against `app`, the app the update is judged against: the
+ * listed one, or the state an expired app last held, whose manifest rows the
+ * node keeps. Null when the spec declares no slot, or when there is still none.
  */
 async function manifestFacts(spec, app, carriedManifest) {
   if (declaredSlots(spec).length === 0) return null;
@@ -890,10 +892,11 @@ async function manifestFacts(spec, app, carriedManifest) {
       specOwnerSigned: app.owner === spec.owner,
     };
   }
-  let { row } = await manifestStanding.standingManifest(app.identity);
+  const judgedAgainst = { getApp: async () => app };
+  let { row } = await manifestStanding.standingManifest(app.identity, judgedAgainst);
   if (!row) {
     await contentSlotService.refreshManifests(app.name, app.identity);
-    ({ row } = await manifestStanding.standingManifest(app.identity));
+    ({ row } = await manifestStanding.standingManifest(app.identity, judgedAgainst));
   }
   if (!row) return null;
   const plaintext = await contentSlotService.openManifestSlots(row.manifest, { encrypted: true });
@@ -910,7 +913,8 @@ async function manifestFacts(spec, app, carriedManifest) {
  * standingNamesRefusal). A sale names everything that stands.
  *
  * @param {object} spec - the cleartext update
- * @param {{name: string, identity: string, owner: string}} app - the listed app
+ * @param {{name: string, identity: string, owner: string}} app - the app the update is judged
+ *   against: the listed one, or the state an expired app last held
  * @param {{carriedManifest?: ?object}} [options] - the manifest the update carries, in its gossip form
  */
 async function assertNamesWhatStands(spec, app, { carriedManifest = null } = {}) {

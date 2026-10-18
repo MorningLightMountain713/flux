@@ -107,6 +107,13 @@ describe('appSubmission: an update names what it stands on', () => {
     sinon.assert.calledWith(contentSlotService.refreshManifests, 'myapp', IDENTITY);
   });
 
+  it('judges the standing manifest against the app it is handed, which for an expired app is the state it last held', async () => {
+    expect(await refusalOf(await slotSpec())).to.equal(null);
+    const [identity, deps] = manifestStanding.standingManifest.firstCall.args;
+    expect(identity).to.equal(IDENTITY);
+    expect(await deps.getApp(IDENTITY)).to.equal(APP);
+  });
+
   it('a slot app with no manifest to be had is refused', async () => {
     standingRow = null;
     expect(await refusalOf(await slotSpec())).to.match(/no manifest stands/);
