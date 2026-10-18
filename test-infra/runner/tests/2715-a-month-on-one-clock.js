@@ -6,6 +6,7 @@
  * message's timestamp and its payment's block on the same time, as a real
  * network does after a month:
  *   - a node's own clock and the chain's tip move by what the suite advances;
+ *   - one node's clock set ahead moves that node alone;
  *   - a v9 app whose term has passed leaves every node;
  *   - its last owner renews it, and it comes back with the identity it held.
  */
@@ -20,12 +21,13 @@ import { pushImage } from '../framework/registry-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { appView } from '../framework/app-view.js';
 import { getState } from '../framework/daemon-control.js';
-import { advanceHarnessClock, harnessNow } from '../framework/harness-clock.js';
+import { advanceHarnessClock, harnessNow, setNodeClockSkew } from '../framework/harness-clock.js';
 import { waitFor } from '../framework/wait.js';
 
 const NODES = 3;
 const CONVERGE_MS = 240000;
-const DAY_S = 86400;
+const HOUR_S = 3600;
+const DAY_S = 24 * HOUR_S;
 const TERM_S = 30 * DAY_S;
 // what a node's clock may differ from the suite's by: the reads are not simultaneous
 const SKEW_MS = 60000;
@@ -100,6 +102,24 @@ describe('a month on one clock', function () {
     const tipAfter = (await getState()).tipTime;
     expect(tipAfter - tipBefore, 'the tip carries the day').to.be.at.least(DAY_S);
     expect(Math.abs(tipAfter * 1000 - now), 'the tip reads the suite\'s time').to.be.below(SKEW_MS);
+  });
+
+  it('runs one node\'s clock an hour ahead and leaves every other node and the tip on the suite\'s', async function () {
+    this.timeout(CONVERGE_MS);
+    const skewed = 2;
+    try {
+      await setNodeClockSkew(skewed, HOUR_S);
+      const now = harnessNow();
+      const read = await Promise.all(nodes().map(nodeNow));
+      read.forEach((t, k) => {
+        const expected = k === skewed ? now + HOUR_S * 1000 : now;
+        expect(Math.abs(t - expected), `node ${k} reads ${k === skewed ? 'an hour past ' : ''}the suite's time`).to.be.below(SKEW_MS);
+      });
+      expect((await getState()).tipTime * 1000, 'the tip stays on the suite\'s time').to.be.below(harnessNow() + SKEW_MS);
+    } finally {
+      await setNodeClockSkew(skewed, 0);
+    }
+    expect(Math.abs((await nodeNow(skewed)) - harnessNow()), `node ${skewed} reads the suite's time again`).to.be.below(SKEW_MS);
   });
 
   it('removes a v9 app whose term has passed from every node', async function () {

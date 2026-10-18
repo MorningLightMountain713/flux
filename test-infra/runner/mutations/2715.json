@@ -1,0 +1,33 @@
+[
+  {
+    "name": "no-clock-preload",
+    "breaks": "every container on the harness clock reads its time through libfaketime",
+    "edits": [
+      {
+        "file": "test-infra/runner/framework/harness-clock.js",
+        "from": "    LD_PRELOAD: LIBFAKETIME,",
+        "to": "    NOT_PRELOADED: LIBFAKETIME,"
+      }
+    ],
+    "red": [
+      "moves every node's clock and the chain's tip by what the suite advances",
+      "runs one node's clock an hour ahead and leaves every other node and the tip on the suite's",
+      "removes a v9 app whose term has passed from every node",
+      "lists the app again when its last owner renews it, with the identity it held"
+    ]
+  },
+  {
+    "name": "nodes-on-the-suite-file",
+    "breaks": "each node reads a clock file of its own",
+    "edits": [
+      {
+        "file": "test-infra/runner/framework/harness-clock.js",
+        "from": "      return environment(nodeFile(index));",
+        "to": "      return environment('offset');"
+      }
+    ],
+    "red": [
+      "runs one node's clock an hour ahead and leaves every other node and the tip on the suite's"
+    ]
+  }
+]
