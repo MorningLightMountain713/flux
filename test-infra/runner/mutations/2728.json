@@ -1,0 +1,32 @@
+[
+  {
+    "name": "door-takes-what-names-nothing",
+    "breaks": "the submission door refuses an update that does not name what stands for the app",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appLifecycle/appOperations.js",
+        "from": "  await assertNamesWhatStands(spec, appInfo, { carriedManifest });",
+        "to": ""
+      }
+    ],
+    "red": [
+      "refuses a sale naming no manifest, naming the one it must",
+      "refuses a sale naming another manifest, naming the one it must",
+      "refuses an update declaring a slot the standing manifest lacks, naming the slot"
+    ]
+  },
+  {
+    "name": "content-update-taken-while-a-sale-waits",
+    "breaks": "a node holding a sale waiting for payment refuses the app's content update",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appLifecycle/contentSlotService.js",
+        "from": "  if (await waitingTransfer(appName, owner)) {",
+        "to": "  if (false) {"
+      }
+    ],
+    "red": [
+      "takes the sale naming the standing manifest, and refuses the owner's content update while it waits for payment"
+    ]
+  }
+]
