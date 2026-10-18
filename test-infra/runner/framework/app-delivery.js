@@ -86,3 +86,25 @@ export async function deliverAppMessage(env, message, indices, { valueSat, timeo
   await pay(message, valueSat);
   await handAppMessage(env, message, indices, { timeout });
 }
+
+// What a node's pool row adds to the message it holds.
+const POOL_FACTS = ['receivedAt', 'payableUntil', 'windowClosedAt'];
+
+/**
+ * Relays, from a stub peer, a message a node holds in its pool: the contents as
+ * the node holds them, signed into the stub's own broadcast, as a peer that took
+ * the message would gossip it. A message every other node refuses enters the
+ * fleet this way, from a node that took it.
+ *
+ * @param {object} stub - the relaying stub peer (env.stubPeerClients.get(index))
+ * @param {object} client - the node holding the message
+ * @param {string} hash - the message's hash
+ * @returns {Promise<{status: string, sent: number, connected: number}>} the stub's broadcast result
+ */
+export async function relayHeldMessage(stub, client, hash) {
+  const { data } = await client.getTempMessages(hash);
+  if (!data?.length) throw new Error(`node ${client.num} holds no message ${hash} in its pool`);
+  const message = { ...data[0] };
+  for (const fact of POOL_FACTS) delete message[fact];
+  return stub.broadcast(message);
+}
