@@ -1,5 +1,5 @@
 import { appOwnerKey, userKey } from './keys.js';
-import { registerAndConfirm, confirmOnChain } from './app-helper.js';
+import { registerApp, registerAndConfirm, confirmOnChain } from './app-helper.js';
 import { updateCleartextV9App, updateEncryptedV9App } from './content-helper.js';
 
 // A sale: the owner on record signs an update whose spec names another owner, and
@@ -12,7 +12,9 @@ import { updateCleartextV9App, updateEncryptedV9App } from './content-helper.js'
 // submission unsealed. `standsOn` names what the sale stands on, the
 // manifest in the spec's `content` block as `sha256:<hex>` and the generation
 // records by hash per role in its `grants` block. The returned app keeps the identity its
-// registration minted: a sale changes the owner, never the identity.
+// registration minted: a sale changes the owner, never the identity. With `pay: false`
+// the sale is submitted and left unpaid; the suite pays it with
+// confirmOnChain(result.appHash, nodes) when it chooses.
 
 export const buyerKey = () => userKey();
 
@@ -24,15 +26,17 @@ export const buyerKey = () => userKey();
  *   submission is rebuilt from go in `v9`
  * @param {Array} nodes - the fleet the confirmation waits on
  * @param {object} [opts] - { sellerKey, buyerKey, standsOn: { manifest?, grants? },
- *   v9: { cleartext?, image, instances, ttl, components, placement, assignment, specOverrides? },
- *   propagationTimeoutMs, explorerTimeoutMs, valueSat }
- * @returns {Promise<object>} the confirmation result with `app` under the buyer
+ *   v9: { cleartext?, image, instances, ttl, components, placement, assignment, specOverrides?, timestamp? },
+ *   pay (default true), propagationTimeoutMs, explorerTimeoutMs, valueSat }
+ * @returns {Promise<object>} the confirmation result, or with `pay: false` the
+ *   submission's `{ status, appHash }`, with `app` under the buyer
  */
 export async function transferApp(nodeUrl, adminKeypair, app, nodes, {
   sellerKey = appOwnerKey(),
   buyerKey: buyer = buyerKey(),
   standsOn = {},
   v9 = null,
+  pay = true,
   ...confirmOpts
 } = {}) {
   const sold = (result, updateHash) => ({
@@ -61,7 +65,7 @@ export async function transferApp(nodeUrl, adminKeypair, app, nodes, {
     });
     if (submitted.status !== 'success') return submitted;
     const updateHash = submitted.data;
-    const confirm = await confirmOnChain(updateHash, nodes, confirmOpts);
+    const confirm = pay ? await confirmOnChain(updateHash, nodes, confirmOpts) : {};
     return sold({ status: 'success', appHash: updateHash, contentHash: submitted.contentHash, ...confirm }, updateHash);
   }
 
@@ -71,7 +75,13 @@ export async function transferApp(nodeUrl, adminKeypair, app, nodes, {
   delete spec.hash;
   delete spec.uuid;
   delete spec.identity;
-  const result = await registerAndConfirm(nodeUrl, adminKeypair, { ...spec, owner: buyer.zelid }, nodes, {
+  const update = { ...spec, owner: buyer.zelid };
+  if (!pay) {
+    const submitted = await registerApp(nodeUrl, adminKeypair, update, 'fluxappupdate', { signerKey: sellerKey });
+    if (submitted.status !== 'success') return submitted;
+    return sold({ status: 'success', appHash: submitted.data }, submitted.data);
+  }
+  const result = await registerAndConfirm(nodeUrl, adminKeypair, update, nodes, {
     ...confirmOpts, type: 'fluxappupdate', signerKey: sellerKey,
   });
   if (result.status !== 'success') return result;
