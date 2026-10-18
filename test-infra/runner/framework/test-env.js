@@ -1719,9 +1719,13 @@ async function _buildEnv(
   containers.externalStub = externalStub;
   watchInfra(env, 'externalStub', externalStub);
 
+  // A node on a released image asks FDM by the hosts its code names,
+  // fdm-<region>-1-<index>.runonflux.io: they resolve to this stub, as the fleet's
+  // own FDM address does for this tree's nodes.
+  const releasedFdmHosts = ['fn', 'usa', 'sg'].flatMap((region) => [1, 2, 3, 4].map((index) => `fdm-${region}-1-${index}.runonflux.io`));
   const fdmStub = await new StaticIpContainer(image('flux-e2e-fdm-stub'))
     .withLogConsumer(infraLog(env, 'fdmStub'))
-    .withStaticIp(networkName, FDM_IP)
+    .withStaticIp(networkName, FDM_IP, releasedFdmHosts)
     .withEnvironment({ FDM_PORT: '16130', CONTROL_PORT: '16131' })
     .withWaitStrategy(new HttpPollWaitStrategy(`http://${FDM_IP}:16131/health`))
     .start();
