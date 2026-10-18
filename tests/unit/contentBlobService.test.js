@@ -669,6 +669,30 @@ describe('contentBlobService', () => {
     });
   });
 
+  describe('assertKeepListCarried', () => {
+    const { assertKeepListCarried } = contentBlobService;
+    const HA = hashOf(Buffer.from('file a'));
+    const HB = hashOf(Buffer.from('file b'));
+    const specNaming = (...hashes) => ({
+      components: { web: { persistentStorage: { getMountsWithContentRef: () => hashes.map((hash) => ({ contentRef: { hash } })) } } },
+    });
+    const keepList = { timestamp: 1_700_000_000_000, ownerSig: 'osig' };
+
+    it('refuses an update that changes the files without the owner\'s keep list, naming what is missing', () => {
+      for (const [spec, prior] of [[specNaming(HB), specNaming(HA)], [specNaming(), specNaming(HA)], [specNaming(HA, HB), specNaming(HA)]]) {
+        for (const missing of [undefined, null, { timestamp: 1 }, { ownerSig: 'osig' }]) {
+          expect(() => assertKeepListCarried(spec, prior, missing), JSON.stringify(missing)).to.throw(/changes the app's content-ref files carries the owner's keep list \(keepList: \{ timestamp, ownerSig \}\)/);
+        }
+        expect(() => assertKeepListCarried(spec, prior, keepList)).to.not.throw();
+      }
+    });
+
+    it('lets an update that names the same files, in any order, through without one', () => {
+      expect(() => assertKeepListCarried(specNaming(HB, HA), specNaming(HA, HB), undefined)).to.not.throw();
+      expect(() => assertKeepListCarried(specNaming(), specNaming(), null)).to.not.throw();
+    });
+  });
+
   describe('sendKeepList', () => {
     const { sendKeepList } = contentBlobService;
     const HA = hashOf(Buffer.from('file a'));
@@ -723,14 +747,6 @@ describe('contentBlobService', () => {
       expect(await sendKeepList(input({ spec: specNaming(HA, HB), priorSpec: specNaming(HA) }), { uploader, benchmark: locating() })).to.equal(true);
     });
 
-    it('sends nothing when the owner signed no keep list, or signed one with no time', async () => {
-      for (const keepList of [undefined, null, { timestamp: 1 }, { ownerSig: 'osig' }]) {
-        const uploader = keeper();
-        // eslint-disable-next-line no-await-in-loop
-        expect(await sendKeepList(input({ keepList }), { uploader, benchmark: locating() }), JSON.stringify(keepList)).to.equal(false);
-        expect(uploader.puts).to.deep.equal([]);
-      }
-    });
 
     it('a refused or failed put is not fatal: the update goes on and its dropped files stay stored', async () => {
       const uploader = { putKeepList: async () => { throw new Error('401 Invalid owner signature'); } };

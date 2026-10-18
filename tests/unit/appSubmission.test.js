@@ -94,6 +94,7 @@ describe('appSubmission tests', () => {
         specContentHashes: sinon.stub().returns(new Set()),
         encryptAndUploadBlobs: sinon.stub().resolves([]),
         sendKeepList: sinon.stub().resolves(false),
+        assertKeepListCarried: sinon.stub(),
       },
       transportHelper: { openTransportEnvelope: sinon.stub(), openContentEnvelope: sinon.stub() },
       specCutover: {
@@ -1071,7 +1072,7 @@ describe('appSubmission tests', () => {
       return { contentSlotService, sender };
     }
     const envelopeWith = (manifest) => stubs.transportHelper.openContentEnvelope.resolves(Buffer.from(JSON.stringify({
-      blobs: { [HSLOT]: Buffer.from('slot-bytes').toString('base64') }, manifest,
+      blobs: { [HSLOT]: Buffer.from('slot-bytes').toString('base64') }, manifest, manifestPutSig: 'put-sig',
     })));
 
     it('verifies a registration\'s first manifest for the identity and owner it was given, hands FluxDrive the write naming the registration, then stores and gossips it', async () => {
@@ -1178,6 +1179,41 @@ describe('appSubmission tests', () => {
       await appSubmission.uploadSealedContent(spec, envelope, new Map(), bind({ priorSpec: { name: 'myapp', owner: '1id' } }));
       sinon.assert.notCalled(stubs.appHistory.ownerships);
       expect(stubs.contentBlobService.sendKeepList.firstCall.args[0]).to.include({ ownedFrom: 0, keepList: undefined });
+    });
+
+    it('refuses a manifest that carries no FluxDrive signature over it, before uploading anything', async () => {
+      const { contentSlotService } = slotPath();
+      stubs.transportHelper.openContentEnvelope.resolves(Buffer.from(JSON.stringify({
+        blobs: { [HSLOT]: Buffer.from('slot-bytes').toString('base64') }, manifest: { appName: 'myapp', version: 1, slots: { s: { hash: HSLOT } } },
+      })));
+      const error = await appSubmission.uploadSealedContent(spec, envelope, new Map(), bind()).catch((e) => e);
+      expect(error.message).to.match(/carries the owner's FluxDrive signature over it \(manifestPutSig\)/);
+      sinon.assert.notCalled(stubs.contentBlobService.encryptAndUploadBlobs);
+      sinon.assert.notCalled(contentSlotService.processManifestSubmission);
+    });
+
+    it('an update is judged for its keep list against the spec it supersedes before anything is uploaded, and a refusal uploads nothing', async () => {
+      appSubmission = load();
+      stubs.appHistory.ownerships = sinon.stub().resolves([{ owner: '1id', from: 2_400_000 }]);
+      const keepList = { timestamp: 1, ownerSig: 'o' };
+      stubs.transportHelper.openContentEnvelope.resolves(Buffer.from(JSON.stringify({ blobs: {}, keepList })));
+      const prior = { name: 'myapp', owner: '1id' };
+      await appSubmission.uploadSealedContent(spec, envelope, new Map(), bind({ priorSpec: prior }));
+      sinon.assert.calledOnceWithExactly(stubs.contentBlobService.assertKeepListCarried, spec, prior, keepList);
+      sinon.assert.callOrder(stubs.contentBlobService.assertKeepListCarried, stubs.contentBlobService.encryptAndUploadBlobs);
+
+      stubs.contentBlobService.assertKeepListCarried.throws(new Error('carries the owner\'s keep list'));
+      stubs.contentBlobService.encryptAndUploadBlobs.resetHistory();
+      const error = await appSubmission.uploadSealedContent(spec, envelope, new Map(), bind({ priorSpec: prior })).catch((e) => e);
+      expect(error.message).to.match(/keep list/);
+      sinon.assert.notCalled(stubs.contentBlobService.encryptAndUploadBlobs);
+    });
+
+    it('a registration is not judged for a keep list', async () => {
+      appSubmission = load();
+      stubs.transportHelper.openContentEnvelope.resolves(Buffer.from(JSON.stringify({ blobs: {} })));
+      await appSubmission.uploadSealedContent(spec, envelope, new Map(), bind());
+      sinon.assert.notCalled(stubs.contentBlobService.assertKeepListCarried);
     });
 
     it('forwards the superseded spec on update so unchanged content is carried over', async () => {

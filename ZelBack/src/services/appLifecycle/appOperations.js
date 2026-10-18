@@ -1928,6 +1928,9 @@ async function updateAppGlobaly(params) {
   // and rides in the update's message; its FluxDrive writes name this message's
   // hash, so FluxDrive holds them until the nodes answer that the update applied.
   let carriedManifest = null;
+  // An update that changes the content-ref files with no content envelope carries
+  // no keep list.
+  if (!contentCtx) contentBlobService.assertKeepListCarried(spec, priorCleartext, null);
   if (contentCtx) {
     ({ carriedManifest } = await uploadSealedContent(spec, contentCtx.content, contentCtx.ownerSigs, {
       ref: cleanContentHash,
