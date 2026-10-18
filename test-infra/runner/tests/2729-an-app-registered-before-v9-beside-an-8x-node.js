@@ -4,9 +4,12 @@
  * An activeStandby app registered before v9, run by v9 nodes and an 8.20 node,
  * on real syncthing.
  *
- * The app is pinned to three nodes: a v9 node that installs it first and runs
- * it as primary, an 8.20 node (FLUX_E2E_BASE_TAG) and a fresh v9 node, the last
- * two booting afterwards. A v9 node names the component's container by the
+ * The app asks for three instances, and three nodes can hold it: a v9 node
+ * that installs it first and runs it as primary, an 8.20 node
+ * (FLUX_E2E_BASE_TAG) and a fresh v9 node, the last two booting afterwards; the
+ * two other v9 nodes, there so the ring closes, hold no room for it. A spec of
+ * a version before v9 that names its nodes is an enterprise app's, so the
+ * spawners place it. A v9 node names the component's container by the
  * app's identity; an 8.20 node asks each peer's /apps/heldcomponents for the
  * container's 8.x name, flux<component>_<name>, before it starts the component.
  *   - the 8.20 node installs the app and does not start the component, the v9
@@ -24,7 +27,8 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
+import { bootAndPeer } from '../framework/reconciler-suite.js';
+import { deliverAppMessage } from '../framework/app-delivery.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import { pushImage } from '../framework/registry-helper.js';
 import {
@@ -39,7 +43,9 @@ const NODES = 5;
 const PRIMARY = 0;
 const OLD = 3; // the 8.20 node
 const FRESH = 4; // the fresh v9 node
-const PINNED = [PRIMARY, OLD, FRESH];
+const FULL = [1, 2]; // close the ring, hold no room for the app
+// more than any tier's disk: the spawner's space check refuses every app
+const NO_ROOM = { lockedSystemResources: { extrahdd: 1000 } };
 const CONVERGE_MS = 300000;
 const MARKER = 'written-on-the-primary';
 
@@ -82,6 +88,7 @@ describe('an app registered before v9, beside an 8.20 node', function () {
       nodes: NODES,
       deferredNodes: 2,
       nodeImageTags: { [OLD]: BASE_TAG },
+      nodeConfigOverrides: Object.fromEntries(FULL.map((i) => [i, NO_ROOM])),
       syncthing: 'real',
       tickerAutostart: false,
     });
@@ -90,10 +97,11 @@ describe('an app registered before v9, beside an 8.20 node', function () {
     view = appView(env, name, { component: name, timeout: CONVERGE_MS });
 
     await pushImage(name, 'v1');
-    app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby', pinnedTo: PINNED });
+    app = await buildSeedableSyncthingApp({ name, syncMode: 'activeStandby', instances: 3 });
     expect(app.registrationVersion, 'the app is registered before v9').to.be.below(9);
     legacyName = legacyFolderId(name);
-    await installOnNodes(env, app, [PRIMARY]);
+    await deliverAppMessage(env, app.message, [PRIMARY]);
+    await waitForInstallSettled(env.clients[PRIMARY], name, CONVERGE_MS);
     await waitFor(async () => (await view.containerOn(PRIMARY))?.running, {
       timeout: CONVERGE_MS, interval: 3000, label: 'the v9 node runs the component',
     });
