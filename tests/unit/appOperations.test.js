@@ -2251,6 +2251,20 @@ describe('appOperations tests', () => {
       expect(uninstallComponentStub.calledWith(sinon.match.any, sinon.match({ stopHandled: true })), 'the teardown must not stop again').to.be.true;
     });
 
+    it('stamps the app instance identifier on every container the update recreates', async () => {
+      setup();
+      const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
+      const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, cpu: 0.7 });
+      deploymentProvider.planDeployment.resolves(newDeployment);
+      const installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
+      const withUuid = await registeredSpec(await v9Spec(), { uuid: 'u-app' });
+
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, withUuid, namingOf(newDeployment)).catch(() => {});
+
+      expect(installComponent.called, 'the changed component is recreated').to.be.true;
+      installComponent.getCalls().forEach((call) => expect(call.args[1].uuid).to.equal('u-app'));
+    });
+
     it('a component with no declared contract keeps the local stop', async () => {
       setup();
       const beginAppStop = sinon.stub(fluxShutdowndClient, 'beginAppStop').resolves({ outcome: 'complete' });
