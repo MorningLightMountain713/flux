@@ -1,7 +1,7 @@
 'use strict';
 
 const { parentPort } = require('worker_threads');
-const bitcoinMessage = require('bitcoinjs-message');
+const bitcoinMessage = require('./bitcoinMessage');
 const { load } = require('@runonflux/flux-spec-cjs');
 const { pubKeyToAddr } = require('./fluxCryptoUtils');
 const { nativeRecoveryCurve } = require('./nativeRecoveryCurve');
