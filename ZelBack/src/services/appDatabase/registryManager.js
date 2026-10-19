@@ -66,7 +66,8 @@ async function storeGlobalSpec(record) {
   // Referee-side founding state derives from public metadata alone (name,
   // height, version), so every node records the anchor, encrypted specs
   // included; the component mapping is host-side and follows below.
-  await foundingCommittee.recordAnchor(record.serialize());
+  const mesh = record.spec.version >= 9 && record.featureSummary().flags.includes('mesh');
+  await foundingCommittee.recordAnchor(record.serialize(), { mesh });
   await materializeFoundingView(record);
   emitSpecStored(record);
 }
