@@ -8,6 +8,7 @@ import { listedIdentity, registerEncryptedV9App, updateEncryptedV9App } from '..
 import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
+import { dbClient } from '../framework/db-client.js';
 
 // A host that learns a mesh app after it was updated takes an ordinal no other
 // host holds.
@@ -15,7 +16,9 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 // Three nodes host a mesh app and found ordinals 0, 1 and 2. The app is then
 // updated to four instances, and a fourth node that has never run joins: it
 // learns the app from the network's history, not from watching it change, and
-// is placed as the fourth host. The ordinal it founds is 3 - the lowest free
+// is placed as the fourth host. It holds the app's registration and update
+// before it starts, as a node does that first runs v9 after the update, so it
+// decides both in one pass and never sees the app at its registration alone. The ordinal it founds is 3 - the lowest free
 // one - and every ordinal names one host.
 //
 // An ordinal register is addressed by the app's founding height. The hosts that
@@ -31,6 +34,7 @@ describe('a late host takes a free mesh ordinal', function () {
   let env;
   let name;
   let identity = null;
+  let registrationHash = null;
   const holders = new Map(); // ordinal -> holder outpoint
 
   // The hash of the message a node lists the app at, or null.
@@ -95,6 +99,7 @@ describe('a late host takes a free mesh ordinal', function () {
       name, instances: 3, image: `${REGISTRY_REPO_HOST}/e2e-pause:v1`, specOverrides: { network: { mesh: true } },
     });
     expect(reg.status, JSON.stringify(reg)).to.equal('success');
+    registrationHash = reg.data;
     await queueAppTx(reg.data);
     await advanceBlocks(3);
 
@@ -122,6 +127,11 @@ describe('a late host takes a free mesh ordinal', function () {
       const hashes = await Promise.all(FIRST_HOSTS.map((i) => listedHash(env.clients[i])));
       return hashes.every((hash) => hash === update.data);
     }, { timeout: 120000, interval: 3000, label: `${name} listed at its update on the first hosts` });
+
+    const hashes = [registrationHash, update.data];
+    const history = await (await dbClient(1).messages()).find({ hash: { $in: hashes } }, { projection: { _id: 0 } }).toArray();
+    expect(history.map((record) => record.hash).sort(), 'node 0 holds both messages').to.deep.equal([...hashes].sort());
+    await (await dbClient(LATE + 1).messages()).insertMany(history);
 
     const late = await env.startNode(LATE);
     await waitForAppInstalled(late, name, 480000);
