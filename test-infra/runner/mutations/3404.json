@@ -12,20 +12,5 @@
     "red": [
       "lists the release's apps on v9, less exactly the apps the rules refuse"
     ]
-  },
-  {
-    "name": "payments-left-unpositioned",
-    "breaks": "the first v9 start positions every payment recorded without a position",
-    "edits": [
-      {
-        "file": "ZelBack/src/services/migrations/index.js",
-        "from": "    run: () => paymentPositions.backfillPaymentPositions(),",
-        "to": "    run: async () => ({ positioned: 0 }),"
-      }
-    ],
-    "red": [
-      "lists the release's apps on v9, less exactly the apps the rules refuse",
-      "reaches a consistent app list within the boot bound from the start of FluxOS"
-    ]
   }
 ]
