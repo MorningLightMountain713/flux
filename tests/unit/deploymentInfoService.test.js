@@ -108,7 +108,10 @@ describe('deploymentInfoService tests', () => {
       sinon.assert.calledOnce(res.json);
       const response = res.json.firstCall.args[0];
       expect(response.data).to.have.property('price');
-      expect(response.data).to.have.property('appSpecsEnforcementHeights');
+      const { V9_ACTIVATION, Chain } = specLibrary.loaded();
+      expect(response.data.appSpecsEnforcementHeights).to.deep.equal({
+        ...config.fluxapps.appSpecsEnforcementHeights, 9: V9_ACTIVATION.heightOn(Chain.MAIN),
+      });
       expect(response.data).to.have.property('address');
       expect(response.data).to.have.property('portMin');
       expect(response.data).to.have.property('portMax');

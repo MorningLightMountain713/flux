@@ -1,8 +1,7 @@
 'use strict';
 
-const config = require('config');
 const { load, CONTRACT_VERSION } = require('@runonflux/flux-spec-cjs');
-const { nodeChain } = require('./nodeChain');
+const { nodeChain, specActivationHeights } = require('./nodeChain');
 
 // The lowest flux-spec surface this FluxOS can run against. Raise it in the same change
 // that starts calling an export added by a later flux-spec release.
@@ -52,7 +51,7 @@ async function getSpecPolicy() { return load(); }
  */
 function assertVersionActivated(version, height) {
   if (height === undefined) return;
-  const activationHeight = config.get('fluxapps.appSpecsEnforcementHeights')[version];
+  const activationHeight = specActivationHeights()[version];
   if (activationHeight === undefined) {
     throw new Error(`Unsupported Flux App specification version: ${version}`);
   }

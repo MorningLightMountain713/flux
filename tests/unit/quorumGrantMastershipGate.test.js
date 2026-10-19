@@ -150,11 +150,11 @@ describe('quorumGrant mastershipGrantGate', () => {
         config: asConfig({
           fluxapps: {
             quorumGrantMastership: flag,
-            quorumGrantActivationHeight: activateAt,
             quorumGrantPursuitIntervalMs: 30_000,
             quorumGrantHeldTtlMs: 150_000,
           },
         }),
+        '../utils/nodeChain': { v9ActivationHeight: () => activateAt },
         '../daemonService/daemonStatus': {
           daemonSyncState: () => ({ height, synced }),
         },
@@ -176,12 +176,6 @@ describe('quorumGrant mastershipGrantGate', () => {
       // fleet a block early - which is a block in which some nodes grant and the
       // rest still elect.
       const gate = gateWith({ flag: true, activateAt: 2_100_000, height: 2_099_999 });
-      expect(await gate.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
-      expect(grantClient.acquire.called).to.equal(false);
-    });
-
-    it('stays inert while no height is scheduled yet', async () => {
-      const gate = gateWith({ flag: true, activateAt: null, height: 9_999_999 });
       expect(await gate.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
       expect(grantClient.acquire.called).to.equal(false);
     });
@@ -224,13 +218,13 @@ describe('quorumGrant mastershipGrantGate', () => {
         config: asConfig({
           fluxapps: {
             quorumGrantMastership: true,
-            quorumGrantActivationHeight: ACTIVATE_AT,
             quorumGrantPreWindowBlocks: PRE_WINDOW,
             quorumGrantPursuitIntervalMs: 30_000,
             quorumGrantHeldTtlMs: 150_000,
             ...extraConfig,
           },
         }),
+        '../utils/nodeChain': { v9ActivationHeight: () => ACTIVATE_AT },
         '../daemonService/daemonStatus': {
           daemonSyncState: () => ({ height, synced }),
         },
@@ -332,12 +326,12 @@ describe('quorumGrant mastershipGrantGate', () => {
         config: asConfig({
           fluxapps: {
             quorumGrantMastership: true,
-            quorumGrantActivationHeight: ACTIVATE_AT,
             quorumGrantPreWindowBlocks: 40,
             quorumGrantPursuitIntervalMs: 30_000,
             quorumGrantHeldTtlMs: 150_000,
           },
         }),
+        '../utils/nodeChain': { v9ActivationHeight: () => ACTIVATE_AT },
         '../daemonService/daemonStatus': {
           daemonSyncState: () => ({ height, synced: true }),
         },
@@ -476,13 +470,13 @@ describe('quorumGrant mastershipGrantGate', () => {
         config: asConfig({
           fluxapps: {
             quorumGrantMastership: true,
-            quorumGrantActivationHeight: ACTIVATE_AT,
             quorumGrantPreWindowBlocks: 40,
             quorumGrantPursuitIntervalMs: 30_000,
             quorumGrantHeldTtlMs: 150_000,
             quorumGrantAskTimeoutMs: ASK_TIMEOUT,
           },
         }),
+        '../utils/nodeChain': { v9ActivationHeight: () => ACTIVATE_AT },
         '../daemonService/daemonStatus': {
           daemonSyncState: () => ({ height, synced: true }),
         },
@@ -611,7 +605,6 @@ describe('quorumGrant mastershipGrantGate', () => {
         config: asConfig({
           fluxapps: {
             quorumGrantMastership: true,
-            quorumGrantActivationHeight: 2_100_000,
             quorumGrantPursuitIntervalMs: 30_000,
             quorumGrantHeldTtlMs: 150_000,
             quorumGrantDemotionSlackMs: slack,
@@ -619,6 +612,7 @@ describe('quorumGrant mastershipGrantGate', () => {
             ...(askTimeout !== undefined ? { quorumGrantAskTimeoutMs: askTimeout } : {}),
           },
         }),
+        '../utils/nodeChain': { v9ActivationHeight: () => 2_100_000 },
         '../daemonService/daemonStatus': {
           daemonSyncState: () => ({ height: 2_100_000, synced: true }),
         },

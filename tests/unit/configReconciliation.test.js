@@ -126,12 +126,11 @@ describe('config reconciliation at boot', () => {
     }
   });
 
-  // The four knobs whose absence used to be the setting now ship the value that
+  // The three knobs whose absence used to be the setting now ship the value that
   // says it, so there is no exempt list left to keep honest - only a check that
   // they really are shipped, because a guard reading undefined and a guard
   // reading null behave the same right up until one of them does not.
   it('ships a value for the knobs whose absence used to be the setting', () => {
-    expect(production.fluxapps.quorumGrantActivationHeight, 'null = not scheduled').to.equal(null);
     expect(production.fluxapps.quorumGrantMastership, 'false = the gate is off').to.equal(false);
     expect(production.fluxapps.restartAlwaysOwners, 'empty = nobody').to.deep.equal([]);
     expect(production.fluxapps.verifyPoolSize, 'null = cpus-1').to.equal(null);
@@ -154,42 +153,28 @@ describe('release config relations at boot', () => {
     expect(broken, 'a relation the shipped values do not satisfy').to.deep.equal([]);
   });
 
-  it('a window too short for a referee restart stops a node whose plane is scheduled', () => {
+  it('a window too short for a referee restart stops the node', () => {
     const lines = [];
     const exits = [];
     // 11 blocks is the floor at the shipped drain and ask timeout; 10 is under it.
     reconciliation.reconcile({
-      config: withFluxapps({ quorumGrantPreWindowBlocks: 10, quorumGrantActivationHeight: 1_900_000 }),
+      config: withFluxapps({ quorumGrantPreWindowBlocks: 10 }),
       exit: (code) => exits.push(code),
       write: (line) => lines.push(line),
     });
 
-    expect(exits, 'a node scheduled to cross with a window that cannot cover a restart kept booting').to.deep.equal([1]);
+    expect(exits, 'a node with a window that cannot cover a restart kept booting').to.deep.equal([1]);
     expect(lines.join('\n'), 'the refusal did not name the arithmetic').to.match(/300000 \+ 5000 \+ 3 x 5000/);
     expect(lines.join('\n'), 'the refusal did not name the window it computed').to.include('300000 ms');
   });
 
-  it('the same break only warns while the plane is not scheduled', () => {
-    const lines = [];
-    const exits = [];
-    reconciliation.reconcile({
-      config: withFluxapps({ quorumGrantPreWindowBlocks: 10, quorumGrantActivationHeight: null }),
-      exit: (code) => exits.push(code),
-      write: (line) => lines.push(line),
-    });
-
-    expect(exits, 'a fleet was stopped over a plane that reaches nothing until it is scheduled').to.deep.equal([]);
-    expect(lines.join('\n'), 'a broken relation went unreported').to.include('quorumGrantPreWindowBlocks');
-  });
-
   it('a drain that outlives the lease it drains is a relation of its own', () => {
     const broken = reconciliation.brokenRelations(
-      withFluxapps({ quorumGrantDrainMs: 300_001, quorumGrantActivationHeight: 1_900_000 }),
+      withFluxapps({ quorumGrantDrainMs: 300_001 }),
     );
 
     expect(broken.map((r) => r.name), 'the drain relation did not break on its own')
       .to.deep.equal(['a drain ends inside the lease it drains']);
-    expect(broken[0].armed, 'a scheduled plane did not arm the relation').to.equal(true);
   });
 
   // R3 is a relation between a shipped value and a constant in the code, so it
@@ -202,19 +187,5 @@ describe('release config relations at boot', () => {
     const bound = nodeDownCertificates.RECORD_LIFETIME_MS + ISSUE_TO_PUBLISH_SLACK_MS;
     expect(production.fluxapps.membershipHistoryRetentionMs, `retention must cover ${bound} ms`)
       .to.be.at.least(bound);
-  });
-});
-
-describe('what counts as a scheduled plane', () => {
-  // `undefined !== null` is true, so a height read off a config that does not
-  // carry the key would arm a relation and stop a boot that nothing threatens.
-  it('arms on a height and on nothing else', () => {
-    const armed = (height) => reconciliation
-      .relations({ ...production, fluxapps: { ...production.fluxapps, quorumGrantActivationHeight: height } })
-      .every((r) => r.armed);
-
-    expect(armed(1_900_000), 'a scheduled height did not arm the relations').to.equal(true);
-    expect(armed(null), 'null is not scheduled').to.equal(false);
-    expect(armed(undefined), 'an absent height is not scheduled').to.equal(false);
   });
 });

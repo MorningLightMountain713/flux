@@ -1,11 +1,10 @@
 'use strict';
 
-const config = require('config');
-
 const pricingRegime = require('../pricing/pricingRegime');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const { lookupBlockTime } = require('../appMessaging/confirmedMessageStore');
 const appsRepository = require('../appDatabase/appsRepository');
+const { specActivationHeights } = require('../utils/nodeChain');
 
 /**
  * This node's chain state, as flux-spec's decideName asks it: activation
@@ -29,7 +28,7 @@ async function createChain() {
 
   return {
     activationHeight(version) {
-      return config.get('fluxapps.appSpecsEnforcementHeights')[version];
+      return specActivationHeights()[version];
     },
 
     async registrationFee(spec, height) {
@@ -58,12 +57,6 @@ async function createChain() {
 
     async historicalV7SecretsBefore(record) {
       return appsRepository.listHistoricalV7SecretsBefore(record);
-    },
-
-    /** The height the name hold is judged from, null while not scheduled. */
-    nameReservedActivation() {
-      const height = config.get('fluxapps.nameReservedActivationHeight');
-      return Number.isInteger(height) && height > 0 ? height : null;
     },
 
     /** The time of a mined block, for a term that ended at a height. */

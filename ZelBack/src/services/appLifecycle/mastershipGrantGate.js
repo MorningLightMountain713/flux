@@ -12,6 +12,7 @@ const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const { nowMs } = require('../utils/monotonicClock');
+const { v9ActivationHeight } = require('../utils/nodeChain');
 const grantClient = require('../quorumGrant/grantClient');
 const grantClientCore = require('../quorumGrant/grantClientCore');
 const log = require('../../lib/log');
@@ -54,12 +55,10 @@ const log = require('../../lib/log');
 
 const ROLE = 'master';
 
-// The block at which the plane starts governing. Absent means it has not been
-// scheduled yet and the plane stays inert.
+// The block at which the plane starts governing: the v9 height.
 function activationHeight() {
   if (testOverrides.activationHeight !== null) return testOverrides.activationHeight;
-  const height = config.get('fluxapps.quorumGrantActivationHeight');
-  return Number.isInteger(height) && height > 0 ? height : null;
+  return v9ActivationHeight();
 }
 
 /**
@@ -130,7 +129,6 @@ function planeView() {
   if (config.get('fluxapps.quorumGrantMastership') !== true) return null;
   if (!timingSafe()) return null;
   const activateAt = activationHeight();
-  if (!activateAt) return null;
   const { height, synced } = daemonStatus.daemonSyncState();
   if (!synced || !Number.isFinite(height)) return null;
   return { height, activateAt };

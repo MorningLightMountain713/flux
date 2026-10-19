@@ -176,16 +176,18 @@ describe('harness chain start', () => {
     ]);
   });
 
-  // The legacy rules' heights live in flux-spec, per network; the harness runs
-  // mainnet's chain, so it has to start above every one of mainnet's.
+  // The legacy rules' heights live in flux-spec, per network; the harness
+  // chain follows mainnet's, so it has to start above every one of them. v9's
+  // height is the one each suite starts its nodes with.
   it('starts above every mainnet height the spec library judges legacy documents by', () => {
     const {
-      Chain, LEGACY_PRICING_HEIGHTS, EXPIRE_INTERVAL_DROPPED,
+      Chain, LEGACY_PRICING_HEIGHTS, EXPIRE_INTERVAL_DROPPED, V9_ACTIVATION,
     } = specLibrary.loaded();
     const heights = {
       'the Proof of Node upgrade': Chain.MAIN.blockTimes[1].fromHeight,
       'the expire-interval rule dropped': EXPIRE_INTERVAL_DROPPED.heightOn(Chain.MAIN),
       ...Object.fromEntries(Object.entries(LEGACY_PRICING_HEIGHTS)
+        .filter(([, activation]) => activation !== V9_ACTIVATION)
         .map(([name, activation]) => [`pricing: ${name}`, activation.heightOn(Chain.MAIN)])),
     };
     expect(Object.keys(heights)).to.have.lengthOf(5);

@@ -7,7 +7,7 @@ const daemonStatus = require('../daemonService/daemonStatus');
 const chainUtilities = require('../utils/chainUtilities');
 const log = require('../../lib/log');
 const specLibrary = require('../utils/specLibrary');
-const { nodeChain } = require('../utils/nodeChain');
+const { nodeChain, specActivationHeights } = require('../utils/nodeChain');
 
 /**
  * To get deployment information including prices and specifications.
@@ -33,7 +33,7 @@ async function deploymentInformation(req, res) {
     const chain = nodeChain();
     const information = {
       price: appPrices,
-      appSpecsEnforcementHeights: config.get('fluxapps.appSpecsEnforcementHeights'),
+      appSpecsEnforcementHeights: specActivationHeights(),
       address: deployAddr,
       portMin,
       portMax,

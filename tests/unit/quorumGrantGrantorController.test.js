@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const config = require('config');
+const { v9ActivationHeight } = require('../../ZelBack/src/services/utils/nodeChain');
 const secp256k1 = require('secp256k1');
 const bs58check = require('bs58check').default;
 
@@ -121,6 +122,8 @@ function fakeRes() {
 describe('quorumGrant grantorController', () => {
   beforeEach(() => {
     grantorController.reset();
+    // v9's rules are in force: the plane governs, and a virgin row is served.
+    grantorController.resetActivationForTests({ activateAt: 0 });
 
     sinon.stub(fluxCommunicationUtils, 'deterministicFluxList').resolves(fixtureFleet());
     sinon.stub(networkStateService, 'membershipAt').returns(fixtureFleet());
@@ -1692,6 +1695,16 @@ describe('quorumGrant grantorController', () => {
       const res = fakeRes();
       await grantorController.probe(fakeReq(await worldAsk('probe')), res);
       expect(res.statusCode).to.equal(200);
+    });
+
+    it('opens at the v9 height on this node\'s chain when no test sets one', async () => {
+      grantorController.resetActivationForTests();
+      const opensAt = v9ActivationHeight() - config.get('fluxapps.quorumGrantPreWindowBlocks');
+      atHeight(opensAt - 1);
+      const shut = fakeRes();
+      await grantorController.probe(fakeReq(await worldAsk('probe')), shut);
+      expect(shut.statusCode).to.equal(409);
+      expect(shut.body.data.message).to.include(`at height ${opensAt}`);
     });
 
     it('the window is a config knob beside the activation height, 40 blocks by default', async () => {
