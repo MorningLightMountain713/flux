@@ -27,11 +27,14 @@ const { createChain } = require('./decisionChain');
  * positions are complete from its first catch-up, and the payments a rewind
  * took away are recorded again).
  *
- * For each name, in order: the triggering message's decision is removed, the
+ * A batch of names is decided, then written in order, each step one store call
+ * for the whole batch: the triggering messages' decisions are removed, the
  * later decisions are written, the decisions after a message the rule could not
- * evaluate are removed, the `onDecided` listeners run (the registry row), and
- * the triggering message's decision is written last. A crash anywhere before
- * that last write leaves the name undecided, and it is decided again.
+ * evaluate are removed, the `onDecided` listeners run for each name (the
+ * registry row), and the triggering messages' decisions are written last. A
+ * crash anywhere before that last write leaves the names undecided, and they
+ * are decided again. A full pass runs no `onDecided` listener: the `onFullPass`
+ * listeners that follow it read every decision.
  */
 
 
@@ -56,8 +59,9 @@ function typeOf(message) {
 }
 
 /**
- * Registers `fn(name, decisions)`, called for each name decided, after its
- * later decisions are written and before its triggering message's decision is.
+ * Registers `fn(name, decisions)`, called for each name a wake decided, after
+ * its later decisions are written and before its triggering message's decision
+ * is.
  * @param {(name: string, decisions: object[]) => Promise<void>} fn
  * @returns {() => void} unsubscribe
  */
@@ -181,38 +185,54 @@ async function entriesOf(messages, records, decisions) {
 }
 
 /**
- * Decides one name and writes its decisions in the crash-safe order.
+ * Writes a batch's decisions in the crash-safe order. A name whose listener
+ * fails keeps its triggering message undecided, and is decided again.
+ * @param {Array<{name: string, entries: object[], from: number, decisions: object[], blocked: ?object}>} decided
+ * @param {boolean} full - a full pass, which runs no `onDecided` listener
+ * @returns {Promise<number>} the decisions written
  */
-async function decideAndWrite(name, { entries, from }, chain) {
-  const { decisions, blocked } = await specLibrary.loaded().decideName({
-    name, entries, from, chain,
-  });
+async function writeDecided(decided, full) {
   const store = appRecords.decisions();
-  const trigger = entries[from].hash;
-  const blockedIndex = blocked ? entries.findIndex((entry) => entry.hash === blocked.hash) : entries.length;
+  const triggers = new Set(decided.map(({ entries, from }) => entries[from].hash));
+  const blockedTails = decided.flatMap(({ entries, blocked }) => {
+    if (!blocked) return [];
+    const at = entries.findIndex((entry) => entry.hash === blocked.hash);
+    return entries.slice(at).filter((entry) => entry.decision).map((entry) => entry.hash);
+  });
 
-  await store.undecide([trigger]);
-  await store.write(decisions.filter((decision) => decision.hash !== trigger));
-  await store.undecide(entries.slice(blockedIndex).filter((entry) => entry.decision).map((entry) => entry.hash));
-  for (const fn of decidedListeners) {
-    // eslint-disable-next-line no-await-in-loop
-    await fn(name, decisions);
+  await store.undecide([...triggers]);
+  await store.write(decided.flatMap(({ decisions }) => decisions.filter((decision) => !triggers.has(decision.hash))));
+  await store.undecide(blockedTails);
+  const settled = [];
+  for (const entry of decided) {
+    try {
+      if (!full) {
+        for (const fn of decidedListeners) {
+          // eslint-disable-next-line no-await-in-loop
+          await fn(entry.name, entry.decisions);
+        }
+      }
+      settled.push(entry);
+    } catch (error) {
+      log.error(`decider - ${entry.name}: not decided: ${error.message}`);
+    }
   }
-  await store.write(decisions.filter((decision) => decision.hash === trigger));
+  await store.write(settled.flatMap(({ decisions }) => decisions.filter((decision) => triggers.has(decision.hash))));
 
-  if (blocked) {
-    log.warn(`decider - ${name}: ${blocked.hash} not decided, this node could not evaluate it: ${blocked.error.message}`);
+  for (const { name, blocked } of decided) {
+    if (blocked) log.warn(`decider - ${name}: ${blocked.hash} not decided, this node could not evaluate it: ${blocked.error.message}`);
   }
-  return decisions.length;
+  return settled.reduce((sum, { decisions }) => sum + decisions.length, 0);
 }
 
 /**
  * Decides a batch of names, holding the chain-state lock: payment records and
  * decisions are read under it, so no rewind moves them meanwhile.
  * @param {Array<[string, object[]]>} batch - names and their stored messages
+ * @param {boolean} full - a full pass
  * @returns {Promise<{written: number, unpositioned: number}>}
  */
-async function decideNames(batch) {
+async function decideNames(batch, full) {
   return chainState.exclusive(async () => {
     const hashes = batch.flatMap(([, messages]) => messages.map((message) => message.hash));
     const [records, decisions, chain] = await Promise.all([
@@ -238,16 +258,19 @@ async function decideNames(batch) {
     })));
     toRecover.forEach((entry, index) => { entry.signers = signers[index]; });
 
-    let written = 0;
+    const decided = [];
     for (const { name, pending } of work) {
       try {
         // eslint-disable-next-line no-await-in-loop
-        written += await decideAndWrite(name, pending, chain);
+        const { decisions, blocked } = await specLibrary.loaded().decideName({
+          name, entries: pending.entries, from: pending.from, chain,
+        });
+        decided.push({ name, ...pending, decisions, blocked });
       } catch (error) {
         log.error(`decider - ${name}: not decided: ${error.message}`);
       }
     }
-    return { written, unpositioned };
+    return { written: await writeDecided(decided, full), unpositioned };
   });
 }
 
@@ -263,7 +286,7 @@ async function runOnce() {
   let unpositioned = 0;
   for (let offset = 0; offset < grouped.length; offset += NAMES_PER_BATCH) {
     // eslint-disable-next-line no-await-in-loop
-    const result = await decideNames(grouped.slice(offset, offset + NAMES_PER_BATCH));
+    const result = await decideNames(grouped.slice(offset, offset + NAMES_PER_BATCH), full);
     written += result.written;
     unpositioned += result.unpositioned;
   }
