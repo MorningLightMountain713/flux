@@ -11,6 +11,8 @@
  *
  * Every path is in the subset express 4 and 5 both accept (routesV2.js).
  */
+const READS_CAPABILITIES = 'reads the capability registry this process holds';
+
 module.exports = [
   // The contents of a paid app message this node is missing, stored through the
   // one store function: it needs the local collections and a chain state that is
@@ -26,8 +28,6 @@ module.exports = [
   {
     method: 'get', path: '/operations/:id', none: 'reads the operation registry this process holds', handler: 'apiV2/operations#read',
   },
-  // How this process came up: the capability registry's states and transitions,
-  // which exist before anything else does. For the node's operator and the team.
   // Which activeStandby components this node runs or holds, for a balancer routing
   // them: it reads the hosted instances.
   {
@@ -38,7 +38,18 @@ module.exports = [
   {
     method: 'get', path: '/apps/:name/ownerships', needs: ['localDbPrepared', 'chainStateConsistent'], handler: 'apiV2/apps#ownerships',
   },
+  // How this process came up, read from the capability registry, which exists
+  // before anything else does. For the node's operator and the team.
   {
-    method: 'get', path: '/node/boot', guards: ['nodeOperatorOrFluxTeam'], none: 'reads the capability registry this process holds', handler: 'apiV2/node#boot',
+    method: 'get', path: '/node/boot', guards: ['nodeOperatorOrFluxTeam'], none: READS_CAPABILITIES, handler: 'apiV2/node#boot',
+  },
+  {
+    method: 'get', path: '/node/capabilities', guards: ['nodeOperatorOrFluxTeam'], none: READS_CAPABILITIES, handler: 'apiV2/node#capabilityStates',
+  },
+  {
+    method: 'get', path: '/node/capabilities/blame', guards: ['nodeOperatorOrFluxTeam'], none: READS_CAPABILITIES, handler: 'apiV2/node#blame',
+  },
+  {
+    method: 'get', path: '/node/capabilities/critical-chain', guards: ['nodeOperatorOrFluxTeam'], none: READS_CAPABILITIES, handler: 'apiV2/node#criticalChain',
   },
 ];

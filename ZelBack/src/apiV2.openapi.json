@@ -405,54 +405,7 @@
                           "type": "array",
                           "description": "Every present capability's state now.",
                           "items": {
-                            "type": "object",
-                            "required": [
-                              "name",
-                              "owner",
-                              "needs",
-                              "state",
-                              "since",
-                              "reason",
-                              "waitingOn"
-                            ],
-                            "properties": {
-                              "name": {
-                                "type": "string"
-                              },
-                              "owner": {
-                                "type": "string",
-                                "description": "The service that raises and lowers it."
-                              },
-                              "needs": {
-                                "type": "array",
-                                "items": {
-                                  "type": "string"
-                                },
-                                "description": "The capabilities it is held below until they are up."
-                              },
-                              "state": {
-                                "type": "string",
-                                "enum": [
-                                  "down",
-                                  "coming-up",
-                                  "up"
-                                ]
-                              },
-                              "since": {
-                                "type": "integer",
-                                "description": "When it entered this state, epoch milliseconds."
-                              },
-                              "reason": {
-                                "type": "string"
-                              },
-                              "waitingOn": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ],
-                                "description": "The first prerequisite not up, or itself while its owner has not raised it; null when up."
-                              }
-                            }
+                            "$ref": "#/components/schemas/Capability"
                           }
                         },
                         "transitions": {
@@ -507,6 +460,258 @@
                                 ]
                               }
                             }
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/node/capabilities": {
+      "get": {
+        "tags": [
+          "node"
+        ],
+        "operationId": "getNodeCapabilities",
+        "summary": "What this node can do now",
+        "description": "Every present capability's state, since when, why, how long the state before it lasted, what it waits on, and when it first came up in this process. For the node's operator and the Flux team: the `zelidauth` header.",
+        "parameters": [
+          {
+            "name": "zelidauth",
+            "in": "header",
+            "required": true,
+            "description": "The node operator's or a Flux team member's signed login.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Request-Id",
+            "in": "header",
+            "required": false,
+            "description": "Echoed back on the response and in meta.requestId. Minted when absent.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every present capability.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Capability"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/node/capabilities/blame": {
+      "get": {
+        "tags": [
+          "node"
+        ],
+        "operationId": "getNodeCapabilitiesBlame",
+        "summary": "Which capabilities held this boot up",
+        "description": "Every present capability by how long after the process start it first came up, slowest first, with every capability that never has ahead of them all. What a capability waited on is the declared prerequisite that came up last before it did; one that never came up names what it waits on now. For the node's operator and the Flux team: the `zelidauth` header.",
+        "parameters": [
+          {
+            "name": "zelidauth",
+            "in": "header",
+            "required": true,
+            "description": "The node operator's or a Flux team member's signed login.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Request-Id",
+            "in": "header",
+            "required": false,
+            "description": "Echoed back on the response and in meta.requestId. Minted when absent.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every present capability, slowest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "name",
+                          "upAfterMs",
+                          "comingUpMs",
+                          "waitedOn",
+                          "state",
+                          "reason"
+                        ],
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "upAfterMs": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "description": "From the process start to its first rise; null while it never has."
+                          },
+                          "comingUpMs": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "description": "The part of it spent coming up, held below a prerequisite; null while it never has come up."
+                          },
+                          "waitedOn": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "The declared prerequisite that came up last before it did, or what it waits on now while it never has come up."
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "down",
+                              "coming-up",
+                              "up"
+                            ]
+                          },
+                          "reason": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/node/capabilities/critical-chain": {
+      "get": {
+        "tags": [
+          "node"
+        ],
+        "operationId": "getNodeCapabilitiesCriticalChain",
+        "summary": "What decided when the boot finished",
+        "description": "The chain of prerequisites that decided when the last capability to come up did: from the first link, which waited on nothing, to that capability. Each link is the declared prerequisite that came up last before the next one. For the node's operator and the Flux team: the `zelidauth` header.",
+        "parameters": [
+          {
+            "name": "zelidauth",
+            "in": "header",
+            "required": true,
+            "description": "The node operator's or a Flux team member's signed login.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Request-Id",
+            "in": "header",
+            "required": false,
+            "description": "Echoed back on the response and in meta.requestId. Minted when absent.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The chain, first link first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "name",
+                          "upAfterMs",
+                          "comingUpMs"
+                        ],
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "upAfterMs": {
+                            "type": "integer",
+                            "description": "From the process start to its first rise."
+                          },
+                          "comingUpMs": {
+                            "type": "integer",
+                            "description": "How long it was coming up, held below a prerequisite, just before."
                           }
                         }
                       }
@@ -893,6 +1098,86 @@
           },
           "meta": {
             "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "Capability": {
+        "type": "object",
+        "required": [
+          "name",
+          "owner",
+          "needs",
+          "state",
+          "since",
+          "reason",
+          "lastTookMs",
+          "waitingOn",
+          "firstUp"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string",
+            "description": "The service that raises and lowers it."
+          },
+          "needs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The capabilities it is held below until they are up."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "down",
+              "coming-up",
+              "up"
+            ]
+          },
+          "since": {
+            "type": "integer",
+            "description": "When it entered this state, epoch milliseconds."
+          },
+          "reason": {
+            "type": "string"
+          },
+          "lastTookMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How long the state before this one lasted; null before its first transition."
+          },
+          "waitingOn": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The first prerequisite not up, or itself while its owner has not raised it; null when up."
+          },
+          "firstUp": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Its first rise in this process; null while it never has.",
+            "required": [
+              "at",
+              "comingUpMs"
+            ],
+            "properties": {
+              "at": {
+                "type": "integer",
+                "description": "Epoch milliseconds."
+              },
+              "comingUpMs": {
+                "type": "integer",
+                "description": "How long it was coming up, held below a prerequisite, just before; 0 when it rose straight from down."
+              }
+            }
           }
         }
       }

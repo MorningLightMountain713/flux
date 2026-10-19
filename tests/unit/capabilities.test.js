@@ -213,4 +213,40 @@ describe('capabilities tests', () => {
       expect(snap.waitingOn).to.equal('mongoReachable');
     });
   });
+  describe('the first rise', () => {
+    let clock;
+    beforeEach(() => { clock = sinon.useFakeTimers({ now: 1_000_000 }); });
+    afterEach(() => clock.restore());
+
+    const snap = (name) => capabilities.snapshot().find((s) => s.name === name);
+
+    it('is none until the capability comes up', () => {
+      expect(snap('mongoReachable').firstUp).to.equal(null);
+      expect(snap('mongoReachable').lastTookMs).to.equal(null);
+    });
+
+    it('records when it rose and how long it was coming up before', () => {
+      const localDb = capabilities.claim('localDbPrepared', 'serviceManager');
+      clock.tick(100);
+      localDb.raise('prepared');
+      clock.tick(250);
+      capabilities.claim('mongoReachable', 'serviceManager').raise('answered');
+      expect(snap('localDbPrepared').firstUp).to.deep.equal({ at: 1_000_350, comingUpMs: 250 });
+      expect(snap('mongoReachable').firstUp, 'a rise straight from down spent nothing coming up')
+        .to.deep.equal({ at: 1_000_350, comingUpMs: 0 });
+      expect(snap('localDbPrepared').lastTookMs).to.equal(250);
+    });
+
+    it('keeps the first rise through a later fall and rise', () => {
+      const mongo = capabilities.claim('mongoReachable', 'serviceManager');
+      clock.tick(10);
+      mongo.raise('answered');
+      clock.tick(500);
+      mongo.lower('probe failed');
+      clock.tick(40);
+      mongo.raise('answered');
+      expect(snap('mongoReachable').firstUp).to.deep.equal({ at: 1_000_010, comingUpMs: 0 });
+      expect(snap('mongoReachable').lastTookMs, 'the last transition is the rise after the fall').to.equal(40);
+    });
+  });
 });

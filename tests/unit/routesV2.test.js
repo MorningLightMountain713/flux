@@ -514,6 +514,67 @@ describe('routesV2 - the /v2 surface', () => {
     });
   });
 
+  describe('GET /node/capabilities and its readouts', () => {
+    let verifyPrivilege;
+    let app;
+
+    beforeEach(() => {
+      verifyPrivilege = sinon.stub(verificationHelper, 'verifyPrivilege');
+      capabilities.resetForTests();
+      capabilities.setForTests('apiListening', true);
+      capabilities.setForTests('localDbPrepared', true);
+      app = express();
+      app.use('/v2', routesV2);
+    });
+
+    afterEach(() => {
+      sinon.restore();
+      capabilities.resetForTests();
+    });
+
+    const paths = ['/v2/node/capabilities', '/v2/node/capabilities/blame', '/v2/node/capabilities/critical-chain'];
+
+    it('is for the node operator and the Flux team, judged on the zelidauth header', async () => {
+      verifyPrivilege.resolves(false);
+      for (const path of paths) {
+        // eslint-disable-next-line no-await-in-loop
+        const res = await supertest(app).get(path).set('zelidauth', 'the-header-value');
+        expect(res.status, path).to.equal(401);
+      }
+      expect(verifyPrivilege.callCount).to.equal(paths.length);
+      verifyPrivilege.getCalls().forEach((call) => expect(call.args).to.deep.equal(['adminandfluxteam', 'the-header-value']));
+    });
+
+    it('answers every present capability\'s state, with its first rise', async () => {
+      verifyPrivilege.resolves(true);
+      const res = await supertest(app).get('/v2/node/capabilities').set('zelidauth', 'the-header-value');
+      expect(res.status).to.equal(200);
+      const local = res.body.data.find((c) => c.name === 'localDbPrepared');
+      expect(local).to.include({ state: 'up', waitingOn: null });
+      expect(local.firstUp.at).to.be.a('number');
+      expect(res.body.data.find((c) => c.name === 'policyVerified').firstUp).to.equal(null);
+      expect(res.body.data.map((c) => c.name)).to.not.include('upnpMapped');
+    });
+
+    it('blames what never came up first, and names what each risen one waited on', async () => {
+      verifyPrivilege.resolves(true);
+      const res = await supertest(app).get('/v2/node/capabilities/blame').set('zelidauth', 'the-header-value');
+      expect(res.status).to.equal(200);
+      const rows = res.body.data;
+      expect(rows[0].upAfterMs, 'something never came up and is not first').to.equal(null);
+      const local = rows.find((r) => r.name === 'localDbPrepared');
+      expect(local.waitedOn).to.equal('mongoReachable');
+      expect(local.upAfterMs).to.be.at.least(0);
+    });
+
+    it('answers the chain to the last capability up', async () => {
+      verifyPrivilege.resolves(true);
+      const res = await supertest(app).get('/v2/node/capabilities/critical-chain').set('zelidauth', 'the-header-value');
+      expect(res.status).to.equal(200);
+      expect(res.body.data.map((link) => link.name)).to.deep.equal(['mongoReachable', 'localDbPrepared']);
+    });
+  });
+
   describe('requireTier / requireAppTier', () => {
     let verifyPrivilege;
     let routerModule;
