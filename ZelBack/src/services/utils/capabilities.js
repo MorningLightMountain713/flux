@@ -64,7 +64,10 @@ const HISTORY_LIMIT = 2000;
 const emitter = new EventEmitter();
 emitter.setMaxListeners(0);
 
-/** name -> { definition, present, held, starting, state, since, reason, handle, everUp } */
+/**
+ * name -> { definition, present, held, starting, state, since, reason, lastTookMs,
+ *   handle, everUp, firstUp }
+ */
 let entries;
 let history;
 
@@ -81,8 +84,10 @@ function init() {
       state: STATE.DOWN,
       since: now,
       reason: 'not started',
+      lastTookMs: null,
       handle: null,
       everUp: false,
+      firstUp: null,
     });
   }
 }
@@ -126,6 +131,7 @@ function settle(name, reason) {
   entry.state = next;
   entry.since = at;
   entry.reason = reason;
+  entry.lastTookMs = record.tookMs;
 
   history.push(record);
   if (history.length > HISTORY_LIMIT) history.shift();
@@ -133,6 +139,7 @@ function settle(name, reason) {
 
   const firstUp = next === STATE.UP && !entry.everUp;
   if (next === STATE.UP) entry.everUp = true;
+  if (firstUp) entry.firstUp = { at, comingUpMs: from === STATE.COMING_UP ? record.tookMs : 0 };
   emitter.emit('transition', record);
   // The transition on the bus: what a reader outside the node waits on.
   fluxEventBus.publish('capability:changed', record);
@@ -279,9 +286,13 @@ function onFirstUp(name, fn) {
 }
 
 /**
- * Every present capability's state, since when, why, and what it waits on.
+ * Every present capability's state, since when, why, how long the state before
+ * it lasted, what it waits on, and when it first came up in this process: the
+ * time, and how long it spent coming up just before (0 when it rose straight
+ * from down), or null while it never has.
  * @returns {Array<{name: string, owner: string, needs: string[], state: string,
- *   since: number, reason: string, waitingOn: string|null}>}
+ *   since: number, reason: string, lastTookMs: number|null, waitingOn: string|null,
+ *   firstUp: {at: number, comingUpMs: number}|null}>}
  */
 function snapshot() {
   return DEFINITIONS.filter(({ name }) => entryOf(name).present).map(({ name, owner, needs }) => {
@@ -289,7 +300,15 @@ function snapshot() {
     let waitingOn = null;
     if (entry.state !== STATE.UP) waitingOn = entry.held ? firstDownPrerequisite(entry) : name;
     return {
-      name, owner, needs: [...needs], state: entry.state, since: entry.since, reason: entry.reason, waitingOn,
+      name,
+      owner,
+      needs: [...needs],
+      state: entry.state,
+      since: entry.since,
+      reason: entry.reason,
+      lastTookMs: entry.lastTookMs,
+      waitingOn,
+      firstUp: entry.firstUp ? { ...entry.firstUp } : null,
     };
   });
 }
