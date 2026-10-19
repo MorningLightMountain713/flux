@@ -145,6 +145,7 @@
     "secp256k1": true,
     "cpu-features": true,
     "ssh2": true,
-    "protobufjs": true
+    "protobufjs": true,
+    "zeromq": false
   }
 }

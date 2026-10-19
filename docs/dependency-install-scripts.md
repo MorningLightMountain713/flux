@@ -11,7 +11,8 @@ is a compromised transitive dependency shipping one.
   "secp256k1": true,
   "cpu-features": true,
   "ssh2": true,
-  "protobufjs": true
+  "protobufjs": true,
+  "zeromq": false
 }
 ```
 
@@ -69,6 +70,15 @@ long-standing, and their scripts do one comprehensible thing.
 
 None fetch anything at install time. All arrive via `dockerode` (ssh2,
 cpu-features, protobufjs) or the crypto path (secp256k1).
+
+`zeromq@6.8.0` is **denied** (`false`). Its `install` script
+(`node ./script/install.js`) only checks that a prebuilt addon loads, and
+builds one from source with cmake-ts (cmake, ninja and vcpkg dependencies)
+when none does. The package ships prebuilt Node-API addons for linux x64
+and arm64 (glibc and musl), and its loader picks one at `require` time
+without the script: on ArcaneOS (Node 24, ABI 137, which has no
+exact-ABI build) it loads and opens a socket. The source build is never
+wanted on a node, so the script is denied rather than approved.
 
 `fsevents` is **intentionally absent**. It is a darwin-only optional
 dependency reached through `nodemon`, so it never installs on a Linux
