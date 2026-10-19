@@ -1,4 +1,4 @@
-// fleet: 3
+// fleet: 4
 // base-image: FLUX_E2E_BASE_TAG
 /*
  * A node upgraded to v9 over the network's whole app history keeps the app list
@@ -36,8 +36,10 @@ const production = require('../../../ZelBack/config/default.js');
 const BASE_TAG = process.env.FLUX_E2E_BASE_TAG;
 const TAG = process.env.FLUX_E2E_TAG;
 const CORPUS = process.env.E2E_APP_CORPUS;
-const NODES = 3;
-const SUBJECT = 2; // boots on the release, then is upgraded
+// Three nodes beside it: a running node needs peers at the threshold before it
+// asks for the network's policy.
+const NODES = 4;
+const SUBJECT = 3; // boots on the release, then is upgraded
 const BOOT_BOUND_MS = production.system.bootSyncTimeoutMs;
 // The apps the first derivation removes from the network's list: refused by the
 // rules the network's release does not enforce.
