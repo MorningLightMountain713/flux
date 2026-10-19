@@ -114,8 +114,11 @@ describe('an upgrade over the network\'s app history', function () {
       listed = await listOn();
       return listed !== null && listed.size > 0;
     }, { timeout: RELEASE_LIST_MS, interval: 5000, label: 'the released node serves its app list' });
-    const network = corpus.listed.map((row) => row.name.toLowerCase()).sort();
-    expect([...listed.keys()].sort(), 'the released node lists what the network lists').to.deep.equal(network);
+    const network = new Map(corpus.listed.map((row) => [row.name.toLowerCase(), row]));
+    const missing = [...network.keys()].filter((name) => !listed.has(name)).sort();
+    const extra = [...listed.keys()].filter((name) => !network.has(name)).sort();
+    console.log(`# release: ${listed.size} listed; missing [${missing.map((name) => `${name}@${network.get(name).height}`).join(', ')}]; extra [${extra.join(', ')}]`);
+    expect([...listed.keys()].sort(), 'the released node lists what the network lists').to.deep.equal([...network.keys()].sort());
   });
 
   it('lists the network\'s apps on v9, less exactly the apps the rules refuse', async function () {
