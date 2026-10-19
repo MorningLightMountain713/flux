@@ -66,7 +66,7 @@ emitter.setMaxListeners(0);
 
 /**
  * name -> { definition, present, held, starting, state, since, reason, lastTookMs,
- *   handle, everUp, firstUp }
+ *   handle, everUp, firstUp, waits }
  */
 let entries;
 let history;
@@ -88,6 +88,7 @@ function init() {
       handle: null,
       everUp: false,
       firstUp: null,
+      waits: new Set(),
     });
   }
 }
@@ -221,12 +222,18 @@ function firstNotUp(nameOrNames) {
 /**
  * Resolves when a capability, or every capability of a set, is up at the same
  * time: at once if they are.
+ *
+ * `for` names the capabilities this wait holds up: code that brings one up
+ * waits through it, and the wait is recorded against each, so the readout
+ * shows what a capability waited on beyond the prerequisites it declares.
  * @param {string|string[]} nameOrNames
+ * @param {{for?: string|string[]}} [options]
  * @returns {Promise<void>}
  */
-function whenUp(nameOrNames) {
+function whenUp(nameOrNames, { for: heldUp = [] } = {}) {
   const names = namesOf(nameOrNames);
   names.forEach(entryOf);
+  namesOf(heldUp).forEach((held) => names.forEach((name) => entryOf(held).waits.add(name)));
   if (isUp(names)) return Promise.resolve();
   return new Promise((resolve) => {
     const listener = (record) => {
@@ -287,10 +294,11 @@ function onFirstUp(name, fn) {
 
 /**
  * Every present capability's state, since when, why, how long the state before
- * it lasted, what it waits on, and when it first came up in this process: the
- * time, and how long it spent coming up just before (0 when it rose straight
- * from down), or null while it never has.
- * @returns {Array<{name: string, owner: string, needs: string[], state: string,
+ * it lasted, what it waits on, the capabilities the code bringing it up waited
+ * for (`waits`), and when it first came up in this process: the time, and how
+ * long it spent coming up just before (0 when it rose straight from down), or
+ * null while it never has.
+ * @returns {Array<{name: string, owner: string, needs: string[], waits: string[], state: string,
  *   since: number, reason: string, lastTookMs: number|null, waitingOn: string|null,
  *   firstUp: {at: number, comingUpMs: number}|null}>}
  */
@@ -303,6 +311,7 @@ function snapshot() {
       name,
       owner,
       needs: [...needs],
+      waits: [...entry.waits],
       state: entry.state,
       since: entry.since,
       reason: entry.reason,

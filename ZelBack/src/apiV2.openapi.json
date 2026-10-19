@@ -1244,6 +1244,7 @@
           "name",
           "owner",
           "needs",
+          "waits",
           "state",
           "since",
           "reason",
@@ -1265,6 +1266,13 @@
               "type": "string"
             },
             "description": "The capabilities it is held below until they are up."
+          },
+          "waits": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The capabilities the code bringing it up waited for."
           },
           "state": {
             "type": "string",
