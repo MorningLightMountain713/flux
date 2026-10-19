@@ -968,6 +968,35 @@ describe('AppSyncOrchestrator', () => {
     });
   });
 
+  // An answer this node skipped because a capability its type needs was down is
+  // a hole of this node's making: the request ends, and the peer is not reported.
+  describe('a peer whose answer this node could not take is replaced', () => {
+    it('ends the request, asks another peer, and says nothing against the peer', async () => {
+      const peers = makeEligiblePeers(3);
+      const spare = makePeer('10.0.0.9:16127');
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+
+      const publish = sinon.spy(fluxEventBus, 'publish');
+      getEligibleSyncPeersStub.returns([peers[1], peers[2], spare]);
+      appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_UNSTORED, peers[0].key, 'localDbPrepared');
+      await clock.tickAsync(0);
+
+      expect(orchestrator.isSyncResponseWanted(peers[0]), 'a skipped answer left its request open').to.equal(false);
+      expect(spare.send.called, 'nobody was asked in its place').to.equal(true);
+      expect(
+        publish.getCalls().map((call) => call.args[0]),
+        'the peer was reported for a hole this node made',
+      ).to.not.include('ephemeralSync:peerUnverified');
+      expect(logStub.info.calledWithMatch(/answered while localDbPrepared was not up/)).to.equal(true);
+      await orchestrator.stop();
+    });
+  });
+
   // A PEER IS CREDITED WHEN IT HAS FINISHED, not when the part of it the tally
   // reads has. A request asks for four streams and the record that admits a
   // peer's responses closes on the credit, so crediting on three closed the

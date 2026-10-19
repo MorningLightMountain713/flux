@@ -198,6 +198,7 @@ class AppSyncOrchestrator {
   #ephemeralRefusedHandler = null;
   #peerStateSyncReadyHandler = null;
   #ephemeralUnverifiedHandler = null;
+  #ephemeralUnstoredHandler = null;
   #ephemeralProgressHandler = null;
   #syncPeersAvailableHandler = null;
   #peerReestablishedHandler = null;
@@ -393,6 +394,9 @@ class AppSyncOrchestrator {
     this.#ephemeralUnverifiedHandler = (peerKey) => this.#onEphemeralSyncUnverified(peerKey);
     appSyncEvents.on(EVENTS.EPHEMERAL_SYNC_UNVERIFIED, this.#ephemeralUnverifiedHandler);
 
+    this.#ephemeralUnstoredHandler = (peerKey, capability) => this.#onEphemeralSyncUnstored(peerKey, capability);
+    appSyncEvents.on(EVENTS.EPHEMERAL_SYNC_UNSTORED, this.#ephemeralUnstoredHandler);
+
     this.#ephemeralProgressHandler = (peerKey) => this.#onEphemeralSyncProgress(peerKey);
     appSyncEvents.on(EVENTS.EPHEMERAL_SYNC_PROGRESS, this.#ephemeralProgressHandler);
 
@@ -585,6 +589,21 @@ class AppSyncOrchestrator {
     if (this.#endRequest(peerKey, 'unverified', 'sent a response this node could not verify')) {
       fluxEventBus.publish('ephemeralSync:peerUnverified', { peer: peerKey });
     }
+  }
+
+  /**
+   * A peer answered while this node could not take the answer.
+   *
+   * A stream with a hole in it is not a survey, so the request ends as an
+   * unverifiable one does; the hole is this node's, so nothing is said against
+   * the peer.
+   *
+   * @param {string} peerKey ip:port of the peer whose answer was skipped
+   * @param {string} capability the capability that was down
+   */
+  #onEphemeralSyncUnstored(peerKey, capability) {
+    if (this.#stateSyncComplete) return;
+    this.#endRequest(peerKey, 'unstored', `answered while ${capability} was not up`);
   }
 
   /**
@@ -1706,6 +1725,7 @@ class AppSyncOrchestrator {
       appSyncEvents.removeListener(EVENTS.EPHEMERAL_SYNC_REFUSED, this.#ephemeralRefusedHandler);
       appSyncEvents.removeListener(EVENTS.PEER_STATE_SYNC_READY, this.#peerStateSyncReadyHandler);
       appSyncEvents.removeListener(EVENTS.EPHEMERAL_SYNC_UNVERIFIED, this.#ephemeralUnverifiedHandler);
+      appSyncEvents.removeListener(EVENTS.EPHEMERAL_SYNC_UNSTORED, this.#ephemeralUnstoredHandler);
       appSyncEvents.removeListener(EVENTS.EPHEMERAL_SYNC_PROGRESS, this.#ephemeralProgressHandler);
     }
     if (this.#hashUnresolvedHandler) {

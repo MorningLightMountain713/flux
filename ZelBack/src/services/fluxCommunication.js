@@ -34,7 +34,7 @@ const fluxEventBus = require('./utils/fluxEventBus');
 const { appSyncEvents, EVENTS: SYNC_EVENTS } = require('./utils/appSyncEvents');
 const { INTENT } = require('./utils/messageIntent');
 const {
-  ROUTE, register, declaredIntent, handlerFor, isOrdered,
+  NONE, ROUTE, register, declaredIntent, handlerFor, isOrdered, noteSkipped, unmetNeed,
 } = require('./utils/messageRoutes');
 
 const { announcementSeen, announcementStore, wsPeerCache } = cacheManager;
@@ -947,6 +947,13 @@ async function dispatchFluxMessage(msgObj, peerSocket) {
     releaseSlot();
     return;
   }
+  // Skipped, not judged: the next copy is handled once the capability is up.
+  const unmet = unmetNeed(msgObj.data.type);
+  if (unmet) {
+    releaseSlot();
+    noteSkipped(msgObj.data.type, unmet);
+    return;
+  }
   const currentTimeStamp = Date.now();
   const { VerifyResult } = fluxCommunicationUtils;
   const { result: verifyResult, announcer } = await fluxCommunicationUtils.verifyFluxBroadcast(msgObj, undefined, currentTimeStamp);
@@ -1125,6 +1132,18 @@ async function dispatchSyncResponse(msgObj, peerSocket) {
         }
         return;
       }
+      // A chunk this node cannot take is a hole too, and this node's, not the
+      // peer's: the request ends without counting against the peer.
+      const type = next.msgObj?.data?.type;
+      const unmet = unmetNeed(type);
+      if (unmet) {
+        noteSkipped(type, unmet);
+        syncChunkQueues.delete(peerKey);
+        if (peerManager.isSyncResponseWanted(peerSocket, next.msgObj?.data?.requestTimestamp)) {
+          appSyncEvents.emit(SYNC_EVENTS.EPHEMERAL_SYNC_UNSTORED, peerKey, unmet);
+        }
+        return;
+      }
       await processSyncChunk(next.msgObj, peerSocket);
     }
 
@@ -1137,55 +1156,64 @@ async function dispatchSyncResponse(msgObj, peerSocket) {
 }
 
 // Register message dispatchers on the peerManager singleton
-// Every wire type this node answers.
+// Every wire type this node answers, and what its handler reads.
+// The handler reads or writes this node's stored records.
+const STORED = { needs: ['localDbPrepared'] };
+// The handler also judges the message against the app list: whose signature an app
+// takes. Only for gossip, which is not offered again once handled; a sync answer
+// judged against a list still being built leaves a gap its round asks again for.
+const STORED_AND_LISTED = { needs: ['localDbPrepared', 'appRegistryConsistent'] };
+const IN_PROCESS = { none: NONE.PROCESS };
 // Everything a node tells the network about itself or about an app it saw. One fact
 // reaching us by many routes is one fact, and a relayed type must be deduplicated.
+// Never the app list: the answers hash sync asks for arrive as these types, and the
+// list waits on hash sync.
 register(['zelappregister', 'zelappupdate', 'fluxappregister', 'fluxappupdate'],
-  (msg, peer) => handleAppMessages(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
-register('fluxapprunning', (msg, peer, announcer) => handleAppRunningMessage(msg, peer.ip, peer.port, announcer), ROUTE.GOSSIP, INTENT.ANNOUNCE);
-register('fluxipchanged', (msg, peer) => handleIPChangedMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
-register('fluxappremoved', (msg, peer) => handleAppRemovedMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
-register('fluxappinstalling', (msg, peer) => handleAppInstallingMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
-register('fluxappinstallingerror', (msg, peer) => handleAppInstallingErrorMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
-register('fluxlimitcounterrecord', (msg) => limitCounter.acceptRecord(msg.data), ROUTE.GOSSIP, INTENT.ANNOUNCE);
-register('fluxmasterlease', (msg, peer, announcer) => handleMasterleaseMessage(msg, peer.ip, peer.port, announcer), ROUTE.GOSSIP, INTENT.ANNOUNCE);
-register('fluxnodedown', (msg, peer) => handleNodeDownMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
-register('fluxnodealive', (msg, peer, announcer) => handleNodeAliveMessage(msg, peer.ip, peer.port, announcer), ROUTE.GOSSIP, INTENT.ANNOUNCE);
-register('fluxgrantgeneration', (msg, peer) => handleGrantGenerationMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
-register('fluxappcontentmanifest', (msg) => contentSlotService.handleIncomingManifest(msg), ROUTE.GOSSIP, INTENT.ANNOUNCE);
-register('fluxappingress', (msg, peer) => handleIngressAttestation(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE);
+  (msg, peer) => handleAppMessages(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE, STORED);
+register('fluxapprunning', (msg, peer, announcer) => handleAppRunningMessage(msg, peer.ip, peer.port, announcer), ROUTE.GOSSIP, INTENT.ANNOUNCE, STORED);
+register('fluxipchanged', (msg, peer) => handleIPChangedMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE, STORED);
+register('fluxappremoved', (msg, peer) => handleAppRemovedMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE, STORED);
+register('fluxappinstalling', (msg, peer) => handleAppInstallingMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE, STORED);
+register('fluxappinstallingerror', (msg, peer) => handleAppInstallingErrorMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE, STORED);
+register('fluxlimitcounterrecord', (msg) => limitCounter.acceptRecord(msg.data), ROUTE.GOSSIP, INTENT.ANNOUNCE, STORED);
+register('fluxmasterlease', (msg, peer, announcer) => handleMasterleaseMessage(msg, peer.ip, peer.port, announcer), ROUTE.GOSSIP, INTENT.ANNOUNCE, STORED);
+register('fluxnodedown', (msg, peer) => handleNodeDownMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE, STORED);
+register('fluxnodealive', (msg, peer, announcer) => handleNodeAliveMessage(msg, peer.ip, peer.port, announcer), ROUTE.GOSSIP, INTENT.ANNOUNCE, STORED);
+register('fluxgrantgeneration', (msg, peer) => handleGrantGenerationMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE, STORED_AND_LISTED);
+register('fluxappcontentmanifest', (msg) => contentSlotService.handleIncomingManifest(msg), ROUTE.GOSSIP, INTENT.ANNOUNCE, STORED_AND_LISTED);
+register('fluxappingress', (msg, peer) => handleIngressAttestation(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE, STORED);
 // Pushed point to point, but a juror's signed statement: the same bytes twice are one
 // verdict, so it is filtered on content like an announcement.
-register('fluxnodedownverdict', handleNodeDownVerdictMessage, ROUTE.GOSSIP, INTENT.ANNOUNCE);
+register('fluxnodedownverdict', handleNodeDownVerdictMessage, ROUTE.GOSSIP, INTENT.ANNOUNCE, IN_PROCESS);
 // An ask delivered by broadcast. Delivery is not the classifier: it goes to every peer,
 // and it is still a question from one node that each of them answers separately.
-register('fluxapprequest', (msg, peer) => fluxCommunicationMessagesSender.respondWithAppMessage(msg, peer), ROUTE.GOSSIP, INTENT.ASK);
-register('fluxpolicyrequest', (msg, peer) => fluxCommunicationMessagesSender.respondWithPolicy(msg, peer), ROUTE.GOSSIP, INTENT.ASK);
-register('fluxappcontentmanifestindexrequest', (msg, peer) => fluxCommunicationMessagesSender.respondWithManifestIndex(peer), ROUTE.GOSSIP, INTENT.ASK);
-register('fluxappcontentmanifestrequest', (msg, peer) => fluxCommunicationMessagesSender.respondWithContentManifests(msg, peer), ROUTE.GOSSIP, INTENT.ASK);
-register('fluxappingressindexrequest', (msg, peer) => fluxCommunicationMessagesSender.respondWithIngressIndex(peer), ROUTE.GOSSIP, INTENT.ASK);
-register('fluxappingressrequest', (msg, peer) => fluxCommunicationMessagesSender.respondWithIngressAttestations(msg, peer), ROUTE.GOSSIP, INTENT.ASK);
+register('fluxapprequest', (msg, peer) => fluxCommunicationMessagesSender.respondWithAppMessage(msg, peer), ROUTE.GOSSIP, INTENT.ASK, STORED);
+register('fluxpolicyrequest', (msg, peer) => fluxCommunicationMessagesSender.respondWithPolicy(msg, peer), ROUTE.GOSSIP, INTENT.ASK, IN_PROCESS);
+register('fluxappcontentmanifestindexrequest', (msg, peer) => fluxCommunicationMessagesSender.respondWithManifestIndex(peer), ROUTE.GOSSIP, INTENT.ASK, STORED);
+register('fluxappcontentmanifestrequest', (msg, peer) => fluxCommunicationMessagesSender.respondWithContentManifests(msg, peer), ROUTE.GOSSIP, INTENT.ASK, STORED);
+register('fluxappingressindexrequest', (msg, peer) => fluxCommunicationMessagesSender.respondWithIngressIndex(peer), ROUTE.GOSSIP, INTENT.ASK, STORED);
+register('fluxappingressrequest', (msg, peer) => fluxCommunicationMessagesSender.respondWithIngressAttestations(msg, peer), ROUTE.GOSSIP, INTENT.ASK, STORED);
 // The one type sent both ways: news when a node announces what it adopted, an answer when
 // it settles a peer's ask. Nothing relays it, which is what makes the marker safe to trust.
 // A claim rather than an answer: a number cannot be checked, so it is a prompt to ask.
 register('fluxpolicyseq', (msg, peer) => policyStore.notePeerSeq(
   msg.data.seq, peer.key, msg.data.correlationId,
-), ROUTE.GOSSIP, INTENT.VARIES);
+), ROUTE.GOSSIP, INTENT.VARIES, IN_PROCESS);
 // Checked against the pinned keys before adoption, so an unsolicited bundle is no more
 // dangerous than one this node asked for - and peers announce what they adopt.
 register('fluxpolicy', (msg, peer) => policyStore.offerBundle(
   msg.data.bundle, peer.key, msg.data.correlationId,
-), ROUTE.GOSSIP, INTENT.ANSWER);
+), ROUTE.GOSSIP, INTENT.ANSWER, IN_PROCESS);
 
 // Answers to a sync this node asked for, which is why they are ordered.
-register('fluxapptempsync', handleTempSyncResponse, ROUTE.ORDERED, INTENT.ANSWER);
-register('fluxapprunningsync', handleAppRunningSyncResponse, ROUTE.ORDERED, INTENT.ANSWER);
-register('fluxappinstallingsync', handleAppInstallingSyncResponse, ROUTE.ORDERED, INTENT.ANSWER);
-register('fluxappinstallingerrorssync', handleAppInstallingErrorsSyncResponse, ROUTE.ORDERED, INTENT.ANSWER);
-register('fluxappcontentmanifestindex', (msg, peer) => handleContentManifestIndexResponse(msg, peer.key), ROUTE.ORDERED, INTENT.ANSWER);
-register('fluxappcontentmanifestsync', (msg, peer) => handleContentManifestSyncResponse(msg, peer.key), ROUTE.ORDERED, INTENT.ANSWER);
-register('fluxappingressindex', (msg, peer) => handleIngressIndexResponse(msg, peer.key), ROUTE.ORDERED, INTENT.ANSWER);
-register('fluxappingresssync', (msg, peer) => handleIngressSyncResponse(msg, peer.key), ROUTE.ORDERED, INTENT.ANSWER);
+register('fluxapptempsync', handleTempSyncResponse, ROUTE.ORDERED, INTENT.ANSWER, STORED);
+register('fluxapprunningsync', handleAppRunningSyncResponse, ROUTE.ORDERED, INTENT.ANSWER, STORED);
+register('fluxappinstallingsync', handleAppInstallingSyncResponse, ROUTE.ORDERED, INTENT.ANSWER, STORED);
+register('fluxappinstallingerrorssync', handleAppInstallingErrorsSyncResponse, ROUTE.ORDERED, INTENT.ANSWER, STORED);
+register('fluxappcontentmanifestindex', (msg, peer) => handleContentManifestIndexResponse(msg, peer.key), ROUTE.ORDERED, INTENT.ANSWER, IN_PROCESS);
+register('fluxappcontentmanifestsync', (msg, peer) => handleContentManifestSyncResponse(msg, peer.key), ROUTE.ORDERED, INTENT.ANSWER, STORED);
+register('fluxappingressindex', (msg, peer) => handleIngressIndexResponse(msg, peer.key), ROUTE.ORDERED, INTENT.ANSWER, IN_PROCESS);
+register('fluxappingresssync', (msg, peer) => handleIngressSyncResponse(msg, peer.key), ROUTE.ORDERED, INTENT.ANSWER, STORED);
 
 peerManager.messageDispatcher = dispatchFluxMessage;
 peerManager.syncResponseDispatcher = dispatchSyncResponse;

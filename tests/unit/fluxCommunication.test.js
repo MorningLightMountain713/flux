@@ -1814,8 +1814,14 @@ describe('fluxCommunication tests', () => {
   });
 
   describe('a sync response is admitted on the verdict of its envelope check', () => {
+    beforeEach(() => {
+      capabilities.resetForTests();
+      capabilities.setForTests('localDbPrepared', true);
+    });
+
     afterEach(() => {
       sinon.restore();
+      capabilities.resetForTests();
     });
 
     function recordSyncEvents() {
@@ -2259,9 +2265,14 @@ describe('the dispatcher hands each type to the handler the route table declares
     sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast')
       .resolves({ result: fluxCommunicationUtils.VerifyResult.OK, announcer });
     sinon.stub(fluxCommunicationUtils, 'verifyTimestampInFluxBroadcast').returns(true);
+    capabilities.resetForTests();
+    capabilities.setForTests('localDbPrepared', true);
   });
 
-  afterEach(() => sinon.restore());
+  afterEach(() => {
+    sinon.restore();
+    capabilities.resetForTests();
+  });
 
   it('offers a policy bundle to the store, from the peer that sent it', async () => {
     const offer = sinon.stub(policyStore, 'offerBundle').resolves();
@@ -2513,10 +2524,13 @@ describe('the flood filter cannot be talked out of deduplicating', () => {
     sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: false });
     sinon.stub(messageStore, 'storeIPChangedMessage').resolves(false);
     sinon.stub(policyStore, 'notePeerSeq');
+    capabilities.resetForTests();
+    capabilities.setForTests('localDbPrepared', true);
   });
 
   afterEach(() => {
     sinon.restore();
+    capabilities.resetForTests();
   });
 
   const envelope = (data) => ({
@@ -2602,6 +2616,105 @@ describe('the flood filter cannot be talked out of deduplicating', () => {
     await peerManager.messageDispatcher(envelope(data), peerSocket);
 
     expect(cacheManager.announcementSeen.has(objectHash(data))).to.equal(true);
+  });
+});
+
+// A message whose type needs a capability that is down is skipped before anything
+// judges it, and the copy that arrives once the capability is up is handled.
+describe('a message is skipped while a capability its type needs is down', () => {
+  const peerSocket = {
+    ip: '127.0.0.10',
+    port: '16127',
+    key: '127.0.0.10:16127',
+    direction: 'outgoing',
+    badMessageTimestamps: [],
+    close: () => {},
+    sendNak: () => {},
+  };
+  const envelope = (data) => ({
+    version: 1, pubKey: '0400', timestamp: Date.now(), signature: 'sig', data,
+  });
+  const settle = () => new Promise((resolve) => { setImmediate(resolve); });
+
+  let verify;
+
+  beforeEach(() => {
+    cacheManager.announcementSeen.clear();
+    capabilities.resetForTests();
+    verify = sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast')
+      .resolves({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
+    sinon.stub(fluxCommunicationUtils, 'verifyTimestampInFluxBroadcast').returns(true);
+    sinon.stub(peerManager, 'broadcastHash');
+  });
+
+  afterEach(() => {
+    sinon.restore();
+    capabilities.resetForTests();
+  });
+
+  it('skips gossip unjudged, gives its slot back, and handles the next copy once the capability is up', async () => {
+    const warn = sinon.stub(log, 'warn');
+    const store = sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: false });
+    sinon.stub(messageStore, 'storeIPChangedMessage').resolves(false);
+    const data = {
+      type: 'fluxipchanged', version: 1, oldIP: '1.1.1.1', newIP: '3.3.3.3', broadcastedAt: Date.now(),
+    };
+
+    await peerManager.messageDispatcher(envelope(data), peerSocket);
+    await settle();
+    sinon.assert.notCalled(verify);
+    sinon.assert.notCalled(store);
+    expect(cacheManager.announcementSeen.has(objectHash(data)), 'a skipped message kept its slot').to.equal(false);
+    sinon.assert.calledWithMatch(warn, 'messageRoutes: skipping fluxipchanged while localDbPrepared is not up');
+
+    capabilities.setForTests('localDbPrepared', true);
+    await peerManager.messageDispatcher(envelope(data), peerSocket);
+    await settle();
+    sinon.assert.calledOnce(verify);
+    sinon.assert.calledOnce(store);
+  });
+
+  it('handles a type that reads no capability whatever is down', async () => {
+    const note = sinon.stub(policyStore, 'notePeerSeq');
+    await peerManager.messageDispatcher(envelope({ type: 'fluxpolicyseq', version: 1, seq: 4 }), peerSocket);
+    await settle();
+    sinon.assert.calledOnce(note);
+  });
+
+  it('ends a sync answer\'s stream at a chunk it skips, without saying the peer failed', async () => {
+    sinon.stub(log, 'warn');
+    sinon.stub(peerManager, 'isSyncResponseWanted').returns(true);
+    sinon.stub(ingressAttestationSyncService, 'isPeerInActiveRound').returns(true);
+    const deposit = sinon.stub(ingressAttestationSyncService, 'depositDigests');
+    const seen = { unstored: [], unverified: [], completed: [] };
+    const onUnstored = (...args) => seen.unstored.push(args);
+    const onUnverified = (key) => seen.unverified.push(key);
+    const onComplete = (...args) => seen.completed.push(args);
+    appSyncEvents.on(SYNC_EVENTS.EPHEMERAL_SYNC_UNSTORED, onUnstored);
+    appSyncEvents.on(SYNC_EVENTS.EPHEMERAL_SYNC_UNVERIFIED, onUnverified);
+    appSyncEvents.on(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, onComplete);
+    try {
+      // Queued behind the skipped chunk on the same peer, and a type that needs
+      // nothing: handled only if the stream carried on past the hole.
+      const first = fluxCommunication.dispatchSyncResponse(
+        { data: { type: 'fluxapptempsync', done: true, messages: [] } },
+        peerSocket,
+      );
+      const second = fluxCommunication.dispatchSyncResponse(
+        { data: { type: 'fluxappingressindex', digests: ['d'], done: true } },
+        peerSocket,
+      );
+      await Promise.all([first, second]);
+      await settle();
+    } finally {
+      appSyncEvents.off(SYNC_EVENTS.EPHEMERAL_SYNC_UNSTORED, onUnstored);
+      appSyncEvents.off(SYNC_EVENTS.EPHEMERAL_SYNC_UNVERIFIED, onUnverified);
+      appSyncEvents.off(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, onComplete);
+    }
+    expect(seen.unstored).to.deep.equal([[peerSocket.key, 'localDbPrepared']]);
+    expect(seen.unverified, 'the peer was blamed for a hole this node made').to.deep.equal([]);
+    expect(seen.completed).to.deep.equal([]);
+    sinon.assert.notCalled(deposit);
   });
 });
 
