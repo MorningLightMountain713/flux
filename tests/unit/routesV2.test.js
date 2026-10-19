@@ -33,6 +33,7 @@ const temporaryPoolSweep = require('../../ZelBack/src/services/appMessaging/temp
 const appHistory = require('../../ZelBack/src/services/appDecisions/appHistory');
 const operationsController = require('../../ZelBack/src/services/appManagement/operationsController');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
+const capabilityHistory = require('../../ZelBack/src/services/capabilityHistory');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 
 const ROOT = nodePath.join(__dirname, '../..');
@@ -572,6 +573,30 @@ describe('routesV2 - the /v2 surface', () => {
       const res = await supertest(app).get('/v2/node/capabilities/critical-chain').set('zelidauth', 'the-header-value');
       expect(res.status).to.equal(200);
       expect(res.body.data.map((link) => link.name)).to.deep.equal(['mongoReachable', 'localDbPrepared']);
+    });
+
+    it('answers the transitions of this process and earlier ones', async () => {
+      verifyPrivilege.resolves(true);
+      const boots = [{ startedAt: 2, transitions: [] }, { startedAt: 1, transitions: [] }];
+      sinon.stub(capabilityHistory, 'history').resolves(boots);
+      const res = await supertest(app).get('/v2/node/capabilities/history').set('zelidauth', 'the-header-value');
+      expect(res.status).to.equal(200);
+      expect(res.body.data).to.deep.equal(boots);
+    });
+
+    it('refuses the history while the local database is not prepared', async () => {
+      verifyPrivilege.resolves(true);
+      const read = sinon.stub(capabilityHistory, 'history').resolves([]);
+      capabilities.setForTests('localDbPrepared', false);
+      const res = await supertest(app).get('/v2/node/capabilities/history').set('zelidauth', 'the-header-value');
+      expect(res.status).to.equal(503);
+      sinon.assert.notCalled(read);
+    });
+
+    it('keeps the history for the node operator and the Flux team', async () => {
+      verifyPrivilege.resolves(false);
+      const res = await supertest(app).get('/v2/node/capabilities/history').set('zelidauth', 'the-header-value');
+      expect(res.status).to.equal(401);
     });
   });
 

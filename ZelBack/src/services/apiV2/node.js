@@ -2,11 +2,9 @@
 
 const capabilities = require('../utils/capabilities');
 const capabilityReadout = require('../utils/capabilityReadout');
+const capabilityHistory = require('../capabilityHistory');
 
-/** The process start, ms since the epoch. */
-function processStartedAt(now = Date.now()) {
-  return Math.round(now - process.uptime() * 1000);
-}
+const { STARTED_AT } = capabilityHistory;
 
 /**
  * GET /v2/node/boot - how this process came up: every capability's state now,
@@ -21,7 +19,7 @@ function processStartedAt(now = Date.now()) {
 function boot(req, res) {
   const now = Date.now();
   return res.ok({
-    startedAt: processStartedAt(now),
+    startedAt: STARTED_AT,
     now,
     capabilities: capabilities.snapshot(),
     transitions: capabilities.transitions(),
@@ -46,7 +44,7 @@ function capabilityStates(req, res) {
  * @returns {*}
  */
 function blame(req, res) {
-  return res.ok(capabilityReadout.blame(capabilities.snapshot(), processStartedAt()));
+  return res.ok(capabilityReadout.blame(capabilities.snapshot(), STARTED_AT));
 }
 
 /**
@@ -57,7 +55,18 @@ function blame(req, res) {
  * @returns {*}
  */
 function criticalChain(req, res) {
-  return res.ok(capabilityReadout.criticalChain(capabilities.snapshot(), processStartedAt()));
+  return res.ok(capabilityReadout.criticalChain(capabilities.snapshot(), STARTED_AT));
+}
+
+/**
+ * GET /v2/node/capabilities/history - the capability transitions of this
+ * process and the ones before it, newest process first.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res carrying the v2 envelope
+ * @returns {Promise<*>}
+ */
+async function history(req, res) {
+  return res.ok(await capabilityHistory.history());
 }
 
 module.exports = {
@@ -65,4 +74,5 @@ module.exports = {
   boot,
   capabilityStates,
   criticalChain,
+  history,
 };

@@ -733,6 +733,143 @@
         }
       }
     },
+    "/node/capabilities/history": {
+      "get": {
+        "tags": [
+          "node"
+        ],
+        "operationId": "getNodeCapabilitiesHistory",
+        "summary": "Capability transitions across restarts",
+        "description": "The capability transitions of this process and the processes before it, from a local collection that keeps the last 5,000 rows: newest process first, up to the last 10, each process's transitions oldest first. This process's transitions not yet written are included. For the node's operator and the Flux team: the `zelidauth` header.",
+        "parameters": [
+          {
+            "name": "zelidauth",
+            "in": "header",
+            "required": true,
+            "description": "The node operator's or a Flux team member's signed login.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Request-Id",
+            "in": "header",
+            "required": false,
+            "description": "Echoed back on the response and in meta.requestId. Minted when absent.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Each process, newest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "startedAt",
+                          "transitions"
+                        ],
+                        "properties": {
+                          "startedAt": {
+                            "type": "integer",
+                            "description": "The process start, epoch milliseconds."
+                          },
+                          "transitions": {
+                            "type": "array",
+                            "description": "Its transitions, oldest first.",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "name",
+                                "from",
+                                "to",
+                                "at",
+                                "reason",
+                                "tookMs",
+                                "waitingOn"
+                              ],
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "from": {
+                                  "type": "string",
+                                  "enum": [
+                                    "down",
+                                    "coming-up",
+                                    "up"
+                                  ]
+                                },
+                                "to": {
+                                  "type": "string",
+                                  "enum": [
+                                    "down",
+                                    "coming-up",
+                                    "up"
+                                  ]
+                                },
+                                "at": {
+                                  "type": "integer",
+                                  "description": "Epoch milliseconds."
+                                },
+                                "reason": {
+                                  "type": "string"
+                                },
+                                "tookMs": {
+                                  "type": "integer",
+                                  "description": "How long the state left behind lasted."
+                                },
+                                "waitingOn": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "description": "The node's local database is not ready.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/apps/activestandby": {
       "get": {
         "tags": [

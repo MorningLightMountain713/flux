@@ -107,6 +107,7 @@ const playgroundService = require('./appPlayground/playgroundService');
 const admissionControl = require('./utils/admissionControl');
 const migrations = require('./migrations');
 const limitCounterRecords = require('./utils/limitCounterRecords');
+const capabilityHistory = require('./capabilityHistory');
 const imageCacheMaintenance = require('./appLifecycle/imageCacheMaintenance');
 const imageReaper = require('./appLifecycle/imageReaper');
 const imageUpdateService = require('./imageUpdateService');
@@ -217,6 +218,7 @@ async function prepareDatabaseSchema() {
   // appPlacements (localzelapps): one record per app
   await appPlacements.prepareCollection();
   await limitCounterRecords.prepareCollection();
+  await capabilityHistory.prepareCollection();
   // The explorer's collections: their indexes are the explorer's to declare.
   await explorerService.prepareCollections();
   log.info('Local database prepared');
@@ -512,6 +514,7 @@ async function startFluxFunctions() {
         // tidy path rather than the only one.
         await migrations.runBefore('localDbPrepared');
         await untilSucceeds('Database schema preparation', prepareDatabaseSchema);
+        capabilityHistory.start();
         // Who gives capacity back when paid work cannot otherwise fit. Registered
         // rather than imported: admissionControl is depended on by every resource
         // check, and it must not in turn depend on whichever feature happens to hold

@@ -52,4 +52,8 @@ module.exports = [
   {
     method: 'get', path: '/node/capabilities/critical-chain', guards: ['nodeOperatorOrFluxTeam'], none: READS_CAPABILITIES, handler: 'apiV2/node#criticalChain',
   },
+  // Earlier processes' transitions are in the local database.
+  {
+    method: 'get', path: '/node/capabilities/history', guards: ['nodeOperatorOrFluxTeam'], needs: ['localDbPrepared'], handler: 'apiV2/node#history',
+  },
 ];
