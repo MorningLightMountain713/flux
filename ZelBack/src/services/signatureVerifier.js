@@ -93,7 +93,7 @@ function includesSigningIdentity(identities, identity) {
  * be re-encoded while still verifying gives one signed message several
  * identities — each accepted as genuinely signed, none deduplicated against
  * the others, and all mintable by anyone who observed the first without the
- * owner's key. `bitcoinjs-message` accepts the high-S twin, and the bare 0/1
+ * owner's key. `utils/bitcoinMessage` accepts the high-S twin, and the bare 0/1
  * spelling of `v` is accepted by most Ethereum recovery code.
  *
  * The rule itself lives in flux-spec (`signature/canonical.js`) and is reached
