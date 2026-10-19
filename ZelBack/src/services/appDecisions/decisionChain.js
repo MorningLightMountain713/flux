@@ -10,12 +10,13 @@ const { specActivationHeights } = require('../utils/nodeChain');
  * This node's chain state, as flux-spec's decideName asks it: activation
  * heights, fees, entitlement, who may sign, the secrets mined before a
  * payment, and block times. One chain serves one run of the decider; it
- * remembers the block times it looks up.
+ * remembers the block times it looks up, and reads the v7 secret uses once.
  *
  * @returns {Promise<import('@runonflux/flux-spec-backend').DecisionChain>}
  */
 async function createChain() {
   const blockTimes = new Map();
+  let v7SecretUses = null;
 
   async function timeAt(height) {
     if (!blockTimes.has(height)) {
@@ -56,7 +57,8 @@ async function createChain() {
     },
 
     async historicalV7SecretsBefore(record) {
-      return appsRepository.listHistoricalV7SecretsBefore(record);
+      v7SecretUses ??= appsRepository.listV7SecretUses();
+      return appsRepository.secretUsesBefore(await v7SecretUses, record);
     },
 
     /** The time of a mined block, for a term that ended at a height. */
