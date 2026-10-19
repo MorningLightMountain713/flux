@@ -195,6 +195,10 @@ describe('every node decides the same app list', function () {
       await deliverAppMessage(env, ordered.updated.message, [REGISTRAR]);
       const connected = RUNNING.filter((i) => i !== POCKET && i !== FETCHER);
       await appliedOn(ordered.updated.hash, connected, 'every connected node takes the update from the node it was handed to');
+      // What every node is held to below: the identity the node handed the
+      // messages in order lists the app under.
+      ordered.identity = (await listedOn(REGISTRAR, ordered.registered.spec.name))?.identity;
+      expect(ordered.identity, 'the node handed the registration lists the app under an identity').to.be.a('string').and.not.equal('');
 
       await hand(POCKET, ordered.updated.message);
       await refusedOn(ordered.updated.hash, [POCKET], 'nothing-to-update', 'the cut-off node judges the update with nothing to update');
@@ -214,10 +218,7 @@ describe('every node decides the same app list', function () {
     this.timeout(CONVERGE_MS * 2);
     await appliedOn(ordered.registered.hash, RUNNING, 'every node applies the registration');
     await appliedOn(ordered.updated.hash, RUNNING, 'every node applies the update');
-    const { identity } = await listedOn(REGISTRAR, ordered.registered.spec.name);
-    expect(identity, 'the node handed the registration lists the app under an identity').to.be.a('string').and.not.equal('');
-    ordered.identity = identity;
-    await sameRowOn(ordered.registered.spec.name, ordered.updated.hash, identity, RUNNING, 'every node lists the update');
+    await sameRowOn(ordered.registered.spec.name, ordered.updated.hash, ordered.identity, RUNNING, 'every node lists the update');
   });
 
   it('refuses an underpaid registration on every node and lists it on none', async function () {
