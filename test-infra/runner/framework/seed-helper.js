@@ -41,8 +41,8 @@ export function nodeOutpoint(index) {
  * @returns {object}
  */
 function signedSpelling(spec) {
-  // the harness fleet runs mainnet's chain: its stub daemon reports `main`
-  const parsed = deserializeSpec(spec, { chain: Chain.MAIN });
+  // the harness fleet runs the harness chain: its stub daemon reports `harness`
+  const parsed = deserializeSpec(spec, { chain: Chain.HARNESS });
   return typeof parsed.allSerializations === 'function' ? parsed.allSerializations()[0] : parsed.toCanonical();
 }
 

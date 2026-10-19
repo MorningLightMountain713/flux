@@ -94,7 +94,6 @@ describe('a chain stall coasts every master and demotes none', function () {
           quorumGrantDrainMs: 90000,
           quorumGrantMinHolderAgeMs: 0,
           quorumGrantPursuitIntervalMs: 10000,
-          quorumGrantActivationHeight: 2_100_000,
           // Recovery latency after the stall lifts is one poll: the next
           // successful getBlockchainInfo refreshes the staleness stamp.
           daemonInfoIntervalMs: 10000,

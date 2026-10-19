@@ -88,7 +88,6 @@ describe('encrypted mastership: a sealed spec holds and fails over a term', func
           quorumGrantDrainMs: 90000,
           quorumGrantMinHolderAgeMs: 0,
           quorumGrantPursuitIntervalMs: 10000,
-          quorumGrantActivationHeight: 2_100_000,
         },
       },
     });

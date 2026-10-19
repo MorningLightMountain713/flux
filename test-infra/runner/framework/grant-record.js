@@ -107,7 +107,6 @@ export function grantPlaneOverrides(extra = {}) {
     quorumGrantDrainMs: 90000,
     quorumGrantMinHolderAgeMs: 0,
     quorumGrantPursuitIntervalMs: 10000,
-    quorumGrantActivationHeight: 2_100_000,
     ...extra,
   };
 }

@@ -171,7 +171,6 @@ describe('step-across: the owner re-rolls the committee under a running master, 
           // the master coasts through the drain and steps across at its lift
           quorumGrantGenerationDrainBlocks: DRAIN_BLOCKS,
           // the plane governs from the fleet's first block
-          quorumGrantActivationHeight: 2_100_000,
         },
       },
     });

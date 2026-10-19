@@ -45,8 +45,10 @@ const NODES = 4;
 const SUBJECT = 3; // boots on the release, then is upgraded
 const BOOT_BOUND_MS = production.system.bootSyncTimeoutMs;
 // The apps the first derivation removes from the network's list: refused by the
-// rules the network's release does not enforce.
-const EXPECTED_REMOVED = ['claimcalc', 'ipshow', 'mole'];
+// rules the network's release does not enforce. claimcalc's registration paid
+// less than its price; tavpn was registered twice in two blocks, and v9 keeps
+// the first, so the second registrant's update is unauthorized.
+const EXPECTED_REMOVED = ['claimcalc', 'tavpn'];
 const UPGRADE_MS = 1200000;
 const RELEASE_LIST_MS = 900000;
 
@@ -89,6 +91,9 @@ describe('an upgrade over the network\'s app history', function () {
       deferredNodes: 1,
       nodeImageTags: { [SUBJECT]: BASE_TAG },
       initialHeight: corpus.tip,
+      // v9's rules start at the library's mainnet height, above the corpus, as
+      // they do on the network's own upgrade.
+      configOverrides: { daemon: { harnessV9ActivationHeight: null } },
     });
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1 });
     // The chain stands still from here, so the release and the upgraded node
