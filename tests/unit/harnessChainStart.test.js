@@ -60,7 +60,7 @@ const CONFIGS = {
   // above.
   'the harness overlay': {
     config: requireShared(),
-    sentinel: 'fluxapps.appSpecsEnforcementHeights.9',
+    sentinel: 'daemon.harnessV9ActivationHeight',
     atLeast: 3,
   },
 };
