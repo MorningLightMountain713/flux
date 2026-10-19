@@ -1,0 +1,65 @@
+[
+  {
+    "name": "decided-messages-not-redecided",
+    "breaks": "a message arriving earlier in chain order than ones already decided re-decides every one after it",
+    "edits": [
+      {
+        "file": "test-infra/flux-spec/dist/packages/spec-backend/src/decision/decisionRule.js",
+        "from": "  const walked = entries.map((entry, index) => (index < from ? entry : { ...entry, decision: null }));\n  for (let i = from; i < walked.length; i += 1) {\n    let decision;",
+        "to": "  const walked = entries.map((entry, index) => (index < from || entry.decision ? entry : { ...entry, decision: null }));\n  for (let i = from; i < walked.length; i += 1) {\n    if (walked[i].decision) continue;\n    let decision;"
+      }
+    ],
+    "red": [
+      "refuses an update handed over before its registration, then applies both once the registration arrives",
+      "lists the update on every node, under the identity the registration made, whatever order and route it arrived by",
+      "holds the same list, refusals and identities on a node that boots afterwards and takes the list from its peers"
+    ]
+  },
+  {
+    "name": "underpaid-registration-applied",
+    "breaks": "a registration paying less than its fee is refused",
+    "edits": [
+      {
+        "file": "test-infra/flux-spec/dist/packages/spec-backend/src/decision/decisionRule.js",
+        "from": "    if (fee === 0n) return refused(entry, name, 'pricing-unavailable');\n    if (BigInt(record.valueSat) < fee) return refused(entry, name, 'underpaid', fee);",
+        "to": "    if (fee === 0n) return refused(entry, name, 'pricing-unavailable');"
+      }
+    ],
+    "red": [
+      "refuses an underpaid registration on every node and lists it on none",
+      "holds the same list, refusals and identities on a node killed and restarted",
+      "holds the same list, refusals and identities on a node that boots afterwards and takes the list from its peers"
+    ]
+  },
+  {
+    "name": "stranger-update-applied",
+    "breaks": "an update is applied only when signed by the app's owner",
+    "edits": [
+      {
+        "file": "test-infra/flux-spec/dist/packages/spec-backend/src/decision/decisionRule.js",
+        "from": "  if (!authorized.valid) return refused(entry, name, 'unauthorized');",
+        "to": ""
+      }
+    ],
+    "red": [
+      "refuses an update signed by a key that is not the owner's on every node, and the owner's row stands",
+      "holds the same list, refusals and identities on a node killed and restarted",
+      "holds the same list, refusals and identities on a node that boots afterwards and takes the list from its peers"
+    ]
+  },
+  {
+    "name": "full-pass-forgets-identity",
+    "breaks": "the registry's full pass lists each app under the identity its decision carries",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appDatabase/appRegistry.js",
+        "from": "    const { rows, carried } = await rowsFor(await appRecords.decisions().latestApplied());",
+        "to": "    const decided = await appRecords.decisions().latestApplied();\n    const { rows, carried } = await rowsFor(new Map([...decided].map(([n, d]) => [n, {\n      hash: d.hash, height: d.height, termStart: d.termStart, uuid: d.uuid, identity: null,\n    }])));"
+      }
+    ],
+    "red": [
+      "holds the same list, refusals and identities on a node killed and restarted",
+      "holds the same list, refusals and identities on a node that boots afterwards and takes the list from its peers"
+    ]
+  }
+]
