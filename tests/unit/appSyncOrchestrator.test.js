@@ -167,7 +167,7 @@ describe('AppSyncOrchestrator', () => {
     // reconcile decided, so a test does not sit on a capability nothing here raises.
     globalStateStub = resetGlobalState();
     capabilities.resetForTests();
-    capabilities.setForTests(['bootReconcileDecided', 'explorerSynced'], true);
+    capabilities.setForTests(['bootReconcileDecided', 'explorerSynced', 'localDbPrepared'], true);
     checkAndNotifyStub = sinon.stub().resolves();
     startBroadcastingStub = sinon.stub();
     resetHashSyncForUpgradeStub = sinon.stub().resolves(0);
@@ -993,6 +993,106 @@ describe('AppSyncOrchestrator', () => {
         'the peer was reported for a hole this node made',
       ).to.not.include('ephemeralSync:peerUnverified');
       expect(logStub.info.calledWithMatch(/answered while localDbPrepared was not up/)).to.equal(true);
+      await orchestrator.stop();
+    });
+  });
+
+  // Every answer this node asks a peer for is stored, so nothing is asked for while
+  // the database is down, and what was held back is asked for the moment it is up.
+  describe('nothing is asked for while the database is down', () => {
+    function completeEphemeral() {
+      for (let i = 0; i < 3; i += 1) {
+        ['apprunning', 'appinstalling', 'apperrors', 'apptemp'].forEach((type) => {
+          appSyncEvents.emit(EVENTS.EPHEMERAL_SYNC_COMPLETE, type, `10.0.0.${i + 1}:16127`);
+        });
+      }
+    }
+
+    async function toReady(peers) {
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const orchestrator = makeOrchestrator({ isEnterprise: () => true });
+      orchestrator.start(defaultBootContext);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
+      await clock.tickAsync(0);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      completeEphemeral();
+      await clock.tickAsync(0);
+      expect(orchestrator.state).to.equal(STATES.READY);
+      return orchestrator;
+    }
+
+    it('asks no peer for the state sync until the database is up, then asks', async () => {
+      capabilities.setForTests('localDbPrepared', false);
+      const peers = makeEligiblePeers(3);
+      getEligibleSyncPeersStub = sinon.stub().returns(peers);
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+      blockEmitter.emit('blocksProcessed', 2_555_000);
+      await clock.tickAsync(0);
+      peerEmitter.emit('peerThresholdReached', 12);
+      await clock.tickAsync(0);
+      expect(peers.some((p) => p.send.called), 'asked while the database was down').to.equal(false);
+      expect(syncMissingHashesStub.called, 'the sync never ran, so nothing was held back').to.equal(true);
+
+      capabilities.setForTests('localDbPrepared', true);
+      await clock.tickAsync(0);
+      expect(peers.every((p) => p.send.called), 'not asked once the database was up').to.equal(true);
+      await orchestrator.stop();
+    });
+
+    it('reconciles content and ingress records only once the database is up', async () => {
+      capabilities.setForTests('localDbPrepared', false);
+      getEligibleSyncPeersStub = sinon.stub().returns(makeEligiblePeers(3));
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+      peersUp();
+      blockEmitter.emit('blocksProcessed', 2_555_000);
+      await clock.tickAsync(0);
+      expect(syncMissingHashesStub.called, 'the sync never ran, so nothing was held back').to.equal(true);
+      sinon.assert.notCalled(reconcileStub);
+      sinon.assert.notCalled(ingressReconcileStub);
+
+      capabilities.setForTests('localDbPrepared', true);
+      await clock.tickAsync(0);
+      sinon.assert.called(reconcileStub);
+      sinon.assert.called(ingressReconcileStub);
+      await orchestrator.stop();
+    });
+
+    it('holds a re-established peer\'s pull until the database is up', async () => {
+      const peers = makeEligiblePeers(3);
+      const orchestrator = await toReady(peers);
+      await clock.tickAsync(300_000);
+      const before = peers[0].send.callCount;
+
+      capabilities.setForTests('localDbPrepared', false);
+      peerEmitter.emit('peerReestablished', { key: peers[0].key, lostAtMs: Date.now() - 60_000 });
+      await clock.tickAsync(0);
+      expect(peers[0].send.callCount, 'pulled while the database was down').to.equal(before);
+
+      capabilities.setForTests('localDbPrepared', true);
+      await clock.tickAsync(0);
+      expect(peers[0].send.callCount, 'the held pull was never sent').to.equal(before + 1);
+      await orchestrator.stop();
+    });
+
+    it('runs a refresh that came due while the database was down on the next block', async () => {
+      const orchestrator = await toReady(makeEligiblePeers(3));
+      reconcileStub.resetHistory();
+      ingressReconcileStub.resetHistory();
+
+      capabilities.setForTests('localDbPrepared', false);
+      blockEmitter.emit('blocksProcessed', 2_555_200);
+      await clock.tickAsync(0);
+      sinon.assert.notCalled(reconcileStub);
+      sinon.assert.notCalled(ingressReconcileStub);
+
+      capabilities.setForTests('localDbPrepared', true);
+      blockEmitter.emit('blocksProcessed', 2_555_201);
+      await clock.tickAsync(0);
+      sinon.assert.calledOnce(reconcileStub);
+      sinon.assert.calledOnce(ingressReconcileStub);
       await orchestrator.stop();
     });
   });

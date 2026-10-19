@@ -81,6 +81,9 @@ function freshSyncCompletions() {
 
 const FIRST_RESPONSE_MS = Math.max(1, Math.floor(SYNC_TIMEOUT_MS / 12));
 const STALL_MS = Math.max(1, Math.floor(SYNC_TIMEOUT_MS / 4));
+// What every answer this node asks peers for is stored in: nothing is asked for
+// while it is down.
+const STORE_CAPABILITY = 'localDbPrepared';
 const MIN_UPTIME_SECONDS = config.get('fluxapps.appSyncMinPeerUptime');
 // A failed hash-sync pass is retried after this long, doubling each time up to
 // the cap, and never given up: whatever made it fail has no event to announce
@@ -221,6 +224,7 @@ class AppSyncOrchestrator {
   #hashSyncRetryTimer = null;
   #offMongoUp = null;
   #offExplorerSynced = null;
+  #offStoreUp = null;
   #getScannedHeight = async () => 0;
 
   // The daemon's tip, read when a sync epoch starts: blocks the chain held
@@ -409,6 +413,7 @@ class AppSyncOrchestrator {
     this.#blockEmitter.on('blocksProcessed', this.#blockReceivedHandler);
     this.#offMongoUp = capabilities.onUp('mongoReachable', () => this.#retryHashSyncNow());
     this.#offExplorerSynced = capabilities.onUp('explorerSynced', () => this.#onExplorerSynced());
+    this.#offStoreUp = capabilities.onUp(STORE_CAPABILITY, () => this.#onStoreUp());
     if (capabilities.isUp('explorerSynced')) this.#onExplorerSynced();
 
 
@@ -589,6 +594,19 @@ class AppSyncOrchestrator {
     if (this.#endRequest(peerKey, 'unverified', 'sent a response this node could not verify')) {
       fluxEventBus.publish('ephemeralSync:peerUnverified', { peer: peerKey });
     }
+  }
+
+  /**
+   * The answers this node asks for can be stored again: whatever was held back
+   * while they could not is asked for now. A refresh that came due meanwhile runs
+   * on the next block.
+   */
+  #onStoreUp() {
+    this.#own(this.#advanceSync());
+    if (!this.#stateSyncComplete) this.#own(this.#runRequestPass());
+    this.#drainReconnectPulls().catch((error) => {
+      log.error(`AppSyncOrchestrator - reconnect pull drain failed: ${error.message}`);
+    });
   }
 
   /**
@@ -907,6 +925,7 @@ class AppSyncOrchestrator {
     // gossip unreliable, and a survey gathered from what it has left is not one to
     // complete a sync on.
     if (!this.#networkReady || !this.#peersAtFloor) return;
+    if (!capabilities.isUp(STORE_CAPABILITY)) return;
 
     // Counted once, before the key fetch, and it can only be too LOW by the time
     // that returns: nothing opens a request but this pass, and #runRequestPass
@@ -1042,6 +1061,7 @@ class AppSyncOrchestrator {
 
   async #drainReconnectPulls() {
     if (!this.#canSendMessages) return;
+    if (!capabilities.isUp(STORE_CAPABILITY)) return;
     for (const [key, lostAtMs] of [...this.#pendingReconnectPulls]) {
       // A peer the active round is asking at since=0 right now is covered
       // outright. One that has already answered or dropped is not: the gap
@@ -1324,6 +1344,7 @@ class AppSyncOrchestrator {
   async #runManifestSync() {
     if (this.#manifestSyncComplete) return;
     if (!this.#canSendMessages) return;
+    if (!capabilities.isUp(STORE_CAPABILITY)) return;
     fluxEventBus.publish('content:manifestSyncStarted', {});
     try {
       const peers = this.#getEligibleSyncPeers(MIN_UPTIME_SECONDS);
@@ -1369,6 +1390,7 @@ class AppSyncOrchestrator {
   async #runIngressSync() {
     if (this.#ingressSyncComplete) return;
     if (!this.#canSendMessages) return;
+    if (!capabilities.isUp(STORE_CAPABILITY)) return;
     try {
       const peers = this.#getEligibleSyncPeers(MIN_UPTIME_SECONDS);
       const result = await ingressAttestationSyncService.reconcile(peers, {
@@ -1532,6 +1554,7 @@ class AppSyncOrchestrator {
     if (this.#state !== STATES.READY) return;
     if (!this.#canSendMessages) return;
     if (this.#manifestRefreshInProgress) return;
+    if (!capabilities.isUp(STORE_CAPABILITY)) return;
     if (blockHeight < this.#nextManifestRefreshHeight) return;
     this.#nextManifestRefreshHeight = blockHeight + MANIFEST_REFRESH_BLOCKS;
 
@@ -1561,6 +1584,7 @@ class AppSyncOrchestrator {
     if (this.#state !== STATES.READY) return;
     if (!this.#canSendMessages) return;
     if (this.#ingressRefreshInProgress) return;
+    if (!capabilities.isUp(STORE_CAPABILITY)) return;
     if (blockHeight < this.#nextIngressRefreshHeight) return;
     this.#nextIngressRefreshHeight = blockHeight + INGRESS_REFRESH_BLOCKS;
 
@@ -1737,6 +1761,8 @@ class AppSyncOrchestrator {
       this.#offMongoUp = null;
       if (this.#offExplorerSynced) this.#offExplorerSynced();
       this.#offExplorerSynced = null;
+      if (this.#offStoreUp) this.#offStoreUp();
+      this.#offStoreUp = null;
     }
     if (this.#peerThresholdHandler) {
       this.#offPeerEvent('peerThresholdReached', this.#peerThresholdHandler);
