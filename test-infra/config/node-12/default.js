@@ -21,7 +21,8 @@ module.exports = {
             "nodeLocations": "nodelocations",
             "quorumGrants": "quorumgrants",
             "fileOperations": "fileoperations",
-            "foundingCommittees": "foundingcommittees"
+            "foundingCommittees": "foundingcommittees",
+            "capabilityTransitions": "capabilitytransitions"
         }
     },
     "daemon": {
