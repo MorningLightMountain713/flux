@@ -754,12 +754,15 @@ async function listLiveV7Secrets() {
   return results;
 }
 
-async function listHistoricalV7Secrets(before = null) {
+/**
+ * Every component secret a confirmed v7 message carries, with the chain
+ * position of the message that carries it.
+ * @returns {Promise<Array<{height: number, txIndex: ?number, owner: string, componentName: string, secrets: string}>>}
+ */
+async function listV7SecretUses() {
   await getSpec();
   const { deserializeSpec } = await getSpecBackend();
-  // Mined before a chain position: what the decider reads, so that a message
-  // decided late on one node and early on another meets the same uses.
-  const records = await appRecords.messages().confirmedOfSpecVersion(7, { before });
+  const records = await appRecords.messages().confirmedOfSpecVersion(7);
   const results = [];
   for (const record of records) {
     const specBlob = record.contents.appSpecifications;
@@ -768,14 +771,36 @@ async function listHistoricalV7Secrets(before = null) {
     try {
       spec = deserializeSpec(specBlob, { chain: nodeChain(), height: record.payment?.height });
     } catch (err) {
-      log.warn(`listHistoricalV7Secrets: ${err.message} (name=${specBlob.name})`);
+      log.warn(`listV7SecretUses: ${err.message} (name=${specBlob.name})`);
       continue;
     }
     for (const { componentName, secrets } of spec.getComponentSecrets()) {
-      results.push({ owner: spec.owner, componentName, secrets });
+      results.push({
+        height: record.payment.height, txIndex: record.payment.txIndex ?? null, owner: spec.owner, componentName, secrets,
+      });
     }
   }
   return results;
+}
+
+/**
+ * The uses mined before a chain position: below its height, or at it and
+ * earlier in its block when the position has a transaction index. What the
+ * decider reads, so that a message decided late on one node and early on
+ * another meets the same uses.
+ * @param {Array<{height: number, txIndex: ?number, owner: string, componentName: string, secrets: string}>} uses
+ * @param {{height: number, txIndex?: number}} before
+ * @returns {Array<{owner: string, componentName: string, secrets: string}>}
+ */
+function secretUsesBefore(uses, before) {
+  return uses
+    .filter((use) => use.height < before.height
+      || (use.height === before.height && Number.isInteger(use.txIndex) && use.txIndex < before.txIndex))
+    .map(({ owner, componentName, secrets }) => ({ owner, componentName, secrets }));
+}
+
+async function listHistoricalV7Secrets() {
+  return (await listV7SecretUses()).map(({ owner, componentName, secrets }) => ({ owner, componentName, secrets }));
 }
 
 module.exports = {
@@ -810,5 +835,6 @@ module.exports = {
   // secrets
   listLiveV7Secrets,
   listHistoricalV7Secrets,
-  listHistoricalV7SecretsBefore: (position) => listHistoricalV7Secrets(position),
+  listV7SecretUses,
+  secretUsesBefore,
 };
