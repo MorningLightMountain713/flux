@@ -1,0 +1,60 @@
+[
+  {
+    "name": "history-not-recorded",
+    "breaks": "every capability transition is kept across restarts",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/serviceManager.js",
+        "from": "        capabilityHistory.start();\n",
+        "to": ""
+      }
+    ],
+    "red": [
+      "holds the previous process in its history once restarted, beside this one"
+    ]
+  },
+  {
+    "name": "chain-stops-at-the-last-capability",
+    "breaks": "the critical chain follows each link back through the prerequisite that came up last",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/utils/capabilityReadout.js",
+        "from": "    current = prerequisite ? byName.get(prerequisite) : null;",
+        "to": "    current = null;"
+      }
+    ],
+    "red": [
+      "follows a critical chain of declared prerequisites to the capability that came up last"
+    ]
+  },
+  {
+    "name": "blame-unordered",
+    "breaks": "the blame lists the slowest capability first",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/utils/capabilityReadout.js",
+        "from": "  return rows.sort((a, b) => order(b) - order(a) || a.name.localeCompare(b.name));",
+        "to": "  return rows;"
+      }
+    ],
+    "red": [
+      "blames no capability for still waiting, slowest first"
+    ]
+  },
+  {
+    "name": "no-first-rise",
+    "breaks": "each capability carries when it first came up",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/utils/capabilities.js",
+        "from": "      firstUp: entry.firstUp ? { ...entry.firstUp } : null,",
+        "to": "      firstUp: null,"
+      }
+    ],
+    "red": [
+      "reports every capability present on the node up, each with its first rise",
+      "blames no capability for still waiting, slowest first",
+      "follows a critical chain of declared prerequisites to the capability that came up last"
+    ]
+  }
+]
