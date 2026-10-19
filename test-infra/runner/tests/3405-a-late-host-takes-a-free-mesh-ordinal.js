@@ -137,6 +137,13 @@ describe('a late host takes a free mesh ordinal', function () {
     await waitForAppInstalled(late, name, 480000);
     const event = await founded(late, 0, 300000);
 
+    // Where each node pins the app: every ordinal register is addressed by it.
+    for (const index of [0, LATE]) {
+      // eslint-disable-next-line no-await-in-loop
+      const record = await dbClient(index + 1).foundingRecord(identity);
+      console.log(`# founding on node ${index}: components ${JSON.stringify(record?.components ?? null)}; anchors [${Object.keys(record?.anchors ?? {}).join(', ')}]; specHeight ${record?.specHeight}; mappedHeight ${record?.mappedHeight}`);
+    }
+
     expect(holders.get(event.data.ordinal), `ordinal ${event.data.ordinal} already held`).to.equal(undefined);
     expect(event.data.ordinal, 'the lowest free ordinal').to.equal(3);
   });
