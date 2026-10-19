@@ -23,7 +23,8 @@ module.exports = {
             "ownAddress": "ownaddress",
             "quorumGrants": "quorumgrants",
             "fileOperations": "fileoperations",
-            "foundingCommittees": "foundingcommittees"
+            "foundingCommittees": "foundingcommittees",
+            "capabilityTransitions": "capabilitytransitions"
         }
     },
     "daemon": {
