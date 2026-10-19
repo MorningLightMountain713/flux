@@ -14,6 +14,7 @@ const foundingCommittee = require('../appMesh/foundingCommittee');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const { selectCommittee } = require('../utils/committeeSelector');
 const fluxEventBus = require('../utils/fluxEventBus');
+const { v9ActivationHeight } = require('../utils/nodeChain');
 const signedEnvelope = require('./signedEnvelope');
 const rosterOverlay = require('./rosterOverlay');
 const downCertificates = require('./downCertificates');
@@ -311,8 +312,7 @@ function resetActivationForTests(options = {}) {
 
 function activationHeight() {
   if (activationOverrides.activateAt !== null) return activationOverrides.activateAt;
-  const height = config.get('fluxapps.quorumGrantActivationHeight');
-  return Number.isInteger(height) && height > 0 ? height : null;
+  return v9ActivationHeight();
 }
 
 // The window before the activation height in which a fresh key is served

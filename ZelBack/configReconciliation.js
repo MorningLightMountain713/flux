@@ -216,12 +216,8 @@ function missingKeys(effective, dir = SRC) {
  * different times. Each relation carries the arithmetic that decides it, so a
  * refusal names the numbers rather than the rule.
  *
- * `armed` is whether the relation governs this node as configured. An unarmed
- * relation that fails is reported and does not stop the boot, because the plane
- * it belongs to reaches nothing until a height schedules it.
- *
  * @param {object} effective the effective config
- * @returns {Array<{name: string, ok: boolean, armed: boolean, detail: string}>}
+ * @returns {Array<{name: string, ok: boolean, detail: string}>}
  */
 function relations(effective) {
   const get = (key) => resolve(effective, `fluxapps.${key}`);
@@ -234,16 +230,11 @@ function relations(effective) {
   // taught it, or one ask timeout later when the refusal taught nothing.
   const retryMs = askTimeoutMs;
   const needMs = drainMs + retryMs + 3 * askTimeoutMs;
-  // Below the activation height the plane governs nothing, so neither relation
-  // can reach a container until a height is set. A height that is not a number
-  // schedules nothing, which is what null says and what an absent key means.
-  const scheduled = Number.isFinite(get('quorumGrantActivationHeight'));
 
   return [
     {
       name: 'the activation window outlasts a referee restart met inside it',
       ok: windowMs > needMs,
-      armed: scheduled,
       detail: `quorumGrantPreWindowBlocks ${preWindowBlocks} x ${BLOCK_TIME_MS} = ${windowMs} ms`
         + ' must exceed quorumGrantDrainMs + retry + 3 x quorumGrantAskTimeoutMs'
         + ` = ${drainMs} + ${retryMs} + 3 x ${askTimeoutMs} = ${needMs} ms`,
@@ -251,7 +242,6 @@ function relations(effective) {
     {
       name: 'a drain ends inside the lease it drains',
       ok: drainMs <= maxTtlMs,
-      armed: scheduled,
       detail: `quorumGrantDrainMs ${drainMs} must not exceed quorumGrantMaxTtlMs ${maxTtlMs}`,
     },
   ];
@@ -261,7 +251,7 @@ function relations(effective) {
  * The relations the shipped values do not satisfy.
  *
  * @param {object} effective the effective config
- * @returns {Array<{name: string, ok: boolean, armed: boolean, detail: string}>}
+ * @returns {Array<{name: string, ok: boolean, detail: string}>}
  */
 function brokenRelations(effective) {
   return relations(effective).filter((r) => !r.ok);
@@ -307,17 +297,14 @@ function reconcile(io = {}) {
   // Relations are checked second because they read the values a missing key
   // does not have.
   const broken = brokenRelations(effective);
-  const arming = broken.filter((r) => r.armed);
   if (broken.length) {
-    write(arming.length
-      ? 'FluxOS will not start: settings config ships contradict each other.'
-      : 'Settings config ships contradict each other, on a plane no height has scheduled:');
+    write('FluxOS will not start: settings config ships contradict each other.');
     broken.forEach((r) => {
-      write(`  ${r.name}${r.armed ? '' : '   (nothing is scheduled to reach this yet)'}`);
+      write(`  ${r.name}`);
       write(`    ${r.detail}`);
     });
+    exit(1);
   }
-  if (arming.length) exit(1);
   return missing;
 }
 

@@ -4,7 +4,10 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const fs = require('fs');
 const path = require('path');
-const { nodeChain } = require('../../ZelBack/src/services/utils/nodeChain');
+const proxyquire = require('proxyquire');
+const config = require('config');
+const { asConfig } = require('./fixtures/config');
+const { nodeChain, v9ActivationHeight, specActivationHeights } = require('../../ZelBack/src/services/utils/nodeChain');
 const specLibrary = require('../../ZelBack/src/services/utils/specLibrary');
 const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const daemonServiceBlockchainRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceBlockchainRpcs');
@@ -16,6 +19,33 @@ describe('the chain this node runs on', () => {
 
   it('is the library\'s chain named by daemon.chain', () => {
     expect(nodeChain()).to.equal(specLibrary.loaded().Chain.MAIN);
+  });
+
+  describe('the height v9\'s rules start at', () => {
+    const withDaemon = (daemon) => proxyquire('../../ZelBack/src/services/utils/nodeChain', {
+      config: asConfig({ ...config, daemon: { ...config.daemon, ...daemon } }),
+    });
+
+    it('is the library\'s on mainnet, and the version table\'s v9 entry', () => {
+      const { V9_ACTIVATION, Chain } = specLibrary.loaded();
+      expect(v9ActivationHeight()).to.equal(V9_ACTIVATION.heightOn(Chain.MAIN));
+      expect(specActivationHeights()).to.deep.equal({
+        ...config.get('fluxapps.appSpecsEnforcementHeights'), 9: V9_ACTIVATION.heightOn(Chain.MAIN),
+      });
+    });
+
+    it('is the one the harness chain was started with', () => {
+      const harness = withDaemon({ chain: 'harness', harnessV9ActivationHeight: 2_000_000 });
+      expect(harness.nodeChain().name).to.equal('harness');
+      expect(harness.v9ActivationHeight()).to.equal(2_000_000);
+      expect(harness.specActivationHeights()[9]).to.equal(2_000_000);
+      expect(harness.nodeChain()).to.equal(harness.nodeChain());
+    });
+
+    it('cannot be set on mainnet', () => {
+      const main = withDaemon({ chain: 'main', harnessV9ActivationHeight: 2_000_000 });
+      expect(() => main.nodeChain()).to.throw(/follows its own rule heights/);
+    });
   });
 
   describe('boot refuses a daemon on another chain', () => {

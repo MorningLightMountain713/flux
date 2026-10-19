@@ -125,8 +125,12 @@ describe('specLibs — how a spec validation failure reaches the caller', () => 
   // gate, above it the call gets far enough to fail on the schema instead. The
   // difference between those two errors is the assertion.
   describe('version activation height', () => {
-    // v9 activates at 2,791,000 in the test config.
-    const V9_ACTIVATION = 2_791_000;
+    // the library's v9 height on the unit config's chain, mainnet
+    let V9_ACTIVATION;
+    before(async () => {
+      const library = await getSpec();
+      V9_ACTIVATION = library.V9_ACTIVATION.heightOn(library.Chain.MAIN);
+    });
     const incompleteV9 = { version: 9, name: 'x' };
 
     for (const [label, validate] of [

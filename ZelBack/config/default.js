@@ -160,6 +160,9 @@ module.exports = {
     // The flux-spec library reads every height on this chain, and boot refuses
     // a daemon that reports another.
     chain: 'main',
+    // The height v9's rules start at, on the harness chain only; null reads
+    // the library's height. The library refuses one on any other chain.
+    harnessV9ActivationHeight: null,
     host: '127.0.0.1',
     chainValidHeight: 1_062_000,
     port: 16_125,
@@ -512,7 +515,7 @@ module.exports = {
       6: 1_300_000, // v6, expiration, app price, t3
       7: isDevelopment ? 1_390_000 : 1_420_000, // v7, nodes selection, secrets, private images (nodes selection allows secrets, private image - scope), staticip
       8: isDevelopment ? 1_921_500 : 1_932_380, // v8, brings enterprise apps using arcaneOS features to run these apps. // Around June 23th
-      9: isDevelopment ? 2_630_000 : 2_791_000, // v9, Bedrock spec redesign: class hierarchy, contentHash signing, named ports, placement, time-based TTL
+      // v9's height is the flux-spec library's (V9_ACTIVATION), on this node's chain.
     },
     // Flux storage is the only host a storage link may address. The node
     // dereferences F_S_ENV and F_S_CMD with its own signed identity before it
@@ -1019,15 +1022,13 @@ module.exports = {
 
     // ---- knobs whose ABSENCE used to be the setting ----
     //
-    // These four were read with no value shipped, and "not set" was how each
-    // said something: the grant plane is not scheduled, mastership is off,
-    // nobody is on the restart list, the verify pool takes its own default.
+    // These three were read with no value shipped, and "not set" was how each
+    // said something: mastership is off, nobody is on the restart list, the
+    // verify pool takes its own default.
     // Absence is a poor way to say anything - it cannot be read, cannot be
     // grepped, and is indistinguishable from a key that was dropped by mistake.
     // Each now ships the value that says the same thing out loud, and every
     // guard that read them treats these identically to undefined.
-    quorumGrantActivationHeight: null, // null = not scheduled; the plane stays inert
-    nameReservedActivationHeight: null, // null = not scheduled; the 30-day name hold judges nothing
     quorumGrantMastership: false, // the mastership gate is off until this is true
     restartAlwaysOwners: [], // FluxIDs whose apps always restart; nobody by default
     verifyPoolSize: null, // null = cpus-1, which is what production runs

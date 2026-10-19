@@ -318,7 +318,6 @@ const harnessOverrides = {
       6: 1_300_000, // v6, expiration, app price, t3
       7: 1_420_000, // v7, nodes selection, secrets, private images (nodes selection allows secrets, private image - scope), staticip
       8: 1_932_380, // v8, brings enterprise apps using arcaneOS features to run these apps. // Around June 23th
-      9: 2_791_000, // v9, Bedrock spec redesign: class hierarchy, contentHash signing, named ports, placement, time-based TTL
     },
     appPaymentAddresses: [
       { address: 't1LUs6quf7TB2zVZmexqPQdnqmrFMGZGjV6', activeFromHeight: 0 },

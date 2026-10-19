@@ -118,8 +118,10 @@ describe('the early-update credit', () => {
 
     // Answers only what pricing asks. 30GB at 100 FLUX/GB is 3000 a month,
     // quoted a third at a time, so 1000.
+    // On the harness chain with v9's rules in force from genesis, so the update
+    // is priced against its predecessor at mainnet's block times.
     const specOf = (expire) => ({
-      get chain() { return spec.Chain.MAIN; },
+      get chain() { return spec.Chain.HARNESS.withActivations([[spec.V9_ACTIVATION, 0]]); },
       expire,
       version: 8,
       instances: 1,

@@ -890,7 +890,7 @@ describe('appSpecHelpers tests', () => {
     });
 
     it('v1-v8: an update the free rule allows is quoted at what the chain charges when that is above the minimum', async () => {
-      const daemonHeight = 100_000;
+      const daemonHeight = flux.V9_ACTIVATION.heightOn(flux.Chain.MAIN);
       const compose = [{ name: 'main', cpu: 1, ram: 2000, hdd: 50 }];
       const legacyApp = await legacySpec({ name: 'legacyapp', compose });
       const prev = await legacySpec({ name: 'legacyapp', compose });
