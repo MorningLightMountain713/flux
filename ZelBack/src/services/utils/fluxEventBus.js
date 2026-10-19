@@ -47,6 +47,10 @@ const Checkpoint = Object.freeze({
   // A state sync has every answer it needs and the node has not yet become
   // authoritative from them, so it still refuses to answer a peer's sync.
   APPSYNC_BEFORE_AUTHORITATIVE: 'appSync:beforeAuthoritative',
+  // A rewind has built its histories and holds the chain-state lock, with
+  // chainStateConsistent still down: nothing is scanned, decided or served from
+  // the list until it is released.
+  CHAINSTATE_BEFORE_CONSISTENT: 'chainState:beforeConsistent',
 });
 const CHECKPOINT_NAMES = new Set(Object.values(Checkpoint));
 // Holds a key for every key of its checkpoint.

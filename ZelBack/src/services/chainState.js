@@ -5,6 +5,7 @@ const config = require('config');
 const log = require('../lib/log');
 const dbHelper = require('./dbHelper');
 const capabilities = require('./utils/capabilities');
+const fluxEventBus = require('./utils/fluxEventBus');
 const entitlementsState = require('./entitlementsState');
 const priceOracleState = require('./pricing/priceOracleState');
 const unclaimedPayments = require('./appDecisions/unclaimedPayments');
@@ -217,6 +218,7 @@ function rewind(reason, target) {
     await deleteAbove(height);
     await Promise.all(rewindListeners.map((fn) => fn(height)));
     await buildHistories();
+    await fluxEventBus.checkpoint(fluxEventBus.Checkpoint.CHAINSTATE_BEFORE_CONSISTENT);
 
     handle.raise(`histories built, scan cursor at ${height}`);
     return height;
