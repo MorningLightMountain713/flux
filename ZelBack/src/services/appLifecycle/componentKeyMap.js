@@ -62,10 +62,11 @@ async function namingForUpdate(install, registered) {
  * recorded as applied yet: the registry stores a version before its decision
  * is written, and a version is the latest of its app when its keys are read.
  * `meshIntroHeights` names, for each key the version carries, the height of
- * the first of those versions with mesh on to carry it — where a node that
- * watched each version arrive pins the component's founding — or none while
- * no such version does. The same on every node however late it learned the
- * app.
+ * the first version to carry it in the run of versions with mesh on that this
+ * one ends — where a node that watched each version arrive pins the
+ * component's founding, a version with mesh off having deleted the record —
+ * or none while this version has mesh off. The same on every node however
+ * late it learned the app.
  * @param {object} registered - RegisteredSpec of the version
  * @returns {Promise<{componentKeys: Map<string, string>, formerNames: Map<string, string[]>,
  *   meshIntroHeights: Map<string, number>}>}
@@ -99,6 +100,8 @@ async function namingForVersion(registered) {
     componentKeys = keys;
     if (spec.network?.mesh === true) {
       for (const key of keys.values()) if (!meshFirstSeen.has(key)) meshFirstSeen.set(key, height);
+    } else {
+      meshFirstSeen.clear();
     }
   }
   const meshIntroHeights = new Map([...componentKeys.values()]

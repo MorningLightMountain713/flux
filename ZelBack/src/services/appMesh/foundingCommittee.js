@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const config = require('config');
 const dbHelper = require('../dbHelper');
+const appRecords = require('../appDatabase/appRecords');
 const networkStateService = require('../networkStateService');
 const daemonStatus = require('../daemonService/daemonStatus');
 const { selectCommittee } = require('../utils/committeeSelector');
@@ -10,10 +11,12 @@ const { globalAppStateEvents } = require('../utils/appConstants');
 const fluxEventBus = require('../utils/fluxEventBus');
 const log = require('../../lib/log');
 
-// One record per app, keyed by the app's identity, so a name registered again
-// after expiry starts with no anchors, pins or generation of the app before it.
-// The registry owner deletes the record when the app leaves the list, and winds
-// it back when the app goes back to an earlier spec.
+// One record per mesh app, keyed by the app's identity, so a name registered
+// again after expiry starts with no anchors, pins or generation of the app
+// before it. A record exists while the app's spec has mesh on: it starts at the
+// first such spec, and the registry owner deletes it when a spec turns mesh off
+// or the app leaves the list, and winds it back when the app goes back to an
+// earlier spec. Mesh turned on again starts a new record, a new world.
 //
 // The founding committees, materialized: the photo, not the album. A founding
 // committee must be ONE agreed set however late the founding happens, and the
@@ -138,15 +141,22 @@ function photoAt(identity, height) {
 /**
  * Record one spec anchor from public registry metadata — name, height,
  * version — and photograph the committee there. Runs on EVERY node for
- * every v9 spec write, encrypted or not: nothing here needs the envelope
- * opened. Anchors apply in chain order; a replay or an out-of-order
- * catch-up write changes nothing. No-throw — a failed materialization
- * never fails a spec store.
+ * every v9 spec write, encrypted or not: whether the spec has mesh on is in
+ * the clear on a sealed spec too. A spec with mesh off deletes the record.
+ * Anchors apply in chain order; a replay or an out-of-order catch-up write
+ * changes nothing. No-throw — a failed materialization never fails a spec
+ * store.
+ * @param {object} specDoc - the registry record, serialized
+ * @param {{mesh: boolean}} options - whether the spec has mesh on
  */
-async function recordAnchor(specDoc) {
+async function recordAnchor(specDoc, { mesh }) {
   try {
     if (!specDoc?.identity || !Number.isFinite(specDoc.height)) return;
     if ((specDoc.version ?? 0) < 9) return;
+    if (!mesh) {
+      await forget(specDoc.identity);
+      return;
+    }
     await serialized(specDoc.identity, () => applyAnchor(specDoc.identity, specDoc.height));
   } catch (error) {
     log.warn(`foundingCommittee - anchor for ${specDoc?.identity} failed: ${error.message}`);
@@ -311,6 +321,11 @@ async function materializeGeneration(record) {
   }
 }
 
+async function listedWithMesh(identity) {
+  const row = await appRecords.registry().byIdentity(identity);
+  return Boolean(row) && row.featureSummary().flags.includes('mesh');
+}
+
 async function applyGenerationRecord(record) {
   const database = db();
   if (!database) return false;
@@ -319,6 +334,8 @@ async function applyGenerationRecord(record) {
   if (!photo) return false;
 
   const existing = await dbHelper.findOneInDatabase(database, collection(), { _id: record.identity });
+  // A node with no record mints one only for an app its list holds with mesh on.
+  if (!existing && !(await listedWithMesh(record.identity))) return false;
   if (existing && (existing.generation ?? 0) >= record.generation) {
     // a lower or equal generation never overwrites; the call succeeds
     // because this node already holds at least the generation asked about

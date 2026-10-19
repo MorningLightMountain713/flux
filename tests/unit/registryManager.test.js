@@ -2008,6 +2008,7 @@ describe('registryManager tests', () => {
       const view = await sealed.decrypt(await sealed.createProvider());
       const resolve = sinon.stub(specCutover, 'resolveRegisteredSpec').resolves(view);
       const applyComponentView = sinon.stub(foundingCommittee, 'applyComponentView').resolves();
+      const recordAnchor = sinon.stub(foundingCommittee, 'recordAnchor').resolves();
       const webKey = `c${'w'.repeat(52)}`;
       const meshIntroHeights = new Map([[webKey, 2_400_000]]);
       const namingForVersion = sinon.stub(componentKeyMap, 'namingForVersion').resolves({ componentKeys: new Map([['web', webKey]]), formerNames: new Map(), meshIntroHeights });
@@ -2033,6 +2034,7 @@ describe('registryManager tests', () => {
         identity: 'ab12cd34ef56', height: 2_500_000, componentKeys: [webKey], introHeights: meshIntroHeights,
       });
       expect(stored.serialize(), 'the stored record itself carries none').to.not.have.property('components');
+      sinon.assert.calledOnceWithExactly(recordAnchor, stored.serialize(), { mesh: true });
     });
 
     it('maps nothing, and walks no history, for an app off the mesh', async () => {
@@ -2041,11 +2043,13 @@ describe('registryManager tests', () => {
       sinon.stub(specCutover, 'resolveRegisteredSpec').resolves(spec);
       const applyComponentView = sinon.stub(foundingCommittee, 'applyComponentView').resolves();
       const namingForVersion = sinon.stub(componentKeyMap, 'namingForVersion').resolves({ componentKeys: new Map(), formerNames: new Map() });
+      const recordAnchor = sinon.stub(foundingCommittee, 'recordAnchor').resolves();
 
       await registryManager.storeGlobalSpec(stored);
 
       sinon.assert.notCalled(namingForVersion);
       sinon.assert.notCalled(applyComponentView);
+      sinon.assert.calledOnceWithExactly(recordAnchor, stored.serialize(), { mesh: false });
     });
   });
 });
