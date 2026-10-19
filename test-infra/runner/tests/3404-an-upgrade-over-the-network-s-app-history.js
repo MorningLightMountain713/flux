@@ -30,6 +30,7 @@ import {
   LEGACY_INDEXES, legacyPaymentRows, legacyPermanentMessages, loadAppCorpus, seedPaymentPositions,
 } from '../framework/app-corpus.js';
 import { dbClient } from '../framework/db-client.js';
+import { stopTicker } from '../framework/daemon-control.js';
 import { waitFor, waitForDaemonReady } from '../framework/wait.js';
 
 const require = createRequire(import.meta.url);
@@ -90,6 +91,9 @@ describe('an upgrade over the network\'s app history', function () {
       initialHeight: corpus.tip,
     });
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1 });
+    // The chain stands still from here, so the release and the upgraded node
+    // judge every term at the same height.
+    await stopTicker();
     await dbClient(SUBJECT + 1).seedLegacyAppStore({
       payments: legacyPaymentRows(corpus),
       messages: legacyPermanentMessages(corpus),
