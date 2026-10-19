@@ -67,6 +67,31 @@ describe('componentKeyMap', () => {
       expect(keys.get('db')).to.not.equal(keys.get('frontend'));
     });
 
+    it('names where each component was introduced: the first version with mesh on to carry its key', async () => {
+      const mesh = (components) => domain.v9Spec({ components, network: { mesh: true } });
+      const version = async (hash, height, spec) => ({ message: { hash, appSpecifications: spec.serialize() }, decision: { hash, uuid: UUID, height } });
+      sinon.stub(appHistory, 'appliedMessages').resolves([
+        await version(H1, 100, await specWith({ web: component('web') })),
+        await version(H2, 200, await mesh({ web: component('web') })),
+      ]);
+      const event = await domain.confirmedEvent({ spec: await mesh({ web: component('web'), db: component('db') }), hash: H3, type: 'fluxappupdate' });
+      const latest = await domain.registeredSpec({
+        event, identity: IDENTITY, uuid: UUID, height: 300,
+      });
+
+      const { componentKeys, meshIntroHeights } = await componentKeyMap.namingForVersion(latest);
+
+      expect(meshIntroHeights.get(componentKeys.get('web')), 'registered off the mesh, joined it at 200').to.equal(200);
+      expect(meshIntroHeights.get(componentKeys.get('db')), 'added at 300').to.equal(300);
+      expect(meshIntroHeights.size).to.equal(2);
+    });
+
+    it('names no introduction while no version with mesh on carries a key', async () => {
+      sinon.stub(appHistory, 'appliedMessages').resolves([await applied(H1, { web: component('web') })]);
+      const { meshIntroHeights } = await componentKeyMap.namingForVersion(await registered(H2, { web: component('web') }));
+      expect(meshIntroHeights.size).to.equal(0);
+    });
+
     it('reads no version applied after it', async () => {
       sinon.stub(appHistory, 'appliedMessages').resolves([
         await applied(H1, { web: component('web') }),

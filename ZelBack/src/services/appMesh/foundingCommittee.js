@@ -234,19 +234,24 @@ async function retract(identity, height) {
  * to at least its own height, and the max keeps anchors identical whatever
  * order the roll and the specs arrive in.
  *
- * @param {{identity: string, height: number, componentKeys: string[]}} view - the
- *   keys of the components the mesh app's spec at this height declares
+ * A component new to the mapping pins at the first version with mesh on that
+ * carried it, from the app's applied history (`introHeights`), so a node that
+ * learned the app late pins where a node that watched it did.
+ *
+ * @param {{identity: string, height: number, componentKeys: string[],
+ *   introHeights: Map<string, number>}} view - the keys of the components the
+ *   mesh app's spec at this height declares, and where each was introduced
  */
 async function applyComponentView(view) {
   try {
     if (!view?.identity || !Number.isFinite(view.height)) return;
-    await serialized(view.identity, () => applyMapping(view.identity, view.height, view.componentKeys));
+    await serialized(view.identity, () => applyMapping(view.identity, view.height, view.componentKeys, view.introHeights));
   } catch (error) {
     log.warn(`foundingCommittee - component view for ${view?.identity} failed: ${error.message}`);
   }
 }
 
-async function applyMapping(identity, height, componentKeys) {
+async function applyMapping(identity, height, componentKeys, introHeights = new Map()) {
   const database = db();
   if (!database) return;
 
@@ -255,9 +260,18 @@ async function applyMapping(identity, height, componentKeys) {
 
   const rollFloor = (existing?.generation ?? 0) >= 1 ? existing.generationHeight : 0;
   const components = {};
+  const anchors = { ...(existing?.anchors ?? {}) };
   componentKeys.forEach((key) => {
     const kept = existing?.components?.[key];
-    components[key] = kept ?? { anchorHeight: Math.max(height, rollFloor) };
+    const intro = introHeights.get(key) ?? height;
+    components[key] = kept ?? { anchorHeight: Math.max(intro, rollFloor) };
+    // A component pinned below this spec is photographed there when this
+    // node's window reaches it; otherwise its basis is discovered from peers.
+    const pinned = String(components[key].anchorHeight);
+    if (!anchors[pinned]) {
+      const photo = photoAt(identity, components[key].anchorHeight);
+      if (photo) anchors[pinned] = photo;
+    }
   });
 
   await dbHelper.findOneAndUpdateInDatabase(
@@ -265,7 +279,7 @@ async function applyMapping(identity, height, componentKeys) {
     collection(),
     { _id: identity },
     {
-      $set: { mappedHeight: height, components },
+      $set: { mappedHeight: height, components, anchors },
       $setOnInsert: { generation: 0 },
     },
     { upsert: true, ...DURABLE },

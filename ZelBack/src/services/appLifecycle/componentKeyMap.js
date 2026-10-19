@@ -61,8 +61,14 @@ async function namingForUpdate(install, registered) {
  * from each to the next, and then the version itself. The version need not be
  * recorded as applied yet: the registry stores a version before its decision
  * is written, and a version is the latest of its app when its keys are read.
+ * `meshIntroHeights` names, for each key the version carries, the height of
+ * the first of those versions with mesh on to carry it — where a node that
+ * watched each version arrive pins the component's founding — or none while
+ * no such version does. The same on every node however late it learned the
+ * app.
  * @param {object} registered - RegisteredSpec of the version
- * @returns {Promise<{componentKeys: Map<string, string>, formerNames: Map<string, string[]>}>}
+ * @returns {Promise<{componentKeys: Map<string, string>, formerNames: Map<string, string[]>,
+ *   meshIntroHeights: Map<string, number>}>}
  */
 async function namingForVersion(registered) {
   const { componentKeysFor, formerNamesFor } = await getSpec();
@@ -79,19 +85,26 @@ async function namingForVersion(registered) {
   // eslint-disable-next-line no-restricted-syntax
   for (const { message, decision } of before) {
     // eslint-disable-next-line no-await-in-loop
-    versions.push([await opened(await specCutover.resolveSpec(message.appSpecifications), registered.name), decision.hash]);
+    versions.push([await opened(await specCutover.resolveSpec(message.appSpecifications), registered.name), decision.hash, decision.height]);
   }
-  versions.push([await opened(await specCutover.resolveRegisteredSpec(registered), registered.name), registered.hash]);
+  versions.push([await opened(await specCutover.resolveRegisteredSpec(registered), registered.name), registered.hash, registered.height]);
 
   let componentKeys = null;
   let formerNames = null;
+  const meshFirstSeen = new Map();
   // eslint-disable-next-line no-restricted-syntax
-  for (const [spec, messageHash] of versions) {
+  for (const [spec, messageHash, height] of versions) {
     const keys = componentKeysFor(spec, { previous: componentKeys, appIdentity, messageHash });
     formerNames = formerNamesFor(keys, { previous: componentKeys, previousFormerNames: formerNames });
     componentKeys = keys;
+    if (spec.network?.mesh === true) {
+      for (const key of keys.values()) if (!meshFirstSeen.has(key)) meshFirstSeen.set(key, height);
+    }
   }
-  return { componentKeys, formerNames };
+  const meshIntroHeights = new Map([...componentKeys.values()]
+    .filter((key) => meshFirstSeen.has(key))
+    .map((key) => [key, meshFirstSeen.get(key)]));
+  return { componentKeys, formerNames, meshIntroHeights };
 }
 
 /**

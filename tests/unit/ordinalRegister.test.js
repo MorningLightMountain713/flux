@@ -9,6 +9,7 @@ const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonSta
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCommittee');
+const foundingService = require('../../ZelBack/src/services/appMesh/foundingService');
 const grantClient = require('../../ZelBack/src/services/quorumGrant/grantClient');
 const masterleasePublisher = require('../../ZelBack/src/services/quorumGrant/masterleasePublisher');
 const ordinalRegisterSeam = require('../../ZelBack/src/services/appMesh/ordinalRegisterSeam');
@@ -58,6 +59,7 @@ describe('quorumGrant ordinalRegister', () => {
     sinon.stub(fluxEventBus, 'publish').callsFake((name, payload) => events.push({ name, payload }));
     sinon.stub(foundingCommittee, 'appWorld').resolves({ intro: RUNG, rungs: [RUNG], armed: false });
     sinon.stub(foundingCommittee, 'refereeCommittee').resolves(COMMITTEE);
+    sinon.stub(foundingService, 'discoveredBasis').resolves(null);
     sinon.stub(messageStore, 'getGrantGenerationRecord').resolves(null);
     sinon.stub(messageStore, 'getMasterleaseRecordsByRolePrefix').resolves([]);
     sinon.stub(messageStore, 'getMasterleaseRecordsByGrantee').resolves([]);
@@ -93,6 +95,26 @@ describe('quorumGrant ordinalRegister', () => {
       expect(options.mode).to.equal('oneshot');
       expect(options.committee).to.deep.include({ fingerprint: COMMITTEE.fingerprint, generation: 2 });
       expect(foundingCommittee.refereeCommittee.calledOnceWith('myapp', RUNG + 200)).to.equal(true);
+    });
+
+    it('asks under a basis a peer holds when this node has no photo at the rung, never a rung below its own', async () => {
+      const PEER_BASIS = { ...COMMITTEE, fingerprint: 'peer-fp' };
+      foundingCommittee.refereeCommittee.resolves(null);
+      const discovered = foundingService.discoveredBasis.resolves({ rung: RUNG + 200, basis: PEER_BASIS });
+
+      await ordinalRegister.probeOrdinal('myapp', 0);
+      sinon.assert.calledOnceWithExactly(discovered, 'myapp', RUNG);
+      const [key, committee] = grantClient.probeOneshot.firstCall.args;
+      expect(key).to.equal(`myapp/ordinal-0@${RUNG + 200}`);
+      expect(committee).to.deep.include({ fingerprint: 'peer-fp' });
+
+      foundingCommittee.appWorld.resolves({ intro: RUNG, rungs: [RUNG, RUNG + 300], armed: false });
+      grantClient.probeOneshot.resetHistory();
+      expect(await ordinalRegister.probeOrdinal('myapp', 0)).to.deep.equal({ decided: false, holder: null, named: [] });
+      sinon.assert.notCalled(grantClient.probeOneshot);
+
+      discovered.resolves(null);
+      expect(await ordinalRegister.probeOrdinal('myapp', 0)).to.deep.equal({ decided: false, holder: null, named: [] });
     });
 
     it('role arithmetic round-trips', () => {
