@@ -45,6 +45,7 @@ const BOOT_BOUND_MS = production.system.bootSyncTimeoutMs;
 // rules the network's release does not enforce.
 const EXPECTED_REMOVED = ['claimcalc', 'ipshow', 'mole'];
 const UPGRADE_MS = 1200000;
+const RELEASE_LIST_MS = 900000;
 
 describe('an upgrade over the network\'s app history', function () {
   let env;
@@ -103,13 +104,15 @@ describe('an upgrade over the network\'s app history', function () {
     await env?.teardown();
   });
 
+  // The release serves its list once its boot hash sync has run with its peers
+  // and it has rebuilt the list from every message it holds.
   it('serves the network\'s app list on the release, from the history it was given', async function () {
-    this.timeout(300000);
+    this.timeout(RELEASE_LIST_MS);
     let listed = null;
     await waitFor(async () => {
       listed = await listOn();
       return listed !== null && listed.size > 0;
-    }, { timeout: 300000, interval: 5000, label: 'the released node serves its app list' });
+    }, { timeout: RELEASE_LIST_MS, interval: 5000, label: 'the released node serves its app list' });
     const network = corpus.listed.map((row) => row.name.toLowerCase()).sort();
     expect([...listed.keys()].sort(), 'the released node lists what the network lists').to.deep.equal(network);
   });
