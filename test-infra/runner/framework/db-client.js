@@ -211,6 +211,23 @@ export function dbClient(nodeNum) {
       return replica != null ? `${base}_${replica}` : base;
     },
 
+    // Writes the app history a release before v9 keeps, in its collections and
+    // shapes: the payment index, the permanent messages and the app list (see
+    // app-corpus.js). For a node that has not booted yet.
+    async seedLegacyAppStore({ payments, messages, listed }) {
+      const explorerDb = await db('explorer');
+      const globalDb = await db('appsGlobal');
+      const batches = async (collection, rows) => {
+        for (let i = 0; i < rows.length; i += 5000) {
+          // eslint-disable-next-line no-await-in-loop
+          await collection.insertMany(rows.slice(i, i + 5000).map((row) => ({ ...row })), { ordered: false });
+        }
+      };
+      await batches(explorerDb.collection('zelappshashes'), payments);
+      await batches(globalDb.collection('zelappsmessages'), messages);
+      await batches(globalDb.collection('zelappsinformation'), listed);
+    },
+
     // This node's stored decision on a paid app message, or null when it holds
     // none: what the decider wrote, read where no route serves it.
     async decision(hash) {
