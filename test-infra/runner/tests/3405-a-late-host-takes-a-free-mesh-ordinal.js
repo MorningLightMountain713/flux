@@ -33,6 +33,17 @@ describe('a late host takes a free mesh ordinal', function () {
   let identity = null;
   const holders = new Map(); // ordinal -> holder outpoint
 
+  // The hash of the message a node lists the app at, or null.
+  async function listedHash(client) {
+    try {
+      const res = await fetch(`${client.url}/apps/globalappsspecifications?appname=${encodeURIComponent(name)}`);
+      const body = await res.json();
+      return body.status === 'success' && Array.isArray(body.data) ? body.data[0]?.hash ?? null : null;
+    } catch {
+      return null;
+    }
+  }
+
   // The ordinal a node founds for the app after an event id, with its holder.
   function founded(client, afterId, timeout) {
     return client.waitForEvent(
@@ -101,8 +112,6 @@ describe('a late host takes a free mesh ordinal', function () {
 
   it('a node that learns the app after its update founds ordinal 3, held by no other host', async function () {
     this.timeout(900000);
-    const listedHash = (await env.clients[0].getAppSpecs(name)).data.hash;
-
     const update = await updateEncryptedV9App(env.clients[0].url, {
       name, instances: 4, image: `${REGISTRY_REPO_HOST}/e2e-pause:v1`, specOverrides: { network: { mesh: true } },
     });
@@ -110,8 +119,8 @@ describe('a late host takes a free mesh ordinal', function () {
     await queueAppTx(update.data);
     await advanceBlocks(3);
     await waitFor(async () => {
-      const rows = await Promise.all(FIRST_HOSTS.map((i) => env.clients[i].getAppSpecs(name).catch(() => null)));
-      return rows.every((r) => r?.data?.hash && r.data.hash !== listedHash);
+      const hashes = await Promise.all(FIRST_HOSTS.map((i) => listedHash(env.clients[i])));
+      return hashes.every((hash) => hash === update.data);
     }, { timeout: 120000, interval: 3000, label: `${name} listed at its update on the first hosts` });
 
     const late = await env.startNode(LATE);
