@@ -59,7 +59,6 @@ function fakeChain(overrides = {}) {
     historicalV7SecretsBefore: async () => [],
     blockTime: async () => 0,
     blockTimeAtHeight: async () => 0,
-    nameReservedActivation: () => null,
     ...overrides,
   };
 }
@@ -240,7 +239,7 @@ describe('decider', function () {
       seen.push({ name, trigger: await decisionOf('r'), later: await decisionOf('u') });
     });
 
-    decider.wakeAll();
+    decider.wake(['r', 'u']);
     await decider.idle();
 
     expect(seen).to.have.length(1);
@@ -259,15 +258,55 @@ describe('decider', function () {
       if (fail) throw new Error('registry write failed');
     });
 
-    decider.wakeAll();
+    decider.wake(['r', 'u']);
     await decider.idle();
     expect(await decisionOf('r')).to.equal(null);
 
     fail = false;
-    decider.wakeAll();
+    decider.wake(['r', 'u']);
     await decider.idle();
     expect(await verdict('r')).to.equal('applied');
     expect(await verdict('u')).to.equal('applied');
+  });
+
+  it('runs no onDecided listener on a full pass, and its onFullPass listeners after it', async () => {
+    await store({ hash: 'r', height: 100 });
+    const decider = loadDecider();
+    const decided = [];
+    const passes = [];
+    decider.onDecided(async (name) => { decided.push(name); });
+    decider.onFullPass(async () => { passes.push(await verdict('r')); });
+
+    decider.wakeAll();
+    await decider.idle();
+
+    expect(decided).to.deep.equal([]);
+    expect(passes).to.deep.equal(['applied']);
+  });
+
+  it('writes a batch of names in the same four store calls however many names it holds', async () => {
+    const decisionStore = Object.getPrototypeOf(appRecords.decisions());
+    const write = sinon.spy(decisionStore, 'write');
+    const undecide = sinon.spy(decisionStore, 'undecide');
+    for (const [i, name] of ['Alpha', 'Beta', 'Gamma', 'Delta'].entries()) {
+      // eslint-disable-next-line no-await-in-loop
+      await store({ hash: `${name}-r`, name, height: 100 + i });
+      // eslint-disable-next-line no-await-in-loop
+      await store({ hash: `${name}-u`, name, type: 'fluxappupdate', height: 200 + i });
+    }
+    const decider = loadDecider();
+
+    decider.wakeAll();
+    await decider.idle();
+
+    expect(write.callCount, 'later decisions, then the triggers').to.equal(2);
+    expect(undecide.callCount, 'the triggers, then the blocked tails').to.equal(2);
+    for (const name of ['Alpha', 'Beta', 'Gamma', 'Delta']) {
+      // eslint-disable-next-line no-await-in-loop
+      expect(await verdict(`${name}-r`), name).to.equal('applied');
+      // eslint-disable-next-line no-await-in-loop
+      expect(await verdict(`${name}-u`), name).to.equal('applied');
+    }
   });
 
   it('lets a name wait while one of its payment records has no position', async () => {
