@@ -1220,11 +1220,15 @@ describe('explorerService tests', () => {
         ],
       });
 
+      const recorded = sinon.stub(priceOracleState, 'recordLegacyPrice');
+
       await explorerService.bootstrapSoftForks(2_579_000);
 
       const written = updateOneStub.getCalls().map((c) => c.args[2]?.txid);
       expect(written).to.include('lastTx');
       expect(written).to.not.include('firstTx');
+      // the price cards held in memory take it as the store does
+      expect(recorded.getCalls().map((c) => c.args[0].txid)).to.deep.equal(['lastTx']);
     });
   });
 

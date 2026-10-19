@@ -1,52 +1,17 @@
 'use strict';
 
 const config = require('config');
-const dbHelper = require('../dbHelper');
 const log = require('../../lib/log');
+const priceOracleState = require('../pricing/priceOracleState');
 
 /**
- * To get array of price specifications updates
- * @returns {(object|object[])} Returns an array of app objects.
+ * The v1-v8 price cards in force from each height, oldest first: chain state,
+ * held in memory with the other price histories.
+ * @returns {Promise<object[]>}
  */
 async function getChainParamsPriceUpdates() {
   try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.get('database.chainparams.database'));
-    const chainParamsMessagesCollection = config.get('database.chainparams.collections.chainMessages');
-    const query = { version: 'p' };
-    const projection = {
-      projection: {
-        _id: 0,
-      },
-    };
-    const priceMessages = await dbHelper.findInDatabase(database, chainParamsMessagesCollection, query, projection);
-    const priceForks = [];
-    config.get('fluxapps.price').forEach((price) => {
-      priceForks.push(price);
-    });
-    priceMessages.forEach((data) => {
-      const splittedMess = data.message.split('_');
-      if (splittedMess[4]) {
-        const dataPoint = {
-          height: +data.height,
-          cpu: +splittedMess[1],
-          ram: +splittedMess[2],
-          hdd: +splittedMess[3],
-          minPrice: +splittedMess[4],
-          port: +splittedMess[5] || 2,
-          scope: +splittedMess[6] || 6,
-          staticip: +splittedMess[7] || 3,
-        };
-        priceForks.push(dataPoint);
-      }
-    });
-    // sort priceForks depending on height
-    priceForks.sort((a, b) => {
-      if (a.height > b.height) return 1;
-      if (a.height < b.height) return -1;
-      return 0;
-    });
-    return priceForks;
+    return [...await priceOracleState.getLegacyPriceSchedule()];
   } catch (error) {
     log.error(error);
     return [];

@@ -466,6 +466,9 @@ async function processSoftFork(txid, height, txIndex, payload, senderIsLegacyAut
       const update = { $set: { txid, height, message: ascii, version } };
       const options = { upsert: true };
       await dbHelper.updateOneInDatabase(database, chainParamsMessagesCollection, query, update, options);
+      priceOracleState.recordLegacyPrice({
+        txid, height, message: ascii, version,
+      });
       break;
     }
     case 'price':
