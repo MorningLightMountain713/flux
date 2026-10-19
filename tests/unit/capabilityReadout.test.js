@@ -11,6 +11,7 @@ function capability(name, needs, upAfterMs, comingUpMs = 0, extra = {}) {
   return {
     name,
     needs,
+    waits: [],
     state: upAfterMs === null ? 'down' : 'up',
     reason: `${name} reason`,
     waitingOn: upAfterMs === null ? name : null,
@@ -79,6 +80,36 @@ describe('capabilityReadout tests', () => {
         capability('registry', ['messages'], 500, 20),
       ];
       expect(criticalChain(snapshot, STARTED).map((link) => link.name)).to.deep.equal(['messages', 'registry']);
+    });
+
+    it('follows what the code bringing a capability up waited for, beyond what it declares', () => {
+      const snapshot = [
+        capability('mongo', [], 100),
+        capability('registry', ['mongo'], 1200, 0),
+        capability('decided', [], 1500, 0, { waits: ['registry', 'mongo'] }),
+        capability('passed', [], 2000, 0, { waits: ['decided'] }),
+      ];
+      expect(criticalChain(snapshot, STARTED).map((link) => link.name)).to.deep.equal(['mongo', 'registry', 'decided', 'passed']);
+      expect(blame(snapshot, STARTED).find((row) => row.name === 'passed').waitedOn).to.equal('decided');
+    });
+
+    it('does not follow a wait for something that came up after the capability did', () => {
+      const snapshot = [
+        capability('mongo', [], 100),
+        capability('late', [], 3000),
+        capability('decided', ['mongo'], 1500, 0, { waits: ['late'] }),
+      ];
+      expect(blame(snapshot, STARTED).find((row) => row.name === 'decided').waitedOn).to.equal('mongo');
+    });
+
+    it('takes each capability once, though two rising together waited for each other', () => {
+      const snapshot = [
+        capability('a', [], 500, 0, { waits: ['b'] }),
+        capability('b', [], 500, 0, { waits: ['a'] }),
+      ];
+      const chain = criticalChain(snapshot, STARTED).map((link) => link.name);
+      expect(chain).to.have.lengthOf(2);
+      expect(new Set(chain).size).to.equal(2);
     });
 
     it('is empty while nothing has come up', () => {

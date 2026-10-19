@@ -145,6 +145,19 @@ describe('capabilities tests', () => {
       expect(resolved).to.equal(true);
     });
 
+    it('records a wait against the capabilities it holds up, whether or not it had to wait', async () => {
+      capabilities.setForTests('mongoReachable', true);
+      await capabilities.whenUp('mongoReachable', { for: 'localDbPrepared' });
+      capabilities.whenUp(['daemonReachable', 'mongoReachable'], { for: ['appStateSynced', 'spawnerReady'] });
+      capabilities.whenUp('daemonSynced');
+
+      const waits = Object.fromEntries(capabilities.snapshot().map((c) => [c.name, c.waits]));
+      expect(waits.localDbPrepared).to.deep.equal(['mongoReachable']);
+      expect(waits.appStateSynced).to.have.members(['daemonReachable', 'mongoReachable']);
+      expect(waits.spawnerReady).to.have.members(['daemonReachable', 'mongoReachable']);
+      expect(waits.daemonSynced, 'a wait for nothing held up records nothing').to.deep.equal([]);
+    });
+
     it('resolves whenUp at once when already up', async () => {
       capabilities.claim('mongoReachable', 'serviceManager').raise('up');
       await capabilities.whenUp('mongoReachable');

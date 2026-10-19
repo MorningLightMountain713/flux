@@ -410,7 +410,7 @@ async function removeAllApps(reason) {
  */
 async function awaitStatePull(deadline) {
   try {
-    await awaitWithin(capabilities.whenUp('appStateSynced'), Math.max(0, deadline - Date.now()), 'state_pull_timeout');
+    await awaitWithin(capabilities.whenUp('appStateSynced', { for: 'bootReconcileDecided' }), Math.max(0, deadline - Date.now()), 'state_pull_timeout');
     return true;
   } catch (error) {
     if (error.message !== 'state_pull_timeout') throw error;
@@ -463,7 +463,7 @@ async function manageAppsOnBoot(bootContext) {
     // Locations still valid — wait for daemon + sync then reconcile.
     const DAEMON_TIMEOUT_MS = config.get('system.bootDaemonTimeoutMs');
     try {
-      await awaitWithin(capabilities.whenUp('daemonReachable'), DAEMON_TIMEOUT_MS, 'daemon_timeout');
+      await awaitWithin(capabilities.whenUp('daemonReachable', { for: 'bootReconcileDecided' }), DAEMON_TIMEOUT_MS, 'daemon_timeout');
     } catch (error) {
       if (error.message === 'daemon_timeout') {
         log.error(`appStartupManager - Daemon not ready after ${DAEMON_TIMEOUT_MS / 1000}s, removing all apps`);
@@ -474,7 +474,7 @@ async function manageAppsOnBoot(bootContext) {
       throw error;
     }
 
-    await capabilities.whenUp('confirmationStatusKnown');
+    await capabilities.whenUp('confirmationStatusKnown', { for: 'bootReconcileDecided' });
     if (!nodeConfirmationService.isConfirmed()) {
       log.info('appStartupManager - Node not confirmed, removing all apps');
       await removeAllApps('Node not confirmed');
@@ -491,7 +491,7 @@ async function manageAppsOnBoot(bootContext) {
 
     const syncDeadline = Date.now() + SYNC_TIMEOUT_MS;
     try {
-      await awaitWithin(capabilities.whenUp('appRegistryConsistent'), SYNC_TIMEOUT_MS, 'sync_timeout');
+      await awaitWithin(capabilities.whenUp('appRegistryConsistent', { for: 'bootReconcileDecided' }), SYNC_TIMEOUT_MS, 'sync_timeout');
     } catch (error) {
       if (error.message === 'sync_timeout') {
         log.error(`appStartupManager - DB not ready after ${SYNC_TIMEOUT_MS / 1000}s, removing all apps`);

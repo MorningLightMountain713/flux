@@ -275,7 +275,7 @@ async function decideNames(batch, full) {
 }
 
 async function runOnce() {
-  await capabilities.whenUp('chainStateConsistent');
+  await capabilities.whenUp('chainStateConsistent', { for: 'appRegistryConsistent' });
   const full = fullPassPending;
   const hashes = [...pendingHashes];
   fullPassPending = false;

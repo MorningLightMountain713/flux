@@ -24,7 +24,21 @@
       }
     ],
     "red": [
-      "follows a critical chain of declared prerequisites to the capability that came up last"
+      "follows a critical chain of what each capability waited on to the capability that came up last"
+    ]
+  },
+  {
+    "name": "waits-not-recorded",
+    "breaks": "a wait names the capability it holds up, and the readout follows it",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/utils/capabilities.js",
+        "from": "  namesOf(heldUp).forEach((held) => names.forEach((name) => entryOf(held).waits.add(name)));\n",
+        "to": ""
+      }
+    ],
+    "red": [
+      "follows a critical chain of what each capability waited on to the capability that came up last"
     ]
   },
   {
@@ -54,7 +68,7 @@
     "red": [
       "reports every capability present on the node up, each with its first rise",
       "blames no capability for still waiting, slowest first",
-      "follows a critical chain of declared prerequisites to the capability that came up last"
+      "follows a critical chain of what each capability waited on to the capability that came up last"
     ]
   }
 ]

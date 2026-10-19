@@ -82,19 +82,21 @@ describe('the capability readout after boot', function () {
     expect(order, 'slowest first').to.deep.equal([...order].sort((a, b) => b - a));
   });
 
-  it('follows a critical chain of declared prerequisites to the capability that came up last', async function () {
+  it('follows a critical chain of what each capability waited on to the capability that came up last', async function () {
     this.timeout(60000);
     const chain = await readout('/capabilities/critical-chain');
-    expect(chain.length, 'the chain has a link').to.be.at.least(1);
+    // The last capability up on a boot waited on something before it.
+    expect(chain.length, 'the chain goes back past the last capability up').to.be.at.least(2);
     const byName = new Map(capabilities.map((c) => [c.name, c]));
     const last = capabilities.reduce((latest, c) => (c.firstUp.at >= latest.firstUp.at ? c : latest));
     expect(byName.get(chain[chain.length - 1].name).firstUp.at, 'the chain ends at the last capability up').to.equal(last.firstUp.at);
     for (let k = 1; k < chain.length; k += 1) {
-      expect(byName.get(chain[k].name).needs, `${chain[k].name} declares ${chain[k - 1].name}`).to.include(chain[k - 1].name);
+      const waitedOn = [...byName.get(chain[k].name).needs, ...byName.get(chain[k].name).waits];
+      expect(waitedOn, `${chain[k].name} declares or waited for ${chain[k - 1].name}`).to.include(chain[k - 1].name);
       expect(chain[k].upAfterMs, `${chain[k].name} came up after ${chain[k - 1].name}`).to.be.at.least(chain[k - 1].upAfterMs);
     }
     const first = byName.get(chain[0].name);
-    const risenBefore = first.needs.filter((n) => byName.get(n)?.firstUp);
+    const risenBefore = [...first.needs, ...first.waits].filter((n) => byName.get(n)?.firstUp && byName.get(n).firstUp.at <= first.firstUp.at);
     expect(risenBefore, `${first.name}, the first link, waited on no prerequisite that rose`).to.deep.equal([]);
   });
 

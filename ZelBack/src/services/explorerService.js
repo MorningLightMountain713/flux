@@ -1166,7 +1166,7 @@ const SCAN_NEEDS = ['daemonSynced', 'localDbPrepared'];
 async function waitForScanPrerequisites() {
   if (capabilities.isUp(SCAN_NEEDS)) return;
   log.info(`Explorer - waiting for ${capabilities.firstNotUp(SCAN_NEEDS)} before scanning`);
-  await capabilities.whenUp(SCAN_NEEDS);
+  await capabilities.whenUp(SCAN_NEEDS, { for: 'explorerSynced' });
 }
 
 /**

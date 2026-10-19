@@ -302,7 +302,7 @@ async function startFluxFunctions() {
         log.info('System service initiated');
       }),
       runOwner('local database', async () => {
-        await capabilities.whenUp('mongoReachable');
+        await capabilities.whenUp('mongoReachable', { for: 'localDbPrepared' });
         capabilities.claim('localDbPrepared', 'serviceManager').starting('running migrations and preparing collections');
         // First, because on a legacy node a changed config restarts mongod, which
         // nothing preparing the database may be in the middle of.
@@ -445,7 +445,7 @@ async function startFluxFunctions() {
       }),
       runOwner('chain state', async () => {
         // The rewind reads the collections the local database's migrations move.
-        await capabilities.whenUp('localDbPrepared');
+        await capabilities.whenUp('localDbPrepared', { for: 'chainStateConsistent' });
         // Not awaited: it rewinds and builds the histories at once, then scans once
         // the daemon is synced. Safe to leave unhandled: initiateBlockProcessor does
         // not reject.
@@ -461,7 +461,7 @@ async function startFluxFunctions() {
         });
       }),
       runOwner('apps', async () => {
-        await capabilities.whenUp(['localDbPrepared', 'dockerReachable']);
+        await capabilities.whenUp(['localDbPrepared', 'dockerReachable'], { for: 'bootReconcileDecided' });
         // The location table this node already holds, brought back as soon as the
         // database is up. Detached and best-effort - every consumer degrades safely
         // without it. On a node that has run before this is a single marker read
@@ -525,7 +525,7 @@ async function startFluxFunctions() {
 
       }),
       runOwner('network', async () => {
-        await capabilities.whenUp(['localDbPrepared', 'daemonReachable']);
+        await capabilities.whenUp(['localDbPrepared', 'daemonReachable'], { for: ['appStateSynced', 'appMessagesSynced', 'spawnerReady'] });
         // Initialize app sync orchestrator and spawner
         const orchestrator = new AppSyncOrchestrator({
           blockEmitter: explorerService.getBlockEmitter(),

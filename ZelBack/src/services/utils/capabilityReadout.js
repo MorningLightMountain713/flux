@@ -5,22 +5,24 @@
  * (capabilities.snapshot()). A capability counts at its first rise in this
  * process; a later fall and rise is in its transitions, not here.
  *
- * What a capability waited on is the prerequisite it declares that came up
- * last before it did. A capability that rose with no prerequisite still down
- * waited on its own owner, and names none.
+ * What a capability waited on is, of the prerequisites it declares and the
+ * capabilities the code bringing it up waited for, the one that came up last
+ * before it did. A capability that rose with none of them still down waited on
+ * its own owner, and names none.
  */
 
 /**
- * The declared prerequisite of a capability that came up last before it did.
+ * The prerequisite or waited-for capability that came up last, at or before
+ * the capability's own first rise.
  * @param {object} capability a snapshot entry that has come up
  * @param {Map<string, object>} byName
  * @returns {string|null}
  */
 function lastPrerequisite(capability, byName) {
   let latest = null;
-  capability.needs.forEach((need) => {
-    const prerequisite = byName.get(need);
-    if (!prerequisite?.firstUp) return;
+  new Set([...capability.needs, ...capability.waits]).forEach((name) => {
+    const prerequisite = byName.get(name);
+    if (!prerequisite?.firstUp || prerequisite.firstUp.at > capability.firstUp.at) return;
     if (!latest || prerequisite.firstUp.at >= latest.firstUp.at) latest = prerequisite;
   });
   return latest ? latest.name : null;
@@ -54,10 +56,11 @@ function blame(snapshot, startedAt) {
 }
 
 /**
- * The prerequisites that decided when the last capability came up: from the
- * first link, which waited on nothing, to the last capability to come up.
- * Capabilities rising in the same millisecond are taken in declaration order,
- * where a prerequisite is listed before what needs it.
+ * What decided when the last capability came up: from the first link, which
+ * waited on nothing, to the last capability to come up, each link what the
+ * next waited on. Capabilities rising in the same millisecond are taken in
+ * declaration order, where a prerequisite is listed before what needs it; a
+ * capability is in the chain once.
  * @param {object[]} snapshot
  * @param {number} startedAt the process start, ms since the epoch
  * @returns {Array<{name: string, upAfterMs: number, comingUpMs: number}>}
@@ -68,7 +71,9 @@ function criticalChain(snapshot, startedAt) {
   if (up.length === 0) return [];
   let current = up.reduce((last, capability) => (capability.firstUp.at >= last.firstUp.at ? capability : last));
   const chain = [];
-  while (current) {
+  const seen = new Set();
+  while (current && !seen.has(current.name)) {
+    seen.add(current.name);
     chain.push({
       name: current.name,
       upAfterMs: current.firstUp.at - startedAt,

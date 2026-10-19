@@ -2512,7 +2512,7 @@ let started = false;
 async function start() {
   if (started) return;
   started = true;
-  await capabilities.whenUp('bootReconcileDecided');
+  await capabilities.whenUp('bootReconcileDecided', { for: 'bootReconcilePassed' });
   // Load flux-spec-backend once at boot rather than on the first reconcile.
   // This used to be load-bearing — the sync identifier helpers threw unless it
   // had already run — but every caller awaits now, so it only warms the cache.
