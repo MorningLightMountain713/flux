@@ -2312,6 +2312,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
       }
       // eslint-disable-next-line no-await-in-loop
       await componentProvisioner.installComponent(deployComp, {
+        uuid: registrySpec.uuid,
         createVolumes,
         skipPorts: true,
         specVersion: registrySpec.version,

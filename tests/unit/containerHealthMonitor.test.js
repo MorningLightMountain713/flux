@@ -184,6 +184,15 @@ describe('containerHealthMonitor tests', () => {
         expect(appVolumeServiceStub.ensureMountSourcesExist.called).to.be.false;
       });
 
+      it('stamps the app instance identifier on the container it recreates', async () => {
+        volumeServiceStub.verifyAppVolumeMount.resolves(true);
+        const install = { name: registered.name, identity: registered.identity, uuid: 'u-app' };
+
+        await containerHealthMonitor.recreateMissingContainers('web_testapp', install, { allowVolumeCreation: false });
+
+        expect(componentProvisionerStub.installComponent.firstCall.args[1].uuid).to.equal('u-app');
+      });
+
       it('still recreates normally (no volume creation) when the volume is verified', async () => {
         volumeServiceStub.verifyAppVolumeMount.resolves(true);
 
