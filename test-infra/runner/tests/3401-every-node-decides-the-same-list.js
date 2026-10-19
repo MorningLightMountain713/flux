@@ -12,7 +12,7 @@
  * back. Every node then lists the update, under the identity the registration
  * made.
  *
- * Then, on every node: a registration paid one satoshi is refused and listed
+ * Then, on every node: a registration paying the price floor is refused and listed
  * nowhere; an update signed by a key that is not the owner's is refused and the
  * owner's row stands; a v9 app is listed under the identity its registration
  * made. All of it holds on a node killed and restarted, and on a node that boots
@@ -23,6 +23,7 @@
  */
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
+import { createRequire } from 'node:module';
 import { createTestEnv } from '../framework/test-env.js';
 import { loadSharedConfig } from '../framework/coupled-knobs.js';
 import { buyerKey } from '../framework/transfer-helper.js';
@@ -38,6 +39,9 @@ import { partition, healPartition } from '../framework/partition.js';
 import { waitForCapabilityState } from '../framework/capability-state.js';
 import { waitFor, waitForDaemonReady } from '../framework/wait.js';
 
+const require = createRequire(import.meta.url);
+const production = require('../../../ZelBack/config/default.js');
+
 const NODES = 6;
 const RUNNING = [0, 1, 2, 3, 4];
 const REGISTRAR = 0; // handed every message the chain pays for
@@ -50,6 +54,9 @@ const CONVERGE_MS = 240000;
 // A node with no peers for the node-down grace is certified down, which is
 // another suite's subject: the cut ends well inside it.
 const CUT_LIMIT_MS = (loadSharedConfig().fluxapps.nodeDownGraceS - 20) * 1000;
+// The least a payment carries for the scan to record it as one: an underpaid
+// registration pays this, which is below any registration's fee.
+const FLOOR_SAT = Math.round(production.fluxapps.price.at(-1).minPrice * 1e8);
 
 function v9Components(name) {
   return {
@@ -70,7 +77,7 @@ describe('every node decides the same app list', function () {
   let env;
   const base = `samelist${Date.now()}`;
   const ordered = {}; // a registration and its update, reaching nodes in different orders
-  const underpaid = {}; // a registration paid one satoshi
+  const underpaid = {}; // a registration paying the price floor, below its fee
   const forged = {}; // a registration, and an update signed by a key that is not the owner's
   const v9 = { name: `${base}v` };
   let cutAt = null;
@@ -183,22 +190,24 @@ describe('every node decides the same app list', function () {
     await partition(env, [POCKET], { cutChain: false });
     await partition(env, [FETCHER], { cutChain: false });
     cutAt = Date.now();
+    try {
+      await deliverAppMessage(env, ordered.registered.message, [REGISTRAR]);
+      await deliverAppMessage(env, ordered.updated.message, [REGISTRAR]);
+      const connected = RUNNING.filter((i) => i !== POCKET && i !== FETCHER);
+      await appliedOn(ordered.updated.hash, connected, 'every connected node takes the update from the node it was handed to');
 
-    await deliverAppMessage(env, ordered.registered.message, [REGISTRAR]);
-    await deliverAppMessage(env, ordered.updated.message, [REGISTRAR]);
-    const connected = RUNNING.filter((i) => i !== POCKET && i !== FETCHER);
-    await appliedOn(ordered.updated.hash, connected, 'every connected node takes the update from the node it was handed to');
-
-    await hand(POCKET, ordered.updated.message);
-    await refusedOn(ordered.updated.hash, [POCKET], 'nothing-to-update', 'the cut-off node judges the update with nothing to update');
-    await hand(POCKET, ordered.registered.message);
-    await appliedOn(ordered.registered.hash, [POCKET], 'the cut-off node applies the registration');
-    await appliedOn(ordered.updated.hash, [POCKET], 'the cut-off node applies the update after it');
-
-    await healPartition(env, [FETCHER]);
-    await healPartition(env, [POCKET]);
-    expect(Date.now() - cutAt, 'the nodes were cut off for less than the node-down grace').to.be.below(CUT_LIMIT_MS);
-    cutAt = null;
+      await hand(POCKET, ordered.updated.message);
+      await refusedOn(ordered.updated.hash, [POCKET], 'nothing-to-update', 'the cut-off node judges the update with nothing to update');
+      await hand(POCKET, ordered.registered.message);
+      await appliedOn(ordered.registered.hash, [POCKET], 'the cut-off node applies the registration');
+      await appliedOn(ordered.updated.hash, [POCKET], 'the cut-off node applies the update after it');
+      expect(Date.now() - cutAt, 'the nodes were cut off for less than the node-down grace').to.be.below(CUT_LIMIT_MS);
+    } finally {
+      // The fleet is whole for every test after this one, whatever this one found.
+      await healPartition(env, [FETCHER]);
+      await healPartition(env, [POCKET]);
+      cutAt = null;
+    }
   });
 
   it('lists the update on every node, under the identity the registration made, whatever order and route it arrived by', async function () {
@@ -213,7 +222,7 @@ describe('every node decides the same app list', function () {
 
   it('refuses an underpaid registration on every node and lists it on none', async function () {
     this.timeout(CONVERGE_MS * 2);
-    await pay(underpaid.registered.message, 1);
+    await pay(underpaid.registered.message, FLOOR_SAT);
     await hand(REGISTRAR, underpaid.registered.message);
     await refusedOn(underpaid.registered.hash, RUNNING, 'underpaid', 'every node refuses the registration');
     await unlistedOn(underpaid.registered.spec.name, RUNNING, 'the underpaid app is not listed');
