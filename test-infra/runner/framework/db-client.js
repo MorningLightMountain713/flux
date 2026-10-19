@@ -48,6 +48,12 @@ export function dbClient(nodeNum) {
       return globalDb.collection('appmessages');
     },
 
+    // An app's founding record on this node: its anchors (photos by height),
+    // its component pins and the heights it last recorded and mapped.
+    async foundingRecord(identity) {
+      return (await db('local')).collection('foundingcommittees').findOne({ _id: identity });
+    },
+
     // The payments the scan recorded: all of them, those whose contents the
     // node holds, those still to fetch, and those marked not found.
     async hashCounts() {
