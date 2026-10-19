@@ -128,6 +128,10 @@ const Checkpoint = Object.freeze({
   // The spawner has chosen an app to attempt and has not yet judged its instance
   // count; keyed by the app's name. Held, the node attempts nothing for that app.
   SPAWNER_BEFORE_ATTEMPT: 'spawner:beforeAttempt',
+  // A rewind has built its histories and holds the chain-state lock, with
+  // chainStateConsistent still down: nothing is scanned, decided or served from
+  // the list until it is released.
+  CHAINSTATE_BEFORE_CONSISTENT: 'chainState:beforeConsistent',
 });
 const CHECKPOINT_NAMES = new Set(Object.values(Checkpoint));
 // Holds a key for every key of its checkpoint.

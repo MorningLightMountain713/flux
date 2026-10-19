@@ -12,6 +12,7 @@ const entitlementsState = require('../../ZelBack/src/services/entitlementsState'
 const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
 const unclaimedPayments = require('../../ZelBack/src/services/appDecisions/unclaimedPayments');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
+const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -95,6 +96,26 @@ describe('chainState', () => {
       const lastDelete = events.map((e) => e.startsWith('delete')).lastIndexOf(true);
       expect(events.indexOf('build groups')).to.be.above(lastDelete);
       expect(events.slice(-4)).to.deep.equal(['install groups', 'install prices', 'install voids', 'capability up']);
+    });
+
+    it('holds chain state down at the harness checkpoint until it is released, after installing the histories', async () => {
+      capabilities.claim('chainStateConsistent', 'chainState').raise('test');
+      let release;
+      const checkpoint = sinon.stub(fluxEventBus, 'checkpoint').callsFake(async () => {
+        events.push('checkpoint');
+        await new Promise((resolve) => { release = resolve; });
+      });
+      events.length = 0;
+
+      const rewound = chainState.rewind('test', 900);
+      await new Promise((resolve) => { setImmediate(resolve); });
+      sinon.assert.calledOnceWithExactly(checkpoint, fluxEventBus.Checkpoint.CHAINSTATE_BEFORE_CONSISTENT);
+      expect(capabilities.isUp('chainStateConsistent'), 'up while the checkpoint held it').to.equal(false);
+      expect(events.indexOf('checkpoint')).to.be.above(events.indexOf('install voids'));
+
+      release();
+      expect(await rewound).to.equal(900);
+      expect(capabilities.isUp('chainStateConsistent')).to.equal(true);
     });
 
     it('takes the app payments off, and deletes their decisions, legacy rows and every v9 soft-fork row above the height', async () => {
