@@ -113,7 +113,6 @@ describe('masterlease proof: a listed node\'s claim without the committee\'s sig
           quorumGrantDrainMs: 90000,
           quorumGrantMinHolderAgeMs: 0,
           quorumGrantPursuitIntervalMs: 10000,
-          quorumGrantActivationHeight: 2_100_000,
         },
       },
     });

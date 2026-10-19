@@ -129,7 +129,6 @@ describe('operator commands against a held mastership', function () {
           // every node carries it. The harness pins the requirement to the floor
           // already in force so the gate is live under test; production pins it
           // to the release that actually ships the plane.
-          quorumGrantActivationHeight: 2_100_000,
         },
       },
     });

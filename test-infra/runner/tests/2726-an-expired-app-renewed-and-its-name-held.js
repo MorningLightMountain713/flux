@@ -137,7 +137,6 @@ describe('an expired app renewed, and its name held', function () {
       arcane: true,
       harnessClock: true,
       fluxDrive: 'real',
-      configOverrides: { fluxapps: { nameReservedActivationHeight: 1 } },
     });
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1, pricing: true });
     const ordinary = RUNNING.filter((i) => !env.establishedNodes.includes(i));

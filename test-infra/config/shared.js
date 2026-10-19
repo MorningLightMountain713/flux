@@ -3,7 +3,9 @@ module.exports = {
   logConsole: true,
   logLevel: 'debug',
   fluxTeamFluxID: '19J4Ef396goaQhrqgNLTFvtCXYqjFAx2Js',
-  daemon: { host: '198.18.0.3' },
+  // The harness chain: mainnet's block times and rule heights, with v9's rules
+  // in force from 2,000,000, below the chain the fleet starts at.
+  daemon: { host: '198.18.0.3', chain: 'harness', harnessV9ActivationHeight: 2_000_000 },
   benchmark: { host: '198.18.0.3' },
   // upnpService builds its client at module load, and with no gateway URL the client
   // discovers one by SSDP - every node multicasting to 239.255.255.250:1900 for the life of
@@ -141,11 +143,10 @@ module.exports = {
     minHashSyncPeers: 1,
     minUpTime: 10,
     maxAppsPerNode: 200,
-    // Version-activation floors. The harness chain tip is INITIAL_HEIGHT
-    // (2,100,000), so every version here resolves active; v9 is pulled below the
-    // tip (prod is 2.6M+) so v9 specs are accepted under the harness.
+    // Version-activation floors, all below the chain the fleet starts at; v9's
+    // is daemon.harnessV9ActivationHeight.
     appSpecsEnforcementHeights: {
-      1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 2000000,
+      1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0,
     },
     hddFileSystemMinimum: 2,
     defaultSwap: 0,

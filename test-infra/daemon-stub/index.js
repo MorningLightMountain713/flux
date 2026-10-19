@@ -272,7 +272,7 @@ function filterNodeList(filter, list = deterministicNodeList) {
 
 const rpcHandlers = {
   getblockchaininfo: () => ({
-    chain: 'main',
+    chain: 'harness',
     blocks: currentHeight,
     headers: currentHeight,
     bestblockhash: blockHash(currentHeight),

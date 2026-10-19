@@ -123,7 +123,6 @@ describe('mastership authority: FluxOS keeps the app up and FDM never decides th
           quorumGrantMinHolderAgeMs: 0,
           quorumGrantPursuitIntervalMs: 10000,
           quorumGrantGenerationDrainBlocks: DRAIN_BLOCKS,
-          quorumGrantActivationHeight: 2_100_000,
         },
       },
     });

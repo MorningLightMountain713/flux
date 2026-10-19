@@ -188,7 +188,6 @@ describe('record-deaf master: after the heal every certificate the partition for
           quorumGrantMinHolderAgeMs: 0,
           quorumGrantPursuitIntervalMs: 10000,
           quorumGrantGenerationDrainBlocks: DRAIN_BLOCKS,
-          quorumGrantActivationHeight: 2_100_000,
         },
       },
     });
