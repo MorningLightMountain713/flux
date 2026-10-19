@@ -17,6 +17,7 @@ const { requireMongo } = require('./dbTestHelper');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const generalService = require('../../ZelBack/src/services/generalService');
 const dockerService = require('../../ZelBack/src/services/dockerService');
+const routeTableV1 = require('../../ZelBack/src/routeTableV1');
 const nodeDosState = require('../../ZelBack/src/services/nodeDosState');
 const appInspector = require('../../ZelBack/src/services/appManagement/appInspector');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
@@ -61,7 +62,8 @@ describe('idService tests', () => {
   // idService reads the node's config off globalThis when it is called.
   beforeEach(() => {
     globalThis.userconfig = adminConfig;
-    capabilities.setForTests('localDbPrepared', true);
+    capabilities.setForTests(['localDbPrepared', 'dockerReachable'], true);
+    idService.resetHardwareReadingForTests();
   });
 
   afterEach(() => {
@@ -315,8 +317,6 @@ describe('idService tests', () => {
       collateralStub = sinon.stub(generalService, 'nodeCollateral');
       getDosDataStub = sinon.stub(nodeDosState, 'getDosData');
       syncthingService.setSyncthingRunningState(true);
-      // only checks for docker availablity
-      sinon.stub(dockerService, 'dockerListImages').returns(true);
     });
 
     afterEach(() => {
@@ -531,7 +531,6 @@ describe('idService tests', () => {
       collateralStub = sinon.stub(generalService, 'nodeCollateral');
       getDosDataStub = sinon.stub(nodeDosState, 'getDosData');
       syncthingService.setSyncthingRunningState(true);
-      sinon.stub(dockerService, 'dockerListImages').returns(true);
     });
 
     afterEach(() => {
@@ -760,6 +759,66 @@ describe('idService tests', () => {
         data: { code: undefined, name: 'DatabaseNotReady', message: 'The local database is not ready' },
       });
       sinon.assert.notCalled(connection);
+    });
+
+    it('reads the database and Docker from their capabilities, not by asking them', async () => {
+      healthyHardware();
+      const find = sinon.spy(dbHelper, 'findOneInDatabase');
+      const images = sinon.spy(dockerService, 'dockerListImages');
+
+      const fitness = await idService.checkNodeFitness();
+
+      expect(fitness.ok).to.equal(true);
+      expect(fitness.checks).to.include({ db: 'ok', docker: 'ok' });
+      sinon.assert.notCalled(find);
+      sinon.assert.notCalled(images);
+    });
+
+    it('reports Docker not reachable while its capability is down', async () => {
+      healthyHardware();
+      capabilities.setForTests('dockerReachable', false);
+      const res = generateResponse();
+
+      await idService.nodeHealth(undefined, res);
+
+      sinon.assert.calledOnceWithExactly(res.json, {
+        status: 'error',
+        data: { code: undefined, name: 'DockerNotReachable', message: 'Docker is not reachable' },
+      });
+    });
+
+    it('logs the hardware reading once while it stays the same, and again when it changes', async () => {
+      healthyHardware();
+      const info = sinon.spy(log, 'info');
+      const tierLines = () => info.getCalls().filter((call) => String(call.args[0]).startsWith('Node Tier:')).length;
+
+      await idService.checkNodeFitness();
+      await idService.checkNodeFitness();
+      await idService.checkNodeFitness();
+      expect(tierLines(), 'a repeated reading was logged again').to.equal(1);
+
+      osCpusStub.returns([1, 1, 1, 1, 1, 1]);
+      await idService.checkNodeFitness();
+      expect(tierLines(), 'a changed reading was not logged').to.equal(2);
+    });
+
+    it('logs a shortfall once while it stands', async () => {
+      tierStub.resolves('basic');
+      collateralStub.resolves(1000);
+      osTotalmemStub.returns(1 * 1024 ** 3);
+      osCpusStub.returns([1]);
+      const error = sinon.spy(log, 'error');
+
+      expect(await idService.confirmNodeTierHardware()).to.equal(false);
+      expect(await idService.confirmNodeTierHardware()).to.equal(false);
+
+      const shortfalls = error.getCalls().filter((call) => call.args[0]?.message === 'Node Total Ram (1) below new Cumulus requirements');
+      expect(shortfalls).to.have.length(1);
+    });
+
+    it('is served uncached', () => {
+      const route = routeTableV1.find((r) => r.path === '/flux/health');
+      expect(route).to.not.have.property('cache');
     });
 
     // The other side of the same question, and the case that used to be decided

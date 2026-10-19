@@ -165,7 +165,7 @@ describe('loading express', () => {
   });
   it('http /id/loginphrase', async () => {
     syncthingService.setSyncthingRunningState(true);
-    capabilities.setForTests('localDbPrepared', true);
+    capabilities.setForTests(['localDbPrepared', 'dockerReachable'], true);
     try {
       const res = await request(serverHttp)
         .get('/id/loginphrase')
@@ -178,7 +178,7 @@ describe('loading express', () => {
   });
   it('https /id/loginphrase', async () => {
     syncthingService.setSyncthingRunningState(true);
-    capabilities.setForTests('localDbPrepared', true);
+    capabilities.setForTests(['localDbPrepared', 'dockerReachable'], true);
     try {
       const res = await request(serverHttps)
         .get('/id/loginphrase')

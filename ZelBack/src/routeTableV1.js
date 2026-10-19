@@ -128,7 +128,7 @@ module.exports = [
   { method: 'get', path: '/flux/marketplaceurl', none: NONE.PROCESS, cache: '1 day', handler: 'fluxService#getMarketplaceURL' },
   { method: 'get', path: '/flux/restart', none: NONE.OPERATOR, handler: 'fluxService#restartFluxOS' },
   { method: 'get', path: '/flux/dosstate', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxNetworkHelper#getDOSState' },
-  { method: 'get', path: '/flux/health', none: NONE.OWN_ANSWER, cache: '30 seconds', handler: 'idService#nodeHealth' },
+  { method: 'get', path: '/flux/health', none: NONE.OWN_ANSWER, handler: 'idService#nodeHealth' },
   { method: 'post', path: '/flux/dosstate', none: NONE.PROCESS, handler: 'fluxNetworkHelper#setDOSStateApi' },
   // New peer endpoints
   { method: 'get', path: '/flux/peers/:filter?', none: NONE.PROCESS, cache: '30 seconds', handler: 'fluxCommunication#getPeers' },

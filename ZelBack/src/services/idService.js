@@ -10,7 +10,6 @@ const dbHelper = require('./dbHelper');
 const verificationHelper = require('./verificationHelper');
 const verificationHelperUtils = require('./verificationHelperUtils');
 const generalService = require('./generalService');
-const dockerService = require('./dockerService');
 const syncthingService = require('./syncthingService');
 const nodeDosState = require('./nodeDosState');
 const capabilities = require('./utils/capabilities');
@@ -49,72 +48,94 @@ async function deleteLoginPhrase(phrase) {
 
 
 /**
- * To check if the hardware specification requirements of the node tier are being met by the node (RAM and CPU threads).
- * @returns {boolean} True or an error is thrown.
+ * What a node of this tier and collateral lacks in RAM or CPU threads, or null
+ * when it meets its tier's requirements.
+ * @param {string|undefined} tier
+ * @param {number|undefined} collateral
+ * @param {number} nodeRam total RAM, GiB
+ * @param {number} nodeCpuThreads
+ * @returns {string|null}
+ */
+function tierHardwareShortfall(tier, collateral, nodeRam, nodeCpuThreads) {
+  if (tier === 'bamf' && collateral === 100_000) {
+    if (nodeRam < 30) {
+      return `Node Total Ram (${nodeRam}) below Stratus requirements`;
+    }
+    if (nodeCpuThreads < 8) {
+      return `Node Cpu Threads (${nodeCpuThreads}) below Stratus requirements`;
+    }
+  } else if (tier === 'super' && collateral === 25_000) {
+    if (nodeRam < 7) {
+      return `Node Total Ram (${nodeRam}) below Nimbus requirements`;
+    }
+    if (nodeCpuThreads < 4) {
+      return `Node Cpu Threads (${nodeCpuThreads}) below Nimbus requirements`;
+    }
+  } else if (tier === 'basic' && collateral === 10_000) {
+    if (nodeRam < 3) {
+      return `Node Total Ram (${nodeRam}) below Cumulus requirements`;
+    }
+    if (nodeCpuThreads < 2) {
+      return `Node Cpu Threads (${nodeCpuThreads}) below Cumulus requirements`;
+    }
+  } else if (tier === 'bamf' && collateral === 40_000) {
+    if (nodeRam < 61) {
+      return `Node Total Ram (${nodeRam}) below new Stratus requirements`;
+    }
+    if (nodeCpuThreads < 16) {
+      return `Node Cpu Threads (${nodeCpuThreads}) below new Stratus requirements`;
+    }
+  } else if (tier === 'super' && collateral === 12_500) {
+    if (nodeRam < 30) {
+      return `Node Total Ram (${nodeRam}) below new Nimbus requirements`;
+    }
+    if (nodeCpuThreads < 8) {
+      return `Node Cpu Threads (${nodeCpuThreads}) below new Nimbus requirements`;
+    }
+  } else if (tier === 'basic' && collateral === 1000) {
+    if (nodeRam < 3) {
+      return `Node Total Ram (${nodeRam}) below new Cumulus requirements`;
+    }
+    if (nodeCpuThreads < 4) {
+      return `Node Cpu Threads (${nodeCpuThreads}) below new Cumulus requirements`;
+    }
+  }
+  return null;
+}
+
+// The last hardware reading logged, so a check repeated on every request logs
+// only what changed.
+let lastHardwareReading = null;
+
+/**
+ * Whether the node meets the RAM and CPU thread requirements of its tier. The
+ * reading - tier, collateral, RAM, threads and the verdict - is logged when it
+ * differs from the last one logged.
+ * @returns {Promise<boolean>}
  */
 async function confirmNodeTierHardware() {
-  try {
-    const tier = await generalService.nodeTier().catch((error) => {
-      log.error(error);
-    });
-
-    const collateral = await generalService.nodeCollateral().catch((error) => {
-      log.error(error);
-    });
-    const nodeRam = os.totalmem() / 1024 / 1024 / 1024;
-    const nodeCpuThreads = os.cpus().length;
+  const lookupErrors = [];
+  const tier = await generalService.nodeTier().catch((error) => { lookupErrors.push(error); });
+  const collateral = await generalService.nodeCollateral().catch((error) => { lookupErrors.push(error); });
+  const nodeRam = os.totalmem() / 1024 / 1024 / 1024;
+  const nodeCpuThreads = os.cpus().length;
+  const shortfall = tierHardwareShortfall(tier, collateral, nodeRam, nodeCpuThreads);
+  const reading = JSON.stringify([tier, collateral, nodeRam, nodeCpuThreads, shortfall, lookupErrors.map((e) => e?.message ?? String(e))]);
+  if (reading !== lastHardwareReading) {
+    lastHardwareReading = reading;
+    lookupErrors.forEach((error) => log.error(error));
     log.info(`Node Tier: ${tier}`);
     log.info(`Node Collateral: ${collateral}`);
     log.info(`Node Total Ram: ${nodeRam}`);
     log.info(`Node Cpu Threads: ${nodeCpuThreads}`);
-    if (tier === 'bamf' && collateral === 100_000) {
-      if (nodeRam < 30) {
-        throw new Error(`Node Total Ram (${nodeRam}) below Stratus requirements`);
-      }
-      if (nodeCpuThreads < 8) {
-        throw new Error(`Node Cpu Threads (${nodeCpuThreads}) below Stratus requirements`);
-      }
-    } else if (tier === 'super' && collateral === 25_000) {
-      if (nodeRam < 7) {
-        throw new Error(`Node Total Ram (${nodeRam}) below Nimbus requirements`);
-      }
-      if (nodeCpuThreads < 4) {
-        throw new Error(`Node Cpu Threads (${nodeCpuThreads}) below Nimbus requirements`);
-      }
-    } else if (tier === 'basic' && collateral === 10_000) {
-      if (nodeRam < 3) {
-        throw new Error(`Node Total Ram (${nodeRam}) below Cumulus requirements`);
-      }
-      if (nodeCpuThreads < 2) {
-        throw new Error(`Node Cpu Threads (${nodeCpuThreads}) below Cumulus requirements`);
-      }
-    } else if (tier === 'bamf' && collateral === 40_000) {
-      if (nodeRam < 61) {
-        throw new Error(`Node Total Ram (${nodeRam}) below new Stratus requirements`);
-      }
-      if (nodeCpuThreads < 16) {
-        throw new Error(`Node Cpu Threads (${nodeCpuThreads}) below new Stratus requirements`);
-      }
-    } else if (tier === 'super' && collateral === 12_500) {
-      if (nodeRam < 30) {
-        throw new Error(`Node Total Ram (${nodeRam}) below new Nimbus requirements`);
-      }
-      if (nodeCpuThreads < 8) {
-        throw new Error(`Node Cpu Threads (${nodeCpuThreads}) below new Nimbus requirements`);
-      }
-    } else if (tier === 'basic' && collateral === 1000) {
-      if (nodeRam < 3) {
-        throw new Error(`Node Total Ram (${nodeRam}) below new Cumulus requirements`);
-      }
-      if (nodeCpuThreads < 4) {
-        throw new Error(`Node Cpu Threads (${nodeCpuThreads}) below new Cumulus requirements`);
-      }
-    }
-    return true;
-  } catch (error) {
-    log.error(error);
-    return false;
+    if (shortfall) log.error(new Error(shortfall));
   }
+  return shortfall === null;
+}
+
+/** Forgets the last hardware reading logged. Unit tests only. */
+function resetHardwareReadingForTests() {
+  lastHardwareReading = null;
 }
 
 /**
@@ -183,19 +204,13 @@ function fit(checks) {
 async function checkNodeFitness() {
   const checks = {};
 
-  // db: a fast read proves the local database answers, once it is prepared
+  // db and docker are what their capabilities say: MongoDB is pinged on the
+  // dependency probe's interval and Docker followed by its event stream, so
+  // the check reads no service and costs a caller nothing.
   if (!capabilities.isUp('localDbPrepared')) {
     return unfit('db', { message: 'The local database is not ready', name: 'DatabaseNotReady' }, checks);
   }
-  try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.get('database.local.database'));
-    const collection = config.get('database.local.collections.activeLoginPhrases');
-    await dbHelper.findOneInDatabase(database, collection, { loginPhrase: 'TestLoginPhraseForDBTest' }, {});
-    checks.db = 'ok';
-  } catch (error) {
-    return unfit('db', { message: error.message, name: error.name, code: error.code }, checks);
-  }
+  checks.db = 'ok';
 
   // syncthing: measured everywhere, but it only decides fitness where FluxOS
   // owns the daemon, and only once there is a measurement to decide on.
@@ -224,13 +239,10 @@ async function checkNodeFitness() {
   }
   checks.syncthing = syncthingBroken ? 'degraded' : syncthingState;
 
-  // docker: listing images proves the daemon answers
-  try {
-    await dockerService.dockerListImages();
-    checks.docker = 'ok';
-  } catch (error) {
-    return unfit('docker', { message: error.message, name: error.name, code: error.code }, checks);
+  if (!capabilities.isUp('dockerReachable')) {
+    return unfit('docker', { message: 'Docker is not reachable', name: 'DockerNotReachable' }, checks);
   }
+  checks.docker = 'ok';
 
   // hardware: the node must still meet its tier requirements
   const hwPassed = await confirmNodeTierHardware();
@@ -1019,4 +1031,5 @@ module.exports = {
 
   // exports for testing purposes
   confirmNodeTierHardware,
+  resetHardwareReadingForTests,
 };
