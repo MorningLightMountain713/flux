@@ -10,6 +10,46 @@ let priceMessageHistory;
 let rateMessageHistory;
 let priceModifierHistory;
 let oracleKeyHistory;
+let legacyPriceRows = null;
+let legacyPriceSchedule = null;
+
+/**
+ * The v1-v8 price cards in force from each height: the configured cards and
+ * every legacy `p_` price message, by height.
+ * @param {Array<{height: number, message: string}>} rows - stored legacy price messages
+ * @returns {ReadonlyArray<object>}
+ */
+function legacyPriceCards(rows) {
+  const cards = [...config.get('fluxapps.price')];
+  for (const { height, message } of rows) {
+    const parts = message.split('_');
+    if (parts[4]) {
+      cards.push({
+        height: +height,
+        cpu: +parts[1],
+        ram: +parts[2],
+        hdd: +parts[3],
+        minPrice: +parts[4],
+        port: +parts[5] || 2,
+        scope: +parts[6] || 6,
+        staticip: +parts[7] || 3,
+      });
+    }
+  }
+  cards.sort((a, b) => a.height - b.height);
+  return Object.freeze(cards.map((card) => Object.freeze({ ...card })));
+}
+
+/**
+ * The stored legacy price messages.
+ * @returns {Promise<Array<{txid: string, height: number, message: string}>>}
+ */
+async function readLegacyPriceRows() {
+  const database = dbHelper.databaseConnection().db(config.get('database.chainparams.database'));
+  return dbHelper.findInDatabase(
+    database, config.get('database.chainparams.collections.chainMessages'), { version: 'p' }, { projection: { _id: 0 } },
+  );
+}
 
 function ensureUint8Array(value) {
   if (value instanceof Uint8Array) return value;
@@ -33,7 +73,7 @@ function fixBinaryFields(doc, fields) {
  * beside the live ones. The live state is untouched until
  * `installPriceOracleState` swaps these in.
  * @returns {Promise<{priceMessageHistory: object, rateMessageHistory: object,
- *   priceModifierHistory: object, oracleKeyHistory: object}>}
+ *   priceModifierHistory: object, oracleKeyHistory: object, legacyPriceRows: object[]}>}
  */
 async function buildPriceOracleState() {
   const {
@@ -48,6 +88,7 @@ async function buildPriceOracleState() {
     rateMessageHistory: new RateMessageHistory(),
     priceModifierHistory: new PriceModifierHistory(),
     oracleKeyHistory: new OracleKeyHistory(),
+    legacyPriceRows: await readLegacyPriceRows(),
   };
 
   const db = dbHelper.databaseConnection();
@@ -102,7 +143,7 @@ async function buildPriceOracleState() {
     built.priceModifierHistory.add(doc.message, doc.height, doc.txIndex);
   }
 
-  log.info(`Price oracle state built: ${priceDocs.length} price, ${rateDocs.length} rate, ${modifierDocs.length} modifier, ${oracleKeyDocs.length} oracle-key`);
+  log.info(`Price oracle state built: ${priceDocs.length} price, ${rateDocs.length} rate, ${modifierDocs.length} modifier, ${oracleKeyDocs.length} oracle-key, ${built.legacyPriceRows.length} legacy price`);
   return built;
 }
 
@@ -110,18 +151,40 @@ async function buildPriceOracleState() {
  * Make built histories the live ones. Synchronous, so no reader sees part of
  * the set.
  * @param {{priceMessageHistory: object, rateMessageHistory: object,
- *   priceModifierHistory: object, oracleKeyHistory: object}} built
+ *   priceModifierHistory: object, oracleKeyHistory: object, legacyPriceRows: object[]}} built
  */
 function installPriceOracleState(built) {
   ({
-    priceMessageHistory, rateMessageHistory, priceModifierHistory, oracleKeyHistory,
+    priceMessageHistory, rateMessageHistory, priceModifierHistory, oracleKeyHistory, legacyPriceRows,
   } = built);
+  legacyPriceSchedule = legacyPriceCards(legacyPriceRows);
+}
+
+/**
+ * Adds a legacy price message the scan stored, replacing the row of its
+ * transaction as the store does. Before the histories are installed there is
+ * nothing to add to: the build reads the store.
+ * @param {{txid: string, height: number, message: string, version: string}} row
+ */
+function recordLegacyPrice(row) {
+  if (legacyPriceRows === null || row.version !== 'p') return;
+  legacyPriceRows = [...legacyPriceRows.filter((stored) => stored.txid !== row.txid), row];
+  legacyPriceSchedule = legacyPriceCards(legacyPriceRows);
 }
 
 function getPriceMessageHistory() { return priceMessageHistory; }
 function getRateMessageHistory() { return rateMessageHistory; }
 function getPriceModifierHistory() { return priceModifierHistory; }
 function getOracleKeyHistory() { return oracleKeyHistory; }
+
+/**
+ * The legacy price cards: the installed ones, or the store's before the
+ * histories are installed.
+ * @returns {Promise<ReadonlyArray<object>>}
+ */
+async function getLegacyPriceSchedule() {
+  return legacyPriceSchedule ?? legacyPriceCards(await readLegacyPriceRows());
+}
 
 module.exports = {
   buildPriceOracleState,
@@ -130,4 +193,6 @@ module.exports = {
   getRateMessageHistory,
   getPriceModifierHistory,
   getOracleKeyHistory,
+  getLegacyPriceSchedule,
+  recordLegacyPrice,
 };
