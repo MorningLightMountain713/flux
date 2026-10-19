@@ -230,7 +230,7 @@ describe('decider', function () {
     expect(await decisionOf('u2')).to.equal(null);
   });
 
-  it('writes the triggering message\'s decision last, after the later ones and the listeners', async () => {
+  it('runs the listeners once every decision of the run is written, the triggering message\'s included', async () => {
     await store({ hash: 'r', height: 100 });
     await store({ hash: 'u', type: 'fluxappupdate', height: 200 });
     const decider = loadDecider();
@@ -244,7 +244,7 @@ describe('decider', function () {
 
     expect(seen).to.have.length(1);
     expect(seen[0].name).to.equal('myapp');
-    expect(seen[0].trigger).to.equal(null);
+    expect(seen[0].trigger).to.include({ decision: 'applied' });
     expect(seen[0].later).to.include({ decision: 'applied' });
     expect(await verdict('r')).to.equal('applied');
   });
@@ -269,6 +269,22 @@ describe('decider', function () {
     expect(await verdict('u')).to.equal('applied');
   });
 
+  it('runs its onFullPass listeners on a full pass that finds nothing left to decide', async () => {
+    await store({ hash: 'r', height: 100 });
+    const decider = loadDecider();
+    decider.wakeAll();
+    await decider.idle();
+    const passes = [];
+    decider.onFullPass(async () => { passes.push(await verdict('r')); });
+
+    decider.wakeAll();
+    await decider.idle();
+
+    // A node that crashed after writing its decisions and before its registry
+    // row has nothing left to decide at its next boot; the row is rebuilt here.
+    expect(passes).to.deep.equal(['applied']);
+  });
+
   it('runs no onDecided listener on a full pass, and its onFullPass listeners after it', async () => {
     await store({ hash: 'r', height: 100 });
     const decider = loadDecider();
@@ -284,7 +300,7 @@ describe('decider', function () {
     expect(passes).to.deep.equal(['applied']);
   });
 
-  it('writes a batch of names in the same four store calls however many names it holds', async () => {
+  it('writes a batch of names in the same store calls however many names it holds', async () => {
     const decisionStore = Object.getPrototypeOf(appRecords.decisions());
     const write = sinon.spy(decisionStore, 'write');
     const undecide = sinon.spy(decisionStore, 'undecide');
@@ -299,8 +315,8 @@ describe('decider', function () {
     decider.wakeAll();
     await decider.idle();
 
-    expect(write.callCount, 'later decisions, then the triggers').to.equal(2);
-    expect(undecide.callCount, 'the triggers, then the blocked tails').to.equal(2);
+    expect(write.callCount, 'every decision of the run').to.equal(1);
+    expect(undecide.callCount, 'the blocked tails, then the triggers of failed listeners').to.equal(2);
     for (const name of ['Alpha', 'Beta', 'Gamma', 'Delta']) {
       // eslint-disable-next-line no-await-in-loop
       expect(await verdict(`${name}-r`), name).to.equal('applied');

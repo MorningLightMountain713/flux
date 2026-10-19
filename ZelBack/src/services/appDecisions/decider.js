@@ -27,14 +27,15 @@ const { createChain } = require('./decisionChain');
  * positions are complete from its first catch-up, and the payments a rewind
  * took away are recorded again).
  *
- * A batch of names is decided, then written in order, each step one store call
- * for the whole batch: the triggering messages' decisions are removed, the
- * later decisions are written, the decisions after a message the rule could not
- * evaluate are removed, the `onDecided` listeners run for each name (the
- * registry row), and the triggering messages' decisions are written last. A
- * crash anywhere before that last write leaves the names undecided, and they
- * are decided again. A full pass runs no `onDecided` listener: the `onFullPass`
- * listeners that follow it read every decision.
+ * A batch of names is decided, then written, each step one store call for the
+ * whole batch: every decision of the run, then the removal of the decisions
+ * after a message the rule could not evaluate. Only then do the `onDecided`
+ * listeners run for each name (the registry row), so what they read of an
+ * app's history holds every decision the run made. A listener that fails
+ * leaves its name's triggering message undecided, and the name is decided
+ * again. A full pass runs no `onDecided` listener: the `onFullPass` listeners
+ * that follow it read every decision, and every boot runs one, so a row a
+ * crash left behind its decisions is rebuilt then.
  */
 
 
@@ -59,9 +60,8 @@ function typeOf(message) {
 }
 
 /**
- * Registers `fn(name, decisions)`, called for each name a wake decided, after
- * its later decisions are written and before its triggering message's decision
- * is.
+ * Registers `fn(name, decisions)`, called for each name a wake decided, once
+ * every decision of the run is written.
  * @param {(name: string, decisions: object[]) => Promise<void>} fn
  * @returns {() => void} unsubscribe
  */
@@ -185,44 +185,44 @@ async function entriesOf(messages, records, decisions) {
 }
 
 /**
- * Writes a batch's decisions in the crash-safe order. A name whose listener
- * fails keeps its triggering message undecided, and is decided again.
+ * Writes a batch's decisions, then runs the listeners of a wake. A name whose
+ * listener fails has its triggering message undecided again, so it is decided
+ * again.
  * @param {Array<{name: string, entries: object[], from: number, decisions: object[], blocked: ?object}>} decided
  * @param {boolean} full - a full pass, which runs no `onDecided` listener
- * @returns {Promise<number>} the decisions written
+ * @returns {Promise<number>} the decisions written and kept
  */
 async function writeDecided(decided, full) {
   const store = appRecords.decisions();
-  const triggers = new Set(decided.map(({ entries, from }) => entries[from].hash));
   const blockedTails = decided.flatMap(({ entries, blocked }) => {
     if (!blocked) return [];
     const at = entries.findIndex((entry) => entry.hash === blocked.hash);
     return entries.slice(at).filter((entry) => entry.decision).map((entry) => entry.hash);
   });
 
-  await store.undecide([...triggers]);
-  await store.write(decided.flatMap(({ decisions }) => decisions.filter((decision) => !triggers.has(decision.hash))));
+  await store.write(decided.flatMap(({ decisions }) => decisions));
   await store.undecide(blockedTails);
-  const settled = [];
-  for (const entry of decided) {
-    try {
-      if (!full) {
+  const failed = [];
+  if (!full) {
+    for (const entry of decided) {
+      try {
         for (const fn of decidedListeners) {
           // eslint-disable-next-line no-await-in-loop
           await fn(entry.name, entry.decisions);
         }
+      } catch (error) {
+        log.error(`decider - ${entry.name}: not decided: ${error.message}`);
+        failed.push(entry);
       }
-      settled.push(entry);
-    } catch (error) {
-      log.error(`decider - ${entry.name}: not decided: ${error.message}`);
     }
   }
-  await store.write(settled.flatMap(({ decisions }) => decisions.filter((decision) => triggers.has(decision.hash))));
+  await store.undecide(failed.map(({ entries, from }) => entries[from].hash));
 
   for (const { name, blocked } of decided) {
     if (blocked) log.warn(`decider - ${name}: ${blocked.hash} not decided, this node could not evaluate it: ${blocked.error.message}`);
   }
-  return settled.reduce((sum, { decisions }) => sum + decisions.length, 0);
+  const kept = decided.filter((entry) => !failed.includes(entry));
+  return kept.reduce((sum, { decisions }) => sum + decisions.length, 0);
 }
 
 /**
