@@ -1,11 +1,8 @@
-const config = require('config');
 const os = require('os');
 const log = require('../lib/log');
 const messageHelper = require('./messageHelper');
-const dbHelper = require('./dbHelper');
 const generalService = require('./generalService');
 const daemonStatus = require('./daemonService/daemonStatus');
-const dockerService = require('./dockerService');
 const syncthingService = require('./syncthingService');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const nodeDosState = require('./nodeDosState');
@@ -149,19 +146,13 @@ function fit(checks) {
 async function checkNodeFitness() {
   const checks = {};
 
-  // db: a fast read proves the local database answers, once it is prepared
+  // db and docker are what their capabilities say: MongoDB is pinged on the
+  // dependency probe's interval and Docker followed by its event stream, so
+  // the check reads no service and costs a caller nothing.
   if (!capabilities.isUp('localDbPrepared')) {
     return unfit('db', { message: 'The local database is not ready', name: 'DatabaseNotReady' }, checks);
   }
-  try {
-    const db = dbHelper.databaseConnection();
-    const database = db.db(config.database.local.database);
-    const collection = config.database.local.collections.activeLoginPhrases;
-    await dbHelper.findOneInDatabase(database, collection, { loginPhrase: 'TestLoginPhraseForDBTest' }, {});
-    checks.db = CHECK.OK;
-  } catch (error) {
-    return unfit('db', { message: error.message, name: error.name, code: error.code }, checks);
-  }
+  checks.db = CHECK.OK;
 
   // syncthing: measured everywhere, but it only decides fitness where FluxOS
   // owns the daemon, and only once there is a measurement to decide on.
@@ -187,13 +178,10 @@ async function checkNodeFitness() {
   }
   checks.syncthing = SYNCTHING_CHECK[syncthingState];
 
-  // docker: listing images proves the daemon answers
-  try {
-    await dockerService.dockerListImages();
-    checks.docker = CHECK.OK;
-  } catch (error) {
-    return unfit('docker', { message: error.message, name: error.name, code: error.code }, checks);
+  if (!capabilities.isUp('dockerReachable')) {
+    return unfit('docker', { message: 'Docker is not reachable', name: 'DockerNotReachable' }, checks);
   }
+  checks.docker = CHECK.OK;
 
   // daemon: whether fluxd answers and has caught up with the chain. Reported,
   // never refused on: a daemon catching up after a restart reads the same as one

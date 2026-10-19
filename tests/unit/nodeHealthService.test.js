@@ -13,6 +13,7 @@ const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper'
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
 const nodeHealthService = require('../../ZelBack/src/services/nodeHealthService');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
+const routeTableV1 = require('../../ZelBack/src/routeTableV1');
 
 const { expect } = chai;
 
@@ -370,7 +371,7 @@ describe('nodeHealthService tests', () => {
       daemonSynced(true);
       syncthingService.setSyncthingRunningState(true);
       sinon.stub(dockerService, 'dockerListImages').returns(true);
-      capabilities.setForTests('localDbPrepared', true);
+      capabilities.setForTests(['localDbPrepared', 'dockerReachable'], true);
     });
 
     afterEach(() => {
@@ -392,6 +393,37 @@ describe('nodeHealthService tests', () => {
         data: { name: 'DatabaseNotReady', message: 'The local database is not ready', failed: 'db' },
       });
       sinon.assert.notCalled(connection);
+    });
+
+    it('reads the database and Docker from their capabilities, not by asking them', async () => {
+      healthyHardware();
+      const find = sinon.spy(dbHelper, 'findOneInDatabase');
+      const images = sinon.spy(dockerService, 'dockerListImages');
+
+      const fitness = await nodeHealthService.checkNodeFitness();
+
+      expect(fitness.ok).to.equal(true);
+      expect(fitness.checks).to.include({ db: 'ok', docker: 'ok' });
+      sinon.assert.notCalled(find);
+      sinon.assert.notCalled(images);
+    });
+
+    it('reports Docker not reachable while its capability is down', async () => {
+      healthyHardware();
+      capabilities.setForTests('dockerReachable', false);
+      const res = generateResponse();
+
+      await nodeHealthService.nodeHealth(undefined, res);
+
+      sinon.assert.calledOnceWithMatch(res.json, {
+        status: 'error',
+        data: { name: 'DockerNotReachable', message: 'Docker is not reachable', failed: 'docker' },
+      });
+    });
+
+    it('is served uncached', () => {
+      const route = routeTableV1.find((r) => r.path === '/flux/health');
+      expect(route).to.not.have.property('cache');
     });
 
     it('nodeHealth reports success with per-check data when the node is fit', async () => {
