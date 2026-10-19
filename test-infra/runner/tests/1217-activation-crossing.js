@@ -80,12 +80,13 @@ async function bringUpFleet(hookCtx) {
         quorumGrantDrainMs: REFEREE_DRAIN_MS,
         quorumGrantMinHolderAgeMs: 0,
         quorumGrantPursuitIntervalMs: 10000,
-        // Ahead of the chain's start, so the fleet boots and settles under the
-        // legacy election exactly as production does today, and the crossing is
-        // something this suite performs rather than something it starts inside.
-        quorumGrantActivationHeight: ACTIVATION_HEIGHT,
         quorumGrantPreWindowBlocks: PRE_WINDOW,
       },
+      // v9's rules, the plane's among them, start ahead of the chain's start, so
+      // the fleet boots and settles under the legacy election exactly as
+      // production does today, and the crossing is something this suite
+      // performs rather than something it starts inside.
+      daemon: { harnessV9ActivationHeight: ACTIVATION_HEIGHT },
     },
   });
   await bootAndPeer(env);
