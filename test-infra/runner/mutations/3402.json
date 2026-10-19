@@ -1,0 +1,44 @@
+[
+  {
+    "name": "rewind-leaves-chain-state-up",
+    "breaks": "a rewind lowers chainStateConsistent until its histories are rebuilt",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/chainState.js",
+        "from": "    handle.lower(`rewinding to ${height}: ${reason}`);\n",
+        "to": ""
+      }
+    ],
+    "red": [
+      "holds chain state and the app list down while the rescan is held"
+    ]
+  },
+  {
+    "name": "list-served-while-inconsistent",
+    "breaks": "the app list route answers 503 while appRegistryConsistent is down",
+    "edits": [
+      {
+        "file": "ZelBack/src/routeTableV1.js",
+        "from": "  { method: 'get', path: '/apps/globalappsspecifications/:hash?/:owner?/:appname?', needs: APP_REGISTRY,",
+        "to": "  { method: 'get', path: '/apps/globalappsspecifications/:hash?/:owner?/:appname?', none: NONE.PROCESS,"
+      }
+    ],
+    "red": [
+      "serves no app list while the rescan is held"
+    ]
+  },
+  {
+    "name": "app-messages-wait-on-chain-state",
+    "breaks": "an app message is taken whatever chain state is doing: it needs only the database",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/fluxCommunication.js",
+        "from": "  (msg, peer) => handleAppMessages(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE, STORED);",
+        "to": "  (msg, peer) => handleAppMessages(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE, { needs: ['localDbPrepared', 'chainStateConsistent'] });"
+      }
+    ],
+    "red": [
+      "takes a registration relayed to it while the rescan is held"
+    ]
+  }
+]
