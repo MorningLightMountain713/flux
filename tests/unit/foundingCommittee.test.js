@@ -167,6 +167,34 @@ describe('foundingCommittee', () => {
       expect(store.get(IDENTITY).components.db.anchorHeight).to.equal(REG_HEIGHT);
     });
 
+    it('pins a component new to this node where its history introduced it, and photographs it there', async () => {
+      await foundingCommittee.applyComponentView(meshView({
+        height: 600_000, componentKeys: ['db', 'cache'], introHeights: new Map([['db', REG_HEIGHT], ['cache', 550_000]]),
+      }));
+      const record = store.get(IDENTITY);
+      expect(record.components.db.anchorHeight, 'a late node pins as a node that watched').to.equal(REG_HEIGHT);
+      expect(record.components.cache.anchorHeight).to.equal(550_000);
+      expect(Object.keys(record.anchors)).to.include.members([String(REG_HEIGHT), '550000']);
+    });
+
+    it('keeps a pin it holds, whatever the history says', async () => {
+      await foundingCommittee.applyComponentView(meshView());
+      await foundingCommittee.applyComponentView(meshView({
+        height: 600_000, introHeights: new Map([['db', REG_HEIGHT - 5]]),
+      }));
+      expect(store.get(IDENTITY).components.db.anchorHeight).to.equal(REG_HEIGHT);
+    });
+
+    it('pins at its intro without a photo when this node\'s window does not reach it', async () => {
+      networkStateService.membershipFingerprintAt.withArgs(REG_HEIGHT).returns(null);
+      await foundingCommittee.applyComponentView(meshView({
+        height: 600_000, introHeights: new Map([['db', REG_HEIGHT]]),
+      }));
+      const record = store.get(IDENTITY);
+      expect(record.components.db.anchorHeight).to.equal(REG_HEIGHT);
+      expect(record.anchors?.[String(REG_HEIGHT)]).to.equal(undefined);
+    });
+
     it('a stale view write changes nothing', async () => {
       await foundingCommittee.applyComponentView(meshView({ height: 600_000 }));
       await foundingCommittee.applyComponentView(meshView({

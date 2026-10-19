@@ -85,11 +85,12 @@ async function materializeFoundingView(record) {
   try {
     const view = await specCutover.resolveRegisteredSpec(record);
     if (view?.network?.mesh !== true) return;
-    const { componentKeys } = await componentKeyMap.namingForVersion(record);
+    const { componentKeys, meshIntroHeights } = await componentKeyMap.namingForVersion(record);
     await foundingCommittee.applyComponentView({
       identity: record.identity,
       height: record.height,
       componentKeys: [...componentKeys.values()],
+      introHeights: meshIntroHeights,
     });
   } catch (error) {
     log.warn(`materializeFoundingView - ${record?.name}: ${error.message}`);

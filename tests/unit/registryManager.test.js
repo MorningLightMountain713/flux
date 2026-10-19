@@ -2009,7 +2009,8 @@ describe('registryManager tests', () => {
       const resolve = sinon.stub(specCutover, 'resolveRegisteredSpec').resolves(view);
       const applyComponentView = sinon.stub(foundingCommittee, 'applyComponentView').resolves();
       const webKey = `c${'w'.repeat(52)}`;
-      const namingForVersion = sinon.stub(componentKeyMap, 'namingForVersion').resolves({ componentKeys: new Map([['web', webKey]]), formerNames: new Map() });
+      const meshIntroHeights = new Map([[webKey, 2_400_000]]);
+      const namingForVersion = sinon.stub(componentKeyMap, 'namingForVersion').resolves({ componentKeys: new Map([['web', webKey]]), formerNames: new Map(), meshIntroHeights });
 
       await registryManager.storeGlobalSpec(stored);
 
@@ -2024,11 +2025,13 @@ describe('registryManager tests', () => {
       assertAnswers(handed.spec, ['createProvider']);
 
       // The mapping names each component by the key its history gives it, so a
-      // renamed component keeps its founding.
+      // renamed component keeps its founding, and where its history introduced it.
       sinon.assert.calledOnceWithExactly(namingForVersion, stored);
       sinon.assert.calledOnce(applyComponentView);
       const [mapped] = applyComponentView.firstCall.args;
-      expect(mapped).to.deep.equal({ identity: 'ab12cd34ef56', height: 2_500_000, componentKeys: [webKey] });
+      expect(mapped).to.deep.equal({
+        identity: 'ab12cd34ef56', height: 2_500_000, componentKeys: [webKey], introHeights: meshIntroHeights,
+      });
       expect(stored.serialize(), 'the stored record itself carries none').to.not.have.property('components');
     });
 

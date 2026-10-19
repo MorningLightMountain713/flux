@@ -8,6 +8,7 @@ const daemonStatus = require('../daemonService/daemonStatus');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { extractIp } = require('../utils/socketAddressUtils');
 const foundingCommittee = require('../appMesh/foundingCommittee');
+const foundingService = require('../appMesh/foundingService');
 const grantClient = require('./grantClient');
 const masterleasePublisher = require('./masterleasePublisher');
 const downCertificates = require('./downCertificates');
@@ -81,14 +82,22 @@ async function selfOutpoint() {
  * rung, the founding committee at that rung with the current generation
  * folded in, and whether the world is ARMED (a flip inside the quiet zone —
  * the founding service's own gate against starting a round that races it).
- * Null is an honest "not yet": no photo, no committee.
+ * Without a photo of its own at the rung, the basis a peer holds routes the
+ * asks, as a founding round's does: every referee reached judges the ask
+ * against its own photo. Null is an honest "not yet": no photo, none
+ * discovered.
  */
 async function basisFor(identity) {
   const world = await foundingCommittee.appWorld(identity);
   if (!world) return null;
-  const rung = world.rungs[world.rungs.length - 1];
-  const committee = await foundingCommittee.refereeCommittee(identity, rung);
-  if (!committee) return null;
+  let rung = world.rungs[world.rungs.length - 1];
+  let committee = await foundingCommittee.refereeCommittee(identity, rung);
+  if (!committee) {
+    const discovered = await foundingService.discoveredBasis(identity, world.intro);
+    if (!discovered || discovered.rung < rung) return null;
+    ({ rung } = discovered);
+    committee = discovered.basis;
+  }
   const generation = await currentGeneration(identity);
   return {
     rung,

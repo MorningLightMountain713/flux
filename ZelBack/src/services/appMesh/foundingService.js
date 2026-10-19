@@ -237,4 +237,5 @@ function validBasis(basis) {
 
 module.exports = {
   founderAsk,
+  discoveredBasis,
 };
