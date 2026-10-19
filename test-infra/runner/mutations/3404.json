@@ -10,7 +10,7 @@
       }
     ],
     "red": [
-      "lists the network's apps on v9, less exactly the apps the rules refuse"
+      "lists the release's apps on v9, less exactly the apps the rules refuse"
     ]
   },
   {
@@ -24,7 +24,7 @@
       }
     ],
     "red": [
-      "lists the network's apps on v9, less exactly the apps the rules refuse",
+      "lists the release's apps on v9, less exactly the apps the rules refuse",
       "reaches a consistent app list within the boot bound from the start of FluxOS"
     ]
   }

@@ -12,10 +12,12 @@
  * the first v9 start moves the messages, positions their payments, decides every
  * one and derives the list from the decisions.
  *
- * Then: the list it reaches is the network's, less exactly the apps the rules
- * refuse (README §8 of the boot-phases design: the apps leaving at the upgrade,
- * by name); every app it removes or adds is printed; and the list is consistent
- * within the boot bound, system.bootSyncTimeoutMs from the start of FluxOS.
+ * Then: the list it reaches is the release's at the same height, less exactly
+ * the apps the rules refuse (README §8 of the boot-phases design: the apps
+ * leaving at the upgrade, by name); every app it removes, adds or lists at
+ * another message is printed with the node's decision on each of its messages;
+ * and the list is consistent within the boot bound, system.bootSyncTimeoutMs
+ * from the start of FluxOS.
  */
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
@@ -105,38 +107,70 @@ describe('an upgrade over the network\'s app history', function () {
     await env?.teardown();
   });
 
+  // The decisions the node holds on every message of an app, in chain order:
+  // why it lists the app where it does, or not at all.
+  async function decisionsFor(name) {
+    const messages = corpus.messages
+      .filter((m) => String((m.appSpecifications ?? m.zelAppSpecifications)?.name ?? '').toLowerCase() === name)
+      .sort((a, b) => a.height - b.height || a.txIndex - b.txIndex);
+    const lines = await Promise.all(messages.map(async (m) => {
+      const { status, data } = await node().request('GET', `/v2/apps/messages/${m.hash}/decision`);
+      const d = status === 200 ? data.data : { decision: `HTTP ${status}` };
+      return `${m.type}@${m.height}:${m.hash.slice(0, 8)} paid ${m.valueSat} ${d.decision}${d.reason ? ` ${d.reason}` : ''}${d.fee ? ` fee ${d.fee}` : ''}`;
+    }));
+    return `${name}: ${lines.join(' | ')}`;
+  }
+
+  // The release's own list at the fleet's height: what the network serves once
+  // every term ended by then has left it. The network's list was read at the
+  // corpus tip and still carries an app whose term ends there.
+  let release = null;
+
   // The release serves its list once its boot hash sync has run with its peers
   // and it has rebuilt the list from every message it holds.
   it('serves the network\'s app list on the release, from the history it was given', async function () {
     this.timeout(RELEASE_LIST_MS);
-    let listed = null;
     await waitFor(async () => {
-      listed = await listOn();
-      return listed !== null && listed.size > 0;
+      release = await listOn();
+      return release !== null && release.size > 0;
     }, { timeout: RELEASE_LIST_MS, interval: 5000, label: 'the released node serves its app list' });
     const network = new Map(corpus.listed.map((row) => [row.name.toLowerCase(), row]));
-    const missing = [...network.keys()].filter((name) => !listed.has(name)).sort();
-    const extra = [...listed.keys()].filter((name) => !network.has(name)).sort();
-    console.log(`# release: ${listed.size} listed; missing [${missing.map((name) => `${name}@${network.get(name).height}`).join(', ')}]; extra [${extra.join(', ')}]`);
-    expect([...listed.keys()].sort(), 'the released node lists what the network lists').to.deep.equal([...network.keys()].sort());
+    const missing = [...network.keys()].filter((name) => !release.has(name)).sort();
+    const extra = [...release.keys()].filter((name) => !network.has(name)).sort();
+    const moved = [...release.keys()].filter((name) => network.has(name) && release.get(name).hash !== network.get(name).hash).sort();
+    console.log(`# release: ${release.size} listed; missing [${missing.map((name) => `${name}@${network.get(name).height}+${network.get(name).expire ?? '-'}`).join(', ')}]; extra [${extra.join(', ')}]; on another message [${moved.join(', ')}]`);
+    expect(extra, 'the release lists an app the network does not').to.deep.equal([]);
+    expect(moved, 'the release lists an app at a message the network does not').to.deep.equal([]);
+    const res = await fetch(`${node().url}/explorer/scannedheight`);
+    const scanned = (await res.json())?.data?.generalScannedHeight;
+    expect(Number.isInteger(scanned), 'the release answers its scanned height').to.equal(true);
+    const unended = missing.filter((name) => {
+      const row = network.get(name);
+      return !Number.isInteger(row.expire) || row.height + row.expire > scanned;
+    });
+    expect(unended, `apps the release does not list whose term had not ended at its height ${scanned}`).to.deep.equal([]);
   });
 
-  it('lists the network\'s apps on v9, less exactly the apps the rules refuse', async function () {
+  it('lists the release\'s apps on v9, less exactly the apps the rules refuse', async function () {
     this.timeout(UPGRADE_MS);
+    expect(release, 'the release served its list').to.not.equal(null);
     await env.upgradeNode(SUBJECT, { tag: TAG, readyTimeoutMs: UPGRADE_MS });
     await waitFor(async () => (await readout('/capabilities'))?.find((c) => c.name === 'appRegistryConsistent')?.state === 'up', {
       timeout: UPGRADE_MS, interval: 10000, label: 'the upgraded node\'s app list is consistent',
     });
     const listed = await listOn();
-    const network = new Map(corpus.listed.map((row) => [row.name.toLowerCase(), row]));
-    const removed = [...network.keys()].filter((name) => !listed.has(name)).sort();
-    const added = [...listed.keys()].filter((name) => !network.has(name)).sort();
-    const moved = [...listed.keys()].filter((name) => network.has(name) && listed.get(name).hash !== network.get(name).hash).sort();
+    const removed = [...release.keys()].filter((name) => !listed.has(name)).sort();
+    const added = [...listed.keys()].filter((name) => !release.has(name)).sort();
+    const moved = [...listed.keys()].filter((name) => release.has(name) && listed.get(name).hash !== release.get(name).hash).sort();
     console.log(`# upgrade over ${corpus.messages.length} messages (${corpus.source}, ${corpus.fetchedAt}, tip ${corpus.tip}): `
       + `${listed.size} listed; removed [${removed.join(', ')}]; added [${added.join(', ')}]; on another message [${moved.join(', ')}]`);
+    for (const name of [...removed, ...added, ...moved]) {
+      // eslint-disable-next-line no-await-in-loop
+      console.log(`# decisions: ${await decisionsFor(name)}`);
+    }
     expect(removed, 'the apps the upgrade removes').to.deep.equal(EXPECTED_REMOVED);
-    expect(added, 'apps the network does not list').to.deep.equal([]);
-    expect(moved, 'apps listed at a message the network does not list them at').to.deep.equal([]);
+    expect(added, 'apps the release does not list').to.deep.equal([]);
+    expect(moved, 'apps listed at a message the release does not list them at').to.deep.equal([]);
   });
 
   it('reaches a consistent app list within the boot bound from the start of FluxOS', async function () {
