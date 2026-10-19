@@ -25,7 +25,7 @@ import { authenticate } from '../auth.js';
 import { fluxTeamKey } from '../framework/keys.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import {
-  legacyPaymentRows, legacyPermanentMessages, loadAppCorpus, seedPaymentPositions,
+  LEGACY_INDEXES, legacyPaymentRows, legacyPermanentMessages, loadAppCorpus, seedPaymentPositions,
 } from '../framework/app-corpus.js';
 import { dbClient } from '../framework/db-client.js';
 import { waitFor, waitForDaemonReady } from '../framework/wait.js';
@@ -92,6 +92,7 @@ describe('an upgrade over the network\'s app history', function () {
       payments: legacyPaymentRows(corpus),
       messages: legacyPermanentMessages(corpus),
       listed: corpus.listed,
+      indexes: LEGACY_INDEXES,
     });
     await seedPaymentPositions(corpus);
     const client = await env.startNode(SUBJECT);
