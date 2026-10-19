@@ -97,6 +97,7 @@ const playgroundService = require('./appPlayground/playgroundService');
 const admissionControl = require('./utils/admissionControl');
 const migrations = require('./migrations');
 const limitCounterRecords = require('./utils/limitCounterRecords');
+const capabilityHistory = require('./capabilityHistory');
 const imageCacheMaintenance = require('./appLifecycle/imageCacheMaintenance');
 const imageReaper = require('./appLifecycle/imageReaper');
 const imageUpdateService = require('./imageUpdateService');
@@ -359,6 +360,8 @@ async function startFluxFunctions() {
         // the admission-path miner check reads
         await playgroundAudit.prepareCollection();
         await limitCounterRecords.prepareCollection();
+        await capabilityHistory.prepareCollection();
+        capabilityHistory.start();
         // Who gives capacity back when paid work cannot otherwise fit. Registered
         // rather than imported: admissionControl is depended on by every resource
         // check, and it must not in turn depend on whichever feature happens to hold
