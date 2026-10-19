@@ -211,10 +211,12 @@ export function dbClient(nodeNum) {
       return replica != null ? `${base}_${replica}` : base;
     },
 
-    // Writes the app history a release before v9 keeps, in its collections and
-    // shapes: the payment index, the permanent messages and the app list (see
-    // app-corpus.js). For a node that has not booted yet.
-    async seedLegacyAppStore({ payments, messages, listed }) {
+    // Writes the app history a release before v9 keeps, in its collections,
+    // shapes and indexes: the payment index, the permanent messages and the app
+    // list (see app-corpus.js). For a node that has not booted yet.
+    async seedLegacyAppStore({
+      payments, messages, listed, indexes,
+    }) {
       const explorerDb = await db('explorer');
       const globalDb = await db('appsGlobal');
       const batches = async (collection, rows) => {
@@ -223,9 +225,18 @@ export function dbClient(nodeNum) {
           await collection.insertMany(rows.slice(i, i + 5000).map((row) => ({ ...row })), { ordered: false });
         }
       };
-      await batches(explorerDb.collection('zelappshashes'), payments);
-      await batches(globalDb.collection('zelappsmessages'), messages);
-      await batches(globalDb.collection('zelappsinformation'), listed);
+      const collections = {
+        payments: explorerDb.collection('zelappshashes'),
+        messages: globalDb.collection('zelappsmessages'),
+        listed: globalDb.collection('zelappsinformation'),
+      };
+      await batches(collections.payments, payments);
+      await batches(collections.messages, messages);
+      await batches(collections.listed, listed);
+      for (const [store, specs] of Object.entries(indexes ?? {})) {
+        // eslint-disable-next-line no-await-in-loop
+        if (specs.length) await collections[store].createIndexes(specs);
+      }
     },
 
     // This node's stored decision on a paid app message, or null when it holds

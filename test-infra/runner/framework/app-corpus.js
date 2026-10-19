@@ -12,6 +12,36 @@ import { readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { seedAddressDeltas } from './daemon-control.js';
 
+// The indexes a release keeps on each collection, as a node running 8.21.1
+// holds them. Its boot updates payment rows by transaction before its explorer
+// starts and indexes anything, so the corpus is written with them.
+export const LEGACY_INDEXES = Object.freeze({
+  payments: [
+    { key: { txid: 1 }, name: 'query for getting txid' },
+    { key: { height: 1 }, name: 'query for getting height' },
+    { key: { hash: 1 }, name: 'query for getting app hash', unique: true },
+    { key: { message: 1 }, name: 'query for getting app hashes depending if we have message' },
+  ],
+  messages: [
+    { key: { 'appSpecifications.name': 1 }, name: 'query for getting app message based on zelapp specs name' },
+    { key: { 'appSpecifications.owner': 1 }, name: 'query for getting app message based on zelapp specs owner' },
+    { key: { 'appSpecifications.version': 1 }, name: 'query for getting app message based on version' },
+    { key: { txid: 1 }, name: 'query for getting zelapp message based on txid' },
+    { key: { 'appSpecifications.repotag': 1 }, name: 'query for getting app message based on image' },
+    { key: { hash: 1 }, name: 'query for getting zelapp message based on hash', unique: true },
+    { key: { 'appSpecifications.nodes': 1 }, name: 'query for getting app message based on nodes' },
+    { key: { height: 1 }, name: 'query for getting zelapp message based on height' },
+    { key: { 'appSpecifications.name': 1, height: -1, timestamp: -1 }, name: 'newestAppMessageByName' },
+  ],
+  listed: [
+    { key: { name: 1 }, name: 'query for getting zelapp based on zelapp specs name' },
+    { key: { owner: 1 }, name: 'query for getting zelapp based on zelapp specs owner' },
+    { key: { repotag: 1 }, name: 'query for getting zelapp based on image' },
+    { key: { height: 1 }, name: 'query for getting zelapp based on last height update' },
+    { key: { hash: 1 }, name: 'query for getting zelapp based on last hash' },
+  ],
+});
+
 // The daemon stub's control API parses at most 100 KB a request.
 const DELTAS_PER_REQUEST = 400;
 
