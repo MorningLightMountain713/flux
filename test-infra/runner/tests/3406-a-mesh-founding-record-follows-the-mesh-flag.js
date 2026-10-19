@@ -91,6 +91,9 @@ describe('a mesh founding record follows the mesh flag', function () {
           quorumGrantLockDelayMs: 10000,
           quorumGrantRenewIntervalMs: 5000,
           quorumGrantAskTimeoutMs: 3000,
+          // A host founds its ordinal once it adopts the spec that turns mesh
+          // on, which production spreads over five minutes.
+          adoptionStaggerWindowMs: 20000,
         },
       },
     });
