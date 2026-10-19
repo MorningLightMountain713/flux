@@ -211,6 +211,13 @@ export function dbClient(nodeNum) {
       return replica != null ? `${base}_${replica}` : base;
     },
 
+    // This node's stored decision on a paid app message, or null when it holds
+    // none: what the decider wrote, read where no route serves it.
+    async decision(hash) {
+      const globalDb = await db('appsGlobal');
+      return globalDb.collection('appdecisions').findOne({ hash }, { projection: { _id: 0 } });
+    },
+
     // The version the app on this node's registration row was registered with:
     // the spec version of the first message the decider applied for the row's
     // uuid, as the node reads it when it names the app's components.
