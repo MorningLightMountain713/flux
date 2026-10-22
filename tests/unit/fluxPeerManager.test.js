@@ -529,6 +529,22 @@ describe('FluxPeerSocket tests', () => {
       sinon.assert.calledOnce(manager.messageDispatcher);
     });
 
+    it('keeps the far end\'s stop statement for its close and dispatches it nowhere', async () => {
+      const ws = createMockWs();
+      sinon.stub(rateLimit, 'lruRateLimit').returns(true);
+      const peer = new FluxPeerSocket(ws, '10.0.0.1', '16127', manager);
+      peer.source = PEER_SOURCE.RANDOM;
+      const statement = {
+        version: 1, pubKey: 'pk', timestamp: 1, signature: 's', data: { type: 'fluxprocessstop', processId: 'p' },
+      };
+
+      ws.onmessage({ data: `T${Date.now()}|${JSON.stringify(statement)}` });
+      await new Promise(setImmediate);
+
+      expect(peer.stopStatement).to.deep.equal(statement);
+      sinon.assert.notCalled(manager.messageDispatcher);
+    });
+
     it('should route sync responses to syncResponseDispatcher', async () => {
       const ws = createMockWs();
       sinon.stub(rateLimit, 'lruRateLimit').returns(true);
@@ -3794,6 +3810,19 @@ describe('FluxPeerManager — a stopping process closes its held connections wit
 
     sinon.assert.notCalled(ws.send);
     sinon.assert.calledWith(ws.close, CLOSE_CODES.SHUTTING_DOWN);
+  });
+
+  it('a held connection\'s removal carries the stop statement its far end sent, or null', () => {
+    const removed = [];
+    manager.on('peer:removed', (info) => removed.push(info));
+    const stopping = manager.add(createMockWs('10.0.0.14'), '10.0.0.14', '16127', { source: PEER_SOURCE.RANDOM });
+    manager.add(createMockWs('10.0.0.15'), '10.0.0.15', '16127', { source: PEER_SOURCE.RANDOM });
+    stopping.stopStatement = { data: { type: 'fluxprocessstop' } };
+
+    manager.remove('10.0.0.14:16127', CLOSE_CODES.RESTARTING);
+    manager.remove('10.0.0.15:16127', 1006);
+
+    expect(removed.map((info) => info.stopStatement)).to.deep.equal([{ data: { type: 'fluxprocessstop' } }, null]);
   });
 
   it('a peer that never acknowledges does not hold the exit past the bound', async () => {

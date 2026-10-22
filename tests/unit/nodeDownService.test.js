@@ -7,7 +7,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { EventEmitter } = require('node:events');
 const log = require('../../ZelBack/src/lib/log');
-const { NodeDownJuror } = require('../../ZelBack/src/services/utils/nodeDownJuror');
+const { NodeDownJuror, STOP_CLOSE_AGE_MS } = require('../../ZelBack/src/services/utils/nodeDownJuror');
 const { NODE_DOWN_GRACE_MS, RESTART_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
 const { CLOSE_CODES } = require('../../ZelBack/src/services/utils/FluxPeerSocket');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
@@ -50,6 +50,11 @@ function makeHarness(opts = {}) {
     verifyMessage: sinon.stub().returns(true),
     certificatesFor: sinon.stub().resolves([]),
     sign: sinon.stub().callsFake(async (message) => JSON.stringify(message)),
+    // A statement is accepted when it names a process id; tests that refuse
+    // one say so.
+    verifyStop: sinon.stub().callsFake(async (statement) => (statement?.data?.processId
+      ? { ok: true, processId: statement.data.processId }
+      : { ok: false, why: 'malformed' })),
   };
   const world = {
     height: 100, ownStatus: null, listReady: true, listWaiters: [],
@@ -101,6 +106,7 @@ function makeHarness(opts = {}) {
     './nodeConfirmationService': { getNodeStatus: () => world.ownStatus },
     './verificationHelper': { signMessage: stubs.signMessage, verifyMessage: stubs.verifyMessage },
     './utils/fluxBroadcastHelper': { serialiseAndSignFluxBroadcast: stubs.sign },
+    './utils/stopStatements': { verifyStop: stubs.verifyStop },
   });
   if (opts.placementCheck !== false) service.setPlacementCheck(stubs.enforcePlacement);
   const peerManager = new EventEmitter();
@@ -1211,9 +1217,18 @@ describe('nodeDownService — the drop carries its reason, and the probe is an e
   const DUTY_PORT = '16127';
   const DUTY_HOST = '10.0.0.2';
 
-  function drop(transport, closeCode) {
+  // A coded close carries a signed stop of a new process unless told otherwise.
+  let processSeq = 0;
+  function drop(transport, closeCode, stopStatement = undefined) {
+    processSeq += 1;
     transport.peerManager.emit('peer:removed', {
-      ip: DUTY_HOST, port: DUTY_PORT, direction: 'outbound', closeCode,
+      ip: DUTY_HOST,
+      port: DUTY_PORT,
+      direction: 'outbound',
+      closeCode,
+      stopStatement: stopStatement === undefined
+        ? { data: { processId: processSeq.toString(16).padStart(32, '0') } }
+        : stopStatement,
     });
   }
   function held(transport) {
@@ -1296,6 +1311,62 @@ describe('nodeDownService — the drop carries its reason, and the probe is an e
     expect(transport.openEphemeralConnection.callCount).to.equal(0);
     service.stop();
     clock.restore();
+  });
+
+  it('a coded close\'s statement is checked as the closing node\'s, for the close\'s reason, within the close age', async () => {
+    const harness = makeHarness();
+    withDuty(harness);
+    const { service, transport, stubs } = harness;
+    service.start(transport);
+    await tick();
+    drop(transport, CLOSE_CODES.RESTARTING);
+    await tick();
+    sinon.assert.calledOnce(stubs.verifyStop);
+    expect(stubs.verifyStop.firstCall.args[1]).to.include({
+      socketAddress: DUTY_IP, reason: 'restart', maxAgeMs: STOP_CLOSE_AGE_MS,
+    });
+    expect(transport.openEphemeralConnection.callCount, 'honoured: no look at the drop').to.equal(0);
+    service.stop();
+  });
+
+  it('a coded close without a stop statement is looked at now', async () => {
+    const harness = makeHarness();
+    withDuty(harness);
+    const { service, transport } = harness;
+    service.start(transport);
+    await tick();
+    drop(transport, CLOSE_CODES.RESTARTING, null);
+    await tick();
+    expect(transport.openEphemeralConnection.callCount).to.equal(1);
+    service.stop();
+  });
+
+  it('a coded close whose stop statement is refused is looked at now', async () => {
+    const harness = makeHarness();
+    withDuty(harness);
+    const { service, transport, stubs } = harness;
+    stubs.verifyStop.resolves({ ok: false, why: 'age' });
+    const said = sinon.spy(log, 'info');
+    service.start(transport);
+    await tick();
+    drop(transport, CLOSE_CODES.SHUTTING_DOWN);
+    await tick();
+    expect(transport.openEphemeralConnection.callCount).to.equal(1);
+    expect(said.args.map((args) => args[0])).to.include(`nodeDownService: the stop statement on ${DUTY_IP}'s shutdown close is not accepted (age)`);
+    service.stop();
+  });
+
+  it('a coded close whose statement cannot be checked is looked at now', async () => {
+    const harness = makeHarness();
+    withDuty(harness);
+    const { service, transport, stubs } = harness;
+    stubs.verifyStop.rejects(new Error('list unavailable'));
+    service.start(transport);
+    await tick();
+    drop(transport, CLOSE_CODES.SHUTTING_DOWN);
+    await tick();
+    expect(transport.openEphemeralConnection.callCount).to.equal(1);
+    service.stop();
   });
 
   it('an unannounced drop is still looked at now', async () => {

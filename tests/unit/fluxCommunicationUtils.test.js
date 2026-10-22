@@ -580,6 +580,18 @@ describe('fluxCommunicationUtils tests', () => {
 
       expect(announcer).to.equal(node);
     });
+
+    it('resolves a stop statement\'s signer by the address it names', async () => {
+      const node = { ip: '192.168.1.100:16127', txhash: 'tx', outidx: 1, pubkey: 'pk' };
+      sinon.stub(networkStateService, 'getFluxnodesByPubkey').resolves(new Map([['a', {}], ['b', {}]]));
+      sinon.stub(networkStateService, 'getFluxnodeBySocketAddress').withArgs(node.ip).resolves(node);
+
+      const { announcer } = await fluxCommunicationUtils.resolveBroadcastAnnouncer(
+        { type: 'fluxprocessstop', ip: node.ip }, 'pk',
+      );
+
+      expect(announcer).to.equal(node);
+    });
   });
 
   // RELEASED-FLEET COMPATIBILITY: delete with appMessaging/releasedFleetSigterm.

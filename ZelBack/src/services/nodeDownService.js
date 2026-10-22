@@ -11,7 +11,8 @@ const nodeDownStore = require('./appMessaging/nodeDownStore');
 const messageStore = require('./appMessaging/messageStore');
 const { RECORD_STATE } = nodeDownStore;
 const { RingReconciler } = require('./utils/ringReconciler');
-const { NodeDownJuror, DROP_REASON } = require('./utils/nodeDownJuror');
+const { NodeDownJuror, DROP_REASON, STOP_CLOSE_AGE_MS } = require('./utils/nodeDownJuror');
+const stopStatements = require('./utils/stopStatements');
 const { FlapLadder } = require('./utils/flapLadder');
 const meshOrdinals = require('./appMesh/meshOrdinals');
 const { FluxPeerManager } = require('./utils/FluxPeerManager');
@@ -62,6 +63,30 @@ let selfLocked = false;
 let selfLockoutUnreadable = false;
 // edge: the death count for a subject could not be read; cleared when it can
 let deathUnreadable = false;
+
+// A coded drop reaches the juror once its stop statement is checked, which
+// takes a turn of the event loop: a duty's drops and holds wait on its
+// pending check, so the juror reads them in the order they happened.
+const pendingDrops = new Map();
+
+/**
+ * Run `apply` for this connection once every earlier drop on it has reached
+ * the juror: at once when none is pending. An `apply` that answers a promise
+ * is pending until it settles.
+ * @param {string} socketAddress
+ * @param {() => (void|Promise<void>)} apply
+ */
+function inDropOrder(socketAddress, apply) {
+  const before = pendingDrops.get(socketAddress);
+  const settled = before ? before.then(apply) : apply();
+  if (!settled || typeof settled.then !== 'function') return;
+  const tail = settled
+    .catch((error) => log.warn(`nodeDownService: ${error.message}`))
+    .then(() => {
+      if (pendingDrops.get(socketAddress) === tail) pendingDrops.delete(socketAddress);
+    });
+  pendingDrops.set(socketAddress, tail);
+}
 
 // outpoint <-> dialable address, rebuilt when the membership moves.
 const index = { fingerprint: undefined, byOutpoint: new Map(), bySocket: new Map() };
@@ -547,7 +572,32 @@ function onVerdictMessage(msgObj) {
   });
 }
 
-function onPeerRemoved({ ip, port, closeCode }) {
+/**
+ * The process id of the stop statement a coded close carried, when the
+ * statement is the closing node's, names this close's reason and was signed
+ * within STOP_CLOSE_AGE_MS of this node's clock; null otherwise, and the
+ * juror reads the close as unannounced.
+ *
+ * @param {object|null} statement
+ * @param {string} socketAddress the closing node's
+ * @param {string} reason the close code's DROP_REASON
+ * @returns {Promise<string|null>}
+ */
+async function stopOnClose(statement, socketAddress, reason) {
+  if (!statement) return null;
+  const stop = await stopStatements.verifyStop(statement, {
+    now: Date.now(), maxAgeMs: STOP_CLOSE_AGE_MS, socketAddress, reason,
+  });
+  if (!stop.ok) {
+    log.info(`nodeDownService: the stop statement on ${socketAddress}'s ${reason} close is not accepted (${stop.why})`);
+    return null;
+  }
+  return stop.processId;
+}
+
+function onPeerRemoved({
+  ip, port, closeCode, stopStatement = null,
+}) {
   if (!reconciler) return;
   reconciler.schedule('peer-removed');
   // every peer gone again while the network is still not back: the grace
@@ -561,12 +611,26 @@ function onPeerRemoved({ ip, port, closeCode }) {
   // flap.
   if (!FluxPeerManager.shouldReconnect(closeCode)) return;
   refreshIndex();
-  const outpoint = index.bySocket.get(`${ip}:${port}`);
+  const socketAddress = `${ip}:${port}`;
+  const outpoint = index.bySocket.get(socketAddress);
   if (!outpoint) return;
   const reason = STOP_REASON_BY_CODE.get(closeCode) ?? DROP_REASON.UNANNOUNCED;
-  const { honoured } = juror.noteDrop(outpoint, reason);
-  const duties = dutyOutpoints();
-  if (!honoured && duties.has(outpoint)) ladder.noteDrop(outpoint, duties.size);
+  const noted = (processId) => {
+    if (!juror) return;
+    const { honoured } = juror.noteDrop(outpoint, reason, processId);
+    const duties = dutyOutpoints();
+    if (!honoured && duties.has(outpoint)) ladder.noteDrop(outpoint, duties.size);
+  };
+  if (reason === DROP_REASON.UNANNOUNCED) {
+    inDropOrder(socketAddress, () => noted(null));
+    return;
+  }
+  const checked = stopOnClose(stopStatement, socketAddress, reason)
+    .catch((error) => {
+      log.warn(`nodeDownService: the stop statement from ${socketAddress} could not be checked: ${error.message}`);
+      return null;
+    });
+  inDropOrder(socketAddress, () => checked.then(noted));
 }
 
 // A peering counts as a hold once the far end has spoken. The add is the
@@ -577,10 +641,14 @@ function onPeerRemoved({ ip, port, closeCode }) {
 function onPeerAnswered({ ip, port } = {}) {
   if (!ladder || !ip || !port) return;
   refreshIndex();
-  const outpoint = index.bySocket.get(`${ip}:${port}`);
+  const socketAddress = `${ip}:${port}`;
+  const outpoint = index.bySocket.get(socketAddress);
   if (outpoint && dutyOutpoints().has(outpoint)) {
-    ladder.noteReturn(outpoint);
-    juror.noteHeld(outpoint);
+    inDropOrder(socketAddress, () => {
+      if (!juror) return;
+      ladder.noteReturn(outpoint);
+      juror.noteHeld(outpoint);
+    });
   }
 }
 
@@ -915,6 +983,7 @@ function stop() {
   index.byOutpoint.clear();
   index.bySocket.clear();
   seenStanding.clear();
+  pendingDrops.clear();
 }
 
 module.exports = {

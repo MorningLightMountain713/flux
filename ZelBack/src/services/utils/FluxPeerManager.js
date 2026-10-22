@@ -465,7 +465,11 @@ class FluxPeerManager extends EventEmitter {
     // Direct emitter event: the bus below is harness observability only and
     // never fires on a real node.
     this.emit('peer:removed', {
-      ip: peer.ip, port: peer.port, direction: peer.direction, closeCode: closeCode || null,
+      ip: peer.ip,
+      port: peer.port,
+      direction: peer.direction,
+      closeCode: closeCode || null,
+      stopStatement: peer.stopStatement ?? null,
     });
     fluxEventBus.publish('peers:removed', { ip: peer.ip, port: peer.port, direction: peer.direction, closeCode: closeCode || null, outbound: this.#outboundKeys.size, inbound: this.#inboundKeys.size, total: this.#peers.size });
     if (this.#aboveThreshold && this.#peers.size < this.#syncDegradedThreshold) {

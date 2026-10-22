@@ -141,6 +141,7 @@ async function resolveBroadcastAnnouncer(payload, pubKey) {
     case 'fluxmasterlease':
     case 'fluxgrantgeneration':
     case 'fluxnodealive':
+    case 'fluxprocessstop':
     case 'fluxnodesigterm': // RELEASED-FLEET COMPATIBILITY: delete with appMessaging/releasedFleetSigterm.
       target = payload.ip;
       break;
