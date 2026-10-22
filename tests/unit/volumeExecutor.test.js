@@ -290,7 +290,7 @@ describe('volumeExecutor tests', () => {
       expect(HostConfig.ReadonlyRootfs).to.equal(true);
       expect(HostConfig.NetworkMode).to.equal('none');
       expect(HostConfig.SecurityOpt).to.deep.equal(['no-new-privileges']);
-      expect(HostConfig.AutoRemove).to.equal(true);
+      expect(HostConfig.AutoRemove, 'kept, so its exit code outlives a restart').to.equal(false);
     });
 
     it('bounds the processor and grants no swap, so four operations cannot starve the node', async () => {
@@ -1564,6 +1564,88 @@ describe('volumeExecutor tests', () => {
       sinon.assert.calledOnceWithExactly(fileOperationStoreStub.forgetOperation, 'container-1');
     });
 
+    // A restart re-opens the job under the terms it was started on: one that
+    // came back ownerless would answer anyone holding its id.
+    it('records the job\'s owner and kind', async () => {
+      jobRegistry.reset();
+      const { jobId } = jobRegistry.start({ kind: 'compress', owner: 'zel-owner' });
+      const vol = await openSession();
+      await volumeExecutor.run(vol, ['true'], { jobId });
+
+      const [doc] = fileOperationStoreStub.recordOperation.firstCall.args;
+      expect(doc.owner).to.equal('zel-owner');
+      expect(doc.jobKind).to.equal('compress');
+    });
+
+    // Kept after it exits, so the exit code is there for a restart to read, and
+    // removed once this process has read it - after the record, so a restart
+    // in between finds a container no record names, which the reaper takes,
+    // rather than a record whose container is missing.
+    it('removes the container after it exits, once its record is forgotten', async () => {
+      const vol = await openSession();
+      await volumeExecutor.run(vol, ['true']);
+      await new Promise((resolve) => { setImmediate(resolve); });
+
+      sinon.assert.calledOnceWithExactly(containerStub.remove, { force: true });
+      sinon.assert.callOrder(fileOperationStoreStub.forgetOperation, containerStub.remove);
+    });
+
+    it('keeps the container until its record is gone', async () => {
+      let forgotten;
+      fileOperationStoreStub.forgetOperation.returns(new Promise((resolve) => { forgotten = resolve; }));
+      const vol = await openSession();
+      await volumeExecutor.run(vol, ['true']);
+      await new Promise((resolve) => { setImmediate(resolve); });
+      sinon.assert.notCalled(containerStub.remove);
+
+      forgotten();
+      await new Promise((resolve) => { setImmediate(resolve); });
+      sinon.assert.calledOnceWithExactly(containerStub.remove, { force: true });
+    });
+
+    it('removes the container of an operation that failed', async () => {
+      containerStub.wait.resolves({ StatusCode: 2 });
+      const vol = await openSession();
+      await expect(volumeExecutor.run(vol, ['false'])).to.be.rejected;
+      await new Promise((resolve) => { setImmediate(resolve); });
+
+      sinon.assert.calledOnceWithExactly(containerStub.remove, { force: true });
+    });
+
+    it('stops an operation that ends before its container, and removes the container once it exits', async () => {
+      let exit;
+      containerStub.wait.returns(new Promise((resolve) => { exit = resolve; }));
+      const vol = await openSession();
+      const onProgress = sinon.stub().onFirstCall().throws(new Error('caller gone'));
+
+      await expect(volumeExecutor.run(vol, ['sleep', '60'], { onProgress })).to.be.rejectedWith('caller gone');
+      sinon.assert.called(containerStub.stop);
+      await new Promise((resolve) => { setImmediate(resolve); });
+      sinon.assert.notCalled(containerStub.remove);
+
+      exit({ StatusCode: 143 });
+      await new Promise((resolve) => { setImmediate(resolve); });
+      await new Promise((resolve) => { setImmediate(resolve); });
+      sinon.assert.calledOnceWithExactly(containerStub.remove, { force: true });
+    });
+
+    it('forces the removal once the stop\'s grace has passed without an exit', async () => {
+      const clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        containerStub.wait.returns(new Promise(() => {}));
+        const vol = await openSession();
+        const onProgress = sinon.stub().onFirstCall().throws(new Error('caller gone'));
+        await expect(volumeExecutor.run(vol, ['sleep', '60'], { onProgress })).to.be.rejectedWith('caller gone');
+        await Promise.resolve();
+        sinon.assert.notCalled(containerStub.remove);
+
+        await clock.tickAsync((15 * 1000) + 10_000);
+        sinon.assert.calledOnceWithExactly(containerStub.remove, { force: true });
+      } finally {
+        clock.restore();
+      }
+    });
+
     // Fail-open: a record that cannot be written costs the adoption and nothing
     // else. Refusing the operation because mongo said no would be worse than
     // the problem it prevents.
@@ -1575,67 +1657,166 @@ describe('volumeExecutor tests', () => {
     });
   });
 
-  describe('adopting an operation a previous process started', () => {
-    const record = {
-      containerId: 'container-1', jobId: 'op_7', stagingRoot: `${MOUNT}/.flux-op-7`, identifier: 'app', kind: 'Copying...',
+  describe('taking back an operation a previous process recorded', () => {
+    const recordFor = (containerId) => ({
+      containerId,
+      jobId: 'op_7',
+      jobKind: 'compress',
+      owner: 'zel-owner',
+      stagingRoot: `${MOUNT}/.flux-op-7`,
+      identifier: 'app',
+      kind: 'Compressing...',
+    });
+    const RUNNING = { Running: true, Status: 'running' };
+    const settle = async () => {
+      await new Promise((resolve) => { setImmediate(resolve); });
+      await new Promise((resolve) => { setImmediate(resolve); });
     };
+    const rmCalls = () => serviceHelperStub.runCommand.getCalls().filter((call) => call.args[0] === 'rm');
 
-    it('re-opens the caller\'s job under its original id', async () => {
-      jobRegistry.reset();
+    beforeEach(() => jobRegistry.reset());
+
+    it('re-opens a running one\'s job under its original id, owner and kind', () => {
       containerStub.wait.returns(new Promise(() => {}));
 
-      await volumeExecutor.adoptOperation(record);
+      volumeExecutor.adoptOperation(recordFor('c-run'), RUNNING);
 
-      const job = jobRegistry.get('op_7');
+      const job = jobRegistry.get('op_7', 'zel-owner');
       expect(job, 'a poll that was answered "no such job" answers again').to.not.equal(null);
       expect(job.status).to.equal('Running');
+      expect(job.kind).to.equal('compress');
+      expect(jobRegistry.get('op_7', 'someone-else'), 'not to anyone else').to.equal(null);
     });
 
-    it('settles the job on the container it adopted exiting', async () => {
-      jobRegistry.reset();
+    it('settles a running one\'s job when it exits, then forgets the record and removes the container', async () => {
       containerStub.wait.resolves({ StatusCode: 0 });
 
-      await volumeExecutor.adoptOperation(record);
-      await new Promise((resolve) => { setImmediate(resolve); });
+      volumeExecutor.adoptOperation(recordFor('c-run'), RUNNING);
+      await settle();
 
-      expect(jobRegistry.get('op_7').status).to.equal('Succeeded');
+      expect(jobRegistry.get('op_7', 'zel-owner').status).to.equal('Succeeded');
+      sinon.assert.calledOnceWithExactly(fileOperationStoreStub.forgetOperation, 'c-run');
+      sinon.assert.calledOnceWithExactly(containerStub.remove, { force: true });
+      sinon.assert.callOrder(fileOperationStoreStub.forgetOperation, containerStub.remove);
     });
 
-    it('fails the job when the adopted container exits non-zero', async () => {
-      jobRegistry.reset();
+    it('fails the job when a running one exits non-zero', async () => {
       containerStub.wait.resolves({ StatusCode: 2 });
 
-      await volumeExecutor.adoptOperation(record);
-      await new Promise((resolve) => { setImmediate(resolve); });
+      volumeExecutor.adoptOperation(recordFor('c-run'), RUNNING);
+      await settle();
 
-      expect(jobRegistry.get('op_7').status).to.equal('Failed');
+      expect(jobRegistry.get('op_7', 'zel-owner').status).to.equal('Failed');
     });
 
-    it('reclaims the staging root once the adopted container settles', async () => {
-      jobRegistry.reset();
-      containerStub.wait.resolves({ StatusCode: 0 });
+    it('a cancel stops a running one, and its exit settles the job as canceled', async () => {
+      let exit;
+      containerStub.wait.returns(new Promise((resolve) => { exit = resolve; }));
 
-      await volumeExecutor.adoptOperation(record);
-      await new Promise((resolve) => { setImmediate(resolve); });
-      await new Promise((resolve) => { setImmediate(resolve); });
+      volumeExecutor.adoptOperation(recordFor('c-run'), RUNNING);
+      jobRegistry.requestCancel('op_7');
+      sinon.assert.calledOnceWithExactly(containerStub.stop, { t: 15 });
 
-      const rm = serviceHelperStub.runCommand.getCalls().find((call) => call.args[0] === 'rm');
-      expect(rm, 'nothing reclaimed the adopted operation\'s staging').to.not.equal(undefined);
-      expect(rm.args[1].params).to.deep.equal(['-rf', record.stagingRoot]);
+      exit({ StatusCode: 143 });
+      await settle();
+      expect(jobRegistry.get('op_7', 'zel-owner').status).to.equal('Canceled');
     });
 
-    // The whole point of adopting: the reaper must stop seeing it as debris.
-    it('marks it live, so the reap that follows leaves it alone', async () => {
-      containerStub.wait.returns(new Promise(() => {}));
+    it('settles the job of one that exited while FluxOS was down from its exit code, without waiting', async () => {
+      volumeExecutor.adoptOperation(recordFor('c-done'), { Running: false, Status: 'exited', ExitCode: 0 });
+      await settle();
+
+      sinon.assert.notCalled(containerStub.wait);
+      expect(jobRegistry.get('op_7', 'zel-owner').status).to.equal('Succeeded');
+      sinon.assert.calledOnceWithExactly(containerStub.remove, { force: true });
+    });
+
+    it('fails the job of one that exited non-zero while FluxOS was down, naming the code', async () => {
+      volumeExecutor.adoptOperation(recordFor('c-done'), { Running: false, Status: 'exited', ExitCode: 137 });
+      await settle();
+
+      const job = jobRegistry.get('op_7', 'zel-owner');
+      expect(job.status).to.equal('Failed');
+      expect(job.error.detail).to.match(/exit code 137/);
+    });
+
+    // A created container reports exit code 0 without having run anything.
+    it('fails the job of one that never started, and removes it', async () => {
+      volumeExecutor.adoptOperation(recordFor('c-new'), { Running: false, Status: 'created', ExitCode: 0 });
+      await settle();
+
+      const job = jobRegistry.get('op_7', 'zel-owner');
+      expect(job.status).to.equal('Failed');
+      expect(job.error.detail).to.match(/did not start/);
+      sinon.assert.calledOnceWithExactly(containerStub.remove, { force: true });
+    });
+
+    it('fails the job of one whose container is gone, saying the outcome is unknown', async () => {
+      volumeExecutor.adoptOperation(recordFor('c-gone'), null);
+      await settle();
+
+      const job = jobRegistry.get('op_7', 'zel-owner');
+      expect(job.status).to.equal('Failed');
+      expect(job.error.detail).to.match(/outcome is unknown/);
+      sinon.assert.calledOnceWithExactly(fileOperationStoreStub.forgetOperation, 'c-gone');
+      sinon.assert.notCalled(containerStub.remove);
+    });
+
+    // An unmounted mountpoint is a bare host directory: until the boot has
+    // mounted the volumes, the staging is left for its sweep.
+    it('leaves the staging for the boot\'s sweep while the volumes are not yet mounted', async () => {
+      volumeExecutor.adoptOperation(recordFor('c-done'), { Running: false, Status: 'exited', ExitCode: 0 });
+      await settle();
+
+      expect(rmCalls()).to.deep.equal([]);
+    });
+
+    it('reclaims the staging once the volumes are mounted', async () => {
+      volumeExecutor.noteVolumesMounted();
+      volumeExecutor.adoptOperation(recordFor('c-done'), { Running: false, Status: 'exited', ExitCode: 0 });
+      await settle();
+
+      expect(rmCalls().map((call) => call.args[1].params)).to.deep.equal([['-rf', `${MOUNT}/.flux-op-7`]]);
+    });
+
+    // A failed wait says nothing about the container, which may still be
+    // writing: it stays live, its record stays, and the next boot takes it.
+    it('leaves a running one alone when its exit cannot be waited on', async () => {
+      containerStub.wait.rejects(new Error('socket hang up'));
       dockerServiceStub.dockerListContainers.resolves([
-        { Id: 'container-1', Labels: { 'flux.utility.role': 'fileop' } },
+        { Id: 'c-run', Labels: { 'flux.utility.role': 'fileop' } },
       ]);
 
-      await volumeExecutor.adoptOperation(record);
+      volumeExecutor.adoptOperation(recordFor('c-run'), RUNNING);
+      await settle();
+
+      expect(jobRegistry.get('op_7', 'zel-owner').status).to.equal('Failed');
+      sinon.assert.notCalled(fileOperationStoreStub.forgetOperation);
+      sinon.assert.notCalled(containerStub.remove);
+      expect(await volumeExecutor.reapOrphanedContainers()).to.equal(0);
+    });
+
+    // The whole point of taking it back: the reaper must stop seeing it as debris.
+    it('marks a running one live, so the reap that follows leaves it alone', async () => {
+      containerStub.wait.returns(new Promise(() => {}));
+      dockerServiceStub.dockerListContainers.resolves([
+        { Id: 'c-run', Labels: { 'flux.utility.role': 'fileop' } },
+      ]);
+
+      volumeExecutor.adoptOperation(recordFor('c-run'), RUNNING);
       const reaped = await volumeExecutor.reapOrphanedContainers();
 
-      expect(reaped, 'an adopted container is not debris').to.equal(0);
+      expect(reaped, 'a container taken back is not debris').to.equal(0);
       sinon.assert.notCalled(dockerServiceStub.appDockerForceRemove);
+    });
+
+    it('takes a container back once', () => {
+      containerStub.wait.returns(new Promise(() => {}));
+
+      volumeExecutor.adoptOperation(recordFor('c-run'), RUNNING);
+      volumeExecutor.adoptOperation(recordFor('c-run'), RUNNING);
+
+      sinon.assert.calledOnce(dockerServiceStub.getDockerContainerHandle);
     });
   });
 
@@ -1911,6 +2092,28 @@ describe('volumeExecutor tests', () => {
     // There is no such state any more: whichever side of the exchange a crash
     // lands on, the destination holds something complete and the staging entry
     // holds something disposable.
+    it('takes the staging of an operation taken back after it ended, before the volumes were mounted', async () => {
+      await realFs.mkdir(at(OP), { recursive: true });
+      sweeper.adoptOperation({ containerId: 'c-done', jobId: null, stagingRoot: at(OP) }, { Running: false, Status: 'exited', ExitCode: 0 });
+      await new Promise((resolve) => { setImmediate(resolve); });
+      expect(await exists(at(OP)), 'left for the sweep').to.equal(true);
+
+      const { removed } = await sweeper.sweepStagingDirectories(session);
+
+      expect(removed).to.deep.equal([OP]);
+    });
+
+    it('keeps the staging of an operation taken back while it is still running', async () => {
+      await realFs.mkdir(at(OP), { recursive: true });
+      containerStub.wait.returns(new Promise(() => {}));
+      sweeper.adoptOperation({ containerId: 'c-run', jobId: null, stagingRoot: at(OP) }, { Running: true, Status: 'running' });
+
+      const { removed } = await sweeper.sweepStagingDirectories(session);
+
+      expect(removed).to.deep.equal([]);
+      expect(await exists(at(OP))).to.equal(true);
+    });
+
     it('deletes an incomplete operation - nothing was published and nobody waits', async () => {
       await realFs.mkdir(at(OP), { recursive: true });
       await write(nodePath.join(OP, 'partial'), 'half a copy');

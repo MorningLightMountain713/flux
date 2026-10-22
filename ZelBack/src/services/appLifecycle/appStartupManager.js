@@ -212,10 +212,9 @@ async function enforceNodePlacement(trigger) {
 /**
  * Every installed app's storage, under the names the boot's migrations left: its
  * data volumes mounted (and the superseded legacy @reboot remount entries
- * dropped), a container that started before its mount restarted, and a file
- * operation the restart interrupted reclaimed - its container is detached from
- * the process that started it, and its staging directory is on a volume, so it
- * runs once the volumes are mounted. Each step is best effort.
+ * dropped), a container that started before its mount restarted, and the
+ * staging a restart left on the volumes reclaimed, which needs them mounted.
+ * Each step is best effort.
  */
 async function prepareInstalledAppStorage() {
   log.info('appStartupManager - mounting installed app volumes');
@@ -439,6 +438,11 @@ async function placementByClock(bootContext) {
 }
 
 async function manageAppsOnBoot(bootContext) {
+  // On every boot, whatever this one decides, and without waiting for it: a
+  // file operation the restart left behind answers its caller's poll as soon as
+  // Docker and the database do.
+  fileOperationRecovery.takeBackFileOperations()
+    .catch((error) => log.error(`appStartupManager - file operation take-back: ${error.message}`));
   capabilities.claim('bootReconcileDecided', 'appStartupManager').starting('deciding what this node keeps');
   // What the boot decided, published with boot:settled.
   let decision = 'reconciled';

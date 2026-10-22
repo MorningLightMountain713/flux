@@ -102,7 +102,7 @@ describe('appStartupManager tests', () => {
       './hardwareValidationService': { performBootTimeHardwareValidation: sinon.stub().resolves() },
       '../appNetwork/portManager': { restoreAppsPortsSupport: sinon.stub().resolves() },
       './containerMountRecovery': { performContainerMountRecovery: sinon.stub().resolves() },
-      '../appSystem/fileOperationRecovery': { recoverInterruptedFileOperations: sinon.stub().resolves() },
+      '../appSystem/fileOperationRecovery': { recoverInterruptedFileOperations: sinon.stub().resolves(), takeBackFileOperations: sinon.stub().resolves() },
       '../../lib/log': logStub,
       '../dockerService': dockerServiceStub,
       '../serviceHelper': { delay: sinon.stub().resolves() },
@@ -151,7 +151,7 @@ describe('appStartupManager tests', () => {
         './hardwareValidationService': { performBootTimeHardwareValidation: sinon.stub().resolves() },
         '../appNetwork/portManager': { restoreAppsPortsSupport: sinon.stub().resolves() },
         './containerMountRecovery': { performContainerMountRecovery: sinon.stub().resolves() },
-        '../appSystem/fileOperationRecovery': { recoverInterruptedFileOperations: sinon.stub().resolves() },
+        '../appSystem/fileOperationRecovery': { recoverInterruptedFileOperations: sinon.stub().resolves(), takeBackFileOperations: sinon.stub().resolves() },
         config: asConfig({ ...realConfig, fluxapps: { ...realConfig.fluxapps, manageCollectorLifecycle: true } }),
         '../../lib/log': logStub,
         '../dockerService': dockerServiceStub,
@@ -365,7 +365,7 @@ describe('appStartupManager tests', () => {
     storageStubs = {
       mounts: { cleanupCrontabAndMounts: sinon.stub().resolves() },
       mountRecovery: { performContainerMountRecovery: sinon.stub().resolves() },
-      fileOperations: { recoverInterruptedFileOperations: sinon.stub().resolves() },
+      fileOperations: { recoverInterruptedFileOperations: sinon.stub().resolves(), takeBackFileOperations: sinon.stub().resolves() },
     };
     return proxyquire('../../ZelBack/src/services/appLifecycle/appStartupManager', {
       ...(bootSyncTimeoutMs === undefined ? {} : {
@@ -538,6 +538,39 @@ describe('appStartupManager tests', () => {
       expect(mounts.cleanupCrontabAndMounts.calledBefore(mountRecovery.performContainerMountRecovery)).to.equal(true);
       expect(mountRecovery.performContainerMountRecovery.calledBefore(fileOperations.recoverInterruptedFileOperations)).to.equal(true);
       expect(fileOperations.recoverInterruptedFileOperations.calledBefore(specReconcilerStub.convergeAtBoot), 'storage before the registry pass').to.equal(true);
+    });
+
+    it('starts the file-operation take-back before the boot waits on anything, and the staging recovery with the storage', async () => {
+      const manager = loadWithMigrations(migrationsTaking(1000));
+
+      await manager.manageAppsOnBoot(contextDropped(60_000));
+
+      const { fileOperations } = storageStubs;
+      sinon.assert.calledOnce(fileOperations.takeBackFileOperations);
+      expect(fileOperations.takeBackFileOperations.calledBefore(whenUpStub.firstCall), 'before the first wait').to.equal(true);
+      sinon.assert.calledOnce(fileOperations.recoverInterruptedFileOperations);
+    });
+
+    it('starts the file-operation take-back on a boot that removes every app before the sync', async () => {
+      const manager = loadWithMigrations(migrationsTaking(1000));
+
+      await manager.manageAppsOnBoot(contextDropped(10 * 60 * 1000));
+
+      const { fileOperations } = storageStubs;
+      expect(logStub.info.calledWithMatch(/Locations expired/), 'the early return').to.equal(true);
+      sinon.assert.calledOnce(fileOperations.takeBackFileOperations);
+      sinon.assert.notCalled(fileOperations.recoverInterruptedFileOperations);
+    });
+
+    it('a take-back that fails is logged and the boot goes on', async () => {
+      const manager = loadWithMigrations(migrationsTaking(1000));
+      storageStubs.fileOperations.takeBackFileOperations.rejects(new Error('store down'));
+
+      await manager.manageAppsOnBoot(contextDropped(60_000));
+      await Promise.resolve();
+
+      expect(logStub.error.calledWithMatch(/file operation take-back: store down/)).to.equal(true);
+      sinon.assert.calledOnce(specReconcilerStub.convergeAtBoot);
     });
 
     it('the rows outrank the clock: a node long past the grace whose rows still place it starts its apps', async () => {

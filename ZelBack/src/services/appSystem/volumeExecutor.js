@@ -61,6 +61,8 @@ const appLocks = new Map();
 // so an operation can be in flight when it does.
 const liveContainerIds = new Set();
 const liveStagingPaths = new Set();
+// Whether the app volumes are mounted yet this boot; see noteVolumesMounted.
+let volumesMounted = false;
 
 function lockForApp(identifier) {
   if (!appLocks.has(identifier)) appLocks.set(identifier, new AsyncLock(Number.MAX_SAFE_INTEGER, { maxHoldMs: 0 }));
@@ -1208,15 +1210,13 @@ function failureFor(status, said) {
 /**
  * Collect what the command writes, so a failure can say what went wrong.
  *
- * Without this, `AutoRemove` takes the container and its logs the moment it
- * exits and the caller is handed an exit code. "The archive is corrupt", "it
+ * Without this the caller is handed an exit code. "The archive is corrupt", "it
  * expands past the volume" and "it holds something that is not data" are three
  * different problems with three different answers, and they arrived as the same
  * number - to the user, and to whoever they then asked for help.
  *
- * Attached BEFORE start, for the same reason the exit subscription is: a fast
- * command can finish and be reaped before a later attach lands, and its output
- * is then gone.
+ * Attached BEFORE start: an attach to a container that has already exited
+ * streams nothing, and a fast command can finish before a later attach lands.
  *
  * Never fatal. Losing the explanation is worse than an exit code alone, but
  * failing the operation over it would be worse still.
@@ -1298,7 +1298,8 @@ async function volumeSpace(mount, fsPromises) {
  *   no-new-privileges                   a setuid file cannot escalate
  *   CapDrop ALL + three                 see below
  *   pids and memory limits              bound a runaway archive
- *   AutoRemove                          no stopped container for a prune to find
+ *   kept after it exits                 its exit code outlives a FluxOS restart;
+ *                                       FluxOS removes it once the result is read
  *
  * Three capabilities are added back out of docker's default fourteen. cp -a
  * cannot restore ownership without CAP_CHOWN and does not fail when it can't -
@@ -1325,7 +1326,7 @@ function containerOptions(session, argv, image, labels, workingDir = WORK_ROOT, 
       Binds: [`${session.mount}:${WORK_ROOT}`],
       ReadonlyRootfs: true,
       NetworkMode: 'none',
-      AutoRemove: true,
+      AutoRemove: false,
       CapDrop: ['ALL'],
       CapAdd: ['CHOWN', 'FOWNER', 'DAC_OVERRIDE'],
       SecurityOpt: ['no-new-privileges'],
@@ -1662,8 +1663,7 @@ async function run(session, argv, options = {}) {
   // closed there, and a handle declared inside the `try` is out of scope.
   let stdin = null;
   let exited = null;
-  // The container's own exit has been observed, so it is reaping itself and
-  // must not be stopped from here.
+  // The container's own exit has been observed, so there is nothing to stop.
   let settled = false;
   // stop, not kill: this sends SIGTERM first and only escalates to SIGKILL
   // after the grace period. flux-op traps the TERM, stops the command and
@@ -1765,9 +1765,12 @@ async function run(session, argv, options = {}) {
     // Awaited so the record exists before the container is started, and caught
     // so it can never fail the operation: the store logs its own failure, and
     // losing the row costs the adoption and nothing else.
+    const job = jobId ? jobRegistry.ownership(jobId) : null;
     await fileOperationStore.recordOperation({
       containerId: registeredContainerId,
       jobId,
+      jobKind: job?.kind ?? null,
+      owner: job?.owner ?? null,
       stagingRoot: registeredStaging,
       identifier: session.identifier,
       kind: status,
@@ -1776,9 +1779,9 @@ async function run(session, argv, options = {}) {
     // Opened BEFORE start, and on next-exit rather than the default. The
     // default condition is "not-running", which a created container already
     // satisfies - so a naive wait-before-start returns 0 immediately. Asking
-    // after start instead would race: a fast command can finish and be reaped
-    // by AutoRemove before the request arrives, and the exit status is then
-    // unknowable.
+    // after start instead would race: a fast command can finish before the
+    // request arrives, and a next-exit wait on an exited container never
+    // answers.
     exited = container.wait({ condition: 'next-exit' });
     const output = await collectOutput(container);
     stdin = input ? await attachInput(container) : null;
@@ -1786,11 +1789,8 @@ async function run(session, argv, options = {}) {
     try {
       await container.start();
     } catch (error) {
-      // AutoRemove only fires for a container that RAN, so one that never
-      // started stays on the node - stopped, invisible to the app sweeps
-      // because it is correctly labelled as ours, and holding a reference to
-      // the executor image that stops anything reclaiming it. Cleared so the
-      // handler below does not then try to stop a container that is gone.
+      // Removed here, since there is no exit to wait for. Cleared so the
+      // handler below neither stops nor removes a container that is gone.
       await container.remove({ force: true }).catch(() => {});
       container = null;
       throw error;
@@ -1963,14 +1963,13 @@ async function run(session, argv, options = {}) {
     if (exited) exited.catch(() => {});
     // Left running, it keeps writing to the volume with nobody waiting for it,
     // while the slot released below lets another operation start on the same
-    // app. A container that has already exited reaps itself.
+    // app.
     if (container && !settled) stopContainer();
     if (registeredContainerId) {
-      liveContainerIds.delete(registeredContainerId);
       // Not awaited: the operation is over either way, and a slow mongo must
-      // not hold the slot. A row left behind is read at the next boot, finds no
-      // container, and is dropped there.
-      fileOperationStore.forgetOperation(registeredContainerId);
+      // not hold the slot.
+      const forgotten = fileOperationStore.forgetOperation(registeredContainerId);
+      discardContainer(registeredContainerId, container, exited, forgotten);
     }
     // Deregistered by the reclaim once it has run, not here: a sweep running
     // while the reclaim waits out the container must still skip this path.
@@ -2101,13 +2100,7 @@ function stagingRootOf(hostPath, mount) {
  */
 async function reclaimStaging(hostPath, exited) {
   try {
-    if (exited) {
-      const graceMs = (settings().cancelGraceSeconds * 1000) + 10_000;
-      let deadline;
-      const deadlinePassed = new Promise((resolve) => { deadline = setTimeout(resolve, graceMs); });
-      await Promise.race([exited.catch(() => {}), deadlinePassed]);
-      clearTimeout(deadline);
-    }
+    if (exited) await exitOrGrace(exited);
     await removeStagingPath(hostPath);
   } catch (error) {
     log.warn(`volumeExecutor - could not reclaim ${hostPath}: ${error.message}`);
@@ -2117,77 +2110,155 @@ async function reclaimStaging(hostPath, exited) {
 }
 
 /**
- * Remove executor containers left running by a FluxOS restart.
+ * Resolves when the container has exited, or once a stop's grace and a margin
+ * have passed without it.
+ * @param {Promise<object>} exited the container's exit subscription
+ * @returns {Promise<void>}
+ */
+async function exitOrGrace(exited) {
+  const graceMs = (settings().cancelGraceSeconds * 1000) + 10_000;
+  let deadline;
+  const deadlinePassed = new Promise((resolve) => { deadline = setTimeout(resolve, graceMs); });
+  await Promise.race([exited.catch(() => {}), deadlinePassed]);
+  clearTimeout(deadline);
+}
+
+/**
+ * Remove an operation's container once it has exited and its record is gone.
  *
- * A container is detached from the process that started it, so a restart leaves
- * one running with nobody waiting for its result. Its staging directory is
- * reclaimed separately by sweepStagingDirectories; nothing it wrote is visible
+ * The record goes first: at boot, a record whose container is missing reads as
+ * an operation whose outcome was lost, while a container no record names is
+ * reaped. The removal is forced once the stop's grace has passed, so a
+ * container that ignores its stop does not outlive the operation.
+ *
+ * @param {string} containerId
+ * @param {object|null} container dockerode handle; null once already removed
+ * @param {Promise<object>|null} exited the container's exit subscription
+ * @param {Promise<void>} forgotten the record's removal
+ * @returns {Promise<void>}
+ */
+async function discardContainer(containerId, container, exited, forgotten) {
+  try {
+    await forgotten;
+    if (!container) return;
+    if (exited) await exitOrGrace(exited);
+    await container.remove({ force: true });
+  } catch (error) {
+    if (error.statusCode === 404) return;
+    log.warn(`volumeExecutor - could not remove file-operation container ${containerId}: ${error.message}`);
+  } finally {
+    liveContainerIds.delete(containerId);
+  }
+}
+
+/**
+ * Take back an operation a PREVIOUS process recorded, in whatever state its
+ * container is in now.
+ *
+ * The container is detached from whoever created it, so a FluxOS restart does
+ * not interrupt the work, and it is kept after it exits, so its exit code
+ * outlives the restart too. The caller's job is re-opened under its ORIGINAL id
+ * and owner and settled by that exit:
+ *
+ *   running      live again, so reap and sweep skip it, and a cancel stops it;
+ *                the job settles when it exits
+ *   exited/dead  the job settles from its exit code now
+ *   created      it never started; the job fails
+ *   gone         its outcome is unknown; the job fails saying so
+ *
+ * Once the job is settled the record is forgotten and the container removed.
+ * The staging directory is reclaimed here when the app volumes are mounted, and
+ * by the boot's staging sweep when they are not yet.
+ *
+ * Progress detail does not come back: the status lines and the byte figure went
+ * with the previous process.
+ *
+ * @param {object} record a fileOperationStore row
+ * @param {object|null} state the container's docker State; null when it is gone
+ * @returns {void}
+ */
+function adoptOperation(record, state) {
+  const { containerId, stagingRoot, jobId } = record;
+  if (liveContainerIds.has(containerId)) return;
+  liveContainerIds.add(containerId);
+  if (stagingRoot) liveStagingPaths.add(stagingRoot);
+
+  const container = state ? dockerService.getDockerContainerHandle(containerId) : null;
+  const running = Boolean(state?.Running);
+  if (jobId) {
+    jobRegistry.start({
+      kind: record.jobKind || record.kind || 'fileoperation',
+      owner: record.owner ?? null,
+      jobId,
+      onCancel: running ? () => { container.stop({ t: settings().cancelGraceSeconds }).catch(() => {}); } : null,
+    });
+    if (running) jobRegistry.progress(jobId, 'Resumed after a FluxOS restart; progress detail is not carried over');
+  }
+
+  let exited;
+  if (!state) {
+    exited = Promise.reject(new Error('The outcome is unknown: the operation\'s container was gone when FluxOS restarted'));
+  } else if (state.Status === 'created') {
+    exited = Promise.reject(new Error('The operation did not start before FluxOS restarted'));
+  } else if (running) {
+    // The default condition, "not-running", answers at once for a container
+    // that exited since it was inspected, where next-exit would wait forever.
+    exited = container.wait();
+  } else {
+    exited = Promise.resolve({ StatusCode: state.ExitCode });
+  }
+
+  // A running container whose wait failed may still be running: it is left
+  // live, and the next boot's reaper and sweep take it and its staging.
+  let unsettled = false;
+  exited
+    .then((result) => {
+      const code = result?.StatusCode ?? 0;
+      if (!jobId) return;
+      // Exit 0 is a published result, whatever was asked of the container.
+      if (code === 0) jobRegistry.succeed(jobId);
+      else if (jobRegistry.isCanceled(jobId)) jobRegistry.cancelled(jobId);
+      else jobRegistry.fail(jobId, failureFor(code, ''));
+    }, (error) => {
+      if (jobId) jobRegistry.fail(jobId, error);
+      if (running) {
+        unsettled = true;
+        log.warn(`volumeExecutor - adopted container ${containerId} could not be waited on: ${error.message}`);
+      }
+    })
+    .finally(() => {
+      if (unsettled) return;
+      const forgotten = fileOperationStore.forgetOperation(containerId);
+      discardContainer(containerId, container, null, forgotten);
+      if (!stagingRoot) return;
+      if (volumesMounted) reclaimStaging(stagingRoot, null);
+      else liveStagingPaths.delete(stagingRoot);
+    });
+}
+
+/**
+ * The app volumes are mounted: a staging directory is reclaimed where its
+ * operation ends from here on. Before this, one is left for the boot's sweep,
+ * because an unmounted mountpoint is a bare host directory.
+ */
+function noteVolumesMounted() {
+  volumesMounted = true;
+}
+
+/**
+ * Remove the executor containers no live operation owns: ones a FluxOS restart
+ * left behind, running or exited, that no record took back. Their staging
+ * directories are reclaimed separately by sweepStagingDirectories; nothing they wrote is visible
  * at a destination path, because publishing is the last thing flux-op does.
  *
  * Selection is by LABEL, less what a live operation owns. This is the
  * ownership-scoped removal that replaced the blanket container prune: it removes
- * what FluxOS knows it started and is NOT still running, rather than everything
+ * what FluxOS knows it started and no live operation owns, rather than everything
  * docker currently considers unused. The API answers before this runs, so a
  * container this process created moments ago is skipped by its id.
  *
  * @returns {Promise<number>} how many were removed
  */
-/**
- * Take over a file-operation container a PREVIOUS process started.
- *
- * The container is detached from whoever created it, so a FluxOS restart does
- * not interrupt the work: flux-op is still copying, and it publishes its own
- * result by exchanging staging with the destination. What the restart lost is
- * the knowledge that this container is legitimate, which is the only thing
- * standing between it and the reaper.
- *
- * So this re-registers it as live - reap and sweep skip it again - re-opens the
- * caller's job under its ORIGINAL id so a poll that was answered "no such job"
- * starts answering again, and waits on the exit to settle that job.
- *
- * Progress detail does not come back. The status lines the previous process
- * wrote went with it, and the byte figure is measured from the staging
- * directory by a ticker this does not restart. The job reports that it is
- * running and then how it ended, which is the part a caller cannot recover for
- * itself.
- *
- * @param {object} record - a fileOperationStore row
- * @returns {Promise<void>}
- */
-async function adoptOperation(record) {
-  const { containerId, stagingRoot, jobId } = record;
-
-  liveContainerIds.add(containerId);
-  if (stagingRoot) liveStagingPaths.add(stagingRoot);
-
-  const handle = jobId ? jobRegistry.start({ kind: record.kind || 'fileoperation', jobId }) : null;
-  if (handle) jobRegistry.progress(jobId, 'Resumed after a FluxOS restart; progress detail is not carried over');
-
-  const container = dockerService.getDockerContainerHandle(containerId);
-  // next-exit, not the default: the default condition is "not-running", which a
-  // container that is still working does not satisfy - but one that exited
-  // between the listing above and here does, and asking for its next exit would
-  // then wait forever. wait() on an already-exited container answers its code.
-  container.wait()
-    .then((result) => {
-      const code = result?.StatusCode ?? 0;
-      if (!jobId) return;
-      if (code === 0) jobRegistry.succeed(jobId);
-      else jobRegistry.fail(jobId, new Error(`file operation exited ${code}`));
-    })
-    .catch((error) => {
-      if (jobId) jobRegistry.fail(jobId, error);
-      log.warn(`volumeExecutor - adopted container ${containerId} could not be waited on: ${error.message}`);
-    })
-    .finally(() => {
-      liveContainerIds.delete(containerId);
-      fileOperationStore.forgetOperation(containerId);
-      // The container has exited, so its staging is reclaimed at once, exactly
-      // as it is for an operation this process started itself.
-      if (stagingRoot) reclaimStaging(stagingRoot, null);
-    });
-}
-
 async function reapOrphanedContainers() {
   let containers;
   try {
@@ -2323,5 +2394,6 @@ module.exports = {
   reapOrphanedContainers,
   sweepStagingDirectories,
   adoptOperation,
+  noteVolumesMounted,
   acquireSlot,
 };
