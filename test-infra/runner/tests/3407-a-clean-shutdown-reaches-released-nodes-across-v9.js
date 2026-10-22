@@ -51,13 +51,28 @@ describe('a clean shutdown reaches released nodes across v9', function () {
       tickerAutostart: false,
     });
 
-    // The released node never holds a connection with the stopping node.
+    // Peered as a whole first: each node attains the peer floor (two), and keeps it
+    // with the one peer the cut below leaves it (it is lost only under one).
+    await bootAndPeer(env, { minOutbound: 1, minInbound: 1, pricing: true });
+
+    // Then the released node and the stopping node are cut apart, both ways, with
+    // a reset so the connection they hold ends now rather than at its dead-peer
+    // timeout. The relay is the released node's only path to the stopping node.
     const stopping = nodeIp(STOPPING);
     const cut = await execInContainer(env.clients[RELEASED].container,
-      `iptables -I INPUT -s ${stopping} -j DROP && iptables -I OUTPUT -d ${stopping} -j DROP && iptables -C INPUT -s ${stopping} -j DROP && echo cut`);
+      `iptables -I INPUT -s ${stopping} -p tcp -j REJECT --reject-with tcp-reset `
+      + `&& iptables -I OUTPUT -d ${stopping} -p tcp -j REJECT --reject-with tcp-reset `
+      + `&& iptables -C INPUT -s ${stopping} -p tcp -j REJECT --reject-with tcp-reset && echo cut`);
     expect(cut.stdout.trim(), `the released node is cut off from the stopping node: ${cut.output}`).to.equal('cut');
-
-    await bootAndPeer(env, { minOutbound: 1, minInbound: 1, pricing: true });
+    const holds = async (from, to) => {
+      const [outgoing, incoming] = await Promise.all([env.clients[from].getPeers(), env.clients[from].getIncomingPeers()]);
+      return [...(outgoing.data ?? []), ...(incoming.data ?? [])].some((p) => String(p.ip ?? p).startsWith(nodeIp(to)));
+    };
+    await waitFor(async () => !(await holds(RELEASED, STOPPING)) && !(await holds(STOPPING, RELEASED)), {
+      timeout: 120000, interval: 2000, label: 'the released and stopping nodes hold no connection with each other',
+    });
+    expect(await holds(RELEASED, RELAY), 'the released node still holds the relay').to.equal(true);
+    expect(await holds(STOPPING, RELAY), 'the stopping node still holds the relay').to.equal(true);
 
     await pushImage(name, 'v1');
     const app = await buildSeedableApp({
