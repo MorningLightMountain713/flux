@@ -7,13 +7,16 @@ const { expect } = require('chai');
 const { MembershipHistory } = require('../../ZelBack/src/services/utils/membershipHistory');
 const { NodeDownTopology } = require('../../ZelBack/src/services/utils/nodeDownTopology');
 const {
-  NodeDownJuror, SHUTDOWN_COURTESY, RESTART_COURTESY, COURTESY_WINDOW_BLOCKS,
+  NodeDownJuror, SHUTDOWN_COURTESY, RESTART_COURTESY, COURTESY_WINDOW_MS, COURTESY_EARLY_EDGE_MS,
 } = require('../../ZelBack/src/services/utils/nodeDownJuror');
 const { NODE_DOWN_GRACE_MS, RESTART_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
 const { JUDGEMENT, verdictPayload } = require('../../ZelBack/src/services/utils/nodeDownCertificates');
 
 const T0 = 1_700_000_000_000;
 const tick = () => new Promise((resolve) => { setImmediate(() => setImmediate(resolve)); });
+// A fresh process id: each signed stop names its own process.
+let processSeq = 0;
+const pid = () => { processSeq += 1; return processSeq.toString(16).padStart(32, '0'); };
 
 // The fake signature binds the exact payload bytes, so any field tampering
 // fails verification naturally; owner binding is Branch 2's matrix.
@@ -307,7 +310,7 @@ describe('nodeDownJuror — the drop carries its reason (R2), and a re-held duty
 
   it('a SHUTTING_DOWN close is honoured: no probe and no verdict until the grace ends, then one look', async () => {
     const world = makeWorld();
-    const { honoured } = world.juror.noteDrop(S, 'shutdown');
+    const { honoured } = world.juror.noteDrop(S, 'shutdown', pid());
     expect(honoured).to.equal(true);
 
     world.advance(NODE_DOWN_GRACE_MS - 1);
@@ -328,7 +331,7 @@ describe('nodeDownJuror — the drop carries its reason (R2), and a re-held duty
 
   it('a RESTARTING close waits the shorter grace', async () => {
     const world = makeWorld();
-    world.juror.noteDrop(S, 'restart');
+    world.juror.noteDrop(S, 'restart', pid());
     world.advance(RESTART_GRACE_MS - 1);
     await tick();
     expect(world.probes).to.deep.equal([]);
@@ -339,7 +342,7 @@ describe('nodeDownJuror — the drop carries its reason (R2), and a re-held duty
 
   it('a duty held again before the grace ends is never looked at', async () => {
     const world = makeWorld();
-    world.juror.noteDrop(S, 'shutdown');
+    world.juror.noteDrop(S, 'shutdown', pid());
     world.held.add(SUBJECT_ADDRESS);
     world.advance(NODE_DOWN_GRACE_MS);
     await tick();
@@ -351,7 +354,7 @@ describe('nodeDownJuror — the drop carries its reason (R2), and a re-held duty
     // wakes the rest. A juror holding the code stands by it — R2 — so the
     // one bad view cannot pull the jury into certifying an announced stop.
     const world = makeWorld();
-    world.juror.noteDrop(S, 'shutdown');
+    world.juror.noteDrop(S, 'shutdown', pid());
     await tick();
     const result = world.juror.onVerdictArrived(world.verdictFrom('j2:0'));
     await tick();
@@ -366,7 +369,7 @@ describe('nodeDownJuror — the drop carries its reason (R2), and a re-held duty
 
   it('an unannounced drop while a deferral pends is looked at now: the deferral does not absorb a death', async () => {
     const world = makeWorld();
-    world.juror.noteDrop(S, 'shutdown');
+    world.juror.noteDrop(S, 'shutdown', pid());
     world.juror.noteDrop(S, 'unannounced');
     await tick();
     expect(world.probes).to.deep.equal([SUBJECT_ADDRESS]);
@@ -378,9 +381,9 @@ describe('nodeDownJuror — the drop carries its reason (R2), and a re-held duty
 
   it('a later coded close replaces the deferral: the grace runs from the newest drop', async () => {
     const world = makeWorld();
-    world.juror.noteDrop(S, 'shutdown');
+    world.juror.noteDrop(S, 'shutdown', pid());
     world.nowMs += NODE_DOWN_GRACE_MS - 1000;
-    world.juror.noteDrop(S, 'shutdown');
+    world.juror.noteDrop(S, 'shutdown', pid());
     world.advance(1000); // the first grace end
     await tick();
     expect(world.probes).to.deep.equal([]);
@@ -424,7 +427,7 @@ describe('nodeDownJuror — the drop carries its reason (R2), and a re-held duty
 
   it('re-holding the duty ends a pending deferral: nothing is owed at the old grace end', async () => {
     const world = makeWorld();
-    world.juror.noteDrop(S, 'shutdown');
+    world.juror.noteDrop(S, 'shutdown', pid());
     world.juror.noteHeld(S);
     world.advance(NODE_DOWN_GRACE_MS);
     await tick();
@@ -463,7 +466,7 @@ describe('nodeDownJuror — the verdict names the drop it answers (P1)', () => {
 
   it('a grace-end look\'s verdict carries the honoured drop, not the look', async () => {
     const world = makeWorld();
-    world.juror.noteDrop(S, 'shutdown');
+    world.juror.noteDrop(S, 'shutdown', pid());
     world.advance(NODE_DOWN_GRACE_MS);
     await tick();
     expect(world.pushes[0].verdict).to.include({ droppedAt: T0, reason: 'shutdown' });
@@ -492,23 +495,25 @@ describe('nodeDownJuror — the verdict names the drop it answers (P1)', () => {
 
 describe('nodeDownJuror — the courtesy: a clean stop is honoured only so many times per window (R7)', () => {
   const SUBJECT_ADDRESS = '10.0.0.20:16127';
+  const COUNTED_FOR = COURTESY_WINDOW_MS - COURTESY_EARLY_EDGE_MS;
 
-  it('the limits are code constants: four shutdowns and twelve restarts per 720 blocks', () => {
+  it('the limits are code constants: four shutdowns and twelve restarts per 24 hours, the window ending 20 minutes early', () => {
     expect(SHUTDOWN_COURTESY).to.equal(4);
     expect(RESTART_COURTESY).to.equal(12);
-    expect(COURTESY_WINDOW_BLOCKS).to.equal(720);
+    expect(COURTESY_WINDOW_MS).to.equal(24 * 60 * 60 * 1000);
+    expect(COURTESY_EARLY_EDGE_MS).to.equal(20 * 60 * 1000);
   });
 
   // one honoured stop and return, the duty re-held
-  async function cleanStop(world, reason) {
-    const { honoured } = world.juror.noteDrop(S, reason);
+  async function cleanStop(world, reason, processId = pid()) {
+    const { honoured } = world.juror.noteDrop(S, reason, processId);
     world.juror.noteHeld(S);
-    world.height += 1;
+    world.nowMs += 1000;
     await tick();
     return honoured;
   }
 
-  it('the fifth SHUTTING_DOWN close in the window is not honoured: the juror looks at the drop, and its verdict says shutdown', async () => {
+  it('the fifth signed SHUTTING_DOWN close in the window is not honoured: the juror looks at the drop, and its verdict says shutdown', async () => {
     const world = makeWorld();
     for (let i = 0; i < SHUTDOWN_COURTESY; i += 1) {
       // eslint-disable-next-line no-await-in-loop
@@ -516,11 +521,20 @@ describe('nodeDownJuror — the courtesy: a clean stop is honoured only so many 
     }
     expect(world.probes).to.deep.equal([]);
 
-    const { honoured } = world.juror.noteDrop(S, 'shutdown');
+    const { honoured } = world.juror.noteDrop(S, 'shutdown', pid());
     await tick();
     expect(honoured).to.equal(false);
     expect(world.probes).to.deep.equal([SUBJECT_ADDRESS]);
-    expect(world.pushes[0].verdict).to.include({ droppedAt: T0, reason: 'shutdown' });
+    expect(world.pushes[0].verdict).to.include({ droppedAt: world.nowMs, reason: 'shutdown' });
+  });
+
+  it('a coded close without an accepted stop statement is looked at now, as unannounced', async () => {
+    const world = makeWorld();
+    const { honoured } = world.juror.noteDrop(S, 'restart', null);
+    await tick();
+    expect(honoured).to.equal(false);
+    expect(world.probes).to.deep.equal([SUBJECT_ADDRESS]);
+    expect(world.pushes[0].verdict).to.include({ reason: 'unannounced' });
   });
 
   it('restarts have their own, longer courtesy', async () => {
@@ -529,7 +543,7 @@ describe('nodeDownJuror — the courtesy: a clean stop is honoured only so many 
       // eslint-disable-next-line no-await-in-loop
       expect(await cleanStop(world, 'restart')).to.equal(true);
     }
-    expect((world.juror.noteDrop(S, 'restart')).honoured).to.equal(false);
+    expect((world.juror.noteDrop(S, 'restart', pid())).honoured).to.equal(false);
     await tick();
     expect(world.pushes[0].verdict).to.include({ reason: 'restart' });
   });
@@ -540,18 +554,60 @@ describe('nodeDownJuror — the courtesy: a clean stop is honoured only so many 
       // eslint-disable-next-line no-await-in-loop
       await cleanStop(world, 'shutdown');
     }
-    expect(world.juror.noteDrop('u:0', 'shutdown').honoured).to.equal(true);
-    expect(world.juror.noteDrop(S, 'restart').honoured).to.equal(true);
+    expect(world.juror.noteDrop('u:0', 'shutdown', pid()).honoured).to.equal(true);
+    expect(world.juror.noteDrop(S, 'restart', pid()).honoured).to.equal(true);
   });
 
-  it('the window slides: an honoured stop older than 720 blocks no longer counts', async () => {
+  it('a stop counts until the window less its early edge has passed since this juror first held it', async () => {
+    const before = makeWorld();
+    const at = makeWorld();
+    [before, at].forEach((world) => {
+      for (let i = 0; i < SHUTDOWN_COURTESY; i += 1) world.juror.learnStop(S, 'shutdown', pid());
+    });
+    before.nowMs += COUNTED_FOR - 1;
+    at.nowMs += COUNTED_FOR;
+    expect(before.juror.noteDrop(S, 'shutdown', pid()).honoured).to.equal(false);
+    expect(at.juror.noteDrop(S, 'shutdown', pid()).honoured).to.equal(true);
+  });
+
+  it('a refused stop is held too: it counts against the next', async () => {
+    const world = makeWorld();
+    for (let i = 0; i < SHUTDOWN_COURTESY; i += 1) world.juror.learnStop(S, 'shutdown', pid());
+    world.nowMs += 1000;
+    expect(world.juror.noteDrop(S, 'shutdown', pid()).honoured).to.equal(false);
+    world.juror.noteHeld(S);
+    // the four have left the window; the refused one has not
+    world.nowMs += COUNTED_FOR - 1;
+    for (let i = 0; i < SHUTDOWN_COURTESY - 1; i += 1) {
+      expect(world.juror.noteDrop(S, 'shutdown', pid()).honoured).to.equal(true);
+      world.juror.noteHeld(S);
+    }
+    expect(world.juror.noteDrop(S, 'shutdown', pid()).honoured).to.equal(false);
+  });
+
+  it('a stop held from another juror counts as one seen on the close', async () => {
     const world = makeWorld();
     for (let i = 0; i < SHUTDOWN_COURTESY; i += 1) {
-      // eslint-disable-next-line no-await-in-loop
-      await cleanStop(world, 'shutdown');
+      expect(world.juror.learnStop(S, 'shutdown', pid())).to.equal(true);
     }
-    world.height += COURTESY_WINDOW_BLOCKS;
-    expect(world.juror.noteDrop(S, 'shutdown').honoured).to.equal(true);
+    expect(world.juror.noteDrop(S, 'shutdown', pid()).honoured).to.equal(false);
+  });
+
+  it('one stop counts once, however many times it is held', async () => {
+    const world = makeWorld();
+    const id = pid();
+    expect(world.juror.learnStop(S, 'shutdown', id)).to.equal(true);
+    expect(world.juror.learnStop(S, 'shutdown', id)).to.equal(false);
+    for (let i = 0; i < SHUTDOWN_COURTESY - 2; i += 1) world.juror.learnStop(S, 'shutdown', pid());
+    expect(world.juror.noteDrop(S, 'shutdown', pid()).honoured).to.equal(true);
+  });
+
+  it('the stop being closed is not counted against itself, though another juror\'s forward of it arrived first', async () => {
+    const world = makeWorld();
+    for (let i = 0; i < SHUTDOWN_COURTESY - 1; i += 1) world.juror.learnStop(S, 'shutdown', pid());
+    const closing = pid();
+    world.juror.learnStop(S, 'shutdown', closing);
+    expect(world.juror.noteDrop(S, 'shutdown', closing).honoured).to.equal(true);
   });
 
   it('an honoured stop that overruns is certified through the grace-end look and is not counted twice', async () => {
@@ -560,14 +616,13 @@ describe('nodeDownJuror — the courtesy: a clean stop is honoured only so many 
       // eslint-disable-next-line no-await-in-loop
       await cleanStop(world, 'shutdown');
     }
-    expect(world.juror.noteDrop(S, 'shutdown').honoured).to.equal(true); // the fourth
+    expect(world.juror.noteDrop(S, 'shutdown', pid()).honoured).to.equal(true); // the fourth
     world.advance(NODE_DOWN_GRACE_MS);
     await tick();
     expect(world.probes).to.deep.equal([SUBJECT_ADDRESS]);
     world.juror.noteHeld(S);
-    world.height += 1;
-    // still the fourth honoured stop in the window: the fifth is the one refused
-    expect(world.juror.noteDrop(S, 'shutdown').honoured).to.equal(false);
+    // still the fourth signed stop in the window: the fifth is the one refused
+    expect(world.juror.noteDrop(S, 'shutdown', pid()).honoured).to.equal(false);
   });
 
   it('the memory is kept for duties only, and dies with the juror', async () => {
@@ -577,6 +632,6 @@ describe('nodeDownJuror — the courtesy: a clean stop is honoured only so many 
       await cleanStop(world, 'shutdown');
     }
     world.juror.retain(new Set(['j2:0']));
-    expect(world.juror.noteDrop(S, 'shutdown').honoured).to.equal(true);
+    expect(world.juror.noteDrop(S, 'shutdown', pid()).honoured).to.equal(true);
   });
 });

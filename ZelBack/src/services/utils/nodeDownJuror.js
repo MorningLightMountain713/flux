@@ -46,18 +46,38 @@ const GRACE_MS = Object.freeze({
 });
 
 // THE COURTESY. An honoured stop leaves no row anywhere, which is what makes
-// it cheap and what makes it invisible to the rungs. The jurors see every
-// one on the connection they hold, so each keeps a private count per
-// subject (the mild ladder's memory rule: no message carries it, it dies
-// with the process) and honours a code only so many times in the window;
-// beyond that it looks at the drop as for an unannounced death, all
-// fourteen cross together, and the certificate forms with the real reason
+// it cheap and what makes it invisible to the rungs. A code is honoured only
+// with the subject's signed stop statement (utils/processIdentity), and only
+// so many times in the window; beyond that the juror looks at the drop as
+// for an unannounced death, and the certificate forms with the real reason
 // on it. Generous on purpose (2026-09-02): a release plus a hardware job is
 // two reboots and costs nothing; tuned down in a release once the fleet
 // shows what normal looks like.
+//
+// THE COUNT IS THE JURY'S, NOT THIS JUROR'S. A juror that missed a close
+// would count fewer than the rest and honour a stop they refuse, and the
+// certificate would fall short. So the count is the distinct signed stops
+// this juror holds, whether it saw the close or another juror forwarded the
+// statement; one forward is enough, because only the subject can sign one.
+// Each stop is dated by when this juror first held it, on its own clock, so
+// no node's clock decides whether another's stops count. A forward is
+// accepted up to STOP_FORWARD_AGE_MS after the time the subject signed, and
+// an honest subject's clock is within STOP_CLOSE_AGE_MS of the juror's, so a
+// stop is first held at most their sum after its close. The window ends
+// COURTESY_EARLY_EDGE_MS (more than that sum) early: a stop is never counted
+// past the true window, and where jurors disagree near its edge they
+// disagree leniently.
 const SHUTDOWN_COURTESY = 4;
 const RESTART_COURTESY = 12;
-const COURTESY_WINDOW_BLOCKS = 720;
+const COURTESY_WINDOW_MS = 24 * 60 * 60 * 1000;
+// A statement on the closing connection counts only within this of the
+// juror's clock: the network's message age.
+const STOP_CLOSE_AGE_MS = 5 * 60 * 1000;
+// A forwarded statement counts within this of the receiver's clock: room
+// for one juror's acceptance at the close plus the jurors' clock difference
+// and the forward's delivery.
+const STOP_FORWARD_AGE_MS = 2 * STOP_CLOSE_AGE_MS;
+const COURTESY_EARLY_EDGE_MS = 2 * STOP_FORWARD_AGE_MS;
 
 const COURTESY = Object.freeze({
   [DROP_REASON.SHUTDOWN]: SHUTDOWN_COURTESY,
@@ -95,9 +115,10 @@ class NodeDownJuror {
   #lookTimers = new Map();
 
   /**
-   * The courtesy spent: subject → reason → heights of the honoured drops
-   * inside the window. Duties only; gone with the process.
-   * @type {Map<string, Object<string, number[]>>}
+   * The signed stops held: subject → reason → processId → learnedAt, this
+   * juror's clock when it first held the statement. Duties only; gone with
+   * the process.
+   * @type {Map<string, Object<string, Map<string, number>>>}
    */
   #courtesy = new Map();
 
@@ -152,18 +173,26 @@ class NodeDownJuror {
 
   /**
    * A duty connection dropped, with what the far end said about it. An
-   * unannounced drop is looked at now. A coded drop is honoured: recorded,
-   * and looked at once at the grace end if the duty is still unheld.
+   * unannounced drop is looked at now, and so is a coded one that carried no
+   * accepted stop statement. A coded drop with one is honoured while the
+   * courtesy lasts: recorded, and looked at once at the grace end if the
+   * duty is still unheld.
    *
    * @param {string} subject outpoint
    * @param {string} reason a DROP_REASON
+   * @param {string|null} [processId] the process id of the stop statement
+   *   accepted on the closing connection
    * @returns {{honoured: boolean}} whether the drop was honoured (deferred)
    */
-  noteDrop(subject, reason) {
+  noteDrop(subject, reason, processId = null) {
     const droppedAt = this.#deps.now();
     this.#spendDeferral(subject);
-    if (!(reason in GRACE_MS) || !this.#honours(subject, reason)) {
-      this.look(subject, 'drop', { droppedAt, reason: reason in GRACE_MS ? reason : DROP_REASON.UNANNOUNCED });
+    const coded = reason in GRACE_MS;
+    if (coded && !processId) {
+      log.info(`nodeDownJuror - ${subject}: ${reason} close carried no accepted stop statement; looked at as unannounced`);
+    }
+    if (!coded || !processId || !this.#honours(subject, reason, processId)) {
+      this.look(subject, 'drop', { droppedAt, reason: coded && processId ? reason : DROP_REASON.UNANNOUNCED });
       return { honoured: false };
     }
     this.#deferrals.set(subject, {
@@ -197,23 +226,48 @@ class NodeDownJuror {
   }
 
   /**
-   * Spend one courtesy for this code if any is left in the window. The
-   * (limit + 1)-th code is not honoured, and spends nothing.
+   * Whether the stop being closed is honoured: fewer than the courtesy's
+   * signed stops in the window, not counting this one. This one is held
+   * after the decision, honoured or not.
    */
-  #honours(subject, reason) {
-    const height = this.#deps.currentHeight();
-    let spent = this.#courtesy.get(subject);
-    if (!spent) {
-      spent = { [DROP_REASON.SHUTDOWN]: [], [DROP_REASON.RESTART]: [] };
-      this.#courtesy.set(subject, spent);
-    }
-    spent[reason] = spent[reason].filter((at) => at > height - COURTESY_WINDOW_BLOCKS);
-    if (spent[reason].length >= COURTESY[reason]) {
-      log.info(`nodeDownJuror - ${subject}: ${reason} close not honoured, ${COURTESY[reason]} already honoured in the window`);
+  #honours(subject, reason, processId) {
+    const held = this.#stopsHeld(subject, reason);
+    const counted = [...held.keys()].filter((id) => id !== processId).length;
+    this.learnStop(subject, reason, processId);
+    if (counted >= COURTESY[reason]) {
+      log.info(`nodeDownJuror - ${subject}: ${reason} close not honoured, ${counted} signed stops already in the window (courtesy ${COURTESY[reason]})`);
       return false;
     }
-    spent[reason].push(height);
-    log.info(`nodeDownJuror - ${subject}: ${reason} close honoured (${spent[reason].length} of ${COURTESY[reason]} in the window)`);
+    log.info(`nodeDownJuror - ${subject}: ${reason} close honoured (${counted + 1} of ${COURTESY[reason]} in the window)`);
+    return true;
+  }
+
+  /** The subject's signed stops for this reason still inside the window. */
+  #stopsHeld(subject, reason) {
+    let stops = this.#courtesy.get(subject);
+    if (!stops) {
+      stops = { [DROP_REASON.SHUTDOWN]: new Map(), [DROP_REASON.RESTART]: new Map() };
+      this.#courtesy.set(subject, stops);
+    }
+    const edge = this.#deps.now() - (COURTESY_WINDOW_MS - COURTESY_EARLY_EDGE_MS);
+    stops[reason].forEach((learnedAt, id) => {
+      if (learnedAt <= edge) stops[reason].delete(id);
+    });
+    return stops[reason];
+  }
+
+  /**
+   * Hold a signed stop of the subject, dated now on this juror's clock.
+   *
+   * @param {string} subject outpoint
+   * @param {string} reason DROP_REASON.SHUTDOWN or DROP_REASON.RESTART
+   * @param {string} processId
+   * @returns {boolean} whether it was new to this juror
+   */
+  learnStop(subject, reason, processId) {
+    const held = this.#stopsHeld(subject, reason);
+    if (held.has(processId)) return false;
+    held.set(processId, this.#deps.now());
     return true;
   }
 
@@ -534,5 +588,8 @@ module.exports = {
   DROP_REASON,
   SHUTDOWN_COURTESY,
   RESTART_COURTESY,
-  COURTESY_WINDOW_BLOCKS,
+  COURTESY_WINDOW_MS,
+  COURTESY_EARLY_EDGE_MS,
+  STOP_CLOSE_AGE_MS,
+  STOP_FORWARD_AGE_MS,
 };

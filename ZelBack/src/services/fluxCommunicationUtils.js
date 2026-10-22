@@ -258,6 +258,8 @@ async function broadcastTarget(payload, pubKey) {
       return { target: payload.ip, error: `Invalid fluxgrantgeneration message, ip: ${payload.ip} pubkey: ${pubKey}` };
     case 'fluxnodealive':
       return { target: payload.ip, error: `Invalid fluxnodealive message, ip: ${payload.ip} pubkey: ${pubKey}` };
+    case 'fluxprocessstop':
+      return { target: payload.ip, error: `Invalid fluxprocessstop message, ip: ${payload.ip} pubkey: ${pubKey}` };
     case 'fluxnodesigterm': // RELEASED-FLEET COMPATIBILITY: delete with appMessaging/releasedFleetSigterm.
       return { target: payload.ip, error: `Invalid fluxnodesigterm message, ip: ${payload.ip} pubkey: ${pubKey}` };
     // zelappregister zelappupdate fluxappregister fluxappupdate fluxapprequest

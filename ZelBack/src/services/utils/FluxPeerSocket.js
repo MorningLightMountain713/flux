@@ -171,6 +171,8 @@ class FluxPeerSocket {
     this.badMessageTimestamps = [];
     this.remoteCapabilities = new Set();
     this.remoteClockOffsetMs = null;
+    /** @type {object|null} the far end's signed stop statement, sent before its close */
+    this.stopStatement = null;
     this.remoteVersion = null;
     this.remoteFluxUptime = null;
     this.source = PEER_SOURCE.INBOUND;
@@ -503,6 +505,12 @@ class FluxPeerSocket {
         if (this.remoteCapabilities.has('peerExchange')) {
           manager.handlePeerExchange(this, msgObj.outbound || [], msgObj.inbound || []);
         }
+        return;
+      }
+      // The far end's signed stop, sent immediately before its close frame:
+      // kept for the close, which carries it to the juror. Not gossip.
+      if (msgObj.data?.type === 'fluxprocessstop') {
+        this.stopStatement = msgObj;
         return;
       }
       if (msgObj.type === 'peerUpdate') {
