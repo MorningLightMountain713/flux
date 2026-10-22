@@ -34,7 +34,7 @@ function collection() {
 /**
  * Record an operation that is now running, keyed by its container.
  *
- * @param {object} doc - { containerId, jobId, stagingRoot, identifier, kind }
+ * @param {object} doc - { containerId, jobId, jobKind, owner, stagingRoot, identifier, kind }
  * @returns {Promise<void>}
  */
 async function recordOperation(doc) {

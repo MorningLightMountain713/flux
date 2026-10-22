@@ -8,30 +8,68 @@ const fileOperationStore = require('./fileOperationStore');
 const dockerService = require('../dockerService');
 const { sessionForMountedVolume } = require('./volumeSession');
 const fluxEventBus = require('../utils/fluxEventBus');
+const capabilities = require('../utils/capabilities');
 
 /**
- * Take back the file operations a FluxOS restart left running, and reclaim what
+ * Take back the file operations a FluxOS restart left behind, and reclaim what
  * it left behind.
  *
  * An operation's container is detached from the process that started it, so a
  * restart does NOT interrupt the work - flux-op keeps copying and publishes its
- * own result. What the restart destroys is this process's memory of which
+ * own result - and the container is kept after it exits, so its result waits
+ * for FluxOS too. What the restart destroys is this process's memory of which
  * containers are legitimate, and the reaper removes every one it does not
- * recognise. So the durable record is read FIRST and anything still running is
- * adopted; only then does the reap run, over what is genuinely debris.
+ * recognise. So the durable record is read FIRST and every recorded operation
+ * is taken back; only then does the reap run, over what is genuinely debris.
  *
  * A destination is never left inconsistent either way: a publish is one atomic
  * exchange, so it holds the old content or the new one.
  *
- * Runs at startup, after app volumes are mounted - but the API is already
- * answering by then, so an operation of THIS process can be in flight when it
- * runs. It removes only what no live operation owns: the executor records each
- * running operation's container and staging directory, and reap and sweep skip
- * those, so anything they reclaim belonged to a PREVIOUS process. Safe to run
- * more than once for the same reason, which matters because a startup that throws
- * is retried.
+ * In two steps. The take-back needs Docker and the database and nothing else,
+ * so it starts with the boot, before anything waits for the network, and a
+ * caller polling a job is answered within seconds of the restart however long
+ * the boot decision takes. The staging sweep needs the app volumes mounted, so
+ * it runs where the boot mounts them, after the take-back.
+ */
+
+let takeBackPass = null;
+
+/**
+ * Re-take every operation this node recorded, then reap the containers no
+ * operation owns. Once per process: every caller shares the first pass.
  *
- * @returns {Promise<{containers: number, removed: number}>}
+ * @returns {Promise<{adopted: number, containers: number}>}
+ */
+function takeBackFileOperations() {
+  if (!takeBackPass) {
+    takeBackPass = (async () => {
+      await capabilities.whenUp(['dockerReachable', 'mongoReachable']);
+      const { adopted, unread } = await adoptRecordedOperations();
+      // A recorded container docker could not describe may be running: nothing
+      // is reaped this boot rather than risk removing it.
+      if (unread) {
+        log.warn(`fileOperationRecovery - ${unread} recorded container(s) could not be inspected; reaping nothing this boot`);
+        return { adopted, containers: 0 };
+      }
+      const containers = await executor.reapOrphanedContainers();
+      return { adopted, containers };
+    })();
+  }
+  return takeBackPass;
+}
+
+/**
+ * The boot's file-operation recovery, run once the app volumes are mounted:
+ * the take-back, then the staging directories no live operation owns.
+ *
+ * The API is already answering by then, so an operation of THIS process can be
+ * in flight. It removes only what no live operation owns: the executor records
+ * each running operation's container and staging directory, and reap and sweep
+ * skip those, so anything they reclaim belonged to a PREVIOUS process. Safe to
+ * run more than once for the same reason, which matters because a startup that
+ * throws is retried.
+ *
+ * @returns {Promise<{containers: number, removed: number, adopted: number}>}
  */
 async function recoverInterruptedFileOperations() {
   // Published on every path that ENDS the pass - the one that found nothing,
@@ -45,7 +83,13 @@ async function recoverInterruptedFileOperations() {
   // publishes again, which is safe for the same reason the sweep is.
   let result = { containers: 0, removed: 0, adopted: 0 };
   try {
-    result = await sweepEveryMountedVolume();
+    const { adopted, containers } = await takeBackFileOperations();
+    executor.noteVolumesMounted();
+    const removed = await sweepEveryMountedVolume();
+    result = { containers, removed, adopted };
+    if (containers || removed) {
+      log.info(`fileOperationRecovery - reaped ${containers} container(s), removed ${removed} artefact(s)`);
+    }
   } finally {
     fluxEventBus.publish('fileops:recovered', result);
   }
@@ -53,62 +97,53 @@ async function recoverInterruptedFileOperations() {
 }
 
 /**
- * Re-take the operations this node recorded as in flight and that are STILL
- * RUNNING, before anything reaps.
+ * Re-take every operation this node recorded, before anything reaps.
  *
  * Order matters and is the whole point: the reaper removes every
- * file-operation container no live operation owns, so adoption has to happen
- * first or it adopts what was just destroyed.
+ * file-operation container no live operation owns, so the take-back has to
+ * happen first or it takes back what was just destroyed.
  *
- * A record whose container is gone, or has already exited, is dropped here -
- * its staging directory is debris and the sweep below clears it, exactly as
- * before this record existed.
+ * A record whose container docker cannot describe is left for the next boot.
  *
- * @returns {Promise<number>} how many were taken over
+ * @returns {Promise<{adopted: number, unread: number}>} records taken back, and
+ *   records left because their container could not be inspected
  */
-async function adoptRunningOperations() {
+async function adoptRecordedOperations() {
   const records = await fileOperationStore.listOperations();
-  if (!records.length) return 0;
-
   let adopted = 0;
+  let unread = 0;
   // eslint-disable-next-line no-restricted-syntax
   for (const record of records) {
-    let running = false;
+    let state;
     try {
       // eslint-disable-next-line no-await-in-loop
-      const state = await dockerService.dockerContainerInspect(record.containerId, { identifierType: 'id' });
-      running = Boolean(state?.State?.Running);
+      const inspected = await dockerService.dockerContainerInspect(record.containerId, { identifierType: 'id' });
+      // null: no such container, the record outlived it
+      state = inspected ? inspected.State : null;
     } catch (error) {
-      // No such container: it finished and reaped itself, or it is gone.
-      running = false;
-    }
-
-    if (!running) {
-      // eslint-disable-next-line no-await-in-loop
-      await fileOperationStore.forgetOperation(record.containerId);
+      unread += 1;
+      log.warn(`fileOperationRecovery - could not inspect recorded container ${record.containerId.slice(0, 12)}: ${error.message}`);
       // eslint-disable-next-line no-continue
       continue;
     }
-
-    // eslint-disable-next-line no-await-in-loop
-    await executor.adoptOperation(record);
+    executor.adoptOperation(record, state);
     adopted += 1;
-    log.info(`fileOperationRecovery - adopted ${record.kind || 'file operation'} on ${record.identifier} (container ${record.containerId.slice(0, 12)})`);
+    log.info(`fileOperationRecovery - took back ${record.kind || 'file operation'} on ${record.identifier} (container ${record.containerId.slice(0, 12)}, ${state ? state.Status : 'gone'})`);
   }
-  return adopted;
+  return { adopted, unread };
 }
 
+/**
+ * Sweep the staging directories on every mounted app volume.
+ * @returns {Promise<number>} how many were removed
+ */
 async function sweepEveryMountedVolume() {
-  // BEFORE the reap, or it adopts containers the reap has already removed.
-  const adopted = await adoptRunningOperations();
-  const containers = await executor.reapOrphanedContainers();
-
   let mounts = [];
   try {
     mounts = await deviceHelper.listMountedFilesystems();
   } catch (error) {
     log.error(`fileOperationRecovery - could not read the mount table: ${error.message}`);
-    return { containers, removed: 0, adopted };
+    return 0;
   }
 
   // Only mounted app volumes. A staging directory can only exist on one, and
@@ -128,11 +163,7 @@ async function sweepEveryMountedVolume() {
       log.error(`fileOperationRecovery - could not sweep ${volume.target}: ${error.message}`);
     }
   }
-
-  if (containers || removed) {
-    log.info(`fileOperationRecovery - reaped ${containers} container(s), removed ${removed} artefact(s)`);
-  }
-  return { containers, removed, adopted };
+  return removed;
 }
 
-module.exports = { recoverInterruptedFileOperations };
+module.exports = { takeBackFileOperations, recoverInterruptedFileOperations };

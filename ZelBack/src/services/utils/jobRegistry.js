@@ -324,6 +324,17 @@ function get(jobId, owner = null, readOptions = {}) {
   };
 }
 
+/**
+ * Whom an operation belongs to and what it is, for a record that has to re-open
+ * it after a restart under the same terms.
+ * @param {string} jobId
+ * @returns {{kind: string, owner: string|null}|null}
+ */
+function ownership(jobId) {
+  const job = jobs.get(jobId);
+  return job ? { kind: job.kind, owner: job.owner } : null;
+}
+
 /** Test seam: drop every operation. */
 function reset() {
   jobs.clear();
@@ -346,5 +357,6 @@ module.exports = {
   cancelled,
   evicted,
   get,
+  ownership,
   reset,
 };

@@ -14,6 +14,7 @@ describe('fileOperationRecovery tests', () => {
   let dockerStub;
   let deviceHelperStub;
   let logStub;
+  let capabilitiesStub;
   let recovery;
 
   const mount = (target) => ({
@@ -24,8 +25,10 @@ describe('fileOperationRecovery tests', () => {
     executorStub = {
       reapOrphanedContainers: sinon.stub().resolves(0),
       sweepStagingDirectories: sinon.stub().resolves({ removed: [] }),
-      adoptOperation: sinon.stub().resolves(),
+      adoptOperation: sinon.stub(),
+      noteVolumesMounted: sinon.stub(),
     };
+    capabilitiesStub = { whenUp: sinon.stub().resolves() };
     storeStub = {
       listOperations: sinon.stub().resolves([]),
       forgetOperation: sinon.stub().resolves(),
@@ -54,12 +57,13 @@ describe('fileOperationRecovery tests', () => {
       './volumeSession': volumeSession,
       '../../lib/log': logStub,
       '../utils/appConstants': { appsFolder: APPS_FOLDER },
+      '../utils/capabilities': capabilitiesStub,
     });
   });
 
   afterEach(() => sinon.restore());
 
-  describe('an operation the restart left running', () => {
+  describe('an operation the restart left behind', () => {
     const record = {
       containerId: 'c0ffee1234567890', jobId: 'op_abc', stagingRoot: '/test/apps/folder/app/.flux-op-1', identifier: 'app', kind: 'Copying...',
     };
@@ -68,24 +72,25 @@ describe('fileOperationRecovery tests', () => {
     // does not stop the copy - it keeps running and publishes itself. Only this
     // node's memory of which containers are legitimate is lost, and without the
     // record the reaper destroys work that was minutes from finishing.
-    it('adopts it rather than reaping it', async () => {
+    it('takes back a running one rather than reaping it', async () => {
+      const state = { Running: true, Status: 'running' };
       storeStub.listOperations.resolves([record]);
-      dockerStub.dockerContainerInspect.resolves({ State: { Running: true } });
+      dockerStub.dockerContainerInspect.resolves({ State: state });
 
       const result = await recovery.recoverInterruptedFileOperations();
 
       // The record holds a container ID, and the inspect resolves by app name
       // unless told otherwise.
       sinon.assert.calledWith(dockerStub.dockerContainerInspect, record.containerId, { identifierType: 'id' });
-      sinon.assert.calledOnceWithExactly(executorStub.adoptOperation, record);
+      sinon.assert.calledOnceWithExactly(executorStub.adoptOperation, record, state);
       sinon.assert.notCalled(storeStub.forgetOperation);
       expect(result.adopted).to.equal(1);
     });
 
     // Order is the whole point: the reaper removes every file-operation
-    // container no live operation owns, so adopting afterwards adopts what was
-    // just destroyed.
-    it('adopts BEFORE anything reaps', async () => {
+    // container no live operation owns, so a take-back afterwards takes back
+    // what was just destroyed.
+    it('takes back BEFORE anything reaps', async () => {
       storeStub.listOperations.resolves([record]);
 
       await recovery.recoverInterruptedFileOperations();
@@ -93,28 +98,43 @@ describe('fileOperationRecovery tests', () => {
       sinon.assert.callOrder(executorStub.adoptOperation, executorStub.reapOrphanedContainers);
     });
 
-    // The negative case, and without it the adoption above would pass on a
-    // recovery that adopts everything it is told about and reaps nothing.
-    it('drops a record whose container has already exited, and lets the reap run', async () => {
+    // An exited container is kept until its result is read, so a job whose
+    // operation finished while FluxOS was down is settled rather than forgotten.
+    it('takes back one that exited while FluxOS was down, with its exit state', async () => {
+      const state = { Running: false, Status: 'exited', ExitCode: 0 };
       storeStub.listOperations.resolves([record]);
-      dockerStub.dockerContainerInspect.resolves({ State: { Running: false } });
+      dockerStub.dockerContainerInspect.resolves({ State: state });
 
       const result = await recovery.recoverInterruptedFileOperations();
 
-      sinon.assert.notCalled(executorStub.adoptOperation);
-      sinon.assert.calledOnceWithExactly(storeStub.forgetOperation, record.containerId);
-      expect(result.adopted).to.equal(0);
+      sinon.assert.calledOnceWithExactly(executorStub.adoptOperation, record, state);
+      expect(result.adopted).to.equal(1);
     });
 
-    it('drops a record whose container docker has never heard of', async () => {
+    it('takes back a record whose container is gone, so its job can say the outcome is unknown', async () => {
       storeStub.listOperations.resolves([record]);
-      dockerStub.dockerContainerInspect.rejects(new Error('No such container'));
+      dockerStub.dockerContainerInspect.resolves(null);
+
+      await recovery.recoverInterruptedFileOperations();
+
+      sinon.assert.calledOnceWithExactly(executorStub.adoptOperation, record, null);
+    });
+
+    // A docker that fails to answer is not a container that is gone: the
+    // record stays for the next boot, and nothing is reaped, since the
+    // container it names may be the one still running.
+    it('leaves a record docker could not inspect, and reaps nothing', async () => {
+      storeStub.listOperations.resolves([record]);
+      dockerStub.dockerContainerInspect.rejects(new Error('socket hang up'));
+      executorStub.reapOrphanedContainers.resolves(3);
 
       const result = await recovery.recoverInterruptedFileOperations();
 
       sinon.assert.notCalled(executorStub.adoptOperation);
-      sinon.assert.calledOnceWithExactly(storeStub.forgetOperation, record.containerId);
-      expect(result.adopted).to.equal(0);
+      sinon.assert.notCalled(storeStub.forgetOperation);
+      sinon.assert.notCalled(executorStub.reapOrphanedContainers);
+      expect(result).to.deep.equal({ containers: 0, removed: 0, adopted: 0 });
+      expect(logStub.warn.calledWithMatch(/reaping nothing this boot/)).to.equal(true);
     });
 
     // Fail-open: an unreadable store leaves this node doing exactly what it did
@@ -127,6 +147,49 @@ describe('fileOperationRecovery tests', () => {
 
       sinon.assert.notCalled(executorStub.adoptOperation);
       expect(result).to.deep.equal({ containers: 2, removed: 0, adopted: 0 });
+    });
+  });
+
+  describe('the take-back, ahead of the staging sweep', () => {
+    it('waits for docker and the database, and reads nothing before', async () => {
+      let up;
+      capabilitiesStub.whenUp.returns(new Promise((resolve) => { up = resolve; }));
+
+      const pass = recovery.takeBackFileOperations();
+      await Promise.resolve();
+      sinon.assert.calledOnceWithExactly(capabilitiesStub.whenUp, ['dockerReachable', 'mongoReachable']);
+      sinon.assert.notCalled(storeStub.listOperations);
+
+      up();
+      await pass;
+      sinon.assert.calledOnce(storeStub.listOperations);
+      sinon.assert.calledOnce(executorStub.reapOrphanedContainers);
+    });
+
+    it('runs once per process: the storage recovery joins the pass the boot started', async () => {
+      executorStub.reapOrphanedContainers.resolves(2);
+      const early = recovery.takeBackFileOperations();
+
+      const first = await recovery.recoverInterruptedFileOperations();
+      const second = await recovery.recoverInterruptedFileOperations();
+
+      expect(await early).to.deep.equal({ adopted: 0, containers: 2 });
+      sinon.assert.calledOnce(storeStub.listOperations);
+      sinon.assert.calledOnce(executorStub.reapOrphanedContainers);
+      expect(first.containers).to.equal(2);
+      expect(second.containers).to.equal(2);
+    });
+
+    it('tells the executor the volumes are mounted after the take-back and before the sweep', async () => {
+      deviceHelperStub.listMountedFilesystems.resolves([mount(`${APPS_FOLDER}fluxcomp_one`)]);
+
+      await recovery.recoverInterruptedFileOperations();
+
+      sinon.assert.callOrder(
+        executorStub.reapOrphanedContainers,
+        executorStub.noteVolumesMounted,
+        executorStub.sweepStagingDirectories,
+      );
     });
   });
 
@@ -229,8 +292,4 @@ describe('fileOperationRecovery tests', () => {
 
     expect(executorStub.reapOrphanedContainers.calledBefore(executorStub.sweepStagingDirectories)).to.equal(true);
   });
-
-
-
-
 });
