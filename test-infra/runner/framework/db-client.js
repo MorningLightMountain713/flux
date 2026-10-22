@@ -157,7 +157,7 @@ export function dbClient(nodeNum) {
     // The app state events this node stored of a type for a node, by its bare IP
     // with or without the port: a released node stores a fluxnodesigterm it acted
     // on as type 'sigterm'.
-    async appStateEvents(type, bareIp) {
+    async appStateEventsAt(type, bareIp) {
       const globalDb = await db('appsGlobal');
       return globalDb.collection('appstateevents').find({ type, ip: atAddress(bareIp) }).toArray();
     },

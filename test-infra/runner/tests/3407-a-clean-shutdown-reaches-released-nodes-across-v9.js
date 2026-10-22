@@ -121,7 +121,7 @@ describe('a clean shutdown reaches released nodes across v9', function () {
     const row = before.find((r) => r.name === name);
     expect(new Date(row.expireAt).getTime() - Date.now(), 'the row starts well past the sigterm expiry')
       .to.be.greaterThan(SIGTERM_EXPIRY_MS + 15 * 60_000);
-    expect(await dbClient(RELEASED + 1).appStateEvents('sigterm', nodeIp(STOPPING)), 'no stop told yet').to.deep.equal([]);
+    expect(await dbClient(RELEASED + 1).appStateEventsAt('sigterm', nodeIp(STOPPING)), 'no stop told yet').to.deep.equal([]);
 
     const container = env.clients[STOPPING].container;
     await execInContainer(container, 'mkdir -p /run/systemd/shutdown && touch /run/systemd/shutdown/scheduled');
@@ -131,7 +131,7 @@ describe('a clean shutdown reaches released nodes across v9', function () {
 
     let events = [];
     await waitFor(async () => {
-      events = await dbClient(RELEASED + 1).appStateEvents('sigterm', nodeIp(STOPPING));
+      events = await dbClient(RELEASED + 1).appStateEventsAt('sigterm', nodeIp(STOPPING));
       return events.length > 0;
     }, { timeout: 120000, interval: 1000, label: 'the released node is told of the stop' });
     // Stored as a date by a released node.
