@@ -109,6 +109,19 @@ class FluxPeerManager extends EventEmitter {
    */
   #undecided = new Map();
 
+  /**
+   * Peering inbounds open at the socket and still at the inbound gate, by peer key.
+   * @type {Map<string, number>}
+   */
+  #atGate = new Map();
+
+  /**
+   * Outbound peers the far end closed as a duplicate while its own connection to
+   * this node was at the gate, by key. Each stays counted until that gate answers.
+   * @type {Map<string, FluxPeerSocket>}
+   */
+  #heldForGate = new Map();
+
   /** The node-down plane's peering gate, installed at its start; see setInboundGate. */
   #inboundGate = null;
 
@@ -393,6 +406,17 @@ class FluxPeerManager extends EventEmitter {
   remove(key, closeCode) {
     const peer = this.#peers.get(key);
     if (!peer) return null;
+
+    // The far end closes this dial as a duplicate because it holds the pair's
+    // other connection, and that connection is open here, still at the inbound
+    // gate: the peer is not lost. The entry stays counted until the gate
+    // answers; the inbound replaces it there, or the gate's end removes it.
+    if (closeCode === CLOSE_CODES.DUPLICATE_PEER && peer.direction === DIRECTION.OUTBOUND
+      && this.#atGate.has(key)) {
+      this.#heldForGate.set(key, peer);
+      log.info(`Outgoing connection ${key} closed as a duplicate; held while the peer's own connection is at the inbound gate`);
+      return null;
+    }
 
     this.#removeTracking(peer);
 
@@ -1471,6 +1495,25 @@ class FluxPeerManager extends EventEmitter {
   }
 
   async #admitInboundThroughGate(ws, ipv4Peer, port, metadata, req) {
+    const key = `${ipv4Peer}:${port}`;
+    this.#atGate.set(key, (this.#atGate.get(key) || 0) + 1);
+    try {
+      await this.#passInboundGate(ws, ipv4Peer, port, metadata, req);
+    } finally {
+      const left = this.#atGate.get(key) - 1;
+      if (left > 0) {
+        this.#atGate.set(key, left);
+      } else {
+        this.#atGate.delete(key);
+        // A held dial the inbound did not replace is lost after all.
+        const held = this.#heldForGate.get(key);
+        this.#heldForGate.delete(key);
+        if (held && this.#peers.get(key) === held) this.remove(key, CLOSE_CODES.DUPLICATE_PEER);
+      }
+    }
+  }
+
+  async #passInboundGate(ws, ipv4Peer, port, metadata, req) {
     let answer;
     try {
       answer = await this.#inboundGate(`${ipv4Peer}:${port}`);
@@ -1548,7 +1591,7 @@ class FluxPeerManager extends EventEmitter {
     if (this.has(key)) {
       const existing = this.get(key);
       if (existing && !existing.isAlive) {
-        log.info(`Replacing stale inbound connection ${key}`);
+        log.info(`Replacing stale ${existing.direction} connection ${key}`);
         this.add(ws, ipv4Peer, port, { source: PEER_SOURCE.INBOUND, ...metadata });
         return;
       }

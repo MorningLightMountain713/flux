@@ -2220,6 +2220,94 @@ describe('FluxPeerManager tests', () => {
     });
   });
 
+  describe('a dial closed as a duplicate while the peer\'s own connection is at the gate', () => {
+    // The far end keeps the pair's other connection and closes this node's dial;
+    // that connection is open here and waiting on the gate. Four peers sit on the
+    // floor's lower edge (appSyncDegradedThreshold), so one lost peer lowers it.
+    const settle = () => new Promise((resolve) => { setImmediate(() => setImmediate(resolve)); });
+    let held;
+    let answer;
+    let removed;
+
+    beforeEach(() => {
+      capabilities.resetForTests();
+      manager.numberOfFluxNodes = 10_000;
+      for (let i = 1; i <= 11; i += 1) {
+        manager.add(createMockWs(`10.0.0.${i}`), `10.0.0.${i}`, '16127', { source: PEER_SOURCE.RANDOM });
+      }
+      held = createMockWs('8.8.8.8');
+      manager.add(held, '8.8.8.8', '16127', { source: PEER_SOURCE.DETERMINISTIC });
+      for (let i = 11; i >= 4; i -= 1) manager.remove(`10.0.0.${i}:16127`, 1006);
+      expect(manager.getNumberOfPeers()).to.equal(4);
+      expect(capabilities.isUp('peersAboveFloor')).to.equal(true);
+      manager.setInboundGate(() => new Promise((resolve) => { answer = resolve; }));
+      removed = [];
+      manager.on('peer:removed', (info) => removed.push(info));
+    });
+
+    afterEach(() => capabilities.resetForTests());
+
+    const farEndCloses = () => {
+      held.readyState = WebSocket.CLOSED;
+      manager.remove('8.8.8.8:16127', CLOSE_CODES.DUPLICATE_PEER);
+    };
+
+    it('is no loss: the peer stays counted and the admitted inbound takes its place', async () => {
+      const inbound = createMockWs('8.8.8.8');
+      manager.validateAndAddInbound(inbound, '16127', createMockReq('8.8.8.8'));
+      farEndCloses();
+
+      expect(manager.getNumberOfPeers(), 'counted through the gate').to.equal(4);
+      expect(capabilities.isUp('peersAboveFloor')).to.equal(true);
+      expect(removed).to.deep.equal([]);
+
+      answer({ admitted: true, reason: 'not_locked_out' });
+      await settle();
+      expect(manager.get('8.8.8.8:16127').direction).to.equal(DIRECTION.INBOUND);
+      expect(manager.get('8.8.8.8:16127').ws).to.equal(inbound);
+      expect(manager.getNumberOfPeers()).to.equal(4);
+      expect(capabilities.isUp('peersAboveFloor')).to.equal(true);
+      expect(removed).to.deep.equal([]);
+    });
+
+    it('is a loss once the gate refuses the inbound', async () => {
+      manager.validateAndAddInbound(createMockWs('8.8.8.8'), '16127', createMockReq('8.8.8.8'));
+      farEndCloses();
+      expect(manager.getNumberOfPeers()).to.equal(4);
+
+      answer({ admitted: false, reason: 'locked_out', subject: 'x:0' });
+      await settle();
+      expect(manager.has('8.8.8.8:16127')).to.equal(false);
+      expect(manager.getNumberOfPeers()).to.equal(3);
+      expect(capabilities.isUp('peersAboveFloor')).to.equal(false);
+      expect(removed.map((r) => r.closeCode)).to.deep.equal([CLOSE_CODES.DUPLICATE_PEER]);
+    });
+
+    it('is a loss at once when no connection from the peer is at the gate', () => {
+      farEndCloses();
+      expect(manager.has('8.8.8.8:16127')).to.equal(false);
+      expect(capabilities.isUp('peersAboveFloor')).to.equal(false);
+      expect(removed).to.have.lengthOf(1);
+    });
+
+    it('holds for that peer only: a duplicate close from another peer is a loss at once', () => {
+      manager.validateAndAddInbound(createMockWs('8.8.8.8'), '16127', createMockReq('8.8.8.8'));
+      manager.remove('10.0.0.1:16127', CLOSE_CODES.DUPLICATE_PEER);
+      expect(manager.has('10.0.0.1:16127')).to.equal(false);
+      expect(removed.map((r) => r.ip)).to.deep.equal(['10.0.0.1']);
+    });
+
+    it('holds this node\'s dial only: an inbound closed as a duplicate is a loss at once', () => {
+      manager.setInboundGate(null);
+      manager.validateAndAddInbound(createMockWs('7.7.7.7'), '16127', createMockReq('7.7.7.7'));
+      manager.setInboundGate(() => new Promise(() => {}));
+      manager.validateAndAddInbound(createMockWs('7.7.7.7'), '16127', createMockReq('7.7.7.7'));
+      manager.remove('7.7.7.7:16127', CLOSE_CODES.DUPLICATE_PEER);
+      expect(manager.has('7.7.7.7:16127')).to.equal(false);
+      expect(removed.map((r) => r.ip)).to.deep.equal(['7.7.7.7']);
+    });
+  });
+
   describe('validateAndAddInbound ephemeral acceptance', () => {
     // The receiving half of openEphemeralConnection: a dialer that declared
     // itself transient must get a reader even when the pair is already held.
