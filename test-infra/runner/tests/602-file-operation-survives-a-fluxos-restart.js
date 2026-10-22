@@ -234,12 +234,14 @@ describe('a file operation survives a FluxOS restart', function () {
 
     const afterId = node.getLastEventId();
     await holdFluxosDown(node.container);
-    await waitFor(async () => (await fileOpContainer(containerId))?.state !== 'running', {
-      timeout: 600000, interval: 2000, label: 'the operation finishes while FluxOS is down',
-    });
-    expect(await fileOpContainer(containerId), 'kept after it exits, for FluxOS to read').to.deep.include({ state: 'exited' });
-
-    await releaseFluxos(node.container);
+    try {
+      await waitFor(async () => (await fileOpContainer(containerId))?.state !== 'running', {
+        timeout: 600000, interval: 2000, label: 'the operation finishes while FluxOS is down',
+      });
+      expect(await fileOpContainer(containerId), 'kept after it exits, for FluxOS to read').to.deep.include({ state: 'exited' });
+    } finally {
+      await releaseFluxos(node.container);
+    }
     await waitForFileOpsRecovered(node, () => true, 300000, { afterId });
 
     const job = await waitForOperation(node, jobId, auth.zelidauth, { timeout: 60000 });
@@ -254,12 +256,14 @@ describe('a file operation survives a FluxOS restart', function () {
 
     const afterId = node.getLastEventId();
     await holdFluxosDown(node.container);
-    await inNode(`docker kill ${containerId}`);
-    await waitFor(async () => (await fileOpContainer(containerId))?.state === 'exited', {
-      timeout: 60000, interval: 1000, label: 'the killed operation exited',
-    });
-
-    await releaseFluxos(node.container);
+    try {
+      await inNode(`docker kill ${containerId}`);
+      await waitFor(async () => (await fileOpContainer(containerId))?.state !== 'running', {
+        timeout: 60000, interval: 1000, label: 'the killed operation exited',
+      });
+    } finally {
+      await releaseFluxos(node.container);
+    }
     await waitForFileOpsRecovered(node, () => true, 300000, { afterId });
 
     const job = await waitForOperation(node, jobId, auth.zelidauth, { timeout: 60000 });
