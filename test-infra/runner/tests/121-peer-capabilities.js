@@ -6,6 +6,7 @@ import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { waitFor } from '../framework/wait.js';
 import { partition, healPartition } from '../framework/partition.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
+import { restartFluxos } from '../framework/container.js';
 
 // The set the fleet declares, so this suite covers whatever is in it rather
 // than whatever somebody remembered to write a case for.
@@ -43,16 +44,16 @@ describe('Peer capabilities', function () {
     env = await createTestEnv({ hookCtx: this,
       nodes: 6,
       stubPeers: [MODERN_STUB, LEGACY_STUB],
-      // One peer that claims syncSigV2 and one that claims nothing, which is the
-      // only pairing that matters here. A fleet runs one image, so a peer whose
-      // claim differs from the fleet's exists nowhere else.
+      // One peer that claims syncSigV2 and processStop and one that claims
+      // nothing, which is the only pairing that matters here. A fleet runs one
+      // image, so a peer whose claim differs from the fleet's exists nowhere else.
       //
       // Neither claims a capability it does not implement. A stub advertising
       // binaryMessages is answered in a frame it never decodes, and one
       // advertising appStateSync is asked a question it never answers - which
       // reads as the node failing to respond.
       stubCapabilities: {
-        [MODERN_STUB]: ['peerExchange', 'syncSigV2'],
+        [MODERN_STUB]: ['peerExchange', 'syncSigV2', 'processStop'],
         [LEGACY_STUB]: ['peerExchange'],
       },
       // A node stamps its per-peer response throttle on arrival, before the
@@ -249,6 +250,44 @@ describe('Peer capabilities', function () {
       )))).some((count) => count > 0);
 
       expect(refusedTheStub, 'no node refused the contradicting stub').to.equal(true);
+    });
+  });
+
+  // A stopping node signs its stop and sends it, before its close frame, only
+  // to a peer that claims processStop: a released node holding a connection to
+  // it is sent the close alone.
+  describe('a stop', function () {
+    it('is signed to a peer that claims processStop, and not to one that claims nothing', async function () {
+      this.timeout(300000);
+      const cfg = getSubnetConfig();
+      const ipOf = (i) => cfg.nodeIp(i + 1);
+      const modern = env.stubPeerClients.get(MODERN_STUB);
+      const legacy = env.stubPeerClients.get(LEGACY_STUB);
+
+      // A fleet node holding both stubs, so one stop reaches both.
+      let stopping = null;
+      for (const i of REAL_NODES) {
+        const peers = (await env.clients[i].getPeerDetails()).data.map((p) => p.ip);
+        if (peers.includes(modern.ip) && peers.includes(legacy.ip)) {
+          stopping = i;
+          break;
+        }
+      }
+      expect(stopping, 'no fleet node holds both stubs').to.not.equal(null);
+      const statedBefore = (await legacy.stopStatementsReceived()).length;
+      const modernBefore = (await modern.stopStatementsReceived()).length;
+
+      await restartFluxos(env.clients[stopping].container);
+      await waitFor(async () => (await modern.stopStatementsReceived()).length > modernBefore,
+        { timeout: 60000, label: `the processStop stub told of node ${stopping}'s stop` });
+
+      const stop = (await modern.stopStatementsReceived()).slice(modernBefore);
+      expect(stop.map((s) => s.ip)).to.deep.equal([`${ipOf(stopping)}:16127`]);
+      expect(stop[0].reason).to.equal('restart');
+      expect(stop[0].processId).to.match(/^[0-9a-f]{32}$/);
+      expect((await legacy.stopStatementsReceived()).length, 'the stub that claims nothing is sent the close alone')
+        .to.equal(statedBefore);
+      await env.startDiscovery([stopping]).catch(() => {});
     });
   });
 });

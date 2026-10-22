@@ -281,6 +281,13 @@ export function stubPeerClient(ip) {
       return stats.syncResponsesReceived ?? 0;
     },
 
+    // The stop statements nodes sent this peer before closing to it:
+    // [{ip, processId, reason}], in arrival order.
+    async stopStatementsReceived() {
+      const stats = await this.getStats();
+      return stats.stopStatementsReceived ?? [];
+    },
+
     async clear() {
       const res = await controlFetch(`${controlUrl}/clear`, { method: 'POST' });
       return res.json();

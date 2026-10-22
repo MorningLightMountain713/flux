@@ -68,6 +68,9 @@ let policyAsksAnswered = 0;
 // advertise policyBundle, so this is zero for a POLICY_UNAWARE stub and the count is the
 // only way a suite can see the difference.
 let policyAnnouncementsReceived = 0;
+// The signed stop statements nodes sent this peer before closing to it, in
+// arrival order: a node sends one only to a peer that claims processStop.
+let stopStatementsReceived = [];
 let unverifiableResponsesSent = 0;
 let syncRequestsSent = 0;
 let syncResponsesReceived = 0;
@@ -253,6 +256,11 @@ async function handleMessage(ws, rawData) {
     // asks for nothing.
     if (data && data.type === 'fluxpolicyseq') {
       policyAnnouncementsReceived += 1;
+      return;
+    }
+
+    if (data && data.type === 'fluxprocessstop') {
+      stopStatementsReceived.push({ ip: data.ip, processId: data.processId, reason: data.reason });
       return;
     }
 
@@ -607,6 +615,7 @@ const controlServer = http.createServer(async (req, res) => {
         broadcastsSent,
         policyAsksAnswered,
         policyAnnouncementsReceived,
+        stopStatementsReceived,
         connectedNodes: connectedNodes.size,
       }));
       return;
@@ -783,6 +792,7 @@ const controlServer = http.createServer(async (req, res) => {
       policyAnswer = { answers: false, seq: null };
       policyAsksAnswered = 0;
       policyAnnouncementsReceived = 0;
+      stopStatementsReceived = [];
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok' }));
       return;
