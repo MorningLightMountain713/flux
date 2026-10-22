@@ -473,6 +473,11 @@ while [ "$STOPPING" = "0" ]; do
   [ "$STOPPING" = "1" ] && break
   echo "fluxos (node app.js) exited, respawning in 1s" >&2
   sleep 1
+  # Fault-injection lever, as /tmp/dockerd-paused is for dockerd: while
+  # /tmp/fluxos-paused exists FluxOS is not respawned (holdFluxosDown), and the
+  # app and file-operation containers carry on without it.
+  while [ -f /tmp/fluxos-paused ] && [ "$STOPPING" = "0" ]; do sleep 0.3; done
+  [ "$STOPPING" = "1" ] && break
 done
 # Stopping: let the child finish its SIGTERM path before PID 1 goes.
 wait "$FLUXOS_PID" 2>/dev/null

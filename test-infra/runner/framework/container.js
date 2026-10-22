@@ -443,6 +443,45 @@ export async function resumeDockerd(container, { readyTimeoutMs = 40000, interva
 }
 
 /**
+ * Stop the FluxOS process and keep it stopped: the watchdog does not respawn it
+ * while /tmp/fluxos-paused exists. The inner dockerd and every container keep
+ * running, so a suite can let something finish while FluxOS is down. Resolves
+ * once the API no longer answers. SIGTERM, as restartFluxos sends.
+ */
+export async function holdFluxosDown(container, { apiPort = 16127, downTimeoutMs = 60000, interval = 300 } = {}) {
+  await execInContainer(container, 'touch /tmp/fluxos-paused; kill -TERM "$(cat /tmp/fluxos.pid 2>/dev/null)" 2>/dev/null || true');
+  const probe = `curl -sf -o /dev/null http://127.0.0.1:${apiPort}/flux/version`;
+  const start = Date.now();
+  while (Date.now() - start < downTimeoutMs) {
+    // eslint-disable-next-line no-await-in-loop
+    const r = await execInContainer(container, probe);
+    if (r.exitCode !== 0) return;
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((res) => setTimeout(res, interval));
+  }
+  throw new Error(`holdFluxosDown: FluxOS did not stop within ${downTimeoutMs}ms`);
+}
+
+/**
+ * Release holdFluxosDown: the watchdog respawns FluxOS, and this resolves once
+ * its API answers.
+ */
+export async function releaseFluxos(container, { apiPort = 16127, readyTimeoutMs = 120000, interval = 500 } = {}) {
+  await execInContainer(container, 'rm -f /tmp/fluxos-paused');
+  const probe = `curl -sf -o /dev/null http://127.0.0.1:${apiPort}/flux/version`;
+  const start = Date.now();
+  while (Date.now() - start < readyTimeoutMs) {
+    throwIfInfraDead();
+    // eslint-disable-next-line no-await-in-loop
+    const r = await execInContainer(container, probe);
+    if (r.exitCode === 0) return;
+    // eslint-disable-next-line no-await-in-loop
+    await sleepUnlessInfraDead(interval);
+  }
+  throw new Error(`releaseFluxos: FluxOS did not answer within ${readyTimeoutMs}ms`);
+}
+
+/**
  * Restart the FluxOS process only - the `systemctl restart fluxos` case. Signals just
  * the node app.js child (its PID is in /tmp/fluxos.pid, written by the entrypoint
  * watchdog, so PID 1 is never touched); the watchdog respawns it. The inner dockerd
