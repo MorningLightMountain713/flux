@@ -29,8 +29,11 @@ const NODES = 3;
 const STOPPING = 0; // v9, runs the app, its machine shuts down
 const RELAY = 1; // v9, the released node's only path to the stopping node
 const RELEASED = 2;
-const SIGTERM_EXPIRY_MS = 420_000;
-const LOCATION_TTL_MS = 7_500_000;
+const SIGTERM_EXPIRY_MS = 420_000; // the released default
+// The harness's own row lifetime (180 s) is shorter than the sigterm expiry, so
+// there would be nothing to shorten: this suite runs a lifetime the expiry is
+// well inside, as production's 7500 s is.
+const LOCATION_TTL_S = 3600;
 
 describe('a clean shutdown reaches released nodes across v9', function () {
   let env;
@@ -48,6 +51,7 @@ describe('a clean shutdown reaches released nodes across v9', function () {
       hookCtx: this,
       nodes: NODES,
       nodeImageTags: { [RELEASED]: BASE_TAG },
+      configOverrides: { fluxapps: { locationTtlS: LOCATION_TTL_S } },
       tickerAutostart: false,
     });
 
@@ -115,8 +119,8 @@ describe('a clean shutdown reaches released nodes across v9', function () {
     this.timeout(600000);
     const before = await rowsOnReleased();
     const row = before.find((r) => r.name === name);
-    expect(new Date(row.expireAt).getTime() - Date.now(), 'the row starts with most of its lifetime')
-      .to.be.greaterThan(LOCATION_TTL_MS / 2);
+    expect(new Date(row.expireAt).getTime() - Date.now(), 'the row starts well past the sigterm expiry')
+      .to.be.greaterThan(SIGTERM_EXPIRY_MS + 15 * 60_000);
     expect(await dbClient(RELEASED + 1).appStateEvents('sigterm', nodeIp(STOPPING)), 'no stop told yet').to.deep.equal([]);
 
     const container = env.clients[STOPPING].container;
