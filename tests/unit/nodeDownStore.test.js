@@ -227,6 +227,72 @@ describe('nodeDownStore', () => {
     });
   });
 
+  describe('a proven lie — the subject\'s two signed stops of one process are a certified stop', () => {
+    const SUBJECT_ADDRESS = '10.9.0.20:16127';
+    const PROCESS = 'ab'.repeat(16);
+
+    function stop(at, { reason = 'restart', signer = 'subject', ip = SUBJECT_ADDRESS } = {}) {
+      const data = {
+        type: 'fluxprocessstop', version: 1, ip, processId: PROCESS, reason,
+      };
+      return {
+        version: 1,
+        timestamp: at,
+        pubKey: keypairFor(signer).pubkey,
+        signature: verificationHelper.signMessage(`1${JSON.stringify(data)}${at}`, keypairFor(signer).wif),
+        data,
+      };
+    }
+    const lie = (a, b) => ({
+      subject: S, reason: 'lie', since: Math.max(a.timestamp, b.timestamp), proof: [a, b],
+    });
+
+    it('is verified cold against the subject\'s listed key and stored as one row per lying process', async () => {
+      const now = Date.now();
+      const certificate = lie(stop(now - 60_000), stop(now - 1000));
+      expect(store.verifyNodeDownCertificate(certificate)).to.deep.equal({ valid: true, subject: S, reason: 'accepted' });
+
+      const result = await store.handleNodeDownEvent({ message: { certificate, broadcastedAt: now } });
+      expect(result).to.include({ accepted: true, rebroadcast: true });
+      const row = await collection.findOne({ type: 'nodedown', subject: S });
+      expect(row.dedupKey).to.equal(`nodedown:${S}:lie:${PROCESS}`);
+      expect(row.reason).to.equal('lie');
+      expect(new Date(row.since).getTime()).to.equal(now - 1000);
+
+      const again = await store.handleNodeDownEvent({
+        message: { certificate: lie(stop(now - 30_000), stop(now - 1000)), broadcastedAt: now + 50 },
+      });
+      expect(again).to.include({ accepted: false, reason: 'same_death' });
+    });
+
+    it('counts on the rungs like a jury\'s certificate', async () => {
+      const now = Date.now();
+      await store.handleNodeDownEvent({
+        message: { certificate: world.certificate(['j1', 'j2', 'j3', 'j4'], { death: 1 }), broadcastedAt: now - 5000 },
+      });
+      await store.handleNodeDownEvent({
+        message: { certificate: lie(stop(now - 60_000), stop(now - 1000)), broadcastedAt: now },
+      });
+      expect(await store.placementFreezeFor(S)).to.include({ frozen: true, count: 2 });
+    });
+
+    it('a proof signed by another key, or naming another address, is refused', () => {
+      const now = Date.now();
+      expect(store.verifyNodeDownCertificate(lie(stop(now - 60_000, { signer: 'j1' }), stop(now - 1000, { signer: 'j1' }))))
+        .to.include({ valid: false, reason: 'not_the_subject' });
+      expect(store.verifyNodeDownCertificate(lie(stop(now - 60_000, { ip: '10.9.0.11:16127' }), stop(now - 1000, { ip: '10.9.0.11:16127' }))))
+        .to.include({ valid: false, reason: 'not_the_subject' });
+    });
+
+    it('an old proof raised again is refused: its since is the later stop, bounded against the broadcast', async () => {
+      const now = Date.now();
+      const result = await store.handleNodeDownEvent({
+        message: { certificate: lie(stop(now - 3_600_000), stop(now - 3_000_000)), broadcastedAt: now },
+      });
+      expect(result).to.include({ accepted: false, reason: 'since_out_of_range' });
+    });
+  });
+
   describe('record semantics — standing, refuted, lapsed', () => {
     it('standingCertificateFor answers while unrefuted, and the announcement clears it', async () => {
       const at = Date.now() - 60_000;

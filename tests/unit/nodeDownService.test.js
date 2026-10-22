@@ -106,7 +106,13 @@ function makeHarness(opts = {}) {
     './nodeConfirmationService': { getNodeStatus: () => world.ownStatus },
     './verificationHelper': { signMessage: stubs.signMessage, verifyMessage: stubs.verifyMessage },
     './utils/fluxBroadcastHelper': { serialiseAndSignFluxBroadcast: stubs.sign },
-    './utils/stopStatements': { verifyStop: stubs.verifyStop },
+    './utils/stopStatements': {
+      verifyStop: stubs.verifyStop,
+      isLie: (a, b) => a.data.processId === b.data.processId && a.timestamp !== b.timestamp,
+      lieCertificate: (subject, a, b) => ({
+        subject, reason: 'lie', since: Math.max(a.timestamp, b.timestamp), proof: [a, b],
+      }),
+    },
   });
   if (opts.placementCheck !== false) service.setPlacementCheck(stubs.enforcePlacement);
   const peerManager = new EventEmitter();
@@ -1498,6 +1504,36 @@ describe('nodeDownService — a subject\'s signed stop travels between its juror
     await service.onCourtesyNote({ pubKey: 'pkj', data: { type: 'fluxcourtesynote', statement: statementOf('aa'.repeat(16)) } });
     await tick();
     sinon.assert.notCalled(transport.sendSignedMessage);
+    service.stop();
+  });
+
+  it('a juror that holds two statements of one process stores and broadcasts the lie as a certificate', async () => {
+    const harness = makeHarness();
+    withJury(harness);
+    const { service, transport, stubs } = harness;
+    stubs.verifyStop.callsFake(async (statement) => ({
+      ok: true, ip: DUTY_IP, reason: 'restart', processId: statement.data.processId,
+    }));
+    service.start(transport);
+    await tick();
+    const processId = '12'.repeat(16);
+    const a = { timestamp: 1000, data: { type: 'fluxprocessstop', processId } };
+    const b = { timestamp: 2000, data: { type: 'fluxprocessstop', processId } };
+    transport.peerManager.emit('peer:removed', {
+      ip: '10.0.0.2', port: '16127', direction: 'outbound', closeCode: CLOSE_CODES.RESTARTING, stopStatement: a,
+    });
+    await tick();
+    await service.onCourtesyNote({ pubKey: 'pkj', data: { type: 'fluxcourtesynote', statement: b } });
+    await tick();
+    await tick();
+
+    const lie = {
+      subject: DUTY_OUTPOINT, reason: 'lie', since: 2000, proof: [a, b],
+    };
+    sinon.assert.calledOnce(stubs.handleNodeDownEvent);
+    expect(stubs.handleNodeDownEvent.firstCall.args[0].message.certificate).to.deep.equal(lie);
+    const sent = transport.broadcastMessageToAll.args.map((args) => args[0]).find((m) => m.type === 'fluxnodedown');
+    expect(sent.certificate).to.deep.equal(lie);
     service.stop();
   });
 });

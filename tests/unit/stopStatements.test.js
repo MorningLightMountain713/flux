@@ -6,7 +6,9 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const networkStateService = require('../../ZelBack/src/services/networkStateService');
 const { getFluxMessageSignature } = require('../../ZelBack/src/services/utils/fluxBroadcastHelper');
-const { verifyStop, isLie } = require('../../ZelBack/src/services/utils/stopStatements');
+const {
+  verifyStop, isLie, lieCertificate, verifyLieCertificate,
+} = require('../../ZelBack/src/services/utils/stopStatements');
 
 const privKey = '5JTeg79dTLzzHXoJPALMWuoGDM8QmLj4n5f6MeFjx8dzsirvjAh';
 const pubKey = '0474eb4690689bb408139249eda7f361b7881c4254ccbe303d3b4d58c2b48897d0f070b44944941998551f9ea0e1befd96f13adf171c07c885e62d0c2af56d3dab';
@@ -132,6 +134,52 @@ describe('stopStatements', () => {
 
     it('stops of two nodes are not', async () => {
       expect(isLie(await statement(), await statement({ ip: '192.168.1.101:16127' }, NOW + 1))).to.equal(false);
+    });
+  });
+
+  describe('a lie certificate', () => {
+    const LISTED = { ip: NODE, pubkey: pubKey };
+
+    it('carries both statements, and since is the later one\'s time', async () => {
+      const a = await statement({}, NOW - 5000);
+      const b = await statement({}, NOW);
+      expect(lieCertificate('s:0', a, b)).to.deep.equal({
+        subject: 's:0', reason: 'lie', since: NOW, proof: [a, b],
+      });
+      expect(lieCertificate('s:0', b, a).since).to.equal(NOW);
+    });
+
+    it('verifies against the listed subject', async () => {
+      const certificate = lieCertificate('s:0', await statement({}, NOW - 5000), await statement());
+      expect(verifyLieCertificate(certificate, LISTED)).to.deep.equal({ valid: true, reason: 'accepted' });
+    });
+
+    it('refuses a proof that is not two well-formed statements', async () => {
+      const a = await statement({}, NOW - 5000);
+      expect(verifyLieCertificate({ proof: [a] }, LISTED).reason).to.equal('malformed');
+      expect(verifyLieCertificate({ proof: [a, { data: {} }] }, LISTED).reason).to.equal('malformed');
+      expect(verifyLieCertificate({}, LISTED).reason).to.equal('malformed');
+    });
+
+    it('refuses a subject the list does not hold', async () => {
+      const certificate = lieCertificate('s:0', await statement({}, NOW - 5000), await statement());
+      expect(verifyLieCertificate(certificate, null).reason).to.equal('not_listed');
+    });
+
+    it('refuses the same stop twice: no lie', async () => {
+      const a = await statement();
+      expect(verifyLieCertificate(lieCertificate('s:0', a, a), LISTED).reason).to.equal('no_lie');
+    });
+
+    it('refuses a since that is not the later statement\'s time', async () => {
+      const certificate = lieCertificate('s:0', await statement({}, NOW - 5000), await statement());
+      expect(verifyLieCertificate({ ...certificate, since: NOW - 5000 }, LISTED).reason).to.equal('since');
+    });
+
+    it('refuses a statement whose signature does not hold', async () => {
+      const a = await statement({}, NOW - 5000);
+      const b = { ...(await statement()), signature: a.signature };
+      expect(verifyLieCertificate(lieCertificate('s:0', a, b), LISTED).reason).to.equal('bad_signature');
     });
   });
 });

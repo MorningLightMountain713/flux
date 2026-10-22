@@ -54,6 +54,7 @@ function makeWorld({ extraNodes = [], myDetectedIp = '10.0.0.11' } = {}) {
     probes: [],
     pushes: [],
     notes: [],
+    proofs: [],
     certificates: [],
     // the looks the juror has scheduled: {due, fn}, fired by advance()
     timers: [],
@@ -91,6 +92,8 @@ function makeWorld({ extraNodes = [], myDetectedIp = '10.0.0.11' } = {}) {
     verifySignature: (owner, payload, signature) => signature === fakeSign(payload),
     pushVerdict: (socketAddress, verdict) => world.pushes.push({ socketAddress, verdict }),
     pushNote: (socketAddress, statement) => world.notes.push({ socketAddress, statement }),
+    isLie: (a, b) => a.data.processId === b.data.processId && a.timestamp !== b.timestamp,
+    onProof: (subject, a, b) => world.proofs.push({ subject, a, b }),
     currentHeight: () => world.height,
     now: () => world.nowMs,
     schedule: (fn, ms) => {
@@ -675,5 +678,57 @@ describe('nodeDownJuror — the courtesy is the jury\'s: a signed stop one juror
     world.topology = { duties: () => [], jury: (subject) => topology.jury(subject) };
     expect(world.juror.onNote(S, 'restart', pid())).to.deep.equal({ held: false, reason: 'not_my_duty' });
     expect(world.notes).to.deep.equal([]);
+  });
+
+  describe('a proven lie', () => {
+    const second = (stop, over = {}) => ({
+      processId: stop.processId,
+      statement: { ...stop.statement, timestamp: 2, ...over },
+    });
+
+    it('a forwarded statement for a held process that says something else raises the proof, once', () => {
+      const world = makeWorld();
+      const stop = pid();
+      world.juror.noteDrop(S, 'restart', stop);
+      const other = second(stop);
+      world.juror.onNote(S, 'restart', other);
+      world.juror.onNote(S, 'restart', second(stop, { timestamp: 3 }));
+      expect(world.proofs).to.deep.equal([{ subject: S, a: stop.statement, b: other.statement }]);
+    });
+
+    it('a close carrying another statement for a process held from a forward raises it too', () => {
+      const world = makeWorld();
+      const stop = pid();
+      world.juror.onNote(S, 'restart', stop);
+      world.juror.noteDrop(S, 'restart', second(stop));
+      expect(world.proofs.length).to.equal(1);
+    });
+
+    it('two statements of one process under different reasons are found', () => {
+      const world = makeWorld();
+      const stop = pid();
+      world.juror.onNote(S, 'restart', stop);
+      world.juror.onNote(S, 'shutdown', second(stop));
+      expect(world.proofs.length).to.equal(1);
+    });
+
+    it('the same statement twice is no proof', () => {
+      const world = makeWorld();
+      const stop = pid();
+      world.juror.onNote(S, 'restart', stop);
+      world.juror.noteDrop(S, 'restart', stop);
+      expect(world.proofs).to.deep.equal([]);
+    });
+
+    it('a subject that left this node\'s duties is forgotten, proof and all', () => {
+      const world = makeWorld();
+      const stop = pid();
+      world.juror.onNote(S, 'restart', stop);
+      world.juror.onNote(S, 'restart', second(stop));
+      world.juror.retain(new Set());
+      world.juror.onNote(S, 'restart', stop);
+      world.juror.onNote(S, 'restart', second(stop));
+      expect(world.proofs.length).to.equal(2);
+    });
   });
 });

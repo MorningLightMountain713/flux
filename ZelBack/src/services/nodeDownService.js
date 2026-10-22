@@ -952,6 +952,10 @@ function start(injectedTransport) {
       .verifyMessage(payload.toString(), owner, signature) === true,
     pushVerdict,
     pushNote,
+    isLie: stopStatements.isLie,
+    onProof: (subject, a, b) => {
+      broadcastOwnCertificate(stopStatements.lieCertificate(subject, a, b)).catch((error) => log.error(error));
+    },
     currentHeight: () => networkStateService.chainHeight() ?? 0,
     now: () => Date.now(),
     currentFingerprint: () => networkStateService.membershipFingerprint(),
