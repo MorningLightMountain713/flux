@@ -21,6 +21,9 @@ export async function closeDb() {
   }
 }
 
+// An address field naming the node at bareIp, with or without its port.
+const atAddress = (bareIp) => ({ $regex: `^${bareIp.replace(/\./g, '\\.')}(:|$)` });
+
 export function dbClient(nodeNum) {
   const prefix = `node${String(nodeNum).padStart(2, '0')}_`;
 
@@ -124,6 +127,19 @@ export function dbClient(nodeNum) {
 
     // This node's synced nodedown certificate rows for a subject (all incidents,
     // newest and lapsed alike — standing-ness is derived, never materialized).
+    // The app state events this node stored of a type for a node, by its bare IP
+    // with or without the port: a released node stores a fluxnodesigterm it acted
+    // on as type 'sigterm'.
+    async appStateEvents(type, bareIp) {
+      const globalDb = await db('appsGlobal');
+      return globalDb.collection('appstateevents').find({ type, ip: atAddress(bareIp) }).toArray();
+    },
+    // The running-location rows a released node holds for a node, by its bare IP
+    // with or without the port, with the expireAt a fluxnodesigterm shortens.
+    async releasedLocationRows(bareIp) {
+      const globalDb = await db('appsGlobal');
+      return globalDb.collection('zelappslocation').find({ ip: atAddress(bareIp) }).toArray();
+    },
     async getNodeDownRecords(subject) {
       const globalDb = await db('appsGlobal');
       return globalDb.collection('appstateevents')
