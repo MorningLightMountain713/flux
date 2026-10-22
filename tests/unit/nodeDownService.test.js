@@ -428,9 +428,33 @@ describe('nodeDownService', () => {
         admitted: false, reason: 'locked_out', subject: DUTY_OUTPOINT, tell: [],
       });
       stubs.lockoutFor.withArgs(DUTY_OUTPOINT).resolves({ lockedOut: false, count: 3, liftsAt: null });
-      expect(await gate(DUTY_IP)).to.deep.equal({ admitted: true, reason: 'not_locked_out' });
-      expect(await gate(MY_IP)).to.deep.equal({ admitted: true, reason: 'not_locked_out' });
-      expect(await gate('10.0.0.9:16127')).to.deep.equal({ admitted: true, reason: 'unlisted' });
+      expect(await gate(DUTY_IP)).to.deep.equal({ admitted: true, reason: 'not_locked_out', juror: false });
+      expect(await gate(MY_IP)).to.deep.equal({ admitted: true, reason: 'not_locked_out', juror: false });
+      expect(await gate('10.0.0.9:16127')).to.deep.equal({ admitted: true, reason: 'unlisted', juror: false });
+      service.stop();
+    });
+
+    // A juror held off by the inbound cap cannot watch: the gate marks this
+    // node's own jurors for the peer manager, read from THIS node's jury.
+    it('the gate marks a dialer on this node\'s own jury, and no other', async () => {
+      const harness = makeHarness();
+      withDuty(harness);
+      const { service, transport, stubs, networkStateServiceStub } = harness;
+      const topology = networkStateServiceStub.nodeDownTopology();
+      networkStateServiceStub.nodeDownTopology = () => ({
+        ...topology,
+        jury: (outpoint) => (outpoint === MY_OUTPOINT ? [{ outpoint: DUTY_OUTPOINT }] : []),
+      });
+      stubs.lockoutFor.resolves({ lockedOut: false, count: 0, liftsAt: null });
+      service.start(transport);
+      await tick();
+      const gate = transport.peerManager.setInboundGate.firstCall.args[0];
+
+      expect(await gate(DUTY_IP)).to.deep.equal({ admitted: true, reason: 'not_locked_out', juror: true });
+      expect(await gate(MY_IP), 'a listed node off the jury').to.deep.include({ juror: false });
+
+      stubs.lockoutFor.rejects(new Error('store down'));
+      expect(await gate(DUTY_IP), 'marked when the lockout lookup fails too').to.deep.equal({ admitted: true, reason: 'store_error', juror: true });
       service.stop();
     });
 

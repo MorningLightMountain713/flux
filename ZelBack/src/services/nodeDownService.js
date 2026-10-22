@@ -193,21 +193,37 @@ async function doorEvidence(subject) {
 }
 
 /**
+ * Whether a node is on this node's own jury: one of the nodes assigned to
+ * watch it, whose peering is its guaranteed inbound.
+ *
+ * @param {string} outpoint
+ * @returns {boolean}
+ */
+function isOwnJuror(outpoint) {
+  const topology = networkStateService.nodeDownTopology();
+  const me = myOutpoint();
+  const jury = topology && me ? topology.jury(me) : null;
+  return Boolean(jury && jury.some((juror) => juror.outpoint === outpoint));
+}
+
+/**
  * The peering gate the peer manager asks before a peering inbound registers.
  * Only a listed subject under the lockout is refused — a placement freeze
  * refuses nobody; who else may peer is decided where it always was. A
- * refusal carries the rows behind it (`tell`), written before the close.
+ * refusal carries the rows behind it (`tell`), written before the close. An
+ * admitted dialer on this node's own jury is marked `juror`: the inbound cap
+ * does not apply to it, since a juror held off cannot watch.
  *
  * @param {string} socketAddress the dialer's ip:port
- * @returns {Promise<{admitted: boolean, reason: string, subject?: string, tell?: string[]}>}
+ * @returns {Promise<{admitted: boolean, reason: string, juror?: boolean, subject?: string, tell?: string[]}>}
  */
 async function inboundGate(socketAddress) {
   refreshIndex();
   const subject = index.bySocket.get(normalizeSocketAddress(socketAddress));
-  if (!subject) return { admitted: true, reason: 'unlisted' };
+  if (!subject) return { admitted: true, reason: 'unlisted', juror: false };
   try {
     const lockout = await nodeDownStore.lockoutFor(subject);
-    if (!lockout.lockedOut) return { admitted: true, reason: 'not_locked_out' };
+    if (!lockout.lockedOut) return { admitted: true, reason: 'not_locked_out', juror: isOwnJuror(subject) };
     let tell = [];
     try {
       tell = await doorEvidence(subject);
@@ -222,7 +238,7 @@ async function inboundGate(socketAddress) {
     };
   } catch (error) {
     log.warn(`nodeDownService: lockout lookup for ${subject} failed, admitting: ${error.message}`);
-    return { admitted: true, reason: 'store_error' };
+    return { admitted: true, reason: 'store_error', juror: isOwnJuror(subject) };
   }
 }
 

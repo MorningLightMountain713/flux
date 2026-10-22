@@ -2203,6 +2203,56 @@ describe('FluxPeerManager tests', () => {
       expect(manager.has('8.8.8.8:16127')).to.equal(true);
     });
 
+    // A juror held off by the cap cannot watch: this node's own jurors are its
+    // guaranteed inbound. The unit config's minIncoming is 4 and a fleet of 100
+    // derives under it, so the cap is 16: a seventeenth inbound is over it.
+    describe('at the inbound cap', () => {
+      const CAP = 16;
+      beforeEach(() => {
+        manager.numberOfFluxNodes = 100;
+        for (let i = 1; i <= CAP + 1; i += 1) {
+          manager.add(createMockWs(`10.1.0.${i}`), `10.1.0.${i}`, '16127', { source: PEER_SOURCE.INBOUND });
+        }
+        expect(manager.inboundCount).to.equal(CAP + 1);
+      });
+
+      it('admits one of this node\'s own jurors', async () => {
+        manager.setInboundGate(sinon.stub().resolves({ admitted: true, reason: 'not_locked_out', juror: true }));
+        const ws = createMockWs('8.8.8.8');
+        manager.validateAndAddInbound(ws, '16127', createMockReq('8.8.8.8'));
+        await settle();
+        expect(manager.has('8.8.8.8:16127')).to.equal(true);
+        sinon.assert.notCalled(ws.close);
+      });
+
+      it('refuses anyone else', async () => {
+        const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+        try {
+          manager.setInboundGate(sinon.stub().resolves({ admitted: true, reason: 'not_locked_out', juror: false }));
+          const ws = createMockWs('8.8.8.8');
+          manager.validateAndAddInbound(ws, '16127', createMockReq('8.8.8.8'));
+          await clock.tickAsync(1000);
+          expect(manager.has('8.8.8.8:16127')).to.equal(false);
+          sinon.assert.calledWith(ws.close, CLOSE_CODES.MAX_CONNECTIONS);
+        } finally {
+          clock.restore();
+        }
+      });
+
+      it('refuses an ungated dialer, the gate not yet installed', async () => {
+        const clock = sinon.useFakeTimers({ toFake: ['setTimeout'] });
+        try {
+          manager.setInboundGate(null);
+          const ws = createMockWs('8.8.8.8');
+          manager.validateAndAddInbound(ws, '16127', createMockReq('8.8.8.8'));
+          await clock.tickAsync(1000);
+          sinon.assert.calledWith(ws.close, CLOSE_CODES.MAX_CONNECTIONS);
+        } finally {
+          clock.restore();
+        }
+      });
+    });
+
     it('a lockout close backs the target off, where an ordinary remote close does not', () => {
       manager.add(createMockWs('8.8.8.8'), '8.8.8.8', '16127', { source: PEER_SOURCE.DETERMINISTIC });
       manager.remove('8.8.8.8:16127', CLOSE_CODES.LOCKED_OUT);

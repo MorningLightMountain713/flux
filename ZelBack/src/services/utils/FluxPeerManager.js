@@ -1537,7 +1537,7 @@ class FluxPeerManager extends EventEmitter {
       log.info(`Admitted ${ipv4Peer}:${port} again (${answer.reason}, subject ${answer.subject})`);
     }
     try {
-      this.#admitInbound(ws, ipv4Peer, port, metadata, req);
+      this.#admitInbound(ws, ipv4Peer, port, metadata, req, { juror: answer.juror === true });
     } catch (error) {
       log.error(error);
     }
@@ -1575,14 +1575,19 @@ class FluxPeerManager extends EventEmitter {
     return { offered, sent, failed };
   }
 
-  /** Capacity, then the duplicate-peer policy, then registration. */
-  #admitInbound(ws, ipv4Peer, port, metadata, req) {
+  /**
+   * Capacity, then the duplicate-peer policy, then registration. The cap does
+   * not apply to one of this node's own jurors (the gate's `juror`): its
+   * peering is this node's guaranteed inbound, and a juror held off cannot
+   * watch.
+   */
+  #admitInbound(ws, ipv4Peer, port, metadata, req, { juror = false } = {}) {
     const maxPeers = 4 * config.get('fluxapps.minIncoming');
     const maxNumberOfConnections = this.numberOfFluxNodes / 160 < 9 * config.get('fluxapps.minIncoming')
       ? this.numberOfFluxNodes / 160
       : 9 * config.get('fluxapps.minIncoming');
     const maxCon = Math.max(maxPeers, maxNumberOfConnections);
-    if (this.inboundCount > maxCon) {
+    if (!juror && this.inboundCount > maxCon) {
       this.#deferRefusal(ws, CLOSE_CODES.MAX_CONNECTIONS, `Max number of incomming connections ${maxCon} reached`);
       return;
     }
