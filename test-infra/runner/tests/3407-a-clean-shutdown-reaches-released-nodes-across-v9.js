@@ -134,10 +134,12 @@ describe('a clean shutdown reaches released nodes across v9', function () {
       events = await dbClient(RELEASED + 1).appStateEvents('sigterm', nodeIp(STOPPING));
       return events.length > 0;
     }, { timeout: 120000, interval: 1000, label: 'the released node is told of the stop' });
-    expect(events[0].broadcastedAt).to.be.within(stoppedAt - 5000, Date.now());
+    // Stored as a date by a released node.
+    const broadcastedAt = new Date(events[0].broadcastedAt).getTime();
+    expect(broadcastedAt).to.be.within(stoppedAt - 5000, Date.now());
 
     const after = (await rowsOnReleased()).find((r) => r.name === name);
     expect(new Date(after.expireAt).getTime(), 'the row now expires at the sigterm expiry')
-      .to.be.at.most(events[0].broadcastedAt + SIGTERM_EXPIRY_MS + 1000);
+      .to.be.at.most(broadcastedAt + SIGTERM_EXPIRY_MS + 1000);
   });
 });
