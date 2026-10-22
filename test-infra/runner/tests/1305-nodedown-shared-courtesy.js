@@ -6,6 +6,7 @@ import {
 } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
+import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { waitFor } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
@@ -99,7 +100,15 @@ describe('node-down: the restart courtesy is the jury\'s count', function () {
 
   before(async function () {
     this.timeout(900000);
-    env = await createTestEnv({ hookCtx: this, nodes: NODES, tickerAutostart: false });
+    env = await createTestEnv({
+      hookCtx: this,
+      nodes: NODES,
+      tickerAutostart: false,
+      // A verdict names the membership fingerprint, which needs the anchored
+      // membership history the ZMQ delta path records; the polling default
+      // carries none, and a juror then signs no verdict at all.
+      zmqTopics: ALL_ZMQ_TOPICS,
+    });
     survivors = env.clients.map((_, i) => i).filter((i) => i !== SUBJECT);
     await bootAndPeer(env);
   });
