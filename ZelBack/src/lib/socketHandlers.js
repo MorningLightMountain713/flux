@@ -28,6 +28,12 @@ const FLUX_PEER_ROUTE = /^\/ws\/flux(\/|$)/;
  * cleanly instead - no peer is constructed, so nothing is queued for reconnect
  * and nothing counts it as a lost peer; the next discovery pass dials again.
  *
+ * A stopping node refuses here too. Its process lives on through the stop's
+ * flush, and a handshake that completes is answered like a live node: the
+ * websocket library pongs a ping before the stop's close lands, so a juror's
+ * probe at the drop would read the stopping node as up and never certify a
+ * stop past the courtesy.
+ *
  * Only the peer routes. Browsers reach /ws/id, /ws/sign and /ws/payment, and
  * those have nothing to do with whether this node has peers yet.
  * @param {import('node:http').IncomingMessage} request
@@ -35,6 +41,7 @@ const FLUX_PEER_ROUTE = /^\/ws\/flux(\/|$)/;
  */
 function admitUpgrade(request) {
   if (!FLUX_PEER_ROUTE.test(request?.url ?? '')) return null;
+  if (peerManager().stopping) return { status: 503, message: 'Service Unavailable', reason: 'node-stopping' };
   if (peerManager().acceptingConnections) return null;
 
   return { status: 503, message: 'Service Unavailable', reason: 'node-not-accepting-connections' };

@@ -213,7 +213,10 @@ describe('FluxSocketServer tests', () => {
   describe('admitUpgrade', () => {
     let accepting;
     beforeEach(() => { accepting = peerManager.acceptingConnections; });
-    afterEach(() => { peerManager.acceptingConnections = accepting; });
+    afterEach(() => {
+      peerManager.acceptingConnections = accepting;
+      peerManager.reset();
+    });
 
     // The real peer manager, in the state a test names.
     const load = (acceptingConnections) => {
@@ -233,6 +236,16 @@ describe('FluxSocketServer tests', () => {
       const admitUpgrade = load(true);
 
       expect(admitUpgrade({ url: '/ws/flux/16127' })).to.equal(null);
+    });
+
+    it('refuses a peer upgrade once the stop has begun, before the handshake can answer a ping', async () => {
+      const admitUpgrade = load(true);
+      await peerManager.closeAllForStop(4022, { flushMs: 0 });
+
+      expect(admitUpgrade({ url: '/ws/flux/16127' })).to.deep.equal({
+        status: 503, message: 'Service Unavailable', reason: 'node-stopping',
+      });
+      expect(admitUpgrade({ url: '/ws/id/somephrase' }), 'a browser route is not a peering').to.equal(null);
     });
 
     // Browsers reach these, and whether this node has peers yet has nothing to
