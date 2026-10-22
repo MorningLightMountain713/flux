@@ -127,6 +127,8 @@ export function dbClient(nodeNum) {
 
     // This node's synced nodedown certificate rows for a subject (all incidents,
     // newest and lapsed alike — standing-ness is derived, never materialized).
+    // RELEASED-FLEET COMPATIBILITY: delete with appMessaging/releasedFleetSigterm
+    // (suite 3407 reads these two).
     // The app state events this node stored of a type for a node, by its bare IP
     // with or without the port: a released node stores a fluxnodesigterm it acted
     // on as type 'sigterm'.
