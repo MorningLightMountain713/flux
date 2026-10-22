@@ -21,6 +21,7 @@ const {
   DROP_REASON,
 } = require('../utils/nodeDownCertificates');
 const { normalizeSocketAddress } = require('../utils/socketAddressUtils');
+const { LIE_REASON, verifyLieCertificate } = require('../utils/stopStatements');
 
 // The nodedown record store: one row PER DEATH, keyed on the death's number
 // — the number the jury counted it as, carried in the certificate as the
@@ -52,6 +53,13 @@ const { normalizeSocketAddress } = require('../utils/socketAddressUtils');
  *   counted?: number, needed?: number, discarded?: object}}
  */
 function verifyNodeDownCertificate(certificate) {
+  // A proven lie: the subject's own two statements are the evidence.
+  if (certificate?.reason === LIE_REASON && typeof certificate.subject === 'string') {
+    const listed = networkStateService.networkState()
+      .find((node) => `${node.txhash}:${node.outidx}` === certificate.subject) ?? null;
+    const check = verifyLieCertificate(certificate, listed);
+    return { valid: check.valid, subject: check.valid ? certificate.subject : null, reason: check.reason };
+  }
   if (
     !certificate
     || typeof certificate.subject !== 'string'
@@ -276,9 +284,11 @@ async function handleNodeDownEvent({ message, envelope = null }) {
     // announcement, or by a pull that serves them backwards, reaches the same
     // rows (formal/death-identity, nth-*).
     const death = Number.isInteger(certificate.death) && certificate.death > 0 ? certificate.death : null;
-    const dedupKey = death !== null
+    let dedupKey = death !== null
       ? `nodedown:${certificate.subject}:${death}`
       : `nodedown:${certificate.subject}:h${certificate.height}`;
+    // A proven lie is one row per lying process, whoever proved it.
+    if (reason === LIE_REASON) dedupKey = `nodedown:${certificate.subject}:lie:${certificate.proof[0].data.processId}`;
     const live = await liveRowsFor(certificate.subject);
     if (live.some((row) => row.dedupKey === dedupKey)) {
       return { accepted: false, rebroadcast: false, reason: 'same_death' };

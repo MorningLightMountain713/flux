@@ -111,6 +111,9 @@ class NodeDownJuror {
    */
   #deferrals = new Map();
 
+  /** subject:processId for each lie this juror has proved, so each is raised once. */
+  #proved = new Set();
+
   /** subject → the handle of the look scheduled for its grace end. */
   #lookTimers = new Map();
 
@@ -143,6 +146,10 @@ class NodeDownJuror {
    * @param {(socketAddress: string, statement: object) => void} [deps.pushNote]
    *   a subject's signed stop statement to another of its jurors, the same
    *   way
+   * @param {(a: object, b: object) => boolean} [deps.isLie] whether two
+   *   statements of one process say different things
+   * @param {(subject: string, a: object, b: object) => void} [deps.onProof]
+   *   this juror holds proof the subject lied: raise it as a certified stop
    * @param {() => number} deps.currentHeight the verifier's own chain height
    * @param {() => string|null} deps.currentFingerprint the membership our own
    *   verdicts and assemblies name
@@ -271,10 +278,35 @@ class NodeDownJuror {
    */
   learnStop(subject, reason, stop) {
     const held = this.#stopsHeld(subject, reason);
-    if (held.has(stop.processId)) return false;
+    const known = this.#heldStatement(subject, stop.processId);
+    if (known) {
+      this.#checkLie(subject, stop.processId, known, stop.statement);
+      return false;
+    }
     held.set(stop.processId, { learnedAt: this.#deps.now(), statement: stop.statement ?? null });
     if (stop.statement && this.#deps.pushNote) this.#forward(subject, stop.statement);
     return true;
+  }
+
+  /** The statement held for this process of the subject, under either reason. */
+  #heldStatement(subject, processId) {
+    const stops = this.#courtesy.get(subject);
+    if (!stops) return null;
+    const entry = stops[DROP_REASON.SHUTDOWN].get(processId) ?? stops[DROP_REASON.RESTART].get(processId);
+    return entry ? { statement: entry.statement } : null;
+  }
+
+  /**
+   * One process cannot stop twice: a second statement that says something
+   * else is the subject's own proof that it lied, raised once.
+   */
+  #checkLie(subject, processId, known, statement) {
+    if (!known.statement || !statement || !this.#deps.isLie || !this.#deps.onProof) return;
+    const key = `${subject}:${processId}`;
+    if (this.#proved.has(key) || !this.#deps.isLie(known.statement, statement)) return;
+    this.#proved.add(key);
+    log.warn(`nodeDownJuror - ${subject}: two signed stops for process ${processId}; raising the proof`);
+    this.#deps.onProof(subject, known.statement, statement);
   }
 
   /** A signed stop to every other juror of the subject. */
@@ -321,6 +353,9 @@ class NodeDownJuror {
       if (outpoints.has(subject)) return;
       this.#courtesy.delete(subject);
       log.info(`nodeDownJuror - ${subject} left this node's duties; its courtesy record is dropped`);
+    });
+    [...this.#proved].forEach((key) => {
+      if (!outpoints.has(key.slice(0, key.lastIndexOf(':')))) this.#proved.delete(key);
     });
     [...this.#deferrals.keys()].forEach((subject) => {
       if (!outpoints.has(subject)) this.#spendDeferral(subject);

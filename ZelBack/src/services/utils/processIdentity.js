@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const log = require('../../lib/log');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const { serialiseAndSignFluxBroadcast } = require('./fluxBroadcastHelper');
+const { STOP_STATEMENT_TYPE } = require('./stopStatements');
 
 // This process's identity, and the one statement it signs when it stops.
 //
@@ -20,8 +21,6 @@ const { serialiseAndSignFluxBroadcast } = require('./fluxBroadcastHelper');
 // that the node lied, since one process stops once; jurors certify the node
 // on that proof. So the statement is signed once and every later ask answers
 // the same bytes.
-
-const STOP_STATEMENT_TYPE = 'fluxprocessstop';
 
 const processId = crypto.randomBytes(16).toString('hex');
 
@@ -59,7 +58,6 @@ function stopStatement(reason) {
 }
 
 module.exports = {
-  STOP_STATEMENT_TYPE,
   processId,
   stopStatement,
 };
