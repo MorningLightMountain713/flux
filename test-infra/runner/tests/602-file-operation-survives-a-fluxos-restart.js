@@ -340,4 +340,19 @@ describe('a file operation survives a FluxOS restart', function () {
       'a fileop container no record claims must still be reaped',
     ).to.equal(false);
   });
+
+  // Last: it removes the app. The removal ends the operation before the volume
+  // goes, and says why, rather than deleting the volume under a running copy.
+  it('removing the app ends a running operation on its volume, and says so', async function () {
+    this.timeout(600000);
+    const { jobId, containerId } = await startCompression('removed-mid-flight.tar.gz');
+
+    await node.removeApp(appName, { zelidauth: auth.zelidauth });
+
+    const job = await waitForOperation(node, jobId, auth.zelidauth, { timeout: 60000 });
+    expect(job.status, JSON.stringify(job)).to.equal('Evicted');
+    expect(job.error?.detail).to.equal('The app was removed from this node');
+    expect(await fileOpContainer(containerId), 'the operation\'s container is gone').to.equal(undefined);
+    expect(await exists(node.container, root), 'the volume was removed').to.equal(false);
+  });
 });
