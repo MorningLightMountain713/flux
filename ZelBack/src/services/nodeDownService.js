@@ -11,7 +11,9 @@ const nodeDownStore = require('./appMessaging/nodeDownStore');
 const messageStore = require('./appMessaging/messageStore');
 const { RECORD_STATE } = nodeDownStore;
 const { RingReconciler } = require('./utils/ringReconciler');
-const { NodeDownJuror, DROP_REASON, STOP_CLOSE_AGE_MS } = require('./utils/nodeDownJuror');
+const {
+  NodeDownJuror, DROP_REASON, STOP_CLOSE_AGE_MS, STOP_FORWARD_AGE_MS,
+} = require('./utils/nodeDownJuror');
 const stopStatements = require('./utils/stopStatements');
 const { FlapLadder } = require('./utils/flapLadder');
 const meshOrdinals = require('./appMesh/meshOrdinals');
@@ -325,25 +327,36 @@ async function probe(socketAddress) {
   });
 }
 
-async function pushVerdict(socketAddress, verdict) {
+/**
+ * One signed message to another juror, one-way over an ephemeral
+ * connection; nothing to a juror the network holds down.
+ * @param {string} socketAddress
+ * @param {object} message
+ * @param {string} what journal only
+ */
+async function pushToJuror(socketAddress, message, what) {
   try {
     refreshIndex();
     const target = index.bySocket.get(socketAddress);
     if (target && await stoodDown(target)) return;
     const peer = await transport.openEphemeralConnection(socketAddress);
     if (!peer) {
-      log.warn(`nodeDownService: verdict push to ${socketAddress}: no ephemeral connection`);
+      log.warn(`nodeDownService: ${what} push to ${socketAddress}: no ephemeral connection`);
       return;
     }
-    await transport.sendSignedMessage(
-      { type: 'fluxnodedownverdict', version: 1, verdict },
-      peer,
-      { awaitDrain: true },
-    );
+    await transport.sendSignedMessage(message, peer, { awaitDrain: true });
     peer.close();
   } catch (error) {
-    log.warn(`nodeDownService: verdict push to ${socketAddress} failed: ${error.message}`);
+    log.warn(`nodeDownService: ${what} push to ${socketAddress} failed: ${error.message}`);
   }
+}
+
+async function pushVerdict(socketAddress, verdict) {
+  await pushToJuror(socketAddress, { type: 'fluxnodedownverdict', version: 1, verdict }, 'verdict');
+}
+
+async function pushNote(socketAddress, statement) {
+  await pushToJuror(socketAddress, { type: 'fluxcourtesynote', version: 1, statement }, 'stop note');
 }
 
 async function broadcastOwnCertificate(certificate) {
@@ -573,15 +586,35 @@ function onVerdictMessage(msgObj) {
 }
 
 /**
- * The process id of the stop statement a coded close carried, when the
- * statement is the closing node's, names this close's reason and was signed
- * within STOP_CLOSE_AGE_MS of this node's clock; null otherwise, and the
- * juror reads the close as unannounced.
+ * Another juror forwarded a subject's signed stop: held when it is the
+ * subject's own, signed within STOP_FORWARD_AGE_MS of this node's clock,
+ * and the subject is this node's duty.
+ * @param {object} msgObj the note, its envelope already verified
+ * @returns {Promise<void>}
+ */
+async function onCourtesyNote(msgObj) {
+  if (!juror) return;
+  const statement = msgObj?.data?.statement;
+  const stop = await stopStatements.verifyStop(statement, { now: Date.now(), maxAgeMs: STOP_FORWARD_AGE_MS });
+  if (!stop.ok) {
+    log.info(`nodeDownService: a stop note from ${msgObj?.pubKey ?? '?'} is not accepted (${stop.why})`);
+    return;
+  }
+  if (!juror) return;
+  refreshIndex();
+  juror.onNote(index.bySocket.get(stop.ip), stop.reason, { processId: stop.processId, statement });
+}
+
+/**
+ * The stop statement a coded close carried, when it is the closing node's,
+ * names this close's reason and was signed within STOP_CLOSE_AGE_MS of this
+ * node's clock; null otherwise, and the juror reads the close as
+ * unannounced.
  *
  * @param {object|null} statement
  * @param {string} socketAddress the closing node's
  * @param {string} reason the close code's DROP_REASON
- * @returns {Promise<string|null>}
+ * @returns {Promise<{processId: string, statement: object}|null>}
  */
 async function stopOnClose(statement, socketAddress, reason) {
   if (!statement) return null;
@@ -592,7 +625,7 @@ async function stopOnClose(statement, socketAddress, reason) {
     log.info(`nodeDownService: the stop statement on ${socketAddress}'s ${reason} close is not accepted (${stop.why})`);
     return null;
   }
-  return stop.processId;
+  return { processId: stop.processId, statement };
 }
 
 function onPeerRemoved({
@@ -615,9 +648,9 @@ function onPeerRemoved({
   const outpoint = index.bySocket.get(socketAddress);
   if (!outpoint) return;
   const reason = STOP_REASON_BY_CODE.get(closeCode) ?? DROP_REASON.UNANNOUNCED;
-  const noted = (processId) => {
+  const noted = (stop) => {
     if (!juror) return;
-    const { honoured } = juror.noteDrop(outpoint, reason, processId);
+    const { honoured } = juror.noteDrop(outpoint, reason, stop);
     const duties = dutyOutpoints();
     if (!honoured && duties.has(outpoint)) ladder.noteDrop(outpoint, duties.size);
   };
@@ -918,6 +951,7 @@ function start(injectedTransport) {
     verifySignature: (owner, payload, signature) => verificationHelper
       .verifyMessage(payload.toString(), owner, signature) === true,
     pushVerdict,
+    pushNote,
     currentHeight: () => networkStateService.chainHeight() ?? 0,
     now: () => Date.now(),
     currentFingerprint: () => networkStateService.membershipFingerprint(),
@@ -992,6 +1026,7 @@ module.exports = {
   stop,
   probe,
   onVerdictMessage,
+  onCourtesyNote,
   onCertificateBroadcast,
   onCertificateSyncEvent,
   mayDialBack,

@@ -29,7 +29,7 @@ const GOSSIP_TYPES = [
   'fluxapprunning', 'fluxipchanged', 'fluxappremoved', 'fluxappinstalling',
   'fluxappinstallingerror', 'fluxpolicyseq', 'fluxpolicy',
   'fluxlimitcounterrecord', 'fluxmasterlease', 'fluxnodedown', 'fluxnodedownverdict',
-  'fluxgrantgeneration', 'fluxappcontentmanifest', 'fluxappingress',
+  'fluxcourtesynote', 'fluxgrantgeneration', 'fluxappcontentmanifest', 'fluxappingress',
   ...ASK_TYPES,
 ];
 
@@ -120,7 +120,7 @@ describe('messageRoutes tests', () => {
 
     it('handles what lives in this process whatever is down', () => {
       // A node with no policy says so: that answer is how a new network starts.
-      ['fluxpolicyrequest', 'fluxpolicyseq', 'fluxpolicy', 'fluxnodedownverdict',
+      ['fluxpolicyrequest', 'fluxpolicyseq', 'fluxpolicy', 'fluxnodedownverdict', 'fluxcourtesynote',
         'fluxappcontentmanifestindex', 'fluxappingressindex'].forEach((type) => {
         expect(needsOf(type), type).to.deep.equal([]);
       });

@@ -14,9 +14,13 @@ const { JUDGEMENT, verdictPayload } = require('../../ZelBack/src/services/utils/
 
 const T0 = 1_700_000_000_000;
 const tick = () => new Promise((resolve) => { setImmediate(() => setImmediate(resolve)); });
-// A fresh process id: each signed stop names its own process.
+// A signed stop of a new process, as accepted from its statement.
 let processSeq = 0;
-const pid = () => { processSeq += 1; return processSeq.toString(16).padStart(32, '0'); };
+const pid = () => {
+  processSeq += 1;
+  const processId = processSeq.toString(16).padStart(32, '0');
+  return { processId, statement: { data: { type: 'fluxprocessstop', processId } } };
+};
 
 // The fake signature binds the exact payload bytes, so any field tampering
 // fails verification naturally; owner binding is Branch 2's matrix.
@@ -49,6 +53,7 @@ function makeWorld({ extraNodes = [], myDetectedIp = '10.0.0.11' } = {}) {
     probeResult: false,
     probes: [],
     pushes: [],
+    notes: [],
     certificates: [],
     // the looks the juror has scheduled: {due, fn}, fired by advance()
     timers: [],
@@ -85,6 +90,7 @@ function makeWorld({ extraNodes = [], myDetectedIp = '10.0.0.11' } = {}) {
     nextDeath: (subject) => Promise.resolve(world.nextDeath?.(subject)),
     verifySignature: (owner, payload, signature) => signature === fakeSign(payload),
     pushVerdict: (socketAddress, verdict) => world.pushes.push({ socketAddress, verdict }),
+    pushNote: (socketAddress, statement) => world.notes.push({ socketAddress, statement }),
     currentHeight: () => world.height,
     now: () => world.nowMs,
     schedule: (fn, ms) => {
@@ -633,5 +639,41 @@ describe('nodeDownJuror — the courtesy: a clean stop is honoured only so many 
     }
     world.juror.retain(new Set(['j2:0']));
     expect(world.juror.noteDrop(S, 'shutdown', pid()).honoured).to.equal(true);
+  });
+});
+
+describe('nodeDownJuror — the courtesy is the jury\'s: a signed stop one juror holds, every juror holds', () => {
+  const OTHER_JURORS = ['10.0.0.12:16127', '10.0.0.13:16127', '10.0.0.14:16127', '10.0.0.15:16127', '10.0.0.16:16127'];
+
+  it('a stop seen on the close is forwarded, as signed, to each other juror of the subject', () => {
+    const world = makeWorld();
+    const stop = pid();
+    world.juror.noteDrop(S, 'restart', stop);
+    expect(world.notes.map((note) => note.socketAddress).sort()).to.deep.equal(OTHER_JURORS);
+    world.notes.forEach((note) => expect(note.statement).to.equal(stop.statement));
+  });
+
+  it('a forwarded stop new to this juror is held and forwarded on; one already held is neither', () => {
+    const world = makeWorld();
+    const stop = pid();
+    expect(world.juror.onNote(S, 'restart', stop)).to.deep.equal({ held: true, reason: 'held' });
+    expect(world.notes.length).to.equal(OTHER_JURORS.length);
+    expect(world.juror.onNote(S, 'restart', stop)).to.deep.equal({ held: false, reason: 'already_held' });
+    world.juror.noteDrop(S, 'restart', stop);
+    expect(world.notes.length, 'nor forwarded again when its close is seen').to.equal(OTHER_JURORS.length);
+  });
+
+  it('a forwarded stop counts like one seen: the jury refuses together past the courtesy', () => {
+    const world = makeWorld();
+    for (let i = 0; i < SHUTDOWN_COURTESY; i += 1) world.juror.onNote(S, 'shutdown', pid());
+    expect(world.juror.noteDrop(S, 'shutdown', pid()).honoured).to.equal(false);
+  });
+
+  it('a stop of a subject that is not this node\'s duty is not held', () => {
+    const world = makeWorld();
+    const { topology } = world;
+    world.topology = { duties: () => [], jury: (subject) => topology.jury(subject) };
+    expect(world.juror.onNote(S, 'restart', pid())).to.deep.equal({ held: false, reason: 'not_my_duty' });
+    expect(world.notes).to.deep.equal([]);
   });
 });

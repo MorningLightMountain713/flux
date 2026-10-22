@@ -853,6 +853,22 @@ function handleNodeDownVerdictMessage(msgObj, peerSocket) {
   }
 }
 
+/**
+ * A juror's forward of a subject's signed stop. Like a verdict, it rides only
+ * an ephemeral connection; one arriving down a peering is ignored, said once
+ * per connection.
+ * @param {object} msgObj
+ * @param {import('./utils/FluxPeerSocket').FluxPeerSocket} peerSocket
+ */
+function handleCourtesyNoteMessage(msgObj, peerSocket) {
+  if (peerSocket.source === PEER_SOURCE.EPHEMERAL) {
+    nodeDownService.onCourtesyNote(msgObj).catch((error) => log.warn(`Stop note: ${error.message}`));
+  } else if (!peerSocket.noteOnPeeringSeen) {
+    peerSocket.noteOnPeeringSeen = true;
+    log.warn(`Stop note from ${msgObj.pubKey} arrived on a ${peerSocket.direction} peering (${peerSocket.key}), ignored: notes ride ephemeral connections only`);
+  }
+}
+
 async function dispatchFluxMessage(msgObj, peerSocket) {
   const codes = peerSocket.closeCodes;
   const {
@@ -1194,6 +1210,9 @@ register('fluxappingress', (msg, peer) => handleIngressAttestation(msg, peer.ip,
 // Pushed point to point, but a juror's signed statement: the same bytes twice are one
 // verdict, so it is filtered on content like an announcement.
 register('fluxnodedownverdict', handleNodeDownVerdictMessage, ROUTE.GOSSIP, INTENT.ANNOUNCE, IN_PROCESS);
+// A subject's signed stop, forwarded by one of its jurors to the others: pushed
+// point to point like a verdict, and taken from an ephemeral connection only.
+register('fluxcourtesynote', handleCourtesyNoteMessage, ROUTE.GOSSIP, INTENT.ANNOUNCE, IN_PROCESS);
 // An ask delivered by broadcast. Delivery is not the classifier: it goes to every peer,
 // and it is still a question from one node that each of them answers separately.
 register('fluxapprequest', (msg, peer) => fluxCommunicationMessagesSender.respondWithAppMessage(msg, peer), ROUTE.GOSSIP, INTENT.ASK, STORED);

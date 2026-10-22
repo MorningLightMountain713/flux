@@ -115,10 +115,10 @@ class NodeDownJuror {
   #lookTimers = new Map();
 
   /**
-   * The signed stops held: subject → reason → processId → learnedAt, this
-   * juror's clock when it first held the statement. Duties only; gone with
-   * the process.
-   * @type {Map<string, Object<string, Map<string, number>>>}
+   * The signed stops held: subject → reason → processId → {learnedAt,
+   * statement}, learnedAt this juror's clock when it first held the
+   * statement. Duties only; gone with the process.
+   * @type {Map<string, Object<string, Map<string, {learnedAt: number, statement: object|null}>>>}
    */
   #courtesy = new Map();
 
@@ -140,6 +140,9 @@ class NodeDownJuror {
    * @param {(owner: string, payload: Buffer, signature: string) => boolean} deps.verifySignature
    * @param {(socketAddress: string, verdict: object) => void} deps.pushVerdict
    *   one-way, over an EPHEMERAL connection — never a peering
+   * @param {(socketAddress: string, statement: object) => void} [deps.pushNote]
+   *   a subject's signed stop statement to another of its jurors, the same
+   *   way
    * @param {() => number} deps.currentHeight the verifier's own chain height
    * @param {() => string|null} deps.currentFingerprint the membership our own
    *   verdicts and assemblies name
@@ -180,19 +183,19 @@ class NodeDownJuror {
    *
    * @param {string} subject outpoint
    * @param {string} reason a DROP_REASON
-   * @param {string|null} [processId] the process id of the stop statement
-   *   accepted on the closing connection
+   * @param {{processId: string, statement: object}|null} [stop] the stop
+   *   statement accepted on the closing connection
    * @returns {{honoured: boolean}} whether the drop was honoured (deferred)
    */
-  noteDrop(subject, reason, processId = null) {
+  noteDrop(subject, reason, stop = null) {
     const droppedAt = this.#deps.now();
     this.#spendDeferral(subject);
     const coded = reason in GRACE_MS;
-    if (coded && !processId) {
+    if (coded && !stop) {
       log.info(`nodeDownJuror - ${subject}: ${reason} close carried no accepted stop statement; looked at as unannounced`);
     }
-    if (!coded || !processId || !this.#honours(subject, reason, processId)) {
-      this.look(subject, 'drop', { droppedAt, reason: coded && processId ? reason : DROP_REASON.UNANNOUNCED });
+    if (!coded || !stop || !this.#honours(subject, reason, stop)) {
+      this.look(subject, 'drop', { droppedAt, reason: coded && stop ? reason : DROP_REASON.UNANNOUNCED });
       return { honoured: false };
     }
     this.#deferrals.set(subject, {
@@ -230,10 +233,10 @@ class NodeDownJuror {
    * signed stops in the window, not counting this one. This one is held
    * after the decision, honoured or not.
    */
-  #honours(subject, reason, processId) {
+  #honours(subject, reason, stop) {
     const held = this.#stopsHeld(subject, reason);
-    const counted = [...held.keys()].filter((id) => id !== processId).length;
-    this.learnStop(subject, reason, processId);
+    const counted = [...held.keys()].filter((id) => id !== stop.processId).length;
+    this.learnStop(subject, reason, stop);
     if (counted >= COURTESY[reason]) {
       log.info(`nodeDownJuror - ${subject}: ${reason} close not honoured, ${counted} signed stops already in the window (courtesy ${COURTESY[reason]})`);
       return false;
@@ -250,25 +253,62 @@ class NodeDownJuror {
       this.#courtesy.set(subject, stops);
     }
     const edge = this.#deps.now() - (COURTESY_WINDOW_MS - COURTESY_EARLY_EDGE_MS);
-    stops[reason].forEach((learnedAt, id) => {
+    stops[reason].forEach(({ learnedAt }, id) => {
       if (learnedAt <= edge) stops[reason].delete(id);
     });
     return stops[reason];
   }
 
   /**
-   * Hold a signed stop of the subject, dated now on this juror's clock.
+   * Hold a signed stop of the subject, dated now on this juror's clock, and
+   * forward a stop new to this juror to the subject's other jurors: one
+   * juror that held it is enough for every juror to count it.
    *
    * @param {string} subject outpoint
    * @param {string} reason DROP_REASON.SHUTDOWN or DROP_REASON.RESTART
-   * @param {string} processId
+   * @param {{processId: string, statement: object|null}} stop
    * @returns {boolean} whether it was new to this juror
    */
-  learnStop(subject, reason, processId) {
+  learnStop(subject, reason, stop) {
     const held = this.#stopsHeld(subject, reason);
-    if (held.has(processId)) return false;
-    held.set(processId, this.#deps.now());
+    if (held.has(stop.processId)) return false;
+    held.set(stop.processId, { learnedAt: this.#deps.now(), statement: stop.statement ?? null });
+    if (stop.statement && this.#deps.pushNote) this.#forward(subject, stop.statement);
     return true;
+  }
+
+  /** A signed stop to every other juror of the subject. */
+  #forward(subject, statement) {
+    const myOutpoint = this.#deps.myOutpoint();
+    const topology = this.#deps.topology();
+    if (!topology) return;
+    (topology.jury(subject) || []).forEach((juror) => {
+      if (juror.outpoint === myOutpoint) return;
+      const target = this.#deps.resolveOutpoint(juror.outpoint);
+      if (target) this.#deps.pushNote(target, statement);
+    });
+  }
+
+  /**
+   * Another juror forwarded a signed stop of the subject, already checked
+   * as the subject's own and within the forward age. Held only for this
+   * node's duties.
+   *
+   * @param {string} subject outpoint
+   * @param {string} reason DROP_REASON.SHUTDOWN or DROP_REASON.RESTART
+   * @param {{processId: string, statement: object}} stop
+   * @returns {{held: boolean, reason: string}}
+   */
+  onNote(subject, reason, stop) {
+    const topology = this.#deps.topology();
+    const myOutpoint = this.#deps.myOutpoint();
+    if (!topology || !myOutpoint) return { held: false, reason: 'not_ready' };
+    const duties = topology.duties(myOutpoint);
+    if (!duties || !duties.some((duty) => duty.outpoint === subject)) {
+      return { held: false, reason: 'not_my_duty' };
+    }
+    if (!this.learnStop(subject, reason, stop)) return { held: false, reason: 'already_held' };
+    return { held: true, reason: 'held' };
   }
 
   /**

@@ -2162,6 +2162,59 @@ describe('fluxCommunication tests', () => {
   });
 });
 
+describe('fluxcourtesynote wire contract', () => {
+  const makePeerSocket = (source) => ({
+    ip: '45.45.45.45',
+    port: '16127',
+    key: '45.45.45.45:16127',
+    direction: 'inbound',
+    source,
+    closeCodes: { invalidMsg: 4016, blocked: 4003 },
+    close: sinon.stub(),
+    badMessageTimestamps: [],
+    msgMap: new Map([['requestHash', 0], ['newHash', 0]]),
+  });
+  const makeMsg = (marker) => ({
+    timestamp: Date.now(),
+    pubKey: 'pubkey',
+    signature: 'sig',
+    version: 1,
+    data: { type: 'fluxcourtesynote', version: 1, statement: { marker } },
+  });
+
+  let onNoteStub;
+
+  beforeEach(() => {
+    sinon.stub(FluxTTLCache.prototype, 'has').returns(false);
+    sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast')
+      .resolves({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
+    sinon.stub(fluxCommunicationUtils, 'verifyTimestampInFluxBroadcast').returns(true);
+    onNoteStub = sinon.stub(nodeDownService, 'onCourtesyNote').resolves();
+  });
+
+  afterEach(() => {
+    sinon.restore();
+  });
+
+  it('dispatches a note arriving on an ephemeral connection', async () => {
+    await peerManager.messageDispatcher(makeMsg(1), makePeerSocket(PEER_SOURCE.EPHEMERAL));
+    await new Promise((resolve) => { setImmediate(resolve); });
+    sinon.assert.calledOnce(onNoteStub);
+    expect(onNoteStub.firstCall.args[0].data.statement).to.deep.equal({ marker: 1 });
+  });
+
+  it('ignores a note arriving down a peering, and says so once per connection', async () => {
+    const warn = sinon.stub(log, 'warn');
+    const onPeering = () => warn.args.map(([line]) => line).filter((line) => line.includes('Stop note from')).length;
+    const socket = makePeerSocket(PEER_SOURCE.INBOUND);
+    await peerManager.messageDispatcher(makeMsg(2), socket);
+    await peerManager.messageDispatcher(makeMsg(3), socket);
+    await new Promise((resolve) => { setImmediate(resolve); });
+    sinon.assert.notCalled(onNoteStub);
+    expect(onPeering()).to.equal(1);
+  });
+});
+
 describe('fluxnodedownverdict wire contract', () => {
   // A verdict rides only an ephemeral connection. One arriving down a
   // peering must be silently ignored - otherwise the gossip plane can be

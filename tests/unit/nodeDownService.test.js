@@ -1413,3 +1413,91 @@ describe('nodeDownService — the drop carries its reason, and the probe is an e
     service.stop();
   });
 });
+
+describe('nodeDownService — a subject\'s signed stop travels between its jurors', () => {
+  const OTHER_JUROR = '10.0.0.3:16127';
+  const statementOf = (processId) => ({ data: { type: 'fluxprocessstop', processId } });
+
+  // This node and one other juror watch x.
+  function withJury(harness) {
+    withDuty(harness);
+    const { networkStateServiceStub } = harness;
+    const listed = networkStateServiceStub.networkState();
+    networkStateServiceStub.networkState = () => [...listed, {
+      txhash: 'j', outidx: 0, pubkey: 'pkj', ip: OTHER_JUROR, added_height: 1,
+    }];
+    const topology = networkStateServiceStub.nodeDownTopology();
+    networkStateServiceStub.nodeDownTopology = () => ({
+      ...topology,
+      jury: () => [{ outpoint: MY_OUTPOINT }, { outpoint: 'j:0' }],
+    });
+  }
+
+  afterEach(() => sinon.restore());
+
+  it('a stop seen on the close is pushed to the other juror, verbatim, over an ephemeral connection', async () => {
+    const harness = makeHarness();
+    withJury(harness);
+    const { service, transport } = harness;
+    service.start(transport);
+    await tick();
+    const statement = statementOf('ab'.repeat(16));
+    transport.peerManager.emit('peer:removed', {
+      ip: '10.0.0.2', port: '16127', direction: 'outbound', closeCode: CLOSE_CODES.RESTARTING, stopStatement: statement,
+    });
+    await tick();
+    await tick();
+    expect(transport.openEphemeralConnection.args).to.deep.equal([[OTHER_JUROR]]);
+    sinon.assert.calledOnce(transport.sendSignedMessage);
+    expect(transport.sendSignedMessage.firstCall.args[0]).to.deep.equal({ type: 'fluxcourtesynote', version: 1, statement });
+    service.stop();
+  });
+
+  it('a forwarded stop is checked within the forward age and held for the subject it names', async () => {
+    const harness = makeHarness();
+    withJury(harness);
+    const { service, transport, stubs } = harness;
+    stubs.verifyStop.callsFake(async (statement) => ({
+      ok: true, ip: DUTY_IP, reason: 'restart', processId: statement.data.processId,
+    }));
+    service.start(transport);
+    await tick();
+    const statement = statementOf('cd'.repeat(16));
+    await service.onCourtesyNote({ pubKey: 'pkj', data: { type: 'fluxcourtesynote', statement } });
+    await tick();
+    expect(stubs.verifyStop.firstCall.args[1]).to.include({ maxAgeMs: 10 * 60 * 1000 });
+    // held, so forwarded on to the other juror
+    expect(transport.sendSignedMessage.firstCall.args[0].statement).to.equal(statement);
+    service.stop();
+  });
+
+  it('a forwarded stop that is refused is not held', async () => {
+    const harness = makeHarness();
+    withJury(harness);
+    const { service, transport, stubs } = harness;
+    stubs.verifyStop.resolves({ ok: false, why: 'age' });
+    const said = sinon.spy(log, 'info');
+    service.start(transport);
+    await tick();
+    await service.onCourtesyNote({ pubKey: 'pkj', data: { type: 'fluxcourtesynote', statement: statementOf('ef'.repeat(16)) } });
+    await tick();
+    sinon.assert.notCalled(transport.sendSignedMessage);
+    expect(said.args.map((args) => args[0])).to.include('nodeDownService: a stop note from pkj is not accepted (age)');
+    service.stop();
+  });
+
+  it('a forwarded stop of a node not in the list is not held', async () => {
+    const harness = makeHarness();
+    withJury(harness);
+    const { service, transport, stubs } = harness;
+    stubs.verifyStop.callsFake(async (statement) => ({
+      ok: true, ip: '10.9.9.9:16127', reason: 'restart', processId: statement.data.processId,
+    }));
+    service.start(transport);
+    await tick();
+    await service.onCourtesyNote({ pubKey: 'pkj', data: { type: 'fluxcourtesynote', statement: statementOf('aa'.repeat(16)) } });
+    await tick();
+    sinon.assert.notCalled(transport.sendSignedMessage);
+    service.stop();
+  });
+});
