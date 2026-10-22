@@ -3762,6 +3762,40 @@ describe('FluxPeerManager — a stopping process closes its held connections wit
     sinon.assert.calledWith(ws2.close, CLOSE_CODES.RESTARTING);
   });
 
+  it('closeAllForStop sends the stop statement to a processStop peer, immediately before its close frame', async () => {
+    const ws = closingWs('10.0.0.11');
+    const peer = manager.add(ws, '10.0.0.11', '16127', { source: PEER_SOURCE.INBOUND });
+    peer.remoteCapabilities.add('processStop');
+
+    await manager.closeAllForStop(CLOSE_CODES.RESTARTING, { flushMs: 2000, statement: '{"stop":1}' });
+
+    sinon.assert.calledOnce(ws.send);
+    expect(ws.send.firstCall.args[0]).to.match(/\{"stop":1\}$/);
+    expect(ws.send.calledBefore(ws.close)).to.equal(true);
+    sinon.assert.calledWith(ws.close, CLOSE_CODES.RESTARTING);
+  });
+
+  it('closeAllForStop sends a peer that does not claim processStop the close alone', async () => {
+    const ws = closingWs('10.0.0.12');
+    manager.add(ws, '10.0.0.12', '16127', { source: PEER_SOURCE.INBOUND });
+
+    await manager.closeAllForStop(CLOSE_CODES.RESTARTING, { flushMs: 2000, statement: '{"stop":1}' });
+
+    sinon.assert.notCalled(ws.send);
+    sinon.assert.calledWith(ws.close, CLOSE_CODES.RESTARTING);
+  });
+
+  it('closeAllForStop with no statement sends nothing before the close', async () => {
+    const ws = closingWs('10.0.0.13');
+    const peer = manager.add(ws, '10.0.0.13', '16127', { source: PEER_SOURCE.INBOUND });
+    peer.remoteCapabilities.add('processStop');
+
+    await manager.closeAllForStop(CLOSE_CODES.SHUTTING_DOWN, { flushMs: 2000 });
+
+    sinon.assert.notCalled(ws.send);
+    sinon.assert.calledWith(ws.close, CLOSE_CODES.SHUTTING_DOWN);
+  });
+
   it('a peer that never acknowledges does not hold the exit past the bound', async () => {
     const clock = sinon.useFakeTimers();
     const ws = createMockWs('10.0.0.3'); // close() is a bare stub: no frame, no event

@@ -1092,18 +1092,25 @@ class FluxPeerManager extends EventEmitter {
    * Ephemeral connections are not held ones and are left to their own
    * lifetime.
    *
+   * The signed stop statement goes out on each held connection whose peer
+   * advertises `processStop`, immediately before that connection's close
+   * frame: one socket carries both in order, so a juror holds the statement
+   * when it reads the code, and honours the code only with it.
+   *
    * @param {number} code CLOSE_CODES.SHUTTING_DOWN or CLOSE_CODES.RESTARTING
    * @param {object} [options]
    * @param {number} [options.flushMs] the bound, default 2 s
+   * @param {string|null} [options.statement] this process's signed stop statement
    * @returns {Promise<number>} how many held connections were closed
    */
-  async closeAllForStop(code, { flushMs = 2000 } = {}) {
+  async closeAllForStop(code, { flushMs = 2000, statement = null } = {}) {
     this.#stopCode = code;
     const name = CLOSE_CODE_NAMES[code] || 'stopping';
     const peers = [...this.#peers.values()];
     const flushed = peers.map((peer) => new Promise((resolve) => {
       peer.ws.once('close', resolve);
       try {
+        if (statement && peer.remoteCapabilities.has('processStop')) peer.send(statement);
         peer.close(code, name);
       } catch (_e) {
         resolve();

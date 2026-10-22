@@ -20,6 +20,8 @@ const { peerManager } = require('./utils/FluxPeerManager');
 const { CLOSE_CODES } = require('./utils/FluxPeerSocket');
 const verifyPool = require('./utils/verifyPool');
 const releasedFleetSigterm = require('./appMessaging/releasedFleetSigterm');
+const processIdentity = require('./utils/processIdentity');
+const { DROP_REASON } = require('./utils/nodeDownCertificates');
 
 /**
  * The node process once its API is listening: what apiServer starts after the
@@ -28,6 +30,8 @@ const releasedFleetSigterm = require('./appMessaging/releasedFleetSigterm');
 
 // How long the stop waits for its close frames to leave before exiting.
 const STOP_FLUSH_MS = 2000;
+// The most signing the stop statement may add to a stop.
+const SIGN_BUDGET_MS = 2000;
 
 let requestHistory = null;
 let axiosDefaultsSet = false;
@@ -217,6 +221,26 @@ async function isSystemShuttingDown() {
  * shutdown stops them: on Arcane the shutdown daemon does, by the plan FluxOS
  * handed it; elsewhere this does.
  */
+/**
+ * This process's signed stop statement, or null past SIGN_BUDGET_MS: the stop
+ * goes on without it, and its jurors read it as unannounced.
+ * @param {string} reason
+ * @returns {Promise<string|null>}
+ */
+async function signedStop(reason) {
+  let timer;
+  const budget = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(null), SIGN_BUDGET_MS);
+  });
+  try {
+    const statement = await Promise.race([processIdentity.stopStatement(reason), budget]);
+    if (!statement) log.warn('The stop is not signed; held connections close without a stop statement');
+    return statement;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function handleSigterm() {
   log.info('SIGTERM received, checking if system is shutting down...');
 
@@ -232,8 +256,10 @@ async function handleSigterm() {
   // Sent while the connections are still held, before they close.
   if (systemShuttingDown) await releasedFleetSigterm.announceShutdown();
 
+  const statement = await signedStop(systemShuttingDown ? DROP_REASON.SHUTDOWN : DROP_REASON.RESTART);
+
   try {
-    const closed = await peerManager.closeAllForStop(code, { flushMs: STOP_FLUSH_MS });
+    const closed = await peerManager.closeAllForStop(code, { flushMs: STOP_FLUSH_MS, statement });
     log.info(`Closed ${closed} held connections with ${systemShuttingDown ? 'SHUTTING_DOWN' : 'RESTARTING'}`);
   } catch (error) {
     log.error(`Error announcing the stop on held connections: ${error.message}`);

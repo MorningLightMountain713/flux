@@ -37,6 +37,11 @@ const FLUX_CAPABILITIES = Object.freeze([
   // participant, it is not a participant: asking it spends a window waiting for a reply
   // that cannot come, and announcing to it logs an unrecognised type on its side.
   'policyBundle',
+  // This build signs its stop: before it closes a held connection with a stop
+  // code it sends that peer its signed stop statement (utils/processIdentity),
+  // and as a juror it honours a stop code only with one. A peer that does not
+  // claim it is sent the close alone.
+  'processStop',
 ]);
 
 module.exports = { FLUX_CAPABILITIES };

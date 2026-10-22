@@ -14,6 +14,7 @@ import { getSubnetConfig } from '../framework/subnet-config.js';
 const FLUX_CAPABILITIES = [
   'transmissionTimestamps', 'peerExchange', 'binaryMessages', 'appStateSync', 'appStateSyncRefusal',
   'appStateSyncReady', 'appInstallingClaims', 'limitCounterRecords', 'masterlease', 'syncSigV2', 'policyBundle',
+  'processStop',
 ];
 
 // MSG_TYPE.REQUEST_APP_RUNNING — one of the four types a signed sync request

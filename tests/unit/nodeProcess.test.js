@@ -25,6 +25,7 @@ describe('nodeProcess', () => {
       writeShutdownReason: sinon.stub().resolves(),
       closeAllForStop: sinon.stub().resolves(0),
       announceShutdown: sinon.stub().resolves(true),
+      stopStatement: sinon.stub().resolves('{"statement":1}'),
       verifyPoolStop: sinon.stub(),
       startFluxFunctions: sinon.stub(),
       startFlushTimer: sinon.stub(),
@@ -54,6 +55,8 @@ describe('nodeProcess', () => {
       './utils/FluxPeerSocket': { CLOSE_CODES },
       './utils/verifyPool': { stop: stubs.verifyPoolStop },
       './appMessaging/releasedFleetSigterm': { announceShutdown: stubs.announceShutdown },
+      './utils/processIdentity': { stopStatement: stubs.stopStatement },
+      './utils/nodeDownCertificates': { DROP_REASON: { RESTART: 'restart', SHUTDOWN: 'shutdown' } },
     });
   });
 
@@ -157,6 +160,28 @@ describe('nodeProcess', () => {
       sinon.assert.calledOnceWithExactly(exit, 0);
     });
 
+    it('on a restart, signs a restart stop and hands it to the close', async () => {
+      await nodeProcess.handleSigterm();
+
+      sinon.assert.calledOnceWithExactly(stubs.stopStatement, 'restart');
+      expect(stubs.closeAllForStop.firstCall.args[1].statement).to.equal('{"statement":1}');
+    });
+
+    it('closes without a statement when signing does not answer within its budget', async () => {
+      const clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      stubs.stopStatement.returns(new Promise(() => {}));
+
+      const stop = nodeProcess.handleSigterm();
+      await clock.tickAsync(1999);
+      sinon.assert.notCalled(stubs.closeAllForStop);
+      await clock.tickAsync(1);
+      await stop;
+      clock.restore();
+
+      expect(stubs.closeAllForStop.firstCall.args[1].statement).to.equal(null);
+      sinon.assert.calledOnceWithExactly(exit, 0);
+    });
+
     // RELEASED-FLEET COMPATIBILITY: delete with appMessaging/releasedFleetSigterm.
     it('on a restart, tells released nodes nothing: the node is coming straight back', async () => {
       await nodeProcess.handleSigterm();
@@ -173,6 +198,13 @@ describe('nodeProcess', () => {
         await nodeProcess.handleSigterm();
         sinon.assert.calledOnce(stubs.announceShutdown);
         expect(stubs.announceShutdown.calledBefore(stubs.closeAllForStop)).to.equal(true);
+      });
+
+      it('signs a shutdown stop and hands it to the close', async () => {
+        await nodeProcess.handleSigterm();
+
+        sinon.assert.calledOnceWithExactly(stubs.stopStatement, 'shutdown');
+        expect(stubs.closeAllForStop.firstCall.args[1].statement).to.equal('{"statement":1}');
       });
 
       it('announces SHUTTING_DOWN and stops every Flux app container, and nothing else', async () => {
