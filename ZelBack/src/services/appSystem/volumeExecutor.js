@@ -64,6 +64,28 @@ const liveStagingPaths = new Set();
 // Whether the app volumes are mounted yet this boot; see noteVolumesMounted.
 let volumesMounted = false;
 
+/**
+ * Every operation whose container is live, by container id: the volume it is
+ * bound to, how to stop it, and its exit. What endOperationsOn ends.
+ * @type {Map<string, {mount: string, jobId: string|null, container: object, exited: Promise<object>|null, stop: function(): void}>}
+ */
+const liveOperations = new Map();
+
+/**
+ * Volumes being removed, with how many removals hold each: no operation starts
+ * on one. Keyed by the mount path, the same path an operation's container binds.
+ * @type {Map<string, number>}
+ */
+const closedMounts = new Map();
+
+const mountKey = (mount) => path.resolve(mount);
+
+function assertMountOpen(mount) {
+  if (closedMounts.has(mountKey(mount))) {
+    throw new Error('This app\'s storage is being removed from this node');
+  }
+}
+
 function lockForApp(identifier) {
   if (!appLocks.has(identifier)) appLocks.set(identifier, new AsyncLock(Number.MAX_SAFE_INTEGER, { maxHoldMs: 0 }));
   return appLocks.get(identifier);
@@ -176,6 +198,7 @@ function acquireSlot(identifier) {
  * @param {VolumeSession} session
  */
 function assertCapacity(session) {
+  assertMountOpen(session.mount);
   const release = acquireSlot(session.identifier);
   release();
 }
@@ -1759,6 +1782,14 @@ async function run(session, argv, options = {}) {
     );
     registeredContainerId = container.id;
     liveContainerIds.add(registeredContainerId);
+    const created = container;
+    liveOperations.set(registeredContainerId, {
+      mount: mountKey(session.mount),
+      jobId,
+      container: created,
+      exited: null,
+      stop: () => { created.stop({ t: settings().cancelGraceSeconds }).catch(() => {}); },
+    });
     // The same fact as liveContainerIds, written where a restart cannot lose
     // it. Without it, boot recovery cannot tell this container from debris and
     // force-removes an operation that is still running.
@@ -1783,10 +1814,15 @@ async function run(session, argv, options = {}) {
     // request arrives, and a next-exit wait on an exited container never
     // answers.
     exited = container.wait({ condition: 'next-exit' });
+    liveOperations.get(registeredContainerId).exited = exited;
     const output = await collectOutput(container);
     stdin = input ? await attachInput(container) : null;
 
     try {
+      // Asked again here, after every await since the request was admitted: a
+      // removal that began meanwhile has already swept the live operations, and
+      // this one would start writing into a volume being deleted.
+      assertMountOpen(session.mount);
       await container.start();
     } catch (error) {
       // Removed here, since there is no exit to wait for. Cleared so the
@@ -2148,6 +2184,7 @@ async function discardContainer(containerId, container, exited, forgotten) {
     log.warn(`volumeExecutor - could not remove file-operation container ${containerId}: ${error.message}`);
   } finally {
     liveContainerIds.delete(containerId);
+    liveOperations.delete(containerId);
   }
 }
 
@@ -2175,9 +2212,10 @@ async function discardContainer(containerId, container, exited, forgotten) {
  *
  * @param {object} record a fileOperationStore row
  * @param {object|null} state the container's docker State; null when it is gone
+ * @param {string|null} [mount] the volume the container binds (mountOf)
  * @returns {void}
  */
-function adoptOperation(record, state) {
+function adoptOperation(record, state, mount = null) {
   const { containerId, stagingRoot, jobId } = record;
   if (liveContainerIds.has(containerId)) return;
   liveContainerIds.add(containerId);
@@ -2196,6 +2234,15 @@ function adoptOperation(record, state) {
   }
 
   let exited;
+  if (running && mount) {
+    liveOperations.set(containerId, {
+      mount: mountKey(mount),
+      jobId: jobId ?? null,
+      container,
+      exited: null,
+      stop: () => { container.stop({ t: settings().cancelGraceSeconds }).catch(() => {}); },
+    });
+  }
   if (!state) {
     exited = Promise.reject(new Error('The outcome is unknown: the operation\'s container was gone when FluxOS restarted'));
   } else if (state.Status === 'created') {
@@ -2204,6 +2251,7 @@ function adoptOperation(record, state) {
     // The default condition, "not-running", answers at once for a container
     // that exited since it was inspected, where next-exit would wait forever.
     exited = container.wait();
+    if (liveOperations.has(containerId)) liveOperations.get(containerId).exited = exited;
   } else {
     exited = Promise.resolve({ StatusCode: state.ExitCode });
   }
@@ -2234,6 +2282,86 @@ function adoptOperation(record, state) {
       if (volumesMounted) reclaimStaging(stagingRoot, null);
       else liveStagingPaths.delete(stagingRoot);
     });
+}
+
+/**
+ * The volume a file-operation container binds, from docker's description of it
+ * (inspect or list): the source of its bind at WORK_ROOT.
+ * @param {object|null} info
+ * @returns {string|null}
+ */
+function mountOf(info) {
+  const bind = (info?.Mounts ?? []).find((m) => m.Destination === WORK_ROOT);
+  return bind?.Source ?? null;
+}
+
+/**
+ * End every file operation on a volume about to be removed, and keep new ones
+ * off it until the returned function is called.
+ *
+ * No operation starts on the volume from here: the request is refused, and one
+ * already admitted is refused again just before its container starts. Each
+ * live operation on it - started here or taken back after a restart - has its
+ * job ended by the node with `reason` and its container stopped, which lets
+ * flux-op discard its staging. So does any file-operation container docker
+ * reports bound to the volume that no live operation owns. Resolves once every
+ * one has exited, or after a stop's grace, when what is left is removed by
+ * force: nothing holds the volume when this returns.
+ *
+ * @param {string} mount the volume's mount path
+ * @param {string} reason told to each operation's caller
+ * @returns {Promise<function(): void>} lets operations onto the volume again
+ */
+async function endOperationsOn(mount, reason) {
+  const key = mountKey(mount);
+  closedMounts.set(key, (closedMounts.get(key) || 0) + 1);
+  let reopened = false;
+  const reopen = () => {
+    if (reopened) return;
+    reopened = true;
+    const left = closedMounts.get(key) - 1;
+    if (left > 0) closedMounts.set(key, left);
+    else closedMounts.delete(key);
+  };
+
+  try {
+    const ending = [];
+    liveOperations.forEach((op) => {
+      if (op.mount !== key) return;
+      if (op.jobId) jobRegistry.evicted(op.jobId, reason);
+      op.stop();
+      ending.push({ container: op.container, exited: op.exited });
+    });
+
+    let listed = [];
+    try {
+      listed = await dockerService.dockerListContainers(true);
+    } catch (error) {
+      log.warn(`volumeExecutor - could not list containers to end operations on ${key}: ${error.message}`);
+    }
+    const { LABEL_KEYS, readLabel } = await getSpecBackend();
+    (listed || [])
+      .filter((info) => readLabel(info.Labels, LABEL_KEYS.ROLE) === FILEOP_ROLE
+        && !liveOperations.has(info.Id)
+        && mountOf(info) && mountKey(mountOf(info)) === key)
+      .forEach((info) => {
+        const container = dockerService.getDockerContainerHandle(info.Id);
+        container.stop({ t: settings().cancelGraceSeconds }).catch(() => {});
+        ending.push({ container, exited: container.wait().catch(() => {}) });
+      });
+
+    await Promise.all(ending.map(async ({ container, exited }) => {
+      if (exited) await exitOrGrace(exited);
+      await container.remove({ force: true }).catch((error) => {
+        if (error.statusCode !== 404) log.warn(`volumeExecutor - could not remove a file-operation container on ${key}: ${error.message}`);
+      });
+    }));
+    if (ending.length) log.info(`volumeExecutor - ended ${ending.length} file operation(s) on ${key}: ${reason}`);
+  } catch (error) {
+    reopen();
+    throw error;
+  }
+  return reopen;
 }
 
 /**
@@ -2394,6 +2522,8 @@ module.exports = {
   reapOrphanedContainers,
   sweepStagingDirectories,
   adoptOperation,
+  mountOf,
+  endOperationsOn,
   noteVolumesMounted,
   acquireSlot,
 };

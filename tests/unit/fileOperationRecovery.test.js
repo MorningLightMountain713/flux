@@ -27,6 +27,8 @@ describe('fileOperationRecovery tests', () => {
       sweepStagingDirectories: sinon.stub().resolves({ removed: [] }),
       adoptOperation: sinon.stub(),
       noteVolumesMounted: sinon.stub(),
+      mountOf: sinon.stub().callsFake((info) => info?.Mounts?.[0]?.Source ?? null),
+      endOperationsOn: sinon.stub().resolves(() => {}),
     };
     capabilitiesStub = { whenUp: sinon.stub().resolves() };
     storeStub = {
@@ -75,14 +77,14 @@ describe('fileOperationRecovery tests', () => {
     it('takes back a running one rather than reaping it', async () => {
       const state = { Running: true, Status: 'running' };
       storeStub.listOperations.resolves([record]);
-      dockerStub.dockerContainerInspect.resolves({ State: state });
+      dockerStub.dockerContainerInspect.resolves({ State: state, Mounts: [{ Source: '/test/apps/folder/app', Destination: '/work' }] });
 
       const result = await recovery.recoverInterruptedFileOperations();
 
       // The record holds a container ID, and the inspect resolves by app name
       // unless told otherwise.
       sinon.assert.calledWith(dockerStub.dockerContainerInspect, record.containerId, { identifierType: 'id' });
-      sinon.assert.calledOnceWithExactly(executorStub.adoptOperation, record, state);
+      sinon.assert.calledOnceWithExactly(executorStub.adoptOperation, record, state, '/test/apps/folder/app');
       sinon.assert.notCalled(storeStub.forgetOperation);
       expect(result.adopted).to.equal(1);
     });
@@ -107,7 +109,7 @@ describe('fileOperationRecovery tests', () => {
 
       const result = await recovery.recoverInterruptedFileOperations();
 
-      sinon.assert.calledOnceWithExactly(executorStub.adoptOperation, record, state);
+      sinon.assert.calledOnceWithExactly(executorStub.adoptOperation, record, state, null);
       expect(result.adopted).to.equal(1);
     });
 
@@ -117,7 +119,7 @@ describe('fileOperationRecovery tests', () => {
 
       await recovery.recoverInterruptedFileOperations();
 
-      sinon.assert.calledOnceWithExactly(executorStub.adoptOperation, record, null);
+      sinon.assert.calledOnceWithExactly(executorStub.adoptOperation, record, null, null);
     });
 
     // A docker that fails to answer is not a container that is gone: the
@@ -190,6 +192,42 @@ describe('fileOperationRecovery tests', () => {
         executorStub.noteVolumesMounted,
         executorStub.sweepStagingDirectories,
       );
+    });
+  });
+
+  describe('ending the operations on a volume being removed', () => {
+    it('ends them once the boot\'s take-back has made the restart\'s operations known', async () => {
+      let up;
+      capabilitiesStub.whenUp.returns(new Promise((resolve) => { up = resolve; }));
+      const reopen = sinon.stub();
+      executorStub.endOperationsOn.resolves(reopen);
+
+      const ending = recovery.endFileOperationsOn('/test/apps/folder/app', 'removed');
+      await Promise.resolve();
+      sinon.assert.notCalled(executorStub.endOperationsOn);
+
+      up();
+      expect(await ending).to.equal(reopen);
+      sinon.assert.calledOnceWithExactly(executorStub.endOperationsOn, '/test/apps/folder/app', 'removed');
+      expect(storeStub.listOperations.calledBefore(executorStub.endOperationsOn), 'the take-back first').to.equal(true);
+    });
+
+    // The executor still ends every container docker reports on the volume;
+    // what a take-back that never finishes costs is the jobs it would have
+    // re-opened.
+    it('does not wait past its bound for a take-back that cannot finish', async () => {
+      const clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        capabilitiesStub.whenUp.returns(new Promise(() => {}));
+        const ending = recovery.endFileOperationsOn('/test/apps/folder/app', 'removed');
+        await clock.tickAsync(29_000);
+        sinon.assert.notCalled(executorStub.endOperationsOn);
+        await clock.tickAsync(1000);
+        await ending;
+        sinon.assert.calledOnce(executorStub.endOperationsOn);
+      } finally {
+        clock.restore();
+      }
     });
   });
 

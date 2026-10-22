@@ -114,23 +114,47 @@ async function adoptRecordedOperations() {
   let unread = 0;
   // eslint-disable-next-line no-restricted-syntax
   for (const record of records) {
-    let state;
+    let inspected;
     try {
-      // eslint-disable-next-line no-await-in-loop
-      const inspected = await dockerService.dockerContainerInspect(record.containerId, { identifierType: 'id' });
       // null: no such container, the record outlived it
-      state = inspected ? inspected.State : null;
+      // eslint-disable-next-line no-await-in-loop
+      inspected = await dockerService.dockerContainerInspect(record.containerId, { identifierType: 'id' });
     } catch (error) {
       unread += 1;
       log.warn(`fileOperationRecovery - could not inspect recorded container ${record.containerId.slice(0, 12)}: ${error.message}`);
       // eslint-disable-next-line no-continue
       continue;
     }
-    executor.adoptOperation(record, state);
+    const state = inspected ? inspected.State : null;
+    executor.adoptOperation(record, state, executor.mountOf(inspected));
     adopted += 1;
     log.info(`fileOperationRecovery - took back ${record.kind || 'file operation'} on ${record.identifier} (container ${record.containerId.slice(0, 12)}, ${state ? state.Status : 'gone'})`);
   }
   return { adopted, unread };
+}
+
+// How long a removal waits for the boot's take-back before ending what it can
+// see. The take-back needs only Docker and MongoDB; past this, the removal still
+// ends every file-operation container docker reports on the volume, and only
+// the jobs of operations not yet taken back go unreported.
+const TAKE_BACK_WAIT_MS = 30_000;
+
+/**
+ * End every file operation on an app volume about to be removed, once the
+ * boot's take-back has made the operations a restart left behind known: their
+ * jobs are then ended by the node like any other. See
+ * volumeExecutor.endOperationsOn.
+ *
+ * @param {string} mount the volume's mount path
+ * @param {string} reason told to each operation's caller
+ * @returns {Promise<function(): void>} lets operations onto the volume again
+ */
+async function endFileOperationsOn(mount, reason) {
+  let timer;
+  const waited = new Promise((resolve) => { timer = setTimeout(resolve, TAKE_BACK_WAIT_MS); });
+  await Promise.race([takeBackFileOperations().catch(() => {}), waited]);
+  clearTimeout(timer);
+  return executor.endOperationsOn(mount, reason);
 }
 
 /**
@@ -166,4 +190,4 @@ async function sweepEveryMountedVolume() {
   return removed;
 }
 
-module.exports = { takeBackFileOperations, recoverInterruptedFileOperations };
+module.exports = { takeBackFileOperations, recoverInterruptedFileOperations, endFileOperationsOn };

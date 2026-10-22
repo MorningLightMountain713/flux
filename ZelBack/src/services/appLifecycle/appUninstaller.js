@@ -27,6 +27,7 @@ const { stopAppMonitoring } = require('../appManagement/appInspector');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const globalCommand = require('../appManagement/globalCommand');
 const volumeService = require('../utils/volumeService');
+const fileOperationRecovery = require('../appSystem/fileOperationRecovery');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { Privilege, authOf } = require('../utils/privileges');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
@@ -44,6 +45,9 @@ const { ANNOUNCE_CYCLE_WAIT_MS } = require('../utils/appConstants');
 const fluxDirPath = process.env.FLUXOS_PATH || path.join(process.env.HOME, 'zelflux');
 const appsFolderPath = process.env.FLUX_APPS_FOLDER || path.join(fluxDirPath, 'ZelApps');
 const appsFolder = `${appsFolderPath}/`;
+
+// What the caller of a file operation is told when its app's removal ends it.
+const FILE_OPERATIONS_ENDED = 'The app was removed from this node';
 const crontabLoad = util.promisify(systemcrontab.load);
 
 /**
@@ -459,22 +463,29 @@ async function teardownComponentCore(c, opts = {}) {
       await denyPorts(c.ports, c.appName, { entityName: c.label, onStatus });
     }
     if (removeVolumes) {
-      await stopSyncthingAndCleanup(c.syncFolder?.id ?? null, c.appId);
-      // The folder has left syncthing with its data about to go: demoted and
-      // reverted in full, which a master fencing this node waits for before it
-      // re-admits the device.
-      if (c.identity) mastershipGrantGate.noteFolderDemoted(c.identity);
-      await unmountVolume(c.appId, { entityName: c.label, onStatus });
-      const dataRemoved = await cleanupAppData(c.appId, { entityName: c.label, onStatus });
-      await cleanupCrontab(c.appId, { onStatus });
-      // The image file is where the resources say the node put it, and nowhere
-      // else is looked. A volume named with no file is one the node recorded
-      // no file for, and the one chance to say an image may be on disk.
-      const volumeRemoved = await cleanupVolumePath(c.volume?.file ?? null, {
-        entityName: c.label, onStatus, conclusive: !c.volume || Boolean(c.volume.file),
-      });
-      // Residue that did not throw is still residue: the record stays owed and retries it.
-      if (!dataRemoved || !volumeRemoved) cleanupFailed = true;
+      // No file operation writes into the volume while it goes: every one on it
+      // is ended, and none starts until the removal is over.
+      const reopenVolume = await fileOperationRecovery.endFileOperationsOn(appsFolder + c.appId, FILE_OPERATIONS_ENDED);
+      try {
+        await stopSyncthingAndCleanup(c.syncFolder?.id ?? null, c.appId);
+        // The folder has left syncthing with its data about to go: demoted and
+        // reverted in full, which a master fencing this node waits for before it
+        // re-admits the device.
+        if (c.identity) mastershipGrantGate.noteFolderDemoted(c.identity);
+        await unmountVolume(c.appId, { entityName: c.label, onStatus });
+        const dataRemoved = await cleanupAppData(c.appId, { entityName: c.label, onStatus });
+        await cleanupCrontab(c.appId, { onStatus });
+        // The image file is where the resources say the node put it, and nowhere
+        // else is looked. A volume named with no file is one the node recorded
+        // no file for, and the one chance to say an image may be on disk.
+        const volumeRemoved = await cleanupVolumePath(c.volume?.file ?? null, {
+          entityName: c.label, onStatus, conclusive: !c.volume || Boolean(c.volume.file),
+        });
+        // Residue that did not throw is still residue: the record stays owed and retries it.
+        if (!dataRemoved || !volumeRemoved) cleanupFailed = true;
+      } finally {
+        reopenVolume();
+      }
     }
   } catch (err) {
     // The container is gone but host residue may remain — a mount, an appdata

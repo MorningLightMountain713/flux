@@ -17,6 +17,8 @@ describe('appUninstaller tests', () => {
   let runtimeStateStub;
   let runCommandStub;
   let volumeServiceStub;
+  let fileOperationRecoveryStub;
+  let reopenVolumeStub;
   let appUninstaller;
   let verificationHelperStub;
   let messageHelperStub;
@@ -167,6 +169,8 @@ describe('appUninstaller tests', () => {
 
     runCommandStub = sinon.stub().resolves({ error: null, stdout: '', stderr: '' });
     volumeServiceStub = { isPathMounted: sinon.stub().resolves(false) };
+    reopenVolumeStub = sinon.stub();
+    fileOperationRecoveryStub = { endFileOperationsOn: sinon.stub().resolves(reopenVolumeStub) };
     appUninstaller = proxyquire('../../ZelBack/src/services/appLifecycle/appUninstaller', {
       config: asConfig(configStub),
       '../verificationHelper': verificationHelperStub,
@@ -181,6 +185,7 @@ describe('appUninstaller tests', () => {
       '../dockerService': dockerServiceStub,
       // isPathMounted runs through the real serviceHelper and spawns a process.
       '../utils/volumeService': volumeServiceStub,
+      '../appSystem/fileOperationRecovery': fileOperationRecoveryStub,
       // Left real, this reads the developer's own crontab.
       crontab: { load: (cb) => cb(null, null) },
       '../../lib/log': logStub,
@@ -387,6 +392,46 @@ describe('appUninstaller tests', () => {
       sinon.assert.calledOnceWithExactly(
         mastershipGrantGateStub.onComponentTeardown, 'web_TestApp', 'ab12cd34ef56',
       );
+    });
+
+    describe('the file operations on a volume it removes', () => {
+      const umountCall = () => runCommandStub.getCalls().find((call) => call.args[0] === 'umount');
+
+      it('are ended on the mount it unmounts, before the unmount, and the volume reopened after its removal', async () => {
+        volumeServiceStub.isPathMounted.resolves(true);
+        await appUninstaller.uninstallComponent(component(), { removeVolumes: true });
+
+        const umount = umountCall();
+        expect(umount, 'the volume was unmounted').to.not.equal(undefined);
+        sinon.assert.calledOnceWithExactly(fileOperationRecoveryStub.endFileOperationsOn, umount.args[1].params[0], 'The app was removed from this node');
+        expect(fileOperationRecoveryStub.endFileOperationsOn.firstCall.calledBefore(umount)).to.equal(true);
+        sinon.assert.calledOnce(reopenVolumeStub);
+        const removals = runCommandStub.getCalls().filter((call) => call.args[0] === 'rm');
+        expect(removals, 'the data was removed').to.not.deep.equal([]);
+        expect(reopenVolumeStub.firstCall.calledAfter(removals[removals.length - 1]), 'reopened once the removal is over').to.equal(true);
+      });
+
+      it('are left alone by a teardown that keeps the volume', async () => {
+        await appUninstaller.uninstallComponent(component(), { removeVolumes: false });
+        sinon.assert.notCalled(fileOperationRecoveryStub.endFileOperationsOn);
+      });
+
+      it('let operations back onto the volume when its removal fails', async () => {
+        volumeServiceStub.isPathMounted.resolves(true);
+        runCommandStub.withArgs('umount').rejects(new Error('busy'));
+        await appUninstaller.uninstallComponent(component(), { removeVolumes: true }).catch(() => {});
+        sinon.assert.calledOnce(reopenVolumeStub);
+      });
+
+      // Nothing is deleted under an operation this node could not end: the
+      // teardown stays owed and is retried.
+      it('keep the volume in place when they cannot be ended', async () => {
+        volumeServiceStub.isPathMounted.resolves(true);
+        fileOperationRecoveryStub.endFileOperationsOn.rejects(new Error('docker down'));
+        await appUninstaller.uninstallComponent(component(), { removeVolumes: true }).catch(() => {});
+        expect(umountCall()).to.equal(undefined);
+        expect(runCommandStub.getCalls().some((call) => call.args[0] === 'rm')).to.equal(false);
+      });
     });
 
     // A redeploy is an explicit "make it run": neither the operator's stop lock nor a

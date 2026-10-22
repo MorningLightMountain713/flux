@@ -1784,7 +1784,7 @@ describe('volumeExecutor tests', () => {
     it('leaves a running one alone when its exit cannot be waited on', async () => {
       containerStub.wait.rejects(new Error('socket hang up'));
       dockerServiceStub.dockerListContainers.resolves([
-        { Id: 'c-run', Labels: { 'flux.utility.role': 'fileop' } },
+        { Id: 'c-run', Labels: { 'io.runonflux.role': 'fileop' } },
       ]);
 
       volumeExecutor.adoptOperation(recordFor('c-run'), RUNNING);
@@ -1800,7 +1800,7 @@ describe('volumeExecutor tests', () => {
     it('marks a running one live, so the reap that follows leaves it alone', async () => {
       containerStub.wait.returns(new Promise(() => {}));
       dockerServiceStub.dockerListContainers.resolves([
-        { Id: 'c-run', Labels: { 'flux.utility.role': 'fileop' } },
+        { Id: 'c-run', Labels: { 'io.runonflux.role': 'fileop' } },
       ]);
 
       volumeExecutor.adoptOperation(recordFor('c-run'), RUNNING);
@@ -1817,6 +1817,145 @@ describe('volumeExecutor tests', () => {
       volumeExecutor.adoptOperation(recordFor('c-run'), RUNNING);
 
       sinon.assert.calledOnce(dockerServiceStub.getDockerContainerHandle);
+    });
+  });
+
+  describe('ending the operations on a volume being removed', () => {
+    const REASON = 'The app was removed from this node';
+    const until = async (condition) => {
+      for (let i = 0; i < 200 && !condition(); i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => { setImmediate(resolve); });
+      }
+      expect(condition(), 'the operation did not get there').to.equal(true);
+    };
+    const fileop = (Id, Source) => ({ Id, Labels: { 'io.runonflux.role': 'fileop' }, Mounts: [{ Source, Destination: '/work' }] });
+
+    beforeEach(() => jobRegistry.reset());
+
+    it('refuses an operation on the volume until it is reopened', async () => {
+      const vol = await openSession();
+      const reopen = await volumeExecutor.endOperationsOn(MOUNT, REASON);
+
+      expect(() => volumeExecutor.assertCapacity(vol)).to.throw('being removed');
+      reopen();
+      expect(() => volumeExecutor.assertCapacity(vol)).to.not.throw();
+    });
+
+    it('keeps the volume closed while any removal holds it, and reopens once', async () => {
+      const vol = await openSession();
+      const first = await volumeExecutor.endOperationsOn(MOUNT, REASON);
+      const second = await volumeExecutor.endOperationsOn(MOUNT, REASON);
+
+      first();
+      first();
+      expect(() => volumeExecutor.assertCapacity(vol), 'the second removal still holds it').to.throw('being removed');
+      second();
+      expect(() => volumeExecutor.assertCapacity(vol)).to.not.throw();
+    });
+
+    it('leaves other volumes open', async () => {
+      const vol = await openSession();
+      await volumeExecutor.endOperationsOn(`${APPS_FOLDER}fluxcomp_other`, REASON);
+      expect(() => volumeExecutor.assertCapacity(vol)).to.not.throw();
+    });
+
+    // Admitted before the removal began and created during it: the check just
+    // before start is what keeps it from writing into the volume being deleted.
+    it('refuses to start an operation admitted before the removal began', async () => {
+      let attached;
+      containerStub.attach.returns(new Promise((resolve) => { attached = resolve; }));
+      const vol = await openSession();
+      const running = volumeExecutor.run(vol, ['true']);
+      await until(() => containerStub.attach.called);
+
+      await volumeExecutor.endOperationsOn(MOUNT, REASON);
+      attached('raw-stream');
+
+      await expect(running).to.be.rejectedWith('being removed');
+      sinon.assert.notCalled(containerStub.start);
+    });
+
+    it('ends a live operation on the volume: its job ended by the node, its container stopped and removed, after it exits', async () => {
+      const { jobId } = jobRegistry.start({ kind: 'copy', owner: 'zel-owner' });
+      containerStub.wait = stoppableFor(60_000);
+      const vol = await openSession();
+      const running = volumeExecutor.run(vol, ['sleep', '60'], { jobId });
+      await until(() => containerStub.start.called);
+
+      const reopen = await volumeExecutor.endOperationsOn(MOUNT, REASON);
+
+      const job = jobRegistry.get(jobId, 'zel-owner');
+      expect(job.status).to.equal('Evicted');
+      expect(job.error.detail).to.equal(REASON);
+      sinon.assert.called(containerStub.stop);
+      sinon.assert.calledWith(containerStub.remove, { force: true });
+      expect(containerStub.remove.firstCall.calledAfter(containerStub.stop.firstCall)).to.equal(true);
+      await expect(running).to.be.rejected;
+      reopen();
+    });
+
+    it('leaves an operation on another volume running', async () => {
+      containerStub.wait = stoppableFor(60_000);
+      const vol = await openSession();
+      const running = volumeExecutor.run(vol, ['sleep', '60']);
+      await until(() => containerStub.start.called);
+
+      await volumeExecutor.endOperationsOn(`${APPS_FOLDER}fluxcomp_other`, REASON);
+
+      sinon.assert.notCalled(containerStub.stop);
+      sinon.assert.notCalled(containerStub.remove);
+      containerStub.stop();
+      await running.catch(() => {});
+    });
+
+    it('ends one taken back after a restart, by the volume its container binds', async () => {
+      containerStub.wait = stoppableFor(60_000);
+      volumeExecutor.adoptOperation({ containerId: 'c-run', jobId: 'op_9', owner: 'zel-owner' }, { Running: true, Status: 'running' }, MOUNT);
+
+      await volumeExecutor.endOperationsOn(MOUNT, REASON);
+
+      expect(jobRegistry.get('op_9', 'zel-owner').status).to.equal('Evicted');
+      sinon.assert.called(containerStub.stop);
+      sinon.assert.calledWith(containerStub.remove, { force: true });
+    });
+
+    // A container a restart left that no record took back is still writing into
+    // the volume: docker names its bind.
+    it('ends a file-operation container docker reports on the volume that no operation owns', async () => {
+      dockerServiceStub.dockerListContainers.resolves([fileop('c-stray', MOUNT), fileop('c-elsewhere', `${APPS_FOLDER}fluxcomp_other`)]);
+
+      await volumeExecutor.endOperationsOn(MOUNT, REASON);
+
+      sinon.assert.calledOnceWithExactly(dockerServiceStub.getDockerContainerHandle, 'c-stray');
+      sinon.assert.calledOnce(containerStub.stop);
+      sinon.assert.calledOnceWithExactly(containerStub.remove, { force: true });
+    });
+
+    it('removes by force what has not exited once the stop\'s grace has passed', async () => {
+      const clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        containerStub.wait.returns(new Promise(() => {}));
+        dockerServiceStub.dockerListContainers.resolves([fileop('c-stuck', MOUNT)]);
+
+        let done = false;
+        const ending = volumeExecutor.endOperationsOn(MOUNT, REASON).then(() => { done = true; });
+        await clock.tickAsync(1000);
+        expect(done, 'waits for the exit').to.equal(false);
+        sinon.assert.notCalled(containerStub.remove);
+
+        await clock.tickAsync((15 * 1000) + 10_000);
+        await ending;
+        sinon.assert.calledOnceWithExactly(containerStub.remove, { force: true });
+      } finally {
+        clock.restore();
+      }
+    });
+
+    it('reads the volume a container binds at the work root', () => {
+      expect(volumeExecutor.mountOf(fileop('c', MOUNT))).to.equal(MOUNT);
+      expect(volumeExecutor.mountOf({ Mounts: [{ Source: '/x', Destination: '/elsewhere' }] })).to.equal(null);
+      expect(volumeExecutor.mountOf(null)).to.equal(null);
     });
   });
 
