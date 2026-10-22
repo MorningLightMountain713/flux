@@ -491,6 +491,27 @@ async function holdFluxos(container) {
 }
 
 /**
+ * Stop the FluxOS process and keep it stopped: systemd does not start it again
+ * while the hold stands (releaseFluxos lifts it). The inner dockerd and every
+ * container keep running, so a suite can let something finish while FluxOS is
+ * down. Resolves once the API no longer answers. SIGTERM, as restartFluxos sends.
+ */
+export async function holdFluxosDown(container, { apiPort = 16127, downTimeoutMs = 60000, interval = 300 } = {}) {
+  await holdFluxos(container);
+  await execInContainer(container, 'systemctl kill --kill-whom=main -s TERM fluxos');
+  const probe = `curl -sf -o /dev/null http://127.0.0.1:${apiPort}/flux/version`;
+  const start = Date.now();
+  while (Date.now() - start < downTimeoutMs) {
+    // eslint-disable-next-line no-await-in-loop
+    const r = await execInContainer(container, probe);
+    if (r.exitCode !== 0) return;
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((res) => setTimeout(res, interval));
+  }
+  throw new Error(`holdFluxosDown: FluxOS did not stop within ${downTimeoutMs}ms`);
+}
+
+/**
  * Restart the FluxOS process only - the `systemctl restart fluxos` case. Signals just
  * FluxOS's main process; systemd starts it again (Restart=always). The inner dockerd
  * and the running app containers are NOT affected - they keep running while FluxOS's

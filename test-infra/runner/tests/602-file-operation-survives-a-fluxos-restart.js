@@ -2,10 +2,14 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer } from '../framework/container.js';
+import { execInContainer, holdFluxosDown, releaseFluxos, restartFluxos } from '../framework/container.js';
 import { pushImage, mirrorExecutorImage, executorImageReference } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
-import { waitFor, waitForOperation, restartFluxosAndAwaitRecovery } from '../framework/wait.js';
+import {
+  waitFor, waitForOperation, restartFluxosAndAwaitRecovery, waitForFileOpsRecovered,
+} from '../framework/wait.js';
+import { partition, healPartition } from '../framework/partition.js';
+import { capabilityState } from '../framework/capability-state.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
@@ -117,6 +121,45 @@ describe('a file operation survives a FluxOS restart', function () {
     await env?.teardown();
   });
 
+  // A compression of SOURCE_MB of random bytes, running and still Running by
+  // its job when this returns.
+  async function startCompression(destination) {
+    await resetVolume(node.container, appName);
+    await seedLargeFile(node.container, appName, 'bulk/payload.bin', SOURCE_MB);
+
+    const accepted = await post('/apps/compressobject', {
+      appname: appName,
+      component: appName,
+      source: 'bulk',
+      destination,
+    });
+    expect(accepted.status, `compressobject: ${JSON.stringify(accepted.data)}`).to.equal(202);
+    const { jobId } = accepted.data.data;
+
+    let running = [];
+    await waitFor(async () => {
+      running = (await fileOpContainerIds()).filter((c) => c.state === 'running');
+      return running.length === 1;
+    }, { timeout: 120000, interval: 1000, label: 'the operation container is running' });
+
+    const midFlight = await get(`/apps/operations/${jobId}`);
+    expect(
+      midFlight.data?.data?.status,
+      `the operation finished before the test could act on it - raise SOURCE_MB above ${SOURCE_MB}`,
+    ).to.equal('Running');
+    return { jobId, containerId: running[0].id };
+  }
+
+  const fileOpContainer = async (containerId) => (await fileOpContainerIds()).find((c) => c.id === containerId);
+
+  async function assertNothingLeftBehind(containerId) {
+    await waitFor(async () => (await fileOpContainer(containerId)) === undefined, {
+      timeout: 60000, interval: 1000, label: 'the container removed once its result was read',
+    });
+    const staging = await inNode(`ls -A ${root}/.flux-op 2>/dev/null; ls -d ${root}/.flux-op-* 2>/dev/null; true`);
+    expect(staging.stdout.trim(), 'staging reclaimed').to.equal('');
+  }
+
   it('keeps running, finishes, and stays pollable across the restart', async function () {
     this.timeout(900000);
 
@@ -180,8 +223,94 @@ describe('a file operation survives a FluxOS restart', function () {
     // 4. NOTHING LEAKED. The record is dropped and the staging directory
     //    reclaimed once the adopted operation settles, exactly as they are for
     //    one this process started itself.
-    const staging = await inNode(`ls -d ${root}/.flux-op-* 2>/dev/null || true`);
-    expect(staging.stdout.trim(), 'staging was reclaimed after the adopted operation settled').to.equal('');
+    await assertNothingLeftBehind(containerId);
+  });
+
+  // The container is kept after it exits, so an operation that finishes while
+  // FluxOS is down leaves its exit code for the next process to read.
+  it('reports the result of an operation that finished while FluxOS was down', async function () {
+    this.timeout(900000);
+    const { jobId, containerId } = await startCompression('done-while-down.tar.gz');
+
+    const afterId = node.getLastEventId();
+    await holdFluxosDown(node.container);
+    await waitFor(async () => (await fileOpContainer(containerId))?.state !== 'running', {
+      timeout: 600000, interval: 2000, label: 'the operation finishes while FluxOS is down',
+    });
+    expect(await fileOpContainer(containerId), 'kept after it exits, for FluxOS to read').to.deep.include({ state: 'exited' });
+
+    await releaseFluxos(node.container);
+    await waitForFileOpsRecovered(node, () => true, 300000, { afterId });
+
+    const job = await waitForOperation(node, jobId, auth.zelidauth, { timeout: 60000 });
+    expect(job.status, `the job of an operation that finished during the restart: ${JSON.stringify(job.error)}`).to.equal('Succeeded');
+    expect(await exists(node.container, `${root}/done-while-down.tar.gz`), 'the archive reached the destination').to.equal(true);
+    await assertNothingLeftBehind(containerId);
+  });
+
+  it('reports the failure of an operation that died while FluxOS was down', async function () {
+    this.timeout(900000);
+    const { jobId, containerId } = await startCompression('killed-while-down.tar.gz');
+
+    const afterId = node.getLastEventId();
+    await holdFluxosDown(node.container);
+    await inNode(`docker kill ${containerId}`);
+    await waitFor(async () => (await fileOpContainer(containerId))?.state === 'exited', {
+      timeout: 60000, interval: 1000, label: 'the killed operation exited',
+    });
+
+    await releaseFluxos(node.container);
+    await waitForFileOpsRecovered(node, () => true, 300000, { afterId });
+
+    const job = await waitForOperation(node, jobId, auth.zelidauth, { timeout: 60000 });
+    expect(job.status).to.equal('Failed');
+    expect(job.error?.detail, 'names the exit').to.match(/137/);
+    expect(await exists(node.container, `${root}/killed-while-down.tar.gz`), 'nothing published').to.equal(false);
+    await assertNothingLeftBehind(containerId);
+  });
+
+  // The take-back runs as soon as Docker and the database answer, ahead of the
+  // boot's wait for the network: cut off from its peers, the restarted node has
+  // not decided its boot, and the job already answers.
+  it('answers the job of a running operation before the boot has decided', async function () {
+    this.timeout(900000);
+    const { jobId } = await startCompression('during-the-boot.tar.gz');
+
+    await partition(env, [0], { cutChain: false });
+    let decided;
+    try {
+      const afterId = node.getLastEventId();
+      await restartFluxos(node.container);
+      await waitFor(async () => (await get(`/apps/operations/${jobId}`)).status === 200, {
+        timeout: 20000, interval: 500, label: 'the job answers after the restart',
+      });
+      decided = await capabilityState(node, 'bootReconcileDecided');
+      await healPartition(env, [0]);
+      expect(decided, 'the boot had already decided, so the take-back was not tested ahead of it').to.not.equal('up');
+      await waitForFileOpsRecovered(node, () => true, 300000, { afterId });
+    } finally {
+      await healPartition(env, [0]);
+    }
+
+    const job = await waitForOperation(node, jobId, auth.zelidauth, { timeout: 600000 });
+    expect(job.status, JSON.stringify(job.error)).to.equal('Succeeded');
+  });
+
+  it('removes the container of an operation that ran without a restart', async function () {
+    this.timeout(300000);
+    await resetVolume(node.container, appName);
+    await seedLargeFile(node.container, appName, 'small/payload.bin', 1);
+
+    const accepted = await post('/apps/compressobject', {
+      appname: appName, component: appName, source: 'small', destination: 'small.tar.gz',
+    });
+    expect([200, 202]).to.include(accepted.status);
+    const jobId = accepted.data?.data?.jobId;
+    if (jobId) await waitForOperation(node, jobId, auth.zelidauth, { timeout: 120000 });
+
+    await waitFor(async () => (await fileOpContainerIds()).length === 0, {
+      timeout: 60000, interval: 1000, label: 'no file-operation container left behind',
+    });
   });
 
   // The negative case. Adoption must not turn boot recovery into a no-op that
