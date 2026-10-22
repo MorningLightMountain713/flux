@@ -61,6 +61,8 @@ const { networkHealthMonitor } = require('./utils/NetworkHealthMonitor');
 const verifyPool = require('./utils/verifyPool');
 const { Privilege, authOf } = require('./utils/privileges');
 const clockDrift = require('./clockDrift');
+// RELEASED-FLEET COMPATIBILITY: delete with appMessaging/releasedFleetSigterm.
+const releasedFleetSigterm = require('./appMessaging/releasedFleetSigterm');
 
 // Upper bound of the random delay before each reconciler dial. Reciprocal
 // duties make simultaneous crossing dials the common case; the jitter breaks
@@ -1178,6 +1180,13 @@ register('fluxappinstallingerror', (msg, peer) => handleAppInstallingErrorMessag
 register('fluxlimitcounterrecord', (msg) => limitCounter.acceptRecord(msg.data), ROUTE.GOSSIP, INTENT.ANNOUNCE, STORED);
 register('fluxmasterlease', (msg, peer, announcer) => handleMasterleaseMessage(msg, peer.ip, peer.port, announcer), ROUTE.GOSSIP, INTENT.ANNOUNCE, STORED);
 register('fluxnodedown', (msg, peer) => handleNodeDownMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE, STORED);
+// RELEASED-FLEET COMPATIBILITY: delete with appMessaging/releasedFleetSigterm.
+// Passed on, never acted on: it carries a stop to the released nodes beyond
+// this one, and only within the age a released node accepts.
+register('fluxnodesigterm', (msg, peer) => {
+  if (!fluxCommunicationUtils.verifyTimestampInFluxBroadcast(msg, Date.now(), releasedFleetSigterm.MAX_AGE_MS)) return;
+  announceToPeers(msg, peer.key);
+}, ROUTE.GOSSIP, INTENT.ANNOUNCE, IN_PROCESS);
 register('fluxnodealive', (msg, peer, announcer) => handleNodeAliveMessage(msg, peer.ip, peer.port, announcer), ROUTE.GOSSIP, INTENT.ANNOUNCE, STORED);
 register('fluxgrantgeneration', (msg, peer) => handleGrantGenerationMessage(msg, peer.ip, peer.port), ROUTE.GOSSIP, INTENT.ANNOUNCE, STORED_AND_LISTED);
 register('fluxappcontentmanifest', (msg) => contentSlotService.handleIncomingManifest(msg), ROUTE.GOSSIP, INTENT.ANNOUNCE, STORED_AND_LISTED);

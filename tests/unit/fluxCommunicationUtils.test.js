@@ -582,6 +582,48 @@ describe('fluxCommunicationUtils tests', () => {
     });
   });
 
+  // RELEASED-FLEET COMPATIBILITY: delete with appMessaging/releasedFleetSigterm.
+  // A v9 node passes fluxnodesigterm on, so it judges the named address as a
+  // released node does: a copy a released node would refuse is never relayed.
+  describe('verifyFluxBroadcast fluxnodesigterm tests', () => {
+    const privKey = '5JTeg79dTLzzHXoJPALMWuoGDM8QmLj4n5f6MeFjx8dzsirvjAh';
+    const pubKey = '0474eb4690689bb408139249eda7f361b7881c4254ccbe303d3b4d58c2b48897d0f070b44944941998551f9ea0e1befd96f13adf171c07c885e62d0c2af56d3dab';
+    let networkStateStub;
+
+    const signed = async (ip) => {
+      const data = {
+        type: 'fluxnodesigterm', version: 1, ip, broadcastedAt: Date.now(),
+      };
+      const timestamp = Date.now();
+      const signature = await fluxCommunicationMessagesSender.getFluxMessageSignature(1 + JSON.stringify(data) + timestamp, privKey);
+      return {
+        version: 1, pubKey, timestamp, data, signature,
+      };
+    };
+
+    beforeEach(() => {
+      networkStateStub = sinon.stub(networkStateService, 'getFluxnodeBySocketAddress');
+    });
+
+    afterEach(() => sinon.restore());
+
+    it('accepts one that names the signer\'s own address', async () => {
+      networkStateStub.withArgs('192.168.1.100:16127').resolves({ ip: '192.168.1.100:16127', tier: 'CUMULUS', pubkey: pubKey });
+
+      const { result } = await fluxCommunicationUtils.verifyFluxBroadcast(await signed('192.168.1.100:16127'));
+
+      expect(result).to.equal(VerifyResult.OK);
+    });
+
+    it('refuses one that names another node\'s address', async () => {
+      networkStateStub.withArgs('192.168.1.200:16127').resolves({ ip: '192.168.1.200:16127', tier: 'CUMULUS', pubkey: 'anothernodespubkey' });
+
+      const { result } = await fluxCommunicationUtils.verifyFluxBroadcast(await signed('192.168.1.200:16127'));
+
+      expect(result).to.equal(VerifyResult.PUBKEY_MISMATCH);
+    });
+  });
+
   describe('verifyFluxBroadcast fluxappremoved tests', () => {
     const privKey = '5JTeg79dTLzzHXoJPALMWuoGDM8QmLj4n5f6MeFjx8dzsirvjAh';
     const pubKey = '0474eb4690689bb408139249eda7f361b7881c4254ccbe303d3b4d58c2b48897d0f070b44944941998551f9ea0e1befd96f13adf171c07c885e62d0c2af56d3dab';

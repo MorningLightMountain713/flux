@@ -19,6 +19,7 @@ const { AppSyncOrchestrator } = require('./appMessaging/appSyncOrchestrator');
 const { peerManager } = require('./utils/FluxPeerManager');
 const { CLOSE_CODES } = require('./utils/FluxPeerSocket');
 const verifyPool = require('./utils/verifyPool');
+const releasedFleetSigterm = require('./appMessaging/releasedFleetSigterm');
 
 /**
  * The node process once its API is listening: what apiServer starts after the
@@ -210,9 +211,9 @@ async function isSystemShuttingDown() {
  * The stop. Whether the machine is going down or only this process, the
  * connections this node holds are closed with the reason, so the jurors
  * holding them read the drop as announced and wait the grace for it before
- * they look. Nothing is broadcast: only those jurors need to know, and if
- * this node is not back in time their certificate tells the fleet, carrying
- * the drop it observed. A restart leaves the app containers running. A
+ * they look. Only those jurors need to know, and if this node is not back in
+ * time their certificate tells the fleet, carrying the drop it observed; the
+ * one broadcast is for released nodes (releasedFleetSigterm). A restart leaves the app containers running. A
  * shutdown stops them: on Arcane the shutdown daemon does, by the plan FluxOS
  * handed it; elsewhere this does.
  */
@@ -226,6 +227,10 @@ async function handleSigterm() {
   const code = systemShuttingDown ? CLOSE_CODES.SHUTTING_DOWN : CLOSE_CODES.RESTARTING;
 
   await AppSyncOrchestrator.writeShutdownReason(systemShuttingDown ? 'sigterm' : 'restart');
+
+  // RELEASED-FLEET COMPATIBILITY: delete with appMessaging/releasedFleetSigterm.
+  // Sent while the connections are still held, before they close.
+  if (systemShuttingDown) await releasedFleetSigterm.announceShutdown();
 
   try {
     const closed = await peerManager.closeAllForStop(code, { flushMs: STOP_FLUSH_MS });

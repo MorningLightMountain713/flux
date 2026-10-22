@@ -2312,6 +2312,40 @@ describe('the dispatcher hands each type to the handler the route table declares
     });
   });
 
+  // RELEASED-FLEET COMPATIBILITY: delete with appMessaging/releasedFleetSigterm.
+  describe('fluxnodesigterm, carried for released nodes', () => {
+    let relayed;
+    beforeEach(() => {
+      relayed = sinon.stub(peerManager, 'broadcastHash');
+    });
+    const sigterm = (broadcastedAt) => signed({
+      type: 'fluxnodesigterm', version: 1, ip: '50.50.50.50:16127', broadcastedAt,
+    });
+
+    it('is passed on to every other peer, once, and acted on not at all', async () => {
+      const store = sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: true });
+      const message = sigterm(Date.now() + 1);
+      const socket = makeSocket();
+
+      await peerManager.messageDispatcher(message, socket);
+      await peerManager.messageDispatcher({ ...message }, { ...makeSocket(), key: '51.51.51.51:16127', ip: '51.51.51.51' });
+      await settle();
+
+      sinon.assert.calledOnce(relayed);
+      expect(relayed.firstCall.args[1], 'not back to the peer it came from').to.equal(socket.key);
+      sinon.assert.notCalled(store);
+    });
+
+    it('is not passed on once older than a released node accepts', async () => {
+      fluxCommunicationUtils.verifyTimestampInFluxBroadcast.withArgs(sinon.match.any, sinon.match.any, 240_000).returns(false);
+
+      await peerManager.messageDispatcher(sigterm(Date.now() + 2), makeSocket());
+      await settle();
+
+      sinon.assert.notCalled(relayed);
+    });
+  });
+
   // A question carries nothing but itself, so two peers asking it are byte-identical,
   // and each of them is owed the answer.
   it('answers the same question from two peers', async () => {

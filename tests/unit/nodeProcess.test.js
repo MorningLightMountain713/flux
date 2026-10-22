@@ -24,6 +24,7 @@ describe('nodeProcess', () => {
       appDockerKill: sinon.stub().resolves(),
       writeShutdownReason: sinon.stub().resolves(),
       closeAllForStop: sinon.stub().resolves(0),
+      announceShutdown: sinon.stub().resolves(true),
       verifyPoolStop: sinon.stub(),
       startFluxFunctions: sinon.stub(),
       startFlushTimer: sinon.stub(),
@@ -52,6 +53,7 @@ describe('nodeProcess', () => {
       './utils/FluxPeerManager': { peerManager: { closeAllForStop: stubs.closeAllForStop } },
       './utils/FluxPeerSocket': { CLOSE_CODES },
       './utils/verifyPool': { stop: stubs.verifyPoolStop },
+      './appMessaging/releasedFleetSigterm': { announceShutdown: stubs.announceShutdown },
     });
   });
 
@@ -155,9 +157,22 @@ describe('nodeProcess', () => {
       sinon.assert.calledOnceWithExactly(exit, 0);
     });
 
+    // RELEASED-FLEET COMPATIBILITY: delete with appMessaging/releasedFleetSigterm.
+    it('on a restart, tells released nodes nothing: the node is coming straight back', async () => {
+      await nodeProcess.handleSigterm();
+      sinon.assert.notCalled(stubs.announceShutdown);
+    });
+
     describe('when the machine is going down', () => {
       beforeEach(() => {
         stubs.existsSync.withArgs('/run/systemd/shutdown/scheduled').returns(true);
+      });
+
+      // RELEASED-FLEET COMPATIBILITY: delete with appMessaging/releasedFleetSigterm.
+      it('tells released nodes while its connections are still held', async () => {
+        await nodeProcess.handleSigterm();
+        sinon.assert.calledOnce(stubs.announceShutdown);
+        expect(stubs.announceShutdown.calledBefore(stubs.closeAllForStop)).to.equal(true);
       });
 
       it('announces SHUTTING_DOWN and stops every Flux app container, and nothing else', async () => {
