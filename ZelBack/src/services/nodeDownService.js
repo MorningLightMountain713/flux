@@ -632,6 +632,9 @@ function onPeerRemoved({
   ip, port, closeCode, stopStatement = null,
 }) {
   if (!reconciler) return;
+  // This node is stopping and these are its own closes: nothing about the
+  // peers it watches.
+  if (transport.peerManager.stopping) return;
   reconciler.schedule('peer-removed');
   // every peer gone again while the network is still not back: the grace
   // runs again from this drop, as the jurors' does

@@ -1375,6 +1375,21 @@ describe('nodeDownService — the drop carries its reason, and the probe is an e
     service.stop();
   });
 
+  it('a stopping node\'s own closes say nothing about the nodes it watches', async () => {
+    const harness = makeHarness();
+    withDuty(harness);
+    const { service, transport, stubs } = harness;
+    service.start(transport);
+    await tick();
+    transport.peerManager.stopping = true;
+    drop(transport, CLOSE_CODES.RESTARTING, null);
+    drop(transport, 1006);
+    await tick();
+    sinon.assert.notCalled(stubs.verifyStop);
+    expect(transport.openEphemeralConnection.callCount).to.equal(0);
+    service.stop();
+  });
+
   it('an unannounced drop is still looked at now', async () => {
     const harness = makeHarness();
     withDuty(harness);
