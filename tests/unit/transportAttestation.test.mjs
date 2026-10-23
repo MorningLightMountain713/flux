@@ -37,9 +37,15 @@ const b64 = (s) => new Uint8Array(Buffer.from(s, 'base64'));
 // with itself — and this is what makes the agreement real rather than assumed.
 describe('transport pubkey attestation — the stub produces what flux-spec verifies', () => {
   let verifyTransportPubkeyAttestation;
+  let Chain;
 
   before(async () => {
-    ({ verifyTransportPubkeyAttestation } = await specLibs.getSpec());
+    ({ verifyTransportPubkeyAttestation, Chain } = await specLibs.getSpec());
+  });
+
+  it('the harness chain holds the default attestation key the stub signs with', () => {
+    expect(Buffer.from(Chain.HARNESS.attestationKey('default')).toString('base64'))
+      .to.equal(benchCrypto.attestationPubkeyB64);
   });
 
   it('verifies an attestation the benchmark daemon stub just signed', async () => {
@@ -54,7 +60,7 @@ describe('transport pubkey attestation — the stub produces what flux-spec veri
       publicKey: b64(served.publicKey),
       timestamp: served.timestamp,
       attestation: b64(served.attestation),
-      attestationPubkey: b64(benchCrypto.attestationPubkeyB64),
+      chain: Chain.HARNESS,
       maxAgeMs: 60_000,
       now: served.timestamp * 1000,
     }, ed25519Verify);
@@ -76,7 +82,7 @@ describe('transport pubkey attestation — the stub produces what flux-spec veri
       publicKey: b64(served.publicKey),
       timestamp: served.timestamp,
       attestation: b64(served.attestation),
-      attestationPubkey: b64(benchCrypto.attestationPubkeyB64),
+      chain: Chain.HARNESS,
       maxAgeMs: 60_000,
       now: served.timestamp * 1000,
     }, ed25519Verify);
@@ -96,7 +102,7 @@ describe('transport pubkey attestation — the stub produces what flux-spec veri
       publicKey: b64(served.publicKey),
       timestamp: served.timestamp,
       attestation: b64(served.attestation),
-      attestationPubkey: b64(benchCrypto.attestationPubkeyB64),
+      chain: Chain.HARNESS,
       maxAgeMs: 1000,
       now: served.timestamp * 1000 + 5000,
     }, ed25519Verify);

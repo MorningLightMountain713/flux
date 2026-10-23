@@ -736,8 +736,9 @@ describe('messageStore tests', () => {
         // check it got that far.
         const [attested] = appEventVerifierStub.verifyAttestation.firstCall.args;
         let signedOver = null;
-        expect(await attested.verifyArcaneAttestation((msg) => { signedOver = msg; return true; }, 'pk'))
-          .to.be.true;
+        expect(await attested.verifyArcaneAttestation(flux.Chain.MAIN, {
+          verify: (signature, message) => { signedOver = Buffer.from(message).toString('utf8'); return true; },
+        })).to.be.true;
         expect(signedOver, 'the attest message is built from the envelope').to.be.a('string').and.not.equal('');
       });
 
