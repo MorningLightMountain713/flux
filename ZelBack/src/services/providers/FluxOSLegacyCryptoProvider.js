@@ -25,7 +25,7 @@ async function create(appName, owner) {
       const inputData = JSON.stringify({
         fluxID: this.#owner,
         appName: this.#appName,
-        message: plaintext.toString('base64'),
+        message: Buffer.from(plaintext).toString('base64'),
         blockHeight: 0,
       });
 
