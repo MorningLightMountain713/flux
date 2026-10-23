@@ -28,12 +28,12 @@ const QUARANTINE_TTL_MS = 2 * 60 * 60 * 1000;
  * @param {{observed: object, asserted: object}} ingress - as ingressCapture.captureIngress reads it
  */
 async function build(hash, { observed, asserted }) {
-  const { buildIngressAttestMessage, sealIngressNote } = await getSpecBackend();
+  const { buildIngressAttestMessage, sealIngressNote, X25519SealProvider } = await getSpecBackend();
 
   if (!observed.ip) return null;
 
   const { kid, publicKey } = ingressEncryptionKey.current();
-  const sealed = sealIngressNote({ observed, asserted }, publicKey, { kid });
+  const sealed = await sealIngressNote({ observed, asserted }, publicKey, { kid, provider: new X25519SealProvider() });
 
   const observedAt = Date.now();
   const node = await fluxNetworkHelper.getFluxNodePublicKey();

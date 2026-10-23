@@ -52,7 +52,8 @@ describe('playgroundAudit tests', () => {
   describe('build', () => {
     it('seals the identifying half as a playground record, which does not open as an ingress note', async () => {
       const backend = await specLibs.getSpecBackend();
-      const { publicKey, privateKey } = backend.generateSealKeypair();
+      const provider = new backend.X25519SealProvider();
+      const { publicKey, privateKey } = await provider.generateKeypair();
       const audit = proxyquire('../../ZelBack/src/services/appPlayground/playgroundAudit', {
         config: asConfig({ fluxapps: { playgroundAuditRetentionMs: 1 } }),
         '../../lib/log': { error: sinon.stub(), info: sinon.stub(), warn: sinon.stub() },
@@ -78,10 +79,12 @@ describe('playgroundAudit tests', () => {
       const doc = await audit.build(session);
 
       const opened = JSON.parse(Buffer.from(
-        backend.unseal(doc.sealed, privateKey, { purpose: backend.SEAL_PURPOSE.PLAYGROUND_AUDIT }),
+        await backend.unseal(doc.sealed, privateKey, { purpose: backend.SEAL_PURPOSE.PLAYGROUND_AUDIT, provider }),
       ).toString('utf8'));
       expect(opened.fluxId).to.equal('1FluxIdOfTheCaller');
-      expect(() => backend.openIngressNote(doc.sealed, privateKey)).to.throw();
+      let asNote;
+      try { await backend.openIngressNote(doc.sealed, privateKey, { provider }); } catch (e) { asNote = e; }
+      expect(asNote, 'a playground record must not open as an ingress note').to.be.an('error');
     });
   });
 

@@ -43,7 +43,7 @@ async function loadSpecLibrary() {
   const flux = cached ?? await load();
   const {
     InsecureTestCryptoProvider, InsecureLegacyTestCryptoProvider,
-  } = await moduleLoader.importModule('@runonflux/flux-spec-backend/testing');
+  } = await moduleLoader.importModule('@runonflux/flux-spec-crypto/testing');
   // Two providers, because v8 and v9 store a sealed spec differently and
   // production has two for the same reason. v9 keeps the whole `encrypted`
   // object; v8's wire form is one opaque `enterprise` string, so a nonce and tag

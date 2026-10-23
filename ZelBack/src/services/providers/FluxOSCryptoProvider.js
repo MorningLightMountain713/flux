@@ -13,11 +13,11 @@ const { getSpecBackend } = require('../utils/specLibs');
  * omission indistinguishable from a spec that legitimately has none. v8 is the
  * one that legitimately has none, and v8 uses a different provider entirely.
  *
- * @param {Buffer} aad
+ * @param {Uint8Array} aad
  * @param {string} operation - named in the error, so the caller is the one blamed
  */
 function assertAad(aad, operation) {
-  if (!Buffer.isBuffer(aad) || aad.length === 0) {
+  if (!(aad instanceof Uint8Array) || aad.length === 0) {
     throw new Error(
       `FluxOSCryptoProvider.${operation}: a v9 container is sealed under an AAD; got ${
         aad === undefined ? 'nothing' : JSON.stringify(String(aad))}`,
@@ -56,8 +56,8 @@ async function build(keyFields) {
       assertAad(aad, 'encrypt');
       const params = {
         ...this.#keyFields,
-        message: plaintext.toString('base64'),
-        aad: aad.toString('base64'),
+        message: Buffer.from(plaintext).toString('base64'),
+        aad: Buffer.from(aad).toString('base64'),
       };
 
       const result = await benchmarkService.seal(params);
@@ -87,7 +87,7 @@ async function build(keyFields) {
         ciphertext: encrypted.ciphertext,
         nonce: encrypted.nonce,
         tag: encrypted.tag,
-        aad: aad.toString('base64'),
+        aad: Buffer.from(aad).toString('base64'),
       };
 
       const result = await benchmarkService.unseal(params);
