@@ -188,6 +188,17 @@ describe('FluxOSLegacyCryptoProvider', () => {
       });
     });
 
+    it('seals a plain Uint8Array plaintext as it seals a Buffer', async () => {
+      benchmarkServiceStub.encryptMessage.resolves({
+        status: 'success',
+        data: { status: 'ok', message: 'encrypted-blob-base64' },
+      });
+      const provider = await fluxOSLegacyCryptoProvider.create('TestApp', '1abc');
+      await provider.encrypt(new TextEncoder().encode('hello'));
+      const input = JSON.parse(benchmarkServiceStub.encryptMessage.firstCall.args[0]);
+      expect(input.message).to.equal(Buffer.from('hello').toString('base64'));
+    });
+
     it('throws when the RPC call itself fails', async () => {
       benchmarkServiceStub.encryptMessage.resolves({ status: 'error' });
       const provider = await fluxOSLegacyCryptoProvider.create('A', 'o');

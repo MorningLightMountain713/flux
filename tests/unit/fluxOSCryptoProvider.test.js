@@ -97,6 +97,22 @@ describe('FluxOSCryptoProvider', () => {
       });
     });
 
+    // A CryptoProvider's bytes are Uint8Array (flux-spec's assertBindsAad passes
+    // plain ones); a Buffer is one, but not every Uint8Array is a Buffer.
+    it('seals a plain Uint8Array plaintext and aad as it seals Buffers', async () => {
+      benchmarkServiceStub.seal.resolves({
+        status: 'success',
+        data: {
+          status: 'ok', algorithm: 'AES-256-GCM', ciphertext: 'Y2lwaGVy', nonce: 'bm9uY2U=', tag: 'dGFn',
+        },
+      });
+      const provider = await fluxOSCryptoProvider.create('TestApp', '1abc');
+      await provider.encrypt(new TextEncoder().encode('hello'), new TextEncoder().encode('metadata'));
+      const params = benchmarkServiceStub.seal.firstCall.args[0];
+      expect(params.message).to.equal(Buffer.from('hello').toString('base64'));
+      expect(params.aad).to.equal(Buffer.from('metadata').toString('base64'));
+    });
+
     // The AAD authenticates a v9 container's cleartext half — its name, owner,
     // ttl, placement and the resource summary other nodes schedule on without
     // decrypting. Forwarding it only `if (aad)` made a caller's omission look
@@ -180,6 +196,19 @@ describe('FluxOSCryptoProvider', () => {
       expect(params.nonce).to.equal('bm9uY2U=');
       expect(params.tag).to.equal('dGFn');
       expect(params.aad).to.equal(Buffer.from('metadata').toString('base64'));
+    });
+
+    it('unseals under a plain Uint8Array aad as under a Buffer', async () => {
+      benchmarkServiceStub.unseal.resolves({
+        status: 'success',
+        data: { status: 'ok', message: Buffer.from('hello').toString('base64') },
+      });
+      const provider = await fluxOSCryptoProvider.create('TestApp', '1abc');
+      const encrypted = {
+        algorithm: 'AES-256-GCM', ciphertext: 'Y2lwaGVy', nonce: 'bm9uY2U=', tag: 'dGFn',
+      };
+      await provider.decrypt(encrypted, new TextEncoder().encode('metadata'));
+      expect(benchmarkServiceStub.unseal.firstCall.args[0].aad).to.equal(Buffer.from('metadata').toString('base64'));
     });
 
     it('refuses to unseal without an aad', async () => {
