@@ -1033,16 +1033,6 @@ module.exports = {
     restartAlwaysOwners: [], // FluxIDs whose apps always restart; nobody by default
     verifyPoolSize: null, // null = cpus-1, which is what production runs
   },
-  // Attestation key for an arcane app, read out-of-band from a secure-backend
-  // build carrying the `app` purpose (GET /v2/attestationPublicKey?purpose=app)
-  // and verified on cabbage 2026-08-27: distinct from both the network-wide
-  // attestation key and the mesh key, and a signature made under one does not
-  // verify under another. Shipped rather than left to a literal in the reader -
-  // it is a verification identity, and a value nobody can see is a value nobody
-  // can rotate.
-  arcane: {
-    appAttestationPubkey: 'ERXxzVN8fg4sCjhIPp37XRu1ealmD4TA6tU7A3o6tQM=',
-  },
   // The x25519 key ingress nodes seal attestations to. Rotation is reactive: on
   // a suspected compromise, generate a new keypair with a new kid, ship the
   // public key here, and records stamped with the old kid stay readable through

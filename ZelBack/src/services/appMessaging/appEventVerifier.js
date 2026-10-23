@@ -4,7 +4,7 @@ const config = require('config');
 const { getSpecBackend } = require('../utils/specLibs');
 const signatureVerifier = require('../signatureVerifier');
 const benchmarkService = require('../benchmarkService');
-const { ARCANE_APP_ATTESTATION_PUBKEY, verifyAttestationSignature } = require('../utils/arcaneAttestation');
+const { verifyEd25519OpenSsl } = require('../utils/arcaneAttestation');
 const { getChainTeamSupportAddressUpdates } = require('../utils/chainUtilities');
 const { isMarketplaceApp } = require('../utils/marketplaceApps');
 const { ownerChangeRaceSigner } = require('./ownerChangeRaces');
@@ -191,23 +191,23 @@ async function requestAttestation(contentHash, specBlob) {
 }
 
 /**
- * Verify an event's arcane attestation against the network attestation key.
+ * Verify an event's arcane attestation against this chain's `app` attestation key.
  *
- * Local-only (hardcoded public key + node:crypto), so any node — Arcane or not —
- * can verify without a secure backend.
+ * Local-only (the key flux-spec holds for the chain, verified through OpenSSL),
+ * so any node — Arcane or not — can verify without a secure backend.
  *
  * Async because the library's verifyArcaneAttestation is, and the caller MUST
  * await it. The result is a Promise and a Promise is truthy, so an unawaited
  * `if (!verifyAttestation(event))` is a gate that never fires — on the check
  * that decides whether an encrypted message is stored and relayed at all.
- * verifyAttestationSignature itself is still synchronous; awaiting a boolean
- * is that boolean.
+ * verifyEd25519OpenSsl itself is synchronous; awaiting a boolean is that
+ * boolean.
  *
  * @param {object} appEvent - SignedAppEvent or ConfirmedAppEvent
  * @returns {Promise<boolean>}
  */
 async function verifyAttestation(appEvent) {
-  return appEvent.verifyArcaneAttestation(verifyAttestationSignature, ARCANE_APP_ATTESTATION_PUBKEY);
+  return appEvent.verifyArcaneAttestation(nodeChain(), { verify: verifyEd25519OpenSsl });
 }
 
 async function computeOutboundHash({

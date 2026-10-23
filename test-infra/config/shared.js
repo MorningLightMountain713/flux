@@ -123,17 +123,6 @@ module.exports = {
   // path, so this default is what default-base runs resolve; non-default bases
   // get the base-derived override from test-env infraOverride.
   fluxDrive: { blobApiUrl: 'http://198.18.0.8:16140' },
-  // The network arcane-attestation pubkeys the node verifies against. Both
-  // override production constants with the benchmark stub's deterministic test
-  // keys (benchCrypto), so the gates stay real and exercised: appAttestationPubkey
-  // for encrypted-app attestations (utils/arcaneAttestation.js, the stub's
-  // purpose:app signer),
-  // meshAttestationPubkey for mesh membership vouchers (appMesh/meshVoucher.js,
-  // the stub's purpose:mesh signer).
-  arcane: {
-    appAttestationPubkey: 'OflaGdLeD2AiUp0OA/riCDF7H6Rgw6cNted3LVtaXqk=',
-    meshAttestationPubkey: 'GfsZ2SxMPGa4Tbwgku9KzOuHT8qfQA3uF16D3tYvYtg=',
-  },
   fluxapps: {
     storageHost: 'storage.runonflux.io',
     minOutgoing: 4,

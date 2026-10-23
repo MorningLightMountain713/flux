@@ -86,7 +86,7 @@ function announcedMtu(value) {
  *     announced heights are untrusted (the voucher covers only the hash)
  *   hostingOutpoints: Set<string>|null, null when placement is unrestricted
  *   refused: Set<string>,
- *   meshPublicKey: string|undefined, test override for the pinned key
+ *   meshPublicKey: Uint8Array|undefined, test override for the chain's mesh key
  *   parseBundle: typeof parseAuthorityBundle|undefined, test seam
  * }} ctx
  * @returns {Promise<{members: Array<{outpoint: string, nodeId: string,

@@ -19,7 +19,7 @@ describe('meshMembership', () => {
   const TIP = 2_843_890;
 
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
-  const publicKeyB64 = publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64');
+  const meshKey = new Uint8Array(publicKey.export({ format: 'der', type: 'spki' }).subarray(-32));
   const signVoucher = (fields) => crypto.sign(
     null,
     Buffer.from(meshVoucherModule.VOUCHER_DOMAIN + meshVoucherModule.buildVoucherMessage(fields)),
@@ -57,7 +57,7 @@ describe('meshMembership', () => {
     anchorHeights: new Map([[ANCHOR_HASH, TIP - 5]]),
     hostingOutpoints: null,
     refused: new Set(),
-    meshPublicKey: publicKeyB64,
+    meshPublicKey: meshKey,
     parseBundle: async () => [pinnedCert],
     ...overrides,
   });
