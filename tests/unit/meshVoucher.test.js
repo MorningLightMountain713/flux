@@ -2,9 +2,11 @@
 
 const { expect } = require('chai');
 const sinon = require('sinon');
+const proxyquire = require('proxyquire');
 const crypto = require('node:crypto');
 
 const meshVoucher = require('../../ZelBack/src/services/appMesh/meshVoucher');
+const { loadSpecLibrary } = require('../../ZelBack/src/services/utils/specLibrary');
 const benchmarkService = require('../../ZelBack/src/services/benchmarkService');
 const daemonServiceBlockchainRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceBlockchainRpcs');
 
@@ -44,7 +46,7 @@ describe('meshVoucher', () => {
     // A locally minted keypair standing in for the mesh-purpose key: the
     // signer prepends the domain, so the test signs domain + message.
     const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
-    const publicKeyB64 = publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64');
+    const meshKey = new Uint8Array(publicKey.export({ format: 'der', type: 'spki' }).subarray(-32));
     const signed = crypto.sign(
       null,
       Buffer.from(meshVoucher.VOUCHER_DOMAIN + GOLDEN_MESSAGE),
@@ -52,25 +54,38 @@ describe('meshVoucher', () => {
     ).toString('base64');
 
     it('accepts a signature over the domain-prefixed message', () => {
-      expect(meshVoucher.verifyVoucher(signed, FIELDS, publicKeyB64)).to.equal(true);
+      expect(meshVoucher.verifyVoucher(signed, FIELDS, meshKey)).to.equal(true);
     });
 
     it('rejects when any field differs from what was signed', () => {
-      expect(meshVoucher.verifyVoucher(signed, { ...FIELDS, appUuid: FIELDS.appUuid.replace('5', '6') }, publicKeyB64)).to.equal(false);
-      expect(meshVoucher.verifyVoucher(signed, { ...FIELDS, outpoint: FIELDS.outpoint.replace(':0', ':1') }, publicKeyB64)).to.equal(false);
-      expect(meshVoucher.verifyVoucher(signed, { ...FIELDS, blockHash: FIELDS.blockHash.replace('7', '8') }, publicKeyB64)).to.equal(false);
-      expect(meshVoucher.verifyVoucher(signed, { ...FIELDS, meshCa: `${MESH_CA} ` }, publicKeyB64)).to.equal(false);
+      expect(meshVoucher.verifyVoucher(signed, { ...FIELDS, appUuid: FIELDS.appUuid.replace('5', '6') }, meshKey)).to.equal(false);
+      expect(meshVoucher.verifyVoucher(signed, { ...FIELDS, outpoint: FIELDS.outpoint.replace(':0', ':1') }, meshKey)).to.equal(false);
+      expect(meshVoucher.verifyVoucher(signed, { ...FIELDS, blockHash: FIELDS.blockHash.replace('7', '8') }, meshKey)).to.equal(false);
+      expect(meshVoucher.verifyVoucher(signed, { ...FIELDS, meshCa: `${MESH_CA} ` }, meshKey)).to.equal(false);
     });
 
     it('rejects a signature under a different key', () => {
       const other = crypto.generateKeyPairSync('ed25519');
-      const otherB64 = other.publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64');
-      expect(meshVoucher.verifyVoucher(signed, FIELDS, otherB64)).to.equal(false);
+      const otherKey = new Uint8Array(other.publicKey.export({ format: 'der', type: 'spki' }).subarray(-32));
+      expect(meshVoucher.verifyVoucher(signed, FIELDS, otherKey)).to.equal(false);
+    });
+
+    it('verifies against this chain\'s mesh key when none is given', async () => {
+      const flux = await loadSpecLibrary();
+      const chain = new flux.Chain({
+        name: 'mesh-test', powBlockSeconds: 120, ponBlockSeconds: 30, ponActivationHeight: 2,
+        attestationKeys: { mesh: Buffer.from(meshKey).toString('base64') },
+      });
+      const onChain = proxyquire('../../ZelBack/src/services/appMesh/meshVoucher', {
+        '../utils/nodeChain': { nodeChain: () => chain },
+      });
+      expect(onChain.verifyVoucher(signed, FIELDS)).to.equal(true);
+      expect(onChain.verifyVoucher(signed, { ...FIELDS, blockHash: FIELDS.blockHash.replace('7', '8') })).to.equal(false);
     });
 
     it('treats malformed fields or garbage signatures as invalid, never throws', () => {
-      expect(meshVoucher.verifyVoucher(signed, { ...FIELDS, appUuid: 'nope' }, publicKeyB64)).to.equal(false);
-      expect(meshVoucher.verifyVoucher('not-base64-!!!', FIELDS, publicKeyB64)).to.equal(false);
+      expect(meshVoucher.verifyVoucher(signed, { ...FIELDS, appUuid: 'nope' }, meshKey)).to.equal(false);
+      expect(meshVoucher.verifyVoucher('not-base64-!!!', FIELDS, meshKey)).to.equal(false);
     });
   });
 

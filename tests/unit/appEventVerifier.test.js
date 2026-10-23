@@ -11,6 +11,8 @@ const fluxSpecCjs = require('@runonflux/flux-spec-cjs');
 chai.use(chaiAsPromised);
 const { expect } = chai;
 
+const { nodeChain } = require('../../ZelBack/src/services/utils/nodeChain');
+
 describe('appEventVerifier', () => {
   let specLibsStub;
   let signatureVerifierStub;
@@ -111,8 +113,7 @@ describe('appEventVerifier', () => {
     };
 
     arcaneAttestationStub = {
-      ARCANE_APP_ATTESTATION_PUBKEY: 'test-app-attestation-pubkey',
-      verifyAttestationSignature: sinon.stub(),
+      verifyEd25519OpenSsl: sinon.stub(),
     };
 
     signatureVerifierStub = {
@@ -611,15 +612,14 @@ describe('appEventVerifier', () => {
   });
 
   describe('verifyAttestation', () => {
-    it('delegates to the event with the local verify primitive and the network key', async () => {
+    it('delegates to the event with this node\'s chain and its OpenSSL verifier', async () => {
       const appEvent = { verifyArcaneAttestation: sinon.stub().resolves(true) };
 
       const result = await appEventVerifier.verifyAttestation(appEvent);
 
       expect(result).to.be.true;
       expect(appEvent.verifyArcaneAttestation.calledOnceWithExactly(
-        arcaneAttestationStub.verifyAttestationSignature,
-        'test-app-attestation-pubkey',
+        nodeChain(), { verify: arcaneAttestationStub.verifyEd25519OpenSsl },
       )).to.be.true;
     });
 

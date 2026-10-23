@@ -21,21 +21,10 @@
 // strings. The exact bytes are pinned by golden vectors in
 // tests/unit/meshVoucher.test.js; minter and every verifier must agree
 // byte-for-byte forever.
-const config = require('config');
-
 const benchmarkService = require('../benchmarkService');
-const { verifyAttestationSignature } = require('../utils/arcaneAttestation');
+const { verifyEd25519OpenSsl } = require('../utils/arcaneAttestation');
+const { nodeChain } = require('../utils/nodeChain');
 const daemonServiceBlockchainRpcs = require('../daemonService/daemonServiceBlockchainRpcs');
-
-/**
- * Network mesh-purpose attestation public key (base64, raw 32-byte Ed25519) —
- * the `purpose=mesh` key of the benchmark channel's attestation surface,
- * distinct from the default attestation key. Config can point a controlled
- * environment at a different keypair; production uses the constant.
- */
-const DEFAULT_MESH_ATTESTATION_PUBKEY = 'B15YMLgv8ozC3cWXPmNySiu0DuEjMVzX5qh3UYspfXE=';
-const MESH_ATTESTATION_PUBKEY = (config.get('arcane') && config.get('arcane').meshAttestationPubkey)
-  ?? DEFAULT_MESH_ATTESTATION_PUBKEY;
 
 // Public domain separator; the signer prepends it server-side, verifiers
 // rebuild it. Only the signing key is secret.
@@ -126,7 +115,7 @@ async function mintVoucher(fields) {
 }
 
 /**
- * Verify a peer's voucher against the pinned mesh-purpose key. Malformed
+ * Verify a peer's voucher against this chain's `mesh` attestation key. Malformed
  * input verifies as false rather than throwing — an unverifiable voucher is
  * simply invalid.
  *
@@ -135,21 +124,22 @@ async function mintVoucher(fields) {
  *   rebuilt from the verifier's own view: the broadcast's meshCa, the
  *   verifier's row uuid for the app, the member's outpoint, the broadcast's
  *   anchor hash
- * @param {string} [publicKeyB64] the mesh-purpose key; overridable for tests
+ * @param {Uint8Array} [publicKey] the mesh-purpose key; the chain's unless given
  * @returns {boolean}
  */
-function verifyVoucher(signatureB64, fields, publicKeyB64 = MESH_ATTESTATION_PUBKEY) {
+function verifyVoucher(signatureB64, fields, publicKey = nodeChain().attestationKey('mesh')) {
   let message;
   try {
     message = buildVoucherMessage(fields);
   } catch (error) {
     return false;
   }
-  return verifyAttestationSignature(VOUCHER_DOMAIN + message, publicKeyB64, signatureB64);
+  return verifyEd25519OpenSsl(
+    Buffer.from(String(signatureB64), 'base64'), Buffer.from(VOUCHER_DOMAIN + message), publicKey,
+  );
 }
 
 module.exports = {
-  MESH_ATTESTATION_PUBKEY,
   VOUCHER_DOMAIN,
   buildVoucherMessage,
   fetchVoucherAnchor,
