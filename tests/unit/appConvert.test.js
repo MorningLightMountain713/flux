@@ -8,7 +8,7 @@ const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/fluxCommunicationMessagesSender');
 const transportCryptoProvider = require('../../ZelBack/src/services/providers/FluxOSTransportProvider');
 const {
-  loadSpecLibrary, V8_SUBMISSION, v8Spec, v9Spec, sealedV8Spec, registeredSpec,
+  loadSpecLibrary, V8_SUBMISSION, v8Spec, v9Spec, sealedV8Spec, registeredSpec, testOwner, ownerSignedViewer,
 } = require('./fixtures/fluxSpec');
 const { stubRegistry } = require('./fixtures/appRecords');
 const moduleLoader = require('../../ZelBack/src/lib/moduleLoader');
@@ -62,11 +62,15 @@ describe('appConvert (registryManager) tests', () => {
   }
 
   /** A frontend's ephemeral X25519 keypair, and the open half of the channel. */
-  async function frontendRecipient() {
+  /**
+   * The owner's frontend: an ephemeral HPKE key, signed by `owner` for the app,
+   * and the means to open what was sealed to it.
+   */
+  async function frontendRecipient(owner, appName = 'convertme') {
     const keyPair = await suite.kem.generateKeyPair();
-    const publicKey = Buffer.from(await suite.kem.serializePublicKey(keyPair.publicKey));
+    const publicKey = new Uint8Array(await suite.kem.serializePublicKey(keyPair.publicKey));
     return {
-      pubkeyBase64: publicKey.toString('base64'),
+      credential: await ownerSignedViewer(owner, appName, publicKey),
       /**
        * Open what convert sealed. Throws unless `info` and `aad` are exactly what
        * production used, which is what makes this an assertion and not a decode.
@@ -201,14 +205,13 @@ describe('appConvert (registryManager) tests', () => {
     // A CLEARTEXT source can still produce a secret draft: v9 has no storage-ref
     // convention, so an F_S_ENV value is fetched and inlined, and it was
     // externalised precisely because it is sensitive.
-    await registryHolds(await v8Spec(withStorageRef({ contacts: ['ops@example.com'] })));
+    const owner = await testOwner();
+    await registryHolds(await v8Spec(withStorageRef({ contacts: ['ops@example.com'], owner: owner.address })));
     storageServes(['SECRET=hunter2']);
     const create = sinon.spy(transportCryptoProvider, 'create');
-    const frontend = await frontendRecipient();
+    const frontend = await frontendRecipient(owner);
 
-    const result = await registryManager.convertApplicationSpecification('convertme', {
-      recipientPubkeyBase64: frontend.pubkeyBase64,
-    });
+    const result = await registryManager.convertApplicationSpecification('convertme', frontend.credential);
 
     expect(result.encrypted).to.equal(true);
     expect(result.complete).to.equal(true);
@@ -219,7 +222,7 @@ describe('appConvert (registryManager) tests', () => {
     // create takes only (name, owner) — both read off the converted blob, so
     // sealing toward `undefined` would pass without this. The recipient pubkey
     // is a seal argument, not a create one.
-    sinon.assert.calledOnceWithExactly(create, 'convertme', V8_SUBMISSION.owner);
+    sinon.assert.calledOnceWithExactly(create, 'convertme', owner.address);
 
     const draft = await frontend.open(result.transportEncrypted, result);
     expect(draft.version).to.equal(9);
@@ -231,12 +234,11 @@ describe('appConvert (registryManager) tests', () => {
     // No contacts on the sealed source, so the draft is incomplete — and an
     // incomplete draft from an encrypted app is still sealed, because it is
     // still the app's cleartext.
-    await registryHolds(await sealedV8Spec({ name: 'convertme' }));
-    const frontend = await frontendRecipient();
+    const owner = await testOwner();
+    await registryHolds(await sealedV8Spec({ name: 'convertme', owner: owner.address }));
+    const frontend = await frontendRecipient(owner);
 
-    const result = await registryManager.convertApplicationSpecification('convertme', {
-      recipientPubkeyBase64: frontend.pubkeyBase64,
-    });
+    const result = await registryManager.convertApplicationSpecification('convertme', frontend.credential);
 
     expect(result.encrypted).to.equal(true);
     expect(result.complete).to.equal(false);
@@ -268,15 +270,34 @@ describe('appConvert (registryManager) tests', () => {
     expect(create.called).to.equal(false);
   });
 
+  it('refuses to seal toward a key the owner did not sign', async () => {
+    const owner = await testOwner();
+    const stranger = await testOwner();
+    await registryHolds(await sealedV8Spec({ name: 'convertme', contacts: ['ops@example.com'], owner: owner.address }));
+    const keyPair = await suite.kem.generateKeyPair();
+    const publicKey = new Uint8Array(await suite.kem.serializePublicKey(keyPair.publicKey));
+    const create = sinon.spy(transportCryptoProvider, 'create');
+
+    for (const credential of [
+      { recipientPubkeyBase64: Buffer.from(publicKey).toString('base64') },
+      await ownerSignedViewer(stranger, 'convertme', publicKey),
+      await ownerSignedViewer(owner, 'otherapp', publicKey),
+    ]) {
+      let threw;
+      try { await registryManager.convertApplicationSpecification('convertme', credential); } catch (e) { threw = e; }
+      expect(threw?.message).to.match(/not signed by the application owner/);
+    }
+    expect(create.called, 'nothing was sealed').to.equal(false);
+  });
+
   it('decrypts an encrypted source before converting, then seals', async () => {
-    await registryHolds(await sealedV8Spec({ name: 'convertme', contacts: ['ops@example.com'] }));
+    const owner = await testOwner();
+    await registryHolds(await sealedV8Spec({ name: 'convertme', contacts: ['ops@example.com'], owner: owner.address }));
     const createProvider = sinon.spy(flux.SealedSpecV8.prototype, 'createProvider');
     const decrypt = sinon.spy(flux.SealedSpecV8.prototype, 'decrypt');
-    const frontend = await frontendRecipient();
+    const frontend = await frontendRecipient(owner);
 
-    const result = await registryManager.convertApplicationSpecification('convertme', {
-      recipientPubkeyBase64: frontend.pubkeyBase64,
-    });
+    const result = await registryManager.convertApplicationSpecification('convertme', frontend.credential);
 
     sinon.assert.calledOnce(createProvider);
     sinon.assert.calledOnce(decrypt);
@@ -290,7 +311,7 @@ describe('appConvert (registryManager) tests', () => {
     const draft = await frontend.open(result.transportEncrypted, result);
     expect(draft.version).to.equal(9);
     expect(draft.components.web.image).to.equal('nginx:latest');
-    expect(draft.owner).to.equal(V8_SUBMISSION.owner);
+    expect(draft.owner).to.equal(owner.address);
   });
 
   it('rejects an app that is already on spec version 9', async () => {

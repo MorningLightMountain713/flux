@@ -555,6 +555,49 @@ async function getAppInstallingLocation(req, res) {
 }
 
 /**
+ * The viewer credential a request carries: the viewer's ephemeral X25519 key and
+ * the app owner's signature over it, with the signed timestamp.
+ *
+ * @param {object} req
+ * @returns {{ recipientPubkeyBase64?: string, viewerSignature?: string, viewerTimestamp?: string }}
+ */
+function viewerCredential(req) {
+  return {
+    recipientPubkeyBase64: req.headers['flux-transport-pubkey'],
+    viewerSignature: req.headers['flux-transport-pubkey-signature'],
+    viewerTimestamp: req.headers['flux-transport-pubkey-timestamp'],
+  };
+}
+
+/**
+ * The key a node may seal an app's cleartext to: the viewer's ephemeral key, as
+ * the app's owner signed it. The owner's session says who is asking; only the
+ * owner's signature over the key says where the answer may go, so a key on the
+ * request that the owner did not sign is refused.
+ *
+ * @param {string} appName
+ * @param {string} owner - the app's registered owner
+ * @param {{ recipientPubkeyBase64: string, viewerSignature?: string, viewerTimestamp?: string }} credential
+ * @returns {Promise<object>} an OwnerAuthorizedViewerKey
+ * @throws {Error} when the owner's signature over the key does not verify inside the window
+ */
+async function authorizedViewer(appName, owner, { recipientPubkeyBase64, viewerSignature, viewerTimestamp }) {
+  const { authorizeViewerKey, verifySignature, VIEWER_KEY_MAX_AGE_MS } = await getSpec();
+  const recipient = await authorizeViewerKey({
+    appName,
+    owner,
+    publicKey: new Uint8Array(Buffer.from(String(recipientPubkeyBase64), 'base64')),
+    timestamp: Number(viewerTimestamp),
+    signature: viewerSignature,
+    maxAgeMs: VIEWER_KEY_MAX_AGE_MS,
+  }, verifySignature);
+  if (!recipient) {
+    throw new Error('The viewer key is not signed by the application owner: send flux-transport-pubkey-signature and flux-transport-pubkey-timestamp');
+  }
+  return recipient;
+}
+
+/**
  * Resolve an application's stored spec for a caller.
  *
  * A cleartext app, or a request with no view credential, returns the sparse
@@ -568,7 +611,9 @@ async function getAppInstallingLocation(req, res) {
  *     reapplied toward the caller. Isolated; removed when v8 is retired.
  *
  * @param {string} appname
- * @param {{ recipientPubkeyBase64?: string, enterpriseKey?: string }} [opts]
+ * @param {{ recipientPubkeyBase64?: string, viewerSignature?: string, viewerTimestamp?: string,
+ *   enterpriseKey?: string }} [opts] - the viewer key, with the owner's signature over it
+ *   (see authorizedViewer), or the legacy v8 credential
  * @returns {Promise<object>} sparse stored spec, a v9 sealed view
  *   ({ encrypted, appName, timestamp, transportEncrypted }), or a v8 reencrypted spec
  */
@@ -589,23 +634,25 @@ async function getApplicationSpecification(appname, opts = {}) {
   if (!recipientPubkeyBase64 && registered.version >= 9) {
     throw new Error('A version 9 application must be viewed via the flux-transport-pubkey channel.');
   }
+  const recipient = recipientPubkeyBase64
+    ? await authorizedViewer(registered.name, registered.owner, opts)
+    : null;
 
   // Storage decrypt is polymorphic — the spec's own provider matches its version.
   const backendProvider = await registered.spec.createProvider();
   const decrypted = await registered.spec.decrypt(backendProvider);
 
-  if (recipientPubkeyBase64) {
-    // v9 transport layer: seal the canonical cleartext toward the caller's
-    // ephemeral pubkey so the owner's frontend gets the full form to re-sign.
+  if (recipient) {
+    // v9 transport layer: seal the canonical cleartext toward the viewer key the
+    // owner signed, so the owner's frontend gets the full form to re-sign.
     const { buildSpecViewAad, SPEC_VIEW_INFO, canonicalJson } = await getSpec();
     const viewSpec = decrypted;
     const timestamp = Date.now();
     const aad = buildSpecViewAad({ appName: viewSpec.name, timestamp });
     const provider = await transportCryptoProvider.create(viewSpec.name, viewSpec.owner);
     const plaintext = Buffer.from(canonicalJson(viewSpec.toCanonical()), 'utf8');
-    const peerPublicKey = Buffer.from(recipientPubkeyBase64, 'base64');
     const envelope = await provider.seal({
-      plaintext, aad, peerPublicKey, info: SPEC_VIEW_INFO,
+      plaintext, aad, recipient, info: SPEC_VIEW_INFO,
     });
     return {
       encrypted: true, appName: viewSpec.name, timestamp, transportEncrypted: envelope.toJSON(),
@@ -641,9 +688,9 @@ async function getApplicationSpecificationAPI(req, res) {
     if (decrypt) {
       // Channel negotiated by which credential the client presents:
       // flux-transport-pubkey -> v9 HPKE view; enterprise-key -> legacy v8.
-      const recipientPubkeyBase64 = req.headers['flux-transport-pubkey'];
+      const viewer = viewerCredential(req);
       const enterpriseKey = req.headers['enterprise-key'];
-      if (!recipientPubkeyBase64 && !enterpriseKey) {
+      if (!viewer.recipientPubkeyBase64 && !enterpriseKey) {
         throw new Error('Header flux-transport-pubkey or enterprise-key is mandatory to view an encrypted application.');
       }
 
@@ -662,7 +709,7 @@ async function getApplicationSpecificationAPI(req, res) {
         return null;
       }
 
-      viewOpts = { recipientPubkeyBase64, enterpriseKey };
+      viewOpts = { ...viewer, enterpriseKey };
     }
 
     const spec = await getApplicationSpecification(appname, viewOpts);
@@ -785,13 +832,13 @@ async function convertApplicationSpecification(appname, opts = {}) {
   if (!recipientPubkeyBase64) {
     throw new Error('Header flux-transport-pubkey is mandatory to convert an encrypted application.');
   }
+  const recipient = await authorizedViewer(name, owner, opts);
   const timestamp = Date.now();
   const aad = buildSpecViewAad({ appName: name, timestamp });
   const provider = await transportCryptoProvider.create(name, owner);
   const plaintext = Buffer.from(JSON.stringify(draft), 'utf8');
-  const peerPublicKey = Buffer.from(recipientPubkeyBase64, 'base64');
   const envelope = await provider.seal({
-    plaintext, aad, peerPublicKey, info: SPEC_VIEW_INFO,
+    plaintext, aad, recipient, info: SPEC_VIEW_INFO,
   });
   const transportEncrypted = envelope.toJSON();
   return {
@@ -835,8 +882,7 @@ async function appConvertApi(req, res) {
       return null;
     }
 
-    const recipientPubkeyBase64 = req.headers['flux-transport-pubkey'];
-    const result = await convertApplicationSpecification(appname, { recipientPubkeyBase64 });
+    const result = await convertApplicationSpecification(appname, viewerCredential(req));
     res.json(messageHelper.createDataMessage(result));
   } catch (error) {
     log.error(error);

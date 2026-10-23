@@ -25,7 +25,7 @@ const { RUNNING_EXPIRY_MS } = require('../../ZelBack/src/services/utils/appConst
 const { requireMongo } = require('./dbTestHelper');
 const {
   loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION,
-  v8Spec, v9Spec, sealedV8Spec, sealedV9Spec, registeredSpec, assertAnswers,
+  v8Spec, v9Spec, sealedV8Spec, sealedV9Spec, registeredSpec, assertAnswers, testOwner, ownerSignedViewer,
 } = require('./fixtures/fluxSpec');
 const { stubRegistry, stubHostedInstances, installedRecord } = require('./fixtures/appRecords');
 const { NODE_DOWN_GRACE_MS } = require('../../ZelBack/src/services/utils/appConstants');
@@ -825,14 +825,20 @@ describe('registryManager tests', () => {
       });
 
       it('should seal a v9 encrypted spec toward the caller over the transport layer', async () => {
-        await registryHolds(await sealedV9Spec());
+        const owner = await testOwner();
+        await registryHolds(await sealedV9Spec({ owner: owner.address }));
         const fakeEnvelope = { toJSON: () => ({ algorithm: 'HPKE', encapsulatedKey: 'enc', ciphertext: 'ct' }) };
         const seal = sinon.fake.resolves(fakeEnvelope);
         const create = sinon.stub(transportCryptoProvider, 'create').resolves({ seal });
-        const pubkey = Buffer.alloc(32, 7).toString('base64');
+        const viewerKey = new Uint8Array(32).fill(7);
+        const viewer = await ownerSignedViewer(owner, 'myapp', viewerKey);
         const res = { json: sinon.fake((param) => param) };
 
-        await registryManager.getApplicationSpecificationAPI(buildReq({ 'flux-transport-pubkey': pubkey }), res);
+        await registryManager.getApplicationSpecificationAPI(buildReq({
+          'flux-transport-pubkey': viewer.recipientPubkeyBase64,
+          'flux-transport-pubkey-signature': viewer.viewerSignature,
+          'flux-transport-pubkey-timestamp': viewer.viewerTimestamp,
+        }), res);
 
         const result = res.json.firstCall.args[0];
         expect(result.status).to.equal('success');
@@ -850,10 +856,12 @@ describe('registryManager tests', () => {
         // spec, read off the WRAPPER by delegation rather than by reaching for an
         // inner spec. Assert they are the real app's, so a lost delegation seals
         // toward `undefined` here instead of on a node.
-        sinon.assert.calledOnceWithExactly(create, 'myapp', V9_SUBMISSION.owner);
+        sinon.assert.calledOnceWithExactly(create, 'myapp', owner.address);
 
         const sealArg = seal.firstCall.args[0];
-        expect(sealArg.peerPublicKey).to.deep.equal(Buffer.from(pubkey, 'base64'));
+        expect(sealArg.recipient).to.be.instanceOf(flux.OwnerAuthorizedViewerKey);
+        expect(sealArg.recipient.publicKey).to.deep.equal(viewerKey);
+        expect(sealArg.recipient.owner).to.equal(owner.address);
         expect(sealArg.info).to.be.a('string').that.is.not.empty;
         expect(sealArg.aad).to.exist;
         // And what it was handed is the real canonical cleartext the owner needs
@@ -862,7 +870,31 @@ describe('registryManager tests', () => {
         const canonical = JSON.parse(sealArg.plaintext.toString('utf8'));
         expect(canonical.version).to.equal(9);
         expect(canonical.components.web.image).to.equal('nginx:latest');
-        expect(canonical.owner).to.equal(V9_SUBMISSION.owner);
+        expect(canonical.owner).to.equal(owner.address);
+      });
+
+      it('refuses to seal a view toward a key the owner did not sign', async () => {
+        const owner = await testOwner();
+        await registryHolds(await sealedV9Spec({ owner: owner.address }));
+        const create = sinon.stub(transportCryptoProvider, 'create');
+        const viewerKey = new Uint8Array(32).fill(7);
+        const stranger = await ownerSignedViewer(await testOwner(), 'myapp', viewerKey);
+        for (const headers of [
+          { 'flux-transport-pubkey': stranger.recipientPubkeyBase64 },
+          {
+            'flux-transport-pubkey': stranger.recipientPubkeyBase64,
+            'flux-transport-pubkey-signature': stranger.viewerSignature,
+            'flux-transport-pubkey-timestamp': stranger.viewerTimestamp,
+          },
+        ]) {
+          const res = { json: sinon.fake((param) => param) };
+          await registryManager.getApplicationSpecificationAPI(buildReq(headers), res);
+          const result = res.json.firstCall.args[0];
+          expect(result.status).to.equal('error');
+          expect(result.data.message).to.match(/not signed by the application owner/);
+        }
+        sinon.assert.notCalled(create);
+        sinon.assert.notCalled(decryptV9);
       });
 
       it('should reencrypt a v8 encrypted spec over the legacy enterprise channel', async () => {
@@ -1038,16 +1070,17 @@ describe('registryManager tests', () => {
     });
 
     it('decrypts an enterprise app node-side and seals the draft toward the caller', async () => {
-      const sealed = await sealedV8Spec({ name: 'convertme', contacts: ['ops@example.com'] });
+      const owner = await testOwner();
+      const sealed = await sealedV8Spec({ name: 'convertme', contacts: ['ops@example.com'], owner: owner.address });
       await registryHolds(sealed);
       const fakeEnvelope = { toJSON: () => ({ algorithm: 'HPKE', encapsulatedKey: 'enc', ciphertext: 'ct' }) };
       const seal = sinon.fake.resolves(fakeEnvelope);
       const create = sinon.stub(transportCryptoProvider, 'create').resolves({ seal });
-      const pubkey = Buffer.alloc(32, 3).toString('base64');
+      const viewerKey = new Uint8Array(32).fill(3);
 
-      const result = await registryManager.convertApplicationSpecification('convertme', {
-        recipientPubkeyBase64: pubkey,
-      });
+      const result = await registryManager.convertApplicationSpecification(
+        'convertme', await ownerSignedViewer(owner, 'convertme', viewerKey),
+      );
 
       expect(result.encrypted).to.be.true;
       expect(result.complete).to.be.true;
@@ -1058,9 +1091,9 @@ describe('registryManager tests', () => {
       // The stubbed transport provider is told which app and owner to seal for,
       // and both come out of the converted blob — which fromLegacy built from the
       // DECRYPTED spec. Sealing toward `undefined` would pass without this.
-      sinon.assert.calledOnceWithExactly(create, 'convertme', V8_SUBMISSION.owner);
+      sinon.assert.calledOnceWithExactly(create, 'convertme', owner.address);
       const sealArg = seal.firstCall.args[0];
-      expect(sealArg.peerPublicKey).to.deep.equal(Buffer.from(pubkey, 'base64'));
+      expect(sealArg.recipient.publicKey).to.deep.equal(viewerKey);
       expect(sealArg.aad).to.exist;
       const draft = JSON.parse(sealArg.plaintext.toString('utf8'));
       expect(draft.version).to.equal(9);
@@ -1084,9 +1117,11 @@ describe('registryManager tests', () => {
     // convention, so an F_S_ENV reference is fetched and inlined, and the values
     // were externalised precisely because they are sensitive.
     it('seals the draft when a storage reference is inlined, even from a cleartext app', async () => {
+      const owner = await testOwner();
       await registryHolds(await v8Spec({
         name: 'convertme',
         contacts: ['ops@example.com'],
+        owner: owner.address,
         compose: [{
           ...V8_SUBMISSION.compose[0],
           environmentParameters: ['F_S_ENV=https://storage.runonflux.io/v1/env/abc'],
@@ -1098,9 +1133,9 @@ describe('registryManager tests', () => {
       const seal = sinon.fake.resolves({ toJSON: () => ({ algorithm: 'HPKE' }) });
       sinon.stub(transportCryptoProvider, 'create').resolves({ seal });
 
-      const result = await registryManager.convertApplicationSpecification('convertme', {
-        recipientPubkeyBase64: Buffer.alloc(32, 5).toString('base64'),
-      });
+      const result = await registryManager.convertApplicationSpecification(
+        'convertme', await ownerSignedViewer(owner, 'convertme', new Uint8Array(32).fill(5)),
+      );
 
       expect(result.encrypted, 'an inlined secret forces the sealed channel').to.be.true;
       const draft = JSON.parse(seal.firstCall.args[0].plaintext.toString('utf8'));

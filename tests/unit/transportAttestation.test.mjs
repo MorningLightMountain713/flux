@@ -38,9 +38,10 @@ const b64 = (s) => new Uint8Array(Buffer.from(s, 'base64'));
 describe('transport pubkey attestation — the stub produces what flux-spec verifies', () => {
   let verifyTransportPubkeyAttestation;
   let Chain;
+  let AttestedTransportKey;
 
   before(async () => {
-    ({ verifyTransportPubkeyAttestation, Chain } = await specLibs.getSpec());
+    ({ verifyTransportPubkeyAttestation, Chain, AttestedTransportKey } = await specLibs.getSpec());
   });
 
   it('the harness chain holds the default attestation key the stub signs with', () => {
@@ -65,7 +66,7 @@ describe('transport pubkey attestation — the stub produces what flux-spec veri
       now: served.timestamp * 1000,
     }, ed25519Verify);
 
-    expect(ok, 'the stub signs a message flux-spec does not verify').to.equal(true);
+    expect(ok, 'the stub signs a message flux-spec does not verify').to.be.instanceOf(AttestedTransportKey);
   });
 
   // The reason the lengths are written down. Without them the same bytes read two
@@ -87,7 +88,7 @@ describe('transport pubkey attestation — the stub produces what flux-spec veri
       now: served.timestamp * 1000,
     }, ed25519Verify);
 
-    expect(ok).to.equal(false);
+    expect(ok).to.equal(null);
   });
 
   it('refuses an attestation older than the window it was given', async () => {
@@ -107,6 +108,6 @@ describe('transport pubkey attestation — the stub produces what flux-spec veri
       now: served.timestamp * 1000 + 5000,
     }, ed25519Verify);
 
-    expect(ok).to.equal(false);
+    expect(ok).to.equal(null);
   });
 });

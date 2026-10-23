@@ -13,9 +13,9 @@
  *   AES-256-GCM open runs locally, so spec bytes never cross the channel. The
  *   appName/owner the transport key derives from are construction-time state.
  *
- * Usage (appConvert seals the converted spec toward the owner's frontend pubkey):
+ * Usage (appConvert seals the converted spec toward the viewer key the owner signed):
  *   const provider = await create(appName, owner);
- *   const envelope = await provider.seal({ plaintext, aad, peerPublicKey, info });
+ *   const envelope = await provider.seal({ plaintext, aad, recipient, info }); // an OwnerAuthorizedViewerKey
  *   const wire = envelope.toJSON();
  */
 
@@ -61,14 +61,15 @@ async function create(appName, owner) {
     }
 
     /**
-     * HPKE single-shot seal toward a recipient's ephemeral pubkey (view
-     * direction). Returns a TransportEnvelope — no nonce, HPKE owns its own.
+     * HPKE single-shot seal toward a viewer's key (view direction). Reached only
+     * through the base class's seal, which admits an owner-authorized recipient.
+     * Returns a TransportEnvelope — no nonce, HPKE owns its own.
      */
-    async seal({
-      plaintext, aad, peerPublicKey, info,
+    async sealToKey({
+      plaintext, aad, publicKey, info,
     }) {
       const { suite, DhkemX25519HkdfSha256: Kem } = await getHpke();
-      const recipientPublicKey = await new Kem().deserializePublicKey(peerPublicKey);
+      const recipientPublicKey = await new Kem().deserializePublicKey(publicKey);
       const sender = await suite.createSenderContext({
         recipientPublicKey,
         info: new TextEncoder().encode(info),
