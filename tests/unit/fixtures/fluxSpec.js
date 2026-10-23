@@ -284,8 +284,41 @@ function assertAnswers(subject, members) {
   }
 }
 
+/**
+ * An app owner whose key the test holds, so it can sign as the owner — a
+ * TestNodeKey signs text exactly as an owner's wallet does. Register an app
+ * under `owner.address` when a test needs the owner's signature.
+ *
+ * @returns {Promise<{address: string, sign: function(string): Promise<string>}>}
+ */
+async function testOwner() {
+  const { TestNodeKey } = await moduleLoader.importModule('@runonflux/flux-spec-backend/testing');
+  return TestNodeKey.generate();
+}
+
+/**
+ * A viewer credential as a request carries it: an X25519 key, and the owner's
+ * signature over it for one app (flux-spec's buildViewerKeyMessage).
+ *
+ * @param {{sign: function(string): Promise<string>}} owner - from testOwner
+ * @param {string} appName
+ * @param {Uint8Array} publicKey - the viewer's 32-byte X25519 key
+ * @returns {Promise<{recipientPubkeyBase64: string, viewerSignature: string, viewerTimestamp: string}>}
+ */
+async function ownerSignedViewer(owner, appName, publicKey) {
+  const flux = await loadSpecLibrary();
+  const timestamp = Math.floor(Date.now() / 1000);
+  return {
+    recipientPubkeyBase64: Buffer.from(publicKey).toString('base64'),
+    viewerSignature: await owner.sign(flux.buildViewerKeyMessage({ appName, publicKey, timestamp })),
+    viewerTimestamp: String(timestamp),
+  };
+}
+
 module.exports = {
   loadSpecLibrary,
+  testOwner,
+  ownerSignedViewer,
   V9_SUBMISSION,
   V8_SUBMISSION,
   v9Spec,
