@@ -3,6 +3,8 @@
 const config = require('config');
 const log = require('../../lib/log');
 const priceOracleState = require('../pricing/priceOracleState');
+const { loaded } = require('./specLibrary');
+const { nodeChain } = require('./nodeChain');
 
 /**
  * The v1-v8 price cards in force from each height, oldest first: chain state,
@@ -54,52 +56,46 @@ function getChainTeamSupportAddressUpdates() {
 }
 
 /**
- * Whether an address is a valid app-payment receiver at a given height.
- * A payment counts toward an app's fee only if its receiver is one of the
- * configured payment addresses and the block is at or past that entry's
- * activeFromHeight.
- * @param {string} address
- * @param {number} height
- * @returns {boolean}
+ * The height app payments count from on this node's chain.
+ * @returns {number}
  */
-function isAppPaymentReceiver(address, height) {
-  return config.get('fluxapps.appPaymentAddresses').some(
-    (entry) => entry.address === address && height >= entry.activeFromHeight,
-  );
+function appPaymentsFrom() {
+  return loaded().APP_PAYMENTS_FROM.heightOn(nodeChain());
 }
 
 /**
- * The address new deployments pay to at a given height — the latest-activated
- * payment address. Ties (equal activeFromHeight) keep the earlier entry, so the
- * t1 base address wins over any same-height entry.
- * @param {number} daemonHeight
+ * Every address an app payment counts toward at a height on this node's chain,
+ * oldest first.
+ * @param {number} height
+ * @returns {ReadonlyArray<string>}
+ */
+function appPaymentAddresses(height) {
+  return loaded().APP_PAYMENT_ADDRESSES.at(nodeChain(), height);
+}
+
+/**
+ * The address new deployments pay at a height on this node's chain.
+ * @param {number} height
  * @returns {string}
  */
-function currentAppPaymentAddress(daemonHeight) {
-  const active = config.get('fluxapps.appPaymentAddresses').filter((entry) => daemonHeight >= entry.activeFromHeight);
-  const latest = active.reduce(
-    (best, entry) => (entry.activeFromHeight > best.activeFromHeight ? entry : best),
-    active[0],
-  );
-  return latest.address;
+function currentAppPaymentAddress(height) {
+  return loaded().appPaymentAddress(nodeChain(), height);
 }
 
 /**
- * The pre-v9 soft-fork message authorities — the payment addresses flagged
- * legacyMessageAuthority (the v6+ multisigs). Used both as the legacy-price
+ * The pre-v9 soft-fork message authorities. Used both as the legacy-price
  * authority and as part of the recognized-message-signer entry filter.
  * @returns {string[]}
  */
 function legacyMessageAuthorities() {
-  return config.get('fluxapps.appPaymentAddresses')
-    .filter((entry) => entry.legacyMessageAuthority)
-    .map((entry) => entry.address);
+  return config.get('fluxapps.legacyMessageAuthorities');
 }
 
 module.exports = {
   getChainParamsPriceUpdates,
   getChainTeamSupportAddressUpdates,
-  isAppPaymentReceiver,
+  appPaymentsFrom,
+  appPaymentAddresses,
   currentAppPaymentAddress,
   legacyMessageAuthorities,
 };

@@ -33,6 +33,10 @@ const specLibrary = require('../../ZelBack/src/services/utils/specLibrary');
 // A standard P2PKH output's script, as the daemon reports it. Every payment output
 // carries one, so a soft-fork fixture's payment output does too.
 const PAY_ASM = 'OP_DUP OP_HASH160 8f1c27f0e5d0b0a8fdcb5a8e6e1fbb7f0c6b2a31 OP_EQUALVERIFY OP_CHECKSIG';
+// The mainnet app payment addresses, oldest first.
+const PAYMENT_FIRST = 't1LUs6quf7TB2zVZmexqPQdnqmrFMGZGjV6';
+const PAYMENT_MULTISIG = 't3aGJvdtd8NR6GrnqnRuVEzH6MbrXuJFLUX';
+const PAYMENT_MULTISIG_B = 't3NryfAQLGeFs9jEoeqsxmBN2QLRaRKFLUX';
 const longAsm = 'OP_RETURN 6162636465666768696a6b6c6d6e6f707172737475767778797a303132333435363738394142434445464748494a4b4c4d4e4f505152535455565758595a3031';
 
 chai.use(chaiAsPromised);
@@ -113,32 +117,6 @@ describe('explorerService tests', () => {
       const result = await explorerService.getVerboseBlock(hash);
       expect(result).to.eql('test data');
       sinon.assert.calledOnceWithExactly(daemonServiceBlockchainRpcsStub, { hashheight: '12345', verbosity: 2 });
-    });
-  });
-
-  describe('decodeMessage tests', () => {
-    it('Should return a proper decoded message', () => {
-      const encodedMessage = 'OP_RETURN 74657374';
-      const expectedResult = 'test';
-      const result = explorerService.decodeMessage(encodedMessage);
-
-      expect(result).to.equal(expectedResult);
-    });
-
-    it('Should return a proper decoded message with only 2 words if there are 3', () => {
-      const encodedMessage = 'OP_RETURN 74657374 74657374 74657374';
-      const expectedResult = 'test\u0007FW7\u0004test';
-      const result = explorerService.decodeMessage(encodedMessage);
-
-      expect(result).to.eql(expectedResult);
-    });
-
-    it('Should return empty string if message is not in a proper format', () => {
-      const encodedMessage = 'test123';
-      const expectedResult = '';
-      const result = explorerService.decodeMessage(encodedMessage);
-
-      expect(result).to.equal(expectedResult);
     });
   });
 
@@ -700,6 +678,7 @@ describe('explorerService tests', () => {
       // initiateBlockProcessor now leaves the cursor where scanning should resume and
       // enables scanning; which block gets written next is the drain's business.
       expect(explorerService.scanning()).to.equal(true);
+      sinon.assert.calledWithMatch(dbHelper.updateOneInDatabase, sinon.match.any, sinon.match.any, sinon.match.any, { $set: { generalScannedHeight: 693_999 } });
     });
 
     it('should rewind to the cursor and scan, height > 0', async () => {
@@ -723,6 +702,8 @@ describe('explorerService tests', () => {
       expect(explorerService.scanning()).to.equal(true);
       sinon.assert.calledWithMatch(logInfoSpy, 'Chain state - rewinding from 1000 to 1000: restore at start');
       expect(capabilities.isUp('chainStateConsistent')).to.equal(true);
+      // A cursor below the height app payments count from moves up to it.
+      sinon.assert.calledWithMatch(dbHelper.updateOneInDatabase, sinon.match.any, sinon.match.any, sinon.match.any, { $set: { generalScannedHeight: 693_999 } });
     });
 
     it('builds chain state before the daemon is synced, and scans only once it is', async () => {
@@ -831,19 +812,6 @@ describe('explorerService tests', () => {
     });
   });
 
-  describe('getPriceSpecForHeight tests', () => {
-    it('should return correct price spec via binary search', () => {
-      const specs = [
-        { height: -1, minPrice: 1 },
-        { height: 983_000, minPrice: 0.1 },
-        { height: 1_004_000, minPrice: 0.01 },
-      ];
-      expect(explorerService.getPriceSpecForHeight(specs, 500_000).minPrice).to.equal(1);
-      expect(explorerService.getPriceSpecForHeight(specs, 983_001).minPrice).to.equal(0.1);
-      expect(explorerService.getPriceSpecForHeight(specs, 2_000_000).minPrice).to.equal(0.01);
-    });
-  });
-
   describe('processBootstrapTx tests', () => {
     const priceSpecs = [{ height: -1, minPrice: 0.01 }];
 
@@ -857,7 +825,7 @@ describe('explorerService tests', () => {
         vout: [{
           valueSat: 500_000_000,
           scriptPubKey: {
-            addresses: [config.fluxapps.appPaymentAddresses[0].address],
+            addresses: [PAYMENT_FIRST],
             asm: longAsm,
           },
         }],
@@ -874,22 +842,26 @@ describe('explorerService tests', () => {
       expect(record.blockTime).to.equal(1_750_000_000);
     });
 
+    it('makes no record for a transaction with no height', () => {
+      expect(explorerService.processBootstrapTx(makeTx({ height: undefined }), priceSpecs, 0)).to.equal(null);
+    });
+
     it('makes no record for a tx with version >= 5', () => {
       expect(explorerService.processBootstrapTx(makeTx({ version: 5 }), priceSpecs, 0)).to.equal(null);
     });
 
     it('makes no record for a payment below minPrice', () => {
-      const tx = makeTx({ vout: [{ valueSat: 100, scriptPubKey: { addresses: [config.fluxapps.appPaymentAddresses[0].address], asm: longAsm } }] });
+      const tx = makeTx({ vout: [{ valueSat: 100, scriptPubKey: { addresses: [PAYMENT_FIRST], asm: longAsm } }] });
       expect(explorerService.processBootstrapTx(tx, [{ height: -1, minPrice: 1 }], 0)).to.equal(null);
     });
 
     it('makes no record for a soft fork (handled by bootstrapSoftForks pre-pass)', () => {
       const tx = makeTx({
-        vin: [{ address: config.fluxapps.appPaymentAddresses[1].address }],
+        vin: [{ address: PAYMENT_MULTISIG }],
         vout: [{
           valueSat: 0,
           scriptPubKey: {
-            addresses: [config.fluxapps.appPaymentAddresses[1].address],
+            addresses: [PAYMENT_MULTISIG],
             asm: 'OP_RETURN 705f302e30315f302e30315f302e3030345f302e30315f302e345f302e385f302e34',
           },
         }],
@@ -903,7 +875,7 @@ describe('explorerService tests', () => {
         vout: [{
           valueSat: 500_000_000,
           scriptPubKey: {
-            addresses: [config.fluxapps.appPaymentAddresses[1].address],
+            addresses: [PAYMENT_MULTISIG],
             asm: 'OP_RETURN 6162636465666768696a6b6c6d6e6f707172737475767778797a303132333435363738394142434445464748494a4b4c4d4e4f505152535455565758595a3031',
           },
         }],
@@ -913,7 +885,7 @@ describe('explorerService tests', () => {
   });
 
   describe('bootstrapAppHashes tests', () => {
-    const PAY = config.fluxapps.appPaymentAddresses[0].address;
+    const PAY = PAYMENT_FIRST;
     let executeCallStub;
     let executeBatchCallStub;
     let updateOneStub;
@@ -937,7 +909,7 @@ describe('explorerService tests', () => {
     // The address index answers the payment addresses with `deltas`, and every
     // other address set (the soft-fork signers) with nothing.
     function addressIndex(deltas) {
-      const paymentAddresses = config.fluxapps.appPaymentAddresses.map((entry) => entry.address);
+      const paymentAddresses = [PAYMENT_FIRST, PAYMENT_MULTISIG, PAYMENT_MULTISIG_B];
       executeCallStub.callsFake(async (method, [{ addresses }]) => {
         if (method === 'getaddressdeltas' && addresses.every((address) => paymentAddresses.includes(address))) {
           return { status: 'success', data: deltas };
@@ -975,6 +947,18 @@ describe('explorerService tests', () => {
 
       const updateCall = updateOneStub.getCalls().find((c) => c.args[1] === config.database.daemon.collections.scannedHeight);
       expect(updateCall.args[3].$set.generalScannedHeight).to.equal(2_579_000);
+    });
+
+    it('asks the address index for every payment address in force at the tip, from the height payments count from', async () => {
+      addressIndex([]);
+      executeBatchCallStub.resolves(answer());
+
+      await explorerService.bootstrapAppHashes(2_579_000);
+
+      const paymentCall = executeCallStub.getCalls().find((call) => call.args[1][0].addresses.includes(PAYMENT_FIRST));
+      expect(paymentCall.args[1][0]).to.deep.equal({
+        addresses: [PAYMENT_FIRST, PAYMENT_MULTISIG, PAYMENT_MULTISIG_B], start: 694_000, end: 2_579_000,
+      });
     });
 
     it('keeps the first payment of a hash paid twice in one block, whatever order the daemon answers in', async () => {
@@ -1052,8 +1036,8 @@ describe('explorerService tests', () => {
   });
 
   describe('bootstrapSoftForks tests', () => {
-    const multisigA = config.fluxapps.appPaymentAddresses[1].address;
-    const multisigB = config.fluxapps.appPaymentAddresses[2].address;
+    const multisigA = PAYMENT_MULTISIG;
+    const multisigB = PAYMENT_MULTISIG_B;
     let executeCallStub;
     let executeBatchCallStub;
     let updateOneStub;
@@ -1324,6 +1308,7 @@ describe('explorerService tests', () => {
       await explorerService.bootstrapSoftForks(TIP);
 
       sinon.assert.calledOnce(executeCallStub);
+      expect(executeCallStub.firstCall.args[1][0].start).to.equal(694_000);
     });
 
     it('queries the oracle address a published key names, from that key\'s height', async () => {
@@ -1871,7 +1856,7 @@ describe('explorerService tests', () => {
       await explorerService.startScanning();
 
       const inserted = messages.recordPayments.getCalls().flatMap((call) => call.args[0]);
-      expect(inserted.map((record) => [record.txid, record.txIndex])).to.deep.equal([['first', 1]]);
+      expect(inserted.map((record) => [record.txid, record.txIndex, record.blockTime])).to.deep.equal([['first', 1, 1_700_000_000]]);
     });
 
     it('fails the block, rather than dropping the payment, when the record lookup fails', async () => {

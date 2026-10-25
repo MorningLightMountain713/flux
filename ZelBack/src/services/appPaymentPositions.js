@@ -1,8 +1,7 @@
 'use strict';
 
-const config = require('config');
-
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
+const chainUtilities = require('./utils/chainUtilities');
 
 /**
  * Every transaction paying an app payment address in a height range, with its
@@ -17,8 +16,7 @@ const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
  * @returns {Promise<Map<string, {height: number, txIndex: number}>>} by txid
  */
 async function appPaymentPositions(start, end) {
-  // Every payment-collection address (the dev receiver is only in the array on dev builds).
-  const appAddresses = config.get('fluxapps.appPaymentAddresses').map((entry) => entry.address);
+  const appAddresses = chainUtilities.appPaymentAddresses(end);
   const result = await daemonServiceUtils.executeCall('getaddressdeltas', [{ addresses: appAddresses, start, end }]);
   if (result.status !== 'success') {
     throw new Error(`getaddressdeltas failed: ${result.data.message || result.data}`);

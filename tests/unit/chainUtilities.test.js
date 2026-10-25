@@ -4,51 +4,38 @@
 process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 
 const { expect } = require('chai');
-const config = require('config');
 const chainUtilities = require('../../ZelBack/src/services/utils/chainUtilities');
 
-describe('chainUtilities app-payment address helpers', () => {
-  const [base, multisigA, multisigB] = config.fluxapps.appPaymentAddresses;
-  // The development-only receiver is absent from the mainnet config array; it must
-  // never be accepted as a payment receiver here.
-  const devAddress = 't1Mzja9iJcEYeW5B4m4s1tJG8M42odFZ16A';
+// The test config runs on mainnet, so these are mainnet's payment rules.
+const BASE = 't1LUs6quf7TB2zVZmexqPQdnqmrFMGZGjV6';
+const MULTISIG = 't3aGJvdtd8NR6GrnqnRuVEzH6MbrXuJFLUX';
+const MULTISIG_B = 't3NryfAQLGeFs9jEoeqsxmBN2QLRaRKFLUX';
 
-  describe('isAppPaymentReceiver', () => {
-    it('accepts the base address at any height', () => {
-      expect(chainUtilities.isAppPaymentReceiver(base.address, 0)).to.equal(true);
-      expect(chainUtilities.isAppPaymentReceiver(base.address, 2_000_000)).to.equal(true);
+describe('chainUtilities app-payment helpers', () => {
+  describe('appPaymentsFrom', () => {
+    it('is the height payments count from on this node\'s chain', () => {
+      expect(chainUtilities.appPaymentsFrom()).to.equal(694_000);
     });
+  });
 
-    it('accepts a multisig only at or after its activation height', () => {
-      expect(chainUtilities.isAppPaymentReceiver(multisigA.address, multisigA.activeFromHeight - 1)).to.equal(false);
-      expect(chainUtilities.isAppPaymentReceiver(multisigA.address, multisigA.activeFromHeight)).to.equal(true);
-      expect(chainUtilities.isAppPaymentReceiver(multisigB.address, multisigB.activeFromHeight - 1)).to.equal(false);
-      expect(chainUtilities.isAppPaymentReceiver(multisigB.address, multisigB.activeFromHeight)).to.equal(true);
-    });
-
-    it('never accepts the development-only address on a mainnet config', () => {
-      expect(chainUtilities.isAppPaymentReceiver(devAddress, 0)).to.equal(false);
-      expect(chainUtilities.isAppPaymentReceiver(devAddress, 2_000_000)).to.equal(false);
-    });
-
-    it('rejects an unrelated address', () => {
-      expect(chainUtilities.isAppPaymentReceiver('t1SomeoneElse', 2_000_000)).to.equal(false);
+  describe('appPaymentAddresses', () => {
+    it('holds every address in force at a height on this node\'s chain', () => {
+      expect(chainUtilities.appPaymentAddresses(1_299_999)).to.deep.equal([BASE]);
+      expect(chainUtilities.appPaymentAddresses(1_670_000)).to.deep.equal([BASE, MULTISIG, MULTISIG_B]);
     });
   });
 
   describe('currentAppPaymentAddress', () => {
-    it('returns the latest-activated address at a height', () => {
-      expect(chainUtilities.currentAppPaymentAddress(100_000)).to.equal(base.address);
-      expect(chainUtilities.currentAppPaymentAddress(multisigA.activeFromHeight + 1000)).to.equal(multisigA.address);
-      expect(chainUtilities.currentAppPaymentAddress(multisigB.activeFromHeight + 1000)).to.equal(multisigB.address);
+    it('is the newest address in force at a height', () => {
+      expect(chainUtilities.currentAppPaymentAddress(100_000)).to.equal(BASE);
+      expect(chainUtilities.currentAppPaymentAddress(1_301_000)).to.equal(MULTISIG);
+      expect(chainUtilities.currentAppPaymentAddress(1_671_000)).to.equal(MULTISIG_B);
     });
   });
 
   describe('legacyMessageAuthorities', () => {
-    it('returns only the flagged multisigs, not the base address', () => {
-      const authorities = chainUtilities.legacyMessageAuthorities();
-      expect(authorities).to.deep.equal([multisigA.address, multisigB.address]);
-      expect(authorities).to.not.include(base.address);
+    it('is the two foundation multisigs, not the base address', () => {
+      expect(chainUtilities.legacyMessageAuthorities()).to.deep.equal([MULTISIG, MULTISIG_B]);
     });
   });
 });

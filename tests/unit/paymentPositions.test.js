@@ -1,7 +1,6 @@
 'use strict';
 
 const { expect } = require('chai');
-const config = require('config');
 const sinon = require('sinon');
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
 const paymentPositions = require('../../ZelBack/src/services/migrations/paymentPositions');
@@ -39,25 +38,25 @@ describe('paymentPositions', () => {
     ...messages.markNotOnChain.getCalls().map((call) => [call.args[0], { notOnChain: true }]),
   ];
 
-  // The first height any app payment address is active from: where a search that
-  // can prove a transaction absent from the chain has to begin.
-  const FIRST_PAYMENT_HEIGHT = Math.min(...config.get('fluxapps.appPaymentAddresses').map((a) => a.activeFromHeight));
+  // The height app payments count from on mainnet: where a search that can prove
+  // a transaction absent from the chain has to begin.
+  const FIRST_PAYMENT_HEIGHT = 694_000;
 
   it('positions each record from one address-index call over every height a payment can be at, and marks one the chain does not hold', async () => {
     messages.withoutPosition.resolves([
-      { hash: 'ha', txid: 'a', height: 900 }, { hash: 'hb', txid: 'b', height: 700 }, { hash: 'hgone', txid: 'gone', height: 800 },
+      { hash: 'ha', txid: 'a', height: 694_900 }, { hash: 'hb', txid: 'b', height: 694_700 }, { hash: 'hgone', txid: 'gone', height: 694_800 },
     ]);
-    daemonAnswers(950, [
-      { txid: 'a', height: 900, blockindex: 4, satoshis: 100 },
-      { txid: 'b', height: 700, blockindex: 1, satoshis: 100 },
-      { txid: 'b', height: 700, blockindex: 1, satoshis: -100 },
+    daemonAnswers(694_950, [
+      { txid: 'a', height: 694_900, blockindex: 4, satoshis: 100 },
+      { txid: 'b', height: 694_700, blockindex: 1, satoshis: 100 },
+      { txid: 'b', height: 694_700, blockindex: 1, satoshis: -100 },
     ]);
     const result = await paymentPositions.backfillPaymentPositions();
     sinon.assert.calledOnce(executeCallStub.withArgs('getaddressdeltas'));
-    expect(executeCallStub.withArgs('getaddressdeltas').firstCall.args[1][0]).to.include({ start: FIRST_PAYMENT_HEIGHT, end: 950 });
+    expect(executeCallStub.withArgs('getaddressdeltas').firstCall.args[1][0]).to.include({ start: FIRST_PAYMENT_HEIGHT, end: 694_950 });
     expect(result).to.deep.equal({ positioned: 2, heightsCorrected: 0, notOnChain: 1 });
     expect(written()).to.deep.equal([
-      ['ha', { txIndex: 4, height: 900 }], ['hb', { txIndex: 1, height: 700 }], ['hgone', { notOnChain: true }],
+      ['ha', { txIndex: 4, height: 694_900 }], ['hb', { txIndex: 1, height: 694_700 }], ['hgone', { notOnChain: true }],
     ]);
   });
 
@@ -77,7 +76,7 @@ describe('paymentPositions', () => {
   });
 
   it('fails rather than searching a range it cannot bound when the daemon gives no tip', async () => {
-    messages.withoutPosition.resolves([{ hash: 'ha', txid: 'a', height: 900 }]);
+    messages.withoutPosition.resolves([{ hash: 'ha', txid: 'a', height: 694_900 }]);
     executeCallStub.withArgs('getBlockCount').resolves({ status: 'error', data: { message: 'loading block index' } });
     let thrown = null;
     await paymentPositions.backfillPaymentPositions().catch((error) => { thrown = error; });

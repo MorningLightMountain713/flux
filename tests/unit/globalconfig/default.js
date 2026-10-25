@@ -319,13 +319,8 @@ const harnessOverrides = {
       7: 1_420_000, // v7, nodes selection, secrets, private images (nodes selection allows secrets, private image - scope), staticip
       8: 1_932_380, // v8, brings enterprise apps using arcaneOS features to run these apps. // Around June 23th
     },
-    appPaymentAddresses: [
-      { address: 't1LUs6quf7TB2zVZmexqPQdnqmrFMGZGjV6', activeFromHeight: 0 },
-      { address: 't3aGJvdtd8NR6GrnqnRuVEzH6MbrXuJFLUX', activeFromHeight: 1_300_000, legacyMessageAuthority: true },
-      { address: 't3NryfAQLGeFs9jEoeqsxmBN2QLRaRKFLUX', activeFromHeight: 1_670_000, legacyMessageAuthority: true },
-    ],
+    legacyMessageAuthorities: ['t3aGJvdtd8NR6GrnqnRuVEzH6MbrXuJFLUX', 't3NryfAQLGeFs9jEoeqsxmBN2QLRaRKFLUX'],
     messageAuthorityAddress: 't1eW962yoqbfCYKzFYaZJVYzeopSmhaKL4f',
-    epochstart: 694_000,
     publicepochstart: 705_000,
     portMinLegacy: 31_000, // ports 30000 - 30999 are reserved for local applications
     portMaxLegacy: 39_999,
