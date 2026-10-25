@@ -71,7 +71,6 @@ function makeBaseStubs(overrides = {}) {
         },
       },
       fluxapps: {
-        epochstart: 694_000,
         minHashSyncPeers: 12,
       },
     }),

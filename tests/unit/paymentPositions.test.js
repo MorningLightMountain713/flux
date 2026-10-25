@@ -5,10 +5,10 @@
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 const sinon = require('sinon');
-const config = require('config');
 
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
-const { appPaymentAddresses, appPaymentPositions } = require('../../ZelBack/src/services/appPaymentPositions');
+const chainUtilities = require('../../ZelBack/src/services/utils/chainUtilities');
+const { appPaymentPositions } = require('../../ZelBack/src/services/appPaymentPositions');
 const { backfillPaymentPositions } = require('../../ZelBack/src/services/migrations/paymentPositions');
 const { stubMessages } = require('./fixtures/appRecords');
 
@@ -16,7 +16,7 @@ chai.use(chaiAsPromised);
 const { expect } = chai;
 
 const delta = (txid, height, blockindex, satoshis = 500_000_000) => ({
-  txid, height, blockindex, satoshis, index: 0, address: config.fluxapps.appPaymentAddresses[0].address,
+  txid, height, blockindex, satoshis, index: 0, address: chainUtilities.appPaymentAddresses(200)[0],
 });
 
 describe('app payment positions', () => {
@@ -28,12 +28,6 @@ describe('app payment positions', () => {
 
   afterEach(() => {
     sinon.restore();
-  });
-
-  describe('appPaymentAddresses', () => {
-    it('asks for every payment-collection address', () => {
-      expect(appPaymentAddresses()).to.deep.equal(config.fluxapps.appPaymentAddresses.map((entry) => entry.address));
-    });
   });
 
   describe('appPaymentPositions', () => {
@@ -49,7 +43,7 @@ describe('app payment positions', () => {
       sinon.assert.calledOnce(executeCall);
       const [rpc, params, options] = executeCall.firstCall.args;
       expect(rpc).to.equal('getaddressdeltas');
-      expect(params).to.deep.equal([{ addresses: appPaymentAddresses(), start: 90, end: 200 }]);
+      expect(params).to.deep.equal([{ addresses: chainUtilities.appPaymentAddresses(200), start: 90, end: 200 }]);
       expect(options).to.deep.equal({ useCache: false });
     });
 
@@ -99,18 +93,18 @@ describe('app payment positions', () => {
 
     it('positions each record from one address-index call from the first payment height to the tip, and marks one the chain does not hold', async () => {
       messages.withoutPosition.resolves([
-        { hash: 'ha', txid: 'a', height: 900 }, { hash: 'hb', txid: 'b', height: 700 }, { hash: 'hgone', txid: 'gone', height: 800 },
+        { hash: 'ha', txid: 'a', height: 694_900 }, { hash: 'hb', txid: 'b', height: 694_700 }, { hash: 'hgone', txid: 'gone', height: 694_800 },
       ]);
-      daemonAnswers(950, [delta('a', 900, 4), delta('b', 700, 1), delta('b', 700, 1, -500_000_000)]);
+      daemonAnswers(694_950, [delta('a', 694_900, 4), delta('b', 694_700, 1), delta('b', 694_700, 1, -500_000_000)]);
       const result = await backfillPaymentPositions();
       sinon.assert.calledOnce(executeCall.withArgs('getaddressdeltas'));
-      expect(executeCall.withArgs('getaddressdeltas').firstCall.args[1][0]).to.include({ start: config.fluxapps.epochstart, end: 950 });
+      expect(executeCall.withArgs('getaddressdeltas').firstCall.args[1][0]).to.include({ start: chainUtilities.appPaymentsFrom(), end: 694_950 });
       expect(executeCall.withArgs('getBlockCount').firstCall.args.slice(1)).to.deep.equal([[], { useCache: false }]);
       expect(result).to.deep.equal({
         positioned: 2, heightsCorrected: 0, notOnChain: 1, aboveTip: 0,
       });
       expect(written()).to.deep.equal([
-        ['ha', { txIndex: 4, height: 900 }], ['hb', { txIndex: 1, height: 700 }], ['hgone', { notOnChain: true }],
+        ['ha', { txIndex: 4, height: 694_900 }], ['hb', { txIndex: 1, height: 694_700 }], ['hgone', { notOnChain: true }],
       ]);
     });
 
@@ -129,8 +123,8 @@ describe('app payment positions', () => {
     });
 
     it('leaves a record above the daemon\'s tip for a later run', async () => {
-      messages.withoutPosition.resolves([{ hash: 'hahead', txid: 'ahead', height: 951 }]);
-      daemonAnswers(950, []);
+      messages.withoutPosition.resolves([{ hash: 'hahead', txid: 'ahead', height: 694_951 }]);
+      daemonAnswers(694_950, []);
       const result = await backfillPaymentPositions();
       expect(result).to.deep.equal({
         positioned: 0, heightsCorrected: 0, notOnChain: 0, aboveTip: 1,
@@ -139,7 +133,7 @@ describe('app payment positions', () => {
     });
 
     it('fails rather than searching a range it cannot bound when the daemon gives no tip', async () => {
-      messages.withoutPosition.resolves([{ hash: 'ha', txid: 'a', height: 900 }]);
+      messages.withoutPosition.resolves([{ hash: 'ha', txid: 'a', height: 694_900 }]);
       executeCall.withArgs('getBlockCount').resolves({ status: 'error', data: { message: 'loading block index' } });
       await expect(backfillPaymentPositions()).to.be.rejectedWith('loading block index');
       sinon.assert.notCalled(messages.setPosition);

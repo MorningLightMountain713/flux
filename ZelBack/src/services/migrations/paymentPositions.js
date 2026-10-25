@@ -1,17 +1,16 @@
 'use strict';
 
-const config = require('config');
-
 const log = require('../../lib/log');
 const appRecords = require('../appDatabase/appRecords');
 const daemonServiceUtils = require('../daemonService/daemonServiceUtils');
 const { appPaymentPositions } = require('../appPaymentPositions');
+const chainUtilities = require('../utils/chainUtilities');
 
 /**
  * Gives every app payment record without a position in its block the position
  * and the height the daemon's address index holds for its transaction: one call
- * over the payment addresses from the first height a payment is recorded at to
- * the chain tip, so a transaction the index does not hold is not on the chain.
+ * over the payment addresses from the height app payments count from to the
+ * chain tip, so a transaction the index does not hold is not on the chain.
  * Such a record is marked `notOnChain`, is no payment, and is not read again. A
  * record above the daemon's tip is left for a later run: the daemon has not
  * reached its block.
@@ -27,12 +26,12 @@ async function backfillPaymentPositions() {
   const messages = appRecords.messages();
   const missing = await messages.withoutPosition();
   if (missing.length === 0) return { positioned: 0, heightsCorrected: 0, notOnChain: 0, aboveTip: 0 };
-
+  const start = chainUtilities.appPaymentsFrom();
   const tip = await daemonServiceUtils.executeCall('getBlockCount', [], { useCache: false });
   if (tip.status !== 'success' || !Number.isInteger(tip.data)) {
     throw new Error(`getBlockCount failed: ${tip.data?.message ?? tip.data}`);
   }
-  const positions = await appPaymentPositions(config.get('fluxapps.epochstart'), tip.data);
+  const positions = await appPaymentPositions(start, tip.data);
   let positioned = 0;
   let heightsCorrected = 0;
   let notOnChain = 0;

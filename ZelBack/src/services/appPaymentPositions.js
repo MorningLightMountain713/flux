@@ -1,17 +1,7 @@
 'use strict';
 
-const config = require('config');
-
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
-
-/**
- * The addresses an app message's payment is made to: every payment-collection
- * address (the development receiver is in the array only on a development node).
- * @returns {string[]}
- */
-function appPaymentAddresses() {
-  return config.get('fluxapps.appPaymentAddresses').map((entry) => entry.address);
-}
+const chainUtilities = require('./utils/chainUtilities');
 
 /**
  * Every transaction paying an app payment address in a height range, with its
@@ -26,11 +16,8 @@ function appPaymentAddresses() {
  * @returns {Promise<Map<string, {height: number, txIndex: number}>>} by txid
  */
 async function appPaymentPositions(start, end) {
-  const result = await daemonServiceUtils.executeCall(
-    'getaddressdeltas',
-    [{ addresses: appPaymentAddresses(), start, end }],
-    { useCache: false },
-  );
+  const appAddresses = chainUtilities.appPaymentAddresses(end);
+  const result = await daemonServiceUtils.executeCall('getaddressdeltas', [{ addresses: appAddresses, start, end }], { useCache: false });
   if (result.status !== 'success') {
     throw new Error(`getaddressdeltas failed: ${result.data?.message ?? result.data}`);
   }
@@ -46,4 +33,4 @@ async function appPaymentPositions(start, end) {
   return positions;
 }
 
-module.exports = { appPaymentAddresses, appPaymentPositions };
+module.exports = { appPaymentPositions };

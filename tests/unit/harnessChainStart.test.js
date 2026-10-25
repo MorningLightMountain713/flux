@@ -165,13 +165,6 @@ describe('harness chain start', () => {
 
     expect(scanned).to.include.members([
       'deterministicNodesStart',
-      // Was fluxapps.multisigAddressChange. This tree replaced the flat
-      // addressMultisigB / multisigAddressChange pair with a table of payment
-      // addresses each carrying the height it becomes active, so the gate is the
-      // same 1670000 written as a row - and reaching it means walking into an
-      // array, which is the harder half of what this test is for.
-      'fluxapps.appPaymentAddresses.2.activeFromHeight',
-      'fluxapps.epochstart',
       'fluxapps.publicepochstart',
     ]);
   });
@@ -181,18 +174,25 @@ describe('harness chain start', () => {
   // height is the one each suite starts its nodes with.
   it('starts above every mainnet height the spec library judges legacy documents by', () => {
     const {
-      Chain, LEGACY_PRICING_HEIGHTS, EXPIRE_INTERVAL_DROPPED, V9_ACTIVATION,
+      Chain, LEGACY_PRICING_HEIGHTS, EXPIRE_INTERVAL_DROPPED, V9_ACTIVATION, APP_PAYMENTS_FROM,
     } = specLibrary.loaded();
     const heights = {
       'the Proof of Node upgrade': Chain.MAIN.blockTimes[1].fromHeight,
+      'app payments count from': APP_PAYMENTS_FROM.heightOn(Chain.MAIN),
       'the expire-interval rule dropped': EXPIRE_INTERVAL_DROPPED.heightOn(Chain.MAIN),
       ...Object.fromEntries(Object.entries(LEGACY_PRICING_HEIGHTS)
         .filter(([, activation]) => activation !== V9_ACTIVATION)
         .map(([name, activation]) => [`pricing: ${name}`, activation.heightOn(Chain.MAIN)])),
     };
-    expect(Object.keys(heights)).to.have.lengthOf(5);
+    expect(Object.keys(heights)).to.have.lengthOf(6);
     Object.entries(heights).forEach(([what, height]) => {
       expect(height, what).to.be.a('number').and.be.below(DEFAULT_INITIAL_HEIGHT);
     });
+  });
+
+  it('starts above every mainnet app payment address change', () => {
+    const { Chain, APP_PAYMENT_ADDRESSES } = specLibrary.loaded();
+    expect(APP_PAYMENT_ADDRESSES.at(Chain.MAIN, DEFAULT_INITIAL_HEIGHT))
+      .to.deep.equal(APP_PAYMENT_ADDRESSES.at(Chain.MAIN, Number.MAX_SAFE_INTEGER));
   });
 });

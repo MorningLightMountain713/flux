@@ -39,6 +39,7 @@ const appRecords = require('./appDatabase/appRecords');
 const decider = require('./appDecisions/decider');
 const { pubKeyToAddr } = require('./utils/fluxCryptoUtils');
 const { nodeChain } = require('./utils/nodeChain');
+const specLibrary = require('./utils/specLibrary');
 const appOperations = require('./appLifecycle/appOperations');
 
 const scannedHeightCollection = config.get('database.daemon.collections.scannedHeight');
@@ -191,26 +192,6 @@ async function getVerboseBlock(heightOrHash, verbosity = 2) {
   throw blockInfo.data;
 }
 
-/**
- * To decode a message from Unicode values to text characters.
- * @param {string} asm UTF-16 value.
- * @returns {string} Message.
- */
-function decodeMessage(asm) {
-  const parts = asm.split('OP_RETURN ', 2);
-  let message = '';
-  if (parts[1]) {
-    const encodedMessage = parts[1];
-    const hexx = encodedMessage.toString(); // force conversion
-    for (let k = 0; k < hexx.length && hexx.slice(k, k + 2) !== '00'; k += 2) {
-      message += String.fromCharCode(
-        parseInt(hexx.slice(k, k + 2), 16),
-      );
-    }
-  }
-  return message;
-}
-
 function decodeMessageBytes(asm) {
   const parts = asm.split('OP_RETURN ', 2);
   if (!parts[1]) return null;
@@ -304,9 +285,9 @@ const FLUX_T1_PUBKEY_HASH = '1cb8';
 
 // Authority for the v9 foundation-signed soft-fork messages (PriceMessage,
 // PriceModifierMessage, OracleKeyMessage, PolicyGroupMessage).
-// messageAuthorityAddress is deliberately separate from the legacy payment
-// multisigs (appPaymentAddresses[].legacyMessageAuthority), which
-// authorise the pre-v9 ASCII price messages and receive app payments.
+// messageAuthorityAddress is deliberately separate from the legacy message
+// authorities (fluxapps.legacyMessageAuthorities), which authorise the pre-v9
+// ASCII price messages.
 // SIGHASH byte semantics: only a signature whose base type is SIGHASH_ALL commits
 // to every output — including the OP_RETURN carrying the message. NONE/SINGLE leave
 // the OP_RETURN unbound (an attacker could graft a different message onto a partially
@@ -401,7 +382,7 @@ function isAvailabilitySigner(tx, height) {
   return tx.vin.some((vin) => vin.address === addr && inputSignsAllOutputs(vin));
 }
 
-// Whether an address is a pre-v9 soft-fork authority (the legacy payment multisigs).
+// Whether an address is a pre-v9 soft-fork authority (the foundation multisigs).
 // Gates the legacy ASCII price messages — kept narrow so the v9 authority and the
 // oracle can never publish a legacy price message.
 function isLegacyMessageAuthority(address) {
@@ -560,6 +541,9 @@ async function processSoftFork(txid, height, txIndex, payload, senderIsLegacyAut
  */
 async function processInsight(blockDataVerbose) {
   await policyLibrary();
+  const { readAppPayment } = specLibrary.loaded();
+  const chain = nodeChain();
+  const priceCards = await chainUtilities.getChainParamsPriceUpdates();
   // get Block Deltas information
   const txs = blockDataVerbose.tx;
   // go through each transaction in deltas. The index is the transaction's position in
@@ -569,8 +553,6 @@ async function processInsight(blockDataVerbose) {
   // eslint-disable-next-line no-restricted-syntax
   for (const [txIndex, tx] of txs.entries()) {
     if (tx.version < 5 && tx.version > 0) {
-      let message = '';
-      let isFluxAppMessageValue = 0;
       let senderIsRecognizedSigner = false;
       let senderIsLegacyAuthority = false;
       let receiverIsRecognizedSigner = false;
@@ -581,42 +563,26 @@ async function processInsight(blockDataVerbose) {
       });
 
       tx.vout.forEach((receiver) => {
-        if (receiver.scriptPubKey.addresses) { // count for messages
-          if (chainUtilities.isAppPaymentReceiver(receiver.scriptPubKey.addresses[0], blockDataVerbose.height)) {
-            // it is an app message. Get Satoshi amount
-            isFluxAppMessageValue += receiver.valueSat;
-          }
-          if (isRecognizedMessageSigner(receiver.scriptPubKey.addresses[0], blockDataVerbose.height)) {
-            receiverIsRecognizedSigner = true;
-          }
-        }
-        if (receiver.scriptPubKey.asm) {
-          message = decodeMessage(receiver.scriptPubKey.asm);
+        if (receiver.scriptPubKey.addresses && isRecognizedMessageSigner(receiver.scriptPubKey.addresses[0], blockDataVerbose.height)) {
+          receiverIsRecognizedSigner = true;
         }
       });
-      if (isFluxAppMessageValue) {
+      // blockTime is the confirming block's timestamp — v9 registeredAt.
+      const payment = readAppPayment(tx, {
+        chain, height: blockDataVerbose.height, txIndex, blockTime: blockDataVerbose.time, priceCards,
+      });
+      if (payment) {
+        // A hash's payment is its first in chain order: a later payment of a
+        // hash already recorded, or already buffered from an earlier block or
+        // an earlier transaction of this one, is not recorded.
         // eslint-disable-next-line no-await-in-loop
-        const appPrices = await chainUtilities.getChainParamsPriceUpdates();
-        const intervals = appPrices.filter((i) => i.height < blockDataVerbose.height);
-        const priceSpecifications = intervals[intervals.length - 1]; // filter does not change order
-        // MAY contain App transaction. Store it.
-        if (isFluxAppMessageValue >= (priceSpecifications.minPrice * 1e8) && message.length === 64 && blockDataVerbose.height >= config.get('fluxapps.epochstart')) { // min of X flux had to be paid for us bothering checking
-          const appTxRecord = {
-            txid: tx.txid, height: blockDataVerbose.height, txIndex, hash: message, value: isFluxAppMessageValue,
-            blockTime: blockDataVerbose.time, // confirming block timestamp — v9 registeredAt
-          };
-          // A hash's payment is its first in chain order: a later payment of a
-          // hash already recorded, or already buffered from an earlier block or
-          // an earlier transaction of this one, is not recorded. A record whose
-          // transaction the chain does not hold is no payment (standingAppPayment).
-          // eslint-disable-next-line no-await-in-loop
-          const held = appsTransactions.some((record) => record.hash === message) || await appRecords.messages().byHash(message);
-          const recorded = held === true || (Boolean(held?.payment) && held.payment.notOnChain !== true);
-          if (recorded) {
-            log.info(`Explorer - hash ${message} is paid again at ${blockDataVerbose.height} by ${tx.txid}; its first payment stands`);
-          } else {
-            appsTransactions.push(appTxRecord);
-          }
+        // A record whose transaction the chain does not hold is no payment.
+        const held = appsTransactions.some((record) => record.hash === payment.hash) || await appRecords.messages().byHash(payment.hash);
+        const recorded = held === true || (Boolean(held?.payment) && held.payment.notOnChain !== true);
+        if (recorded) {
+          log.info(`Explorer - hash ${payment.hash} is paid again at ${blockDataVerbose.height} by ${tx.txid}; its first payment stands`);
+        } else {
+          appsTransactions.push(payment);
         }
       }
       // check for softForks — coarse filter: a recognized signer self-send. Every
@@ -831,7 +797,7 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
     // as being at the tip and took the tip path.
     isSynced = atTip;
     if (isSynced) {
-      if (capabilities.isUp('appRegistryConsistent') && blockDataVerbose.height >= config.get('fluxapps.epochstart')) {
+      if (capabilities.isUp('appRegistryConsistent') && blockDataVerbose.height >= chainUtilities.appPaymentsFrom()) {
         // Desired-state convergence at every tip block: cheap (this node's
         // handful of installed rows), level-triggered, and the reconciler
         // staggers any actual redeploys itself — so evaluating every block
@@ -948,24 +914,6 @@ async function cleanupDuplicateScannedHeight(database) {
   } catch (error) {
     log.error(`Error cleaning up duplicate scannedheight documents: ${error.message}`);
   }
-}
-
-/**
- * To start the block processor.
- * @param {boolean} restoreDatabase True if database is to be restored.
- * @param {boolean} deepRestore True if a deep restore is required.
- * @returns {void} Return statement is only used here to interrupt the function and nothing is returned.
- */
-
-function getPriceSpecForHeight(priceSpecs, height) {
-  let lo = 0;
-  let hi = priceSpecs.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >> 1;
-    if (priceSpecs[mid].height < height) lo = mid;
-    else hi = mid - 1;
-  }
-  return priceSpecs[lo];
 }
 
 /**
@@ -1139,7 +1087,7 @@ async function bootstrapSoftForks(currentDaemonHeight) {
   ].filter(Boolean);
 
   await scanForSoftForks(
-    staticSigners, config.get('fluxapps.epochstart'), currentDaemonHeight, 'phase 1 (foundation)',
+    staticSigners, chainUtilities.appPaymentsFrom(), currentDaemonHeight, 'phase 1 (foundation)',
   );
 
   // Only now can the oracle's addresses be known: phase 1 is what read the messages
@@ -1169,42 +1117,25 @@ async function bootstrapSoftForks(currentDaemonHeight) {
  * @returns {object|null}
  */
 function processBootstrapTx(tx, priceSpecs, txIndex) {
-  if (tx.version >= 5 || tx.version <= 0) return null;
-  const { height } = tx;
-  if (!height) return null;
-
-  let message = '';
-  let appValue = 0;
-
-  for (const vout of tx.vout) {
-    if (vout.scriptPubKey.addresses) {
-      const addr = vout.scriptPubKey.addresses[0];
-      if (chainUtilities.isAppPaymentReceiver(addr, height)) {
-        appValue += vout.valueSat;
-      }
-    }
-    if (vout.scriptPubKey.asm) {
-      message = decodeMessage(vout.scriptPubKey.asm);
-    }
-  }
-
-  if (appValue <= 0) return null;
-  const priceSpec = getPriceSpecForHeight(priceSpecs, height);
-  if (appValue < (priceSpec.minPrice * 1e8) || message.length !== 64 || height < config.get('fluxapps.epochstart')) return null;
-  return {
-    txid: tx.txid, height, txIndex, hash: message, value: appValue,
+  if (!tx.height) return null;
+  return specLibrary.loaded().readAppPayment(tx, {
+    chain: nodeChain(),
+    height: tx.height,
+    txIndex,
     blockTime: tx.blocktime ?? null, // verbose getrawtransaction field — v9 registeredAt
-  };
+    priceCards: priceSpecs,
+  });
 }
 
 /**
- * Records every app payment from `epochstart` to a height without scanning
+ * Records every app payment from the height payments count from to a height, without scanning
  * blocks: each hash's first payment by chain order `(height, txIndex)`.
  * @param {number} currentDaemonHeight
  */
 async function bootstrapAppHashes(currentDaemonHeight) {
-  log.info(`Bootstrap: Fetching app payments from height ${config.get('fluxapps.epochstart')} to ${currentDaemonHeight}`);
-  const positions = await appPaymentPositions(config.get('fluxapps.epochstart'), currentDaemonHeight);
+  const from = chainUtilities.appPaymentsFrom();
+  log.info(`Bootstrap: Fetching app payments from height ${from} to ${currentDaemonHeight}`);
+  const positions = await appPaymentPositions(from, currentDaemonHeight);
   const allTxids = [...positions.keys()];
   log.info(`Bootstrap: ${allTxids.length} unique txids to process`);
 
@@ -1669,11 +1600,11 @@ async function initiateBlockProcessor(options = {}) {
         } catch (error) {
           log.error('Bootstrap failed, falling back to block-by-block scan');
           log.error(error);
-          await chainState.setScannedHeight(database, config.get('fluxapps.epochstart') - 1);
+          await chainState.setScannedHeight(database, chainUtilities.appPaymentsFrom() - 1);
         }
       });
-    } else if (isInsightExplorer && scannedBlockHeight < config.get('fluxapps.epochstart') - 1) {
-      await chainState.exclusive(() => chainState.setScannedHeight(database, config.get('fluxapps.epochstart') - 1));
+    } else if (isInsightExplorer && scannedBlockHeight < chainUtilities.appPaymentsFrom() - 1) {
+      await chainState.exclusive(() => chainState.setScannedHeight(database, chainUtilities.appPaymentsFrom() - 1));
     }
 
     await migrations.runBefore('explorerSynced');
@@ -1976,10 +1907,8 @@ module.exports = {
   processSoftFork,
   bootstrapSoftForks,
   bootstrapAppHashes,
-  getPriceSpecForHeight,
   processBootstrapTx,
   getVerboseBlock,
-  decodeMessage,
   processInsight,
   insertTransactions,
   setIsInInitiationOfBP,
