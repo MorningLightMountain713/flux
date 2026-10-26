@@ -69,14 +69,24 @@ describe('decisionChain', () => {
     sinon.assert.calledOnceWithExactly(updateSigners, event, 2_000_000);
   });
 
-  it('asks a spec\'s own regime whether it is priced at the height', async () => {
+  it('asks a spec\'s own regime whether it is priced at the moment', async () => {
     const chain = await loadChain().createChain();
     const v9 = sinon.stub(v9PricingRegime, 'pricedAt').resolves(false);
     const legacy = sinon.stub(legacyPricingRegime, 'pricedAt').resolves(true);
-    expect(await chain.pricedAt(await appDomain.v9Spec(), 1234)).to.equal(false);
-    expect(await chain.pricedAt(await appDomain.v8Spec(), 1234)).to.equal(true);
-    sinon.assert.calledOnceWithExactly(v9, 1234);
-    sinon.assert.calledOnceWithExactly(legacy, 1234);
+    const at = { time: 1_750_000_000, height: 1234 };
+    expect(await chain.pricedAt(await appDomain.v9Spec(), at)).to.equal(false);
+    expect(await chain.pricedAt(await appDomain.v8Spec(), at)).to.equal(true);
+    sinon.assert.calledOnceWithExactly(v9, at);
+    sinon.assert.calledOnceWithExactly(legacy, at);
+  });
+
+  it('asks a spec\'s own regime its registration fee at the moment', async () => {
+    const chain = await loadChain().createChain();
+    const fee = sinon.stub(v9PricingRegime, 'registrationFee').resolves(7n);
+    const at = { time: 1_750_000_000, height: 1234 };
+    const spec = await appDomain.v9Spec();
+    expect(await chain.registrationFee(spec, at)).to.equal(7n);
+    sinon.assert.calledOnceWithExactly(fee, spec, at);
   });
 
   it('reads the activation height of each version from the enforcement heights', async () => {

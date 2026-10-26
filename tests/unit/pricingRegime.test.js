@@ -74,29 +74,28 @@ describe('pricingRegime', () => {
     });
   });
 
-  describe('v9 updateFee prices against its predecessor as of the confirming block', () => {
+  describe('v9 updateFee prices against its predecessor at the update\'s moment', () => {
     const HEIGHT = 2_000_000;
     const BLOCK_TIME = 1_750_000_000;
     const events = [{ hash: 'earlier', height: HEIGHT - 5, type: 'fluxappupdate' }];
     const spec = { name: 'myapp', ttl: 2_592_000, isEncrypted: false };
 
-    function loadV9() {
+    function loadV9(modifierHistory = null) {
       const priceUpdate = sinon.stub().resolves({ free: true });
       const v9 = proxyquire('../../ZelBack/src/services/pricing/v9PricingRegime', {
         './buildPricingEngine': { buildPricingEngine: sinon.stub().resolves({ priceUpdate }) },
-        './priceOracleState': { getPriceModifierHistory: () => null },
+        './priceOracleState': { getPriceModifierHistory: () => modifierHistory },
       });
       return { v9, priceUpdate };
     }
 
     async function contextHandedToTheRule({ extend = false } = {}) {
       const { v9, priceUpdate } = loadV9();
-      const prevSpec = { termSeconds: sinon.stub().returns(7000), remainingSeconds: sinon.stub().returns(3000) };
+      const prevSpec = { termSeconds: sinon.stub().returns(7000), remainingSecondsAt: sinon.stub().returns(3000) };
       await v9.updateFee(spec, prevSpec, {
-        height: HEIGHT,
-        prevHeight: HEIGHT - 5,
+        at: { time: BLOCK_TIME, height: HEIGHT },
+        prevAt: { time: BLOCK_TIME - 3700, height: HEIGHT - 5 },
         prevRegisteredAt: BLOCK_TIME - 3600,
-        nowBlockTime: BLOCK_TIME,
         extend,
         recentEvents: async () => events,
         prevTermCost: { oldTermPriceFluxSats: 42 },
@@ -104,7 +103,7 @@ describe('pricingRegime', () => {
       return { ctx: priceUpdate.firstCall.args[2], prevSpec };
     }
 
-    it('hands the rule the block time, not the clock of the node reading it', async () => {
+    it('hands the rule the update\'s signed time, not the clock of the node reading it', async () => {
       const { ctx } = await contextHandedToTheRule();
       expect(ctx.asOf).to.equal(BLOCK_TIME * 1000);
     });
@@ -114,19 +113,31 @@ describe('pricingRegime', () => {
       expect(ctx.recentEvents).to.equal(events);
     });
 
-    it('reads the predecessor\'s term through its accessors, at the confirming block', async () => {
+    it('reads the predecessor\'s term through its accessors, credited at the update\'s signed time', async () => {
       const { ctx, prevSpec } = await contextHandedToTheRule();
       const prevState = { height: HEIGHT - 5, registeredAt: BLOCK_TIME - 3600 };
       expect(ctx.oldTtl).to.equal(7000);
       expect(ctx.remainingSeconds).to.equal(3000);
       sinon.assert.calledWithExactly(prevSpec.termSeconds, prevState);
-      sinon.assert.calledWithExactly(prevSpec.remainingSeconds, prevState, { tipBlockTime: BLOCK_TIME, currentHeight: HEIGHT });
+      sinon.assert.calledWithExactly(prevSpec.remainingSecondsAt, prevState, BLOCK_TIME);
     });
 
     it('credits the term cost its predecessor\'s regime gave, in that regime\'s unit', async () => {
       const { ctx } = await contextHandedToTheRule();
       expect(ctx.oldTermPriceFluxSats).to.equal(42);
       expect(ctx).to.not.have.property('oldScaledPriceMicrodollars');
+    });
+
+    it('hands the rule the update discount in force at the update\'s moment', async () => {
+      const resolveAt = sinon.stub().returns({ updateDiscountBp: 1000 });
+      const { v9, priceUpdate } = loadV9({ resolveAt });
+      const prevSpec = { termSeconds: () => 7000, remainingSecondsAt: () => 3000 };
+      const at = { time: BLOCK_TIME, height: HEIGHT };
+      await v9.updateFee(spec, prevSpec, {
+        at, prevAt: { time: BLOCK_TIME - 3700, height: HEIGHT - 5 }, prevRegisteredAt: BLOCK_TIME - 3600, extend: false, recentEvents: async () => [], prevTermCost: {},
+      });
+      sinon.assert.calledWithExactly(resolveAt, at);
+      expect(priceUpdate.firstCall.args[2].updateDiscountBp).to.equal(1000);
     });
 
     it('hands the rule the event\'s renewal flag', async () => {
@@ -177,35 +188,37 @@ describe('pricingRegime', () => {
 
   describe('v9 pricedAt', () => {
     const MINED = 1000;
+    const MINED_TIME = 1_750_000_000;
 
     async function loadWith(priceMessages) {
-      const { PriceMessageHistory, SOFT_FORK_EFFECTIVE_DEPTH } = await specLibs.getSpecPolicy();
+      const { PriceMessageHistory, PRICE_NOTICE_SECONDS } = await specLibs.getSpecPolicy();
       let history = null;
       if (priceMessages) {
         history = new PriceMessageHistory();
-        priceMessages.forEach((fields, i) => history.add({ fields }, MINED, i));
+        priceMessages.forEach((fields, i) => history.add({ fields }, MINED, i, MINED_TIME));
       }
       const regime = proxyquire('../../ZelBack/src/services/pricing/v9PricingRegime', {
         './priceOracleState': { getPriceMessageHistory: () => history },
       });
-      return { regime, effective: MINED + SOFT_FORK_EFFECTIVE_DEPTH };
+      // Well past the depth: the hour decides.
+      return { regime, inForce: { time: MINED_TIME + PRICE_NOTICE_SECONDS, height: MINED + 200 } };
     }
 
-    it('is false at a height no price message is in force at', async () => {
-      const { regime } = await loadWith([]);
-      expect(await regime.pricedAt(MINED)).to.equal(false);
+    it('is false at a moment no price message is in force at', async () => {
+      const { regime, inForce } = await loadWith([]);
+      expect(await regime.pricedAt(inForce)).to.equal(false);
     });
 
-    it('is false before a mined price message takes effect, and true from then on', async () => {
-      const { regime, effective } = await loadWith([{ minPrice: 1_000_000 }]);
-      expect(await regime.pricedAt(effective - 1)).to.equal(false);
-      expect(await regime.pricedAt(effective)).to.equal(true);
+    it('is false before a mined price message counts, and true from then on', async () => {
+      const { regime, inForce } = await loadWith([{ minPrice: 1_000_000 }]);
+      expect(await regime.pricedAt({ ...inForce, time: inForce.time - 1 })).to.equal(false);
+      expect(await regime.pricedAt(inForce)).to.equal(true);
     });
 
     it('cannot answer before the price message history is built', async () => {
-      const { regime } = await loadWith(null);
+      const { regime, inForce } = await loadWith(null);
       let thrown = null;
-      try { await regime.pricedAt(MINED); } catch (error) { thrown = error; }
+      try { await regime.pricedAt(inForce); } catch (error) { thrown = error; }
       expect(thrown).to.be.an('error');
     });
   });
@@ -231,12 +244,13 @@ describe('pricingRegime', () => {
       const prevSpec = { pricingModel: PricingModel.CHAIN_FLOOR };
       const spec = { pricingModel: PricingModel.UNIFIED };
 
-      const fee = await regime.updateFee(spec, prevSpec, { height: 10, prevHeight: 4 });
+      const ctx = { at: { time: 2000, height: 10 }, prevAt: { time: 1000, height: 4 } };
+      const fee = await regime.updateFee(spec, prevSpec, ctx);
 
       expect(fee).to.equal(5n);
-      sinon.assert.calledOnceWithExactly(legacy.termCost, prevSpec, 4);
+      sinon.assert.calledOnceWithExactly(legacy.termCost, prevSpec, ctx.prevAt);
       sinon.assert.notCalled(v9.termCost);
-      sinon.assert.calledOnceWithExactly(v9.updateFee, spec, prevSpec, { height: 10, prevHeight: 4, prevTermCost: cost });
+      sinon.assert.calledOnceWithExactly(v9.updateFee, spec, prevSpec, { ...ctx, prevTermCost: cost });
     });
   });
 

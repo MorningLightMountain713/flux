@@ -41,9 +41,9 @@ async function regimeRegistry() {
  *
  *   onChainDisplayPrice(spec, pricing)         -> FLUX for display
  *   fiatAndFluxDisplayPrice(spec, rawDoc, pricing) -> { usd, flux, fluxDiscount }
- *   registrationFee(spec, height)              -> bigint sats
- *   termCost(spec, height)                     -> what a term bought at that
- *                                              height cost, in the regime's
+ *   registrationFee(spec, at)                  -> bigint sats
+ *   termCost(spec, at)                         -> what a term bought at that
+ *                                              moment cost, in the regime's
  *                                              own unit
  *   updateFee(spec, prevSpec, ctx)             -> bigint sats (null: refused)
  *   entitlementRefusal(spec, height)           -> why the owner may not use the
@@ -70,13 +70,13 @@ async function regimeFor(spec) {
 }
 
 /**
- * What a term of `spec` bought at `height` cost, from the spec's own regime.
+ * What a term of `spec` bought at moment `at` cost, from the spec's own regime.
  * @param {object} spec
- * @param {number} height
+ * @param {{time: number, height: number}} at
  * @returns {Promise<object>} the regime's cost fields, for priceUpdate's context
  */
-async function termCost(spec, height) {
-  return (await regimeFor(spec)).termCost(spec, height);
+async function termCost(spec, at) {
+  return (await regimeFor(spec)).termCost(spec, at);
 }
 
 /** What every regime's display functions read of the others. */
@@ -88,12 +88,12 @@ const pricing = Object.freeze({ termCost });
  *
  * @param {object} spec - resolved new spec
  * @param {object} prevSpec - resolved previous spec
- * @param {{height: number, prevHeight: number, prevRegisteredAt: ?number,
- *   nowBlockTime: number, recentEvents: () => Promise<object[]>}} ctx
+ * @param {{at: object, prevAt: object, prevRegisteredAt: ?number, extend: boolean,
+ *   recentEvents: () => Promise<object[]>}} ctx - as flux-spec's decision rule asks it
  * @returns {Promise<bigint|null>}
  */
 async function updateFee(spec, prevSpec, ctx) {
-  const prevTermCost = await termCost(prevSpec, ctx.prevHeight);
+  const prevTermCost = await termCost(prevSpec, ctx.prevAt);
   return (await regimeFor(spec)).updateFee(spec, prevSpec, { ...ctx, prevTermCost });
 }
 
