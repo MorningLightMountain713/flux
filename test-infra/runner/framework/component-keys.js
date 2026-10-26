@@ -7,13 +7,15 @@
  * data directory and Syncthing folder are named by its key.
  */
 import {
-  FluxAppSpecV9, appIdentityFromUuid, appUuid, componentKeysFor,
+  OpenedSpec, appIdentityFromUuid, appUuid, componentKeysFor,
 } from '@runonflux/flux-spec';
 
 const MESSAGE_HASH = /^[a-f0-9]{64}$/;
 
+// Under the private rules, which hold every spec the harness registers, sealed
+// or in the clear.
 function specOf(submissionSpec) {
-  return FluxAppSpecV9.fromSubmission(submissionSpec, { encrypted: true });
+  return OpenedSpec.fromSubmission(submissionSpec);
 }
 
 function messageHashOf(hash, what) {

@@ -9,9 +9,10 @@ import * as benchCrypto from '../../daemon-stub/benchCrypto.js';
 import * as tk from './content-crypto-v9.js';
 import { harnessNow } from './harness-clock.js';
 import { registrationKeys, updateKeys } from './component-keys.js';
+import {
+  Chain, TRANSPORT_ATTESTATION_MAX_AGE_MS, verifyTransportPubkeyAttestation,
+} from '@runonflux/flux-spec';
 
-// The node's per-app transport pubkey (the real frontend fetches this before sealing).
-// The route wraps the benchmark reply as { status:'success', data:{ status:'ok', publicKey } }.
 // The component keys of a registration the door accepted, by name: its data is
 // the registration's message hash.
 function keysOfRegistration(data, submissionSpec) {
@@ -25,13 +26,28 @@ function keysOfUpdate(data, submissionSpec, opts) {
   return { componentKeys: updateKeys(submissionSpec, data.data, { previous: opts.previousKeys, identity: opts.identity }) };
 }
 
-export async function fetchTransportPubKey(nodeUrl, appName, owner) {
+// The network's transport key for an app and owner, as a node offers it,
+// checked against the harness chain's attestation key the way a client checks
+// it, at the suite's time. A key the network did not attest is refused.
+export async function fetchTransportKey(nodeUrl, appName, owner) {
   const res = await fetch(`${nodeUrl}/apps/transportpubkey/${encodeURIComponent(appName)}?fluxid=${encodeURIComponent(owner)}`);
   const body = await res.json();
   if (body.status !== 'success' || !body.data || !body.data.publicKey) {
     throw new Error(`transportpubkey failed: ${JSON.stringify(body)}`);
   }
-  return body.data.publicKey;
+  const { publicKey, timestamp, attestation } = body.data;
+  const key = await verifyTransportPubkeyAttestation({
+    appName,
+    fluxID: owner,
+    publicKey: new Uint8Array(Buffer.from(publicKey, 'base64')),
+    timestamp,
+    attestation: new Uint8Array(Buffer.from(attestation, 'base64')),
+    chain: Chain.HARNESS,
+    maxAgeMs: TRANSPORT_ATTESTATION_MAX_AGE_MS,
+    now: harnessNow(),
+  });
+  if (!key) throw new Error(`transportpubkey: the key offered for ${appName} is not attested by the harness chain`);
+  return key;
 }
 
 // The identity of the app a node's registry lists under a name: what a content
@@ -88,8 +104,8 @@ export async function deployContentApp(nodeUrl, opts) {
     })),
   });
 
-  const transportPubB64 = await fetchTransportPubKey(nodeUrl, name, owner);
-  const { specField, contentHash } = await tk.buildSignedRegistration({ submissionSpec, ownerKey, transportPubB64, timestamp });
+  const transportKey = await fetchTransportKey(nodeUrl, name, owner);
+  const { specField, contentHash } = await tk.buildSignedRegistration({ submissionSpec, ownerKey, transportKey, timestamp });
 
   // Blobs: contentRef + every slot's initial bytes, keyed by plaintext hash.
   const blobs = {};
@@ -126,7 +142,7 @@ export async function deployContentApp(nodeUrl, opts) {
   }
 
   const envelope = await tk.buildContentEnvelope({
-    blobs, manifest, manifestPutSig, appName: name, transportPubB64, ref: contentHash, timestamp,
+    blobs, manifest, manifestPutSig, appName: name, transportKey, ref: contentHash, timestamp,
   });
 
   const auth = await authenticate(nodeUrl, ownerKey);
@@ -180,9 +196,9 @@ export async function registerEncryptedV9App(nodeUrl, opts) {
     ...(opts.specOverrides || {}),
   });
 
-  const transportPubB64 = await fetchTransportPubKey(nodeUrl, name, owner);
+  const transportKey = await fetchTransportKey(nodeUrl, name, owner);
   const { specField, contentHash } = await tk.buildSignedRegistration({
-    submissionSpec, ownerKey, transportPubB64, timestamp, contentHash: opts.contentHash,
+    submissionSpec, ownerKey, transportKey, timestamp, contentHash: opts.contentHash,
   });
 
   const auth = await authenticate(nodeUrl, ownerKey);
@@ -234,9 +250,9 @@ export async function updateEncryptedV9App(nodeUrl, opts) {
     ...(opts.specOverrides || {}),
   });
 
-  const transportPubB64 = await fetchTransportPubKey(nodeUrl, name, owner);
+  const transportKey = await fetchTransportKey(nodeUrl, name, owner);
   const { specField, contentHash } = await tk.buildSignedRegistration({
-    submissionSpec, ownerKey, transportPubB64, timestamp, type: 'fluxappupdate',
+    submissionSpec, ownerKey, transportKey, timestamp, type: 'fluxappupdate',
   });
 
   const auth = await authenticate(nodeUrl, ownerKey);
@@ -420,9 +436,9 @@ export async function updateContentApp(nodeUrl, opts) {
     ...(opts.specOverrides || {}),
   });
 
-  const transportPubB64 = await fetchTransportPubKey(nodeUrl, name, owner);
+  const transportKey = await fetchTransportKey(nodeUrl, name, owner);
   const { specField, contentHash } = await tk.buildSignedRegistration({
-    submissionSpec, ownerKey, transportPubB64, timestamp, type: 'fluxappupdate',
+    submissionSpec, ownerKey, transportKey, timestamp, type: 'fluxappupdate',
   });
 
   const blobs = {};
@@ -466,7 +482,7 @@ export async function updateContentApp(nodeUrl, opts) {
   }
 
   const envelope = await tk.buildContentEnvelope({
-    blobs, manifest, manifestPutSig, keepList, appName: name, transportPubB64, ref: contentHash, timestamp,
+    blobs, manifest, manifestPutSig, keepList, appName: name, transportKey, ref: contentHash, timestamp,
   });
 
   const auth = await authenticate(nodeUrl, ownerKey);
@@ -498,9 +514,9 @@ export async function updateContentApp(nodeUrl, opts) {
 export async function requestBlobLocator(nodeUrl, {
   name, contentHash, ownerKey, timestamp = harnessNow(),
 }) {
-  const transportPubB64 = await fetchTransportPubKey(nodeUrl, name, ownerKey.zelid);
+  const transportKey = await fetchTransportKey(nodeUrl, name, ownerKey.zelid);
   const sealed = await tk.sealLocatorRequest({
-    contentHash, appName: name, timestamp, transportPubB64,
+    contentHash, appName: name, timestamp, transportKey,
   });
   const auth = await authenticate(nodeUrl, ownerKey);
   const res = await fetch(`${nodeUrl}/apps/bloblocator`, {
@@ -538,7 +554,7 @@ export async function pushContentUpdate(nodeUrl, opts) {
     slotMap[s.name] = { hash: h };
   }
 
-  const transportPubB64 = await fetchTransportPubKey(nodeUrl, name, owner);
+  const transportKey = await fetchTransportKey(nodeUrl, name, owner);
   // Signed under the listed ownership: the manifest carries the height the owner
   // took the app, and the version the node says comes next unless the suite names one.
   const standing = await manifestStanding(nodeUrl, name);
@@ -559,7 +575,7 @@ export async function pushContentUpdate(nodeUrl, opts) {
 
   const envelope = await tk.buildContentEnvelope({
     blobs, manifest, manifestPutSig: mPutSig,
-    appName: name, transportPubB64, ref: `manifest:v${version}`, timestamp,
+    appName: name, transportKey, ref: `manifest:v${version}`, timestamp,
   });
 
   const auth = await authenticate(nodeUrl, ownerKey);

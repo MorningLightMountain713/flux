@@ -3,7 +3,7 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
-import { deployContentApp, fetchTransportPubKey } from '../framework/content-helper.js';
+import { deployContentApp, fetchTransportKey } from '../framework/content-helper.js';
 import { getFluxDriveState, resetFluxDrive } from '../framework/fluxdrive-control.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { queueAppTx, advanceBlocks } from '../framework/daemon-control.js';
@@ -78,10 +78,10 @@ describe('content blobs (contentRef): register, upload, provision', function () 
     expect(stored.byteLength).to.be.greaterThan(contentBytes.length); // nonce+ct+tag framing
   });
 
-  it('serves the per-app transport public key', async function () {
+  it('serves the per-app transport public key, attested by the network', async function () {
     this.timeout(30000);
-    const pub = await fetchTransportPubKey(env.clients[0].url, appName, appOwnerKey().zelid);
-    expect(Buffer.from(pub, 'base64')).to.have.lengthOf(32);
+    const key = await fetchTransportKey(env.clients[0].url, appName, appOwnerKey().zelid);
+    expect(key.publicKey).to.have.lengthOf(32);
   });
 
   it('confirms on-chain and the spawner provisions the blob from the FluxDrive backstop', async function () {
