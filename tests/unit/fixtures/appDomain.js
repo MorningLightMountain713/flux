@@ -52,7 +52,7 @@ function submission(overrides = {}) {
 
 /**
  * A v8 submission body. The legacy path is still live — a temp message below
- * version 2 deserializes through AppEventLegacy — so tests covering it need a
+ * version 2 deserializes through SignedAppEventLegacy — so tests covering it need a
  * spec the real deserializer accepts. It rejects a bare {name, version, owner}:
  * description, nodes, staticip and enterprise are all required.
  */
@@ -141,12 +141,12 @@ async function v3Spec(overrides = {}) {
   }, { chain: Chain.MAIN });
 }
 
-/** The real AppEventLegacy, for temp messages below version 2. */
-async function legacyEvent(overrides = {}) {
-  const { AppEventLegacy, Chain } = await load();
+/** The real ConfirmedAppEventLegacy: a message below version 2, with its payment. */
+async function confirmedLegacyEvent(overrides = {}) {
+  const { ConfirmedAppEventLegacy, Chain } = await load();
   const { spec, ...rest } = overrides;
   const appSpecifications = (spec ?? await v8Spec()).serialize();
-  return AppEventLegacy.deserialize({
+  return ConfirmedAppEventLegacy.deserialize({
     type: 'fluxappupdate',
     version: 1,
     appSpecifications,
@@ -225,7 +225,7 @@ async function hostedInstance(overrides = {}) {
  *
  * `version` here is the MESSAGE version, not the spec's, and it decides which
  * event class deserializes it: 2 and above is ConfirmedAppEvent (v9 specs
- * only), below that is AppEventLegacy. The spec blob has to match — that
+ * only), below that is ConfirmedAppEventLegacy. The spec blob has to match — that
  * pairing is the thing a double could not enforce.
  */
 async function tempMessage(overrides = {}) {
@@ -320,7 +320,7 @@ module.exports = {
   v3Spec,
   encryptedV8Spec,
   confirmedEvent,
-  legacyEvent,
+  confirmedLegacyEvent,
   registeredSpec,
   hostedInstance,
   tempMessage,

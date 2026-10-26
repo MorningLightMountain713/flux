@@ -93,7 +93,9 @@ describe('appEventVerifier', () => {
       // ever deserialize. Hashing and attestation stay stubbed: those reach the
       // crypto and benchmark surfaces, which do leave the process.
       getSpecBackend: sinon.stub().resolves({
-        AppEventLegacy: realBackend.AppEventLegacy,
+        SignedAppEventLegacy: realBackend.SignedAppEventLegacy,
+        ConfirmedAppEventLegacy: realBackend.ConfirmedAppEventLegacy,
+        SignedAppEvent: realBackend.SignedAppEvent,
         ConfirmedAppEvent: realBackend.ConfirmedAppEvent,
         // The real rule for who may sign: these tests are about what the node
         // hands it, and a double would answer whatever the test assumed.
@@ -152,10 +154,10 @@ describe('appEventVerifier', () => {
     // messages each class will really accept: a v1 envelope carries a v8 spec,
     // a v2 envelope a v9 one. A marker double answers for any document at all,
     // so it can show a message routed somewhere that would have refused it.
-    it('dispatches envelope version 1 to AppEventLegacy', async () => {
+    it('dispatches envelope version 1 to ConfirmedAppEventLegacy', async () => {
       const msg = await domain.tempMessage({ version: 1 });
       const result = await appEventVerifier.deserializeMessage(msg);
-      expect(result).to.be.instanceOf(realBackend.AppEventLegacy);
+      expect(result).to.be.instanceOf(realBackend.ConfirmedAppEventLegacy);
     });
 
     it('dispatches envelope version 2 to ConfirmedAppEvent', async () => {
@@ -164,12 +166,30 @@ describe('appEventVerifier', () => {
       expect(result).to.be.instanceOf(realBackend.ConfirmedAppEvent);
     });
 
-    it('falls back to AppEventLegacy for any other/legacy envelope version', async () => {
+    it('falls back to ConfirmedAppEventLegacy for any other/legacy envelope version', async () => {
       // Wire history has some zel*register messages with non-integer version
-      // fields. AppEventLegacy is the compatibility path.
+      // fields. The legacy event is the compatibility path.
       const msg = await domain.tempMessage({ version: 0, type: 'zelappregister' });
       const result = await appEventVerifier.deserializeMessage(msg);
-      expect(result).to.be.instanceOf(realBackend.AppEventLegacy);
+      expect(result).to.be.instanceOf(realBackend.ConfirmedAppEventLegacy);
+    });
+  });
+
+  describe('deserializeTempMessage', () => {
+    it('dispatches envelope version 1 to SignedAppEventLegacy, which serializes without chain facts', async () => {
+      const msg = await domain.tempMessage({ version: 1 });
+      const result = await appEventVerifier.deserializeTempMessage({
+        ...msg, txid: 'a'.repeat(64), height: 1_000_000, valueSat: 1,
+      });
+      expect(result).to.be.instanceOf(realBackend.SignedAppEventLegacy);
+      expect(result).not.to.be.instanceOf(realBackend.ConfirmedAppEventLegacy);
+      expect(result.serialize()).to.not.have.any.keys('txid', 'height', 'valueSat');
+    });
+
+    it('dispatches envelope version 2 to SignedAppEvent', async () => {
+      const msg = await domain.tempMessage({ version: 2 });
+      const result = await appEventVerifier.deserializeTempMessage(msg);
+      expect(result).to.be.instanceOf(realBackend.SignedAppEvent);
     });
   });
 

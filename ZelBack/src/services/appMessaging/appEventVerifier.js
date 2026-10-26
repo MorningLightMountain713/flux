@@ -11,19 +11,19 @@ const { ownerChangeRaceSigner } = require('./ownerChangeRaces');
 const { nodeChain } = require('../utils/nodeChain');
 
 async function deserializeMessage(message) {
-  const { AppEventLegacy, ConfirmedAppEvent } = await getSpecBackend();
+  const { ConfirmedAppEventLegacy, ConfirmedAppEvent } = await getSpecBackend();
   if (message.version === 2) {
     return ConfirmedAppEvent.deserialize(message);
   }
-  return AppEventLegacy.deserialize(message, { chain: nodeChain() });
+  return ConfirmedAppEventLegacy.deserialize(message, { chain: nodeChain() });
 }
 
 async function deserializeTempMessage(message) {
-  const { AppEventLegacy, SignedAppEvent } = await getSpecBackend();
+  const { SignedAppEventLegacy, SignedAppEvent } = await getSpecBackend();
   if (message.version === 2) {
     return SignedAppEvent.deserialize(message);
   }
-  return AppEventLegacy.deserialize(message, { chain: nodeChain() });
+  return SignedAppEventLegacy.deserialize(message, { chain: nodeChain() });
 }
 
 async function verifyFn(payload, address, signature) {

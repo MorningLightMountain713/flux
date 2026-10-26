@@ -63,7 +63,7 @@ describe('decisionChain', () => {
   it('names the renewal signers in force at a height, and the update signers an event has there', async () => {
     const chain = await loadChain().createChain();
     expect(chain.renewalSignersAt(2_000_000)).to.include(RENEWER);
-    const event = await appDomain.legacyEvent({ spec: await appDomain.v8Spec() });
+    const event = await appDomain.confirmedLegacyEvent({ spec: await appDomain.v8Spec() });
     const updateSigners = sinon.stub(appEventVerifier, 'updateSignersAt').returns([RENEWER]);
     expect(chain.updateSignersAt(event, 2_000_000)).to.deep.equal([RENEWER]);
     sinon.assert.calledOnceWithExactly(updateSigners, event, 2_000_000);

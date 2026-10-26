@@ -1226,7 +1226,7 @@ describe('volumeService tests', () => {
     const KEY = `c${'k'.repeat(51)}a`;
 
     const registered = async ({ spec, identity }) => domain.registeredSpec({
-      event: spec.version >= 9 ? await domain.confirmedEvent({ spec }) : await domain.legacyEvent({ spec }),
+      event: spec.version >= 9 ? await domain.confirmedEvent({ spec }) : await domain.confirmedLegacyEvent({ spec }),
       identity,
     });
     const block = (identifier) => ({
