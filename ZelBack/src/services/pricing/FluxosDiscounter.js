@@ -1,14 +1,18 @@
 'use strict';
 
-const priceOracleState = require('./priceOracleState');
 const specLibs = require('../utils/specLibs');
 
+/** The duration discounts and the free-update rule, from the modifiers in force at the moment priced. */
 class FluxosDiscounter {
+  #params;
+
+  /** @param {object} params - PriceModifierHistory.resolveAt at the moment */
+  constructor(params) {
+    this.#params = params;
+  }
+
   async discounts(spec, _partial, ctx) {
-    const history = priceOracleState.getPriceModifierHistory();
-    if (!history) return [];
-    const params = history.resolveAt(ctx.height);
-    if (!params) return [];
+    const params = this.#params;
 
     const entries = [];
     const duration = ctx.duration || 0;

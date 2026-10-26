@@ -170,7 +170,7 @@ describe('the early-update credit, over every update on chain', function corpus(
       const credited = loadRegime();
 
       const withCredit = Number(await credited.onChainDisplayPrice(APP));
-      const feeWithCredit = Number(await regime.updateFee(APP, APP, { height: UPDATE_HEIGHT, prevHeight: PREV_HEIGHT }));
+      const feeWithCredit = Number(await regime.updateFee(APP, APP, { at: { height: UPDATE_HEIGHT }, prevAt: { height: PREV_HEIGHT } }));
 
       // The same app with no prior registration: the price before any credit.
       const noPrevious = proxyquire('../../ZelBack/src/services/pricing/legacyPricingRegime', {
@@ -182,7 +182,7 @@ describe('the early-update credit, over every update on chain', function corpus(
         '../appDatabase/appRecords': { registry: () => ({ byName: async () => null }) },
       });
       const displayGross = Number(await noPrevious.onChainDisplayPrice(APP));
-      const feeGross = Number(await noPrevious.registrationFee(APP, UPDATE_HEIGHT));
+      const feeGross = Number(await noPrevious.registrationFee(APP, { height: UPDATE_HEIGHT }));
 
       const displayFraction = (displayGross - withCredit) / displayGross;
       // The fee carries a 0.9 both sides of the subtraction, so it cancels.

@@ -15,6 +15,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
   let PriceMessage, RateMessage, PriceModifierMessage, dispatch;
   let PriceMessageHistory, RateMessageHistory, PriceModifierHistory;
   let SOFT_FORK_EFFECTIVE_DEPTH;
+  let PRICE_NOTICE_SECONDS;
   let convertMicrodollarsToSats;
   let meteredQuantities;
   let FluxAppSpecV9;
@@ -24,6 +25,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       PriceMessage, RateMessage, PriceModifierMessage, dispatch,
       PriceMessageHistory, RateMessageHistory, PriceModifierHistory,
       SOFT_FORK_EFFECTIVE_DEPTH,
+      PRICE_NOTICE_SECONDS,
       convertMicrodollarsToSats,
       meteredQuantities,
       FluxAppSpecV9,
@@ -72,6 +74,9 @@ describe('pricing integration — chain messages through PricingEngine', () => {
   function buildTestHistories(opts = {}) {
     const chainHeight = opts.chainHeight || 100;
     const queryHeight = chainHeight + SOFT_FORK_EFFECTIVE_DEPTH;
+    const blockTime = 1_700_000_000 + chainHeight * 30;
+    // The first moment every message below counts at: an hour on, and deep enough.
+    const at = { time: blockTime + PRICE_NOTICE_SECONDS, height: queryHeight };
 
     // PriceMessage: commodity rates + feature fees (USD microdollars)
     const priceFields = {
@@ -89,7 +94,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     const priceResult = dispatch(priceBytes);
 
     const priceHistory = new PriceMessageHistory();
-    priceHistory.add(priceResult.message, chainHeight, 0);
+    priceHistory.add(priceResult.message, chainHeight, 0, blockTime);
 
     // RateMessage: FLUX/USD oracle rate
     const fluxUsdPriceE4 = opts.fluxUsdPriceE4 || 577; // $0.0577
@@ -97,7 +102,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     const rateResult = dispatch(rateBytes);
 
     const rateHistory = new RateMessageHistory();
-    rateHistory.add(rateResult.message, chainHeight, 0);
+    rateHistory.add(rateResult.message, chainHeight, 0, blockTime);
 
     // PriceModifierMessage: duration discounts + instance surcharges
     const modifierFields = {
@@ -120,9 +125,11 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     const modifierResult = dispatch(modifierBytes);
 
     const modifierHistory = new PriceModifierHistory();
-    modifierHistory.add(modifierResult.message, chainHeight, 0);
+    modifierHistory.add(modifierResult.message, chainHeight, 0, blockTime);
 
-    return { priceHistory, rateHistory, modifierHistory, queryHeight, priceFields };
+    return {
+      priceHistory, rateHistory, modifierHistory, queryHeight, at, priceFields,
+    };
   }
 
   function stubHistories(histories) {
@@ -161,7 +168,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const h = buildTestHistories();
       stubHistories(h);
 
-      const engine = await buildPricingEngine(h.queryHeight);
+      const engine = await buildPricingEngine(h.at);
       const breakdown = await engine.price(testSpec, { height: h.queryHeight, duration: testSpec.ttl, isEncrypted: false });
 
       // cpu: 0.5 core × 10 × 3 instances = 15 units × 150_000 = 2_250_000 microdollars
@@ -192,7 +199,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const h = buildTestHistories({ priceFields: { minPrice: 50_000_000 } }); // $50 floor
       stubHistories(h);
 
-      const engine = await buildPricingEngine(h.queryHeight);
+      const engine = await buildPricingEngine(h.at);
       const breakdown = await engine.price(testSpec, { height: h.queryHeight, duration: testSpec.ttl, isEncrypted: false });
 
       expect(breakdown.adjustedMicrodollars).to.equal(50_000_000);
@@ -210,7 +217,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       });
       stubHistories(h);
 
-      const engine = await buildPricingEngine(h.queryHeight);
+      const engine = await buildPricingEngine(h.at);
       const breakdown = await engine.price(testSpec, { height: h.queryHeight, duration: testSpec.ttl, isEncrypted: false });
 
       expect(breakdown.total).to.equal(100_000_000);
@@ -222,7 +229,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       h.rateHistory = new RateMessageHistory();
       stubHistories(h);
 
-      const engine = await buildPricingEngine(h.queryHeight);
+      const engine = await buildPricingEngine(h.at);
       const breakdown = await engine.price(testSpec, { height: h.queryHeight, duration: testSpec.ttl, isEncrypted: false });
 
       expect(breakdown.fluxUsdPriceE4).to.be.null;
@@ -235,7 +242,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const h = buildTestHistories();
       stubHistories(h);
 
-      const engine = await buildPricingEngine(h.queryHeight);
+      const engine = await buildPricingEngine(h.at);
       const breakdown = await engine.price(testSpec, { height: h.queryHeight, duration: testSpec.ttl, isEncrypted: false });
 
       expect(breakdown.surcharges).to.have.lengthOf(0);
@@ -246,7 +253,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const h = buildTestHistories();
       stubHistories(h);
 
-      const engine = await buildPricingEngine(h.queryHeight);
+      const engine = await buildPricingEngine(h.at);
       const breakdown = await engine.price(bigSpec, { height: h.queryHeight, duration: bigSpec.ttl, isEncrypted: false });
 
       expect(breakdown.surcharges).to.have.lengthOf(1);
@@ -260,7 +267,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const h = buildTestHistories();
       stubHistories(h);
 
-      const engine = await buildPricingEngine(h.queryHeight);
+      const engine = await buildPricingEngine(h.at);
       const breakdown = await engine.price(testSpec, {
         height: h.queryHeight,
         duration: 2_592_000, // 30 days
@@ -274,7 +281,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const h = buildTestHistories();
       stubHistories(h);
 
-      const engine = await buildPricingEngine(h.queryHeight);
+      const engine = await buildPricingEngine(h.at);
       const breakdown = await engine.price(testSpec, {
         height: h.queryHeight,
         duration: 7_776_000, // 90 days
@@ -290,7 +297,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const h = buildTestHistories();
       stubHistories(h);
 
-      const engine = await buildPricingEngine(h.queryHeight);
+      const engine = await buildPricingEngine(h.at);
       const breakdown = await engine.price(testSpec, {
         height: h.queryHeight,
         duration: 31_536_000, // 365 days
@@ -306,7 +313,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
   describe('fiatMarkupBp', () => {
     it('resolves fiatMarkupBp from PriceModifierHistory', () => {
       const h = buildTestHistories();
-      const resolved = h.modifierHistory.resolveAt(h.queryHeight);
+      const resolved = h.modifierHistory.resolveAt(h.at);
       expect(resolved.fiatMarkupBp).to.equal(500);
     });
 
@@ -316,8 +323,8 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const bytes = PriceModifierMessage.encode({ durationBucket1DiscountBp: 300 });
       const result = dispatch(bytes);
       const history = new PriceModifierHistory();
-      history.add(result.message, chainHeight, 0);
-      const resolved = history.resolveAt(queryHeight);
+      history.add(result.message, chainHeight, 0, 1_700_000_000);
+      const resolved = history.resolveAt({ time: 1_700_000_000 + PRICE_NOTICE_SECONDS, height: queryHeight });
       expect(resolved.fiatMarkupBp || 0).to.equal(0);
     });
   });
@@ -327,7 +334,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const h = buildTestHistories();
       stubHistories(h);
 
-      const engine = await buildPricingEngine(h.queryHeight);
+      const engine = await buildPricingEngine(h.at);
       const breakdown = await engine.price(testSpec, { height: h.queryHeight, duration: testSpec.ttl, isEncrypted: false });
 
       expect(breakdown).to.have.all.keys(
@@ -357,7 +364,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       };
       const premSpec = specOf(premSubmission);
 
-      const engine = await buildPricingEngine(h.queryHeight);
+      const engine = await buildPricingEngine(h.at);
       const stdBreakdown = await engine.price(stdSpec, { height: h.queryHeight, duration: stdSpec.ttl, isEncrypted: false });
       const premBreakdown = await engine.price(premSpec, { height: h.queryHeight, duration: premSpec.ttl, isEncrypted: false });
 
@@ -372,7 +379,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     it('scales a registration by duration — a year costs more than a month', async () => {
       const h = buildTestHistories();
       stubHistories(h);
-      const engine = await buildPricingEngine(h.queryHeight);
+      const engine = await buildPricingEngine(h.at);
       const month = await engine.price(testSpec, { height: h.queryHeight, duration: ONE_PERIOD, isEncrypted: false });
       const year = await engine.price(testSpec, { height: h.queryHeight, duration: 31_536_000, isEncrypted: false });
       // Even with the 12% 365-day bucket discount, a year dwarfs a month.
@@ -382,9 +389,9 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     it('round-trips standardPeriodSeconds through the price message and scales by it', async () => {
       const h = buildTestHistories({ priceFields: { standardPeriodSeconds: ONE_PERIOD } });
       stubHistories(h);
-      expect(h.priceHistory.resolveAt(h.queryHeight).standardPeriodSeconds).to.equal(ONE_PERIOD);
+      expect(h.priceHistory.resolveAt(h.at).standardPeriodSeconds).to.equal(ONE_PERIOD);
 
-      const engine = await buildPricingEngine(h.queryHeight);
+      const engine = await buildPricingEngine(h.at);
       const onePeriod = await engine.price(testSpec, { height: h.queryHeight, duration: ONE_PERIOD, isEncrypted: false });
       const twoPeriods = await engine.price(testSpec, { height: h.queryHeight, duration: ONE_PERIOD * 2, isEncrypted: false });
       expect(onePeriod.standardPeriodSeconds).to.equal(ONE_PERIOD);
@@ -397,10 +404,10 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       // verify the new 0x04 tag survives the FluxOS chain-message pipeline so
       // computeUpdateFee can resolve it.
       const withDiscount = buildTestHistories({ modifierFields: { updateDiscountBp: 1000 } });
-      expect(withDiscount.modifierHistory.resolveAt(withDiscount.queryHeight).updateDiscountBp).to.equal(1000);
+      expect(withDiscount.modifierHistory.resolveAt(withDiscount.at).updateDiscountBp).to.equal(1000);
 
       const without = buildTestHistories();
-      expect(without.modifierHistory.resolveAt(without.queryHeight).updateDiscountBp).to.equal(undefined);
+      expect(without.modifierHistory.resolveAt(without.at).updateDiscountBp).to.equal(undefined);
     });
   });
 
@@ -439,7 +446,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const h = buildTestHistories();
       stubHistories(h);
       const spec = realSpec();
-      const engine = await buildPricingEngine(h.queryHeight);
+      const engine = await buildPricingEngine(h.at);
 
       // Old breakdown priced with the old (cleartext) encryption bit, exactly as
       // computeUpdateFee does, to derive the metered quantities passed via ctx.
@@ -554,11 +561,13 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const pricingRegime = proxyquire('../../ZelBack/src/services/pricing/pricingRegime', {
         './legacyPricingRegime': legacyPricingRegime,
       });
+      // The v8 term started at its block's time, on the fixtures' 30-second blocks.
+      const prevBlockTime = 1_700_000_000 + prevHeight * 30;
       return pricingRegime.updateFee(v9Spec(), await v8Spec(), {
-        height: h.queryHeight,
-        prevHeight,
-        prevRegisteredAt: null,
-        nowBlockTime: 1_750_000_000,
+        at: h.at,
+        prevAt: { time: prevBlockTime, height: prevHeight },
+        prevRegisteredAt: prevBlockTime,
+        extend: false,
         recentEvents: async () => [],
       });
     }
@@ -608,7 +617,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const h = buildTestHistories();
       stubHistories(h);
       const grown = baseSpec({ cpu: 4 });
-      const engine = await buildPricingEngine(h.queryHeight);
+      const engine = await buildPricingEngine(h.at);
       const oldBreakdown = await engine.price(previous, {
         height: h.queryHeight, duration: previous.ttl, isEncrypted: false,
       });

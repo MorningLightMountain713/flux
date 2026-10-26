@@ -218,7 +218,7 @@ describe('decider', function () {
     await store({ hash: 'u0', type: 'fluxappupdate', height: 150 });
     const blocked = loadDecider(fakeChain({
       updateFee: async (spec, prevSpec, ctx) => {
-        if (ctx.height === 200) throw new Error('price history not in force');
+        if (ctx.at.height === 200) throw new Error('price history not in force');
         return 10n;
       },
     }));

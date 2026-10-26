@@ -247,25 +247,26 @@ async function fiatAndFluxDisplayPrice(spec, appSpecification) {
 }
 
 /**
- * Consensus registration fee in satoshis — the near-zero floor.
+ * Consensus registration fee in satoshis — the near-zero floor, by the card in
+ * force at the confirming height.
  * @param {object} spec - resolved v1-v8 spec
- * @param {number} height - confirming block height
+ * @param {{height: number}} at - the message's moment; a v1-v8 fee reads its height alone
  * @returns {Promise<bigint>}
  */
-async function registrationFee(spec, height) {
+async function registrationFee(spec, { height }) {
   const engine = await engineFor();
   return engine.registrationFee(spec, height);
 }
 
 /**
- * What a v1-v8 term cost, in FLUX at the card in force at `height`. A v9
- * update credits the unused share of it.
+ * What a v1-v8 term cost, in FLUX at the card in force at the height it was
+ * bought at. A v9 update credits the unused share of it.
  *
  * @param {object} spec - resolved v1-v8 spec
- * @param {number} height - the height the term was bought at
+ * @param {{height: number}} at - the moment the term was bought at; read by its height
  * @returns {Promise<{oldTermPriceFluxSats: number}>}
  */
-async function termCost(spec, height) {
+async function termCost(spec, { height }) {
   const engine = await engineFor();
   return { oldTermPriceFluxSats: Math.round(engine.termPrice(spec, height) * 1e8) };
 }
@@ -278,13 +279,13 @@ async function termCost(spec, height) {
  *
  * @param {object} spec - resolved new v1-v8 spec
  * @param {object} prevSpec - resolved previous spec
- * @param {{height: number, prevHeight: number}} ctx - the confirming height and
- *   the height the previous spec registered at
+ * @param {{at: {height: number}, prevAt: {height: number}}} ctx - the update's
+ *   moment and the one the previous spec was bought at, read by their heights
  * @returns {Promise<bigint>}
  */
-async function updateFee(spec, prevSpec, { height, prevHeight }) {
+async function updateFee(spec, prevSpec, { at, prevAt }) {
   const engine = await engineFor();
-  return engine.updateFee(spec, prevSpec, height, prevHeight);
+  return engine.updateFee(spec, prevSpec, at.height, prevAt.height);
 }
 
 /**

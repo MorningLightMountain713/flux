@@ -1,13 +1,16 @@
 'use strict';
 
-const priceOracleState = require('./priceOracleState');
-
+/** The instance-count surcharges, from the modifiers in force at the moment priced. */
 class FluxosSurcharger {
-  async surcharges(spec, _partial, ctx) {
-    const history = priceOracleState.getPriceModifierHistory();
-    if (!history) return [];
-    const params = history.resolveAt(ctx.height);
-    if (!params) return [];
+  #params;
+
+  /** @param {object} params - PriceModifierHistory.resolveAt at the moment */
+  constructor(params) {
+    this.#params = params;
+  }
+
+  async surcharges(spec) {
+    const params = this.#params;
 
     const instances = typeof spec.instances === 'number' ? spec.instances : 1;
     const entries = [];

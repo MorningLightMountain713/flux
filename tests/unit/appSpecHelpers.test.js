@@ -665,16 +665,31 @@ describe('appSpecHelpers tests', () => {
     /** A real FluxAppSpecV9 for the app under quote. */
     const v9SpecWith = (over = {}) => v9Spec({ name: 'regimetest', ...over });
 
+    // The quote prices a message stamped now; the clock is pinned so a test can
+    // price the same moment on the consensus side.
+    const NOW_MS = 1_760_000_000_500;
+    const QUOTED_AT = { time: 1_760_000_000, height: 201 };
+
     /**
      * The existing registration, so the quote takes the UPDATE path
-     * (priceUpdate) rather than the registration path. registeredAt is "just
-     * now" on purpose: it leaves the subscription unextended, which is what the
-     * free-update rule requires before it will call an update free. A stale
-     * value makes the rule reject on time alone, and the feature test below
-     * would then pass without proving anything.
+     * (priceUpdate) rather than the registration path. Its term started a
+     * minute before the quote: it leaves the subscription unextended, which is
+     * what the free-update rule requires before it will call an update free. A
+     * stale value makes the rule reject on time alone, and the feature test
+     * below would then pass without proving anything.
      */
     async function registrationOf(prevSpec) {
-      return registered(prevSpec, 100, Math.floor(Date.now() / 1000));
+      return registered(prevSpec, 100, QUOTED_AT.time - 60);
+    }
+
+    /** The registration as the app's history holds it: the message the update replaces. */
+    function stubReplaced(existing) {
+      sinon.stub(appHistory, 'latestApplied').resolves({
+        message: { timestamp: (existing.registeredAt - 30) * 1000 },
+        decision: {
+          hash: existing.hash, height: existing.height, termStart: existing.registeredAt, blockTime: existing.registeredAt,
+        },
+      });
     }
 
     // `messages` becomes the free-update rate-limit input.
@@ -689,9 +704,11 @@ describe('appSpecHelpers tests', () => {
         resolveSpec: sinon.stub().resolves(newSpec),
         resolveRegisteredSpec,
       });
+      sinon.useFakeTimers({ now: NOW_MS, toFake: ['Date'] });
       sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: 200 });
       stubRegistry().byName.resolves(existing);
       stubAppliedHistory(messages);
+      stubReplaced(existing);
       sinon.stub(priceOracleState, 'getPriceMessageHistory').returns({ resolveAt: () => priceFields });
       sinon.stub(priceOracleState, 'getRateMessageHistory').returns({ resolveAt: () => ({ fluxUsdPriceE4: 10_000 }) });
       sinon.stub(priceOracleState, 'getPriceModifierHistory').returns({ resolveAt: () => ({}) });
@@ -699,7 +716,7 @@ describe('appSpecHelpers tests', () => {
     }
 
     const updatesAt = (count, msAgo) => Array.from({ length: count }, () => ({
-      type: 'fluxappupdate', timestamp: Date.now() - msAgo,
+      type: 'fluxappupdate', timestamp: NOW_MS - msAgo,
     }));
 
     it('v9: an unchanged update quotes zero — priceUpdate decided it was free', async () => {
@@ -780,10 +797,10 @@ describe('appSpecHelpers tests', () => {
       const quote = await helpers.getAppFiatAndFluxPrice(newSpec);
 
       const consensusSats = await pricingRegime.updateFee(newSpec, prevSpec, {
-        height: 200,
-        prevHeight: existing.height,
+        at: QUOTED_AT,
+        prevAt: { time: existing.registeredAt - 30, height: existing.height },
         prevRegisteredAt: existing.registeredAt,
-        nowBlockTime: Math.floor(Date.now() / 1000),
+        extend: false,
         recentEvents: async () => [],
       });
 
@@ -799,15 +816,66 @@ describe('appSpecHelpers tests', () => {
       const quote = await helpers.getAppFiatAndFluxPrice(newSpec);
 
       const consensusSats = await pricingRegime.updateFee(newSpec, prevSpec, {
-        height: 200,
-        prevHeight: existing.height,
+        at: QUOTED_AT,
+        prevAt: { time: existing.registeredAt - 30, height: existing.height },
         prevRegisteredAt: existing.registeredAt,
-        nowBlockTime: Math.floor(Date.now() / 1000),
+        extend: false,
         recentEvents: async () => [],
       });
 
       expect(quote.flux).to.equal(0);
       expect(consensusSats).to.equal(0n);
+    });
+
+    it('v9: quotes at the message\'s signed time and the next block, crediting the replaced term at its own moment', async () => {
+      const { existing } = await buildHelpers({ newSpec: await v9SpecWith(), prevSpec: await v9SpecWith() });
+      const asked = [];
+      priceOracleState.getPriceMessageHistory.returns({ resolveAt: (at) => { asked.push(at); return priceFields; } });
+      const helpers = buildAppSpecHelpers({
+        resolveSpec: sinon.stub().resolves(await v9SpecWith()),
+        resolveRegisteredSpec: sinon.stub().resolves(await v9SpecWith()),
+      });
+
+      await helpers.getAppFiatAndFluxPrice(await v9SpecWith());
+
+      const replacedAt = { time: existing.registeredAt - 30, height: existing.height };
+      expect(asked).to.deep.include(QUOTED_AT);
+      expect(asked).to.deep.include(replacedAt);
+      for (const at of asked) expect([QUOTED_AT, replacedAt]).to.deep.include(at);
+    });
+
+    it('v9: refuses to quote an update signed before the message it replaces was mined', async () => {
+      const { helpers, existing } = await buildHelpers({
+        newSpec: await v9SpecWith(), prevSpec: await v9SpecWith(),
+      });
+      appHistory.latestApplied.resolves({
+        message: { timestamp: (existing.registeredAt - 30) * 1000 },
+        decision: {
+          hash: existing.hash, height: existing.height, termStart: existing.registeredAt, blockTime: QUOTED_AT.time + 1,
+        },
+      });
+
+      const error = await helpers.getAppFiatAndFluxPrice(await v9SpecWith()).then(() => null, (e) => e);
+
+      expect(error, 'consensus would refuse it as stamped-early').to.be.an('error');
+      expect(error.name).to.equal('StampedEarly');
+    });
+
+    it('v9: refuses to quote when the history\'s latest message is not the listed one', async () => {
+      const { helpers, existing } = await buildHelpers({
+        newSpec: await v9SpecWith(), prevSpec: await v9SpecWith(),
+      });
+      appHistory.latestApplied.resolves({
+        message: { timestamp: (existing.registeredAt - 30) * 1000 },
+        decision: {
+          hash: 'b'.repeat(64), height: existing.height + 1, termStart: existing.registeredAt, blockTime: existing.registeredAt,
+        },
+      });
+
+      const error = await helpers.getAppFiatAndFluxPrice(await v9SpecWith()).then(() => null, (e) => e);
+
+      expect(error).to.be.an('error');
+      expect(error.message).to.match(/not the latest applied message/);
     });
 
     it('v9: the quote reads the applied updates rather than an empty list', async () => {

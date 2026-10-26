@@ -1,9 +1,10 @@
 'use strict';
 
 const daemonStatus = require('../daemonService/daemonStatus');
+const { lookupBlockTime } = require('../daemonService/daemonServiceBlockchainRpcs');
 const appRecords = require('../appDatabase/appRecords');
 const appHistory = require('../appDecisions/appHistory');
-const { getSpecPolicy } = require('../utils/specLibs');
+const { getSpecPolicy, getSpecBackend } = require('../utils/specLibs');
 const { buildPricingEngine } = require('./buildPricingEngine');
 const priceOracleState = require('./priceOracleState');
 const entitlementsState = require('../entitlementsState');
@@ -23,107 +24,105 @@ const entitlementsState = require('../entitlementsState');
  */
 
 /**
- * Whether on-chain pricing is active (at least one PriceMessage has been
- * published and is effective).
- * @returns {boolean}
+ * The moment a message stamped at `timestamp` is quoted at: its signed time,
+ * and the next block's height — the earliest that can confirm its payment.
+ * @param {number} timestamp - ms
+ * @returns {Promise<{time: number, height: number}>}
+ * @throws {Error} while the daemon is not synced: there is no next block to name
  */
-function isOnChainPricingActive() {
-  const priceHistory = priceOracleState.getPriceMessageHistory();
-  if (!priceHistory) return false;
+async function quoteMoment(timestamp) {
   const syncStatus = daemonStatus.daemonSyncState();
-  if (!syncStatus.synced) return false;
-  return pricesInForce(priceHistory, syncStatus.height);
+  if (!syncStatus.synced) throw new Error('Daemon not yet synced.');
+  const { priceMoment } = await getSpecBackend();
+  return priceMoment({ timestamp, height: syncStatus.height + 1 });
 }
 
-function pricesInForce(priceHistory, height) {
-  const resolved = priceHistory.resolveAt(height);
+function pricesInForce(priceHistory, at) {
+  const resolved = priceHistory.resolveAt(at);
   return Boolean(resolved) && Object.keys(resolved).length > 0;
 }
 
 /**
- * Whether a v9 spec has a price at `height`: a PriceMessage is in force there.
+ * Whether a v9 spec has a price at a moment: a PriceMessage is in force there.
  * Without one every rate reads 0 and the engine prices any v9 term at nothing.
  *
- * @param {number} height - confirming block height
+ * @param {{time: number, height: number}} at
  * @returns {Promise<boolean>}
  * @throws {Error} while the price message history is not built: the question
  *   has an answer this node cannot give yet
  */
-async function pricedAt(height) {
+async function pricedAt(at) {
   const priceHistory = priceOracleState.getPriceMessageHistory();
   if (!priceHistory) throw new Error('price message history is not built');
-  return pricesInForce(priceHistory, height);
+  return pricesInForce(priceHistory, at);
 }
 
 /**
- * Get the current FLUX/USD rate from the oracle. Returns null if no oracle rate
- * is available (pre-activation or oracle down).
+ * The oracle's FLUX/USD rate in force at a moment, or null when none is
+ * (pre-activation or oracle down).
+ * @param {{time: number, height: number}} at
  * @returns {number|null} USD per FLUX, or null.
  */
-function getOracleFluxUsdRate() {
+function getOracleFluxUsdRate(at) {
   const rateHistory = priceOracleState.getRateMessageHistory();
   if (!rateHistory) return null;
-  const syncStatus = daemonStatus.daemonSyncState();
-  if (!syncStatus.synced) return null;
-  const rateMsg = rateHistory.resolveAt(syncStatus.height);
+  const rateMsg = rateHistory.resolveAt(at);
   if (!rateMsg || !rateMsg.fluxUsdPriceE4) return null;
   return rateMsg.fluxUsdPriceE4 / 10_000;
 }
 
 /**
- * Get the current fiat markup in basis points from PriceModifierHistory. Throws
- * when pricing state isn't ready (no modifier history / daemon not synced),
- * matching the fail-loud posture of onChainDisplayPrice rather than silently
- * pretending there's no markup. Returns 0 only when no PriceModifierMessage has
- * set the field — a genuine "no markup configured" state. The value is bounded
- * at the parse boundary, so this trusts it without re-checking.
+ * The fiat markup in basis points in force at a moment. Throws when there is no
+ * modifier history, matching the fail-loud posture of onChainDisplayPrice
+ * rather than silently pretending there's no markup. Returns 0 only when no
+ * PriceModifierMessage has set the field — a genuine "no markup configured"
+ * state. The value is bounded at the parse boundary, so this trusts it without
+ * re-checking.
+ * @param {{time: number, height: number}} at
  * @returns {number}
  */
-function getFiatMarkupBp() {
+function getFiatMarkupBp(at) {
   const modifierHistory = priceOracleState.getPriceModifierHistory();
   if (!modifierHistory) {
     throw new Error('Price modifier history is not available.');
   }
-  const syncStatus = daemonStatus.daemonSyncState();
-  if (!syncStatus.synced) {
-    throw new Error('Daemon not yet synced.');
-  }
-  const resolved = modifierHistory.resolveAt(syncStatus.height);
-  return resolved.fiatMarkupBp || 0;
+  return modifierHistory.resolveAt(at).fiatMarkupBp || 0;
 }
 
 /**
  * An update priced against its predecessor: the one computation consensus
- * (`updateFee`) and the quote (`onChainDisplayUpdatePrice`) both make, so the
- * two cannot drift.
+ * (`updateFee`) and the quote (`quoteUpdate`) both make, so the two cannot
+ * drift.
  *
- * The predecessor's term is read through the spec's own accessors and its cost
- * arrives from its own regime (`prevTermCost`, see pricingRegime.termCost), so a
- * predecessor of any version is credited the unused share of what it cost.
+ * Everything is measured at the update's moment: the rates in force there, the
+ * credit for the unused share of the predecessor's term at its signed time
+ * (`remainingSecondsAt`, the term read as its start plus its length), and the
+ * free-update windows ending there. The predecessor's cost arrives from its own
+ * regime (`prevTermCost`, see pricingRegime.termCost), so a predecessor of any
+ * version is credited the unused share of what it cost.
  *
  * @param {object} spec - resolved new v9 spec
  * @param {object} prevSpec - resolved previous spec, of any version
- * @param {{height: number, prevState: {height: number, registeredAt: ?number},
- *   at: {tipBlockTime: number, currentHeight: number}, asOf: number,
- *   recentEvents: object[], prevTermCost: object, extend?: boolean}} ctx -
+ * @param {{at: {time: number, height: number}, prevState: {height: number, registeredAt: number},
+ *   recentEvents: object[], prevTermCost: object, extend: boolean}} ctx -
  *   `extend` is the event's signed renewal flag; a renewal is never free
  * @returns {Promise<object>} priceUpdate's result
  */
 async function priceAgainstPredecessor(spec, prevSpec, {
-  height, prevState, at, asOf, recentEvents, prevTermCost, extend = false,
+  at, prevState, recentEvents, prevTermCost, extend,
 }) {
   const modifierHistory = priceOracleState.getPriceModifierHistory();
-  const modParams = modifierHistory ? modifierHistory.resolveAt(height) : null;
+  const modParams = modifierHistory ? modifierHistory.resolveAt(at) : null;
   const updateDiscountBp = (modParams && modParams.updateDiscountBp) || 0;
 
-  const engine = await buildPricingEngine(height);
+  const engine = await buildPricingEngine(at);
   return engine.priceUpdate(prevSpec, spec, {
-    height,
+    height: at.height,
     duration: spec.ttl || 0,
-    asOf,
+    asOf: at.time * 1000,
     recentEvents,
     ...prevTermCost,
-    remainingSeconds: prevSpec.remainingSeconds(prevState, at),
+    remainingSeconds: prevSpec.remainingSecondsAt(prevState, at.time),
     oldTtl: prevSpec.termSeconds(prevState),
     updateDiscountBp,
     extend,
@@ -133,106 +132,116 @@ async function priceAgainstPredecessor(spec, prevSpec, {
 }
 
 /**
- * On-chain display price for an update to an existing app.
- *
- * Priced exactly as consensus prices it (`priceAgainstPredecessor`), at the
- * current height and now: the update is not yet in a block and the confirming
- * block time is unknown at preview time.
+ * The fee an update to an existing app will be charged, priced exactly as
+ * consensus prices it (`priceAgainstPredecessor`) at the update's moment,
+ * against the message it replaces as the decision rule reads it
+ * (`replacedMessage`).
  *
  * @param {object} spec - resolved new v9 spec
- * @param {object} existing - RegisteredSpec of the prior registration
- * @param {number} daemonHeight - current chain height
- * @param {(spec: object, height: number) => Promise<object>} termCost - the
+ * @param {object} existing - RegisteredSpec of the app as it stands
+ * @param {{at: {time: number, height: number}, timestamp: number, extend: boolean}} message -
+ *   the update's moment, its signed timestamp in ms and its renewal flag
+ * @param {(spec: object, at: object) => Promise<object>} termCost - the
  *   predecessor's term cost, from its own regime
- * @returns {Promise<number>} price in FLUX (decimal)
+ * @returns {Promise<object>} priceUpdate's result
+ * @throws {Error} `StampedEarly` when the update is signed at or before the
+ *   message it replaces was mined or signed, which consensus refuses
  */
-async function onChainDisplayUpdatePrice(spec, existing, daemonHeight, termCost) {
+async function quoteUpdate(spec, existing, { at, timestamp, extend }, termCost) {
+  const replaced = await appHistory.latestApplied(spec.name);
+  if (!replaced || replaced.decision.hash !== existing.hash) {
+    throw new Error(`The app ${spec.name} as listed is not the latest applied message; it cannot be quoted yet.`);
+  }
+  const { replacedMessage } = await getSpecBackend();
+  const { decision, message } = replaced;
+  const blockTime = decision.blockTime ?? await lookupBlockTime(decision.height);
+  if (!Number.isFinite(blockTime)) throw new Error(`no block time for height ${decision.height}`);
+  const { prevAt, prevRegisteredAt, signAfter } = replacedMessage({
+    timestamp: message.timestamp,
+    height: decision.height,
+    version: existing.spec.version,
+    termStart: decision.termStart,
+    blockTime,
+  });
+  if (timestamp <= signAfter) {
+    const early = new Error('An update must be signed after the message it replaces was mined and signed.');
+    early.name = 'StampedEarly';
+    throw early;
+  }
   // The app's register + update history. The free-update rule rate-limits on
   // it (5 in 24h, 8 in 48h, 10 in 120h); passing an empty list would silently
   // disable that cap and quote free for an owner consensus is about to charge.
-  // A quote has no confirming block yet, so its windows end at the moment it
-  // is asked.
-  const recentEvents = await appHistory.appliedUpdateEvents(spec.name);
-  const result = await priceAgainstPredecessor(spec, existing.spec, {
-    height: daemonHeight,
-    prevState: { height: existing.height, registeredAt: existing.registeredAt },
-    at: { tipBlockTime: Math.floor(Date.now() / 1000), currentHeight: daemonHeight },
-    asOf: Date.now(),
-    recentEvents,
-    prevTermCost: await termCost(existing.spec, existing.height),
+  return priceAgainstPredecessor(spec, existing.spec, {
+    at,
+    prevState: { height: decision.height, registeredAt: prevRegisteredAt },
+    recentEvents: await appHistory.appliedUpdateEvents(spec.name),
+    prevTermCost: await termCost(existing.spec, prevAt),
+    extend,
   });
-  // REFUSED is a third outcome, and it carries a reason rather than a figure: the
-  // update is free-shaped but the allowance is spent, so there is nothing to quote
-  // (updateFee declines it outright for the same reason). Thrown rather than
-  // returned, because this function already reports 'no price, and here is why'
-  // by throwing — an unsynced daemon and an invalid spec both do. The name lets a
-  // UI branch without matching on English; the message is the engine's own reason.
-  if (result && result.refused) {
-    const refusal = new Error(result.reason || 'update refused');
-    refusal.name = 'UpdateRefused';
-    throw refusal;
-  }
-  if (result && result.free) return 0;
-  return result.total / 1e8;
 }
 
 /**
- * On-chain price in FLUX for display. A query before on-chain pricing is
+ * The on-chain price in FLUX of a message stamped at `timestamp`, as consensus
+ * will charge it: an update to an app that exists (with the unused-time
+ * credit), else a registration. A query before on-chain pricing is
  * bootstrapped throws rather than returning a misleading 0 — the displayed
  * price is what the customer pays, so a missing rate must fail loudly.
  *
  * @param {object} spec - resolved v9 spec
- * @param {{termCost: (spec: object, height: number) => Promise<object>}} pricing -
+ * @param {{termCost: (spec: object, at: object) => Promise<object>}} pricing -
  *   what a predecessor's term cost, from its own regime (pricingRegime.termCost)
+ * @param {{timestamp?: number, extend?: boolean}} [message] - the message's
+ *   signed timestamp in ms (now when absent) and its renewal flag
  * @returns {Promise<number>} Price in FLUX (decimal)
+ * @throws {Error} `UpdateRefused` when the update is free-shaped with the free
+ *   allowance spent; `StampedEarly` (see quoteUpdate)
  */
-async function onChainDisplayPrice(spec, { termCost }) {
-  if (!isOnChainPricingActive()) {
+async function onChainDisplayPrice(spec, { termCost }, { timestamp = Date.now(), extend = false } = {}) {
+  const at = await quoteMoment(timestamp);
+  const priceHistory = priceOracleState.getPriceMessageHistory();
+  if (!priceHistory || !pricesInForce(priceHistory, at)) {
     throw new Error('On-chain pricing is not yet active (no PriceMessage in force).');
   }
 
-  const syncStatus = daemonStatus.daemonSyncState();
-  if (!syncStatus.synced) {
-    throw new Error('Daemon not yet synced.');
-  }
-  const daemonHeight = syncStatus.height;
-
-  // Display == consensus: if an app of this name already exists, this preview
-  // is an update, so price it through priceUpdate (with the unused-time credit)
-  // exactly as updateFee will. Otherwise it's a registration and prices via
-  // price().
   const existing = await appRecords.registry().byName(spec.name);
   if (existing) {
-    return onChainDisplayUpdatePrice(spec, existing, daemonHeight, termCost);
+    const result = await quoteUpdate(spec, existing, { at, timestamp, extend }, termCost);
+    // REFUSED is a third outcome, and it carries a reason rather than a figure:
+    // the update is free-shaped but the allowance is spent, so there is nothing
+    // to quote (updateFee declines it outright for the same reason). The name
+    // lets a UI branch without matching on English; the message is the engine's
+    // own reason.
+    if (result && result.refused) {
+      const refusal = new Error(result.reason || 'update refused');
+      refusal.name = 'UpdateRefused';
+      throw refusal;
+    }
+    if (result && result.free) return 0;
+    return result.total / 1e8;
   }
 
-  const engine = await buildPricingEngine(daemonHeight);
-  const breakdown = await engine.price(spec, {
-    height: daemonHeight,
-    duration: spec.ttl || 0,
-    // Real encryption bit drives the encryptedSpec fee: a cleartext spec reports
-    // false, a OpenedSpec (decrypted-from-encrypted) reports true.
-    isEncrypted: spec.isEncrypted,
-  });
-  return breakdown.total / 1e8;
+  return Number(await registrationFee(spec, at)) / 1e8;
 }
 
 /**
  * The network price in FLUX, and what a customer paying in dollars is charged:
- * that price with the fiat markup, rounded up to .49/.99 (`fiatPrice`). The
- * dollar figure is never checked on chain. There is no free-update check here: the quote
- * routes through the same priceUpdate call consensus makes, and that call
- * returns 0 when the update is free.
+ * that price with the fiat markup, rounded up to .49/.99 (`fiatPrice`), both
+ * at the moment of a message signed now. The dollar figure is never checked on
+ * chain. There is no free-update check here: the price routes through the same
+ * priceUpdate call consensus makes, and that call returns 0 when the update is
+ * free.
  *
  * @param {object} spec - resolved v9 spec
  * @param {object} _appSpecification - the raw submitted document (read by the legacy regime only)
- * @param {{termCost: (spec: object, height: number) => Promise<object>}} pricing
+ * @param {{termCost: (spec: object, at: object) => Promise<object>}} pricing
  * @returns {Promise<{usd: number|null, flux: number, fluxDiscount: number, fiatMarkupBp: number}>}
  */
 async function fiatAndFluxDisplayPrice(spec, _appSpecification, pricing) {
-  const fluxPrice = await onChainDisplayPrice(spec, pricing);
-  const fluxUsdRate = getOracleFluxUsdRate();
-  const fiatMarkupBp = getFiatMarkupBp();
+  const timestamp = Date.now();
+  const fluxPrice = await onChainDisplayPrice(spec, pricing, { timestamp });
+  const at = await quoteMoment(timestamp);
+  const fluxUsdRate = getOracleFluxUsdRate(at);
+  const fiatMarkupBp = getFiatMarkupBp(at);
   const { fiatPrice } = await getSpecPolicy();
   const usd = fluxUsdRate != null ? fiatPrice(fluxPrice * fluxUsdRate, fiatMarkupBp) : null;
 
@@ -248,13 +257,13 @@ async function fiatAndFluxDisplayPrice(spec, _appSpecification, pricing) {
 /**
  * Consensus registration fee in satoshis.
  * @param {object} spec - resolved v9 spec
- * @param {number} height - confirming block height
+ * @param {{time: number, height: number}} at - the registration's moment
  * @returns {Promise<bigint>}
  */
-async function registrationFee(spec, height) {
-  const engine = await buildPricingEngine(height);
+async function registrationFee(spec, at) {
+  const engine = await buildPricingEngine(at);
   const breakdown = await engine.price(spec, {
-    height,
+    height: at.height,
     duration: spec.ttl || 0,
     // Real encryption bit drives the encryptedSpec fee: a cleartext spec reports
     // false, a OpenedSpec (decrypted-from-encrypted) reports true.
@@ -264,19 +273,19 @@ async function registrationFee(spec, height) {
 }
 
 /**
- * What a v9 term cost: the spec priced at the rates in force at `height`, for
- * its whole term, before the minimum-price floor, with every quantity the
- * pricer meters for it. An update credits the unused share of it.
+ * What a v9 term cost: the spec priced at the rates in force at the moment it
+ * was bought, for its whole term, before the minimum-price floor, with every
+ * quantity the pricer meters for it. An update credits the unused share of it.
  *
  * @param {object} spec - resolved v9 spec
- * @param {number} height - the height the term was bought at
+ * @param {{time: number, height: number}} at - the moment the term was bought at
  * @returns {Promise<{oldScaledPriceMicrodollars: number, oldMetered: Map<string, number>}>}
  */
-async function termCost(spec, height) {
-  const engine = await buildPricingEngine(height);
+async function termCost(spec, at) {
+  const engine = await buildPricingEngine(at);
   const breakdown = await engine.price(spec, {
-    height,
-    duration: spec.termSeconds({ height }),
+    height: at.height,
+    duration: spec.termSeconds({ height: at.height }),
     isEncrypted: spec.isEncrypted,
   });
   const { meteredQuantities } = await getSpecPolicy();
@@ -295,25 +304,24 @@ async function termCost(spec, height) {
  *
  * The free-update rate limit counts what `recentEvents()` answers: the app's
  * applied updates before this one, stamped with their confirming blocks' times,
- * windowed by this update's: every node counts the same events against the
- * same window, however late it reads the block.
+ * windowed by this update's signed time: every node counts the same events
+ * against the same window, however late it reads the block.
  *
  * @param {object} spec - resolved new v9 spec
  * @param {object} prevSpec - resolved previous spec, of any version
- * @param {{height: number, prevHeight: number, prevRegisteredAt: ?number,
- *   nowBlockTime: number, extend: boolean, recentEvents: () => Promise<object[]>,
- *   prevTermCost: object}} ctx - `prevTermCost` from the predecessor's own
- *   regime (pricingRegime.termCost); `extend` the event's signed renewal flag
+ * @param {{at: {time: number, height: number}, prevAt: {time: number, height: number},
+ *   prevRegisteredAt: number, extend: boolean, recentEvents: () => Promise<object[]>,
+ *   prevTermCost: object}} ctx - the update's moment, and the term the predecessor
+ *   holds (started at `prevRegisteredAt`, bought at `prevAt`); `prevTermCost`
+ *   from the predecessor's own regime (pricingRegime.termCost)
  * @returns {Promise<bigint|null>}
  */
 async function updateFee(spec, prevSpec, {
-  height, prevHeight, prevRegisteredAt, nowBlockTime, extend, recentEvents, prevTermCost,
+  at, prevAt, prevRegisteredAt, extend, recentEvents, prevTermCost,
 }) {
   const result = await priceAgainstPredecessor(spec, prevSpec, {
-    height,
-    prevState: { height: prevHeight, registeredAt: prevRegisteredAt },
-    at: { tipBlockTime: nowBlockTime, currentHeight: height },
-    asOf: nowBlockTime * 1000,
+    at,
+    prevState: { height: prevAt.height, registeredAt: prevRegisteredAt },
     recentEvents: await recentEvents(),
     prevTermCost,
     extend,
@@ -355,5 +363,4 @@ module.exports = {
   registrationFee,
   termCost,
   updateFee,
-  isOnChainPricingActive,
 };

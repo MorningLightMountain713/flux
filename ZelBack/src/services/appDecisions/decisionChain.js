@@ -32,12 +32,12 @@ async function createChain() {
       return specActivationHeights()[version];
     },
 
-    async registrationFee(spec, height) {
-      return (await pricingRegime.regimeFor(spec)).registrationFee(spec, height);
+    async registrationFee(spec, at) {
+      return (await pricingRegime.regimeFor(spec)).registrationFee(spec, at);
     },
 
-    async pricedAt(spec, height) {
-      return (await pricingRegime.regimeFor(spec)).pricedAt(height);
+    async pricedAt(spec, at) {
+      return (await pricingRegime.regimeFor(spec)).pricedAt(at);
     },
 
     async updateFee(spec, prevSpec, ctx) {
