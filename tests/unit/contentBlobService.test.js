@@ -64,21 +64,20 @@ function component(name, mounts, { hostPort = 31_000, containerPort = 80 } = {})
 const webWith = (...mounts) => ({ web: component('web', mounts) });
 
 /**
- * The cleartext FluxAppSpecV9 that reaches encryptAndUploadBlobs. The submission
- * path (appSubmission.resolveSubmission) transport-opens the HPKE envelope and
- * validates the blob, then hands that cleartext instance straight to
- * uploadSealedContent -> encryptAndUploadBlobs — nothing is sealed yet, so this
- * is a plain FluxAppSpecV9, `isEncrypted === false`.
+ * The spec that reaches encryptAndUploadBlobs. The submission path
+ * (appSubmission.resolveSubmission) transport-opens the HPKE envelope and
+ * validates the blob through flux-spec's private door, then hands that private
+ * spec straight to uploadSealedContent -> encryptAndUploadBlobs: an OpenedSpec,
+ * readable, never sealed yet. Every spec here carries a contentRef, which only
+ * works on the encrypted path.
  */
-// Every spec here carries a contentRef, which only works on the encrypted path,
-// so the envelope is stated once for the whole file.
 const submissionSpec = (...mounts) => v9Spec({ components: webWith(...mounts) }, { encrypted: true });
 
 /**
- * The `priorSpec` an UPDATE carries — a different class from the one above.
- * appOperations reads the superseded spec off the registry (sealed, because any
- * content mount forces encryption) and decrypts it before forwarding, so what
- * arrives is a OpenedSpec: `isEncrypted === true`, `sealed === false`.
+ * The `priorSpec` an UPDATE carries. appOperations reads the superseded spec off
+ * the registry (sealed, because any content mount forces encryption) and
+ * decrypts it before forwarding, so what arrives is an OpenedSpec too:
+ * `isEncrypted === true`, `sealed === false`.
  */
 const priorSpecOf = (...mounts) => decryptedV9Spec({ components: webWith(...mounts) });
 
@@ -318,10 +317,11 @@ describe('contentBlobService', () => {
     it('carries over a prior-spec hash: presence-checked, not re-uploaded, no owner sig needed', async () => {
       const uploader = makeUploader({ exists: true });
 
-      // The two arguments are DIFFERENT classes in production and here: the
-      // incoming spec is cleartext, the superseded one was decrypted out of the
-      // registry's sealed row. specContentHashes has to read both.
-      expect(specAB.isEncrypted, 'the submission spec is cleartext').to.equal(false);
+      // The two arguments come from different places in production and here: the
+      // incoming spec was opened from its transport envelope, the superseded one
+      // was decrypted out of the registry's sealed row. specContentHashes has to
+      // read both.
+      expect(specAB.isEncrypted, 'the submission spec is a private app').to.equal(true);
       expect(priorB.isEncrypted, 'the superseded spec is an encrypted app...').to.equal(true);
       expect(priorB.sealed, '...but readable right now').to.equal(false);
 

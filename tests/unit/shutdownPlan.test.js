@@ -8,7 +8,7 @@ const { expect } = require('chai');
 const shutdownPlan = require('../../ZelBack/src/services/appLifecycle/shutdownPlan');
 const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
 const {
-  loadSpecLibrary, V9_SUBMISSION, v9Spec, decryptedV9Spec, registeredSpec, assertAnswers,
+  loadSpecLibrary, V9_SUBMISSION, decryptedV9Spec, registeredSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
@@ -249,10 +249,12 @@ describe('shutdownPlan', () => {
       // is genuinely encryption-forcing — the same app submitted as cleartext is
       // refused — so the app really is encrypted and still gets no plan.
       const secretsOnly = { ...PLAIN, secretEnvironment: { API_KEY: 'shh' } };
-      // Built with the envelope so the instance exists at all; the rule is then
-      // asked directly with the opposite answer, which is this test's subject.
-      const asCleartext = await v9Spec(
-        { components: componentsFor({ web: secretsOnly }) }, { encrypted: true },
+      // Read as a document that already exists so a plain instance exists at
+      // all; the rule is then asked directly, which is this test's subject.
+      const flux = await loadSpecLibrary();
+      const asCleartext = flux.FluxAppSpecV9.fromSubmission(
+        { ...V9_SUBMISSION, components: componentsFor({ web: secretsOnly }) },
+        { purpose: flux.ValidationPurpose.INSPECTION },
       );
       const refusals = asCleartext.validateSemantics({ encrypted: false });
       expect(refusals.map((e) => e.code), 'secretEnvironment must force encryption')

@@ -6,7 +6,7 @@ const appsRepository = require('../appDatabase/appsRepository');
 const pricingRegime = require('../pricing/pricingRegime');
 const { resolveSpec } = require('../utils/specCutover');
 const transportHelper = require('../utils/transportHelper');
-const { getSpecBackend } = require('../utils/specLibs');
+const { getSpecBackend, validatePrivateSubmission } = require('../utils/specLibs');
 const { assertSubmittableTimestamp } = require('../appMessaging/submittableTimestamp');
 
 /** The refusals a quote reports by name, for a client to branch on. */
@@ -73,9 +73,13 @@ async function quote(req, res) {
 
   let spec;
   try {
-    spec = await resolveSpec(await transportHelper.openTransportEnvelope(appSpecification, {
-      contentHash, timestamp, type,
-    }));
+    // A sealed spec opens to a private one, held as an OpenedSpec; a spec in
+    // the clear, or stored sealed, is read as it is.
+    spec = appSpecification.transportEncrypted
+      ? await validatePrivateSubmission(await transportHelper.openTransportEnvelope(appSpecification, {
+        contentHash, timestamp, type,
+      }))
+      : await resolveSpec(appSpecification);
   } catch (error) {
     return res.fail('UNPROCESSABLE', error.message);
   }

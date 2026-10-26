@@ -17,7 +17,7 @@ const messageVerifier = require('../appMessaging/messageVerifier');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const { verifyImageRegistryAndArchitectures } = require('../appSecurity/imageArchitectureValidator');
 const {
-  validateSubmissionSpec, getSpec, getSpecBackend, assertUpdateInvariants, assertVersionActivated,
+  validateSubmissionSpec, validatePrivateSubmission, getSpec, getSpecBackend, assertUpdateInvariants, assertVersionActivated,
 } = require('../utils/specLibs');
 const { ensureProvidersRegistered, resolveRegisteredSpec } = require('../utils/specCutover');
 const transportHelper = require('../utils/transportHelper');
@@ -244,62 +244,67 @@ async function resolveSubmission(appSpecification, {
     contentHash, timestamp, type,
   });
 
-  // Parse strictly, class-first. The tolerant specCutover wrapper (null on
-  // any parse error) is for reading stored docs where a bad row must not
-  // crash a loop; a submission error must reach the submitter with the
-  // validator's field-precise message, so the validation error propagates.
   await ensureProvidersRegistered();
-  const { deserializeSpec: parseSubmission, SealedSpecV8 } = await getSpecBackend();
-  const wireSpec = await parseSubmission(submissionBlob, { chain: nodeChain() });
-  if (!wireSpec) throw new Error('Could not deserialize app specifications');
-
-  // The ENVELOPE of a v8 enterprise submission, which nothing else checks.
-  // `deserializeSpec` dispatches every read — stored row, gossiped message,
-  // chain replay — through SealedSpecV8.deserialize, which takes the
-  // ciphertext and the named metadata and drops the rest. So a submission could
-  // carry a populated `compose` beside its blob and be accepted: signed onto the
-  // chain, then ignored by every node that read it back. Not a way to run
-  // unvalidated code, but a signed document saying something the network does
-  // not do, which anything reading chain data sees.
-  //
-  // `fromSubmission` is where those sentinels are written down and it had no
-  // caller anywhere. Here, and only here: this function is reached from the four
-  // register/update paths and from nothing that reads. The dispatcher stays
-  // exactly as loose as it is, because every v8 enterprise spec already on chain
-  // is re-validated through it on every sync and a stricter door there forks the
-  // node off the network.
-  //
-  // Measured before wiring it in: all 3599 v8 enterprise documents in the
-  // permanent-message corpus pass `fromSubmission`, so this rejects nothing that
-  // has ever been registered. The return value is discarded — `wireSpec` is
-  // already built and is what flows on; this call is the assertion.
-  if (SealedSpecV8.matchesWire(submissionBlob)) {
-    SealedSpecV8.fromSubmission(submissionBlob, { chain: nodeChain() });
-  }
-
-  // Computed BEFORE validation, because validation needs it. `wasTransportEncrypted`
-  // is what makes this node seal the spec for broadcast below, and `isEncrypted` is
-  // a v8 blob that arrived sealed; either way the credentials never travel in the
-  // clear. Neither, and the broadcast blob is the cleartext spec — which is exactly
-  // when `imageAuth` and `secretEnvironment` must be refused.
-  const isEncrypted = wasTransportEncrypted || wireSpec.isEncrypted;
-
   let spec;
-  if (wireSpec.isEncrypted) {
-    // v8 enterprise blob — decrypt, then hold the decrypted instance to submission rules
-    const provider = await wireSpec.createProvider();
-    spec = await wireSpec.decrypt(provider);
-    // Through the wrapper: a decrypted spec has no wire form, so submission
-    // rules are applied without ever producing a plaintext blob. v8's decrypt
-    // uses the looser deserialize path, so this is the check that holds an
-    // enterprise blob's contents to submission rules.
-    assertVersionActivated(spec.version, daemonHeight);
-    spec.validateContents({ purpose: 'submission', height: daemonHeight });
+  let wireSpec = null;
+  if (wasTransportEncrypted) {
+    // A private spec, opened from its envelope: held as an OpenedSpec from the
+    // moment it is a spec, so it is validated under the private rules and its
+    // contents reach bytes only sealed for storage below.
+    spec = await validatePrivateSubmission(submissionBlob, { height: daemonHeight });
   } else {
-    spec = await validateSubmissionSpec(submissionBlob, {
-      height: daemonHeight, encrypted: isEncrypted,
-    });
+    // Parse strictly, class-first. The tolerant specCutover wrapper (null on
+    // any parse error) is for reading stored docs where a bad row must not
+    // crash a loop; a submission error must reach the submitter with the
+    // validator's field-precise message, so the validation error propagates.
+    const { deserializeSpec: parseSubmission, SealedSpecV8 } = await getSpecBackend();
+    wireSpec = await parseSubmission(submissionBlob, { chain: nodeChain() });
+    if (!wireSpec) throw new Error('Could not deserialize app specifications');
+
+    // The ENVELOPE of a v8 enterprise submission, which nothing else checks.
+    // `deserializeSpec` dispatches every read — stored row, gossiped message,
+    // chain replay — through SealedSpecV8.deserialize, which takes the
+    // ciphertext and the named metadata and drops the rest. So a submission could
+    // carry a populated `compose` beside its blob and be accepted: signed onto the
+    // chain, then ignored by every node that read it back. Not a way to run
+    // unvalidated code, but a signed document saying something the network does
+    // not do, which anything reading chain data sees.
+    //
+    // `fromSubmission` is where those sentinels are written down and it had no
+    // caller anywhere. Here, and only here: this function is reached from the four
+    // register/update paths and from nothing that reads. The dispatcher stays
+    // exactly as loose as it is, because every v8 enterprise spec already on chain
+    // is re-validated through it on every sync and a stricter door there forks the
+    // node off the network.
+    //
+    // Measured before wiring it in: all 3599 v8 enterprise documents in the
+    // permanent-message corpus pass `fromSubmission`, so this rejects nothing that
+    // has ever been registered. The return value is discarded — `wireSpec` is
+    // already built and is what flows on; this call is the assertion.
+    if (SealedSpecV8.matchesWire(submissionBlob)) {
+      SealedSpecV8.fromSubmission(submissionBlob, { chain: nodeChain() });
+    }
+
+    if (wireSpec.isEncrypted) {
+      // v8 enterprise blob — decrypt, then hold the decrypted instance to submission rules
+      const provider = await wireSpec.createProvider();
+      spec = await wireSpec.decrypt(provider);
+      // Through the wrapper: a decrypted spec has no wire form, so submission
+      // rules are applied without ever producing a plaintext blob. v8's decrypt
+      // uses the looser deserialize path, so this is the check that holds an
+      // enterprise blob's contents to submission rules.
+      assertVersionActivated(spec.version, daemonHeight);
+      spec.validateContents({ purpose: 'submission', height: daemonHeight });
+    } else {
+      // In the clear: fields that must never travel in the clear are refused.
+      spec = await validateSubmissionSpec(submissionBlob, { height: daemonHeight });
+    }
   }
+
+  // A private spec arrived sealed: a transport envelope this node seals for
+  // storage, or a v8 blob already in its stored form. Either way the
+  // credentials never travel in the clear.
+  const { isEncrypted } = spec;
 
   // The signed contentHash (v9) must match the actual decrypted content, so a
   // tampered envelope can't slip different bytes past the signature.

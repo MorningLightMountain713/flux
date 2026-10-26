@@ -2,7 +2,7 @@
 
 const { expect } = require('chai');
 
-const { validateSubmissionSpec, getSpec } = require('../../ZelBack/src/services/utils/specLibs');
+const { validateSubmissionSpec, validatePrivateSubmission, getSpec } = require('../../ZelBack/src/services/utils/specLibs');
 
 describe('specLibs — how a spec validation failure reaches the caller', () => {
   let ValidationError;
@@ -294,9 +294,16 @@ describe('specLibs — how a spec validation failure reaches the caller', () => 
       expect(err.message).to.match(/encrypted spec/);
     });
 
-    it('accepts imageAuth once the caller states the spec will be sealed', async () => {
+    it('accepts imageAuth on a private submission, held as an OpenedSpec', async () => {
+      const spec = await validatePrivateSubmission(withImageAuth());
+      expect(spec.isEncrypted).to.equal(true);
+      expect(spec.serialize, 'a private spec has no wire form').to.equal(undefined);
+    });
+
+    it('refuses imageAuth at the ordinary door whatever the caller says', async () => {
       const err = await refusal({ encrypted: true });
-      expect(err, err && err.message).to.equal(null);
+      expect(err).to.be.instanceOf(ValidationError);
+      expect(err.errors.map((e) => e.code)).to.include('ENCRYPTION_REQUIRED');
     });
   });
 });

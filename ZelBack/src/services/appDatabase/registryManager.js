@@ -606,7 +606,7 @@ async function authorizedViewer(appName, owner, { recipientPubkeyBase64, viewerS
  * the caller over the channel the client asked for — not by spec version:
  *   - flux-transport-pubkey -> v9 transport layer: HPKE-seal the canonical
  *     cleartext toward the caller's ephemeral pubkey, directly through the
- *     transport provider. Never reencrypt() here — that is the storage layer.
+ *     transport provider. Never seal() here — that is the storage layer.
  *   - enterprise-key        -> v8's single shared encryption (RSA-wrapped AES)
  *     reapplied toward the caller. Isolated; removed when v8 is retired.
  *
@@ -616,7 +616,7 @@ async function authorizedViewer(appName, owner, { recipientPubkeyBase64, viewerS
  *   (see authorizedViewer), or the legacy v8 credential
  * @returns {Promise<object>} the registered record, a v9 sealed view
  *   ({ encrypted, appName, timestamp, transportEncrypted }), or the registered
- *   record with its v8 spec reencrypted toward the caller
+ *   record with its v8 spec resealed toward the caller
  */
 async function getApplicationSpecification(appname, opts = {}) {
   const { recipientPubkeyBase64, enterpriseKey } = opts;
@@ -667,8 +667,8 @@ async function getApplicationSpecification(appname, opts = {}) {
   const transportProvider = await legacyTransportProvider.create(
     registered.name, registered.owner, enterpriseKey,
   );
-  const reencrypted = await decrypted.reencrypt(transportProvider);
-  return { ...registered.serialize(), ...reencrypted.serialize() };
+  const resealed = await decrypted.seal(transportProvider);
+  return { ...registered.serialize(), ...resealed.serialize() };
 }
 
 async function getApplicationSpecificationAPI(req, res) {

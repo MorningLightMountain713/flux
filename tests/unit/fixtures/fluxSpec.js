@@ -126,26 +126,27 @@ const V8_SUBMISSION = Object.freeze({
 /** A real FluxAppSpecV9. Overrides are merged into the submission blob, so an
  * override the schema does not accept is rejected — which is the point.
  *
- * `encrypted` states whether this spec would be broadcast sealed. It defaults to
- * false because that is what the library defaults to and what a caller who says
- * nothing means: fields that must never travel in the clear — `imageAuth`,
- * `secretEnvironment`, a content reference — are refused. A test whose subject
- * IS one of those features passes true, because such a spec only exists sealed. */
+ * `encrypted` makes it a private app: an OpenedSpec, through flux-spec's private
+ * door, the only kind that may carry fields that must never travel in the clear
+ * — `imageAuth`, `secretEnvironment`, a content reference. Without it those are
+ * refused. A test whose subject IS one of those features passes true. */
 async function v9Spec(overrides = {}, { encrypted = false } = {}) {
   const flux = await loadSpecLibrary();
-  return flux.FluxAppSpecV9.fromSubmission({ ...V9_SUBMISSION, ...overrides }, { encrypted });
+  const blob = { ...V9_SUBMISSION, ...overrides };
+  return encrypted ? flux.OpenedSpec.fromSubmission(blob) : flux.FluxAppSpecV9.fromSubmission(blob);
 }
 
 /** A real FluxAppSpecV8. `encrypted` as for v9Spec: a registry credential or a
  * node list is refused on a cleartext registration, so a test whose subject is
- * one says the spec would be sealed. The content of an envelope carries no
+ * one makes it a private app. The content of an envelope carries no
  * `enterprise` field, the ciphertext being the envelope's, so a sealed spec is
  * built without it. */
 async function v8Spec(overrides = {}, { encrypted = false } = {}) {
   const flux = await loadSpecLibrary();
   const blob = { ...V8_SUBMISSION, ...overrides };
   if (encrypted) delete blob.enterprise;
-  return flux.FluxAppSpecV8.fromSubmission(blob, { encrypted, chain: flux.Chain.MAIN });
+  const context = { chain: flux.Chain.MAIN };
+  return encrypted ? flux.OpenedSpec.fromSubmission(blob, context) : flux.FluxAppSpecV8.fromSubmission(blob, context);
 }
 
 /** A real FluxAppSpecV8 off the chain door rather than the submission door.
@@ -197,13 +198,10 @@ async function v1Spec(overrides = {}) {
  * that arrived HPKE-sealed; the owner never holds it. */
 async function sealedV9Spec(overrides = {}) {
   const flux = await loadSpecLibrary();
-  // Sealed on the next line, so the envelope is stated on the way in. Without it
-  // the encryption-forcing rules refuse exactly the specs this helper exists to
-  // produce — the ones carrying the fields the envelope protects.
+  // A private spec, sealing itself: the encryption-forcing rules refuse the
+  // fields the envelope protects on any other kind.
   const spec = await v9Spec(overrides, { encrypted: true });
-  return flux.SealedSpecV9.fromSpec(
-    spec, await flux.SealedSpecV9.createProviderFor(spec.name, spec.owner),
-  );
+  return spec.seal(await flux.SealedSpecV9.createProviderFor(spec.name, spec.owner));
 }
 
 /**
@@ -216,9 +214,7 @@ async function sealedV9Spec(overrides = {}) {
 async function sealedV8Spec(overrides = {}) {
   const flux = await loadSpecLibrary();
   const spec = await v8Spec(overrides, { encrypted: true });
-  return flux.SealedSpecV8.fromSpec(
-    spec, await flux.SealedSpecV8.createProviderFor(spec.name, spec.owner),
-  );
+  return spec.seal(await flux.SealedSpecV8.createProviderFor(spec.name, spec.owner));
 }
 
 /** A real OpenedSpec — what a node holds after opening a sealed

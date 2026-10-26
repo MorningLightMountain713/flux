@@ -128,9 +128,7 @@ describe('confirmedMessageStore', () => {
   async function sealedMessage() {
     const flux = await fluxSpec.loadSpecLibrary();
     const cleartext = await fluxSpec.v9Spec({}, { encrypted: true });
-    const sealed = await flux.SealedSpecV9.fromSpec(
-      cleartext, await flux.SealedSpecV9.createProviderFor(cleartext.name, cleartext.owner),
-    );
+    const sealed = await cleartext.seal(await flux.SealedSpecV9.createProviderFor(cleartext.name, cleartext.owner));
     return domain.paidTempMessage({ version: 2, spec: sealed, contentHash: cleartext.contentHash() });
   }
 
