@@ -3,6 +3,7 @@
 const config = require('config');
 const { inChainOrder } = require('../utils/softForkRows');
 const dbHelper = require('../dbHelper');
+const { lookupBlockTime } = require('../daemonService/daemonServiceBlockchainRpcs');
 const log = require('../../lib/log');
 const { getSpecPolicy } = require('../utils/specLibs');
 
@@ -69,6 +70,25 @@ function fixBinaryFields(doc, fields) {
 }
 
 /**
+ * A stored price, rate or modifier row's block time: a v9 price message counts
+ * from an hour after it. A row stored without one takes it from the daemon and
+ * keeps it.
+ * @param {object} database
+ * @param {string} collection
+ * @param {{txid: string, vout: number, height: number, blockTime?: number}} doc
+ * @returns {Promise<number>}
+ */
+async function rowBlockTime(database, collection, doc) {
+  if (Number.isInteger(doc.blockTime)) return doc.blockTime;
+  const blockTime = await lookupBlockTime(doc.height);
+  if (!Number.isInteger(blockTime)) {
+    throw new Error(`Price oracle state: no block time for ${doc.txid} at height ${doc.height}`);
+  }
+  await dbHelper.updateOneInDatabase(database, collection, { txid: doc.txid, vout: doc.vout }, { $set: { blockTime } });
+  return blockTime;
+}
+
+/**
  * Price, rate, modifier and oracle-key histories built from the stored rows,
  * beside the live ones. The live state is untouched until
  * `installPriceOracleState` swaps these in.
@@ -122,7 +142,9 @@ async function buildPriceOracleState() {
   );
   inChainOrder(priceDocs, 'priceMessages');
   for (const doc of priceDocs) {
-    built.priceMessageHistory.add(doc.message, doc.height, doc.txIndex);
+    // eslint-disable-next-line no-await-in-loop
+    const blockTime = await rowBlockTime(database, config.get('database.chainparams.collections.priceMessages'), doc);
+    built.priceMessageHistory.add(doc.message, doc.height, doc.txIndex, blockTime);
   }
 
   const rateDocs = await dbHelper.findInDatabase(
@@ -131,7 +153,9 @@ async function buildPriceOracleState() {
   );
   inChainOrder(rateDocs, 'rateMessages');
   for (const doc of rateDocs) {
-    built.rateMessageHistory.add(doc.message, doc.height, doc.txIndex);
+    // eslint-disable-next-line no-await-in-loop
+    const blockTime = await rowBlockTime(database, config.get('database.chainparams.collections.rateMessages'), doc);
+    built.rateMessageHistory.add(doc.message, doc.height, doc.txIndex, blockTime);
   }
 
   const modifierDocs = await dbHelper.findInDatabase(
@@ -140,7 +164,9 @@ async function buildPriceOracleState() {
   );
   inChainOrder(modifierDocs, 'priceModifierMessages');
   for (const doc of modifierDocs) {
-    built.priceModifierHistory.add(doc.message, doc.height, doc.txIndex);
+    // eslint-disable-next-line no-await-in-loop
+    const blockTime = await rowBlockTime(database, config.get('database.chainparams.collections.priceModifierMessages'), doc);
+    built.priceModifierHistory.add(doc.message, doc.height, doc.txIndex, blockTime);
   }
 
   log.info(`Price oracle state built: ${priceDocs.length} price, ${rateDocs.length} rate, ${modifierDocs.length} modifier, ${oracleKeyDocs.length} oracle-key, ${built.legacyPriceRows.length} legacy price`);

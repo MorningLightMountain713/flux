@@ -1059,6 +1059,7 @@ describe('explorerService tests', () => {
       return {
         txid,
         height,
+        blocktime: 1_700_000_000 + height * 30,
         vin: [{ address: multisigA }],
         vout: opReturnFirst ? [data, payment] : [payment, data],
       };
@@ -1133,6 +1134,22 @@ describe('explorerService tests', () => {
       expect(forkWrite).to.not.be.undefined;
       expect(forkWrite.args[3].$set.height).to.equal(1_594_832);
       expect(forkWrite.args[3].$set.message).to.equal(priceForkMsg);
+    });
+
+    it('refuses a soft-fork transaction the daemon gives no block time for', async () => {
+      executeCallStub.resolves({
+        status: 'success',
+        data: [
+          makeDelta('timelessTx', multisigA, -500_000),
+          makeDelta('timelessTx', multisigA, 500_000),
+        ],
+      });
+      const { blocktime, ...timeless } = makeSoftForkTx('timelessTx', 1_594_832, priceForkHex);
+      expect(blocktime).to.be.a('number');
+      executeBatchCallStub.resolves({ status: 'success', data: [{ id: 0, result: timeless, error: null }] });
+
+      await expect(explorerService.bootstrapSoftForks(2_579_000)).to.be.rejectedWith(/no blocktime for timelessTx/);
+      expect(updateOneStub.getCalls().some((c) => c.args[2]?.txid === 'timelessTx')).to.equal(false);
     });
 
     it('should batch-fetch in chunks of 500', async () => {
@@ -1259,6 +1276,7 @@ describe('explorerService tests', () => {
     const signedTx = (txid, height, from, msgHex, layout = ['pay', msgHex]) => ({
       txid,
       height,
+      blocktime: 1_700_000_000 + height * 30,
       vin: [{ address: from, scriptSig: { hex: ALL_SCRIPTSIG } }],
       vout: layout.map((out) => (out === 'pay'
         ? { valueSat: 100_000, scriptPubKey: { addresses: [from], asm: PAY_ASM } }
@@ -1407,6 +1425,7 @@ describe('explorerService tests', () => {
       const rates = [...priceOracleState.getRateMessageHistory().entries()];
       expect(rates, 'no rate message was rebuilt — phase 2 did not reach it').to.have.lengthOf(1);
       expect(rates[0].chainHeight).to.equal(RATE_HEIGHT);
+      expect(rates[0].blockTime, 'placed by its block\'s time').to.equal(1_700_000_000 + RATE_HEIGHT * 30);
     });
 
     describe('an UnclaimedPaymentMessage in the block walk', () => {
@@ -1687,7 +1706,7 @@ describe('explorerService tests', () => {
           ]);
         });
 
-        await svc.processSoftFork('badTx', 1_594_832, 4, PAYLOAD, false, authorityTx());
+        await svc.processSoftFork('badTx', 1_594_832, 4, 1_750_000_000, PAYLOAD, false, authorityTx());
 
         expect(warnSpy.calledWithMatch(/Rejected soft-fork message badTx/)).to.equal(true);
         expect(errorSpy.calledWithMatch(/defect/)).to.equal(false);
@@ -1703,7 +1722,7 @@ describe('explorerService tests', () => {
           throw new TypeError('PRICE_TAGS.get is not a function');
         });
 
-        await expect(svc.processSoftFork('goodTx', 1_594_832, 4, PAYLOAD, false, authorityTx()))
+        await expect(svc.processSoftFork('goodTx', 1_594_832, 4, 1_750_000_000, PAYLOAD, false, authorityTx()))
           .to.eventually.be.rejectedWith('PRICE_TAGS.get is not a function');
 
         expect(errorSpy.calledWithMatch(/FluxOS\/spec-policy.*defect, not a bad message/)).to.equal(true);
@@ -1719,12 +1738,41 @@ describe('explorerService tests', () => {
         });
         const svc = explorerWith(() => ({ kind: 'price', message: PARSED_PRICE, firstByte: 0x02 }));
 
-        await expect(svc.processSoftFork('priceTx', 1_594_832, 4, PAYLOAD, false, authorityTx()))
+        await expect(svc.processSoftFork('priceTx', 1_594_832, 4, 1_750_000_000, PAYLOAD, false, authorityTx()))
           .to.eventually.be.rejectedWith(/chainHeight must be a non-negative integer/);
 
         // A row the history refuses is a poison pill: every rewind builds the history
         // from the stored rows through the same add(), unguarded.
         expect(updateStub.called).to.equal(false);
+      });
+
+      it('places a message the live walk reads by the time of the block it was mined in', async () => {
+        const updateStub = sinon.stub(dbHelper, 'updateOneInDatabase').resolves();
+        sinon.stub(dbHelper, 'findOneInDatabase').resolves(null);
+        sinon.stub(dbHelper, 'insertManyToDatabase').resolves();
+        await dbHelper.initiateDB();
+        const addStub = sinon.stub();
+        sinon.stub(priceOracleState, 'getPriceMessageHistory').returns({ add: addStub });
+        const svc = explorerWith(() => ({ kind: 'price', message: PARSED_PRICE, firstByte: 0x02 }));
+        const authority = config.fluxapps.messageAuthorityAddress;
+
+        await svc.processInsight({
+          height: 1_594_832,
+          time: 1_750_000_123,
+          tx: [{
+            txid: 'walkTx',
+            version: 4,
+            ...authorityTx(),
+            vout: [
+              { valueSat: 100_000, scriptPubKey: { addresses: [authority], asm: PAY_ASM } },
+              { valueSat: 0, scriptPubKey: { addresses: [], asm: 'OP_RETURN 0200' } },
+            ],
+          }],
+        });
+
+        sinon.assert.calledOnceWithExactly(addStub, PARSED_PRICE, 1_594_832, 0, 1_750_000_123);
+        const write = updateStub.getCalls().find((c) => c.args[2]?.txid === 'walkTx');
+        expect(write.args[3].$set.blockTime).to.equal(1_750_000_123);
       });
 
       it('writes the row and applies the message when both succeed', async () => {
@@ -1733,14 +1781,15 @@ describe('explorerService tests', () => {
         sinon.stub(priceOracleState, 'getPriceMessageHistory').returns({ add: addStub });
         const svc = explorerWith(() => ({ kind: 'price', message: PARSED_PRICE, firstByte: 0x02 }));
 
-        await svc.processSoftFork('priceTx', 1_594_832, 4, PAYLOAD, false, authorityTx());
+        await svc.processSoftFork('priceTx', 1_594_832, 4, 1_750_000_000, PAYLOAD, false, authorityTx());
 
-        sinon.assert.calledOnceWithExactly(addStub, PARSED_PRICE, 1_594_832, 4);
+        sinon.assert.calledOnceWithExactly(addStub, PARSED_PRICE, 1_594_832, 4, 1_750_000_000);
         const write = updateStub.getCalls().find((c) => c.args[2]?.txid === 'priceTx');
         expect(write, 'the price row must be stored').to.not.be.undefined;
         expect(write.args[2]).to.deep.equal({ txid: 'priceTx', vout: 1 });
         expect(write.args[3].$set.message).to.equal(PARSED_PRICE);
         expect(write.args[3].$set.vout).to.equal(1);
+        expect(write.args[3].$set.blockTime, 'its block\'s time, which the history places it by').to.equal(1_750_000_000);
       });
     });
   });
