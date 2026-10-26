@@ -105,11 +105,12 @@ function getFiatMarkupBp() {
  * @param {object} prevSpec - resolved previous spec, of any version
  * @param {{height: number, prevState: {height: number, registeredAt: ?number},
  *   at: {tipBlockTime: number, currentHeight: number}, asOf: number,
- *   recentEvents: object[], prevTermCost: object}} ctx
+ *   recentEvents: object[], prevTermCost: object, extend?: boolean}} ctx -
+ *   `extend` is the event's signed renewal flag; a renewal is never free
  * @returns {Promise<object>} priceUpdate's result
  */
 async function priceAgainstPredecessor(spec, prevSpec, {
-  height, prevState, at, asOf, recentEvents, prevTermCost,
+  height, prevState, at, asOf, recentEvents, prevTermCost, extend = false,
 }) {
   const modifierHistory = priceOracleState.getPriceModifierHistory();
   const modParams = modifierHistory ? modifierHistory.resolveAt(height) : null;
@@ -125,6 +126,7 @@ async function priceAgainstPredecessor(spec, prevSpec, {
     remainingSeconds: prevSpec.remainingSeconds(prevState, at),
     oldTtl: prevSpec.termSeconds(prevState),
     updateDiscountBp,
+    extend,
     // priceUpdate prices the new spec internally, so this is the new spec's bit.
     isEncrypted: spec.isEncrypted,
   });
@@ -299,13 +301,13 @@ async function termCost(spec, height) {
  * @param {object} spec - resolved new v9 spec
  * @param {object} prevSpec - resolved previous spec, of any version
  * @param {{height: number, prevHeight: number, prevRegisteredAt: ?number,
- *   nowBlockTime: number, recentEvents: () => Promise<object[]>,
+ *   nowBlockTime: number, extend: boolean, recentEvents: () => Promise<object[]>,
  *   prevTermCost: object}} ctx - `prevTermCost` from the predecessor's own
- *   regime (pricingRegime.termCost)
+ *   regime (pricingRegime.termCost); `extend` the event's signed renewal flag
  * @returns {Promise<bigint|null>}
  */
 async function updateFee(spec, prevSpec, {
-  height, prevHeight, prevRegisteredAt, nowBlockTime, recentEvents, prevTermCost,
+  height, prevHeight, prevRegisteredAt, nowBlockTime, extend, recentEvents, prevTermCost,
 }) {
   const result = await priceAgainstPredecessor(spec, prevSpec, {
     height,
@@ -314,6 +316,7 @@ async function updateFee(spec, prevSpec, {
     asOf: nowBlockTime * 1000,
     recentEvents: await recentEvents(),
     prevTermCost,
+    extend,
   });
   if (result && result.refused) return null;
   return (result && result.free) ? 0n : BigInt(result.total);

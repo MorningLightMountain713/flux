@@ -89,7 +89,7 @@ describe('pricingRegime', () => {
       return { v9, priceUpdate };
     }
 
-    async function contextHandedToTheRule() {
+    async function contextHandedToTheRule({ extend = false } = {}) {
       const { v9, priceUpdate } = loadV9();
       const prevSpec = { termSeconds: sinon.stub().returns(7000), remainingSeconds: sinon.stub().returns(3000) };
       await v9.updateFee(spec, prevSpec, {
@@ -97,6 +97,7 @@ describe('pricingRegime', () => {
         prevHeight: HEIGHT - 5,
         prevRegisteredAt: BLOCK_TIME - 3600,
         nowBlockTime: BLOCK_TIME,
+        extend,
         recentEvents: async () => events,
         prevTermCost: { oldTermPriceFluxSats: 42 },
       });
@@ -126,6 +127,11 @@ describe('pricingRegime', () => {
       const { ctx } = await contextHandedToTheRule();
       expect(ctx.oldTermPriceFluxSats).to.equal(42);
       expect(ctx).to.not.have.property('oldScaledPriceMicrodollars');
+    });
+
+    it('hands the rule the event\'s renewal flag', async () => {
+      expect((await contextHandedToTheRule({ extend: true })).ctx.extend).to.equal(true);
+      expect((await contextHandedToTheRule({ extend: false })).ctx.extend).to.equal(false);
     });
   });
 
