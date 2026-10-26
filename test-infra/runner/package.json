@@ -15,6 +15,7 @@
     "@scure/base": "^2.2.0",
     "@runonflux/flux-spec": "file:../flux-spec/dist/packages/spec",
     "@runonflux/flux-spec-backend": "file:../flux-spec/dist/packages/spec-backend",
+    "@runonflux/flux-spec-crypto": "file:../flux-spec/dist/packages/spec-crypto",
     "@runonflux/flux-spec-policy": "file:../flux-spec/dist/packages/spec-policy",
     "axios": "^1.7.9",
     "chai": "^6.2.2",

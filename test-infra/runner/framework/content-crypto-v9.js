@@ -1,52 +1,29 @@
 // v9 content-delivery seal/sign toolkit for the harness, acting as the submitting
 // frontend. Every shape is taken from @runonflux/flux-spec (the authoritative
 // source) — the v9 spec, the contentHash, the AppEventV2 signing payload, the
-// transport envelope, and the content-manifest canonical form — never hand-rolled.
+// transport seal, and the content-manifest canonical form — never hand-rolled.
 // The owner signatures use the same BTC-message primitive the node verifies with.
 import crypto from 'node:crypto';
 import {
-  CipherSuite, DhkemX25519HkdfSha256, HkdfSha256, Aes256Gcm,
-} from '@hpke/core';
-import {
-  TransportEnvelope, buildTransportAad, buildContentTransportAad, buildSignaturePayloadV2, CONTENT_LOCATOR_AAD_REF,
-  FluxAppSpecV9, canonicalContentManifest, TRANSPORT_ALGORITHM, TRANSPORT_INFO, TRANSPORT_EXPORT_LABEL,
+  buildTransportAad, buildContentTransportAad, buildSignaturePayloadV2, CONTENT_LOCATOR_AAD_REF,
+  FluxAppSpecV9, OpenedSpec, canonicalContentManifest, TRANSPORT_INFO,
   appUuid, appIdentityFromUuid, blobUploadDigest, manifestPutDigest, blobKeepDigest,
 } from '@runonflux/flux-spec';
 import { computeMessageHashV2 } from '@runonflux/flux-spec-backend';
+import { HpkeTransportProvider } from '@runonflux/flux-spec-crypto';
 import { signBtcMessage } from '../auth.js';
 import { harnessNow } from './harness-clock.js';
 
-const enc = new TextEncoder();
 const sha256Hex = (input) => crypto.createHash('sha256').update(input).digest('hex');
 export const blobHash = (bytes) => `sha256:${sha256Hex(bytes)}`;
 
-let suiteCache;
-function hpke() {
-  if (!suiteCache) {
-    suiteCache = {
-      kem: new DhkemX25519HkdfSha256(),
-      suite: new CipherSuite({ kem: new DhkemX25519HkdfSha256(), kdf: new HkdfSha256(), aead: new Aes256Gcm() }),
-    };
-  }
-  return suiteCache;
-}
-
-// HPKE export-mode seal toward a recipient X25519 pubkey + local AES-256-GCM, the
-// frontend half of the split-HPKE the node opens (transportdecap + aeadDecrypt).
-async function sealExport(plaintext, aadBytes, recipientPubB64) {
-  const { suite, kem } = hpke();
-  const recipientPublicKey = await kem.deserializePublicKey(Buffer.from(recipientPubB64, 'base64'));
-  const sender = await suite.createSenderContext({ recipientPublicKey, info: enc.encode(TRANSPORT_INFO) });
-  const key = Buffer.from(await sender.export(enc.encode(TRANSPORT_EXPORT_LABEL), 32));
-  const nonce = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
-  cipher.setAAD(Buffer.from(aadBytes));
-  const ct = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  const envelope = new TransportEnvelope({
-    algorithm: TRANSPORT_ALGORITHM,
-    encapsulatedKey: new Uint8Array(sender.enc),
-    nonce: new Uint8Array(nonce),
-    ciphertext: new Uint8Array(Buffer.concat([ct, cipher.getAuthTag()])),
+// Seal toward the network's transport key, as any client does: flux-spec's
+// HpkeTransportProvider, to a key whose attestation was checked
+// (content-helper.fetchTransportKey). The wire form of the envelope.
+async function sealToTransportKey(plaintext, aadBytes, transportKey) {
+  const provider = await HpkeTransportProvider.create();
+  const envelope = await provider.seal({
+    plaintext: new Uint8Array(plaintext), aad: aadBytes, recipient: transportKey, info: TRANSPORT_INFO,
   });
   return envelope.toJSON();
 }
@@ -126,7 +103,7 @@ export function buildV9ContentSpec({
 // Declared as a spec that will be broadcast sealed: fields that must never travel
 // in the clear (a contentSlot) are refused on a cleartext registration.
 export function contentHashOf(submissionSpec) {
-  return FluxAppSpecV9.fromSubmission(submissionSpec, { encrypted: true }).contentHash();
+  return OpenedSpec.fromSubmission(submissionSpec).contentHash();
 }
 
 // Sign the AppEventV2 payload (type + "2" + contentHash + timestamp + extend) with
@@ -146,11 +123,11 @@ export async function signV9Event({
 // and signature stay self-consistent around the given hash, so the node opens the
 // envelope and its own validation is what rejects — the actual surface under test.
 export async function buildSignedRegistration({
-  submissionSpec, ownerKey, transportPubB64, timestamp = harnessNow(), type = 'fluxappregister', extend = true, contentHash: givenHash,
+  submissionSpec, ownerKey, transportKey, timestamp = harnessNow(), type = 'fluxappregister', extend = true, contentHash: givenHash,
 }) {
   const contentHash = givenHash || contentHashOf(submissionSpec);
   const aad = buildTransportAad({ contentHash, timestamp, type });
-  const transportEncrypted = await sealExport(Buffer.from(JSON.stringify(submissionSpec)), aad, transportPubB64);
+  const transportEncrypted = await sealToTransportKey(Buffer.from(JSON.stringify(submissionSpec)), aad, transportKey);
   const appSpecification = { name: submissionSpec.name, owner: submissionSpec.owner, transportEncrypted };
   const signature = await signV9Event({
     type, contentHash, timestamp, extend, ownerPrivkey: ownerKey.privkey,
@@ -228,7 +205,7 @@ export async function buildOwnerSigs({
 // Seal the ONE content envelope a submission carries: { blobs, manifest?, ... } HPKE-sealed
 // toward the node's transport key (content leg AAD bound to the spec's contentHash via `ref`).
 export async function buildContentEnvelope({
-  blobs, manifest, manifestPutSig, keepList, appName, transportPubB64, ref, timestamp,
+  blobs, manifest, manifestPutSig, keepList, appName, transportKey, ref, timestamp,
 }) {
   const payload = { blobs: {} };
   for (const [hash, bytes] of Object.entries(blobs || {})) {
@@ -238,16 +215,16 @@ export async function buildContentEnvelope({
   if (manifestPutSig) payload.manifestPutSig = manifestPutSig;
   if (keepList) payload.keepList = keepList;
   const aad = buildContentTransportAad({ appName, ref, timestamp });
-  return sealExport(Buffer.from(JSON.stringify(payload)), aad, transportPubB64);
+  return sealToTransportKey(Buffer.from(JSON.stringify(payload)), aad, transportKey);
 }
 
 // Seal a locator request: the blob's contentHash, toward the node's transport key
 // for the caller, under the locator's AAD reference, so only that node opens it.
 export async function sealLocatorRequest({
-  contentHash, appName, timestamp, transportPubB64,
+  contentHash, appName, timestamp, transportKey,
 }) {
   const aad = buildContentTransportAad({ appName, ref: CONTENT_LOCATOR_AAD_REF, timestamp });
-  return sealExport(Buffer.from(JSON.stringify({ contentHash })), aad, transportPubB64);
+  return sealToTransportKey(Buffer.from(JSON.stringify({ contentHash })), aad, transportKey);
 }
 
 // An owner-signed plaintext ContentManifest (gossip form for a plaintext app; the node
