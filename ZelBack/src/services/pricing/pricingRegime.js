@@ -116,8 +116,28 @@ async function fiatAndFluxDisplayPrice(spec, appSpecification) {
   return (await regimeFor(spec)).fiatAndFluxDisplayPrice(spec, appSpecification, pricing);
 }
 
+/**
+ * The quote of a message that fixes its fee at its signed time — a v9 message:
+ * the fee in satoshis consensus will charge it, and the fiat figure beside it.
+ * @param {object} spec - resolved spec
+ * @param {{timestamp: number, extend: boolean}} message
+ * @returns {Promise<{fee: bigint, usd: number|null, fiatMarkupBp: number, at: object}>}
+ * @throws {Error} `NotQuotable` for a spec whose regime fixes no fee at a signed
+ *   time (v1-v8, quoted by fiatAndFluxDisplayPrice)
+ */
+async function messageQuote(spec, message) {
+  const regime = await regimeFor(spec);
+  if (typeof regime.messageQuote !== 'function') {
+    const error = new Error(`A version ${spec.version} spec has no fee fixed at its signed time; its price is /apps/calculatefiatandfluxprice.`);
+    error.name = 'NotQuotable';
+    throw error;
+  }
+  return regime.messageQuote(spec, pricing, message);
+}
+
 module.exports = {
   fiatAndFluxDisplayPrice,
+  messageQuote,
   onChainDisplayPrice,
   regimeFor,
   termCost,

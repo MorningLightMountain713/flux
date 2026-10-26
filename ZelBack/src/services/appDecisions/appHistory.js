@@ -3,6 +3,7 @@
 const appRecords = require('../appDatabase/appRecords');
 const { compareChainOrder } = require('../utils/chainOrder');
 const { lookupBlockTime } = require('../daemonService/daemonServiceBlockchainRpcs');
+const { getSpecBackend } = require('../utils/specLibs');
 
 /**
  * An app's history as the chain accepted it: the messages the decider applied
@@ -78,6 +79,36 @@ async function latestApplied(name, { type, before } = {}) {
 }
 
 /**
+ * What an update to the app holding a name reads of the message it replaces —
+ * the latest applied one — as flux-spec's decision rule reads it
+ * (replacedMessage): its hash, where the term it holds started
+ * (`prevRegisteredAt`), the moment that term was bought at (`prevAt`), and the
+ * time in ms an update must be signed after (`signAfter`). Null when nothing
+ * applied.
+ * @param {string} name - in any letter case
+ * @returns {Promise<?{hash: string, prevAt: {time: number, height: number},
+ *   prevRegisteredAt: number, signAfter: number}>}
+ */
+async function replacedBy(name) {
+  const latest = await latestApplied(name);
+  if (!latest) return null;
+  const { decision, message } = latest;
+  const blockTime = decision.blockTime ?? await lookupBlockTime(decision.height);
+  if (!Number.isFinite(blockTime)) throw new Error(`no block time for height ${decision.height}`);
+  const { replacedMessage } = await getSpecBackend();
+  return {
+    hash: decision.hash,
+    ...replacedMessage({
+      timestamp: message.timestamp,
+      height: decision.height,
+      version: message.appSpecifications.version,
+      termStart: decision.termStart,
+      blockTime,
+    }),
+  };
+}
+
+/**
  * The applied updates of the app that holds a name, stamped with their
  * confirming blocks' times: what a free-update limit counts.
  * @param {string} name - in any letter case
@@ -138,4 +169,5 @@ module.exports = {
   currentAppMessages,
   registrationVersionOf,
   latestApplied,
+  replacedBy,
 };

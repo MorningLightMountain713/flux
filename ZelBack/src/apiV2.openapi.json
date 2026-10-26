@@ -1066,6 +1066,140 @@
           }
         }
       }
+    },
+    "/apps/quotes": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "operationId": "quoteAppMessage",
+        "summary": "The fee consensus will charge a v9 app message",
+        "description": "Prices a v9 registration or update as consensus will, fixed at the message's signed time: the rates in force an hour before that time, and for an update the unused share of the term it replaces at that time. A payment of `fee` satoshis mined by `payBy` is accepted whichever block confirms it. The body carries the fields the submission does; the client signs the message with the same `timestamp`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "appSpecification",
+                  "timestamp"
+                ],
+                "properties": {
+                  "appSpecification": {
+                    "type": "object",
+                    "description": "The message's specification, as submitted."
+                  },
+                  "timestamp": {
+                    "type": "integer",
+                    "description": "The message's signed time, in ms; at most an hour old and five minutes ahead."
+                  },
+                  "extend": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "The message's renewal flag: an update that sets it buys a new term and is never free."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The fee.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "fee": {
+                          "type": "string",
+                          "description": "Satoshis, as a decimal string."
+                        },
+                        "usd": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "description": "What a customer paying in dollars is charged; null with no oracle rate."
+                        },
+                        "fiatMarkupBp": {
+                          "type": "integer"
+                        },
+                        "payBy": {
+                          "type": "integer",
+                          "description": "The latest block time, in ms, the payment can be mined at."
+                        },
+                        "pricedAt": {
+                          "type": "object",
+                          "properties": {
+                            "time": {
+                              "type": "integer"
+                            },
+                            "height": {
+                              "type": "integer"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A field is missing or of the wrong type.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A message for this app is already waiting in this node's pool for its payment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The timestamp is one a submission would refuse, the specification cannot be read, or the message is refused by name in `reason`: `NotQuotable` (a v1-v8 specification), `StampedEarly` (an update signed at or before the message it replaces), `UpdateRefused` (a free-shaped update with the free allowance spent).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The node's pricing state, registry or chain state is not ready.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {

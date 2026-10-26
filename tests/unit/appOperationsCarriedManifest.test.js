@@ -7,6 +7,7 @@ const sinon = require('sinon');
 const proxyquire = require('proxyquire');
 
 const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
+const appHistory = require('../../ZelBack/src/services/appDecisions/appHistory');
 const appEventVerifier = require('../../ZelBack/src/services/appMessaging/appEventVerifier');
 const placementFeasibility = require('../../ZelBack/src/services/appPlacement/placementFeasibility');
 const messageVerifier = require('../../ZelBack/src/services/appMessaging/messageVerifier');
@@ -53,6 +54,8 @@ describe('updateAppGlobaly and the manifest an update carries', () => {
     sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: 2_600_000 });
     stubRegistry().byName.resolves({ spec, owner: spec.owner, identity: IDENTITY });
     sinon.stub(appsRepository, 'getTempMessage').resolves({ hash: 'outbound-hash' });
+    sinon.stub(appsRepository, 'getTempMessageByName').resolves(null);
+    sinon.stub(appHistory, 'replacedBy').resolves(null);
     sinon.stub(placementFeasibility, 'checkPlacementFeasibility').resolves(null);
     sinon.stub(appEventVerifier, 'deserializeTempMessage').resolves({ requiresArcaneAttestation: () => false });
     sinon.stub(appEventVerifier, 'authorize').resolves();
