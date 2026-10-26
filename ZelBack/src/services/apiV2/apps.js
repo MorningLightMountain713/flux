@@ -145,8 +145,9 @@ async function verification(req, res) {
  * POST /v2/apps/submissions - stores and broadcasts a signed message, the
  * verification's fields with `version` and `signature`, and answers its hash
  * once this node holds it. Its decision is read at the `Location` answered.
- * Refused when this node holds too few peers to broadcast it, and with the
- * reason for a message the network would refuse.
+ * Unavailable when this node holds too few peers to broadcast it, or does not
+ * hold the message once it has; refused with the reason for a message the
+ * network would refuse.
  * @param {import('express').Request} req
  * @param {import('express').Response} res carrying the v2 envelope
  * @returns {Promise<*>}
@@ -169,6 +170,7 @@ async function submission(req, res) {
   } catch (error) {
     return res.fail('UNPROCESSABLE', error.message);
   }
+  if (!hash) return res.fail('UNAVAILABLE', 'this node broadcast the message and does not hold it yet; submit it again');
 
   // Record and gossip where this message entered the network (best-effort).
   await ingressAttestationService.emit(hash, await ingressCapture.captureIngress(req));

@@ -1464,7 +1464,7 @@
             }
           },
           "503": {
-            "description": "The node's registry, chain state or explorer is not ready. Or the node holds too few peer connections to broadcast the message.",
+            "description": "The node's registry, chain state or explorer is not ready, it holds too few peer connections to broadcast the message, or it broadcast the message and does not hold it yet. The message can be submitted again.",
             "content": {
               "application/json": {
                 "schema": {

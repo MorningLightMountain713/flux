@@ -1235,6 +1235,7 @@ describe('appSubmission tests', () => {
   describe('a registration carrying content', () => {
     let calls;
     let authorize;
+    let getTempMessage;
     let appSubmission;
     const envelope = { algorithm: 'x', encapsulatedKey: 'k', nonce: 'n', ciphertext: 'c' };
 
@@ -1249,6 +1250,7 @@ describe('appSubmission tests', () => {
       });
       stubs.contentBlobService.encryptAndUploadBlobs.callsFake(async () => { calls.push('upload'); return []; });
       authorize = sinon.stub().callsFake(async () => { calls.push('authorize'); });
+      getTempMessage = sinon.stub().resolves({ hash: 'f'.repeat(64) });
       appSubmission = load({
         '../verificationHelper': { verifyPrivilege: sinon.stub().resolves(true) },
         '../utils/peerState': { peerManager: { getNumberOfPeers: () => 100 } },
@@ -1262,7 +1264,7 @@ describe('appSubmission tests', () => {
         },
         '../appMessaging/ingressAttestationService': { emit: sinon.stub().resolves() },
         '../appMessaging/messageVerifier': { requestAppMessage: sinon.stub().resolves() },
-        '../appDatabase/appsRepository': { getTempMessage: sinon.stub().resolves({ hash: 'f'.repeat(64) }) },
+        '../appDatabase/appsRepository': { getTempMessage, getPermanentMessage: sinon.stub().resolves(null) },
         '../serviceHelper': { ...serviceHelper, delay: sinon.stub().resolves() },
         '../utils/globalState': { isArcane: () => true },
       });
@@ -1287,6 +1289,22 @@ describe('appSubmission tests', () => {
       expect(res.body.status, JSON.stringify(res.body)).to.equal('error');
       expect(res.body.data.message).to.match(/not the owner/);
       expect(calls).to.deep.equal(['authorize']);
+    });
+
+    it('answers no hash for a registration this node broadcast and does not hold', async () => {
+      getTempMessage.resolves(null);
+      const hash = await appSubmission.registerAppGlobaly({
+        appSpecification: { ...V9_SUBMISSION }, timestamp: Date.now(), signature: 'sig', type: 'fluxappregister', version: 2, extend: true,
+      });
+      expect(hash).to.equal(null);
+      expect(calls).to.include('broadcast');
+    });
+
+    it('a registration this node does not hold once broadcast is answered as one to try again', async () => {
+      getTempMessage.resolves(null);
+      const res = await register();
+      expect(res.body.status, JSON.stringify(res.body)).to.equal('error');
+      expect(res.body.data.message).to.equal('Unable to register application on the network. Try again later.');
     });
 
     it('a signed registration uploads its content after the signature is checked and before it is broadcast', async () => {
