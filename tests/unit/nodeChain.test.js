@@ -87,7 +87,7 @@ describe('every call FluxOS and its harness make to a door that builds a legacy 
   const SOURCES = [path.join(ROOT, 'ZelBack/src'), path.join(ROOT, 'test-infra/runner/framework')];
   const DOORS = new RegExp(`\\b(${[
     'deserializeSpec', 'parseSubmission', 'RegisteredSpec\\.deserialize', 'HostedInstance\\.deserialize',
-    'AppEventLegacy\\.deserialize', 'SealedSpecV8\\.(?:deserialize|fromSubmission)',
+    '(?:Signed|Confirmed)AppEventLegacy\\.deserialize', 'SealedSpecV8\\.(?:deserialize|fromSubmission)',
     'VersionClass\\.(?:deserialize|fromSubmission)', 'FluxAppSpecV[1-8]\\.(?:deserialize|fromSubmission)',
     'new AppRegistry', 'new HostedInstances',
   ].join('|')})\\(`, 'g');

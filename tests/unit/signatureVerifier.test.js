@@ -228,26 +228,26 @@ describe('a real Bitcoin signature, through the deployed path', () => {
   const replay = (message, address, signature) => signatureVerifier.verifySignature(
     message, address, signature, { allowLegacyEncoding: true },
   );
-  let AppEventLegacy;
+  let ConfirmedAppEventLegacy;
 
   before(async () => {
-    ({ AppEventLegacy } = await getSpecBackend());
+    ({ ConfirmedAppEventLegacy } = await getSpecBackend());
   });
 
   it('verifies the message against the owner that signed it', async () => {
-    const result = await AppEventLegacy.deserialize(MESSAGE, { chain: nodeChain() }).verifySignature(replay, [MESSAGE.appSpecifications.owner]);
+    const result = await ConfirmedAppEventLegacy.deserialize(MESSAGE, { chain: nodeChain() }).verifySignature(replay, [MESSAGE.appSpecifications.owner]);
     expect(result.valid).to.equal(true);
     expect(result.signer).to.equal(MESSAGE.appSpecifications.owner);
   });
 
   it('refuses the same signature for another owner', async () => {
-    const result = await AppEventLegacy.deserialize(MESSAGE, { chain: nodeChain() }).verifySignature(replay, ['1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm']);
+    const result = await ConfirmedAppEventLegacy.deserialize(MESSAGE, { chain: nodeChain() }).verifySignature(replay, ['1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm']);
     expect(result.valid).to.equal(false);
   });
 
   it('refuses a message altered under the real signature', async () => {
     const altered = { ...MESSAGE, timestamp: MESSAGE.timestamp + 1 };
-    const result = await AppEventLegacy.deserialize(altered, { chain: nodeChain() }).verifySignature(replay, [MESSAGE.appSpecifications.owner]);
+    const result = await ConfirmedAppEventLegacy.deserialize(altered, { chain: nodeChain() }).verifySignature(replay, [MESSAGE.appSpecifications.owner]);
     expect(result.valid).to.equal(false);
   });
 });

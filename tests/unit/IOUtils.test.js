@@ -55,7 +55,7 @@ describe('IOUtils getVolumeInfo tests', () => {
     });
     installedApps.set('myapp', await domain.registeredSpec({ event: await domain.confirmedEvent({ spec: myapp }) }));
     const singleapp = await domain.v3Spec({ name: 'singleapp' });
-    installedApps.set('singleapp', await domain.registeredSpec({ event: await domain.legacyEvent({ spec: singleapp }) }));
+    installedApps.set('singleapp', await domain.registeredSpec({ event: await domain.confirmedLegacyEvent({ spec: singleapp }) }));
   });
 
   // Each instance as the node records it: its hosted instance, and the resources

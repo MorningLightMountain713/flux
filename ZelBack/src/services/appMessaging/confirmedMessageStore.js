@@ -63,10 +63,10 @@ function notifyStored(hashes) {
  *   hash, timestamp, signature, and for v2 the content hash, extend flag and
  *   attestation. Any chain facts it carries are ignored.
  * @param {{txid: string, height: number, value: number, blockTime?: number|null}} record
- * @returns {Promise<object>} ConfirmedAppEvent (v2) or AppEventLegacy
+ * @returns {Promise<object>} ConfirmedAppEvent (v2) or ConfirmedAppEventLegacy
  */
 async function confirmedEvent(contents, record) {
-  const { AppEventLegacy, ConfirmedAppEvent } = await getSpecBackend();
+  const { ConfirmedAppEventLegacy, ConfirmedAppEvent } = await getSpecBackend();
   const chain = {
     txid: serviceHelper.ensureString(record.txid),
     height: serviceHelper.ensureNumber(record.height),
@@ -96,7 +96,7 @@ async function confirmedEvent(contents, record) {
     });
   }
 
-  return AppEventLegacy.deserialize({
+  return ConfirmedAppEventLegacy.deserialize({
     type: contents.type,
     version: contents.version,
     appSpecifications: contents.appSpecifications,

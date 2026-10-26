@@ -44,14 +44,14 @@ function makeDeserializeSpecStub() {
 /**
  * The event classes `appEventVerifier.deserializeMessage` really returns,
  * routed exactly as production routes them: envelope version 2 is a
- * ConfirmedAppEvent, anything older an AppEventLegacy. Both are frozen, both
+ * ConfirmedAppEvent, anything older a ConfirmedAppEventLegacy. Both are frozen, both
  * carry a real spec on `.spec`, and both refuse a document whose
  * appSpecifications is not a spec the library can parse.
  */
 function makeDeserializeMessageStub() {
   return sinon.stub().callsFake(async (msg) => (msg.version === 2
     ? flux.ConfirmedAppEvent.deserialize(msg)
-    : flux.AppEventLegacy.deserialize(msg, { chain: flux.Chain.MAIN })));
+    : flux.ConfirmedAppEventLegacy.deserialize(msg, { chain: flux.Chain.MAIN })));
 }
 
 /**

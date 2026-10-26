@@ -52,7 +52,7 @@ describe('messageStore tests', () => {
    */
   function legacyEvent(message, spec, { hash } = {}) {
     const [signedForm] = spec.allSerializations?.() ?? [spec.toCanonical()];
-    return new flux.AppEventLegacy({
+    return new flux.SignedAppEventLegacy({
       originalType: message.type,
       spec,
       version: message.version,
@@ -652,7 +652,7 @@ describe('messageStore tests', () => {
       }
 
       // The v8 enterprise equivalent. An envelope version 1 message deserializes
-      // to AppEventLegacy, and that class answers requiresArcaneAttestation()
+      // to SignedAppEventLegacy, and that class answers requiresArcaneAttestation()
       // false by construction — which is the thing under test.
       async function encryptedV8Event() {
         return legacyEvent(
@@ -744,7 +744,7 @@ describe('messageStore tests', () => {
 
       it('does not subject a v8 (envelope version 1) encrypted message to the gate', async () => {
         // Legacy enterprise apps predate attestation and aren't born attested;
-        // AppEventLegacy has no verifyArcaneAttestation, so the gate must skip them.
+        // SignedAppEventLegacy has no verifyArcaneAttestation, so the gate must skip them.
         appEventVerifierStub.deserializeTempMessage.resolves(await encryptedV8Event());
         appEventVerifierStub.verifyAttestation.resolves(false);
         messageStore = buildWithSystemSecure(false);
