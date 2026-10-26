@@ -5,6 +5,7 @@ const appHistory = require('../appDecisions/appHistory');
 const appsRepository = require('../appDatabase/appsRepository');
 const pricingRegime = require('../pricing/pricingRegime');
 const { resolveSpec } = require('../utils/specCutover');
+const transportHelper = require('../utils/transportHelper');
 const { getSpecBackend } = require('../utils/specLibs');
 const { assertSubmittableTimestamp } = require('../appMessaging/submittableTimestamp');
 
@@ -39,9 +40,12 @@ async function ownerships(req, res) {
 
 /**
  * POST /v2/apps/quotes - the fee consensus will charge a v9 message, fixed at
- * its signed time: `{ appSpecification, extend, timestamp }`, the fields the
- * submission carries. A payment of `fee` satoshis mined by `payBy` is accepted
- * whichever block confirms it; after that the message can no longer be paid.
+ * its signed time: `{ type, appSpecification, contentHash, extend, timestamp }`,
+ * the fields the submission carries. A private spec arrives sealed to this
+ * node's transport key exactly as it is submitted, and is opened the same way;
+ * `contentHash`, when given, is the hash of the spec priced. A payment of `fee`
+ * satoshis mined by `payBy` is accepted whichever block confirms it; after that
+ * the message can no longer be paid.
  *
  * Refused, before anyone pays: a timestamp a submission would refuse; a message
  * for an app with another waiting in this node's pool for its payment; and by
@@ -53,7 +57,9 @@ async function ownerships(req, res) {
  * @returns {Promise<*>}
  */
 async function quote(req, res) {
-  const { appSpecification, extend = false, timestamp } = req.body ?? {};
+  const {
+    type, appSpecification, contentHash, extend = false, timestamp,
+  } = req.body ?? {};
   if (!appSpecification || typeof appSpecification !== 'object') {
     return res.fail('BAD_REQUEST', 'appSpecification is the message\'s specification');
   }
@@ -67,11 +73,16 @@ async function quote(req, res) {
 
   let spec;
   try {
-    spec = await resolveSpec(appSpecification);
+    spec = await resolveSpec(await transportHelper.openTransportEnvelope(appSpecification, {
+      contentHash, timestamp, type,
+    }));
   } catch (error) {
     return res.fail('UNPROCESSABLE', error.message);
   }
   if (!spec) return res.fail('UNPROCESSABLE', 'appSpecification cannot be read on this node');
+  if (contentHash !== undefined && spec.contentHash() !== contentHash) {
+    return res.fail('UNPROCESSABLE', 'contentHash does not match appSpecification');
+  }
 
   if (await appsRepository.getTempMessageByName(spec.name)) {
     return res.fail('CONFLICT', 'a message for this app is already waiting for its payment; wait for it to be applied');

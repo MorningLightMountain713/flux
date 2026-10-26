@@ -16,10 +16,12 @@ const { expect } = chai;
 // reader and the pool at their seams.
 describe('POST /v2/apps/quotes', () => {
   const NOW = 1_760_000_000_000;
-  const SPEC = { name: 'myapp', version: 9 };
+  const CONTENT_HASH = 'c'.repeat(64);
+  const SPEC = { name: 'myapp', version: 9, contentHash: () => CONTENT_HASH };
   let apps;
   let messageQuote;
   let resolveSpec;
+  let openTransportEnvelope;
   let getTempMessageByName;
 
   const respond = () => ({
@@ -34,10 +36,13 @@ describe('POST /v2/apps/quotes', () => {
       fee: 123_456_789n, usd: 4.99, fiatMarkupBp: 500, at: { time: (NOW - 1000) / 1000, height: 201 },
     });
     resolveSpec = sinon.stub().resolves(SPEC);
+    // The submission door's own opener: a cleartext spec passes through it unchanged.
+    openTransportEnvelope = sinon.stub().callsFake(async (spec) => spec);
     getTempMessageByName = sinon.stub().resolves(null);
     apps = proxyquire('../../ZelBack/src/services/apiV2/apps', {
       '../pricing/pricingRegime': { messageQuote },
       '../utils/specCutover': { resolveSpec },
+      '../utils/transportHelper': { openTransportEnvelope },
       '../appDatabase/appsRepository': { getTempMessageByName },
     });
   });
@@ -107,6 +112,68 @@ describe('POST /v2/apps/quotes', () => {
       expect(res.fail.firstCall.args).to.deep.equal(['UNPROCESSABLE', 'refused', { reason }]);
     });
   }
+
+  describe('a private specification, sealed as it is submitted', () => {
+    const SEALED = {
+      name: 'myapp',
+      owner: '1owner',
+      transportEncrypted: {
+        algorithm: 'HPKE-X25519-HKDF-SHA256-AES256GCM',
+        encapsulatedKey: Buffer.alloc(32).toString('base64'),
+        ciphertext: Buffer.alloc(32).toString('base64'),
+        nonce: Buffer.alloc(12).toString('base64'),
+      },
+    };
+    const OPENED = { version: 9, name: 'myapp', owner: '1owner' };
+    const sealedBody = (over = {}) => body({
+      type: 'fluxappregister', appSpecification: SEALED, contentHash: CONTENT_HASH, extend: true, ...over,
+    });
+
+    it('is opened with the type, content hash and time its seal is bound to, and what it opens to is priced', async () => {
+      openTransportEnvelope.withArgs(SEALED).resolves(OPENED);
+      const res = respond();
+      await apps.quote({ body: sealedBody() }, res);
+      sinon.assert.calledOnceWithExactly(openTransportEnvelope, SEALED, {
+        contentHash: CONTENT_HASH, timestamp: NOW - 1000, type: 'fluxappregister',
+      });
+      sinon.assert.calledOnceWithExactly(resolveSpec, OPENED);
+      sinon.assert.calledOnceWithExactly(messageQuote, SPEC, { timestamp: NOW - 1000, extend: true });
+      sinon.assert.calledOnce(res.ok);
+    });
+
+    it('is refused by the seal\'s own rule when the type it is bound to is missing', async () => {
+      const real = proxyquire('../../ZelBack/src/services/apiV2/apps', {
+        '../pricing/pricingRegime': { messageQuote },
+        '../appDatabase/appsRepository': { getTempMessageByName },
+      });
+      const res = respond();
+      await real.quote({ body: sealedBody({ type: undefined }) }, res);
+      expect(res.fail.firstCall.args[0]).to.equal('UNPROCESSABLE');
+      expect(res.fail.firstCall.args[1]).to.match(/type must be one of TRANSPORT_PURPOSE/);
+      sinon.assert.notCalled(messageQuote);
+    });
+
+    it('is refused when it does not open on this node', async () => {
+      openTransportEnvelope.rejects(new Error('Transport-encrypted submission could not be opened'));
+      const res = respond();
+      await apps.quote({ body: sealedBody() }, res);
+      expect(res.fail.firstCall.args).to.deep.equal(['UNPROCESSABLE', 'Transport-encrypted submission could not be opened']);
+      sinon.assert.notCalled(messageQuote);
+    });
+  });
+
+  it('refuses a specification that does not hash to the content hash given', async () => {
+    const res = respond();
+    await apps.quote({ body: body({ contentHash: 'd'.repeat(64) }) }, res);
+    expect(res.fail.firstCall.args).to.deep.equal(['UNPROCESSABLE', 'contentHash does not match appSpecification']);
+    sinon.assert.notCalled(messageQuote);
+  });
+
+  it('prices a specification that hashes to the content hash given', async () => {
+    const res = respond();
+    await apps.quote({ body: body({ contentHash: CONTENT_HASH }) }, res);
+    sinon.assert.calledOnce(res.ok);
+  });
 
   it('lets any other failure out to the surface\'s error handler', async () => {
     messageQuote.rejects(new TypeError('a fault of ours'));

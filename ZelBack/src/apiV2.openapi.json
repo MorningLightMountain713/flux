@@ -1074,7 +1074,7 @@
         ],
         "operationId": "quoteAppMessage",
         "summary": "The fee consensus will charge a v9 app message",
-        "description": "Prices a v9 registration or update as consensus will, fixed at the message's signed time: the rates in force an hour before that time, and for an update the unused share of the term it replaces at that time. A payment of `fee` satoshis mined by `payBy` is accepted whichever block confirms it. The body carries the fields the submission does; the client signs the message with the same `timestamp`.",
+        "description": "Prices a v9 registration or update as consensus will, fixed at the message's signed time: the rates in force an hour before that time, and for an update the unused share of the term it replaces at that time. A payment of `fee` satoshis mined by `payBy` is accepted whichever block confirms it. The body carries the fields the submission does; the client signs the message with the same `timestamp`. A private specification is sent sealed to this node's transport key exactly as it is submitted, with the `type` and `contentHash` its seal is bound to.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1086,9 +1086,21 @@
                   "timestamp"
                 ],
                 "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "fluxappregister",
+                      "fluxappupdate"
+                    ],
+                    "description": "The message's type. Required with a sealed specification, whose seal is bound to it."
+                  },
                   "appSpecification": {
                     "type": "object",
-                    "description": "The message's specification, as submitted."
+                    "description": "The message's specification, as submitted: in the clear, or sealed as { name, owner, transportEncrypted }."
+                  },
+                  "contentHash": {
+                    "type": "string",
+                    "description": "The message's content hash. Required with a sealed specification, whose seal is bound to it; when given, the specification priced must hash to it."
                   },
                   "timestamp": {
                     "type": "integer",
