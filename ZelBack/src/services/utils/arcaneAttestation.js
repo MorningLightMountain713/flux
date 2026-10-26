@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const specLibrary = require('./specLibrary');
 
 // DER SubjectPublicKeyInfo prefix for an Ed25519 public key. Prepended to the
 // raw 32-byte key so node:crypto can import it as a KeyObject.
@@ -14,7 +15,9 @@ const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
  * encrypted message it relays, so it verifies through OpenSSL, about fifteen
  * times faster than flux-spec's default; tests/unit/arcaneAttestation.test.js
  * holds this function to `assertEd25519Agrees`, which is what lets it stand in
- * for the rule.
+ * for the rule. The one case OpenSSL answers by version, an identity R, is
+ * refused first by the rule's own `hasIdentityR`, so every Node release gives
+ * the rule's answer.
  *
  * Any malformed input verifies as false rather than throwing: an unverifiable
  * attestation is simply invalid.
@@ -25,6 +28,7 @@ const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
  * @returns {boolean}
  */
 function verifyEd25519OpenSsl(signature, message, publicKey) {
+  if (specLibrary.loaded().hasIdentityR(signature)) return false;
   try {
     const key = crypto.createPublicKey({
       key: Buffer.concat([ED25519_SPKI_PREFIX, Buffer.from(publicKey)]), format: 'der', type: 'spki',
