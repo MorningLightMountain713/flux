@@ -35,6 +35,9 @@ const operationsController = require('../../ZelBack/src/services/appManagement/o
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const capabilityHistory = require('../../ZelBack/src/services/capabilityHistory');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
+const appSubmission = require('../../ZelBack/src/services/appRequirements/appSubmission');
+const appOperations = require('../../ZelBack/src/services/appLifecycle/appOperations');
+const ingressAttestationService = require('../../ZelBack/src/services/appMessaging/ingressAttestationService');
 
 const ROOT = nodePath.join(__dirname, '../..');
 
@@ -378,6 +381,174 @@ describe('routesV2 - the /v2 surface', () => {
       const res = await supertest(app).get('/v2/apps/MyApp/ownerships');
       expect(res.status).to.equal(503);
       sinon.assert.notCalled(ownershipRecord);
+    });
+  });
+
+  describe('POST /apps/verifications', () => {
+    const READS = ['appRegistryConsistent', 'explorerSynced', 'chainStateConsistent'];
+    let app;
+    let validateAppRegistration;
+    let validateAppUpdate;
+
+    beforeEach(() => {
+      validateAppRegistration = sinon.stub(appSubmission, 'validateAppRegistration').resolves('registration-blob');
+      validateAppUpdate = sinon.stub(appSubmission, 'validateAppUpdate').resolves('update-blob');
+      capabilities.resetForTests();
+      capabilities.setForTests(READS, true);
+      app = express();
+      app.use('/v2', routesV2);
+    });
+
+    afterEach(() => {
+      sinon.restore();
+      capabilities.resetForTests();
+    });
+
+    const message = (over = {}) => ({
+      type: 'fluxappregister', version: 2, appSpecification: { name: 'myapp' }, contentHash: 'c'.repeat(64), timestamp: 1_760_000_000_000, extend: false, ...over,
+    });
+    const verify = (body) => supertest(app).post('/v2/apps/verifications').send(body);
+
+    it('holds a registration to the registration checks and answers the spec as it will be broadcast', async () => {
+      const res = await verify(message());
+      expect(res.status).to.equal(200);
+      expect(res.body.data).to.deep.equal({ appSpecification: 'registration-blob' });
+      sinon.assert.calledOnceWithExactly(validateAppRegistration, { name: 'myapp' }, { contentHash: 'c'.repeat(64), timestamp: 1_760_000_000_000, type: 'fluxappregister' });
+      sinon.assert.notCalled(validateAppUpdate);
+    });
+
+    it('holds an update to the update checks', async () => {
+      const res = await verify(message({ type: 'fluxappupdate' }));
+      expect(res.status).to.equal(200);
+      expect(res.body.data).to.deep.equal({ appSpecification: 'update-blob' });
+      sinon.assert.calledOnceWithExactly(validateAppUpdate, { name: 'myapp' }, { contentHash: 'c'.repeat(64), timestamp: 1_760_000_000_000, type: 'fluxappupdate' });
+      sinon.assert.notCalled(validateAppRegistration);
+    });
+
+    for (const [what, over] of [
+      ['no type', { type: undefined }],
+      ['a type that is not a message type', { type: 'zelappregister' }],
+      ['no specification', { appSpecification: undefined }],
+      ['a specification that is not an object', { appSpecification: 'myapp' }],
+    ]) {
+      it(`refuses ${what} as a bad request, and checks nothing`, async () => {
+        const res = await verify(message(over));
+        expect(res.status).to.equal(400);
+        expect(res.body.error.code).to.equal('BAD_REQUEST');
+        sinon.assert.notCalled(validateAppRegistration);
+        sinon.assert.notCalled(validateAppUpdate);
+      });
+    }
+
+    it('answers 422 with the reason for a message its submission would refuse', async () => {
+      validateAppRegistration.rejects(new Error('App x requests 5 instances but only 2 eligible nodes exist'));
+      const res = await verify(message());
+      expect(res.status).to.equal(422);
+      expect(res.body.error).to.deep.include({ code: 'UNPROCESSABLE', message: 'App x requests 5 instances but only 2 eligible nodes exist' });
+    });
+
+    for (const capability of READS) {
+      it(`answers 503 while ${capability} is down, and checks nothing`, async () => {
+        capabilities.setForTests(capability, false);
+        const res = await verify(message());
+        expect(res.status).to.equal(503);
+        sinon.assert.notCalled(validateAppRegistration);
+      });
+    }
+  });
+
+  describe('POST /apps/submissions', () => {
+    const READS = ['appRegistryConsistent', 'explorerSynced', 'chainStateConsistent'];
+    const HASH = 'f'.repeat(64);
+    let app;
+    let verifyPrivilege;
+    let holdsEnoughPeersToSubmit;
+    let registerAppGlobaly;
+    let updateAppGlobaly;
+    let emit;
+
+    beforeEach(() => {
+      verifyPrivilege = sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      holdsEnoughPeersToSubmit = sinon.stub(appSubmission, 'holdsEnoughPeersToSubmit').returns(true);
+      registerAppGlobaly = sinon.stub(appSubmission, 'registerAppGlobaly').resolves(HASH);
+      updateAppGlobaly = sinon.stub(appOperations, 'updateAppGlobaly').resolves(HASH);
+      emit = sinon.stub(ingressAttestationService, 'emit').resolves();
+      capabilities.resetForTests();
+      capabilities.setForTests(READS, true);
+      app = express();
+      app.use('/v2', routesV2);
+    });
+
+    afterEach(() => {
+      sinon.restore();
+      capabilities.resetForTests();
+    });
+
+    const FIELDS = {
+      version: 2, appSpecification: { name: 'myapp' }, contentHash: 'c'.repeat(64), timestamp: 1_760_000_000_000, extend: true, signature: 'sig',
+    };
+    const submit = (body) => supertest(app).post('/v2/apps/submissions').set('zelidauth', 'the-header-value').send(body);
+
+    it('submits a registration, records where it entered, and answers its hash and where its decision is read', async () => {
+      const res = await submit({ type: 'fluxappregister', ...FIELDS });
+      expect(res.status).to.equal(201);
+      expect(res.body.data).to.deep.equal({ hash: HASH });
+      expect(res.headers.location).to.equal(`/v2/apps/messages/${HASH}/decision`);
+      sinon.assert.calledOnceWithExactly(registerAppGlobaly, { type: 'fluxappregister', ...FIELDS });
+      sinon.assert.notCalled(updateAppGlobaly);
+      sinon.assert.calledOnce(emit);
+      expect(emit.firstCall.args[0]).to.equal(HASH);
+    });
+
+    it('submits an update as an update', async () => {
+      const res = await submit({ type: 'fluxappupdate', ...FIELDS });
+      expect(res.status).to.equal(201);
+      sinon.assert.calledOnceWithExactly(updateAppGlobaly, { type: 'fluxappupdate', ...FIELDS });
+      sinon.assert.notCalled(registerAppGlobaly);
+    });
+
+    it('hands on only the message\'s own fields, never content a body names', async () => {
+      await submit({ type: 'fluxappregister', ...FIELDS, contentCtx: { content: 'x' } });
+      expect(registerAppGlobaly.firstCall.args[0]).to.not.have.property('contentCtx');
+    });
+
+    it('is for a signed-in user, judged on the zelidauth header, and submits nothing otherwise', async () => {
+      verifyPrivilege.resolves(false);
+      const res = await submit({ type: 'fluxappregister', ...FIELDS });
+      expect(res.status).to.equal(401);
+      expect(res.body.error.code).to.equal('UNAUTHORIZED');
+      sinon.assert.calledOnceWithExactly(verifyPrivilege, 'user', 'the-header-value');
+      sinon.assert.notCalled(registerAppGlobaly);
+    });
+
+    it('refuses a type that is not a message type as a bad request', async () => {
+      const res = await submit({ type: 'zelappregister', ...FIELDS });
+      expect(res.status).to.equal(400);
+      sinon.assert.notCalled(registerAppGlobaly);
+      sinon.assert.notCalled(updateAppGlobaly);
+    });
+
+    it('answers 503 when this node holds too few peers to broadcast, and submits nothing', async () => {
+      holdsEnoughPeersToSubmit.returns(false);
+      const res = await submit({ type: 'fluxappregister', ...FIELDS });
+      expect(res.status).to.equal(503);
+      expect(res.body.error.code).to.equal('UNAVAILABLE');
+      sinon.assert.notCalled(registerAppGlobaly);
+    });
+
+    it('answers 422 with the reason for a refused message, and records no entry', async () => {
+      updateAppGlobaly.rejects(new Error('Invalid version of message'));
+      const res = await submit({ type: 'fluxappupdate', ...FIELDS });
+      expect(res.status).to.equal(422);
+      expect(res.body.error).to.deep.include({ code: 'UNPROCESSABLE', message: 'Invalid version of message' });
+      sinon.assert.notCalled(emit);
+    });
+
+    it('answers 503 while chain state is rebuilding, and submits nothing', async () => {
+      capabilities.setForTests('chainStateConsistent', false);
+      const res = await submit({ type: 'fluxappregister', ...FIELDS });
+      expect(res.status).to.equal(503);
+      sinon.assert.notCalled(registerAppGlobaly);
     });
   });
 

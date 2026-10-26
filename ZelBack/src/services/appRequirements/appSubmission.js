@@ -377,6 +377,37 @@ async function resolveSubmission(appSpecification, {
   return { spec, isEncrypted, broadcastBlob };
 }
 
+/**
+ * Check a registration message before it is signed and paid for, as its
+ * submission will: the spec, the name, and whether the network can place it.
+ * @param {object} appSpecification the spec as submitted, in the clear or sealed
+ * @param {{contentHash?: string, timestamp?: number, type?: string}} [meta] the
+ *   message fields a sealed spec is bound to
+ * @returns {Promise<string|object>} the spec as the node will broadcast it
+ */
+async function validateAppRegistration(appSpecification, meta = {}) {
+  const syncStatus = daemonStatus.daemonSyncState();
+  if (!syncStatus.synced) {
+    throw new Error('Daemon not yet synced.');
+  }
+  const daemonHeight = syncStatus.height;
+
+  const { contentHash, timestamp, type } = meta;
+  const { spec, broadcastBlob } = await resolveSubmission(appSpecification, {
+    contentHash, timestamp, type: type || 'fluxappregister', daemonHeight,
+  });
+
+  await registryManager.checkApplicationRegistrationNameConflicts(spec);
+
+  // Placement feasibility at the front door, while the spec is in hand: a spec
+  // the network provably cannot place is refused before it is paid for, and a
+  // diversity-constrained one is accepted with a warning. A failure to COMPUTE
+  // never refuses - without the computation there is no proof.
+  await placementFeasibility.checkPlacementFeasibility(spec, 'validateAppRegistration');
+
+  return broadcastBlob;
+}
+
 async function verifyAppRegistrationParameters(req, res) {
   try {
     const processedBody = serviceHelper.ensureObject(req.body);
@@ -385,27 +416,8 @@ async function verifyAppRegistrationParameters(req, res) {
     // preflight is just the spec object.
     const appSpecification = serviceHelper.ensureObject(processedBody.appSpecification || processedBody);
     const { contentHash, timestamp, type } = processedBody;
-
-    const syncStatus = daemonStatus.daemonSyncState();
-    if (!syncStatus.synced) {
-      throw new Error('Daemon not yet synced.');
-    }
-    const daemonHeight = syncStatus.height;
-
-    const { spec, broadcastBlob } = await resolveSubmission(appSpecification, {
-      contentHash, timestamp, type: type || 'fluxappregister', daemonHeight,
-    });
-
-    await registryManager.checkApplicationRegistrationNameConflicts(spec);
-
-    // Placement feasibility at the front door, while the spec is in hand: a spec
-    // the network provably cannot place is refused before it is paid for, and a
-    // diversity-constrained one is accepted with a warning. A failure to COMPUTE
-    // never refuses - without the computation there is no proof.
-    await placementFeasibility.checkPlacementFeasibility(spec, 'verifyAppRegistrationParameters');
-
-    const respondPrice = messageHelper.createDataMessage(broadcastBlob);
-    res.json(respondPrice);
+    const broadcastBlob = await validateAppRegistration(appSpecification, { contentHash, timestamp, type });
+    res.json(messageHelper.createDataMessage(broadcastBlob));
   } catch (error) {
     log.warn(error);
     const errorResponse = messageHelper.createErrorMessage(
@@ -479,32 +491,33 @@ async function verifyAppUpdateApi(req, res) {
 }
 
 /**
- * Validate and broadcast a parsed registration submission. Shared by the JSON
- * and multipart paths. The multipart path passes contentCtx (the HPKE-sealed
- * content envelope) so its content is opened + uploaded synchronously (durable
- * before gossip) once the spec validates. res.json is sent here on
- * success/unauthorized; validation failures throw to the caller's handler.
+ * Whether this node holds enough peer connections to broadcast an app message
+ * safely. Direction-agnostic on purpose: duty pairs are reciprocal, one
+ * connection per pair, and which end wears the outbound label is decided by a
+ * dial race - a well-connected node can hold every pair inbound-labelled. What
+ * safety needs is that enough distinct peers hold a connection to this node;
+ * counting by direction undercounts exactly the healthy case.
+ * @returns {boolean}
  */
-async function submitAppRegistration(req, res, processedBody, contentCtx) {
-  const authorized = await verificationHelper.verifyPrivilege(Privilege.USER, authOf(req));
-  if (!authorized) {
-    res.json(messageHelper.errUnauthorizedMessage());
-    return;
-  }
+function holdsEnoughPeersToSubmit() {
+  return peerManager.getNumberOfPeers() >= config.get('fluxapps.minOutgoing') + config.get('fluxapps.minIncoming');
+}
 
-  // Direction-agnostic on purpose: duty pairs are reciprocal, one connection
-  // per pair, and which end wears the outbound label is decided by a dial
-  // race — a well-connected node can hold every pair inbound-labelled.
-  // What safety needs is that enough distinct peers hold a connection to
-  // this node; counting by direction undercounts exactly the healthy case.
-  if (peerManager.getNumberOfPeers() < config.get('fluxapps.minOutgoing') + config.get('fluxapps.minIncoming')) {
-    throw new Error('Sorry, This Flux does not hold enough peer connections for safe application registration');
-  }
-
-  let { appSpecification, timestamp, signature } = processedBody;
-  const { contentHash, extend } = processedBody;
-  let messageType = processedBody.type;
-  let typeVersion = processedBody.version;
+/**
+ * Validate, store and broadcast a signed registration message, and wait for
+ * this node to hold it. The multipart path passes contentCtx (the HPKE-sealed
+ * content envelope), whose content is opened and uploaded, durable before the
+ * message is broadcast, once the signature is checked.
+ * @param {{appSpecification: object, timestamp: number, signature: string,
+ *   type: string, version: number, contentHash?: string, extend?: boolean,
+ *   contentCtx?: object}} params the submission's fields
+ * @returns {Promise<string>} the message's hash
+ */
+async function registerAppGlobaly(params) {
+  let { appSpecification, timestamp, signature } = params;
+  const { contentHash, extend, contentCtx } = params;
+  let messageType = params.type;
+  let typeVersion = params.version;
 
   if (!appSpecification || !timestamp || !signature || !messageType || !typeVersion) {
     throw new Error('Incomplete message received. Check if appSpecification, type, version, timestamp and signature are provided.');
@@ -543,7 +556,7 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
   // The preflight applies this too, but the preflight is advisory - a client can
   // skip it. This is the path that stores and gossips the spec, so the refusal
   // has to stand here as well.
-  await placementFeasibility.checkPlacementFeasibility(spec, 'registerAppGlobalyApi');
+  await placementFeasibility.checkPlacementFeasibility(spec, 'registerAppGlobaly');
 
   const messageHASH = await appEventVerifier.computeOutboundHash({
     type: messageType,
@@ -608,8 +621,6 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
     arcaneAttestation,
   };
   await fluxCommunicationMessagesSender.broadcastTemporaryAppMessage(temporaryAppMessage);
-  // Record and gossip where this registration entered the network (best-effort).
-  await ingressAttestationService.emit(messageHASH, await ingressCapture.captureIngress(req));
   await serviceHelper.delay(1200);
   await messageVerifier.requestAppMessage(messageHASH);
   await serviceHelper.delay(1200);
@@ -626,11 +637,32 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
     }
   }
   if (tempMessage && typeof tempMessage === 'object' && !Array.isArray(tempMessage)) {
-    const responseHash = messageHelper.createDataMessage(tempMessage.hash);
-    res.json(responseHash);
-    return;
+    return tempMessage.hash;
   }
   throw new Error('Unable to register application on the network. Try again later.');
+}
+
+/**
+ * Authorize and run a registration from a parsed submission. Shared by the JSON
+ * and multipart paths. res.json is sent here on success/unauthorized;
+ * validation failures throw to the caller's handler.
+ */
+async function submitAppRegistration(req, res, processedBody, contentCtx) {
+  const authorized = await verificationHelper.verifyPrivilege(Privilege.USER, authOf(req));
+  if (!authorized) {
+    res.json(messageHelper.errUnauthorizedMessage());
+    return;
+  }
+  if (!holdsEnoughPeersToSubmit()) {
+    throw new Error('Sorry, This Flux does not hold enough peer connections for safe application registration');
+  }
+
+  const hash = await registerAppGlobaly({ ...processedBody, contentCtx });
+
+  // Record and gossip where this registration entered the network (best-effort).
+  await ingressAttestationService.emit(hash, await ingressCapture.captureIngress(req));
+
+  res.json(messageHelper.createDataMessage(hash));
 }
 
 /**
@@ -934,9 +966,12 @@ async function assertNamesWhatStands(spec, app, { carriedManifest = null } = {})
 module.exports = {
   resolveSubmission,
   assertPlacementPrivileges,
+  holdsEnoughPeersToSubmit,
+  validateAppRegistration,
   verifyAppRegistrationParameters,
   validateAppUpdate,
   verifyAppUpdateApi,
+  registerAppGlobaly,
   registerAppGlobalyApi,
   parseMultipartSubmission,
   uploadSealedContent,

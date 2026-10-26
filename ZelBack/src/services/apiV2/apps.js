@@ -8,9 +8,16 @@ const { resolveSpec } = require('../utils/specCutover');
 const transportHelper = require('../utils/transportHelper');
 const { getSpecBackend, validatePrivateSubmission } = require('../utils/specLibs');
 const { assertSubmittableTimestamp } = require('../appMessaging/submittableTimestamp');
+const appSubmission = require('../appRequirements/appSubmission');
+const appOperations = require('../appLifecycle/appOperations');
+const ingressAttestationService = require('../appMessaging/ingressAttestationService');
+const ingressCapture = require('../utils/ingressCapture');
 
 /** The refusals a quote reports by name, for a client to branch on. */
 const QUOTE_REFUSALS = new Set(['NotQuotable', 'StampedEarly', 'UpdateRefused']);
+
+/** The message types a verification or a submission takes. */
+const MESSAGE_TYPES = new Set(['fluxappregister', 'fluxappupdate']);
 
 /**
  * GET /v2/apps/activestandby - each installed activeStandby component this node is
@@ -106,8 +113,72 @@ async function quote(req, res) {
   }
 }
 
+/**
+ * POST /v2/apps/verifications - checks a message before it is signed and paid
+ * for, as its submission will: `{ type, appSpecification, contentHash,
+ * timestamp }`, the fields the submission carries. `type` selects the checks a
+ * registration or an update is held to. A private spec arrives sealed to this
+ * node's transport key exactly as it is submitted. Answers the spec as the node
+ * will broadcast it; refused with the reason the submission would give.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res carrying the v2 envelope
+ * @returns {Promise<*>}
+ */
+async function verification(req, res) {
+  const {
+    type, appSpecification, contentHash, timestamp,
+  } = req.body ?? {};
+  if (!MESSAGE_TYPES.has(type)) return res.fail('BAD_REQUEST', 'type is fluxappregister or fluxappupdate');
+  if (!appSpecification || typeof appSpecification !== 'object') {
+    return res.fail('BAD_REQUEST', 'appSpecification is the message\'s specification');
+  }
+
+  const validate = type === 'fluxappregister' ? appSubmission.validateAppRegistration : appSubmission.validateAppUpdate;
+  try {
+    return res.ok({ appSpecification: await validate(appSpecification, { contentHash, timestamp, type }) });
+  } catch (error) {
+    return res.fail('UNPROCESSABLE', error.message);
+  }
+}
+
+/**
+ * POST /v2/apps/submissions - stores and broadcasts a signed message, the
+ * verification's fields with `version` and `signature`, and answers its hash
+ * once this node holds it. Its decision is read at the `Location` answered.
+ * Refused when this node holds too few peers to broadcast it, and with the
+ * reason for a message the network would refuse.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res carrying the v2 envelope
+ * @returns {Promise<*>}
+ */
+async function submission(req, res) {
+  const {
+    type, version, appSpecification, contentHash, timestamp, extend, signature,
+  } = req.body ?? {};
+  if (!MESSAGE_TYPES.has(type)) return res.fail('BAD_REQUEST', 'type is fluxappregister or fluxappupdate');
+  if (!appSubmission.holdsEnoughPeersToSubmit()) {
+    return res.fail('UNAVAILABLE', 'this node does not hold enough peer connections to broadcast an app message');
+  }
+
+  const submit = type === 'fluxappregister' ? appSubmission.registerAppGlobaly : appOperations.updateAppGlobaly;
+  let hash;
+  try {
+    hash = await submit({
+      type, version, appSpecification, contentHash, timestamp, extend, signature,
+    });
+  } catch (error) {
+    return res.fail('UNPROCESSABLE', error.message);
+  }
+
+  // Record and gossip where this message entered the network (best-effort).
+  await ingressAttestationService.emit(hash, await ingressCapture.captureIngress(req));
+  return res.created({ hash }, `/v2/apps/messages/${hash}/decision`);
+}
+
 module.exports = {
   activeStandby,
   ownerships,
   quote,
+  submission,
+  verification,
 };

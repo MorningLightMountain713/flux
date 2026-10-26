@@ -1212,6 +1212,269 @@
           }
         }
       }
+    },
+    "/apps/verifications": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "operationId": "verifyAppMessage",
+        "summary": "Checks an app message before it is signed and paid for",
+        "description": "Holds a registration or an update to the checks its submission will apply: the specification, the name, the update's invariants, and whether the network can place it. Takes the fields the submission carries, without its signature. A private specification is sent sealed to this node's transport key exactly as it is submitted, with the `type` and `contentHash` its seal is bound to.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "type",
+                  "appSpecification"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "fluxappregister",
+                      "fluxappupdate"
+                    ],
+                    "description": "The message's type; selects the checks a registration or an update is held to."
+                  },
+                  "version": {
+                    "type": "integer",
+                    "description": "The message's envelope version: 1 for a v1-v8 specification, 2 for v9."
+                  },
+                  "appSpecification": {
+                    "type": "object",
+                    "description": "The message's specification, as submitted: in the clear, or sealed as { name, owner, transportEncrypted }."
+                  },
+                  "contentHash": {
+                    "type": "string",
+                    "description": "The message's content hash. Required with a sealed specification, whose seal is bound to it."
+                  },
+                  "timestamp": {
+                    "type": "integer",
+                    "description": "The message's signed time, in ms."
+                  },
+                  "extend": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "The message's renewal flag."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The message passes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "appSpecification": {
+                          "type": [
+                            "object",
+                            "string"
+                          ],
+                          "description": "The specification as the node will broadcast it."
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`type` or `appSpecification` is missing or of the wrong type.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The message is refused; `message` gives the reason its submission would.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The node's registry, chain state or explorer is not ready.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/apps/submissions": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "operationId": "submitAppMessage",
+        "summary": "Stores and broadcasts a signed app message",
+        "description": "Stores a signed registration or update and broadcasts it to the network, answering its hash once this node holds it. The message is applied once its payment confirms; its decision is read at the `Location` answered.",
+        "security": [
+          {
+            "zelidauth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "type",
+                  "version",
+                  "appSpecification",
+                  "timestamp",
+                  "signature"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "fluxappregister",
+                      "fluxappupdate"
+                    ],
+                    "description": "The message's type; selects the checks a registration or an update is held to."
+                  },
+                  "version": {
+                    "type": "integer",
+                    "description": "The message's envelope version: 1 for a v1-v8 specification, 2 for v9."
+                  },
+                  "appSpecification": {
+                    "type": "object",
+                    "description": "The message's specification, as submitted: in the clear, or sealed as { name, owner, transportEncrypted }."
+                  },
+                  "contentHash": {
+                    "type": "string",
+                    "description": "The message's content hash. Required with a sealed specification, whose seal is bound to it."
+                  },
+                  "timestamp": {
+                    "type": "integer",
+                    "description": "The message's signed time, in ms."
+                  },
+                  "extend": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "The message's renewal flag."
+                  },
+                  "signature": {
+                    "type": "string",
+                    "description": "The owner's signature over the message."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Stored and broadcast.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "hash": {
+                          "type": "string",
+                          "description": "The message's hash, the reference its payment carries."
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "The message's decision, /v2/apps/messages/{hash}/decision.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`type` is missing or not a message type.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The caller is not a signed-in user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The message is refused; `message` gives the reason.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The node's registry, chain state or explorer is not ready. Or the node holds too few peer connections to broadcast the message.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {

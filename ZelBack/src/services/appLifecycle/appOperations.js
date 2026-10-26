@@ -73,6 +73,7 @@ const telemetryIdentityService = require('../telemetryIdentityService');
 const hwRequirements = require('../appRequirements/hwRequirements');
 const {
   resolveSubmission, assertSecretsNotConflicting, parseMultipartSubmission, uploadSealedContent, assertNamesWhatStands,
+  holdsEnoughPeersToSubmit,
 } = require('../appRequirements/appSubmission');
 const globalState = require('../utils/globalState');
 const contentBlobService = require('./contentBlobService');
@@ -2026,10 +2027,7 @@ async function submitAppUpdate(req, res, processedBody, contentCtx) {
     res.json(messageHelper.errUnauthorizedMessage());
     return;
   }
-  // Direction-agnostic on purpose — see the registration gate: duty pairs
-  // are reciprocal and the outbound label is a dial-race outcome, so what
-  // safety needs is enough distinct peers HELD, whoever dialed.
-  if (peerManager.getNumberOfPeers() < config.get('fluxapps.minOutgoing') + config.get('fluxapps.minIncoming')) {
+  if (!holdsEnoughPeersToSubmit()) {
     throw new Error('Sorry, This Flux does not hold enough peer connections for safe application update');
   }
 
