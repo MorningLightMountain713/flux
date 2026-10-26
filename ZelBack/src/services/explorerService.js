@@ -265,8 +265,9 @@ async function storeToCollection(collectionName, doc) {
  * from the database again.
  *
  * @param {string} collectionName Chainparams collection to upsert into.
- * @param {{txid: string, vout: number, height: number, txIndex: number, message: object}} doc
- *   Row to store, keyed by `txid` and `vout`. `txIndex` is the transaction's position
+ * @param {{txid: string, vout: number, height: number, txIndex: number, blockTime: number, message: object}} doc
+ *   Row to store, keyed by `txid` and `vout`. `blockTime` is its block's time: a v9
+ *   price, rate or modifier message counts from an hour after it. `txIndex` is the transaction's position
  *   in its block and `vout` the message's output within the transaction: two messages
  *   can be mined in one block, or in one transaction, and the history orders them by
  *   those positions rather than by the order this node happened to reach them in,
@@ -276,7 +277,7 @@ async function storeToCollection(collectionName, doc) {
  * @returns {Promise<void>}
  */
 async function applySoftForkMessage(collectionName, doc, history) {
-  if (history) history.add(doc.message, doc.height, doc.txIndex);
+  if (history) history.add(doc.message, doc.height, doc.txIndex, doc.blockTime);
   await storeToCollection(collectionName, doc);
 }
 
@@ -408,12 +409,13 @@ function isRecognizedMessageSigner(address, height) {
  * @param {string} txid Transaction carrying it
  * @param {number} height Block height
  * @param {number} txIndex Transaction's position in its block
+ * @param {number} blockTime Its block's time, in seconds
  * @param {{vout: number, bytes: Uint8Array, legacyPosition: boolean}} payload One entry of softForkPayloads
  * @param {boolean} senderIsLegacyAuthority Whether an input is a legacy message authority
  * @param {object} tx Verbose transaction, for the per-kind signer checks
  * @returns {Promise<void>}
  */
-async function processSoftFork(txid, height, txIndex, payload, senderIsLegacyAuthority, tx) {
+async function processSoftFork(txid, height, txIndex, blockTime, payload, senderIsLegacyAuthority, tx) {
   const { vout, bytes, legacyPosition } = payload;
   const { dispatch, ValidationError } = await policyLibrary();
   let dispatched;
@@ -473,7 +475,9 @@ async function processSoftFork(txid, height, txIndex, payload, senderIsLegacyAut
       log.info(`PriceMessage at height ${height}: ${txid}`);
       await applySoftForkMessage(
         priceMessagesCollection,
-        { txid, vout, height, txIndex, message },
+        {
+          txid, vout, height, txIndex, blockTime, message,
+        },
         priceOracleState.getPriceMessageHistory(),
       );
       break;
@@ -485,7 +489,9 @@ async function processSoftFork(txid, height, txIndex, payload, senderIsLegacyAut
       log.info(`RateMessage at height ${height}: ${txid}`);
       await applySoftForkMessage(
         rateMessagesCollection,
-        { txid, vout, height, txIndex, message },
+        {
+          txid, vout, height, txIndex, blockTime, message,
+        },
         priceOracleState.getRateMessageHistory(),
       );
       break;
@@ -494,7 +500,9 @@ async function processSoftFork(txid, height, txIndex, payload, senderIsLegacyAut
       log.info(`PriceModifierMessage at height ${height}: ${txid}`);
       await applySoftForkMessage(
         priceModifierMessagesCollection,
-        { txid, vout, height, txIndex, message },
+        {
+          txid, vout, height, txIndex, blockTime, message,
+        },
         priceOracleState.getPriceModifierHistory(),
       );
       break;
@@ -503,7 +511,9 @@ async function processSoftFork(txid, height, txIndex, payload, senderIsLegacyAut
       log.info(`OracleKeyMessage at height ${height}: ${txid}`);
       await applySoftForkMessage(
         oracleKeyMessagesCollection,
-        { txid, vout, height, txIndex, message },
+        {
+          txid, vout, height, txIndex, blockTime, message,
+        },
         priceOracleState.getOracleKeyHistory(),
       );
       break;
@@ -515,7 +525,9 @@ async function processSoftFork(txid, height, txIndex, payload, senderIsLegacyAut
       log.info(`UnclaimedPaymentMessage at height ${height}: ${txid} voids ${message.hashHex}`);
       await applySoftForkMessage(
         unclaimedPaymentMessagesCollection,
-        { txid, vout, height, txIndex, message },
+        {
+          txid, vout, height, txIndex, blockTime, message,
+        },
         unclaimedPayments.getUnclaimedPaymentHistory(),
       );
       await unclaimedPayments.applyVoid(message, height, decider.wake);
@@ -525,7 +537,9 @@ async function processSoftFork(txid, height, txIndex, payload, senderIsLegacyAut
       log.info(`PolicyGroupMessage at height ${height}: ${txid}`);
       await applySoftForkMessage(
         policyGroupMessagesCollection,
-        { txid, vout, height, txIndex, message },
+        {
+          txid, vout, height, txIndex, blockTime, message,
+        },
         entitlementsState.getPolicyGroupHistory(),
       );
       break;
@@ -593,7 +607,7 @@ async function processInsight(blockDataVerbose) {
         for (const payload of softForkPayloads(tx)) {
           try {
             // eslint-disable-next-line no-await-in-loop
-            await processSoftFork(tx.txid, blockDataVerbose.height, txIndex, payload, senderIsLegacyAuthority, tx);
+            await processSoftFork(tx.txid, blockDataVerbose.height, txIndex, blockDataVerbose.time, payload, senderIsLegacyAuthority, tx);
           } catch (error) {
             // A message that cannot be read is skipped. One that could not be written is not:
             // the block is reprocessed, or this node prices apps without that fork for good.
@@ -1008,10 +1022,15 @@ async function scanForSoftForks(addresses, startHeight, endHeight, phase) {
             + 'daemon cannot order two soft-fork messages mined in one block',
           );
         }
+        if (!Number.isInteger(tx.blocktime)) {
+          // Fail closed: a v9 price message counts from an hour after its
+          // block's time, so one stored without it could never be placed.
+          throw new Error(`Bootstrap: getrawtransaction returned no blocktime for ${tx.txid}`);
+        }
         // eslint-disable-next-line no-restricted-syntax
         for (const payload of payloads) {
           // eslint-disable-next-line no-await-in-loop
-          await processSoftFork(tx.txid, tx.height, txIndex, payload, senderIsLegacyAuthority, tx);
+          await processSoftFork(tx.txid, tx.height, txIndex, tx.blocktime, payload, senderIsLegacyAuthority, tx);
           totalForks += 1;
         }
       }
