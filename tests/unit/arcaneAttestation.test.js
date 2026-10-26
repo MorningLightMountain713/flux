@@ -25,6 +25,18 @@ describe('arcaneAttestation: the node\'s Ed25519 verifier', () => {
     await flux.assertEd25519Agrees(verifyEd25519OpenSsl);
   });
 
+  // OpenSSL accepts this before 3.5 and refuses it from 3.5 on; the node gives
+  // the rule's answer on every release.
+  it('refuses an identity R that satisfies the equation, whatever OpenSSL would say', () => {
+    // flux-spec's vector "R the identity, canonical, S recomputed with the private key".
+    const bytes = (h) => Uint8Array.from(Buffer.from(h, 'hex'));
+    const signature = bytes('0100000000000000000000000000000000000000000000000000000000000000a2815ad574f1caabf3565b92fdc4c8035186b6265e758f159730f4b07fc52c0e');
+    const message = bytes('464c55585f415243414e455f4154544553545f76323a6964656e746974792052');
+    const publicKey = bytes('35c423a3db52672326173028ccd79b78ce00e2069071df8202c8562c6597aaf8');
+    expect(flux.verifyEd25519(signature, message, publicKey), 'the rule refuses it').to.equal(false);
+    expect(verifyEd25519OpenSsl(signature, message, publicKey)).to.equal(false);
+  });
+
   it('verifies a genuine signature, and refuses a tampered message or another key', () => {
     const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
     const other = crypto.generateKeyPairSync('ed25519');
