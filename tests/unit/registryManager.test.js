@@ -24,7 +24,7 @@ const componentKeyMap = require('../../ZelBack/src/services/appLifecycle/compone
 const { RUNNING_EXPIRY_MS } = require('../../ZelBack/src/services/utils/appConstants');
 const { requireMongo } = require('./dbTestHelper');
 const {
-  loadSpecLibrary, V8_SUBMISSION, V9_SUBMISSION,
+  loadSpecLibrary, V8_SUBMISSION,
   v8Spec, v9Spec, sealedV8Spec, sealedV9Spec, registeredSpec, assertAnswers, testOwner, ownerSignedViewer,
 } = require('./fixtures/fluxSpec');
 const { stubRegistry, stubHostedInstances, installedRecord } = require('./fixtures/appRecords');
