@@ -17,6 +17,7 @@ const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonSta
 const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 const appSubmission = require('../../ZelBack/src/services/appRequirements/appSubmission');
 const appHistory = require('../../ZelBack/src/services/appDecisions/appHistory');
+const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const {
   loadSpecLibrary, v8Spec, v9Spec, decryptedV9Spec, sealedV9Spec,
 } = require('./fixtures/fluxSpec');
@@ -50,6 +51,7 @@ describe('updateAppGlobaly and the app an update is judged against', () => {
         resolveSubmission,
         assertSecretsNotConflicting: sinon.stub().resolves(),
         assertNamesWhatStands: sinon.stub().resolves(),
+        holdsEnoughPeersToSubmit: () => true,
       },
       '../utils/specLibs': { ...specLibs, assertUpdateInvariants },
     });
@@ -123,6 +125,28 @@ describe('updateAppGlobaly and the app an update is judged against', () => {
     sinon.stub(appsRepository, 'getPermanentMessage').resolves({ hash: 'outbound-hash' });
 
     expect(await appOperations.updateAppGlobaly(params())).to.equal('outbound-hash');
+  });
+
+  it('answers no hash for an update this node broadcast and does not hold', async () => {
+    byName.resolves({ spec, owner: spec.owner, identity: IDENTITY });
+    appsRepository.getTempMessage.resolves(null);
+    sinon.stub(appsRepository, 'getPermanentMessage').resolves(null);
+
+    expect(await appOperations.updateAppGlobaly(params())).to.equal(null);
+  });
+
+  it('answers the v1 update route\'s caller to try again for an update this node does not hold', async () => {
+    byName.resolves({ spec, owner: spec.owner, identity: IDENTITY });
+    appsRepository.getTempMessage.resolves(null);
+    sinon.stub(appsRepository, 'getPermanentMessage').resolves(null);
+    sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+    const res = { json: sinon.stub() };
+
+    await appOperations.updateAppGlobalyApi({ headers: {}, body: params() }, res);
+
+    sinon.assert.calledOnce(res.json);
+    expect(res.json.firstCall.args[0].status).to.equal('error');
+    expect(res.json.firstCall.args[0].data.message).to.equal('Unable to update application on the network. Try again later.');
   });
 
   describe('a v9 update the chain would price against a message it does not replace', () => {

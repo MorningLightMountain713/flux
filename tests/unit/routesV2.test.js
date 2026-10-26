@@ -536,6 +536,14 @@ describe('routesV2 - the /v2 surface', () => {
       sinon.assert.notCalled(registerAppGlobaly);
     });
 
+    it('answers 503 for a message it broadcast and does not hold yet, and records no entry', async () => {
+      registerAppGlobaly.resolves(null);
+      const res = await submit({ type: 'fluxappregister', ...FIELDS });
+      expect(res.status).to.equal(503);
+      expect(res.body.error.code).to.equal('UNAVAILABLE');
+      sinon.assert.notCalled(emit);
+    });
+
     it('answers 422 with the reason for a refused message, and records no entry', async () => {
       updateAppGlobaly.rejects(new Error('Invalid version of message'));
       const res = await submit({ type: 'fluxappupdate', ...FIELDS });

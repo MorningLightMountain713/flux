@@ -511,7 +511,8 @@ function holdsEnoughPeersToSubmit() {
  * @param {{appSpecification: object, timestamp: number, signature: string,
  *   type: string, version: number, contentHash?: string, extend?: boolean,
  *   contentCtx?: object}} params the submission's fields
- * @returns {Promise<string>} the message's hash
+ * @returns {Promise<string|null>} the message's hash, or null when this node
+ *   does not hold the message it broadcast
  */
 async function registerAppGlobaly(params) {
   let { appSpecification, timestamp, signature } = params;
@@ -639,7 +640,7 @@ async function registerAppGlobaly(params) {
   if (tempMessage && typeof tempMessage === 'object' && !Array.isArray(tempMessage)) {
     return tempMessage.hash;
   }
-  throw new Error('Unable to register application on the network. Try again later.');
+  return null;
 }
 
 /**
@@ -658,6 +659,7 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
   }
 
   const hash = await registerAppGlobaly({ ...processedBody, contentCtx });
+  if (!hash) throw new Error('Unable to register application on the network. Try again later.');
 
   // Record and gossip where this registration entered the network (best-effort).
   await ingressAttestationService.emit(hash, await ingressCapture.captureIngress(req));

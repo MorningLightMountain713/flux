@@ -1819,7 +1819,8 @@ async function runRestoreTask(appname, restore, type, zelidauth, report, { force
  * @param {string} params.signature - Message signature
  * @param {string} params.type - Message type (fluxappupdate)
  * @param {number} params.version - Message version
- * @returns {Promise<string>} The message hash
+ * @returns {Promise<string|null>} The message hash, or null when this node does not
+ *   hold the message it broadcast
  */
 async function updateAppGlobaly(params) {
   const {
@@ -2005,7 +2006,7 @@ async function updateAppGlobaly(params) {
   if (tempMessage && typeof tempMessage === 'object' && !Array.isArray(tempMessage)) {
     return tempMessage.hash;
   }
-  throw new Error('Unable to update application on the network. Try again later.');
+  return null;
 }
 
 /**
@@ -2043,6 +2044,7 @@ async function submitAppUpdate(req, res, processedBody, contentCtx) {
     extend: processedBody.extend,
     contentCtx,
   });
+  if (!hash) throw new Error('Unable to update application on the network. Try again later.');
 
   // Record and gossip where this update entered the network (best-effort).
   await ingressAttestationService.emit(hash, await ingressCapture.captureIngress(req));
