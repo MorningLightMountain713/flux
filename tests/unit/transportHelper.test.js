@@ -5,6 +5,7 @@ const sinon = require('sinon');
 const crypto = require('node:crypto');
 const proxyquire = require('proxyquire').noCallThru();
 const { aeadEncrypt, NONCE_BYTES } = require('../../ZelBack/src/services/utils/aeadCrypto');
+const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 
 describe('transportHelper tests', () => {
   let transportHelper;
@@ -14,18 +15,24 @@ describe('transportHelper tests', () => {
 
   const AAD = Buffer.from('aad-bytes');
 
+  const ENCAPSULATED_KEY = crypto.randomBytes(32);
+
   // Build a real export-mode envelope: a fresh key, plus an aeadEncrypt frame
   // (nonce‖ct‖tag) split into the envelope's nonce + ciphertext (ct‖tag). The
   // matching transportDecap reply carries that key, so the open path runs real
-  // AES-256-GCM rather than a stub.
-  function sealEnvelope(plaintextObj, aad = AAD) {
+  // AES-256-GCM rather than a stub, against an AES seal written apart from it.
+  async function sealEnvelope(plaintextObj, aad = AAD) {
+    const { TransportEnvelope, TRANSPORT_ALGORITHM } = await specLibs.getSpec();
     const key = crypto.randomBytes(32);
     const frame = aeadEncrypt(key, Buffer.from(JSON.stringify(plaintextObj)), aad);
-    const nonce = frame.subarray(0, NONCE_BYTES);
-    const ciphertext = frame.subarray(NONCE_BYTES);
     return {
       key,
-      envelope: { encapsulatedKey: Buffer.from('encapsulated-key'), nonce, ciphertext },
+      envelope: new TransportEnvelope({
+        algorithm: TRANSPORT_ALGORITHM,
+        encapsulatedKey: new Uint8Array(ENCAPSULATED_KEY),
+        nonce: new Uint8Array(frame.subarray(0, NONCE_BYTES)),
+        ciphertext: new Uint8Array(frame.subarray(NONCE_BYTES)),
+      }),
     };
   }
 
@@ -76,7 +83,7 @@ describe('transportHelper tests', () => {
 
   it('decaps the key, opens the spec locally, and returns the parsed sparse spec', async () => {
     const sparse = { version: 9, name: 'app', owner: 'owner1' };
-    const { key, envelope } = sealEnvelope(sparse);
+    const { key, envelope } = await sealEnvelope(sparse);
     fromJSONStub.returns(envelope);
     benchmarkServiceStub.transportDecap.resolves({
       status: 'success',
@@ -93,7 +100,7 @@ describe('transportHelper tests', () => {
     const args = benchmarkServiceStub.transportDecap.firstCall.args[0];
     expect(args.appName).to.equal('app');
     expect(args.fluxID).to.equal('owner1');
-    expect(args.encapsulatedKey).to.equal(Buffer.from('encapsulated-key').toString('base64'));
+    expect(args.encapsulatedKey).to.equal(ENCAPSULATED_KEY.toString('base64'));
     // No bulk on the channel: only the encapsulated key crosses, never ciphertext/aad.
     expect(args).to.not.have.property('ciphertext');
     expect(args).to.not.have.property('aad');
@@ -101,7 +108,7 @@ describe('transportHelper tests', () => {
 
   it('parses a string-encoded decap payload', async () => {
     const sparse = { version: 9, name: 'app' };
-    const { key, envelope } = sealEnvelope(sparse);
+    const { key, envelope } = await sealEnvelope(sparse);
     fromJSONStub.returns(envelope);
     benchmarkServiceStub.transportDecap.resolves({
       status: 'success',
@@ -132,7 +139,7 @@ describe('transportHelper tests', () => {
   });
 
   it('throws INTERNAL_ERROR when the benchmark is unreachable', async () => {
-    const { envelope } = sealEnvelope({ a: 1 });
+    const { envelope } = await sealEnvelope({ a: 1 });
     fromJSONStub.returns(envelope);
     benchmarkServiceStub.transportDecap.resolves({ status: 'error' });
     const spec = { name: 'app', owner: 'owner1', transportEncrypted: {} };
@@ -146,7 +153,7 @@ describe('transportHelper tests', () => {
   });
 
   it('throws the backend-reported code when decap fails', async () => {
-    const { envelope } = sealEnvelope({ a: 1 });
+    const { envelope } = await sealEnvelope({ a: 1 });
     fromJSONStub.returns(envelope);
     benchmarkServiceStub.transportDecap.resolves({
       status: 'success',
@@ -165,7 +172,7 @@ describe('transportHelper tests', () => {
   it('throws DECRYPT_FAILED when local AEAD authentication fails (aad mismatch)', async () => {
     // Correct key, but the frame was sealed under a different aad than
     // buildTransportAad reconstructs — GCM auth fails locally.
-    const { key, envelope } = sealEnvelope({ version: 9 }, Buffer.from('different-aad'));
+    const { key, envelope } = await sealEnvelope({ version: 9 }, Buffer.from('different-aad'));
     fromJSONStub.returns(envelope);
     benchmarkServiceStub.transportDecap.resolves({
       status: 'success',
