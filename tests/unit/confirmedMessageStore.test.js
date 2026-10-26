@@ -48,7 +48,7 @@ describe('confirmedMessageStore', () => {
         }),
       },
       '../daemonService/daemonServiceBlockchainRpcs': {
-        getBlock: sinon.stub().resolves({ status: 'success', data: { time: 1_750_000_000 } }),
+        lookupBlockTime: sinon.stub().resolves(1_750_000_000),
       },
       './appEventVerifier': { verifyAttestation: async () => attestationValid },
     });

@@ -40,6 +40,19 @@ async function getBlock(options = {}) {
 }
 
 /**
+ * A block's time, in seconds, by height; null when the daemon cannot say.
+ * @param {number} height
+ * @returns {Promise<number|null>}
+ */
+async function lookupBlockTime(height) {
+  const blockInfo = await getBlock({ hashheight: String(height), verbosity: 1 });
+  if (blockInfo.status === 'success' && Number.isFinite(blockInfo.data.time)) {
+    return blockInfo.data.time;
+  }
+  return null;
+}
+
+/**
  * To get block, with the hash height and verbosity taken from the request.
  * @param {import('express').Request} req
  * @param {import('express').Response} res
@@ -476,6 +489,7 @@ module.exports = {
   getTxOut,
   getTxOutProof,
   getTxOutSetInfo,
+  lookupBlockTime,
   verifyChain,
   verifyTxOutProof,
   getSpentInfo, // experimental feature, insight explorer

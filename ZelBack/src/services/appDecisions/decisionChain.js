@@ -2,7 +2,7 @@
 
 const pricingRegime = require('../pricing/pricingRegime');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
-const { lookupBlockTime } = require('../appMessaging/confirmedMessageStore');
+const { lookupBlockTime } = require('../daemonService/daemonServiceBlockchainRpcs');
 const appsRepository = require('../appDatabase/appsRepository');
 const { specActivationHeights } = require('../utils/nodeChain');
 

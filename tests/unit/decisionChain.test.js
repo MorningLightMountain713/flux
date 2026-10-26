@@ -16,7 +16,7 @@ const RENEWER = '1MCBJn6qsy3YRY2YasdYMYdJcdhy1ev8Rd';
 
 function loadChain({ lookupBlockTime = sinon.stub().resolves(1_700_000_000) } = {}) {
   const { createChain } = proxyquire('../../ZelBack/src/services/appDecisions/decisionChain', {
-    '../appMessaging/confirmedMessageStore': { lookupBlockTime },
+    '../daemonService/daemonServiceBlockchainRpcs': { lookupBlockTime },
   });
   return { createChain, lookupBlockTime };
 }

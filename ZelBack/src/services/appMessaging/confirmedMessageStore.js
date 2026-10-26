@@ -58,19 +58,6 @@ function notifyStored(hashes) {
 }
 
 /**
- * The confirming block's time, for a payment record made before the scan kept it.
- * @param {number} height
- * @returns {Promise<number|null>}
- */
-async function lookupBlockTime(height) {
-  const blockInfo = await daemonServiceBlockchainRpcs.getBlock({ hashheight: String(height), verbosity: 1 });
-  if (blockInfo.status === 'success' && Number.isFinite(blockInfo.data.time)) {
-    return blockInfo.data.time;
-  }
-  return null;
-}
-
-/**
  * The confirmed event a message's contents and a payment record make together.
  * @param {object} contents The message as signed: type, version, specifications,
  *   hash, timestamp, signature, and for v2 the content hash, extend flag and
@@ -89,7 +76,7 @@ async function confirmedEvent(contents, record) {
   if (contents.version === 2) {
     // registeredAt anchors v9's time-based expiry (registeredAt + ttl); a
     // coerced 0/NaN stores an app every liveness query reads as long-dead.
-    const registeredAt = serviceHelper.ensureNumber(record.blockTime ?? await lookupBlockTime(record.height));
+    const registeredAt = serviceHelper.ensureNumber(record.blockTime ?? await daemonServiceBlockchainRpcs.lookupBlockTime(record.height));
     if (!Number.isFinite(registeredAt) || registeredAt <= 0) {
       throw new Error(`no confirming block time for ${contents.hash} at height ${record.height}`);
     }
@@ -254,5 +241,5 @@ async function storeConfirmedMessages(candidates) {
 }
 
 module.exports = {
-  storeConfirmedMessages, confirmedEvent, paymentRecords, lookupBlockTime, onStored, notifyStored,
+  storeConfirmedMessages, confirmedEvent, paymentRecords, onStored, notifyStored,
 };
