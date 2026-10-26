@@ -9,6 +9,8 @@ const proxyquire = require('proxyquire');
 const priceOracleState = require('../../ZelBack/src/services/pricing/priceOracleState');
 const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 const { buildPricingEngine } = require('../../ZelBack/src/services/pricing/buildPricingEngine');
+const pricingRegime = require('../../ZelBack/src/services/pricing/pricingRegime');
+const v9PricingRegime = require('../../ZelBack/src/services/pricing/v9PricingRegime');
 const { nodeChain } = require('../../ZelBack/src/services/utils/nodeChain');
 
 describe('pricing integration — chain messages through PricingEngine', () => {
@@ -648,6 +650,73 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const result = await priceGrowthAgainst(grown, { remainingSeconds: grown.ttl });
       expect(result.free).to.equal(true);
       expect(result.total).to.be.undefined;
+    });
+  });
+
+  // The guarantee a quote stands on: a v9 fee is fixed at its message's signed
+  // time, so whichever block in the payment window confirms the payment charges
+  // the same — even when a new FLUX/USD rate and a new price schedule are mined
+  // inside that window.
+  describe('every block in the payment window charges the fee quoted at the signed time', () => {
+    const H0 = 2_000_000;
+    const B0 = 1_760_000_000;
+    const blockTime = (height) => B0 + (height - H0) * 30;
+    const SIGNED = B0 + 2 * 3600; // two hours after the first messages' block
+    const SIGNED_HEIGHT = H0 + 240;
+    // Every block from the next one to an hour on.
+    const windowHeights = Array.from({ length: 120 }, (_, i) => SIGNED_HEIGHT + 1 + i);
+
+    function chainWithChangesInTheWindow() {
+      const priceHistory = new PriceMessageHistory();
+      const rateHistory = new RateMessageHistory();
+      const modifierHistory = new PriceModifierHistory();
+      const price = (fields) => dispatch(PriceMessage.encode(fields)).message;
+      const rate = (fluxUsdPriceE4) => dispatch(RateMessage.encode({ timestamp: B0, fluxUsdPriceE4 })).message;
+      priceHistory.add(price({
+        cpuRate: 150_000, memoryRate: 50_000, storageRate: 20_000, minPrice: 990_000, minPriceFluxSats: 1_000_000,
+      }), H0, 0, blockTime(H0));
+      rateHistory.add(rate(577), H0, 1, blockTime(H0));
+      modifierHistory.add(dispatch(PriceModifierMessage.encode({ updateDiscountBp: 1000 })).message, H0, 2, blockTime(H0));
+      // Mined five and ten minutes after the signing: FLUX halves, and cpu doubles.
+      rateHistory.add(rate(288), SIGNED_HEIGHT + 10, 0, blockTime(SIGNED_HEIGHT + 10));
+      priceHistory.add(price({ cpuRate: 300_000 }), SIGNED_HEIGHT + 20, 0, blockTime(SIGNED_HEIGHT + 20));
+      stubHistories({ priceHistory, rateHistory, modifierHistory });
+    }
+
+    const appSpec = (cpu) => specOf({
+      ...testSubmission, components: { web: { ...testSubmission.components.web, cpu } },
+    });
+
+    it('charges one registration fee at every block of the window, and a later stamp the new rates', async () => {
+      chainWithChangesInTheWindow();
+      const spec = appSpec(0.5);
+
+      const fees = await Promise.all(windowHeights.map(
+        (height) => v9PricingRegime.registrationFee(spec, { time: SIGNED, height }),
+      ));
+
+      expect(new Set(fees.map(String)).size, 'one fee across the window').to.equal(1);
+      expect(fees[0] > 0n).to.equal(true);
+      // Canary: the changes do move the fee of a message stamped once they count.
+      const later = await v9PricingRegime.registrationFee(spec, { time: blockTime(SIGNED_HEIGHT + 20) + 3600, height: SIGNED_HEIGHT + 200 });
+      expect(later > fees[0], 'a message stamped after the changes count pays the new rates').to.equal(true);
+    });
+
+    it('charges one renewal fee at every block of the window, crediting the replaced term at the signed time', async () => {
+      chainWithChangesInTheWindow();
+      const spec = appSpec(0.5);
+      const prevAt = { time: blockTime(H0 + 130), height: H0 + 130 };
+
+      const fees = await Promise.all(windowHeights.map((height) => pricingRegime.updateFee(spec, spec, {
+        at: { time: SIGNED, height },
+        prevAt,
+        prevRegisteredAt: prevAt.time,
+        extend: true,
+        recentEvents: async () => [],
+      })));
+
+      expect(new Set(fees.map(String)).size, 'one fee across the window').to.equal(1);
+      expect(fees[0] > 0n, 'a renewal is never free').to.equal(true);
     });
   });
 });
