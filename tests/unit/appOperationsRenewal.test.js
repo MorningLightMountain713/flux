@@ -16,8 +16,9 @@ const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 const appSubmission = require('../../ZelBack/src/services/appRequirements/appSubmission');
+const appHistory = require('../../ZelBack/src/services/appDecisions/appHistory');
 const {
-  loadSpecLibrary, v9Spec, decryptedV9Spec, sealedV9Spec,
+  loadSpecLibrary, v8Spec, v9Spec, decryptedV9Spec, sealedV9Spec,
 } = require('./fixtures/fluxSpec');
 const { stubRegistry } = require('./fixtures/appRecords');
 
@@ -32,6 +33,7 @@ describe('updateAppGlobaly and the app an update is judged against', () => {
   let byName;
   let latestAppliedState;
   let assertUpdateInvariants;
+  let resolveSubmission;
 
   before(async function loadLibrary() {
     this.timeout(30_000);
@@ -41,10 +43,11 @@ describe('updateAppGlobaly and the app an update is judged against', () => {
   beforeEach(async () => {
     spec = await v9Spec({ name: 'myapp' });
     assertUpdateInvariants = sinon.stub().resolves();
+    resolveSubmission = sinon.stub().resolves({ spec, broadcastBlob: spec.serialize() });
     appOperations = proxyquire('../../ZelBack/src/services/appLifecycle/appOperations', {
       '../appRequirements/appSubmission': {
         ...appSubmission,
-        resolveSubmission: sinon.stub().resolves({ spec, broadcastBlob: spec.serialize() }),
+        resolveSubmission,
         assertSecretsNotConflicting: sinon.stub().resolves(),
         assertNamesWhatStands: sinon.stub().resolves(),
       },
@@ -54,6 +57,8 @@ describe('updateAppGlobaly and the app an update is judged against', () => {
     byName = stubRegistry().byName.resolves(null);
     latestAppliedState = sinon.stub(appSpecHistory, 'latestAppliedState').resolves(null);
     sinon.stub(appsRepository, 'getTempMessage').resolves({ hash: 'outbound-hash' });
+    sinon.stub(appsRepository, 'getTempMessageByName').resolves(null);
+    sinon.stub(appHistory, 'replacedBy').resolves(null);
     sinon.stub(placementFeasibility, 'checkPlacementFeasibility').resolves(null);
     sinon.stub(appEventVerifier, 'deserializeTempMessage').resolves({ requiresArcaneAttestation: () => false });
     sinon.stub(appEventVerifier, 'authorize').resolves();
@@ -118,6 +123,61 @@ describe('updateAppGlobaly and the app an update is judged against', () => {
     sinon.stub(appsRepository, 'getPermanentMessage').resolves({ hash: 'outbound-hash' });
 
     expect(await appOperations.updateAppGlobaly(params())).to.equal('outbound-hash');
+  });
+
+  describe('a v9 update the chain would price against a message it does not replace', () => {
+    const listed = () => ({ spec, owner: spec.owner, identity: IDENTITY });
+
+    it('is refused when signed at or before the message it replaces was mined or signed', async () => {
+      byName.resolves(listed());
+      const p = params();
+      appHistory.replacedBy.resolves({ hash: 'r', signAfter: p.timestamp });
+
+      const error = await appOperations.updateAppGlobaly(p).catch((e) => e);
+
+      expect(error.name).to.equal('StampedEarly');
+      sinon.assert.notCalled(fluxCommunicationMessagesSender.broadcastTemporaryAppMessage);
+    });
+
+    it('is taken when signed after it', async () => {
+      byName.resolves(listed());
+      const p = params();
+      appHistory.replacedBy.resolves({ hash: 'r', signAfter: p.timestamp - 1 });
+
+      expect(await appOperations.updateAppGlobaly(p)).to.equal('outbound-hash');
+    });
+
+    it('is refused while another message for the app waits for its payment', async () => {
+      byName.resolves(listed());
+      appsRepository.getTempMessageByName.resolves({ hash: 'waiting-hash' });
+
+      const error = await appOperations.updateAppGlobaly(params()).catch((e) => e);
+
+      expect(error.message).to.match(/already in progress/);
+      sinon.assert.calledOnceWithExactly(appsRepository.getTempMessageByName, 'myapp');
+      sinon.assert.notCalled(fluxCommunicationMessagesSender.broadcastTemporaryAppMessage);
+    });
+
+    it('is taken again when the message waiting is itself', async () => {
+      byName.resolves(listed());
+      appsRepository.getTempMessageByName.resolves({ hash: 'outbound-hash' });
+
+      expect(await appOperations.updateAppGlobaly(params())).to.equal('outbound-hash');
+    });
+
+    it('does not apply to a v1-v8 update', async () => {
+      const legacy = await v8Spec({ name: 'myapp' });
+      resolveSubmission.resolves({ spec: legacy, broadcastBlob: legacy.serialize() });
+      byName.resolves({ spec: legacy, owner: legacy.owner, identity: IDENTITY });
+      appHistory.replacedBy.resolves({ hash: 'r', signAfter: Number.MAX_SAFE_INTEGER });
+      appsRepository.getTempMessageByName.resolves({ hash: 'waiting-hash' });
+
+      const result = await appOperations.updateAppGlobaly({ ...params(), version: 1 }).catch((e) => e);
+
+      expect(result?.name, 'not refused as stamped early').to.not.equal('StampedEarly');
+      expect(String(result?.message), 'not refused as in progress').to.not.match(/already in progress/);
+      sinon.assert.notCalled(appHistory.replacedBy);
+    });
   });
 
   it('refuses an update of a name no app ever held', async () => {

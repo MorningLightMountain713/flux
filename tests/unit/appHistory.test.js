@@ -48,6 +48,56 @@ describe('appHistory', () => {
     expect(answer[0].decision.type).to.equal('registration');
   });
 
+  describe('the message an update replaces', () => {
+    it('is the latest applied one, read as the decision rule reads it', async () => {
+      applied = [
+        decision('r', { type: 'registration', height: 100, termStart: 1000 }),
+        decision('u', { type: 'update', height: 150, termStart: 1490 }),
+      ];
+      stored = [
+        { hash: 'r', timestamp: 950_000, appSpecifications: { version: 9 } },
+        { hash: 'u', timestamp: 1_490_000, appSpecifications: { version: 9 } },
+      ];
+
+      expect(await history.replacedBy('MyApp')).to.deep.equal({
+        hash: 'u',
+        prevAt: { time: 1490, height: 150 },
+        prevRegisteredAt: 1490,
+        // Its block (150 x 10 here) is later than its signing.
+        signAfter: 1_500_000,
+      });
+      sinon.assert.calledOnceWithExactly(lookupBlockTime, 150);
+    });
+
+    it('reads a v1-v8 message by its block, which also starts a term recorded without a start', async () => {
+      applied = [decision('r', {
+        type: 'registration', height: 100, termStart: null, blockTime: 990,
+      })];
+      stored = [{ hash: 'r', timestamp: 9_999_999_000, appSpecifications: { version: 8 } }];
+
+      const replaced = await history.replacedBy('myapp');
+
+      expect(replaced.prevRegisteredAt).to.equal(990);
+      expect(replaced.signAfter).to.equal(990_000);
+      sinon.assert.notCalled(lookupBlockTime);
+    });
+
+    it('is null when nothing applied', async () => {
+      expect(await history.replacedBy('myapp')).to.equal(null);
+    });
+
+    it('cannot be read when the daemon cannot say when its block was mined', async () => {
+      applied = [decision('r', { type: 'registration', height: 100, termStart: 1000 })];
+      stored = [{ hash: 'r', timestamp: 950_000, appSpecifications: { version: 9 } }];
+      lookupBlockTime.resolves(null);
+
+      const error = await history.replacedBy('myapp').catch((e) => e);
+
+      expect(error).to.be.an('error');
+      expect(error.message).to.match(/no block time for height 100/);
+    });
+  });
+
   it('leaves out a decision whose message is not held', async () => {
     applied = [decision('r', { type: 'registration', height: 100 })];
     expect(await history.appliedMessages('myapp')).to.deep.equal([]);

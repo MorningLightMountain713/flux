@@ -231,6 +231,33 @@ describe('pricingRegime', () => {
     expect(await legacyRegime.entitlementRefusal({ owner: 'x' }, 1)).to.equal(null);
   });
 
+  describe('messageQuote quotes only a message whose fee is fixed at its signed time', () => {
+    async function load() {
+      const legacy = { termCost: sinon.stub() };
+      const v9 = { termCost: sinon.stub(), messageQuote: sinon.stub().resolves({ fee: 1n }) };
+      const regime = proxyquire('../../ZelBack/src/services/pricing/pricingRegime', {
+        './legacyPricingRegime': legacy,
+        './v9PricingRegime': v9,
+      });
+      const { PricingModel } = await specLibs.getSpec();
+      return { regime, v9, PricingModel };
+    }
+
+    it('asks the v9 regime, handing it how a predecessor\'s term cost is read', async () => {
+      const { regime, v9, PricingModel } = await load();
+      const spec = { pricingModel: PricingModel.UNIFIED, version: 9 };
+      const message = { timestamp: 1, extend: false };
+      expect(await regime.messageQuote(spec, message)).to.deep.equal({ fee: 1n });
+      sinon.assert.calledOnceWithExactly(v9.messageQuote, spec, sinon.match({ termCost: regime.termCost }), message);
+    });
+
+    it('refuses a v1-v8 spec by name', async () => {
+      const { regime, PricingModel } = await load();
+      const error = await regime.messageQuote({ pricingModel: PricingModel.CHAIN_FLOOR, version: 8 }, {}).catch((e) => e);
+      expect(error.name).to.equal('NotQuotable');
+    });
+  });
+
   describe('updateFee asks the predecessor\'s regime what its term cost', () => {
     it('hands the update\'s regime the cost the predecessor\'s regime answered', async () => {
       const cost = { oldTermPriceFluxSats: 123 };

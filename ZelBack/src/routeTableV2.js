@@ -33,6 +33,12 @@ module.exports = [
   {
     method: 'get', path: '/apps/activestandby', needs: ['localDbPrepared'], handler: 'apiV2/apps#activeStandby',
   },
+  // The fee consensus will charge a v9 message, fixed at its signed time: it reads
+  // the price histories, the registry, the decisions and the pool, as the v1
+  // price quote does.
+  {
+    method: 'post', path: '/apps/quotes', needs: ['localDbPrepared', 'appRegistryConsistent', 'explorerSynced', 'chainStateConsistent'], handler: 'apiV2/apps#quote',
+  },
   // Who has owned the app holding a name: it reads the decisions, which are not
   // whole mid-rewind.
   {

@@ -682,14 +682,16 @@ describe('appSpecHelpers tests', () => {
       return registered(prevSpec, 100, QUOTED_AT.time - 60);
     }
 
-    /** The registration as the app's history holds it: the message the update replaces. */
+    /** The registration as the app's history reads it: the message the update replaces. */
+    const replacedFacts = (existing, over = {}) => ({
+      hash: existing.hash,
+      prevAt: { time: existing.registeredAt - 30, height: existing.height },
+      prevRegisteredAt: existing.registeredAt,
+      signAfter: existing.registeredAt * 1000,
+      ...over,
+    });
     function stubReplaced(existing) {
-      sinon.stub(appHistory, 'latestApplied').resolves({
-        message: { timestamp: (existing.registeredAt - 30) * 1000 },
-        decision: {
-          hash: existing.hash, height: existing.height, termStart: existing.registeredAt, blockTime: existing.registeredAt,
-        },
-      });
+      sinon.stub(appHistory, 'replacedBy').resolves(replacedFacts(existing));
     }
 
     // `messages` becomes the free-update rate-limit input.
@@ -844,16 +846,11 @@ describe('appSpecHelpers tests', () => {
       for (const at of asked) expect([QUOTED_AT, replacedAt]).to.deep.include(at);
     });
 
-    it('v9: refuses to quote an update signed before the message it replaces was mined', async () => {
+    it('v9: refuses to quote an update signed at or before the time it must be signed after', async () => {
       const { helpers, existing } = await buildHelpers({
         newSpec: await v9SpecWith(), prevSpec: await v9SpecWith(),
       });
-      appHistory.latestApplied.resolves({
-        message: { timestamp: (existing.registeredAt - 30) * 1000 },
-        decision: {
-          hash: existing.hash, height: existing.height, termStart: existing.registeredAt, blockTime: QUOTED_AT.time + 1,
-        },
-      });
+      appHistory.replacedBy.resolves(replacedFacts(existing, { signAfter: NOW_MS }));
 
       const error = await helpers.getAppFiatAndFluxPrice(await v9SpecWith()).then(() => null, (e) => e);
 
@@ -865,12 +862,7 @@ describe('appSpecHelpers tests', () => {
       const { helpers, existing } = await buildHelpers({
         newSpec: await v9SpecWith(), prevSpec: await v9SpecWith(),
       });
-      appHistory.latestApplied.resolves({
-        message: { timestamp: (existing.registeredAt - 30) * 1000 },
-        decision: {
-          hash: 'b'.repeat(64), height: existing.height + 1, termStart: existing.registeredAt, blockTime: existing.registeredAt,
-        },
-      });
+      appHistory.replacedBy.resolves(replacedFacts(existing, { hash: 'b'.repeat(64) }));
 
       const error = await helpers.getAppFiatAndFluxPrice(await v9SpecWith()).then(() => null, (e) => e);
 

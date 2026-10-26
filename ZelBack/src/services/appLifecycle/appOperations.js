@@ -25,7 +25,8 @@ const daemonStatus = require('../daemonService/daemonStatus');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 // eslint-disable-next-line no-unused-vars
 const upnpService = require('../upnpService');
-const { appsFolder, APP_MESSAGE_CLOCK_ALLOWANCE_MS } = require('../utils/appConstants');
+const { appsFolder } = require('../utils/appConstants');
+const { assertSubmittableTimestamp } = require('../appMessaging/submittableTimestamp');
 const {
   extractIp, extractPort, ipsMatch,
 } = require('../utils/socketAddressUtils');
@@ -1840,12 +1841,7 @@ async function updateAppGlobaly(params) {
   const cleanMessageType = serviceHelper.ensureString(messageType);
   const cleanTypeVersion = serviceHelper.ensureNumber(typeVersion);
 
-  const timestampNow = Date.now();
-  if (cleanTimestamp < timestampNow - 1000 * 3600) {
-    throw new Error('Message timestamp is over 1 hour old, not valid. Check if your computer clock is synced and restart the registration process.');
-  } else if (cleanTimestamp > timestampNow + APP_MESSAGE_CLOCK_ALLOWANCE_MS) {
-    throw new Error('Message timestamp from future, not valid. Check if your computer clock is synced and restart the registration process.');
-  }
+  assertSubmittableTimestamp(cleanTimestamp);
 
   const syncStatus = daemonStatus.daemonSyncState();
   if (!syncStatus.synced) {
@@ -1918,6 +1914,24 @@ async function updateAppGlobaly(params) {
     extend: cleanExtend,
     signature: cleanSignature,
   });
+
+  // A v9 update is priced against the message it replaces and starts its term at
+  // its signed time, so one signed at or before that message was mined or signed
+  // is refused by consensus, and one sent while another for the app waits for
+  // its payment would be priced against a message about to be replaced. Both are
+  // refused here, before anyone pays.
+  if (spec.version >= 9) {
+    const replaced = await appHistory.replacedBy(spec.name);
+    if (replaced && cleanTimestamp <= replaced.signAfter) {
+      const early = new Error('An update must be signed after the message it replaces was mined and signed.');
+      early.name = 'StampedEarly';
+      throw early;
+    }
+    const waiting = await appsRepository.getTempMessageByName(spec.name);
+    if (waiting && waiting.hash !== messageHASH) {
+      throw new Error('An update for this app is already in progress; wait for it to be applied.');
+    }
+  }
 
   // Content rides as ONE HPKE-sealed envelope — never plaintext in transit. Open it
   // toward this node's per-app transport key and upload synchronously so it is

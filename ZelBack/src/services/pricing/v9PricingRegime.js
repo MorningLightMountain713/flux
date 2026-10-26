@@ -1,7 +1,6 @@
 'use strict';
 
 const daemonStatus = require('../daemonService/daemonStatus');
-const { lookupBlockTime } = require('../daemonService/daemonServiceBlockchainRpcs');
 const appRecords = require('../appDatabase/appRecords');
 const appHistory = require('../appDecisions/appHistory');
 const { getSpecPolicy, getSpecBackend } = require('../utils/specLibs');
@@ -148,21 +147,11 @@ async function priceAgainstPredecessor(spec, prevSpec, {
  *   message it replaces was mined or signed, which consensus refuses
  */
 async function quoteUpdate(spec, existing, { at, timestamp, extend }, termCost) {
-  const replaced = await appHistory.latestApplied(spec.name);
-  if (!replaced || replaced.decision.hash !== existing.hash) {
+  const replaced = await appHistory.replacedBy(spec.name);
+  if (!replaced || replaced.hash !== existing.hash) {
     throw new Error(`The app ${spec.name} as listed is not the latest applied message; it cannot be quoted yet.`);
   }
-  const { replacedMessage } = await getSpecBackend();
-  const { decision, message } = replaced;
-  const blockTime = decision.blockTime ?? await lookupBlockTime(decision.height);
-  if (!Number.isFinite(blockTime)) throw new Error(`no block time for height ${decision.height}`);
-  const { prevAt, prevRegisteredAt, signAfter } = replacedMessage({
-    timestamp: message.timestamp,
-    height: decision.height,
-    version: existing.spec.version,
-    termStart: decision.termStart,
-    blockTime,
-  });
+  const { prevAt, prevRegisteredAt, signAfter } = replaced;
   if (timestamp <= signAfter) {
     const early = new Error('An update must be signed after the message it replaces was mined and signed.');
     early.name = 'StampedEarly';
@@ -173,7 +162,7 @@ async function quoteUpdate(spec, existing, { at, timestamp, extend }, termCost) 
   // disable that cap and quote free for an owner consensus is about to charge.
   return priceAgainstPredecessor(spec, existing.spec, {
     at,
-    prevState: { height: decision.height, registeredAt: prevRegisteredAt },
+    prevState: { height: prevAt.height, registeredAt: prevRegisteredAt },
     recentEvents: await appHistory.appliedUpdateEvents(spec.name),
     prevTermCost: await termCost(existing.spec, prevAt),
     extend,
@@ -181,22 +170,23 @@ async function quoteUpdate(spec, existing, { at, timestamp, extend }, termCost) 
 }
 
 /**
- * The on-chain price in FLUX of a message stamped at `timestamp`, as consensus
- * will charge it: an update to an app that exists (with the unused-time
- * credit), else a registration. A query before on-chain pricing is
- * bootstrapped throws rather than returning a misleading 0 — the displayed
- * price is what the customer pays, so a missing rate must fail loudly.
+ * The fee in satoshis consensus will charge a message stamped at `timestamp`,
+ * whichever block in its payment window confirms it: an update to an app that
+ * exists (with the unused-time credit), else a registration. A query before
+ * on-chain pricing is bootstrapped throws rather than returning a misleading 0
+ * — the price is what the customer pays, so a missing rate must fail loudly.
  *
  * @param {object} spec - resolved v9 spec
  * @param {{termCost: (spec: object, at: object) => Promise<object>}} pricing -
  *   what a predecessor's term cost, from its own regime (pricingRegime.termCost)
- * @param {{timestamp?: number, extend?: boolean}} [message] - the message's
- *   signed timestamp in ms (now when absent) and its renewal flag
- * @returns {Promise<number>} Price in FLUX (decimal)
+ * @param {{timestamp: number, extend: boolean}} message - the message's signed
+ *   timestamp in ms and its renewal flag
+ * @returns {Promise<{fee: bigint, at: {time: number, height: number}}>} the fee
+ *   and the moment it was priced at
  * @throws {Error} `UpdateRefused` when the update is free-shaped with the free
  *   allowance spent; `StampedEarly` (see quoteUpdate)
  */
-async function onChainDisplayPrice(spec, { termCost }, { timestamp = Date.now(), extend = false } = {}) {
+async function messageFee(spec, { termCost }, { timestamp, extend }) {
   const at = await quoteMoment(timestamp);
   const priceHistory = priceOracleState.getPriceMessageHistory();
   if (!priceHistory || !pricesInForce(priceHistory, at)) {
@@ -216,20 +206,54 @@ async function onChainDisplayPrice(spec, { termCost }, { timestamp = Date.now(),
       refusal.name = 'UpdateRefused';
       throw refusal;
     }
-    if (result && result.free) return 0;
-    return result.total / 1e8;
+    if (result && result.free) return { fee: 0n, at };
+    return { fee: BigInt(result.total), at };
   }
 
-  return Number(await registrationFee(spec, at)) / 1e8;
+  return { fee: await registrationFee(spec, at), at };
 }
 
 /**
- * The network price in FLUX, and what a customer paying in dollars is charged:
- * that price with the fiat markup, rounded up to .49/.99 (`fiatPrice`), both
- * at the moment of a message signed now. The dollar figure is never checked on
- * chain. There is no free-update check here: the price routes through the same
- * priceUpdate call consensus makes, and that call returns 0 when the update is
- * free.
+ * The on-chain price in FLUX of a message stamped at `timestamp` (now when
+ * absent): `messageFee` in FLUX.
+ *
+ * @param {object} spec - resolved v9 spec
+ * @param {{termCost: (spec: object, at: object) => Promise<object>}} pricing
+ * @param {{timestamp?: number, extend?: boolean}} [message]
+ * @returns {Promise<number>} Price in FLUX (decimal)
+ */
+async function onChainDisplayPrice(spec, pricing, { timestamp = Date.now(), extend = false } = {}) {
+  const { fee } = await messageFee(spec, pricing, { timestamp, extend });
+  return Number(fee) / 1e8;
+}
+
+/**
+ * A message's quote: the fee in satoshis consensus will charge it
+ * (`messageFee`), and what a customer paying in dollars is charged — that fee
+ * with the fiat markup, rounded up to .49/.99 (`fiatPrice`), at the rates in
+ * force at the message's moment. The dollar figure is never checked on chain.
+ *
+ * @param {object} spec - resolved v9 spec
+ * @param {{termCost: (spec: object, at: object) => Promise<object>}} pricing
+ * @param {{timestamp: number, extend: boolean}} message
+ * @returns {Promise<{fee: bigint, usd: number|null, fiatMarkupBp: number,
+ *   at: {time: number, height: number}}>}
+ */
+async function messageQuote(spec, pricing, message) {
+  const { fee, at } = await messageFee(spec, pricing, message);
+  const fluxUsdRate = getOracleFluxUsdRate(at);
+  const fiatMarkupBp = getFiatMarkupBp(at);
+  const { fiatPrice } = await getSpecPolicy();
+  const usd = fluxUsdRate != null ? fiatPrice((Number(fee) / 1e8) * fluxUsdRate, fiatMarkupBp) : null;
+  return {
+    fee, usd, fiatMarkupBp, at,
+  };
+}
+
+/**
+ * The quote of a message signed now, in the v1 display shape. There is no
+ * free-update check here: the price routes through the same priceUpdate call
+ * consensus makes, and that call returns 0 when the update is free.
  *
  * @param {object} spec - resolved v9 spec
  * @param {object} _appSpecification - the raw submitted document (read by the legacy regime only)
@@ -237,17 +261,10 @@ async function onChainDisplayPrice(spec, { termCost }, { timestamp = Date.now(),
  * @returns {Promise<{usd: number|null, flux: number, fluxDiscount: number, fiatMarkupBp: number}>}
  */
 async function fiatAndFluxDisplayPrice(spec, _appSpecification, pricing) {
-  const timestamp = Date.now();
-  const fluxPrice = await onChainDisplayPrice(spec, pricing, { timestamp });
-  const at = await quoteMoment(timestamp);
-  const fluxUsdRate = getOracleFluxUsdRate(at);
-  const fiatMarkupBp = getFiatMarkupBp(at);
-  const { fiatPrice } = await getSpecPolicy();
-  const usd = fluxUsdRate != null ? fiatPrice(fluxPrice * fluxUsdRate, fiatMarkupBp) : null;
-
+  const { fee, usd, fiatMarkupBp } = await messageQuote(spec, pricing, { timestamp: Date.now(), extend: false });
   return {
     usd,
-    flux: Number(Number(fluxPrice).toFixed(2)),
+    flux: Number((Number(fee) / 1e8).toFixed(2)),
     // fluxDiscount is a display percent (UI shows "-N%"); fiatMarkupBp is the raw value.
     fluxDiscount: fiatMarkupBp / 100,
     fiatMarkupBp,
@@ -357,6 +374,7 @@ async function entitlementRefusal(spec, height) {
 
 module.exports = {
   entitlementRefusal,
+  messageQuote,
   onChainDisplayPrice,
   fiatAndFluxDisplayPrice,
   pricedAt,

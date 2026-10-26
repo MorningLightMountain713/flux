@@ -36,7 +36,7 @@ const contentSlotService = require('../appLifecycle/contentSlotService');
 const messageStore = require('../appMessaging/messageStore');
 const fluxDriveClient = require('../utils/fluxDriveClient');
 const globalState = require('../utils/globalState');
-const { APP_MESSAGE_CLOCK_ALLOWANCE_MS } = require('../utils/appConstants');
+const { assertSubmittableTimestamp } = require('../appMessaging/submittableTimestamp');
 const capabilities = require('../utils/capabilities');
 const { peerManager } = require('../utils/peerState');
 const { Privilege, authOf } = require('../utils/privileges');
@@ -520,12 +520,7 @@ async function submitAppRegistration(req, res, processedBody, contentCtx) {
   messageType = serviceHelper.ensureString(messageType);
   typeVersion = serviceHelper.ensureNumber(typeVersion);
 
-  const timestampNow = Date.now();
-  if (timestamp < timestampNow - 1000 * 3600) {
-    throw new Error('Message timestamp is over 1 hour old, not valid. Check if your computer clock is synced and restart the registration process.');
-  } else if (timestamp > timestampNow + APP_MESSAGE_CLOCK_ALLOWANCE_MS) {
-    throw new Error('Message timestamp from future, not valid. Check if your computer clock is synced and restart the registration process.');
-  }
+  assertSubmittableTimestamp(timestamp);
 
   const syncStatus = daemonStatus.daemonSyncState();
   if (!syncStatus.synced) {
