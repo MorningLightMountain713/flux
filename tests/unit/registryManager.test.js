@@ -613,6 +613,41 @@ describe('registryManager tests', () => {
     });
   });
 
+  // The route answers the registered record — the spec with the chain facts of the
+  // message that registered it — which is what a caller reads a term and a change by.
+  describe('the registered record a plain read answers', () => {
+    beforeEach(() => {
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: 1000 });
+    });
+
+    const read = async () => {
+      const res = { json: sinon.fake((param) => param) };
+      await registryManager.getApplicationSpecificationAPI({ params: { appname: 'myapp' }, query: {}, headers: {} }, res);
+      return res.json.firstCall.args[0];
+    };
+
+    it('carries a v8 app\'s hash and height beside its spec', async () => {
+      await registryHolds(await v8Spec(), { hash: 'h8', height: 1_650_000 });
+      const result = await read();
+      expect(result.status).to.equal('success');
+      expect(result.data).to.include({ name: 'myapp', version: 8, hash: 'h8', height: 1_650_000 });
+    });
+
+    it('carries a v9 app\'s hash, height and term start beside its spec', async () => {
+      const registered = await registryHolds(await v9Spec(), { hash: 'h9', height: 3_300_000 });
+      const result = await read();
+      expect(result.data).to.include({ version: 9, hash: 'h9', height: 3_300_000 });
+      expect(result.data.registeredAt).to.equal(registered.serialize().registeredAt).and.be.a('number');
+    });
+
+    it('carries a sealed app\'s chain facts and never its cleartext', async () => {
+      await registryHolds(await sealedV9Spec(), { hash: 'hs', height: 3_300_001 });
+      const result = await read();
+      expect(result.data).to.include({ hash: 'hs', height: 3_300_001 });
+      expect(result.data.components, 'no cleartext components').to.equal(undefined);
+    });
+  });
+
   describe('getApplicationComponentNamesAPI tests', () => {
     // A composed legacy app carrying the three cases the classifier has to
     // separate: an activeStandby (`g:`) component, a component that IS synced
@@ -925,6 +960,8 @@ describe('registryManager tests', () => {
         expect(result.data.compose, 'cleartext components never reach the caller').to.deep.equal([]);
         expect(result.data.contacts).to.deep.equal([]);
         expect(await reencrypt.firstCall.returnValue).to.be.instanceOf(flux.SealedSpecV8);
+        // With the chain facts of the message that registered it.
+        expect(result.data).to.include({ hash: 'storedhash', height: 1_700_000 });
       });
 
       it('should reject a v9 app that arrives on the legacy enterprise channel', async () => {
@@ -940,9 +977,9 @@ describe('registryManager tests', () => {
         sinon.assert.notCalled(decryptV9);
       });
 
-      it('should return the sparse stored spec when no decrypt is requested', async () => {
+      it('should return the registered record, sealed, when no decrypt is requested', async () => {
         const sealed = await sealedV9Spec();
-        await registryHolds(sealed);
+        const registered = await registryHolds(sealed);
         const req = { params: { appname: 'myapp' }, query: {}, headers: {} };
         const res = { json: sinon.fake((param) => param) };
 
@@ -950,7 +987,7 @@ describe('registryManager tests', () => {
 
         const result = res.json.firstCall.args[0];
         expect(result.status).to.equal('success');
-        expect(result.data).to.deep.equal(sealed.serialize());
+        expect(result.data).to.deep.equal(registered.serialize());
         // "sparse" is a real shape, not a marker: cleartext metadata plus the
         // resource summary a node screens on, and the ciphertext — never the
         // components.
@@ -963,9 +1000,9 @@ describe('registryManager tests', () => {
       // The double hardcoded isEncrypted:true, so the branch that returns a
       // cleartext app's stored spec untouched — credential or no credential —
       // was unreachable and untested.
-      it('returns a cleartext app untouched even when a view credential is presented', async () => {
+      it('returns a cleartext app\'s registered record even when a view credential is presented', async () => {
         const cleartext = await v9Spec();
-        await registryHolds(cleartext);
+        const registered = await registryHolds(cleartext);
         const create = sinon.stub(transportCryptoProvider, 'create');
         const res = { json: sinon.fake((param) => param) };
 
@@ -975,7 +1012,7 @@ describe('registryManager tests', () => {
 
         const result = res.json.firstCall.args[0];
         expect(result.status).to.equal('success');
-        expect(result.data).to.deep.equal(cleartext.serialize());
+        expect(result.data).to.deep.equal(registered.serialize());
         expect(result.data.components.web.image).to.equal('nginx:latest');
         sinon.assert.notCalled(create); // nothing to protect, so nothing sealed
       });

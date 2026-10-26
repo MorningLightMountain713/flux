@@ -600,8 +600,8 @@ async function authorizedViewer(appName, owner, { recipientPubkeyBase64, viewerS
 /**
  * Resolve an application's stored spec for a caller.
  *
- * A cleartext app, or a request with no view credential, returns the sparse
- * stored spec untouched. An encrypted app is decrypted node-side through its
+ * A cleartext app, or a request with no view credential, returns the registered
+ * record: the stored spec and the chain facts of the message that registered it. An encrypted app is decrypted node-side through its
  * own storage provider (polymorphic across versions) and re-protected toward
  * the caller over the channel the client asked for — not by spec version:
  *   - flux-transport-pubkey -> v9 transport layer: HPKE-seal the canonical
@@ -614,8 +614,9 @@ async function authorizedViewer(appName, owner, { recipientPubkeyBase64, viewerS
  * @param {{ recipientPubkeyBase64?: string, viewerSignature?: string, viewerTimestamp?: string,
  *   enterpriseKey?: string }} [opts] - the viewer key, with the owner's signature over it
  *   (see authorizedViewer), or the legacy v8 credential
- * @returns {Promise<object>} sparse stored spec, a v9 sealed view
- *   ({ encrypted, appName, timestamp, transportEncrypted }), or a v8 reencrypted spec
+ * @returns {Promise<object>} the registered record, a v9 sealed view
+ *   ({ encrypted, appName, timestamp, transportEncrypted }), or the registered
+ *   record with its v8 spec reencrypted toward the caller
  */
 async function getApplicationSpecification(appname, opts = {}) {
   const { recipientPubkeyBase64, enterpriseKey } = opts;
@@ -625,8 +626,10 @@ async function getApplicationSpecification(appname, opts = {}) {
     throw new Error(`Application: ${appname} not found`);
   }
 
+  // The registered record: the spec with the chain facts of the message that
+  // registered it (hash, height, and a v9 term's registeredAt).
   if ((!recipientPubkeyBase64 && !enterpriseKey) || !registered.isEncrypted) {
-    return registered.spec.serialize();
+    return registered.serialize();
   }
 
   // A v9 owner always presents flux-transport-pubkey; reject a v9 app on the
@@ -665,7 +668,7 @@ async function getApplicationSpecification(appname, opts = {}) {
     registered.name, registered.owner, enterpriseKey,
   );
   const reencrypted = await decrypted.reencrypt(transportProvider);
-  return reencrypted.serialize();
+  return { ...registered.serialize(), ...reencrypted.serialize() };
 }
 
 async function getApplicationSpecificationAPI(req, res) {
