@@ -114,6 +114,7 @@ const surface = {
   guards: {
     deliveryBody: express.json({ limit: DELIVERY_BODY_LIMIT }),
     nodeOperatorOrFluxTeam: requireTier(Privilege.NODE_OPERATOR_OR_FLUX_TEAM),
+    user: requireTier(Privilege.USER),
   },
 };
 

@@ -39,6 +39,15 @@ module.exports = [
   {
     method: 'post', path: '/apps/quotes', needs: ['localDbPrepared', 'appRegistryConsistent', 'explorerSynced', 'chainStateConsistent'], handler: 'apiV2/apps#quote',
   },
+  // A message checked as its submission will check it: it reads the registry,
+  // the chain and the prices the v1 verification does.
+  {
+    method: 'post', path: '/apps/verifications', needs: ['appRegistryConsistent', 'explorerSynced', 'chainStateConsistent'], handler: 'apiV2/apps#verification',
+  },
+  // A signed message stored and broadcast: the same reads, by a signed-in user.
+  {
+    method: 'post', path: '/apps/submissions', guards: ['user'], needs: ['appRegistryConsistent', 'explorerSynced', 'chainStateConsistent'], handler: 'apiV2/apps#submission',
+  },
   // Who has owned the app holding a name: it reads the decisions, which are not
   // whole mid-rewind.
   {

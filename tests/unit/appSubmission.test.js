@@ -812,7 +812,7 @@ describe('appSubmission tests', () => {
 
       sinon.assert.calledOnce(stubs.placementFeasibility.checkPlacementFeasibility);
       expect(stubs.placementFeasibility.checkPlacementFeasibility.firstCall.args[1])
-        .to.equal('verifyAppRegistrationParameters');
+        .to.equal('validateAppRegistration');
       // and the price was quoted, not an error
       expect(res.json.firstCall.args[0].status).to.equal('success');
     });
