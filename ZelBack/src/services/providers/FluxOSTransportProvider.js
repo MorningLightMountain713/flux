@@ -2,16 +2,18 @@
 
 /**
  * FluxOSTransportProvider — the node-side TransportCryptoProvider (both
- * directions) for v9.
+ * directions) for v9, on flux-spec-crypto's node functions, so a node and a
+ * client run one implementation of the channel.
  *
- * seal: view/response direction (node -> frontend). HPKE single-shot seal toward
- *   the frontend's ephemeral X25519 pubkey via @hpke/core. Fully local; the
- *   returned TransportEnvelope carries no nonce (HPKE manages it internally).
+ * seal: view/response direction (node -> frontend). flux-spec's sealView, HPKE
+ *   single-shot toward the frontend's ephemeral X25519 pubkey. Fully local; the
+ *   returned TransportEnvelope carries no nonce.
  *
  * open: submission direction (frontend -> node). Split-HPKE — the asymmetric
  *   decap + per-submission key export run over the benchmark channel; the bulk
- *   AES-256-GCM open runs locally, so spec bytes never cross the channel. The
- *   appName/owner the transport key derives from are construction-time state.
+ *   AES-256-GCM open (flux-spec's openSubmission) runs locally, so spec bytes
+ *   never cross the channel. The appName/owner the transport key derives from
+ *   are construction-time state.
  *
  * Usage (appConvert seals the converted spec toward the viewer key the owner signed):
  *   const provider = await create(appName, owner);
@@ -20,25 +22,7 @@
  */
 
 const benchmarkService = require('../benchmarkService');
-const { aeadDecrypt } = require('../utils/aeadCrypto');
 const { getSpec } = require('../utils/specLibs');
-const moduleLoader = require('../../lib/moduleLoader');
-
-let hpkeCache;
-
-async function getHpke() {
-  if (hpkeCache) return hpkeCache;
-  const {
-    CipherSuite, DhkemX25519HkdfSha256, HkdfSha256, Aes256Gcm,
-  } = await moduleLoader.importModule('@hpke/core');
-  const suite = new CipherSuite({
-    kem: new DhkemX25519HkdfSha256(),
-    kdf: new HkdfSha256(),
-    aead: new Aes256Gcm(),
-  });
-  hpkeCache = { suite, DhkemX25519HkdfSha256 };
-  return hpkeCache;
-}
 
 /**
  * Create a v9 transport provider for one app.
@@ -48,7 +32,7 @@ async function getHpke() {
  * @returns {Promise<import('@runonflux/flux-spec').TransportCryptoProvider>}
  */
 async function create(appName, owner) {
-  const { TransportCryptoProvider, TransportEnvelope, TRANSPORT_ALGORITHM } = await getSpec();
+  const { TransportCryptoProvider, sealView, openSubmission } = await getSpec();
 
   class FluxOSTransportProvider extends TransportCryptoProvider {
     #appName;
@@ -68,17 +52,8 @@ async function create(appName, owner) {
     async sealToKey({
       plaintext, aad, publicKey, info,
     }) {
-      const { suite, DhkemX25519HkdfSha256: Kem } = await getHpke();
-      const recipientPublicKey = await new Kem().deserializePublicKey(publicKey);
-      const sender = await suite.createSenderContext({
-        recipientPublicKey,
-        info: new TextEncoder().encode(info),
-      });
-      const ct = await sender.seal(plaintext, aad || new Uint8Array(0));
-      return new TransportEnvelope({
-        algorithm: TRANSPORT_ALGORITHM,
-        encapsulatedKey: new Uint8Array(sender.enc),
-        ciphertext: new Uint8Array(ct),
+      return sealView({
+        plaintext, aad: aad || new Uint8Array(0), publicKey, info,
       });
     }
 
@@ -115,14 +90,13 @@ async function create(appName, owner) {
         throw err;
       }
 
-      // The envelope ciphertext is ct‖tag and aeadCrypto frames as nonce‖ct‖tag,
-      // so the nonce followed by the ciphertext is exactly the frame aeadDecrypt
-      // expects — no byte re-ordering. A bad key/tag/aad throws.
-      const key = Buffer.from(decap.key, 'base64');
-      const frame = Buffer.concat([Buffer.from(envelope.nonce), Buffer.from(envelope.ciphertext)]);
-      const aadBuf = aad ? Buffer.from(aad) : Buffer.alloc(0);
+      // A bad key/tag/aad throws.
       try {
-        return aeadDecrypt(key, frame, aadBuf);
+        return Buffer.from(openSubmission({
+          envelope,
+          aad: aad ? new Uint8Array(aad) : new Uint8Array(0),
+          key: new Uint8Array(Buffer.from(decap.key, 'base64')),
+        }));
       } catch (decryptError) {
         const err = new Error('Transport open failed: AEAD authentication failed');
         err.code = 'DECRYPT_FAILED';

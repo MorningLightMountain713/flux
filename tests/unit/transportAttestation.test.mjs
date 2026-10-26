@@ -111,3 +111,57 @@ describe('transport pubkey attestation — the stub produces what flux-spec veri
     expect(ok).to.equal(null);
   });
 });
+
+// The submission's key step, bound the same way. The stub derives the
+// per-submission key as fluxbench does, written apart from flux-spec; a client
+// seals with flux-spec's HpkeTransportProvider and the node opens with
+// flux-spec's openSubmission, so the stub's key must be the one both of those
+// agree on.
+describe('transport submission — the stub derives the key flux-spec seals and opens with', () => {
+  let spec;
+
+  before(async () => {
+    spec = await specLibs.getSpec();
+  });
+
+  async function sealedSubmission(plaintext, aad) {
+    const served = await benchCrypto.transportPublicKey({ appName: APP_NAME, fluxID: FLUX_ID });
+    const recipient = await spec.verifyTransportPubkeyAttestation({
+      appName: APP_NAME,
+      fluxID: FLUX_ID,
+      publicKey: b64(served.publicKey),
+      timestamp: served.timestamp,
+      attestation: b64(served.attestation),
+      chain: spec.Chain.HARNESS,
+      maxAgeMs: 60_000,
+    }, ed25519Verify);
+    const provider = await spec.HpkeTransportProvider.create();
+    return provider.seal({
+      plaintext, aad, recipient, info: spec.TRANSPORT_INFO,
+    });
+  }
+
+  const decapFor = async (appName, envelope) => b64((await benchCrypto.transportDecap({
+    appName, fluxID: FLUX_ID, encapsulatedKey: Buffer.from(envelope.encapsulatedKey).toString('base64'),
+  })).key);
+
+  it('opens a submission with the key the stub derives', async () => {
+    const plaintext = new TextEncoder().encode(JSON.stringify({ version: 9, name: APP_NAME }));
+    const aad = spec.buildTransportAad({ contentHash: 'ab'.repeat(32), timestamp: 1_760_000_000_000, type: 'fluxappregister' });
+    const envelope = await sealedSubmission(plaintext, aad);
+
+    const opened = spec.openSubmission({ envelope, aad, key: await decapFor(APP_NAME, envelope) });
+
+    expect(opened).to.deep.equal(plaintext);
+  });
+
+  it('does not open it with the key the stub derives for another app', async () => {
+    const plaintext = new TextEncoder().encode('{}');
+    const aad = spec.buildTransportAad({ contentHash: 'ab'.repeat(32), timestamp: 1_760_000_000_000, type: 'fluxappregister' });
+    const envelope = await sealedSubmission(plaintext, aad);
+
+    const key = await decapFor(`${APP_NAME}x`, envelope);
+
+    expect(() => spec.openSubmission({ envelope, aad, key })).to.throw(/does not open/);
+  });
+});
