@@ -72,17 +72,11 @@ function assertVersionActivated(version, height) {
  * @param {string} [options.purpose] - Which question is being asked
  *   (a flux-spec ValidationPurpose value; default registration, the strict
  *   one). The spec library refuses unknown purposes at the door.
- * @param {boolean} [options.encrypted] - whether this submission will be
- *   broadcast sealed. Read under the REGISTRATION purpose only, which is the
- *   one question where the contents are about to be published: fields that must
- *   never travel in the clear — `imageAuth`, `secretEnvironment`, a content
- *   reference — are refused unless this says true, and silence counts as false.
- *   The spec cannot answer this about itself: for v9 the node decides whether to
- *   seal, so only the caller holding that decision can state it. A SESSION never
- *   broadcasts and is not asked.
- * @returns {Promise<FluxAppSpecBase>} The validated spec class instance
+ * @returns {Promise<FluxAppSpecBase>} The validated spec class instance; fields
+ *   that must never travel in the clear are refused under REGISTRATION (a
+ *   private spec is validated by validatePrivateSubmission)
  */
-async function validateSubmissionSpec(spec, { height, purpose, encrypted } = {}) {
+async function validateSubmissionSpec(spec, { height, purpose } = {}) {
   await getSpecBackend();
   const { FluxAppSpecBase } = await getSpec();
   const VersionClass = spec && FluxAppSpecBase.getVersionClass(spec.version);
@@ -90,7 +84,7 @@ async function validateSubmissionSpec(spec, { height, purpose, encrypted } = {})
     throw new Error(`Unsupported Flux App specification version: ${spec && spec.version}`);
   }
   assertVersionActivated(spec.version, height);
-  const context = { encrypted: encrypted === true };
+  const context = {};
   if (purpose !== undefined) context.purpose = purpose;
   if (height !== undefined) context.height = height;
   return VersionClass.fromSubmission(spec, { ...context, chain: nodeChain() });
@@ -112,11 +106,30 @@ async function assertUpdateInvariants(priorSpec, newSpec) {
   impl(priorSpec, newSpec);
 }
 
+/**
+ * Validate a private submission — the cleartext a transport envelope opened
+ * to — as flux-spec's private door does, enforcing the FluxOS fork-activation
+ * height gate. What comes back is an OpenedSpec: readable, with no wire form,
+ * so the contents reach bytes only sealed (sealForStorage).
+ *
+ * @param {object} spec - the opened submission blob
+ * @param {{height?: number}} [options] - the height the submission is judged at
+ * @returns {Promise<object>} an OpenedSpec
+ */
+async function validatePrivateSubmission(spec, { height } = {}) {
+  const { OpenedSpec } = await getSpecBackend();
+  assertVersionActivated(spec && spec.version, height);
+  const context = { chain: nodeChain() };
+  if (height !== undefined) context.height = height;
+  return OpenedSpec.fromSubmission(spec, context);
+}
+
 module.exports = {
   getSpec,
   assertVersionActivated,
   getSpecBackend,
   getSpecPolicy,
   validateSubmissionSpec,
+  validatePrivateSubmission,
   assertUpdateInvariants,
 };

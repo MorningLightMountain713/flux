@@ -77,17 +77,13 @@ function component(name, mounts, { hostPort = 31_000, containerPort = 80 } = {})
 const webWith = (...mounts) => ({ web: component('web', mounts) });
 
 /**
- * The cleartext FluxAppSpecV9 the SUBMISSION path holds: appSubmission validates
- * the submission blob and hands that instance straight to processManifestSubmission
- * before anything is sealed. `isEncrypted` is false, so verifyManifest reads it
- * directly rather than decrypting.
+ * The private spec the SUBMISSION path holds: appSubmission validates the opened
+ * submission through flux-spec's private door and hands that OpenedSpec straight
+ * to processManifestSubmission before anything is sealed. It is not `sealed`, so
+ * verifyManifest reads it directly rather than decrypting.
  */
-function cleartextSpec(components) {
-  // contentSlot only works on the encrypted path — a slot spec exists sealed or
-  // not at all, so the envelope is stated rather than left silent.
-  return flux.FluxAppSpecV9.fromSubmission(
-    { ...V9_SUBMISSION, name: APP, components }, { encrypted: true },
-  );
+function privateSpec(components) {
+  return flux.OpenedSpec.fromSubmission({ ...V9_SUBMISSION, name: APP, components });
 }
 
 /**
@@ -280,15 +276,15 @@ describe('contentSlotService', () => {
     // The first fromSubmission compiles the ajv schemas.
     this.timeout(30_000);
     flux = await loadSpecLibrary();
-    slotSpec = cleartextSpec(webWith(slotMount('app-config')));
-    twoSlotSpec = cleartextSpec(webWith(slotMount('app-config'), slotMount('tls-cert')));
+    slotSpec = privateSpec(webWith(slotMount('app-config')));
+    twoSlotSpec = privateSpec(webWith(slotMount('app-config'), slotMount('tls-cert')));
     slotSpecSealed = await sealedSpec(webWith(slotMount('app-config')));
   });
 
   describe('specSlotNames', () => {
     it('collects every declared contentSlot name', () => {
       const { service } = load();
-      const spec = cleartextSpec(webWith(slotMount('a'), slotMount('b')));
+      const spec = privateSpec(webWith(slotMount('a'), slotMount('b')));
       const names = service.specSlotNames(spec);
       expect([...names]).to.have.members(['a', 'b']);
     });
@@ -355,15 +351,15 @@ describe('contentSlotService', () => {
 
     it('takes a manifest listing a slot the spec does not declare: the slot is ignored, not refused', async () => {
       const { service } = load();
-      const otherSpec = cleartextSpec(webWith(slotMount('something-else')));
+      const otherSpec = privateSpec(webWith(slotMount('something-else')));
       await service.verifyManifest(manifest(), { owner: OWNER, spec: otherSpec, identity: IDENTITY, ownedFrom: 2_400_000 }, { verify: () => true });
     });
 
     it('takes a manifest the spec names though the listed owner did not sign it, and refuses one it does not name', async () => {
       const { service } = load();
-      const named = flux.FluxAppSpecV9.fromSubmission({
+      const named = flux.OpenedSpec.fromSubmission({
         ...V9_SUBMISSION, name: APP, components: webWith(slotMount('app-config')), content: { manifest: flux.contentManifestHash(manifest()) },
-      }, { encrypted: true });
+      });
       await service.verifyManifest(manifest(), { owner: OWNER, spec: named, identity: IDENTITY, ownedFrom: 2_400_000 }, { verify: () => false });
       await expectReject(
         service.verifyManifest(manifest({ version: 3 }), { owner: OWNER, spec: named, identity: IDENTITY, ownedFrom: 2_400_000 }, { verify: () => false }),

@@ -825,7 +825,7 @@ describe('registryManager tests', () => {
     describe('encrypted spec view channel negotiation', () => {
       let decryptV9;
       let decryptV8;
-      let reencrypt;
+      let storageSeal;
 
       const buildReq = (headers) => ({
         params: { appname: 'myapp', decrypt: 'true' },
@@ -844,7 +844,7 @@ describe('registryManager tests', () => {
         // prototypes; sinon.restore() in the outer afterEach puts them back.
         decryptV9 = sinon.spy(flux.SealedSpecV9.prototype, 'decrypt');
         decryptV8 = sinon.spy(flux.SealedSpecV8.prototype, 'decrypt');
-        reencrypt = sinon.spy(flux.OpenedSpec.prototype, 'reencrypt');
+        storageSeal = sinon.spy(flux.OpenedSpec.prototype, 'seal');
       });
 
       it('should require a view credential when decrypt is requested', async () => {
@@ -862,6 +862,7 @@ describe('registryManager tests', () => {
       it('should seal a v9 encrypted spec toward the caller over the transport layer', async () => {
         const owner = await testOwner();
         await registryHolds(await sealedV9Spec({ owner: owner.address }));
+        storageSeal.resetHistory();
         const fakeEnvelope = { toJSON: () => ({ algorithm: 'HPKE', encapsulatedKey: 'enc', ciphertext: 'ct' }) };
         const seal = sinon.fake.resolves(fakeEnvelope);
         const create = sinon.stub(transportCryptoProvider, 'create').resolves({ seal });
@@ -882,9 +883,9 @@ describe('registryManager tests', () => {
         expect(result.data).to.have.property('timestamp');
         expect(result.data.transportEncrypted).to.deep.equal({ algorithm: 'HPKE', encapsulatedKey: 'enc', ciphertext: 'ct' });
         // the storage decrypt ran, and the transport seal — not the storage
-        // reencrypt — produced the view payload
+        // the storage seal — produced the view payload
         sinon.assert.calledOnce(decryptV9);
-        sinon.assert.notCalled(reencrypt);
+        sinon.assert.notCalled(storageSeal);
 
         // The transport provider is stubbed and never sees the spec object: it is
         // asked to seal FOR an app, and both arguments are read off the INNER
@@ -932,9 +933,10 @@ describe('registryManager tests', () => {
         sinon.assert.notCalled(decryptV9);
       });
 
-      it('should reencrypt a v8 encrypted spec over the legacy enterprise channel', async () => {
+      it('should reseal a v8 encrypted spec over the legacy enterprise channel', async () => {
         const sealed = await sealedV8Spec();
         await registryHolds(sealed);
+        storageSeal.resetHistory();
         // The legacy transport provider wraps an AES key under the caller's RSA
         // key off the benchmark channel, so it stays stubbed — but it must hand
         // back a real CryptoProvider, because SealedSpecV8.reencryptFrom
@@ -951,7 +953,7 @@ describe('registryManager tests', () => {
         // which app and owner to wrap for, off the RegisteredSpec's accessors.
         sinon.assert.calledOnceWithExactly(legacyCreate, 'myapp', V8_SUBMISSION.owner, 'wrappedKeyBase64');
         sinon.assert.calledOnce(decryptV8);
-        sinon.assert.calledOnce(reencrypt);
+        sinon.assert.calledOnce(storageSeal);
         // v8's own enterprise wire form came back, not a passthrough of the
         // stored row and not a literal: ciphertext present, cleartext absent.
         expect(result.data.version).to.equal(8);
@@ -959,7 +961,7 @@ describe('registryManager tests', () => {
         expect(result.data.enterprise).to.be.a('string').and.not.equal('');
         expect(result.data.compose, 'cleartext components never reach the caller').to.deep.equal([]);
         expect(result.data.contacts).to.deep.equal([]);
-        expect(await reencrypt.firstCall.returnValue).to.be.instanceOf(flux.SealedSpecV8);
+        expect(await storageSeal.firstCall.returnValue).to.be.instanceOf(flux.SealedSpecV8);
         // With the chain facts of the message that registered it.
         expect(result.data).to.include({ hash: 'storedhash', height: 1_700_000 });
       });

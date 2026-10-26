@@ -109,6 +109,9 @@ describe('appSubmission tests', () => {
         validateSubmissionSpec: sinon.stub().callsFake(async (blob) => (
           flux.FluxAppSpecBase.getVersionClass(blob.version).fromSubmission(blob, { chain: flux.Chain.MAIN })
         )),
+        validatePrivateSubmission: sinon.stub().callsFake(async (blob) => (
+          flux.OpenedSpec.fromSubmission(blob, { chain: flux.Chain.MAIN })
+        )),
         getSpec: sinon.stub().callsFake(async () => flux),
         getSpecBackend: sinon.stub(),
         assertUpdateInvariants: sinon.stub().resolves(),
@@ -423,16 +426,13 @@ describe('appSubmission tests', () => {
       sinon.assert.calledWith(stubs.specLibs.validateSubmissionSpec, V8_SUBMISSION, sinon.match({ height: 2_500_000 }));
     });
 
-    it('backend-encrypts a transport-encrypted v9 submission and never broadcasts cleartext', async () => {
+    it('holds a transport-encrypted v9 submission as a private spec, seals it for storage and never broadcasts cleartext', async () => {
       appSubmission = load();
-      const spec = v9Spec();
-      const sparse = { version: 9, name: 'myapp', owner: 'owner1' };
+      const opened = { ...V9_SUBMISSION };
       const submission = {
-        version: 9, name: 'myapp', owner: 'owner1', transportEncrypted: { algorithm: 'x' },
+        version: 9, name: V9_SUBMISSION.name, owner: V9_SUBMISSION.owner, transportEncrypted: { algorithm: 'x' },
       };
-      stubs.transportHelper.openTransportEnvelope.resolves(sparse);
-      stubs.parseSpec.resolves({ isEncrypted: false });
-      stubs.specLibs.validateSubmissionSpec.resolves(spec);
+      stubs.transportHelper.openTransportEnvelope.resolves(opened);
       // The real sealed form the node broadcasts, not a marker object.
       const encryptedSpec = await sealedV9Spec({ name: V9_SUBMISSION.name });
       const sealForStorage = sinon.stub().resolves(encryptedSpec);
@@ -441,17 +441,24 @@ describe('appSubmission tests', () => {
       });
 
       const result = await appSubmission.resolveSubmission(submission, {
-        contentHash: spec.contentHash(), timestamp: 1, type: 'fluxappregister', daemonHeight: 100,
+        contentHash: flux.OpenedSpec.fromSubmission({ ...V9_SUBMISSION }).contentHash(),
+        timestamp: 1,
+        type: 'fluxappregister',
+        daemonHeight: 100,
       });
 
       expect(result.isEncrypted).to.be.true;
+      // A private spec from the moment it is one: never parsed to a plain spec,
+      // and holding no wire form of its own.
+      sinon.assert.calledOnceWithExactly(stubs.specLibs.validatePrivateSubmission, opened, { height: 100 });
+      sinon.assert.notCalled(stubs.parseSpec);
+      sinon.assert.notCalled(stubs.specLibs.validateSubmissionSpec);
+      expect(result.spec).to.be.instanceOf(flux.OpenedSpec);
+      expect(result.spec.serialize).to.equal(undefined);
       expect(result.broadcastBlob).to.deep.equal(encryptedSpec.serialize());
       expect(result.broadcastBlob.encrypted, 'the sealed form carries ciphertext').to.be.an('object');
       expect(result.broadcastBlob, 'and never the components').to.not.have.property('components');
-      // the cleartext serialize must never become the wire form
-      sinon.assert.notCalled(spec.serialize);
-      sinon.assert.calledOnce(sealForStorage);
-      sinon.assert.calledWith(sealForStorage, spec);
+      sinon.assert.calledOnceWithExactly(sealForStorage, result.spec);
     });
 
     it('refuses a v8 enterprise submission whose envelope carries a compose', async () => {
@@ -463,9 +470,7 @@ describe('appSubmission tests', () => {
       // reading it back. Held to the sentinels here, at the submission door only.
       appSubmission = load();
       const cleartext = await v8Spec({}, { encrypted: true });
-      const wireSpec = await flux.SealedSpecV8.fromSpec(
-        cleartext, await flux.SealedSpecV8.createProviderFor(cleartext.name, cleartext.owner),
-      );
+      const wireSpec = await cleartext.seal(await flux.SealedSpecV8.createProviderFor(cleartext.name, cleartext.owner));
       const submission = wireSpec.serialize();
       expect(submission.compose, 'the honest form leaves it empty').to.deep.equal([]);
       submission.compose = [{ name: 'web', repotag: 'nginx:latest' }];
@@ -489,9 +494,7 @@ describe('appSubmission tests', () => {
       // down with it.
       appSubmission = load();
       const cleartext = await v8Spec({}, { encrypted: true });
-      const wireSpec = await flux.SealedSpecV8.fromSpec(
-        cleartext, await flux.SealedSpecV8.createProviderFor(cleartext.name, cleartext.owner),
-      );
+      const wireSpec = await cleartext.seal(await flux.SealedSpecV8.createProviderFor(cleartext.name, cleartext.owner));
       const submission = wireSpec.serialize();
       stubs.transportHelper.openTransportEnvelope.resolves(submission);
       stubs.parseSpec.resolves(wireSpec);
@@ -510,9 +513,7 @@ describe('appSubmission tests', () => {
       // wrapper shaped like that — a shape the real OpenedSpec has
       // never had.
       const cleartext = await v8Spec({}, { encrypted: true });
-      const wireSpec = await flux.SealedSpecV8.fromSpec(
-        cleartext, await flux.SealedSpecV8.createProviderFor(cleartext.name, cleartext.owner),
-      );
+      const wireSpec = await cleartext.seal(await flux.SealedSpecV8.createProviderFor(cleartext.name, cleartext.owner));
       const validateContents = sinon.spy(flux.OpenedSpec.prototype, 'validateContents');
       const submission = wireSpec.serialize();
       stubs.transportHelper.openTransportEnvelope.resolves(submission);
@@ -548,9 +549,8 @@ describe('appSubmission tests', () => {
       //
       // What refuses is the wrapper not carrying `serialize` at all: flux-spec
       // withholds it deliberately and its own completeness test fails if it is
-      // ever delegated by accident. So this throws a TypeError, NOT the inner
-      // spec's "no wire form: reencrypt() it for storage" error - measured, not
-      // assumed. Left without a message argument on purpose: the guarantee
+      // ever delegated by accident. So this throws a TypeError, NOT an error
+      // from the inner spec. Left without a message argument on purpose: the guarantee
       // asserted is that no wire form is reachable here by any route.
       expect(() => result.spec.serialize()).to.throw();
       // the entitlements gate runs for every version now (no version branch); v8

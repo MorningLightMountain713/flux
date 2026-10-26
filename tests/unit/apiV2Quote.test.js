@@ -18,10 +18,12 @@ describe('POST /v2/apps/quotes', () => {
   const NOW = 1_760_000_000_000;
   const CONTENT_HASH = 'c'.repeat(64);
   const SPEC = { name: 'myapp', version: 9, contentHash: () => CONTENT_HASH };
+  const PRIVATE_SPEC = { name: 'myapp', version: 9, contentHash: () => CONTENT_HASH, isEncrypted: true };
   let apps;
   let messageQuote;
   let resolveSpec;
   let openTransportEnvelope;
+  let validatePrivateSubmission;
   let getTempMessageByName;
 
   const respond = () => ({
@@ -36,13 +38,14 @@ describe('POST /v2/apps/quotes', () => {
       fee: 123_456_789n, usd: 4.99, fiatMarkupBp: 500, at: { time: (NOW - 1000) / 1000, height: 201 },
     });
     resolveSpec = sinon.stub().resolves(SPEC);
-    // The submission door's own opener: a cleartext spec passes through it unchanged.
-    openTransportEnvelope = sinon.stub().callsFake(async (spec) => spec);
+    openTransportEnvelope = sinon.stub();
+    validatePrivateSubmission = sinon.stub().resolves(PRIVATE_SPEC);
     getTempMessageByName = sinon.stub().resolves(null);
     apps = proxyquire('../../ZelBack/src/services/apiV2/apps', {
       '../pricing/pricingRegime': { messageQuote },
       '../utils/specCutover': { resolveSpec },
       '../utils/transportHelper': { openTransportEnvelope },
+      '../utils/specLibs': { getSpecBackend: specLibs.getSpecBackend, validatePrivateSubmission },
       '../appDatabase/appsRepository': { getTempMessageByName },
     });
   });
@@ -129,15 +132,16 @@ describe('POST /v2/apps/quotes', () => {
       type: 'fluxappregister', appSpecification: SEALED, contentHash: CONTENT_HASH, extend: true, ...over,
     });
 
-    it('is opened with the type, content hash and time its seal is bound to, and what it opens to is priced', async () => {
+    it('is opened with the type, content hash and time its seal is bound to, and priced as the private spec it opens to', async () => {
       openTransportEnvelope.withArgs(SEALED).resolves(OPENED);
       const res = respond();
       await apps.quote({ body: sealedBody() }, res);
       sinon.assert.calledOnceWithExactly(openTransportEnvelope, SEALED, {
         contentHash: CONTENT_HASH, timestamp: NOW - 1000, type: 'fluxappregister',
       });
-      sinon.assert.calledOnceWithExactly(resolveSpec, OPENED);
-      sinon.assert.calledOnceWithExactly(messageQuote, SPEC, { timestamp: NOW - 1000, extend: true });
+      sinon.assert.calledOnceWithExactly(validatePrivateSubmission, OPENED);
+      sinon.assert.notCalled(resolveSpec);
+      sinon.assert.calledOnceWithExactly(messageQuote, PRIVATE_SPEC, { timestamp: NOW - 1000, extend: true });
       sinon.assert.calledOnce(res.ok);
     });
 
