@@ -101,6 +101,33 @@ describe('daemonServiceBlockchainRpcs tests', () => {
     });
   });
 
+  describe('lookupBlockTime tests', () => {
+    let daemonServiceUtilsStub;
+
+    beforeEach(() => {
+      daemonServiceUtilsStub = sinon.stub(daemonServiceUtils, 'executeCall');
+    });
+
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    it('answers the block\'s time, asking for the block by height', async () => {
+      daemonServiceUtilsStub.resolves({ status: 'success', data: { time: 1_750_000_000 } });
+
+      expect(await daemonServiceBlockchainRpcs.lookupBlockTime(1998)).to.equal(1_750_000_000);
+      sinon.assert.calledOnceWithExactly(daemonServiceUtilsStub, 'getBlock', ['1998', 1]);
+    });
+
+    it('answers null when the daemon cannot say', async () => {
+      daemonServiceUtilsStub.resolves({ status: 'error', data: { message: 'Block height out of range' } });
+      expect(await daemonServiceBlockchainRpcs.lookupBlockTime(1998)).to.equal(null);
+
+      daemonServiceUtilsStub.resolves({ status: 'success', data: {} });
+      expect(await daemonServiceBlockchainRpcs.lookupBlockTime(1998)).to.equal(null);
+    });
+  });
+
   describe('getBlockApi tests', () => {
     let daemonServiceUtilsStub;
 

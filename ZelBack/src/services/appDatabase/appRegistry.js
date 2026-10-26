@@ -16,7 +16,7 @@ const appEventVerifier = require('../appMessaging/appEventVerifier');
 const decider = require('../appDecisions/decider');
 const messageStore = require('../appMessaging/messageStore');
 const { processPendingUpdates } = require('../appMessaging/messageStore');
-const { lookupBlockTime } = require('../appMessaging/confirmedMessageStore');
+const { lookupBlockTime } = require('../daemonService/daemonServiceBlockchainRpcs');
 
 /**
  * The app registry (`globalAppsInformation`): for each name, the latest applied

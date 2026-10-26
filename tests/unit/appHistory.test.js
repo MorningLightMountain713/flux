@@ -28,7 +28,7 @@ describe('appHistory', () => {
         }),
         decisions: () => ({ appliedFor: async (name) => applied.filter((d) => d.name === name) }),
       },
-      '../appMessaging/confirmedMessageStore': { lookupBlockTime },
+      '../daemonService/daemonServiceBlockchainRpcs': { lookupBlockTime },
     });
   });
 

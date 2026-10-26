@@ -2,7 +2,7 @@
 
 const appRecords = require('../appDatabase/appRecords');
 const { compareChainOrder } = require('../utils/chainOrder');
-const { lookupBlockTime } = require('../appMessaging/confirmedMessageStore');
+const { lookupBlockTime } = require('../daemonService/daemonServiceBlockchainRpcs');
 
 /**
  * An app's history as the chain accepted it: the messages the decider applied

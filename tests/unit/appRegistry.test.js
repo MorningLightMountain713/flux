@@ -83,7 +83,7 @@ describe('appRegistry', () => {
         onBlockScanned: sinon.stub(),
         onRewind: sinon.stub(),
       },
-      '../appMessaging/confirmedMessageStore': { lookupBlockTime: sinon.stub().resolves(NOW) },
+      '../daemonService/daemonServiceBlockchainRpcs': { lookupBlockTime: sinon.stub().resolves(NOW) },
       './appsRepository': {
         removeAppInstallingErrorRecords: sinon.stub().resolves(),
         removeContentManifests: sinon.stub().resolves(),
@@ -204,13 +204,13 @@ describe('appRegistry', () => {
     it('is the scanned block\'s time, not this node\'s clock', async () => {
       // Past its term by this node's clock, inside it at the scanned block.
       const blockTime = LONG_EXPIRED_AT + 86_400;
-      stubs['../appMessaging/confirmedMessageStore'].lookupBlockTime.resolves(blockTime);
+      stubs['../daemonService/daemonServiceBlockchainRpcs'].lookupBlockTime.resolves(blockTime);
       const spec = await v9Spec({ name: 'myapp' });
       messages = [message('r', spec)];
 
       await registry.applyDecided('myapp', [decision('r', { termStart: LONG_EXPIRED_AT })]);
 
-      sinon.assert.calledOnceWithExactly(stubs['../appMessaging/confirmedMessageStore'].lookupBlockTime, SCANNED_HEIGHT);
+      sinon.assert.calledOnceWithExactly(stubs['../daemonService/daemonServiceBlockchainRpcs'].lookupBlockTime, SCANNED_HEIGHT);
       sinon.assert.calledOnce(stubs['./registryManager'].storeGlobalSpec);
     });
 
@@ -222,11 +222,11 @@ describe('appRegistry', () => {
 
       await registry.blockScanned({ height: SCANNED_HEIGHT + 1, time: NOW });
       await registry.applyDecided('myapp', [decision('r')]);
-      sinon.assert.notCalled(stubs['../appMessaging/confirmedMessageStore'].lookupBlockTime);
+      sinon.assert.notCalled(stubs['../daemonService/daemonServiceBlockchainRpcs'].lookupBlockTime);
 
       onRewind(SCANNED_HEIGHT - 10);
       await registry.applyDecided('myapp', [decision('r')]);
-      sinon.assert.calledOnce(stubs['../appMessaging/confirmedMessageStore'].lookupBlockTime);
+      sinon.assert.calledOnce(stubs['../daemonService/daemonServiceBlockchainRpcs'].lookupBlockTime);
     });
   });
 
