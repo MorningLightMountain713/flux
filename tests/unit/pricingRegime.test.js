@@ -80,13 +80,13 @@ describe('pricingRegime', () => {
     const events = [{ hash: 'earlier', height: HEIGHT - 5, type: 'fluxappupdate' }];
     const spec = { name: 'myapp', ttl: 2_592_000, isEncrypted: false };
 
-    function loadV9(modifierHistory = null) {
+    function loadV9() {
       const priceUpdate = sinon.stub().resolves({ free: true });
+      const buildPricingEngine = sinon.stub().resolves({ priceUpdate });
       const v9 = proxyquire('../../ZelBack/src/services/pricing/v9PricingRegime', {
-        './buildPricingEngine': { buildPricingEngine: sinon.stub().resolves({ priceUpdate }) },
-        './priceOracleState': { getPriceModifierHistory: () => modifierHistory },
+        './buildPricingEngine': { buildPricingEngine },
       });
-      return { v9, priceUpdate };
+      return { v9, priceUpdate, buildPricingEngine };
     }
 
     async function contextHandedToTheRule({ extend = false } = {}) {
@@ -128,16 +128,15 @@ describe('pricingRegime', () => {
       expect(ctx).to.not.have.property('oldScaledPriceMicrodollars');
     });
 
-    it('hands the rule the update discount in force at the update\'s moment', async () => {
-      const resolveAt = sinon.stub().returns({ updateDiscountBp: 1000 });
-      const { v9, priceUpdate } = loadV9({ resolveAt });
+    it('prices with the engine in force at the update\'s moment, which carries the update discount', async () => {
+      const { v9, priceUpdate, buildPricingEngine } = loadV9();
       const prevSpec = { termSeconds: () => 7000, remainingSecondsAt: () => 3000 };
       const at = { time: BLOCK_TIME, height: HEIGHT };
       await v9.updateFee(spec, prevSpec, {
         at, prevAt: { time: BLOCK_TIME - 3700, height: HEIGHT - 5 }, prevRegisteredAt: BLOCK_TIME - 3600, extend: false, recentEvents: async () => [], prevTermCost: {},
       });
-      sinon.assert.calledWithExactly(resolveAt, at);
-      expect(priceUpdate.firstCall.args[2].updateDiscountBp).to.equal(1000);
+      sinon.assert.calledWithExactly(buildPricingEngine, at);
+      expect(priceUpdate.firstCall.args[2]).to.not.have.property('updateDiscountBp');
     });
 
     it('hands the rule the event\'s renewal flag', async () => {

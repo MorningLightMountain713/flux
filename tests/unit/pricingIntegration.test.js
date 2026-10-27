@@ -239,7 +239,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     });
   });
 
-  describe('FluxosSurcharger — instance tier surcharges', () => {
+  describe('instance tier surcharges', () => {
     it('applies no surcharge for 3 instances (below tier 1 breakpoint of 10)', async () => {
       const h = buildTestHistories();
       stubHistories(h);
@@ -259,12 +259,12 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       const breakdown = await engine.price(bigSpec, { height: h.queryHeight, duration: bigSpec.ttl, isEncrypted: false });
 
       expect(breakdown.surcharges).to.have.lengthOf(1);
-      expect(breakdown.surcharges[0].label).to.equal('instance-tier-1');
+      expect(breakdown.surcharges[0].name).to.equal('instance-tier-1');
       expect(breakdown.adjustedMicrodollars).to.be.above(breakdown.grossMicrodollars);
     });
   });
 
-  describe('FluxosDiscounter — duration bucket discounts', () => {
+  describe('duration bucket discounts', () => {
     it('applies no discount for 30-day duration (below 90-day bucket)', async () => {
       const h = buildTestHistories();
       stubHistories(h);
@@ -291,7 +291,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       });
 
       expect(breakdown.discounts).to.have.lengthOf(1);
-      expect(breakdown.discounts[0].label).to.equal('duration-90d');
+      expect(breakdown.discounts[0].name).to.equal('duration-90d');
       expect(breakdown.discounts[0].value).to.equal(300);
     });
 
@@ -307,7 +307,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
       });
 
       expect(breakdown.discounts).to.have.lengthOf(1);
-      expect(breakdown.discounts[0].label).to.equal('duration-365d');
+      expect(breakdown.discounts[0].name).to.equal('duration-365d');
       expect(breakdown.discounts[0].value).to.equal(1200);
     });
   });
@@ -415,7 +415,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
 
   describe('free-update feature delta through the FluxOS stack (became-encrypted)', () => {
     // The flux-spec rule is unit-tested with real specs; this exercises the
-    // FluxOS wiring end-to-end through the real engine + FluxosDiscounter:
+    // FluxOS wiring end-to-end through the real engine and the network's free-update rule:
     // priceUpdate derives the new feature set from the new breakdown, the caller
     // supplies the old set off the old breakdown, and turning encryption on
     // during an otherwise-identical update adds the encryptedSpec feature, so it
