@@ -18,9 +18,9 @@ const moduleLoader = require('../../ZelBack/src/lib/moduleLoader');
 // The spec library is REAL here — see tests/unit/fixtures/fluxSpec.js for why.
 // This endpoint's whole job is to move between real shapes, so a hand-written
 // double is the one thing that cannot test it: the sparse-draft branch only
-// exists because the real fromLegacy emits a v8 app with no contacts as an
-// INCOMPLETE v9 blob, and a stubbed `validateSchema` returning `{valid:false}`
-// asserts nothing about whether that ever happens.
+// exists because the real upgrade emits a v8 app with no contacts as an
+// INCOMPLETE v9 draft, and a stubbed draft reporting `complete: false` asserts
+// nothing about whether that ever happens.
 //
 // The transport provider is real too. Its `seal` direction is pure local HPKE
 // (only `open` touches the benchmark channel), so the tests seal toward a real
@@ -72,8 +72,9 @@ describe('appConvert (registryManager) tests', () => {
     return {
       credential: await ownerSignedViewer(owner, appName, publicKey),
       /**
-       * Open what convert sealed. Throws unless `info` and `aad` are exactly what
-       * production used, which is what makes this an assertion and not a decode.
+       * Open what convert sealed: { spec, warnings, errors }. Throws unless `info`
+       * and `aad` are exactly what production used, which is what makes this an
+       * assertion and not a decode.
        */
       async open(wire, { appName, timestamp }) {
         const context = await suite.createRecipientContext({
@@ -140,9 +141,9 @@ describe('appConvert (registryManager) tests', () => {
     // converting at height undefined — with no error anywhere.
     expect(held.version, 'convert routes on .version').to.equal(8);
     expect(held.isEncrypted, 'convert routes on .isEncrypted').to.equal(false);
-    expect(held.height, 'fromLegacy is given .height as confirmationHeight').to.equal(1_700_000);
+    expect(held.height, 'upgradeDraft is given .height as confirmationHeight').to.equal(1_700_000);
     expect(held.name, 'storage refs are resolved against .name').to.equal('convertme');
-    expect(held.spec, 'fromLegacy converts .spec').to.be.an.instanceOf(flux.FluxAppSpecV8);
+    expect(held.spec, 'convert upgrades .spec').to.be.an.instanceOf(flux.FluxAppSpecV8);
   });
 
   it('hands back a region it cannot resolve as a gap to fill, not a widened pin', async () => {
@@ -157,7 +158,7 @@ describe('appConvert (registryManager) tests', () => {
     const result = await registryManager.convertApplicationSpecification('convertme', {});
 
     expect(result.complete, 'a dropped pin must not read as a finished draft').to.equal(false);
-    const regionError = result.errors.find((e) => e.code === 'region_unresolved');
+    const regionError = result.errors.find((e) => e.code === flux.CODES.REGION_UNRESOLVED);
     expect(regionError, 'the owner is told which name, so they can pick it again').to.exist;
     expect(regionError.value).to.equal('Geneva');
     // Not widened to the country it was pinned inside.
@@ -175,7 +176,7 @@ describe('appConvert (registryManager) tests', () => {
     const result = await registryManager.convertApplicationSpecification('convertme', {});
 
     expect(result.complete).to.equal(true);
-    expect(result.errors.some((e) => e.code === 'region_unresolved')).to.equal(false);
+    expect(result.errors.some((e) => e.code === flux.CODES.REGION_UNRESOLVED)).to.equal(false);
     expect(result.spec.placement.geoAllow).to.deep.equal([{ continent: 'EU', country: 'FI' }]);
   });
 
@@ -217,14 +218,16 @@ describe('appConvert (registryManager) tests', () => {
     expect(result.complete).to.equal(true);
     expect(result.appName).to.equal('convertme');
     expect(result.timestamp).to.be.a('number');
-    expect(result).to.not.have.property('spec'); // cleartext never crosses the wire
+    // Cleartext never crosses the wire, nor do the warnings and errors that can quote it.
+    expect(result).to.have.all.keys('encrypted', 'appName', 'timestamp', 'transportEncrypted', 'complete');
     expect(result.transportEncrypted).to.have.all.keys('algorithm', 'encapsulatedKey', 'ciphertext');
-    // create takes only (name, owner) — both read off the converted blob, so
-    // sealing toward `undefined` would pass without this. The recipient pubkey
-    // is a seal argument, not a create one.
+    // create takes only (name, owner) — both read off the draft, so sealing
+    // toward `undefined` would pass without this. The recipient pubkey is a seal
+    // argument, not a create one.
     sinon.assert.calledOnceWithExactly(create, 'convertme', owner.address);
 
-    const draft = await frontend.open(result.transportEncrypted, result);
+    const { spec: draft, errors } = await frontend.open(result.transportEncrypted, result);
+    expect(errors).to.deep.equal([]);
     expect(draft.version).to.equal(9);
     expect(draft.components.web.env).to.deep.equal({ SECRET: 'hunter2' });
     expect(draft.components.web.env).to.not.have.property('F_S_ENV');
@@ -242,10 +245,12 @@ describe('appConvert (registryManager) tests', () => {
 
     expect(result.encrypted).to.equal(true);
     expect(result.complete).to.equal(false);
-    expect(result.errors.map((e) => e.field)).to.deep.equal(['contacts']);
+    expect(result).to.not.have.property('errors');
 
-    // The sealed plaintext is the sparse blob, not a canonical form.
-    const draft = await frontend.open(result.transportEncrypted, result);
+    // The sealed plaintext is the sparse draft, not a canonical form.
+    const { spec: draft, errors, warnings } = await frontend.open(result.transportEncrypted, result);
+    expect(errors.map((e) => e.field)).to.deep.equal(['contacts']);
+    expect(warnings.join(' ')).to.include('TCP only');
     expect(draft).to.not.have.property('contacts');
     expect(draft).to.not.have.property('placement');
     expect(draft.components.web.image, 'the sealed source really was opened').to.equal('nginx:latest');
@@ -306,12 +311,33 @@ describe('appConvert (registryManager) tests', () => {
     expect(result.encrypted).to.equal(true);
     expect(result.complete).to.equal(true);
 
-    // fromLegacy converted the DECRYPTED spec: nothing but a real decrypt
-    // produces the repotag that was sealed.
-    const draft = await frontend.open(result.transportEncrypted, result);
+    // The DECRYPTED spec was upgraded: nothing but a real decrypt produces the
+    // repotag that was sealed.
+    const { spec: draft } = await frontend.open(result.transportEncrypted, result);
     expect(draft.version).to.equal(9);
     expect(draft.components.web.image).to.equal('nginx:latest');
     expect(draft.owner).to.equal(owner.address);
+  });
+
+  it('judges an encrypted app\'s draft by the private rules, so its registry login is no gap', async () => {
+    // A registry login travels in v9 only sealed. An encrypted app's draft is
+    // sealed, so it carries one, complete; judged as a public spec it would be
+    // refused.
+    const owner = await testOwner();
+    await registryHolds(await sealedV8Spec({
+      name: 'convertme',
+      contacts: ['ops@example.com'],
+      owner: owner.address,
+      compose: [{ ...V8_SUBMISSION.compose[0], repoauth: 'registryuser:hunter2' }],
+    }));
+    const frontend = await frontendRecipient(owner);
+
+    const result = await registryManager.convertApplicationSpecification('convertme', frontend.credential);
+
+    expect(result.complete).to.equal(true);
+    const { spec: draft, errors } = await frontend.open(result.transportEncrypted, result);
+    expect(errors).to.deep.equal([]);
+    expect(draft.components.web.imageAuth).to.equal('registryuser:hunter2');
   });
 
   it('rejects an app that is already on spec version 9', async () => {

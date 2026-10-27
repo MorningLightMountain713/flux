@@ -903,7 +903,7 @@ describe('registryManager tests', () => {
         // And what it was handed is the real canonical cleartext the owner needs
         // in order to re-sign — the decrypt actually opened the blob, rather than
         // a literal standing in for it.
-        const canonical = JSON.parse(sealArg.plaintext.toString('utf8'));
+        const canonical = JSON.parse(Buffer.from(sealArg.plaintext).toString('utf8'));
         expect(canonical.version).to.equal(9);
         expect(canonical.components.web.image).to.equal('nginx:latest');
         expect(canonical.owner).to.equal(owner.address);
@@ -1023,7 +1023,7 @@ describe('registryManager tests', () => {
 
   // The v8->v9 conversion endpoint had no tests at all. It is the other half of
   // this module's spec-view surface: it decrypts an enterprise spec node-side,
-  // runs the real fromLegacy, and seals the draft back toward the owner — so the
+  // runs the real upgradeDraft, and seals the draft back toward the owner — so the
   // sealed shape and the decrypted shape both matter, and neither is expressible
   // with a literal.
   describe('convertApplicationSpecification (appconvert)', () => {
@@ -1080,7 +1080,7 @@ describe('registryManager tests', () => {
 
       expect(result.complete).to.be.false;
       expect(result.spec.placement.geoAllow).to.deep.equal([]);
-      const named = result.errors.find((e) => e.code === 'region_unresolved');
+      const named = result.errors.find((e) => e.code === flux.CODES.REGION_UNRESOLVED);
       expect(named, JSON.stringify(result.errors)).to.not.equal(undefined);
       expect(named.message).to.include("'acXX_FR'");
     });
@@ -1091,7 +1091,7 @@ describe('registryManager tests', () => {
       const result = await registryManager.convertApplicationSpecification('banme');
 
       expect(result.complete).to.be.false;
-      const named = result.errors.find((e) => e.code === 'region_unresolved');
+      const named = result.errors.find((e) => e.code === flux.CODES.REGION_UNRESOLVED);
       expect(named, JSON.stringify(result.errors)).to.not.equal(undefined);
       expect(named.path).to.deep.equal(['placement', 'geoDeny']);
       expect(named.message).to.include('ban');
@@ -1128,15 +1128,16 @@ describe('registryManager tests', () => {
       expect(result).to.not.have.property('spec'); // cleartext never crosses the wire
       sinon.assert.calledOnce(decryptV8);
       // The stubbed transport provider is told which app and owner to seal for,
-      // and both come out of the converted blob — which fromLegacy built from the
+      // and both come out of the draft — which upgradeDraft built from the
       // DECRYPTED spec. Sealing toward `undefined` would pass without this.
       sinon.assert.calledOnceWithExactly(create, 'convertme', owner.address);
       const sealArg = seal.firstCall.args[0];
       expect(sealArg.recipient.publicKey).to.deep.equal(viewerKey);
       expect(sealArg.aad).to.exist;
-      const draft = JSON.parse(sealArg.plaintext.toString('utf8'));
+      const { spec: draft, errors } = JSON.parse(Buffer.from(sealArg.plaintext).toString('utf8'));
       expect(draft.version).to.equal(9);
       expect(draft.components.web.image, 'the sealed blob really was opened').to.equal('nginx:latest');
+      expect(errors).to.deep.equal([]);
     });
 
     it('refuses to convert an encrypted app with no transport pubkey to seal toward', async () => {
@@ -1177,7 +1178,7 @@ describe('registryManager tests', () => {
       );
 
       expect(result.encrypted, 'an inlined secret forces the sealed channel').to.be.true;
-      const draft = JSON.parse(seal.firstCall.args[0].plaintext.toString('utf8'));
+      const { spec: draft } = JSON.parse(Buffer.from(seal.firstCall.args[0].plaintext).toString('utf8'));
       expect(draft.components.web.env).to.deep.equal({ SECRET: 'hunter2' });
       expect(draft.components.web.env).to.not.have.property('F_S_ENV');
     });

@@ -11,11 +11,11 @@ const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const verificationHelper = require('../verificationHelper');
 const daemonStatus = require('../daemonService/daemonStatus');
-const { getSpec, getSpecBackend } = require('../utils/specLibs');
+const { getSpec } = require('../utils/specLibs');
 const specCutover = require('../utils/specCutover');
 const legacyTransportProvider = require('../providers/FluxOSLegacyTransportProvider');
 const transportCryptoProvider = require('../providers/FluxOSTransportProvider');
-const { resolveStorageRefs } = require('../utils/fluxStorageRefs');
+const { obtainPayloadFromStorage } = require('../utils/fluxStorageRefs');
 const {
   globalAppsInstallingLocations,
   globalAppsInstallingBroadcasts,
@@ -646,19 +646,13 @@ async function getApplicationSpecification(appname, opts = {}) {
   const decrypted = await registered.spec.decrypt(backendProvider);
 
   if (recipient) {
-    // v9 transport layer: seal the canonical cleartext toward the viewer key the
-    // owner signed, so the owner's frontend gets the full form to re-sign.
-    const { buildSpecViewAad, SPEC_VIEW_INFO, canonicalJson } = await getSpec();
-    const viewSpec = decrypted;
+    // v9 transport layer: the canonical cleartext sealed toward the viewer key
+    // the owner signed, so the owner's frontend gets the full form to re-sign.
     const timestamp = Date.now();
-    const aad = buildSpecViewAad({ appName: viewSpec.name, timestamp });
-    const provider = await transportCryptoProvider.create(viewSpec.name, viewSpec.owner);
-    const plaintext = Buffer.from(canonicalJson(viewSpec.toCanonical()), 'utf8');
-    const envelope = await provider.seal({
-      plaintext, aad, recipient, info: SPEC_VIEW_INFO,
-    });
+    const provider = await transportCryptoProvider.create(decrypted.name, decrypted.owner);
+    const envelope = await decrypted.sealForView({ provider, recipient, timestamp });
     return {
-      encrypted: true, appName: viewSpec.name, timestamp, transportEncrypted: envelope.toJSON(),
+      encrypted: true, appName: decrypted.name, timestamp, transportEncrypted: envelope.toJSON(),
     };
   }
 
@@ -733,44 +727,24 @@ async function getApplicationSpecificationAPI(req, res) {
 }
 
 /**
- * Convert an existing on-chain v1-v8 app spec to v9.
+ * Upgrade an existing on-chain v1-v8 app spec to a v9 draft for its owner.
  *
- * Loads the stored spec (decrypting an enterprise spec node-side first),
- * resolves and inlines any F_S_ENV/F_S_CMD storage references — fail-hard, v9
- * has no storage-ref convention — then runs fromLegacy. When the source was
- * encrypted, or any sensitive value was inlined, the v9 spec is sealed toward
- * the frontend's ephemeral pubkey (view direction) so cleartext never crosses
- * the wire. The owner reviews the returned draft (completing any missing
- * required fields), signs it, then submits it as a normal v9 update (priced as
+ * An encrypted app is decrypted node-side first, and its draft stays private.
+ * So does a draft whose Flux Storage references were inlined: those values were
+ * kept off chain because they are secret. A private draft leaves sealed toward
+ * the viewer key the owner signed, its warnings and errors inside the seal. The
+ * owner completes the draft, signs it, and submits it as a v9 update (priced as
  * a free version-only upgrade).
  *
  * @param {string} appname
- * @param {{ recipientPubkeyBase64?: string }} opts
- * @returns {Promise<object>} A draft for owner review: cleartext
- *   { encrypted:false, spec, complete, errors, warnings } or sealed
- *   { encrypted:true, appName, timestamp, transportEncrypted, complete, errors, warnings }.
- *   complete:false means the draft is missing required fields, or carries a
- *   region name this node's location table cannot resolve (both listed in errors)
- *   that the owner must fill before it can be signed.
+ * @param {{ recipientPubkeyBase64?: string, viewerSignature?: string, viewerTimestamp?: string }} opts
+ *   - the viewer key, with the owner's signature over it (see authorizedViewer);
+ *   required when the draft is private
+ * @returns {Promise<object>} cleartext { encrypted: false, spec, complete, errors, warnings },
+ *   or sealed { encrypted: true, appName, timestamp, transportEncrypted, complete }, whose
+ *   envelope opens to { spec, warnings, errors }. complete:false means errors lists what
+ *   the owner must fill before the draft can be signed.
  */
-/**
- * What the owner is told about a geolocation entry the draft cannot carry.
- * @param {{entry: string, list: 'allow'|'deny', country?: string, region?: string}} u
- * @returns {string}
- */
-function regionUnresolvedMessage(u) {
-  if (u.list === 'deny') {
-    return `The ban on region '${u.region}' in ${u.country} could not be resolved to an ISO 3166-2 code.`
-      + ' Restate the ban before signing — it is not carried into this draft, which is placeable there until you do.';
-  }
-  if (u.region !== undefined) {
-    return `Region '${u.region}' in ${u.country} could not be resolved to an ISO 3166-2 code.`
-      + ' Choose the region again before signing — it is not carried into this draft.';
-  }
-  return `Geolocation entry '${u.entry}' names no place this draft can carry.`
-    + ' Choose the location again before signing — it is not carried into this draft.';
-}
-
 async function convertApplicationSpecification(appname, opts = {}) {
   const { recipientPubkeyBase64 } = opts;
 
@@ -782,70 +756,31 @@ async function convertApplicationSpecification(appname, opts = {}) {
     throw new Error(`Application ${appname} is already on spec version 9`);
   }
 
-  // The node can decrypt a stored enterprise spec via its own provider; the
-  // cleartext legacy instance is what fromLegacy converts.
-  let legacySpec = registered.spec;
-  if (registered.isEncrypted) {
-    const backendProvider = await registered.spec.createProvider();
-    const decrypted = await registered.spec.decrypt(backendProvider);
-    legacySpec = decrypted;
-  }
+  // The node can decrypt a stored enterprise spec via its own provider.
+  const spec = registered.isEncrypted
+    ? await registered.spec.decrypt(await registered.spec.createProvider())
+    : registered.spec;
 
-  const { fromLegacy } = await getSpecBackend();
-  const { FluxAppSpecV9, buildSpecViewAad, SPEC_VIEW_INFO } = await getSpec();
+  const draft = await spec.upgradeDraft({
+    confirmationHeight: registered.height,
+    resolveStorageRef: (link) => obtainPayloadFromStorage(link, registered.name),
+  });
 
-  const { spec: v9Blob, warnings, unresolvedRegions } = fromLegacy(legacySpec, { confirmationHeight: registered.height });
-
-  const inlinedSensitive = await resolveStorageRefs(v9Blob.components, registered.name);
-
-  // Convert is a draft generator, so validate without throwing: a fixable gap
-  // (e.g. a contacts-less v8 app) returns a fillable draft with inline errors
-  // for the owner to complete, not a hard failure. Strict fromSubmission stays
-  // at sign-time submission, which requires a valid canonical form anyway.
-  const { valid, errors } = FluxAppSpecV9.validateSchema(v9Blob);
-
-  // A geolocation entry the converter cannot read is a gap of exactly the kind
-  // this endpoint exists to hand back: the owner is the only party who knows
-  // which place they meant, and they can pick it here. It is not in the draft
-  // — converting it to the whole country would be the draft agreeing with a
-  // warning about itself, on the document they are about to sign — so it is an
-  // error that blocks completion rather than a warning beside a value. The
-  // schema cannot catch it: the entry is simply absent, and a placement with
-  // one fewer entry is perfectly valid. A dropped ban is named as a ban, on
-  // the deny list: until the owner restates it, the draft is placeable where
-  // the app was never allowed to run.
-  const regionErrors = (unresolvedRegions || []).map((u) => ({
-    path: ['placement', u.list === 'deny' ? 'geoDeny' : 'geoAllow'],
-    code: 'region_unresolved',
-    message: regionUnresolvedMessage(u),
-    value: u.region ?? u.entry,
-  }));
-  const allErrors = [...errors, ...regionErrors];
-  const complete = valid && regionErrors.length === 0;
-  const draft = valid ? FluxAppSpecV9.fromSubmission(v9Blob).toCanonical() : v9Blob;
-  const { name, owner } = v9Blob;
-
-  const mustEncrypt = registered.isEncrypted || inlinedSensitive;
-  if (!mustEncrypt) {
+  if (!draft.isEncrypted) {
     return {
-      encrypted: false, spec: draft, complete, errors: allErrors, warnings,
+      encrypted: false, spec: draft.document, complete: draft.complete, errors: draft.errors, warnings: draft.warnings,
     };
   }
 
   if (!recipientPubkeyBase64) {
     throw new Error('Header flux-transport-pubkey is mandatory to convert an encrypted application.');
   }
-  const recipient = await authorizedViewer(name, owner, opts);
+  const recipient = await authorizedViewer(draft.name, draft.owner, opts);
   const timestamp = Date.now();
-  const aad = buildSpecViewAad({ appName: name, timestamp });
-  const provider = await transportCryptoProvider.create(name, owner);
-  const plaintext = Buffer.from(JSON.stringify(draft), 'utf8');
-  const envelope = await provider.seal({
-    plaintext, aad, recipient, info: SPEC_VIEW_INFO,
-  });
-  const transportEncrypted = envelope.toJSON();
+  const provider = await transportCryptoProvider.create(draft.name, draft.owner);
+  const envelope = await draft.sealForView({ provider, recipient, timestamp });
   return {
-    encrypted: true, appName: name, timestamp, transportEncrypted, complete, errors: allErrors, warnings,
+    encrypted: true, appName: draft.name, timestamp, transportEncrypted: envelope.toJSON(), complete: draft.complete,
   };
 }
 
