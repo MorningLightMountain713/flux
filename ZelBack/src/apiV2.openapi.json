@@ -1191,7 +1191,7 @@
             }
           },
           "422": {
-            "description": "The timestamp is one a submission would refuse, the specification cannot be read, or the message is refused by name in `reason`: `NotQuotable` (a v1-v8 specification), `StampedEarly` (an update signed at or before the message it replaces), `UpdateRefused` (a free-shaped update with the free allowance spent).",
+            "description": "The timestamp is one a submission would refuse, the specification cannot be read, or the message is refused by name in `reason`: `NotQuotable` (a v1-v8 specification), `StampedEarly` (an update signed at or before the message it replaces), `UpdateRefused` (a free-shaped update with the free allowance spent), `PricingNotActive` (no price message is in force).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1202,6 +1202,112 @@
           },
           "503": {
             "description": "The node's pricing state, registry or chain state is not ready.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/apps/prices": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "operationId": "pricesInForce",
+        "summary": "The prices in force for a v9 app message",
+        "description": "The rates and feature fees, the FLUX/USD rate and the price modifiers in force for a message signed at `timestamp`: exactly what a quote at that timestamp prices with. flux-spec-policy's `PricingEngine.from` builds the network's pricing engine from them.",
+        "parameters": [
+          {
+            "name": "timestamp",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "The message's signed time, in ms; now when absent. At most an hour old and five minutes ahead."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The prices in force.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "pricedAt",
+                        "prices",
+                        "fluxUsdPriceE4",
+                        "modifiers"
+                      ],
+                      "properties": {
+                        "pricedAt": {
+                          "type": "object",
+                          "properties": {
+                            "time": {
+                              "type": "integer"
+                            },
+                            "height": {
+                              "type": "integer"
+                            }
+                          },
+                          "description": "The moment priced: the signed time in seconds and the next block's height."
+                        },
+                        "prices": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "integer"
+                          },
+                          "description": "The price message's values in force: commodity rates in microdollars, feature fees, minimums and the standard period."
+                        },
+                        "fluxUsdPriceE4": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "description": "FLUX/USD × 10000; null with no oracle rate in force."
+                        },
+                        "modifiers": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "integer"
+                          },
+                          "description": "The price-modifier values in force: duration buckets, instance tiers, fiatMarkupBp, updateDiscountBp."
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The timestamp is not an integer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The timestamp is one a submission would refuse, or no price message is in force (`reason`: `PricingNotActive`).",
             "content": {
               "application/json": {
                 "schema": {

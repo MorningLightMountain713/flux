@@ -105,7 +105,7 @@ describe('POST /v2/apps/quotes', () => {
     expect(res.fail.firstCall.args).to.deep.equal(['UNPROCESSABLE', 'ttl: must be 0 or an integer in [86400, 31536000]']);
   });
 
-  for (const reason of ['NotQuotable', 'StampedEarly', 'UpdateRefused']) {
+  for (const reason of ['NotQuotable', 'StampedEarly', 'UpdateRefused', 'PricingNotActive']) {
     it(`reports a ${reason} refusal by name`, async () => {
       const refusal = new Error('refused');
       refusal.name = reason;
