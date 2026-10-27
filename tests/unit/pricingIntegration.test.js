@@ -158,10 +158,10 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     });
 
     it('dispatches encoded PriceModifierMessage to kind=price-modifier', () => {
-      const bytes = PriceModifierMessage.encode({ durationBucket1MinSeconds: 7_776_000, durationBucket1DiscountBp: 300 });
+      const bytes = PriceModifierMessage.encode({ updateDiscountBp: 1000 });
       const result = dispatch(bytes);
       expect(result.kind).to.equal('price-modifier');
-      expect(result.message.fields.durationBucket1MinSeconds).to.equal(7_776_000);
+      expect(result.message.fields.updateDiscountBp).to.equal(1000);
     });
   });
 
@@ -322,7 +322,7 @@ describe('pricing integration — chain messages through PricingEngine', () => {
     it('defaults to 0 when no fiatMarkupBp is in the message', () => {
       const chainHeight = 100;
       const queryHeight = chainHeight + SOFT_FORK_EFFECTIVE_DEPTH;
-      const bytes = PriceModifierMessage.encode({ durationBucket1DiscountBp: 300 });
+      const bytes = PriceModifierMessage.encode({ updateDiscountBp: 300 });
       const result = dispatch(bytes);
       const history = new PriceModifierHistory();
       history.add(result.message, chainHeight, 0, 1_700_000_000);
