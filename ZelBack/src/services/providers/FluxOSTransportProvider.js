@@ -15,9 +15,9 @@
  *   never cross the channel. The appName/owner the transport key derives from
  *   are construction-time state.
  *
- * Usage (appConvert seals the converted spec toward the viewer key the owner signed):
+ * Usage (a private spec or draft sealed toward the viewer key the owner signed):
  *   const provider = await create(appName, owner);
- *   const envelope = await provider.seal({ plaintext, aad, recipient, info }); // an OwnerAuthorizedViewerKey
+ *   const envelope = await opened.sealForView({ provider, recipient, timestamp }); // an OwnerAuthorizedViewerKey
  *   const wire = envelope.toJSON();
  */
 
