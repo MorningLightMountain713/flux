@@ -39,6 +39,11 @@ module.exports = [
   {
     method: 'post', path: '/apps/quotes', needs: ['localDbPrepared', 'appRegistryConsistent', 'explorerSynced', 'chainStateConsistent'], handler: 'apiV2/apps#quote',
   },
+  // The prices in force for a message signed at a time, which its quote prices
+  // with: it reads the price histories.
+  {
+    method: 'get', path: '/apps/prices', needs: ['explorerSynced', 'chainStateConsistent'], handler: 'apiV2/apps#prices',
+  },
   // A message checked as its submission will check it: it reads the registry,
   // the chain and the prices the v1 verification does.
   {

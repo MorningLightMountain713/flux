@@ -4,7 +4,7 @@ const daemonStatus = require('../daemonService/daemonStatus');
 const appRecords = require('../appDatabase/appRecords');
 const appHistory = require('../appDecisions/appHistory');
 const { getSpecPolicy, getSpecBackend } = require('../utils/specLibs');
-const { buildPricingEngine } = require('./buildPricingEngine');
+const { buildPricingEngine, pricesInForceAt } = require('./buildPricingEngine');
 const priceOracleState = require('./priceOracleState');
 const entitlementsState = require('../entitlementsState');
 
@@ -39,6 +39,37 @@ async function quoteMoment(timestamp) {
 function pricesInForce(priceHistory, at) {
   const resolved = priceHistory.resolveAt(at);
   return Boolean(resolved) && Object.keys(resolved).length > 0;
+}
+
+/**
+ * Refuse a moment no PriceMessage is in force at: every rate would read 0 and
+ * the engine would price any v9 term at nothing.
+ * @param {{time: number, height: number}} at
+ * @throws {Error} `PricingNotActive`
+ */
+function assertPricingActive(at) {
+  const priceHistory = priceOracleState.getPriceMessageHistory();
+  if (!priceHistory || !pricesInForce(priceHistory, at)) {
+    const error = new Error('On-chain pricing is not yet active (no PriceMessage in force).');
+    error.name = 'PricingNotActive';
+    throw error;
+  }
+}
+
+/**
+ * The prices in force for a message signed at `timestamp`: the moment its
+ * quote is priced at (`pricedAt`), and the rates, FLUX/USD rate and price
+ * modifiers there. flux-spec-policy's PricingEngine.from builds from them the
+ * engine the quote prices with.
+ * @param {number} timestamp - ms
+ * @returns {Promise<{pricedAt: {time: number, height: number}, prices: object,
+ *   fluxUsdPriceE4: ?number, modifiers: object}>}
+ * @throws {Error} `PricingNotActive`; and while the daemon is not synced
+ */
+async function pricesInForceFor(timestamp) {
+  const at = await quoteMoment(timestamp);
+  assertPricingActive(at);
+  return { pricedAt: at, ...(await pricesInForceAt(at)) };
 }
 
 /**
@@ -165,14 +196,11 @@ async function quoteUpdate(spec, existing, { at, timestamp, extend }, termCost) 
  * @returns {Promise<{fee: bigint, at: {time: number, height: number}}>} the fee
  *   and the moment it was priced at
  * @throws {Error} `UpdateRefused` when the update is free-shaped with the free
- *   allowance spent; `StampedEarly` (see quoteUpdate)
+ *   allowance spent; `StampedEarly` (see quoteUpdate); `PricingNotActive`
  */
 async function messageFee(spec, { termCost }, { timestamp, extend }) {
   const at = await quoteMoment(timestamp);
-  const priceHistory = priceOracleState.getPriceMessageHistory();
-  if (!priceHistory || !pricesInForce(priceHistory, at)) {
-    throw new Error('On-chain pricing is not yet active (no PriceMessage in force).');
-  }
+  assertPricingActive(at);
 
   const existing = await appRecords.registry().byName(spec.name);
   if (existing) {
@@ -358,6 +386,7 @@ module.exports = {
   onChainDisplayPrice,
   fiatAndFluxDisplayPrice,
   pricedAt,
+  pricesInForceFor,
   registrationFee,
   termCost,
   updateFee,

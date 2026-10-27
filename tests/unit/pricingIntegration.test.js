@@ -12,6 +12,8 @@ const { buildPricingEngine } = require('../../ZelBack/src/services/pricing/build
 const pricingRegime = require('../../ZelBack/src/services/pricing/pricingRegime');
 const v9PricingRegime = require('../../ZelBack/src/services/pricing/v9PricingRegime');
 const { nodeChain } = require('../../ZelBack/src/services/utils/nodeChain');
+const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
+const appRecords = require('../../ZelBack/src/services/appDatabase/appRecords');
 
 describe('pricing integration — chain messages through PricingEngine', () => {
   let PriceMessage, RateMessage, PriceModifierMessage, dispatch;
@@ -657,6 +659,44 @@ describe('pricing integration — chain messages through PricingEngine', () => {
   // time, so whichever block in the payment window confirms the payment charges
   // the same — even when a new FLUX/USD rate and a new price schedule are mined
   // inside that window.
+  describe('the prices in force (GET /v2/apps/prices) reprice a quote exactly', () => {
+    function nodeAt(h) {
+      stubHistories(h);
+      sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: h.at.height - 1 });
+      sinon.stub(appRecords, 'registry').returns({ byName: async () => null });
+    }
+
+    it('prices a registration with PricingEngine.from on the served values as the quote does', async () => {
+      const h = buildTestHistories();
+      nodeAt(h);
+      const timestamp = h.at.time * 1000;
+      // Fifty instances for a year: an instance tier and a duration bucket apply.
+      const spec = specOf({ ...testSubmission, instances: 50, ttl: 31_536_000 });
+
+      const quote = await pricingRegime.messageQuote(spec, { timestamp, extend: false });
+      const served = JSON.parse(JSON.stringify(await v9PricingRegime.pricesInForceFor(timestamp)));
+
+      expect(served.pricedAt).to.deep.equal(quote.at);
+      const { PricingEngine } = await specLibs.getSpecPolicy();
+      const engine = PricingEngine.from(served);
+      const breakdown = await engine.price(spec, {
+        height: served.pricedAt.height, duration: spec.ttl, isEncrypted: spec.isEncrypted,
+      });
+      expect(breakdown.surcharges.map((e) => e.name), 'the modifiers arrived').to.deep.equal(['instance-tier-3']);
+      expect(breakdown.discounts.map((e) => e.name)).to.deep.equal(['duration-365d']);
+      expect(BigInt(breakdown.total)).to.equal(quote.fee);
+      expect(engine.fiatPriceOf(breakdown.total)).to.equal(quote.usd);
+    });
+
+    it('refuses by name while no price message is in force', async () => {
+      const h = buildTestHistories();
+      nodeAt({ ...h, priceHistory: new PriceMessageHistory() });
+      const refusal = await v9PricingRegime.pricesInForceFor(h.at.time * 1000).catch((error) => error);
+      expect(refusal).to.be.instanceOf(Error);
+      expect(refusal.name).to.equal('PricingNotActive');
+    });
+  });
+
   describe('every block in the payment window charges the fee quoted at the signed time', () => {
     const H0 = 2_000_000;
     const B0 = 1_760_000_000;

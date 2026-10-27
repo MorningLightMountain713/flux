@@ -4,6 +4,7 @@ const appQueryService = require('../appQuery/appQueryService');
 const appHistory = require('../appDecisions/appHistory');
 const appsRepository = require('../appDatabase/appsRepository');
 const pricingRegime = require('../pricing/pricingRegime');
+const v9PricingRegime = require('../pricing/v9PricingRegime');
 const { resolveSpec } = require('../utils/specCutover');
 const transportHelper = require('../utils/transportHelper');
 const { getSpecBackend, validatePrivateSubmission } = require('../utils/specLibs');
@@ -14,7 +15,7 @@ const ingressAttestationService = require('../appMessaging/ingressAttestationSer
 const ingressCapture = require('../utils/ingressCapture');
 
 /** The refusals a quote reports by name, for a client to branch on. */
-const QUOTE_REFUSALS = new Set(['NotQuotable', 'StampedEarly', 'UpdateRefused']);
+const QUOTE_REFUSALS = new Set(['NotQuotable', 'StampedEarly', 'UpdateRefused', 'PricingNotActive']);
 
 /** The message types a verification or a submission takes. */
 const MESSAGE_TYPES = new Set(['fluxappregister', 'fluxappupdate']);
@@ -57,8 +58,9 @@ async function ownerships(req, res) {
  * Refused, before anyone pays: a timestamp a submission would refuse; a message
  * for an app with another waiting in this node's pool for its payment; and by
  * name (`reason`) a v1-v8 spec (`NotQuotable`), an update signed at or before
- * the message it replaces (`StampedEarly`), and a free-shaped update with the
- * free allowance spent (`UpdateRefused`).
+ * the message it replaces (`StampedEarly`), a free-shaped update with the
+ * free allowance spent (`UpdateRefused`), and any message while on-chain
+ * pricing is not active (`PricingNotActive`).
  * @param {import('express').Request} req
  * @param {import('express').Response} res carrying the v2 envelope
  * @returns {Promise<*>}
@@ -109,6 +111,34 @@ async function quote(req, res) {
     });
   } catch (error) {
     if (QUOTE_REFUSALS.has(error.name)) return res.fail('UNPROCESSABLE', error.message, { reason: error.name });
+    throw error;
+  }
+}
+
+/**
+ * GET /v2/apps/prices - the prices in force for a message signed at
+ * `timestamp` (ms, in the query; now when absent): `{ pricedAt, prices,
+ * fluxUsdPriceE4, modifiers }`, what a quote at that timestamp prices with.
+ * flux-spec-policy's PricingEngine.from builds the network's engine from them.
+ *
+ * Refused: a timestamp a submission would refuse; and while on-chain pricing is
+ * not active (`reason: PricingNotActive`).
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res carrying the v2 envelope
+ * @returns {Promise<*>}
+ */
+async function prices(req, res) {
+  const timestamp = req.query.timestamp === undefined ? Date.now() : Number(req.query.timestamp);
+  if (!Number.isInteger(timestamp)) return res.fail('BAD_REQUEST', 'timestamp is a signed time in ms');
+  try {
+    assertSubmittableTimestamp(timestamp);
+  } catch (error) {
+    return res.fail('UNPROCESSABLE', error.message);
+  }
+  try {
+    return res.ok(await v9PricingRegime.pricesInForceFor(timestamp));
+  } catch (error) {
+    if (error.name === 'PricingNotActive') return res.fail('UNPROCESSABLE', error.message, { reason: error.name });
     throw error;
   }
 }
@@ -180,6 +210,7 @@ async function submission(req, res) {
 module.exports = {
   activeStandby,
   ownerships,
+  prices,
   quote,
   submission,
   verification,
