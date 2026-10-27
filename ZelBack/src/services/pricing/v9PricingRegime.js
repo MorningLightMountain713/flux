@@ -57,20 +57,6 @@ async function pricedAt(at) {
 }
 
 /**
- * The oracle's FLUX/USD rate in force at a moment, or null when none is
- * (pre-activation or oracle down).
- * @param {{time: number, height: number}} at
- * @returns {number|null} USD per FLUX, or null.
- */
-function getOracleFluxUsdRate(at) {
-  const rateHistory = priceOracleState.getRateMessageHistory();
-  if (!rateHistory) return null;
-  const rateMsg = rateHistory.resolveAt(at);
-  if (!rateMsg || !rateMsg.fluxUsdPriceE4) return null;
-  return rateMsg.fluxUsdPriceE4 / 10_000;
-}
-
-/**
  * The fiat markup in basis points in force at a moment. Throws when there is no
  * modifier history, matching the fail-loud posture of onChainDisplayPrice
  * rather than silently pretending there's no markup. Returns 0 only when no
@@ -110,10 +96,6 @@ function getFiatMarkupBp(at) {
 async function priceAgainstPredecessor(spec, prevSpec, {
   at, prevState, recentEvents, prevTermCost, extend,
 }) {
-  const modifierHistory = priceOracleState.getPriceModifierHistory();
-  const modParams = modifierHistory ? modifierHistory.resolveAt(at) : null;
-  const updateDiscountBp = (modParams && modParams.updateDiscountBp) || 0;
-
   const engine = await buildPricingEngine(at);
   return engine.priceUpdate(prevSpec, spec, {
     height: at.height,
@@ -123,7 +105,6 @@ async function priceAgainstPredecessor(spec, prevSpec, {
     ...prevTermCost,
     remainingSeconds: prevSpec.remainingSecondsAt(prevState, at.time),
     oldTtl: prevSpec.termSeconds(prevState),
-    updateDiscountBp,
     extend,
     // priceUpdate prices the new spec internally, so this is the new spec's bit.
     isEncrypted: spec.isEncrypted,
@@ -230,8 +211,9 @@ async function onChainDisplayPrice(spec, pricing, { timestamp = Date.now(), exte
 /**
  * A message's quote: the fee in satoshis consensus will charge it
  * (`messageFee`), and what a customer paying in dollars is charged — that fee
- * with the fiat markup, rounded up to .49/.99 (`fiatPrice`), at the rates in
- * force at the message's moment. The dollar figure is never checked on chain.
+ * with the fiat markup, rounded up to .49/.99 (`PricingEngine.fiatPriceOf`), at
+ * the rates in force at the message's moment. The dollar figure is never
+ * checked on chain.
  *
  * @param {object} spec - resolved v9 spec
  * @param {{termCost: (spec: object, at: object) => Promise<object>}} pricing
@@ -241,10 +223,8 @@ async function onChainDisplayPrice(spec, pricing, { timestamp = Date.now(), exte
  */
 async function messageQuote(spec, pricing, message) {
   const { fee, at } = await messageFee(spec, pricing, message);
-  const fluxUsdRate = getOracleFluxUsdRate(at);
   const fiatMarkupBp = getFiatMarkupBp(at);
-  const { fiatPrice } = await getSpecPolicy();
-  const usd = fluxUsdRate != null ? fiatPrice((Number(fee) / 1e8) * fluxUsdRate, fiatMarkupBp) : null;
+  const usd = (await buildPricingEngine(at)).fiatPriceOf(fee);
   return {
     fee, usd, fiatMarkupBp, at,
   };
