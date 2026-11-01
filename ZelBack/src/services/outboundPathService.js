@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Whether this node's calls to other Flux nodes reach them.
  *

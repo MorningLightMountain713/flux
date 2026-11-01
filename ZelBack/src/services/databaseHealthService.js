@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Hold this node back from new placements while its database is timing out
  * FluxOS's calls.

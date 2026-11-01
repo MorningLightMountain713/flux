@@ -1,3 +1,5 @@
+'use strict';
+
 const fs = require('node:fs/promises');
 const serviceHelper = require('../serviceHelper');
 const ufwHelper = require('./ufwHelper');

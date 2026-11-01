@@ -1,3 +1,5 @@
+'use strict';
+
 // Removes the installed apps the registry no longer lists, one at a time.
 //
 // The registry is current once a rebuild or the expiry pass has written it. Removing what this node

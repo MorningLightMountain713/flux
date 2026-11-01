@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * How the main thread's global http and https agents resolve a hostname.
  *

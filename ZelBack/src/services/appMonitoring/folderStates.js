@@ -1,3 +1,5 @@
+'use strict';
+
 const globalState = require('../utils/globalState');
 const mountParser = require('../utils/mountParser');
 const dockerService = require('../dockerService');

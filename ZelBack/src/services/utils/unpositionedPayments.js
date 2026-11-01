@@ -1,3 +1,5 @@
+'use strict';
+
 // The payment records the backfill reads: those without a position. A record
 // already marked notOnChain is decided: if its transaction is mined later, the
 // explorer records the payment from that block. Read through the collection's

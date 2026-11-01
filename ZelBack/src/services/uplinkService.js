@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Whether this node reaches the internet through a tunnel to a remote box.
  *

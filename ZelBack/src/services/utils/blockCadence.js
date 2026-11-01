@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * When work paced by the chain is due: a job that runs every `period` blocks runs once for each
  * multiple of `period` the chain passes, on the first block it is asked about at or past that

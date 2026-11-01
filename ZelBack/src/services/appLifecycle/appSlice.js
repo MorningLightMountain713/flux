@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Every app's containers live in their own systemd slice, under flux.slice, so
  * the app's processes are found and killed from its name alone, without docker

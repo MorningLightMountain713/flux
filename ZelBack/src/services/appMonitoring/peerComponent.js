@@ -1,3 +1,5 @@
+'use strict';
+
 const axios = require('axios');
 const log = require('../../lib/log');
 const fluxEventBus = require('../utils/fluxEventBus');

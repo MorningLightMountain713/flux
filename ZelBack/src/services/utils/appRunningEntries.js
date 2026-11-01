@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * The app entries of a version 2 apprunning message that can be stored, and the
  * ones that cannot. An entry is a location row only with a string name and a

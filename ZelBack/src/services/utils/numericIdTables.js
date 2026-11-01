@@ -1,3 +1,5 @@
+'use strict';
+
 // The user and group tables syncthing resolves owners against: every id from 0
 // to 65535 named by its own decimal number, and id 0 named root as well.
 //

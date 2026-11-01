@@ -1,3 +1,5 @@
+'use strict';
+
 const crypto = require('crypto');
 const log = require('../../lib/log');
 const syncthingService = require('../syncthingService');

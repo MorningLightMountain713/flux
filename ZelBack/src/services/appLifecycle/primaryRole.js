@@ -1,3 +1,5 @@
+'use strict';
+
 const log = require('../../lib/log');
 const fluxEventBus = require('../utils/fluxEventBus');
 const appReconciler = require('../appMonitoring/appReconciler');

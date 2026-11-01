@@ -1,3 +1,5 @@
+'use strict';
+
 // Which of an app's permanent messages is in force: the one rule shared by block-by-block
 // promotion (registryManager), the expiry pass and the rebuild of globalAppsInformation from the
 // message log (dbHelper). They must agree, or two nodes holding the same messages end up with a

@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Readiness notification to a supervising systemd.
  *

@@ -1,3 +1,5 @@
+'use strict';
+
 const dgram = require('node:dgram');
 const { once } = require('node:events');
 

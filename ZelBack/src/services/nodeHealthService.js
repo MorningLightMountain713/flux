@@ -1,3 +1,5 @@
+'use strict';
+
 const os = require('os');
 const log = require('../lib/log');
 const messageHelper = require('./messageHelper');

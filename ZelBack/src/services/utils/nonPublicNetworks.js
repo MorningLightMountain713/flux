@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Address ranges that are not the public internet: private networks, carrier-grade
  * NAT, loopback, link-local (a cloud host's metadata service), and the ranges IANA

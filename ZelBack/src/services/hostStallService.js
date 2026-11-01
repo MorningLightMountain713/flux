@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Take a node out of service when a thread of one of its dependencies is held
  * in the kernel for good.

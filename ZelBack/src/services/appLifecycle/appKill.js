@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Kill every process of an app through its cgroups, without docker or the
  * database, and say whether any of them can still run.

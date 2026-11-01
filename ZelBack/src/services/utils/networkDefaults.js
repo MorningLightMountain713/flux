@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * How every thread in the process opens outbound connections.
  *

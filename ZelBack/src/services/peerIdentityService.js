@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * Which Flux node answers when this node dials an address.
  *

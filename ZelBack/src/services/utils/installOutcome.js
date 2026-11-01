@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * What an install attempt did, for a caller that has to decide what to do next.
  *

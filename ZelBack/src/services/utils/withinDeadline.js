@@ -1,3 +1,5 @@
+'use strict';
+
 /** What withinDeadline answers when the deadline passed first. */
 const TIMED_OUT = 'timedOut';
 

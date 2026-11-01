@@ -1,3 +1,5 @@
+'use strict';
+
 // The changes of primary role in progress on this node, per component. Kept apart
 // from primaryRole, which carries a change out, so the modules that answer "does
 // this node hold this component?" read it without depending on the reconciler.

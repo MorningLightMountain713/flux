@@ -1,3 +1,5 @@
+'use strict';
+
 // Whose turn it is to hand an app back. Turns are cut from block time, and a
 // turn belongs to the holder with the lowest hash of the turn number and its
 // signing key: inputs every node reads the same and no holder can move.

@@ -1,3 +1,5 @@
+'use strict';
+
 const { EventEmitter } = require('events');
 
 // Told each time a move is applied to the location table: `from`, the address a

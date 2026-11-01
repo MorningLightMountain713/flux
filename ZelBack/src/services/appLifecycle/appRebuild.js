@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * A hard redeploy: an app removed from this node, data and all, and installed again
  * at a specification, the whole app at once. The one way an app is rebuilt from

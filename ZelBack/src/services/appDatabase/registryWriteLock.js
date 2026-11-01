@@ -1,3 +1,5 @@
+'use strict';
+
 // The one lock every write to the global application registry runs under.
 //
 // The registry (globalAppsInformation) is written by promotion, by expiry and by
