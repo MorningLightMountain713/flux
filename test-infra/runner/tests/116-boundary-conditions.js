@@ -248,7 +248,7 @@ describe('Boundary: clean shutdown beyond SIGTERM_EXPIRY', function () {
       configOverrides: PRODUCTION_EXPIRIES,
       nodes: 1,
       tickerAutostart: false,
-      bootContext: { downtimeMs: 500000, machineBootId: 'old-boot-id', shutdownReason: 'sigterm' },
+      bootContext: { downtimeMs: 600000, machineBootId: 'old-boot-id', shutdownReason: 'sigterm' },
     });
   });
 
