@@ -296,6 +296,41 @@ describe('quorumGrant mastershipGrantGate', () => {
       expect(reconcilerQueue.enqueueComponent.calledWith(IDENTIFIER)).to.equal(true);
     });
 
+    it('an acquisition that replaced another holder says which, once', async () => {
+      dockerService.dockerContainerInspect.resolves({ State: { Running: true } });
+      const REPLACED = `${'7'.repeat(64)}:0`;
+      grantClient.acquire.resolves({ granted: true, holder: { epoch: 2 }, deposed: REPLACED });
+      const gate = windowGate({ height: ACTIVATE_AT });
+      const listener = sinon.stub();
+      gate.onMasterReplaced(listener);
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise(setImmediate);
+      sinon.assert.calledOnceWithExactly(listener, 'myapp', REPLACED);
+    });
+
+    it('an acquisition that replaced nobody says nothing', async () => {
+      dockerService.dockerContainerInspect.resolves({ State: { Running: true } });
+      grantClient.acquire.resolves({ granted: true, holder: { epoch: 1 } });
+      const gate = windowGate({ height: ACTIVATE_AT });
+      const listener = sinon.stub();
+      gate.onMasterReplaced(listener);
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise(setImmediate);
+      sinon.assert.notCalled(listener);
+    });
+
+    it('a listener that throws does not keep the replacement from the others', async () => {
+      dockerService.dockerContainerInspect.resolves({ State: { Running: true } });
+      grantClient.acquire.resolves({ granted: true, holder: { epoch: 2 }, deposed: `${'7'.repeat(64)}:0` });
+      const gate = windowGate({ height: ACTIVATE_AT });
+      const later = sinon.stub();
+      gate.onMasterReplaced(() => { throw new Error('boom'); });
+      gate.onMasterReplaced(later);
+      await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
+      await new Promise(setImmediate);
+      sinon.assert.calledOnce(later);
+    });
+
     it('the decider seams answer nothing inside the window and still kick the pursuit', async () => {
       // masterIntent is what the activeStandby coordinator asks every
       // interval, so it is the periodic kick a running node gets inside the
@@ -1020,14 +1055,6 @@ describe('quorumGrant mastershipGrantGate', () => {
       messageStore.getMasterleaseRecord.resolves({ data: { grantee: `${'9'.repeat(64)}:0` }, verified: true });
       const intent = await mastershipGrantGate.masterIntent(IDENTIFIER, activeStandbyComp());
       expect(intent).to.deep.equal({ ip: null, fdmOk: true });
-    });
-  });
-
-  describe('the self-demotion note', () => {
-    it('records and answers the cooperative fence attestation', () => {
-      expect(mastershipGrantGate.folderDemotedAt('myapp')).to.equal(null);
-      mastershipGrantGate.noteFolderDemoted('myapp');
-      expect(mastershipGrantGate.folderDemotedAt('myapp')).to.be.a('number');
     });
   });
 

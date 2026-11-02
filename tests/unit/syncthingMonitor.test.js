@@ -179,7 +179,11 @@ const ignorePolicyMock = {
   ignoreLinesFor: sinon.stub().callsFake(derivedIgnoreLines),
 };
 
+// The peer fence answers no fence; what this file checks is what the pass asks it.
+const peerFenceMock = { fenceFor: sinon.stub().returns(null) };
+
 const syncthingMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/syncthingMonitor', {
+  './syncthingPeerFence': peerFenceMock,
   './peerFolderLiveness': { createPeerFolderLiveness: () => livenessMock },
   '../serviceHelper': serviceHelperMock,
   '../dockerService': dockerServiceMock,
@@ -1311,6 +1315,25 @@ describe('syncthingMonitor tests', () => {
       } finally {
         globalStateModule.folderHoldings = saved;
       }
+    });
+
+    // A replaced master may hold the app under either name: a pre-v9 app's folder
+    // id is not its identifier.
+    it('asks the peer fence about every name the app\'s activeStandby components go by', async () => {
+      const preV9 = await deploymentFor('testapp', 'web', { persistentStorage: ACTIVE_STANDBY_STORAGE }, 'ab12cd34ef56', 9, {
+        web: { syncFolderId: 'fluxweb_testapp', aliases: [] },
+      });
+      const comp = preV9.getComponent('web');
+      expect(comp.syncFolderId, 'the fixture\'s folder id differs from its identifier').to.not.equal(comp.identifier);
+      peerFenceMock.fenceFor.resetHistory();
+      syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      deploymentProviderMock.listInstalledDeployments.resolves([preV9]);
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
+
+      sinon.assert.calledWith(peerFenceMock.fenceFor, 'ab12cd34ef56', sinon.match.array.deepEquals([comp.identifier, 'fluxweb_testapp']));
     });
 
     it('drives the folder state machine from the real component, not from an asserted flag', async () => {

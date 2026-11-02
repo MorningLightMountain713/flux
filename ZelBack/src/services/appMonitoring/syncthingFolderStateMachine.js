@@ -1311,14 +1311,6 @@ async function handleReceiveOnlyTransition(params) {
   cache.leaderStreak = electedLeader && connected ? (cache.leaderStreak || 0) + 1 : 0;
   const isLeader = grantLeader ?? (electedLeader && cache.leaderStreak >= LEADER_CONFIRM_COUNT);
 
-  // A grant-plane standby on this path holds a receiveonly folder by
-  // construction — that IS the demoted state, so attest it: a master fencing
-  // this node re-admits its device on exactly this word, including after a
-  // reboot that landed the folder already-receiveonly (nothing to revert).
-  if (grantLeader === false) {
-    mastershipGrantGate.noteFolderDemoted(appIdentity);
-  }
-
   // RESIDUAL LIMITATION (legacy election only - the grant path above is the
   // consensus-grounded redesign this note called for, and closes it where the
   // grant plane is open): a confirmed leader is the cold-start seed and flips
@@ -1722,7 +1714,6 @@ async function manageFolderSyncState(params) {
       } catch (error) {
         log.warn(`manageFolderSyncState - ${appId} revert after demotion failed, local changes stand: ${error.message}`);
       }
-      mastershipGrantGate.noteFolderDemoted(appIdentity);
       const cache = { numberOfExecutions: 0, grantDemoted: true, demotedAt: Date.now() };
       await appCaches.setSyncedMark(receiveOnlySyncthingAppsCache, appId, cache);
       return { syncthingFolder, cache, skipUpdate: false };

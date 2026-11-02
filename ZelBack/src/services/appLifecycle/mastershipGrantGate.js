@@ -1,7 +1,6 @@
 'use strict';
 
 const config = require('config');
-const serviceHelper = require('../serviceHelper');
 const daemonStatus = require('../daemonService/daemonStatus');
 const dockerService = require('../dockerService');
 const nodeConfirmationService = require('../nodeConfirmationService');
@@ -10,7 +9,6 @@ const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const messageStore = require('../appMessaging/messageStore');
 const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
 const fluxEventBus = require('../utils/fluxEventBus');
-const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const { nowMs } = require('../utils/monotonicClock');
 const { quorumGrantActivationHeight } = require('../utils/nodeChain');
 const grantClient = require('../quorumGrant/grantClient');
@@ -438,7 +436,7 @@ async function acquireUnlessSettled(identifier, identity, key) {
     if (outcome.granted) {
       log.info(`mastershipGrantGate - ${identifier} holds ${key} (epoch ${outcome.holder.epoch}) `
         + `after ${nowMs() - acquireStarted}ms`);
-      if (outcome.deposed) raiseFence(identity, outcome.deposed);
+      if (outcome.deposed) announceReplaced(identity, outcome.deposed);
       reconcilerQueue.enqueueComponent(identifier);
     } else {
       // A refusal names itself four different ways (reason, a live incumbent, a
@@ -622,94 +620,27 @@ async function masterIntent(identifier, comp) {
   }
 }
 
-// app -> monotonic ms of the last cooperative self-demotion (folder set
-// receiveonly + local changes reverted). The deposed node's own attestation
-// that its data can no longer win — what a fencing master consults before
-// re-adding the device.
-const folderDemotions = new Map();
-
-/** The syncthing state machine reports its cooperative self-fence here. */
-function noteFolderDemoted(identity) {
-  folderDemotions.set(identity, nowMs());
-}
-
-/** Monotonic ms of the app's last self-demotion, or null. */
-function folderDemotedAt(identity) {
-  return folderDemotions.get(identity) ?? null;
-}
-
-// The peer fence (the wedged-deposed case): app -> {outpoint, host, since}.
-// Declarative — the syncthing monitor consults fenceFor() every pass and
-// keeps the folder's device list and the device's autoAcceptFolders in
-// agreement with it, so the fence cannot be forgotten by a missed pass or
-// silently reversed by syncthing's auto-accept (the trap the lease design
-// found in the source). Lifting is event-driven and comes from the one
-// party that knows: the deposed node's own witness attestation that it has
-// demoted and reverted. A node too dead to answer stays fenced.
-const fences = new Map();
-
-// app -> monotonic ms of the last lift poll, so a standing fence costs one
-// ask per interval, not one per monitor pass
-const liftPolls = new Map();
+// Listeners told when a grant this node acquired replaced another holder.
+const masterReplacedListeners = [];
 
 /**
- * Raise the fence against a superseded grantee. Resolved to a host now —
- * the fence outlives the deposed node's list entry, and a fence that could
- * no longer name its target would lift by accident.
+ * Registers a listener for this node's grant replacing another holder of an
+ * app's mastership. Called with the app's identity and the replaced holder's
+ * `txhash:outidx`, once per acquisition that replaced one.
+ * @param {function(string, string): void} listener
  */
-function raiseFence(identity, deposedOutpoint) {
-  const membership = networkStateService.membershipAt(networkStateService.membershipFingerprint()) ?? [];
-  const node = membership.find((entry) => `${entry.txhash}:${entry.outidx}` === deposedOutpoint);
-  if (!node) {
-    log.warn(`mastershipGrantGate - deposed ${deposedOutpoint} of ${identity} is not listed; nothing to fence`);
-    return;
-  }
-  fences.set(identity, {
-    outpoint: deposedOutpoint, host: extractIp(node.ip), address: node.ip, since: nowMs(),
-  });
-  log.warn(`mastershipGrantGate - fencing ${extractIp(node.ip)} out of ${identity}'s folder until it attests demotion`);
-  fluxEventBus.publish('quorumGrant:fenceRaised', {
-    app: identity, deposed: deposedOutpoint, host: extractIp(node.ip),
-  });
+function onMasterReplaced(listener) {
+  masterReplacedListeners.push(listener);
 }
 
-function liftFence(identity, reason) {
-  if (fences.delete(identity)) {
-    log.info(`mastershipGrantGate - fence on ${identity} lifted: ${reason}`);
-    // the lift can only happen through the deposed node's own attestation
-    // (or a fresh grant superseding the fence) — publishing it is what lets
-    // the harness assert the raise→attest→lift cycle end to end. publish()
-    // is a no-op outside the harness.
-    fluxEventBus.publish('quorumGrant:fenceLifted', { app: identity, reason });
-  }
-}
-
-/**
- * The standing fence for an app, or null. Consulting it also advances the
- * lift poll: while a fence stands, the deposed node's witness endpoint is
- * asked (throttled) whether it has demoted and reverted, and its own
- * attestation is what re-admits it.
- */
-function fenceFor(identity) {
-  const fence = fences.get(identity) ?? null;
-  if (fence) pollFenceLift(identity, fence);
-  return fence;
-}
-
-async function pollFenceLift(identity, fence) {
-  const last = liftPolls.get(identity) ?? 0;
-  if (nowMs() - last < pursuitIntervalMs()) return;
-  liftPolls.set(identity, nowMs());
-  try {
-    const url = `http://${extractIp(fence.address)}:${extractPort(fence.address)}/flux/quorumgrant/witness`;
-    const response = await serviceHelper.axiosPost(url, { key: keyFor(identity) }, { timeout: 5000 });
-    const answer = response?.data?.data;
-    if (answer && answer.folderDemotedAt !== null && answer.folderDemotedAt !== undefined && !answer.holding) {
-      liftFence(identity, 'the deposed node attests it demoted and reverted');
+function announceReplaced(identity, replacedOutpoint) {
+  masterReplacedListeners.forEach((listener) => {
+    try {
+      listener(identity, replacedOutpoint);
+    } catch (error) {
+      log.warn(`mastershipGrantGate - a listener for ${identity}'s replaced master failed: ${error.message}`);
     }
-  } catch (error) {
-    // silence keeps the fence — exactly right for a node still down
-  }
+  });
 }
 
 /**
@@ -784,9 +715,6 @@ function resetForTests(options = {}) {
   windowRetries.clear();
   receiptWaits.forEach((timer) => clearTimeout(timer));
   receiptWaits.clear();
-  folderDemotions.clear();
-  fences.clear();
-  liftPolls.clear();
 }
 
 /**
@@ -828,11 +756,7 @@ module.exports = {
   blocksStart,
   leaderIsSelf,
   masterIntent,
-  noteFolderDemoted,
-  folderDemotedAt,
-  fenceFor,
-  raiseFence,
-  liftFence,
+  onMasterReplaced,
   onComponentTeardown,
   yieldMastership,
   pursuitWaitMs,

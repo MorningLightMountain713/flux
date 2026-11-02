@@ -98,11 +98,6 @@ async function witness(req, res) {
     }
 
     const answer = await grantClient.witnessAnswer(key);
-    // The self-fence attestation rides the same answer: "my folder for this
-    // app is demoted and reverted, as of my time T" — what a fencing master
-    // waits for before re-admitting this node's device.
-    const identity = key.slice(0, key.indexOf('/'));
-    answer.folderDemotedAt = mastershipGrantGate.folderDemotedAt(identity);
     // when this node's own pursuit of the key may start: a holder past its
     // deadline retries only inside the soonest of these
     answer.pursueInMs = await mastershipGrantGate.pursuitWaitMs(key);

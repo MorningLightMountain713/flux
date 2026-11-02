@@ -35,7 +35,7 @@ const {
   folderNeedsUpdate,
 } = require('./syncthingMonitorHelpers');
 const volumeService = require('../utils/volumeService');
-const mastershipGrantGate = require('../appLifecycle/mastershipGrantGate');
+const syncthingPeerFence = require('./syncthingPeerFence');
 const syncthingIgnorePolicy = require('../appSystem/syncthingIgnorePolicy');
 const { extractIp, socketAddressesMatch } = require('../utils/socketAddressUtils');
 const appReconciler = require('./appReconciler');
@@ -378,6 +378,7 @@ async function reconcileFenceAutoAccept(appName, locations, allDevices, fence) {
 async function processContainerData(params) {
   const {
     deployComp,
+    activeStandbyNames = [],
     identifier,
     installedAppName,
     localSocketAddr,
@@ -422,15 +423,15 @@ async function processContainerData(params) {
   let locations = await appLocation(installedAppName);
   locations = sortAndFilterLocations(locations, localSocketAddr);
 
-  // The peer fence, reconciled declaratively every pass: a deposed master
-  // that has not attested demote-and-revert is kept OFF this folder's device
-  // list, and its device entry's autoAcceptFolders is held false so
-  // syncthing's auto-accept cannot silently re-share the folder when it
-  // announces (the reversal trap the lease design found in the source).
-  // Consulting the fence also advances its lift poll; when the fence drops,
-  // the same reconciliation re-adds the device and restores auto-accept.
+  // The peer fence, reconciled declaratively every pass: a replaced master
+  // that has not shown it holds none of the app's components is kept OFF this
+  // folder's device list, and its device entry's autoAcceptFolders is held
+  // false so syncthing's auto-accept cannot silently re-share the folder when
+  // it announces. Consulting the fence also asks the replaced node again; when
+  // the fence drops, the same reconciliation re-adds the device and restores
+  // auto-accept.
   const fence = deployComp.hasActiveStandbySyncthing()
-    ? mastershipGrantGate.fenceFor(deployComp.identity)
+    ? syncthingPeerFence.fenceFor(deployComp.identity, activeStandbyNames)
     : null;
   await reconcileFenceAutoAccept(installedAppName, locations, allDevices, fence);
 
@@ -1011,6 +1012,11 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
         continue;
       }
 
+      // Every name a peer may hold the app's activeStandby components under.
+      const activeStandbyNames = [...new Set(deployment.componentEntries()
+        .map(([, comp]) => comp)
+        .filter((comp) => comp.hasActiveStandbySyncthing())
+        .flatMap((comp) => [comp.identifier, comp.syncFolderId]))];
       // eslint-disable-next-line no-restricted-syntax
       for (const [, deployComp] of deployment.componentEntries()) {
         // The component whose mount is unsafe is the one held out - its folder
@@ -1024,6 +1030,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
         await processContainerData({
           ...sharedParams,
           deployComp,
+          activeStandbyNames,
           identifier: deployComp.identifier,
           installedAppName: appName,
         });

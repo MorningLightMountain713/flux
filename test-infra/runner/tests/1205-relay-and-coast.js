@@ -286,7 +286,7 @@ describe('relay renewal and the partitioned app island', function () {
           && e.data.key === `${app.identity}/master`));
       expect(winner, 'a survivor holds the granted event').to.not.equal(undefined);
       await env.clients[winner].waitForEvent(
-        'quorumGrant:fenceRaised', (d) => d.app === app.identity, 15000, { afterId: survivorAfters.get(winner) },
+        'syncthing:fenceRaised', (d) => d.app === app.identity, 15000, { afterId: survivorAfters.get(winner) },
       ).catch(() => {
         throw new Error('the fence against the deposed master did not stand with the grant');
       });
@@ -331,14 +331,14 @@ describe('relay renewal and the partitioned app island', function () {
     expect(after, 'the quorum view returns after the heal').to.not.equal(null);
     expect(after.grantee, 'the returning master did not reclaim').to.not.equal(before.grantee);
 
-    // THE FENCE LIFTS: the deposed node demotes its folder cooperatively
-    // (receiveonly + revert), its witness endpoint attests it, and the
-    // winner's throttled lift poll re-admits its device. A fence that never
-    // lifts silently costs the app a replica — the ex-master would stop
-    // replicating forever. The event can only fire through the attestation
-    // path, so it proves the whole raise→attest→lift cycle.
+    // THE FENCE LIFTS: the deposed node stops holding the app - container
+    // gone, folder no longer sending - and says so in an answer it signs, and
+    // the winner re-admits its device. A fence that never lifts silently costs
+    // the app a replica: the ex-master would stop replicating forever. The
+    // event fires only on that signed answer, so it proves the whole
+    // raise→stand-down→lift cycle.
     await env.clients[winner].waitForEvent(
-      'quorumGrant:fenceLifted', (d) => d.app === app.identity, 240000, { afterId: survivorAfters.get(winner) },
+      'syncthing:fenceLifted', (d) => d.app === app.identity, 240000, { afterId: survivorAfters.get(winner) },
     ).catch((err) => {
       // rethrown with the verdict the timeout MEANS, keeping the wait's own
       // diagnostics (stream state) — a dead event stream and a fence that
