@@ -652,7 +652,7 @@ class ImageVerifier {
         errorType: httpStatus === 429 ? 'rate_limit' : (httpStatus >= 500 ? 'server_error' : 'http_error'),
         // What the registry said about its own limit, carried so a caller can
         // pace a retry off the registry's number instead of a fixed guess.
-        ...ImageVerifier.rateLimitMeta(error.response.headers),
+        ...ImageVerifier.rateLimitMeta(error.response?.headers),
       };
       return { data: null };
     }
