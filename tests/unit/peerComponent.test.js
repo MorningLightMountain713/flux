@@ -6,7 +6,9 @@ const sinon = require('sinon');
 const axios = require('axios');
 const peerIdentityService = require('../../ZelBack/src/services/peerIdentityService');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
-const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
+const networkStateService = require('../../ZelBack/src/services/networkStateService');
+const nodeDownStore = require('../../ZelBack/src/services/appMessaging/nodeDownStore');
+const peerFolderLiveness = require('../../ZelBack/src/services/appMonitoring/peerFolderLiveness');
 const globalState = require('../../ZelBack/src/services/utils/globalState');
 const {
   PeerComponent, componentStateOnPeers, componentStateOnOtherHolders, peerComponentState, peerUndecided,
@@ -144,7 +146,9 @@ describe('peerComponent tests', () => {
     describe('a peer that does not answer', () => {
       // This node's syncthing saw the peer after it started, and holds no live
       // connection to it for whichever folders the test names.
-      const evidence = (connectedFolders) => {
+      // `record` is where the peer's node-down record stands: certified down,
+      // not certified, or unreadable.
+      const evidence = (connectedFolders, record = 'standing') => {
         sinon.stub(axios, 'get').rejects(new Error('connect ECONNREFUSED'));
         sinon.stub(syncthingService, 'getConfigDevices').resolves([{ name: PEER, deviceID: 'PEERDEVICE' }]);
         sinon.stub(syncthingService, 'getDbCompletion').callsFake(async ({ folder }) => ({
@@ -152,7 +156,10 @@ describe('peerComponent tests', () => {
         }));
         sinon.stub(syncthingService, 'getDeviceStats').resolves({ PEERDEVICE: { lastSeen: '2026-10-16T10:00:00Z' } });
         sinon.stub(syncthingService, 'getSystemStatus').resolves({ startTime: '2026-10-16T09:00:00Z' });
-        sinon.stub(registryManager, 'shuttingDownNodes').resolves([]);
+        sinon.stub(networkStateService, 'networkState').returns([{ ip: PEER, txhash: 'peertx', outidx: 0 }]);
+        const read = sinon.stub(nodeDownStore, 'recordStateFor');
+        if (record === 'unreadable') read.rejects(new Error('mongo down'));
+        else read.withArgs('peertx:0').resolves({ state: record === 'standing' ? nodeDownStore.RECORD_STATE.STANDING : nodeDownStore.RECORD_STATE.NONE, key: null });
       };
 
       beforeEach(() => {
@@ -175,6 +182,36 @@ describe('peerComponent tests', () => {
 
       it('does not free the app while the anchor\'s folder is still connected to it', async () => {
         evidence(['fluxdb_a']);
+
+        expect(await peerComponentState(PEER, appCtx)).to.equal(PeerComponent.UNKNOWN);
+      });
+
+      // A closed connection may be a restart or a reboot until the network
+      // certifies the node down.
+      it('does not free the app while the network has not certified the peer down', async () => {
+        evidence([], 'none');
+
+        expect(await peerComponentState(PEER, appCtx)).to.equal(PeerComponent.UNKNOWN);
+      });
+
+      it('does not free the app when the peer\'s node-down record cannot be read', async () => {
+        evidence([], 'unreadable');
+
+        expect(await peerComponentState(PEER, appCtx)).to.equal(PeerComponent.UNKNOWN);
+      });
+
+      it('names why it held: not certified, or a record it could not read', async () => {
+        const { silenceVerdict, SilenceVerdict } = peerFolderLiveness;
+        evidence([], 'none');
+        expect(await silenceVerdict('fluxweb_a', PEER, {})).to.equal(SilenceVerdict.NOT_CERTIFIED);
+        sinon.restore();
+        evidence([], 'unreadable');
+        expect(await silenceVerdict('fluxweb_a', PEER, {})).to.equal(SilenceVerdict.NO_EVIDENCE);
+      });
+
+      it('does not free the app when no listed node is at the peer\'s address', async () => {
+        evidence([]);
+        networkStateService.networkState.returns([{ ip: '203.0.113.200:16127', txhash: 'othertx', outidx: 0 }]);
 
         expect(await peerComponentState(PEER, appCtx)).to.equal(PeerComponent.UNKNOWN);
       });

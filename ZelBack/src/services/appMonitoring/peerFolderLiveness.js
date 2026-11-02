@@ -25,7 +25,8 @@ const globalState = require('../utils/globalState');
 const { extractIp, extractPort, socketAddressesMatch } = require('../utils/socketAddressUtils');
 const { nodeSigner } = require('../utils/nodeSigner');
 const peerIdentityService = require('../peerIdentityService');
-const registryManager = require('../appDatabase/registryManager');
+const networkStateService = require('../networkStateService');
+const nodeDownStore = require('../appMessaging/nodeDownStore');
 const { NODE_DOWN_GRACE_MS } = require('../utils/appConstants');
 
 // Bounded because this runs on the pass a node is about to promote, and a slow
@@ -315,21 +316,30 @@ const SilenceVerdict = Object.freeze({
   GONE: 'gone',
   CONNECTION_ALIVE: 'connectionAlive',
   NO_EVIDENCE: 'noEvidence',
-  RESTARTING: 'restarting',
+  NOT_CERTIFIED: 'notCertified',
   LOCALLY_ISOLATED: 'locallyIsolated',
 });
 
 /**
- * Whether a peer announced a shutdown less than SIGTERM_EXPIRY_MS ago and has
- * not announced its apps running since: the time the network gives it to come
- * back from a reboot, before its locations expire.
+ * Whether the network has certified a peer down: a node-down certificate
+ * stands for the node listed at its address. The jurors that sign one wait out
+ * the grace a stopping node's coded close asks for, so a node coming back from
+ * a restart or a reboot is not certified while it does.
  * @param {string} peerIp The peer's socket address
- * @returns {Promise<boolean|null>} null when the announcements cannot be read
+ * @returns {Promise<boolean|null>} null when no listed node is at the address,
+ *   or its record cannot be read
  */
-async function announcedShutdown(peerIp) {
-  const departing = await registryManager.shuttingDownNodes().catch(() => null);
-  if (!Array.isArray(departing)) return null;
-  return departing.some((address) => socketAddressesMatch(address, peerIp));
+async function certifiedDown(peerIp) {
+  try {
+    const listed = (networkStateService.networkState() || [])
+      .find((node) => node?.txhash && node.outidx !== undefined && node.outidx !== null && socketAddressesMatch(node.ip, peerIp));
+    if (!listed) return null;
+    const { state } = await nodeDownStore.recordStateFor(`${listed.txhash}:${listed.outidx}`);
+    return state === nodeDownStore.RECORD_STATE.STANDING;
+  } catch (error) {
+    log.warn(`peerFolderLiveness - the node-down record of ${peerIp} could not be read: ${error.message}`);
+    return null;
+  }
 }
 
 /**
@@ -448,10 +458,9 @@ async function peerSyncthingConnection(folderId, peerIp) {
  * whose peers have all gone quiet is the one that fell over, and the peer is
  * very likely still serving on the other side of the split.
  *
- * A peer that announced its shutdown is rebooting until SIGTERM_EXPIRY_MS has
- * passed: its closed connection is the reboot, and a node back within that
- * time keeps what it holds. Once it has passed, the closed connection is
- * evidence again.
+ * A closed connection is evidence only once the network has certified the
+ * peer down (certifiedDown): until then it may be a restart or a reboot, and a
+ * node back from one keeps what it holds.
  *
  * @param {string} folderId
  * @param {string} peerIp
@@ -462,9 +471,9 @@ async function silenceVerdict(folderId, peerIp, liveness) {
   const connection = await peerSyncthingConnection(folderId, peerIp);
   if (connection === PeerConnection.CONNECTED) return SilenceVerdict.CONNECTION_ALIVE;
   if (connection === PeerConnection.UNKNOWN) return SilenceVerdict.NO_EVIDENCE;
-  const shutdown = await announcedShutdown(peerIp);
-  if (shutdown === null) return SilenceVerdict.NO_EVIDENCE;
-  if (shutdown) return SilenceVerdict.RESTARTING;
+  const certified = await certifiedDown(peerIp);
+  if (certified === null) return SilenceVerdict.NO_EVIDENCE;
+  if (!certified) return SilenceVerdict.NOT_CERTIFIED;
   if (!liveness.localConnectivity().connected) return SilenceVerdict.LOCALLY_ISOLATED;
   return SilenceVerdict.GONE;
 }
