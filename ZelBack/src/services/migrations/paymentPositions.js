@@ -6,6 +6,10 @@ const daemonServiceUtils = require('../daemonService/daemonServiceUtils');
 const { appPaymentPositions } = require('../appPaymentPositions');
 const chainUtilities = require('../utils/chainUtilities');
 
+// Records written per call: no single call carries every record the backfill
+// writes.
+const BACKFILL_BATCH = 5000;
+
 /**
  * Gives every app payment record without a position in its block the position
  * and the height the daemon's address index holds for its transaction: one call
@@ -18,8 +22,9 @@ const chainUtilities = require('../utils/chainUtilities');
  * The height is the chain's, not the one recorded: a record written from a block
  * that later left the chain carries a height its transaction is not at. Position
  * and height are set in one write of the hash's record, which carries its
- * contents with it. A run that stops part way leaves the rest without a
- * position, and the next run takes them.
+ * contents with it. Records are written BACKFILL_BATCH to a call; a run that
+ * stops part way leaves the rest without a position, and the next run takes
+ * them.
  * @returns {Promise<{positioned: number, heightsCorrected: number, notOnChain: number, aboveTip: number}>}
  */
 async function backfillPaymentPositions() {
@@ -32,9 +37,9 @@ async function backfillPaymentPositions() {
     throw new Error(`getBlockCount failed: ${tip.data?.message ?? tip.data}`);
   }
   const positions = await appPaymentPositions(start, tip.data);
-  let positioned = 0;
+  const placed = [];
+  const unmined = [];
   let heightsCorrected = 0;
-  let notOnChain = 0;
   let aboveTip = 0;
   for (const { hash, txid, height } of missing) {
     const position = positions.get(txid);
@@ -42,19 +47,25 @@ async function backfillPaymentPositions() {
       aboveTip += 1;
     } else if (position) {
       if (position.height !== height) heightsCorrected += 1;
-      positioned += 1;
-      // eslint-disable-next-line no-await-in-loop
-      await messages.setPosition(hash, { txIndex: position.txIndex, height: position.height });
+      placed.push({ hash, txIndex: position.txIndex, height: position.height });
     } else {
-      notOnChain += 1;
-      // eslint-disable-next-line no-await-in-loop
-      await messages.markNotOnChain(hash);
+      unmined.push(hash);
     }
   }
+  for (let i = 0; i < placed.length; i += BACKFILL_BATCH) {
+    // eslint-disable-next-line no-await-in-loop
+    await messages.setPositions(placed.slice(i, i + BACKFILL_BATCH));
+  }
+  for (let i = 0; i < unmined.length; i += BACKFILL_BATCH) {
+    // eslint-disable-next-line no-await-in-loop
+    await messages.markAllNotOnChain(unmined.slice(i, i + BACKFILL_BATCH));
+  }
+  const positioned = placed.length;
+  const notOnChain = unmined.length;
   log.info(`migrations - payment positions: ${positioned} positioned, ${heightsCorrected} of them at the chain's height rather than the recorded one, ${notOnChain} not on the chain, ${aboveTip} above the daemon's tip`);
   return {
     positioned, heightsCorrected, notOnChain, aboveTip,
   };
 }
 
-module.exports = { backfillPaymentPositions };
+module.exports = { backfillPaymentPositions, BACKFILL_BATCH };

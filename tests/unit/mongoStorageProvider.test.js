@@ -5,6 +5,8 @@ process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 const config = require('config');
+const sinon = require('sinon');
+const { Collection } = require('mongodb');
 
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const specLibrary = require('../../ZelBack/src/services/utils/specLibrary');
@@ -131,6 +133,27 @@ describe('MongoStorageProvider', () => {
     expect(keys(await provider.find(STORE, { nested: { exists: true } }))).to.deep.equal([]);
     expect(await provider.update(STORE, { k: 'b' }, {}), 'an empty change still counts the records it names').to.equal(1);
     expect(await provider.count(STORE, {})).to.equal(records.length);
+  });
+
+  it('applies a list of changes in one call, each as update applies it, and answers how many records they matched', async () => {
+    const bulkWrite = sinon.spy(Collection.prototype, 'bulkWrite');
+    try {
+      const matched = await provider.updateEach(STORE, [
+        { query: { k: 'a' }, change: { set: { 'deep.x': 1 } } },
+        { query: { tags: 'x' }, change: { set: { marked: true }, unset: ['nested'] } },
+        { query: { k: 'b' }, change: {} },
+        { query: { k: 'none' }, change: { set: { marked: true } } },
+      ]);
+
+      expect(matched).to.equal(4);
+      expect(bulkWrite.callCount, 'the changes took more than one call').to.equal(1);
+    } finally {
+      bulkWrite.restore();
+    }
+    expect(keys(await provider.find(STORE, { marked: true }))).to.deep.equal(['a', 'd']);
+    expect(keys(await provider.find(STORE, { 'deep.x': 1 }))).to.deep.equal(['a']);
+    expect(keys(await provider.find(STORE, { nested: { exists: true } }))).to.deep.equal(['b']);
+    expect(await provider.updateEach(STORE, [])).to.equal(0);
   });
 
   it('removes every record a query names, and answers how many', async () => {

@@ -9,7 +9,7 @@ const sinon = require('sinon');
 const daemonServiceUtils = require('../../ZelBack/src/services/daemonService/daemonServiceUtils');
 const chainUtilities = require('../../ZelBack/src/services/utils/chainUtilities');
 const { appPaymentPositions } = require('../../ZelBack/src/services/appPaymentPositions');
-const { backfillPaymentPositions } = require('../../ZelBack/src/services/migrations/paymentPositions');
+const { backfillPaymentPositions, BACKFILL_BATCH } = require('../../ZelBack/src/services/migrations/paymentPositions');
 const { stubMessages } = require('./fixtures/appRecords');
 
 chai.use(chaiAsPromised);
@@ -77,8 +77,8 @@ describe('app payment positions', () => {
 
     // What the migration wrote, by hash: a position, or the not-on-chain mark.
     const written = () => [
-      ...messages.setPosition.getCalls().map((call) => [call.args[0], call.args[1]]),
-      ...messages.markNotOnChain.getCalls().map((call) => [call.args[0], { notOnChain: true }]),
+      ...messages.setPositions.getCalls().flatMap((call) => call.args[0].map(({ hash, ...position }) => [hash, position])),
+      ...messages.markAllNotOnChain.getCalls().flatMap((call) => call.args[0].map((hash) => [hash, { notOnChain: true }])),
     ];
 
     it('asks the daemon nothing and writes nothing when everything has a position', async () => {
@@ -87,8 +87,21 @@ describe('app payment positions', () => {
         positioned: 0, heightsCorrected: 0, notOnChain: 0, aboveTip: 0,
       });
       sinon.assert.notCalled(executeCall);
-      sinon.assert.notCalled(messages.setPosition);
-      sinon.assert.notCalled(messages.markNotOnChain);
+      sinon.assert.notCalled(messages.setPositions);
+      sinon.assert.notCalled(messages.markAllNotOnChain);
+    });
+
+    it('writes the records in batches, each of at most BACKFILL_BATCH', async () => {
+      const count = (2 * BACKFILL_BATCH) + 1;
+      const records = Array.from({ length: count }, (_, i) => ({ hash: `h${i}`, txid: `t${i}`, height: 694_900 }));
+      messages.withoutPosition.resolves([...records, { hash: 'hgone', txid: 'gone', height: 694_900 }]);
+      daemonAnswers(694_950, records.map(({ txid }, i) => delta(txid, 694_900, i)));
+
+      const outcome = await backfillPaymentPositions();
+
+      expect(messages.setPositions.getCalls().map((call) => call.args[0].length)).to.deep.equal([BACKFILL_BATCH, BACKFILL_BATCH, 1]);
+      expect(messages.markAllNotOnChain.getCalls().map((call) => call.args[0])).to.deep.equal([['hgone']]);
+      expect(outcome).to.include({ positioned: count, notOnChain: 1 });
     });
 
     it('positions each record from one address-index call from the first payment height to the tip, and marks one the chain does not hold', async () => {
@@ -136,8 +149,8 @@ describe('app payment positions', () => {
       messages.withoutPosition.resolves([{ hash: 'ha', txid: 'a', height: 694_900 }]);
       executeCall.withArgs('getBlockCount').resolves({ status: 'error', data: { message: 'loading block index' } });
       await expect(backfillPaymentPositions()).to.be.rejectedWith('loading block index');
-      sinon.assert.notCalled(messages.setPosition);
-      sinon.assert.notCalled(messages.markNotOnChain);
+      sinon.assert.notCalled(messages.setPositions);
+      sinon.assert.notCalled(messages.markAllNotOnChain);
     });
   });
 });

@@ -70,6 +70,18 @@ function toFilter(query = {}) {
   return { $and: clauses };
 }
 
+/**
+ * The Mongo update a port change states, or null when it sets and unsets nothing.
+ * @param {{ set?: Object<string, *>, unset?: string[] }} change
+ * @returns {Object|null}
+ */
+function toUpdate({ set = {}, unset = [] } = {}) {
+  const update = {};
+  if (Object.keys(set).length) update.$set = set;
+  if (unset.length) update.$unset = Object.fromEntries(unset.map((field) => [field, '']));
+  return Object.keys(update).length ? update : null;
+}
+
 function projectionFor(fields) {
   const projection = { _id: 0 };
   if (fields) for (const field of fields) projection[field] = 1;
@@ -129,13 +141,30 @@ function providerClass() {
       await this.#collection(store).replaceOne(toFilter(query), { ...record }, { upsert });
     }
 
-    async update(store, query, { set = {}, unset = [] }) {
-      const change = {};
-      if (Object.keys(set).length) change.$set = set;
-      if (unset.length) change.$unset = Object.fromEntries(unset.map((field) => [field, '']));
-      if (!Object.keys(change).length) return this.#collection(store).countDocuments(toFilter(query));
-      const { matchedCount } = await this.#collection(store).updateMany(toFilter(query), change);
+    async update(store, query, change) {
+      const update = toUpdate(change);
+      if (!update) return this.#collection(store).countDocuments(toFilter(query));
+      const { matchedCount } = await this.#collection(store).updateMany(toFilter(query), update);
       return matchedCount;
+    }
+
+    async updateEach(store, changes) {
+      if (changes.length === 0) return 0;
+      // A change that sets and unsets nothing is no write: its records are counted.
+      const writes = [];
+      let counted = 0;
+      for (const { query, change } of changes) {
+        const update = toUpdate(change);
+        if (update) {
+          writes.push({ updateMany: { filter: toFilter(query), update } });
+        } else {
+          // eslint-disable-next-line no-await-in-loop
+          counted += await this.#collection(store).countDocuments(toFilter(query));
+        }
+      }
+      if (writes.length === 0) return counted;
+      const { matchedCount } = await this.#collection(store).bulkWrite(writes, { ordered: true });
+      return counted + matchedCount;
     }
 
     async remove(store, query) {
