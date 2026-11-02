@@ -1,5 +1,5 @@
 const { expect } = require('chai');
-const bs58check = require('bs58check');
+const bs58check = require('bs58check').default;
 
 const { decodeWIF } = require('../../ZelBack/src/services/utils/fluxCryptoUtils');
 const { privateKey, sameKey } = require('./data/wifFixtures');
