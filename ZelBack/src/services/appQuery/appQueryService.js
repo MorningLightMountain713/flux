@@ -319,20 +319,14 @@ async function sendingFolderIds() {
  * @returns {Promise<string[][]>}
  */
 async function multiComponentElectedApps() {
-  const installed = await installedApps();
-  if (installed.status !== 'success') throw new Error('the installed apps cannot be read');
+  const deployments = await deploymentProvider.listInstalledDeployments();
   const apps = [];
-  // eslint-disable-next-line no-restricted-syntax
-  for (const app of installed.data) {
-    // eslint-disable-next-line no-await-in-loop
-    const deployments = await deploymentProvider.getInstalledDeployments(app.name);
-    deployments.forEach((deployment) => {
-      const names = deployment.componentEntries()
-        .filter(([, component]) => component.hasActiveStandbySyncthing())
-        .map(([, component]) => dockerService.getAppIdentifier(component.identifier));
-      if (names.length > 1) apps.push(names);
-    });
-  }
+  deployments.forEach((deployment) => {
+    const names = deployment.componentEntries()
+      .filter(([, component]) => component.hasActiveStandbySyncthing())
+      .map(([, component]) => dockerService.getAppIdentifier(component.identifier));
+    if (names.length > 1) apps.push(names);
+  });
   return apps;
 }
 

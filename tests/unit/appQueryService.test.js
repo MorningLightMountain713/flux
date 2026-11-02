@@ -36,6 +36,7 @@ describe('appQueryService tests', () => {
   let dockerServiceStub;
   let deploymentProviderStub;
   let registryManagerStub;
+  let syncthingServiceStub;
 
   let installedStub;
   let nodeSpecsStub;
@@ -92,7 +93,10 @@ describe('appQueryService tests', () => {
       createErrorMessage: sinon.stub(),
     };
 
-    deploymentProviderStub = { listInstalledDeploymentsDetailed: sinon.stub().resolves({ deployments: [], unreadableApps: new Map() }) };
+    deploymentProviderStub = {
+      listInstalledDeploymentsDetailed: sinon.stub().resolves({ deployments: [], unreadableApps: new Map() }),
+      listInstalledDeployments: sinon.stub().resolves([]),
+    };
     dockerServiceStub = {
       dockerListContainers: sinon.stub(),
       // Namespacing, rather than returning a constant: these tests assert which
@@ -128,6 +132,9 @@ describe('appQueryService tests', () => {
       },
     };
 
+    // Syncthing answers, and no folder sends here, unless a test says otherwise.
+    syncthingServiceStub = { getConfigFolders: sinon.stub().resolves([]) };
+
     registryManagerStub = {
       appLocation: sinon.stub(),
       appInstallingLocation: sinon.stub(),
@@ -156,6 +163,7 @@ describe('appQueryService tests', () => {
       '../dbHelper': dbHelperStub,
       '../messageHelper': messageHelperStub,
       '../dockerService': dockerServiceStub,
+      '../syncthingService': syncthingServiceStub,
       '../appRuntime/deploymentProvider': deploymentProviderStub,
       '../appDatabase/registryManager': registryManagerStub,
       '../appDatabase/appRecords': { hostedInstances: () => installedStub },
@@ -665,6 +673,44 @@ describe('appQueryService tests', () => {
       messageHelperStub.createDataMessage.returnsArg(0);
       return appQueryService.heldComponents();
     };
+
+    // A primary back from a stop: its folder still sends, paused, and nothing runs
+    // or is committed while it decides whether another holder took over.
+    it('reports a component whose folder sends here, with nothing running, committed or stopped', async () => {
+      syncthingServiceStub.getConfigFolders.resolves([{ id: 'www_App', type: 'sendreceive' }]);
+
+      expect(await held()).to.deep.equal(['www_App']);
+    });
+
+    it('reports a folder that sends while syncthing is paused, and not one that receives', async () => {
+      syncthingServiceStub.getConfigFolders.resolves([
+        { id: 'www_App', type: 'sendreceive', paused: true },
+        { id: 'db_App', type: 'receiveonly', paused: true },
+      ]);
+
+      expect(await held()).to.deep.equal(['www_App']);
+    });
+
+    it('answers that it cannot say yet while syncthing cannot say which folders send', async () => {
+      syncthingServiceStub.getConfigFolders.rejects(new Error('connect ECONNREFUSED'));
+      messageHelperStub.createErrorMessage.callsFake((message) => ({ status: 'error', data: { message } }));
+
+      const result = await held({ running: ['db_App'] });
+
+      expect(result.status).to.equal('error');
+      expect(result.data.message).to.equal('Which folders send here is not known yet');
+    });
+
+    // A peer may ask only about an app's anchor: holding any of its activeStandby
+    // components is holding the app, so the anchor is reported with it.
+    it('reports the anchor of an app with more than one activeStandby component when it holds another of them', async () => {
+      const component = (identifier) => ({ identifier, hasActiveStandbySyncthing: () => true });
+      deploymentProviderStub.listInstalledDeployments.resolves([{
+        componentEntries: () => [['www', component('www_App')], ['db', component('db_App')]],
+      }]);
+
+      expect(await held({ committed: ['db_App'] })).to.deep.equal(['db_App', 'www_App']);
+    });
 
     it('reports a component the operator stopped, with no container and nothing committed', async () => {
       // The regression. `appstop` is durable and node-local: the election skips
