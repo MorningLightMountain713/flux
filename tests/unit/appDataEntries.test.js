@@ -3,7 +3,11 @@
 process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 
 const path = require('node:path');
-const { expect } = require('chai');
+const chai = require('chai');
+const chaiAsPromised = require('chai-as-promised');
+
+chai.use(chaiAsPromised);
+const { expect } = chai;
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { loadSpecLibrary } = require('./fixtures/fluxSpec');
