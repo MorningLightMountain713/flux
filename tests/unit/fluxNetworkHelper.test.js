@@ -1547,6 +1547,7 @@ describe('fluxNetworkHelper tests', () => {
     let runCommandStub;
     beforeEach(() => {
       runCommandStub = sinon.stub(serviceHelper, 'runCommand');
+      ufw.resetFirewallActiveCache();
     });
 
     afterEach(() => {

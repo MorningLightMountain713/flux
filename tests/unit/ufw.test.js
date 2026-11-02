@@ -75,6 +75,58 @@ describe('ufw runner', () => {
     sinon.assert.calledTwice(runCommand);
   });
 
+  describe('whether the firewall is active', () => {
+    const status = (line) => ({ error: null, stdout: `${line}\n`, stderr: '' });
+    let clock;
+
+    beforeEach(() => {
+      ufw.resetFirewallActiveCache();
+      clock = sinon.useFakeTimers({ toFake: ['hrtime'] });
+    });
+
+    afterEach(() => {
+      ufw.resetFirewallActiveCache();
+    });
+
+    it('asks ufw once, and answers from that while it is fresh', async () => {
+      runCommand.resolves(status('Status: active'));
+
+      expect(await ufw.isFirewallActive()).to.equal(true);
+      expect(await ufw.isFirewallActive()).to.equal(true);
+      sinon.assert.calledOnce(runCommand);
+    });
+
+    it('asks again once the answer is fifteen minutes old', async () => {
+      runCommand.resolves(status('Status: active'));
+      await ufw.isFirewallActive();
+      runCommand.resolves(status('Status: inactive'));
+
+      clock.tick(15 * 60 * 1000 - 1);
+      expect(await ufw.isFirewallActive()).to.equal(true);
+      clock.tick(1);
+      expect(await ufw.isFirewallActive()).to.equal(false);
+      sinon.assert.calledTwice(runCommand);
+    });
+
+    it('keeps no answer from a probe that failed', async () => {
+      runCommand.onFirstCall().resolves(exited(1));
+      runCommand.onSecondCall().resolves(status('Status: active'));
+
+      expect(await ufw.isFirewallActive()).to.equal(false);
+      expect(await ufw.isFirewallActive()).to.equal(true);
+      sinon.assert.calledTwice(runCommand);
+    });
+
+    it('keeps no answer read while another ufw command holds ufw\'s lock', async () => {
+      runCommand.onFirstCall().resolves(exited(ufw.UFW_LOCK_UNAVAILABLE));
+      runCommand.onSecondCall().resolves(status('Status: inactive'));
+
+      await ufw.isFirewallActive();
+      expect(await ufw.isFirewallActive()).to.equal(false);
+      sinon.assert.calledTwice(runCommand);
+    });
+  });
+
   describe('a batch of ufw commands', () => {
     const commands = [['allow', '31000'], ['allow', '31001']];
     const answered = (result) => ({ error: null, stdout: `${JSON.stringify({ removed: 0, applied: true, failed: [], reason: null, ...result })}\n`, stderr: '' });

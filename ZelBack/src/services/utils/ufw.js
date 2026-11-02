@@ -128,16 +128,35 @@ async function ipv6Filtered() {
   return /^IPV6="?yes"?\s*$/mi.test(defaults);
 }
 
+// The firewall's status changes only when an operator toggles ufw by hand, and
+// the loops that ask (the availability checker every couple of minutes) each
+// fork a root ufw probe, so one clean answer is shared until a monotonic
+// deadline passes.
+const FIREWALL_ACTIVE_TTL_NS = 15n * 60n * 1_000_000_000n;
+let firewallActive = null;
+let firewallActiveFreshUntil = 0n;
+
 /**
- * Whether the firewall is active, as `ufw status` reports it. While another ufw
- * command holds ufw's lock past the wait, the answer is whether ufw is enabled.
+ * Whether the firewall is active, as `ufw status` reports it. A clean answer is
+ * kept for FIREWALL_ACTIVE_TTL_NS; a failed probe, and the answer read while
+ * another ufw command holds ufw's lock past the wait (whether ufw is enabled), are
+ * not kept.
  * @returns {Promise<boolean>}
  */
 async function isFirewallActive() {
+  if (firewallActive !== null && process.hrtime.bigint() < firewallActiveFreshUntil) return firewallActive;
   const { error, stdout, locked } = await runUfw(['status']);
   if (locked) return ufwEnabled();
   if (error) return false;
-  return /^Status: active$/m.test(stdout);
+  firewallActive = /^Status: active$/m.test(stdout);
+  firewallActiveFreshUntil = process.hrtime.bigint() + FIREWALL_ACTIVE_TTL_NS;
+  return firewallActive;
+}
+
+/** Forget the kept answer, so the next isFirewallActive asks ufw. */
+function resetFirewallActiveCache() {
+  firewallActive = null;
+  firewallActiveFreshUntil = 0n;
 }
 
 module.exports = {
@@ -147,6 +166,7 @@ module.exports = {
   ipv6Filtered,
   isFirewallActive,
   oneAtATime,
+  resetFirewallActiveCache,
   runUfw,
   runUfwCommands,
   ufwEnabled,
