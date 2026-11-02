@@ -28,7 +28,6 @@ const path = require('path');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const appSlice = require('./appSlice');
-const { getAppIdentifier } = require('../dockerService');
 const globalState = require('../utils/globalState');
 
 const SIGKILL_MASK = 1n << 8n;
@@ -70,9 +69,11 @@ async function readAsRoot(file) {
   return error ? null : stdout;
 }
 
-// The name FluxOS gives an app's containers carries the flux or zel prefix
-// (dockerService.getAppIdentifier).
+// A container made before the runonflux.app label is named with the flux or zel
+// prefix: `<prefix><component>_<app>`, or for an app of one component its name,
+// prefixed with flux unless it already starts with flux or zel.
 const APP_PREFIX = /^(flux|zel)/;
+const legacySingleName = (appName) => (APP_PREFIX.test(appName) ? appName : `flux${appName}`);
 
 /**
  * The app a container belongs to: its runonflux.app label, which FluxOS sets on
@@ -95,7 +96,7 @@ function appOf({ name, app }) {
  */
 function belongsTo({ name, app }, appName) {
   if (app) return app === appName;
-  return name === getAppIdentifier(appName) || (APP_PREFIX.test(name) && name.endsWith(`_${appName}`));
+  return name === legacySingleName(appName) || (APP_PREFIX.test(name) && name.endsWith(`_${appName}`));
 }
 
 /**
