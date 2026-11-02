@@ -860,7 +860,8 @@ describe('volumeService tests', () => {
 
     it('switches a volume it mounts', async () => {
       dockerServiceStub.getAppIdentifier.returns('fluxapp1');
-      deviceHelperStub.listMountedFilesystems.resolves([{ source: '/dev/sda1', target: '/dat' }]);
+      // The image the app's resources record, stamped with the filesystem it holds.
+      resourcesNames('/dat/fluxapp1FLUXFSVOL', 'uuid');
       fsStub.promises.access.rejects(enoent());
       fsStub.promises.access.withArgs('/dat/fluxapp1FLUXFSVOL').resolves();
       // Not mounted when asked, mounted on loop0 once the mount has run.
