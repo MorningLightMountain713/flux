@@ -225,6 +225,9 @@ describe('appUninstaller tombstoning teardown', () => {
       },
       appSwapPoolService: { reconcile: sinon.stub().resolves() },
       telemetrySinkCache: { deleteSink: sinon.stub() },
+      // Ending the file operations on a volume first waits for the boot's take-back
+      // of the ones a restart left behind; that wait is its own module's to test.
+      fileOperationRecovery: { endFileOperationsOn: sinon.stub().resolves(() => {}) },
       fluxShutdowndClient: {
         beginAppStop: sinon.stub().resolves({ outcome: 'not_arcane' }),
         forceAppStop: sinon.stub().resolves({ outcome: 'forced' }),
@@ -269,6 +272,7 @@ describe('appUninstaller tombstoning teardown', () => {
       '../appRuntime/deploymentProvider': stubs.deploymentProvider,
       '../appMonitoring/syncthingMonitorHelpers': stubs.syncthingMonitorHelpers,
       '../utils/volumeService': stubs.volumeService,
+      '../appSystem/fileOperationRecovery': stubs.fileOperationRecovery,
       './appSwapPoolService': stubs.appSwapPoolService,
       '../appManagement/appInspector': stubs.appInspector,
       '../appManagement/appsRuntimeState': stubs.appsRuntimeState,
