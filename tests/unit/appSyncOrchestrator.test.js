@@ -11,6 +11,8 @@ const { asConfig } = require('./fixtures/config');
 const appSyncEventsModule = require('../../ZelBack/src/services/utils/appSyncEvents');
 const realConfig = require('config');
 
+const HASH_SYNC_RETRY_MIN_MS = realConfig.get('fluxapps.hashSyncRetryMinMs');
+
 describe('AppSyncOrchestrator', () => {
   // Whether the sync responder answers peers about app state: its own sync
   // complete, or the block timer spent.
@@ -3805,25 +3807,47 @@ describe('AppSyncOrchestrator', () => {
       sinon.assert.calledWith(nodeStartupRepositoryStub.setHashSyncVersionMarker, '8.12.0');
     });
 
-    it('writes no version marker while the reset fails, and runs the reset again on the next hash retry', async () => {
+    it('writes no version marker while the reset fails, and runs the reset again on the next hash retry pass', async () => {
       nodeStartupRepositoryStub.getHashSyncVersionMarker.resolves(null);
       resetHashSyncForUpgradeStub.onFirstCall().rejects(new Error('db down'));
-      const versionWrites = () => findOneAndUpdateStub.getCalls().filter((c) => c.args[2]?._id === 'hashSyncVersion');
+      syncMissingHashesStub.resolves({ resolved: 0, missing: 0, unreachable: 0, nextRetryHeight: 2_555_100 });
 
       const orchestrator = makeOrchestrator({ fluxVersion: '8.12.0' });
       orchestrator.start(defaultBootContext);
+      peersUp();
 
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
 
-      expect(syncMissingHashesStub.calledOnce).to.be.true;
-      expect(versionWrites()).to.have.length(0);
+      expect(syncMissingHashesStub.calledOnce, 'the hash sync ran').to.be.true;
+      sinon.assert.notCalled(nodeStartupRepositoryStub.setHashSyncVersionMarker);
 
       blockEmitter.emit('blocksProcessed', 2_555_100);
       await clock.tickAsync(0);
 
+      expect(syncMissingHashesStub.calledTwice, 'the hash retry pass ran').to.be.true;
       expect(resetHashSyncForUpgradeStub.calledTwice).to.be.true;
-      expect(versionWrites()).to.have.length(1);
+      sinon.assert.calledOnceWithExactly(nodeStartupRepositoryStub.setHashSyncVersionMarker, '8.12.0');
+    });
+
+    it('runs the reset again on the hash sync\'s backoff retry, and writes the marker once it has', async () => {
+      nodeStartupRepositoryStub.getHashSyncVersionMarker.resolves(null);
+      resetHashSyncForUpgradeStub.onFirstCall().rejects(new Error('db down'));
+      syncMissingHashesStub.onFirstCall().rejects(new Error('db down'));
+
+      const orchestrator = makeOrchestrator({ fluxVersion: '8.12.0' });
+      orchestrator.start(defaultBootContext);
+      peersUp();
+
+      blockEmitter.emit('blocksProcessed', 2_555_000);
+      await clock.tickAsync(0);
+      sinon.assert.notCalled(nodeStartupRepositoryStub.setHashSyncVersionMarker);
+
+      await clock.tickAsync(HASH_SYNC_RETRY_MIN_MS);
+
+      expect(syncMissingHashesStub.calledTwice, 'the backoff retry ran').to.be.true;
+      expect(resetHashSyncForUpgradeStub.calledTwice).to.be.true;
+      sinon.assert.calledOnceWithExactly(nodeStartupRepositoryStub.setHashSyncVersionMarker, '8.12.0');
     });
 
     it('should skip version check when fluxVersion not provided', async () => {

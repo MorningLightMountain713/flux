@@ -235,6 +235,10 @@ class AppSyncOrchestrator {
   #nextHashRetryHeight = 0;
   #lastBlockHeight = 0;
   #fluxVersion = null;
+
+  // Whether this version's once-per-upgrade hash retry reset has run, or was
+  // already recorded as run. The version marker is written only once it has.
+  #upgradeResetDone = false;
   #heartbeatInterval = null;
   #bootContext = null;
   #canSendMessages = false;
@@ -1189,6 +1193,10 @@ class AppSyncOrchestrator {
 
     this.#syncInProgress = true;
     try {
+      if (!this.#upgradeResetDone) {
+        await this.#checkVersionUpgrade();
+        await this.#writeVersionMarker();
+      }
       const result = await appHashSyncService.syncMissingHashes({ currentHeight: this.#lastBlockHeight });
       this.#nextHashRetryHeight = result.nextRetryHeight ?? (this.#lastBlockHeight + FALLBACK_RECHECK_BLOCKS);
       fluxEventBus.count('hashSync:retry', result.missing > 0 ? 'missingRemain' : 'clear');
@@ -1228,7 +1236,6 @@ class AppSyncOrchestrator {
     log.info('AppSyncOrchestrator - Sync started');
     // A pass waiting out its backoff is not run again on the block.
     if (!this.#hashSyncComplete && !this.#hashSyncRetryTimer) {
-      await this.#checkVersionUpgrade();
       await this.#runHashSync();
     }
     await this.#runManifestSync();
@@ -1245,13 +1252,14 @@ class AppSyncOrchestrator {
         const resetCount = await appHashSyncService.resetHashSyncForUpgrade(this.#lastBlockHeight);
         log.info(`AppSyncOrchestrator - Version upgrade to ${this.#fluxVersion}, reset ${resetCount} hash sync entries`);
       }
+      this.#upgradeResetDone = true;
     } catch (error) {
       log.error(`AppSyncOrchestrator - Version upgrade check failed: ${error.message}`);
     }
   }
 
   async #writeVersionMarker() {
-    if (!this.#fluxVersion) return;
+    if (!this.#fluxVersion || !this.#upgradeResetDone) return;
     try {
       await nodeStartupRepository.setHashSyncVersionMarker(this.#fluxVersion);
     } catch (error) {
@@ -1277,6 +1285,7 @@ class AppSyncOrchestrator {
     this.#syncInProgress = true;
     try {
       this.#hashSyncAttempts += 1;
+      if (!this.#upgradeResetDone) await this.#checkVersionUpgrade();
       const result = await appHashSyncService.syncMissingHashes({ currentHeight: this.#lastBlockHeight });
       if (result.missing > 0) {
         log.warn(`AppSyncOrchestrator - Hash sync has ${result.missing} unresolvable hashes, proceeding`);
