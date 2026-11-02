@@ -14,7 +14,7 @@ const appEvacuationSafety = require('../../ZelBack/src/services/appLifecycle/app
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
 const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
 const appGiveUp = require('../../ZelBack/src/services/appLifecycle/appGiveUp');
-const peerComponentProbe = require('../../ZelBack/src/services/appLifecycle/peerComponentProbe');
+const peerComponent = require('../../ZelBack/src/services/appMonitoring/peerComponent');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const domain = require('./fixtures/appDomain');
 const { loadSpecLibrary, v9Spec, V9_SUBMISSION } = require('./fixtures/fluxSpec');
@@ -379,7 +379,7 @@ describe('appGiveUp - handing an app back', () => {
 
     it('the next copy trims instead, but only on a confirmed writer', async () => {
       withWriter('web_gapp');
-      sinon.stub(peerComponentProbe, 'peerComponentState').resolves(peerComponentProbe.PeerComponent.RUNNING);
+      sinon.stub(peerComponent, 'peerComponentState').resolves(peerComponent.PeerComponent.RUNNING);
 
       const verdict = await appGiveUp.surplusVerdict(
         app, twoCopies, OLDEST, { runningLocally: async () => false, liveness: {} },
@@ -395,7 +395,7 @@ describe('appGiveUp - handing an app back', () => {
     ['UNKNOWN', 'NOT_RUNNING'].forEach((state) => {
       it(`the next copy does NOT trim when the newest answers ${state}`, async () => {
         withWriter('web_gapp');
-        sinon.stub(peerComponentProbe, 'peerComponentState').resolves(peerComponentProbe.PeerComponent[state]);
+        sinon.stub(peerComponent, 'peerComponentState').resolves(peerComponent.PeerComponent[state]);
 
         const verdict = await appGiveUp.surplusVerdict(
           app, twoCopies, OLDEST, { runningLocally: async () => false, liveness: {} },

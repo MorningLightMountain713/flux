@@ -35,7 +35,7 @@ const syncthingFolderStateMachine = require('../appMonitoring/syncthingFolderSta
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const { compareInstanceSeniority } = require('../utils/instanceOrdering');
 const { socketAddressesMatch } = require('../utils/socketAddressUtils');
-const peerComponentProbe = require('./peerComponentProbe');
+const peerComponent = require('../appMonitoring/peerComponent');
 
 // Two reasons, one answer. SURPLUS: the app runs on more nodes than it needs and
 // this node holds the junior instance. EVACUATION: the node is shedding what it
@@ -263,19 +263,16 @@ async function surplusVerdict(app, locations, localSocketAddr, deps) {
   // Silence, a timeout, a refusal, "not running": all mean this node does
   // nothing. The rule can only ever fail towards no trim, never towards two.
   if (index === 1 && writer && liveness) {
-    const appId = dockerService.getAppIdentifier(writer);
     const { folderId } = writerComp;
-    const newestState = await peerComponentProbe.peerComponentState({
-      appId,
-      folderId,
-      aliases: folderId === appId ? [] : [folderId],
+    const newestState = await peerComponent.peerComponentState(ordered[0].ip, {
+      appIds: [...new Set([writer, folderId])],
       identifier: writer,
       appName: app.name,
-      peerSocketAddr: ordered[0].ip,
-      label: 'the newest copy',
       liveness,
+      label: 'the newest copy',
+      logPrefix: 'giveUpApp',
     });
-    if (newestState === peerComponentProbe.PeerComponent.RUNNING) {
+    if (newestState === peerComponent.PeerComponent.RUNNING) {
       return {
         giveUp: true,
         code: 'NEWEST_CONFIRMED_WRITER',

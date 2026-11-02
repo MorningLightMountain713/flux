@@ -14,46 +14,33 @@
  */
 const config = require('config');
 const fs = require('node:fs/promises');
-const axios = require('axios');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const messageHelper = require('../messageHelper');
-const mastershipGrantGate = require('./mastershipGrantGate');
-const dockerService = require('../dockerService');
 const verificationHelper = require('../verificationHelper');
 const daemonStatus = require('../daemonService/daemonStatus');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 // eslint-disable-next-line no-unused-vars
 const upnpService = require('../upnpService');
-const { appsFolder } = require('../utils/appConstants');
 const { assertSubmittableTimestamp } = require('../appMessaging/submittableTimestamp');
-const {
-  extractIp, extractPort, ipsMatch,
-} = require('../utils/socketAddressUtils');
+const { ipsMatch } = require('../utils/socketAddressUtils');
 const appsRepository = require('../appDatabase/appsRepository');
 const appRecords = require('../appDatabase/appRecords');
 const appSpecHistory = require('../appDatabase/appSpecHistory');
 const appDataEntries = require('../utils/appDataEntries');
 const ingressAttestationService = require('../appMessaging/ingressAttestationService');
 const ingressCapture = require('../utils/ingressCapture');
-const registryManager = require('../appDatabase/registryManager');
-const https = require('https');
-const { getSpec, getSpecBackend, assertUpdateInvariants } = require('../utils/specLibs');
+const { getSpec, assertUpdateInvariants } = require('../utils/specLibs');
 const appEventVerifier = require('../appMessaging/appEventVerifier');
 const placementFeasibility = require('../appPlacement/placementFeasibility');
 const messageVerifier = require('../appMessaging/messageVerifier');
-const appQueryService = require('../appQuery/appQueryService');
-const { listRunningContainers } = appQueryService;
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const appReconciler = require('../appMonitoring/appReconciler');
 const syncthingMonitorHelpers = require('../appMonitoring/syncthingMonitorHelpers');
 const syncthingFolderStateMachine = require('../appMonitoring/syncthingFolderStateMachine');
-const { ConfigMethod } = require('../utils/syncthingConstants');
 // Accessed through the module object, not destructured: a destructured binding
 // is fixed at load and cannot be substituted, so the two-writer rule could not be
 // exercised against a stated silence verdict.
-const peerFolderLiveness = require('../appMonitoring/peerFolderLiveness');
-const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const globalCommand = require('../appManagement/globalCommand');
 const appVolumeService = require('./appVolumeService');
 const volumeService = require('../utils/volumeService');
@@ -80,109 +67,11 @@ const contentBlobService = require('./contentBlobService');
 const contentSlotService = require('./contentSlotService');
 const operationRegistry = require('../utils/operationRegistry');
 const { Privilege, authOf } = require('../utils/privileges');
-const syncthingService = require('../syncthingService');
 const IOUtils = require('../IOUtils');
 const fluxCommunicationMessagesSender = require('../fluxCommunicationMessagesSender');
 const { peerManager } = require('../utils/peerState');
-const { peerComponentState, anyPeerHoldsComponent } = require('./peerComponentProbe');
-const appGiveUp = require('./appGiveUp');
-
-// Active-standby app tracking
-const activePrimaryByIdentifier = new Map();
-// When each identifier's primary was last established. A record with no age is
-// indistinguishable from a fresh one, and the give-up gate reads this to answer
-// "is another node provably the primary" - which, answered from a stale record,
-// clears a node to hand back an app it may still be the writer for. Absence of a
-// recent record is "the election cannot say", not "no primary".
-const primaryElectionCheckedAt = new Map();
-// How long an election record is worth reading: ten election cycles, so one missed
-// pass does not turn every verdict into "cannot say", and the window follows the
-// cycle wherever it is set.
-const PRIMARY_ELECTION_STALE_MS = config.get('fluxapps.masterSlaveIntervalMs') * 10;
-const scheduledPrimaryStart = new Map();
-// Components already announced as operator-stopped. A reporting latch only - nothing
-// reads it to make a decision - so that the exclusion is stated once on entry (and again
-// after a restart) instead of on every pass.
-const operatorStoppedAnnounced = new Set();
-// Same latch for a component the give-up pass has standing down.
-const standDownAnnounced = new Set();
-// Same latch for the no-primary announcement: stated once when an app enters the
-// no-primary state, cleared when FDM reports a primary again.
-const noPrimaryAnnounced = new Set();
-
-/**
- * Get the FDM index based on app name first letter (distributes across 4 servers)
- * @param {string} appName - Application name
- * @returns {number} FDM index (1-4)
- */
-function getFdmIndex(appName) {
-  const firstLetter = appName.substring(0, 1).toLowerCase();
-  if (firstLetter.match(/[h-n]/)) {
-    return 2;
-  }
-  if (firstLetter.match(/[o-u]/)) {
-    return 3;
-  }
-  if (firstLetter.match(/[v-z]/)) {
-    return 4;
-  }
-  return 1; // a-g or any other character
-}
-
-/**
- * Get master IP for an app from FDM using the /appips endpoint.
- * Tries EU, USA, and ASIA FDM servers in order until one succeeds.
- * @param {string} appName - Application name
- * @param {Object} axiosOptions - Axios request options
- * @returns {Promise<{ip: string|null, fdmOk: boolean}>} The master IP (FDM returns a bare IP;
- *   compare it with ipsMatch, which ignores the port) and success status
- */
-async function getMasterIpFromFdm(appName, axiosOptions) {
-  const fdmIndex = getFdmIndex(appName);
-  const fdmRegions = config.get('fdm.regions').map((region) => ({
-    name: region.name,
-    baseUrl: region.baseUrlTemplate.replace('%i', fdmIndex),
-  }));
-
-  // Whether any region SAID something - a primary, none, or that the app is
-  // unknown to it. A region that could not be reached, or was still starting,
-  // said nothing, and a node that heard nothing from anyone must not read the
-  // silence as "there is no primary".
-  let answered = false;
-
-  for (const region of fdmRegions) {
-    try {
-      const url = `${region.baseUrl}/appips/${appName}`;
-      // eslint-disable-next-line no-await-in-loop
-      const response = await serviceHelper.axiosGet(url, axiosOptions);
-
-      if (response.data && response.data.status === 'success' && response.data.data) {
-        answered = true;
-        const { ips } = response.data.data;
-        if (ips && ips.length > 0) {
-          // Return the first IP, stripping the port if present
-          const ip = extractIp(ips[0]);
-          log.debug(`getMasterIpFromFdm: Got IP ${ip} for app ${appName} from ${region.name} FDM`);
-          return { ip, fdmOk: true };
-        }
-      }
-      // No IPs returned from this region, try next
-      log.debug(`getMasterIpFromFdm: No IPs returned from ${region.name} FDM for app ${appName}`);
-    } catch (error) {
-      if (error.response && error.response.status === 404) {
-        answered = true;
-        log.debug(`getMasterIpFromFdm: App ${appName} not found in ${region.name} FDM`);
-      } else if (error.response && error.response.status === 503) {
-        log.debug(`getMasterIpFromFdm: ${region.name} FDM service starting up for app ${appName}`);
-      } else {
-        log.error(`getMasterIpFromFdm: Failed to reach ${region.name} FDM for app ${appName}: ${error.message}`);
-      }
-      // Continue to next region
-    }
-  }
-
-  return { ip: null, fdmOk: answered };
-}
+const activeStandbyElection = require('./activeStandbyElection');
+const primaryRole = require('./primaryRole');
 
 /**
  * Redeploy a single component of an application.
@@ -771,106 +660,6 @@ async function recordedSyncFolder(identifier) {
 }
 
 /**
- * Changes the type of a syncthing folder.
- * @param {string} folderId - the folder's id, as the instance's resources record
- *   it. For an app registered before v9 it is not the name of the component's
- *   directory.
- * @param {string} folderType - 'receiveonly' or 'sendreceive'
- * @returns {Promise<boolean>} - true if successful, false otherwise
- */
-async function changeSyncthingFolderType(folderId, folderType) {
-  try {
-
-    log.debug(`Changing syncthing folder ${folderId} to ${folderType} mode`);
-
-    // Get current folder configuration
-    // getConfigFolders answers the rows themselves, or throws - the envelope is
-    // put back on only by the Api half. Read as an envelope, `.status` was
-    // undefined, so this refused every folder change it was ever asked to make.
-    const folders = await syncthingService.getConfigFolders();
-    if (!Array.isArray(folders)) {
-      log.error(`Failed to get syncthing folders: ${JSON.stringify(folders)}`);
-      return false;
-    }
-
-    const folder = folders.find((f) => f.id === folderId);
-
-    if (!folder) {
-      log.error(`Syncthing folder ${folderId} not found`);
-      return false;
-    }
-
-    // Check if already in desired mode
-    if (folder.type === folderType) {
-      log.debug(`Syncthing folder ${folderId} is already in ${folderType} mode`);
-      return true;
-    }
-
-    // Update folder type using PATCH. It answers or throws, and the catch
-    // below is the only place a refusal is reported from.
-    await syncthingService.adjustConfigFolders({
-      method: ConfigMethod.PATCH,
-      config: { type: folderType },
-      id: folder.id,
-    });
-
-    log.debug(`Successfully changed syncthing folder ${folderId} to ${folderType} mode`);
-    return true;
-  } catch (error) {
-    log.error(`Error changing syncthing folder type for ${folderId}: ${error.message}`);
-    return false;
-  }
-}
-
-/**
- * Helper function to apply permissions fix on persistent container data
- * Fixes permissions on appdata and all additional mount points
- * @param {string} appId - Application ID
- * @returns {Promise<boolean>} - true if successful, false otherwise
- */
-async function applyPermissionsFix(appname, appId) {
-  try {
-    const appPath = `${appsFolder}${appId}`;
-    log.debug(`Applying permissions fix for app: ${appname}`);
-
-    const deployment = await deploymentProvider.getInstalledDeployment(appname);
-    const mounts = deployment
-      ? deployment.componentEntries().flatMap(([, comp]) => comp.mounts)
-      : [];
-    const hasContent = mounts.some((mount) => mount.perms);
-
-    if (!hasContent) {
-      // No injected content to protect: the blanket recursive fix, unchanged. The
-      // root-owned synced data tree (syncthing runs as root) must be accessible to a
-      // container that may run as a non-root uid.
-      await serviceHelper.runCommand('chmod', { params: ['-R', '777', appPath], runAsRoot: true });
-    } else {
-      // The container only sees its bind-mounted sources, so fix each in ONE pass —
-      // never recursively 777 the whole tree and walk content back. A data/synced
-      // tree gets the recursive 777; injected content gets its own root-owned 0644
-      // default (world-readable so the container reads it, never world-writable).
-      // No path twice.
-      await serviceHelper.runCommand('chmod', { params: ['777', appPath], runAsRoot: true });
-      for (const mount of mounts) {
-        if (mount.perms) {
-          // eslint-disable-next-line no-await-in-loop
-          await appVolumeService.applyMountPerms(mount);
-        } else {
-          // eslint-disable-next-line no-await-in-loop
-          await serviceHelper.runCommand('chmod', { params: ['-R', '777', mount.Source], runAsRoot: true });
-        }
-      }
-    }
-
-    log.debug(`Successfully applied permissions fix for app: ${appname}`);
-    return true;
-  } catch (error) {
-    log.error(`Error applying permissions fix for ${appname}: ${error.message}`);
-    return false;
-  }
-}
-
-/**
  * Resolve an app or component name to the component identifiers the reconciler keys
  * on: a component name (contains '_') resolves to itself with no spec lookup; a
  * whole-app name expands to every component via its deployment.
@@ -1022,72 +811,6 @@ async function stopApplication(appname, onWait) {
   }
   if (stillRunning.length) {
     throw new Error(`Refusing to touch ${appname}'s data: ${stillRunning.join(', ')} is still running`);
-  }
-}
-
-/**
- * Makes this node the primary of an active-standby component: its data is
- * re-owned with its syncthing folder held receiveonly, the folder goes back to
- * sendreceive, and the start is handed to the reconciler.
- *
- * The component names both things the workflow touches: its directory, named
- * by its identifier, and its syncthing folder, under the id the installed
- * resources record, which for an app registered before v9 is another name.
- * @param {object} comp - the DeploymentComponent of an installed deployment
- * @returns {Promise<void>}
- */
-async function promoteApplicationToPrimary(comp) {
-  const { identifier } = comp;
-  try {
-    const directory = dockerService.getAppIdentifier(identifier);
-    const folderId = comp.syncFolderId;
-    // Idempotence backstop for every promote path: a promotion already in effect
-    // is the reconciler's to enforce; re-running the workflow would only re-chmod
-    // the tree and cycle the syncthing folder mode.
-    if (appReconciler.getControllerDesired(identifier) === 'running') return;
-
-    // A fact: this node has decided to become primary and is committing to it.
-    // Published AFTER the idempotence backstop above, not before it as
-    // development does - dev has no such backstop, and announcing ahead of it
-    // would claim a promotion that then returns without doing anything.
-    //
-    // The cadence around this decision is a COUNTER, not an event: a pass that
-    // considered promotion twenty times a minute would drown the stream, and
-    // what a reader wants from it is the number. See the rule at the top of
-    // fluxEventBus.js.
-    fluxEventBus.publish('masterSlave:started', { identifier });
-    fluxEventBus.count('masterSlave:decision', identifier, 'started');
-
-    log.info(`Promoting ${identifier} to primary (permissions fix + syncthing folder cycle)`);
-
-    // Quiesce inbound replication while the fix runs: receiveonly stops syncthing
-    // overwriting the data we are about to re-own.
-    const toReceiveOnly = await changeSyncthingFolderType(folderId, 'receiveonly');
-    if (!toReceiveOnly) {
-      log.warn(`Failed to change syncthing folder to receiveonly for ${identifier}, continuing anyway...`);
-    }
-
-    // Re-own the persistent container data before the app starts writing to it.
-    const permissionsApplied = await applyPermissionsFix(identifier, directory);
-    if (!permissionsApplied) {
-      log.error(`Failed to apply permissions fix for ${identifier}, aborting container start`);
-      return;
-    }
-
-    // Restore two-way sync now the data is fixed; a primary must be sendreceive.
-    const toSendReceive = await changeSyncthingFolderType(folderId, 'sendreceive');
-    if (!toSendReceive) {
-      log.error(`Failed to change syncthing folder to sendreceive for ${identifier}, aborting container start - cannot become primary without sendreceive mode`);
-      return;
-    }
-
-    // Hand the run-state decision to the reconciler (the single container actuator);
-    // permissions are already fixed at this point. Its desired-state transition
-    // line is the workflow's success marker.
-    appReconciler.setControllerDesired(identifier, 'running', 'masterSlave primary (synced)');
-  } catch (error) {
-    log.error(`Error in promoteApplicationToPrimary for ${identifier}: ${error.message}`);
-    // Do not start the app if there was an error in the workflow
   }
 }
 
@@ -1477,8 +1200,9 @@ async function holdPartialRestore(appname, swaps) {
     if (swap.synced) {
       const { folderId } = swap;
       // eslint-disable-next-line no-await-in-loop
-      const demoted = await changeSyncthingFolderType(folderId, 'receiveonly');
-      if (!demoted) {
+      // A folder syncthing does not know answers 404: nothing replicates it.
+      const demoted = await primaryRole.demoteForSafety(folderId);
+      if (demoted.status !== 'success' && demoted.data?.httpStatus !== 404) {
         log.error(`restore - SAFETY: ${folderId} holds partial data and could not be demoted to receiveonly`);
       }
       // eslint-disable-next-line no-await-in-loop
@@ -1598,7 +1322,7 @@ async function runRestoreTask(appname, restore, type, zelidauth, report, { force
     // answer does not block a restore, as it does not block an election.
     if (!force && targets.some((target) => target.elected)) {
       const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
-      const { ip: primaryIp, fdmOk } = await getMasterIpFromFdm(appname, { timeout: 10_000 });
+      const { ip: primaryIp, fdmOk } = await activeStandbyElection.getMasterIpFromFdm(appname, { timeout: 10_000 });
       if (fdmOk && primaryIp && !ipsMatch(primaryIp, localSocketAddr)) {
         throw new Error(`Refused: restore on ${primaryIp}, it holds the live copy`);
       }
@@ -2552,547 +2276,11 @@ async function shutdownPlanResync() {
 }
 
 /**
- * Whether THIS node is the elected g: primary for an app. Three-state, and the
- * three are not interchangeable.
- *
- *   true   this node is the primary - it is the one writing, so it must stand
- *          down before the app can be handed back
- *   false  another node provably is - this node holds a quiescent copy
- *   null   the election cannot say. NOT "there is no primary": a caller that
- *          treats it as false hands an app back from under a writer.
- *
- * Read from the coordinator's own record of each of the app's g: component
- * identifiers, and only while that record is recent enough to mean anything.
- *
- * @param {string[]} identifiers the app's g: component identifiers, as its
- *   deployment names them
- * @param {string} localSocketAddr
- * @param {number} [now]
- * @param {{primaries: Map<string, string>, checkedAt: Map<string, number>}} [records]
- *   the election records; this module's own
- * @returns {boolean|null}
+ * One pass of the activeStandby election - see activeStandbyElection.
+ * @returns {Promise<void>}
  */
-function isElectedPrimaryHere(identifiers, localSocketAddr, now = Date.now(), records = {
-  primaries: activePrimaryByIdentifier, checkedAt: primaryElectionCheckedAt,
-}) {
-  let namesAPrimary = false;
-  for (const identifier of identifiers) {
-    const checkedAt = records.checkedAt.get(identifier);
-    if (checkedAt === undefined || now - checkedAt > PRIMARY_ELECTION_STALE_MS) continue;
-    const masterIp = records.primaries.get(identifier);
-    if (!masterIp) continue;
-    namesAPrimary = true;
-    if (ipsMatch(masterIp, localSocketAddr)) return true;
-  }
-  return namesAPrimary ? false : null;
-}
-
-/**
- * Whether THIS node is the elected g: primary of an app's g: components, as
- * appEvacuationSafety asks it: isElectedPrimaryHere at this node's address.
- *
- * @param {string} _appName
- * @param {string[]} identifiers the app's g: component identifiers
- * @returns {Promise<boolean|null>}
- */
-async function isElectedPrimary(_appName, identifiers) {
-  return isElectedPrimaryHere(identifiers, await fluxNetworkHelper.getLocalSocketAddress());
-}
-
-async function coordinateActiveStandbyApps() {
-  // Hoisted so the finally releases ONLY a lease this cycle acquired.
-  let coordinateToken = null;
-  try {
-    // Mark the election cycle in flight (node-global coordinator lease). The
-    // node-wide destructive sweeps (daemon-health wipe, orphan removal) stand
-    // down while we may be starting/stopping standby containers, and the
-    // installer's docker-prune gate checks isHeld(...) for the same reason.
-    coordinateToken = operationRegistry.acquire(operationRegistry.ACTIVE_STANDBY_COORDINATOR_KEY, 'coordinate', 'appOperations', 'activeStandby election cycle');
-    // The election cycle iterates every activeStandby app; pause it while any
-    // folder-set-changing operation is in flight (install/remove/redeploy/reconcile),
-    // node-wide. NOT backup/restore - those are skipped per-app in the loop below,
-    // so one app's backup never freezes the whole election.
-    if (operationRegistry.anyHeldOfType('install', 'remove', 'redeploy', 'rebuild', 'reconcile')) {
-      return;
-    }
-
-    // Wait for the syncthing monitor's first run before electing any primary:
-    // that run performs the startup mount-safety check (switching unsafe
-    // sendreceive folders to receiveonly). Electing earlier could start a
-    // master on a sendreceive-but-unmounted folder and lose data. The monitor
-    // clears the flag only after a fully successful cycle.
-    if (globalState.syncthingAppsFirstRun) {
-      log.info('activeStandby: syncthing first-run mount-safety not complete yet, skipping this cycle');
-      return;
-    }
-
-    try {
-      const syncthingHealth = await syncthingService.getHealth();
-      if (syncthingHealth?.status !== 'OK') {
-        log.warn('activeStandby: Syncthing is not available or not healthy, skipping this cycle');
-        return;
-      }
-    } catch (syncthingError) {
-      log.warn(`activeStandby: Failed to check syncthing health: ${syncthingError.message}, skipping this cycle`);
-      return;
-    }
-
-    const deployments = await deploymentProvider.listInstalledDeployments();
-    const runningContainers = await listRunningContainers();
-    // One peer view for this pass, never carried into the next: a peer's
-    // liveness is the one thing here that must not be remembered - held over, it
-    // reports a recovered holder as dead, or a dead one as serving, which is the
-    // judgement this path exists to make.
-    const liveness = peerFolderLiveness.createPeerFolderLiveness();
-
-    const { LABEL_KEYS, readLabel } = await getSpecBackend();
-    const runningAppsNames = runningContainers.map((container) => dockerService.containerIdentifier(
-      { labels: container.Labels, name: container.Names?.[0] }, { LABEL_KEYS, readLabel },
-    ));
-    const agent = new https.Agent({ rejectUnauthorized: false });
-    const axiosOptions = { timeout: 10_000, httpsAgent: agent };
-
-    const validIdentifiers = new Set();
-    for (const deployment of deployments) {
-      for (const [, deployComp] of deployment.componentEntries()) {
-        if (deployComp.hasActiveStandbySyncthing()) {
-          validIdentifiers.add(deployComp.identifier);
-        }
-      }
-    }
-
-    for (const identifier of activePrimaryByIdentifier.keys()) {
-      if (!validIdentifiers.has(identifier)) {
-        activePrimaryByIdentifier.delete(identifier);
-        primaryElectionCheckedAt.delete(identifier);
-        log.info(`activeStandby: Cleaned up stale entry from activePrimaryByIdentifier: ${identifier}`);
-      }
-    }
-
-    for (const identifier of scheduledPrimaryStart.keys()) {
-      if (!validIdentifiers.has(identifier)) {
-        scheduledPrimaryStart.delete(identifier);
-        log.info(`activeStandby: Cleaned up stale entry from scheduledPrimaryStart: ${identifier}`);
-      }
-    }
-
-    // Silently - the entries are reporting latches, not state anyone acts on, and an app
-    // going away is not itself an election event worth a line.
-    for (const identifier of operatorStoppedAnnounced) {
-      if (!validIdentifiers.has(identifier)) operatorStoppedAnnounced.delete(identifier);
-    }
-    for (const identifier of standDownAnnounced) {
-      if (!validIdentifiers.has(identifier)) standDownAnnounced.delete(identifier);
-    }
-    for (const identifier of noPrimaryAnnounced) {
-      if (!validIdentifiers.has(identifier)) noPrimaryAnnounced.delete(identifier);
-    }
-
-    const { receiveOnlySyncthingAppsCache } = globalState;
-
-    for (const deployment of deployments) {
-      const { appName } = deployment;
-      let fdmOk = true;
-      let identifier;
-      let needsToBeChecked = false;
-      let appId;
-      let folderId;
-      let activeStandbyComp = null;
-      if (operationRegistry.isHeld(appName)) {
-        log.info(`activeStandby: operation in progress for ${appName}, skipping`);
-        fluxEventBus.count('masterSlave:decision', appName, 'skippedBusy');
-        // eslint-disable-next-line no-continue
-        continue;
-      }
-      for (const [, deployComp] of deployment.componentEntries()) {
-        if (deployComp.hasActiveStandbySyncthing()) {
-          ({ identifier } = deployComp);
-          appId = dockerService.getAppIdentifier(identifier);
-          folderId = deployComp.syncFolderId;
-          needsToBeChecked = true;
-          activeStandbyComp = deployComp;
-          break;
-        }
-      }
-      if (needsToBeChecked) {
-        // operator explicitly stopped this g: component; don't elect or act on it
-        // eslint-disable-next-line no-await-in-loop
-        if (await appsRuntimeState.isOperatorStopped(identifier)) {
-          // Every pass that honours the stop is tallied; the announcement below
-          // is the state change, made once.
-          fluxEventBus.count('masterSlave:decision', identifier, 'operatorStopped');
-          // Announced on entry rather than every cycle: an operator stop is durable, so
-          // at a 30s cadence a per-pass line is noise while silence is worse - the
-          // component sits unelected indefinitely with the loop emitting nothing about
-          // it, which is indistinguishable in the logs from a loop that has died. Two
-          // separate investigations with root access read it exactly that way.
-          if (!operatorStoppedAnnounced.has(identifier)) {
-            operatorStoppedAnnounced.add(identifier);
-            log.info(`activeStandby: ${identifier} is operator-stopped - excluded from primary election until it is started`);
-            fluxEventBus.publish('activeStandby:decided', { identifier, action: 'operatorStopExcluded' });
-          }
-          // eslint-disable-next-line no-continue
-          continue;
-        }
-        // Cleared when the lock lifts so a later stop is announced rather than swallowed.
-        if (operatorStoppedAnnounced.delete(identifier)) {
-          fluxEventBus.publish('activeStandby:decided', { identifier, action: 'operatorStopCleared' });
-        }
-        // A component the give-up pass has stood down is not a candidate: this
-        // node stopped it so it could hand the app back, and electing it again
-        // here would restart it within a cycle. Checked in the same place and
-        // for the same reason as operator-stopped, which is the other way a
-        // component this node holds is deliberately not running.
-        if (appGiveUp.isStandingDown(identifier)) {
-          fluxEventBus.count('masterSlave:decision', identifier, 'standingDown');
-          if (!standDownAnnounced.has(identifier)) {
-            standDownAnnounced.add(identifier);
-            log.info(`activeStandby: ${identifier} is standing down to be handed back - excluded from primary election`);
-            fluxEventBus.publish('activeStandby:decided', { identifier, action: 'standDownExcluded' });
-          }
-          // eslint-disable-next-line no-continue
-          continue;
-        }
-        if (standDownAnnounced.delete(identifier)) {
-          fluxEventBus.publish('activeStandby:decided', { identifier, action: 'standDownCleared' });
-        }
-        // The grant plane, when open for this app, IS the intent source: the
-        // published masterlease record replaces the FDM read (FDM itself is
-        // unchanged and keeps routing to what runs). No record yet means no
-        // primary exists — becoming one goes through grant acquisition, which
-        // the gate is pursuing, never through the no-primary self-election
-        // branch below.
-        // eslint-disable-next-line no-await-in-loop
-        const grantIntent = await mastershipGrantGate.masterIntent(identifier, activeStandbyComp);
-        if (grantIntent && !grantIntent.ip) {
-          if (!noPrimaryAnnounced.has(identifier)) {
-            noPrimaryAnnounced.add(identifier);
-            log.info(`activeStandby: app:${appName} has no granted primary yet, awaiting acquisition`);
-          }
-          // eslint-disable-next-line no-continue
-          continue;
-        }
-        // Get master IP from FDM using the new /appips endpoint
-        // eslint-disable-next-line no-await-in-loop
-        const fdmResult = grantIntent ?? await getMasterIpFromFdm(appName, axiosOptions);
-        const { ip } = fdmResult;
-        ({ fdmOk } = fdmResult);
-
-        if (!fdmOk) {
-          log.warn(`activeStandby: All FDM services failed for app:${appName}, skipping primary selection for this cycle`);
-          fluxEventBus.count('masterSlave:decision', appName, 'fdmUnreachable');
-          // eslint-disable-next-line no-continue
-          continue;
-        }
-        if (fdmOk) {
-          // no ip means there was no row with ip on fdm
-          // down means there was a row ip with status down
-          // eslint-disable-next-line no-await-in-loop
-          let localSocketAddr;
-          try {
-            // eslint-disable-next-line no-await-in-loop
-            localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
-          } catch (error) {
-            log.error(`activeStandby: Failed to get my IP for app:${appName}, error: ${error.message}`);
-            // eslint-disable-next-line no-continue
-            continue;
-          }
-          if (localSocketAddr) {
-            // Validate ip is a string if it exists
-            if (ip && typeof ip !== 'string') {
-              log.error(`activeStandby: Invalid IP type from FDM for app:${appName}, got: ${typeof ip}`);
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-            if ((!ip)) {
-              if (!noPrimaryAnnounced.has(identifier)) {
-                noPrimaryAnnounced.add(identifier);
-                log.info(`activeStandby: app:${appName} has currently no primary set`);
-              }
-              if (!runningAppsNames.includes(identifier)) {
-                // A prior pass already elected this node: desired-running sits with the
-                // reconciler, which owns the retry/backoff for a container that will not
-                // stay up. Re-electing every pass would re-probe every peer and re-run
-                // the permissions workflow to no effect.
-                if (appReconciler.getControllerDesired(identifier) === 'running') {
-                  // eslint-disable-next-line no-continue
-                  continue;
-                }
-                // Check if app is ready (syncthing data is synced) before allowing it to become primary.
-                // syncedMark rejects a mark left behind by a previous incarnation of this
-                // component's volume - promoting on one would serve an empty disk as primary.
-                // eslint-disable-next-line no-await-in-loop
-                let isReady = (await appCaches.syncedMark(receiveOnlySyncthingAppsCache, appId))?.restarted === true;
-
-                // Fallback: If not in cache or not ready, check if syncthing folder is already in sendreceive mode
-                // This handles the case where folder is synced but cache was cleared/lost
-                if (!isReady) {
-                  try {
-                    // eslint-disable-next-line no-await-in-loop
-                    const allSyncthingFolders = await syncthingService.getConfigFolders();
-                    if (Array.isArray(allSyncthingFolders)) {
-                      // eslint-disable-next-line no-restricted-syntax
-                      for (const syncthingFolder of allSyncthingFolders) {
-                        if (syncthingFolder.id === folderId && syncthingFolder.type === 'sendreceive') {
-                          log.info(`activeStandby: app:${appName} folder is already in sendreceive mode, treating as ready`);
-                          isReady = true;
-                          break;
-                        }
-                      }
-                    }
-                  } catch (error) {
-                    log.error(`activeStandby: Failed to check syncthing folder status for ${appName}: ${error.message}`);
-                  }
-                }
-
-                if (!isReady) {
-                  log.info(`activeStandby: app:${appName} is not ready yet (syncthing not synced), skipping primary selection for this cycle`);
-                  // eslint-disable-next-line no-continue
-                  continue;
-                }
-                // eslint-disable-next-line no-await-in-loop
-                const runningAppList = await registryManager.appLocation(appName);
-                runningAppList.sort((a, b) => {
-                  if (!a.runningSince && b.runningSince) {
-                    return -1;
-                  }
-                  if (a.runningSince && !b.runningSince) {
-                    return 1;
-                  }
-                  if (a.runningSince < b.runningSince) {
-                    return -1;
-                  }
-                  if (a.runningSince > b.runningSince) {
-                    return 1;
-                  }
-                  if (a.ip < b.ip) {
-                    return -1;
-                  }
-                  if (a.ip > b.ip) {
-                    return 1;
-                  }
-                  return 0;
-                });
-                const index = runningAppList.findIndex((x) => ipsMatch(x.ip, localSocketAddr));
-
-                // Docker reports names with a leading slash, and getAppIdentifier yields
-                // exactly the container name for this component. Compare whole names: a
-                // substring test also matches a longer app whose name merely begins the
-                // same way - myapp against myapp2, or simplexsmp against simplexsmp1,
-                // both live on the network - and a false positive here reads as "a peer
-                // already runs this", so the component is never started at all.
-                // A peer that has not moved the app onto its identity, or runs 8.x,
-                // holds the component under its 8.x name, the folder id.
-                const peerRunsThisComponent = (appsRunning) => (appsRunning || []).some(
-                  (app) => (app.Names || []).some((name) => [appId, folderId].includes(name.replace(/^\//, ''))),
-                );
-
-                // 'lower' consults only peers ahead of us in the ordering; 'all' consults
-                // every other peer. The index-0 start needs 'all' because it has no
-                // lower-index peer to ask, while FDM's view lags a node actually starting
-                // by ~110s measured - so an index-0 node restarting inside another node's
-                // promotion window would otherwise start a second writer on a shared
-                // volume.
-                //
-                // Probed CONCURRENTLY, not in sequence. Each probe is bounded at 10s and
-                // an unreachable peer burns the whole budget, so a sequential walk costs
-                // 10s x peers on the promotion path - paid repeatedly, since the component
-                // is not running locally throughout, and ahead of every later g: app in
-                // the same pass. The per-probe timeout is deliberately NOT shortened: this
-                // check fails open, so a peer that answers slowly must still get its full
-                // budget or a live primary reads as absent.
-                const peerRunningComponent = async (scope) => {
-                  const peers = [];
-                  for (let i = 0; i < runningAppList.length; i += 1) {
-                    if (scope === 'lower' && i >= index) break;
-                    const node = runningAppList[i];
-                    if (node && !ipsMatch(node.ip, localSocketAddr)) peers.push({ i, node });
-                  }
-                  if (!peers.length) return false;
-                  // Probed CONCURRENTLY, not in sequence. Each probe is bounded at 10s and
-                  // an unreachable peer burns the whole budget, so a sequential walk costs
-                  // 10s x peers on the promotion path - paid repeatedly, since the
-                  // component is not running locally throughout, and ahead of every later
-                  // g: app in the same pass.
-                  const verdicts = await Promise.all(peers.map(({ i, node }) => peerComponentState({
-                    appId, folderId, aliases: folderId === appId ? [] : [folderId], identifier, appName, peerSocketAddr: node.ip, label: `index ${i}`, liveness,
-                  })));
-                  return anyPeerHoldsComponent(verdicts);
-                };
-
-                // The remembered primary is this node, but the component is not running
-                // here - so the memory is stale: we were stopped, or the FluxOS process
-                // outlived the container. Keeping it disqualifies this node twice over,
-                // because the no-history starts below require no remembered primary and
-                // the previous-primary branch requires the remembered primary to be a
-                // DIFFERENT node. The last primary is then permanently unelectable, and
-                // when every instance is in that state the app cannot come back at all
-                // without a restart to clear this map.
-                if (activePrimaryByIdentifier.has(identifier)
-                  && ipsMatch(activePrimaryByIdentifier.get(identifier), localSocketAddr)
-                  && !runningAppsNames.includes(identifier)) {
-                  activePrimaryByIdentifier.delete(identifier);
-                  primaryElectionCheckedAt.delete(identifier);
-                  log.info(`activeStandby: cleared this node's stale primary record for ${identifier} - it is not running here`);
-                  fluxEventBus.publish('activeStandby:decided', { identifier, action: 'stalePrimaryEvicted' });
-                }
-
-                if (index === 0 && !activePrimaryByIdentifier.has(identifier)) {
-                  // Index 0 with no history. Every other start path probes peers first;
-                  // this one has no lower-index node to consult, so it asks all of them.
-                  // eslint-disable-next-line no-await-in-loop
-                  const peerRunning = await peerRunningComponent('all');
-                  if (peerRunning) {
-                    log.info(`activeStandby: not starting component:${identifier} at index 0 - a peer is already running it`);
-                    fluxEventBus.publish('activeStandby:decided', { identifier, action: 'peerProbeBlocked', index });
-                  } else {
-                    promoteApplicationToPrimary(activeStandbyComp);
-                    log.info(`activeStandby: starting docker component:${identifier} index: ${index}`);
-                    fluxEventBus.publish('activeStandby:decided', { identifier, action: 'primaryPromoted', index });
-                  }
-                } else if (!scheduledPrimaryStart.has(identifier) && activePrimaryByIdentifier.has(identifier) && !ipsMatch(activePrimaryByIdentifier.get(identifier), localSocketAddr)) {
-                  // There was a previous master (not me), and it's no longer on FDM
-                  const { CancelToken } = axios;
-                  const source = CancelToken.source();
-                  const timeout = 10 * 1000; // 10 seconds
-                  // Cleared once the request settles, so a completed check leaves no live
-                  // timer behind.
-                  const cancelTimer = setTimeout(() => source.cancel('Operation canceled by the user.'), timeout * 2);
-                  const previousMasterIp = activePrimaryByIdentifier.get(identifier);
-                  // Look up the correct port from runningAppList since FDM API returns IP without port
-                  const previousMasterNode = runningAppList.find((x) => ipsMatch(x.ip, previousMasterIp));
-                  const ipToCheckAppRunning = extractIp(previousMasterIp);
-                  const portToCheckAppRunning = extractPort(previousMasterNode?.ip);
-                  let previousMasterStillRunning = false;
-                  try {
-                    // eslint-disable-next-line no-await-in-loop
-                    const response = await axios.get(`http://${ipToCheckAppRunning}:${portToCheckAppRunning}/apps/listrunningapps`, { timeout, cancelToken: source.token });
-                    if (peerRunsThisComponent(response.data.data)) {
-                      log.info(`activeStandby: component:${identifier} is not on fdm but previous master is running it at: ${ipToCheckAppRunning}:${portToCheckAppRunning}`);
-                      previousMasterStillRunning = true;
-                    }
-                  } catch (error) {
-                    log.info(`activeStandby: Failed to reach previous master at ${ipToCheckAppRunning}:${portToCheckAppRunning} for app:${appName}, will proceed with primary selection. Error: ${error.message}`);
-                  } finally {
-                    clearTimeout(cancelTimer);
-                  }
-                  if (previousMasterStillRunning) {
-                    // This app is settled - move to the next one. Returning here abandoned
-                    // the whole pass, so every g: app ordered after this one lost its
-                    // election cycle for as long as the previous master kept running.
-                    // eslint-disable-next-line no-continue
-                    continue;
-                  }
-                  // Previous master is not running, determine next primary
-                  if (index === 0) {
-                    promoteApplicationToPrimary(activeStandbyComp);
-                    log.info(`activeStandby: starting docker component:${identifier} index: ${index}`);
-                  } else {
-                    const previousMasterIndex = runningAppList.findIndex((x) => ipsMatch(x.ip, activePrimaryByIdentifier.get(identifier)));
-                    let timetoStartApp = Date.now();
-                    if (previousMasterIndex >= 0) {
-                      log.info(`activeStandby: app:${appName} had primary running at index: ${previousMasterIndex}`);
-                      if (index > previousMasterIndex) {
-                        timetoStartApp += (index - 1) * 3 * 60 * 1000;
-                      } else {
-                        timetoStartApp += index * 3 * 60 * 1000;
-                      }
-                    } else {
-                      timetoStartApp += index * 3 * 60 * 1000;
-                    }
-                    if (timetoStartApp <= Date.now()) {
-                      // Time to start, but check if lower-index nodes are running
-                      // eslint-disable-next-line no-await-in-loop
-                      const lowerNodeRunning = await peerRunningComponent('lower');
-                      if (!lowerNodeRunning) {
-                        promoteApplicationToPrimary(activeStandbyComp);
-                        log.info(`activeStandby: starting docker component:${identifier} index: ${index}`);
-                      }
-                    } else {
-                      log.info(`activeStandby: will start docker app:${appName} at ${timetoStartApp.toString()}`);
-                      scheduledPrimaryStart.set(identifier, timetoStartApp);
-                    }
-                  }
-                } else if (scheduledPrimaryStart.has(identifier) && scheduledPrimaryStart.get(identifier) <= Date.now()) {
-                  // Scheduled start time has arrived, check if lower-index nodes are running
-                  // eslint-disable-next-line no-await-in-loop
-                  const lowerNodeRunning = await peerRunningComponent('lower');
-                  if (!lowerNodeRunning) {
-                    promoteApplicationToPrimary(activeStandbyComp);
-                    log.info(`activeStandby: starting docker component:${identifier} index: ${index} that was scheduled to start at ${scheduledPrimaryStart.get(identifier).toString()}`);
-                    scheduledPrimaryStart.delete(identifier);
-                  } else {
-                    log.info(`activeStandby: not starting app:${appName} index: ${index} - lower-index node is already running`);
-                    scheduledPrimaryStart.delete(identifier);
-                  }
-                } else if (index > 0 && !activePrimaryByIdentifier.has(identifier) && !scheduledPrimaryStart.has(identifier)) {
-                  // Non-primary node with no history - schedule start based on index
-                  const timetoStartApp = Date.now() + (index * config.get('fluxapps.activeStandbyStaggerMs'));
-                  log.info(`activeStandby: scheduling app:${appName} index: ${index} to start at ${timetoStartApp.toString()}`);
-                  scheduledPrimaryStart.set(identifier, timetoStartApp);
-                } else {
-                  // All other cases: don't start
-                  log.info(`activeStandby: not starting app:${appName} index: ${index} - conditions not met for primary selection`);
-                }
-              }
-            } else {
-              // This pass read a primary off FDM: the loop's cadence, tallied.
-              fluxEventBus.count('masterSlave:decision', identifier, 'primaryObserved');
-              noPrimaryAnnounced.delete(identifier);
-              activePrimaryByIdentifier.set(identifier, ip);
-              primaryElectionCheckedAt.set(identifier, Date.now());
-              if (scheduledPrimaryStart.has(identifier)) {
-                log.info(`activeStandby: app:${appName} removed from scheduledPrimaryStart cache, already started on another standby node`);
-                scheduledPrimaryStart.delete(identifier);
-              }
-              if (!ipsMatch(localSocketAddr, ip) && runningAppsNames.includes(identifier)) {
-                // Stop only the active-standby component on this standby node. Sibling components
-                // (e.g. a DB cluster component that needs all instances running) must keep running.
-                appReconciler.setControllerDesired(identifier, 'stopped', 'masterSlave standby');
-                log.info(`activeStandby: stopping docker component:${identifier} it's running on ip:${ip} and localSocketAddr is: ${localSocketAddr}`);
-              } else if (ipsMatch(localSocketAddr, ip) && !runningAppsNames.includes(identifier)) {
-                // Check if app is ready (syncthing data is synced) before starting. As above,
-                // a mark describing a replaced volume must not certify this disk as synced.
-                // eslint-disable-next-line no-await-in-loop
-                let isReady = (await appCaches.syncedMark(receiveOnlySyncthingAppsCache, appId))?.restarted === true;
-
-                // Fallback: If not in cache or not ready, check if syncthing folder is already in sendreceive mode
-                if (!isReady) {
-                  try {
-                    // eslint-disable-next-line no-await-in-loop
-                    const allSyncthingFolders = await syncthingService.getConfigFolders();
-                    if (Array.isArray(allSyncthingFolders)) {
-                      // eslint-disable-next-line no-restricted-syntax
-                      for (const syncthingFolder of allSyncthingFolders) {
-                        if (syncthingFolder.id === folderId && syncthingFolder.type === 'sendreceive') {
-                          log.info(`activeStandby: app:${appName} folder is already in sendreceive mode, treating as ready`);
-                          isReady = true;
-                          break;
-                        }
-                      }
-                    }
-                  } catch (error) {
-                    log.error(`activeStandby: Failed to check syncthing folder status for ${appName}: ${error.message}`);
-                  }
-                }
-
-                if (isReady) {
-                  promoteApplicationToPrimary(activeStandbyComp);
-                  log.info(`activeStandby: starting docker component:${identifier}`);
-                } else {
-                  log.info(`activeStandby: app:${appName} is registered as primary on FDM but not ready yet (syncthing not synced), skipping start for this cycle`);
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  } catch (error) {
-    log.error(`activeStandby: ${error}`);
-  } finally {
-    operationRegistry.release(operationRegistry.ACTIVE_STANDBY_COORDINATOR_KEY, coordinateToken);
-  }
+function coordinateActiveStandbyApps() {
+  return activeStandbyElection.electionPass();
 }
 
 // A pass must never overlap itself: the cadence is a fixed interval, so a pass that
@@ -3218,9 +2406,8 @@ module.exports = {
   // Its five call sites are all inside coordinateActiveStandbyApps and all
   // fire-and-forget, so driving it through the election would assert the
   // election rather than the promotion.
-  promoteApplicationToPrimary,
   // Exported so the two-writer rule can be exercised without driving the whole
   // election: the loop reaches it only through the grant, FDM and index gates.
-  isElectedPrimary,
-  isElectedPrimaryHere,
+  isElectedPrimary: activeStandbyElection.isElectedPrimary,
+  isElectedPrimaryHere: activeStandbyElection.isElectedPrimaryHere,
 };

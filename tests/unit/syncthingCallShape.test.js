@@ -284,7 +284,7 @@ describe('syncthing call shape', () => {
       'ZelBack/src/services/appMonitoring/syncthingEventsConsumer.js',
       'ZelBack/src/services/appMonitoring/syncthingMonitor.js',
       'ZelBack/src/services/appMonitoring/peerFolderLiveness.js',
-      'ZelBack/src/services/appLifecycle/appOperations.js',
+      'ZelBack/src/services/appLifecycle/activeStandbyElection.js',
       'ZelBack/src/services/systemService.js',
       'ZelBack/src/services/fluxService.js',
     ]) {
