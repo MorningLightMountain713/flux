@@ -3359,10 +3359,14 @@ describe('AppSyncOrchestrator', () => {
       const roundsBefore = reconcileStub.callCount;
 
       // The peers become askable. That is the level the vacuous round was waiting
-      // on, and it is what resumes the work.
+      // on, and it is what resumes the work. A peer connecting is what asks them
+      // for the state sync, whose answers count only from a peer asked.
       getEligibleSyncPeersStub.returns(peers);
       peerEmitter.emit('syncPeersAvailable');
       await clock.tickAsync(0);
+      peerEmitter.emit('peerConnected', peers[0].key, peers[0].connectionId);
+      await clock.tickAsync(0);
+      expect(peers.every((p) => p.send.called), 'fixture: the peers were not asked').to.equal(true);
       completeEphemeral();
       await clock.tickAsync(0);
 

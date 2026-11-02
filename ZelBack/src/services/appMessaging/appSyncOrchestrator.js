@@ -694,9 +694,14 @@ class AppSyncOrchestrator {
       return;
     }
     if (this.#syncCompletions[syncType] === undefined) return;
-    // A completion naming a request this round is not waiting on answers a
-    // question already over, and counts for nothing.
-    if (id !== null && !this.#requests.isOpen(peerKey, { id })) return;
+    // A completion counts only while its request is open: one that arrives after
+    // it ended (its deadline, or an answer that could not be verified or
+    // recorded), or that names a request this round is not waiting on, answers a
+    // question already over.
+    if (!this.#requests.isOpen(peerKey, id === null ? {} : { id })) {
+      log.info(`AppSyncOrchestrator - ${syncType} sync complete from ${peerKey} after its request ended, not counted`);
+      return;
+    }
     this.#syncCompletions[syncType].add(peerKey);
     // Its whole answer is in, so it is no longer being waited on. The record
     // stands as answered: a peer that has given its whole view must not be
