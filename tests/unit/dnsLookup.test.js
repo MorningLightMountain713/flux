@@ -874,6 +874,11 @@ describe('dnsLookup tests', () => {
 
     it('should not resolve the same request without it', async () => {
       // Canary for the test above: the hostname resolves only through the stubbed sources.
+      // The system resolver stands in on the agent, knowing no name under the reserved
+      // .invalid TLD, so the canary asks no real resolver.
+      http.globalAgent.options.lookup = (hostname, options, callback) => {
+        process.nextTick(() => callback(Object.assign(new Error(`getaddrinfo ENOTFOUND ${hostname}`), { code: 'ENOTFOUND' })));
+      };
       let caught = null;
       try {
         await get();

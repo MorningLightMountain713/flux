@@ -113,16 +113,34 @@ net.Socket.prototype.connect = function connect(...args) {
 
   const port = Number(opts.port);
   const host = opts.host || opts.hostname;
-  if (isLoopback(host) && (ownPorts.has(port) || ALLOWED_PORTS.has(port))) {
-    return origConnect.apply(this, args);
+  const allowed = (address) => isLoopback(address) && (ownPorts.has(port) || ALLOWED_PORTS.has(port));
+  const refuse = () => {
+    violations.push({ test: currentTest, target: targetOf(opts), stack: stackFrames() });
+    // Fail this connection the way an unreachable host would, so the caller's
+    // existing error handling runs and no test hangs waiting on a real socket.
+    process.nextTick(() => this.destroy(new Error(`ECONNREFUSED ${targetOf(opts)} (blocked: unit tests must not use the network)`)));
+    return this;
+  };
+  if (allowed(host)) return origConnect.apply(this, args);
+
+  // A name the connection resolves through its own lookup reaches whatever that
+  // lookup answers, and asks no resolver this file does not guard: decided by
+  // the address it leads to.
+  if (host && !net.isIP(host) && typeof opts.lookup === 'function') {
+    opts.lookup(host, { family: opts.family || 0, all: false }, (error, address) => {
+      // A name its own lookup cannot place reaches nothing: the connection fails as
+      // the lookup says, and nothing was dialled.
+      if (error) {
+        this.destroy(error);
+        return;
+      }
+      const resolved = Array.isArray(address) ? address[0]?.address : address;
+      if (allowed(resolved)) origConnect.apply(this, args);
+      else refuse();
+    });
+    return this;
   }
-
-  violations.push({ test: currentTest, target: targetOf(opts), stack: stackFrames() });
-
-  // Fail this connection the way an unreachable host would, so the caller's
-  // existing error handling runs and no test hangs waiting on a real socket.
-  process.nextTick(() => this.destroy(new Error(`ECONNREFUSED ${targetOf(opts)} (blocked: unit tests must not use the network)`)));
-  return this;
+  return refuse();
 };
 
 // A datagram never reaches net.Socket.connect either. UPnP discovery is a
