@@ -607,8 +607,8 @@ describe('activeStandbyElection', () => {
           const component = await pass(await build(), { names: 'other', running: false }, { granted: true });
 
           expect(taken()).to.deep.equal(['standDown', 'holdAsStandby']);
-          const [identifier, folderId, { othersHold: standbyHolders }] = role.holdAsStandby.firstCall.args;
-          expect([identifier, folderId]).to.deep.equal([component.identifier, component.syncFolderId]);
+          const [identifier, folderId, { othersHold: standbyHolders, appName: named }] = role.holdAsStandby.firstCall.args;
+          expect([identifier, folderId, named]).to.deep.equal([component.identifier, component.syncFolderId, appName]);
           expect(await standbyHolders()).to.equal(peerComponent.PeerComponent.RUNNING);
           sinon.assert.notCalled(othersHold);
           sinon.assert.notCalled(fdm);

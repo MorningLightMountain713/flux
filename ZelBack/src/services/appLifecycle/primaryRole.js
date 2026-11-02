@@ -5,7 +5,7 @@ const fluxEventBus = require('../utils/fluxEventBus');
 const appReconciler = require('../appMonitoring/appReconciler');
 const syncthingFolderWrites = require('../appMonitoring/syncthingFolderWrites');
 const changes = require('./primaryRoleChanges');
-const globalState = require('../utils/globalState');
+const operationRegistry = require('../utils/operationRegistry');
 const { PeerComponent } = require('../appMonitoring/peerComponent');
 
 // A single-writer (g:) component's primary role on this node, and the only writer
@@ -244,14 +244,13 @@ async function holdAsPrimary(identifier, appId) {
 }
 
 /**
- * Whether a backup or restore holds the app a component belongs to. Its folder
- * is paused for the operation, which alone may unpause it.
- * @param {string} identifier `<component>_<app>`, or the app name alone
+ * Whether a backup or restore holds an app. Its folders are paused for the
+ * operation, which alone may unpause them.
+ * @param {string} appName
  * @returns {boolean}
  */
-function heldByOperation(identifier) {
-  const appName = identifier.slice(identifier.lastIndexOf('_') + 1);
-  return globalState.backupInProgress.includes(appName) || globalState.restoreInProgress.includes(appName);
+function heldByOperation(appName) {
+  return ['backup', 'restore'].includes(operationRegistry.get(appName)?.type);
 }
 
 /**
@@ -278,7 +277,8 @@ function heldByOperation(identifier) {
  * What syncthing scanned before the stop is in its index, which receiving does
  * not withdraw: it reaches the other holders once the folder is unpaused.
  *
- * A folder a backup or restore holds stays paused.
+ * A folder a backup or restore holds stays paused, and so does one whose app the
+ * caller does not name: whether an operation holds it cannot be told.
  *
  * A standby whose container is stopped has 'stopped' recorded as the reconciler's
  * desired state where this process holds none, as holdAsPrimary records 'running',
@@ -289,15 +289,16 @@ function heldByOperation(identifier) {
  * @param {object} [opts]
  * @param {() => Promise<string>} [opts.othersHold] The PeerComponent state of the
  *   other holders.
+ * @param {string} [opts.appName] The app the component belongs to.
  * @returns {Promise<void>}
  */
-async function holdAsStandby(identifier, appId, { othersHold } = {}) {
+async function holdAsStandby(identifier, appId, { othersHold, appName } = {}) {
   if (changes.get(identifier) || isPrimary(identifier)) return;
   await adopt(identifier, 'stopped', 'masterSlave standby');
   const folder = await syncthingFolderWrites.folderConfig(appId);
   if (folder?.paused && folder.type === 'sendreceive') {
     const others = othersHold ? await othersHold() : PeerComponent.UNKNOWN;
-    if (others === PeerComponent.UNKNOWN || heldByOperation(identifier)
+    if (others === PeerComponent.UNKNOWN || !appName || heldByOperation(appName)
       || changes.get(identifier) || isPrimary(identifier)) {
       fluxEventBus.count('primaryRole:returned', identifier, 'heldPaused');
       return;

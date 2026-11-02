@@ -554,7 +554,7 @@ async function decideNamed({
         log.info(`activeStandby: standing down as primary of component:${member.identifier} - ip:${ip} is named, localSocketAddr is: ${localSocketAddr}`);
       } else {
         // eslint-disable-next-line no-await-in-loop
-        await primaryRole.holdAsStandby(member.identifier, member.folderId, { othersHold: standbyHolders });
+        await primaryRole.holdAsStandby(member.identifier, member.folderId, { othersHold: standbyHolders, appName });
       }
     }
     return;
