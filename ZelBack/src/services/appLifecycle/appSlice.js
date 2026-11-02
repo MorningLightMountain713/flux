@@ -1,11 +1,11 @@
 'use strict';
 
 /**
- * Every app's containers live in their own systemd slice, under flux.slice, so
- * the app's processes are found and killed from its name alone, without docker
- * or the database. Under contention the apps together share the machine
- * against the system services as one group, so they cannot starve FluxOS's own
- * dependencies.
+ * Every app's containers live in their own systemd slice, inside flux-apps.slice,
+ * so the app's processes are found and killed from its name alone, without docker
+ * or the database. The apps together are one group under it: they share the
+ * host-swap fence, and under contention they share the machine against the
+ * system services, so they cannot starve FluxOS's own dependencies.
  *
  * A slice outlives its last container until it is stopped. Removing an app
  * stops its slice, and boot stops every slice left empty.
@@ -20,7 +20,10 @@ const path = require('path');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 
-const PARENT = 'flux.slice';
+// systemd reads each '-' in a slice's name as one level: flux-apps-<app>.slice
+// sits inside flux-apps.slice, which sits inside flux.slice.
+const PARENT = 'flux-apps.slice';
+const PREFIX = 'flux-apps-';
 const APP_NAME = /^[A-Za-z0-9-]+$/;
 // systemd answers from memory; a question it has not answered by then gets no answer
 const SYSTEMD_ANSWER_MS = 10 * 1000;
@@ -35,15 +38,25 @@ function useCgroupRoot(root) {
 }
 
 /**
- * The app's slice unit. systemd reads each '-' in a slice name as one level of
- * nesting, so the name escapes it the way systemd-escape does: unescaped,
- * `my-app` would land inside `my`'s slice.
+ * The app's slice unit. The app's name is escaped the way systemd-escape does,
+ * so it is one level: unescaped, `my-app` would land inside `my`'s slice.
  * @param {string} appName
  * @returns {string|null} Null for a name no app can have.
  */
 function sliceName(appName) {
   if (typeof appName !== 'string' || !APP_NAME.test(appName)) return null;
-  return `flux-${appName.replace(/-/g, '\\x2d')}.slice`;
+  return `${PREFIX}${appName.replace(/-/g, '\\x2d')}.slice`;
+}
+
+/**
+ * The app whose slice a unit is.
+ * @param {string} unit
+ * @returns {string|null} Null for a unit that is not an app's slice.
+ */
+function appOfSlice(unit) {
+  if (typeof unit !== 'string' || !unit.startsWith(PREFIX) || !unit.endsWith('.slice')) return null;
+  const appName = unit.slice(PREFIX.length, -'.slice'.length).replace(/\\x2d/g, '-');
+  return APP_NAME.test(appName) ? appName : null;
 }
 
 /**
@@ -106,7 +119,7 @@ async function release(appName) {
 async function stopEmptySlices() {
   const parent = await controlGroup(PARENT);
   const entries = parent ? await fs.readdir(parent).catch(() => []) : [];
-  const slices = entries.filter((entry) => entry.startsWith('flux-') && entry.endsWith('.slice'));
+  const slices = entries.filter((entry) => appOfSlice(entry) !== null);
   let stopped = 0;
   // eslint-disable-next-line no-restricted-syntax
   for (const unit of slices) {
@@ -119,6 +132,7 @@ async function stopEmptySlices() {
 
 module.exports = {
   sliceName,
+  appOfSlice,
   controlGroup,
   release,
   stopEmptySlices,

@@ -310,10 +310,9 @@ async function stillRunnable(appName, containers) {
  */
 async function appsOnDisk(containers) {
   const names = new Set();
-  const parent = await appSlice.controlGroup('flux.slice');
+  const parent = await appSlice.controlGroup('flux-apps.slice');
   const slices = parent ? await fs.readdir(parent).catch(() => []) : [];
-  slices.filter((entry) => /^flux-.+\.slice$/.test(entry))
-    .forEach((entry) => names.add(entry.slice('flux-'.length, -'.slice'.length).replace(/\\x2d/g, '-')));
+  slices.map(appSlice.appOfSlice).filter(Boolean).forEach((name) => names.add(name));
   (containers ?? []).map(appOf).filter(Boolean).forEach((name) => names.add(name));
   return [...names];
 }

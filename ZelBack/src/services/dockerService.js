@@ -1188,7 +1188,8 @@ function isFluxOwnedContainer({ labels, name }, { LABEL_KEYS: labelKeys, readLab
  * @param {boolean} [options.requiresEncryption] stamp the shutdown-budget labels
  * @param {object} [options.labels] extra container labels merged over the standard set
  * @param {boolean} [options.publishPorts] bind the component's ports on the host; default true
- * @param {string} [options.cgroupSlice] cgroup parent; default 'flux-apps.slice'
+ * @param {string} [options.cgroupSlice] a slice of the caller's own in place of the
+ *   app's (appSlice.sliceName), used on a managed-storage host only
  * @param {string[]} [options.dns] resolver chain for the container's embedded
  *   resolver. Omitted, the host's resolvers apply; a mesh component states the
  *   flux-dnsd chain so mesh names resolve.
@@ -1210,14 +1211,18 @@ async function appDockerCreate(deployComp, options = {}) {
   // probe and its sibling components still reach them inside the app network -
   // what is withdrawn is the binding on the host, not the port itself.
   const publishPorts = options.publishPorts !== false;
-  // Which cgroup slice the container lands in. Apps get flux-apps.slice; the
-  // playground passes its own so a guest's load is capped in aggregate
-  // independently of the apps this node is paid to run.
-  const cgroupSlice = options.cgroupSlice || 'flux-apps.slice';
   // Managed-storage host (host-swap fence + flux-apps.slice + xfs/prjquota). Cached, local check.
   const managedStorage = await hostStorageCapability.supportsManagedStorage();
 
   const { appName } = deployComp;
+  // Which cgroup slice the container lands in. An app's containers run in the
+  // app's own slice inside flux-apps.slice, so the apps share the host-swap fence
+  // as one group and each app's processes are found and killed by its name. The
+  // playground passes its own so a guest's load is capped in aggregate
+  // independently of the apps this node is paid to run.
+  const cgroupParent = options.cgroupSlice
+    ? (managedStorage ? options.cgroupSlice : null)
+    : appSlice.sliceName(appName);
   const { identifier } = deployComp;
   const networkName = options.networkName ?? deployComp.networkName ?? `fluxDockerNetwork_${appName}`;
 
@@ -1322,10 +1327,7 @@ async function appDockerCreate(deployComp, options = {}) {
     ...(containerLabels && { Labels: containerLabels }),
     ...(healthcheck && { Healthcheck: healthcheck }),
     HostConfig: {
-      // Place app containers in the dedicated app slice so they sit outside the
-      // fenced host slices (their per-container memory.swap.max draws from the app
-      // swap pool, not the host's). Only on nodes carrying the new-mechanism config.
-      ...(managedStorage && { CgroupParent: cgroupSlice }),
+      ...(cgroupParent && { CgroupParent: cgroupParent }),
       NanoCPUs: nanoCpus,
       Memory: memoryBytes,
       MemorySwap: memorySwapBytes,
@@ -1385,8 +1387,6 @@ async function appDockerCreate(deployComp, options = {}) {
   // XFS quota: apply StorageOpt if the backing filesystem supports it.
   // eslint-disable-next-line no-use-before-define
   const dockerInfoResp = await dockerInfo();
-  const slice = appSlice.sliceName(appName);
-  if (slice) options.HostConfig.CgroupParent = slice;
   const driverStatus = dockerInfoResp.DriverStatus;
   const backingFs = driverStatus.find((status) => status[0] === 'Backing Filesystem');
   if (backingFs && backingFs[1] === 'xfs') {

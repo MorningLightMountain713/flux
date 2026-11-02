@@ -18,15 +18,16 @@ describe('appKill tests', () => {
   const id = (n) => String(n).repeat(64).slice(0, 64);
   // systemd runs in a container here, so its tree starts below the filesystem's root
   const SYSTEMD_ROOT = '/init';
+  // where systemd puts flux-apps.slice: each '-' in a slice's name is a level
+  const APPS = path.join('flux.slice', 'flux-apps.slice');
 
   function cgroup(rel, pids) {
     const dir = path.join(cgroupRoot, SYSTEMD_ROOT, rel);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'cgroup.procs'), pids.map((pid) => `${pid}\n`).join(''));
     fs.writeFileSync(path.join(dir, 'cgroup.kill'), '');
-    units.set(path.basename(rel), path.join(SYSTEMD_ROOT, rel));
-    const parent = rel.split('/')[0];
-    if (parent !== rel) units.set(parent, path.join(SYSTEMD_ROOT, parent));
+    const parts = rel.split('/');
+    parts.forEach((unit, i) => units.set(unit, path.join(SYSTEMD_ROOT, ...parts.slice(0, i + 1))));
     return dir;
   }
   // `app`: the runonflux.app label FluxOS sets; left out, a container made before it
@@ -42,8 +43,8 @@ describe('appKill tests', () => {
   // An app's slice, as the kernel lays it out: no process of its own, and each
   // container's processes in the container's scope below it.
   function slice(unit, scopes) {
-    const dir = cgroup(path.join('flux.slice', unit), []);
-    Object.entries(scopes).forEach(([scope, pids]) => cgroup(path.join('flux.slice', unit, scope), pids));
+    const dir = cgroup(path.join(APPS, unit), []);
+    Object.entries(scopes).forEach(([scope, pids]) => cgroup(path.join(APPS, unit, scope), pids));
     return dir;
   }
   function processWith(pid, { sigPnd = '0000000000000000', shdPnd = '0000000000000000' } = {}) {
@@ -90,13 +91,13 @@ describe('appKill tests', () => {
 
   describe('kill', () => {
     it('kills the app\'s slice and the scopes of its containers made before slices, and no other app\'s', async () => {
-      const appSliceDir = slice('flux-my\\x2dapp.slice', { [`docker-${id(9)}.scope`]: ['10'] });
+      const appSliceDir = slice('flux-apps-my\\x2dapp.slice', { [`docker-${id(9)}.scope`]: ['10'] });
       record(9, 'fluxdb_my-app', '10');
       const web = container(1, 'fluxweb_my-app', ['11']);
       const single = container(2, 'fluxmy-app', ['12']);
       container(3, 'fluxweb_my-app2', ['13']);
       container(4, 'fluxweb_other', ['14']);
-      slice('flux-my.slice', { [`docker-${id(8)}.scope`]: ['15'] });
+      slice('flux-apps-my.slice', { [`docker-${id(8)}.scope`]: ['15'] });
 
       const sent = await appKill.kill('my-app', await appKill.readContainers());
 
@@ -113,7 +114,7 @@ describe('appKill tests', () => {
     });
 
     it('kills the app\'s slice alone when docker\'s records could not be read', async () => {
-      const appSliceDir = slice('flux-app.slice', { [`docker-${id(9)}.scope`]: ['10'] });
+      const appSliceDir = slice('flux-apps-app.slice', { [`docker-${id(9)}.scope`]: ['10'] });
       container(1, 'fluxweb_app', ['11']);
 
       expect(await appKill.kill('app', null)).to.deep.equal([appSliceDir]);
@@ -122,7 +123,7 @@ describe('appKill tests', () => {
 
   describe('killOutsideSlices', () => {
     it('kills every container outside the app slices, and no other unit', async () => {
-      slice('flux-app.slice', { [`docker-${id(9)}.scope`]: ['10'] });
+      slice('flux-apps-app.slice', { [`docker-${id(9)}.scope`]: ['10'] });
       const web = container(1, 'fluxweb_app', ['11']);
       const other = container(2, 'fluxother', ['12']);
       cgroup('system.slice/fluxos.service', ['1']);
@@ -132,7 +133,7 @@ describe('appKill tests', () => {
     });
 
     it('kills nothing and says so when systemd does not say where system.slice is', async () => {
-      slice('flux-app.slice', { [`docker-${id(9)}.scope`]: ['10'] });
+      slice('flux-apps-app.slice', { [`docker-${id(9)}.scope`]: ['10'] });
 
       expect(await appKill.killOutsideSlices()).to.equal(null);
       expect(killed).to.deep.equal([]);
@@ -149,7 +150,7 @@ describe('appKill tests', () => {
 
   describe('stillRunnable', () => {
     beforeEach(() => {
-      slice('flux-app.slice', { [`docker-${id(1)}.scope`]: ['21', '22'], [`docker-${id(2)}.scope`]: ['23', '24'] });
+      slice('flux-apps-app.slice', { [`docker-${id(1)}.scope`]: ['21', '22'], [`docker-${id(2)}.scope`]: ['23', '24'] });
     });
 
     it('names each process that is neither gone nor has the kill pending', async () => {
@@ -238,7 +239,7 @@ describe('appKill tests', () => {
 
   describe('appsOnDisk', () => {
     it('names every app with a slice or a container record, and no container that is not an app\'s', async () => {
-      slice('flux-sliced\\x2dapp.slice', {});
+      slice('flux-apps-sliced\\x2dapp.slice', {});
       container(1, 'fluxweb_composed', ['11']);
       container(2, 'fluxsingle', ['12']);
       container(3, 'watchtower', ['13']);
@@ -247,7 +248,7 @@ describe('appKill tests', () => {
     });
 
     it('names every app with a slice when docker\'s records could not be read', async () => {
-      slice('flux-sliced.slice', {});
+      slice('flux-apps-sliced.slice', {});
       container(1, 'fluxweb_composed', ['11']);
 
       expect(await appKill.appsOnDisk(null)).to.deep.equal(['sliced']);

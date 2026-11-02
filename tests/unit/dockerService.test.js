@@ -18,6 +18,7 @@ const globalState = require('../../ZelBack/src/services/utils/globalState');
 const specLibs = require('../../ZelBack/src/services/utils/specLibs');
 const telemetryLogClient = require('../../ZelBack/src/services/telemetryLogClient');
 const telemetryDaemon = require('./fixtures/telemetryDaemon');
+const hostStorageCapability = require('../../ZelBack/src/services/utils/hostStorageCapability');
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -1994,6 +1995,28 @@ describe('dockerService tests', () => {
       volumeStub.restore();
       // Restores any per-test stubs (e.g. the node-address stub) too.
       sinon.restore();
+    });
+
+    describe('the slice a container runs in', () => {
+      [true, false].forEach((managed) => {
+        it(`runs an app's container in its own slice inside flux-apps.slice${managed ? '' : ' without managed storage too'}`, async () => {
+          sinon.stub(hostStorageCapability, 'supportsManagedStorage').resolves(managed);
+
+          await dockerService.appDockerCreate(makeDeployComp());
+
+          expect(dockerStub.firstCall.args[0].HostConfig.CgroupParent).to.equal('flux-apps-fluxwebsite.slice');
+        });
+      });
+
+      it('runs a container in the slice its caller names on a managed-storage host, and in none without', async () => {
+        sinon.stub(hostStorageCapability, 'supportsManagedStorage').resolves(true);
+        await dockerService.appDockerCreate(makeDeployComp(), { cgroupSlice: 'flux-playground.slice' });
+        expect(dockerStub.firstCall.args[0].HostConfig.CgroupParent).to.equal('flux-playground.slice');
+
+        hostStorageCapability.supportsManagedStorage.resolves(false);
+        await dockerService.appDockerCreate(makeDeployComp(), { cgroupSlice: 'flux-playground.slice' });
+        expect(dockerStub.secondCall.args[0].HostConfig).to.not.have.property('CgroupParent');
+      });
     });
 
     it('should create a container with correct image and resource limits', async () => {

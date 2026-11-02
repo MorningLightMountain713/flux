@@ -76,8 +76,9 @@ const CRASH_LOOP_RESTARTS = STUCK_INTERVALS + 2;
 const byOwner = (data) => data.owner === OWNER;
 const outOfServiceForTheStall = (data) => data.dosState >= 100
   && String(data.dosMessage).includes('Host stall') && String(data.dosMessage).includes('dockerd');
-// the app names here have no '-', which a slice name escapes
-const sliceOf = (appName) => `flux-${appName}.slice`;
+// an app's slice, inside flux-apps.slice; the app names here have no '-', which
+// a slice name escapes
+const sliceOf = (appName) => `flux-apps-${appName}.slice`;
 const containerOf = (appName) => `flux${appName}_${appName}`;
 // what of the app can still run, read from its slice, which outlives its containers
 async function sliceProcessesThatCanRun(container, appName) {

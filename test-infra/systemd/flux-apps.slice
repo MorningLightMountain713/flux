@@ -1,7 +1,7 @@
 # Dedicated cgroup slice for v9 app containers, mirrored from the Arcane
-# image (flux_iso/flux_fs/systemd/system/flux-apps.slice). FluxOS places
-# every app container here (Docker CgroupParent=flux-apps.slice) once the
-# managed-storage capability passes; systemd nests it under flux.slice —
+# image (flux_iso/flux_fs/systemd/system/flux-apps.slice). Every app's
+# containers run in the app's own slice inside it (Docker
+# CgroupParent=flux-apps-<app>.slice); systemd nests it under flux.slice —
 # the exact path flux-telemetryd's cgroup sampler reads.
 [Unit]
 Description=Flux application containers
