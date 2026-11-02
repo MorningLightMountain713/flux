@@ -94,16 +94,19 @@ describe('networkDefaults tests', () => {
       expect(result).to.deep.equal(APPLIED);
     });
 
-    it('should give a verifyPool worker the defaults', async () => {
-      verifyPool.stop();
-      verifyPool.start(1, { workerPath: reportingWorker });
-      try {
+    describe('the verify pool', () => {
+      // The pool is the process's one pool: stopped after the test, which leaves it on its own
+      // worker script for whatever runs next, however the test ends.
+      afterEach(() => verifyPool.stop());
+
+      it('should give a verifyPool worker the defaults', async () => {
+        verifyPool.stop();
+        verifyPool.start(1, { workerPath: reportingWorker });
+
         const results = await verifyPool.verify([{ messageToVerify: 'a', pubKey: 'b', signature: 'c' }]);
 
         expect(results).to.deep.equal([APPLIED]);
-      } finally {
-        verifyPool.stop();
-      }
+      });
     });
 
     it('should create every worker in the product through createWorker', () => {
