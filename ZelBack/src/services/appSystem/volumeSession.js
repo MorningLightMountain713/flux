@@ -7,6 +7,7 @@ const volumeService = require('../utils/volumeService');
 const { selectVolumeByReplica } = require('./volumeTarget');
 const serviceHelper = require('../serviceHelper');
 const syncthingService = require('../syncthingService');
+const deploymentProvider = require('../appRuntime/deploymentProvider');
 const verificationHelper = require('../verificationHelper');
 const {
   sanitizePath, verifyRealPath, verifyRealPathOfExistingPath, realLandingPath,
@@ -656,27 +657,53 @@ class VolumeSession {
  * with it. A read-only copy whose lines cannot be read answers none, so the
  * whole volume counts as replicated and every write into it is refused.
  *
- * @param {string} identifier - The volume's component identifier, which is its folder id
+ * @param {string|null} folderId - The syncthing folder the volume's data is shared under (syncFolderIdOf)
  * @returns {Promise<string[]|null>}
  */
-async function readOnlyCopyScope(identifier) {
+async function readOnlyCopyScope(folderId) {
+  if (folderId === null) return null;
   let folders;
   try {
     folders = await syncthingService.getConfigFolders();
   } catch (error) {
-    log.warn(`readOnlyCopyScope - could not read the syncthing folders for ${identifier}: ${error.message}`);
+    log.warn(`readOnlyCopyScope - could not read the syncthing folders for ${folderId}: ${error.message}`);
     return null;
   }
-  const folder = Array.isArray(folders) ? folders.find((f) => f.id === identifier) : null;
+  const folder = Array.isArray(folders) ? folders.find((f) => f.id === folderId) : null;
   if (folder?.type !== 'receiveonly') return null;
   try {
-    const read = await syncthingService.getFolderIgnores(identifier);
+    const read = await syncthingService.getFolderIgnores(folderId);
     if (Array.isArray(read?.ignore)) return read.ignore;
-    log.warn(`readOnlyCopyScope - syncthing holds no ignores for ${identifier}; every write into its read-only copy is refused`);
+    log.warn(`readOnlyCopyScope - syncthing holds no ignores for ${folderId}; every write into its read-only copy is refused`);
   } catch (error) {
-    log.warn(`readOnlyCopyScope - could not read the ignores of ${identifier} (${error.message}); every write into its read-only copy is refused`);
+    log.warn(`readOnlyCopyScope - could not read the ignores of ${folderId} (${error.message}); every write into its read-only copy is refused`);
   }
   return [];
+}
+
+/**
+ * The syncthing folder a component's data is shared under, from the app's
+ * installed deployment: the component identifier for an app registered on v9,
+ * its 8.x name for one registered before. Null when the deployment cannot be
+ * read or holds no such component, which, like a syncthing that cannot be asked,
+ * reads as no folder.
+ * @param {string} appName
+ * @param {string} identifier
+ * @returns {Promise<string|null>}
+ */
+async function syncFolderIdOf(appName, identifier) {
+  try {
+    const deployments = await deploymentProvider.getInstalledDeployments(appName);
+    // eslint-disable-next-line no-restricted-syntax
+    for (const deployment of deployments) {
+      const found = deployment.componentEntries().find(([, component]) => component.identifier === identifier);
+      if (found) return found[1].syncFolderId;
+    }
+    log.warn(`syncFolderIdOf - no installed component ${identifier} of ${appName}`);
+  } catch (error) {
+    log.warn(`syncFolderIdOf - could not read the folder of ${identifier}: ${error.message}`);
+  }
+  return null;
 }
 
 /**
@@ -748,7 +775,7 @@ async function openVolume(req, options = {}) {
   }
 
   const { mount, availableBytes, identifier } = await resolveVolumeMount(appname, component, replica);
-  const readOnlyScope = await readOnlyCopyScope(identifier);
+  const readOnlyScope = await readOnlyCopyScope(await syncFolderIdOf(appname, identifier));
   // Read after authorisation succeeded, so this is the identity that passed it.
   const auth = serviceHelper.ensureObject(authOf(req));
   const owner = (auth && auth.zelid) || null;

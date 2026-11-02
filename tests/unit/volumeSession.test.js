@@ -17,6 +17,7 @@ describe('volumeSession tests', () => {
   const MOUNT = `${APPS_FOLDER}fluxcomp_myapp`;
 
   let deviceHelperStub;
+  let deploymentProviderStub;
   let volumeServiceStub;
   let verificationHelperStub;
   let IOUtilsStub;
@@ -37,10 +38,17 @@ describe('volumeSession tests', () => {
   const volumeRow = (mount, replica = null, identifier = 'comp_myapp', availableBytes = 1e9) => ({
     replica, identifier, mount, filesystem: '/dev/loop3', sizeBytes: 2e9, usedBytes: 1e9, availableBytes, capacity: 0.5,
   });
+  // The installed deployment, as far as the session reads it: which syncthing
+  // folder a component's data is shared under. An app registered before v9
+  // keeps its 8.x name as the folder id.
+  const deploymentsOf = (identifier = 'comp_myapp', syncFolderId = 'fluxcomp_myapp') => ({
+    getInstalledDeployments: sinon.stub().resolves([{ componentEntries: () => [['comp', { identifier, syncFolderId }]] }]),
+  });
 
   beforeEach(() => {
     deviceHelperStub = { listMountedFilesystems: sinon.stub().resolves([mountRow(MOUNT)]) };
     volumeServiceStub = { listComponentVolumeMounts: sinon.stub().resolves([volumeRow(MOUNT)]) };
+    deploymentProviderStub = deploymentsOf();
     verificationHelperStub = { verifyPrivilege: sinon.stub().resolves(true) };
     IOUtilsStub = {
       getFolderSize: sinon.stub().resolves(1000),
@@ -57,6 +65,7 @@ describe('volumeSession tests', () => {
     volumeSession = proxyquire('../../ZelBack/src/services/appSystem/volumeSession', {
       '../deviceHelper': deviceHelperStub,
       '../utils/volumeService': volumeServiceStub,
+      '../appRuntime/deploymentProvider': deploymentProviderStub,
       '../verificationHelper': verificationHelperStub,
       '../IOUtils': IOUtilsStub,
       '../utils/pathSecurity': pathSecurity,
@@ -182,6 +191,25 @@ describe('volumeSession tests', () => {
         expect(error.code).to.equal(409);
         expect(error.name).to.equal('ReadOnlyCopy');
         expect(error.message).to.include('Make changes on that node');
+      });
+
+      it('finds a v9 app\'s folder by its identifier', async () => {
+        deploymentProviderStub.getInstalledDeployments.resolves([{ componentEntries: () => [['comp', { identifier: 'comp_myapp', syncFolderId: 'comp_myapp' }]] }]);
+        syncthingServiceStub.getConfigFolders.resolves([{ id: 'comp_myapp', type: 'receiveonly' }]);
+
+        const vol = await volumeSession.openVolume(reqFor());
+
+        const error = await vol.refuseReadOnlyWrite(await vol.resolve('appdata/world.sav')).catch((e) => e);
+        expect(error.code).to.equal(409);
+      });
+
+      it('takes a folder named by the identifier for no app registered before v9', async () => {
+        // Its folder is the 8.x name; another folder carrying the identifier is not its own.
+        syncthingServiceStub.getConfigFolders.resolves([{ id: 'comp_myapp', type: 'receiveonly' }]);
+
+        const vol = await volumeSession.openVolume(reqFor());
+
+        await vol.refuseReadOnlyWrite(await vol.resolve('appdata/world.sav'));
       });
 
       it('refuses nothing on a volume whose folder is sendreceive', async () => {
@@ -633,6 +661,8 @@ describe('volumeSession tests', () => {
       };
       onDisk = proxyquire('../../ZelBack/src/services/appSystem/volumeSession', {
         '../deviceHelper': deviceHelperStub,
+        '../utils/volumeService': { listComponentVolumeMounts: sinon.stub().resolves([volumeRow(mount)]) },
+        '../appRuntime/deploymentProvider': deploymentsOf(),
         '../verificationHelper': verificationHelperStub,
         '../IOUtils': IOUtilsStub,
         '../utils/pathSecurity': pathSecurity,
@@ -749,6 +779,8 @@ describe('volumeSession tests', () => {
       const linkedMount = nodePath.join(linkedApps, 'fluxcomp_myapp');
       const behindLink = proxyquire('../../ZelBack/src/services/appSystem/volumeSession', {
         '../deviceHelper': { listMountedFilesystems: sinon.stub().resolves([mountRow(linkedMount)]) },
+        '../utils/volumeService': { listComponentVolumeMounts: sinon.stub().resolves([volumeRow(linkedMount)]) },
+        '../appRuntime/deploymentProvider': deploymentsOf(),
         '../verificationHelper': verificationHelperStub,
         '../IOUtils': IOUtilsStub,
         '../utils/pathSecurity': pathSecurity,
@@ -794,6 +826,7 @@ describe('volumeSession tests', () => {
       const onDisk = proxyquire('../../ZelBack/src/services/appSystem/volumeSession', {
         '../deviceHelper': deviceHelperStub,
         '../utils/volumeService': volumeServiceStub,
+        '../appRuntime/deploymentProvider': deploymentProviderStub,
         '../verificationHelper': verificationHelperStub,
         '../IOUtils': IOUtilsStub,
         '../utils/pathSecurity': pathSecurity,

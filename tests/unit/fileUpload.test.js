@@ -254,6 +254,16 @@ describe('fileSystemManager upload tests', () => {
 
     const onStandby = () => {
       const volumeSession = proxyquire('../../ZelBack/src/services/appSystem/volumeSession', {
+        // The component's volume as the app's installed row names it, and its data's
+        // syncthing folder: the 8.x name, for an app registered before v9.
+        '../utils/volumeService': {
+          listComponentVolumeMounts: sinon.stub().resolves([{
+            replica: null, identifier: 'comp_myapp', mount, filesystem: '/dev/loop3', sizeBytes: 2e9, usedBytes: 1e9, availableBytes: 1e9, capacity: 0.5,
+          }]),
+        },
+        '../appRuntime/deploymentProvider': {
+          getInstalledDeployments: sinon.stub().resolves([{ componentEntries: () => [['comp', { identifier: 'comp_myapp', syncFolderId: 'fluxcomp_myapp' }]] }]),
+        },
         '../deviceHelper': {
           listMountedFilesystems: sinon.stub().resolves([{
             source: '/dev/loop3', target: mount, fstype: 'ext4', sizeBytes: 2e9, usedBytes: 1e9, availableBytes: 1e9, usePercent: 50,
@@ -266,7 +276,11 @@ describe('fileSystemManager upload tests', () => {
           APP_NAME_REGEX: /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/,
           APP_NAME_REGEX_LEGACY: /^[a-zA-Z0-9]+$/,
         },
-        '../syncthingService': { getConfigFolders: sinon.stub().resolves([{ id: 'fluxcomp_myapp', type: 'receiveonly' }]) },
+        '../syncthingService': {
+          getConfigFolders: sinon.stub().resolves([{ id: 'fluxcomp_myapp', type: 'receiveonly' }]),
+          // What syncthing keeps on this node: the platform's lines.
+          getFolderIgnores: sinon.stub().resolves({ ignore: ['/backup', '/lost+found', '/.flux-op', '/.flux-op-*'] }),
+        },
       });
       return proxyquire('../../ZelBack/src/services/appSystem/fileSystemManager', {
         config: asConfig({ fluxapps: { volumeOperations: { minUploadBitsPerSecond: 64 * 1000, stallTimeoutMs: 10 * 60 * 1000 } } }),
