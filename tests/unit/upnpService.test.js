@@ -397,6 +397,8 @@ describe('upnpService tests', () => {
       });
 
       describe('and holds nothing of this node\'s to remove', () => {
+        // This node's api port, which the router's entry below maps.
+        const API_PORT = 16_127;
         // the router's entry for each port: this node's api port, or nothing
         const routerMaps = (apiEntry) => {
           natUpnp.Client.prototype.getMapping.reset();
@@ -415,10 +417,10 @@ describe('upnpService tests', () => {
         it('should verify when the router already maps this node\'s api port to it', async () => {
           routerMaps(apiEntry());
 
-          const result = await upnpService.verifyUPNPsupport();
+          const result = await upnpService.verifyUPNPsupport(API_PORT);
 
           expect(result).to.equal(true);
-          expect(upnpService.isUPNP()).to.equal(true);
+          expect(upnpService.isUPNPHealthy()).to.equal(true);
           sinon.assert.calledWithExactly(natUpnp.Client.prototype.getMapping, { public: 16_127, protocol: 'TCP' });
           sinon.assert.calledOnce(createMappingStub);
           sinon.assert.notCalled(removeMappingStub);
@@ -433,7 +435,7 @@ describe('upnpService tests', () => {
           it(`should fail when the router ${what}`, async () => {
             routerMaps(entry);
 
-            const result = await upnpService.verifyUPNPsupport();
+            const result = await upnpService.verifyUPNPsupport(API_PORT);
 
             expect(result).to.equal(false);
             expect(upnpService.isUPNP()).to.equal(false);
@@ -445,7 +447,7 @@ describe('upnpService tests', () => {
           createMappingStub.reset();
           createMappingStub.rejects(new natUpnp.UpnpError(718, 'ConflictInMappingEntry', 'AddPortMapping'));
 
-          const result = await upnpService.verifyUPNPsupport();
+          const result = await upnpService.verifyUPNPsupport(API_PORT);
 
           expect(result).to.equal(false);
         });
@@ -455,7 +457,7 @@ describe('upnpService tests', () => {
           createMappingStub.reset();
           createMappingStub.rejects(new Error('timeout of 10000ms exceeded'));
 
-          const result = await upnpService.verifyUPNPsupport();
+          const result = await upnpService.verifyUPNPsupport(API_PORT);
 
           expect(result).to.equal(false);
         });
