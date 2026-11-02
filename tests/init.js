@@ -46,6 +46,8 @@ fsPromises.writeFile = async function guardedWriteFile(file, ...rest) {
 // unrelated ones red.
 // eslint-disable-next-line global-require
 const { resetGlobalState } = require('./unit/fixtures/globalState');
+// eslint-disable-next-line global-require
+const ufw = require('../ZelBack/src/services/utils/ufw');
 
 // Root hooks: name the test that opened each connection, and fail the run at
 // the end if any did. Reported after the fact because these call paths all
@@ -75,6 +77,9 @@ exports.mochaHooks = {
     currentTest = this.currentTest ? this.currentTest.fullTitle() : '(unknown)';
     noRealNetwork.setCurrentTest(currentTest);
     resetGlobalState();
+    // The firewall's status is kept process-wide (utils/ufw): a status one file
+    // stubbed is not another file's answer.
+    ufw.resetFirewallActiveCache();
     // Every test starts from the fixture config, whatever a file set before it;
     // a test that needs another sets it in its own beforeEach or body.
     globalThis.userconfig = testUserconfig();
