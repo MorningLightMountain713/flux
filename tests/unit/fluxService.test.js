@@ -49,6 +49,7 @@ const log = require('../../ZelBack/src/lib/log');
 const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 const { testUserconfig } = require('../fixtures/userconfig');
 const residentialNodeDosService = require('../../ZelBack/src/services/residentialNodeDosService');
+const { resetGlobalState } = require('./fixtures/globalState');
 
 // The same userconfig tests/init.js put on globalThis. Built from the shared
 // fixture rather than restated here: fluxService reads globalThis, so a private
@@ -463,10 +464,13 @@ describe('fluxService tests', () => {
     beforeEach(() => {
       verifyPrivilegeStub = sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
       runCmdStub = sinon.stub(serviceHelper, 'runCommand').resolves({ error: null });
+      // An Arcane node by its capability verdict, as boot resolves it.
+      resetGlobalState().capabilityVerdict = true;
     });
 
     afterEach(() => {
       sinon.restore();
+      resetGlobalState();
     });
 
     ['updateFlux', 'softUpdateFluxApi', 'softUpdateFluxInstallApi', 'hardUpdateFlux'].forEach((handler) => {
@@ -2017,10 +2021,6 @@ describe('fluxService tests', () => {
       fluxCommunicationStub = sinon.stub(fluxCommunication, 'connectedPeersInfo');
       fluxNetworkHelperStub = sinon.stub(fluxNetworkHelper, 'getIncomingConnectionsInfo');
       syncthingServiceStub = sinon.stub(syncthingService, 'systemVersion');
-      // getNodeGeolocation reads a process-wide module cache and the local DB; pin it
-      // so the response is driven by this test rather than by geolocation state left by
-      // an earlier suite.
-      sinon.stub(geolocationService, 'getNodeGeolocation').resolves(null);
     });
 
     afterEach(() => {
