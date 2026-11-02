@@ -185,6 +185,9 @@ class AppSyncOrchestrator {
   // satisfied the requirement without ever asking anyone else - which is the
   // whole thing the minimum exists to prevent.
   #syncCompletions = freshSyncCompletions();
+  // A completed sync paused at the authority checkpoint, so later answers do
+  // not pause a second completion behind it.
+  #completionHeld = false;
   #manifestSyncComplete = false;
   /** The outcome of the last manifest round this node awaited, so a round joined by
    *  several wake-ups is reported once. */
@@ -681,18 +684,45 @@ class AppSyncOrchestrator {
       completions: this.#syncCompletions[syncType].size,
       required: MIN_SYNC_COMPLETIONS,
     });
-    if (Object.values(this.#syncCompletions).every((peers) => peers.size >= MIN_SYNC_COMPLETIONS)) {
-      this.#stateSyncComplete = true;
-      this.#publishStateSyncAuthority();
-      if (this.#syncTimeout) {
-        clearTimeout(this.#syncTimeout);
-        this.#syncTimeout = null;
-      }
-      this.#closeRound('the sync completed');
-      log.info('AppSyncOrchestrator - All state syncs complete');
-      fluxEventBus.publish('ephemeralSync:allComplete', this.#completionCounts());
-      this.#own(this.#evaluate());
+    if (this.#completionHeld) return;
+    if (!Object.values(this.#syncCompletions).every((peers) => peers.size >= MIN_SYNC_COMPLETIONS)) return;
+    if (fluxEventBus.isCheckpointHeld(fluxEventBus.Checkpoint.APPSYNC_BEFORE_AUTHORITATIVE)) {
+      this.#own(this.#completeStateSyncWhenReleased());
+      return;
     }
+    this.#completeStateSync();
+  }
+
+  /**
+   * Hold a completed sync at the authority checkpoint, and complete it on release.
+   *
+   * Released into a reset or a stop, it completes nothing: the answers it was
+   * holding belong to an attempt that has ended.
+   * @returns {Promise<void>}
+   */
+  async #completeStateSyncWhenReleased() {
+    const attempt = this.#syncCompletions;
+    this.#completionHeld = true;
+    try {
+      await fluxEventBus.checkpoint(fluxEventBus.Checkpoint.APPSYNC_BEFORE_AUTHORITATIVE);
+    } finally {
+      this.#completionHeld = false;
+    }
+    if (!this.#started || this.#stateSyncComplete || this.#syncCompletions !== attempt) return;
+    this.#completeStateSync();
+  }
+
+  #completeStateSync() {
+    this.#stateSyncComplete = true;
+    this.#publishStateSyncAuthority();
+    if (this.#syncTimeout) {
+      clearTimeout(this.#syncTimeout);
+      this.#syncTimeout = null;
+    }
+    this.#closeRound('the sync completed');
+    log.info('AppSyncOrchestrator - All state syncs complete');
+    fluxEventBus.publish('ephemeralSync:allComplete', this.#completionCounts());
+    this.#own(this.#evaluate());
   }
 
   // A permanent-plane round that found no askable peer leaves its step incomplete
@@ -987,16 +1017,23 @@ class AppSyncOrchestrator {
     });
 
     if (!this.#syncTimeout) {
-      this.#syncTimeout = setTimeout(() => {
+      // Held at the checkpoint the attempt stays open and goes on asking; a
+      // reset meanwhile gives the next attempt its own budget, and this one
+      // then ends neither.
+      const budget = setTimeout(async () => {
+        await fluxEventBus.checkpoint(fluxEventBus.Checkpoint.APPSYNC_BEFORE_BUDGET_SPENT);
+        if (this.#syncTimeout !== budget) return;
         this.#syncTimeout = null;
         if (this.#stateSyncComplete) return;
         this.#closeRound('the budget ran out');
         this.#syncBudgetSpent = true;
         this.#requests.discardAll();
-        const answered = Object.entries(this.#completionCounts())
-          .map(([type, count]) => `${type}=${count}`).join(' ');
+        const counts = this.#completionCounts();
+        const answered = Object.entries(counts).map(([type, count]) => `${type}=${count}`).join(' ');
         log.warn(`AppSyncOrchestrator - Sync budget spent, peers answered: ${answered}`);
+        fluxEventBus.publish('ephemeralSync:budgetSpent', { answered: counts });
       }, SYNC_TIMEOUT_MS);
+      this.#syncTimeout = budget;
     }
   }
 
