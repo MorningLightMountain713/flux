@@ -2293,6 +2293,89 @@ describe('appOperations tests', () => {
       expect(openHostPortsStub.called).to.be.false;
     });
 
+    // The update records the new specification before it builds the
+    // replacements, so the row is no sign the update finished: the announcement
+    // is, one per component it replaced, as a component redeploy announces it.
+    describe('the components an update replaced are announced', () => {
+      const redeployed = (publish) => publish.getCalls()
+        .filter((call) => call.args[0] === 'app:componentRedeployed').map((call) => call.args[1]);
+
+      it('announces a component recreated on its volume as a soft redeploy', async () => {
+        setup();
+        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
+        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, cpu: 0.7 });
+        deploymentProvider.planDeployment.resolves(newDeployment);
+        sinon.stub(componentProvisioner, 'installComponent').resolves();
+        const publish = sinon.stub(fluxEventBus, 'publish');
+
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
+
+        expect(redeployed(publish)).to.deep.equal([{
+          name: 'myapp', component: 'web', identifier: newDeployment.getComponent('web').identifier, hard: false,
+        }]);
+      });
+
+      it('announces a component whose volume was rebuilt as a hard redeploy', async () => {
+        setup();
+        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
+        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 10 });
+        deploymentProvider.planDeployment.resolves(newDeployment);
+        sinon.stub(componentProvisioner, 'installComponent').resolves();
+        const publish = sinon.stub(fluxEventBus, 'publish');
+
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
+
+        expect(redeployed(publish).map(({ component, hard }) => ({ component, hard }))).to.deep.equal([{ component: 'web', hard: true }]);
+      });
+
+      it('announces nothing for a component the update left alone', async () => {
+        setup();
+        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
+        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
+        deploymentProvider.planDeployment.resolves(newDeployment);
+        const installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
+        const publish = sinon.stub(fluxEventBus, 'publish');
+
+        await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
+
+        expect(installComponent.called, 'the unchanged component was recreated').to.equal(false);
+        expect(redeployed(publish)).to.deep.equal([]);
+      });
+
+      it('announces only the replaced component, not one the update adds', async () => {
+        setup();
+        const webOnly = deploymentFor(await specWithComponents('myapp', {
+          web: { cpu: 0.5, ports: { p80: { containerPort: 80, hostPort: 80 } } },
+        }));
+        const both = deploymentFor(await specWithComponents('myapp', {
+          web: { cpu: 0.7, ports: { p80: { containerPort: 80, hostPort: 80 } } },
+          db: { ports: { p81: { containerPort: 81, hostPort: 81 } } },
+        }));
+        deploymentProvider.planDeployment.resolves(both);
+        const installComponent = sinon.stub(componentProvisioner, 'installComponent').resolves();
+        const publish = sinon.stub(fluxEventBus, 'publish');
+
+        await appOperations.reconcileComponents('myapp', webOnly, both, registrySpec, namingOf(both));
+
+        expect(installComponent.getCalls().map((call) => call.args[0].name).sort(), 'the fixture must replace web and add db').to.deep.equal(['db', 'web']);
+        expect(redeployed(publish).map(({ component }) => component)).to.deep.equal(['web']);
+      });
+
+      it('announces nothing when a replacement is not built', async () => {
+        setup();
+        const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
+        const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, cpu: 0.7 });
+        deploymentProvider.planDeployment.resolves(newDeployment);
+        sinon.stub(componentProvisioner, 'installComponent').rejects(new Error('create refused'));
+        const publish = sinon.stub(fluxEventBus, 'publish');
+
+        const failure = await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment)).then(() => null, (error) => error);
+
+        expect(failure?.message).to.equal('create refused');
+        expect(redeployed(publish)).to.deep.equal([]);
+      });
+    });
+
     // An update that changes what content the app declares. The files reach the
     // node's store before anything is torn down, and its containers before
     // anything is started.

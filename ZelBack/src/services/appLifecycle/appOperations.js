@@ -2309,6 +2309,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
 
   const toInstall = [...keepVolume, ...recreateVolume, ...added];
   const created = [];
+  const replaced = [];
   if (freshDeployment && toInstall.length > 0) {
     const freshByKey = byKey(freshDeployment);
     const requiresEncryption = shutdownPlan.appRequiresDaemonShutdown(freshDeployment);
@@ -2333,6 +2334,7 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
         requiresEncryption,
       });
       created.push(deployComp.name);
+      if (!added.includes(key)) replaced.push({ component: deployComp.name, identifier: deployComp.identifier, hard: createVolumes });
       // eslint-disable-next-line no-await-in-loop
       await serviceHelper.delay(config.get('fluxapps.redeploy.composedDelay') * 1000);
     }
@@ -2396,6 +2398,16 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
     } else {
       await fluxShutdowndClient.deleteAppPlanBestEffort(freshDeployment.identity, freshDeployment.replica ?? null);
     }
+  }
+
+  // Each component the update replaced, once the whole update is applied: the
+  // row was written before the replacements were built, so it is no sign the
+  // update finished. The event a component redeploy publishes; `hard` when the
+  // component's volume was rebuilt.
+  for (const { component, identifier, hard } of replaced) {
+    fluxEventBus.publish('app:componentRedeployed', {
+      name: appName, component, identifier, hard,
+    });
   }
 }
 
