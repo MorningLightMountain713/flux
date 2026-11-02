@@ -76,8 +76,8 @@ const migrations = [
     id: 'payment-positions',
     // Needs the daemon's address index, so it runs once the daemon is synced and
     // before the scan first reaches the tip. Must succeed: the hash sync waits for
-    // explorerSynced, and a node whose records lack positions can pick a different
-    // first registrant for a name than its peers (appMessageChain.firstRegistrant).
+    // explorerSynced, and the decider leaves a name undecided while any of its
+    // payments has no position (appDecisions/decider.js).
     before: 'explorerSynced',
     mustSucceed: true,
     description: 'record the block position and chain height of app payments recorded without a position',

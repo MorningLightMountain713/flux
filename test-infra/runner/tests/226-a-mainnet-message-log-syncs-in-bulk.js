@@ -32,20 +32,15 @@ import { setSystemSecure, stopTicker } from '../framework/daemon-control.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 import { dbClient } from '../framework/db-client.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
+import { Chain, expiresAtHeightFor } from '@runonflux/flux-spec';
 
 const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'fixtures', 'mainnet-message-slice');
 const JOINER = 3;
-// The chain's speed-up at the PON fork, as appMessageChain.appExpirationHeight counts it.
-const PON_FORK = 2020000;
-const BLOCKS_LASTING = 22000;
 
 const readLines = (file) => gunzipSync(readFileSync(join(FIXTURE, file))).toString().trim().split('\n').map((line) => JSON.parse(line));
 
-function expirationHeight(height, expire) {
-  const end = height + (expire || (height >= PON_FORK ? BLOCKS_LASTING * 4 : BLOCKS_LASTING));
-  if (height < PON_FORK && end > PON_FORK) return PON_FORK + ((end - PON_FORK) * 4);
-  return end;
-}
+// The height a v1-v8 app's term ends at on the harness chain, as flux-spec reads it.
+const expirationHeight = (height, expire) => expiresAtHeightFor({ height, expire, chain: Chain.HARNESS });
 
 describe('a node that joins takes a slice of the mainnet message log in bulk', function () {
   let env;

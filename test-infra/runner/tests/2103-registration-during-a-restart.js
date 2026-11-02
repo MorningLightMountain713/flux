@@ -12,12 +12,10 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 // An app confirmed while a node is restarting reaches that node's registry
 // exactly once, beside every app it already held.
 //
-// The node promotes the new app during the stretch its boot hash sync and
-// registry rebuild run in. Which of the two lands first is not something a
-// fleet can choose, so this asserts the end state on a real node: nothing
-// lost, nothing doubled. The exact interleaving - a write made while the
-// rebuild's staging copy is being built - is proven by the unit suite
-// registryRebuild.test.js, which can place the write inside that window.
+// The app is confirmed while the node is restarting, so the node takes it in
+// whatever order its boot work and the message land. A fleet cannot choose
+// that order, so this asserts the end state on a real node: nothing lost,
+// nothing doubled.
 
 const NODES = 4;
 const RESTARTED = 0;
