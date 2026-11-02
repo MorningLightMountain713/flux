@@ -7,7 +7,10 @@ const proxyquire = require('proxyquire').noCallThru();
 const { expect } = chai;
 
 describe('appCaches tests', () => {
+  // A component of an app registered before v9: shared under its 8.x folder id, its
+  // volume mounted at the directory its identifier names.
   const APP_ID = 'fluxcomp_myapp';
+  const IDENTIFIER = 'comp_ab12cd34ef56';
   let volumeServiceStub;
   let logStub;
   let appCaches;
@@ -37,7 +40,7 @@ describe('appCaches tests', () => {
     it('should stamp the mark with the identity of the volume it describes', async () => {
       volumeServiceStub.appVolumeFilesystemId.resolves('uuid-v1');
 
-      const stored = await appCaches.setSyncedMark(marks, APP_ID, { restarted: true });
+      const stored = await appCaches.setSyncedMark(marks, APP_ID, IDENTIFIER, { restarted: true });
 
       expect(stored).to.eql({ restarted: true, volumeUuid: 'uuid-v1' });
       expect(marks.get(APP_ID)).to.eql({ restarted: true, volumeUuid: 'uuid-v1' });
@@ -47,18 +50,26 @@ describe('appCaches tests', () => {
       // during boot the mark can legitimately be written before the volume is remounted
       volumeServiceStub.appVolumeFilesystemId.resolves(null);
 
-      await appCaches.setSyncedMark(marks, APP_ID, { numberOfExecutions: 1 });
+      await appCaches.setSyncedMark(marks, APP_ID, IDENTIFIER, { numberOfExecutions: 1 });
 
       expect(marks.get(APP_ID)).to.eql({ numberOfExecutions: 1, volumeUuid: null });
     });
 
-    it('should not mutate the object the caller passed in', async () => {
+    it('stores the mark it was given, so work begun on it still finds it current', async () => {
       volumeServiceStub.appVolumeFilesystemId.resolves('uuid-v1');
-      const original = { restarted: true };
+      const mark = { restarted: true };
 
-      await appCaches.setSyncedMark(marks, APP_ID, original);
+      await appCaches.setSyncedMark(marks, APP_ID, IDENTIFIER, mark);
 
-      expect(original).to.eql({ restarted: true });
+      expect(marks.get(APP_ID)).to.equal(mark);
+    });
+
+    it('stamps the volume mounted at the component\'s directory, not at its folder id', async () => {
+      volumeServiceStub.appVolumeFilesystemId.resolves('uuid-v1');
+
+      await appCaches.setSyncedMark(marks, APP_ID, IDENTIFIER, { restarted: true });
+
+      sinon.assert.calledOnceWithExactly(volumeServiceStub.appVolumeFilesystemId, IDENTIFIER);
     });
   });
 
@@ -69,10 +80,11 @@ describe('appCaches tests', () => {
       marks.set(APP_ID, { restarted: true, volumeUuid: 'uuid-v1' });
       volumeServiceStub.appVolumeFilesystemId.resolves('uuid-v2');
 
-      const mark = await appCaches.syncedMark(marks, APP_ID);
+      const mark = await appCaches.syncedMark(marks, APP_ID, IDENTIFIER);
 
       expect(mark).to.equal(null);
       expect(marks.has(APP_ID)).to.equal(false);
+      sinon.assert.calledWith(volumeServiceStub.appVolumeFilesystemId, IDENTIFIER);
     });
 
     it('should honour the mark when the volume is unchanged', async () => {
@@ -82,7 +94,7 @@ describe('appCaches tests', () => {
       marks.set(APP_ID, { restarted: true, volumeUuid: 'uuid-v1' });
       volumeServiceStub.appVolumeFilesystemId.resolves('uuid-v1');
 
-      const mark = await appCaches.syncedMark(marks, APP_ID);
+      const mark = await appCaches.syncedMark(marks, APP_ID, IDENTIFIER);
 
       expect(mark.restarted).to.equal(true);
       expect(marks.has(APP_ID)).to.equal(true);
@@ -94,7 +106,7 @@ describe('appCaches tests', () => {
       marks.set(APP_ID, { restarted: true, volumeUuid: 'uuid-v1' });
       volumeServiceStub.appVolumeFilesystemId.resolves(null);
 
-      const mark = await appCaches.syncedMark(marks, APP_ID);
+      const mark = await appCaches.syncedMark(marks, APP_ID, IDENTIFIER);
 
       expect(mark.restarted).to.equal(true);
       expect(marks.has(APP_ID)).to.equal(true);
@@ -103,14 +115,14 @@ describe('appCaches tests', () => {
     it('should honour an unstamped mark without probing the volume', async () => {
       marks.set(APP_ID, { restarted: true });
 
-      const mark = await appCaches.syncedMark(marks, APP_ID);
+      const mark = await appCaches.syncedMark(marks, APP_ID, IDENTIFIER);
 
       expect(mark.restarted).to.equal(true);
       expect(volumeServiceStub.appVolumeFilesystemId.called).to.equal(false);
     });
 
     it('should return null when the component has no mark at all', async () => {
-      const mark = await appCaches.syncedMark(marks, APP_ID);
+      const mark = await appCaches.syncedMark(marks, APP_ID, IDENTIFIER);
 
       expect(mark).to.equal(null);
       expect(volumeServiceStub.appVolumeFilesystemId.called).to.equal(false);

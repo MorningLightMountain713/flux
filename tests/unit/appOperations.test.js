@@ -2412,7 +2412,7 @@ describe('appOperations tests', () => {
       const failure = await runRestore('bkapp', [{ component: 'web', restore: true }], 'local');
 
       expect(failure, `the restore must complete: ${failure?.message}`).to.equal(null);
-      const marked = setSyncedMark.getCalls().filter((call) => call.args[2]?.restarted === true).map((call) => call.args[1]);
+      const marked = setSyncedMark.getCalls().filter((call) => call.args[3]?.restarted === true).map((call) => call.args[1]);
       expect(marked).to.deep.equal(['web_bident_s1']);
     });
 
@@ -2428,7 +2428,7 @@ describe('appOperations tests', () => {
 
       expect(failure, `the restore must complete: ${failure?.message}`).to.equal(null);
       expect(pause.getCalls().map((call) => call.args.slice(0, 2))).to.deep.equal([['fluxweb_bkapp', true], ['fluxweb_bkapp', false]]);
-      const marked = setSyncedMark.getCalls().filter((call) => call.args[2]?.restarted === true).map((call) => call.args[1]);
+      const marked = setSyncedMark.getCalls().filter((call) => call.args[3]?.restarted === true).map((call) => call.args[1]);
       expect(marked).to.deep.equal(['fluxweb_bkapp']);
     });
 
@@ -2466,7 +2466,7 @@ describe('appOperations tests', () => {
 
       expect(failure?.message).to.match(/could not clear/);
       sinon.assert.calledOnceWithExactly(adjust, { method: 'patch', config: { type: 'receiveonly' }, id: 'fluxweb_bkapp' });
-      sinon.assert.calledOnceWithExactly(setSyncedMark, sinon.match.any, 'fluxweb_bkapp', { restarted: false, numberOfExecutions: 0 });
+      sinon.assert.calledOnceWithExactly(setSyncedMark, sinon.match.any, 'fluxweb_bkapp', 'web_bident', { restarted: false, numberOfExecutions: 0 });
       sinon.assert.calledWith(hold, 'web_bident', 'stopped');
     });
 

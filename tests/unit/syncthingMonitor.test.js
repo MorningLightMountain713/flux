@@ -118,6 +118,7 @@ const syncthingEventsConsumerMock = {
 
 const volumeServiceMock = {
   ensureAppVolumeMounted: sinon.stub().resolves({ mounted: true, alreadyMounted: true }),
+  isPathMounted: sinon.stub().resolves(true),
 };
 
 // The real setSyncedMark stamps the mark with the volume's filesystem id, which
@@ -125,12 +126,13 @@ const volumeServiceMock = {
 // is WHICH mark a pass writes. This stores it as the real one does, with the
 // unreadable stamp an unmounted volume answers.
 const appCachesMock = {
-  setSyncedMark: sinon.stub().callsFake(async (marks, appId, cache) => {
-    const stamped = { ...cache, volumeUuid: null };
-    marks.set(appId, stamped);
-    return stamped;
+  setSyncedMark: sinon.stub().callsFake(async (marks, folderId, identifier, cache) => {
+    // eslint-disable-next-line no-param-reassign
+    cache.volumeUuid = null;
+    marks.set(folderId, cache);
+    return cache;
   }),
-  syncedMark: sinon.stub().callsFake(async (marks, appId) => marks.get(appId) || null),
+  syncedMark: sinon.stub().callsFake(async (marks, folderId) => marks.get(folderId) || null),
 };
 
 const appReconcilerMock = {
@@ -182,8 +184,21 @@ const ignorePolicyMock = {
 // The peer fence answers no fence; what this file checks is what the pass asks it.
 const peerFenceMock = { fenceFor: sinon.stub().returns(null) };
 
+// The real writers, over the same syncthing double the monitor reads.
+const syncthingFolderWrites = proxyquire('../../ZelBack/src/services/appMonitoring/syncthingFolderWrites', {
+  '../serviceHelper': serviceHelperMock,
+  '../syncthingService': syncthingServiceMock,
+  '../utils/volumeService': volumeServiceMock,
+});
+const primaryRole = proxyquire('../../ZelBack/src/services/appLifecycle/primaryRole', {
+  '../appMonitoring/appReconciler': appReconcilerMock,
+  '../appMonitoring/syncthingFolderWrites': syncthingFolderWrites,
+});
+
 const syncthingMonitor = proxyquire('../../ZelBack/src/services/appMonitoring/syncthingMonitor', {
   './syncthingPeerFence': peerFenceMock,
+  './syncthingFolderWrites': syncthingFolderWrites,
+  '../appLifecycle/primaryRole': primaryRole,
   './peerFolderLiveness': { createPeerFolderLiveness: () => livenessMock },
   '../serviceHelper': serviceHelperMock,
   '../dockerService': dockerServiceMock,
@@ -1067,7 +1082,7 @@ describe('syncthingMonitor tests', () => {
       expect(mark.mountSafetyBlocked, 'and says why it is parked').to.be.true;
       expect(mark.blockedReason).to.equal('unmounted_with_content');
       // written through appCaches, so the volume stamp cannot be forgotten here
-      sinon.assert.calledWith(appCachesMock.setSyncedMark, mockState.receiveOnlySyncthingAppsCache, syncFolderId);
+      sinon.assert.calledWith(appCachesMock.setSyncedMark, mockState.receiveOnlySyncthingAppsCache, syncFolderId, syncComp.identifier);
     });
 
     // The mark describes a DEMOTED folder, so a folder still sendreceive has
@@ -1288,33 +1303,42 @@ describe('syncthingMonitor tests', () => {
       sinon.assert.called(syncthingServiceMock.getDeviceId);
     });
 
-    // What a folder holds that the cluster's index does not is a receive-only
-    // question, and a promotion answers it: everything this node holds is published.
-    it('drops the published holdings of a folder it promotes, once the write lands', async () => {
-      const saved = globalStateModule.folderHoldings;
-      const claim = { bytes: 5_821_604_997, newestModified: 200 };
-      globalStateModule.folderHoldings = new Map([[syncFolderId, claim], ['fluxother_app', claim]]);
-      try {
-        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
-        syncthingServiceMock.getConfigFolders.resolves([]);
-        syncthingServiceMock.getConfigDevices.resolves([]);
-        syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
-        fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
-        syncthingMonitorHelpersMock.folderNeedsUpdate.returns(true);
+    // An activeStandby folder's type is its primary role's: the pass names it only
+    // for a folder syncthing does not have, and then as receiveonly, whatever the
+    // state machine decided.
+    it('creates a new activeStandby folder receiveonly', async () => {
+      deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+      syncthingServiceMock.getConfigFolders.resolves([]);
+      syncthingServiceMock.getConfigDevices.resolves([]);
+      syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      syncthingMonitorHelpersMock.folderNeedsUpdate.returns(true);
 
-        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
-        await clock.tickAsync(100);
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
 
-        const put = syncthingServiceMock.adjustConfigFolders.getCalls()
-          .find((call) => call.args[0]?.method === 'put');
-        expect(put, 'nothing was written, so this asserts nothing').to.not.equal(undefined);
-        expect(put.args[0].config.find((folder) => folder.id === syncFolderId)?.type).to.equal('sendreceive');
-        expect(globalStateModule.folderHoldings.has(syncFolderId), 'a promoted folder still claims receive-only holdings').to.equal(false);
-        // Scoped to what the write changed, not a clear of every claim the node made.
-        expect(globalStateModule.folderHoldings.get('fluxother_app')).to.equal(claim);
-      } finally {
-        globalStateModule.folderHoldings = saved;
-      }
+      const put = syncthingServiceMock.adjustConfigFolders.getCalls()
+        .find((call) => call.args[0]?.method === 'put');
+      expect(put, 'nothing was written, so this asserts nothing').to.not.equal(undefined);
+      expect(put.args[0].config.find((folder) => folder.id === syncFolderId)?.type).to.equal('receiveonly');
+    });
+
+    it('writes an existing activeStandby folder without a type, so syncthing keeps the one its primary role set', async () => {
+      deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+      syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, path: syncComp.dir, type: 'sendreceive' }]);
+      syncthingServiceMock.getConfigDevices.resolves([]);
+      syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      syncthingMonitorHelpersMock.folderNeedsUpdate.returns(true);
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
+
+      const writes = syncthingServiceMock.adjustConfigFolders.getCalls()
+        .filter((call) => call.args[0]?.id === syncFolderId || call.args[0]?.config?.some?.((folder) => folder.id === syncFolderId));
+      expect(writes, 'nothing was written, so this asserts nothing').to.have.length(1);
+      expect(writes[0].args[0].method).to.equal('patch');
+      expect(writes[0].args[0].config).to.not.have.property('type');
     });
 
     // A replaced master may hold the app under either name: a pre-v9 app's folder
@@ -1430,6 +1454,152 @@ describe('syncthingMonitor tests', () => {
       sinon.assert.notCalled(syncthingMonitorHelpersMock.createSyncthingFolderConfig);
       // ...and the orphaned folder is removed.
       expect(syncthingServiceMock.adjustConfigFolders.calledWith({ method: 'delete', id: syncFolderId })).to.be.true;
+    });
+
+    // What this node tells its peers about each receive-only folder, written where
+    // each fact becomes known.
+    describe('the folder states the pass records', () => {
+      const baseline = () => {
+        syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+        fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+      };
+      afterEach(() => {
+        globalStateModule.folderStates.clear();
+      });
+
+      it('records an installed folder it has not measured as not looked at', async () => {
+        baseline();
+        syncthingMonitorHelpersMock.ensureStfolderExists.resolves(true);
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        expect(globalStateModule.folderStates.get(syncFolderId)).to.deep.equal({ state: 'notLookedAt' });
+      });
+
+      it('holds out a folder whose volume is not mounted', async () => {
+        baseline();
+        syncthingMonitorHelpersMock.ensureStfolderExists.resolves(false);
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        expect(globalStateModule.folderStates.get(syncFolderId)).to.deep.equal({ state: 'heldOut' });
+      });
+
+      it('records a folder whose volume image is gone as gone, and demotes it through its primary role', async () => {
+        baseline();
+        syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
+        syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
+        volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+        syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, path: syncComp.dir, type: 'sendreceive' }]);
+        const demote = sinon.spy(primaryRole, 'demoteForSafety');
+        try {
+          monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+          await clock.tickAsync(100);
+
+          expect(globalStateModule.folderStates.get(syncFolderId)).to.deep.equal({ state: 'volumeGone' });
+          sinon.assert.calledWith(demote, syncFolderId);
+        } finally {
+          demote.restore();
+        }
+      });
+
+      it('holds out a folder whose volume will not mount while its image is on the node', async () => {
+        baseline();
+        syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
+        syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
+        volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'mount_failed' });
+        syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, path: syncComp.dir, type: 'sendreceive' }]);
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        expect(globalStateModule.folderStates.get(syncFolderId)).to.deep.equal({ state: 'heldOut' });
+      });
+    });
+
+    // The election starts a seed on designatedLeader, which has to mean the
+    // folder batch naming it has landed in syncthing.
+    describe('a seed the state machine decided this pass', () => {
+      const seedPass = () => {
+        syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+        fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+        syncthingServiceMock.getConfigFolders.resolves([]);
+        syncthingMonitorHelpersMock.folderNeedsUpdate.returns(true);
+        syncthingFolderStateMachineMock.manageFolderSyncState.callsFake(async ({ syncthingFolder }) => ({
+          syncthingFolder, cache: { restarted: true, designationPending: true },
+        }));
+      };
+
+      it('is designated once the folder write lands', async () => {
+        seedPass();
+        const ready = sinon.spy();
+        const publish = sinon.stub(fluxEventBus, 'publish').callsFake((event, data) => ready(event, data));
+        try {
+          monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+          await clock.tickAsync(100);
+        } finally {
+          publish.restore();
+        }
+
+        const mark = mockState.receiveOnlySyncthingAppsCache.get(syncFolderId);
+        expect(mark.designatedLeader).to.equal(true);
+        expect(mark.designationPending).to.equal(false);
+        sinon.assert.calledWith(ready, 'syncthing:folderReady', { folder: syncFolderId });
+      });
+
+      it('is not designated when syncthing refused the write', async () => {
+        seedPass();
+        syncthingServiceMock.adjustConfigFolders.withArgs(sinon.match({ method: 'put' })).rejects(new Error('refused'));
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        const mark = mockState.receiveOnlySyncthingAppsCache.get(syncFolderId);
+        expect(mark.designatedLeader).to.not.equal(true);
+        expect(mark.designationPending).to.equal(true);
+      });
+    });
+
+    // The app's primary runs all of its activeStandby components together, so the
+    // state machine is told each sibling by the name it is shared under and the
+    // name it is held under.
+    it('hands the state machine the app\'s other activeStandby components', async () => {
+      const spec = await v9Spec({
+        name: 'testapp',
+        components: {
+          web: { ...V9_SUBMISSION.components.web, name: 'web', persistentStorage: ACTIVE_STANDBY_STORAGE },
+          db: {
+            ...V9_SUBMISSION.components.web,
+            name: 'db',
+            ports: { http: { containerPort: 80, hostPort: 31_001 } },
+            persistentStorage: { sizeGb: 5, mounts: { '/data': { source: 'data', destination: '/data' } }, sync: { mode: 'activeStandby' } },
+          },
+        },
+      }, { encrypted: true });
+      const deployment = flux.DeploymentSpec.fromSpec(spec, appsFolder, {
+        replica: null,
+        identity: 'ab12cd34ef56',
+        registrationVersion: 9,
+        names: { db: { syncFolderId: 'fluxdb_testapp', aliases: [] } },
+      });
+      syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      deploymentProviderMock.listInstalledDeployments.resolves([deployment]);
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
+
+      const web = deployment.getComponent('web');
+      const db = deployment.getComponent('db');
+      const asked = syncthingFolderStateMachineMock.manageFolderSyncState.getCalls().map((call) => call.args[0]);
+      expect(asked.find((params) => params.appId === web.syncFolderId).electedSiblings)
+        .to.deep.equal([{ folderId: 'fluxdb_testapp', identifier: db.identifier }]);
+      expect(asked.find((params) => params.appId === 'fluxdb_testapp').electedSiblings)
+        .to.deep.equal([{ folderId: web.syncFolderId, identifier: web.identifier }]);
     });
 
     it('keeps the folder of a component skipped for an unmounted volume', async () => {
@@ -1651,7 +1821,10 @@ describe('syncthingMonitor tests', () => {
       // of a pass that simply never wrote anything.
       it('publishes it when the write lands', async () => {
         globalStateModule.promotedFolderIds = null;
-        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+        const syncFirst = await deploymentFor('testapp', 'web', {
+          persistentStorage: { ...ACTIVE_STANDBY_STORAGE, sync: { mode: 'syncFirst' } },
+        }, 'ab12cd34ef56');
+        deploymentProviderMock.listInstalledDeployments.resolves([syncFirst]);
         syncthingServiceMock.getConfigFolders.resolves([]);
         syncthingServiceMock.getConfigDevices.resolves([]);
         syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');

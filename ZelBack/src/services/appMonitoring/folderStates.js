@@ -1,8 +1,6 @@
 'use strict';
 
 const globalState = require('../utils/globalState');
-const mountParser = require('../utils/mountParser');
-const dockerService = require('../dockerService');
 
 // What this node tells its peers about each receive-only folder of an installed app,
 // for a cold-start seed: which holder starts the app from what it holds.
@@ -37,27 +35,26 @@ const FolderState = Object.freeze({
 const NO_CLAIM_ANSWER = Object.freeze({ unreadable: true });
 
 /**
- * The folder ids of an app's components that sync receive-only (g: and r:).
- * @param {object} appSpec Installed app specification, decrypted.
+ * The folder ids of an app's components that sync receive-only (activeStandby and
+ * syncFirst).
+ * @param {object} deployment Installed app deployment.
  * @returns {string[]}
  */
-function receiveOnlyFolderIds(appSpec) {
-  const components = appSpec.version <= 3
-    ? [{ identifier: appSpec.name, containerData: appSpec.containerData }]
-    : (appSpec.compose || []).map((component) => ({ identifier: `${component.name}_${appSpec.name}`, containerData: component.containerData }));
-  return components
-    .filter(({ containerData }) => ['g', 'r'].includes(mountParser.getComponentSyncMode(containerData)))
-    .map(({ identifier }) => dockerService.getAppIdentifier(identifier));
+function receiveOnlyFolderIds(deployment) {
+  return deployment.componentEntries()
+    .map(([, component]) => component)
+    .filter((component) => component.hasActiveStandbySyncthing() || component.requiresSyncBeforeStart())
+    .map((component) => component.syncFolderId);
 }
 
 /**
  * Records the receive-only folders of an installed app that have no entry as not
  * looked at. A folder that already has one keeps it: its volume is the one it
  * describes.
- * @param {object} appSpec Installed app specification, decrypted.
+ * @param {object} deployment Installed app deployment.
  */
-function installed(appSpec) {
-  receiveOnlyFolderIds(appSpec)
+function installed(deployment) {
+  receiveOnlyFolderIds(deployment)
     .filter((folderId) => !globalState.folderStates.has(folderId))
     .forEach((folderId) => globalState.folderStates.set(folderId, { state: FolderState.NOT_LOOKED_AT }));
 }

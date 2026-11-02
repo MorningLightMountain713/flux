@@ -888,13 +888,14 @@ describe('appQueryService tests', () => {
           '../fluxNetworkHelper': fluxNetworkHelperStub,
           '../fluxCommunicationUtils': fluxCommunicationUtilsStub,
         });
-        globalState.promotedFolderIds = new Set(['fluxa_a']);
-        globalState.folderHoldings = new Map([['fluxa_a', { bytes: 5_821_604_997, newestModified: 200 }]]);
+        globalState.promotedFolderIds = new Set(['fluxw_w']);
+        globalState.folderStates.set('fluxa_a', { state: 'measured', bytes: 5_821_604_997, newestModified: 200 });
         messageHelperStub.createDataMessage.returnsArg(0);
       });
 
       afterEach(() => {
-        globalState.folderHoldings = null;
+        globalState.folderStates.clear();
+        globalState.seedMarks.clear();
       });
 
       it('serves the holdings to a node on the deterministic list', async () => {
@@ -903,6 +904,17 @@ describe('appQueryService tests', () => {
         const result = await holdingsService.promotedFolderHoldings({ body: signed() });
 
         expect(result.holding).to.deep.equal({ fluxa_a: { bytes: 5_821_604_997, newestModified: 200 } });
+      });
+
+      // Where this node stands in deciding a cold-start seed carries the same figures
+      // as its holdings, so it goes where they go.
+      it('serves this node\'s seed marks beside the holdings', async () => {
+        fluxNetworkHelperStub.verifySignedFluxnodeMessage.resolves(true);
+        globalState.seedMarks.set('fluxb_b', { stage: 'deciding', bytes: 10, newestModified: 5 });
+
+        const result = await holdingsService.promotedFolderHoldings({ body: signed() });
+
+        expect(result.seeding).to.deep.equal({ fluxb_b: { stage: 'deciding', bytes: 10, newestModified: 5 } });
       });
 
       it('serves the holdings to the flux team', async () => {
@@ -923,7 +935,9 @@ describe('appQueryService tests', () => {
           const result = await holdingsService.promotedFolderHoldings({ body });
 
           expect(result.holding, 'holdings went to a caller that proved nothing').to.equal(undefined);
-          expect(result).to.deep.equal({ ready: true, folders: ['fluxa_a'] });
+          expect(result).to.deep.equal({
+            ready: true, folders: ['fluxw_w'], notLookedAt: [], heldOut: [], volumeGone: [],
+          });
         });
       });
 
@@ -940,7 +954,9 @@ describe('appQueryService tests', () => {
         });
 
         expect(result.holding, 'a body dated in the future served as a credential').to.equal(undefined);
-        expect(result).to.deep.equal({ ready: true, folders: ['fluxa_a'] });
+        expect(result).to.deep.equal({
+          ready: true, folders: ['fluxw_w'], notLookedAt: [], heldOut: [], volumeGone: [],
+        });
       });
 
       // The bound is the fleet's clocks disagreeing, which is honest and must still work.
@@ -981,7 +997,9 @@ describe('appQueryService tests', () => {
         const result = await holdingsService.promotedFolderHoldings({ body: signed({ target: '10.0.0.8:16127' }) });
 
         expect(result.holding, 'a signature captured in flight worked on another node').to.equal(undefined);
-        expect(result).to.deep.equal({ ready: true, folders: ['fluxa_a'] });
+        expect(result).to.deep.equal({
+          ready: true, folders: ['fluxw_w'], notLookedAt: [], heldOut: [], volumeGone: [],
+        });
       });
 
       it('withholds the holdings when this node does not know its own address', async () => {

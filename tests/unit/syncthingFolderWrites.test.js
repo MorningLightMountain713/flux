@@ -219,7 +219,7 @@ describe('syncthing folder writes', () => {
         syncthingFolderWrites.patchFolder('fluxother_app', { paused: true }),
         syncthingFolderWrites.putFolders([
           { id: 'fluxprobe_app', type: 'receiveonly' },
-          { id: 'fluxother_app', type: 'sendreceive' },
+          { id: 'fluxother_app', path: `${appsFolder}fluxother_app`, type: 'sendreceive' },
         ]),
       ];
       await tick();
@@ -407,7 +407,7 @@ describe('syncthing folder writes', () => {
       const scan = sinon.stub(syncthingService, 'scanFolder').resolves({ status: 'success' });
 
       await syncthingFolderWrites.putFolders([
-        { id: 'fluxsends_app', type: 'sendreceive' },
+        { id: 'fluxsends_app', path: `${appsFolder}fluxsends_app`, type: 'sendreceive' },
         { id: 'fluxreceives_app', type: 'receiveonly' },
       ]);
       await Promise.all(['fluxsends_app', 'fluxreceives_app'].map((id) => syncthingFolderWrites.whenCovered(id)));
@@ -514,11 +514,18 @@ describe('syncthing folder writes', () => {
   });
 
   describe('the types it records', () => {
+    beforeEach(() => {
+      sinon.stub(syncthingService, 'getConfigFolders').resolves([
+        { id: 'fluxprobe_app', path: `${appsFolder}fluxprobe_app`, type: 'receiveonly' },
+        { id: 'fluxother_app', path: `${appsFolder}fluxother_app`, type: 'receiveonly' },
+      ]);
+    });
+
     it('publishes a folder turning writable once, and tells peers it is writable', async () => {
       const publish = sinon.stub(fluxEventBus, 'publish');
       sinon.stub(syncthingService, 'adjustConfigFolders').resolves({ status: 'success' });
 
-      await syncthingFolderWrites.putFolders([{ id: 'fluxprobe_app', type: 'sendreceive' }]);
+      await syncthingFolderWrites.putFolders([{ id: 'fluxprobe_app', path: `${appsFolder}fluxprobe_app`, type: 'sendreceive' }]);
       await syncthingFolderWrites.patchFolder('fluxprobe_app', { type: 'sendreceive' });
 
       expect(publish.getCalls().filter((c) => c.args[0] === 'syncthing:folderWritable').map((c) => c.args[1]))
@@ -681,6 +688,15 @@ describe('folderConfig', () => {
     expect(await syncthingFolderWrites.folderConfig('fluxprobe_app')).to.equal(null);
   });
 
+  // An app registered before v9 shares its folder under its 8.x name over the
+  // directory its identifier names.
+  it('answers the folder by its id, wherever its directory is', async () => {
+    const folder = { id: 'fluxweb_app', path: `${appsFolder}web_ab12cd34ef56`, type: 'receiveonly' };
+    sinon.stub(syncthingService, 'getConfigFolders').resolves([folder]);
+
+    expect(await syncthingFolderWrites.folderConfig('fluxweb_app')).to.deep.equal(folder);
+  });
+
   it('answers null when syncthing cannot be read', async () => {
     sinon.stub(syncthingService, 'getConfigFolders').rejects(new Error('syncthing did not answer'));
 
@@ -770,5 +786,35 @@ describe('pauseAllFolders', () => {
       { method: 'patch', config: { paused: true }, id: 'fluxb_two' },
       { method: 'patch', config: { paused: true }, id: 'fluxc_three' },
     ]);
+  });
+});
+
+describe('a folder of an app registered before v9', () => {
+  const folder = 'fluxweb_app';
+  const directory = `${appsFolder}web_ab12cd34ef56`;
+
+  afterEach(() => {
+    sinon.restore();
+  });
+
+  it('is made to send once the volume at its own directory is mounted', async () => {
+    sinon.stub(volumeService, 'isPathMounted').callsFake(async (mountPath) => mountPath === directory);
+    sinon.stub(syncthingService, 'getConfigFolders').resolves([{ id: folder, path: directory, type: 'receiveonly' }]);
+    const adjust = sinon.stub(syncthingService, 'adjustConfigFolders').resolves({ status: 'success' });
+
+    expect(await syncthingFolderWrites.changeSyncthingFolderType(folder, 'sendreceive')).to.equal(true);
+
+    sinon.assert.calledOnceWithExactly(adjust, { method: 'patch', config: { type: 'sendreceive', ...OWNED_FOLDER_SETTINGS }, id: folder });
+  });
+
+  it('is not made to send while the volume at its own directory is not mounted', async () => {
+    sinon.stub(volumeService, 'isPathMounted').callsFake(async (mountPath) => mountPath !== directory);
+    sinon.stub(syncthingService, 'getConfigFolders').resolves([{ id: folder, path: directory, type: 'receiveonly' }]);
+    const adjust = sinon.stub(syncthingService, 'adjustConfigFolders').resolves({ status: 'success' });
+
+    expect(await syncthingFolderWrites.changeSyncthingFolderType(folder, 'sendreceive')).to.equal(false);
+    expect(await syncthingFolderWrites.patchFolder(folder, { type: 'sendreceive' })).to.not.have.property('status', 'success');
+
+    sinon.assert.notCalled(adjust);
   });
 });

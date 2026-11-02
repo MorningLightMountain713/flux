@@ -393,6 +393,16 @@ describe('primaryRole', () => {
       expect(t.calls).to.deep.equal([['folder', FOLDER, 'receiveonly', 'scanFirst']]);
     });
 
+    // The node the grant names may already be writing: what this one has not
+    // sent never reaches it.
+    it('keeps the folder of a standby receiving, unscanned, when the grant names another node', async () => {
+      const t = loadRole();
+
+      await t.role.holdAsStandby(APP, FOLDER, { grantedElsewhere: true });
+
+      expect(t.calls).to.deep.equal([['folder', FOLDER, 'receiveonly']]);
+    });
+
     it('does not make the folder of the primary receive', async () => {
       const t = loadRole({ primary: true });
 

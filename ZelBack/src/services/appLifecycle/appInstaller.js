@@ -22,6 +22,7 @@ const { checkPlacement, capacityShortfall } = hwRequirements;
 const { isImageBlocked } = require('../appSecurity/imageManager');
 const operationRegistry = require('../utils/operationRegistry');
 const globalState = require('../utils/globalState');
+const folderStates = require('../appMonitoring/folderStates');
 const capabilities = require('../utils/capabilities');
 const owedRemovals = require('./owedRemovals');
 const appHistory = require('../appDecisions/appHistory');
@@ -283,6 +284,9 @@ async function attemptInstallApplication(registered, options = {}) {
     }));
     await appRecords.instanceResources().put(new InstanceResources({ name: appName, replica: replica ?? null }));
     log.info(`Database entry created for ${appName} BEFORE Docker container creation`);
+    // Installed from here: a peer deciding a cold-start seed waits on this node
+    // until its monitor has measured what it holds.
+    folderStates.installed(deployment);
     // Now counted by appsResources (it is in the DB); drop the pending reservation
     // so it is not double-counted. The finally releases it on any earlier failure.
     admissionControl.release(appName);

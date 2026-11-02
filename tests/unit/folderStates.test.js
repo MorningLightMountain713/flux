@@ -1,4 +1,5 @@
 const { expect } = require('chai');
+const { loadSpecLibrary, V9_SUBMISSION, v9Spec } = require('./fixtures/fluxSpec');
 const folderStates = require('../../ZelBack/src/services/appMonitoring/folderStates');
 const { folderStates: folderStateMap } = require('../../ZelBack/src/services/utils/globalState');
 
@@ -12,34 +13,61 @@ describe('folderStates tests', () => {
   });
 
   describe('installed', () => {
-    it('records each g: and r: component of an app, and no s: or unsynced one', () => {
-      folderStates.installed({
-        name: 'app',
-        version: 4,
-        compose: [
-          { name: 'g', containerData: 'g:/data' },
-          { name: 'r', containerData: 'r:/data' },
-          { name: 's', containerData: 's:/data' },
-          { name: 'plain', containerData: '/data' },
-        ],
+    const storage = (mode) => ({
+      sizeGb: 5, mounts: { '/data': { source: 'data', destination: '/data' } }, ...(mode ? { sync: { mode } } : {}),
+    });
+    let flux;
+
+    before(async function loadLibrary() {
+      this.timeout(30_000);
+      flux = await loadSpecLibrary();
+    });
+
+    async function deploymentOf(components, opts = {}) {
+      const built = {};
+      Object.entries(components).forEach(([name, mode], index) => {
+        built[name] = {
+          ...V9_SUBMISSION.components.web,
+          name,
+          ports: { http: { containerPort: 80, hostPort: 31_000 + index } },
+          persistentStorage: storage(mode),
+        };
       });
+      const spec = await v9Spec({ name: 'app', components: built });
+      return flux.DeploymentSpec.fromSpec(spec, '/apps/', { replica: null, registrationVersion: 9, ...opts });
+    }
 
-      expect([...folderStateMap.keys()]).to.have.members(['fluxg_app', 'fluxr_app']);
-      expect(folderStateMap.get('fluxg_app')).to.deep.equal({ state: 'notLookedAt' });
+    it('records each activeStandby and syncFirst component of an app, and no sync or unsynced one', async () => {
+      const deployment = await deploymentOf({
+        primary: 'activeStandby', first: 'syncFirst', every: 'sync', plain: null,
+      });
+      const folderOf = (name) => deployment.getComponent(name).syncFolderId;
+
+      folderStates.installed(deployment);
+
+      expect([...folderStateMap.keys()]).to.have.members([folderOf('primary'), folderOf('first')]);
+      expect(folderStateMap.get(folderOf('primary'))).to.deep.equal({ state: 'notLookedAt' });
     });
 
-    it('records the single folder of an app from before compose', () => {
-      folderStates.installed({ name: 'legacy', version: 3, containerData: 'g:/data' });
+    it('records the folder of an app registered before v9 under its folder id', async () => {
+      const deployment = await deploymentOf({ primary: 'activeStandby' }, {
+        identity: 'ab12cd34ef56', names: { primary: { syncFolderId: 'fluxprimary_app', aliases: [] } },
+      });
+      expect(deployment.getComponent('primary').identifier, 'the fixture\'s folder id is not its identifier').to.not.equal('fluxprimary_app');
 
-      expect(folderStateMap.get('fluxlegacy')).to.deep.equal({ state: 'notLookedAt' });
+      folderStates.installed(deployment);
+
+      expect([...folderStateMap.keys()]).to.deep.equal(['fluxprimary_app']);
     });
 
-    it('keeps the state of a folder it already has', () => {
-      folderStateMap.set('fluxlegacy', { state: 'heldOut' });
+    it('keeps the state of a folder it already has', async () => {
+      const deployment = await deploymentOf({ primary: 'activeStandby' });
+      const folderId = deployment.getComponent('primary').syncFolderId;
+      folderStateMap.set(folderId, { state: 'heldOut' });
 
-      folderStates.installed({ name: 'legacy', version: 3, containerData: 'g:/data' });
+      folderStates.installed(deployment);
 
-      expect(folderStateMap.get('fluxlegacy')).to.deep.equal({ state: 'heldOut' });
+      expect(folderStateMap.get(folderId)).to.deep.equal({ state: 'heldOut' });
     });
   });
 
@@ -137,7 +165,7 @@ describe('folderStates tests', () => {
     it('keeps a folder whose volume image is gone when its app\'s spec cannot be read, and holds out any other', () => {
       folderStates.volumeGone('fluxgone');
       folderStates.measured('fluxmeasured', { bytes: 5, newestModified: 1 });
-      folderStates.installed({ name: 'fluxwait', version: 3, containerData: 'g:/appdata' });
+      folderStates.recreated('fluxwait');
 
       ['fluxgone', 'fluxmeasured', 'fluxwait', 'fluxnew'].forEach((folderId) => folderStates.specUnreadable(folderId));
 

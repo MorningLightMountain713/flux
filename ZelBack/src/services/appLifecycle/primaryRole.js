@@ -256,7 +256,9 @@ function heldByOperation(appName) {
 /**
  * Keeps the folder of a component this node is not the primary of receiving.
  * A folder found sending is scanned first, so what was written here goes out
- * as this node's own version and the next primary pulls it.
+ * as this node's own version and the next primary pulls it - unless the grant
+ * names another node its primary: that node may already be writing, so what
+ * this one has not yet sent is discarded, unscanned, and never reaches it.
  *
  * A folder found sending and paused is a primary returning from a stop, whose
  * syncthing came back paused: nothing written here since has gone out. It comes
@@ -290,9 +292,11 @@ function heldByOperation(appName) {
  * @param {() => Promise<string>} [opts.othersHold] The PeerComponent state of the
  *   other holders.
  * @param {string} [opts.appName] The app the component belongs to.
+ * @param {boolean} [opts.grantedElsewhere] The grant names another node the
+ *   component's primary.
  * @returns {Promise<void>}
  */
-async function holdAsStandby(identifier, appId, { othersHold, appName } = {}) {
+async function holdAsStandby(identifier, appId, { othersHold, appName, grantedElsewhere = false } = {}) {
   if (changes.get(identifier) || isPrimary(identifier)) return;
   await adopt(identifier, 'stopped', 'masterSlave standby');
   const folder = await syncthingFolderWrites.folderConfig(appId);
@@ -319,7 +323,7 @@ async function holdAsStandby(identifier, appId, { othersHold, appName } = {}) {
     promote(identifier, appId);
     return;
   }
-  await syncthingFolderWrites.changeSyncthingFolderType(appId, 'receiveonly', { scanFirst: true });
+  await syncthingFolderWrites.changeSyncthingFolderType(appId, 'receiveonly', { scanFirst: !grantedElsewhere });
 }
 
 /**

@@ -1206,7 +1206,7 @@ async function holdPartialRestore(appname, swaps) {
         log.error(`restore - SAFETY: ${folderId} holds partial data and could not be demoted to receiveonly`);
       }
       // eslint-disable-next-line no-await-in-loop
-      await appCaches.setSyncedMark(appCaches.receiveOnlySyncthingAppsCache, folderId, { restarted: false, numberOfExecutions: 0 });
+      await appCaches.setSyncedMark(appCaches.receiveOnlySyncthingAppsCache, folderId, swap.identifier, { restarted: false, numberOfExecutions: 0 });
     }
     appReconciler.setControllerDesired(swap.identifier, 'stopped', 'restore did not complete');
   }
@@ -1444,7 +1444,7 @@ async function runRestoreTask(appname, restore, type, zelidauth, report, { force
         }
         if (target.synced) {
           // eslint-disable-next-line no-await-in-loop
-          await appCaches.setSyncedMark(appCaches.receiveOnlySyncthingAppsCache, folder.id, {
+          await appCaches.setSyncedMark(appCaches.receiveOnlySyncthingAppsCache, folder.id, volume.identifier, {
             restarted: true,
             numberOfExecutionsRequired: 4,
             numberOfExecutions: 10,

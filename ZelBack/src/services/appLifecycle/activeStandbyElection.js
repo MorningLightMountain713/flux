@@ -213,7 +213,7 @@ function holdsMemberHere(member, runningIdentifiers) {
  * @returns {Promise<string[]>} identifiers of the components not ready
  */
 async function unreadyMembers(appName, members) {
-  const marks = await Promise.all(members.map((member) => appCaches.syncedMark(globalState.receiveOnlySyncthingAppsCache, member.folderId)));
+  const marks = await Promise.all(members.map((member) => appCaches.syncedMark(globalState.receiveOnlySyncthingAppsCache, member.folderId, member.identifier)));
   const unmarked = members.filter((member, index) => marks[index]?.restarted !== true);
   if (!unmarked.length) return [];
   let folders = [];
@@ -230,6 +230,23 @@ async function unreadyMembers(appName, members) {
       return !sending;
     })
     .map((member) => member.identifier);
+}
+
+/**
+ * Withdraws this node's mark that it seeds the folder of each of an app's
+ * activeStandby components, once the election has decided another node runs
+ * them. The mark tells a holder reaching its own cold start to stand aside, and
+ * this node will not seed. Becoming the primary here needs no withdrawal: a
+ * folder that sends clears its mark (syncthingFolderWrites).
+ * @param {object[]} members
+ * @param {string} outcome What the election decided, for the log.
+ */
+function withdrawSeedMarks(members, outcome) {
+  members.forEach((member) => {
+    if (!globalState.seedMarks.delete(member.folderId)) return;
+    log.info(`activeStandby: withdrew this node's mark that it seeds ${member.folderId} - ${outcome}`);
+    fluxEventBus.count('syncthing:seedMark', member.folderId, 'withdrawn');
+  });
 }
 
 /**
@@ -404,7 +421,10 @@ async function decideUnnamed({
       .map((location, i) => ({ ip: location.ip, label: `index ${i}` }))
       .filter((peer, i) => i !== index);
     const state = await peerComponent.componentStateOnPeers(peers, probeCtx);
-    if (state === PeerComponent.RUNNING && resuming) await settleOperatorStarts(members, 'a peer holds it');
+    if (state === PeerComponent.RUNNING) {
+      withdrawSeedMarks(members, 'a peer holds it');
+      if (resuming) await settleOperatorStarts(members, 'a peer holds it');
+    }
     return state;
   };
   const start = () => startMembers(members, runningIdentifiers);
@@ -443,7 +463,10 @@ async function decideUnnamed({
     const askedAt = previousNode ? previousNode.ip : previousPrimary;
     const previousState = await peerComponent.peerComponentState(`${extractIp(askedAt)}:${extractPort(askedAt)}`, { ...probeCtx, label: 'previous primary' });
     if (previousState !== PeerComponent.NOT_RUNNING) {
-      if (resuming && previousState === PeerComponent.RUNNING) await settleOperatorStarts(members, 'the previous primary runs it');
+      if (previousState === PeerComponent.RUNNING) {
+        withdrawSeedMarks(members, 'the previous primary runs it');
+        if (resuming) await settleOperatorStarts(members, 'the previous primary runs it');
+      }
       return;
     }
     if (index === 0) {
@@ -497,6 +520,35 @@ async function decideUnnamed({
     }
     return;
   }
+  if (index > 0 && !primaryByIdentifier.has(identifier)
+    && members.some((member) => globalState.receiveOnlySyncthingAppsCache.get(member.folderId)?.designatedLeader)) {
+    // The seed is the only instance that can start a newborn app: every other
+    // instance is receiveonly with nothing to sync from, so the index stagger
+    // would wait on nodes that cannot become ready.
+    const peerState = await checkPeersRunning();
+    if (peerState === PeerComponent.UNKNOWN) {
+      // The designation is what this decision is made from, and no decision was
+      // reached: a peer this node could not read is not a peer that took the seed.
+      log.info(`activeStandby: holding the seed of app:${appName} index: ${index} - a peer could not be ruled out`);
+      return;
+    }
+    if (peerState === PeerComponent.RUNNING) {
+      log.info(`activeStandby: not starting app:${appName} index: ${index} - a peer is already running it`);
+    } else if (await start()) {
+      fluxEventBus.count('masterSlave:decision', identifier, 'seedStarted');
+      log.info(`activeStandby: starting docker component:${identifier} index: ${index} - the seed starts without the index stagger`);
+    }
+    // A stagger already booked here is moot once the seed has been handled, and
+    // left standing it would start the component a second time when it comes due.
+    scheduledStart.delete(identifier);
+    // The designation covers the app's first start only: spent here, so it cannot
+    // take this node out of the stagger on a later loss of its primary.
+    members.forEach((member) => {
+      const seedCache = globalState.receiveOnlySyncthingAppsCache.get(member.folderId);
+      if (seedCache) seedCache.designatedLeader = false;
+    });
+    return;
+  }
   if (index > 0 && !primaryByIdentifier.has(identifier) && !scheduledStart.has(identifier)) {
     // No history: the turn is counted from the pass that finds no holder running it.
     const peerState = await checkPeersRunning();
@@ -538,6 +590,7 @@ async function decideNamed({
     : () => peerComponent.componentStateOnOtherHolders((name) => registryManager.appLocation(name), localSocketAddr, probeCtx, { also: [ip] });
 
   if (!ipsMatch(localSocketAddr, ip)) {
+    withdrawSeedMarks(members, `${granted ? 'the grant' : 'FDM'} names ${ip} its primary`);
     if (resuming) await settleOperatorStarts(members, `${granted ? 'the grant' : 'FDM'} names ${ip} its primary`);
     const holdsHere = members.some((member) => holdsMemberHere(member, runningIdentifiers));
     // FDM also names a node that only holds the app, while nothing runs it
@@ -554,7 +607,7 @@ async function decideNamed({
         log.info(`activeStandby: standing down as primary of component:${member.identifier} - ip:${ip} is named, localSocketAddr is: ${localSocketAddr}`);
       } else {
         // eslint-disable-next-line no-await-in-loop
-        await primaryRole.holdAsStandby(member.identifier, member.folderId, { othersHold: standbyHolders, appName });
+        await primaryRole.holdAsStandby(member.identifier, member.folderId, { othersHold: standbyHolders, appName, grantedElsewhere: granted });
       }
     }
     return;

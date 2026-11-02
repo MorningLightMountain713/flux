@@ -517,19 +517,22 @@ describe('activeStandbyElection', () => {
     let undecided;
     let fdm;
     let intent;
+    // The component's synced mark as the last pass read it.
+    let entry;
 
-    async function pass(deployment, row, { granted = false } = {}) {
+    async function pass(deployment, row, { granted = false, mark = {} } = {}) {
       const component = deployment.getComponent('valheim');
       deploymentProvider.listInstalledDeployments.resolves([deployment]);
       const { identityLabels } = await loadSpecLibrary();
       appQueryService.listRunningContainers.resolves(row.running ? [{ Names: [`/${component.identifier}`], Labels: identityLabels(component) }] : []);
       sinon.stub(appReconciler, 'hasControllerOpinion').returns(row.opinion === true);
       appsRuntimeState.operatorStopState.resolves(row.operatorStopped ? LOCKED : UNLOCKED);
-      globalState.receiveOnlySyncthingAppsCache.set(component.syncFolderId, { restarted: true });
+      globalState.receiveOnlySyncthingAppsCache.set(component.syncFolderId, { restarted: true, ...mark });
       sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves(row.names === 'other' ? '192.168.1.5:16127' : here);
       const named = { here, other: elsewhere, none: null }[row.names];
       fdm.resolves({ data: { status: 'success', data: { ips: named ? [named.split(':')[0]] : [] } } });
       if (granted) intent.resolves({ ip: named, fdmOk: true });
+      entry = globalState.receiveOnlySyncthingAppsCache.get(component.syncFolderId);
       try {
         await activeStandbyElection.electionPass();
       } finally {
@@ -610,8 +613,76 @@ describe('activeStandbyElection', () => {
           const [identifier, folderId, { othersHold: standbyHolders, appName: named }] = role.holdAsStandby.firstCall.args;
           expect([identifier, folderId, named]).to.deep.equal([component.identifier, component.syncFolderId, appName]);
           expect(await standbyHolders()).to.equal(peerComponent.PeerComponent.RUNNING);
+          // another node may already be writing: what this one has not sent is discarded
+          expect(role.holdAsStandby.firstCall.args[2].grantedElsewhere).to.equal(true);
           sinon.assert.notCalled(othersHold);
           sinon.assert.notCalled(fdm);
+        });
+
+        it('FDM names another node, stopped here -> holdAsStandby, which scans what this node wrote', async () => {
+          role.standDown.returns(false);
+          await pass(await build(), { names: 'other', running: false });
+
+          expect(role.holdAsStandby.firstCall.args[2].grantedElsewhere).to.equal(false);
+        });
+
+        // A node that marked itself the seed withdraws the mark once another node
+        // runs the app; the mark is kept under the folder id.
+        it('withdraws this node\'s seed mark when another node is named', async () => {
+          const deployment = await build();
+          const { syncFolderId } = deployment.getComponent('valheim');
+          globalState.seedMarks.set(syncFolderId, { stage: 'decided', bytes: 0, newestModified: 0 });
+          try {
+            await pass(deployment, { names: 'other', running: false });
+
+            expect(globalState.seedMarks.has(syncFolderId)).to.equal(false);
+          } finally {
+            globalState.seedMarks.clear();
+          }
+        });
+
+        // The seed is the only holder that can start a newborn app: nobody else
+        // holds a copy to sync from, so it starts without waiting its turn.
+        describe('the seed, after another holder in the order', () => {
+          let peers;
+          beforeEach(() => {
+            registryManager.appLocation.resolves([
+              { ip: elsewhere, runningSince: '2026-01-01T00:01:00.000Z' },
+              { ip: here, runningSince: '2026-01-01T00:02:00.000Z' },
+            ]);
+            peers = sinon.stub(peerComponent, 'componentStateOnPeers').resolves(peerComponent.PeerComponent.NOT_RUNNING);
+          });
+
+          it('starts at once, and spends the designation', async () => {
+            const component = await pass(await build(), { names: 'none', running: false }, { mark: { designatedLeader: true } });
+
+            expect(taken()).to.deep.equal(['promote']);
+            sinon.assert.calledWith(role.promote, component.identifier, component.syncFolderId);
+            sinon.assert.called(peers);
+            expect(entry.designatedLeader).to.equal(false);
+          });
+
+          it('waits its turn without the designation', async () => {
+            await pass(await build(), { names: 'none', running: false });
+
+            expect(taken()).to.deep.equal([]);
+          });
+
+          it('starts nothing while a peer cannot be ruled out, and keeps the designation', async () => {
+            peers.resolves(peerComponent.PeerComponent.UNKNOWN);
+            await pass(await build(), { names: 'none', running: false }, { mark: { designatedLeader: true } });
+
+            expect(taken()).to.deep.equal([]);
+            expect(entry.designatedLeader).to.equal(true);
+          });
+
+          it('starts nothing while a peer runs the app, and spends the designation', async () => {
+            peers.resolves(peerComponent.PeerComponent.RUNNING);
+            await pass(await build(), { names: 'none', running: false }, { mark: { designatedLeader: true } });
+
+            expect(taken()).to.deep.equal([]);
+            expect(entry.designatedLeader).to.equal(false);
+          });
         });
 
         it('the grant names nobody yet -> nothing, and FDM is not read', async () => {

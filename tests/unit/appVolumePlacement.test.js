@@ -151,7 +151,6 @@ describe('app volume placement', () => {
     volumeService = proxyquire('../../ZelBack/src/services/utils/volumeService', {
       '../dockerService': { getAppIdentifier: sinon.stub() },
       '../serviceHelper': { runCommand: sinon.stub().resolves({ error: null, stdout: '', stderr: '' }) },
-      './mountParser': {},
       './appConstants': {
         appsFolder: APPS_FOLDER,
         appVolumesPath: '/dat/var/lib/fluxos/appvolumes',

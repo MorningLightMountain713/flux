@@ -6,7 +6,6 @@ const syncthingService = require('../syncthingService');
 const globalState = require('../utils/globalState');
 const folderStates = require('./folderStates');
 const fluxEventBus = require('../utils/fluxEventBus');
-const { appsFolder } = require('../utils/appConstants');
 const { OWNED_FOLDER_SETTINGS } = require('./syncthingMonitorHelpers');
 const volumeService = require('../utils/volumeService');
 const { ConfigMethod } = require('../utils/syncthingConstants');
@@ -263,16 +262,39 @@ async function written(write) {
 }
 
 /**
- * @param {string} folderId
- * @returns {Promise<boolean>} whether the folder's app directory has its volume mounted
+ * A folder is shared under its id over the directory its path names, and the two
+ * differ for an app registered before v9: the folder is that app's 8.x container
+ * name, the directory its identifier. A folder is found by its id, and its volume
+ * is the one mounted at its path.
+ * @param {string|null|undefined} folderPath
+ * @returns {Promise<boolean>} whether the folder's directory has its volume mounted;
+ *   false when its path is not known
  */
-function volumeMounted(folderId) {
-  return volumeService.isPathMounted(`${appsFolder}${folderId}`);
+async function volumeMounted(folderPath) {
+  if (!folderPath) return false;
+  return volumeService.isPathMounted(folderPath);
 }
 
-async function patchNow(folderId, fields) {
+/**
+ * @param {string} folderId
+ * @returns {Promise<string|null>} the path syncthing holds the folder at, or null
+ */
+async function configuredPath(folderId) {
+  const folders = await syncthingService.getConfigFolders().catch(() => null);
+  if (!Array.isArray(folders)) return null;
+  return folders.find((f) => f.id === folderId)?.path ?? null;
+}
+
+/**
+ * @param {string} folderId
+ * @param {object} fields
+ * @param {string} [folderPath] The folder's path, when the caller has read it.
+ * @returns {Promise<object>} syncthing's response
+ */
+async function patchNow(folderId, fields, folderPath = undefined) {
   if (globalState.shutdownInProgress && fields.paused === false) return SHUTDOWN_REFUSAL;
-  if (fields.type === 'sendreceive' && !(await volumeMounted(folderId))) return UNMOUNTED_REFUSAL;
+  if (fields.type === 'sendreceive'
+    && !(await volumeMounted(folderPath ?? fields.path ?? await configuredPath(folderId)))) return UNMOUNTED_REFUSAL;
   const response = await written(syncthingService.adjustConfigFolders({ method: ConfigMethod.PATCH, config: fields, id: folderId }));
   if (response.status === 'success' && fields.type) recordType(folderId, fields.type);
   return response;
@@ -290,7 +312,7 @@ async function putFolders(folders) {
     return Promise.reject(new Error(`folder config without a type would be written as syncthing's default: ${untyped.join(', ')}`));
   }
   const sending = folders.filter((folder) => folder.type === 'sendreceive');
-  const unmounted = (await Promise.all(sending.map(async (folder) => ((await volumeMounted(folder.id)) ? null : folder.id)))).filter(Boolean);
+  const unmounted = (await Promise.all(sending.map(async (folder) => ((await volumeMounted(folder.path)) ? null : folder.id)))).filter(Boolean);
   if (unmounted.length) {
     return Promise.reject(new Error(`folder config would send over a directory with no volume mounted: ${unmounted.join(', ')}`));
   }
@@ -377,14 +399,14 @@ function typesRecordedSince(since) {
  * @param {number} settleMs
  * @returns {Promise<boolean>}
  */
-async function folderTypeSettles(folderPath, folderType, settleMs) {
+async function folderTypeSettles(folderId, folderType, settleMs) {
   const deadline = Date.now() + settleMs;
   while (Date.now() < deadline) {
     // eslint-disable-next-line no-await-in-loop
     await serviceHelper.delay(FOLDER_TYPE_POLL_MS);
     // eslint-disable-next-line no-await-in-loop
     const folders = await syncthingService.getConfigFolders().catch(() => null);
-    if (folders?.find((f) => f.path === folderPath)?.type === folderType) return true;
+    if (folders?.find((f) => f.id === folderId)?.type === folderType) return true;
   }
   return false;
 }
@@ -396,10 +418,9 @@ async function folderTypeSettles(folderPath, folderType, settleMs) {
  *   cannot be read
  */
 async function folderConfig(folderId) {
-  const folderPath = `${appsFolder}${folderId}`;
   const folders = await syncthingService.getConfigFolders().catch(() => null);
   if (!Array.isArray(folders)) return null;
-  return folders.find((f) => f.path === folderPath) ?? null;
+  return folders.find((f) => f.id === folderId) ?? null;
 }
 
 /**
@@ -413,8 +434,7 @@ async function folderConfig(folderId) {
  */
 async function scannedBeforeChange(folderId, folderType) {
   try {
-    const folderPath = `${appsFolder}${folderId}`;
-    const folder = (await syncthingService.getConfigFolders()).find((f) => f.path === folderPath);
+    const folder = (await syncthingService.getConfigFolders()).find((f) => f.id === folderId);
     if (!folder || folder.type === folderType) return true;
     await syncthingService.scanFolder(folderId, { timeoutMs: FOLDER_SCAN_TIMEOUT_MS });
     return true;
@@ -458,20 +478,18 @@ async function changeSyncthingFolderType(folderId, folderType, {
   const changed = await exclusive([folderId], async () => {
     try {
       if (abandonIf()) return false;
-      // asked of a folder already sending too: one whose volume went away is not
-      // kept sending, and a start over it waits for the volume
-      if (folderType === 'sendreceive' && !(await volumeMounted(folderId))) {
-        log.warn(`Syncthing folder ${folderId} is not made to send: its volume is not mounted`);
-        return false;
-      }
       const folders = await syncthingService.getConfigFolders();
-
-      // Syncthing syncs the entire appId folder (includes all subdirectories)
-      const folderPath = `${appsFolder}${folderId}`;
-      const folder = folders.find((f) => f.path === folderPath);
+      const folder = folders.find((f) => f.id === folderId);
 
       if (!folder) {
-        log.error(`Syncthing folder not found for path: ${folderPath}`);
+        log.error(`Syncthing folder not found: ${folderId}`);
+        return false;
+      }
+
+      // asked of a folder already sending too: one whose volume went away is not
+      // kept sending, and a start over it waits for the volume
+      if (folderType === 'sendreceive' && !(await volumeMounted(folder.path))) {
+        log.warn(`Syncthing folder ${folderId} is not made to send: its volume is not mounted`);
         return false;
       }
 
@@ -484,7 +502,7 @@ async function changeSyncthingFolderType(folderId, folderType, {
       log.info(`Changing syncthing folder ${folderId} to ${folderType} mode${unpause ? ', unpaused' : ''}`);
 
       const patchData = { type: folderType, ...OWNED_FOLDER_SETTINGS, ...(unpause ? { paused: false } : {}) };
-      const updateResponse = await patchNow(folder.id, patchData);
+      const updateResponse = await patchNow(folder.id, patchData, folder.path);
 
       if (updateResponse.status === 'success') {
         log.info(`Successfully changed syncthing folder ${folderId} to ${folderType} mode`);
@@ -493,7 +511,7 @@ async function changeSyncthingFolderType(folderId, folderType, {
       }
       if (settleMs > 0 && updateResponse.data?.httpStatus === null) {
         log.warn(`Syncthing did not answer the change of folder ${folderId} to ${folderType} mode, waiting up to ${settleMs}ms for it to apply`);
-        if (await folderTypeSettles(folderPath, folderType, settleMs)) {
+        if (await folderTypeSettles(folderId, folderType, settleMs)) {
           log.info(`Syncthing folder ${folderId} is in ${folderType} mode`);
           recordType(folderId, folderType);
           covered = leavesSending(folderId, patchData);

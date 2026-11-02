@@ -14,6 +14,7 @@ const { departingApps: realDepartingApps } = require('../../ZelBack/src/services
 
 describe('appUninstaller tests', () => {
   let runtimeStateStub;
+  let folderStatesStub;
   let runCommandStub;
   let volumeServiceStub;
   let fileOperationRecoveryStub;
@@ -90,7 +91,9 @@ describe('appUninstaller tests', () => {
       // The real marks, which peerNotification reads, and a cycle lock of the shape it holds.
       departingApps: realDepartingApps,
       announceCycle: new AsyncLock(1, { maxHoldMs: 0 }),
+      seedMarks: new Map(),
     };
+    folderStatesStub = { removed: sinon.stub() };
 
     runtimeStateStub = {
       setCondemned: sinon.stub().resolves(),
@@ -188,6 +191,7 @@ describe('appUninstaller tests', () => {
       crontab: { load: (cb) => cb(null, null) },
       '../../lib/log': logStub,
       '../utils/globalState': globalStateStub,
+      '../appMonitoring/folderStates': folderStatesStub,
       // Stubbed so the standalone run never reaches the real imageCacheStore,
       // whose DB fail-safe ("keep") would mask the reference-gated GC under test.
       './imageCacheRetention': {
@@ -522,25 +526,42 @@ describe('appUninstaller tests', () => {
   });
 
   // The published claim goes with the data it describes: one kept past the removal
-  // offers peers a volume this node no longer has.
+  // offers peers a volume this node no longer has. It is kept under the folder id,
+  // which for an app registered before v9 is not the component's identifier.
   describe('a teardown that removes the volume', () => {
+    const KEY = `c${'q'.repeat(52)}`;
     beforeEach(() => {
-      // The folder a holding is published under is the component's physical name.
-      dockerServiceStub.getAppIdentifier.callsFake((identifier) => `flux${identifier}`);
-      globalStateStub.folderHoldings = new Map([['fluxweb_TestApp', { bytes: 5 }], ['fluxother_App', { bytes: 7 }]]);
+      globalStateStub.seedMarks = new Map([['fluxweb_TestApp', { stage: 'intent' }], ['fluxother_App', { stage: 'intent' }]]);
+      instanceResourcesStub.byInstance.resolves(resourcesOf({
+        [KEY]: {
+          identifier: 'web_TestApp',
+          image: { reference: 'img', digest: null },
+          hostPorts: [],
+          volume: null,
+          mountSources: [],
+          syncFolder: { id: 'fluxweb_TestApp', path: '/x/web_TestApp' },
+          aliases: [],
+          mesh: null,
+          tls: null,
+        },
+      }));
     });
 
-    const comp = () => ({ identifier: 'web_TestApp', appName: 'TestApp', name: 'web' });
+    const comp = () => ({
+      identifier: 'web_TestApp', appName: 'TestApp', name: 'web', componentKey: KEY,
+    });
 
-    it('withdraws the published holding of the component whose data it deletes', async () => {
+    it('withdraws what this node said about the folder whose data it deletes', async () => {
       await appUninstaller.uninstallComponent(comp(), { removeVolumes: true }).catch(() => {});
-      expect(globalStateStub.folderHoldings.has('fluxweb_TestApp'), 'a claim outlived the data').to.equal(false);
-      expect(globalStateStub.folderHoldings.has('fluxother_App'), 'another folder lost its claim').to.equal(true);
+      sinon.assert.calledOnceWithExactly(folderStatesStub.removed, 'fluxweb_TestApp');
+      expect(globalStateStub.seedMarks.has('fluxweb_TestApp'), 'a seed mark outlived the data').to.equal(false);
+      expect(globalStateStub.seedMarks.has('fluxother_App'), 'another folder lost its mark').to.equal(true);
     });
 
     it('keeps it when the volume stays', async () => {
       await appUninstaller.uninstallComponent(comp(), { removeVolumes: false }).catch(() => {});
-      expect(globalStateStub.folderHoldings.has('fluxweb_TestApp')).to.equal(true);
+      sinon.assert.notCalled(folderStatesStub.removed);
+      expect(globalStateStub.seedMarks.has('fluxweb_TestApp')).to.equal(true);
     });
   });
 

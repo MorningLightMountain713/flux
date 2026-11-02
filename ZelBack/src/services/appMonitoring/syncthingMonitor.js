@@ -36,6 +36,9 @@ const {
 } = require('./syncthingMonitorHelpers');
 const volumeService = require('../utils/volumeService');
 const syncthingPeerFence = require('./syncthingPeerFence');
+const primaryRole = require('../appLifecycle/primaryRole');
+const syncthingFolderWrites = require('./syncthingFolderWrites');
+const folderStates = require('./folderStates');
 const syncthingIgnorePolicy = require('../appSystem/syncthingIgnorePolicy');
 const { extractIp, socketAddressesMatch } = require('../utils/socketAddressUtils');
 const appReconciler = require('./appReconciler');
@@ -87,6 +90,20 @@ async function syncthingApplied(write, what) {
 }
 
 /**
+ * Stops a folder sending at once, unscanned, through its primary role - which
+ * also abandons a promotion of its component in progress.
+ * @param {string} folderId
+ * @param {string} what - what is being applied, for the log line
+ * @returns {Promise<boolean>} whether syncthing applied it
+ */
+async function demotedForSafety(folderId, what) {
+  const response = await primaryRole.demoteForSafety(folderId).catch((error) => ({ status: 'error', data: { message: error.message } }));
+  if (response?.status === 'success') return true;
+  log.error(`syncthingAppsCore - ${what} FAILED: ${response?.data?.message || 'unknown error'}`);
+  return false;
+}
+
+/**
  * The ignore lines a folder's sync scope is read against: the ones its component's
  * specification derives, or, for a folder whose owning specification cannot be read
  * this pass, the ones syncthing holds for it, which are the lines its index was built
@@ -130,7 +147,9 @@ async function scopeLinesFor(folderId, deployComp) {
  *  specification can be read this pass
  * @param {string} [identifier] - the component identifier the volume is mounted
  *  under; the folder id where the two are one
- * @returns {Promise<{isSafe: boolean, reason: string}>} Result after any repair
+ * @returns {Promise<{isSafe: boolean, reason: string, volumeFileMissing?: boolean}>} Result
+ *  after any repair; volumeFileMissing when the mount found conclusively that the
+ *  volume's image is not on this node
  */
 async function verifyAppFolderMountWithRepair(appId, appFolder, appName, sending = false, deployComp = null, identifier = appId) {
   const ignoreLines = sending ? await scopeLinesFor(appId, deployComp) : [];
@@ -142,6 +161,7 @@ async function verifyAppFolderMountWithRepair(appId, appFolder, appName, sending
   let mountSafety = await verify();
   if (!mountSafety.isSafe && !mountSafety.isMounted) {
     const mountAttempt = await volumeService.ensureAppVolumeMounted(identifier);
+    if (mountAttempt.reason === 'volume_file_missing') return { ...mountSafety, volumeFileMissing: true };
     if (mountAttempt.mounted) {
       log.info(`checkAppFolderMounts - ${appId} volume was not mounted; mounted it`);
       mountSafety = await verify();
@@ -225,6 +245,7 @@ async function checkAppFolderMounts(deployments, sendingFolderIds, knownFolderId
           identifier: deployComp.identifier,
           appName: deployment.appName,
           reason: mountSafety.reason,
+          volumeFileMissing: Boolean(mountSafety.volumeFileMissing),
           sending: sendingFolderIds.has(folderId),
           known: knownFolderIds.has(folderId),
           syncing: deployComp.hasSyncthing(),
@@ -249,7 +270,7 @@ async function checkAppFolderMounts(deployments, sendingFolderIds, knownFolderId
       // These entries come from syncthing's own folder list, filtered to
       // sendreceive, so both are true by construction.
       unmountedApps.push({
-        appId, identifier: appId, appName, reason: mountSafety.reason, sending: true, known: true, syncing: true,
+        appId, identifier: appId, appName, reason: mountSafety.reason, volumeFileMissing: Boolean(mountSafety.volumeFileMissing), sending: true, known: true, syncing: true,
       });
     }
   }
@@ -315,12 +336,22 @@ function deploymentsMatchingFolderIds(deployments, folderIds) {
   });
 }
 
+/**
+ * An app's location records. Throws when they cannot be read, so a caller that
+ * must tell "no other holder" from "unknown" can.
+ * @param {string} appName
+ * @returns {Promise<Array<object>>}
+ */
+async function readAppLocation(appName) {
+  return (await appsRepository.appLocationFromEvents({ appname: appName })) || [];
+}
+
 // Where an app is running, for syncthing peer selection and leader election.
 // Soft-fails to an empty list: a read failure must leave the folder alone rather
 // than reshape its peers off a partial answer.
 async function appLocation(appName) {
   try {
-    return await appsRepository.appLocationFromEvents({ appname: appName });
+    return await readAppLocation(appName);
   } catch (error) {
     log.error(`Error getting app location for ${appName}: ${error.message}`);
     return [];
@@ -379,13 +410,13 @@ async function processContainerData(params) {
   const {
     deployComp,
     activeStandbyNames = [],
+    activeStandbyMembers = [],
     identifier,
     installedAppName,
     localSocketAddr,
     liveness,
     localDeviceId,
     state,
-    erroredFolderIds,
     allFolders,
     allDevices,
     devicesConfiguration,
@@ -416,6 +447,8 @@ async function processContainerData(params) {
   const markerReady = await ensureStfolderExists(folder);
   if (!markerReady) {
     log.warn(`processContainerData - ${appId} volume not mounted; skipping syncthing configuration this cycle`);
+    fluxEventBus.count('syncthing:folderPass', appId, 'volumeNotMounted');
+    folderStates.notMounted(appId);
     return;
   }
 
@@ -464,23 +497,30 @@ async function processContainerData(params) {
   // activeStandby (the election decides which instance runs) and syncFirst (the
   // sync-readiness decider starts it once data is complete) are the decider-owned
   // modes that drive the folder state machine.
-  if (deployComp.requiresSyncBeforeStart() || deployComp.hasActiveStandbySyncthing()) {
+  const isActiveStandby = deployComp.hasActiveStandbySyncthing();
+  if (deployComp.requiresSyncBeforeStart() || isActiveStandby) {
+    // Read before the pass: the state machine updates the entry in place.
+    const wasReady = !!state.receiveOnlySyncthingAppsCache.get(appId)?.restarted;
     // Use state machine to manage folder sync transitions
     const { syncthingFolder: updatedFolder, cache, skipProcessing } = await manageFolderSyncState({
       appId,
       identifier,
       syncFolder,
       requiresSyncBeforeStart: deployComp.requiresSyncBeforeStart(),
-      isActiveStandby: deployComp.hasActiveStandbySyncthing(),
+      isActiveStandby,
       syncthingAppsFirstRun: state.syncthingAppsFirstRun,
       receiveOnlySyncthingAppsCache: state.receiveOnlySyncthingAppsCache,
       appLocation,
+      readAppLocation,
       localSocketAddr,
       syncthingFolder,
       installedAppName,
       appIdentity: deployComp.identity,
-      mountVerifyNeeded: state.syncthingAppsFirstRun || erroredFolderIds.has(appId),
       liveness,
+      // The app's primary runs all of its activeStandby components together.
+      electedSiblings: isActiveStandby
+        ? activeStandbyMembers.filter((member) => member.folderId !== appId)
+        : [],
       // The scope the disk is read in: the platform's scaffolding, the content
       // delivered on every node and the directories the spec keeps local are none
       // of them synced payload, so a volume holding only those is still empty.
@@ -489,7 +529,11 @@ async function processContainerData(params) {
 
     // Update cache if provided
     if (cache !== null) {
-      await appCaches.setSyncedMark(state.receiveOnlySyncthingAppsCache, appId, cache);
+      await appCaches.setSyncedMark(state.receiveOnlySyncthingAppsCache, appId, identifier, cache);
+      // From here the election reads this holder as ready to take over. An
+      // activeStandby standby stays receiveonly, so this, not the folder type, is
+      // when it becomes eligible.
+      if (cache.restarted && !wasReady) fluxEventBus.publish('syncthing:folderReady', { folder: appId });
     }
 
     // Skip processing if marked to skip
@@ -499,6 +543,14 @@ async function processContainerData(params) {
 
     // Update folder with state machine result
     Object.assign(syncthingFolder, updatedFolder);
+
+    // The state machine decides a syncFirst folder's type. An activeStandby
+    // folder's type is its primary role's (primaryRole.js): named here only for a
+    // folder syncthing does not have yet, and never sent for one it has.
+    if (isActiveStandby) {
+      if (syncFolder) delete syncthingFolder.type;
+      else syncthingFolder.type = primaryRole.CREATED_FOLDER_TYPE;
+    }
   }
 
   // Add to tracking arrays
@@ -624,6 +676,11 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     };
     const ownedByUnreadableApp = (folderId) => unreadableApps.has(folderIdentity(folderId));
 
+    // Every receive-only folder of an installed app has a state before this node first
+    // answers its peers. After a restart the states start empty while the volumes
+    // still hold their data, so each folder is not looked at until this pass measures it.
+    deployments.forEach((deployment) => folderStates.installed(deployment));
+
     // Drain the folders syncthing flagged with errors since the last cycle. Mount
     // safety is verified only at decision points - the first pass after start (the
     // reboot case: loop mounts may not be up yet) and folders syncthing itself
@@ -729,6 +786,13 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     const knownFolderIds = new Set(allFolders.map((folder) => folder.id));
     globalState.promotedFolderIds = new Set(sendingFolderIds);
 
+    // A receive-only folder of an app whose spec cannot be read is one this pass
+    // does not measure, so what it holds is unknown. Its folders come from
+    // syncthing's own list, as the sweep below takes them.
+    allFolders
+      .filter((folder) => folder.type === 'receiveonly' && ownedByUnreadableApp(folder.id))
+      .forEach((folder) => folderStates.specUnreadable(folder.id));
+
     // An unreadable app's folders are protected from the SWEEP, not from the
     // mount check: the verdict derives entirely from the folder id, so a folder
     // whose owning app's spec cannot be read this pass is verified all the same.
@@ -775,9 +839,11 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       // before anything is judged by it.
       // eslint-disable-next-line no-restricted-syntax
       for (const {
-        appId, identifier, reason, sending, known, syncing,
+        appId, identifier, reason, volumeFileMissing, sending, known, syncing,
       } of unmountedApps) {
         unsafeFolderIds.add(appId);
+        if (volumeFileMissing) folderStates.volumeGone(appId);
+        else folderStates.heldOut(appId);
         if (!sending) {
           // A folder syncthing holds RECEIVEONLY over a bad mount is already in
           // the state this block exists to put it in - nothing to demote, and
@@ -809,10 +875,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
           continue;
         }
         // eslint-disable-next-line no-await-in-loop
-        const demoted = await syncthingApplied(
-          syncthingService.adjustConfigFolders({ method: ConfigMethod.PATCH, config: { type: 'receiveonly' }, id: appId }),
-          `SAFETY BLOCK: demoting ${appId} to receiveonly over an unsafe mount (${reason})`,
-        );
+        const demoted = await demotedForSafety(appId, `SAFETY BLOCK: demoting ${appId} to receiveonly over an unsafe mount (${reason})`);
         if (demoted) {
           log.error(`syncthingAppsCore - SAFETY BLOCK: ${appId} folder was sendreceive over an unsafe mount (${reason}); switched to receiveonly and holding the container`);
           // A demoted folder re-enters the promotion machinery from the start:
@@ -822,7 +885,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
           // on this same condition, so both paths describe a blocked folder the
           // same way.
           // eslint-disable-next-line no-await-in-loop
-          await appCaches.setSyncedMark(state.receiveOnlySyncthingAppsCache, appId, {
+          await appCaches.setSyncedMark(state.receiveOnlySyncthingAppsCache, appId, identifier, {
             numberOfExecutions: 0,
             mountSafetyBlocked: true,
             blockedReason: reason,
@@ -927,10 +990,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
 
             // Immediately switch to receiveonly mode
             // eslint-disable-next-line no-await-in-loop
-            await syncthingApplied(
-              syncthingService.adjustConfigFolders({ method: ConfigMethod.PATCH, config: { type: 'receiveonly' }, id: folder.id }),
-              `STARTUP SAFETY: demoting ${folder.id} to receiveonly`,
-            );
+            await demotedForSafety(folder.id, `STARTUP SAFETY: demoting ${folder.id} to receiveonly`);
           } else {
             log.info(`syncthingAppsCore - Folder ${appId} mount is safe (mounted=${mountSafety.isMounted}, files=${mountSafety.fileCount})`);
           }
@@ -978,7 +1038,6 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       liveness,
       localDeviceId,
       state,
-      erroredFolderIds,
       allFolders,
       allDevices,
       devicesConfiguration,
@@ -1012,11 +1071,13 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
         continue;
       }
 
-      // Every name a peer may hold the app's activeStandby components under.
-      const activeStandbyNames = [...new Set(deployment.componentEntries()
+      // The app's activeStandby components, which its primary runs together, and
+      // every name a peer may hold them under.
+      const activeStandbyMembers = deployment.componentEntries()
         .map(([, comp]) => comp)
         .filter((comp) => comp.hasActiveStandbySyncthing())
-        .flatMap((comp) => [comp.identifier, comp.syncFolderId]))];
+        .map((comp) => ({ folderId: comp.syncFolderId, identifier: comp.identifier }));
+      const activeStandbyNames = [...new Set(activeStandbyMembers.flatMap((member) => [member.identifier, member.folderId]))];
       // eslint-disable-next-line no-restricted-syntax
       for (const [, deployComp] of deployment.componentEntries()) {
         // The component whose mount is unsafe is the one held out - its folder
@@ -1031,6 +1092,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
           ...sharedParams,
           deployComp,
           activeStandbyNames,
+          activeStandbyMembers,
           identifier: deployComp.identifier,
           installedAppName: appName,
         });
@@ -1108,7 +1170,18 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     });
 
     if (newFoldersConfiguration.length > 0) {
-      await syncthingService.adjustConfigFolders({ method: ConfigMethod.PUT, config: newFoldersConfiguration });
+      // A folder this pass sends no type for is an existing activeStandby folder,
+      // whose type is its primary role's: only the fields the monitor owns are
+      // changed, and syncthing keeps its type. Every other folder is written whole,
+      // type and all.
+      const applied = (response) => {
+        if (response?.status !== 'success') throw new Error(response?.data?.message || 'syncthing refused the folder write');
+      };
+      const wholeFolders = newFoldersConfiguration.filter((folder) => folder.type);
+      const roleTypedFolders = newFoldersConfiguration.filter((folder) => !folder.type);
+      if (wholeFolders.length > 0) applied(await syncthingFolderWrites.putFolders(wholeFolders));
+      (await Promise.all(roleTypedFolders.map((folder) => syncthingFolderWrites.patchFolder(folder.id, folder))))
+        .forEach(applied);
       // Reconciled in BOTH directions the moment the write lands, not left to
       // the next pass. The published set is what a peer reads before promoting a
       // folder of its own, and a promotion applied on the line above is absent
@@ -1121,15 +1194,22 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       // and it is what peers act on: a folder named here that syncthing did not
       // accept advertises this node as holding it writable, and a peer stands
       // down from a promotion nothing serves.
-      for (const folder of newFoldersConfiguration) {
+      for (const folder of wholeFolders) {
         if (folder.type === 'sendreceive') globalState.promotedFolderIds.add(folder.id);
         else globalState.promotedFolderIds.delete(folder.id);
-        // What a folder holds that the cluster's index does not is a receive-only
-        // question, and promotion answers it: everything this node holds is now
-        // published. Dropped rather than zeroed - absent is what a peer reads as
-        // "not a receive-only holder", where a figure left behind goes on being
-        // ranked after the folder it described has stopped being one.
-        if (folder.type === 'sendreceive') globalState.folderHoldings?.delete(folder.id);
+      }
+    }
+
+    // Seeds decided this pass are applied now, so the claims they made become true
+    // here and nowhere earlier: the election starts a seed on designatedLeader, and a
+    // flag raised before the folder batch landed would start a primary against a
+    // folder that is not yet the seed. A failed apply threw above, so the intent
+    // survives untouched for the retry pass.
+    // eslint-disable-next-line no-restricted-syntax
+    for (const [, folderCache] of state.receiveOnlySyncthingAppsCache) {
+      if (folderCache && folderCache.designationPending) {
+        folderCache.designationPending = false;
+        folderCache.designatedLeader = true;
       }
     }
 

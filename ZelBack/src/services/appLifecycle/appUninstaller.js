@@ -8,6 +8,7 @@ const verificationHelper = require('../verificationHelper');
 const messageHelper = require('../messageHelper');
 const dockerService = require('../dockerService');
 const globalState = require('../utils/globalState');
+const folderStates = require('../appMonitoring/folderStates');
 const operationRegistry = require('../utils/operationRegistry');
 const telemetrySinkCache = require('../telemetrySinkCache');
 const appTamperingDetectionService = require('../appTamperingDetectionService');
@@ -80,28 +81,32 @@ function setOnComponentRemoved(callback) {
  * @returns {Promise<void>}
  */
 async function stopSyncthingAndCleanup(folderId, appId) {
+  // What this node says about the folder is kept under its folder id, which for an
+  // app registered before v9 is not the component's identifier.
+  const key = folderId ?? appId;
   // Hard removal - the data is going, so what this node says about it goes first
   // and unconditionally. Stopping syncthing can fail; the volume is deleted either
   // way, and state describing it must not outlive it on the strength of that.
   const { receiveOnlySyncthingAppsCache } = globalState;
-  if (receiveOnlySyncthingAppsCache && receiveOnlySyncthingAppsCache.has(appId)) {
-    receiveOnlySyncthingAppsCache.delete(appId);
-    log.info(`Deleted syncthing cache for ${appId} during hard removal`);
+  if (receiveOnlySyncthingAppsCache && receiveOnlySyncthingAppsCache.has(key)) {
+    receiveOnlySyncthingAppsCache.delete(key);
+    log.info(`Deleted syncthing cache for ${key} during hard removal`);
   }
   // The published claim goes with the data it describes. Peers rank a seed on it,
   // and one kept past the removal offers a volume this node no longer has -
   // outranking a node that still holds the app and seeding an empty folder in its
   // place.
-  globalState.folderHoldings?.delete(appId);
+  folderStates.removed(key);
+  globalState.seedMarks.delete(key);
   try {
     if (folderId) await syncthingMonitorHelpers.removeSyncthingFolder(folderId);
 
     // The folder and its data are going, so the cache entry must go with them:
     // a stale mark would make the next install of this name read as already-synced
     const { receiveOnlySyncthingAppsCache } = globalState;
-    if (receiveOnlySyncthingAppsCache && receiveOnlySyncthingAppsCache.has(appId)) {
-      receiveOnlySyncthingAppsCache.delete(appId);
-      log.info(`Deleted syncthing cache for ${appId} during removal`);
+    if (receiveOnlySyncthingAppsCache && receiveOnlySyncthingAppsCache.has(key)) {
+      receiveOnlySyncthingAppsCache.delete(key);
+      log.info(`Deleted syncthing cache for ${key} during removal`);
     }
   } catch (error) {
     log.error(`Error stopping Syncthing app: ${error.message}`);

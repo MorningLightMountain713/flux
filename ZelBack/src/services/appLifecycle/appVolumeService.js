@@ -10,6 +10,7 @@ const messageHelper = require('../messageHelper');
 const volumeService = require('../utils/volumeService');
 const appRecords = require('../appDatabase/appRecords');
 const globalState = require('../utils/globalState');
+const folderStates = require('../appMonitoring/folderStates');
 const syncthingIgnorePolicy = require('../appSystem/syncthingIgnorePolicy');
 const { withHostMutationLock } = require('../utils/hostMutationLock');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
@@ -86,7 +87,10 @@ async function createAppVolume(deployComp, res) {
       // This node's published claim about the folder describes the volume being
       // replaced, and peers rank a seed on it. Withdrawn at the first act that cannot
       // be undone: every abort above leaves the volume and its data as they were.
-      globalState.folderHoldings?.delete(appId);
+      if (deployComp.hasSyncthing()) {
+        folderStates.recreated(deployComp.syncFolderId);
+        globalState.seedMarks.delete(deployComp.syncFolderId);
+      }
       // The image's file, its disk and its mount directory are this node's
       // choices, in the resources before the file exists: a later boot mounts the
       // file the resources name and nothing else. The filesystem is stamped with

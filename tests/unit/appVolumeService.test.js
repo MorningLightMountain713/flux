@@ -154,8 +154,17 @@ describe('appVolumeService.removeOrphanedInjectedContent', () => {
 describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', () => {
   // The component's key, deliberately unlike its name: the resources are keyed by it.
   const COMPONENT_KEY = `c${'k'.repeat(52)}`;
+  // Shared under a folder id that is not its identifier, as an app registered before v9 is.
   const deployComp = {
-    identifier: 'web_testapp', name: 'web', componentKey: COMPONENT_KEY, appName: 'testapp', replica: null, storage: 10, mounts: [],
+    identifier: 'web_testapp',
+    name: 'web',
+    componentKey: COMPONENT_KEY,
+    appName: 'testapp',
+    replica: null,
+    storage: 10,
+    mounts: [],
+    syncFolderId: 'fluxweb_testapp',
+    hasSyncthing: () => true,
   };
   // placementVolumesInGib's rows: whole GiB, emptiest first.
   const disk = (mount, available) => ({
@@ -279,31 +288,42 @@ describe('appVolumeService.createAppVolume (disk selection + in-lock recheck)', 
 
   // Peers rank a seed on what each node says it holds, so a claim about the volume
   // being replaced describes data that is about to be gone.
-  describe('the published holdings claim', () => {
+  describe('what this node says about the folder', () => {
     const claim = { bytes: 5_000_000, newestModified: 1000 };
-    let saved;
+    const mark = { stage: 'intent', bytes: 5_000_000, newestModified: 1000 };
     beforeEach(() => {
-      saved = globalState.folderHoldings;
-      globalState.folderHoldings = new Map([['fluxweb_testapp', claim], ['fluxother_app', claim]]);
+      globalState.folderStates.set('fluxweb_testapp', { state: 'measured', ...claim });
+      globalState.folderStates.set('fluxother_app', { state: 'measured', ...claim });
+      globalState.seedMarks.set('fluxweb_testapp', mark);
+      globalState.seedMarks.set('fluxother_app', mark);
     });
-    afterEach(() => { globalState.folderHoldings = saved; });
+    afterEach(() => {
+      globalState.folderStates.clear();
+      globalState.seedMarks.clear();
+    });
 
-    it('is withdrawn for this component before its volume is allocated', async () => {
+    it('is withdrawn under the folder id before its volume is allocated', async () => {
       const { svc, runCommand } = load({ disks: [disk('/dat', 500)] });
-      let heldAtAllocation;
+      let atAllocation;
       runCommand.withArgs('fallocate').callsFake(async () => {
-        heldAtAllocation = globalState.folderHoldings.has('fluxweb_testapp');
+        atAllocation = {
+          state: globalState.folderStates.get('fluxweb_testapp'),
+          marked: globalState.seedMarks.has('fluxweb_testapp'),
+        };
         return { error: null };
       });
       await svc.createAppVolume(deployComp, null, false);
-      expect(heldAtAllocation, 'withdrawn before the allocation').to.equal(false);
-      expect(globalState.folderHoldings.get('fluxother_app'), 'another folder keeps its claim').to.equal(claim);
+      expect(atAllocation.state, 'not looked at once the volume is replaced').to.deep.equal({ state: 'notLookedAt' });
+      expect(atAllocation.marked, 'the seed mark withdrawn before the allocation').to.equal(false);
+      expect(globalState.folderStates.get('fluxother_app'), 'another folder keeps its claim').to.deep.equal({ state: 'measured', ...claim });
+      expect(globalState.seedMarks.get('fluxother_app'), 'another folder keeps its mark').to.equal(mark);
     });
 
     it('stands when creation aborts before anything is allocated', async () => {
       const { svc } = load({ disks: [disk('/dat', 500)], condemned: true });
       await svc.createAppVolume(deployComp, null, false).catch(() => {});
-      expect(globalState.folderHoldings.get('fluxweb_testapp'), 'the volume and its data are untouched').to.equal(claim);
+      expect(globalState.folderStates.get('fluxweb_testapp'), 'the volume and its data are untouched').to.deep.equal({ state: 'measured', ...claim });
+      expect(globalState.seedMarks.get('fluxweb_testapp')).to.equal(mark);
     });
   });
 
