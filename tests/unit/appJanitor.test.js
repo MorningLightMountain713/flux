@@ -223,6 +223,23 @@ describe('appJanitor tests', () => {
       );
     });
 
+    // A removal of a row a peer does not hold changes nothing there.
+    it('broadcasts the removal of an orphan whose location rows cannot be read', async () => {
+      appQueryServiceStub.listAllApps.resolves({
+        status: 'success',
+        data: [container('/fluxweb_unread', { [flux.LABEL_KEYS.APP]: 'unread' })],
+      });
+      appsRepositoryStub.appLocationFromEvents.rejects(new Error('timed out'));
+
+      await appJanitor.sweepDockerOrphans();
+
+      sinon.assert.calledOnceWithMatch(
+        appUninstallerStub.uninstallApplication,
+        'unread',
+        sinon.match({ forceKill: false, skipGuard: true, broadcastRemoval: true, background: true }),
+      );
+    });
+
     it('publishes the sweep result for harness observability', async () => {
       await appJanitor.sweepDockerOrphans();
 

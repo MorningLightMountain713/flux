@@ -99,7 +99,9 @@ async function dockerOrphanSweep() {
         log.info(`appJanitor - ${appName} found in locations for this IP (${localSocketAddr}), will broadcast removal`);
       }
     } catch (locationError) {
-      log.error(`appJanitor - error checking app location for ${appName}: ${locationError.message}`);
+      // A removal of a row a peer does not hold changes nothing there.
+      shouldBroadcast = true;
+      log.error(`appJanitor - error checking app location for ${appName}, will broadcast removal: ${locationError.message}`);
     }
 
     log.warn(`REMOVAL REASON: Orphan app cleanup - ${appName} running in Docker but not in installed apps database (appJanitor)`);
