@@ -246,7 +246,18 @@ describe('appHashSyncService tests', () => {
 
 
   describe('triggerAppHashesCheckAPI', () => {
-    it('should trigger sync when authorized', async () => {
+    // queued for the sync orchestrator, which runs it once no hash sync holds the node
+    let requested;
+    const onRequested = () => { requested += 1; };
+    beforeEach(() => {
+      requested = 0;
+      appSyncEvents.on(EVENTS.HASH_CHECK_REQUESTED, onRequested);
+    });
+    afterEach(() => {
+      appSyncEvents.removeListener(EVENTS.HASH_CHECK_REQUESTED, onRequested);
+    });
+
+    it('should queue the check when authorized', async () => {
       const req = {};
       const res = { json: sinon.stub() };
 
@@ -257,6 +268,7 @@ describe('appHashSyncService tests', () => {
 
       expect(res.json.calledOnce).to.be.true;
       expect(verificationHelperStub.verifyPrivilege.calledWith(Privilege.NODE_OPERATOR_OR_FLUX_TEAM, authOf(req))).to.be.true;
+      expect(requested, 'the check was not queued').to.equal(1);
     });
 
     it('should deny unauthorized access', async () => {
@@ -269,6 +281,7 @@ describe('appHashSyncService tests', () => {
 
       expect(res.json.calledOnce).to.be.true;
       expect(messageHelperStub.errUnauthorizedMessage.calledOnce).to.be.true;
+      expect(requested, 'an unauthorized caller queued a check').to.equal(0);
     });
 
     it('should handle errors gracefully', async () => {

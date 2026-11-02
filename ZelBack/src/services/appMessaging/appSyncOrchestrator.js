@@ -156,6 +156,9 @@ class AppSyncOrchestrator {
   #peersBelowHandler = null;
   #ephemeralSyncHandler = null;
   #hashUnresolvedHandler = null;
+  #hashCheckRequestedHandler = null;
+  // An operator's check of every missing app message, waiting for the node.
+  #hashCheckRequested = false;
   #broadcastStarted = null;
   #started = false;
   #syncInProgress = false;
@@ -414,6 +417,12 @@ class AppSyncOrchestrator {
 
     this.#hashUnresolvedHandler = () => this.#onHashUnresolved();
     appSyncEvents.on(EVENTS.HASH_UNRESOLVED, this.#hashUnresolvedHandler);
+
+    this.#hashCheckRequestedHandler = () => {
+      this.#hashCheckRequested = true;
+      this.#own(this.#runRequestedHashCheck());
+    };
+    appSyncEvents.on(EVENTS.HASH_CHECK_REQUESTED, this.#hashCheckRequestedHandler);
 
     this.#blockReceivedHandler = (blockHeight) => {
       this.#onBlocksProcessed(blockHeight);
@@ -1244,6 +1253,27 @@ class AppSyncOrchestrator {
         this.#own(this.#advanceSync());
       }
     }
+    this.#own(this.#runRequestedHashCheck());
+  }
+
+  /**
+   * Runs the check an operator asked for, once no hash sync holds the node; a
+   * request made while one runs waits for a later block. One hash sync at a time:
+   * a second beside it is skipped by syncMissingHashes and answers as if nothing
+   * were missing.
+   * @returns {Promise<void>}
+   */
+  async #runRequestedHashCheck() {
+    if (!this.#hashCheckRequested || this.#syncInProgress) return;
+    this.#hashCheckRequested = false;
+    this.#syncInProgress = true;
+    try {
+      await appHashSyncService.syncMissingHashes({ force: true, currentHeight: this.#lastBlockHeight });
+    } catch (error) {
+      log.error(`AppSyncOrchestrator - Requested hash check failed: ${error.message}`);
+    } finally {
+      this.#syncInProgress = false;
+    }
   }
 
   #onHashUnresolved() {
@@ -1798,6 +1828,9 @@ class AppSyncOrchestrator {
     }
     if (this.#hashUnresolvedHandler) {
       appSyncEvents.removeListener(EVENTS.HASH_UNRESOLVED, this.#hashUnresolvedHandler);
+    }
+    if (this.#hashCheckRequestedHandler) {
+      appSyncEvents.removeListener(EVENTS.HASH_CHECK_REQUESTED, this.#hashCheckRequestedHandler);
     }
     if (this.#blockReceivedHandler) {
       this.#blockEmitter.removeListener('blocksProcessed', this.#blockReceivedHandler);

@@ -3688,6 +3688,82 @@ describe('AppSyncOrchestrator', () => {
 
   });
 
+  // An operator asks for a check of every missing app message. It is queued, and
+  // runs once no hash sync holds the node.
+  describe('a requested hash check', () => {
+    it('runs at once when nothing holds the node', async () => {
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+      peersUp();
+      blockEmitter.emit('blocksProcessed', 2_555_000);
+      await clock.tickAsync(0);
+      syncMissingHashesStub.resetHistory();
+
+      appSyncEvents.emit(EVENTS.HASH_CHECK_REQUESTED);
+      await clock.tickAsync(0);
+
+      sinon.assert.calledOnce(syncMissingHashesStub);
+      expect(syncMissingHashesStub.firstCall.args[0]).to.include({ force: true, currentHeight: 2_555_000 });
+    });
+
+    it('waits for a hash sync under way, then runs on a later block', async () => {
+      let finishSync;
+      syncMissingHashesStub.callsFake(() => new Promise((resolve) => { finishSync = resolve; }));
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+      peersUp();
+      blockEmitter.emit('blocksProcessed', 2_555_000);
+      await clock.tickAsync(0);
+      expect(finishSync, 'no hash sync was under way, so nothing below was tested').to.be.a('function');
+
+      appSyncEvents.emit(EVENTS.HASH_CHECK_REQUESTED);
+      await clock.tickAsync(0);
+      expect(syncMissingHashesStub.getCalls().filter((c) => c.args[0].force), 'the check ran beside a hash sync').to.have.length(0);
+
+      syncMissingHashesStub.resolves({ resolved: 0, missing: 0, unreachable: 0, nextRetryHeight: 9_999_999 });
+      finishSync({ resolved: 0, missing: 0, unreachable: 0, nextRetryHeight: 9_999_999 });
+      await clock.tickAsync(0);
+      blockEmitter.emit('blocksProcessed', 2_555_001);
+      await clock.tickAsync(0);
+
+      expect(syncMissingHashesStub.getCalls().filter((c) => c.args[0].force), 'the queued check never ran').to.have.length(1);
+    });
+
+    it('holds the node while it runs, so the block\'s own hash retry waits', async () => {
+      syncMissingHashesStub.resolves({ resolved: 0, missing: 0, unreachable: 0, nextRetryHeight: 2_555_001 });
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+      peersUp();
+      blockEmitter.emit('blocksProcessed', 2_555_000);
+      await clock.tickAsync(0);
+      let finishCheck;
+      syncMissingHashesStub.callsFake(() => new Promise((resolve) => { finishCheck = resolve; }));
+      syncMissingHashesStub.resetHistory();
+
+      appSyncEvents.emit(EVENTS.HASH_CHECK_REQUESTED);
+      await clock.tickAsync(0);
+      expect(finishCheck, 'the requested check never started, so nothing below was tested').to.be.a('function');
+      blockEmitter.emit('blocksProcessed', 2_555_001);
+      await clock.tickAsync(0);
+
+      sinon.assert.calledOnce(syncMissingHashesStub);
+      finishCheck({ resolved: 0, missing: 0, unreachable: 0, nextRetryHeight: null });
+      await clock.tickAsync(0);
+    });
+
+    it('stops listening when the orchestrator stops', async () => {
+      const orchestrator = makeOrchestrator();
+      orchestrator.start(defaultBootContext);
+      peersUp();
+      blockEmitter.emit('blocksProcessed', 2_555_000);
+      await clock.tickAsync(0);
+      expect(appSyncEvents.listenerCount(EVENTS.HASH_CHECK_REQUESTED), 'the orchestrator never listened').to.equal(1);
+      await orchestrator.stop();
+
+      expect(appSyncEvents.listenerCount(EVENTS.HASH_CHECK_REQUESTED)).to.equal(0);
+    });
+  });
+
   describe('hash retry scheduling', () => {
     it('should retry hash sync when block reaches nextRetryHeight', async () => {
       syncMissingHashesStub.onFirstCall().resolves({ resolved: 5, missing: 2, unreachable: 0, nextRetryHeight: 2_555_200 });
