@@ -1431,18 +1431,35 @@ function storeAppStateEvent(type, payload) {
   }
 }
 
+/**
+ * Record a synced slice of verified running-apps announcements in the event log.
+ *
+ * The entries the slice refuses (no string name and hash) are logged in one line
+ * and published once as `network:apprunningRefused` (`path: 'sync'`): a sync
+ * response is stored a slice at a time, and a slice holds thousands of
+ * announcements.
+ *
+ * @param {object[]} verifiedBroadcasts signed fluxapprunning broadcasts
+ * @param {Map<object, object>} announcers each broadcast's announcing node
+ * @returns {Promise<{stored: number, writeFailed?: boolean}>}
+ */
 async function storeBatchAppRunningEvents(verifiedBroadcasts, announcers = new Map()) {
   if (verifiedBroadcasts.length === 0) return { stored: 0 };
   const db = dbHelper.databaseConnection();
   const database = db.db(config.get('database.appsglobal.database'));
 
   const ops = [];
+  const refusals = [];
 
   for (const broadcast of verifiedBroadcasts) {
     const { data } = broadcast;
     if (!data || !data.ip || !data.broadcastedAt) continue;
     if (!broadcastedAtUsable(data.broadcastedAt, RUNNING_EXPIRY_MS)) continue;
     const validTill = data.broadcastedAt + RUNNING_EXPIRY_MS;
+    if (data.version === 2 && Array.isArray(data.apps)) {
+      const { refused } = appRunningEntries(data.apps);
+      if (refused.length) refusals.push({ ip: data.ip, broadcastedAt: data.broadcastedAt, refused });
+    }
     if (namesOnlyRefusedApps(data)) continue;
 
     const dedupKey = data.apps ? 'v2' : `v1:${data.name}`;
@@ -1471,6 +1488,14 @@ async function storeBatchAppRunningEvents(verifiedBroadcasts, announcers = new M
         writeFailed = true;
         log.error(`storeBatchAppRunningEvents: ${err.message}`);
       });
+  }
+
+  if (refusals.length) {
+    logRefusedEntries('storeBatchAppRunningEvents', refusals);
+    fluxEventBus.publish('network:apprunningRefused', {
+      path: 'sync',
+      refusals: refusals.map(({ ip, refused }) => ({ ip, names: refused.map((app) => app?.name ?? null) })),
+    });
   }
 
   return { stored: ops.length, writeFailed };

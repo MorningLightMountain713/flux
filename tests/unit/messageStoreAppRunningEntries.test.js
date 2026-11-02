@@ -4,6 +4,7 @@ const config = require('config');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
 const log = require('../../ZelBack/src/lib/log');
+const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 const { appRunningEntries } = require('../../ZelBack/src/services/utils/appRunningEntries');
 const { RUNNING_EXPIRY_MS } = require('../../ZelBack/src/services/utils/appConstants');
 const { requireMongo } = require('./dbTestHelper');
@@ -171,46 +172,6 @@ describe('apprunning entries are stored one at a time', () => {
       });
     });
 
-    // The event log is what a peer syncing from this node is served. A message
-    // naming only entries this node refuses never takes the place of the
-    // sender's last announcement there.
-    describe('the event log', () => {
-      let events;
-      const signed = (apps, broadcastedAt = Date.now()) => ({
-        version: 1, timestamp: broadcastedAt, pubKey: '04ab', signature: 'sig', data: message(apps, broadcastedAt),
-      });
-      const storedApps = async () => (await events.find({ ip, type: 'apprunning' }).toArray()).map((event) => event.data.apps.map((a) => a.name));
-
-      beforeEach(async () => {
-        events = dbHelper.databaseConnection().db(config.database.appsglobal.database)
-          .collection(config.database.appsglobal.collections.appStateEvents);
-        await events.deleteMany({ ip });
-      });
-
-      afterEach(async () => {
-        await events.deleteMany({ ip });
-      });
-
-      it('keeps the sender\'s last announcement over a later one naming only refused entries', async () => {
-        await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, { signedBroadcast: signed([{ name: 'web', hash: 'webhash' }], Date.now() - 1000) });
-        await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, { signedBroadcast: signed([{ name: 'probe' }]) });
-
-        expect(await storedApps()).to.deep.equal([['web']]);
-      });
-
-      it('records a mixed announcement whole, as it was signed', async () => {
-        await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, { signedBroadcast: signed([{ name: 'web', hash: 'webhash' }, { name: 'probe' }]) });
-
-        expect(await storedApps()).to.deep.equal([['web', 'probe']]);
-      });
-
-      it('keeps a synced announcement naming only refused entries out of the log', async () => {
-        await messageStore.storeBatchAppRunningEvents([signed([{ name: 'probe' }])]);
-
-        expect(await storedApps()).to.deep.equal([]);
-      });
-    });
-
     describe('storeBatchAppRunningMessages', () => {
       const broadcast = (data) => ({ version: 1, timestamp: data.broadcastedAt, pubKey: '04ab', signature: 'sig', data });
 
@@ -249,6 +210,99 @@ describe('apprunning entries are stored one at a time', () => {
         expect(await rowsAt()).to.deep.equal([]);
         expect((await rowsAt(otherIp)).map((r) => r.name)).to.deep.equal(['web']);
       });
+    });
+  });
+
+  // The event log is what a peer syncing from this node is served. A message
+  // naming only entries this node refuses never takes the place of the
+  // sender's last announcement there.
+  describe('the event log', () => {
+    before(requireMongo);
+
+    let events;
+    const message = (apps, broadcastedAt = Date.now(), from = ip) => ({
+      type: 'fluxapprunning', version: 2, apps, ip: from, broadcastedAt, osUptime: 1000, staticIp: true,
+    });
+    const signed = (apps, broadcastedAt = Date.now()) => ({
+      version: 1, timestamp: broadcastedAt, pubKey: '04ab', signature: 'sig', data: message(apps, broadcastedAt),
+    });
+    const storedApps = async () => (await events.find({ ip, type: 'apprunning' }).toArray()).map((event) => event.data.apps.map((a) => a.name));
+
+    beforeEach(async () => {
+      events = dbHelper.databaseConnection().db(config.database.appsglobal.database)
+        .collection(config.database.appsglobal.collections.appStateEvents);
+      await events.deleteMany({ ip: { $in: [ip, otherIp] } });
+    });
+
+    afterEach(async () => {
+      await events.deleteMany({ ip: { $in: [ip, otherIp] } });
+    });
+
+    it('keeps the sender\'s last announcement over a later one naming only refused entries', async () => {
+      await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, { signedBroadcast: signed([{ name: 'web', hash: 'webhash' }], Date.now() - 1000) });
+      await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, { signedBroadcast: signed([{ name: 'probe' }]) });
+
+      expect(await storedApps()).to.deep.equal([['web']]);
+    });
+
+    it('records a mixed announcement whole, as it was signed', async () => {
+      await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, { signedBroadcast: signed([{ name: 'web', hash: 'webhash' }, { name: 'probe' }]) });
+
+      expect(await storedApps()).to.deep.equal([['web', 'probe']]);
+    });
+
+    it('keeps a synced announcement naming only refused entries out of the log', async () => {
+      await messageStore.storeBatchAppRunningEvents([signed([{ name: 'probe' }])]);
+
+      expect(await storedApps()).to.deep.equal([]);
+    });
+
+    it('logs the refusals of a whole synced batch in one line', async () => {
+      const warn = sinon.stub(log, 'warn');
+      try {
+        await messageStore.storeBatchAppRunningEvents([
+          signed([{ name: 'probe' }, { name: 'web', hash: 'webhash' }]),
+          { ...signed([]), data: message([{ name: 'probe2' }, { name: 'probe3' }], Date.now(), otherIp) },
+        ]);
+      } finally {
+        warn.restore();
+      }
+
+      expect(warn.callCount).to.equal(1);
+      expect(warn.firstCall.args[0]).to.match(/^storeBatchAppRunningEvents - 3 app entries in 2 messages have no string name and hash and are not stored\./);
+    });
+
+    it('publishes the names a synced batch refused, per sender', async () => {
+      const publish = sinon.stub(fluxEventBus, 'publish');
+      try {
+        await messageStore.storeBatchAppRunningEvents([
+          signed([{ name: 'probe' }, { name: 'web', hash: 'webhash' }]),
+          { ...signed([]), data: message([{ hash: 'h2' }], Date.now(), otherIp) },
+          { ...signed([]), data: message([{ name: 'db', hash: 'dbhash' }], Date.now() - 1000, otherIp) },
+        ]);
+      } finally {
+        publish.restore();
+      }
+
+      const published = publish.getCalls().filter((call) => call.args[0] === 'network:apprunningRefused').map((call) => call.args[1]);
+      expect(published).to.deep.equal([{
+        path: 'sync',
+        refusals: [{ ip, names: ['probe'] }, { ip: otherIp, names: [null] }],
+      }]);
+    });
+
+    it('logs and publishes nothing for a synced batch it refuses nothing of', async () => {
+      const publish = sinon.stub(fluxEventBus, 'publish');
+      const warn = sinon.stub(log, 'warn');
+      try {
+        await messageStore.storeBatchAppRunningEvents([signed([{ name: 'web', hash: 'webhash' }])]);
+      } finally {
+        publish.restore();
+        warn.restore();
+      }
+
+      expect(publish.getCalls().filter((call) => call.args[0] === 'network:apprunningRefused')).to.deep.equal([]);
+      expect(warn.called).to.equal(false);
     });
   });
 });
