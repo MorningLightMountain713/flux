@@ -4,6 +4,7 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
 const { capabilityStub } = require('./fixtures/capabilityStub');
+const { resetGlobalState } = require('./fixtures/globalState');
 // The real registry singleton — the reconciler's hasOperationLease reads it, and
 // proxyquire (un-stubbed dep) gives the reconciler this same instance.
 const operationRegistry = require('../../ZelBack/src/services/utils/operationRegistry');
@@ -255,14 +256,13 @@ describe('appReconciler tests', () => {
         getAppDockerNameIdentifier: (id) => `/flux${id}`,
       },
       capabilities: capabilityStub({ bootReconcileDecided: true }),
-      globalState: {
-        appsMonitored: {},
-        getAppShutdownPipelineState: sinon.stub().returns(null),
-        // FluxOS's own removals. recreateMissing reads it to decide whether a
-        // vanished container is worth a tampering event; empty means "nothing
-        // here was taken by us", which is what every case below assumes.
-        fluxRemovedContainers: new Set(),
-      },
+      // The real module, reset before each test: its members are the ones the
+      // reconciler reads, and a test sets only what it is about.
+      globalState: (() => {
+        const state = resetGlobalState();
+        sinon.stub(state, 'getAppShutdownPipelineState').returns(null);
+        return state;
+      })(),
       appInspector: {
         startAppMonitoring: sinon.stub(),
         stopAppMonitoring: sinon.stub(),
