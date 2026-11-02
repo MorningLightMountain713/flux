@@ -14,6 +14,7 @@ const syncthingService = require('../../ZelBack/src/services/syncthingService');
 const nodeHealthService = require('../../ZelBack/src/services/nodeHealthService');
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const routeTableV1 = require('../../ZelBack/src/routeTableV1');
+const nodeDosState = require('../../ZelBack/src/services/nodeDosState');
 
 const { expect } = chai;
 
@@ -356,17 +357,14 @@ describe('nodeHealthService tests', () => {
       collateralTierStub.resolves({ collateral: 1000, tier: generalService.COLLATERAL_TIERS[1000] });
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
-      getDOSStateStub.returns({
-        status: 'success',
-        data: { dosState: 0, dosMessage: null },
-      });
+      getDOSStateStub.returns({ dosState: 0, dosMessage: null });
     };
 
     beforeEach(() => {
       osTotalmemStub = sinon.stub(os, 'totalmem');
       osCpusStub = sinon.stub(os, 'cpus');
       collateralTierStub = sinon.stub(generalService, 'nodeCollateralTier');
-      getDOSStateStub = sinon.stub(fluxNetworkHelper, 'getDOSState');
+      getDOSStateStub = sinon.stub(nodeDosState, 'getDosData');
       daemonSyncStateStub = sinon.stub(daemonStatus, 'daemonSyncState');
       daemonSynced(true);
       syncthingService.setSyncthingRunningState(true);
@@ -398,7 +396,7 @@ describe('nodeHealthService tests', () => {
     it('reads the database and Docker from their capabilities, not by asking them', async () => {
       healthyHardware();
       const find = sinon.spy(dbHelper, 'findOneInDatabase');
-      const images = sinon.spy(dockerService, 'dockerListImages');
+      const images = dockerService.dockerListImages;
 
       const fitness = await nodeHealthService.checkNodeFitness();
 
@@ -554,7 +552,7 @@ describe('nodeHealthService tests', () => {
       it('still refuses on a later check while the daemon is degraded', async () => {
         healthyHardware();
         daemonSynced(false);
-        getDOSStateStub.returns({ status: 'success', data: { dosState: 100, dosMessage: 'Flux IP detection failed' } });
+        getDOSStateStub.returns({ dosState: 100, dosMessage: 'Flux IP detection failed' });
 
         const fitness = await nodeHealthService.checkNodeFitness();
 
@@ -604,10 +602,7 @@ describe('nodeHealthService tests', () => {
       });
 
       it('says a node is unfit once, however often it is asked', async () => {
-        getDOSStateStub.returns({
-          status: 'success',
-          data: { dosState: 11, dosMessage: 'Flux IP detection failed' },
-        });
+        getDOSStateStub.returns({ dosState: 11, dosMessage: 'Flux IP detection failed' });
 
         await nodeHealthService.checkNodeFitness();
         await nodeHealthService.checkNodeFitness();
@@ -622,16 +617,10 @@ describe('nodeHealthService tests', () => {
       // The case that makes keying on the code wrong: the score accrues while
       // the condition is the same one.
       it('does not speak again as the dos score climbs under the same message', async () => {
-        getDOSStateStub.returns({
-          status: 'success',
-          data: { dosState: 11, dosMessage: 'Flux IP detection failed' },
-        });
+        getDOSStateStub.returns({ dosState: 11, dosMessage: 'Flux IP detection failed' });
         await nodeHealthService.checkNodeFitness();
 
-        getDOSStateStub.returns({
-          status: 'success',
-          data: { dosState: 13, dosMessage: 'Flux IP detection failed' },
-        });
+        getDOSStateStub.returns({ dosState: 13, dosMessage: 'Flux IP detection failed' });
         await nodeHealthService.checkNodeFitness();
 
         expect(
@@ -641,16 +630,10 @@ describe('nodeHealthService tests', () => {
       });
 
       it('speaks again when a different check is the one failing', async () => {
-        getDOSStateStub.returns({
-          status: 'success',
-          data: { dosState: 11, dosMessage: 'Flux IP detection failed' },
-        });
+        getDOSStateStub.returns({ dosState: 11, dosMessage: 'Flux IP detection failed' });
         await nodeHealthService.checkNodeFitness();
 
-        getDOSStateStub.returns({
-          status: 'success',
-          data: { dosState: 0, dosMessage: null },
-        });
+        getDOSStateStub.returns({ dosState: 0, dosMessage: null });
         osTotalmemStub.returns(1 * 1024 ** 3);
         osCpusStub.returns([1]);
         await nodeHealthService.checkNodeFitness();
@@ -699,26 +682,17 @@ describe('nodeHealthService tests', () => {
       });
 
       it('speaks again when a check that names no cause fails with a new message', async () => {
-        getDOSStateStub.returns({
-          status: 'success',
-          data: { dosState: 11, dosMessage: 'Flux IP detection failed' },
-        });
+        getDOSStateStub.returns({ dosState: 11, dosMessage: 'Flux IP detection failed' });
         await nodeHealthService.checkNodeFitness();
 
-        getDOSStateStub.returns({
-          status: 'success',
-          data: { dosState: 11, dosMessage: 'Flux collision detection. Another ip:port is confirmed on flux network with the same collateral transaction information.' },
-        });
+        getDOSStateStub.returns({ dosState: 11, dosMessage: 'Flux collision detection. Another ip:port is confirmed on flux network with the same collateral transaction information.' });
         await nodeHealthService.checkNodeFitness();
 
         expect(warnStub.callCount, 'a check with no cause stopped being keyed on its message').to.equal(2);
       });
 
       it('says so once when the node recovers, and not again', async () => {
-        getDOSStateStub.returns({
-          status: 'success',
-          data: { dosState: 11, dosMessage: 'Flux IP detection failed' },
-        });
+        getDOSStateStub.returns({ dosState: 11, dosMessage: 'Flux IP detection failed' });
         await nodeHealthService.checkNodeFitness();
 
         healthyHardware();
