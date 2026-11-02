@@ -12,7 +12,7 @@ const reconcilerQueue = require('../appMonitoring/reconcilerQueue');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const { nowMs } = require('../utils/monotonicClock');
-const { v9ActivationHeight } = require('../utils/nodeChain');
+const { quorumGrantActivationHeight } = require('../utils/nodeChain');
 const grantClient = require('../quorumGrant/grantClient');
 const grantClientCore = require('../quorumGrant/grantClientCore');
 const log = require('../../lib/log');
@@ -25,12 +25,12 @@ const log = require('../../lib/log');
 // controllerDesired data gates exactly as today. It can never answer
 // desired:true — the grant decides WHO may run, never THAT something runs.
 //
-// INERT BY DEFAULT, behind the config switch and the network's own version
-// floor (see featureEnabled). The plane must never run beside the legacy
-// election - two elections over one app is the split brain it exists to
-// prevent - and the way that is guaranteed is SEQUENCING, not detection: the
-// code ships everywhere inert, the enforced floor rises to the release that
-// carries it, and only then does the flag mean anything. There is no runtime
+// INERT until its activation height (see featureEnabled). The plane must never
+// run beside the legacy election - two elections over one app is the split
+// brain it exists to prevent - and the way that is guaranteed is SEQUENCING,
+// not detection: the code ships everywhere inert, the enforced floor rises to
+// the release that carries it, and only then is the height scheduled
+// (flux-spec's QUORUM_GRANT_ACTIVATION). There is no runtime
 // probe of what the fleet is running, because a node without this code cannot
 // report that it lacks it: it can only fail to answer, exactly as a dead node
 // does, and no probe can separate those two.
@@ -55,10 +55,11 @@ const log = require('../../lib/log');
 
 const ROLE = 'master';
 
-// The block at which the plane starts governing: the v9 height.
+// The block at which the plane starts governing, or null while it is not
+// scheduled on this node's chain.
 function activationHeight() {
   if (testOverrides.activationHeight !== null) return testOverrides.activationHeight;
-  return v9ActivationHeight();
+  return quorumGrantActivationHeight();
 }
 
 /**
@@ -82,9 +83,8 @@ function activationHeight() {
  * everyone HAS it and the height decides when everyone USES it, and neither
  * substitutes for the other.
  *
- * The flag may still be flipped at any time; it cannot engage the plane before
- * the height, and the height must be scheduled far enough out for the floor to
- * have been raised first. That ordering is release management, not a runtime
+ * The height must be scheduled far enough out for the floor to have been
+ * raised first. That ordering is release management, not a runtime
  * check: a height that arrives while nodes below the floor are still on the
  * network is a scheduling mistake no config value here can catch.
  */
@@ -120,15 +120,15 @@ function timingSafe() {
 
 /**
  * The node's own view of the chain against the scheduled activation, or null
- * when the plane cannot engage at all: flag off, timing unsafe, no height
- * scheduled, or a node that cannot say where the chain is - unsynced or
+ * when the plane cannot engage at all: timing unsafe, no height scheduled, or a
+ * node that cannot say where the chain is - unsynced or
  * unknown reads as NOT reached, because a node that cannot place the tip must
  * not be the one deciding the plane has started.
  */
 function planeView() {
-  if (config.get('fluxapps.quorumGrantMastership') !== true) return null;
-  if (!timingSafe()) return null;
   const activateAt = activationHeight();
+  if (activateAt === null) return null;
+  if (!timingSafe()) return null;
   const { height, synced } = daemonStatus.daemonSyncState();
   if (!synced || !Number.isFinite(height)) return null;
   return { height, activateAt };

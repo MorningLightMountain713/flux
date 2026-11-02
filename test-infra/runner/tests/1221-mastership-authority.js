@@ -27,7 +27,7 @@ import { postGenerationRecord } from '../framework/generation-record.js';
 import { appOwnerKey } from '../framework/keys.js';
 
 import { committeeFor } from '../framework/committee.js';
-import { readGrantRecord } from '../framework/grant-record.js';
+import { readGrantRecord, grantPlaneDaemon } from '../framework/grant-record.js';
 
 // FluxOS is the sole mastership authority. Two properties, on a real fleet:
 //   1. A re-roll under a running master keeps the app up even when one new
@@ -111,8 +111,8 @@ describe('mastership authority: FluxOS keeps the app up and FDM never decides th
       tickerAutostart: false,
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
+        daemon: grantPlaneDaemon(),
         fluxapps: {
-          quorumGrantMastership: true,
           quorumGrantHeldCommitteeSize: COMMITTEE_SIZE,
           quorumGrantHeldTtlMs: HELD_TTL_MS,
           quorumGrantRenewIntervalMs: 10000,

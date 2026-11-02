@@ -32,7 +32,7 @@ import { pushImage } from '../framework/registry-helper.js';
 import { nodeOutpoint } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.js';
 import { appDataRoot, execInContainer } from '../framework/container.js';
-import { grantPlaneOverrides, grantVerdict } from '../framework/grant-record.js';
+import { grantPlaneOverrides, grantVerdict, grantPlaneDaemon } from '../framework/grant-record.js';
 import { appView } from '../framework/app-view.js';
 import {
   advanceBlocks, getState, queueAppTx, reorgChain, startTicker, stopTicker,
@@ -88,6 +88,7 @@ describe('an activeStandby app sold while its primary runs', function () {
       tickerAutostart: false,
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
+        daemon: grantPlaneDaemon(),
         fluxapps: grantPlaneOverrides({
           quorumGrantGenerationDrainBlocks: DRAIN_BLOCKS, adoptionStaggerStepMs: 5000, adoptionStaggerWindowMs: 10000,
         }),

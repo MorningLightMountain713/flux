@@ -14,6 +14,7 @@ import {
 } from '../framework/wait.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
+import { grantPlaneDaemon } from '../framework/grant-record.js';
 
 // The operator's two verbs against a held mastership, and the routine
 // lifecycle operation between them — the three ways an operator or the
@@ -108,8 +109,8 @@ describe('operator commands against a held mastership', function () {
       // history carries no chain anchors and can never answer at-height.
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
+        daemon: grantPlaneDaemon(),
         fluxapps: {
-          quorumGrantMastership: true,
           // The term must outlive a full FAILED pass cycle: direct round,
           // relay carriers and the witness poll each burn a whole ask
           // timeout serially under a partition (~35s at the 5s default), and

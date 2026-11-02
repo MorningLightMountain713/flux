@@ -19,7 +19,7 @@ import {
   waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent,
 } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
-import { readGrantRecord } from '../framework/grant-record.js';
+import { readGrantRecord, grantPlaneDaemon } from '../framework/grant-record.js';
 
 // A published masterlease record is a claim; the granting committee's signed
 // term acceptances are its proof, verified at every node's intake against the
@@ -103,8 +103,8 @@ describe('masterlease proof: a listed node\'s claim without the committee\'s sig
       tickerAutostart: false,
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
+        daemon: grantPlaneDaemon(),
         fluxapps: {
-          quorumGrantMastership: true,
           quorumGrantHeldTtlMs: 90000,
           quorumGrantRenewIntervalMs: 10000,
           quorumGrantLockDelayMs: 15000,

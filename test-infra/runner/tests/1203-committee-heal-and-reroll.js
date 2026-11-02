@@ -20,7 +20,7 @@ import { getSubnetConfig } from '../framework/subnet-config.js';
 import { authenticate } from '../auth.js';
 import { postGenerationRecord } from '../framework/generation-record.js';
 import { appOwnerKey } from '../framework/keys.js';
-import { readGrantRecord } from '../framework/grant-record.js';
+import { readGrantRecord, grantPlaneDaemon } from '../framework/grant-record.js';
 
 // Tier one and tier two against a real fleet. A referee that answers
 // nobody for a full term is voted off by the committee itself: the holder
@@ -93,8 +93,8 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       // history carries no chain anchors and can never answer at-height.
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
+        daemon: grantPlaneDaemon(),
         fluxapps: {
-          quorumGrantMastership: true,
           // The term must outlive a full FAILED pass cycle: direct round,
           // relay carriers and the witness poll each burn a whole ask
           // timeout serially under a partition (~35s at the 5s default), and

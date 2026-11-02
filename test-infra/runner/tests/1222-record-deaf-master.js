@@ -27,7 +27,7 @@ import { appOwnerKey } from '../framework/keys.js';
 // The walk the nodes run, so the suite deals the same committees they do.
 const require = createRequire(import.meta.url);
 import { committeeFor } from '../framework/committee.js';
-import { readGrantRecord } from '../framework/grant-record.js';
+import { readGrantRecord, grantPlaneDaemon } from '../framework/grant-record.js';
 
 // A re-roll under a running master whose whole side MISSED the record. The
 // master's node and every cell of its granting committee are partitioned from
@@ -175,8 +175,8 @@ describe('record-deaf master: after the heal every certificate the partition for
       // wait is peer liveness, declared rather than left on the fleet default
       timing: { partitions: true },
       configOverrides: {
+        daemon: grantPlaneDaemon(),
         fluxapps: {
-          quorumGrantMastership: true,
           quorumGrantHeldCommitteeSize: COMMITTEE_SIZE,
           quorumGrantHeldTtlMs: HELD_TTL_MS,
           locationTtlS: LOCATION_TTL_S,

@@ -16,7 +16,7 @@ import {
   unpauseHostContainer,
 } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent } from '../framework/wait.js';
-import { readGrantRecord } from '../framework/grant-record.js';
+import { readGrantRecord, grantPlaneDaemon } from '../framework/grant-record.js';
 
 // A chain stall must coast every master, never demote one. When no node's
 // daemon has seen a block past chainStaleAfterMs — a chain halt, a fleet
@@ -76,15 +76,14 @@ describe('a chain stall coasts every master and demotes none', function () {
       tickerAutostart: false,
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
-        daemon: {
+        daemon: grantPlaneDaemon({
           subscriptions: {
             // Production's 300s compressed: the stall must outlive it inside
             // a test, and every grantor reads the SAME node-config value.
             chainStaleAfterMs: CHAIN_STALE_AFTER_MS,
           },
-        },
+        }),
         fluxapps: {
-          quorumGrantMastership: true,
           quorumGrantHeldTtlMs: 90000,
           locationTtlS: LOCATION_TTL_S,
           quorumGrantRenewIntervalMs: 10000,

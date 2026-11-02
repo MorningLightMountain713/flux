@@ -20,6 +20,7 @@ import {
 import { waitFor, waitForAppInstalled } from '../framework/wait.js';
 import { authenticate } from '../auth.js';
 import { fluxTeamKey } from '../framework/keys.js';
+import { grantPlaneDaemon } from '../framework/grant-record.js';
 
 // The encrypted referee (owed since 13C): a SEALED spec as the grant consumer.
 // Everything the plane reads must come off the encrypted path's cleartext
@@ -78,8 +79,8 @@ describe('encrypted mastership: a sealed spec holds and fails over a term', func
       tickerAutostart: false,
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
+        daemon: grantPlaneDaemon(),
         fluxapps: {
-          quorumGrantMastership: true,
           quorumGrantHeldTtlMs: 90000,
           quorumGrantRenewIntervalMs: 10000,
           quorumGrantLockDelayMs: 15000,

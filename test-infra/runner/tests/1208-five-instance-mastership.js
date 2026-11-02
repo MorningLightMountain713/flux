@@ -16,6 +16,7 @@ import {
 } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
+import { grantPlaneDaemon } from '../framework/grant-record.js';
 
 // The mastership plane beyond the three-instance fixture every other suite
 // uses: FIVE holders on a ten-node fleet. Everything N-sensitive changes
@@ -97,8 +98,8 @@ describe('the mastership grant with five instances', function () {
       // history carries no chain anchors and can never answer at-height.
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
+        daemon: grantPlaneDaemon(),
         fluxapps: {
-          quorumGrantMastership: true,
           // The term must outlive a full FAILED pass cycle: direct round,
           // relay carriers and the witness poll each burn a whole ask
           // timeout serially under a partition (~35s at the 5s default), and

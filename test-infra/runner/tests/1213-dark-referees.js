@@ -17,6 +17,7 @@ import {
 import { waitFor, waitForAppInstalled, waitForReconcileActuated, assertNoEvent } from '../framework/wait.js';
 import { removeFromNodeList, resetNodeList, advanceBlock } from '../framework/daemon-control.js';
 import { committeeFor } from '../framework/committee.js';
+import { grantPlaneDaemon } from '../framework/grant-record.js';
 
 // Dark referees: nodes the chain still lists as valid while they answer
 // nothing — the confirmation gap means the list stays polluted for hours, and
@@ -150,8 +151,8 @@ describe('dark referees: the list lies, the plane must not', function () {
       tickerAutostart: false,
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
+        daemon: grantPlaneDaemon(),
         fluxapps: {
-          quorumGrantMastership: true,
           quorumGrantHeldTtlMs: 90000,
           quorumGrantRenewIntervalMs: 10000,
           quorumGrantLockDelayMs: 15000,

@@ -71,7 +71,6 @@ async function bringUpFleet(hookCtx) {
     zmqTopics: ALL_ZMQ_TOPICS,
     configOverrides: {
       fluxapps: {
-        quorumGrantMastership: true,
         quorumGrantHeldTtlMs: 90000,
         quorumGrantRenewIntervalMs: 10000,
         quorumGrantLockDelayMs: 15000,
@@ -82,11 +81,11 @@ async function bringUpFleet(hookCtx) {
         quorumGrantPursuitIntervalMs: 10000,
         quorumGrantPreWindowBlocks: PRE_WINDOW,
       },
-      // v9's rules, the plane's among them, start ahead of the chain's start, so
+      // The plane starts ahead of the chain's start, so
       // the fleet boots and settles under the legacy election exactly as
       // production does today, and the crossing is something this suite
       // performs rather than something it starts inside.
-      daemon: { harnessV9ActivationHeight: ACTIVATION_HEIGHT },
+      daemon: { harnessQuorumGrantActivationHeight: ACTIVATION_HEIGHT },
     },
   });
   await bootAndPeer(env);

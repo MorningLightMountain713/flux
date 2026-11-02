@@ -11,6 +11,7 @@ import { appSyncthingFolderId, componentIdentifier, getAppContainerStatus } from
 import { waitFor, waitForAppInstalled, waitForReconcileActuated } from '../framework/wait.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
+import { grantPlaneDaemon } from '../framework/grant-record.js';
 
 // Removing the master's app from a LIVE node — scale-down, re-placement, an
 // operator's local removal — is a failover the node itself must announce. The
@@ -76,8 +77,8 @@ describe('removing the master\'s app from a live node', function () {
       // needs the ANCHORED membership history — see 1209.
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
+        daemon: grantPlaneDaemon(),
         fluxapps: {
-          quorumGrantMastership: true,
           quorumGrantHeldTtlMs: 90000,
           quorumGrantRenewIntervalMs: 10000,
           quorumGrantLockDelayMs: 15000,

@@ -14,7 +14,7 @@ const foundingCommittee = require('../appMesh/foundingCommittee');
 const { extractIp, extractPort } = require('../utils/socketAddressUtils');
 const { selectCommittee } = require('../utils/committeeSelector');
 const fluxEventBus = require('../utils/fluxEventBus');
-const { v9ActivationHeight } = require('../utils/nodeChain');
+const { quorumGrantActivationHeight } = require('../utils/nodeChain');
 const signedEnvelope = require('./signedEnvelope');
 const rosterOverlay = require('./rosterOverlay');
 const downCertificates = require('./downCertificates');
@@ -310,9 +310,11 @@ function resetActivationForTests(options = {}) {
   activationOverrides.preWindowBlocks = options.preWindowBlocks ?? null;
 }
 
+// The plane's activation height, or null while it is not scheduled on this
+// node's chain.
 function activationHeight() {
   if (activationOverrides.activateAt !== null) return activationOverrides.activateAt;
-  return v9ActivationHeight();
+  return quorumGrantActivationHeight();
 }
 
 // The window before the activation height in which a fresh key is served
@@ -591,20 +593,20 @@ async function selfOnCommittee(key, mode, fingerprint, generation, carriedChain,
   // plane starts governing at activateAt and nothing moves at the crossing.
   // A row with accepted history is exempt: renewals and reclaims never wait
   // on a height, so an activation height configured above standing terms
-  // cannot demote a fleet.
+  // cannot demote a fleet. While no height is scheduled the register opens
+  // for no new key.
   const activateAt = activationHeight();
-  if (activateAt !== null) {
-    const height = daemonStatus.daemonSyncState().height ?? 0;
-    const opensAt = activateAt - preWindowBlocks();
-    if (height < opensAt) {
-      const stored = await grantRegister.read(key);
-      if (!stored?.accepted) {
-        return {
-          member: false,
-          code: 409,
-          reason: `the register opens for new keys at height ${opensAt}`,
-        };
-      }
+  const opensAt = activateAt === null ? null : activateAt - preWindowBlocks();
+  if (opensAt === null || (daemonStatus.daemonSyncState().height ?? 0) < opensAt) {
+    const stored = await grantRegister.read(key);
+    if (!stored?.accepted) {
+      return {
+        member: false,
+        code: 409,
+        reason: opensAt === null
+          ? 'the register opens for new keys at no height: the grant plane is not scheduled'
+          : `the register opens for new keys at height ${opensAt}`,
+      };
     }
   }
 

@@ -3,7 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const config = require('config');
-const { v9ActivationHeight } = require('../../ZelBack/src/services/utils/nodeChain');
+const { quorumGrantActivationHeight } = require('../../ZelBack/src/services/utils/nodeChain');
 const secp256k1 = require('secp256k1');
 const bs58check = require('bs58check').default;
 
@@ -1697,14 +1697,19 @@ describe('quorumGrant grantorController', () => {
       expect(res.statusCode).to.equal(200);
     });
 
-    it('opens at the v9 height on this node\'s chain when no test sets one', async () => {
+    it('opens to no new key while the plane is not scheduled on this node\'s chain', async () => {
       grantorController.resetActivationForTests();
-      const opensAt = v9ActivationHeight() - config.get('fluxapps.quorumGrantPreWindowBlocks');
-      atHeight(opensAt - 1);
+      expect(quorumGrantActivationHeight(), 'unscheduled on this node\'s chain').to.equal(null);
+      atHeight(9_999_999);
       const shut = fakeRes();
       await grantorController.probe(fakeReq(await worldAsk('probe')), shut);
       expect(shut.statusCode).to.equal(409);
-      expect(shut.body.data.message).to.include(`at height ${opensAt}`);
+      expect(shut.body.data.message).to.match(/the register opens for new keys at no height: the grant plane is not scheduled/);
+
+      grantRegister.read.resolves({ accepted: { epoch: 2, grantee: 'x:1', mode: 'held' } });
+      const renewed = fakeRes();
+      await grantorController.probe(fakeReq(await worldAsk('probe')), renewed);
+      expect(renewed.statusCode, 'a row with accepted history is still served').to.equal(200);
     });
 
     it('the window is a config knob beside the activation height, 40 blocks by default', async () => {

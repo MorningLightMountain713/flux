@@ -7,7 +7,9 @@ const path = require('path');
 const proxyquire = require('proxyquire');
 const config = require('config');
 const { asConfig } = require('./fixtures/config');
-const { nodeChain, v9ActivationHeight, specActivationHeights } = require('../../ZelBack/src/services/utils/nodeChain');
+const {
+  nodeChain, v9ActivationHeight, quorumGrantActivationHeight, specActivationHeights,
+} = require('../../ZelBack/src/services/utils/nodeChain');
 const specLibrary = require('../../ZelBack/src/services/utils/specLibrary');
 const daemonStatus = require('../../ZelBack/src/services/daemonService/daemonStatus');
 const daemonServiceBlockchainRpcs = require('../../ZelBack/src/services/daemonService/daemonServiceBlockchainRpcs');
@@ -44,6 +46,45 @@ describe('the chain this node runs on', () => {
 
     it('cannot be set on mainnet', () => {
       const main = withDaemon({ chain: 'main', harnessV9ActivationHeight: 2_000_000 });
+      expect(() => main.nodeChain()).to.throw(/follows its own rule heights/);
+    });
+  });
+
+  describe('the height the grant plane starts at', () => {
+    const withDaemon = (daemon) => proxyquire('../../ZelBack/src/services/utils/nodeChain', {
+      config: asConfig({ ...config, daemon: { ...config.daemon, ...daemon } }),
+    });
+
+    it('is the library\'s, and unscheduled on mainnet', () => {
+      const { QUORUM_GRANT_ACTIVATION, Chain } = specLibrary.loaded();
+      expect(QUORUM_GRANT_ACTIVATION.heightOn(Chain.MAIN)).to.equal(null);
+      expect(quorumGrantActivationHeight()).to.equal(null);
+    });
+
+    it('is unscheduled on a harness chain started without one, whatever v9\'s height', () => {
+      const harness = withDaemon({ chain: 'harness', harnessV9ActivationHeight: 2_000_000 });
+      expect(harness.quorumGrantActivationHeight()).to.equal(null);
+      expect(harness.v9ActivationHeight()).to.equal(2_000_000);
+    });
+
+    it('is the one the harness chain was started with, apart from v9\'s', () => {
+      const harness = withDaemon({
+        chain: 'harness', harnessV9ActivationHeight: 2_000_000, harnessQuorumGrantActivationHeight: 2_100_000,
+      });
+      expect(harness.quorumGrantActivationHeight()).to.equal(2_100_000);
+      expect(harness.v9ActivationHeight()).to.equal(2_000_000);
+      expect(harness.nodeChain()).to.equal(harness.nodeChain());
+    });
+
+    it('a harness chain started with it below v9\'s does not build', () => {
+      const below = withDaemon({
+        chain: 'harness', harnessV9ActivationHeight: 2_000_000, harnessQuorumGrantActivationHeight: 1_999_999,
+      });
+      expect(() => below.nodeChain()).to.throw(/below "v9"/);
+    });
+
+    it('cannot be set on mainnet', () => {
+      const main = withDaemon({ chain: 'main', harnessQuorumGrantActivationHeight: 3_300_000 });
       expect(() => main.nodeChain()).to.throw(/follows its own rule heights/);
     });
   });

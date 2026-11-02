@@ -16,6 +16,7 @@ import {
   unpauseHostContainer,
 } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, waitForReconcileActuated } from '../framework/wait.js';
+import { grantPlaneDaemon } from '../framework/grant-record.js';
 
 // The held mastership grant on a 10-node fleet, governing on its own.
 //
@@ -112,8 +113,8 @@ describe('the mastership grant on a multi-node fleet', function () {
       // history carries no chain anchors and can never answer at-height.
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
+        daemon: grantPlaneDaemon(),
         fluxapps: {
-          quorumGrantMastership: true,
           // The term must outlive a full FAILED pass cycle: direct round,
           // relay carriers and the witness poll each burn a whole ask
           // timeout serially under a partition (~35s at the 5s default), and

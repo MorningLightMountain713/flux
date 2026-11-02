@@ -26,7 +26,7 @@ import { appOwnerKey } from '../framework/keys.js';
 
 // The walk the nodes run, so the suite deals the same committees they do.
 import { committeeFor } from '../framework/committee.js';
-import { readGrantRecord } from '../framework/grant-record.js';
+import { readGrantRecord, grantPlaneDaemon } from '../framework/grant-record.js';
 
 // A re-roll under a running master (STEP_ACROSS_DESIGN.md). Every referee
 // that accepts or renews a term signs it; the holder keeps a quorum of those
@@ -157,8 +157,8 @@ describe('step-across: the owner re-rolls the committee under a running master, 
       // committees pin at anchored membership: the ZMQ delta path
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
+        daemon: grantPlaneDaemon(),
         fluxapps: {
-          quorumGrantMastership: true,
           quorumGrantHeldCommitteeSize: COMMITTEE_SIZE,
           quorumGrantHeldTtlMs: HELD_TTL_MS,
           quorumGrantRenewIntervalMs: 10000,

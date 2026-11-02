@@ -34,7 +34,7 @@ import { pushImage } from '../framework/registry-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { appSyncthingFolderId, componentIdentifier } from '../framework/container.js';
 import { setSynced } from '../framework/syncthing-control.js';
-import { grantPlaneOverrides, grantVerdict } from '../framework/grant-record.js';
+import { grantPlaneOverrides, grantVerdict, grantPlaneDaemon } from '../framework/grant-record.js';
 import { rerollRole } from '../framework/generation-record.js';
 import { appView } from '../framework/app-view.js';
 import {
@@ -135,6 +135,7 @@ describe('a v8 activeStandby app re-rolled, then sold', function () {
       zmqTopics: ALL_ZMQ_TOPICS,
       policy: { documents: { enterprisenodes } },
       configOverrides: {
+        daemon: grantPlaneDaemon(),
         fluxapps: grantPlaneOverrides({
           quorumGrantGenerationDrainBlocks: DRAIN_BLOCKS, adoptionStaggerStepMs: 5000, adoptionStaggerWindowMs: 10000,
         }),

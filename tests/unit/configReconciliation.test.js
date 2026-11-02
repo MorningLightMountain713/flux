@@ -126,12 +126,10 @@ describe('config reconciliation at boot', () => {
     }
   });
 
-  // The three knobs whose absence used to be the setting now ship the value that
-  // says it, so there is no exempt list left to keep honest - only a check that
-  // they really are shipped, because a guard reading undefined and a guard
-  // reading null behave the same right up until one of them does not.
-  it('ships a value for the knobs whose absence used to be the setting', () => {
-    expect(production.fluxapps.quorumGrantMastership, 'false = the gate is off').to.equal(false);
+  // A guard reading undefined and a guard reading null behave the same right up
+  // until one of them does not, so these knobs ship the value that says it.
+  it('ships a value for the knobs whose absence would otherwise be the setting', () => {
+    expect(production.fluxapps, 'the plane starts at its height alone').to.not.have.property('quorumGrantMastership');
     expect(production.fluxapps.restartAlwaysOwners, 'empty = nobody').to.deep.equal([]);
     expect(production.fluxapps.verifyPoolSize, 'null = cpus-1').to.equal(null);
   });

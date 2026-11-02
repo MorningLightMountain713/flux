@@ -12,7 +12,7 @@ import { setSynced } from '../framework/syncthing-control.js';
 import { appSyncthingFolderId, componentIdentifier, getAppContainerStatus, restartFluxos } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, assertNoEvent, waitForReconcileActuated } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
-import { readGrantRecord } from '../framework/grant-record.js';
+import { readGrantRecord, grantPlaneDaemon } from '../framework/grant-record.js';
 
 // A grantor that restarts must come back as the SAME grantor: its promises
 // were journaled before every reply, so the record survives the process —
@@ -67,8 +67,8 @@ describe('a grantor restarts, and its promises outlive the process', function ()
       // history carries no chain anchors and can never answer at-height.
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
+        daemon: grantPlaneDaemon(),
         fluxapps: {
-          quorumGrantMastership: true,
           // The term must outlive a full FAILED pass cycle: direct round,
           // relay carriers and the witness poll each burn a whole ask
           // timeout serially under a partition (~35s at the 5s default), and

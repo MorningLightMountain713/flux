@@ -145,16 +145,15 @@ describe('quorumGrant mastershipGrantGate', () => {
     // config module is injected rather than mutated. Every key the gate reads is
     // supplied: proxyquire replaces the module wholesale and a missing key would
     // read as undefined rather than fail.
-    function gateWith({ flag, activateAt, height, synced = true }) {
+    function gateWith({ activateAt, height, synced = true }) {
       return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
         config: asConfig({
           fluxapps: {
-            quorumGrantMastership: flag,
             quorumGrantPursuitIntervalMs: 30_000,
             quorumGrantHeldTtlMs: 150_000,
           },
         }),
-        '../utils/nodeChain': { v9ActivationHeight: () => activateAt },
+        '../utils/nodeChain': { quorumGrantActivationHeight: () => activateAt },
         '../daemonService/daemonStatus': {
           daemonSyncState: () => ({ height, synced }),
         },
@@ -162,7 +161,7 @@ describe('quorumGrant mastershipGrantGate', () => {
     }
 
     it('governs once the chain reaches the activation height', async () => {
-      const gate = gateWith({ flag: true, activateAt: 2_100_000, height: 2_100_000 });
+      const gate = gateWith({ activateAt: 2_100_000, height: 2_100_000 });
       const verdict = await gate.grantVerdict(IDENTIFIER, activeStandbyComp());
       expect(verdict, 'the plane engaged').to.not.equal(null);
       // The pursuit is fire-and-forget and now asks docker whether this node is the
@@ -171,17 +170,17 @@ describe('quorumGrant mastershipGrantGate', () => {
       expect(grantClient.acquire.called).to.equal(true);
     });
 
-    it('stays inert one block short, however the flag is set', async () => {
+    it('stays inert one block short', async () => {
       // The boundary, both sides. A height comparison off by one engages a whole
       // fleet a block early - which is a block in which some nodes grant and the
       // rest still elect.
-      const gate = gateWith({ flag: true, activateAt: 2_100_000, height: 2_099_999 });
+      const gate = gateWith({ activateAt: 2_100_000, height: 2_099_999 });
       expect(await gate.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
       expect(grantClient.acquire.called).to.equal(false);
     });
 
-    it('stays inert while the flag is off, however far past the height', async () => {
-      const gate = gateWith({ flag: false, activateAt: 2_100_000, height: 9_999_999 });
+    it('stays inert while no height is scheduled, however far the chain has gone', async () => {
+      const gate = gateWith({ activateAt: null, height: 9_999_999 });
       expect(await gate.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
       expect(grantClient.acquire.called).to.equal(false);
     });
@@ -191,11 +190,11 @@ describe('quorumGrant mastershipGrantGate', () => {
       // stale or absent tip as 'reached' would engage exactly the node least able
       // to know, and a node that is behind is the one most likely to be behind on
       // the grant records too.
-      const unsynced = gateWith({ flag: true, activateAt: 2_100_000, height: 2_100_000, synced: false });
+      const unsynced = gateWith({ activateAt: 2_100_000, height: 2_100_000, synced: false });
       expect(await unsynced.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
 
       grantClient.acquire.resetHistory();
-      const noHeight = gateWith({ flag: true, activateAt: 2_100_000, height: undefined });
+      const noHeight = gateWith({ activateAt: 2_100_000, height: undefined });
       expect(await noHeight.grantVerdict(IDENTIFIER, activeStandbyComp())).to.equal(null);
       expect(grantClient.acquire.called).to.equal(false);
     });
@@ -217,14 +216,13 @@ describe('quorumGrant mastershipGrantGate', () => {
       return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
         config: asConfig({
           fluxapps: {
-            quorumGrantMastership: true,
             quorumGrantPreWindowBlocks: PRE_WINDOW,
             quorumGrantPursuitIntervalMs: 30_000,
             quorumGrantHeldTtlMs: 150_000,
             ...extraConfig,
           },
         }),
-        '../utils/nodeChain': { v9ActivationHeight: () => ACTIVATE_AT },
+        '../utils/nodeChain': { quorumGrantActivationHeight: () => ACTIVATE_AT },
         '../daemonService/daemonStatus': {
           daemonSyncState: () => ({ height, synced }),
         },
@@ -325,13 +323,12 @@ describe('quorumGrant mastershipGrantGate', () => {
       return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
         config: asConfig({
           fluxapps: {
-            quorumGrantMastership: true,
             quorumGrantPreWindowBlocks: 40,
             quorumGrantPursuitIntervalMs: 30_000,
             quorumGrantHeldTtlMs: 150_000,
           },
         }),
-        '../utils/nodeChain': { v9ActivationHeight: () => ACTIVATE_AT },
+        '../utils/nodeChain': { quorumGrantActivationHeight: () => ACTIVATE_AT },
         '../daemonService/daemonStatus': {
           daemonSyncState: () => ({ height, synced: true }),
         },
@@ -469,14 +466,13 @@ describe('quorumGrant mastershipGrantGate', () => {
       return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
         config: asConfig({
           fluxapps: {
-            quorumGrantMastership: true,
             quorumGrantPreWindowBlocks: 40,
             quorumGrantPursuitIntervalMs: 30_000,
             quorumGrantHeldTtlMs: 150_000,
             quorumGrantAskTimeoutMs: ASK_TIMEOUT,
           },
         }),
-        '../utils/nodeChain': { v9ActivationHeight: () => ACTIVATE_AT },
+        '../utils/nodeChain': { quorumGrantActivationHeight: () => ACTIVATE_AT },
         '../daemonService/daemonStatus': {
           daemonSyncState: () => ({ height, synced: true }),
         },
@@ -604,7 +600,6 @@ describe('quorumGrant mastershipGrantGate', () => {
       return proxyquire('../../ZelBack/src/services/appLifecycle/mastershipGrantGate', {
         config: asConfig({
           fluxapps: {
-            quorumGrantMastership: true,
             quorumGrantPursuitIntervalMs: 30_000,
             quorumGrantHeldTtlMs: 150_000,
             quorumGrantDemotionSlackMs: slack,
@@ -612,7 +607,7 @@ describe('quorumGrant mastershipGrantGate', () => {
             ...(askTimeout !== undefined ? { quorumGrantAskTimeoutMs: askTimeout } : {}),
           },
         }),
-        '../utils/nodeChain': { v9ActivationHeight: () => 2_100_000 },
+        '../utils/nodeChain': { quorumGrantActivationHeight: () => 2_100_000 },
         '../daemonService/daemonStatus': {
           daemonSyncState: () => ({ height: 2_100_000, synced: true }),
         },

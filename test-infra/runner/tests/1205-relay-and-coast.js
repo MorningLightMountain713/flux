@@ -9,6 +9,7 @@ import { pushImage } from '../framework/registry-helper.js';
 import { setSynced } from '../framework/syncthing-control.js';
 import { appSyncthingFolderId, componentIdentifier, getAppContainerStatus } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, assertNoEvent, waitForReconcileActuated } from '../framework/wait.js';
+import { grantPlaneDaemon } from '../framework/grant-record.js';
 
 // The two rules that keep a master's safety independent of its own network
 // path, on a real partitioned fleet:
@@ -94,8 +95,8 @@ describe('relay renewal and the partitioned app island', function () {
       // is declared rather than left on the uncompressed fleet default.
       timing: { partitions: true },
       configOverrides: {
+        daemon: grantPlaneDaemon(),
         fluxapps: {
-          quorumGrantMastership: true,
           // The term must outlive a full FAILED pass cycle: direct round,
           // relay carriers and the witness poll each burn a whole ask
           // timeout serially under a partition (~35s at the 5s default), and

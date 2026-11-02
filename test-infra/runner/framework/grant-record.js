@@ -7,6 +7,7 @@
 // arithmetic already tolerates missing cells.
 
 import { waitFor } from './wait.js';
+import { loadSharedConfig } from './coupled-knobs.js';
 
 /**
  * @param {string} nodeUrl The node's API base URL.
@@ -90,15 +91,24 @@ export async function grantVerdict(clients, key, { quorum }) {
 }
 
 /**
- * The grant plane on, at harness timescales: a held term outlives two failed
- * pass cycles (about 35 s each under a partition), and the plane governs from
- * the floor already in force.
+ * The grant plane from v9's height on the harness chain, which the fleet starts
+ * above: the plane governs from boot.
+ * @param {object} [extra] - daemon settings the suite adds
+ * @returns {object} daemon config overrides
+ */
+export function grantPlaneDaemon(extra = {}) {
+  return { ...extra, harnessQuorumGrantActivationHeight: loadSharedConfig().daemon.harnessV9ActivationHeight };
+}
+
+/**
+ * The grant plane at harness timescales: a held term outlives two failed pass
+ * cycles (about 35 s each under a partition). A suite running the plane passes
+ * these with `daemon: grantPlaneDaemon()`.
  * @param {object} [extra] - fluxapps settings the suite adds or overrides
  * @returns {object} fluxapps config overrides
  */
 export function grantPlaneOverrides(extra = {}) {
   return {
-    quorumGrantMastership: true,
     quorumGrantHeldTtlMs: 90000,
     quorumGrantRenewIntervalMs: 10000,
     quorumGrantLockDelayMs: 15000,

@@ -41,7 +41,7 @@ import { REGISTRY_REPO_HOST, getSubnetConfig } from '../framework/subnet-config.
 import {
   appDataRoot, componentIdentifier, execInContainer,
 } from '../framework/container.js';
-import { grantPlaneOverrides, grantVerdict } from '../framework/grant-record.js';
+import { grantPlaneOverrides, grantVerdict, grantPlaneDaemon } from '../framework/grant-record.js';
 import { rerollRole } from '../framework/generation-record.js';
 import { appView } from '../framework/app-view.js';
 import {
@@ -132,6 +132,7 @@ describe('an activeStandby app re-rolled, then sold', function () {
       tickerAutostart: false,
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
+        daemon: grantPlaneDaemon(),
         fluxapps: grantPlaneOverrides({
           quorumGrantGenerationDrainBlocks: DRAIN_BLOCKS,
           adoptionStaggerStepMs: 5000,

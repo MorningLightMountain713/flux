@@ -15,6 +15,7 @@ import {
   unpauseHostContainer,
 } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, waitForReconcileActuated } from '../framework/wait.js';
+import { grantPlaneDaemon } from '../framework/grant-record.js';
 
 // Two activeStandby apps on the SAME three holders: every other suite runs
 // the plane single-tenant, but production nodes referee and hold MANY apps
@@ -79,8 +80,8 @@ describe('two apps share their holders, and their terms never entangle', functio
       // history carries no chain anchors and can never answer at-height.
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
+        daemon: grantPlaneDaemon(),
         fluxapps: {
-          quorumGrantMastership: true,
           // The term must outlive a full FAILED pass cycle: direct round,
           // relay carriers and the witness poll each burn a whole ask
           // timeout serially under a partition (~35s at the 5s default), and

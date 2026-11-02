@@ -47,7 +47,6 @@ describe('rollout sequencing: the plane stays inert below the activation height'
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
         fluxapps: {
-          quorumGrantMastership: true,
           quorumGrantHeldTtlMs: 90000,
           quorumGrantRenewIntervalMs: 10000,
           quorumGrantLockDelayMs: 15000,
@@ -57,9 +56,8 @@ describe('rollout sequencing: the plane stays inert below the activation height'
           quorumGrantMinHolderAgeMs: 0,
           quorumGrantPursuitIntervalMs: 10000,
         },
-        // v9's rules at a block this chain never reaches: the state every node
-        // ships in until the v9 height arrives.
-        daemon: { harnessV9ActivationHeight: 99_000_000 },
+        // The plane scheduled for a block this chain never reaches.
+        daemon: { harnessQuorumGrantActivationHeight: 99_000_000 },
       },
     });
     await bootAndPeer(env);

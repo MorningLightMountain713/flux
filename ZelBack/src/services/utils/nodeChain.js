@@ -11,20 +11,26 @@ let built = null;
  * document is read on it, and boot refuses a daemon reporting another.
  *
  * `daemon.harnessV9ActivationHeight` starts the harness chain with v9's rules
- * at that height; the library refuses it on any other chain.
+ * at that height, and `daemon.harnessQuorumGrantActivationHeight` with the
+ * grant plane at that one; the library refuses either on any other chain, and
+ * a plane height below v9's.
  *
  * @returns {import('@runonflux/flux-spec').Chain}
- * @throws {Error} for a chain name the library has no parameters for, or a
- *   v9 height set on a chain that follows its own rule heights
+ * @throws {Error} for a chain name the library has no parameters for, a
+ *   height set on a chain that follows its own rule heights, or a plane height
+ *   below v9's
  */
 function nodeChain() {
   const name = config.get('daemon.chain');
   const v9Height = config.get('daemon.harnessV9ActivationHeight');
-  if (built && built.name === name && built.v9Height === v9Height) return built.chain;
-  const { Chain, V9_ACTIVATION } = loaded();
+  const planeHeight = config.get('daemon.harnessQuorumGrantActivationHeight');
+  if (built && built.name === name && built.v9Height === v9Height && built.planeHeight === planeHeight) return built.chain;
+  const { Chain, V9_ACTIVATION, QUORUM_GRANT_ACTIVATION } = loaded();
   const named = Chain.named(name);
-  const chain = v9Height === null ? named : named.withActivations([[V9_ACTIVATION, v9Height]]);
-  built = { name, v9Height, chain };
+  const started = [[V9_ACTIVATION, v9Height], [QUORUM_GRANT_ACTIVATION, planeHeight]].filter(([, height]) => height !== null);
+  const chain = started.length === 0 ? named : named.withActivations(started);
+  QUORUM_GRANT_ACTIVATION.heightOn(chain);
+  built = { name, v9Height, planeHeight, chain };
   return chain;
 }
 
@@ -37,6 +43,15 @@ function v9ActivationHeight() {
 }
 
 /**
+ * The height the grant plane starts governing at on this node's chain, or null
+ * while it is not scheduled there. Never below v9's.
+ * @returns {?number}
+ */
+function quorumGrantActivationHeight() {
+  return loaded().QUORUM_GRANT_ACTIVATION.heightOn(nodeChain());
+}
+
+/**
  * The height each spec version is accepted from on this node's chain.
  * @returns {Object<number, number>}
  */
@@ -44,4 +59,6 @@ function specActivationHeights() {
   return { ...config.get('fluxapps.appSpecsEnforcementHeights'), 9: v9ActivationHeight() };
 }
 
-module.exports = { nodeChain, v9ActivationHeight, specActivationHeights };
+module.exports = {
+  nodeChain, v9ActivationHeight, quorumGrantActivationHeight, specActivationHeights,
+};
