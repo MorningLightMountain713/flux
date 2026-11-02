@@ -996,14 +996,6 @@ function getUdpReachability() {
 
 
 
-/**
- * The DOS state a reader sees. A held node reports the sticky verdict; an
- * unheld one reports what the availability checks have counted.
- * @returns {number}
- */
-function effectiveDosState() {
-  return nodeDosState.getDosStateValue();
-}
 
 /**
  * Hold this node back from new placements. Idempotent per owner.
@@ -1517,11 +1509,7 @@ function isCommunicationEstablishedAPI(req, res) {
  * @returns {object} Message.
  */
 function getDOSState(req, res) {
-  const data = {
-    dosState: effectiveDosState(),
-    dosMessage: nodeDosState.getDosMessage(),
-  };
-  const message = messageHelper.createDataMessage(data);
+  const message = messageHelper.createDataMessage(nodeDosState.getDosData());
   return res ? res.json(message) : message;
 }
 
