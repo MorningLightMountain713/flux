@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
+const { MongoNetworkTimeoutError } = require('mongodb');
 const { capabilityStub } = require('./fixtures/capabilityStub');
 const realImageManager = require('../../ZelBack/src/services/appSecurity/imageManager');
 const {
@@ -1104,6 +1105,31 @@ describe('appSpawner tests', () => {
   });
 
   describe('install error caching', () => {
+    it('tries the app again on the next pass when this node\'s installed identities cannot be read', async () => {
+      const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED });
+      const installedIdentities = sinon.stub().rejects(new MongoNetworkTimeoutError('timed out'));
+      buildModule({ candidates: [await makeCandidate()], errorCount: 0, installStub, installedIdentities });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      expect(installedIdentities.called, 'the read must have been reached, or the argument below proves nothing').to.equal(true);
+      sinon.assert.notCalled(installStub);
+      expect(globalStateStub.trySpawningGlobalAppCache.has('abc123')).to.be.false;
+      expect(globalStateStub.spawnErrorsLongerAppCache.has('abc123')).to.be.false;
+    });
+
+    it('holds the app back after an error that is not the database', async () => {
+      const installStub = sinon.stub().resolves({ status: InstallStatus.INSTALLED });
+      const installedIdentities = sinon.stub().rejects(new Error('bad record'));
+      buildModule({ candidates: [await makeCandidate()], errorCount: 0, installStub, installedIdentities });
+
+      await appSpawner.trySpawningGlobalApplication().catch(() => {});
+
+      expect(installedIdentities.called, 'the read must have been reached').to.equal(true);
+      sinon.assert.notCalled(installStub);
+      expect(globalStateStub.trySpawningGlobalAppCache.has('abc123')).to.be.true;
+    });
+
     it('skips cleanly at 5+ network errors without touching either local cache', async () => {
       // the shared error docs ARE the backoff - they expire in 24h and a respec
       // clears them, so a local cache entry would only delay the recovery
