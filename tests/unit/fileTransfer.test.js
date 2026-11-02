@@ -145,7 +145,13 @@ describe('fileTransfer tests', () => {
     const file = path.join(directory, 'growing.bin');
     await fsPromises.writeFile(file, 'x'.repeat(1000));
 
+    // The file grows once its length is declared: an append the size read
+    // lands inside would declare a length the fixture did not write.
+    const declared = new Promise((resolve) => {
+      res.setHeader.callsFake((name) => { if (name === 'Content-Length') resolve(); });
+    });
     const sending = sendFile(res, file, 'growing.bin');
+    await declared;
     await fsPromises.appendFile(file, 'y'.repeat(5000));
     await sending;
 
