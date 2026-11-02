@@ -57,6 +57,8 @@ describe('fileSystemManager tests', () => {
       owner: OWNER,
       availableBytes: 1e9,
       resolve: sinon.stub().callsFake(async (p) => volumePath(p)),
+      refuseReadOnlyWrite: sinon.stub().resolves(),
+      refuseReadOnlyRemoval: sinon.stub().resolves(),
       pair: sinon.stub().callsFake(async (source, destination) => ({
         source: volumePath(source),
         destination: volumePath(destination),
@@ -982,6 +984,43 @@ describe('fileSystemManager tests', () => {
 
       expect(res.statusCode).to.equal(202);
       expect(acceptedBody().jobId).to.match(/^op_/);
+    });
+  });
+
+  describe('a copy that follows another node', () => {
+    // [handler, set-up, paths written (followed to where they point), entries taken away]
+    const cases = [
+      ['createAppsFolder', () => { req.params.folder = 'backup/local'; }, ['backup/local'], []],
+      ['renameAppsObject', () => { req.params.oldpath = 'backup/a.tar.gz'; req.params.newname = 'b.tar.gz'; }, ['backup/b.tar.gz'], ['backup/a.tar.gz']],
+      ['removeAppsObject', () => { req.params.object = 'backup/local/a.tar.gz'; }, [], ['backup/local/a.tar.gz']],
+      ['moveAppsObject', () => { req.body = { source: 'backup/a', destination: 'backup/b' }; }, ['backup/b'], ['backup/a']],
+      ['copyAppsObject', () => { req.body = { source: 'appdata/world', destination: 'backup/world' }; }, ['backup/world'], []],
+      ['compressAppsObject', () => { req.body = { source: ['appdata/world', 'appdata/config'], destination: 'backup/local/a.tar.gz' }; }, ['backup/local/a.tar.gz'], []],
+      ['extractAppsObject', () => { req.body = { source: 'backup/a.tar.gz', destination: 'backup/out' }; }, ['backup/out'], []],
+    ];
+    const asked = (stub) => stub.getCalls().flatMap((call) => call.args.map((p) => p.relative));
+
+    cases.forEach(([handler, setUp, written, removed]) => {
+      it(`${handler} asks about exactly the paths it writes and takes away`, async () => {
+        setUp();
+        await fileSystemManager[handler](req, res);
+        await settle();
+
+        expect(asked(sessionStub.refuseReadOnlyWrite)).to.deep.equal(written);
+        expect(asked(sessionStub.refuseReadOnlyRemoval)).to.deep.equal(removed);
+      });
+
+      it(`${handler} starts nothing when the session refuses`, async () => {
+        const readOnly = Object.assign(new Error('This node holds a read-only copy of this app\'s data, which follows the node running the app. Make changes on that node.'), { name: 'ReadOnlyCopy', code: 409 });
+        sessionStub.refuseReadOnlyWrite.rejects(readOnly);
+        sessionStub.refuseReadOnlyRemoval.rejects(readOnly);
+        setUp();
+        await fileSystemManager[handler](req, res);
+        await settle();
+
+        expect(executorStub.run.called).to.equal(false);
+        expect(res.json.firstCall.args[0].data.code).to.equal(409);
+      });
     });
   });
 
