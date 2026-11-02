@@ -202,6 +202,7 @@ class AppSyncOrchestrator {
   #peerStateSyncReadyHandler = null;
   #ephemeralUnverifiedHandler = null;
   #ephemeralUnstoredHandler = null;
+  #ephemeralWriteFailedHandler = null;
   #ephemeralProgressHandler = null;
   #syncPeersAvailableHandler = null;
   #peerReestablishedHandler = null;
@@ -405,6 +406,9 @@ class AppSyncOrchestrator {
     this.#ephemeralUnstoredHandler = (peerKey, capability) => this.#onEphemeralSyncUnstored(peerKey, capability);
     appSyncEvents.on(EVENTS.EPHEMERAL_SYNC_UNSTORED, this.#ephemeralUnstoredHandler);
 
+    this.#ephemeralWriteFailedHandler = (peerKey) => this.#onEphemeralSyncWriteFailed(peerKey);
+    appSyncEvents.on(EVENTS.EPHEMERAL_SYNC_WRITE_FAILED, this.#ephemeralWriteFailedHandler);
+
     this.#ephemeralProgressHandler = (peerKey) => this.#onEphemeralSyncProgress(peerKey);
     appSyncEvents.on(EVENTS.EPHEMERAL_SYNC_PROGRESS, this.#ephemeralProgressHandler);
 
@@ -597,6 +601,27 @@ class AppSyncOrchestrator {
     }
     if (this.#endRequest(peerKey, 'unverified', 'sent a response this node could not verify')) {
       fluxEventBus.publish('ephemeralSync:peerUnverified', { peer: peerKey });
+    }
+  }
+
+  /**
+   * A peer's message could not be recorded.
+   *
+   * A peer answers in several messages and only the last says done, so a
+   * message whose writes failed ends the request there, as an unverifiable one
+   * does: the rest of its answer is not taken, it is never credited, and
+   * another peer is asked.
+   *
+   * @param {string} peerKey ip:port of the peer whose message was not recorded
+   */
+  #onEphemeralSyncWriteFailed(peerKey) {
+    if (this.#stateSyncComplete) return;
+    if (!peerKey) {
+      log.error('AppSyncOrchestrator - A sync response that could not be recorded named no peer, cannot replace it');
+      return;
+    }
+    if (this.#endRequest(peerKey, 'writeFailed', 'sent a response this node could not record')) {
+      fluxEventBus.publish('ephemeralSync:peerWriteFailed', { peer: peerKey });
     }
   }
 
@@ -1763,6 +1788,7 @@ class AppSyncOrchestrator {
       appSyncEvents.removeListener(EVENTS.PEER_STATE_SYNC_READY, this.#peerStateSyncReadyHandler);
       appSyncEvents.removeListener(EVENTS.EPHEMERAL_SYNC_UNVERIFIED, this.#ephemeralUnverifiedHandler);
       appSyncEvents.removeListener(EVENTS.EPHEMERAL_SYNC_UNSTORED, this.#ephemeralUnstoredHandler);
+      appSyncEvents.removeListener(EVENTS.EPHEMERAL_SYNC_WRITE_FAILED, this.#ephemeralWriteFailedHandler);
       appSyncEvents.removeListener(EVENTS.EPHEMERAL_SYNC_PROGRESS, this.#ephemeralProgressHandler);
     }
     if (this.#hashUnresolvedHandler) {
