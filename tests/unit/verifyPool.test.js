@@ -357,7 +357,7 @@ describe('verifyPool worker protocol', () => {
     }
 
     const pool = proxyquire('../../ZelBack/src/services/utils/verifyPool', {
-      worker_threads: { Worker: FakeWorker },
+      './networkDefaults': { createWorker: () => new FakeWorker() },
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
     });
 
@@ -536,7 +536,7 @@ describe('verifyPool sizing', () => {
       terminate() {}
     }
     const pool = proxyquire('../../ZelBack/src/services/utils/verifyPool', {
-      worker_threads: { Worker: FakeWorker },
+      './networkDefaults': { createWorker: () => new FakeWorker() },
       config: asConfig({ fluxapps }),
       os: { cpus: () => new Array(cores) },
       '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
