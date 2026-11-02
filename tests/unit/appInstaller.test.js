@@ -357,6 +357,8 @@ describe('appInstaller tests', () => {
         alreadyInstalled = false,
         globalAppInfo = null,
         convergeError = null,
+        enterpriseOwner = false,
+        burstEnabled = false,
       } = opts;
 
       const onInstallComplete = sinon.stub().resolves();
@@ -459,7 +461,7 @@ describe('appInstaller tests', () => {
         './contentSlotService': { provisionContentSlots },
         '../utils/fluxEventBus': { publish: fluxEventBusPublish },
         '../appMonitoring/appReconciler': { awaitConvergence: appReconcilerAwaitConvergence },
-        '../utils/cpuBurstHelper': { getCpuBurstAllowance: sinon.stub().returns(0), isEnterpriseOwner: sinon.stub().returns(false), isCpuBurstSupported: sinon.stub().resolves(false) },
+        '../utils/cpuBurstHelper': { isEnterpriseOwner: sinon.stub().returns(enterpriseOwner), isCpuBurstEnabled: sinon.stub().returns(burstEnabled) },
         '../appRequirements/hwRequirements': hwRequirementsStub,
       });
 
@@ -520,6 +522,25 @@ describe('appInstaller tests', () => {
       expect(onInstallComplete.calledOnce, 'post-install broadcast fired').to.be.true;
       expect(fluxEventBusPublish.calledWith('app:installed'), 'app:installed event published').to.be.true;
       expect(appReconcilerAwaitConvergence.calledOnce, 'install handed off + awaited reconciler convergence').to.be.true;
+    });
+
+    describe('CPU burst', () => {
+      it('an enterprise owner\'s components are created burst-eligible while burst is switched on', async () => {
+        const { installer, installComponent } = loadFresh({ enterpriseOwner: true, burstEnabled: true });
+        const result = await installer.installApplication(newappRegistered, {});
+        expect(result.status).to.equal(appInstaller.InstallStatus.INSTALLED);
+        expect(installComponent.firstCall.args[1].burstEligible).to.equal(true);
+      });
+
+      it('no component is burst-eligible while burst is switched off, or for another owner', async () => {
+        for (const opts of [{ enterpriseOwner: true, burstEnabled: false }, { enterpriseOwner: false, burstEnabled: true }]) {
+          const { installer, installComponent } = loadFresh(opts);
+          // eslint-disable-next-line no-await-in-loop
+          const result = await installer.installApplication(newappRegistered, {});
+          expect(result.status, JSON.stringify(opts)).to.equal(appInstaller.InstallStatus.INSTALLED);
+          expect(installComponent.firstCall.args[1].burstEligible, JSON.stringify(opts)).to.equal(false);
+        }
+      });
     });
 
     // A waiter on the bus learns what every attempt did: an install says app:installed,

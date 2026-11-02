@@ -304,7 +304,7 @@ async function attemptInstallApplication(registered, options = {}) {
       const { owner } = registered;
       const burstEligible = owner
         && cpuBurstHelper.isEnterpriseOwner(owner)
-        && await cpuBurstHelper.isCpuBurstSupported();
+        && cpuBurstHelper.isCpuBurstEnabled();
       const restartAlwaysOwners = config.get('fluxapps.restartAlwaysOwners') || [];
       const restartPolicy = (owner && restartAlwaysOwners.includes(owner)) ? 'always' : null;
 
