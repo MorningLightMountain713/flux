@@ -1456,6 +1456,32 @@ describe('syncthingMonitor tests', () => {
       expect(syncthingServiceMock.adjustConfigFolders.calledWith({ method: 'delete', id: syncFolderId })).to.be.true;
     });
 
+    // A harness suite holds the pass at these to interleave another node's decision.
+    it('stops after reading the folders, before publishing them, and before writing each folder', async () => {
+      syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+      fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+      deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+      syncthingServiceMock.getConfigFolders.resolves([]);
+      syncthingMonitorHelpersMock.folderNeedsUpdate.returns(true);
+      let publishedAtRead;
+      const checkpoint = sinon.stub(fluxEventBus, 'checkpoint').callsFake(async (name) => {
+        if (name === 'syncthing:afterFolderRead') publishedAtRead = globalStateModule.promotedFolderIds;
+      });
+      globalStateModule.promotedFolderIds = null;
+      try {
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        sinon.assert.calledWith(checkpoint, 'syncthing:afterFolderRead');
+        expect(publishedAtRead, 'nothing published yet').to.equal(null);
+        const write = checkpoint.withArgs('syncthing:beforeFolderWrite', syncFolderId);
+        sinon.assert.calledOnce(write);
+        sinon.assert.callOrder(write, syncthingServiceMock.adjustConfigFolders.withArgs(sinon.match({ method: 'put' })));
+      } finally {
+        checkpoint.restore();
+      }
+    });
+
     // What this node tells its peers about each receive-only folder, written where
     // each fact becomes known.
     describe('the folder states the pass records', () => {

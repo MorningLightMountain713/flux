@@ -763,6 +763,8 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       return;
     }
 
+    await fluxEventBus.checkpoint(fluxEventBus.Checkpoint.SYNCTHING_AFTER_FOLDER_READ);
+
     // Publish which folders this node holds WRITABLE, for the peers that ask
     // before promoting one of their own. Recorded here rather than read on
     // demand: the answer is a byproduct of a pass the monitor already makes, so
@@ -1169,6 +1171,11 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       heldForBusy,
     });
 
+    // eslint-disable-next-line no-restricted-syntax
+    for (const folder of newFoldersConfiguration) {
+      // eslint-disable-next-line no-await-in-loop
+      await fluxEventBus.checkpoint(fluxEventBus.Checkpoint.SYNCTHING_BEFORE_FOLDER_WRITE, folder.id);
+    }
     if (newFoldersConfiguration.length > 0) {
       // A folder this pass sends no type for is an existing activeStandby folder,
       // whose type is its primary role's: only the fields the monitor owns are
