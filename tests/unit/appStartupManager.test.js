@@ -7,6 +7,7 @@ const proxyquire = require('proxyquire').noCallThru();
 const capabilities = require('../../ZelBack/src/services/utils/capabilities');
 const { asConfig } = require('./fixtures/config');
 const realConfig = require('config');
+const { StickyDosOwner } = require('../../ZelBack/src/services/nodeDosState');
 
 describe('appStartupManager tests', () => {
   let appStartupManager;
@@ -22,6 +23,9 @@ describe('appStartupManager tests', () => {
   let appUninstallerStub;
   let globalStateStub;
   let whenUpStub;
+  // The boot's own serviceHelper. Its delay resolves at once unless a test holds
+  // the placement retry (holdPlacementRetry).
+  let serviceHelperStub;
 
   beforeEach(() => {
     logStub = {
@@ -85,6 +89,7 @@ describe('appStartupManager tests', () => {
     // On the module itself those two are the same fact, which is why this has to
     // be sinon over the real object rather than an object asserting both.
     globalStateStub = resetGlobalState();
+    serviceHelperStub = { delay: sinon.stub().resolves() };
     whenUpStub = sinon.stub(capabilities, 'whenUp').resolves();
     // What the boot reconcile needs before its decision counts as up.
     capabilities.resetForTests();
@@ -104,9 +109,9 @@ describe('appStartupManager tests', () => {
       '../appSystem/fileOperationRecovery': { recoverInterruptedFileOperations: sinon.stub().resolves(), takeBackFileOperations: sinon.stub().resolves() },
       '../../lib/log': logStub,
       '../dockerService': dockerServiceStub,
-      '../serviceHelper': { delay: sinon.stub().resolves() },
+      '../serviceHelper': serviceHelperStub,
       '../fluxNetworkHelper': fluxNetworkHelperStub,
-      '../nodeDosState': { isNodeDos: sinon.stub().returns(false) },
+      '../nodeDosState': { isNodeDos: sinon.stub().returns(false), isStickyDosHeldBy: sinon.stub().returns(false), StickyDosOwner },
       '../appMonitoring/appReconciler': appReconcilerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../appDatabase/appRecords': { hostedInstances: () => installedStub },
@@ -125,6 +130,21 @@ describe('appStartupManager tests', () => {
   afterEach(() => {
     sinon.restore();
   });
+
+  // The held apps are decided off the boot path, after the retry wait; this holds
+  // that wait until the test releases it.
+  const holdPlacementRetry = () => {
+    let release;
+    serviceHelperStub.delay.callsFake(() => new Promise((resolve) => { release = resolve; }));
+    return () => release();
+  };
+  // ...and this lets the decision run.
+  const decided = async () => {
+    for (let i = 0; i < 50; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => { setImmediate(resolve); });
+    }
+  };
 
   // The derivation only returns LIVE claims - an announcement past its TTL, a node
   // past its shutdown grace, and an address off the node list are all excluded by the query - so a
@@ -155,9 +175,9 @@ describe('appStartupManager tests', () => {
         config: asConfig({ ...realConfig, fluxapps: { ...realConfig.fluxapps, manageCollectorLifecycle: true } }),
         '../../lib/log': logStub,
         '../dockerService': dockerServiceStub,
-        '../serviceHelper': { delay: sinon.stub().resolves() },
+        '../serviceHelper': serviceHelperStub,
         '../fluxNetworkHelper': fluxNetworkHelperStub,
-        '../nodeDosState': { isNodeDos: sinon.stub().returns(false) },
+        '../nodeDosState': { isNodeDos: sinon.stub().returns(false), isStickyDosHeldBy: sinon.stub().returns(false), StickyDosOwner },
         '../appMonitoring/appReconciler': appReconcilerStub,
         '../appDatabase/appsRepository': appsRepositoryStub,
         '../appDatabase/appRecords': { hostedInstances: () => installedStub },
@@ -290,26 +310,22 @@ describe('appStartupManager tests', () => {
       expect(results.appsEnqueued).to.deep.equal([]);
     });
 
-    // The held apps are decided off the boot path; this lets that decision run.
-    const decided = async () => {
-      for (let i = 0; i < 50; i += 1) {
-        // eslint-disable-next-line no-await-in-loop
-        await new Promise((resolve) => { setImmediate(resolve); });
-      }
-    };
 
     it('holds every stopped app when the rows cannot be read, and starts them once the check answers placed', async () => {
       dockerServiceStub.dockerListContainers.resolves([{ Names: ['/fluxAppA'], State: 'exited' }]);
       installedStub.names.resolves(['AppA']);
       appsRepositoryStub.appLocationFromEvents.onFirstCall().rejects(new Error('DB error'));
       appsRepositoryStub.appLocationFromEvents.onSecondCall().resolves([{ name: 'AppA' }]);
+      const releaseRetry = holdPlacementRetry();
 
       const results = await appStartupManager.reconcileAppsOnBoot();
+      await decided();
 
       expect(results.appsUnconfirmed).to.deep.equal(['AppA']);
       expect(results.appsEnqueued).to.deep.equal([]);
       expect(globalStateStub.unconfirmedApps.has('AppA')).to.equal(true);
 
+      releaseRetry();
       await decided();
 
       sinon.assert.calledOnceWithExactly(appReconcilerStub.enqueueApp, 'AppA');
@@ -377,8 +393,10 @@ describe('appStartupManager tests', () => {
     it('holds every stopped app when the boot could not read the rows', async () => {
       dockerServiceStub.dockerListContainers.resolves([{ Names: ['/fluxAppA'], State: 'exited' }]);
       installedStub.names.resolves(['AppA']);
+      holdPlacementRetry();
 
       const results = await appStartupManager.reconcileAppsOnBoot({ placement: { placed: null, removed: [], failed: [] } });
+      await decided();
 
       expect(results.appsUnconfirmed).to.deep.equal(['AppA']);
       expect(results.appsEnqueued).to.deep.equal([]);
@@ -419,9 +437,9 @@ describe('appStartupManager tests', () => {
       }),
       '../../lib/log': logStub,
       '../dockerService': dockerServiceStub,
-      '../serviceHelper': { delay: sinon.stub().resolves() },
+      '../serviceHelper': serviceHelperStub,
       '../fluxNetworkHelper': fluxNetworkHelperStub,
-      '../nodeDosState': { isNodeDos: sinon.stub().returns(false) },
+      '../nodeDosState': { isNodeDos: sinon.stub().returns(false), isStickyDosHeldBy: sinon.stub().returns(false), StickyDosOwner },
       '../appMonitoring/appReconciler': appReconcilerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../appDatabase/appRecords': { hostedInstances: () => installedStub },
@@ -689,6 +707,7 @@ describe('appStartupManager tests', () => {
       dockerServiceStub.dockerListContainers.resolves([{ Names: ['/fluxAppA'], State: 'exited' }]);
       const runBefore = migrationsTaking(500_000);
       const manager = loadWithMigrations(runBefore, { bootSyncTimeoutMs: 50 });
+      serviceHelperStub.delay.callsFake(() => new Promise(() => {}));
 
       await manager.manageAppsOnBoot({
         unreadable: true, machineRebooted: true, downtimeMs: null, cleanShutdown: false, currentBootId: null, firstBoot: false,
