@@ -183,7 +183,7 @@ describe('nodeConfirmationService', () => {
   describe('nodeMessageCapable', () => {
     it('is heard the moment the node learns its address', async () => {
       const callback = sinon.spy();
-      capabilities.onUpChange('nodeMessageCapable', callback);
+      capabilities.onUp('nodeMessageCapable', () => callback(true));
       setupConfirmed();
       getLocalSocketAddressStub.resolves(null);
       await service.start();
@@ -199,7 +199,7 @@ describe('nodeConfirmationService', () => {
 
     it('reports one change when a poll checks while the address arriving is still being checked', async () => {
       const callback = sinon.spy();
-      capabilities.onUpChange('nodeMessageCapable', callback);
+      capabilities.onUp('nodeMessageCapable', () => callback(true));
       setupConfirmed();
       getLocalSocketAddressStub.resolves(null);
       await service.start();
