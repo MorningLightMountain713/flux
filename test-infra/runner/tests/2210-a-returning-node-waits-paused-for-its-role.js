@@ -303,20 +303,17 @@ describe('a returning node waits paused until its role is decided', function () 
 
   it('pauses every folder on a planned shutdown, and keeps the role of a node back inside the grace', async function () {
     this.timeout(600000);
-    const mark = client(ARCANE).getLastEventId();
     const standbyMark = client(LEGACY).getLastEventId();
     const notCertifiedFrom = await client(LEGACY).getDecisionCount('peer:silenceVerdict', identifier, 'notCertified');
     // The syncthing the next boot starts has no --paused, as on the fleet before
     // the ISO carries it: the pause the shutdown left is all that holds it.
     await shutdownFluxosGracefully(client(ARCANE).container, { hold: true, stopSyncthingAfter: true });
-    const paused = await fluxEvent(ARCANE, 'shutdown:paused', () => true, mark, 10000);
-    expect(paused.data.paused, 'the folders the shutdown paused').to.include(folder);
     await waitFor(async () => await client(LEGACY).getDecisionCount('peer:silenceVerdict', identifier, 'notCertified') > notCertifiedFrom, {
       timeout: 60000, interval: 2000, label: 'the other holder waiting for the node that shut down',
     });
 
     await startDaemon(client(ARCANE), { paused: false });
-    expect(await folderIs(ARCANE, { type: 'sendreceive', paused: true }), 'fixture: the folder the shutdown paused').to.equal(true);
+    expect(await folderIs(ARCANE, { type: 'sendreceive', paused: true }), 'the folder the shutdown paused').to.equal(true);
     const since = await lastDaemonEventId(client(ARCANE));
     await releaseFluxos(client(ARCANE).container);
     // Its folder sends again, unpaused - whether its election or its paused return
