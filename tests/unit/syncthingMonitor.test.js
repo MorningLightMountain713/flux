@@ -1584,6 +1584,19 @@ describe('syncthingMonitor tests', () => {
         });
       });
 
+      it('counts a pass that holds a folder out over an unsafe mount', async () => {
+        const count = sinon.spy(fluxEventBus, 'count');
+        baseline();
+        syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
+        syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: false, isMounted: false, reason: 'not_mounted' });
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+        count.restore();
+
+        sinon.assert.calledWith(count, 'syncthing:folderPass', syncFolderId, 'mountUnsafe');
+      });
+
       it('holds out a folder whose volume is not mounted', async () => {
         baseline();
         syncthingMonitorHelpersMock.ensureStfolderExists.resolves(false);

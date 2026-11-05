@@ -858,6 +858,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
         unsafeFolderIds.add(appId);
         if (volumeFileMissing) folderStates.volumeGone(appId);
         else folderStates.heldOut(appId);
+        fluxEventBus.count('syncthing:folderPass', appId, 'mountUnsafe');
         if (!sending) {
           // A folder syncthing holds RECEIVEONLY over a bad mount is already in
           // the state this block exists to put it in - nothing to demote, and
