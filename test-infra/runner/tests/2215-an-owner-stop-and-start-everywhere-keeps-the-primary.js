@@ -17,6 +17,7 @@ import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
+import { PRODUCTION_LOCATION_EXPIRIES } from '../framework/coupled-knobs.js';
 
 // An owner stops a single-writer (g:) app on every node at once and starts it
 // on every node at once - the global stop and start the owner's tools send.
@@ -111,7 +112,9 @@ describe('an owner stop and start everywhere keeps the primary', function () {
       syncthing: 'real',
       tickerAutostart: false,
       configOverrides: {
-        fluxapps: { minOutgoing: 1, minIncoming: 1 },
+        // The first holder comes back ranked where it was only if its location is
+        // still valid when its restart ends.
+        fluxapps: { minOutgoing: 1, minIncoming: 1, ...PRODUCTION_LOCATION_EXPIRIES },
       },
     });
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1 });

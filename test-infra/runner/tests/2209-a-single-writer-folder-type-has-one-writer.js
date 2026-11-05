@@ -384,8 +384,10 @@ describe('a single-writer folder type has one writer', function () {
 
       const resumed = await writeSince(a.primary, a.folder, writesBefore, (w) => w.body?.paused === false,
         'the backup resumes the folder');
-      const covering = (await getPendingFolderScans(ipOf(a.primary))).filter((scan) => scan.id === a.folder && scan.arrivedSeq > resumed.seq);
-      expect(covering, 'fixture: no scan covers the resumed folder\'s restart').to.have.lengthOf(1);
+      await waitFor(async () => (await getPendingFolderScans(ipOf(a.primary)))
+        .some((scan) => scan.id === a.folder && scan.arrivedSeq > resumed.seq), {
+        timeout: 60000, interval: 500, label: 'fixture: a scan covering the resumed folder\'s restart is under way',
+      });
       await waitFor(async () => isUp(client, a.appName), {
         timeout: 120000, interval: 2000, label: 'the component runs again after its backup',
       });

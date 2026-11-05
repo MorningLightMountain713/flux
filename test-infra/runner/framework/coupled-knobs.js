@@ -65,6 +65,17 @@ export const PRODUCTION = Object.freeze({
 });
 
 /**
+ * Production's location lifetimes, for a suite whose node must come back with its
+ * location valid. A restart is a boot, an absolute duration the compressed grace
+ * does not shorten: under gate load one outlasts it, and the node removes its apps
+ * as expired.
+ */
+export const PRODUCTION_LOCATION_EXPIRIES = Object.freeze({
+  nodeDownGraceS: PRODUCTION.nodeDownGraceS,
+  locationTtlS: PRODUCTION.locationTtlS,
+});
+
+/**
  * How many election passes one place of stagger spans in production. A standby
  * reads the order and the peers it probes once a pass, so a stagger of fewer
  * passes than this gives it fewer looks at the candidate ahead than production
