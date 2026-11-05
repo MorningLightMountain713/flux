@@ -172,6 +172,16 @@ describe('the committee heals its dark seat, and the owner re-deals the walk', f
       return first !== null;
     }, { timeout: 240000, interval: 10000, label: 'a grant quorum forms' });
 
+    // Every seat renews the term before one goes dark: a grant won by a bare
+    // quorum can rest on the seat this test darkens.
+    const holder = Number(Object.keys(outpoints).find((i) => outpoints[i] === first.grantee));
+    await env.clients[holder].waitForEvent(
+      'quorumGrant:assess',
+      (d) => d.key === `${app.identity}/master` && d.quorumRenewed === true && d.refusingCells === 0,
+      120000,
+      { afterId: env.clients[holder].getLastEventId() },
+    );
+
     // A pure referee: on the committee (its cell answers the key), not a
     // holder — pausing it darkens a seat without touching the master.
     const cells = await Promise.all(env.clients.map((_, i) => readCell(i)));
