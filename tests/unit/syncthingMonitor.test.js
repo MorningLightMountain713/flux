@@ -53,6 +53,7 @@ const syncthingServiceMock = {
   adjustConfigFolders: sinon.stub().resolves({}),
   getFolderIdErrors: sinon.stub(),
   systemRestart: sinon.stub().resolves(),
+  systemResume: sinon.stub().resolves(),
   getDbStatus: sinon.stub(),
   getFolderIgnores: sinon.stub(),
 };
@@ -327,6 +328,8 @@ describe('syncthingMonitor tests', () => {
     syncthingServiceMock.adjustConfigFolders.resolves({});
     syncthingServiceMock.getFolderIdErrors.reset();
     syncthingServiceMock.systemRestart.reset();
+    syncthingServiceMock.systemResume.reset();
+    syncthingServiceMock.systemResume.resolves();
     syncthingServiceMock.getDbStatus.reset();
     fluxNetworkHelperMock.getLocalSocketAddress.reset();
     dockerServiceMock.dockerContainerInspect.reset();
@@ -489,6 +492,53 @@ describe('syncthingMonitor tests', () => {
 
         expect(passes(), 'exactly one per pass').to.have.lengthOf(1);
         expect(passes()[0]).to.have.all.keys('wrote', 'heldForBusy');
+      });
+
+      // A syncthing started paused pauses every device, and only the monitor
+      // resumes them.
+      describe('resuming paused devices', () => {
+        const runOnePass = async () => {
+          deploymentProviderMock.listInstalledDeployments.resolves([]);
+          monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+          await clock.tickAsync(100);
+        };
+        const resumedEvents = () => publish.getCalls().filter((c) => c.args[0] === 'syncthing:devicesResumed');
+
+        it('resumes every paused peer device, and leaves running ones and its own alone', async () => {
+          syncthingServiceMock.getConfigDevices.resolves([
+            { deviceID: 'DEVICE-ID', paused: true },
+            { deviceID: 'PEER-PAUSED-1', paused: true },
+            { deviceID: 'PEER-RUNNING', paused: false },
+            { deviceID: 'PEER-PAUSED-2', paused: true },
+          ]);
+
+          await runOnePass();
+
+          expect(syncthingServiceMock.systemResume.args.map(([id]) => id)).to.have.members(['PEER-PAUSED-1', 'PEER-PAUSED-2']);
+          expect(resumedEvents()[0].args[1]).to.deep.equal({ devices: ['PEER-PAUSED-1', 'PEER-PAUSED-2'] });
+        });
+
+        it('resumes nothing and says nothing when no device is paused', async () => {
+          syncthingServiceMock.getConfigDevices.resolves([{ deviceID: 'PEER-RUNNING', paused: false }]);
+
+          await runOnePass();
+
+          sinon.assert.notCalled(syncthingServiceMock.systemResume);
+          expect(resumedEvents()).to.have.lengthOf(0);
+        });
+
+        it('resumes the others and goes on with the pass when one resume fails', async () => {
+          syncthingServiceMock.getConfigDevices.resolves([
+            { deviceID: 'PEER-STUCK', paused: true },
+            { deviceID: 'PEER-PAUSED', paused: true },
+          ]);
+          syncthingServiceMock.systemResume.withArgs('PEER-STUCK').rejects(new Error('syncthing refused'));
+
+          await runOnePass();
+
+          expect(resumedEvents()[0].args[1]).to.deep.equal({ devices: ['PEER-PAUSED'] });
+          expect(passes(), 'the pass carried on').to.have.lengthOf(1);
+        });
       });
 
       // promotedFolderIds had two readers and NO writer, so it stayed null,
