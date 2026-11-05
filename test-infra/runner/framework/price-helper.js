@@ -15,12 +15,13 @@
 // the harness default in test-infra/config/shared.js is authorityAddress() from
 // flux-chain-crypto.js; suites testing authority rotation override it per-suite.
 import {
-  PriceMessage, RateMessage, OracleKeyMessage, SOFT_FORK_EFFECTIVE_DEPTH,
+  PriceMessage, RateMessage, OracleKeyMessage, PRICE_NOTICE_SECONDS, SOFT_FORK_EFFECTIVE_DEPTH,
 } from '@runonflux/flux-spec-policy';
 import {
   buildSignedSoftForkTx, compressedPubkey, AUTHORITY_PRIVKEY, ORACLE_PRIVKEY,
 } from './flux-chain-crypto.js';
 import { injectBlock, seedTransaction, advanceBlocks } from './daemon-control.js';
+import { harnessNow } from './harness-clock.js';
 
 // Modest, non-zero defaults: a small app floors at minPrice (well under the 2 FLUX
 // the stub's registration tx pays), so pricing is in force without underpaying.
@@ -40,8 +41,10 @@ const DEFAULT_FLUX_USD_E4 = 10000; // $1.00 / FLUX
  * @param {string} signerPrivHex the signing key, one of flux-chain-crypto's
  * @param {Uint8Array} messageBytes the encoded message
  * @param {string} label names the transaction, unique within the chain
+ * @param {object} [opts]
+ * @param {number} [opts.time] - the block's time in seconds; the moment it is mined when absent
  */
-export async function injectSoftForkMessage(signerPrivHex, messageBytes, label) {
+export async function injectSoftForkMessage(signerPrivHex, messageBytes, label, { time } = {}) {
   const txid = `softfork-${label}`;
   const prevTxid = `softfork-${label}-prev`;
   const { tx, prevTx } = buildSignedSoftForkTx({
@@ -50,7 +53,7 @@ export async function injectSoftForkMessage(signerPrivHex, messageBytes, label) 
   // Seed the input's source tx first so the processStandard path resolves the
   // sender address, then mine the message tx into the next block.
   await seedTransaction(prevTxid, prevTx);
-  await injectBlock(tx);
+  await injectBlock(tx, { time });
 }
 
 /**
@@ -69,8 +72,11 @@ export async function bootstrapPricing(opts = {}) {
   // A soft-fork message only takes effect SOFT_FORK_EFFECTIVE_DEPTH blocks after it
   // is mined (reorg safety). So the oracle key must be effective before the rate
   // message can resolve it, and all three must be effective before the first
-  // registration fee is computed — hence the empty-block gaps.
+  // registration fee is computed — hence the empty-block gaps. A rate and a price
+  // also count only PRICE_NOTICE_SECONDS after their block's time, so their blocks
+  // carry a time that notice in the past.
   const gap = SOFT_FORK_EFFECTIVE_DEPTH + 1;
+  const time = Math.floor(harnessNow() / 1000) - PRICE_NOTICE_SECONDS;
 
   await injectSoftForkMessage(
     AUTHORITY_PRIVKEY,
@@ -83,11 +89,13 @@ export async function bootstrapPricing(opts = {}) {
     ORACLE_PRIVKEY,
     RateMessage.encode({ timestamp, fluxUsdPriceE4 }),
     'rate',
+    { time },
   );
   await injectSoftForkMessage(
     AUTHORITY_PRIVKEY,
     PriceMessage.encode(priceFields),
     'price',
+    { time },
   );
   await advanceBlocks(gap); // rate + price become effective
 }

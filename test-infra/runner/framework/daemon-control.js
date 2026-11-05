@@ -383,8 +383,8 @@ export async function seedAddressTxids(txids) {
 }
 
 // Advance one block carrying an explicit transaction (e.g. a soft-fork message tx).
-export async function injectBlock(tx) {
-  return post('/advance-block', { block: { tx: [tx] } });
+export async function injectBlock(tx, { time } = {}) {
+  return post('/advance-block', { block: { tx: [tx], time } });
 }
 
 export async function seedTransaction(txid, tx) {
