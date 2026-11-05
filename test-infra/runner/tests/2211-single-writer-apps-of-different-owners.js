@@ -313,7 +313,7 @@ describe('single-writer apps of different owners on shared holders', function ()
     // holder's syncthing sees its connections drop.
     await crashFluxos(client(lost).container, { hold: true });
     try {
-      await sh(lost, `docker kill ${A.folder}`);
+      await sh(lost, `docker kill ${A.identifier}`);
       await stopDaemon(client(lost));
 
       await waitHolding(async () => {
