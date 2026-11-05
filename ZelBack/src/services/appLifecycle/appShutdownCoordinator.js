@@ -129,6 +129,19 @@ async function requestGracefulStop(identifier, reconcilerReason) {
 }
 
 /**
+ * Waits out a drain in flight that covers this component: its own, or its app's.
+ * A daemon that takes a stop answers at once and stops the containers afterwards,
+ * so a caller about to read the container waits here first.
+ *
+ * @param {string} identifier component identifier
+ * @returns {Promise<void>}
+ */
+async function drainSettled(identifier) {
+  const install = await appRecords.hostedInstanceByIdentifier(identifier);
+  await Promise.all([inFlight.get(identifier), install && inFlight.get(install.name)]);
+}
+
+/**
  * What a stop of this component drains: the whole app when every component this
  * node runs of it is desired stopped, otherwise this component alone - an operator
  * stop can name a single component, and draining the app for it stops the rest.
@@ -156,4 +169,5 @@ async function drainScope(identifier, deployments) {
 
 module.exports = {
   requestGracefulStop,
+  drainSettled,
 };

@@ -20,10 +20,11 @@ const FOLDER = 'fluxn8n_n8napp';
  * to one shared log.
  */
 function loadRole({
-  primary = false, changeType, folder = null, operatorStopped = false, superseded = false, inSlot = async () => {}, afterRun = () => {},
+  primary = false, changeType, folder = null, operatorStopped = false, superseded = false, drain = async () => {}, inSlot = async () => {}, afterRun = () => {},
 } = {}) {
   const calls = [];
   const note = (name) => (...args) => { calls.push([name, ...args]); };
+  const shutdownCoordinator = { drainSettled: sinon.spy(async (id) => { note('drainSettled')(id); await drain(); }) };
   const reconciler = {
     committed: primary ? [APP] : [],
     committedIdentifiers: sinon.spy(() => reconciler.committed),
@@ -72,6 +73,7 @@ function loadRole({
   };
   const changes = proxyquire('../../ZelBack/src/services/appLifecycle/primaryRoleChanges', {});
   const role = proxyquire('../../ZelBack/src/services/appLifecycle/primaryRole', {
+    './appShutdownCoordinator': shutdownCoordinator,
     '../../lib/log': { info: sinon.stub(), warn: sinon.stub(), error: sinon.stub() },
     '../utils/fluxEventBus': bus,
     '../appMonitoring/appReconciler': reconciler,
@@ -232,12 +234,31 @@ describe('primaryRole', () => {
 
       expect(t.calls).to.deep.equal([
         ['setControllerDesiredAndWait', APP, 'stopped'],
+        ['drainSettled', APP],
         ['folder', FOLDER, 'receiveonly'],
       ]);
       expect(t.roleEvents()).to.deep.equal([
         { identifier: APP, from: 'primary', to: 'demoting' },
         { identifier: APP, from: 'demoting', to: 'standby' },
       ]);
+    });
+
+    // On Arcane the stop is handed to flux-shutdownd and answered at once, while the
+    // daemon is still stopping the container.
+    it('reads the container only once a drain of it has ended', async () => {
+      let endDrain;
+      const t = loadRole({ primary: true, drain: () => new Promise((resolve) => { endDrain = resolve; }) });
+      t.reconciler.observedContainerState.resolves({ reachable: true, exists: true, running: true });
+
+      t.role.standDown(APP, FOLDER, { running: true });
+      await new Promise(setImmediate);
+      sinon.assert.notCalled(t.reconciler.observedContainerState);
+
+      t.reconciler.observedContainerState.resolves({ reachable: true, exists: true, running: false });
+      endDrain();
+      await t.role.whenSettled(APP);
+
+      expect(t.roleEvents().at(-1)).to.deep.equal({ identifier: APP, from: 'demoting', to: 'standby' });
     });
 
     it('ends as a standby whose folder still sends when the folder could not be made to receive', async () => {
@@ -265,7 +286,7 @@ describe('primaryRole', () => {
         t.role.standDown(APP, FOLDER, { running: true });
         await t.role.whenSettled(APP);
 
-        expect(t.calls).to.deep.equal([['setControllerDesiredAndWait', APP, 'stopped']]);
+        expect(t.calls).to.deep.equal([['setControllerDesiredAndWait', APP, 'stopped'], ['drainSettled', APP]]);
         expect(t.roleEvents().at(-1)).to.deep.equal({
           identifier: APP, from: 'demoting', to: 'primary', reason: 'the container is not confirmed stopped',
         });

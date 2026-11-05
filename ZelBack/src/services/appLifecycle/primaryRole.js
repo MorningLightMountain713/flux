@@ -3,6 +3,7 @@
 const log = require('../../lib/log');
 const fluxEventBus = require('../utils/fluxEventBus');
 const appReconciler = require('../appMonitoring/appReconciler');
+const appShutdownCoordinator = require('./appShutdownCoordinator');
 const syncthingFolderWrites = require('../appMonitoring/syncthingFolderWrites');
 const changes = require('./primaryRoleChanges');
 const operationRegistry = require('../utils/operationRegistry');
@@ -136,6 +137,7 @@ async function sendThenRun(identifier, appId, change) {
 // elected copy when the two reconnect.
 async function stopThenReceive(identifier, appId) {
   await appReconciler.setControllerDesiredAndWait(identifier, 'stopped', 'masterSlave standby');
+  await appShutdownCoordinator.drainSettled(identifier);
   // Docker unreachable and a state it cannot read both answer running: false, and
   // neither is a stopped container.
   const actual = await appReconciler.observedContainerState(identifier);

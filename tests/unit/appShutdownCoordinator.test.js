@@ -271,6 +271,44 @@ describe('appShutdownCoordinator', () => {
     resolveDrain({ outcome: 'complete' });
   });
 
+  describe('drainSettled', () => {
+    const settledYet = async (identifier) => {
+      let settled = false;
+      coordinator.drainSettled(identifier).then(() => { settled = true; });
+      await new Promise(setImmediate);
+      return settled;
+    };
+
+    it('answers at once with no drain in flight', async () => {
+      await install('quiet', { components: { web: {} } });
+      expect(await settledYet(idOf('quiet', 'web'))).to.equal(true);
+    });
+
+    it('waits for a drain of the whole app', async () => {
+      await install('whole', { components: { web: {} } });
+      let endDrain;
+      stubs.fluxShutdowndClient.beginAppStop.returns(new Promise((resolve) => { endDrain = resolve; }));
+      await coordinator.requestGracefulStop(idOf('whole', 'web'), 'controllerDesired');
+
+      expect(await settledYet(idOf('whole', 'web'))).to.equal(false);
+      endDrain({ outcome: 'complete' });
+      await new Promise(setImmediate);
+      expect(await settledYet(idOf('whole', 'web'))).to.equal(true);
+    });
+
+    it('waits for a drain of that component alone', async () => {
+      await install('duo', { components: { web: {}, db: {} } });
+      stubs.appReconciler.desiredRunState.withArgs(idOf('duo', 'db')).resolves({ desired: true, reason: 'running', force: false });
+      let endDrain;
+      stubs.fluxShutdowndClient.beginAppStop.returns(new Promise((resolve) => { endDrain = resolve; }));
+      await coordinator.requestGracefulStop(idOf('duo', 'web'), 'controllerDesired');
+
+      expect(await settledYet(idOf('duo', 'web'))).to.equal(false);
+      expect(await settledYet(idOf('duo', 'db')), 'a sibling no drain covers').to.equal(true);
+      endDrain({ outcome: 'complete' });
+    });
+  });
+
   describe('a stop of one component', () => {
     beforeEach(async () => {
       await install('pair', { components: { web: {}, db: {} } });
