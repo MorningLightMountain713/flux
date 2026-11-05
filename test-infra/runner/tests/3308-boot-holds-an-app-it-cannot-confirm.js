@@ -99,6 +99,7 @@ describe('boot holds an app whose location it cannot read', function () {
   let plain;
   let lapsed;
   let again;
+  const components = new Map();
   let againSpec;
   let holder;
   let holderDb;
@@ -149,7 +150,7 @@ describe('boot holds an app whose location it cannot read', function () {
   async function rebootUnreadable(identifiers, { keep = [], expire = false }) {
     await crashFluxos(holder.container, { hold: true });
     for (const identifier of identifiers) {
-      const [component, appName] = identifier.split('_');
+      const { appName, component } = components.get(identifier);
       // eslint-disable-next-line no-await-in-loop
       const stopped = await stopAppContainer(holder.container, appName, component);
       if (stopped.exitCode !== 0) throw new Error(`could not stop ${identifier}: ${stopped.output}`);
@@ -207,6 +208,11 @@ describe('boot holds an app whose location it cannot read', function () {
     db = componentIdentifier(apps[0], 'db');
     web = componentIdentifier(apps[0], 'web');
     [plain, lapsed, again] = apps.slice(1).map((app) => componentIdentifier(app));
+    components.set(db, { appName: mixedApp, component: 'db' });
+    components.set(web, { appName: mixedApp, component: 'web' });
+    [[plain, plainApp], [lapsed, lapsedApp], [again, againApp]].forEach(([identifier, appName]) => {
+      components.set(identifier, { appName, component: appName });
+    });
     for (const app of apps) {
       // eslint-disable-next-line no-await-in-loop
       await installOnNodes(env, app, [HOLDER]);
