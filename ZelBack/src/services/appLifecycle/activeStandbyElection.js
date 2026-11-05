@@ -66,6 +66,23 @@ function getFdmIndex(appName) {
 }
 
 /**
+ * The full socket address of the primary FDM names by IP: the app's holder at that
+ * IP, at the address it answers on now. The IP as FDM gave it when the registry
+ * cannot be read.
+ * @param {string} appName
+ * @param {string} ip The primary FDM names.
+ * @returns {Promise<string>}
+ */
+async function fdmPrimaryAddress(appName, ip) {
+  try {
+    return await registryManager.primaryAddressOf(appName, ip);
+  } catch (error) {
+    log.warn(`activeStandby: the holder FDM names at ${ip} for app:${appName} cannot be looked up: ${error.message}`);
+    return ip;
+  }
+}
+
+/**
  * The primary FDM names for an app, asking each region in turn.
  * @param {string} appName
  * @param {object} axiosOptions
@@ -762,12 +779,15 @@ async function decideApp(deployment, {
     }
     return;
   }
-  const { ip, fdmOk } = grantIntent ?? await getMasterIpFromFdm(appName, axiosOptions);
+  const { ip: named, fdmOk } = grantIntent ?? await getMasterIpFromFdm(appName, axiosOptions);
   if (!fdmOk) {
     log.warn(`activeStandby: All FDM services failed for app:${appName}, skipping primary selection for this cycle`);
     fluxEventBus.count('masterSlave:decision', appName, 'fdmUnreachable');
     return;
   }
+  // A grant names the primary at its address; FDM names an IP, which may be one the
+  // primary has since moved from.
+  const ip = named && !grantIntent ? await fdmPrimaryAddress(appName, named) : named;
   let localSocketAddr;
   try {
     localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();

@@ -111,7 +111,7 @@ describe('a primary whose api port changes keeps the app', function () {
     // eslint-disable-next-line no-restricted-syntax
     for (const i of [A, B, C]) {
       // eslint-disable-next-line no-await-in-loop
-      const held = await dbClient(i + 1).getAppLocations(appName);
+      const held = (await client(i).getAppLocations(appName)).data ?? [];
       expect(held.map((row) => row.ip).filter((ip) => ip.startsWith(`${nodeIp}:`)), `node ${i}'s rows for the primary`).to.deep.equal([newSocket]);
     }
   });

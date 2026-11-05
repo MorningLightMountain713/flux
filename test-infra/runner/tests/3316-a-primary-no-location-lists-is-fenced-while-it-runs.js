@@ -63,7 +63,7 @@ describe('a primary no location lists is fenced while it runs', function () {
 
   before(async function () {
     this.timeout(900000);
-    fleet = await placeSilentPrimaryApp({ hookCtx: this, appName, sigtermExpiryS: SIGTERM_EXPIRY_S });
+    fleet = await placeSilentPrimaryApp({ hookCtx: this, appName, sigtermExpiryS: SIGTERM_EXPIRY_S, thirdHolder: true });
     root = fleet.root;
     primaryDevice = await getDeviceId(client(B));
     const startedAt = Date.now();

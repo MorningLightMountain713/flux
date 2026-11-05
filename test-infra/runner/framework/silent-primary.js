@@ -7,6 +7,7 @@ import { electMaster, resetFdm } from './fdm-control.js';
 import { waitFor, waitForReconcileActuated, waitForUp, waitForElectionDecisions } from './wait.js';
 import { bootAndPeer, installOnNodes, seedSyncScopedData } from './reconciler-suite.js';
 import { isDaemonUp, listFolderFiles } from './syncthing-real.js';
+import { PRODUCTION_LOCATION_EXPIRIES } from './coupled-knobs.js';
 
 // A single-writer (g:) app on two holders of a three-node fleet, for the suites
 // that take its primary away and watch what the standby does: B runs it, A holds
@@ -40,12 +41,16 @@ async function isUp(client, appName) {
  *   suite needs other than the shared fleet's
  * @param {object} [opts.system] The fleet's system settings, when the suite needs
  *   other than the shared fleet's
+ * @param {boolean} [opts.thirdHolder] The spec names C too, for a suite that places
+ *   a holder there later; its two instances keep the spawner from doing so.
+ * @param {boolean} [opts.productionExpiries] A location outlives the suite's own
+ *   steps, for a suite whose primary stays listed after it is certified down.
  * @param {object} [opts.env] More fleet: nodes beyond the three, deferred ones,
  *   collateral shared between machines - as createTestEnv takes them
  * @returns {Promise<object>}
  */
 export async function placeSilentPrimaryApp({
-  hookCtx, appName, sigtermExpiryS, peers, system, env: moreFleet = {},
+  hookCtx, appName, sigtermExpiryS, peers, system, env: moreFleet = {}, thirdHolder = false, productionExpiries = false,
 }) {
   const env = await createTestEnv({
     hookCtx,
@@ -62,6 +67,7 @@ export async function placeSilentPrimaryApp({
         minIncoming: 1,
         sigtermExpiryS,
         locationTtlS: LOCATION_TTL_S,
+        ...(productionExpiries ? PRODUCTION_LOCATION_EXPIRIES : {}),
         nodeMonitorIntervalMs: NODE_MONITOR_INTERVAL_MS,
       },
       ...(peers ? { peers } : {}),
@@ -79,7 +85,7 @@ export async function placeSilentPrimaryApp({
   // Two instances: the holders the suites place. Wanting more, the spawner would
   // place a third on C, which would then judge and take over beside them.
   const app = await buildSeedableSyncthingApp({
-    name: appName, syncMode: 'activeStandby', instances: 2, pinnedTo: [A, B],
+    name: appName, syncMode: 'activeStandby', instances: 2, pinnedTo: thirdHolder ? [A, B, C] : [A, B],
   });
   const identifier = componentIdentifier(app);
   const root = `/mnt/appdata/flux-apps/${identifier}`;

@@ -25,7 +25,7 @@ const {
   INSTALLING_EXPIRY_MS,
 } = require('../utils/appConstants');
 const { Privilege, authOf } = require('../utils/privileges');
-const { normalizeSocketAddress } = require('../utils/socketAddressUtils');
+const { normalizeSocketAddress, extractIp, ipsMatch } = require('../utils/socketAddressUtils');
 
 // Control-plane hook fired after a global app spec is committed. Wired by
 // serviceManager to the spawner so a spec this node must install can wake the
@@ -257,6 +257,76 @@ async function addressesLeadingTo(address) {
     frontier.forEach((ip) => found.add(ip));
   }
   return [...found];
+}
+
+/**
+ * The socket addresses at `ip` that a recorded move leaves.
+ * @param {string} ip An IP, or a socket address whose IP is meant.
+ * @returns {Promise<string[]>}
+ */
+async function addressesMovedFromIp(ip) {
+  const bare = extractIp(ip);
+  if (!bare) return [];
+  // Every location and every move is stored under its node's address in ip:port
+  // form, so the IP and the colon after it match exactly the addresses at that IP.
+  const atIp = new RegExp(`^${bare.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:`);
+  const events = await stateEvents().find(
+    { ip: atIp, type: 'ipchanged', expireAt: { $gt: new Date() } },
+    { projection: { _id: 0, ip: 1 } },
+  ).toArray();
+  return [...new Set(events.map((event) => event.ip))];
+}
+
+/**
+ * Where a node known at `socketAddr` answers now.
+ * @param {string} socketAddr
+ * @param {Map<string, {to: string, at: number}>} moves From addressMovesFrom.
+ * @returns {string} The address, normalised; `socketAddr` when it has not moved.
+ */
+function followAddressMoves(socketAddr, moves) {
+  let address = normalizeSocketAddress(socketAddr);
+  let since = 0;
+  for (let hop = 0; hop < MAX_ADDRESS_MOVES_FOLLOWED; hop += 1) {
+    const move = moves.get(address);
+    if (!move || move.at <= since) break;
+    address = move.to;
+    since = move.at;
+  }
+  return address;
+}
+
+/**
+ * The full socket address of the node FDM names an app's primary.
+ *
+ * FDM names it by IP alone. A node runs at most one instance of an app per IP, so
+ * the app's location at that IP is the node, and its port is the one to ask it on.
+ * A move carries a node's rows to where it is now, so the locations are where their
+ * nodes are. With no location at that IP, the IP may be one a node has since moved
+ * from, which FDM names until it catches up: the one move away from it that ends at
+ * a holder of the app is that node.
+ *
+ * When neither settles it - locations at the IP at different addresses, or no move
+ * or several leading to a holder - the IP comes back as given.
+ * @param {string} appName
+ * @param {string} fdmIp The primary FDM names.
+ * @returns {Promise<string>} A full socket address, or `fdmIp` unresolved.
+ */
+async function primaryAddressOf(appName, fdmIp) {
+  const locations = await appLocation(appName);
+  const atIp = new Set(locations
+    .filter((location) => ipsMatch(location.ip, fdmIp))
+    .map((location) => normalizeSocketAddress(location.ip)));
+  if (atIp.size === 1) return [...atIp][0];
+  if (atIp.size > 1) return fdmIp;
+  const holders = new Set(locations.map((location) => normalizeSocketAddress(location.ip)));
+  const moves = await addressMovesFrom(await addressesMovedFromIp(fdmIp));
+  const reached = new Set(
+    [...moves.keys()]
+      .filter((from) => ipsMatch(from, fdmIp))
+      .map((from) => followAddressMoves(from, moves))
+      .filter((to) => holders.has(to)),
+  );
+  return reached.size === 1 ? [...reached][0] : fdmIp;
 }
 
 /**
@@ -1278,6 +1348,7 @@ module.exports = {
   addressMovesFrom,
   addressMovesTo,
   listedNodeMovedTo,
+  primaryAddressOf,
   appLocationOf,
   appInstallingLocation,
   installingCountsByApp,

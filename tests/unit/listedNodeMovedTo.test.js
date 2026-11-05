@@ -89,9 +89,9 @@ describe('registryManager listedNodeMovedTo tests', () => {
         timestamp: broadcastedAt,
         pubKey: OWN_KEY,
         signature: 'SIG',
-        data: JSON.stringify({
+        data: {
           type: 'fluxapprunning', version: 2, ip, broadcastedAt, osUptime: 1, staticIp: false, apps: [{ name: 'moved', hash: 'a'.repeat(64), runningSince: new Date(broadcastedAt).toISOString() }],
-        }),
+        },
       },
     });
 
@@ -110,6 +110,42 @@ describe('registryManager listedNodeMovedTo tests', () => {
       await move(A, B, Date.now() - 60_000, OWN_KEY);
 
       expect(await appsRepository.appLocationFromEvents({ ip: C })).to.deep.equal([]);
+    });
+  });
+
+  // FDM names an IP and goes on naming the one a node moved from until it catches up.
+  describe('primaryAddressOf', () => {
+    const NEW_IP = '203.0.113.172:16127';
+
+    afterEach(async () => {
+      sinon.restore();
+      await events.deleteMany({ ip: { $in: [NEW_IP] } });
+    });
+
+    it('gives the holder at the IP, at the port it answers on', async () => {
+      sinon.stub(appsRepository, 'appLocationFromEvents').resolves([{ ip: B }]);
+
+      expect(await registryManager.primaryAddressOf('app', '203.0.113.170')).to.equal(B);
+    });
+
+    it('follows a move away from the IP to the holder it ends at', async () => {
+      await move(A, NEW_IP, Date.now() - 60_000, OWN_KEY);
+      sinon.stub(appsRepository, 'appLocationFromEvents').resolves([{ ip: NEW_IP }]);
+
+      expect(await registryManager.primaryAddressOf('app', '203.0.113.170')).to.equal(NEW_IP);
+    });
+
+    it('gives the IP back when no move leads to a holder', async () => {
+      await move(A, NEW_IP, Date.now() - 60_000, OWN_KEY);
+      sinon.stub(appsRepository, 'appLocationFromEvents').resolves([{ ip: C }]);
+
+      expect(await registryManager.primaryAddressOf('app', '203.0.113.170')).to.equal('203.0.113.170');
+    });
+
+    it('gives the IP back when two holders are at it', async () => {
+      sinon.stub(appsRepository, 'appLocationFromEvents').resolves([{ ip: A }, { ip: B }]);
+
+      expect(await registryManager.primaryAddressOf('app', '203.0.113.170')).to.equal('203.0.113.170');
     });
   });
 

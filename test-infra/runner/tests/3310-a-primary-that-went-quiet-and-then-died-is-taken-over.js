@@ -82,7 +82,7 @@ describe('a primary that went quiet and then died is taken over', function () {
 
   before(async function () {
     this.timeout(900000);
-    fleet = await placeSilentPrimaryApp({ hookCtx: this, appName, sigtermExpiryS: SIGTERM_EXPIRY_S });
+    fleet = await placeSilentPrimaryApp({ hookCtx: this, appName, sigtermExpiryS: SIGTERM_EXPIRY_S, thirdHolder: true, productionExpiries: true });
     root = fleet.root;
     primaryDevice = await getDeviceId(client(B));
     const wrote = await execInContainer(client(B).container, `printf '${SAVE_CONTENT}' > ${root}/${SAVE}`);
