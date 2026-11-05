@@ -1076,6 +1076,16 @@ async function scanFolder(folderId, { timeoutMs, folderPath } = {}) {
 }
 
 /**
+ * Syncthing's connections, keyed by device id. A device connected here is connected
+ * whatever folders the two share.
+ * @returns {Promise<Object<string, {connected: boolean}>>}
+ */
+async function getDeviceConnections() {
+  const { connections = {} } = await request('get', '/rest/system/connections');
+  return connections;
+}
+
+/**
  * Announces everything this node holds in its sendreceive folders and waits for
  * the connected peers to hold it too. The scan is what makes it a drain: the
  * watcher batches changes for ten seconds, and a file written inside that window
@@ -1094,7 +1104,7 @@ async function drainFoldersToPeers(timeoutMs) {
   const folders = (await getConfigFolders()).filter((folder) => folder.type === 'sendreceive');
   if (!folders.length) return [];
   const myId = await getDeviceId();
-  const { connections = {} } = await request('get', '/rest/system/connections');
+  const connections = await getDeviceConnections();
   const connectedPeers = new Set(Object.keys(connections).filter((id) => connections[id]?.connected));
   const scans = await Promise.allSettled(folders.map((folder) => scanFolder(folder.id, {
     timeoutMs: Math.max(1, deadline - monotonicMs()),
@@ -2841,6 +2851,7 @@ module.exports = {
   dbRevert,
   drainFoldersToPeers,
   getDeviceStats,
+  getDeviceConnections,
   scanFolder,
   // EVENTS
   getEvents,

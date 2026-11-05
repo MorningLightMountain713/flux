@@ -47,6 +47,7 @@ const syncthingServiceMock = {
   getConfigFolders: sinon.stub(),
   getConfigRestartRequired: sinon.stub(),
   getConfigDevices: sinon.stub(),
+  getDeviceStats: sinon.stub().resolves({}),
   // These answer rows, as the service does, so a call site reading one as an
   // envelope is visible from here.
   adjustConfigDevices: sinon.stub().resolves({}),
@@ -1978,6 +1979,85 @@ describe('syncthingMonitor tests', () => {
 
     // syncthingService answers rows or throws. These state what a refusal
     // looks like from outside: reported, and never reported as applied.
+    // A device stays while a peer may still be running what it shared: a peer
+    // certified down has lost its FluxOS, not necessarily its syncthing.
+    describe('a peer device no location names', () => {
+      const PEER = 'PEER-DEVICE';
+      const deleted = () => syncthingServiceMock.adjustConfigDevices.getCalls()
+        .map((call) => call.args[0]).filter((options) => options.method === 'delete').map((options) => options.id);
+
+      const sharedWithPeer = (listed = false) => {
+        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+        syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+        fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+        syncthingServiceMock.getConfigFolders.resolves([
+          { id: syncFolderId, type: 'receiveonly', devices: [{ deviceID: 'DEVICE-ID' }, ...(listed ? [{ deviceID: PEER }] : [])] },
+        ]);
+        syncthingServiceMock.getConfigDevices.resolves([{ deviceID: PEER }]);
+      };
+
+      afterEach(() => {
+        syncthingServiceMock.getDeviceStats.reset();
+        syncthingServiceMock.getDeviceStats.resolves({});
+      });
+
+      const pass = async () => {
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+      };
+
+      it('removes a device no folder lists and syncthing has not seen for a day', async () => {
+        sharedWithPeer();
+        syncthingServiceMock.getDeviceStats.resolves({ [PEER]: { lastSeen: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString() } });
+
+        await pass();
+
+        expect(deleted()).to.deep.equal([PEER]);
+      });
+
+      it('keeps a device syncthing reads as connected now', async () => {
+        sharedWithPeer();
+        syncthingServiceMock.getDeviceStats.resolves({ [PEER]: { lastSeen: new Date().toISOString() } });
+
+        await pass();
+
+        sinon.assert.calledOnce(syncthingServiceMock.getDeviceStats);
+        expect(deleted()).to.deep.equal([]);
+      });
+
+      it('keeps a device a folder still lists', async () => {
+        sharedWithPeer(true);
+
+        await pass();
+
+        sinon.assert.calledOnce(syncthingServiceMock.getDeviceStats);
+        expect(deleted()).to.deep.equal([]);
+      });
+
+      it('removes a device seen within a day when another device holds its name', async () => {
+        sharedWithPeer();
+        syncthingServiceMock.getConfigDevices.resolves([
+          { deviceID: PEER, name: '10.0.0.2:16127' },
+          { deviceID: 'STALE-DEVICE', name: '10.0.0.2:16127' },
+        ]);
+        const recent = new Date().toISOString();
+        syncthingServiceMock.getDeviceStats.resolves({ [PEER]: { lastSeen: recent }, 'STALE-DEVICE': { lastSeen: recent } });
+
+        await pass();
+
+        expect(deleted()).to.include('STALE-DEVICE');
+      });
+
+      it('removes no device while when each was last seen cannot be read', async () => {
+        sharedWithPeer();
+        syncthingServiceMock.getDeviceStats.rejects(new Error('connect ECONNREFUSED'));
+
+        await pass();
+
+        expect(deleted()).to.deep.equal([]);
+      });
+    });
+
     describe('a configuration write syncthing refused', () => {
       const refused = (message) => Object.assign(new Error(message), { code: 'ECONNREFUSED' });
 

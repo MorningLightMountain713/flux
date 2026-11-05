@@ -406,6 +406,11 @@ async function peerSyncthingConnection(folderId, peerIp) {
   const deviceId = await peerDeviceId(peerIp);
   if (!deviceId) return PeerConnection.UNKNOWN;
 
+  // Connected whether or not the folder still lists the device: the folder's list is
+  // the fence, and a peer out of it can still be running what the folder holds.
+  const connections = await syncthingService.getDeviceConnections().catch(() => null);
+  if (connections?.[deviceId]?.connected) return PeerConnection.CONNECTED;
+
   const completion = await syncthingService.getDbCompletion({
     folder: folderId,
     device: deviceId,
@@ -460,10 +465,10 @@ async function peerSyncthingConnection(folderId, peerIp) {
  *
  * A closed connection is evidence only once the network has certified the
  * peer down (certifiedDown): until then it may be a restart or a reboot, and a
- * node back from one keeps what it holds. The certificate stands alone: it takes
- * the peer's location row, and the monitor then removes its device, so a
- * connection this node can no longer read says nothing against it. Only a live
- * connection does.
+ * node back from one keeps what it holds. A certificate says a peer's FluxOS has
+ * stopped, not its machine: while its syncthing is connected it may still run the
+ * app, and the connection stands against the certificate. One this node can no
+ * longer read says nothing against it.
  *
  * @param {string} folderId
  * @param {string} peerIp

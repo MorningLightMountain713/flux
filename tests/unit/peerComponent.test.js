@@ -154,6 +154,7 @@ describe('peerComponent tests', () => {
         sinon.stub(syncthingService, 'getDbCompletion').callsFake(async ({ folder }) => ({
           remoteState: connectedFolders.includes(folder) ? 'valid' : 'notSharing',
         }));
+        sinon.stub(syncthingService, 'getDeviceConnections').resolves({});
         sinon.stub(syncthingService, 'getDeviceStats').resolves({ PEERDEVICE: { lastSeen: '2026-10-16T10:00:00Z' } });
         sinon.stub(syncthingService, 'getSystemStatus').resolves({ startTime: '2026-10-16T09:00:00Z' });
         sinon.stub(networkStateService, 'networkState').returns([{ ip: PEER, txhash: 'peertx', outidx: 0 }]);
@@ -200,8 +201,17 @@ describe('peerComponent tests', () => {
 
       // A closed connection may be a restart or a reboot until the network
       // certifies the node down.
-      // The certificate takes the peer's location row, and the monitor then removes
-      // its device: this node can no longer ask about the connection.
+      // A certificate says the peer's FluxOS stopped, not its machine.
+      it('does not free the app of a certified peer still connected, though no folder lists it', async () => {
+        evidence([]);
+        syncthingService.getDeviceConnections.resolves({ PEERDEVICE: { connected: true } });
+
+        expect(await peerComponentState(PEER, appCtx)).to.equal(PeerComponent.UNKNOWN);
+        expect(await peerFolderLiveness.silenceVerdict('fluxweb_a', PEER, {}))
+          .to.equal(peerFolderLiveness.SilenceVerdict.CONNECTION_ALIVE);
+      });
+
+      // Its connection went with it: this node has no connection left to ask about.
       it('frees the app of a certified peer whose device this node no longer holds', async () => {
         evidence([]);
         syncthingService.getConfigDevices.resolves([]);
