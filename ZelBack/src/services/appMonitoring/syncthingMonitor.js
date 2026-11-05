@@ -10,7 +10,6 @@ const appCaches = require('../utils/appCaches');
 const fluxNetworkHelper = require('../fluxNetworkHelper');
 const syncthingService = require('../syncthingService');
 const { ConfigMethod, ABSENT } = require('../utils/syncthingConstants');
-const globalState = require('../utils/globalState');
 const fluxEventBus = require('../utils/fluxEventBus');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const { getSpecBackend } = require('../utils/specLibs');
@@ -752,6 +751,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     // must not withhold a folder list it already has, or every peer asking is
     // told to wait for as long as the device read keeps failing.
     let allFolders;
+    const writesBeforeRead = syncthingFolderWrites.mark();
     try {
       allFolders = await syncthingService.getConfigFolders();
     } catch (error) {
@@ -783,22 +783,24 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     // serving it costs nothing, where an endpoint calling syncthing per request
     // would be an unauthenticated amplifier into it.
     //
-    // It had no writer at all, so it stayed null, /apps/promotedfolders answered
-    // ready:false forever, and every folder with at least one peer was blocked
-    // from promotion fleet-wide.
-    //
     // Set only from a VALIDATED response - the guard above - so a failed read
     // leaves the last good answer standing rather than momentarily claiming this
-    // node holds nothing writable. Published as a COPY: the reconciliation at the
-    // end of the pass mutates the published set as writes land, while this stays
-    // what the scan observed.
+    // node holds nothing writable. Published as a COPY: every type written from
+    // here on updates the published set as it lands (syncthingFolderWrites), while
+    // sendingFolderIds stays what this pass observed. A type written after the
+    // mark may be missing from the read, and is what syncthing holds.
     const sendingFolderIds = new Set(
       allFolders.filter((folder) => folder.type === 'sendreceive').map((folder) => folder.id),
     );
     // Every folder syncthing holds, in any mode. Absence from this is the
     // 404 the demotion would otherwise have to ask for.
     const knownFolderIds = new Set(allFolders.map((folder) => folder.id));
-    globalState.promotedFolderIds = new Set(sendingFolderIds);
+    const writable = new Set(sendingFolderIds);
+    syncthingFolderWrites.typesRecordedSince(writesBeforeRead).forEach(([folderId, type]) => {
+      if (type === 'sendreceive') writable.add(folderId);
+      else writable.delete(folderId);
+    });
+    syncthingFolderWrites.publishWritable(writable);
 
     // A receive-only folder of an app whose spec cannot be read is one this pass
     // does not measure, so what it holds is unknown. Its folders come from
@@ -845,12 +847,13 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       // Never leave an unsafe-mount folder sendreceive while processing is
       // skipped: the syncthing daemon keeps running as configured, so an
       // un-demoted sendreceive folder over a bad mount can still broadcast its
-      // (leaked or missing) disk state to the healthy peers. Demote those
-      // folders and hold their containers before bailing - idempotent, and the
-      // normal receiveonly machinery re-promotes once the mount is healthy.
-      // Which folders are sendreceive is carried on the entry. The folder
-      // configuration is read ONCE per pass, at the top, where a failure returns
-      // before anything is judged by it.
+      // (leaked or missing) disk state to the healthy peers. Every folder syncthing
+      // holds over a bad mount is demoted and its container held, whichever type
+      // the pass read: a type written since, a promotion in progress and a
+      // container running on a receiving folder are all answered here. Syncthing
+      // restarts a folder only when its config changed, so the demotion is safe to
+      // repeat, and the normal receiveonly machinery re-promotes once the mount is
+      // healthy.
       // eslint-disable-next-line no-restricted-syntax
       for (const {
         appId, identifier, reason, volumeFileMissing, sending, known, syncing,
@@ -859,38 +862,39 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
         if (volumeFileMissing) folderStates.volumeGone(appId);
         else folderStates.heldOut(appId);
         fluxEventBus.count('syncthing:folderPass', appId, 'mountUnsafe');
-        if (!sending) {
-          // A folder syncthing holds RECEIVEONLY over a bad mount is already in
-          // the state this block exists to put it in - nothing to demote, and
-          // its container is left to the normal machinery.
-          //
+        if (!known) {
           // A folder syncthing does not hold AT ALL, declared by a component
           // that syncs, is a contradiction rather than an answer. Nothing is
           // recreated from here - the level loop rebuilds the folder once the
           // mount is healthy - but the mount is unsafe either way, so the
           // container is held now and the flag stands for the next pass.
-          if (!known && syncing) {
+          if (syncing) {
             log.error(`syncthingAppsCore - SAFETY BLOCK: ${appId} is over an unsafe mount (${reason}) and syncthing holds no folder for it though the component syncs; holding the container, flag stands`);
             appReconciler.setControllerDesired(identifier, 'stopped', `mount safety block: ${reason}`);
-          }
-          // A component that declares no sync has no folder to be missing, and
-          // syncthing holds none for it: there is nothing here for the mount
-          // question to be answered ABOUT, this pass or any later one. Left
-          // standing the flag is re-read forever, the pending set only grows,
-          // and deploymentsMatchingFolderIds keeps handing this deployment back
-          // - so the node never reaches steady state and sweeps every mount on
-          // every cycle. The unsafe mount itself is still a fault; it is the
-          // reconciler's, and holding a container this monitor has no folder
-          // for is not this block's call.
-          if (!known && !syncing) {
+          } else {
+            // A component that declares no sync has no folder to be missing, and
+            // syncthing holds none for it: there is nothing here for the mount
+            // question to be answered ABOUT, this pass or any later one. Left
+            // standing the flag is re-read forever, the pending set only grows,
+            // and deploymentsMatchingFolderIds keeps handing this deployment back
+            // - so the node never reaches steady state and sweeps every mount on
+            // every cycle. The unsafe mount itself is still a fault; it is the
+            // reconciler's, and holding a container this monitor has no folder
+            // for is not this block's call.
             log.info(`syncthingAppsCore - resolving mount-verify flag for ${appId}: the component declares no sync and syncthing holds no folder for it`);
             syncthingEventsConsumer.resolveMountVerify(appId);
           }
           // eslint-disable-next-line no-continue
           continue;
         }
-        // eslint-disable-next-line no-await-in-loop
-        const demoted = await demotedForSafety(appId, `SAFETY BLOCK: demoting ${appId} to receiveonly over an unsafe mount (${reason})`);
+        // The demotion abandons a promotion in progress as it is called, before
+        // the hold is written, so the promotion cannot ask to run the component
+        // after. The hold is written whatever the demotion does: the harm is this
+        // node's copy writing to a bad mount, which a failed demotion does not
+        // make less likely.
+        const demoting = demotedForSafety(appId, `SAFETY BLOCK: demoting ${appId} to receiveonly over an unsafe mount (${reason})`);
+        appReconciler.setControllerDesired(identifier, 'stopped', `mount safety block: ${reason}`);
+        const demoted = await demoting;
         if (demoted) {
           log.error(`syncthingAppsCore - SAFETY BLOCK: ${appId} folder was sendreceive over an unsafe mount (${reason}); switched to receiveonly and holding the container`);
           // A demoted folder re-enters the promotion machinery from the start:
@@ -907,16 +911,11 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
             blockedAt: Date.now(),
           });
         } else {
-          // No mark: it describes a DEMOTED folder, and this one is still
-          // sendreceive.
-          log.error(`syncthingAppsCore - SAFETY BLOCK: ${appId} is STILL sendreceive over an unsafe mount (${reason}); holding the container and retrying the demotion next pass`);
+          // No mark: it describes a DEMOTED folder, and this one may still send.
+          log.error(`syncthingAppsCore - SAFETY BLOCK: ${appId} is ${sending ? 'STILL sendreceive' : 'not confirmed receiveonly'} over an unsafe mount (${reason}); holding the container and retrying the demotion next pass`);
         }
-        // The container is held whether or not the demotion landed: the harm is
-        // this node's copy writing to a bad mount, which a failed demotion does
-        // not make less likely. The flag is untouched here - it resolves only
-        // where the mount question is ANSWERED - so the next pass comes back to
-        // this folder.
-        appReconciler.setControllerDesired(identifier, 'stopped', `mount safety block: ${reason}`);
+        // The flag is untouched here - it resolves only where the mount question
+        // is ANSWERED - so the next pass comes back to this folder.
       }
     }
 
@@ -1190,10 +1189,9 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
     // Apply new configuration
     // THE CONFIGURATION WRITES ABORT THE PASS. Everything below acts on the
     // configuration these apply - the folder-error scan reads the folders just
-    // written, the restart check asks whether they need one, and the promoted
-    // set is published from them. A refused write leaves all of it describing a
-    // configuration syncthing does not hold, so it leaves through the outer
-    // catch and the level loop reassembles next pass.
+    // written and the restart check asks whether they need one. A refused write
+    // leaves all of it describing a configuration syncthing does not hold, so it
+    // leaves through the outer catch and the level loop reassembles next pass.
     if (devicesConfiguration.length > 0) {
       await syncthingService.adjustConfigDevices({ method: ConfigMethod.PUT, config: devicesConfiguration });
     }
@@ -1224,22 +1222,6 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       if (wholeFolders.length > 0) applied(await syncthingFolderWrites.putFolders(wholeFolders));
       (await Promise.all(roleTypedFolders.map((folder) => syncthingFolderWrites.patchFolder(folder.id, folder))))
         .forEach(applied);
-      // Reconciled in BOTH directions the moment the write lands, not left to
-      // the next pass. The published set is what a peer reads before promoting a
-      // folder of its own, and a promotion applied on the line above is absent
-      // from it until syncthing is read again - so two nodes promoting in one
-      // cycle would each advertise nothing, neither would block the other, and
-      // that is the collision the check exists to catch.
-      //
-      // Reached only on a write that landed - the line above throws otherwise.
-      // This is an ASSERTION about syncthing's state made without re-reading it,
-      // and it is what peers act on: a folder named here that syncthing did not
-      // accept advertises this node as holding it writable, and a peer stands
-      // down from a promotion nothing serves.
-      for (const folder of wholeFolders) {
-        if (folder.type === 'sendreceive') globalState.promotedFolderIds.add(folder.id);
-        else globalState.promotedFolderIds.delete(folder.id);
-      }
     }
 
     // Seeds decided this pass are applied now, so the claims they made become true

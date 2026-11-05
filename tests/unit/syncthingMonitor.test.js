@@ -1235,7 +1235,9 @@ describe('syncthingMonitor tests', () => {
       sinon.assert.calledWith(syncthingEventsConsumerMock.resolveMountVerify, syncFolderId);
     });
 
-    it('does not re-patch an unsafe folder that is already receiveonly', async () => {
+    // The pass's read says nothing of a type written since, a promotion in
+    // progress or a container running on the folder.
+    it('demotes and holds a folder the pass read receiving over an unsafe mount', async () => {
       deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
       syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
       syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'empty_unmounted_directory' });
@@ -1248,8 +1250,27 @@ describe('syncthingMonitor tests', () => {
       );
       await clock.tickAsync(100);
 
-      sinon.assert.notCalled(syncthingServiceMock.adjustConfigFolders);
-      sinon.assert.notCalled(appReconcilerMock.setControllerDesired);
+      sinon.assert.calledWithExactly(syncthingServiceMock.adjustConfigFolders, { method: 'patch', config: { type: 'receiveonly' }, id: syncFolderId });
+      sinon.assert.calledWith(appReconcilerMock.setControllerDesired, syncComp.identifier, 'stopped');
+    });
+
+    it('abandons a promotion before it writes the hold, and holds before the demotion lands', async () => {
+      deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+      syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
+      syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'empty_unmounted_directory' });
+      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+      syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, type: 'receiveonly' }]);
+      const demote = sinon.stub(primaryRole, 'demoteForSafety').returns(new Promise(() => {}));
+      try {
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        sinon.assert.calledOnceWithExactly(demote, syncFolderId);
+        sinon.assert.calledWith(appReconcilerMock.setControllerDesired, syncComp.identifier, 'stopped');
+        sinon.assert.callOrder(demote, appReconcilerMock.setControllerDesired);
+      } finally {
+        demote.restore();
+      }
     });
 
     // A COMPONENT THAT SYNCS, A MOUNT THAT IS UNSAFE, AND NO FOLDER: that is a
@@ -1530,6 +1551,81 @@ describe('syncthingMonitor tests', () => {
       } finally {
         checkpoint.restore();
       }
+    });
+
+    // A type written after the pass read the folder list is what syncthing holds,
+    // and what peers are told.
+    describe('the folders it tells peers are writable', () => {
+      const baseline = (held) => {
+        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+        syncthingServiceMock.getDeviceId.resolves('DEVICE-ID');
+        fluxNetworkHelperMock.getLocalSocketAddress.resolves('10.0.0.1:16127');
+        volumeServiceMock.isPathMounted.resolves(true);
+        let written = false;
+        syncthingServiceMock.getConfigFolders.callsFake(async () => {
+          if (!written) {
+            written = true;
+            await syncthingFolderWrites.patchFolder(syncFolderId, { type: held === 'sendreceive' ? 'receiveonly' : 'sendreceive', path: syncComp.dir });
+          }
+          return [{ id: syncFolderId, path: syncComp.dir, type: held }];
+        });
+      };
+
+      afterEach(() => {
+        globalStateModule.promotedFolderIds = null;
+      });
+
+      it('counts a folder made writable after the pass read it', async () => {
+        globalStateModule.promotedFolderIds = new Set();
+        baseline('receiveonly');
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        expect(globalStateModule.promotedFolderIds.has(syncFolderId)).to.equal(true);
+      });
+
+      it('leaves out a folder that stopped sending after the pass read it', async () => {
+        globalStateModule.promotedFolderIds = new Set([syncFolderId]);
+        baseline('sendreceive');
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        expect(globalStateModule.promotedFolderIds.has(syncFolderId)).to.equal(false);
+      });
+
+      it('publishes what the read shows when nothing was written since', async () => {
+        globalStateModule.promotedFolderIds = new Set();
+        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+        syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, path: syncComp.dir, type: 'sendreceive' }]);
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        expect([...globalStateModule.promotedFolderIds]).to.deep.equal([syncFolderId]);
+      });
+
+      it('publishes a folder it finds turned writable, and not on the first pass after a start', async () => {
+        const publish = sinon.stub(fluxEventBus, 'publish');
+        try {
+          deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+          syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, path: syncComp.dir, type: 'sendreceive' }]);
+
+          globalStateModule.promotedFolderIds = null;
+          monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+          await clock.tickAsync(100);
+          sinon.assert.neverCalledWith(publish, 'syncthing:folderWritable');
+
+          monitorControl.stop?.();
+          globalStateModule.promotedFolderIds = new Set();
+          monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+          await clock.tickAsync(100);
+          sinon.assert.calledWith(publish, 'syncthing:folderWritable', { folder: syncFolderId });
+        } finally {
+          publish.restore();
+        }
+      });
     });
 
     // What this node tells its peers about each receive-only folder, written where
