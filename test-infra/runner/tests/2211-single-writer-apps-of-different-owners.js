@@ -58,7 +58,7 @@ describe('single-writer apps of different owners on shared holders', function ()
   // The app's own container, by its exact name: a match on the app name alone
   // counts B's container as A's.
   const container = async (i, app) => {
-    const r = await sh(i, `docker inspect -f '{{.State.Running}} {{.Id}} {{.State.StartedAt}}' ${app.folder} 2>/dev/null; true`);
+    const r = await sh(i, `docker inspect -f '{{.State.Running}} {{.Id}} {{.State.StartedAt}}' ${app.identifier} 2>/dev/null; true`);
     const [running, id, startedAt] = r.stdout.trim().split(' ');
     return running === 'true' ? { id, startedAt } : null;
   };
@@ -112,8 +112,8 @@ describe('single-writer apps of different owners on shared holders', function ()
   const primaryState = async (app) => {
     const primary = app.order[0];
     const disk = await sh(primary, `ls -la --time-style=full-iso ${app.data}; stat -c 'host dir inode %i dev %d' ${app.data}; findmnt -n -o SOURCE,TARGET --target ${app.data}; `
-      + `docker inspect -f 'started {{.State.StartedAt}} mounts {{json .Mounts}}' ${app.folder}; `
-      + `docker exec ${app.folder} ls -la /appdata 2>&1 | head -8; docker logs ${app.folder} 2>&1 | tail -5; true`);
+      + `docker inspect -f 'started {{.State.StartedAt}} mounts {{json .Mounts}}' ${app.identifier}; `
+      + `docker exec ${app.identifier} ls -la /appdata 2>&1 | head -8; docker logs ${app.identifier} 2>&1 | tail -5; true`);
     const status = await getFolderStatus(client(primary), app.folder).catch((error) => ({ error: error.message }));
     const kinds = ['StateChanged', 'LocalIndexUpdated', 'FolderWatchStateChanged', 'FolderScanProgress', 'ConfigSaved', 'FolderErrors',
       'ItemStarted', 'ItemFinished', 'RemoteIndexUpdated', 'FolderCompletion', 'DeviceConnected', 'DeviceDisconnected'];

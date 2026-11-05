@@ -46,7 +46,7 @@ describe('an owner start keeps the primary', function () {
 
   const client = (i) => env.clients[i];
   const running = async (i) => {
-    const r = await execInContainer(client(i).container, `docker inspect -f '{{.State.Running}}' ${folder} 2>/dev/null; true`);
+    const r = await execInContainer(client(i).container, `docker inspect -f '{{.State.Running}}' ${identifier} 2>/dev/null; true`);
     return r.stdout.trim() === 'true';
   };
   const runners = async () => {
