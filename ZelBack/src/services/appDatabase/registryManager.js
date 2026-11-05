@@ -17,6 +17,7 @@ const legacyTransportProvider = require('../providers/FluxOSLegacyTransportProvi
 const transportCryptoProvider = require('../providers/FluxOSTransportProvider');
 const { obtainPayloadFromStorage } = require('../utils/fluxStorageRefs');
 const {
+  globalAppStateEvents,
   globalAppsInstallingLocations,
   globalAppsInstallingBroadcasts,
   globalAppsInstallingErrorsLocations,
@@ -24,6 +25,7 @@ const {
   INSTALLING_EXPIRY_MS,
 } = require('../utils/appConstants');
 const { Privilege, authOf } = require('../utils/privileges');
+const { normalizeSocketAddress } = require('../utils/socketAddressUtils');
 
 // Control-plane hook fired after a global app spec is committed. Wired by
 // serviceManager to the spawner so a spec this node must install can wake the
@@ -147,6 +149,145 @@ async function getAppHashesAPI(req, res) {
  */
 async function appLocation(appname) {
   return appsRepository.appLocationFromEvents(appname ? { appname } : {});
+}
+
+/**
+ * The names of the apps the network lists at `socketAddress`.
+ * @param {string} socketAddress
+ * @returns {Promise<string[]>}
+ */
+async function appsListedAt(socketAddress) {
+  const ip = normalizeSocketAddress(socketAddress);
+  if (!ip) return [];
+  const rows = await appsRepository.appLocationFromEvents({ ip });
+  return [...new Set(rows.map((row) => row.name))];
+}
+
+// How many recorded moves are followed from one address.
+const MAX_ADDRESS_MOVES_FOLLOWED = 8;
+
+// A recorded address move is a node announcing, signed, that it no longer answers
+// at its old socket address and now answers at the new one: one per old address,
+// the latest it announced. Events are stored as they arrive, before anything checks
+// them, so only a version 1 move between two different addresses counts.
+const MOVE_PROJECTION = Object.freeze({
+  _id: 0, ip: 1, broadcastedAt: 1, 'data.newIP': 1, 'data.version': 1, 'envelope.pubKey': 1,
+});
+
+function stateEvents() {
+  return dbHelper.databaseConnection().db(config.get('database.appsglobal.database')).collection(globalAppStateEvents);
+}
+
+/**
+ * Add a stored ipchanged event to `moves` when it is a move: version 1, between two
+ * different addresses. `signer` is the key that signed it, or null.
+ * @param {Map<string, {to: string, at: number, signer: string|null}>} moves
+ * @param {object} event
+ * @returns {string|null} The address it moves to, or null when it is not a move.
+ */
+function addMove(moves, event) {
+  const from = normalizeSocketAddress(event.ip);
+  const to = typeof event.data?.newIP === 'string' ? normalizeSocketAddress(event.data.newIP) : null;
+  const at = new Date(event.broadcastedAt).getTime();
+  if (event.data?.version !== 1 || !from || !to || to === from || !Number.isFinite(at)) return null;
+  moves.set(from, { to, at, signer: event.envelope?.pubKey ?? null });
+  return to;
+}
+
+/**
+ * The recorded moves away from `addresses`, and away from every address those lead
+ * to, read by address rather than by scanning every move.
+ * @param {string[]} addresses Socket addresses.
+ * @returns {Promise<Map<string, {to: string, at: number, signer: string|null}>>}
+ *   old socket address -> the move
+ */
+async function addressMovesFrom(addresses) {
+  const collection = stateEvents();
+  const moves = new Map();
+  const asked = new Set();
+  let frontier = addresses;
+  for (let hop = 0; hop < MAX_ADDRESS_MOVES_FOLLOWED && frontier.length; hop += 1) {
+    // an address may be stored with its port or, when it is the default, without
+    const pending = [...new Set(frontier.flatMap((address) => [address, normalizeSocketAddress(address)]).filter(Boolean))]
+      .filter((address) => !asked.has(address));
+    if (!pending.length) break;
+    pending.forEach((address) => asked.add(address));
+    // eslint-disable-next-line no-await-in-loop
+    const events = await collection.find(
+      { ip: { $in: pending }, type: 'ipchanged', expireAt: { $gt: new Date() } },
+      { projection: MOVE_PROJECTION },
+    ).toArray();
+    frontier = events.map((event) => addMove(moves, event)).filter(Boolean);
+  }
+  return moves;
+}
+
+/**
+ * The recorded moves to `address`.
+ * @param {string} address A socket address.
+ * @returns {Promise<Map<string, {to: string, at: number, signer: string|null}>>}
+ *   old socket address -> the move
+ */
+async function addressMovesTo(address) {
+  const events = await stateEvents().find(
+    { type: 'ipchanged', 'data.newIP': normalizeSocketAddress(address), expireAt: { $gt: new Date() } },
+    { projection: MOVE_PROJECTION },
+  ).toArray();
+  const moves = new Map();
+  events.forEach((event) => addMove(moves, event));
+  return moves;
+}
+
+/**
+ * The addresses whose recorded moves lead to `address`, and `address` itself.
+ * @param {string} address A socket address.
+ * @returns {Promise<string[]>}
+ */
+async function addressesLeadingTo(address) {
+  const collection = stateEvents();
+  const found = new Set([address]);
+  let frontier = [address];
+  for (let hop = 0; hop < MAX_ADDRESS_MOVES_FOLLOWED && frontier.length; hop += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const events = await collection.find(
+      { type: 'ipchanged', 'data.newIP': { $in: [...new Set(frontier.flatMap((to) => [to, normalizeSocketAddress(to)]))] }, expireAt: { $gt: new Date() } },
+      { projection: { _id: 0, ip: 1 } },
+    ).toArray();
+    frontier = events.map((event) => event.ip).filter((ip) => !found.has(ip));
+    frontier.forEach((ip) => found.add(ip));
+  }
+  return [...found];
+}
+
+/**
+ * The listed node whose recorded moves end at `address`, or null: an address it
+ * moved on from is no longer the node's. A node moves only itself, so every move
+ * followed is one signed by the key the list holds for the node, and each is newer
+ * than the one before it.
+ * @param {string} address A socket address.
+ * @param {Array<{ip: string, pubkey: string}>} nodeList The deterministic list.
+ * @returns {Promise<object|null>}
+ */
+async function listedNodeMovedTo(address, nodeList) {
+  const target = normalizeSocketAddress(address);
+  const sources = new Set((await addressesLeadingTo(address)).map(normalizeSocketAddress));
+  sources.delete(target);
+  const candidates = nodeList.filter((node) => sources.has(normalizeSocketAddress(node.ip)));
+  // eslint-disable-next-line no-restricted-syntax
+  for (const node of candidates) {
+    // eslint-disable-next-line no-await-in-loop
+    const moves = await addressMovesFrom([node.ip]);
+    let current = normalizeSocketAddress(node.ip);
+    let since = 0;
+    for (let hop = 0; hop < MAX_ADDRESS_MOVES_FOLLOWED; hop += 1) {
+      const move = moves.get(current);
+      if (!move || move.at <= since || move.signer !== node.pubkey) break;
+      current = move.to;
+      since = move.at;
+    }
+    if (current === target) return node;
+  }
+  return null;
 }
 
 /**
@@ -1133,6 +1274,10 @@ module.exports = {
   getAppHashes,
   getAppHashesAPI,
   appLocation,
+  appsListedAt,
+  addressMovesFrom,
+  addressMovesTo,
+  listedNodeMovedTo,
   appLocationOf,
   appInstallingLocation,
   installingCountsByApp,

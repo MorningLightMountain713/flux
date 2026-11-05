@@ -1,7 +1,9 @@
 const { expect } = require('chai');
+const sinon = require('sinon');
 const config = require('config');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const messageStore = require('../../ZelBack/src/services/appMessaging/messageStore');
+const appsRepository = require('../../ZelBack/src/services/appDatabase/appsRepository');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const { requireMongo } = require('./dbTestHelper');
 
@@ -76,5 +78,21 @@ describe('registryManager listedNodeMovedTo tests', () => {
     await move(A, B, Date.now() - 60_000, OWN_KEY);
 
     expect(await registryManager.listedNodeMovedTo(C, [listed])).to.equal(null);
+  });
+
+  describe('appsListedAt', () => {
+    afterEach(() => sinon.restore());
+
+    it('names each app the network lists at the address once', async () => {
+      const read = sinon.stub(appsRepository, 'appLocationFromEvents').resolves([{ name: 'one' }, { name: 'two' }, { name: 'one' }]);
+
+      expect(await registryManager.appsListedAt('198.51.100.1')).to.deep.equal(['one', 'two']);
+
+      sinon.assert.calledOnceWithExactly(read, { ip: '198.51.100.1:16127' });
+    });
+
+    it('lists nothing for no address', async () => {
+      expect(await registryManager.appsListedAt(null)).to.deep.equal([]);
+    });
   });
 });

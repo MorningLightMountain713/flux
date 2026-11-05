@@ -781,7 +781,7 @@ async function startFluxFunctions() {
         // reinstalled g:/r: app must await a fresh election, not inherit a stale one
         appUninstaller.setOnComponentRemoved((id) => appReconciler.forgetDesiredState(id));
         // an app the registry stops listing is removed here and its removal told to peers
-        localRemovalQueue.setRemover((appName) => appUninstaller.removeAppLocally(appName, null, true, false, true));
+        localRemovalQueue.setRemover((appName) => appUninstaller.uninstallApplication(appName, { forceKill: true, broadcastRemoval: true }));
         // the node's address moved, so every app that survived it has to come up on
         // the new one - asked for durably here rather than driven from the network
         // layer, which sits underneath the reconciler and cannot require it
