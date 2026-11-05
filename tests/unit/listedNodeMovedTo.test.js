@@ -80,6 +80,39 @@ describe('registryManager listedNodeMovedTo tests', () => {
     expect(await registryManager.listedNodeMovedTo(C, [listed])).to.equal(null);
   });
 
+  // A node asks where the network lists it right after it moves: what it announced
+  // at the address it left is its until it announces again at the new one.
+  describe('the rows of an address a move leads to', () => {
+    const announce = (ip, broadcastedAt) => messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.APPRUNNING, {
+      signedBroadcast: {
+        version: 1,
+        timestamp: broadcastedAt,
+        pubKey: OWN_KEY,
+        signature: 'SIG',
+        data: JSON.stringify({
+          type: 'fluxapprunning', version: 2, ip, broadcastedAt, osUptime: 1, staticIp: false, apps: [{ name: 'moved', hash: 'a'.repeat(64), runningSince: new Date(broadcastedAt).toISOString() }],
+        }),
+      },
+    });
+
+    it('holds what the node announced at the address it left', async () => {
+      await announce(A, Date.now() - 120_000);
+      await move(A, B, Date.now() - 60_000, OWN_KEY);
+
+      const rows = await appsRepository.appLocationFromEvents({ ip: B });
+
+      expect(rows.map((row) => [row.name, row.ip])).to.deep.equal([['moved', B]]);
+    });
+
+    // Canary: nothing moved to it, so nothing reads as at it.
+    it('holds nothing at an address no move leads to', async () => {
+      await announce(A, Date.now() - 120_000);
+      await move(A, B, Date.now() - 60_000, OWN_KEY);
+
+      expect(await appsRepository.appLocationFromEvents({ ip: C })).to.deep.equal([]);
+    });
+  });
+
   describe('appsListedAt', () => {
     afterEach(() => sinon.restore());
 

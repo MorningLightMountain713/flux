@@ -393,7 +393,7 @@ function buildAppLocationPipeline({
       { type: 'nodedown' },
     ],
   };
-  if (ip) base.ip = ip;
+  if (ip) base.ip = Array.isArray(ip) ? { $in: ip } : ip;
   // Every app on one machine, whatever apiport each node there runs on. Anchored on
   // the port separator and with the address escaped, so 1.2.3.4 cannot also select
   // 1.2.3.45 - the ports being checked belong to the host, not to a prefix of it.
@@ -653,9 +653,11 @@ async function appLocationFromEvents(options = {}) {
 
   const { supersededIps, translate } = await resolveAddressMoves(collection, now);
   const { absent: offListIps, returned: offListReturned } = departures.denySet(now.getTime());
+  // An address's rows include those a move carries to it from the address it left.
+  const movedHere = ip ? [...translate].filter(([, to]) => to === ip).map(([from]) => from) : [];
   const rows = await collection.aggregate([
     ...buildAppLocationPipeline({
-      now, appname, excludeHashes, ip, host, supersededIps, offListIps, offListReturned,
+      now, appname, excludeHashes, ip: movedHere.length ? [ip, ...movedHere] : ip, host, supersededIps, offListIps, offListReturned,
     }),
     ...RUNNING_ROW_TAIL,
   ]).toArray();
