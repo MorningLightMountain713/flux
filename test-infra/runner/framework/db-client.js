@@ -24,6 +24,13 @@ export async function closeDb() {
 // An address field naming the node at bareIp, with or without its port.
 const atAddress = (bareIp) => ({ $regex: `^${bareIp.replace(/\./g, '\\.')}(:|$)` });
 
+// An app role's published grant records: its founding or ordinal row, and a held
+// term's row per world, whose key ends `@<generation>:<height>`.
+const masterleaseRows = (identity, role) => ({
+  type: 'masterlease',
+  dedupKey: { $regex: `^masterlease:${identity}/${role}(@|$)` },
+});
+
 export function dbClient(nodeNum) {
   const prefix = `node${String(nodeNum).padStart(2, '0')}_`;
 
@@ -123,7 +130,8 @@ export function dbClient(nodeNum) {
     async getMasterleaseRoster(identity, role) {
       const globalDb = await db('appsGlobal');
       const row = await globalDb.collection('appstateevents').findOne(
-        { type: 'masterlease', dedupKey: `masterlease:${identity}/${role}` },
+        masterleaseRows(identity, role),
+        { sort: { broadcastedAt: -1 } },
       );
       return row?.data?.roster ?? null;
     },
@@ -134,7 +142,8 @@ export function dbClient(nodeNum) {
     async getMasterleaseRecord(identity, role) {
       const globalDb = await db('appsGlobal');
       const row = await globalDb.collection('appstateevents').findOne(
-        { type: 'masterlease', dedupKey: `masterlease:${identity}/${role}` },
+        masterleaseRows(identity, role),
+        { sort: { broadcastedAt: -1 } },
       );
       // the row holds the record as signed, with this node's verdict beside it
       return row?.data ? { ...row.data, proofRank: row.proofRank, verified: row.verified } : null;
@@ -144,9 +153,7 @@ export function dbClient(nodeNum) {
     // the one-time gossip" without any partition timing.
     async wipeMasterleaseRecord(identity, role) {
       const globalDb = await db('appsGlobal');
-      const res = await globalDb.collection('appstateevents').deleteOne(
-        { type: 'masterlease', dedupKey: `masterlease:${identity}/${role}` },
-      );
+      const res = await globalDb.collection('appstateevents').deleteMany(masterleaseRows(identity, role));
       return res.deletedCount;
     },
 
