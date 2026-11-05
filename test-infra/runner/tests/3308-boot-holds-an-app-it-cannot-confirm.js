@@ -20,8 +20,9 @@
  * The mixed app pairs an active-standby component, which only the election starts,
  * with a plain one boot starts. Its decision is held at a checkpoint once the
  * database answers, so the announcement and the election that run then can be
- * watched leaving it alone. The plain app is decided as soon as the database
- * answers: it is the canary that the announcement and the decisions run at all.
+ * watched leaving it alone. Every app boot held is decided together, so the plain
+ * app waits with it, and the app left running is the canary that the announcement
+ * runs at all.
  *
  * Every app asks for as many instances as the fleet has nodes and is installed on
  * every node, the holder first so it is the mixed app's primary, before the holder
@@ -284,9 +285,10 @@ describe('boot holds an app whose location it cannot read', function () {
       parkedAtDecision = holdable && Boolean(await heard(
         'checkpoint:held', (d) => d.name === BEFORE_DECISION && d.key === mixedApp, 120000, answeredFrom,
       ));
-      await heard('boot:appConfirmed', (d) => d.name === plainApp && d.valid === true, 120000, answeredFrom);
+      // Every held app is decided together, so what the node announces now names
+      // only the apps it did not hold: the one left running.
       announcement = (await heard(
-        'app:running', (d) => (d.apps ?? []).some((a) => a.name === plainApp), 120000, answeredFrom,
+        'app:running', (d) => (d.apps ?? []).some((a) => a.name === lapsedApp), 120000, answeredFrom,
       ))?.data ?? null;
       const cyclesFrom = await cycles();
       await waitFor(async () => (await cycles()) >= cyclesFrom + 2, {

@@ -333,6 +333,24 @@ describe('appStartupManager tests', () => {
       expect(appUninstallerStub.uninstallApplication.called).to.equal(false);
     });
 
+    // The hold ended with an uninstall: what is installed under the name now is a new app.
+    it('leaves an app whose hold ended before the check answered not placed, and removes the rest', async () => {
+      dockerServiceStub.dockerListContainers.resolves([{ Names: ['/fluxAppA'], State: 'exited' }]);
+      installedStub.names.resolves(['AppA', 'AppB']);
+      appsRepositoryStub.appLocationFromEvents.onFirstCall().rejects(new Error('DB error'));
+      appsRepositoryStub.appLocationFromEvents.onSecondCall().resolves([]);
+      const releaseRetry = holdPlacementRetry();
+
+      await appStartupManager.reconcileAppsOnBoot();
+      await decided();
+      globalStateStub.unconfirmedApps.delete('AppA');
+      releaseRetry();
+      await decided();
+
+      sinon.assert.neverCalledWith(appUninstallerStub.uninstallApplication, 'AppA');
+      sinon.assert.calledWith(appUninstallerStub.uninstallApplication, 'AppB', sinon.match({ broadcastRemoval: false }));
+    });
+
     it('holds every stopped app when the rows cannot be read, and removes every app once the check answers not placed', async () => {
       dockerServiceStub.dockerListContainers.resolves([{ Names: ['/fluxAppA'], State: 'exited' }]);
       installedStub.names.resolves(['AppA', 'AppB']);

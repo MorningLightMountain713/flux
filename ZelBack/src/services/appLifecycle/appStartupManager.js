@@ -313,7 +313,8 @@ async function confirmHeldApps(holds, localSocketAddr) {
   log.warn(`appStartupManager - placement check (boot): ${why}; removing every app, no broadcast`);
   holds.forEach((hold, appName) => fluxEventBus.publish('boot:appConfirmed', { name: appName, valid: false }));
   try {
-    await removeUnplacedApps(await getInstalledAppNamesFromDb());
+    const installed = await getInstalledAppNamesFromDb();
+    await removeUnplacedApps(installed.filter((appName) => !holds.has(appName) || isHeld(appName)));
   } finally {
     holds.forEach((hold, appName) => { if (isHeld(appName)) globalState.unconfirmedApps.delete(appName); });
   }
