@@ -870,6 +870,7 @@ async function electionPass() {
     log.error(`activeStandby: ${error}`);
   } finally {
     operationRegistry.release(operationRegistry.ACTIVE_STANDBY_COORDINATOR_KEY, coordinateToken);
+    fluxEventBus.count('masterSlave:cycles');
   }
 }
 
