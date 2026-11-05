@@ -23,6 +23,11 @@ export async function closeDb() {
 
 // An address field naming the node at bareIp, with or without its port.
 const atAddress = (bareIp) => ({ $regex: `^${bareIp.replace(/\./g, '\\.')}(:|$)` });
+// A node's location record is its one running announcement, which lists every app
+// at its address. Takes the address with or without the port.
+const runningAnnouncement = (appName, ip) => ({
+  type: 'apprunning', ip: atAddress(String(ip).replace(/:\d+$/, '')), 'data.apps.name': appName,
+});
 
 // An app role's published grant records: its founding or ordinal row, and a held
 // term's row per world, whose key ends `@<generation>:<height>`.
@@ -384,24 +389,25 @@ export function dbClient(nodeNum) {
       return rows.map((row) => row.name);
     },
 
-    // This node's rows for the app at that address stay unexpired for `ms` from now,
-    // as a production record does across a restart the harness's compressed record
-    // would not outlive. Resolves to how many rows were found.
+    // This node's record of the address's running announcement, which names the
+    // app, stays unexpired for `ms` from now, as a production record does across a
+    // restart the harness's compressed record would not outlive. An announcement
+    // lists every app at its address, so all of them stay. Resolves to how many
+    // rows were found.
     async extendAppLocation(appName, ip, ms) {
       const globalDb = await db('appsGlobal');
-      const host = String(ip).replace(/:\d+$/, '').replace(/\./g, '\\.');
-      const { matchedCount } = await globalDb.collection('zelappslocation')
-        .updateMany({ name: appName, ip: { $regex: `^${host}(:\\d+)?$` } }, { $set: { expireAt: new Date(Date.now() + ms) } });
+      const { matchedCount } = await globalDb.collection('appstateevents')
+        .updateMany(runningAnnouncement(appName, ip), { $set: { expireAt: new Date(Date.now() + ms) } });
       return matchedCount;
     },
 
-    // A location's expiry on this node: its rows for the app at that address are
-    // gone, as the TTL index removes them. Resolves to how many rows went.
+    // A location's expiry on this node: the address's running announcement, which
+    // names the app, is gone, as the TTL index removes it. An announcement lists
+    // every app at its address, so all of them go. Resolves to how many rows went.
     async expireAppLocation(appName, ip) {
       const globalDb = await db('appsGlobal');
-      const host = String(ip).replace(/:\d+$/, '').replace(/\./g, '\\.');
-      const { deletedCount } = await globalDb.collection('zelappslocation')
-        .deleteMany({ name: appName, ip: { $regex: `^${host}(:\\d+)?$` } });
+      const { deletedCount } = await globalDb.collection('appstateevents')
+        .deleteMany(runningAnnouncement(appName, ip));
       return deletedCount;
     },
 

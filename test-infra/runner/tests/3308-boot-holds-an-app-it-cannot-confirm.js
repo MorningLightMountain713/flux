@@ -8,7 +8,7 @@
  * answers, then starts or removes the app by the answer.
  *
  * Here FluxOS is killed and held down, the apps' containers are stopped, and the
- * node's reads of the location collection are refused before FluxOS comes back. The
+ * node's reads of the location records are refused before FluxOS comes back. The
  * holder's records are made to outlive the restart, as a production record does and
  * the harness's compressed one would not.
  *
@@ -128,7 +128,7 @@ describe('boot holds an app whose location it cannot read', function () {
         answer = 'started';
         return true;
       }
-      if (await holder.getDecisionCount('reconciler:deferred', identifier, 'managedElsewhere') > 0) {
+      if (await holder.getDecisionCount('reconciler:deferred', identifier, 'blockingLease') > 0) {
         answer = 'deferred';
         return true;
       }
@@ -165,7 +165,7 @@ describe('boot holds an app whose location it cannot read', function () {
       await holderDb.forgetHeartbeat();
     }
     const anchors = env.clients.map((client) => client?.getLastEventId());
-    const release = await failCommands(HOLDER + 1, 'globalzelapps', 'zelappslocation', { commands: ['find'] });
+    const release = await failCommands(HOLDER + 1, 'globalzelapps', 'appstateevents', { commands: ['aggregate'] });
     await releaseFluxos(holder.container, { readyTimeoutMs: 180000 });
     return { anchors, release };
   }
