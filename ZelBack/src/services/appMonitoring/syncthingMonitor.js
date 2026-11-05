@@ -89,6 +89,14 @@ async function syncthingApplied(write, what) {
 }
 
 /**
+ * @param {object} response - what syncthingFolderWrites answered
+ * @throws {Error} when syncthing did not accept the write
+ */
+function landed(response) {
+  if (response?.status !== 'success') throw new Error(response?.data?.message || 'syncthing refused the folder write');
+}
+
+/**
  * Stops a folder sending at once, unscanned, through its primary role - which
  * also abandons a promotion of its component in progress.
  * @param {string} folderId
@@ -896,7 +904,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
         appReconciler.setControllerDesired(identifier, 'stopped', `mount safety block: ${reason}`);
         const demoted = await demoting;
         if (demoted) {
-          log.error(`syncthingAppsCore - SAFETY BLOCK: ${appId} folder was sendreceive over an unsafe mount (${reason}); switched to receiveonly and holding the container`);
+          log.error(`syncthingAppsCore - SAFETY BLOCK: ${appId} folder over an unsafe mount (${reason}); switched to receiveonly and holding the container`);
           // A demoted folder re-enters the promotion machinery from the start:
           // left where it stood, a folder moments from promotion resumes there
           // once the mount returns, on a sync state established before the
@@ -910,12 +918,15 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
             blockedReason: reason,
             blockedAt: Date.now(),
           });
+          // The block has done its work: the folder receives and the container is
+          // held. From the next pass an unmounted volume is the normal pass's
+          // finding, which skips the folder until the volume is back.
+          syncthingEventsConsumer.resolveMountVerify(appId);
         } else {
           // No mark: it describes a DEMOTED folder, and this one may still send.
+          // The flag stands, so the next pass comes back to this folder.
           log.error(`syncthingAppsCore - SAFETY BLOCK: ${appId} is ${sending ? 'STILL sendreceive' : 'not confirmed receiveonly'} over an unsafe mount (${reason}); holding the container and retrying the demotion next pass`);
         }
-        // The flag is untouched here - it resolves only where the mount question
-        // is ANSWERED - so the next pass comes back to this folder.
       }
     }
 
@@ -1171,7 +1182,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       ...nonUsedFolders.map((folder) => {
         log.info(`syncthingAppsCore - Removing unused Syncthing folder ${folder.id}`);
         return syncthingApplied(
-          syncthingService.adjustConfigFolders({ method: ConfigMethod.DELETE, id: folder.id }),
+          syncthingFolderWrites.deleteFolder(folder.id).then(landed),
           `removing unused folder ${folder.id}`,
         );
       }),
@@ -1214,14 +1225,11 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
       // whose type is its primary role's: only the fields the monitor owns are
       // changed, and syncthing keeps its type. Every other folder is written whole,
       // type and all.
-      const applied = (response) => {
-        if (response?.status !== 'success') throw new Error(response?.data?.message || 'syncthing refused the folder write');
-      };
       const wholeFolders = newFoldersConfiguration.filter((folder) => folder.type);
       const roleTypedFolders = newFoldersConfiguration.filter((folder) => !folder.type);
-      if (wholeFolders.length > 0) applied(await syncthingFolderWrites.putFolders(wholeFolders));
+      if (wholeFolders.length > 0) landed(await syncthingFolderWrites.putFolders(wholeFolders));
       (await Promise.all(roleTypedFolders.map((folder) => syncthingFolderWrites.patchFolder(folder.id, folder))))
-        .forEach(applied);
+        .forEach(landed);
     }
 
     // Seeds decided this pass are applied now, so the claims they made become true

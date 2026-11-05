@@ -541,14 +541,11 @@ describe('syncthingMonitor tests', () => {
         });
       });
 
-      // promotedFolderIds had two readers and NO writer, so it stayed null,
-      // /apps/promotedfolders answered ready:false forever, and every folder
-      // with at least one peer was blocked from promotion fleet-wide.
       it('publishes which folders this node holds writable', async () => {
         globalStateModule.promotedFolderIds = null;
-        deploymentProviderMock.listInstalledDeployments.resolves([]);
+        deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
         syncthingServiceMock.getConfigFolders.resolves([
-          { id: 'fluxweb_writable', type: 'sendreceive' },
+          { id: syncFolderId, type: 'sendreceive' },
           { id: 'fluxweb_readonly', type: 'receiveonly' },
         ]);
 
@@ -556,7 +553,19 @@ describe('syncthingMonitor tests', () => {
         await clock.tickAsync(100);
 
         expect(globalStateModule.promotedFolderIds, 'null is "this node has not answered yet"').to.not.equal(null);
-        expect([...globalStateModule.promotedFolderIds]).to.deep.equal(['fluxweb_writable']);
+        expect([...globalStateModule.promotedFolderIds]).to.deep.equal([syncFolderId]);
+      });
+
+      it('takes a folder it sweeps out of the set peers are told', async () => {
+        globalStateModule.promotedFolderIds = new Set();
+        deploymentProviderMock.listInstalledDeployments.resolves([]);
+        syncthingServiceMock.getConfigFolders.resolves([{ id: 'fluxweb_orphan', type: 'sendreceive' }]);
+
+        monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+        await clock.tickAsync(100);
+
+        sinon.assert.calledWith(syncthingServiceMock.adjustConfigFolders, sinon.match({ method: 'delete', id: 'fluxweb_orphan' }));
+        expect([...globalStateModule.promotedFolderIds]).to.deep.equal([]);
       });
 
       // THE TWO READS ARE CAUGHT SEPARATELY, and these say why that is not
@@ -788,10 +797,9 @@ describe('syncthingMonitor tests', () => {
       });
 
       // The flag syncthing raised names the folder id, and an app registered
-      // before v9 carries its folder under that id: the flag stands until the
-      // mount question is answered, and while the mount is unsafe the component
-      // is the one held out of the pass.
-      it('keeps the flag of a folder an app registered before v9 carries, and holds that component out while its mount is unsafe', async () => {
+      // before v9 carries its folder under that id: the flag finds the component,
+      // and the component is the one held out of the pass.
+      it('holds out the component of a flagged folder an app registered before v9 carries, while its mount is unsafe', async () => {
         const legacy = await deploymentFor('legacyapp', 'web', { persistentStorage: ACTIVE_STANDBY_STORAGE }, 'ab12cd34ef56', 8);
         deploymentProviderMock.listInstalledDeployments.resolves([legacy]);
         syncthingEventsConsumerMock.mountVerifyPendingIds.returns(['fluxweb_legacyapp']);
@@ -805,7 +813,6 @@ describe('syncthingMonitor tests', () => {
         monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
         await clock.tickAsync(100);
 
-        sinon.assert.notCalled(syncthingEventsConsumerMock.resolveMountVerify);
         sinon.assert.calledWithExactly(syncthingServiceMock.adjustConfigFolders, { method: 'patch', config: { type: 'receiveonly' }, id: 'fluxweb_legacyapp' });
         sinon.assert.calledWith(appReconcilerMock.setControllerDesired, 'web_ab12cd34ef56', 'stopped', sinon.match.string);
         // The pass went on past the hold-out (the device read follows it), and
@@ -1154,12 +1161,13 @@ describe('syncthingMonitor tests', () => {
       sinon.assert.notCalled(appCachesMock.setSyncedMark);
     });
 
-    it('keeps a mount-verify flag standing while the mount is still unsafe', async () => {
+    it('keeps a mount-verify flag standing until the folder over the unsafe mount is demoted', async () => {
       // The flag is the node's memory that this folder's mount is in question.
       // Clearing it by READING it - which is what the old drainErroredFolderIds
       // did in one call - loses that memory the moment the pass looks, so a pass
       // that dies before it acts never retries the folder it was asked about.
-      // Only a completed outcome resolves it, and "still unsafe" is not one.
+      // Only a completed outcome resolves it: the mount found safe, or the folder
+      // demoted.
       deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
       syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
       syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'unmounted_with_content' });
@@ -1167,6 +1175,7 @@ describe('syncthingMonitor tests', () => {
       // receiveonly, so the SHALLOW verifier is the one consulted - the deeper
       // check exists for the mode that can broadcast a deletion.
       syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, type: 'receiveonly' }]);
+      syncthingServiceMock.adjustConfigFolders.rejects(new Error('connect ECONNREFUSED 127.0.0.1:8384'));
 
       monitorControl = syncthingMonitor.syncthingApps(
         mockState,
@@ -1252,6 +1261,20 @@ describe('syncthingMonitor tests', () => {
 
       sinon.assert.calledWithExactly(syncthingServiceMock.adjustConfigFolders, { method: 'patch', config: { type: 'receiveonly' }, id: syncFolderId });
       sinon.assert.calledWith(appReconcilerMock.setControllerDesired, syncComp.identifier, 'stopped');
+    });
+
+    // From the next pass an unmounted volume is the normal pass's finding.
+    it('resolves the flag once the folder is demoted', async () => {
+      deploymentProviderMock.listInstalledDeployments.resolves([syncDeployment]);
+      syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
+      syncthingFolderStateMachineMock.verifyFolderMountSafety.resolves({ isSafe: false, isMounted: false, reason: 'empty_unmounted_directory' });
+      volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+      syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, type: 'receiveonly' }]);
+
+      monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+      await clock.tickAsync(100);
+
+      sinon.assert.calledWith(syncthingEventsConsumerMock.resolveMountVerify, syncFolderId);
     });
 
     it('abandons a promotion before it writes the hold, and holds before the demotion lands', async () => {

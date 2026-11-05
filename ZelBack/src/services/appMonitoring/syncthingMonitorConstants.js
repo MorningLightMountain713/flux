@@ -56,8 +56,23 @@ const HEALTH_WARNING_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes - log warning
 const HEALTH_NUDGE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes - device pause/resume nudge (and min interval between nudges)
 const HEALTH_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes - how often to run health checks
 
+/**
+ * The settings every folder FluxOS owns carries, on creation and on every write
+ * that changes its type. syncthing re-applies its own defaults to the fields a
+ * type or ownership change leaves out of the body, and its default of ten
+ * conflict copies puts renamed losers into a single-writer app's data.
+ * syncOwnership makes a synced file arrive owned by the uid that wrote it on
+ * the primary, so the same image writes it there without a permissions sweep.
+ */
+const OWNED_FOLDER_SETTINGS = Object.freeze({
+  rescanIntervalS: SYNCTHING_RESCAN_INTERVAL_SECONDS,
+  maxConflicts: SYNCTHING_MAX_CONFLICTS,
+  syncOwnership: true,
+});
+
 module.exports = {
   DEVICE_ID_REQUEST_TIMEOUT_MS,
+  OWNED_FOLDER_SETTINGS,
   MONITOR_INTERVAL_MS,
   OPERATION_DELAY_MS,
   ERROR_RETRY_DELAY_MS,

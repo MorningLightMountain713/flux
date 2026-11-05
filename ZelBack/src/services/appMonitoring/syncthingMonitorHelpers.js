@@ -7,15 +7,14 @@ const path = require('node:path');
 const log = require('../../lib/log');
 const serviceHelper = require('../serviceHelper');
 const syncthingService = require('../syncthingService');
-const { ConfigMethod } = require('../utils/syncthingConstants');
 const volumeService = require('../utils/volumeService');
 const peerIdentityService = require('../peerIdentityService');
 const fluxEventBus = require('../utils/fluxEventBus');
 const {
   DEVICE_ID_REQUEST_TIMEOUT_MS,
-  SYNCTHING_RESCAN_INTERVAL_SECONDS,
-  SYNCTHING_MAX_CONFLICTS,
+  OWNED_FOLDER_SETTINGS,
 } = require('./syncthingMonitorConstants');
+const syncthingFolderWrites = require('./syncthingFolderWrites');
 const { normalizeSocketAddress, extractIp, extractPort, socketAddressesMatch } = require('../utils/socketAddressUtils');
 
 /**
@@ -272,20 +271,6 @@ async function buildDeviceConfiguration(
 }
 
 /**
- * The settings every folder FluxOS owns carries, on creation and on every write
- * that changes its type. syncthing re-applies its own defaults to the fields a
- * type or ownership change leaves out of the body, and its default of ten
- * conflict copies puts renamed losers into a single-writer app's data.
- * syncOwnership makes a synced file arrive owned by the uid that wrote it on
- * the primary, so the same image writes it there without a permissions sweep.
- */
-const OWNED_FOLDER_SETTINGS = Object.freeze({
-  rescanIntervalS: SYNCTHING_RESCAN_INTERVAL_SECONDS,
-  maxConflicts: SYNCTHING_MAX_CONFLICTS,
-  syncOwnership: true,
-});
-
-/**
  * The fields of a folder's syncthing configuration the monitor owns. Its type
  * is decided separately: by the monitor for an r: folder, by the primary role
  * for a g: folder.
@@ -400,10 +385,11 @@ function emitFolderStatus(report, status) {
  *   instance resources record it; null for a component that shares none
  * @param {boolean} paused - the state to leave the folder in
  * @param {function(string): void} [report] - told what happened
- * @returns {Promise<'held'|'resumed'|'absent'|'failed'>} 'held' or 'resumed' when
- *   syncthing accepted it; 'absent' when no folder is configured, so there is
- *   nothing replicating to hold still; 'failed' when the folder may be live and
- *   unheld
+ * @returns {Promise<'held'|'alreadyPaused'|'resumed'|'absent'|'failed'>} 'held' or
+ *   'resumed' when syncthing accepted it; 'alreadyPaused' when a pause found the
+ *   folder paused, so there is nothing for the caller to give back; 'absent' when
+ *   no folder is configured, so there is nothing replicating to hold still;
+ *   'failed' when the folder may be live and unheld
  */
 async function setSyncthingFolderPaused(folderId, paused, report) {
   const verb = paused ? 'pause' : 'resume';
@@ -421,9 +407,15 @@ async function setSyncthingFolderPaused(folderId, paused, report) {
       return 'absent';
     }
 
-    await syncthingService.adjustConfigFolders({
-      method: ConfigMethod.PATCH, config: { paused }, id: folderId,
-    });
+    // Paused by something else: a shutdown, or another operation. It is not this
+    // operation's to release.
+    if (paused && match.paused) {
+      emitFolderStatus(report, { status: `Syncthing folder ${folderId} is already paused` });
+      return 'alreadyPaused';
+    }
+
+    const response = await syncthingFolderWrites.patchFolder(folderId, { paused });
+    if (response.status !== 'success') throw new Error(response.data?.message || 'syncthing refused the write');
     emitFolderStatus(report, { status: `Syncthing ${paused ? 'paused' : 'resumed'} for ${folderId}` });
     return paused ? 'held' : 'resumed';
   } catch (error) {
@@ -451,11 +443,10 @@ async function removeSyncthingFolder(folderId, report) {
     const folder = allSyncthingFolders.find((f) => f.id === folderId);
     if (!folder) return;
     // Only a removal syncthing accepted is reported as one. A delete is
-    // idempotent, so a folder already gone answers rather than throws.
-    try {
-      await syncthingService.adjustConfigFolders({ method: ConfigMethod.DELETE, id: folderId });
-    } catch (error) {
-      log.error(`removeSyncthingFolder - failed to remove folder ${folderId}: ${error.message}`);
+    // idempotent, so a folder already gone answers as a success.
+    const response = await syncthingFolderWrites.deleteFolder(folderId);
+    if (response.status !== 'success') {
+      log.error(`removeSyncthingFolder - failed to remove folder ${folderId}: ${response.data?.message}`);
       emitFolderStatus(report, { status: `Syncthing folder ${folder.path} could not be removed` });
       return;
     }

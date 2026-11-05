@@ -13,6 +13,7 @@ const volumeService = require('../utils/volumeService');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
 const syncthingService = require('../syncthingService');
+const syncthingFolderWrites = require('../appMonitoring/syncthingFolderWrites');
 const appDockerNetwork = require('../appNetwork/appDockerNetwork');
 const componentProvisioner = require('./componentProvisioner');
 const appNetworkLinker = require('./appNetworkLinker');
@@ -23,7 +24,6 @@ const operationRegistry = require('../utils/operationRegistry');
 const serviceHelper = require('../serviceHelper');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { getSpec } = require('../utils/specLibs');
-const { ConfigMethod } = require('../utils/syncthingConstants');
 const { appsFolder } = require('../utils/appConstants');
 const log = require('../../lib/log');
 const { nodeChain } = require('../utils/nodeChain');
@@ -319,8 +319,11 @@ async function repointFolder(comp) {
   try {
     const folder = await syncthingService.getConfigFolders(id);
     if (!folder || !folder.id || folder.path === target) return false;
-    await syncthingService.adjustConfigFolders({ method: ConfigMethod.PATCH, id, config: { path: target } });
-    return true;
+    const response = await syncthingFolderWrites.patchFolder(id, { path: target });
+    if (response.status === 'success') return true;
+    if (response.data?.httpStatus === 404) return false;
+    log.warn(`appIdentityMove - folder ${id} keeps its path for now: ${response.data?.message}`);
+    return false;
   } catch (error) {
     if (error.httpStatus === 404) return false;
     log.warn(`appIdentityMove - folder ${id} keeps its path for now: ${error.message}`);

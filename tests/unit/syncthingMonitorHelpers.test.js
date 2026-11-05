@@ -15,6 +15,8 @@ const log = require('../../ZelBack/src/lib/log');
 const helpers = require('../../ZelBack/src/services/appMonitoring/syncthingMonitorHelpers');
 const peerIdentityService = require('../../ZelBack/src/services/peerIdentityService');
 const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
+const globalState = require('../../ZelBack/src/services/utils/globalState');
+const syncthingFolderWrites = require('../../ZelBack/src/services/appMonitoring/syncthingFolderWrites');
 
 const { IdentityVerdict } = peerIdentityService;
 
@@ -630,6 +632,52 @@ describe('syncthingMonitorHelpers tests', () => {
       list.resolves(beforeV9());
       expect(await helpers.setSyncthingFolderPaused('fluxweb_app', true, (line) => emitted.push(String(line)))).to.equal('failed');
       expect(emitted.some((line) => line.includes('could not be paused'))).to.equal(true);
+    });
+  });
+
+  // Every folder write goes through syncthingFolderWrites, which covers a
+  // restart and keeps the set peers are told.
+  describe('the writes it makes', () => {
+    let savedWritable;
+    beforeEach(() => { savedWritable = globalState.promotedFolderIds; });
+    afterEach(() => { globalState.promotedFolderIds = savedWritable; });
+
+    it('covers the restart of a sending folder it resumes', async () => {
+      globalState.promotedFolderIds = new Set(['fluxweb_app']);
+      sandbox.stub(syncthingService, 'getConfigFolders').resolves(beforeV9());
+      sandbox.stub(syncthingService, 'adjustConfigFolders').resolves({});
+      const scan = sandbox.stub(syncthingService, 'scanFolder').resolves({});
+
+      expect(await helpers.setSyncthingFolderPaused('fluxweb_app', false)).to.equal('resumed');
+      await syncthingFolderWrites.whenCovered('fluxweb_app');
+
+      sinon.assert.calledTwice(scan);
+    });
+
+    it('takes a folder it removes out of the set peers are told', async () => {
+      globalState.promotedFolderIds = new Set(['fluxweb_app']);
+      sandbox.stub(syncthingService, 'getConfigFolders').resolves(beforeV9());
+      sandbox.stub(syncthingService, 'adjustConfigFolders').resolves({});
+
+      await helpers.removeSyncthingFolder('fluxweb_app');
+
+      expect(globalState.promotedFolderIds.has('fluxweb_app')).to.equal(false);
+    });
+
+    it('leaves a pause it did not make, and says the folder is not this operation\'s to give back', async () => {
+      sandbox.stub(syncthingService, 'getConfigFolders').resolves([{ ...beforeV9()[0], id: 'fluxweb_app', paused: true }]);
+      const adjust = sandbox.stub(syncthingService, 'adjustConfigFolders').resolves({});
+
+      expect(await helpers.setSyncthingFolderPaused('fluxweb_app', true)).to.equal('alreadyPaused');
+
+      sinon.assert.notCalled(adjust);
+    });
+
+    it('fails a pause syncthing refused, so the folder is not taken for held', async () => {
+      sandbox.stub(syncthingService, 'getConfigFolders').resolves(beforeV9());
+      sandbox.stub(syncthingService, 'adjustConfigFolders').rejects(new Error('connect ECONNREFUSED 127.0.0.1:8384'));
+
+      expect(await helpers.setSyncthingFolderPaused('fluxweb_app', true)).to.equal('failed');
     });
   });
 

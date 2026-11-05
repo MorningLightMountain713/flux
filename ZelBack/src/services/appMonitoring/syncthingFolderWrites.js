@@ -6,7 +6,7 @@ const syncthingService = require('../syncthingService');
 const globalState = require('../utils/globalState');
 const folderStates = require('./folderStates');
 const fluxEventBus = require('../utils/fluxEventBus');
-const { OWNED_FOLDER_SETTINGS } = require('./syncthingMonitorHelpers');
+const { OWNED_FOLDER_SETTINGS } = require('./syncthingMonitorConstants');
 const volumeService = require('../utils/volumeService');
 const { ConfigMethod } = require('../utils/syncthingConstants');
 

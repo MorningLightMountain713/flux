@@ -208,7 +208,12 @@ describe('appIdentityMove tests', () => {
           if (!folders.has(id)) throw Object.assign(new Error('not found'), { httpStatus: 404 });
           return folders.get(id);
         },
-        adjustConfigFolders: async (options) => { record('adjustConfigFolders', options); },
+      },
+      syncthingFolderWrites: {
+        patchFolder: async (id, config) => {
+          record('patchFolder', id, config);
+          return { status: 'success', data: {} };
+        },
       },
       appDockerNetwork: { ensureAppDockerNetwork: async (name, options) => { record('ensureAppDockerNetwork', name, options); } },
       componentProvisioner: {
@@ -250,6 +255,7 @@ describe('appIdentityMove tests', () => {
       '../appManagement/appsRuntimeState': stubs.appsRuntimeState,
       '../appManagement/appInspector': stubs.appInspector,
       '../syncthingService': stubs.syncthingService,
+      '../appMonitoring/syncthingFolderWrites': stubs.syncthingFolderWrites,
       '../appNetwork/appDockerNetwork': stubs.appDockerNetwork,
       './componentProvisioner': stubs.componentProvisioner,
       './appNetworkLinker': stubs.appNetworkLinker,
@@ -602,23 +608,21 @@ describe('appIdentityMove tests', () => {
 
       await appIdentityMove.moveInstalledAppsOntoIdentity();
 
-      expect(calls[indexOf('adjustConfigFolders')][1]).to.deep.equal({
-        method: 'patch', id: `flux${NAME}_${NAME}`, config: { path: `${APPS}${newIdentifier()}` },
-      });
+      expect(calls[indexOf('patchFolder')].slice(1)).to.deep.equal([`flux${NAME}_${NAME}`, { path: `${APPS}${newIdentifier()}` }]);
     });
 
     it('is left alone when syncthing does not hold it, or already has the path', async () => {
       seedRunningUnderName();
       folders.clear();
       await appIdentityMove.moveInstalledAppsOntoIdentity();
-      expect(indexOf('adjustConfigFolders')).to.equal(-1);
+      expect(indexOf('patchFolder')).to.equal(-1);
 
       calls = [];
       appIdentityMove.resetForTests();
       seedRunningUnderName();
       folders.set(`flux${NAME}_${NAME}`, { id: `flux${NAME}_${NAME}`, path: `${APPS}${newIdentifier()}` });
       await appIdentityMove.moveInstalledAppsOntoIdentity();
-      expect(indexOf('adjustConfigFolders')).to.equal(-1);
+      expect(indexOf('patchFolder')).to.equal(-1);
     });
 
     it('costs the move nothing when syncthing cannot answer', async () => {

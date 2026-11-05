@@ -201,6 +201,7 @@ describe('a single-writer folder type has one writer', function () {
     const client = env.clients[target];
     const from = client.getLastEventId();
     const writesBefore = (await writesTo(target, a.folder)).length;
+    const unsafePassesBefore = await client.getDecisionCount('syncthing:folderPass', a.folder, 'mountUnsafe');
 
     await client.holdCheckpoint(BEFORE_START, a.identifier);
     try {
@@ -210,7 +211,9 @@ describe('a single-writer folder type has one writer', function () {
       // again, as suite 61 does it; syncthing reports the folder's marker gone.
       await destroyVolume(client.container, a.appName);
       await injectSyncthingEvent({ ip: ipOf(target), type: 'FolderErrors', data: { folder: a.folder, errors: [{ error: 'folder marker missing' }] } });
-      await waitForReconcilerDesiredChanged(client, a.identifier, 'stopped', 120000, { afterId: from });
+      await waitFor(async () => (await client.getDecisionCount('syncthing:folderPass', a.folder, 'mountUnsafe')) > unsafePassesBefore, {
+        timeout: 120000, interval: 1000, label: 'a monitor pass finds the volume unsafe',
+      });
     } finally {
       await client.releaseCheckpoint(BEFORE_START, a.identifier)
         .catch((err) => console.warn(`cleanup: checkpoint release failed: ${err.message}`));
@@ -219,6 +222,8 @@ describe('a single-writer folder type has one writer', function () {
     const ended = await client.waitForEvent('primaryRole:changed',
       (d) => d.identifier === a.identifier && d.from === 'promoting', 120000, { afterId: from });
     expect(ended.data.to, 'the promotion was not abandoned').to.equal('standby');
+    // A promotion left to run on ends with its folder refused the send.
+    expect(ended.data.reason, 'the promotion ran on until its folder was refused').to.equal(undefined);
     await passesFromNow([target], (i) => electionCount(i, a.appName, 'evaluated'), 'election');
     expect((await writesTo(target, a.folder)).slice(writesBefore).map((w) => w.body?.type),
       'the folder over the unsafe volume was made to send').to.not.include('sendreceive');
