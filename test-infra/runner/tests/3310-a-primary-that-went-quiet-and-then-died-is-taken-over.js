@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 3
 /*
  * A single-writer app's primary stops announcing while it carries on running: its
  * FluxOS is gone, its syncthing and its container are not.

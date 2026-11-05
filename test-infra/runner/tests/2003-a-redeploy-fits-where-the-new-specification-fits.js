@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 5
 /*
  * A node with room for an app's new specification keeps the app through a
  * redeploy, though it has no room for the old and new specifications together.

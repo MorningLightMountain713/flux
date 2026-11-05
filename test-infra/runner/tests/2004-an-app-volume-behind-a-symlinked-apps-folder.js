@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 5
 /*
  * A legacy node whose apps folder is reached through a symlink manages its
  * apps' volumes as any other node does: each is mounted once, uses direct I/O,

@@ -1,3 +1,4 @@
+// fleet: 4
 /*
  * A running node fetches in bulk the app messages missing behind its payment records,
  * stores them, and then writes the registry row of each app they belong to before it

@@ -1,3 +1,4 @@
+// fleet: 7
 // Maintenance SSH access on a legacy node, end to end: the
 // fluxadm account, its passwordless sudo, the configured keys and a dedicated sshd
 // unit on apiport - 5, reached over the fleet network with a real ssh client.

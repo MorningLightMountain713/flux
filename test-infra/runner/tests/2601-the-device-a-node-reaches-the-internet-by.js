@@ -1,3 +1,4 @@
+// fleet: 8
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
@@ -24,6 +25,7 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 // container, so it reads near on every node and the tunnel verdicts here come
 // from the node's devices, never from distance.
 
+const NODES = 8;
 const SHAPES = [
   {
     shape: null,
@@ -111,7 +113,7 @@ describe('The device a node reaches the internet by', function () {
     const networkShapes = Object.fromEntries(SHAPES
       .map(({ shape }, index) => [index, shape])
       .filter(([, shape]) => shape));
-    env = await createTestEnv({ hookCtx: this, nodes: SHAPES.length, networkShapes });
+    env = await createTestEnv({ hookCtx: this, nodes: NODES, networkShapes });
     await Promise.all(env.clients.map((client) => waitForDaemonReady(client)));
 
     await Promise.all(env.clients.map(async (client, index) => {

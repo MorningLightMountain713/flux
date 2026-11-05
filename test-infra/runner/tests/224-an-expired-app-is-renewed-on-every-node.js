@@ -1,3 +1,4 @@
+// fleet: 6
 /*
  * An app whose term has ended is renewed by an update, on every node alike.
  *

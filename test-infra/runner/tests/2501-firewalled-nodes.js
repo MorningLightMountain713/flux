@@ -1,3 +1,4 @@
+// fleet: 3
 // The harness firewall switch: a firewalled node boots with ufw active as its
 // install leaves it, and FluxOS then adds its own rules on top. A legacy node
 // gets the legacy installer's baseline, an Arcane node the ISO's, and a node the

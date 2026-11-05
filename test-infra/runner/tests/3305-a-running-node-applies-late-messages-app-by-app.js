@@ -1,3 +1,4 @@
+// fleet: 4
 /*
  * A node that is running finds more than 500 app messages missing behind payments its scan
  * recorded, and its hash retry fetches them in bulk. It writes the registry row of each app

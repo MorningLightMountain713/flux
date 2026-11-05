@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 3
 /*
  * A standby's copy of a file the primary wrote changes while the primary still holds
  * it. Whether the standby's changes hold the only copy of anything is checked off the

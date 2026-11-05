@@ -1,3 +1,4 @@
+// fleet: 3
 // base-image: FLUX_E2E_BASE_TAG
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';

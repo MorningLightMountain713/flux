@@ -1,3 +1,4 @@
+// fleet: 3
 // An app's published port answers every client on a node whose firewall is on:
 // IPv4 and IPv6 clients outside the node, and a container on the node connecting
 // to it at the node's own address.

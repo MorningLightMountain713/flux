@@ -1,3 +1,4 @@
+// fleet: 10
 // base-image: FLUX_E2E_BASE_TAG
 /*
  * A fleet part way through an upgrade decides a cold-start seed across both releases.

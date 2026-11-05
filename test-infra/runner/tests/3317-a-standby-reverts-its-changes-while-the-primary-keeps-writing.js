@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 3
 /*
  * A standby's local changes are reverted while its primary keeps writing. Every pull
  * moves the folder's sequences, and none moves syncthing's counts of the standby's own

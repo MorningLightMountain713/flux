@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 5
 /*
  * An app installed at specification version 3 is updated to a version that has
  * components. Nothing of the old app carries over, so the reinstall pass rebuilds it

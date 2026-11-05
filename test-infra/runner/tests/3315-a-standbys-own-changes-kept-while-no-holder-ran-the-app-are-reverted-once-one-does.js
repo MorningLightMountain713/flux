@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 3
 /*
  * A standby's own changes are reverted only while another holder runs the app. The
  * primary's machine dies, and a change the standby made itself is kept: no holder

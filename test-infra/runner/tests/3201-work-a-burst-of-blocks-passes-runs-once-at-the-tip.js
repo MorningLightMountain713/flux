@@ -1,3 +1,4 @@
+// fleet: 3
 /*
  * Work paced by the chain that a node passes while catching up runs once, on the block that
  * reaches the tip.

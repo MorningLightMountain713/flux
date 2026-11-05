@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 3
 /*
  * At boot a node reads its location record of each app whose containers are stopped,
  * which is every app a machine reboot leaves. One whose record has expired was placed

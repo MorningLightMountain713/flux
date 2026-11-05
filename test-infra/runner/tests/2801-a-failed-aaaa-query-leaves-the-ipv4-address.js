@@ -1,3 +1,4 @@
+// fleet: 3
 import { describe, it, before, after } from 'mocha';
 import { createTestEnv } from '../framework/test-env.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';

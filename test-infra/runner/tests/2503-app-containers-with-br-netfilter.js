@@ -1,3 +1,4 @@
+// fleet: 3
 // App containers on a node whose kernel has br_netfilter loaded: traffic between
 // an app's own containers then passes through iptables, and the DOCKER-USER chain
 // must let it through by the network's own exception while still keeping app

@@ -1,3 +1,4 @@
+// fleet: 2
 /*
  * One give-up-an-app pass runs at a time.
  *

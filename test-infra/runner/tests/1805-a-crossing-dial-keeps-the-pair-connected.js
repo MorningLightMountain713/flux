@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 3
 /*
  * Two nodes dial each other at once, and the pair keeps the connection the lower
  * address dialed - at both ends, in every order the two dials can meet.

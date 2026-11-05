@@ -1,3 +1,4 @@
+// fleet: 3
 /*
  * A hard redeploy whose removal cannot delete the app's row stops with the app part
  * removed: its containers and volume are gone, its row is not. The node holds it as

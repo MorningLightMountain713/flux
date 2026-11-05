@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 3
 /*
  * A node that was a single-writer app's primary, and later its standby, is left the
  * only holder. What it wrote as the primary carries no other device's history, which

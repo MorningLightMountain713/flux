@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 5
 /*
  * The periodic reinstall pass redeploys an app whose specification changed, and the
  * database refuses the write of the app's new record. The app keeps its record, at the

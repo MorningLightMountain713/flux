@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 5
 /*
  * An app's volume is a loop-mounted image file, and its loop device uses direct
  * I/O: from the mount that creates it, through a spec update that reinstalls the

@@ -1,4 +1,4 @@
-// weight: medium
+// fleet: 3
 import crypto from 'node:crypto';
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';

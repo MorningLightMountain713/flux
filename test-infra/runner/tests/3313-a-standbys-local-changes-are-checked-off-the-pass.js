@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 3
 /*
  * Whether a standby's local changes hold the only copy of the primary's data is
  * checked off the monitor pass, and acted on only while the folder is the one it was

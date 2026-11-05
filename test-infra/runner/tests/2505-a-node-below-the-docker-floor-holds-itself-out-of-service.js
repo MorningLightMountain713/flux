@@ -1,3 +1,4 @@
+// fleet: 2
 // A node whose Docker is below the network minimum holds itself out of service and
 // says why: the version it found, the version required, and to upgrade Docker and
 // restart FluxOS. A node at or above the floor is not held.

@@ -1,3 +1,4 @@
+// fleet: 4
 /*
  * A node that joins takes a slice of the mainnet app message log in bulk, and ends where its
  * own record of the chain puts it.

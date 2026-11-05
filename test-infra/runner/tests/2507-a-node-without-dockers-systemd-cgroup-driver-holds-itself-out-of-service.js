@@ -1,3 +1,4 @@
+// fleet: 2
 // A node whose cgroups are not the ones FluxOS runs apps in holds itself out of
 // service and says why. Harness nodes run cgroup v2, with cgroup.kill, under Docker's
 // systemd cgroup driver, so the node under test has its Docker switched to the

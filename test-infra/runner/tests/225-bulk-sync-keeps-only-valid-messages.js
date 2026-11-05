@@ -1,3 +1,4 @@
+// fleet: 5
 /*
  * A node that joins with more than 500 app messages to fetch takes them in bulk from a peer,
  * and keeps exactly the valid ones, each where its own scan of the chain placed it.

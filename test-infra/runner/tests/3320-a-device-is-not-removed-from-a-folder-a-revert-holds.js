@@ -1,4 +1,4 @@
-// weight: heavy
+// fleet: 3
 /*
  * Syncthing drops a deleted device from every folder that lists it, outside
  * FluxOS's writes to those folders. A revert of a standby's changes holds the
