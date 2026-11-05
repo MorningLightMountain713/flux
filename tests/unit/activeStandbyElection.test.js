@@ -549,6 +549,7 @@ describe('activeStandbyElection', () => {
       sinon.stub(deploymentProvider, 'listInstalledDeployments').resolves([]);
       sinon.stub(appQueryService, 'listRunningContainers').resolves([]);
       sinon.stub(appsRuntimeState, 'operatorStopState').resolves(UNLOCKED);
+      sinon.stub(appsRuntimeState, 'releaseOperatorStart').resolves(true);
       sinon.stub(registryManager, 'appLocation').resolves([]);
       role = Object.fromEntries(ROLE_ACTIONS.map((name) => [name, sinon.stub(primaryRole, name).returns(true)]));
       adopt = sinon.stub(appReconciler, 'adoptControllerDesired').resolves(true);
@@ -559,6 +560,32 @@ describe('activeStandbyElection', () => {
     });
 
     const taken = () => ROLE_ACTIONS.filter((name) => role[name].called);
+
+    describe('an app with one of two activeStandby components held down by its operator', () => {
+      async function passTwoComponents({ granted }) {
+        const deployment = deploymentFor(await specWithComponents(appName, { valheim: { persistentStorage: AS }, voice: { persistentStorage: AS, ports: { http: { containerPort: 80, hostPort: 31001 } } } }));
+        const held = deployment.getComponent('voice');
+        deploymentProvider.listInstalledDeployments.resolves([deployment]);
+        appsRuntimeState.operatorStopState.withArgs(held.identifier).resolves(LOCKED);
+        sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('192.168.1.5:16127');
+        fdm.resolves({ data: { status: 'success', data: { ips: [elsewhere.split(':')[0]] } } });
+        if (granted) intent.resolves({ ip: elsewhere, fdmOk: true });
+        await activeStandbyElection.electionPass();
+        return { free: deployment.getComponent('valheim').identifier, held: held.identifier };
+      }
+
+      it('stands both down when the grant names another node', async () => {
+        const { free, held } = await passTwoComponents({ granted: true });
+
+        expect(role.standDown.getCalls().map((call) => call.args[0])).to.have.members([free, held]);
+      });
+
+      it('leaves the held one alone when FDM names another node', async () => {
+        const { free } = await passTwoComponents({ granted: false });
+
+        expect(role.standDown.getCalls().map((call) => call.args[0])).to.deep.equal([free]);
+      });
+    });
 
     Object.entries(FIXTURES).forEach(([registered, build]) => {
       describe(`an app ${registered}`, () => {
@@ -617,6 +644,48 @@ describe('activeStandbyElection', () => {
           expect(role.holdAsStandby.firstCall.args[2].grantedElsewhere).to.equal(true);
           sinon.assert.notCalled(othersHold);
           sinon.assert.notCalled(fdm);
+        });
+
+        // An owner's stop keeps the term this node holds. Once the grant names
+        // another node its folder stops sending, and the stop lock stays.
+        it('the grant names another node, operator-stopped here -> standDown', async () => {
+          const component = await pass(await build(), { names: 'other', running: false, operatorStopped: true }, { granted: true });
+
+          expect(taken()).to.deep.equal(['standDown']);
+          sinon.assert.calledWith(role.standDown, component.identifier, component.syncFolderId, { running: false });
+          sinon.assert.notCalled(appsRuntimeState.releaseOperatorStart);
+          sinon.assert.notCalled(fdm);
+        });
+
+        it('the grant names another node, operator-stopped here with no role held -> holdAsStandby, unscanned', async () => {
+          role.standDown.returns(false);
+          const component = await pass(await build(), { names: 'other', running: false, operatorStopped: true }, { granted: true });
+
+          expect(taken()).to.deep.equal(['standDown', 'holdAsStandby']);
+          const [identifier, folderId, { grantedElsewhere, othersHold: standbyHolders }] = role.holdAsStandby.firstCall.args;
+          expect([identifier, folderId, grantedElsewhere]).to.deep.equal([component.identifier, component.syncFolderId, true]);
+          expect(await standbyHolders()).to.equal(peerComponent.PeerComponent.RUNNING);
+        });
+
+        it('the grant names this node, operator-stopped here -> nothing', async () => {
+          await pass(await build(), { names: 'here', running: false, operatorStopped: true }, { granted: true });
+
+          sinon.assert.calledOnce(intent);
+          expect(taken()).to.deep.equal([]);
+        });
+
+        it('the grant names nobody yet, operator-stopped here -> nothing', async () => {
+          await pass(await build(), { names: 'none', running: false, operatorStopped: true }, { granted: true });
+
+          sinon.assert.calledOnce(intent);
+          expect(taken()).to.deep.equal([]);
+        });
+
+        it('FDM names another node, operator-stopped here -> nothing', async () => {
+          await pass(await build(), { names: 'other', running: false, operatorStopped: true });
+
+          sinon.assert.calledOnce(intent);
+          expect(taken()).to.deep.equal([]);
         });
 
         it('FDM names another node, stopped here -> holdAsStandby, which scans what this node wrote', async () => {

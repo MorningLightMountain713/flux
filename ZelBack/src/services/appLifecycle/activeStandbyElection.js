@@ -599,17 +599,13 @@ async function decideNamed({
       log.info(`activeStandby: keeping app:${appName} - FDM names ip:${ip}, which has not decided it holds it`);
       return;
     }
-    // Only the activeStandby components stand down; their siblings keep running,
-    // and one held down by its operator stays as its lock keeps it.
-    const standbyHolders = granted ? async () => PeerComponent.RUNNING : othersHold;
-    for (const member of members.filter((each) => each.free)) {
-      if (primaryRole.standDown(member.identifier, member.folderId, { running: runningIdentifiers.includes(member.identifier) })) {
-        log.info(`activeStandby: standing down as primary of component:${member.identifier} - ip:${ip} is named, localSocketAddr is: ${localSocketAddr}`);
-      } else {
-        // eslint-disable-next-line no-await-in-loop
-        await primaryRole.holdAsStandby(member.identifier, member.folderId, { othersHold: standbyHolders, appName, grantedElsewhere: granted });
-      }
-    }
+    // Only the activeStandby components stand down; their siblings keep running.
+    // FDM leaves a component held down by its operator as it stands. The grant
+    // does not: its operator's stop keeps the container down, and its folder
+    // stops sending for the node the grant names.
+    await standDownMembers(granted ? members : members.filter((each) => each.free), {
+      appName, ip, runningIdentifiers, localSocketAddr, granted, standbyHolders: granted ? async () => PeerComponent.RUNNING : othersHold,
+    });
     return;
   }
   for (const member of members.filter((each) => runningIdentifiers.includes(each.identifier))) {
@@ -617,6 +613,53 @@ async function decideNamed({
     await primaryRole.holdAsPrimary(member.identifier, member.folderId);
   }
   await startMissingMembers(appName, members, runningIdentifiers, { othersHold, namedPrimary: true });
+}
+
+/**
+ * Gives up the primary role of components another node is named for.
+ * @param {object[]} members
+ * @param {object} options
+ * @param {string} options.appName
+ * @param {string} options.ip The node named
+ * @param {string[]} options.runningIdentifiers
+ * @param {string} options.localSocketAddr
+ * @param {boolean} options.granted The grant named it
+ * @param {() => Promise<string>} options.standbyHolders The PeerComponent state of
+ *   the other holders
+ * @returns {Promise<void>}
+ */
+async function standDownMembers(members, {
+  appName, ip, runningIdentifiers, localSocketAddr, granted, standbyHolders,
+}) {
+  for (const member of members) {
+    if (primaryRole.standDown(member.identifier, member.folderId, { running: runningIdentifiers.includes(member.identifier) })) {
+      log.info(`activeStandby: standing down as primary of component:${member.identifier} - ip:${ip} is named, localSocketAddr is: ${localSocketAddr}`);
+    } else {
+      // eslint-disable-next-line no-await-in-loop
+      await primaryRole.holdAsStandby(member.identifier, member.folderId, { othersHold: standbyHolders, appName, grantedElsewhere: granted });
+    }
+  }
+}
+
+/**
+ * Stands an app every component of which is held down by its operator down from
+ * the primary role once the grant names another node: an owner's stop keeps a
+ * term this node holds, and keeps no folder sending past it. The stop locks stay.
+ * @param {object} ctx
+ * @param {string} ctx.appName
+ * @param {object[]} ctx.members
+ * @param {string[]} ctx.runningIdentifiers
+ * @returns {Promise<void>}
+ */
+async function yieldToGrantee({ appName, members, runningIdentifiers }) {
+  const [anchor] = members;
+  const intent = await mastershipGrantGate.masterIntent(anchor.identifier, anchor.component);
+  if (!intent?.ip) return;
+  const localSocketAddr = await fluxNetworkHelper.getLocalSocketAddress();
+  if (!localSocketAddr || ipsMatch(localSocketAddr, intent.ip)) return;
+  await standDownMembers(members, {
+    appName, ip: intent.ip, runningIdentifiers, localSocketAddr, granted: true, standbyHolders: async () => PeerComponent.RUNNING,
+  });
 }
 
 /**
@@ -687,7 +730,7 @@ async function decideApp(deployment, {
   if (standDownAnnounced.delete(identifier)) {
     fluxEventBus.publish('activeStandby:decided', { identifier, action: 'standDownCleared' });
   }
-  // Every component locked by its operator: not elected or acted on until one is started.
+  // Every component locked by its operator: not elected until one is started.
   if (!members.some((member) => member.free)) {
     fluxEventBus.count('masterSlave:decision', identifier, 'operatorStopped');
     if (!operatorStoppedAnnounced.has(identifier)) {
@@ -695,6 +738,7 @@ async function decideApp(deployment, {
       log.info(`activeStandby: ${members.map((member) => member.identifier).join(', ')} is operator-stopped - excluded from primary election until it is started`);
       fluxEventBus.publish('activeStandby:decided', { identifier, action: 'operatorStopExcluded' });
     }
+    await yieldToGrantee({ appName, members, runningIdentifiers });
     return;
   }
   if (operatorStoppedAnnounced.delete(identifier)) {
