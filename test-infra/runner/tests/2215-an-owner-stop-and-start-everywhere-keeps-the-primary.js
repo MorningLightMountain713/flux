@@ -1,4 +1,5 @@
 // fleet: 4
+import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
@@ -105,6 +106,7 @@ describe('an owner stop and start everywhere keeps the primary', function () {
     this.timeout(1500000);
     env = await createTestEnv({
       hookCtx: this,
+      zmqTopics: ALL_ZMQ_TOPICS,
       nodes: 4,
       syncthing: 'real',
       tickerAutostart: false,

@@ -1,4 +1,5 @@
 import { createTestEnv } from './test-env.js';
+import { ALL_ZMQ_TOPICS } from './fluxd-conf.js';
 import { pushImage } from './registry-helper.js';
 import { buildSeedableSyncthingApp } from './seed-helper.js';
 import { getAppContainerStatus, componentIdentifier } from './container.js';
@@ -49,6 +50,9 @@ export async function placeSilentPrimaryApp({
   const env = await createTestEnv({
     hookCtx,
     nodes: 3,
+    // A verdict names the anchored membership it was made on, and the polling path
+    // has none: without these the fleet certifies nobody down.
+    zmqTopics: ALL_ZMQ_TOPICS,
     ...moreFleet,
     syncthing: 'real',
     tickerAutostart: false,

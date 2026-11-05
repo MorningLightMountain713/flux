@@ -57,7 +57,7 @@ describe('an owner start keeps the primary', function () {
   const heldOnPrimary = async () => {
     const held = await client(PRIMARY).get('/apps/heldcomponents');
     if (held?.status !== 'success') throw new Error(`the primary's held account: ${JSON.stringify(held)}`);
-    return held.data.includes(identifier);
+    return held.data.includes(identifier) || held.data.includes(folder);
   };
   const started = () => Promise.all(STANDBYS.map((i) => electionDecisionCount(client(i), identifier, 'started')));
   const folderPasses = () => client(PRIMARY).getDecisionCount('syncthing:folderPass', folder, 'evaluated');

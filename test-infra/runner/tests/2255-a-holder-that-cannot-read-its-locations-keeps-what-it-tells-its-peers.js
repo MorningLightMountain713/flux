@@ -33,7 +33,7 @@ const APP_UID = 1000;
 const COMPONENT = 'data';
 const BEFORE_HOLDINGS = 'syncthing:beforeHoldings';
 const SETTLE_PASSES = 6;
-const unreadableLocations = (i) => failCommands(i + 1, 'globalzelapps', 'zelappslocation', { commands: ['find'] });
+const unreadableLocations = (i) => failCommands(i + 1, 'globalzelapps', 'appstateevents', { commands: ['aggregate'] });
 
 describe('a holder that cannot read its locations keeps what it tells its peers', function () {
   let env;

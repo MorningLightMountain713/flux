@@ -1,3 +1,4 @@
+import { ALL_ZMQ_TOPICS } from '../framework/fluxd-conf.js';
 import {
   describe, it, before, after, beforeEach, afterEach,
 } from 'mocha';
@@ -141,6 +142,7 @@ describe('a returning node waits paused until its role is decided', function () 
     this.timeout(900000);
     env = await createTestEnv({
       hookCtx: this,
+      zmqTopics: ALL_ZMQ_TOPICS,
       nodes: 3,
       legacyNodes: [LEGACY],
       syncthing: 'real',
