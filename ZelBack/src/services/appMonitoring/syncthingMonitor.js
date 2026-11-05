@@ -346,9 +346,8 @@ async function readAppLocation(appName) {
   return (await appsRepository.appLocationFromEvents({ appname: appName })) || [];
 }
 
-// Where an app is running, for syncthing peer selection and leader election.
-// Soft-fails to an empty list: a read failure must leave the folder alone rather
-// than reshape its peers off a partial answer.
+// Where an app is running, for the peers a pass warms up to ask. A read that fails
+// warms nobody.
 async function appLocation(appName) {
   try {
     return await readAppLocation(appName);
@@ -424,6 +423,7 @@ async function processContainerData(params) {
     folderIds,
     foldersConfiguration,
     newFoldersConfiguration,
+    unsafeFolderIds,
   } = params;
 
   // Only syncthing-enabled components need folder management. In v9 a sync mode
@@ -453,7 +453,19 @@ async function processContainerData(params) {
   }
 
   // Get and process app locations
-  let locations = await appLocation(installedAppName);
+  let locations;
+  try {
+    locations = await readAppLocation(installedAppName);
+  } catch (error) {
+    // Without its locations the folder would be shared with no peer, and the device
+    // sweep would remove every peer it has: it is held out of this pass instead. What
+    // this node tells its peers of the folder stays as it was: a read that failed says
+    // nothing about what the volume holds.
+    log.warn(`processContainerData - ${appId} locations could not be read (${error.message}); leaving the folder as it is`);
+    fluxEventBus.count('syncthing:folderPass', appId, 'locationsUnread');
+    unsafeFolderIds.add(appId);
+    return;
+  }
   locations = sortAndFilterLocations(locations, localSocketAddr);
 
   // The peer fence, reconciled declaratively every pass: a replaced master
@@ -1057,6 +1069,7 @@ async function syncthingAppsCore(state, getGlobalStateFn) {
 
     // Shared parameters for processing
     const sharedParams = {
+      unsafeFolderIds,
       localSocketAddr,
       liveness,
       localDeviceId,

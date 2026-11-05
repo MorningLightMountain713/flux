@@ -1554,6 +1554,36 @@ describe('syncthingMonitor tests', () => {
         expect(globalStateModule.folderStates.get(syncFolderId)).to.deep.equal({ state: 'notLookedAt' });
       });
 
+      // A read that failed says nothing about what the volume holds.
+      describe('a folder whose locations could not be read', () => {
+        const locationsUnreadable = () => {
+          baseline();
+          syncthingMonitorHelpersMock.ensureStfolderExists.resolves(true);
+          appsRepositoryMock.appLocationFromEvents.rejects(new Error('database unavailable'));
+          syncthingServiceMock.getConfigDevices.resolves([{ deviceID: 'PEER-DEVICE' }]);
+        };
+
+        it('leaves what it measured as it was', async () => {
+          globalStateModule.folderStates.set(syncFolderId, { state: 'measured', bytes: 10, newestModified: 1 });
+          locationsUnreadable();
+
+          monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+          await clock.tickAsync(100);
+
+          expect(globalStateModule.folderStates.get(syncFolderId)).to.deep.equal({ state: 'measured', bytes: 10, newestModified: 1 });
+        });
+
+        it('removes no peer device', async () => {
+          locationsUnreadable();
+
+          monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
+          await clock.tickAsync(100);
+
+          const deleted = syncthingServiceMock.adjustConfigDevices.getCalls().filter((call) => call.args[0]?.id === 'PEER-DEVICE');
+          expect(deleted).to.have.lengthOf(0);
+        });
+      });
+
       it('holds out a folder whose volume is not mounted', async () => {
         baseline();
         syncthingMonitorHelpersMock.ensureStfolderExists.resolves(false);
