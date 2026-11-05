@@ -12,6 +12,7 @@ const { untilSucceeds } = require('./utils/untilSucceeds');
 const explorerService = require('./explorerService');
 const chainState = require('./chainState');
 const fluxCommunication = require('./fluxCommunication');
+const appQueryService = require('./appQuery/appQueryService');
 const networkStateService = require('./networkStateService');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 const databaseHealthService = require('./databaseHealthService');
@@ -784,7 +785,17 @@ async function startFluxFunctions() {
         // the node's address moved, so every app that survived it has to come up on
         // the new one - asked for durably here rather than driven from the network
         // layer, which sits underneath the reconciler and cannot require it
-        fluxNetworkMonitor.setOnAddressChanged((apps, reason) => appReconciler.requestRestartOf(apps, reason));
+        fluxNetworkMonitor.setOnAddressChanged((apps, reason, key) => appReconciler.requestRestartOf(apps, reason, key));
+        // this node's own address moved: it records the move as its peers will, so
+        // it knows FDM naming its old IP means itself, and tells them once it has
+        // peers at the new address
+        fluxNetworkMonitor.setOnOwnAddressMoved((oldIp, newIp, movedAt) => fluxCommunication.handleOwnAddressMove(oldIp, newIp, movedAt));
+        // whether this node ran apps at an address it has no record of leaving
+        fluxNetworkMonitor.setInstalledAppsListedAt((socketAddress) => appQueryService.installedAppsListedAt(socketAddress));
+        fluxCommunication.announceRecordedOwnMovesWhenConnected();
+        // every address benchmark reports as this node's own, from boot on: one that
+        // differs from the address it last adopted is its move
+        fluxNetworkMonitor.startOwnAddressWatch();
         // route the reconciler's graceful stop-but-keep through flux-shutdownd on Arcane;
         // returns false off Arcane (or when the daemon is unavailable) so it stops locally
         appReconciler.setRequestGracefulStop((id, reason) => appShutdownCoordinator.requestGracefulStop(id, reason));

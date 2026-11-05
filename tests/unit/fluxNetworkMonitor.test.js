@@ -3,8 +3,7 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const config = require('config');
-const { stubHostedInstances, installedRecord } = require('./fixtures/appRecords');
-const proxyquire = require('proxyquire');
+const { stubHostedInstances } = require('./fixtures/appRecords');
 const chai = require('chai');
 const chaiAsPromised = require('chai-as-promised');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
@@ -18,15 +17,9 @@ const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper'
 const geolocationService = require('../../ZelBack/src/services/geolocationService');
 const fluxNetworkMonitor = require('../../ZelBack/src/services/fluxNetworkMonitor');
 const nodeDosState = require('../../ZelBack/src/services/nodeDosState');
-const nodeIdentityRepository = require('../../ZelBack/src/services/appDatabase/nodeIdentityRepository');
-const { getSpecBackend } = require('../../ZelBack/src/services/utils/specLibs');
 const appUninstaller = require('../../ZelBack/src/services/appLifecycle/appUninstaller');
 const { requireMongo } = require('./dbTestHelper');
-const fluxCommunicationMessagesSender = require('../../ZelBack/src/services/fluxCommunicationMessagesSender');
-const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const log = require('../../ZelBack/src/lib/log');
-const { peerManager } = require('../../ZelBack/src/services/utils/FluxPeerManager');
-const { nodeChain } = require('../../ZelBack/src/services/utils/nodeChain');
 
 chai.use(chaiAsPromised);
 
@@ -178,6 +171,7 @@ describe('fluxNetworkMonitor tests', () => {
     });
 
     it('should return true if getPublicIp status is a success and has a proper ip', async () => {
+      const readAddress = sinon.stub(fluxNetworkHelper, 'getLocalSocketAddress').resolves('129.0.0.1:16127');
       const getPublicIptResponse = { value: '129.0.0.1' };
       sinon.stub(benchmarkService, 'getPublicIp').returns(getPublicIptResponse);
       const axiosGetResponse = {
@@ -195,6 +189,7 @@ describe('fluxNetworkMonitor tests', () => {
       const result = await fluxNetworkMonitor.checkMyFluxAvailability();
 
       expect(result).to.be.true;
+      sinon.assert.calledOnceWithExactly(readAddress, { fresh: true });
     });
 
     it('should return false if getPublicIp status is a success but does not have a proper ip', async () => {
@@ -213,191 +208,6 @@ describe('fluxNetworkMonitor tests', () => {
       const result = await fluxNetworkMonitor.checkMyFluxAvailability();
 
       expect(result).to.be.false;
-    });
-  });
-
-  describe('adjustExternalIP tests', () => {
-    let setLastKnownIpStub;
-    let getLastKnownIpStub;
-
-    beforeEach(() => {
-      // The previously-observed address is node runtime state and lives in the local
-      // database; the operator's config file is no longer written by this path.
-      getLastKnownIpStub = sinon.stub(nodeIdentityRepository, 'getLastKnownIp').resolves('127.0.0.1');
-      setLastKnownIpStub = sinon.stub(nodeIdentityRepository, 'setLastKnownIp').resolves(true);
-      // Recording a new IP also announces it on chain; unstubbed that is a real
-      // RPC to the daemon port.
-      sinon.stub(daemonServiceFluxnodeRpcs, 'createConfirmationTransaction').returns(true);
-      // The broadcast waits for a peer to hear it; a unit test holds none.
-      sinon.stub(peerManager, 'waitForPeers').resolves(false);
-    });
-
-    afterEach(() => {
-      sinon.restore();
-    });
-
-    it('should record a new ip in the database', async () => {
-      await fluxNetworkMonitor.adjustExternalIP('127.0.0.66');
-
-      sinon.assert.calledOnceWithExactly(setLastKnownIpStub, '127.0.0.66');
-    });
-
-    describe('telling the fleet', () => {
-      let waitForPeers;
-      let broadcast;
-      let confirm;
-      let warn;
-
-      beforeEach(() => {
-        stubHostedInstances().apps.resolves([installedRecord({ name: 'appx', placement: { staticIp: false } })]);
-        sinon.stub(registryManager, 'appLocation').resolves([]);
-        sinon.stub(fluxNetworkHelper, 'getCachedLocalSocketAddress').returns('127.0.0.1:16127');
-        sinon.stub(fluxNetworkHelper, 'fluxUptime').returns(0);
-        ({ waitForPeers } = peerManager);
-        waitForPeers.resolves(true);
-        broadcast = sinon.stub(fluxCommunicationMessagesSender, 'broadcastMessageToAll').resolves({});
-        confirm = daemonServiceFluxnodeRpcs.createConfirmationTransaction;
-        warn = sinon.stub(log, 'warn');
-      });
-
-      it('announces the change on chain before it waits for anyone', async () => {
-        await fluxNetworkMonitor.adjustExternalIP('127.0.0.71');
-
-        sinon.assert.calledOnce(confirm);
-        sinon.assert.callOrder(confirm, waitForPeers);
-      });
-
-      it('sends fluxipchanged once, when there are peers to hear it', async () => {
-        await fluxNetworkMonitor.adjustExternalIP('127.0.0.72');
-
-        sinon.assert.calledOnce(broadcast);
-        const [message] = broadcast.firstCall.args;
-        expect(message.type).to.equal('fluxipchanged');
-        expect(message.oldIP.split(':')[0]).to.equal('127.0.0.1');
-        expect(message.newIP.split(':')[0]).to.equal('127.0.0.72');
-      });
-
-      it('does not send fluxipchanged when no peer arrives inside the bound', async () => {
-        waitForPeers.resolves(false);
-
-        await fluxNetworkMonitor.adjustExternalIP('127.0.0.73');
-
-        sinon.assert.notCalled(broadcast);
-        sinon.assert.calledOnce(confirm);
-        sinon.assert.calledWithMatch(warn, /fluxipchanged not sent/);
-      });
-    });
-
-    it('should not record anything if the stored ip is already the same', async () => {
-      await fluxNetworkMonitor.adjustExternalIP('127.0.0.1');
-
-      sinon.assert.notCalled(setLastKnownIpStub);
-    });
-
-    it('should record the address on a node that has never stored one', async () => {
-      getLastKnownIpStub.resolves(null);
-
-      await fluxNetworkMonitor.adjustExternalIP('127.0.0.66');
-
-      sinon.assert.calledOnceWithExactly(setLastKnownIpStub, '127.0.0.66');
-    });
-
-    it('should not record an ip that does not have a proper format', async () => {
-      await fluxNetworkMonitor.adjustExternalIP('127111111');
-
-      sinon.assert.notCalled(setLastKnownIpStub);
-    });
-
-    it('should not record an ip that is not a string', async () => {
-      await fluxNetworkMonitor.adjustExternalIP(121);
-
-      sinon.assert.notCalled(setLastKnownIpStub);
-    });
-
-    it('should not record an empty ip', async () => {
-      await fluxNetworkMonitor.adjustExternalIP('');
-
-      sinon.assert.notCalled(setLastKnownIpStub);
-    });
-  });
-
-  describe('adjustExternalIP static IP app handling tests', () => {
-    let appsRepositoryStub;
-    let registryManagerStub;
-    let appUninstallerStub;
-    let onAddressChangedStub;
-    let geolocationServiceStub;
-
-    beforeEach(() => {
-      // The address the node last observed about itself; a change from this is what
-      // gates the static-IP uninstall below.
-      sinon.stub(nodeIdentityRepository, 'getLastKnownIp').resolves('127.0.0.1');
-      sinon.stub(nodeIdentityRepository, 'setLastKnownIp').resolves(true);
-      sinon.stub(daemonServiceFluxnodeRpcs, 'createConfirmationTransaction').resolves({ status: 'success' });
-      // The broadcast waits for a peer to hear it; these tests are about the apps.
-      sinon.stub(peerManager, 'waitForPeers').resolves(true);
-      sinon.stub(serviceHelper, 'delay').resolves();
-      fluxNetworkHelper.setStoredFluxBenchAllowed('6.2.0');
-      fluxNetworkHelper.setLocalSocketAddress('127.0.0.1');
-      registryManagerStub = { appLocation: sinon.stub().resolves([]) };
-      appUninstallerStub = { uninstallApplication: sinon.stub().resolves() };
-      onAddressChangedStub = sinon.stub().resolves();
-      geolocationServiceStub = { setNodeGeolocation: sinon.stub() };
-    });
-
-    afterEach(() => {
-      sinon.restore();
-    });
-
-    // Each test moves to its own address: a handled address is remembered by the
-    // module's cache and a second change to it does nothing.
-    async function adjustWith(installed, ip) {
-      appsRepositoryStub = { listInstalledApps: sinon.stub().resolves(installed) };
-      const monitor = proxyquire('../../ZelBack/src/services/fluxNetworkMonitor', {
-        './appDatabase/appsRepository': appsRepositoryStub,
-        './appDatabase/appRecords': { hostedInstances: () => ({ apps: async () => (await appsRepositoryStub.listInstalledApps()).map((record) => installedRecord(record)) }) },
-        './appDatabase/registryManager': registryManagerStub,
-        './appLifecycle/appUninstaller': appUninstallerStub,
-        './geolocationService': geolocationServiceStub,
-        './fluxCommunicationMessagesSender': { broadcastMessageToOutgoing: sinon.stub().resolves(), broadcastMessageToIncoming: sinon.stub().resolves() },
-        './serviceHelper': serviceHelper,
-      });
-      monitor.setOnAddressChanged(onAddressChangedStub);
-      await monitor.adjustExternalIP(ip);
-    }
-
-    it('uninstalls the apps whose placement requires a static IP and hands the rest over once', async () => {
-      await adjustWith([
-        { name: 'staticApp', placement: { staticIp: true } },
-        { name: 'normalApp', placement: { staticIp: false } },
-      ], '192.168.1.100');
-
-      sinon.assert.calledOnceWithExactly(appUninstallerStub.uninstallApplication, 'staticApp', { forceKill: true, skipGuard: true, broadcastRemoval: true });
-      // The apps that stay are handed over ONCE, as a set: what an app is made of
-      // is knowledge the reconciler holds and this layer does not.
-      sinon.assert.calledOnce(onAddressChangedStub);
-      expect(onAddressChangedStub.firstCall.args[0].map((a) => a.name)).to.deep.equal(['normalApp']);
-      sinon.assert.calledOnce(geolocationServiceStub.setNodeGeolocation);
-    });
-
-    // The requirement is the record's to answer, for every version and without
-    // decrypting: these are real records, read as the repository reads them.
-    it('asks the record, so a v6 app stays and a v7 app that requires a static IP goes', async () => {
-      const { RegisteredSpec } = await getSpecBackend();
-      const component = {
-        name: 'web', description: 'x', repotag: 'nginx:latest', ports: [31_000], domains: [''], environmentParameters: [],
-        commands: [], containerPorts: [80], containerData: '/data', cpu: 0.5, ram: 300, hdd: 5, tiered: false,
-      };
-      const record = (version, name) => RegisteredSpec.deserialize({
-        version, name, description: 'x', owner: '1abc', instances: 3, contacts: [], geolocation: [], expire: 88_000,
-        ...(version >= 7 ? { nodes: [] } : {}), staticip: true, compose: [component], hash: `h-${name}`, height: 1000,
-      }, { chain: nodeChain() });
-
-      await adjustWith([record(6, 'sixapp'), record(7, 'sevenapp')], '192.168.1.101');
-
-      sinon.assert.calledOnce(appUninstallerStub.uninstallApplication);
-      sinon.assert.calledWith(appUninstallerStub.uninstallApplication, 'sevenapp');
-      expect(onAddressChangedStub.firstCall.args[0].map((a) => a.name)).to.deep.equal(['sixapp']);
     });
   });
 
@@ -809,20 +619,20 @@ describe('fluxNetworkMonitor tests', () => {
 
     afterEach(() => {
       sinon.restore();
+      fluxNetworkMonitor.setDosTooManyIpChanges(false);
     });
 
     it('a first change within the window removes nothing', async () => {
       hosted.names.resolves(['alpha']);
 
-      expect(await fluxNetworkMonitor.ipChangesOverLimit()).to.equal(false);
+      expect(await fluxNetworkMonitor.ipChangesOverLimit(1)).to.equal(false);
       sinon.assert.notCalled(uninstallApplication);
     });
 
     it('a second change within the window removes every hosted app without a broadcast', async () => {
       hosted.names.resolves(['alpha', 'beta']);
 
-      await fluxNetworkMonitor.ipChangesOverLimit();
-      expect(await fluxNetworkMonitor.ipChangesOverLimit()).to.equal(true);
+      expect(await fluxNetworkMonitor.ipChangesOverLimit(2)).to.equal(true);
 
       expect(uninstallApplication.args).to.deep.equal([['alpha', { forceKill: true }], ['beta', { forceKill: true }]]);
     });
@@ -831,8 +641,7 @@ describe('fluxNetworkMonitor tests', () => {
       hosted.names.rejects(new Error('mongo down'));
       const logError = sinon.stub(log, 'error');
 
-      await fluxNetworkMonitor.ipChangesOverLimit();
-      expect(await fluxNetworkMonitor.ipChangesOverLimit()).to.equal(true);
+      expect(await fluxNetworkMonitor.ipChangesOverLimit(2)).to.equal(true);
 
       sinon.assert.notCalled(uninstallApplication);
       sinon.assert.calledWithMatch(logError, /cannot list the hosted apps: mongo down/);

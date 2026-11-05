@@ -946,6 +946,39 @@ async function waitForLocalSocketAddress() {
   return address;
 }
 
+// The address this node last adopted as its own, and the addresses it has moved
+// away from, held as each is recorded so reading them costs nothing.
+let adoptedOwnAddress = null;
+const ownAddressesLeft = new Set();
+
+/**
+ * Notes the address this node adopted, and the one it left for it.
+ * @param {string} current
+ * @param {string|null} previous
+ * @returns {void}
+ */
+function noteOwnAddress(current, previous) {
+  const to = normalizeSocketAddress(current);
+  if (!to) return;
+  const from = normalizeSocketAddress(previous);
+  if (from && from !== to) ownAddressesLeft.add(from);
+  ownAddressesLeft.delete(to);
+  adoptedOwnAddress = to;
+}
+
+/**
+ * Where this node is, for an address benchmark reports as its own: the address it
+ * adopted when the reported one is an address it has moved away from - a move is
+ * recorded, and its rows carried, before benchmark reports the new address - and
+ * the reported one otherwise.
+ * @param {string} reported
+ * @returns {string|null}
+ */
+function ownAddressFor(reported) {
+  const address = normalizeSocketAddress(reported);
+  return address && adoptedOwnAddress && ownAddressesLeft.has(address) ? adoptedOwnAddress : address;
+}
+
 /**
  * @param {function(string): void} listener Called with the new address (ip:port)
  *   each time the node learns an address that differs from the last one.
@@ -2405,6 +2438,8 @@ module.exports = {
   checkFluxAvailability,
   getLocalSocketAddress,
   getKnownLocalSocketAddress,
+  noteOwnAddress,
+  ownAddressFor,
   waitForLocalSocketAddress,
   onLocalSocketAddressChange,
   offLocalSocketAddressChange,

@@ -61,7 +61,7 @@ async function migrateNodeIdentity() {
   }
 
   // Seeding the previous address preserves change detection across the upgrade. It is
-  // a convenience, not a correctness requirement: adjustExternalIP already guards its
+  // a convenience, not a correctness requirement: the own-address reconcile already guards its
   // side effects on the previous value being a valid address, so an unseeded node
   // records the current address without treating it as a change.
   const existingIp = await nodeIdentityRepository.getLastKnownIp();

@@ -776,6 +776,9 @@ async function decideApp(deployment, {
     return;
   }
   if (!localSocketAddr) return;
+  // Taken once FDM's answer is in, so a move recorded while it was asked counts
+  // for both: this node is where it adopted, whatever benchmark still reports.
+  localSocketAddr = fluxNetworkHelper.ownAddressFor(localSocketAddr);
   if (ip && typeof ip !== 'string') {
     log.error(`activeStandby: Invalid IP type for app:${appName}, got: ${typeof ip}`);
     return;
