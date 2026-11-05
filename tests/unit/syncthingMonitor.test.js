@@ -1589,6 +1589,8 @@ describe('syncthingMonitor tests', () => {
         baseline();
         syncthingEventsConsumerMock.mountVerifyPendingIds.returns([syncFolderId]);
         syncthingFolderStateMachineMock.verifySendReceiveFolderSafety.resolves({ isSafe: false, isMounted: false, reason: 'not_mounted' });
+        volumeServiceMock.ensureAppVolumeMounted.resolves({ mounted: false, reason: 'volume_file_missing' });
+        syncthingServiceMock.getConfigFolders.resolves([{ id: syncFolderId, path: syncComp.dir, type: 'sendreceive' }]);
 
         monitorControl = syncthingMonitor.syncthingApps(mockState, mockGetGlobalStateFn);
         await clock.tickAsync(100);
