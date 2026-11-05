@@ -460,7 +460,10 @@ async function peerSyncthingConnection(folderId, peerIp) {
  *
  * A closed connection is evidence only once the network has certified the
  * peer down (certifiedDown): until then it may be a restart or a reboot, and a
- * node back from one keeps what it holds.
+ * node back from one keeps what it holds. The certificate stands alone: it takes
+ * the peer's location row, and the monitor then removes its device, so a
+ * connection this node can no longer read says nothing against it. Only a live
+ * connection does.
  *
  * @param {string} folderId
  * @param {string} peerIp
@@ -470,10 +473,9 @@ async function peerSyncthingConnection(folderId, peerIp) {
 async function silenceVerdict(folderId, peerIp, liveness) {
   const connection = await peerSyncthingConnection(folderId, peerIp);
   if (connection === PeerConnection.CONNECTED) return SilenceVerdict.CONNECTION_ALIVE;
-  if (connection === PeerConnection.UNKNOWN) return SilenceVerdict.NO_EVIDENCE;
   const certified = await certifiedDown(peerIp);
   if (certified === null) return SilenceVerdict.NO_EVIDENCE;
-  if (!certified) return SilenceVerdict.NOT_CERTIFIED;
+  if (!certified) return connection === PeerConnection.UNKNOWN ? SilenceVerdict.NO_EVIDENCE : SilenceVerdict.NOT_CERTIFIED;
   if (!liveness.localConnectivity().connected) return SilenceVerdict.LOCALLY_ISOLATED;
   return SilenceVerdict.GONE;
 }

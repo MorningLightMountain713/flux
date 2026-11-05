@@ -200,6 +200,24 @@ describe('peerComponent tests', () => {
 
       // A closed connection may be a restart or a reboot until the network
       // certifies the node down.
+      // The certificate takes the peer's location row, and the monitor then removes
+      // its device: this node can no longer ask about the connection.
+      it('frees the app of a certified peer whose device this node no longer holds', async () => {
+        evidence([]);
+        syncthingService.getConfigDevices.resolves([]);
+
+        expect(await peerComponentState(PEER, appCtx)).to.equal(PeerComponent.NOT_RUNNING);
+      });
+
+      it('does not free the app of an uncertified peer whose device this node does not hold', async () => {
+        evidence([], 'none');
+        syncthingService.getConfigDevices.resolves([]);
+
+        expect(await peerComponentState(PEER, appCtx)).to.equal(PeerComponent.UNKNOWN);
+        expect(await peerFolderLiveness.silenceVerdict('fluxweb_a', PEER, {}))
+          .to.equal(peerFolderLiveness.SilenceVerdict.NO_EVIDENCE);
+      });
+
       it('does not free the app while the network has not certified the peer down', async () => {
         evidence([], 'none');
 
