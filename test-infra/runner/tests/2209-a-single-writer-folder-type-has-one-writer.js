@@ -32,6 +32,9 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 // The syncthing stub applies config changes as syncthing does: one at a time,
 // each answered once it has taken effect, a PATCH written back whole from the
 // folder as it was when the request arrived.
+//
+// Twelve apps stay installed on the holders. A v8 component reserves 13 GB: a
+// CUMULUS node's 148 usable hold eleven, a NIMBUS node's 376 hold them all.
 
 const subnet = getSubnetConfig();
 
@@ -135,7 +138,9 @@ describe('a single-writer folder type has one writer', function () {
 
   before(async function () {
     this.timeout(900000);
-    env = await createTestEnv({ hookCtx: this, nodes: 10, tickerAutostart: false });
+    env = await createTestEnv({
+      hookCtx: this, nodes: 10, tickerAutostart: false, nodeTiers: { 1: 'NIMBUS', 2: 'NIMBUS', 3: 'NIMBUS' },
+    });
     await bootAndPeer(env);
     await resetFdm();
     await resetSyncState();
