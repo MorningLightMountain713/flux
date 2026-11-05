@@ -411,7 +411,7 @@ async function decideUnnamed({
   }
 
   const probeCtx = {
-    appIds: namesOf(members), identifier, appName, liveness, logPrefix: 'activeStandby',
+    appIds: namesOf(members), folderIds: members.map((member) => member.folderId), identifier, appName, liveness, logPrefix: 'activeStandby',
   };
   // Every other holder is asked, whatever this node's place in the order: the
   // order decides who goes first, not who can have started. A peer that does not
@@ -583,7 +583,7 @@ async function decideNamed({
     scheduledStart.delete(identifier);
   }
   const probeCtx = {
-    appIds: namesOf(members), identifier, appName, liveness, logPrefix: 'activeStandby',
+    appIds: namesOf(members), folderIds: members.map((member) => member.folderId), identifier, appName, liveness, logPrefix: 'activeStandby',
   };
   const othersHold = granted
     ? async () => PeerComponent.NOT_RUNNING
@@ -812,7 +812,7 @@ async function decideApp(deployment, {
   }
   await startMissingMembers(appName, members, runningIdentifiers, {
     othersHold: () => peerComponent.componentStateOnOtherHolders((name) => registryManager.appLocation(name), localSocketAddr, {
-      appIds: namesOf(members), identifier, appName, liveness, logPrefix: 'activeStandby',
+      appIds: namesOf(members), folderIds: members.map((member) => member.folderId), identifier, appName, liveness, logPrefix: 'activeStandby',
     }),
   });
 }

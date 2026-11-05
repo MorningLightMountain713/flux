@@ -51,7 +51,10 @@ const SILENCE_REASONS = Object.freeze({
  * primary, or from the instance order the surplus rule ranks.
  * @param {string} peerSocketAddr The peer's socket address.
  * @param {object} ctx Everything the probe needs that is not the peer.
- * @param {string[]} ctx.appIds Container names of the app's g: components.
+ * @param {string[]} ctx.appIds Every name a peer may hold the app's g: components
+ *   by: their identifiers and folder ids.
+ * @param {string[]} ctx.folderIds The folder ids of those components: what this
+ *   node's syncthing knows them by.
  * @param {string} ctx.identifier `<component>_<app>` the election keys on.
  * @param {string} ctx.appName Global app name, for the log lines.
  * @param {object} ctx.liveness Peer folder liveness, for judging silence.
@@ -60,7 +63,7 @@ const SILENCE_REASONS = Object.freeze({
  * @returns {Promise<string>} A PeerComponent state.
  */
 async function peerComponentState(peerSocketAddr, {
-  appIds, identifier, appName, liveness, label, logPrefix,
+  appIds, folderIds, identifier, appName, liveness, label, logPrefix,
 }) {
   // Docker reports names with a leading slash, and getAppIdentifier yields
   // exactly the container name for each component. Compare whole names: a
@@ -78,7 +81,7 @@ async function peerComponentState(peerSocketAddr, {
 
   const { IdentityVerdict, AnswerPurpose } = peerIdentityService;
   const silent = () => silentPeerState(peerSocketAddr, {
-    appIds, identifier, appName, liveness, label, logPrefix,
+    folderIds, identifier, appName, liveness, label, logPrefix,
   });
 
   // "Not running" is a clearance to start a second writer, so it counts only
@@ -201,14 +204,14 @@ async function peerComponentState(peerSocketAddr, {
  * @returns {Promise<string>} NOT_RUNNING or UNKNOWN.
  */
 async function silentPeerState(peerSocketAddr, {
-  appIds, identifier, appName, liveness, label, logPrefix,
+  folderIds, identifier, appName, liveness, label, logPrefix,
 }) {
   const ipToCheck = extractIp(peerSocketAddr);
-  const verdicts = await Promise.all(appIds.map((appId) => silenceVerdict(appId, peerSocketAddr, liveness)));
+  const verdicts = await Promise.all(folderIds.map((folderId) => silenceVerdict(folderId, peerSocketAddr, liveness)));
   const verdict = verdicts.find((each) => each !== SilenceVerdict.GONE) ?? SilenceVerdict.GONE;
   fluxEventBus.count('peer:silenceVerdict', identifier, verdict);
   if (verdict === SilenceVerdict.GONE) {
-    log.info(`${logPrefix}: peer node (${label}) at ${ipToCheck} is silent and this node's syncthing shows its connection for ${appIds.join(', ')} gone - the app is free there`);
+    log.info(`${logPrefix}: peer node (${label}) at ${ipToCheck} is silent and this node's syncthing shows its connection for ${folderIds.join(', ')} gone - the app is free there`);
     return PeerComponent.NOT_RUNNING;
   }
   log.info(`${logPrefix}: peer node (${label}) at ${ipToCheck} is silent for app:${appName} and ${SILENCE_REASONS[verdict]}, will not start`);

@@ -2011,6 +2011,7 @@ async function manageFolderSyncState(params) {
   // running any of them is its primary.
   const othersHold = () => componentStateOnOtherHolders(readAppLocation, localSocketAddr, {
     appIds: [...new Set([appId, identifier, ...electedSiblings.flatMap((sibling) => [sibling.folderId, sibling.identifier])])],
+    folderIds: [appId, ...electedSiblings.map((sibling) => sibling.folderId)],
     identifier,
     appName: installedAppName,
     liveness,

@@ -266,6 +266,7 @@ async function surplusVerdict(app, locations, localSocketAddr, deps) {
     const { folderId } = writerComp;
     const newestState = await peerComponent.peerComponentState(ordered[0].ip, {
       appIds: [...new Set([writer, folderId])],
+      folderIds: [folderId],
       identifier: writer,
       appName: app.name,
       liveness,

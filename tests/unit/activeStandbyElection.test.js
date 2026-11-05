@@ -563,7 +563,7 @@ describe('activeStandbyElection', () => {
 
     describe('an app with one of two activeStandby components held down by its operator', () => {
       async function passTwoComponents({ granted }) {
-        const deployment = deploymentFor(await specWithComponents(appName, { valheim: { persistentStorage: AS }, voice: { persistentStorage: AS, ports: { http: { containerPort: 80, hostPort: 31001 } } } }));
+        const deployment = deploymentFor(await specWithComponents(appName, { valheim: { persistentStorage: AS }, voice: { persistentStorage: AS, ports: { http: { containerPort: 80, hostPort: 31_001 } } } }));
         const held = deployment.getComponent('voice');
         deploymentProvider.listInstalledDeployments.resolves([deployment]);
         appsRuntimeState.operatorStopState.withArgs(held.identifier).resolves(LOCKED);
@@ -686,6 +686,14 @@ describe('activeStandbyElection', () => {
 
           sinon.assert.calledOnce(intent);
           expect(taken()).to.deep.equal([]);
+        });
+
+        it('asks the other holders about its folders, under every name, and judges silence by the folder', async () => {
+          const component = await pass(await build(), { names: 'here', running: false });
+
+          const asked = othersHold.firstCall.args[2];
+          expect(asked.folderIds).to.deep.equal([component.syncFolderId]);
+          expect(asked.appIds).to.have.members([...new Set([component.identifier, component.syncFolderId])]);
         });
 
         it('FDM names another node, stopped here -> holdAsStandby, which scans what this node wrote', async () => {

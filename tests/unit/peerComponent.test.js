@@ -17,7 +17,7 @@ const {
 describe('peerComponent tests', () => {
   const appId = 'fluxw_a';
   const ctx = {
-    appIds: [appId], identifier: 'w_a', appName: 'a', liveness: {}, logPrefix: 'test',
+    appIds: [appId], folderIds: [appId], identifier: 'w_a', appName: 'a', liveness: {}, logPrefix: 'test',
   };
 
   // Each peer answers /apps/heldcomponents with what it holds; a peer given a
@@ -118,7 +118,7 @@ describe('peerComponent tests', () => {
   describe('an app with more than one g: component', () => {
     const appIds = ['fluxdb_a', 'fluxweb_a'];
     const appCtx = {
-      appIds, identifier: 'db_a', appName: 'a', logPrefix: 'test', label: 'peer',
+      appIds, folderIds: appIds, identifier: 'db_a', appName: 'a', logPrefix: 'test', label: 'peer',
       liveness: { localConnectivity: () => ({ connected: true }) },
     };
     const PEER = '2.2.2.2:16127';
@@ -174,6 +174,18 @@ describe('peerComponent tests', () => {
 
       // Canary for the test above: the same peer with one folder still connected
       // is one that may still be writing it.
+      // A pre-v9 app's folder id is not its identifier, and syncthing knows only the
+      // folder: asked about the identifier it gives no evidence, and a standby could
+      // never take the app from a dead primary.
+      it('judges a pre-v9 app by its folders, not by the names its components run under', async () => {
+        evidence([]);
+        syncthingService.getDbCompletion.withArgs(sinon.match({ folder: 'db_identity' })).rejects(new Error('no such folder'));
+
+        expect(await peerComponentState(PEER, {
+          ...appCtx, appIds: ['db_identity', 'fluxdb_a'], folderIds: ['fluxdb_a'],
+        })).to.equal(PeerComponent.NOT_RUNNING);
+      });
+
       it('does not free the app while one g: folder is still connected to it', async () => {
         evidence(['fluxweb_a']);
 
