@@ -986,7 +986,13 @@ async function uninstallApplication(appName, options = {}) {
       // order they happened, so the claim is applied first and this message clears it.
       await waitForAnnouncementInFlight();
       const ip = await fluxNetworkHelper.getLocalSocketAddress();
-      if (ip) {
+      if (!ip) {
+        log.warn(`${appName} removed without announcing it - this node's own address is unknown, so peers hold its location row until it expires`);
+      } else if (!nodeConfirmationService.canSendMessages()) {
+        // Read as the message goes out: whether this node can be heard changes while
+        // a removal waits for the cycle above.
+        log.warn(`${appName} removed without announcing it - peers do not accept this node's messages, so they hold its location row until it expires`);
+      } else {
         const appRemovedMessage = {
           type: 'fluxappremoved', version: 1, appName, ip, broadcastedAt: Date.now(),
           ...(replica != null ? { replica } : {}),
@@ -998,8 +1004,6 @@ async function uninstallApplication(appName, options = {}) {
           const { runningAppsCache } = globalState;
           if (runningAppsCache.has(appName)) runningAppsCache.delete(appName);
         }
-      } else {
-        log.warn(`${appName} removed without announcing it - this node's own address is unknown, so peers hold its location row until it expires`);
       }
     }
 

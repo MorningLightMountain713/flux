@@ -265,6 +265,7 @@ describe('appUninstaller tombstoning teardown', () => {
       '../dockerService': stubs.dockerService,
       '../utils/globalState': stubs.globalState,
       '../upnpService': stubs.upnpService,
+      '../nodeConfirmationService': { canSendMessages: () => true },
       '../fluxNetworkHelper': stubs.fluxNetworkHelper,
       '../fluxCommunicationMessagesSender': stubs.fluxCommunicationMessagesSender,
       '../appDatabase/appRecords': stubs.appRecords,

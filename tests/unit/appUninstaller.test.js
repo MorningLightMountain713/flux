@@ -26,6 +26,7 @@ describe('appUninstaller tests', () => {
   let configStub;
   let globalStateStub;
   let broadcastAllStub;
+  let canSendMessagesStub;
   let dockerServiceStub;
   let installedStub;
   let registryStub;
@@ -83,6 +84,7 @@ describe('appUninstaller tests', () => {
     };
 
     broadcastAllStub = sinon.stub().resolves();
+    canSendMessagesStub = sinon.stub().returns(true);
     globalStateStub = {
       abortInstall: sinon.stub(),
       installAborted: sinon.stub().returns(false),
@@ -199,7 +201,7 @@ describe('appUninstaller tests', () => {
       },
       '../upnpService': upnpServiceStub,
       '../fluxNetworkHelper': fluxNetworkHelperStub,
-      '../nodeConfirmationService': { ownCollateral: sinon.stub().resolves({ txhash: 'txh', txindex: 0 }) },
+      '../nodeConfirmationService': { ownCollateral: sinon.stub().resolves({ txhash: 'txh', txindex: 0 }), canSendMessages: canSendMessagesStub },
       '../fluxCommunicationMessagesSender': {
         broadcastMessageToOutgoing: sinon.stub().resolves(),
         broadcastMessageToIncoming: sinon.stub().resolves(),
@@ -732,6 +734,30 @@ describe('appUninstaller tests', () => {
       expect(result.status).to.equal(appUninstaller.UninstallStatus.REMOVED);
       expect(markedDuring.app, 'the app was still claimed while it was being handed back').to.equal(true);
       expect(realDepartingApps.has('leaving'), 'the mark outlived the removal').to.equal(false);
+      sinon.assert.calledOnce(broadcast);
+    });
+
+    it('tells the network nothing while peers would not accept this node\'s messages', async () => {
+      canSendMessagesStub.returns(false);
+
+      const result = await appUninstaller.uninstallApplication('leaving', { forceKill: true, broadcastRemoval: true, background: true });
+
+      expect(result.status, 'the removal itself stands').to.equal(appUninstaller.UninstallStatus.REMOVED);
+      sinon.assert.called(canSendMessagesStub);
+      sinon.assert.notCalled(broadcast);
+    });
+
+    // A removal can wait for an announcement cycle, and the answer changes.
+    it('reads whether this node can be heard as the message goes out', async () => {
+      canSendMessagesStub.returns(false);
+      const { waitReady } = globalStateStub.announceCycle;
+      globalStateStub.announceCycle.waitReady = async () => { canSendMessagesStub.returns(true); };
+      try {
+        await appUninstaller.uninstallApplication('leaving', { forceKill: true, broadcastRemoval: true, background: true });
+      } finally {
+        globalStateStub.announceCycle.waitReady = waitReady;
+      }
+
       sinon.assert.calledOnce(broadcast);
     });
 
