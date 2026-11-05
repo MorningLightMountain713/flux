@@ -1061,10 +1061,15 @@ async function getSystemStatus() {
  * @param {object} [options]
  * @param {number} [options.timeoutMs] How long the scan may take; the client's
  *   own timeout when omitted.
+ * @param {string} [options.folderPath] The folder's path, when the caller has
+ *   read it; syncthing's config is asked otherwise. A folder id does not name its
+ *   directory: an app registered before v9 is shared under its 8.x container name
+ *   over the directory of its identifier.
  * @returns {Promise<object>} Syncthing's reply
  */
-async function scanFolder(folderId, { timeoutMs } = {}) {
-  if (!(await volumeService.isPathMounted(path.join(appsFolderPath, folderId)))) {
+async function scanFolder(folderId, { timeoutMs, folderPath } = {}) {
+  const directory = folderPath ?? (await getConfigFolders(folderId))?.path;
+  if (!directory || !(await volumeService.isPathMounted(directory))) {
     throw Object.assign(new Error(`${folderId} was not scanned: its volume is not mounted`), { code: 'VOLUME_NOT_MOUNTED' });
   }
   return request('post', `/rest/db/scan?folder=${encodeURIComponent(folderId)}`, undefined, timeoutMs ? { timeout: timeoutMs } : undefined);
@@ -1093,6 +1098,7 @@ async function drainFoldersToPeers(timeoutMs) {
   const connectedPeers = new Set(Object.keys(connections).filter((id) => connections[id]?.connected));
   const scans = await Promise.allSettled(folders.map((folder) => scanFolder(folder.id, {
     timeoutMs: Math.max(1, deadline - monotonicMs()),
+    folderPath: folder.path,
   })));
   scans.forEach((scan, i) => {
     if (scan.status === 'rejected') log.warn(`Shutdown drain: the scan of ${folders[i].id} did not finish: ${scan.reason.message}`);

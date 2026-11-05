@@ -387,9 +387,15 @@ describe('syncthingService tests', () => {
     const peer = 'PEER111-2U3U5AI-MEDDSIE-5WC7F0K-FDLAOJQ-24AFG44-Z2B749L-BOUX3QM';
     const gone = 'GONE111-2U3U5AI-MEDDSIE-5WC7F0K-FDLAOJQ-24AFG44-Z2B749L-BOUX3QM';
     const metaBody = `var metadata = {"authenticated":true,"deviceID":"${deviceId}","deviceIDShort":"AEYDK6D"};\n`;
+    // A folder registered before v9: its id is not its directory.
+    const appDirectory = `${appsFolderPath}a_identifier`;
     const folders = [
-      { id: 'fluxa_app', type: 'sendreceive', devices: [{ deviceID: deviceId }, { deviceID: peer }, { deviceID: gone }] },
-      { id: 'fluxb_app', type: 'receiveonly', devices: [{ deviceID: deviceId }, { deviceID: peer }] },
+      {
+        id: 'fluxa_app', path: appDirectory, type: 'sendreceive', devices: [{ deviceID: deviceId }, { deviceID: peer }, { deviceID: gone }],
+      },
+      {
+        id: 'fluxb_app', path: `${appsFolderPath}b_identifier`, type: 'receiveonly', devices: [{ deviceID: deviceId }, { deviceID: peer }],
+      },
     ];
     let fakeGet;
     let fakePost;
@@ -408,6 +414,7 @@ describe('syncthingService tests', () => {
         if (reqPath === '/rest/noauth/health') return { status: 'success', data: { status: 'OK' } };
         if (reqPath === '/rest/system/ping') return { status: 'success', data: { ping: 'pong' } };
         if (reqPath === '/rest/config/folders') return { data: folders };
+        if (reqPath.startsWith('/rest/config/folders/')) return { data: folders.find((f) => reqPath.endsWith(`/${f.id}`)) };
         if (reqPath === '/rest/system/connections') return { data: { connections: { [peer]: { connected: true }, [gone]: { connected: false } } } };
         if (reqPath.startsWith('/rest/db/completion')) return { data: completion() };
         return {};
@@ -459,7 +466,43 @@ describe('syncthingService tests', () => {
 
       sinon.assert.notCalled(fakePost);
       expect(refused?.code).to.equal('VOLUME_NOT_MOUNTED');
-      sinon.assert.calledOnceWithExactly(mounted, path.join(appsFolderPath, 'fluxa_app'));
+      sinon.assert.calledOnceWithExactly(mounted, appDirectory);
+    });
+
+    it('scanFolder judges the mount at the directory syncthing holds the folder over', async () => {
+      await syncthingService.scanFolder('fluxa_app');
+
+      sinon.assert.calledOnceWithExactly(mounted, appDirectory);
+      sinon.assert.calledOnce(fakePost);
+    });
+
+    it('scanFolder asks syncthing nothing for a folder whose path it cannot be told', async () => {
+      let refused = null;
+      await syncthingService.scanFolder('fluxunknown_app').catch((error) => { refused = error; });
+
+      sinon.assert.notCalled(mounted);
+      sinon.assert.notCalled(fakePost);
+      expect(refused?.code).to.equal('VOLUME_NOT_MOUNTED');
+    });
+
+    it('scanFolder takes a path the caller has read, and reads no config', async () => {
+      const configReads = () => fakeGet.getCalls().filter((call) => call.args[0].startsWith('/rest/config/folders')).length;
+      const before = configReads();
+
+      await syncthingService.scanFolder('fluxa_app', { folderPath: appDirectory });
+
+      expect(configReads()).to.equal(before);
+      sinon.assert.calledOnceWithExactly(mounted, appDirectory);
+    });
+
+    // A read per folder would spend the drain's own time on what it already holds.
+    it('judges each folder of a drain at the directory its one folder read gave', async () => {
+      completion = () => ({ needBytes: 0, needItems: 0, needDeletes: 0 });
+
+      await syncthingService.drainFoldersToPeers(1000);
+
+      sinon.assert.calledOnceWithExactly(mounted, appDirectory);
+      expect(fakeGet.getCalls().filter((call) => call.args[0].startsWith('/rest/config/folders/'))).to.deep.equal([]);
     });
 
     it('scans no folder in a drain whose volume is not mounted, and still waits on its peers', async () => {
