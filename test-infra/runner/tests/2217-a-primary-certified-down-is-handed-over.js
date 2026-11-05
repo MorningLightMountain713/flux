@@ -4,7 +4,7 @@ import {
 } from 'mocha';
 import { readFileSync } from 'node:fs';
 import { expect } from 'chai';
-import { shutdownFluxosGracefully } from '../framework/container.js';
+import { execInContainer, shutdownFluxosGracefully } from '../framework/container.js';
 import { clearMaster, resetFdm } from '../framework/fdm-control.js';
 import { waitForUp } from '../framework/wait.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
@@ -48,6 +48,8 @@ describe('a primary certified down is handed over', function () {
     const standbyFrom = client(A).getLastEventId();
 
     await shutdownFluxosGracefully(client(B).container, { hold: true, stopSyncthingAfter: true });
+    // The machine is going down: the app goes with it.
+    await execInContainer(client(B).container, `docker kill ${fleet.identifier}`);
     await clearMaster(appName);
     const stored = await client(A).waitForEvent('nodedown:stored', (d) => d.subject === primaryOutpoint,
       NODE_DOWN_GRACE_MS + TAKEOVER_MS, { afterId: standbyFrom });
