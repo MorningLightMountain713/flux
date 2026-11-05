@@ -16,6 +16,7 @@ const reconcilerQueue = require('../../ZelBack/src/services/appMonitoring/reconc
 const appReconciler = require('../../ZelBack/src/services/appMonitoring/appReconciler');
 const deploymentProvider = require('../../ZelBack/src/services/appRuntime/deploymentProvider');
 const mastershipGrantGate = require('../../ZelBack/src/services/appLifecycle/mastershipGrantGate');
+const primaryRoleChanges = require('../../ZelBack/src/services/appLifecycle/primaryRoleChanges');
 const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirmationService');
 const fluxEventBus = require('../../ZelBack/src/services/utils/fluxEventBus');
 
@@ -191,6 +192,190 @@ describe('appController tests', () => {
     sinon.restore();
   });
 
+  // The election decides an app whole. A lock on an elected component is what holds
+  // it on this node, and records whether this node was its primary.
+  describe('the components the election decides', () => {
+    const req = (appname) => ({ params: { appname }, query: {} });
+    const res = () => ({ json: sinon.fake((param) => param) });
+    const lockOptions = () => Object.fromEntries(appsRuntimeState.setOperatorStopped.args.map(([id, , options]) => [id, options]));
+    let requestOperatorStart;
+    let committed;
+    let promoting;
+
+    /** Two activeStandby components beside a plain one, where each name is its identifier. */
+    async function electedApp(name) {
+      const base = V9_SUBMISSION.components.web;
+      const synced = { ...base, persistentStorage: { ...base.persistentStorage, sync: { mode: 'activeStandby' } } };
+      const plain = { ...base, persistentStorage: { ...base.persistentStorage, sync: undefined } };
+      return registeredSpec(await v9Spec({
+        name,
+        components: {
+          db: { ...synced, name: 'db', ports: { http: { ...base.ports.http, hostPort: 31_010 } } },
+          cache: { ...plain, name: 'cache', ports: { http: { ...base.ports.http, hostPort: 31_011 } } },
+          web: { ...synced, name: 'web', ports: { http: { ...base.ports.http, hostPort: 31_012 } } },
+        },
+      }));
+    }
+
+    const identifiersOf = async (registered) => {
+      const [deployment] = await deploymentProvider.buildDeployments(installedHolds(registered));
+      const components = Object.fromEntries(deployment.componentEntries().map(([name, component]) => [name, component.identifier]));
+      return components;
+    };
+
+    const runningOnly = (identifier) => observedStateStub.callsFake(async (id) => ({
+      reachable: true, exists: true, running: id === identifier, exitCode: null, health: null,
+    }));
+
+    beforeEach(() => {
+      verificationHelperStub.resolves(true);
+      stubApplyIntent();
+      sinon.stub(appsRuntimeState, 'setOperatorStopped').resolves();
+      requestOperatorStart = sinon.stub(appsRuntimeState, 'requestOperatorStart').resolves(true);
+      sinon.stub(appReconciler, 'clearControllerDesired');
+      committed = sinon.stub(appReconciler, 'committedIdentifiers').returns([]);
+      promoting = sinon.stub(primaryRoleChanges, 'promotingIdentifiers').returns([]);
+    });
+
+    it('leaves each elected lock for the election to lift, and lifts every other', async () => {
+      const ids = await identifiersOf(await electedApp('twin'));
+      const publish = sinon.stub(fluxEventBus, 'publish');
+
+      await appController.appStart(req('twin'), res());
+
+      expect(requestOperatorStart.args.map(([id]) => id)).to.have.members([ids.db, ids.web]);
+      expect(appsRuntimeState.setOperatorStopped.args.map(([id]) => id)).to.deep.equal([ids.cache]);
+      const intents = Object.fromEntries(publish.args.filter(([name]) => name === 'app:operatorIntent')
+        .map(([, data]) => [data.identifier, data.awaitsElection]));
+      expect(intents).to.deep.equal({ [ids.db]: true, [ids.cache]: false, [ids.web]: true });
+    });
+
+    it('lifts an elected lock at once when it holds none: there is no hold to keep', async () => {
+      const ids = await identifiersOf(await electedApp('twin'));
+      requestOperatorStart.resolves(false);
+
+      await appController.appStart(req('twin'), res());
+
+      expect(appsRuntimeState.setOperatorStopped.args.map(([id]) => id)).to.have.members([ids.db, ids.cache, ids.web]);
+    });
+
+    it('asks the election about no component of an app it does not decide', async () => {
+      installedHolds(await composedApp('Plain', ['one', 'two']));
+
+      await appController.appStart(req('Plain'), res());
+
+      sinon.assert.notCalled(requestOperatorStart);
+    });
+
+    it('says a start waits on the election', async () => {
+      const ids = await identifiersOf(await electedApp('twin'));
+      runningOnly(ids.cache);
+      sinon.stub(appReconciler, 'desiredRunState').resolves({ desired: false, reason: 'startAwaitsElection' });
+
+      const answer = res();
+      await appController.appStart(req('twin'), answer);
+
+      expect(answer.json.firstCall.args[0].data).to.equal('Application twin will be started: waiting for the election');
+    });
+
+    it('leaves an elected lock for the election on a restart too, with the restart raised', async () => {
+      const ids = await identifiersOf(await electedApp('twin'));
+      const requestRestart = sinon.stub(appsRuntimeState, 'requestRestart').resolves();
+      sinon.stub(appsRuntimeState, 'isOperatorStopped').resolves(true);
+      sinon.stub(appsRuntimeState, 'getState').resolves({ restartGeneration: 1, actuatedRestartGeneration: 1 });
+
+      await appController.appRestart(req('twin'), res());
+
+      expect(requestOperatorStart.args.map(([id]) => id)).to.have.members([ids.db, ids.web]);
+      expect(appsRuntimeState.setOperatorStopped.args.map(([id]) => id)).to.deep.equal([ids.cache]);
+      expect(requestRestart.args.map(([id]) => id)).to.have.members([ids.db, ids.cache, ids.web]);
+    });
+
+    it('reports a restart once the generation it raised is actuated, not while the container runs on', async () => {
+      await identifiersOf(await electedApp('twin'));
+      sinon.stub(appsRuntimeState, 'requestRestart').resolves();
+      sinon.stub(appsRuntimeState, 'isOperatorStopped').resolves(false);
+      sinon.stub(appsRuntimeState, 'getState').resolves({ restartGeneration: 2, actuatedRestartGeneration: 1 });
+      sinon.stub(appReconciler, 'desiredRunState').resolves({ desired: true, reason: 'controllerDesired' });
+
+      const answer = res();
+      await appController.appRestart(req('twin'), answer);
+
+      expect(answer.json.firstCall.args[0].data).to.match(/will be restarted/);
+    });
+
+    it('takes every elected lock as the primary\'s on the node running one of them', async () => {
+      const ids = await identifiersOf(await electedApp('twin'));
+      runningOnly(ids.web);
+
+      await appController.appStop(req('twin'), res());
+
+      expect(lockOptions()).to.deep.equal({
+        [ids.db]: { force: false, asPrimary: true },
+        [ids.cache]: { force: false },
+        [ids.web]: { force: false, asPrimary: true },
+      });
+    });
+
+    it('takes one component\'s lock as the primary\'s on the node running the other', async () => {
+      const ids = await identifiersOf(await electedApp('twin'));
+      runningOnly(ids.db);
+
+      await appController.appStop(req('web_twin'), res());
+
+      expect(lockOptions()).to.deep.equal({ [ids.web]: { force: false, asPrimary: true } });
+    });
+
+    it('takes it as the primary\'s on a node committed to running it whose container is down', async () => {
+      const ids = await identifiersOf(await electedApp('twin'));
+      runningOnly(null);
+      committed.returns([ids.db]);
+
+      await appController.appStop(req('web_twin'), res());
+
+      expect(lockOptions()[ids.web].asPrimary).to.equal(true);
+    });
+
+    it('takes it as the primary\'s on a node becoming the primary, before it is committed', async () => {
+      const ids = await identifiersOf(await electedApp('twin'));
+      runningOnly(null);
+      promoting.returns([ids.db]);
+
+      await appController.appStop(req('web_twin'), res());
+
+      expect(lockOptions()[ids.web].asPrimary).to.equal(true);
+    });
+
+    it('takes it as not the primary\'s on a node holding none of the app', async () => {
+      const ids = await identifiersOf(await electedApp('twin'));
+      runningOnly(null);
+
+      await appController.appStop(req('web_twin'), res());
+
+      expect(lockOptions()).to.deep.equal({ [ids.web]: { force: false, asPrimary: false } });
+    });
+
+    it('records the primary on a kill as well, and keeps it a kill', async () => {
+      const ids = await identifiersOf(await electedApp('twin'));
+      runningOnly(ids.web);
+
+      await appController.appKill(req('web_twin'), res());
+
+      expect(lockOptions()).to.deep.equal({ [ids.web]: { force: true, asPrimary: true } });
+    });
+
+    // A yield hands the app on: peers must not stand aside for this node.
+    it('does not record a yielding node as the primary', async () => {
+      const ids = await identifiersOf(await electedApp('twin'));
+      runningOnly(ids.web);
+      sinon.stub(mastershipGrantGate, 'yieldMastership').resolves({ held: true });
+
+      await appController.appYield('web_twin');
+
+      sinon.assert.calledOnceWithExactly(appsRuntimeState.setOperatorStopped, ids.web, true);
+    });
+  });
+
   describe('appStart tests', () => {
     let enqueueComponent;
     let setOperatorStopped;
@@ -363,7 +548,7 @@ describe('appController tests', () => {
 
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('success');
-      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'TestApp', true);
+      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'TestApp', true, { force: false });
       sinon.assert.calledOnceWithExactly(enqueueComponent, 'TestApp');
     });
 
@@ -378,8 +563,8 @@ describe('appController tests', () => {
 
       const result = res.json.firstCall.args[0];
       expect(result.status).to.equal('success');
-      sinon.assert.calledWithExactly(setOperatorStopped, 'Component1_ComposedApp', true);
-      sinon.assert.calledWithExactly(setOperatorStopped, 'Component2_ComposedApp', true);
+      sinon.assert.calledWithExactly(setOperatorStopped, 'Component1_ComposedApp', true, { force: false });
+      sinon.assert.calledWithExactly(setOperatorStopped, 'Component2_ComposedApp', true, { force: false });
       sinon.assert.calledTwice(enqueueComponent);
     });
 
@@ -396,7 +581,7 @@ describe('appController tests', () => {
       expect(result.status).to.equal('success');
       // the operator lock is durable and nothing ever clears it, so locking a key
       // no component answers to is a lock that can never be lifted
-      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component_a1b2c3d4e5f6', true);
+      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component_a1b2c3d4e5f6', true, { force: false });
       sinon.assert.calledOnceWithExactly(enqueueComponent, 'Component_a1b2c3d4e5f6');
     });
 
@@ -410,7 +595,7 @@ describe('appController tests', () => {
       const res = { json: sinon.fake((param) => param) };
       await appController.appStop(req, res);
 
-      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component_TestApp', true);
+      sinon.assert.calledOnceWithExactly(setOperatorStopped, 'Component_TestApp', true, { force: false });
       sinon.assert.callOrder(setOperatorStopped, enqueueComponent);
     });
   });
@@ -839,7 +1024,7 @@ describe('appController tests', () => {
           // The bare form the reconciler publishes reconciler:actuated under -
           // an event carrying a different spelling of the same component cannot
           // be ordered against them, which is the only thing this is for.
-          identifier: 'TestApp', stopped: true, force: true, restartRequested: false,
+          identifier: 'TestApp', stopped: true, force: true, restartRequested: false, awaitsElection: false,
         }]);
       });
 
@@ -850,8 +1035,8 @@ describe('appController tests', () => {
         await appController.appRestart(reqFor('TestApp'), res());
 
         expect(intentsOf()).to.deep.equal([
-          { identifier: 'TestApp', stopped: false, force: false, restartRequested: false },
-          { identifier: 'TestApp', stopped: false, force: false, restartRequested: true },
+          { identifier: 'TestApp', stopped: false, force: false, restartRequested: false, awaitsElection: false },
+          { identifier: 'TestApp', stopped: false, force: false, restartRequested: true, awaitsElection: false },
         ]);
       });
 

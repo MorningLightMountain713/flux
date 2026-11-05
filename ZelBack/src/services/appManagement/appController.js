@@ -12,6 +12,7 @@ const { Privilege, authOf } = require('../utils/privileges');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const globalCommand = require('./globalCommand');
 const mastershipGrantGate = require('../appLifecycle/mastershipGrantGate');
+const primaryRoleChanges = require('../appLifecycle/primaryRoleChanges');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { getSpecBackend } = require('../utils/specLibs');
 const verificationHelper = require('../verificationHelper');
@@ -26,8 +27,9 @@ const verificationHelper = require('../verificationHelper');
  * correctly held, not force-started.
  *
  * @param {string[]} ids component identifiers, resolved by the caller
- * @param {(id: string) => Promise<void>} recordIntent records the durable intent for one component
- * @returns {Promise<void>}
+ * @param {(id: string) => Promise<boolean|void>} recordIntent records the durable
+ *   intent for one component, answering true when a start waits on the election
+ * @returns {Promise<boolean>} whether every component's pass ran
  */
 async function driveOperatorCommand(ids, recordIntent, intent) {
   const { stopped, force = false, restartRequested = false } = intent;
@@ -56,7 +58,7 @@ async function driveOperatorCommand(ids, recordIntent, intent) {
     // rather than merely the order the intents were written.
     // eslint-disable-next-line no-await-in-loop
     const actuated = await reconcilerQueue.applyIntent(id, async () => {
-      await recordIntent(id);
+      const awaitsElection = (await recordIntent(id)) === true;
       // The operator's intent is the one desired-state write in this flow that
       // announced nothing, so nothing could be ordered against it - and the
       // failure that hides is an actuation on the PREVIOUS intent arriving
@@ -70,12 +72,74 @@ async function driveOperatorCommand(ids, recordIntent, intent) {
       // the inverse of the flux- prefix and would eat four characters of a
       // component genuinely named `fluxproxy`.
       fluxEventBus.publish('app:operatorIntent', {
-        identifier: id, stopped, force, restartRequested,
+        identifier: id, stopped, force, restartRequested, awaitsElection,
       });
     }, { awaitPass: true });
     if (!actuated) allActuated = false;
   }
   return allActuated;
+}
+
+/**
+ * The app's components the election decides, as the election reads them. The app's
+ * and not the request's: a command on one component acts on an app elected whole.
+ * @param {object[]} deployments The app's deployments, as resolveRequestTargets gives them.
+ * @returns {string[]} Their identifiers.
+ */
+function electedIdentifiers(deployments) {
+  return deployments.flatMap((deployment) => deployment.componentEntries()
+    .map(([, component]) => component)
+    .filter((component) => component.hasActiveStandbySyncthing())
+    .map((component) => component.identifier));
+}
+
+/**
+ * Whether this node holds the app these elected components belong to: it runs one,
+ * is becoming the primary of one, or has asked the reconciler to run one. A
+ * component stopped on the node that runs the others was stopped on its primary.
+ * A container docker cannot read is not one known to run.
+ * @param {string[]} electedIds
+ * @returns {Promise<boolean>}
+ */
+async function holdsElectedApp(electedIds) {
+  const committed = appReconciler.committedIdentifiers();
+  const promoting = primaryRoleChanges.promotingIdentifiers();
+  if (electedIds.some((id) => committed.includes(id) || promoting.includes(id))) return true;
+  const actual = await Promise.all(electedIds.map((id) => appReconciler.observedContainerState(id)));
+  return actual.some((each) => each.running === true);
+}
+
+/**
+ * An operator stop's lock. Runs inside the component's slot, so no pass moves the
+ * container between the read of who holds the app and the lock. The lock on a
+ * component the election decides records whether this node was its primary, which
+ * is what brings the app back here when it is started again.
+ * @param {string} id Component identifier.
+ * @param {string[]} electedIds
+ * @param {boolean} [force] A hard kill rather than a graceful stop.
+ * @returns {Promise<void>}
+ */
+async function recordStop(id, electedIds, force = false) {
+  const options = electedIds.includes(id)
+    ? { force, asPrimary: await holdsElectedApp(electedIds) }
+    : { force };
+  await appsRuntimeState.setOperatorStopped(id, true, options);
+}
+
+/**
+ * An operator start's lock. The lock is what holds a stopped component the
+ * election decides on this node: lifted here, it would be held by nothing until
+ * the election next ran, and a standby could take it in between. So that lock is
+ * left for the election to lift (appsRuntimeState.requestOperatorStart), and every
+ * other lifts now.
+ * @param {string} id Component identifier.
+ * @param {string[]} electedIds
+ * @returns {Promise<boolean>} whether the start waits on the election
+ */
+async function recordStart(id, electedIds) {
+  const awaitsElection = electedIds.includes(id) && await appsRuntimeState.requestOperatorStart(id);
+  if (!awaitsElection) await appsRuntimeState.setOperatorStopped(id, false);
+  return awaitsElection;
 }
 
 /**
@@ -118,6 +182,7 @@ async function containersReachedStopped(ids) {
 // which nothing on this tree produces.
 const NOT_RUNNING_REASONS = {
   awaitingController: 'waiting for the election',
+  startAwaitsElection: 'waiting for the election',
   controllerDesired: 'the election has not made this node the writer',
   awaitingAppDependency: 'waiting for an app it depends on',
   boundToDependencyDown: 'the component it is bound to is not running',
@@ -128,6 +193,22 @@ const NOT_RUNNING_REASONS = {
   invalidSpec: 'its specification cannot be actuated',
   notInstalled: 'it is not installed on this node',
 };
+
+/**
+ * The reconciler's own reason for leaving a component as it is.
+ * @param {string} id Component identifier.
+ * @param {string} fallback Said when its verdict carries no reason to report.
+ * @returns {Promise<string>}
+ */
+async function pendingReason(id, fallback) {
+  let verdict;
+  try {
+    verdict = await appReconciler.desiredRunState(id);
+  } catch (err) {
+    return `its state could not be read: ${err.message}`;
+  }
+  return NOT_RUNNING_REASONS[verdict.reason] || fallback;
+}
 
 /**
  * Whether the containers are actually running, once the reconciler has had its
@@ -146,19 +227,33 @@ async function containersReachedRunning(ids) {
     if (!actual.reachable) return { settled: false, reason: 'docker is not reachable' };
     // eslint-disable-next-line no-continue
     if (actual.running) continue;
-    let verdict;
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      verdict = await appReconciler.desiredRunState(id);
-    } catch (err) {
-      return { settled: false, reason: `its state could not be read: ${err.message}` };
-    }
-    return {
-      settled: false,
-      reason: NOT_RUNNING_REASONS[verdict.reason] || 'the reconciler has not started it yet',
-    };
+    // eslint-disable-next-line no-await-in-loop
+    return { settled: false, reason: await pendingReason(id, 'the reconciler has not started it yet') };
   }
   return { settled: true, reason: null };
+}
+
+/**
+ * Whether the restart the operator asked for has been carried out, once the
+ * reconciler has had its pass. A running container is not the answer: a pass that
+ * takes no action leaves it running as it was. It is carried out when the
+ * generation the request raised has been actuated, by a bounce of a running
+ * container or the start of a stopped one.
+ * @param {string[]} ids Component identifiers.
+ * @returns {Promise<{settled: boolean, reason: string|null}>}
+ */
+async function containersRestarted(ids) {
+  // eslint-disable-next-line no-restricted-syntax
+  for (const id of ids) {
+    // eslint-disable-next-line no-await-in-loop
+    const state = await appsRuntimeState.getState(id).catch(() => null);
+    if (!state) return { settled: false, reason: 'its state could not be read' };
+    if ((state.actuatedRestartGeneration ?? 0) < (state.restartGeneration ?? 0)) {
+      // eslint-disable-next-line no-await-in-loop
+      return { settled: false, reason: await pendingReason(id, 'the reconciler has not restarted it yet') };
+    }
+  }
+  return containersReachedRunning(ids);
 }
 
 async function appStart(req, res) {
@@ -191,7 +286,7 @@ async function appStart(req, res) {
 
     const isComponent = appname.includes('_');
     let appRes;
-    const { registered, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
+    const { registered, deployments, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
     if (isComponent) {
       appRes = `Component ${appname} started`;
     } else {
@@ -199,9 +294,10 @@ async function appStart(req, res) {
         ? `Replica ${replica} of ${registered.name} started`
         : `Application ${registered.name} started`;
     }
-    // clear the operator stop lock; the reconciler then (re)starts each component,
-    // honouring its own election/dependency gates (a non-elected activeStandby
-    // component is held at awaitingController, never force-started).
+    // clear the operator stop lock (see recordStart); the reconciler then
+    // (re)starts each component, honouring its own election/dependency gates (a
+    // non-elected activeStandby component is held at awaitingController, never
+    // force-started).
     //
     // A decider verdict recorded BEFORE the stop is withdrawn with the lock: an
     // operator stop is an interregnum, and the verdict's safety checks (sync
@@ -209,9 +305,11 @@ async function appStart(req, res) {
     // kept moving while the component sat stopped. Absent-verdict is the state
     // a FluxOS restart already produces — running containers are left as-is,
     // stopped decider-owned ones wait for their decider to rule again.
+    const electedIds = electedIdentifiers(deployments);
     const actuated = await driveOperatorCommand(ids, async (id) => {
-      await appsRuntimeState.setOperatorStopped(id, false);
+      const awaitsElection = await recordStart(id, electedIds);
       appReconciler.clearControllerDesired(id);
+      return awaitsElection;
     }, { stopped: false });
 
     // Accepted, not applied. The intent is durable and the reconciler will
@@ -274,7 +372,7 @@ async function appStop(req, res) {
 
     const isComponent = appname.includes('_'); // it is a component stop
     let appRes;
-    const { registered, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
+    const { registered, deployments, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
     if (isComponent) {
       appRes = `Component ${appname} stopped`;
     } else {
@@ -284,9 +382,8 @@ async function appStop(req, res) {
     }
     // operator stop persists (the reconciler will not restart a stopped app); the
     // reconciler does the actual stop + stops monitoring on its stop branch.
-    const actuated = await driveOperatorCommand(
-      ids, (id) => appsRuntimeState.setOperatorStopped(id, true), { stopped: true },
-    );
+    const electedIds = electedIdentifiers(deployments);
+    const actuated = await driveOperatorCommand(ids, (id) => recordStop(id, electedIds), { stopped: true });
 
     const outcome = actuated
       ? await containersReachedStopped(ids)
@@ -325,7 +422,8 @@ async function appStop(req, res) {
  * yields the app's mastership and stops the named component. On a
  * non-holder the yield is a no-op and the stop still applies — which keeps
  * the global fan-out idempotent: every instance stops, only the master
- * releases.
+ * releases. The lock does not record this node as the primary: a yield hands the
+ * app on, and peers must not stand aside for the node giving it up.
  *
  * @param {string} appname app or component name
  * @param {{replica?: string|null}} [options]
@@ -433,7 +531,7 @@ async function appRestart(req, res) {
 
     const isComponent = appname.includes('_');
     let appRes;
-    const { registered, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
+    const { registered, deployments, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
     if (isComponent) {
       appRes = `Component ${appname} restarted`;
     } else {
@@ -448,14 +546,16 @@ async function appRestart(req, res) {
     // for the same reason as appStart. A running component has no stale verdict, and
     // its decider re-asserts only on a transition, so withdrawing its live verdict
     // would hold it at awaitingController and the restart would never happen.
+    const electedIds = electedIdentifiers(deployments);
     const actuated = await driveOperatorCommand(ids, async (id) => {
       if (await appsRuntimeState.isOperatorStopped(id)) appReconciler.clearControllerDesired(id);
-      await appsRuntimeState.setOperatorStopped(id, false);
+      const awaitsElection = await recordStart(id, electedIds);
       await appsRuntimeState.requestRestart(id);
+      return awaitsElection;
     }, { stopped: false, restartRequested: true });
 
     const outcome = actuated
-      ? await containersReachedRunning(ids)
+      ? await containersRestarted(ids)
       : { settled: false, reason: 'no reconcile has run yet' };
     if (!outcome.settled) {
       const pending = messageHelper.createDataMessage(`${appRes.replace(/ restarted$/, '')} will be restarted: ${outcome.reason}`);
@@ -501,7 +601,7 @@ async function appKill(req, res) {
     const replica = req.query.replica || null;
     const isComponent = appname.includes('_');
     let appRes;
-    const { registered, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
+    const { registered, deployments, ids } = await deploymentProvider.resolveRequestTargets(appname, { replica });
     if (isComponent) {
       appRes = `Component ${appname} killed`;
     } else {
@@ -512,11 +612,8 @@ async function appKill(req, res) {
     // operator kill = force-stop now: durable operatorStopped carrying the force
     // mode (so a crash never downgrades it to the app's graceful window); the
     // reconciler's desired-stopped branch honours force with appDockerKill.
-    const actuated = await driveOperatorCommand(
-      ids,
-      (id) => appsRuntimeState.setOperatorStopped(id, true, { force: true }),
-      { stopped: true, force: true },
-    );
+    const electedIds = electedIdentifiers(deployments);
+    const actuated = await driveOperatorCommand(ids, (id) => recordStop(id, electedIds, true), { stopped: true, force: true });
 
     const outcome = actuated
       ? await containersReachedStopped(ids)
