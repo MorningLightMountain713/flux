@@ -393,6 +393,10 @@ describe('boot holds an app whose location it cannot read', function () {
       release = null;
       await heard('boot:appConfirmed', (d) => d.name === lapsedApp && d.valid === false, 120000, answeredFrom);
       removed = Boolean(await heard('app:removed', (d) => d.name === lapsedApp, 120000, answeredFrom));
+      // The event marks the removal's decision; the record goes with its teardown.
+      await waitFor(async () => !(await installedNames()).includes(lapsedApp), {
+        timeout: 120000, interval: 1000, label: 'the removed app\'s record is gone',
+      }).catch(() => {});
       installedAfter = await installedNames();
     });
 
@@ -442,6 +446,14 @@ describe('boot holds an app whose location it cannot read', function () {
 
     before(async function () {
       this.timeout(900000);
+      // A location record is a node's one announcement, so the expiry before this
+      // removed every app the holder held: this one is seated on it again.
+      await installSeededOnNodes(env, againSpec, [HOLDER]);
+      await waitFor(() => isUp(again), { timeout: 300000, interval: 3000, label: 'the app runs on the holder again' });
+      await waitFor(async () => (await holder.getAppLocations(againApp))?.data?.some((row) => row.ip.startsWith(holder.ip)), {
+        timeout: 300000, interval: 3000, label: 'the holder announces the app again',
+      });
+
       step('taking the node down for longer than its records live, its location reads refused');
       let anchors;
       ({ anchors, release } = await rebootUnreadable([again], { expire: true }));

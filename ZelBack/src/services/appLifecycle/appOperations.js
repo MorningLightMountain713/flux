@@ -327,6 +327,12 @@ async function redeployApplication(appName, options = {}) {
     if (!preTeardownSpec) {
       throw new Error(`Application ${appName} not found in database`);
     }
+    // A rebuilt app starts, and boot has yet to decide whether this one may.
+    if (globalState.unconfirmedApps.has(appName)) {
+      status(`${appName} is held until this node confirms it still holds it, ${operation} deferred`);
+      operationRegistry.release(appName, redeployToken);
+      return;
+    }
     // The spec decides whether this node keeps the app at all, asked before anything
     // comes down: a node its targets no longer name hands the app back and tells its
     // peers, rather than tearing down a copy the rebuild would then refuse to install.
@@ -852,6 +858,18 @@ async function taskVolumes(appname, componentName, replica) {
   return [match];
 }
 
+/**
+ * Refuses a task that starts an app this node is removing, or has not yet confirmed
+ * it still holds.
+ * @param {string} appName
+ * @returns {void}
+ * @throws {Error} When the app is held.
+ */
+function refuseHeldApp(appName) {
+  if (globalState.departingApps.has(appName)) throw new Error(`Refused: ${appName} is being removed from this node`);
+  if (globalState.unconfirmedApps.has(appName)) throw new Error(`Refused: ${appName} is held until this node confirms it still holds it`);
+}
+
 async function appendBackupTask(req, res) {
   let appname;
   let backup;
@@ -880,6 +898,8 @@ async function appendBackupTask(req, res) {
     if (hasTrueBackup === false) {
       throw new Error('No backup jobs...');
     }
+    // a backup ends by starting the app
+    refuseHeldApp(appname);
   } catch (error) {
     log.error(error);
     res.json(messageHelper.createErrorMessage(error.message || error, error.name, error.code));
@@ -1154,6 +1174,8 @@ async function appendRestoreTask(req, res) {
     if (hasTrueRestore === false) {
       throw new Error('No restore jobs...');
     }
+    // a restore ends by starting the app
+    refuseHeldApp(appname);
   } catch (error) {
     log.error(error);
     res.json(messageHelper.createErrorMessage(error.message || error, error.name, error.code));

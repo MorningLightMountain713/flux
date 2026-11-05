@@ -10,7 +10,7 @@ const {
   loadSpecLibrary, v9Spec, sealedV8Spec, registeredSpec, assertAnswers,
 } = require('./fixtures/fluxSpec');
 const { installedRecord } = require('./fixtures/appRecords');
-const { departingApps } = require('../../ZelBack/src/services/utils/globalState');
+const { departingApps, unconfirmedApps } = require('../../ZelBack/src/services/utils/globalState');
 
 // The spec library is real here, not stubbed — see tests/unit/fixtures/fluxSpec.js
 // for why. What this module actually handles is the row appsRepository hydrates
@@ -115,6 +115,7 @@ describe('peerNotification tests', () => {
       runningAppsCache: new Set(),
       announceCycle: new AsyncLock(1, { maxHoldMs: 0 }),
       departingApps,
+      unconfirmedApps,
       getAppShutdownPipelineState: (appName) => drainingAppsMap.get(appName) ?? null,
     },
     '../utils/fluxEventBus': {
@@ -205,6 +206,22 @@ describe('peerNotification tests', () => {
         expect(announced(), 'claimed a placement the node is handing back').to.deep.equal([['app1', null]]);
         const [meshRows] = meshFieldsStub.firstCall.args;
         expect(meshRows.map((row) => row.name), 'a mesh voucher was built for an app being handed back').to.deep.equal(['app1']);
+      });
+
+      // Naming it would renew a record that may have expired.
+      it('leaves out an app boot has not confirmed this node still holds', async () => {
+        listInstalledAppsStub.resolves([
+          await installedRow(await v9Spec({ name: 'app1' })),
+          await installedRow(await v9Spec({ name: 'app2' })),
+        ]);
+        unconfirmedApps.set('app2', {});
+        try {
+          await peerNotification.checkAndNotifyPeersOfRunningApps();
+        } finally {
+          unconfirmedApps.delete('app2');
+        }
+
+        expect(announced()).to.deep.equal([['app1', null]]);
       });
 
       // THE ANNOUNCEMENT IS A WHOLE SNAPSHOT, so an identity missing from it releases its

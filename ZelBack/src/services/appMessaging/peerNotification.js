@@ -254,8 +254,11 @@ async function checkAndNotifyPeersOfRunningApps() {
     //
     // An app a broadcast removal is handing back is not held any more, from the
     // decision onwards (globalState.departingApps), and neither is a replica of one.
+    // So is an app boot has not yet confirmed this node still holds: naming it would
+    // renew a location record that may have expired, and the boot check would then
+    // read it as valid.
     const applicationsToBroadcast = hostedInstances.filter(
-      (inst) => !globalState.departingApps.has(inst.name),
+      (inst) => !globalState.departingApps.has(inst.name) && !globalState.unconfirmedApps.has(inst.name),
     );
     const mesh = await meshBroadcast.meshBroadcastFields(
       applicationsToBroadcast.filter((inst) => resolvedViews.has(inst.name)),

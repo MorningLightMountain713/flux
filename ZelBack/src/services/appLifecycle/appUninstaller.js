@@ -1248,6 +1248,9 @@ async function finishTeardown(target, status) {
   const remaining = await appRecords.hostedInstances().keys(target.name, { includeOwed: true });
   if (remaining.length === 0) {
     dockerService.clearFluxRemovedContainers(target.components.map((c) => c.identifier));
+    // Nor is there an app left for boot's location check to decide: an install of
+    // the same name from here on is a new app.
+    globalState.unconfirmedApps.delete(target.name);
     status('Database cleaned');
   }
 }

@@ -92,6 +92,7 @@ describe('appUninstaller tests', () => {
       trySpawningGlobalAppCache: new Map(),
       // The real marks, which peerNotification reads, and a cycle lock of the shape it holds.
       departingApps: realDepartingApps,
+      unconfirmedApps: new Map(),
       announceCycle: new AsyncLock(1, { maxHoldMs: 0 }),
       seedMarks: new Map(),
     };
@@ -735,6 +736,14 @@ describe('appUninstaller tests', () => {
       expect(markedDuring.app, 'the app was still claimed while it was being handed back').to.equal(true);
       expect(realDepartingApps.has('leaving'), 'the mark outlived the removal').to.equal(false);
       sinon.assert.calledOnce(broadcast);
+    });
+
+    it('leaves boot nothing to decide about an app it has removed', async () => {
+      globalStateStub.unconfirmedApps.set('leaving', {});
+
+      await appUninstaller.uninstallApplication('leaving', { forceKill: true, broadcastRemoval: true });
+
+      expect(globalStateStub.unconfirmedApps.has('leaving')).to.equal(false);
     });
 
     it('tells the network nothing while peers would not accept this node\'s messages', async () => {

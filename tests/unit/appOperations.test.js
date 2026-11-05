@@ -599,6 +599,30 @@ describe('appOperations tests', () => {
       operationRegistry.clear();
     });
 
+    // A rebuilt app starts, and boot has yet to decide whether this one may.
+    it('defers a redeploy of an app boot has not confirmed, with the old version running', async () => {
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(
+        await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' }),
+      );
+      sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
+      sinon.stub(serviceHelper, 'delay').resolves();
+      stubHostedInstances().byName.resolves(installedRecord(await registeredSpec(await v9Spec())));
+      sinon.stub(relationshipResolver, 'checkAppDependencyRequirements').resolves();
+      const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+      const uninstallApplication = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+      const told = [];
+      globalState.unconfirmedApps.set('myapp', {});
+      try {
+        await appOperations.redeployApplication('myapp', { onStatus: (line) => told.push(String(line)) });
+      } finally {
+        globalState.unconfirmedApps.delete('myapp');
+      }
+
+      expect(told.some((line) => line.includes('held until this node confirms')), `not told: ${told}`).to.equal(true);
+      expect(uninstallComponent.called, 'the old version was torn down').to.equal(false);
+      expect(uninstallApplication.called, 'the app was removed').to.equal(false);
+    });
+
     // Same contract as the image pre-flight: a redeploy that cannot complete must be
     // rejected BEFORE the old version is torn down, never after.
     it('aborts without tearing down the old version when a dependency is missing', async () => {
@@ -2566,6 +2590,39 @@ describe('appOperations tests', () => {
       const response = res.json.firstCall.args[0];
       expect(response.status).to.equal('error');
       expect(response.data.message).to.equal('backup must be a list of components');
+    });
+  });
+
+  // Both tasks end by starting the app.
+  describe('a task on an app this node has not confirmed, or is removing', () => {
+    const answer = async (handler, body) => {
+      sinon.stub(verificationHelper, 'verifyPrivilege').resolves(true);
+      const res = {
+        json: sinon.stub(), status: sinon.stub().returnsThis(), setHeader: sinon.stub(), write: sinon.stub(), end: sinon.stub(),
+      };
+      await handler({ body, headers: {} }, res);
+      return res.json.firstCall?.args[0];
+    };
+
+    afterEach(() => {
+      globalState.unconfirmedApps.delete('myapp');
+      globalState.departingApps.leave('myapp');
+    });
+
+    it('refuses a backup of an app boot has not confirmed', async () => {
+      globalState.unconfirmedApps.set('myapp', {});
+
+      const response = await answer(appOperations.appendBackupTask, { appname: 'myapp', backup: [{ component: 'web', backup: true }] });
+
+      expect(response?.data?.message).to.equal('Refused: myapp is held until this node confirms it still holds it');
+    });
+
+    it('refuses a restore of an app being removed', async () => {
+      globalState.departingApps.enter('myapp');
+
+      const response = await answer(appOperations.appendRestoreTask, { appname: 'myapp', restore: [{ component: 'web', restore: true }], type: 'local' });
+
+      expect(response?.data?.message).to.equal('Refused: myapp is being removed from this node');
     });
   });
 
