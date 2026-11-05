@@ -165,9 +165,8 @@ describe('a returning node waits paused until its role is decided', function () 
 
     await pushTestApp(appName, 'v1', 'swpaused', { user: APP_UID });
     const app = await buildSeedableApp({
-      env,
       name: appName,
-      instances: HOLDERS.length,
+      instances: HOLDERS.length, pinnedTo: HOLDERS,
       compose: [{
         name: appName,
         description: 'returning node waits paused',

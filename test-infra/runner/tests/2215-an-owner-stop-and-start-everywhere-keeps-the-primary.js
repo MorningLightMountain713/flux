@@ -119,9 +119,8 @@ describe('an owner stop and start everywhere keeps the primary', function () {
 
     await pushTestApp(appName, 'v1', 'globalresume', { user: APP_UID });
     app = await buildSeedableApp({
-      env,
       name: appName,
-      instances: HOLDERS.length,
+      instances: HOLDERS.length, pinnedTo: HOLDERS,
       compose: [{
         name: appName,
         description: 'an owner stop and start everywhere',

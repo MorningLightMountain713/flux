@@ -65,7 +65,7 @@ describe('a holder that cannot decrypt an app\'s spec is left out of the seed', 
         expect(nodeIp(lowest) < nodeIp(other), 'fixture: the lowest holder is not the lowest address').to.equal(true);
         await pushTestApp(appName, 'v1', 'nodecrypt', { user: APP_UID });
         const app = await buildSeedableEnterpriseApp({
-          env, name: appName, instances: holders.length, compose: [gComponent(appName, COMPONENT)],
+          name: appName, instances: holders.length, pinnedTo: holders, compose: [gComponent(appName, COMPONENT)],
         });
         await pinColdStart(holders, folder);
         if (dataOn !== undefined) await pinHolding(dataOn, folder, DATA_BYTES);

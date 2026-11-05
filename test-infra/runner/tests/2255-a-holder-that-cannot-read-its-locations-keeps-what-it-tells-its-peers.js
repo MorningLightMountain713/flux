@@ -60,7 +60,7 @@ describe('a holder that cannot read its locations keeps what it tells its peers'
         expect(subnet.nodeIp(lowest + 1) < subnet.nodeIp(other + 1), 'fixture: the deciding holder is not the lowest address').to.equal(true);
         await pushTestApp(appName, 'v1', 'locunread', { user: APP_UID });
         const app = await buildSeedableApp({
-          env, name: appName, instances: 2, compose: [gComponent(appName, COMPONENT)],
+          name: appName, instances: 2, pinnedTo: [lowest, other], compose: [gComponent(appName, COMPONENT)],
         });
         await pinColdStart([lowest, other], folder);
         const from = client(lowest).getLastEventId();

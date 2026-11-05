@@ -68,7 +68,7 @@ describe('a holder that cannot mount its volume is left out of the seed', functi
         expect(byAddress(holders)[0], 'fixture: a broken holder is not the lowest address').to.be.oneOf(brokenHolders);
         await pushTestApp(appName, 'v1', 'cannotseed', { user: APP_UID });
         const app = await buildSeedableApp({
-          env, name: appName, instances: holders.length, compose: [gComponent(appName, COMPONENT)],
+          name: appName, instances: holders.length, pinnedTo: holders, compose: [gComponent(appName, COMPONENT)],
         });
         await pinColdStart(holders, folder);
         if (dataOn !== undefined) await pinHolding(dataOn, folder, DATA_BYTES);

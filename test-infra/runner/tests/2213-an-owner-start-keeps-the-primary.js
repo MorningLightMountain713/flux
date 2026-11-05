@@ -126,9 +126,8 @@ describe('an owner start keeps the primary', function () {
     await followPrimary(appName, { nodes: NODES.map((i) => new URL(client(i).url).host), gNames: [folder] });
     await pushTestApp(appName, 'v1', 'resume', { user: 1000 });
     app = await buildSeedableApp({
-      env,
       name: appName,
-      instances: NODES.length,
+      instances: NODES.length, pinnedTo: NODES,
       compose: [{
         name: appName,
         description: 'an owner start keeps the primary',

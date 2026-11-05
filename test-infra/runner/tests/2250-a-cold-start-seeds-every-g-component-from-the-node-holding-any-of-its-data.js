@@ -58,7 +58,7 @@ describe('a cold start seeds every g: component from the node holding any of its
 
     await pushTestApp(appName, 'v1', 'gcold', { user: APP_UID });
     const app = await buildSeedableApp({
-      env, name: appName, instances: HOLDERS.length, compose: COMPONENTS.map((name) => gComponent(appName, name)),
+      name: appName, instances: HOLDERS.length, pinnedTo: HOLDERS, compose: COMPONENTS.map((name) => gComponent(appName, name)),
     });
     await Promise.all(COMPONENTS.map((name) => pinColdStart(HOLDERS, folderOf(name))));
     await pinHolding(HOLDER, folderOf('web'), HOLDING_BYTES);

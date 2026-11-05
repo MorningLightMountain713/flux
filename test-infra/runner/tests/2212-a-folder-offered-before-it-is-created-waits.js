@@ -60,9 +60,9 @@ describe('a folder a peer offers before this node has created it', function () {
     await followPrimary(appName, { nodes: [PRIMARY, HOLDER].map((i) => new URL(client(i).url).host), gNames: [folder] });
     await pushTestApp(appName, 'v1', 'offered', { user: 1000 });
     app = await buildSeedableApp({
-      env,
       name: appName,
       instances: 2,
+      pinnedTo: [PRIMARY, HOLDER],
       compose: [{
         name: appName,
         description: 'offered before created',

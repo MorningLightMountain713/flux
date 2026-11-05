@@ -304,7 +304,9 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
       const index = 2;
       const name = `e2eseedcheck${ts}`;
       await pushImage(name, 'v1');
-      const app = await buildSeedableSyncthingApp({ name, syncMode: 'syncFirst', instances: 1 });
+      const app = await buildSeedableSyncthingApp({
+        name, syncMode: 'syncFirst', instances: 1, pinnedTo: [index],
+      });
       const identifier = componentIdentifier(app);
       const folder = folderIdOf(app);
       const client = env.clients[index];

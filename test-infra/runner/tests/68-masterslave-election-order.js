@@ -18,7 +18,7 @@ import { restartFluxos } from '../framework/container.js';
 import { getSubnetConfig } from '../framework/subnet-config.js';
 import { waitFor, waitHolding, waitForElectionDecisions, electionDecisionCount } from '../framework/wait.js';
 import {
-  bootAndPeer, placeGAppInOrder, electionIndexOf,
+  bootAndPeer, placeGAppInOrder, electionIndexOf, seedSyncScopedData,
 } from '../framework/reconciler-suite.js';
 import { syncthingSeedIndex, placementOrderWithSeedAt } from '../framework/g-app-placement.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
@@ -256,6 +256,8 @@ describe('primary election under a divergent placement order', function () {
     // FluxOS is about to go away is the whole evidence the probe reads while its API
     // is silent.
     const orderFolder = await appSyncthingFolderId(env.clients[holders[0]], orderApp, orderApp);
+    // A synced index over an empty disk is what the mount safety stops an app for.
+    await Promise.all(holders.map((i) => seedSyncScopedData(env, orderApp, i)));
     await Promise.all(holders.map((i) => setSynced({ ip: subnet.nodeIp(i + 1), folder: orderFolder })));
     await Promise.all(holders.map((i) => setPeerHasData({ ip: subnet.nodeIp(i + 1), folder: orderFolder })));
 

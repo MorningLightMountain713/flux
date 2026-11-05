@@ -149,7 +149,7 @@ describe('reconciler cold start - fresh multi-node placement, no seeded source',
     expect(unmeasured, 'no holder is left between the address-order winner and the data holder').to.not.equal(undefined);
 
     await pushImage(waitApp, 'v1');
-    const spec = await buildSeedableSyncthingApp({ name: waitApp, syncMode: 'syncFirst' });
+    const spec = await buildSeedableSyncthingApp({ name: waitApp, syncMode: 'syncFirst', pinnedTo: holders });
     const folder = folderIdOf(spec);
     const passes = () => env.clients[seedIndex].getDecisionCount('syncthing:folderPass', folder, 'evaluated');
     await pinColdStart(holders, folder);

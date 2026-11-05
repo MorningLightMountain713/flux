@@ -63,7 +63,7 @@ describe('a holder whose volume did not mount does not hold up the seed', functi
 
     await pushTestApp(appName, 'v1', 'heldout', { user: APP_UID });
     const app = await buildSeedableApp({
-      env, name: appName, instances: HOLDERS.length, compose: [gComponent(appName, COMPONENT)],
+      name: appName, instances: HOLDERS.length, pinnedTo: HOLDERS, compose: [gComponent(appName, COMPONENT)],
     });
     await pinColdStart(HOLDERS, folder);
     await client(LOWEST).holdCheckpoint(BEFORE_HOLDINGS, folder);

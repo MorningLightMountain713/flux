@@ -162,9 +162,8 @@ describe('single-writer apps of different owners on shared holders', function ()
       await pushTestApp(app.name, 'v1', `owners${app.tag}`, { user: APP_UID });
       // eslint-disable-next-line no-await-in-loop
       app.spec = await buildSeedableApp({
-        env,
         name: app.name,
-        instances: app.order.length,
+        instances: app.order.length, pinnedTo: app.order,
         ownerKey: app.key,
         compose: [{
           name: app.name,

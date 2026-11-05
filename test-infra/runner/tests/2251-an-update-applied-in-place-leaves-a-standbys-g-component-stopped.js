@@ -70,7 +70,7 @@ describe('an update applied in place leaves a standby\'s g: component stopped', 
 
     await pushTestApp(appName, 'v1', 'inplace', { user: APP_UID });
     app = await buildSeedableApp({
-      env, name: appName, instances: HOLDERS.length, compose: [gComponent(appName, 'db'), web('first')],
+      name: appName, instances: HOLDERS.length, pinnedTo: HOLDERS, compose: [gComponent(appName, 'db'), web('first')],
     });
     await installOnNodes(env, app, [PRIMARY]);
     await waitHolding(async () => (await oneHolderAtMost())[PRIMARY].includes('db'), {

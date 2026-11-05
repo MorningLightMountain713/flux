@@ -82,7 +82,7 @@ describe('a mixed fleet seeds a cold-start folder on the holder', function () {
     await resetSyncState();
 
     await pushImage(appName, 'v1');
-    const spec = await buildSeedableSyncthingApp({ name: appName, syncMode: 'syncFirst' });
+    const spec = await buildSeedableSyncthingApp({ name: appName, syncMode: 'syncFirst', pinnedTo: HOLDERS });
     await pinColdStart(HOLDERS, folder);
     await pinHolding(DATA_HOLDER, folder, HOLDER_BYTES);
 

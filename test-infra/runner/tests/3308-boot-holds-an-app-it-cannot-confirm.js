@@ -191,16 +191,17 @@ describe('boot holds an app whose location it cannot read', function () {
     await pushImage(plainApp, 'v1');
     await pushImage(lapsedApp, 'v1');
     await pushImage(againApp, 'v1');
+    const fleet = [...Array(NODES).keys()];
     const apps = await Promise.all([
       buildSeedableApp({
-        env,
         name: mixedApp,
         instances: NODES,
+        pinnedTo: fleet,
         compose: [gComponent(mixedApp, 'db'), { ...gComponent(mixedApp, 'web'), containerData: '/appdata' }],
       }),
-      buildSeedableApp({ env, name: plainApp, instances: NODES, compose: [plainComponent(plainApp)] }),
-      buildSeedableApp({ env, name: lapsedApp, instances: NODES, compose: [plainComponent(lapsedApp)] }),
-      buildSeedableApp({ env, name: againApp, instances: NODES, compose: [plainComponent(againApp)] }),
+      buildSeedableApp({ name: plainApp, instances: NODES, pinnedTo: fleet, compose: [plainComponent(plainApp)] }),
+      buildSeedableApp({ name: lapsedApp, instances: NODES, pinnedTo: fleet, compose: [plainComponent(lapsedApp)] }),
+      buildSeedableApp({ name: againApp, instances: NODES, pinnedTo: fleet, compose: [plainComponent(againApp)] }),
     ]);
     [, , , againSpec] = apps;
     for (const app of apps) {

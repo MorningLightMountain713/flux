@@ -70,7 +70,7 @@ describe('two holders that can reach each other never both seed', function () {
     const name = `e2eseed${tag}${stamp}`;
     const folder = `flux${name}_${name}`;
     await pushImage(name, 'v1');
-    const spec = await buildSeedableSyncthingApp({ name, syncMode });
+    const spec = await buildSeedableSyncthingApp({ name, syncMode, pinnedTo: holders });
     await pinColdStart(holders, folder);
     await pinHolding(holder, folder, holdingBytes);
     const from = Object.fromEntries(holders.map((i) => [i, client(i).getLastEventId()]));
