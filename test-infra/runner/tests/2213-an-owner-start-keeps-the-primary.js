@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer } from '../framework/container.js';
+import { execInContainer, componentIdentifier } from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
@@ -36,7 +36,7 @@ describe('an owner start keeps the primary', function () {
   dumpLogsOnFailure(() => env);
 
   const appName = `e2eresume${Date.now()}`;
-  const identifier = `${appName}_${appName}`;
+  let identifier;
   const folder = `flux${appName}_${appName}`;
   const PRIMARY = 0;
   const STANDBYS = [1, 2];
@@ -144,6 +144,7 @@ describe('an owner start keeps the primary', function () {
         repoauth: '',
       }],
     });
+    identifier = componentIdentifier(app);
 
     await installOnNodes(env, app, [PRIMARY]);
     await waitFor(async () => (await runners()).includes(PRIMARY), {

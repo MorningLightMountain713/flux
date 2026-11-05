@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer, isAppContainerRunning, crashFluxos, releaseFluxos } from '../framework/container.js';
+import { execInContainer, isAppContainerRunning, crashFluxos, releaseFluxos, componentIdentifier } from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { bootAndPeer, installOnNodes, electionIndexOf } from '../framework/reconciler-suite.js';
@@ -37,8 +37,8 @@ describe('an owner stop and start everywhere keeps the primary', function () {
   dumpLogsOnFailure(() => env);
 
   const appName = `e2eglobalresume${Date.now()}`;
-  const identifier = `${appName}_${appName}`;
-  const folder = `flux${identifier}`;
+  let identifier;
+  const folder = `flux${appName}_${appName}`;
   // Placed in this order, so the election ranks them in it. A fourth node
   // holds nothing and keeps the discovery ring whole.
   const FIRST = 0;
@@ -137,6 +137,7 @@ describe('an owner stop and start everywhere keeps the primary', function () {
         repoauth: '',
       }],
     });
+    identifier = componentIdentifier(app);
 
     // One at a time: a node learns of the app only when it is installed, so the
     // order is the placement order.

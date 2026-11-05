@@ -49,7 +49,7 @@ describe('a primary no location lists is fenced while it runs', function () {
   dumpLogsOnFailure(() => fleet?.env);
   const appName = `e2efenced${Date.now()}`;
   const folder = `flux${appName}_${appName}`;
-  const root = `/mnt/appdata/flux-apps/${folder}`;
+  let root;
   const client = (i) => fleet.env.clients[i];
   let primaryDevice;
   // How long the primary's write took to reach the standby while it was listed.
@@ -64,6 +64,7 @@ describe('a primary no location lists is fenced while it runs', function () {
   before(async function () {
     this.timeout(900000);
     fleet = await placeSilentPrimaryApp({ hookCtx: this, appName, sigtermExpiryS: SIGTERM_EXPIRY_S });
+    root = fleet.root;
     primaryDevice = await getDeviceId(client(B));
     const startedAt = Date.now();
     await write(B, SAVE, SAVE_CONTENT);

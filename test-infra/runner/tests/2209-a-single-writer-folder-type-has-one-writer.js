@@ -9,7 +9,7 @@ import { authenticate } from '../auth.js';
 import { appOwnerKey } from '../framework/keys.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import {
-  execInContainer, getAppContainerStatus, blockPeerAccess, unblockPeerAccess,
+  execInContainer, getAppContainerStatus, blockPeerAccess, unblockPeerAccess, componentIdentifier,
 } from '../framework/container.js';
 import { electMaster, resetFdm } from '../framework/fdm-control.js';
 import {
@@ -61,7 +61,8 @@ describe('a single-writer folder type has one writer', function () {
   const stamp = Date.now();
 
   const ipOf = (i) => subnet.nodeIp(i + 1);
-  const identifierOf = (appName) => `${appName}_${appName}`;
+  const built = new Map();
+  const identifierOf = (appName) => componentIdentifier(built.get(appName));
   const folderOf = (appName) => `flux${appName}_${appName}`;
   const writesTo = async (i, folder) => (await getFolderWrites(ipOf(i))).filter((w) => w.id === folder);
   const scansOf = async (i, folder) => (await getFolderScans(ipOf(i))).filter((s) => s.id === folder);
@@ -93,10 +94,11 @@ describe('a single-writer folder type has one writer', function () {
   // standbys the election reads as ready to take over.
   const settle = async (appName) => {
     const folder = folderOf(appName);
-    const identifier = identifierOf(appName);
     const from = holders.map((i) => env.clients[i].getLastEventId());
     await pushImage(appName, 'v1');
     const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby', pinnedTo: holders });
+    built.set(appName, app);
+    const identifier = identifierOf(appName);
     await placeGAppInOrder(env, app, { placementOrder: holders, folder, identifier });
     await waitFor(async () => (await Promise.all(holders.map((i) => isUp(env.clients[i], appName)))).filter(Boolean).length === 1, {
       timeout: 300000, interval: 3000, label: `${appName} runs on one holder`,
@@ -386,7 +388,7 @@ describe('a single-writer folder type has one writer', function () {
     this.timeout(900000);
     const a = await settle(`e2erestore${stamp}`);
     const client = env.clients[a.primary];
-    const dir = `/mnt/appdata/flux-apps/${a.folder}`;
+    const dir = `/mnt/appdata/flux-apps/${a.identifier}`;
     // A restore of a g: component runs on the node FDM names.
     await electMaster(a.appName, client.ip);
     const archive = `${dir}/backup/local/backup_${a.appName.toLowerCase()}.tar.gz`;

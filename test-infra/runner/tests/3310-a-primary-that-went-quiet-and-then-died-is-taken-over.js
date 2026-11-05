@@ -63,7 +63,7 @@ describe('a primary that went quiet and then died is taken over', function () {
   dumpLogsOnFailure(() => fleet?.env);
   const appName = `e2equietdied${Date.now()}`;
   const folder = `flux${appName}_${appName}`;
-  const root = `/mnt/appdata/flux-apps/${folder}`;
+  let root;
   const client = (i) => fleet.env.clients[i];
   let primaryDevice;
   let afterDeath;
@@ -83,6 +83,7 @@ describe('a primary that went quiet and then died is taken over', function () {
   before(async function () {
     this.timeout(900000);
     fleet = await placeSilentPrimaryApp({ hookCtx: this, appName, sigtermExpiryS: SIGTERM_EXPIRY_S });
+    root = fleet.root;
     primaryDevice = await getDeviceId(client(B));
     const wrote = await execInContainer(client(B).container, `printf '${SAVE_CONTENT}' > ${root}/${SAVE}`);
     if (wrote.exitCode !== 0) throw new Error(`could not write on the primary: ${wrote.output}`);

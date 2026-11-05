@@ -50,7 +50,7 @@ describe('a former primary left the only holder keeps what it wrote as the prima
   dumpLogsOnFailure(() => fleet?.env);
   const appName = `e2eformerprimary${Date.now()}`;
   const folder = `flux${appName}_${appName}`;
-  const root = `/mnt/appdata/flux-apps/${folder}`;
+  let root;
   const client = (i) => fleet.env.clients[i];
   const sh = async (i, command) => {
     const r = await execInContainer(client(i).container, command);
@@ -78,6 +78,7 @@ describe('a former primary left the only holder keeps what it wrote as the prima
   before(async function () {
     this.timeout(900000);
     fleet = await placeSilentPrimaryApp({ hookCtx: this, appName, sigtermExpiryS: SIGTERM_EXPIRY_S });
+    root = fleet.root;
     await sh(B, `mkdir -p ${root}/${DIR} && printf '${CONTENT}' > ${root}/${FILE} && printf 'inside' > ${root}/${DIR}/inside.txt`);
     await scanFolder(client(B), folder);
     await waitFor(async () => (await readPath(client(A), `${root}/${FILE}`)) === CONTENT, {

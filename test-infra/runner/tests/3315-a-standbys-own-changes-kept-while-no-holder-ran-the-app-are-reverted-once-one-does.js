@@ -40,7 +40,7 @@ describe('a standby\'s own changes kept while no holder ran the app are reverted
   dumpLogsOnFailure(() => fleet?.env);
   const appName = `e2ekeptthenreverted${Date.now()}`;
   const folder = `flux${appName}_${appName}`;
-  const root = `/mnt/appdata/flux-apps/${folder}`;
+  let root;
   const client = (i) => fleet.env.clients[i];
   const passes = () => client(A).getDecisionCount('syncthing:folderPass', folder, 'evaluated');
   const eventsSince = (name, from) => client(A).getEventBuffer().filter((e) => e.id > from && e.event === name && e.data?.folder === folder);
@@ -48,6 +48,7 @@ describe('a standby\'s own changes kept while no holder ran the app are reverted
   before(async function () {
     this.timeout(900000);
     fleet = await placeSilentPrimaryApp({ hookCtx: this, appName, sigtermExpiryS: SIGTERM_EXPIRY_S });
+    root = fleet.root;
   });
 
   after(async function () {

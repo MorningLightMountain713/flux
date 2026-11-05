@@ -5,7 +5,7 @@ import { createTestEnv } from '../framework/test-env.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableSyncthingApp } from '../framework/seed-helper.js';
 import {
-  redirectOutbound, clearOutboundRedirect, getAppContainerStatus,
+  redirectOutbound, clearOutboundRedirect, getAppContainerStatus, componentIdentifier,
 } from '../framework/container.js';
 import { electMaster, clearMaster, resetFdm } from '../framework/fdm-control.js';
 import {
@@ -49,7 +49,6 @@ const HELD_PASSES = 3;
 // router fixed mid-suite is noticed within a pass or two.
 const MISROUTED_TTL_MS = 10000;
 
-const appDir = (name) => `/mnt/appdata/flux-apps/flux${name}_${name}`;
 
 // Where a node's syncthing monitor took each device it looked up for `name`,
 // counted per source.
@@ -72,7 +71,7 @@ describe('a standby whose calls to its primary reach another node', function () 
 
   const appName = `e2ereroute${Date.now()}`;
   const folder = `flux${appName}_${appName}`;
-  const identifier = `${appName}_${appName}`;
+  let identifier;
 
   const addr = (i) => `${env.clients[i].ip}:16127`;
   const deviceIds = {};
@@ -116,6 +115,7 @@ describe('a standby whose calls to its primary reach another node', function () 
     await resetFdm();
     await pushImage(appName, 'v1');
     const app = await buildSeedableSyncthingApp({ name: appName, syncMode: 'activeStandby', pinnedTo: [A, B] });
+    identifier = componentIdentifier(app);
 
     // The primary first, holding the world.
     await electMaster(appName, env.clients[B].ip);
@@ -184,7 +184,7 @@ describe('a standby whose calls to its primary reach another node', function () 
       return devices.some((d) => d.name === addr(B) && d.deviceID === deviceIds[B]);
     }, { timeout: 180000, interval: 5000, label: 'the standby configured the primary\'s own device' });
     await waitFor(
-      async () => (await listFolderFiles(env.clients[A], `${appDir(appName)}/appdata`)).split(' ').includes('seed-data'),
+      async () => (await listFolderFiles(env.clients[A], `/mnt/appdata/flux-apps/${identifier}/appdata`)).split(' ').includes('seed-data'),
       { timeout: 240000, interval: 5000, label: 'the primary\'s data reached the standby through the primary\'s connection' },
     );
     // Still redirected: the data came in over the primary's connection, not the
@@ -251,6 +251,6 @@ describe('a standby whose calls to its primary reach another node', function () 
     );
     const devices = await getConfiguredDevices(env.clients[A]);
     expect(devices.filter((d) => d.name === addr(B)).map((d) => d.deviceID)).to.deep.equal([deviceIds[B]]);
-    expect((await listFolderFiles(env.clients[A], `${appDir(appName)}/appdata`)).split(' ')).to.include('seed-data');
+    expect((await listFolderFiles(env.clients[A], `/mnt/appdata/flux-apps/${identifier}/appdata`)).split(' ')).to.include('seed-data');
   });
 });

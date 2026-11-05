@@ -45,7 +45,7 @@ describe('a standby reverts its local changes while the primary keeps writing', 
   dumpLogsOnFailure(() => fleet?.env);
   const appName = `e2ewriting${Date.now()}`;
   const folder = `flux${appName}_${appName}`;
-  const root = `/mnt/appdata/flux-apps/${folder}`;
+  let root;
   const client = (i) => fleet.env.clients[i];
   let writing = false;
   let writer = null;
@@ -75,6 +75,7 @@ describe('a standby reverts its local changes while the primary keeps writing', 
   before(async function () {
     this.timeout(900000);
     fleet = await placeSilentPrimaryApp({ hookCtx: this, appName, sigtermExpiryS: SIGTERM_EXPIRY_S });
+    root = fleet.root;
     writing = true;
     writer = keepWriting();
     await waitFor(async () => (await linesOnStandby()) >= 3, {

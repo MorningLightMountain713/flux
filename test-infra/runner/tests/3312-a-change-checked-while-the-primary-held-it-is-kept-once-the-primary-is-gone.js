@@ -46,7 +46,7 @@ describe('a change checked while the primary held it is kept once the primary is
   dumpLogsOnFailure(() => fleet?.env);
   const appName = `e2echeckedstale${Date.now()}`;
   const folder = `flux${appName}_${appName}`;
-  const root = `/mnt/appdata/flux-apps/${folder}`;
+  let root;
   const client = (i) => fleet.env.clients[i];
   const passes = () => client(A).getDecisionCount('syncthing:folderPass', folder, 'evaluated');
   let primaryDevice;
@@ -54,6 +54,7 @@ describe('a change checked while the primary held it is kept once the primary is
   before(async function () {
     this.timeout(900000);
     fleet = await placeSilentPrimaryApp({ hookCtx: this, appName, sigtermExpiryS: SIGTERM_EXPIRY_S });
+    root = fleet.root;
     primaryDevice = await getDeviceId(client(B));
     const wrote = await execInContainer(client(B).container, `printf '${SAVE_CONTENT}' > ${root}/${SAVE}`);
     if (wrote.exitCode !== 0) throw new Error(`could not write on the primary: ${wrote.output}`);

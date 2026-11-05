@@ -5,7 +5,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import {
   execInContainer, isAppContainerRunning, crashFluxos, releaseFluxos, shutdownFluxosGracefully,
-  redirectOutbound, clearOutboundRedirect, fluxosPid,
+  redirectOutbound, clearOutboundRedirect, fluxosPid, componentIdentifier,
 } from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
@@ -70,9 +70,9 @@ describe('a returning node waits paused until its role is decided', function () 
   dumpLogsOnFailure(() => env);
 
   const appName = `e2eswpaused${Date.now()}`;
-  const identifier = `${appName}_${appName}`;
-  const folder = `flux${identifier}`;
-  const data = `/mnt/appdata/flux-apps/${folder}/appdata`;
+  let identifier;
+  const folder = `flux${appName}_${appName}`;
+  let data;
   const ARCANE = 0;
   const LEGACY = 1;
   const BYSTANDER = 2;
@@ -183,6 +183,8 @@ describe('a returning node waits paused until its role is decided', function () 
         repoauth: '',
       }],
     });
+    identifier = componentIdentifier(app);
+    data = `/mnt/appdata/flux-apps/${identifier}/appdata`;
 
     // Placed one at a time, so the election ranks the Arcane node first.
     await installOnNodes(env, app, [ARCANE]);
@@ -337,7 +339,7 @@ describe('a returning node waits paused until its role is decided', function () 
     // The whole machine, with no announcement: the process, the container and the
     // daemon.
     await crashFluxos(client(ARCANE).container, { hold: true });
-    await execInContainer(client(ARCANE).container, `docker kill flux${identifier}`);
+    await execInContainer(client(ARCANE).container, `docker kill ${identifier}`);
     await stopDaemon(client(ARCANE));
     await becamePrimary(LEGACY, standbyMark, 600000);
 
@@ -391,7 +393,7 @@ describe('a returning node waits paused until its role is decided', function () 
 
       // The whole machine: the process, the container and the daemon.
       await crashFluxos(client(LEGACY).container, { hold: true });
-      await execInContainer(client(LEGACY).container, `docker kill flux${identifier}`);
+      await execInContainer(client(LEGACY).container, `docker kill ${identifier}`);
       await stopDaemon(client(LEGACY));
       await writeAsApp(LEGACY, 'written-while-down.txt', 'sent once it is safe');
 
@@ -463,7 +465,7 @@ describe('a returning node waits paused until its role is decided', function () 
       // The whole machine, with no announcement: the process, the container and the
       // daemon.
       await crashFluxos(client(primary).container, { hold: true });
-      await execInContainer(client(primary).container, `docker kill flux${identifier}`);
+      await execInContainer(client(primary).container, `docker kill ${identifier}`);
       await stopDaemon(client(primary));
       await becamePrimary(standby, standbyMark, 600000);
       await writeAsApp(primary, 'written-before-fdm-caught-up.txt', 'never sent');
@@ -529,7 +531,7 @@ describe('a returning node waits paused until its role is decided', function () 
       // The whole machine, with no announcement: the process, the container and the
       // daemon.
       await crashFluxos(client(primary).container, { hold: true });
-      await execInContainer(client(primary).container, `docker kill flux${identifier}`);
+      await execInContainer(client(primary).container, `docker kill ${identifier}`);
       await stopDaemon(client(primary));
       const becoming = await fluxEvent(standby, 'checkpoint:held', (d) => d.name === BEFORE_RUN && d.key === identifier, standbyMark, 600000);
       expect(await folderIs(standby, { type: 'sendreceive' }), 'fixture: the folder of the node becoming the primary sends').to.equal(true);
@@ -620,7 +622,7 @@ describe('a returning node waits paused until its role is decided', function () 
       // The whole machine, with no announcement: the process, the container and the
       // daemon.
       await crashFluxos(client(primary).container, { hold: true });
-      await execInContainer(client(primary).container, `docker kill flux${identifier}`);
+      await execInContainer(client(primary).container, `docker kill ${identifier}`);
       await stopDaemon(client(primary));
       if (primary === ARCANE) await startDaemon(client(ARCANE), { paused: true });
       const returned = client(primary).getLastEventId();

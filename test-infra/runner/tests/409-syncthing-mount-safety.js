@@ -287,7 +287,7 @@ describe('syncthing mount-safety guard demotes unsafe sendreceive folders', func
       try {
         await client.waitForEvent('checkpoint:held', (d) => d.name === checkpoint && d.key === folder, 180000, { afterId });
         const dir = await appDataRoot(client.container, name);
-        const wipe = await execInContainer(client.container, `sh -c 'find ${dir}/appdata -mindepth 1 -delete'`);
+        const wipe = await execInContainer(client.container, `sh -c 'mkdir -p ${dir}/appdata && find ${dir}/appdata -mindepth 1 -delete'`);
         expect(wipe.exitCode, `could not empty appdata: ${wipe.output}`).to.equal(0);
         await setStatusUnreadable({ ip, folder });
       } finally {

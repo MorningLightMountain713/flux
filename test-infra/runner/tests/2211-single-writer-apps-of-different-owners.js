@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { execInContainer, crashFluxos, releaseFluxos } from '../framework/container.js';
+import { execInContainer, crashFluxos, releaseFluxos, componentIdentifier } from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
@@ -46,9 +46,7 @@ describe('single-writer apps of different owners on shared holders', function ()
     { tag: 'C', name: `e2eothers${stamp}`, key: ownerThree, order: [2, 3, 0] },
   ].map((app) => ({
     ...app,
-    identifier: `${app.name}_${app.name}`,
     folder: `flux${app.name}_${app.name}`,
-    data: `/mnt/appdata/flux-apps/flux${app.name}_${app.name}/appdata`,
   }));
   const [A, B, C] = apps;
   const NODES = [0, 1, 2, 3, NOBODY];
@@ -181,6 +179,8 @@ describe('single-writer apps of different owners on shared holders', function ()
           repoauth: '',
         }],
       });
+      app.identifier = componentIdentifier(app.spec);
+      app.data = `/mnt/appdata/flux-apps/${app.identifier}/appdata`;
       // Placed one holder at a time, so each app's election order is its order.
       const [primary, ...standbys] = app.order;
       // eslint-disable-next-line no-await-in-loop

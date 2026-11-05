@@ -44,7 +44,7 @@ describe('a device is not removed from a folder a revert holds', function () {
   dumpLogsOnFailure(() => fleet?.env);
   const appName = `e2eheldrevert${Date.now()}`;
   const folder = `flux${appName}_${appName}`;
-  const root = `/mnt/appdata/flux-apps/${folder}`;
+  let root;
   const client = (i) => fleet.env.clients[i];
   const sh = async (i, command) => {
     const r = await execInContainer(client(i).container, command);
@@ -56,6 +56,7 @@ describe('a device is not removed from a folder a revert holds', function () {
   before(async function () {
     this.timeout(900000);
     fleet = await placeSilentPrimaryApp({ hookCtx: this, appName, sigtermExpiryS: SIGTERM_EXPIRY_S });
+    root = fleet.root;
   });
 
   afterEach(async function () {

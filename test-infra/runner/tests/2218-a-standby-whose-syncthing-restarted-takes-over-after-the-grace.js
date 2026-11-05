@@ -45,7 +45,7 @@ describe('a standby whose syncthing restarted takes over from a crashed primary 
     // the daemon. FDM still names it, so the standby does not act on the closing
     // its syncthing sees - and then that syncthing restarts.
     await crashFluxos(client(B).container, { hold: true });
-    await execInContainer(client(B).container, `docker kill flux${fleet.identifier}`);
+    await execInContainer(client(B).container, `docker kill ${fleet.identifier}`);
     await stopDaemon(client(B));
     const standbyFrom = client(A).getLastEventId();
     await stopDaemon(client(A));

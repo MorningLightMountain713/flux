@@ -2,7 +2,7 @@
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { isAppContainerRunning } from '../framework/container.js';
+import { isAppContainerRunning, componentIdentifier } from '../framework/container.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
@@ -34,7 +34,7 @@ describe('a folder a peer offers before this node has created it', function () {
 
   const appName = `e2eoffered${Date.now()}`;
   const folder = `flux${appName}_${appName}`;
-  const data = `/mnt/appdata/flux-apps/${folder}/appdata`;
+  let data;
   const PRIMARY = 0;
   const HOLDER = 1;
   let app;
@@ -79,6 +79,7 @@ describe('a folder a peer offers before this node has created it', function () {
         repoauth: '',
       }],
     });
+    data = `/mnt/appdata/flux-apps/${componentIdentifier(app)}/appdata`;
 
     await installOnNodes(env, app, [PRIMARY]);
     await waitFor(() => isAppContainerRunning(client(PRIMARY).container, appName), {

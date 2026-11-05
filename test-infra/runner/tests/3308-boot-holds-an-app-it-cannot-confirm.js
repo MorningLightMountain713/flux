@@ -38,7 +38,7 @@ import {
   bootAndPeer, installOnNodes, installSeededOnNodes, installedInstanceIndices,
 } from '../framework/reconciler-suite.js';
 import {
-  crashFluxos, listAppContainers, releaseFluxos, stopAppContainer,
+  crashFluxos, listAppContainers, releaseFluxos, stopAppContainer, componentIdentifier,
 } from '../framework/container.js';
 import { waitFor } from '../framework/wait.js';
 import { failCommands } from '../framework/mongo-control.js';
@@ -94,11 +94,11 @@ describe('boot holds an app whose location it cannot read', function () {
   const lapsedApp = `e2ebootlapsed${stamp}`;
   // its record is gone, and it is uninstalled and installed again while its decision is held
   const againApp = `e2ebootagain${stamp}`;
-  const db = `db_${mixedApp}`;
-  const web = `web_${mixedApp}`;
-  const plain = `${plainApp}_${plainApp}`;
-  const lapsed = `${lapsedApp}_${lapsedApp}`;
-  const again = `${againApp}_${againApp}`;
+  let db;
+  let web;
+  let plain;
+  let lapsed;
+  let again;
   let againSpec;
   let holder;
   let holderDb;
@@ -107,7 +107,7 @@ describe('boot holds an app whose location it cannot read', function () {
   });
 
   const isUp = async (identifier) => (await listAppContainers(holder.container))
-    .some((c) => c.name === `flux${identifier}` && c.status?.startsWith('Up'));
+    .some((c) => c.name === identifier && c.status?.startsWith('Up'));
   const installedNames = () => holderDb.localAppNames();
   const heardRemoved = (appName, afterIds) => env.clients.some((client, i) => i !== HOLDER && client
     && client.getEventBuffer().some((e) => e.id > afterIds[i] && e.event === 'network:appremoved'
@@ -204,6 +204,9 @@ describe('boot holds an app whose location it cannot read', function () {
       buildSeedableApp({ name: againApp, instances: NODES, pinnedTo: fleet, compose: [plainComponent(againApp)] }),
     ]);
     [, , , againSpec] = apps;
+    db = componentIdentifier(apps[0], 'db');
+    web = componentIdentifier(apps[0], 'web');
+    [plain, lapsed, again] = apps.slice(1).map((app) => componentIdentifier(app));
     for (const app of apps) {
       // eslint-disable-next-line no-await-in-loop
       await installOnNodes(env, app, [HOLDER]);

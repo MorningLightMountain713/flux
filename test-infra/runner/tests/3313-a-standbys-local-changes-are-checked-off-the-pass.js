@@ -34,7 +34,7 @@ describe('a standby\'s local changes are checked off the monitor pass', function
   dumpLogsOnFailure(() => fleet?.env);
   const appName = `e2echeckoffpass${Date.now()}`;
   const folder = `flux${appName}_${appName}`;
-  const root = `/mnt/appdata/flux-apps/${folder}`;
+  let root;
   const client = (i) => fleet.env.clients[i];
   const passes = () => client(A).getDecisionCount('syncthing:folderPass', folder, 'evaluated');
   const sh = async (i, command) => {
@@ -49,6 +49,7 @@ describe('a standby\'s local changes are checked off the monitor pass', function
   before(async function () {
     this.timeout(900000);
     fleet = await placeSilentPrimaryApp({ hookCtx: this, appName, sigtermExpiryS: SIGTERM_EXPIRY_S });
+    root = fleet.root;
     await sh(B, `mkdir -p ${root}/appdata/many && for i in $(seq 1 ${FILES}); do printf 'primary %s' $i > ${root}/appdata/many/f$i; done`);
     await scanFolder(client(B), folder);
     await waitFor(async () => (await sh(A, `ls ${root}/appdata/many | wc -l`)).trim() === String(FILES), {

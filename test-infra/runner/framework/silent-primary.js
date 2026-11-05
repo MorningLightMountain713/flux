@@ -1,7 +1,7 @@
 import { createTestEnv } from './test-env.js';
 import { pushImage } from './registry-helper.js';
 import { buildSeedableSyncthingApp } from './seed-helper.js';
-import { getAppContainerStatus } from './container.js';
+import { getAppContainerStatus, componentIdentifier } from './container.js';
 import { electMaster, resetFdm } from './fdm-control.js';
 import { waitFor, waitForReconcileActuated, waitForUp, waitForElectionDecisions } from './wait.js';
 import { bootAndPeer, installOnNodes, seedSyncScopedData } from './reconciler-suite.js';
@@ -21,8 +21,6 @@ export const C = 2;
 
 export const LOCATION_TTL_S = 30 * 60;
 const NODE_MONITOR_INTERVAL_MS = 60 * 60 * 1000;
-
-const appDir = (name) => `/mnt/appdata/flux-apps/flux${name}_${name}`;
 
 async function isUp(client, appName) {
   const status = await getAppContainerStatus(client.container, appName);
@@ -48,7 +46,6 @@ async function isUp(client, appName) {
 export async function placeSilentPrimaryApp({
   hookCtx, appName, sigtermExpiryS, peers, system, env: moreFleet = {},
 }) {
-  const identifier = `${appName}_${appName}`;
   const env = await createTestEnv({
     hookCtx,
     nodes: 3,
@@ -80,6 +77,8 @@ export async function placeSilentPrimaryApp({
   const app = await buildSeedableSyncthingApp({
     name: appName, syncMode: 'activeStandby', instances: 2, pinnedTo: [A, B],
   });
+  const identifier = componentIdentifier(app);
+  const root = `/mnt/appdata/flux-apps/${identifier}`;
 
   await electMaster(appName, client(B).ip);
   const primaryAfter = client(B).getLastEventId();
@@ -91,7 +90,7 @@ export async function placeSilentPrimaryApp({
   const standbyAfter = client(A).getLastEventId();
   await installOnNodes(env, app, [A]);
   await waitForReconcileActuated(client(A), identifier, 'dataCleared', 120000, { afterId: standbyAfter });
-  await waitFor(async () => (await listFolderFiles(client(A), `${appDir(appName)}/appdata`)).split(' ').includes('seed-data'), {
+  await waitFor(async () => (await listFolderFiles(client(A), `${root}/appdata`)).split(' ').includes('seed-data'), {
     timeout: 240000, interval: 5000, label: 'the primary\'s data reached the standby',
   });
   // Once FDM goes quiet the standby asks the primary it read off FDM.
@@ -109,6 +108,8 @@ export async function placeSilentPrimaryApp({
     env,
     app,
     identifier,
+    // The app's directory on a holder.
+    root,
     // When more than one node ran the component.
     twoRan,
     stop: () => clearInterval(sampler),

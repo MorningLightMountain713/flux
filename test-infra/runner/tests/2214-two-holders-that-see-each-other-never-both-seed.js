@@ -3,7 +3,7 @@ import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import {
-  getAppContainerStatus, blockPeerAccess, unblockPeerAccess, execInContainer,
+  getAppContainerStatus, blockPeerAccess, unblockPeerAccess, execInContainer, componentIdentifier,
 } from '../framework/container.js';
 import {
   resetSyncState, getFolderConfig, pinColdStart, pinHolding,
@@ -74,9 +74,12 @@ describe('two holders that can reach each other never both seed', function () {
     await pinColdStart(holders, folder);
     await pinHolding(holder, folder, holdingBytes);
     const from = Object.fromEntries(holders.map((i) => [i, client(i).getLastEventId()]));
-    await Promise.all(holds.map(([i, checkpoint, key = folder]) => client(i).holdCheckpoint(checkpoint, key)));
+    const identifier = componentIdentifier(spec);
+    await Promise.all(holds.map(([i, checkpoint, key = folder]) => client(i).holdCheckpoint(checkpoint, key === ELECTION ? identifier : key)));
     await installOnNodes(env, spec, holders);
-    return { name, folder, from };
+    return {
+      name, folder, identifier, from,
+    };
   };
   const heldAt = (i, checkpoint, app) => client(i).waitForEvent(
     'checkpoint:held',
@@ -216,17 +219,15 @@ describe('two holders that can reach each other never both seed', function () {
   // decision, seeds it as the primary FDM names.
   it('withdraws a seed decision of a single-writer app once the election names another node', async function () {
     this.timeout(600000);
-    const identifier = (app) => `${app.name}_${app.name}`;
-    const name = `e2eseedgwithdraw${stamp}`;
     // The lowest address decides only once the holder has, so the holder is the
     // one that decided, whichever pass reaches the field first.
-    const app = await placeSplitApp('gwithdraw', [[holder, ELECTION, `${name}_${name}`], [lowest, BEFORE_DECISION]], 'activeStandby');
+    const app = await placeSplitApp('gwithdraw', [[holder, ELECTION, ELECTION], [lowest, BEFORE_DECISION]], 'activeStandby');
     const team = (await authenticate(client(holder).url, fluxTeamKey())).zelidauth;
     // The seed decisions a node publishes go to a node or the Flux team, on the POST
     // form of the route; the open GET carries none.
     const seeding = async () => (await client(holder).post('/apps/promotedfolders', {}, { zelidauth: team }))?.data?.seeding?.[app.folder];
     try {
-      await heldAt(holder, ELECTION, { ...app, folder: identifier(app) });
+      await heldAt(holder, ELECTION, { ...app, folder: app.identifier });
       await waitFor(async () => (await seeding())?.stage === 'decided', {
         timeout: 240000, interval: 1000, label: 'the holder decides to seed, its election held',
       });
@@ -234,7 +235,7 @@ describe('two holders that can reach each other never both seed', function () {
 
       await electMaster(app.name, client(lowest).ip);
     } finally {
-      await release(holder, ELECTION, { ...app, folder: identifier(app) });
+      await release(holder, ELECTION, { ...app, folder: app.identifier });
       await release(lowest, BEFORE_DECISION, app).catch(() => {});
     }
 
