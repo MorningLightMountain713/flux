@@ -460,11 +460,11 @@ const rpcHandlers = {
   // that belongs to it, answered together so the anchor can never name a block the
   // node set did not match. Deliberately the RAW list, unlike the two handlers above:
   // a ZMQ publish is a broadcast with no requester, so the anchor must match what the
-  // stream actually carries (snapshotForDiff(deterministicNodeList)).
+  // stream actually carries (snapshotForDiff of it).
   getfluxnodesnapshot: () => ({
     height: currentHeight,
     blockhash: blockHash(currentHeight),
-    nodes: deterministicNodeList,
+    nodes: publishReported(deterministicNodeList),
   }),
 
   getzelnodesnapshot: function f(params) { return this.getfluxnodesnapshot(params); },
@@ -1063,8 +1063,9 @@ function publishBlockConnect({ from = null, isReorg = false } = {}) {
 
   publish('hashblockheight', zmqEncoders.encode('hashblockheight', to));
 
+  // The list as the chain holds it: a confirmed move changes the entry's address.
   const before = lastPublishedNodes;
-  const after = snapshotForDiff(deterministicNodeList);
+  const after = snapshotForDiff(publishReported(deterministicNodeList));
   lastPublishedNodes = after;
 
   publish('fluxnodelistdelta', zmqEncoders.encode('fluxnodelistdelta', {
@@ -1094,7 +1095,7 @@ function publishBlockConnect({ from = null, isReorg = false } = {}) {
 function connectListChange(mutate) {
   mutate();
 
-  const diff = diffNodeLists(lastPublishedNodes, snapshotForDiff(deterministicNodeList));
+  const diff = diffNodeLists(lastPublishedNodes, snapshotForDiff(publishReported(deterministicNodeList)));
   if (!diff.added.length && !diff.removed.length && !diff.updated.length) return currentHeight;
 
   currentHeight += 1;
@@ -1303,7 +1304,7 @@ control.post('/set-node-list', (req, res) => {
   // and connects no block — it re-bases what the next delta is measured against.
   deterministicNodeList = req.body.nodes;
   originalNodeList = [...req.body.nodes];
-  lastPublishedNodes = snapshotForDiff(deterministicNodeList);
+  lastPublishedNodes = snapshotForDiff(publishReported(deterministicNodeList));
   res.json({ nodeCount: deterministicNodeList.length });
 });
 
