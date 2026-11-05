@@ -1,4 +1,4 @@
-import { getDiskClaims, onSyncDeclaration } from './syncthing-control.js';
+import { getDiskClaims, getSyncthingState, onSyncDeclaration } from './syncthing-control.js';
 import { execInContainer } from './container.js';
 
 // A real syncthing leaves a folder's data on every node that syncs it, and FluxOS
@@ -19,6 +19,7 @@ import { execInContainer } from './container.js';
 const SYNCED_FILE = 'appdata/.harness-synced';
 const APPS_DIR = '/mnt/appdata/flux-apps';
 const SAFE_NAME = /^[A-Za-z0-9_.-]+$/;
+const SAFE_PATH = /^[A-Za-z0-9_./-]+$/;
 
 // The bytes each node should hold per folder: the node's own declaration where it
 // has one, the wildcard's otherwise - the stub's own lookup order.
@@ -42,13 +43,27 @@ function belongsTo(folder, app) {
 }
 
 /**
- * @param {Array<[string, number]>} entries folder -> bytes it should hold (0: none)
+ * The directory each folder of a node syncs: the path FluxOS configured it at, which
+ * is named by the component's identifier, not the folder id.
+ * @param {object} state The stub's state
+ * @param {string} ip The node
+ * @returns {Map<string, string>} folder -> directory
+ */
+export function folderDirectories(state, ip) {
+  const folders = state?.nodes?.find((node) => node.ip === ip)?.folders ?? [];
+  return new Map(folders
+    .filter((folder) => typeof folder.path === 'string' && SAFE_PATH.test(folder.path))
+    .map((folder) => [folder.id, folder.path.replace(/\/+$/, '')]));
+}
+
+/**
+ * @param {Array<[string, number, string]>} entries directory of a folder, with the
+ *   bytes it should hold (0: none)
  * @param {boolean} sweep Also remove the file from every folder not in entries.
  * @returns {string}
  */
 function script(entries, sweep) {
-  const lines = entries.map(([folder, bytes]) => {
-    const dir = `${APPS_DIR}/${folder}`;
+  const lines = entries.map(([, bytes, dir]) => {
     const file = `${dir}/${SYNCED_FILE}`;
     const ownData = `find ${dir}/appdata -type f -size +0 ! -path ${file} -print -quit`;
     const write = bytes > 0
@@ -57,7 +72,7 @@ function script(entries, sweep) {
     return `if grep -qs " ${dir} " /proc/mounts && [ -d ${dir}/appdata ]; then ${write}; fi`;
   });
   if (sweep) {
-    const keep = entries.map(([folder]) => `${APPS_DIR}/${folder}/${SYNCED_FILE}`).join(' ');
+    const keep = entries.map(([, , dir]) => `${dir}/${SYNCED_FILE}`).join(' ');
     lines.push(`for f in ${APPS_DIR}/*/${SYNCED_FILE}; do case " ${keep} " in *" $f "*) ;; *) rm -f "$f" ;; esac; done`);
   }
   return lines.join('\n');
@@ -76,13 +91,17 @@ export function startSyncedDataKeeper(env) {
   const unsubscribes = [];
 
   // Brings one node's volumes to the declared bytes: the folders `pick` accepts, or
-  // every declared folder - and no file in any other - when pick is null.
+  // every declared folder a node has configured - and no file in any other - when
+  // pick is null. A folder it has not configured has no volume yet.
   const apply = (client, pick) => {
     const run = async () => {
       const claims = await getDiskClaims().catch(() => null);
       if (!Array.isArray(claims)) return;
+      const directories = folderDirectories(await getSyncthingState().catch(() => null), client.ip);
       const entries = [...bytesByFolder(claims, client.ip)]
-        .filter(([folder]) => SAFE_NAME.test(folder) && (!pick || pick(folder)));
+        .filter(([folder]) => SAFE_NAME.test(folder) && directories.has(folder))
+        .map(([folder, bytes]) => [folder, bytes, directories.get(folder)])
+        .filter(([folder, , dir]) => !pick || pick(folder, dir));
       if (pick && !entries.length) return;
       await execInContainer(client.container, script(entries, !pick)).catch(() => {});
     };
@@ -100,10 +119,10 @@ export function startSyncedDataKeeper(env) {
       client.subscribe('stream:gap', everything),
       client.subscribe('app:installed', ({ data }) => { apply(client, (folder) => belongsTo(folder, data.name)); }),
       client.subscribe('app:componentRedeployed', ({ data }) => {
-        if (data.hard) apply(client, (folder) => folder === folderOf(data.identifier));
+        if (data.hard) apply(client, (folder, dir) => dir.endsWith(`/${data.identifier}`));
       }),
       client.subscribe('reconciler:actuated', ({ data }) => {
-        if (data.action === 'dataCleared') apply(client, (folder) => folder === folderOf(data.identifier));
+        if (data.action === 'dataCleared') apply(client, (folder, dir) => dir.endsWith(`/${data.identifier}`));
       }),
     );
     everything();
