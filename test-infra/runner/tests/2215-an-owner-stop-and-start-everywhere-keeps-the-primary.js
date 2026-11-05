@@ -156,7 +156,7 @@ describe('an owner stop and start everywhere keeps the primary', function () {
     // takes the app over. Which one is the first to see the first holder's
     // connection close, not the election order.
     await crashFluxos(client(FIRST).container, { hold: true });
-    await execInContainer(client(FIRST).container, `docker kill ${folder}`);
+    await execInContainer(client(FIRST).container, `docker kill ${identifier}`);
     await stopDaemon(client(FIRST));
     await waitHolding(async () => (await oneWriterAtMost()).some((i) => i !== FIRST), {
       timeout: 300000, interval: 3000, label: 'another holder takes the app over',

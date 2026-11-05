@@ -733,7 +733,7 @@ describe('primary election under a divergent placement order', function () {
     const { container } = env.clients[primary];
     await crashFluxos(container, { hold: true });
     try {
-      await execInContainer(container, `docker kill ${folder}`);
+      await execInContainer(container, `docker kill ${identifierOf(lossApp)}`);
       await severPeerSync({ folder, deviceIp: env.clients[primary].ip });
 
       await waitFor(async () => (await electionCount(senior, lossApp, 'started')) > startedBefore[0], {
