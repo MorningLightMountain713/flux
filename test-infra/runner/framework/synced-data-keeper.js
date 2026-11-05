@@ -67,9 +67,9 @@ function script(entries, sweep) {
     const file = `${dir}/${SYNCED_FILE}`;
     const ownData = `find ${dir}/appdata -type f -size +0 ! -path ${file} -print -quit`;
     const write = bytes > 0
-      ? `[ -n "$(${ownData})" ] || [ "$(stat -c %s ${file} 2>/dev/null)" = "${bytes}" ] || head -c ${bytes} /dev/zero > ${file}`
+      ? `mkdir -p ${dir}/appdata; [ -n "$(${ownData})" ] || [ "$(stat -c %s ${file} 2>/dev/null)" = "${bytes}" ] || head -c ${bytes} /dev/zero > ${file}`
       : `rm -f ${file}`;
-    return `if grep -qs " ${dir} " /proc/mounts && [ -d ${dir}/appdata ]; then ${write}; fi`;
+    return `if grep -qs " ${dir} " /proc/mounts; then ${write}; fi`;
   });
   if (sweep) {
     const keep = entries.map(([, , dir]) => `${dir}/${SYNCED_FILE}`).join(' ');

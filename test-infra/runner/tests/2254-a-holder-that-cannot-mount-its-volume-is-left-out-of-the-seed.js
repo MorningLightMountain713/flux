@@ -12,7 +12,9 @@ import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { gComponent, watchGComponents } from '../framework/g-components.js';
-import { crashFluxos, releaseFluxos } from '../framework/container.js';
+import {
+  crashFluxos, releaseFluxos, componentIdentifier,
+} from '../framework/container.js';
 import { breakFolderVolume, destroyFolderVolume, restoreFolderVolume } from '../framework/volume-fixture.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
@@ -49,6 +51,7 @@ describe('a holder that cannot mount its volume is left out of the seed', functi
     const appName = `e2ecannotseed${tag}${Date.now()}`;
     const watch = watchGComponents(() => env, { appName, components: [COMPONENT], holders });
     const folder = watch.folderOf(COMPONENT);
+    let identifier;
     const count = (i, counter, decision) => client(i).getDecisionCount(counter, folder, decision);
     const brokenHolders = Object.keys(broken).map(Number);
     const deciders = holders.filter((i) => !brokenHolders.includes(i));
@@ -56,6 +59,7 @@ describe('a holder that cannot mount its volume is left out of the seed', functi
 
     return {
       folder,
+      identifier: () => identifier,
       oneHolderAtMost: watch.oneHolderAtMost,
       seeded,
       cannotSeed: (i) => count(i, 'syncthing:seedDecision', 'holderCannotSeed'),
@@ -74,6 +78,7 @@ describe('a holder that cannot mount its volume is left out of the seed', functi
         if (dataOn !== undefined) await pinHolding(dataOn, folder, DATA_BYTES);
         const from = Object.fromEntries(deciders.map((i) => [i, client(i).getLastEventId()]));
         await Promise.all(deciders.map((i) => client(i).holdCheckpoint(BEFORE_HOLDINGS, folder)));
+        identifier = componentIdentifier(app, COMPONENT);
         await installOnNodes(env, app, holders);
         await Promise.all(deciders.map((i) => client(i).waitForEvent(
           'checkpoint:held',
@@ -87,9 +92,9 @@ describe('a holder that cannot mount its volume is left out of the seed', functi
           // eslint-disable-next-line no-await-in-loop
           await crashFluxos(client(i).container, { hold: true });
           // eslint-disable-next-line no-await-in-loop
-          if (broken[i] === GONE) await destroyFolderVolume(client(i).container, folder);
+          if (broken[i] === GONE) await destroyFolderVolume(client(i).container, identifier);
           // eslint-disable-next-line no-await-in-loop
-          else await breakFolderVolume(client(i).container, folder);
+          else await breakFolderVolume(client(i).container, identifier);
           // eslint-disable-next-line no-await-in-loop
           await releaseFluxos(client(i).container);
           // eslint-disable-next-line no-await-in-loop
@@ -145,7 +150,7 @@ describe('a holder that cannot mount its volume is left out of the seed', functi
     it('takes the broken holder back as a standby once its volume mounts', async function () {
       this.timeout(600000);
       const from = await c.passes(0);
-      await restoreFolderVolume(client(0).container, c.folder);
+      await restoreFolderVolume(client(0).container, c.identifier());
       await waitHolding(async () => {
         await c.oneHolderAtMost();
         return await c.passes(0) >= from + SETTLE_PASSES;
@@ -171,7 +176,7 @@ describe('a holder that cannot mount its volume is left out of the seed', functi
 
     it('seeds once that volume mounts', async function () {
       this.timeout(600000);
-      await restoreFolderVolume(client(2).container, c.folder);
+      await restoreFolderVolume(client(2).container, c.identifier());
       await waitHolding(async () => {
         await c.oneHolderAtMost();
         return (await c.seeders()).length >= 1;

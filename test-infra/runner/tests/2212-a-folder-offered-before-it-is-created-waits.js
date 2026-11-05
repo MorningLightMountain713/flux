@@ -6,7 +6,7 @@ import { isAppContainerRunning, componentIdentifier } from '../framework/contain
 import { pushTestApp } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import {
-  bootAndPeer, installOnNodes, holdSpawnerExcept, releaseSpawnerHolds,
+  bootAndPeer, installOnNodes,
 } from '../framework/reconciler-suite.js';
 import { waitFor } from '../framework/wait.js';
 import {
@@ -83,8 +83,6 @@ describe('a folder a peer offers before this node has created it', function () {
     });
     data = `/mnt/appdata/flux-apps/${componentIdentifier(app)}/appdata`;
 
-    // The app names the holder, so its spawner would take it up before the checkpoint is held.
-    await holdSpawnerExcept(env, appName, [PRIMARY]);
     await installOnNodes(env, app, [PRIMARY]);
     await waitFor(() => isAppContainerRunning(client(PRIMARY).container, appName), {
       timeout: 300000, interval: 3000, label: 'the primary runs the app',
@@ -106,7 +104,6 @@ describe('a folder a peer offers before this node has created it', function () {
     const from = holder.getLastEventId();
     await holder.holdCheckpoint(BEFORE_FOLDER_WRITE, folder);
     try {
-      await releaseSpawnerHolds(env, appName);
       await installOnNodes(env, app, [HOLDER]);
       await holder.waitForEvent('checkpoint:held', (d) => d.name === BEFORE_FOLDER_WRITE && d.key === folder, 300000, { afterId: from });
 

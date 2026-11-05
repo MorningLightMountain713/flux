@@ -11,7 +11,9 @@ import { syncthingSeedIndex } from '../framework/g-app-placement.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { pushTestApp } from '../framework/registry-helper.js';
 import { gComponent, watchGComponents } from '../framework/g-components.js';
-import { crashFluxos, releaseFluxos } from '../framework/container.js';
+import {
+  crashFluxos, releaseFluxos, componentIdentifier,
+} from '../framework/container.js';
 import { destroyFolderVolume } from '../framework/volume-fixture.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
@@ -49,6 +51,7 @@ describe('a holder whose volume did not mount does not hold up the seed', functi
     appName, components: [COMPONENT], holders: HOLDERS,
   });
   const folder = folderOf(COMPONENT);
+  let identifier;
   const seeded = (i) => client(i).getDecisionCount('syncthing:seedDecision', folder, 'seeded');
   const waitedOnLook = (i) => client(i).getDecisionCount('syncthing:seedDecision', folder, 'holderNotLookedAt');
   const folderPasses = (i) => client(i).getDecisionCount('syncthing:folderPass', folder, 'evaluated');
@@ -68,6 +71,7 @@ describe('a holder whose volume did not mount does not hold up the seed', functi
     await pinColdStart(HOLDERS, folder);
     await client(LOWEST).holdCheckpoint(BEFORE_HOLDINGS, folder);
     const from = client(LOWEST).getLastEventId();
+    identifier = componentIdentifier(app, COMPONENT);
     await installOnNodes(env, app, HOLDERS);
     await client(LOWEST).waitForEvent(
       'checkpoint:held',
@@ -89,7 +93,7 @@ describe('a holder whose volume did not mount does not hold up the seed', functi
     expect(subnet.nodeIp(LOWEST + 1) < subnet.nodeIp(BROKEN + 1), 'fixture: the broken holder is not the lowest address').to.equal(true);
 
     await crashFluxos(client(BROKEN).container, { hold: true });
-    await destroyFolderVolume(client(BROKEN).container, folder);
+    await destroyFolderVolume(client(BROKEN).container, identifier);
     await releaseFluxos(client(BROKEN).container);
     await waitFor(async () => await heldOutPasses(BROKEN) >= 1, {
       timeout: 300000, interval: 2000, label: 'the restarted holder holds the folder out',

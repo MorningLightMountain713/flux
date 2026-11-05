@@ -58,7 +58,7 @@ export function watchGComponents(getEnv, { appName, components, holders }) {
   const folderOf = (name) => `flux${name}_${appName}`;
   const runningOn = async (i) => {
     const containers = await listAppContainers(getEnv().clients[i].container);
-    return components.filter((name) => containers.some((c) => c.name === folderOf(name) && c.status?.startsWith('Up')));
+    return components.filter((name) => containers.some((c) => c.app === appName && c.component === name && c.status?.startsWith('Up')));
   };
   // Asserted on every call: a waitHolding poll built on it fails at the first breach.
   const oneHolderAtMost = async () => {
