@@ -109,7 +109,7 @@ describe('idService tests', () => {
         data: {
           code: undefined,
           name: 'Error',
-          message: 'Node hardware requirements not met',
+          message: 'Node Total Ram (1) below new Cumulus requirements',
         },
       };
 

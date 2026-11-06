@@ -572,6 +572,7 @@ describe('appSpecHelpers tests', () => {
   describe('getAppFiatAndFluxPrice — v9 fiat markup (basis points)', () => {
     let appSpecHelpers;
     let markupSpec;
+    let resolveSpecStub;
 
     before(async () => {
       markupSpec = await v9Spec({ name: 'markuptest' });
@@ -616,8 +617,9 @@ describe('appSpecHelpers tests', () => {
     };
 
     beforeEach(() => {
+      resolveSpecStub = sinon.stub().resolves(markupSpec);
       appSpecHelpers = proxyquire('../../ZelBack/src/services/utils/appSpecHelpers', {
-        './specCutover': { resolveSpec: sinon.stub().resolves(markupSpec) },
+        './specCutover': { resolveSpec: resolveSpecStub },
       });
       sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true, height: 200 });
       // No existing global app -> the registration path runs, so the markup is visible.
@@ -695,9 +697,9 @@ describe('appSpecHelpers tests', () => {
     });
 
     it('should decrypt an enterprise spec with a valid app name and owner', async () => {
-      // Off ArcaneOS the decrypt refuses, which shows the spec reached it.
       const response = await quote(buildSpec('/data', { version: 8, enterprise: 'blob' }));
-      expect(response.data.message).to.equal('Application Specifications can only be validated on a node running Arcane OS.');
+      expect(response.status).to.equal('success');
+      sinon.assert.calledOnce(resolveSpecStub);
     });
   });
 

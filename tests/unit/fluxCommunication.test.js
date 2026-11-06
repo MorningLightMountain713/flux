@@ -1950,17 +1950,6 @@ describe('fluxCommunication tests', () => {
       sinon.restore();
     });
 
-    it('hands a sigterm to messageStore with the time it was sent', async () => {
-      const broadcastedAt = Date.now() - 90 * 60 * 1000;
-      const data = { type: 'fluxnodesigterm', ip: SENDER, broadcastedAt };
-
-      await fluxCommunication.handleAppRunningSyncResponse({
-        data: { type: 'fluxapprunningsync', messages: [{ type: 'sigterm', ip: SENDER, envelope, data }], done: true },
-      }, PEER_SOCKET);
-
-      sinon.assert.calledOnceWithExactly(messageStore.storeAppStateEvent, 'sigterm', { message: data, envelope, announcer: sinon.match.any });
-    });
-
     it('hands an appremoved to messageStore with the app and the time it was sent', async () => {
       const broadcastedAt = Date.now() - 30 * 60 * 1000;
       const data = { type: 'fluxappremoved', version: 1, appName: 'app', ip: SENDER, broadcastedAt };
@@ -2260,7 +2249,7 @@ describe('fluxCommunication tests', () => {
       const running = () => ({
         type: 'apprunning', envelope: envelope(), data: { version: 2, ip: '1.2.3.4:16127', broadcastedAt: Date.now(), apps: [{ name: 'a' }] },
       });
-      const sigterm = () => ({ type: 'sigterm', envelope: envelope(), data: { ip: '1.2.3.4:16127', broadcastedAt: Date.now() } });
+      const removed = () => ({ type: 'appremoved', envelope: envelope(), data: { ip: '1.2.3.4:16127', appName: 'a', broadcastedAt: Date.now() } });
       const respond = (handler, type, messages, done) => fluxCommunication[handler]({ data: { type, messages, done } }, PEER_SOCKET);
 
       beforeEach(() => {
@@ -2312,7 +2301,7 @@ describe('fluxCommunication tests', () => {
       it('ends the apprunning request when storing a state event throws', async () => {
         messageStore.storeAppStateEvent.rejects(new Error('operation exceeded time limit'));
 
-        await respond('handleAppRunningSyncResponse', 'fluxapprunningsync', [running(), sigterm()], true);
+        await respond('handleAppRunningSyncResponse', 'fluxapprunningsync', [running(), removed()], true);
 
         expect(messageStore.storeAppStateEvent.called, 'the fixture never reached the state event').to.be.true;
         expect(writeFailures).to.deep.equal([PEER]);
@@ -2320,7 +2309,7 @@ describe('fluxCommunication tests', () => {
       });
 
       it('a canary: the same apprunning response with its state event stored is counted', async () => {
-        await respond('handleAppRunningSyncResponse', 'fluxapprunningsync', [running(), sigterm()], true);
+        await respond('handleAppRunningSyncResponse', 'fluxapprunningsync', [running(), removed()], true);
 
         expect(messageStore.storeAppStateEvent.called, 'the fixture never reached the state event').to.be.true;
         expect(writeFailures).to.deep.equal([]);
@@ -2396,7 +2385,7 @@ describe('fluxCommunication tests', () => {
         expect(processed, 'a chunk was processed while an earlier one was still being checked')
           .to.deep.equal([]);
 
-        admitFirst(fluxCommunicationUtils.VerifyResult.OK);
+        admitFirst({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
         await first;
 
         expect(processed, 'the second chunk overtook the first because its check finished first')
@@ -2416,12 +2405,12 @@ describe('fluxCommunication tests', () => {
         fluxCommunicationUtils.verifyFluxBroadcast
           .onFirstCall().returns(new Promise((resolve) => { admitFirst = resolve; }));
         fluxCommunicationUtils.verifyFluxBroadcast
-          .onSecondCall().resolves(fluxCommunicationUtils.VerifyResult.BAD_SIGNATURE);
+          .onSecondCall().resolves({ result: fluxCommunicationUtils.VerifyResult.BAD_SIGNATURE, announcer: null });
 
         try {
           const first = dispatch(chunkFor('a'), PEER_SOCKET);
           await dispatch(chunkFor('b'), PEER_SOCKET);
-          admitFirst(fluxCommunicationUtils.VerifyResult.OK);
+          admitFirst({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
           await first;
         } finally {
           appSyncEvents.removeListener(SYNC_EVENTS.EPHEMERAL_SYNC_UNVERIFIED, onUnverified);
@@ -2446,13 +2435,13 @@ describe('fluxCommunication tests', () => {
         fluxCommunicationUtils.verifyFluxBroadcast
           .onFirstCall().returns(new Promise((resolve) => { admitFirst = resolve; }));
         fluxCommunicationUtils.verifyFluxBroadcast
-          .onSecondCall().resolves(fluxCommunicationUtils.VerifyResult.BAD_SIGNATURE);
+          .onSecondCall().resolves({ result: fluxCommunicationUtils.VerifyResult.BAD_SIGNATURE, announcer: null });
 
         try {
           const stale = dispatch(chunkFor('a'), PEER_SOCKET);
           await dispatch(chunkFor('bad'), PEER_SOCKET);
           wanted = (socket) => socket === reconnected;
-          admitFirst(fluxCommunicationUtils.VerifyResult.OK);
+          admitFirst({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
           await stale;
         } finally {
           appSyncEvents.removeListener(SYNC_EVENTS.EPHEMERAL_SYNC_UNVERIFIED, onUnverified);
@@ -3182,9 +3171,7 @@ describe('fluxCommunication tests', () => {
     it('a signed alive record in the stream is stored as the node\'s alive record', async () => {
       sinon.stub(peerManager, 'isSyncResponseWanted').returns(true);
       const node = { txhash: 'tx', outidx: 1 };
-      sinon.stub(fluxCommunicationUtils, 'resolveBroadcastAnnouncer')
-        .resolves({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: node });
-      sinon.stub(verifyPool, 'verify').resolves([true]);
+      sinon.stub(fluxCommunicationUtils, 'verifyBroadcasts').resolves([{ result: fluxCommunicationUtils.VerifyResult.OK, announcer: node }]);
       const stateStore = sinon.stub(messageStore, 'storeAppStateEvent').resolves({ isNewer: true });
       sinon.stub(messageStore, 'storeBatchAppRunningEvents').resolves({ stored: 0 });
       const alive = {

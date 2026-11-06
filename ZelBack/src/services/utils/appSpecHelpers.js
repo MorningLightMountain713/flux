@@ -4,6 +4,7 @@ const messageHelper = require('../messageHelper');
 const serviceHelper = require('../serviceHelper');
 const daemonStatus = require('../daemonService/daemonStatus');
 const { resolveSpec } = require('./specCutover');
+const { verifyAppNameAndOwner } = require('./appIdentity');
 const pricingRegime = require('../pricing/pricingRegime');
 const log = require('../../lib/log');
 
@@ -42,6 +43,9 @@ async function getAppFiatAndFluxPrice(appSpecification) {
   const syncStatus = daemonStatus.daemonSyncState();
   if (!syncStatus.synced) {
     throw new Error('Daemon not yet synced.');
+  }
+  if (appSpecification.version >= 8 && appSpecification.enterprise) {
+    verifyAppNameAndOwner(appSpecification.name, appSpecification.owner);
   }
   const spec = await resolveSpec(appSpecification);
 
