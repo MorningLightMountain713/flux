@@ -1,4 +1,4 @@
-// fleet: 3
+// fleet: 5
 /*
  * A single-writer app's primary stops announcing while it carries on running: its
  * FluxOS is gone, its syncthing and its container are not.
@@ -16,7 +16,9 @@
  * due. The standby keeps the changes, takes the app over with the primary's data
  * intact, and a new standby syncs that copy.
  *
- * A = the standby, B = the primary, C = the new standby.
+ * A = the standby, B = the primary, C = the new standby. Five nodes put three peers
+ * of A's on the ring besides B: a node restarting below the peer floor removes its
+ * apps when boot times out.
  */
 import {
   describe, it, before, after,
@@ -38,6 +40,7 @@ import { waitFor } from '../framework/wait.js';
 import { sleepUnlessInfraDead } from '../framework/infra-death.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
+const NODES = 5;
 const SIGTERM_EXPIRY_S = 120;
 // The harness's syncthing monitor passes every 3s; this is several of them.
 const MONITOR_PASSES_MS = 30000;
@@ -82,7 +85,9 @@ describe('a primary that went quiet and then died is taken over', function () {
 
   before(async function () {
     this.timeout(900000);
-    fleet = await placeSilentPrimaryApp({ hookCtx: this, appName, sigtermExpiryS: SIGTERM_EXPIRY_S, thirdHolder: true, productionExpiries: true });
+    fleet = await placeSilentPrimaryApp({
+      hookCtx: this, appName, sigtermExpiryS: SIGTERM_EXPIRY_S, thirdHolder: true, productionExpiries: true, env: { nodes: NODES },
+    });
     root = fleet.root;
     primaryDevice = await getDeviceId(client(B));
     const wrote = await execInContainer(client(B).container, `printf '${SAVE_CONTENT}' > ${root}/${SAVE}`);
@@ -127,7 +132,8 @@ describe('a primary that went quiet and then died is taken over', function () {
 
   it('drops the primary from the folder once its location expires, and what it writes then reaches no holder', async function () {
     this.timeout(300000);
-    const expired = await Promise.all([A, C].map((i) => dbClient(i + 1).expireAppLocation(appName, client(B).ip)));
+    const expired = await Promise.all([...Array(NODES).keys()].filter((i) => i !== B)
+      .map((i) => dbClient(i + 1).expireAppLocation(appName, client(B).ip)));
     expect(expired[0], 'the standby held no location for the primary, so none expired').to.be.at.least(1);
     await waitFor(async () => !((await getFolderConfig(client(A), folder))?.devices ?? [])
       .some((d) => d.deviceID === primaryDevice), {
