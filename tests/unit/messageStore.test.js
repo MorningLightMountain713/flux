@@ -214,6 +214,7 @@ describe('messageStore tests', () => {
     };
 
     registryManagerStub = {
+      currentAddressOf: sinon.stub().callsFake(async (address) => address),
       checkApplicationRegistrationNameConflicts: sinon.stub().resolves(),
     };
     assertVersionActivatedStub = sinon.stub();
