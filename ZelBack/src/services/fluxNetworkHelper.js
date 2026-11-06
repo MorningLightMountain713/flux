@@ -1409,24 +1409,13 @@ function checkMongoDbVersionAllowed(mongoDbVersion) {
 const FLUXBENCH_VERSION_MESSAGE_PREFIX = 'Fluxbench Version Error.';
 
 /**
- * Ends the node's DOS when the message standing is one `owns` recognises.
- * @param {function(string): boolean} owns
- * @returns {void}
- */
-function releaseDosOwnedBy(owns) {
-  if (!nodeDosState.getRawDosMessage() || !owns(nodeDosState.getRawDosMessage())) return;
-  nodeDosState.setDosStateValue(0);
-  nodeDosState.setDosMessage(null);
-}
-
-/**
  * To check if Flux benchmark version is allowed.
  * @returns {boolean} True if version is verified as allowed. Otherwise false.
  */
 async function checkFluxbenchVersionAllowed() {
   if (storedFluxBenchAllowed) {
     const versionOK = serviceHelper.semverAtLeast(storedFluxBenchAllowed, config.get('minimumFluxBenchAllowedVersion'));
-    if (versionOK) releaseDosOwnedBy((message) => message.startsWith(FLUXBENCH_VERSION_MESSAGE_PREFIX));
+    if (versionOK) nodeDosState.releaseDosOwnedBy((message) => message.startsWith(FLUXBENCH_VERSION_MESSAGE_PREFIX));
     return versionOK;
   }
   try {
@@ -1437,7 +1426,7 @@ async function checkFluxbenchVersionAllowed() {
       setStoredFluxBenchAllowed(benchmarkVersion);
       const versionOK = serviceHelper.semverAtLeast(benchmarkVersion, config.get('minimumFluxBenchAllowedVersion'));
       if (versionOK) {
-        releaseDosOwnedBy((message) => message.startsWith(FLUXBENCH_VERSION_MESSAGE_PREFIX));
+        nodeDosState.releaseDosOwnedBy((message) => message.startsWith(FLUXBENCH_VERSION_MESSAGE_PREFIX));
         return true;
       }
       nodeDosState.addDosState(11);
@@ -1563,6 +1552,7 @@ async function setDOSStateApi(req, res) {
   if (Number.isNaN(newDosState)) {
     return res.json(messageHelper.createErrorMessage('dosState must be a number'));
   }
+  nodeDosState.resetAvailabilityDos();
   nodeDosState.setDosMessage(body.dosMessage ?? null);
   nodeDosState.setDosStateValue(newDosState);
   return res.json(messageHelper.createSuccessMessage({ dosState: nodeDosState.getDosStateValue(), dosMessage: nodeDosState.getRawDosMessage() }));

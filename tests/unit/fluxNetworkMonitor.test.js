@@ -80,6 +80,9 @@ describe('fluxNetworkMonitor tests', () => {
     });
 
     afterEach(() => {
+      nodeDosState.resetAvailabilityDos();
+      nodeDosState.setDosStateValue(0);
+      nodeDosState.setDosMessage(null);
       sinon.assert.notCalled(uninstallApplication);
       sinon.restore();
     });
@@ -151,8 +154,66 @@ describe('fluxNetworkMonitor tests', () => {
 
       expect(result).to.be.false;
       expect(nodeDosState.getRawDosMessage()).to.equal('too few outgoing peers');
+      nodeDosState.resetAvailabilityDos();
       nodeDosState.setDosStateValue(0);
       nodeDosState.setDosMessage(null);
+    });
+
+    describe('a good pass ends only what this check counted', () => {
+      const ROUTER_DOS = 'Not possible to run applications on the node, router returning exceptions when creating UPNP ports mappings';
+
+      beforeEach(() => {
+        getRandomExternalObserver.resolves('1.2.3.4:16127');
+        sinon.stub(serviceHelper, 'axiosGet').resolves({ data: { status: 'success', data: { message: 'all is well' } } });
+        sinon.stub(fluxNetworkHelper, 'fluxUptime').returns(0);
+      });
+
+      afterEach(() => {
+        nodeDosState.resetAvailabilityDos();
+        nodeDosState.setDosStateValue(0);
+        nodeDosState.setDosMessage(null);
+      });
+
+      it('leaves another check\'s DOS standing', async () => {
+        nodeDosState.setDosStateValue(100);
+        nodeDosState.setDosMessage(ROUTER_DOS);
+
+        await fluxNetworkMonitor.checkMyFluxAvailability();
+
+        expect(nodeDosState.getRawDosMessage()).to.equal(ROUTER_DOS);
+        expect(nodeDosState.isNodeDos()).to.equal(true);
+      });
+
+      it('ends what it counted against reaching the node, and its message', async () => {
+        nodeDosState.countUnreachable(20);
+        nodeDosState.holdAvailabilityDos(nodeDosState.UNREACHABLE_MESSAGE);
+
+        await fluxNetworkMonitor.checkMyFluxAvailability();
+
+        expect(nodeDosState.effectiveDosState()).to.equal(0);
+        expect(nodeDosState.getRawDosMessage()).to.equal(null);
+      });
+
+      it('ends what it counted while another check\'s DOS stands, leaving that one', async () => {
+        nodeDosState.setDosStateValue(100);
+        nodeDosState.setDosMessage(ROUTER_DOS);
+        nodeDosState.countUnreachable(20);
+
+        await fluxNetworkMonitor.checkMyFluxAvailability();
+
+        expect(nodeDosState.effectiveDosState()).to.equal(100);
+        expect(nodeDosState.getRawDosMessage()).to.equal(ROUTER_DOS);
+      });
+
+      it('ends a failed UPnP mapping at boot, the node being reached over its api port', async () => {
+        nodeDosState.addDosState(11);
+        nodeDosState.setDosMessage('UPnP is enabled for this node but mapping port 16127 failed');
+
+        await fluxNetworkMonitor.checkMyFluxAvailability();
+
+        expect(nodeDosState.effectiveDosState()).to.equal(0);
+        expect(nodeDosState.getRawDosMessage()).to.equal(null);
+      });
     });
 
     it('an unreachable node whose benchmark cannot say its public IP is held, and says why', async () => {
@@ -166,6 +227,7 @@ describe('fluxNetworkMonitor tests', () => {
       expect(result).to.be.false;
       sinon.assert.calledOnce(getPublicIp);
       expect(nodeDosState.getRawDosMessage()).to.equal('Error getting publicIp from FluxBench');
+      nodeDosState.resetAvailabilityDos();
       nodeDosState.setDosStateValue(0);
       nodeDosState.setDosMessage(null);
     });

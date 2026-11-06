@@ -28,6 +28,11 @@ const appRecords = require('./appDatabase/appRecords');
 // IP-change monitoring state.
 const IP_CHANGE_WINDOW_MS = 20 * 60 * 60 * 1000;
 let dosTooManyIpChanges = false;
+
+const IP_CHANGES_MESSAGE = 'IP changes over the limit allowed, one in 20 hours';
+const COLLISION_MESSAGE_PREFIXES = ['Flux collision detection.', 'Flux earlier collision detection'];
+const UPNP_BOOT_MESSAGE_PREFIX = 'UPnP is enabled for this node';
+const isCollisionMessage = (message) => COLLISION_MESSAGE_PREFIXES.some((prefix) => message.startsWith(prefix));
 let maxNumberOfIpChanges = 0;
 
 // Fired with the apps that survived an address change, after the node's public IP
@@ -239,7 +244,7 @@ async function recordOwnMove(previousSocket, currentSocket, announce) {
   if (ipChanged && await ipChangesOverLimit(recentIpChanges.length) && fluxNetworkHelper.fluxUptime() > config.get('fluxapps.minUpTime')) {
     log.info('IP changes over the limit allowed, one in 20 hours');
     nodeDosState.addDosState(11);
-    nodeDosState.setDosMessage('IP changes over the limit allowed, one in 20 hours');
+    nodeDosState.setDosMessage(IP_CHANGES_MESSAGE);
     log.error(nodeDosState.getRawDosMessage());
   }
 }
@@ -538,9 +543,10 @@ function startOwnAddressWatch() {
 async function checkMyFluxAvailability(retryNumber = 0) {
   if (dosTooManyIpChanges) {
     nodeDosState.addDosState(11);
-    nodeDosState.setDosMessage('IP changes over the limit allowed, one in 20 hours');
+    nodeDosState.setDosMessage(IP_CHANGES_MESSAGE);
     return false;
   }
+  nodeDosState.releaseDosOwnedBy((message) => message === IP_CHANGES_MESSAGE);
 
   const localSocketAddress = fluxNetworkHelper.getCachedLocalSocketAddress();
   if (localSocketAddress === null) return false;
@@ -590,9 +596,9 @@ async function checkMyFluxAvailability(retryNumber = 0) {
   );
 
   if (!resMyAvailability) {
-    nodeDosState.addDosState(2);
-    if (nodeDosState.getDosStateValue() > 10) {
-      nodeDosState.setDosMessage(nodeDosState.getRawDosMessage() || 'Flux communication is limited, other nodes on the network cannot reach yours through API calls');
+    nodeDosState.countUnreachable(2);
+    if (nodeDosState.effectiveDosState() > 10) {
+      nodeDosState.holdAvailabilityDos(nodeDosState.UNREACHABLE_MESSAGE);
       log.error(nodeDosState.getRawDosMessage());
       return false;
     }
@@ -605,7 +611,7 @@ async function checkMyFluxAvailability(retryNumber = 0) {
   if (resMyAvailability.data.status === 'error' || resMyAvailability.data.data.message.includes('not')) {
     log.error(`My Flux unavailability detected from: ${remoteIp}:${remotePort}`);
     // Asked Flux cannot reach me lets check if ip changed
-    if (retryNumber === 4 || nodeDosState.getDosStateValue() > 10) {
+    if (retryNumber === 4 || nodeDosState.effectiveDosState() > 10) {
       log.info('Getting publicIp from FluxBench');
       const { value: benchIp, reason } = await benchmarkService.getPublicIp();
       if (!reason) {
@@ -613,8 +619,7 @@ async function checkMyFluxAvailability(retryNumber = 0) {
         const benchMyIP = benchIp.length > 5 ? benchIp : null;
         if (benchMyIP && extractIp(benchMyIP) !== localIp) {
           log.info('New IP found... updating network');
-          nodeDosState.setDosStateValue(0);
-          nodeDosState.setDosMessage(null);
+          nodeDosState.releaseUnreachable();
           // Read afresh: a new address is a change of this node's own address, which
           // its one handler acts on.
           await fluxNetworkHelper.getLocalSocketAddress({ fresh: true });
@@ -623,21 +628,21 @@ async function checkMyFluxAvailability(retryNumber = 0) {
           log.info('FluxBench reported the same Ip that was already in use');
         } else {
           log.info('FluxBench reported a invalid IP');
-          nodeDosState.setDosMessage('Error getting publicIp from FluxBench');
-          nodeDosState.addDosState(15);
+          nodeDosState.holdAvailabilityDos(nodeDosState.BENCH_PUBLIC_IP_MESSAGE, { replace: true });
+          nodeDosState.countUnreachable(15);
           log.error('FluxBench wasnt able to detect flux node public ip');
         }
       } else {
         log.info('FluxBench reported returned error on getpublicipcall');
-        nodeDosState.setDosMessage('Error getting publicIp from FluxBench');
-        nodeDosState.addDosState(15);
+        nodeDosState.holdAvailabilityDos(nodeDosState.BENCH_PUBLIC_IP_MESSAGE, { replace: true });
+        nodeDosState.countUnreachable(15);
         log.error(nodeDosState.getRawDosMessage());
         return false;
       }
     }
-    nodeDosState.addDosState(2);
-    if (nodeDosState.getDosStateValue() > 10) {
-      nodeDosState.setDosMessage(nodeDosState.getRawDosMessage() || 'Flux is not available for outside communication');
+    nodeDosState.countUnreachable(2);
+    if (nodeDosState.effectiveDosState() > 10) {
+      nodeDosState.holdAvailabilityDos(nodeDosState.UNAVAILABLE_MESSAGE);
       log.error(nodeDosState.getRawDosMessage());
       return false;
     }
@@ -656,9 +661,13 @@ async function checkMyFluxAvailability(retryNumber = 0) {
       // check sufficient connections
       const communication = fluxNetworkHelper.isCommunicationEstablished();
       if (!communication.established) {
-        nodeDosState.addDosState(0.13); // slow increment, DOS after ~75 minutes. 0.13 per minute. This check depends on other nodes being able to connect to my node
-        if (nodeDosState.getDosStateValue() > 10) {
-          nodeDosState.setDosMessage(communication.reason);
+        // Reachable: what this check counted against reaching it no longer holds.
+        // The count for too few peers goes on, and depends on other nodes being able
+        // to connect to this one.
+        nodeDosState.releaseUnreachable();
+        nodeDosState.countPeerShortfall(config.get('fluxapps.peerShortfallDosPerMinute'));
+        if (nodeDosState.effectiveDosState() > 10) {
+          nodeDosState.holdAvailabilityDos(communication.reason);
           log.error(nodeDosState.getRawDosMessage());
           return false;
         }
@@ -666,9 +675,23 @@ async function checkMyFluxAvailability(retryNumber = 0) {
       }
     }
   }
-  nodeDosState.setDosStateValue(0);
-  nodeDosState.setDosMessage(null);
+  nodeDosState.releaseUnreachable();
+  nodeDosState.releaseShortfall();
+  // Reached over its api port: the router maps it.
+  nodeDosState.releaseDosOwnedBy((message) => message.startsWith(UPNP_BOOT_MESSAGE_PREFIX));
   return true;
+}
+
+/**
+ * A peer connected: once this node has the connections it needs, what the
+ * availability check counted for too few of them ends now rather than at its next
+ * pass.
+ * @returns {void}
+ */
+function onPeerConnected() {
+  if (!nodeDosState.peerShortfallStands()) return;
+  if (!fluxNetworkHelper.isCommunicationEstablished().established) return;
+  nodeDosState.releaseShortfall();
 }
 
 /**
@@ -759,6 +782,8 @@ async function checkDeterministicNodesCollisions() {
         // waiting for its confirmation: nothing to judge.
         const ownRecord = nodeCollateralDifferentIp ? await ownAddressRepository.read() : null;
         const movedFromHere = Boolean(ownRecord?.movedFrom) && socketAddressesMatch(ownRecord.movedFrom, nodeCollateralDifferentIp?.ip);
+        // Listed nowhere it should not be: whatever this check said no longer holds.
+        if (!nodeCollateralDifferentIp || movedFromHere) nodeDosState.releaseDosOwnedBy(isCollisionMessage);
         if (nodeStatus.status === 'CONFIRMED' && nodeCollateralDifferentIp && !movedFromHere) {
           let errorCall = false;
           const askingIP = extractIp(nodeCollateralDifferentIp.ip);
@@ -799,12 +824,7 @@ async function checkDeterministicNodesCollisions() {
             log.info(`Other node at ${askingIP}:${askingIpPort} confirmed offline. Creating confirmation transaction to take over collateral...`);
             const daemonResult = await daemonServiceFluxnodeRpcs.createConfirmationTransaction();
             log.info(`node was confirmed on a different machine ip - createConfirmationTransaction: ${JSON.stringify(daemonResult)}`);
-            // Clear any previous DOS state related to this collision
-            if (nodeDosState.getDosMessage() && nodeDosState.getDosMessage().includes('is confirmed and reachable on flux network')) {
-              log.info('Clearing previous collision DOS state - this node has successfully taken over the collateral');
-              nodeDosState.setDosStateValue(0);
-              nodeDosState.setDosMessage(null);
-            }
+            nodeDosState.releaseDosOwnedBy(isCollisionMessage);
           } else {
             // Other node came back online during grace period
             log.warn(`Node at ${askingIP}:${askingIpPort} came back online during grace period. Collision still exists.`);
@@ -837,9 +857,9 @@ async function checkDeterministicNodesCollisions() {
         }
       }
     } else {
-      nodeDosState.addDosState(1);
-      if (nodeDosState.getDosStateValue() > 10) {
-        nodeDosState.setDosMessage(nodeDosState.getRawDosMessage() || 'Flux IP detection failed');
+      nodeDosState.countUnreachable(1);
+      if (nodeDosState.effectiveDosState() > 10) {
+        nodeDosState.holdAvailabilityDos(nodeDosState.IP_DETECTION_FAILED_MESSAGE);
         log.error(nodeDosState.getRawDosMessage());
       } else {
         const measuredUptime = fluxNetworkHelper.fluxUptime();
@@ -883,5 +903,6 @@ module.exports = {
   setOnOwnAddressMoved,
   startOwnAddressWatch,
   checkMyFluxAvailability,
+  onPeerConnected,
   checkDeterministicNodesCollisions,
 };

@@ -2,6 +2,7 @@
 
 const fluxEventBus = require('./utils/fluxEventBus');
 const log = require('../lib/log');
+const { nowMs } = require('./utils/monotonicClock');
 
 // Node DOS (denial-of-service) state: this FluxNode's aggregate health/eligibility
 // score. Contributed to by the availability / IP-change / collision / fluxbench
@@ -13,6 +14,29 @@ const log = require('../lib/log');
 
 let dosState = 0; // we can start at bigger number later
 let dosMessage = null;
+
+// The messages of the availability check that reaching this node ends. There is one
+// message for every reason a node can be out of service, so each check clears only
+// one it set itself.
+const UNREACHABLE_MESSAGE = 'Flux communication is limited, other nodes on the network cannot reach yours through API calls';
+const UNAVAILABLE_MESSAGE = 'Flux is not available for outside communication';
+const BENCH_PUBLIC_IP_MESSAGE = 'Error getting publicIp from FluxBench';
+const IP_DETECTION_FAILED_MESSAGE = 'Flux IP detection failed';
+const REACHABILITY_MESSAGES = [UNREACHABLE_MESSAGE, UNAVAILABLE_MESSAGE, BENCH_PUBLIC_IP_MESSAGE, IP_DETECTION_FAILED_MESSAGE];
+
+// What the availability check has counted against this node, apart from the score
+// the other checks share: the asks no peer answered as reachable, and the time it has
+// been reachable with too few peer connections. The node's DOS state is the two added
+// to the shared score (effectiveDosState), so a check that resets the shared score
+// leaves these standing, and the availability check takes off only its own. The
+// message it set is kept to end only that one.
+let unreachablePoints = 0;
+let shortfallPoints = 0;
+let availabilityMessage = null;
+
+// When this node last found itself reachable with too few peer connections, while it
+// keeps doing so: null otherwise.
+let peerShortfallSeenAt = null;
 
 // Who may take this node out of service permanently. An owner is an IDENTITY, not a
 // message: the reason is what an operator reads, and the owner is what a release is
@@ -108,6 +132,105 @@ function setDosMessage(message) {
 }
 
 /**
+ * Ends the node's DOS when the message standing is one `owns` recognises.
+ * @param {function(string): boolean} owns
+ * @returns {void}
+ */
+function releaseDosOwnedBy(owns) {
+  if (!dosMessage || !owns(dosMessage)) return;
+  dosState = 0;
+  dosMessage = null;
+  publishChanged();
+}
+
+/**
+ * Counts `points` against reaching this node.
+ * @param {number} points
+ * @returns {void}
+ */
+function countUnreachable(points) {
+  unreachablePoints += points;
+  publishChanged();
+}
+
+/**
+ * Counts `perMinute` for each minute this node has been reachable with too few peer
+ * connections, and one minute's worth the first time.
+ * @param {number} perMinute
+ * @returns {void}
+ */
+function countPeerShortfall(perMinute) {
+  const now = nowMs();
+  const minutes = peerShortfallSeenAt === null ? 1 : (now - peerShortfallSeenAt) / 60_000;
+  peerShortfallSeenAt = now;
+  shortfallPoints += perMinute * minutes;
+  publishChanged();
+}
+
+/**
+ * Sets `message` as the availability check's, when no message stands or `replace`
+ * says this one outranks the one standing.
+ * @param {string} message
+ * @param {{replace?: boolean}} [options]
+ * @returns {void}
+ */
+function holdAvailabilityDos(message, { replace = false } = {}) {
+  if (dosMessage && !replace) return;
+  availabilityMessage = message;
+  dosMessage = message;
+  publishChanged();
+}
+
+/**
+ * Ends what the availability check counted against reaching this node, and the
+ * message it sets for that if it is the one standing: the node was reached.
+ * @returns {void}
+ */
+function releaseUnreachable() {
+  unreachablePoints = 0;
+  if (REACHABILITY_MESSAGES.includes(dosMessage)) {
+    availabilityMessage = null;
+    dosMessage = null;
+  }
+  publishChanged();
+}
+
+/**
+ * Whether the availability check has counted too few peer connections.
+ * @returns {boolean}
+ */
+function peerShortfallStands() {
+  return peerShortfallSeenAt !== null || shortfallPoints !== 0;
+}
+
+/**
+ * Ends what the availability check counted for too few peer connections, and its
+ * message if that is the one standing: the node has enough.
+ * @returns {void}
+ */
+function releaseShortfall() {
+  shortfallPoints = 0;
+  peerShortfallSeenAt = null;
+  if (dosMessage && dosMessage === availabilityMessage && !REACHABILITY_MESSAGES.includes(dosMessage)) {
+    availabilityMessage = null;
+    dosMessage = null;
+  }
+  publishChanged();
+}
+
+/**
+ * Forgets what the availability check counted and the message it set, as a DOS state
+ * set from outside does.
+ * @returns {void}
+ */
+function resetAvailabilityDos() {
+  unreachablePoints = 0;
+  shortfallPoints = 0;
+  peerShortfallSeenAt = null;
+  availabilityMessage = null;
+}
+
+/**
  * Getter for the raw regular dosMessage (ignores sticky).
  * @returns {string|null} dosMessage
  */
@@ -177,7 +300,9 @@ function isStickyDosHeldBy(owner) {
 
 /** The DOS state a reader sees: the verdict while any owner holds it, the count otherwise. */
 function effectiveDosState() {
-  return stickyDosHolds.size ? STICKY_DOS_STATE : dosState;
+  if (stickyDosHolds.size) return STICKY_DOS_STATE;
+  const availabilityPoints = unreachablePoints + shortfallPoints;
+  return availabilityPoints ? dosState + availabilityPoints : dosState;
 }
 
 /**
@@ -208,6 +333,19 @@ module.exports = {
   setDosMessage,
   getRawDosMessage,
   getDosMessage,
+  UNREACHABLE_MESSAGE,
+  UNAVAILABLE_MESSAGE,
+  BENCH_PUBLIC_IP_MESSAGE,
+  IP_DETECTION_FAILED_MESSAGE,
+  releaseDosOwnedBy,
+  countUnreachable,
+  countPeerShortfall,
+  holdAvailabilityDos,
+  releaseUnreachable,
+  peerShortfallStands,
+  releaseShortfall,
+  resetAvailabilityDos,
+  effectiveDosState,
   StickyDosOwner,
   setStickyDos,
   clearStickyDos,

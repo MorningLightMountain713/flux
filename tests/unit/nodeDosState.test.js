@@ -219,4 +219,65 @@ describe('nodeDosState tests', () => {
       expect(nodeDosState.getDosStateValue()).to.equal(100);
     });
   });
+
+  describe('the availability check\'s share', () => {
+    afterEach(() => {
+      nodeDosState.resetAvailabilityDos();
+      nodeDosState.setDosStateValue(0);
+      nodeDosState.setDosMessage(null);
+    });
+
+    it('adds to the shared score, and survives a reset of it', () => {
+      nodeDosState.countUnreachable(6);
+      nodeDosState.setDosStateValue(5);
+      expect(nodeDosState.effectiveDosState()).to.equal(11);
+
+      nodeDosState.setDosStateValue(0);
+      expect(nodeDosState.effectiveDosState()).to.equal(6);
+    });
+
+    it('does not take a message from the check holding one, unless told to', () => {
+      nodeDosState.setDosMessage('another check');
+
+      nodeDosState.holdAvailabilityDos(nodeDosState.UNREACHABLE_MESSAGE);
+      expect(nodeDosState.getRawDosMessage()).to.equal('another check');
+
+      nodeDosState.holdAvailabilityDos(nodeDosState.BENCH_PUBLIC_IP_MESSAGE, { replace: true });
+      expect(nodeDosState.getRawDosMessage()).to.equal(nodeDosState.BENCH_PUBLIC_IP_MESSAGE);
+    });
+
+    it('releases being unreachable apart from too few peers', () => {
+      nodeDosState.countUnreachable(6);
+      nodeDosState.countPeerShortfall(5);
+
+      nodeDosState.releaseUnreachable();
+
+      expect(nodeDosState.effectiveDosState()).to.equal(5);
+      expect(nodeDosState.peerShortfallStands()).to.equal(true);
+    });
+
+    it('releases too few peers and the message it set for them, leaving a reachability message', () => {
+      nodeDosState.countPeerShortfall(5);
+      nodeDosState.holdAvailabilityDos('too few peers');
+      nodeDosState.releaseShortfall();
+      expect(nodeDosState.getRawDosMessage()).to.equal(null);
+      expect(nodeDosState.peerShortfallStands()).to.equal(false);
+
+      nodeDosState.holdAvailabilityDos(nodeDosState.UNREACHABLE_MESSAGE);
+      nodeDosState.releaseShortfall();
+      expect(nodeDosState.getRawDosMessage()).to.equal(nodeDosState.UNREACHABLE_MESSAGE);
+    });
+
+    it('ends a DOS only for the owner of the message standing', () => {
+      nodeDosState.setDosStateValue(100);
+      nodeDosState.setDosMessage('Flux collision detection. Something');
+
+      nodeDosState.releaseDosOwnedBy((message) => message.startsWith('Fluxbench'));
+      expect(nodeDosState.getDosStateValue()).to.equal(100);
+
+      nodeDosState.releaseDosOwnedBy((message) => message.startsWith('Flux collision'));
+      expect(nodeDosState.getDosStateValue()).to.equal(0);
+      expect(nodeDosState.getRawDosMessage()).to.equal(null);
+    });
+  });
 });

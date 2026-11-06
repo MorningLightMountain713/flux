@@ -738,6 +738,7 @@ async function startFluxFunctions() {
         // The orchestrator next door draws the same distinction for its sync pool, and for the
         // same reason: a latched edge says nothing about a pool that has changed since it fired.
         peerManager.on('peerConnected', (key) => policyStore.notePeerAvailable(key));
+        peerManager.on('peerConnected', () => fluxNetworkMonitor.onPeerConnected());
         // Both edges, because the store's decision is about the peer SET. A peer leaving takes
         // its answer with it, and a node waiting on one that has gone waits out a deadline for an
         // answer that cannot come.
