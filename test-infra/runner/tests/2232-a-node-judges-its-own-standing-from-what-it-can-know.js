@@ -279,6 +279,7 @@ describe('a node judges its own standing from what it can know', function () {
     // threshold.
     const PORTS_REFUSED = 2;
     const BOTH = 1;
+    const NO_INBOUND_FLOOR = { minIncoming: 0, minUniqueIpsIncoming: 0 };
     const APPS_PORT_CHECK = {
       timeoutsMs: {
         default: 20000, error: 5000, failure: 1000, dos: 15000, appError: 5000,
@@ -304,8 +305,8 @@ describe('a node judges its own standing from what it can know', function () {
         nodeConfigOverrides: {
           // A node of three can end with no inbound peer, and what the availability
           // check counts for that is not this case's subject.
-          [PORTS_REFUSED]: { fluxapps: { appsPortCheck: APPS_PORT_CHECK, minIncoming: 0 } },
-          [BOTH]: { fluxapps: { appsPortCheck: APPS_PORT_CHECK, minIncoming: 0 } },
+          [PORTS_REFUSED]: { fluxapps: { appsPortCheck: APPS_PORT_CHECK, ...NO_INBOUND_FLOOR } },
+          [BOTH]: { fluxapps: { appsPortCheck: APPS_PORT_CHECK, ...NO_INBOUND_FLOOR } },
         },
       });
       await bootAndPeer(env, { minOutbound: 1, minInbound: 1 });
