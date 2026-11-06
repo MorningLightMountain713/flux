@@ -107,7 +107,7 @@ describe('a node whose IP changed while it was down, with no record of its addre
     await waitFor(async () => (await movesFrom(socketOf(from))).includes(socketOf(to)), {
       timeout: ADOPTED_MS, interval: 5000, label: 'the bystander holds the move',
     });
-    await waitFor(async () => (await dbClient(bystander + 1).getAppLocations(appName))
+    await waitFor(async () => (await client(bystander).getAppLocations(appName)).data
       .map((row) => socketOf(row.ip)).join() === socketOf(to), {
       timeout: 180000, interval: 5000, label: 'the bystander holds the app at the new address only',
     });

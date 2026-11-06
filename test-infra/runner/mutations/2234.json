@@ -1,0 +1,8 @@
+[
+  {
+    "name": "takeover-asks-no-peer",
+    "breaks": "a collateral is taken over only once peers find nothing at the other node",
+    "edits": [{ "file": "ZelBack/src/services/fluxNetworkMonitor.js", "from": "const peersFind = answersHere ? null : await peersFindAt(nodeCollateralDifferentIp.ip);", "to": "const peersFind = answersHere ? null : PeerFinding.NOTHING;" }],
+    "red": ["stays out of service, and makes no move, while it cannot reach the running node and peers can"]
+  }
+]

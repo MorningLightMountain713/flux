@@ -142,7 +142,7 @@ describe('a move heard after the chain lists the new address', function () {
       });
       expect(held.data.broadcastedAt, `the time node ${j} holds for the move`).to.equal(told.data.broadcastedAt);
       // eslint-disable-next-line no-await-in-loop
-      await waitFor(async () => (await dbClient(j + 1).getAppLocations(appName)).map((row) => socketOf(row.ip)).join() === newSocket, {
+      await waitFor(async () => (await client(j).getAppLocations(appName)).data.map((row) => socketOf(row.ip)).join() === newSocket, {
         timeout: 180000, interval: 3000, label: `node ${j} holds the app at the new address only`,
       });
     }
