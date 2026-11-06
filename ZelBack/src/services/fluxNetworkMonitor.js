@@ -397,14 +397,23 @@ async function fluxStillAnswersAt(socketAddress) {
 const PEERS_FINDING_NOTHING = 2;
 const PEER_DRAWS = 5;
 
+// What peers find at an address.
+const PeerFinding = Object.freeze({
+  NOTHING: 'nothing',
+  REACHED: 'reached',
+  UNKNOWN: 'unknown',
+});
+
 /**
- * Whether peers find nothing at `socketAddress`: this node's own view of one
- * address can fail where the network's does not. Asks distinct random peers, as
- * the availability check does. False as soon as one reaches a Flux node there.
+ * What peers find at `socketAddress`: this node's own view of one address can fail
+ * where the network's does not. Asks distinct random peers, as the availability
+ * check does. REACHED as soon as one reaches a Flux node there; NOTHING once
+ * PEERS_FINDING_NOTHING have answered that nothing is available there; UNKNOWN when
+ * too few answer to say.
  * @param {string} socketAddress
- * @returns {Promise<boolean>}
+ * @returns {Promise<string>} One of PeerFinding.
  */
-async function peersFindNothingAt(socketAddress) {
+async function peersFindAt(socketAddress) {
   const asked = [socketAddress];
   let foundNothing = 0;
   // eslint-disable-next-line no-restricted-syntax
@@ -419,12 +428,14 @@ async function peersFindNothingAt(socketAddress) {
     const status = answer?.data?.status;
     if (status === 'success') {
       log.info(`${peer} reaches a Flux node at ${socketAddress}`);
-      return false;
+      return PeerFinding.REACHED;
     }
     // A peer that does not list the address has not looked there.
     if (status === 'error' && !fluxNetworkHelper.isNotListedAnswer(answer.data)) foundNothing += 1;
   }
-  return foundNothing >= PEERS_FINDING_NOTHING;
+  if (foundNothing >= PEERS_FINDING_NOTHING) return PeerFinding.NOTHING;
+  log.info(`too few peers answered whether a Flux node is at ${socketAddress} to say`);
+  return PeerFinding.UNKNOWN;
 }
 
 /**
@@ -436,7 +447,7 @@ async function peersFindNothingAt(socketAddress) {
  */
 async function fluxGoneFrom(socketAddress) {
   if (await fluxStillAnswersAt(socketAddress)) return false;
-  return peersFindNothingAt(socketAddress);
+  return await peersFindAt(socketAddress) === PeerFinding.NOTHING;
 }
 
 /**
@@ -716,10 +727,6 @@ function onPeerConnected() {
  * @returns {void} Return statement is only used here to interrupt the function and nothing is returned.
  */
 async function checkDeterministicNodesCollisions() {
-  const axiosConfig = {
-    timeout: 5000,
-  };
-
   try {
     // After the work on this node's own address already asked for: a move it is
     // recording is its own, not a collision.
@@ -777,14 +784,11 @@ async function checkDeterministicNodesCollisions() {
         // Listed nowhere it should not be: whatever this check said no longer holds.
         if (!nodeCollateralDifferentIp || movedFromHere) nodeDosState.releaseDosOwnedBy(isCollisionMessage);
         if (nodeStatus.status === 'CONFIRMED' && nodeCollateralDifferentIp && !movedFromHere) {
-          let errorCall = false;
           const askingIP = extractIp(nodeCollateralDifferentIp.ip);
           const askingIpPort = extractPort(nodeCollateralDifferentIp.ip);
           log.info(`Detected same collateral on different IP: ${askingIP}:${askingIpPort}. Checking if other node is reachable...`);
 
-          // First reachability check
-          await serviceHelper.axiosGet(`http://${askingIP}:${askingIpPort}/flux/version`, axiosConfig).catch(() => { errorCall = true; });
-          if (!errorCall) {
+          if (await fluxAnswersAt(nodeCollateralDifferentIp.ip)) {
             // Other node is reachable and confirmed - this is a collision
             log.error(`Flux collision detection. Node at ${askingIP}:${askingIpPort} is confirmed and reachable on flux network with the same collateral transaction information.`);
             nodeDosState.setDosStateValue(100);
@@ -795,28 +799,35 @@ async function checkDeterministicNodesCollisions() {
           // First check failed - wait 60 seconds before confirming the other node is truly offline
           // This grace period prevents false positives from temporary network issues or node restarts
           log.info(`Other node at ${askingIP}:${askingIpPort} appears unreachable. Waiting 60 seconds to verify before taking over...`);
-          errorCall = false;
-          await serviceHelper.delay(60 * 1000);
-
-          // Second reachability check after grace period
-          await serviceHelper.axiosGet(`http://${askingIP}:${askingIpPort}/flux/version`, axiosConfig).catch(() => { errorCall = true; });
+          await serviceHelper.delay(ANSWER_GRACE_MS);
+          const answersHere = await fluxAnswersAt(nodeCollateralDifferentIp.ip);
+          const peersFind = answersHere ? null : await peersFindAt(nodeCollateralDifferentIp.ip);
+          const gone = peersFind === PeerFinding.NOTHING;
+          fluxEventBus.publish('collision:judged', {
+            address: normalizeSocketAddress(nodeCollateralDifferentIp.ip), answersHere, peersFind, gone,
+          });
           // The collateral listed at the IP this node last knew as its own, and nothing
           // answering there: not another machine, but this node, which has moved and
           // has no record of where it was. Handled as the move it is, recorded and told
           // to the network before the new address is confirmed.
-          if (errorCall && askingIP === await nodeIdentityRepository.getLastKnownIp()) {
+          if (gone && askingIP === await nodeIdentityRepository.getLastKnownIp()) {
             const formerSocket = normalizeSocketAddress(`${askingIP}:${askingIpPort}`);
             log.info(`Our collateral is listed at ${formerSocket}, this node's own former address - handling the move to ${localSocketAddr}`);
             await leaveConfiguredAddress(formerSocket, localSocketAddr);
-          } else if (errorCall) {
+          } else if (gone) {
             // Other node is confirmed offline after grace period - take over the collateral
             log.info(`Other node at ${askingIP}:${askingIpPort} confirmed offline. Creating confirmation transaction to take over collateral...`);
             const daemonResult = await daemonServiceFluxnodeRpcs.createConfirmationTransaction();
             log.info(`node was confirmed on a different machine ip - createConfirmationTransaction: ${JSON.stringify(daemonResult)}`);
             nodeDosState.releaseDosOwnedBy(isCollisionMessage);
+          } else if (peersFind === PeerFinding.UNKNOWN) {
+            log.info(`Whether the node at ${askingIP}:${askingIpPort} is gone cannot be said yet; the next pass asks again`);
           } else {
-            // Other node came back online during grace period
-            log.warn(`Node at ${askingIP}:${askingIpPort} came back online during grace period. Collision still exists.`);
+            // Answering again after the grace, or reached by peers: the other node is
+            // there, so this is a collision.
+            log.error(`Flux collision detection. Node at ${askingIP}:${askingIpPort} is confirmed and reachable on flux network with the same collateral transaction information.`);
+            nodeDosState.setDosStateValue(100);
+            nodeDosState.setDosMessage(`Flux collision detection. Node at ${askingIP}:${askingIpPort} is confirmed and reachable on flux network with the same collateral transaction information.`);
           }
         }
       }

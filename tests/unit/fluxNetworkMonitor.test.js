@@ -282,7 +282,15 @@ describe('fluxNetworkMonitor tests', () => {
     let isReadyStub;
     let deterministicFluxnodeListResponse;
 
+    const versionAsks = (axiosGetStub) => axiosGetStub.getCalls().filter((call) => String(call.args[0]).endsWith('/flux/version'));
+    const peersAnswer = (axiosGetStub) => axiosGetStub.withArgs(sinon.match(/\/flux\/checkfluxavailability/));
+
     beforeEach(() => {
+      let drawn = 0;
+      sinon.stub(networkStateService, 'getRandomExternalObserver').callsFake(async () => {
+        drawn += 1;
+        return drawn <= 5 ? `198.51.100.${drawn}:16127` : null;
+      });
       // EVERY path through this check re-arms itself on a timer (60s / 120s / 240s).
       // Left on the real clock those outlive the test, fire once sinon.restore() has
       // put the real collaborators back, and dial the benchmark RPC for real - which
@@ -594,12 +602,14 @@ describe('fluxNetworkMonitor tests', () => {
         collateral: sharedCollateral,
       });
 
-      // Mock axios to fail (other node unreachable) on both calls
+      // the other node unreachable from here, and to the peers asked
       const axiosGetStub = serviceHelper.axiosGet.rejects(new Error('Connection refused'));
+      peersAnswer(axiosGetStub).resolves({ data: { status: 'error' } });
 
       await fluxNetworkMonitor.checkDeterministicNodesCollisions();
 
-      expect(axiosGetStub.calledTwice).to.be.true;
+      expect(versionAsks(axiosGetStub)).to.have.lengthOf(2);
+      sinon.assert.calledOnce(daemonServiceFluxnodeRpcs.createConfirmationTransaction);
       // DOS state should remain clear since we successfully took over
       expect(nodeDosState.getDosStateValue()).to.equal(0);
     });
@@ -664,8 +674,62 @@ describe('fluxNetworkMonitor tests', () => {
       await fluxNetworkMonitor.checkDeterministicNodesCollisions();
 
       expect(axiosGetStub.calledTwice).to.be.true;
-      // DOS state should remain at 0 since this is not an error condition
-      expect(nodeDosState.getDosStateValue()).to.equal(0);
+      sinon.assert.notCalled(daemonServiceFluxnodeRpcs.createConfirmationTransaction);
+      expect(nodeDosState.getDosStateValue()).to.equal(100);
+    });
+
+    describe('when this node cannot reach the other node after the grace', () => {
+      const collateral = 'COutPoint(38c04da72786b08adb309259cdd6d2128ea9059d0334afca127a5dc4e75bf174, 0)';
+      let axiosGetStub;
+      let peerAsks;
+
+      beforeEach(() => {
+        fluxNetworkHelper.setLocalSocketAddress('192.168.1.101:16127');
+        getBenchmarksStub.resolves({ value: { ipaddress: '192.168.1.101:16127' } });
+        daemonSyncStateStub.returns({ synced: true });
+        deterministicFluxListStub.returns([{ ...deterministicFluxnodeListResponse[0], collateral, ip: '192.168.1.201:16127' }]);
+        getNodeStatusStub.returns({ status: 'CONFIRMED', collateral });
+        axiosGetStub = serviceHelper.axiosGet.rejects(new Error('Connection refused'));
+        peerAsks = peersAnswer(axiosGetStub);
+      });
+
+      it('holds itself out of service when a peer can', async () => {
+        peerAsks.onFirstCall().resolves({ data: { status: 'error' } });
+        peerAsks.onSecondCall().resolves({ data: { status: 'success' } });
+
+        await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+
+        expect(versionAsks(axiosGetStub), 'fixture: it could not reach the other node itself').to.have.lengthOf(2);
+        sinon.assert.notCalled(daemonServiceFluxnodeRpcs.createConfirmationTransaction);
+        expect(nodeDosState.getDosStateValue()).to.equal(100);
+      });
+
+      it('takes nothing over once one peer reaches the other node, whatever the peers asked after it would say', async () => {
+        peerAsks.resolves({ data: { status: 'error' } });
+        peerAsks.onFirstCall().resolves({ data: { status: 'success' } });
+
+        await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+
+        sinon.assert.notCalled(daemonServiceFluxnodeRpcs.createConfirmationTransaction);
+        expect(nodeDosState.getDosStateValue()).to.equal(100);
+      });
+
+      it('takes nothing over while too few peers answer whether the other node is there', async () => {
+        await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+
+        expect(peerAsks.callCount, 'every peer drawn was asked').to.equal(5);
+        sinon.assert.notCalled(daemonServiceFluxnodeRpcs.createConfirmationTransaction);
+        expect(nodeDosState.getDosStateValue(), 'no collision is claimed on too few answers').to.equal(0);
+      });
+
+      it('takes nothing over while the peers asked do not list the other node', async () => {
+        peerAsks.resolves({ data: { status: 'error', data: { message: fluxNetworkHelper.NOT_LISTED_MESSAGE } } });
+
+        await fluxNetworkMonitor.checkDeterministicNodesCollisions();
+
+        sinon.assert.notCalled(daemonServiceFluxnodeRpcs.createConfirmationTransaction);
+        expect(nodeDosState.getDosStateValue(), 'a peer that has not looked finds nothing either way').to.equal(0);
+      });
     });
   });
 
