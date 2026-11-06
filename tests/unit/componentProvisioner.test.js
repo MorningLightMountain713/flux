@@ -32,7 +32,7 @@ describe('componentProvisioner tests', () => {
     createAppVolumeStub = sinon.stub().resolves();
     appDockerImageSizeStub = sinon.stub().resolves(0);
     allowPortStub = sinon.stub().resolves({ status: true });
-    mapUpnpPortStub = sinon.stub().resolves(true);
+    mapUpnpPortStub = sinon.stub().resolves({ mapped: true });
     provisionCertStub = certError ? sinon.stub().rejects(certError) : sinon.stub().resolves();
     appDockerImageDigestStub = sinon.stub().resolves('sha256:pulled');
     verifyAppVolumeMountStub = sinon.stub().resolves();
@@ -260,8 +260,8 @@ describe('componentProvisioner tests', () => {
       const provisioner = loadProvisioner();
       allowPortStub.resolves({ status: false });
       await provisioner.openHostPorts([80], 'app', ['ufw']).then(() => { throw new Error('opened'); }, (e) => expect(e.message).to.match(/80 FAILed to open/));
-      mapUpnpPortStub.resolves(false);
-      await provisioner.openHostPorts([80], 'app', ['upnp']).then(() => { throw new Error('mapped'); }, (e) => expect(e.message).to.match(/80 FAILed to map/));
+      mapUpnpPortStub.resolves({ mapped: false, reason: 'held by another machine' });
+      await provisioner.openHostPorts([80], 'app', ['upnp']).then(() => { throw new Error('mapped'); }, (e) => expect(e.message).to.match(/80 FAILed to map\. held by another machine/));
     });
   });
 

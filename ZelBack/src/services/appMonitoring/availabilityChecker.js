@@ -178,7 +178,7 @@ async function runAvailabilityCheckOnce(dosState, portsNotWorking, failedNodesTe
 
     if (isUpnp) {
       const upnpMapResult = await upnpService.mapUpnpPort(dosState.testingPort, 'Flux_Test_App');
-      if (!upnpMapResult) {
+      if (!upnpMapResult.mapped) {
         if (dosState.lastUPNPMapFailed) {
           // eslint-disable-next-line no-param-reassign
           dosState.dosStateValue += 4;

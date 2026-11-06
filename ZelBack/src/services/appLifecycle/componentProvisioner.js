@@ -142,9 +142,9 @@ async function openHostPorts(ports, appName, opened, status = null) {
     }
     if (opened.includes('upnp')) {
       // eslint-disable-next-line no-await-in-loop
-      const mapped = await upnpService.mapUpnpPort(port, `Flux_App_${appName}`);
-      if (mapped !== true) {
-        throw new Error(`Error: Port ${port} FAILed to map.`);
+      const portResponse = await upnpService.mapUpnpPort(port, `Flux_App_${appName}`);
+      if (!portResponse.mapped) {
+        throw new Error(`Error: Port ${port} FAILed to map. ${portResponse.reason}`);
       }
     }
     if (status) status(`Port ${port} OK`);

@@ -284,6 +284,7 @@ describe('explorerService tests', () => {
     let daemonStatusStub;
 
     beforeEach(async () => {
+      explorerService.resetBlockCadenceForTests();
       // An unsynced daemon makes processBlock retry itself in two minutes. Left
       // real, that timer outlives this file and re-enters block processing
       // against restored stubs.

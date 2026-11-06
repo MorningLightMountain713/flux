@@ -64,7 +64,7 @@ async function mappingIsMine(port) {
 }
 
 async function mapAndVerify(port, instance) {
-  const mapped = await upnpService.mapUpnpPort(port, `Flux_Mesh_${instance}`);
+  const { mapped } = await upnpService.mapUpnpPort(port, `Flux_Mesh_${instance}`);
   if (!mapped) return false;
   const mine = await mappingIsMine(port);
   if (mine === null) {

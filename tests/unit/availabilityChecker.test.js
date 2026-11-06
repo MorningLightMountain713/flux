@@ -407,7 +407,7 @@ describe('availabilityChecker tests', () => {
       sinon.stub(networkStateService, 'getRandomExternalObserver').resolves('192.168.1.200:16127');
       sinon.stub(fluxNetworkHelper, 'isFirewallActive').resolves(true);
       sinon.stub(fluxNetworkHelper, 'allowPort').resolves();
-      sinon.stub(upnpService, 'mapUpnpPort').resolves(false); // Failed
+      sinon.stub(upnpService, 'mapUpnpPort').resolves({ mapped: false }); // Failed
       sinon.stub(fluxNetworkHelper, 'deleteAllowPortRule').resolves();
       sinon.stub(upnpService, 'removeMapUpnpPort').resolves();
 
@@ -437,7 +437,7 @@ describe('availabilityChecker tests', () => {
       sinon.stub(networkStateService, 'getRandomExternalObserver').resolves('192.168.1.200:16127');
       sinon.stub(fluxNetworkHelper, 'isFirewallActive').resolves(true);
       sinon.stub(fluxNetworkHelper, 'allowPort').resolves();
-      sinon.stub(upnpService, 'mapUpnpPort').resolves(false);
+      sinon.stub(upnpService, 'mapUpnpPort').resolves({ mapped: false });
       sinon.stub(fluxNetworkHelper, 'deleteAllowPortRule').resolves();
       sinon.stub(upnpService, 'removeMapUpnpPort').resolves();
 

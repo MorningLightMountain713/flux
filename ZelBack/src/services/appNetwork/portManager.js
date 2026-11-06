@@ -753,7 +753,7 @@ function portNotOurs(portsToTest, answered, token) {
 function udpPortsNotOurs(portsToTest, udpAnswered, token, proven) {
   const closed = [];
   portsToTest.forEach((port) => {
-    const probed = port >= config.fluxapps.portMin && port <= config.fluxapps.portMax;
+    const probed = port >= config.get('fluxapps.portMin') && port <= config.get('fluxapps.portMax');
     if (!probed) return;
 
     const reply = udpAnswered[port] !== undefined ? udpAnswered[port] : udpAnswered[String(port)];
@@ -806,7 +806,7 @@ function udpDisputes(udpDisagreements, proven) {
  * @returns {boolean}
  */
 function everyUdpPortProven(portsToTest, proven) {
-  return portsToTest.every((port) => port < config.fluxapps.portMin || port > config.fluxapps.portMax || proven.has(port));
+  return portsToTest.every((port) => port < config.get('fluxapps.portMin') || port > config.get('fluxapps.portMax') || proven.has(port));
 }
 
 /**

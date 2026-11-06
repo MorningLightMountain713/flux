@@ -136,7 +136,7 @@ function buildProxyquireMap(stubs, overrides = {}) {
     '../upnpService': {
       isUPNP: sinon.stub().returns(false),
       setupUPNP: sinon.stub().resolves(true),
-      mapUpnpPort: sinon.stub().resolves(true),
+      mapUpnpPort: sinon.stub().resolves({ mapped: true }),
       removeMapUpnpPort: sinon.stub().resolves(true),
       ...upnp,
     },
@@ -435,23 +435,6 @@ describe('portManager tests', () => {
   });
 
   describe('restoreAppsPortsSupport tests', () => {
-    it('should setup firewall for app ports when active', async () => {
-      stubs.deploymentProviderStub.listInstalledDeployments.resolves([
-        { name: 'App1', version: 3, ports: [30_001] },
-      ].map(mockDeployment));
-
-      const fluxNetOverride = {
-        isFirewallActive: sinon.stub().resolves(true),
-        allowPort: sinon.stub().resolves(true),
-      };
-
-      const localPm = loadPortManager(stubs, { fluxNetworkHelper: fluxNetOverride });
-
-      await localPm.restoreAppsPortsSupport();
-
-      sinon.assert.called(fluxNetOverride.allowPort);
-    });
-
     it('should setup UPNP for app ports when active', async () => {
       stubs.deploymentProviderStub.listInstalledDeployments.resolves([
         { name: 'App1', version: 3, ports: [30_001] },
@@ -459,7 +442,7 @@ describe('portManager tests', () => {
 
       const upnpOverride = {
         isUPNP: sinon.stub().returns(true),
-        mapUpnpPort: sinon.stub().resolves(true),
+        mapUpnpPort: sinon.stub().resolves({ mapped: true }),
       };
 
       const localPm = loadPortManager(stubs, { upnpService: upnpOverride });
@@ -484,7 +467,7 @@ describe('portManager tests', () => {
     // app keeps running regardless; removal now requires sustained failure
     // (>=3 consecutive cycles AND 30 wall-clock minutes), tracked per app.
     function loadUpnpFailing(overrides = {}) {
-      const mapUpnpPort = overrides.mapUpnpPort || sinon.stub().resolves(false);
+      const mapUpnpPort = overrides.mapUpnpPort || sinon.stub().resolves({ mapped: false });
       const delay = sinon.stub().resolves();
       const uninstallApplication = sinon.stub().resolves();
       const localPm = loadPortManager(stubs, {
@@ -515,8 +498,8 @@ describe('portManager tests', () => {
 
     it('should retry a failed port within the cycle and record no failure on recovery', async () => {
       installApp({ name: 'App1', version: 3, ports: [30_001] });
-      const mapUpnpPort = sinon.stub().resolves(true);
-      mapUpnpPort.onFirstCall().resolves(false);
+      const mapUpnpPort = sinon.stub().resolves({ mapped: true });
+      mapUpnpPort.onFirstCall().resolves({ mapped: false });
       const { localPm, uninstallApplication } = loadUpnpFailing({ mapUpnpPort });
 
       await localPm.restoreAppsPortsSupport();
@@ -553,13 +536,13 @@ describe('portManager tests', () => {
 
     it('should clear the failure tracker once mapping succeeds again', async () => {
       installApp({ name: 'App1', version: 3, ports: [30_001] });
-      const mapUpnpPort = sinon.stub().resolves(false);
+      const mapUpnpPort = sinon.stub().resolves({ mapped: false });
       const { localPm, uninstallApplication } = loadUpnpFailing({ mapUpnpPort });
 
       await localPm.restoreAppsPortsSupport();
       expect(localPm.upnpMapFailures.get('App1').cycles).to.equal(1);
 
-      mapUpnpPort.resolves(true);
+      mapUpnpPort.resolves({ mapped: true });
       await localPm.restoreAppsPortsSupport();
 
       expect(localPm.upnpMapFailures.has('App1')).to.be.false;

@@ -28,7 +28,7 @@ describe('meshPortAllocator', () => {
     };
     upnp = {
       isUPNP: sinon.stub().returns(true),
-      mapUpnpPort: sinon.stub().resolves(true),
+      mapUpnpPort: sinon.stub().resolves({ mapped: true }),
       removeMapUpnpPort: sinon.stub().resolves(true),
       getUpnpMappings: sinon.stub().resolves([]),
       getLocalGatewayAddress: sinon.stub().resolves(MY_ADDR),
@@ -45,7 +45,7 @@ describe('meshPortAllocator', () => {
       if (!existing.some((m) => m.public.port === port)) {
         upnp.getUpnpMappings.resolves([...existing, udpMapping(port, MY_ADDR)]);
       }
-      return true;
+      return { mapped: true };
     });
   });
 
@@ -73,14 +73,22 @@ describe('meshPortAllocator', () => {
     upnp.mapUpnpPort.callsFake(async (port) => {
       if (port === 16_226) {
         upnp.getUpnpMappings.resolves([udpMapping(16_226, NEIGHBOUR)]);
-        return true;
+        return { mapped: true };
       }
       upnp.getUpnpMappings.resolves([udpMapping(16_226, NEIGHBOUR), udpMapping(port, MY_ADDR)]);
-      return true;
+      return { mapped: true };
     });
     const port = await allocator.ensureTransportPort('ab12cd34ef56', { startOffset: 0 });
     expect(port).to.equal(16_227);
     expect(upnp.removeMapUpnpPort.called).to.equal(false);
+  });
+
+  it('moves past a port the router refuses, on a router that cannot list its mappings', async () => {
+    upnp.getUpnpMappings.rejects(new Error('no listing'));
+    upnp.mapUpnpPort.callsFake(async (port) => (port === 16_226 ? { mapped: false, reason: 'refused' } : { mapped: true }));
+    const port = await allocator.ensureTransportPort('ab12cd34ef56', { startOffset: 0 });
+    expect(port).to.equal(16_227);
+    expect(ports.registry.get('ab12cd34ef56')).to.equal(16_227);
   });
 
   it('an existing verified allocation is kept and refreshed in place', async () => {
@@ -116,7 +124,7 @@ describe('meshPortAllocator', () => {
 
   it('a router that cannot enumerate degrades to unverified mapping, loudly', async () => {
     upnp.getUpnpMappings.rejects(new Error('GetGenericPortMappingEntry not supported'));
-    upnp.mapUpnpPort.resolves(true);
+    upnp.mapUpnpPort.resolves({ mapped: true });
     const port = await allocator.ensureTransportPort('ab12cd34ef56', { startOffset: 3 });
     expect(port).to.equal(16_229);
     expect(ports.registry.get('ab12cd34ef56')).to.equal(16_229);
@@ -126,7 +134,7 @@ describe('meshPortAllocator', () => {
     const full = [];
     for (let p = 16_226; p <= 16_299; p += 1) full.push(udpMapping(p, NEIGHBOUR));
     upnp.getUpnpMappings.resolves(full);
-    upnp.mapUpnpPort.resolves(true);
+    upnp.mapUpnpPort.resolves({ mapped: true });
     try {
       await allocator.ensureTransportPort('ab12cd34ef56', { startOffset: 0 });
       expect.fail('should throw');
