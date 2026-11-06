@@ -1,0 +1,17 @@
+[
+  {
+    "name": "not-listed-reads-as-not-available",
+    "breaks": "a peer that does not list the address says so",
+    "edits": [{ "file": "ZelBack/src/services/fluxNetworkHelper.js", "from": "message = messageHelper.createErrorMessage(NOT_LISTED_MESSAGE);", "to": "message = messageHelper.createErrorMessage('Asking Flux is not available');" }],
+    "red": [
+      "is answered \"not listed\" by a peer that does not list it",
+      "holds no reachability verdict against itself on the passes that ask"
+    ]
+  },
+  {
+    "name": "not-listed-counts-against-the-node",
+    "breaks": "a not-listed answer concludes nothing about this node",
+    "edits": [{ "file": "ZelBack/src/services/fluxNetworkMonitor.js", "from": "if (resMyAvailability && fluxNetworkHelper.isNotListedAnswer(resMyAvailability.data)) {", "to": "if (false) {" }],
+    "red": ["holds no reachability verdict against itself on the passes that ask"]
+  }
+]

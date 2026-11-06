@@ -29,6 +29,7 @@ const listing = (ip, collateral = COLLATERAL) => ({
 
 const reachable = { data: { status: 'success', data: { message: 'Asking Flux is available' } } };
 const unreachable = { data: { status: 'error', data: { message: 'Asking Flux is not available' } } };
+const notListed = { data: { status: 'error', data: { message: fluxNetworkHelper.NOT_LISTED_MESSAGE } } };
 
 describe('fluxNetworkMonitor own standing tests', () => {
   before(requireMongo);
@@ -267,6 +268,16 @@ describe('fluxNetworkMonitor own standing tests', () => {
       peerManager.emit('peerConnected', '198.51.100.10:16127', 2);
 
       expect(dos()).to.deep.equal({ dosState: 0, dosMessage: null });
+    });
+
+    it('concludes nothing, without retrying, when the observer does not list this node yet', async () => {
+      axiosGet.resolves(notListed);
+
+      expect(await fluxNetworkMonitor.checkMyFluxAvailability()).to.equal(false);
+
+      sinon.assert.calledOnce(axiosGet);
+      expect(nodeDosState.effectiveDosState()).to.equal(0);
+      expect(nodeDosState.getDosMessage()).to.equal(null);
     });
 
     it('counts an ask that fails after it was reached', async () => {

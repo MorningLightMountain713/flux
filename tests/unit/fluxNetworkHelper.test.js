@@ -359,6 +359,55 @@ describe('fluxNetworkHelper tests', () => {
     });
   });
 
+  describe('fluxAvailability tests', () => {
+    const versionResponse = { data: { status: 'success', data: '8.2.0' } };
+    Object.setPrototypeOf(versionResponse.data, { // axios on home expects string
+      includes() {
+        return true;
+      },
+    });
+
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    it('is AVAILABLE when the listed node answers on its api, ui and syncthing ports', async () => {
+      sinon.stub(serviceHelper, 'axiosGet').resolves(versionResponse);
+      sinon.stub(fluxCommunicationUtils, 'socketAddressInFluxList').resolves(true);
+      sinon.stub(net.Socket.prototype, 'connect').callsFake((_port, _ip, callback) => {
+        callback();
+      });
+
+      expect(await fluxNetworkHelper.fluxAvailability('127.0.0.1', '16127')).to.equal(fluxNetworkHelper.FluxAvailability.AVAILABLE);
+    });
+
+    it('is NOT_LISTED, without probing, when the address is not on the deterministic list', async () => {
+      const axiosGet = sinon.stub(serviceHelper, 'axiosGet').resolves(versionResponse);
+      sinon.stub(fluxCommunicationUtils, 'socketAddressInFluxList').resolves(false);
+
+      expect(await fluxNetworkHelper.fluxAvailability('127.0.0.1', '16127')).to.equal(fluxNetworkHelper.FluxAvailability.NOT_LISTED);
+      sinon.assert.notCalled(axiosGet);
+    });
+
+    it('is UNAVAILABLE when the listed node does not answer', async () => {
+      sinon.stub(serviceHelper, 'axiosGet').rejects(new Error('Connection refused'));
+      sinon.stub(fluxCommunicationUtils, 'socketAddressInFluxList').resolves(true);
+
+      expect(await fluxNetworkHelper.fluxAvailability('127.0.0.1', '16127')).to.equal(fluxNetworkHelper.FluxAvailability.UNAVAILABLE);
+    });
+
+    it('answers checkfluxavailability for an address it does not list as not listed', async () => {
+      sinon.stub(serviceHelper, 'axiosGet').resolves(versionResponse);
+      sinon.stub(fluxCommunicationUtils, 'socketAddressInFluxList').resolves(false);
+      const res = { json: sinon.fake((param) => param) };
+
+      const answer = await fluxNetworkHelper.checkFluxAvailability({ params: { ip: '127.0.0.1', port: '16127' }, query: {} }, res);
+
+      expect(answer.status).to.equal('error');
+      expect(answer.data.message).to.equal(fluxNetworkHelper.NOT_LISTED_MESSAGE);
+    });
+  });
+
   describe('isFluxAvailable tests', () => {
     let stub;
     const ip = '127.0.0.1';

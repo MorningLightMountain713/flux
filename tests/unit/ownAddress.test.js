@@ -237,6 +237,18 @@ describe('fluxNetworkHelper own address tests', () => {
     sinon.assert.notCalled(nodeIdentityRepository.setLastKnownIp);
   });
 
+  it('holding no address, makes no move while the peers asked do not list the configured address', async () => {
+    configure('198.51.100.19');
+    listedHere.resolves(['ranthere']);
+    serviceHelper.axiosGet.withArgs(sinon.match(/\/flux\/checkfluxavailability/))
+      .resolves({ data: { status: 'error', data: { message: fluxNetworkHelper.NOT_LISTED_MESSAGE } } });
+
+    await fluxNetworkMonitor.handleOwnAddress('198.51.100.20:16127');
+
+    sinon.assert.notCalled(moved);
+    sinon.assert.notCalled(nodeIdentityRepository.setLastKnownIp);
+  });
+
   it('holding no address, makes no move when the node at the configured address answers once the restart grace has passed', async () => {
     configure('198.51.100.13');
     serviceHelper.axiosGet.withArgs('http://198.51.100.13:16127/flux/version')

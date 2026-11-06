@@ -421,7 +421,8 @@ async function peersFindNothingAt(socketAddress) {
       log.info(`${peer} reaches a Flux node at ${socketAddress}`);
       return false;
     }
-    if (status === 'error') foundNothing += 1;
+    // A peer that does not list the address has not looked there.
+    if (status === 'error' && !fluxNetworkHelper.isNotListedAnswer(answer.data)) foundNothing += 1;
   }
   return foundNothing >= PEERS_FINDING_NOTHING;
 }
@@ -602,6 +603,14 @@ async function checkMyFluxAvailability(retryNumber = 0) {
       return null;
     },
   );
+
+  // The observer does not list this address yet - typically a move it has not seen
+  // confirmed - so it has not looked. Like having nobody to ask: nothing is
+  // concluded, dosState is untouched, and the next cycle asks again.
+  if (resMyAvailability && fluxNetworkHelper.isNotListedAnswer(resMyAvailability.data)) {
+    log.info(`checkMyFluxAvailability - ${remoteIp}:${remotePort} does not list ${localIp}:${localApiPort} yet; skipping this pass`);
+    return false;
+  }
 
   if (!resMyAvailability) {
     nodeDosState.countUnreachable(2);
