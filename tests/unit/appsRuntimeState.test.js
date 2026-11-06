@@ -23,14 +23,19 @@ describe('appsRuntimeState tests', () => {
         return store.get(query.identifier) || null;
       },
       // The fake honors projections the way mongo does: a query that stops
-      // selecting a field loses that field here too. operatorStoppedIdentifiers
+      // selecting a field loses that field here too. operatorHeldIdentifiers
       // reads doc.identifier off an unauthenticated peer route, and a stub that
       // ignores the projection serves the field regardless - the seam where a
       // wrong projection answers [] to an election in production while every
       // test stays green.
       findInDatabase: async (_db, _coll, query = {}, options = {}) => {
-        const docs = [...store.values()]
-          .filter((doc) => Object.entries(query).every(([field, value]) => doc[field] === value));
+        const fieldMatches = (doc, field, value) => (value && typeof value === 'object'
+          ? ('$exists' in value && (field in doc) === value.$exists) || ('$ne' in value && doc[field] !== value.$ne)
+          : doc[field] === value);
+        const matches = (doc, clauses) => Object.entries(clauses).every(([field, value]) => (field === '$or'
+          ? value.some((clause) => matches(doc, clause))
+          : fieldMatches(doc, field, value)));
+        const docs = [...store.values()].filter((doc) => matches(doc, query));
         const projection = options.projection || {};
         const included = Object.entries(projection)
           .filter(([field, mode]) => mode === 1 && field !== '_id')
@@ -127,26 +132,26 @@ describe('appsRuntimeState tests', () => {
  
     // The set, not one component at a time. This is what a peer is told this node
     // owns, so it is read on an unauthenticated route at election cadence.
-    describe('operatorStoppedIdentifiers', () => {
+    describe('operatorHeldIdentifiers', () => {
       it('lists only the components carrying the lock', async () => {
-        await appsRuntimeState.setOperatorStopped('www_App', true);
-        await appsRuntimeState.setOperatorStopped('db_App', true);
+        await appsRuntimeState.setOperatorStopped('www_App', true, { asPrimary: true });
+        await appsRuntimeState.setOperatorStopped('db_App', true, { asPrimary: true });
         await appsRuntimeState.recordRestart('api_App'); // a row, but no lock
 
-        const stopped = await appsRuntimeState.operatorStoppedIdentifiers();
+        const stopped = await appsRuntimeState.operatorHeldIdentifiers();
 
         expect(stopped.sort()).to.deep.equal(['db_App', 'www_App']);
       });
 
       it('is empty when nothing is stopped, and distinguishes that from unreadable', async () => {
-        expect(await appsRuntimeState.operatorStoppedIdentifiers()).to.deep.equal([]);
+        expect(await appsRuntimeState.operatorHeldIdentifiers()).to.deep.equal([]);
       });
 
       it('drops a component whose lock was lifted', async () => {
         await appsRuntimeState.setOperatorStopped('www_App', true);
         await appsRuntimeState.setOperatorStopped('www_App', false);
 
-        expect(await appsRuntimeState.operatorStoppedIdentifiers()).to.deep.equal([]);
+        expect(await appsRuntimeState.operatorHeldIdentifiers()).to.deep.equal([]);
       });
 
       it('THROWS when the store cannot be read, rather than reporting nothing stopped', async () => {
@@ -165,7 +170,7 @@ describe('appsRuntimeState tests', () => {
         });
 
         let threw = null;
-        await failing.operatorStoppedIdentifiers().catch((err) => { threw = err; });
+        await failing.operatorHeldIdentifiers().catch((err) => { threw = err; });
 
         expect(threw, 'an unreadable lock store answered as an empty one').to.be.an('error');
         expect(threw.message).to.include('no primary available');
