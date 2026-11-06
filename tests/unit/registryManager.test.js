@@ -22,6 +22,7 @@ const specCutover = require('../../ZelBack/src/services/utils/specCutover');
 const foundingCommittee = require('../../ZelBack/src/services/appMesh/foundingCommittee');
 const componentKeyMap = require('../../ZelBack/src/services/appLifecycle/componentKeyMap');
 const { RUNNING_EXPIRY_MS } = require('../../ZelBack/src/services/utils/appConstants');
+const globalState = require('../../ZelBack/src/services/utils/globalState');
 const { requireMongo } = require('./dbTestHelper');
 const {
   loadSpecLibrary, V8_SUBMISSION,
@@ -149,6 +150,81 @@ describe('registryManager tests', () => {
       await registryManager.getAppHashesAPI({}, res);
       const [result] = res.json.firstCall.args;
 
+      expect(result.status).to.equal('error');
+      expect(result.data.message).to.include('Database error');
+    });
+  });
+
+  describe('getRegistryStatus tests', () => {
+    const scannedHeightCollection = config.get('database.daemon.collections.scannedHeight');
+    const paid = (i) => ({
+      hash: `${i}`.padStart(64, 'a'), txid: `tx${i}`, height: 1000 + i, txIndex: 1, value: 100_000_000, blockTime: 1_700_000_000,
+    });
+    let syncStateBefore;
+    const clear = async () => {
+      await dbHelper.databaseConnection().db(config.get('database.appsglobal.database')).collection('appmessages').deleteMany({});
+      await dbHelper.databaseConnection().db(config.get('database.daemon.database')).collection(scannedHeightCollection).deleteMany({});
+    };
+
+    beforeEach(async () => {
+      await clear();
+      syncStateBefore = globalState.appSyncState;
+      sinon.stub(appRecords, 'registry').returns({ count: sinon.stub().resolves(3) });
+    });
+
+    afterEach(async () => {
+      globalState.appSyncState = syncStateBefore;
+      await clear();
+    });
+
+    it('reports the sync state and counts the registry, the recorded payments and those without a message', async () => {
+      await appRecords.messages().recordPayments([paid(1), paid(2), paid(3)]);
+      await appRecords.messages().markNotFound(paid(3).hash);
+      await dbHelper.databaseConnection().db(config.get('database.daemon.database')).collection(scannedHeightCollection)
+        .insertOne({ generalScannedHeight: 2_983_500 });
+      globalState.appSyncState = 'READY';
+      const res = { json: sinon.fake((param) => param) };
+
+      const result = await registryManager.getRegistryStatus(undefined, res);
+
+      sinon.assert.calledOnce(res.json);
+      expect(result).to.deep.equal({
+        status: 'success',
+        data: {
+          syncState: 'READY', scannedHeight: 2_983_500, apps: 3, transactions: 3, missingMessages: 3, messagesNotFound: 1,
+        },
+      });
+    });
+
+    it('answers in every sync state, saying which', async () => {
+      // eslint-disable-next-line no-restricted-syntax
+      for (const syncState of ['INITIALIZING', 'SYNCING', 'DEGRADED', 'RESYNCING']) {
+        globalState.appSyncState = syncState;
+
+        // eslint-disable-next-line no-await-in-loop
+        const result = await registryManager.getRegistryStatus(undefined, undefined);
+
+        expect(result.status).to.equal('success');
+        expect(result.data.syncState).to.equal(syncState);
+        expect(result.data.scannedHeight).to.equal(null);
+      }
+    });
+
+    it('reads no payment record to answer', async () => {
+      const read = sinon.spy(appRecords.messages(), 'paid');
+
+      await registryManager.getRegistryStatus(undefined, undefined);
+
+      sinon.assert.notCalled(read);
+    });
+
+    it('reports a database failure as an error, not as counts', async () => {
+      sinon.stub(dbHelper, 'databaseConnection').throws(new Error('Database error'));
+      const res = { json: sinon.fake((param) => param) };
+
+      const result = await registryManager.getRegistryStatus(undefined, res);
+
+      sinon.restore();
       expect(result.status).to.equal('error');
       expect(result.data.message).to.include('Database error');
     });

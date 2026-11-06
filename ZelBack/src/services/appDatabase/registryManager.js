@@ -13,6 +13,7 @@ const verificationHelper = require('../verificationHelper');
 const daemonStatus = require('../daemonService/daemonStatus');
 const { getSpec } = require('../utils/specLibs');
 const specCutover = require('../utils/specCutover');
+const globalState = require('../utils/globalState');
 const legacyTransportProvider = require('../providers/FluxOSLegacyTransportProvider');
 const transportCryptoProvider = require('../providers/FluxOSTransportProvider');
 const { obtainPayloadFromStorage } = require('../utils/fluxStorageRefs');
@@ -97,6 +98,46 @@ async function materializeFoundingView(record) {
     });
   } catch (error) {
     log.warn(`materializeFoundingView - ${record?.name}: ${error.message}`);
+  }
+}
+
+/**
+ * The state of this node's app registry: the app sync state, the height its
+ * explorer has scanned to (null before the first scan), how many apps it holds,
+ * how many app transactions the explorer has recorded, how many of those this
+ * node still has no message for, and how many of the missing ones it has
+ * stopped looking for. A node answers in every sync state, READY or not.
+ * @param {object} _req - Request object (unused)
+ * @param {object} res - Response object
+ * @returns {Promise<object>} {syncState, scannedHeight, apps, transactions, missingMessages, messagesNotFound}
+ */
+async function getRegistryStatus(_req, res) {
+  try {
+    const daemonDatabase = dbHelper.databaseConnection().db(config.get('database.daemon.database'));
+    const [scanned, apps, payments] = await Promise.all([
+      dbHelper.findOneInDatabase(
+        daemonDatabase,
+        scannedHeightCollection,
+        { generalScannedHeight: { $gte: 0 } },
+        { projection: { _id: 0, generalScannedHeight: 1 } },
+      ),
+      appRecords.registry().count(),
+      appRecords.messages().paymentCounts(),
+    ]);
+    const status = {
+      syncState: globalState.appSyncState,
+      scannedHeight: scanned ? serviceHelper.ensureNumber(scanned.generalScannedHeight) : null,
+      apps,
+      transactions: payments.paid,
+      missingMessages: payments.missing,
+      messagesNotFound: payments.notFound,
+    };
+    const statusResponse = messageHelper.createDataMessage(status);
+    return res ? res.json(statusResponse) : statusResponse;
+  } catch (error) {
+    log.error(error);
+    const errorResponse = messageHelper.createErrorMessage(error.message || error, error.name, error.code);
+    return res ? res.json(errorResponse) : errorResponse;
   }
 }
 
@@ -1359,6 +1400,7 @@ module.exports = {
   getAppHashesAPI,
   appLocation,
   appsListedAt,
+  getRegistryStatus,
   addressMovesFrom,
   addressMovesTo,
   currentAddressOf,

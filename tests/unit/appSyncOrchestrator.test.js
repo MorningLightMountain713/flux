@@ -1659,6 +1659,27 @@ describe('AppSyncOrchestrator', () => {
       await clock.tickAsync(0);
     }
 
+    it('mirrors every state change into globalState', async () => {
+      const { mod, orchestrator } = makeAtTwoMinutes();
+      await orchestrator.start(defaultBootContext);
+      peersUp();
+      await clock.tickAsync(0);
+
+      await driveBlocks(2_555_000, 1);
+      expect(globalStateStub.appSyncState).to.equal(mod.STATES.SYNCING);
+
+      peerEmitter.emit('peersBelowThreshold', 3);
+      await clock.tickAsync(0);
+      expect(globalStateStub.appSyncState).to.equal(mod.STATES.DEGRADED);
+
+      peersUp();
+      await clock.tickAsync(0);
+      expect(globalStateStub.appSyncState).to.equal(mod.STATES.RESYNCING);
+
+      await driveBlocks(2_555_001, FALLBACK_BLOCKS);
+      expect(globalStateStub.appSyncState).to.equal(mod.STATES.READY);
+    });
+
     it('never reaches READY with no peers, however many blocks arrive', async () => {
       const { mod, orchestrator } = makeAtTwoMinutes();
       await orchestrator.start(defaultBootContext);

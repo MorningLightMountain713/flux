@@ -6,6 +6,7 @@ const { AsyncLock } = require('./asyncLock');
 // These need to be shared across all modules to maintain the original business logic
 
 let shutdownInProgress = false;
+let appSyncState = 'INITIALIZING';
 let appStateSyncDeadlinePassed = false;
 // Node-capability ("is-arcane") verdict, resolved once at boot by the awaited
 // resolveNodeCapability() (nodeCapabilities.js) before any is-arcane consumer runs.
@@ -228,6 +229,11 @@ module.exports = {
   // Set by the graceful shutdown path and never cleared: the process exits at the
   // end of it. From then on no container starts and no decider acts, so what the
   // shutdown stops and drains stays stopped and drained.
+  // The app sync orchestrator's state (INITIALIZING, SYNCING, READY, DEGRADED,
+  // RESYNCING), for readers that cannot require the orchestrator without a
+  // cycle. The orchestrator owns the value and mirrors it; nothing else writes it.
+  get appSyncState() { return appSyncState; },
+  set appSyncState(value) { appSyncState = value; },
   get shutdownInProgress() { return shutdownInProgress; },
   setShutdownInProgressTrue() { shutdownInProgress = true; },
 
