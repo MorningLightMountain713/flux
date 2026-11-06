@@ -23,6 +23,11 @@ const fluxEventBus = require('./fluxEventBus');
 
 const RELEASE_MARGIN = 2;
 
+// How many failed dials in a row to a duty this node has held are a suspicion:
+// its connection can be lost where the juror could not name the node, at an address
+// the list has yet to reach, and the dials are then the only trace of it.
+const REPEATED_DIAL_FAILURES = 2;
+
 const DUTY_STATE = Object.freeze({
   PENDING: 'pending',
   CONNECTED: 'connected',
@@ -41,6 +46,12 @@ class RingReconciler {
 
   /** @type {Map<string, {state: string, socketAddress: string}>} outpoint → top-up state */
   #topups = new Map();
+
+  /** @type {Set<string>} duties held at any address since this node started */
+  #dutiesHeld = new Set();
+
+  /** @type {Map<string, number>} outpoint → failed dials in a row */
+  #failedDials = new Map();
 
   #passRunning = false;
 
@@ -78,6 +89,8 @@ class RingReconciler {
    *   dials nobody and asks nobody, and resumes at the lift its own rows name
    * @param {(outpoint: string) => string} [deps.dialPlan] the mild tier's order for
    *   the duty's dial, a flapLadder DIAL_PLAN; eager when absent
+   * @param {(outpoint: string) => void} [deps.noteDutyUnreachable] a duty this node has
+   *   held failed REPEATED_DIAL_FAILURES dials or more in a row
    * @param {(outpoint: string) => void} [deps.noteContact] the duty was dialed or is
    *   held this pass — the ladder's clock
    * @param {object} [options]
@@ -167,9 +180,28 @@ class RingReconciler {
       // resolution is the event; only a resolved dial moves the write-off
       // or runs another pass.
       if (connected !== null) entry.writtenOff = !connected;
+      this.#noteDutyDial(outpoint, connected);
       if (connected === false) this.schedule('dial-failed');
     };
     this.#deps.dial(socketAddress, { witness }).then(settle).catch(() => settle(false));
+  }
+
+  /** @param {string} outpoint a duty just dialed @param {boolean|null} connected */
+  #noteDutyDial(outpoint, connected) {
+    if (connected === null) return;
+    if (connected) {
+      this.#noteDutyHeld(outpoint);
+      return;
+    }
+    if (!this.#dutiesHeld.has(outpoint)) return;
+    const failed = (this.#failedDials.get(outpoint) ?? 0) + 1;
+    this.#failedDials.set(outpoint, failed);
+    if (failed >= REPEATED_DIAL_FAILURES && this.#deps.noteDutyUnreachable) this.#deps.noteDutyUnreachable(outpoint);
+  }
+
+  #noteDutyHeld(outpoint) {
+    this.#dutiesHeld.add(outpoint);
+    this.#failedDials.delete(outpoint);
   }
 
   /**
@@ -247,6 +279,7 @@ class RingReconciler {
       }
       if (this.#deps.isHeld(socketAddress)) {
         current.set(duty.outpoint, { state: DUTY_STATE.CONNECTED, socketAddress, writtenOff: false });
+        this.#noteDutyHeld(duty.outpoint);
         if (this.#deps.noteContact) this.#deps.noteContact(duty.outpoint);
         return;
       }
@@ -280,6 +313,11 @@ class RingReconciler {
       }
     });
     this.#duties = current;
+    for (const records of [this.#dutiesHeld, this.#failedDials]) {
+      for (const outpoint of records.keys()) {
+        if (!current.has(outpoint)) records.delete(outpoint);
+      }
+    }
 
     // --- top-ups: refresh state, then open or release against the band ---
     this.#topups.forEach((entry, outpoint) => {

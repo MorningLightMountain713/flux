@@ -918,6 +918,9 @@ function start(injectedTransport) {
     },
     dialPlan: (outpoint) => ladder.dialPlan(outpoint),
     noteContact: (outpoint) => ladder.noteContact(outpoint),
+    noteDutyUnreachable: (outpoint) => {
+      if (juror) juror.look(outpoint, 'dial-failed');
+    },
   });
 
   juror = new NodeDownJuror({

@@ -1,0 +1,8 @@
+[
+  {
+    "name": "failed-dials-raise-nothing",
+    "breaks": "repeated failed dials to a held duty are a suspicion",
+    "edits": [{ "file": "ZelBack/src/services/nodeDownService.js", "from": "if (juror) juror.look(outpoint, 'dial-failed');", "to": "if (!juror) log.debug(outpoint);" }],
+    "red": ["is certified down and taken over by the standby once the list names the address it died at"]
+  }
+]

@@ -260,6 +260,102 @@ describe('ringReconciler', () => {
       .to.deep.equal([['addr-s2:0', false], ['addr-s3:0', false]]);
   });
 
+  describe('a duty this node has held and can no longer reach', () => {
+    const lastDial = (world) => world.dials[world.dials.length - 1];
+    let world;
+    let unreachable;
+
+    const failDial = async () => {
+      await reconciler.schedule('test');
+      await tick();
+      lastDial(world).resolve(false);
+      await tick();
+      await tick();
+    };
+
+    beforeEach(() => {
+      world = makeWorld({ duties: ['a:0'] });
+      unreachable = sinon.stub();
+      world.deps.noteDutyUnreachable = unreachable;
+      world.inbound = 99; // silence the ask path
+    });
+
+    const heldThenLost = async () => {
+      world.held.set('addr-a:0', 'outbound');
+      reconciler = makeReconciler(world, { floor: 0 });
+      await tick();
+      world.held.delete('addr-a:0');
+    };
+
+    it('is reported from the second failed dial in a row, not the first', async () => {
+      await heldThenLost();
+
+      await failDial();
+      sinon.assert.notCalled(unreachable);
+
+      await failDial();
+      sinon.assert.calledOnceWithExactly(unreachable, 'a:0');
+    });
+
+    it('is reported again on each dial that fails after that, for the juror to weigh', async () => {
+      await heldThenLost();
+
+      await failDial();
+      await failDial();
+      await failDial();
+
+      expect(unreachable.callCount).to.equal(2);
+    });
+
+    it('is not reported when this node has never held it', async () => {
+      reconciler = makeReconciler(world, { floor: 0 });
+      await failDial();
+      await failDial();
+      await failDial();
+
+      sinon.assert.notCalled(unreachable);
+    });
+
+    it('counts failures in a row: a dial that connects starts the count again', async () => {
+      await heldThenLost();
+      await failDial();
+      await reconciler.schedule('test');
+      await tick();
+      lastDial(world).resolve(true);
+      await tick();
+      await tick();
+
+      await failDial();
+
+      sinon.assert.notCalled(unreachable);
+    });
+
+    it('counts failures in a row: the duty held by its far end starts the count again', async () => {
+      await heldThenLost();
+      await failDial();
+      world.held.set('addr-a:0', 'inbound');
+      await reconciler.schedule('test');
+      await tick();
+      world.held.delete('addr-a:0');
+
+      await failDial();
+
+      sinon.assert.notCalled(unreachable);
+    });
+
+    it('forgets a duty the list no longer gives this node', async () => {
+      await heldThenLost();
+      world.duties = [];
+      await reconciler.schedule('test');
+      world.duties = ['a:0'];
+
+      await failDial();
+      await failDial();
+
+      sinon.assert.notCalled(unreachable);
+    });
+  });
+
   describe('the mild tier orders dials, never excludes a duty', () => {
     it('a damped duty is dialed lazily: not while the floor is short, yes once it is covered without it', async () => {
       const world = makeWorld({ duties: ['a:0', 'b:0'] });
