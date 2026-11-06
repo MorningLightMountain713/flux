@@ -8,7 +8,7 @@ import { getSubnetConfig, REGISTRY_REPO_HOST } from '../framework/subnet-config.
 import { bootAndPeer, seedSpawnerApp } from '../framework/reconciler-suite.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
-import { execInContainer, restartFluxos, setNodeApiPort } from '../framework/container.js';
+import { execInContainer, restartFluxos, setNodeUpnp } from '../framework/container.js';
 import { enableUpnpGateway, setUpnpProtocolFault, upnpGatewayState } from '../framework/external-http-control.js';
 import { waitFor, waitForAppInstalled, waitForBootSettled } from '../framework/wait.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
@@ -120,12 +120,12 @@ describe('a port is proven over UDP', function () {
         [BLOCKED]: { fluxapps: { appsPortCheck: APPS_PORT_CHECK } },
       },
     });
-    // the first boot writes userconfig.js (its identity); a node with an api port
+    // the first boot writes userconfig.js (its identity); a node declaring upnp
     // in it verifies UPnP when it starts
     const upnp = env.clients[EVERY_OTHER];
     await waitForBootSettled(upnp);
     await enableUpnpGateway(subnet.nodeIp(EVERY_OTHER + 1));
-    await setNodeApiPort(upnp.container, 16127);
+    await setNodeUpnp(upnp.container);
     await restartFluxos(upnp.container);
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1 });
   });
@@ -261,7 +261,7 @@ describe('a node behind UPnP tests one protocol a pass', function () {
     const node = env.clients[NODE];
     await waitForBootSettled(node);
     await enableUpnpGateway(nodeIp);
-    await setNodeApiPort(node.container, 16127);
+    await setNodeUpnp(node.container);
     await restartFluxos(node.container);
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1 });
   });

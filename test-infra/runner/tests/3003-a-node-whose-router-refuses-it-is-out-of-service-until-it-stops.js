@@ -4,7 +4,7 @@ import {
 } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { restartFluxos, setNodeApiPort } from '../framework/container.js';
+import { restartFluxos, setNodeUpnp } from '../framework/container.js';
 import { pushBusybox } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { bootAndPeer, seedSpawnerApp } from '../framework/reconciler-suite.js';
@@ -100,11 +100,11 @@ describe('a node whose router refuses it is out of service until it stops', func
     });
     node = env.clients[NODE];
     nodeIp = subnet.nodeIp(NODE + 1);
-    // the first boot writes userconfig.js (its identity); a node with an api port
+    // the first boot writes userconfig.js (its identity); a node declaring upnp
     // in it verifies UPnP when it starts
     await waitForBootSettled(node);
     await enableUpnpGateway(nodeIp);
-    await setNodeApiPort(node.container, 16127);
+    await setNodeUpnp(node.container);
     await restartFluxos(node.container);
     await bootAndPeer(env, { minOutbound: 1, minInbound: 1 });
     await pushBusybox('e2eupnprefuse', 'v1', 'busybox', {

@@ -560,6 +560,12 @@ export async function setNodeApiPort(container, apiPort) {
   if (r.exitCode !== 0) throw new Error(`setNodeApiPort: could not set apiport ${apiPort}: ${r.output}`);
 }
 
+// Declare a node as using UPnP, as an operator does, taken at its next start.
+export async function setNodeUpnp(container) {
+  const r = await execInContainer(container, `sed -i -E 's/^( *)apiport:.*$/&\\n\\1upnp: true,/' /flux/config/userconfig.js && grep -q 'upnp: true,' /flux/config/userconfig.js`);
+  if (r.exitCode !== 0) throw new Error(`setNodeUpnp: could not declare upnp: ${r.output}`);
+}
+
 // ── "Fully gone" state inspectors ──────────────────────────────────────
 // The container being absent is NOT proof an app was fully torn down: the teardown
 // also removes the app's cross-app docker network and umount+rm's its loop-mounted

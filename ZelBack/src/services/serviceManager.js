@@ -147,6 +147,7 @@ const dosState = {
   testingPort: null,
   nextTestingPort: null,
   originalPortFailed: null,
+  portFailureScore: 0,
   routerRefusalsSeen: 0,
 };
 const portsNotWorking = new Set();
