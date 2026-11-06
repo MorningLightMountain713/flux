@@ -172,7 +172,7 @@ describe('every node decides the same app list', function () {
     forged.registered = await buildSeedableApp({ name: `${base}f`, instances: 3 });
     forged.updated = await buildSeedableUpdate(forged.registered, (spec) => {
       spec.description = `updated by a stranger ${base}f`;
-    }, { signerKey: buyerKey() });
+    }, { signer: buyerKey() });
     for (const app of [ordered, underpaid, forged]) {
       // eslint-disable-next-line no-await-in-loop
       await holdSpawners(app.registered.spec.name);
