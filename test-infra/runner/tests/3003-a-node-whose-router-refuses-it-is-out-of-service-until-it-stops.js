@@ -50,6 +50,7 @@ const APPS_PORT_CHECK = {
   thresholds: { dos: 100, portsHighEdge: 3, portsLowEdge: 1 },
 };
 // 25 counted passes, 5 s apart, reach the threshold of 100
+const SPAWNER_ATTEMPT = 'spawner:beforeAttempt';
 const DOS_WITHIN_MS = 4 * 60 * 1000;
 // the harness's longest removal retry (8 s) and one pass
 const RELEASED_WITHIN_MS = 90 * 1000;
@@ -152,6 +153,9 @@ describe('a node whose router refuses it is out of service until it stops', func
     await waitForAppInstalled(node, appName, 240000, { afterId: mark });
     expect((await gateway()).mappings.filter((m) => m.externalPort === appPort).map((m) => m.protocol).sort(), 'the app\'s port mapped').to.deep.equal(['TCP', 'UDP']);
 
+    // The app is short of an instance once it leaves, and the node's spawner would
+    // take it again, mapping its port over the removal the router refuses.
+    await node.holdCheckpoint(SPAWNER_ATTEMPT, appName);
     await setUpnpRefuseDeletes(nodeIp, Infinity);
     const refusedFrom = Date.now();
     const auth = await authenticate(node.url, fluxTeamKey());
@@ -182,6 +186,7 @@ describe('a node whose router refuses it is out of service until it stops', func
     const { requests, mappings } = await gateway();
     expect(mappings.some((m) => m.externalPort === appPort), 'the app\'s mapping removed').to.equal(false);
     expect(testMappings(requests, takenFrom).length, 'a test ran once the router took the removal').to.be.at.least(1);
+    await node.releaseCheckpoint(SPAWNER_ATTEMPT, appName);
   });
 
   it('is out of service once a full router refuses an app\'s mapping, sooner than its wait after a passing test', async function () {
@@ -229,6 +234,7 @@ describe('a node whose router refuses it is out of service until it stops', func
     await waitForAppInstalled(node, name, 240000, { afterId: mark });
     expect((await gateway()).mappings.some((m) => m.externalPort === port), 'the app\'s port mapped').to.equal(true);
 
+    await node.holdCheckpoint(SPAWNER_ATTEMPT, name);
     await setUpnpDeleteFault(nodeIp, 501);
     const faultFrom = Date.now();
     const auth = await authenticate(node.url, fluxTeamKey());
@@ -253,6 +259,7 @@ describe('a node whose router refuses it is out of service until it stops', func
     const lookup = ofPort.findIndex((r) => r.action === 'GetSpecificPortMappingEntry');
     expect(lookup, 'the retry looked the entry up').to.be.at.least(0);
     expect(ofPort.slice(lookup).filter((r) => r.action === 'DeletePortMapping'), 'no removal sent once it was found gone').to.have.length(0);
+    await node.releaseCheckpoint(SPAWNER_ATTEMPT, name);
   });
 
   it('counts a mapping as its own while the router answers its lookup with a fault, until the router removes it', async function () {
@@ -265,6 +272,7 @@ describe('a node whose router refuses it is out of service until it stops', func
     await waitForAppInstalled(node, name, 240000, { afterId: mark });
     expect((await gateway()).mappings.some((m) => m.externalPort === port), 'the app\'s port mapped').to.equal(true);
 
+    await node.holdCheckpoint(SPAWNER_ATTEMPT, name);
     await setUpnpLookupFault(nodeIp, 501);
     await setUpnpRefuseDeletes(nodeIp, Infinity);
     const faultFrom = Date.now();
@@ -288,6 +296,7 @@ describe('a node whose router refuses it is out of service until it stops', func
       timeout: RELEASED_WITHIN_MS, interval: 2000, label: 'the node back in service once the router removed the mapping',
     });
     await setUpnpLookupFault(nodeIp, null);
+    await node.releaseCheckpoint(SPAWNER_ATTEMPT, name);
     state = await gateway();
     expect(state.mappings.some((m) => m.externalPort === port), 'the mapping removed').to.equal(false);
   });
