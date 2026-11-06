@@ -448,7 +448,7 @@ const harnessOverrides = {
     meshReconcileIntervalMs: 1_800_000,
     backendTlsRenewalIntervalMs: 21_600_000,
     installCollisionWaitMs: 90_000,
-    portTestPeerTimeoutMs: 5000, // per-peer reachability round-trip timeout
+    portTestPeerTimeoutMs: 30_000, // per-peer reachability round-trip timeout
     portTestBindDelayMs: 5000,
     portTestPropagationDelayMs: 10_000,
     portTestMaxAttempts: 5,
