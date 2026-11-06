@@ -329,6 +329,48 @@ describe('AppSyncOrchestrator', () => {
 
   });
 
+  describe('the hash sync while the store is down', () => {
+    const block = async (height) => {
+      blockEmitter.emit('blocksProcessed', height);
+      await clock.tickAsync(0);
+    };
+
+    it('asks for nothing, and runs once the store is back', async () => {
+      const orchestrator = makeOrchestrator();
+      capabilities.setForTests('localDbPrepared', false);
+      orchestrator.start(defaultBootContext);
+      peersUp();
+      await clock.tickAsync(0);
+      await block(2_600_000);
+
+      sinon.assert.notCalled(syncMissingHashesStub);
+
+      capabilities.setForTests('localDbPrepared', true);
+      await clock.tickAsync(0);
+      sinon.assert.calledOnce(syncMissingHashesStub);
+    });
+
+    it('leaves a retry due until the store is back', async () => {
+      const orchestrator = makeOrchestrator();
+      syncMissingHashesStub.resolves({
+        resolved: 0, missing: 1, unreachable: 0, nextRetryHeight: 2_600_001,
+      });
+      orchestrator.start(defaultBootContext);
+      peersUp();
+      await clock.tickAsync(0);
+      await block(2_600_000);
+      syncMissingHashesStub.resetHistory();
+      capabilities.setForTests('localDbPrepared', false);
+
+      await block(2_600_001);
+      sinon.assert.notCalled(syncMissingHashesStub);
+
+      capabilities.setForTests('localDbPrepared', true);
+      await block(2_600_002);
+      sinon.assert.calledOnce(syncMissingHashesStub);
+    });
+  });
+
   describe('peer threshold events', () => {
     it('should call getEligibleSyncPeers on peerThresholdReached', async () => {
       capabilities.setForTests('explorerSynced', false);
@@ -1054,10 +1096,11 @@ describe('AppSyncOrchestrator', () => {
       peerEmitter.emit('peerThresholdReached', 12);
       await clock.tickAsync(0);
       expect(peers.some((p) => p.send.called), 'asked while the database was down').to.equal(false);
-      expect(syncMissingHashesStub.called, 'the sync never ran, so nothing was held back').to.equal(true);
+      sinon.assert.notCalled(syncMissingHashesStub);
 
       capabilities.setForTests('localDbPrepared', true);
       await clock.tickAsync(0);
+      sinon.assert.called(syncMissingHashesStub);
       expect(peers.every((p) => p.send.called), 'not asked once the database was up').to.equal(true);
       await orchestrator.stop();
     });
@@ -1070,7 +1113,7 @@ describe('AppSyncOrchestrator', () => {
       peersUp();
       blockEmitter.emit('blocksProcessed', 2_555_000);
       await clock.tickAsync(0);
-      expect(syncMissingHashesStub.called, 'the sync never ran, so nothing was held back').to.equal(true);
+      sinon.assert.notCalled(syncMissingHashesStub);
       sinon.assert.notCalled(reconcileStub);
       sinon.assert.notCalled(ingressReconcileStub);
 

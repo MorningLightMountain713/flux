@@ -1286,6 +1286,7 @@ class AppSyncOrchestrator {
   async #checkHashRetry(blockHeight) {
     if (!this.#hashSyncComplete) return;
     if (!this.#canSendMessages) return;
+    if (!capabilities.isUp(STORE_CAPABILITY)) return;
     if (this.#syncInProgress) return;
     if (blockHeight < this.#nextHashRetryHeight) return;
 
@@ -1380,6 +1381,7 @@ class AppSyncOrchestrator {
 
   async #runHashSync() {
     if (this.#syncInProgress) return;
+    if (!capabilities.isUp(STORE_CAPABILITY)) return;
     this.#syncInProgress = true;
     try {
       this.#hashSyncAttempts += 1;
