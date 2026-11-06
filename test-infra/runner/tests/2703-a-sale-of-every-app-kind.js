@@ -129,11 +129,11 @@ describe('a sale of every app kind that carries no content', function () {
   }
 
   // Resolves once every node named holds the app at this message, installed.
-  async function installedEverywhere(kind, hash, indices, label) {
+  async function installedEverywhere(kind, hash, indices, label, timeout = CONVERGE_MS) {
     await waitFor(async () => {
       const held = await Promise.all(indices.map((i) => installedOn(i, kind.name)));
       return held.every((app) => app?.hash === hash);
-    }, { timeout: CONVERGE_MS, interval: 3000, label: `${kind.label}: ${label}` });
+    }, { timeout, interval: 3000, label: `${kind.label}: ${label}` });
   }
 
   // Resolves once every node named lists the app at this message.
@@ -332,13 +332,14 @@ describe('a sale of every app kind that carries no content', function () {
   });
 
   it('installs every app as sold on a node that boots afterwards', async function () {
-    this.timeout(CONVERGE_MS * 2);
+    // A node installs one app at a time, in an order of its own.
+    const allInstalledMs = CONVERGE_MS * kinds.length;
+    this.timeout(allInstalledMs + CONVERGE_MS);
     const fresh = await env.startNode(FRESH);
     await waitForDaemonReady(fresh);
     await env.startDiscovery([FRESH]);
+    await Promise.all(kinds.map((kind) => installedEverywhere(kind, kind.sold.spec.hash, [FRESH], 'the fresh node installs the app as sold', allInstalledMs)));
     for (const kind of kinds) {
-      // eslint-disable-next-line no-await-in-loop
-      await installedEverywhere(kind, kind.sold.spec.hash, [FRESH], 'the fresh node installs the app as sold');
       // eslint-disable-next-line no-await-in-loop
       expect((await installedOn(FRESH, kind.name)).owner, `${kind.label}: the fresh node's record names the buyer`).to.equal(buyer.zelid);
       // eslint-disable-next-line no-await-in-loop
