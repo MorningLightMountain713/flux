@@ -188,7 +188,7 @@ describe('a primary that went quiet and then died is taken over', function () {
   it('gives a new standby the survivor\'s copy', async function () {
     this.timeout(600000);
     const afterInstall = client(C).getLastEventId();
-    await installOnNodes(fleet.env, fleet.app, [C]);
+    await installOnNodes(fleet.env, fleet.app, [C], { down: [B] });
     await waitFor(async () => (await readPath(client(C), `${root}/${SAVE}`)) === SAVE_CONTENT, {
       timeout: 300000, interval: 5000, label: 'the new standby holds the primary\'s data',
     });

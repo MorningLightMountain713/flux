@@ -449,8 +449,11 @@ describe('boot holds an app whose location it cannot read', function () {
     before(async function () {
       this.timeout(900000);
       // A location record is a node's one announcement, so the expiry before this
-      // removed every app the holder held: this one is seated on it again.
-      await installSeededOnNodes(env, againSpec, [HOLDER]);
+      // removed every app the holder held: this one is seated on it again, the node
+      // deferring the install while that removal runs.
+      await waitFor(() => installSeededOnNodes(env, againSpec, [HOLDER], { noRetrier: true }), {
+        timeout: 300000, interval: 1000, label: 'the holder takes the app again',
+      });
       await waitFor(() => isUp(again), { timeout: 300000, interval: 3000, label: 'the app runs on the holder again' });
       await waitFor(async () => (await holder.getAppLocations(againApp))?.data?.some((row) => row.ip.startsWith(holder.ip)), {
         timeout: 300000, interval: 3000, label: 'the holder announces the app again',

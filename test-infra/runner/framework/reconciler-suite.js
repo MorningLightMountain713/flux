@@ -99,10 +99,11 @@ export async function seedSpecUpdate(env, updated, indices) {
 // and the fleet places its remaining instances.
 // Nodes a spec names and a call leaves out are installed on by a later call, in the
 // suite's order: their spawners, which go after any app that names them, wait for it.
-async function holdLaterHolders(env, app, indices) {
+// A node in `down` has no FluxOS, so no spawner to hold.
+async function holdLaterHolders(env, app, indices, down) {
   if (!Array.isArray(app.spec.nodes)) return;
   const named = new Set(app.spec.nodes);
-  const later = spawnerNodes(env).filter((i) => !indices.includes(i) && named.has(nodeOutpoint(i)));
+  const later = spawnerNodes(env).filter((i) => !indices.includes(i) && !down.includes(i) && named.has(nodeOutpoint(i)));
   await Promise.all(later.map((i) => env.clients[i].holdCheckpoint('spawner:beforeAttempt', app.spec.name)));
   await releaseSpawnerHolds(env, app.spec.name, indices);
 }
@@ -188,9 +189,9 @@ export async function placeOnNodes(env, app, indices, { timeout = 120000, releas
   return indices;
 }
 
-export async function installOnNodes(env, app, indices, { timeout = 120000 } = {}) {
+export async function installOnNodes(env, app, indices, { timeout = 120000, down = [] } = {}) {
   assertPinnedTo(app, indices);
-  await holdLaterHolders(env, app, indices);
+  await holdLaterHolders(env, app, indices, down);
   // A delivered app and a direct install both need the global app table to be
   // past its boot rebuild, which drops the table and reinserts it from stored
   // messages. hashSync:complete is published when that rebuild is done;
@@ -202,8 +203,9 @@ export async function installOnNodes(env, app, indices, { timeout = 120000 } = {
 
 // installOnNodes for an app whose chain records the nodes already hold: an app
 // uninstalled from a node and installed on it again, say. A local uninstall
-// leaves those records, and seeding them a second time is refused.
-export async function installSeededOnNodes(env, app, indices, { timeout = 120000 } = {}) {
+// leaves those records, and seeding them a second time is refused. `noRetrier` settles
+// a deferral as not held, for a caller that asks again itself.
+export async function installSeededOnNodes(env, app, indices, { timeout = 120000, noRetrier = false } = {}) {
   const teamKey = fluxTeamKey();
   await Promise.all(indices.map(async (i) => {
     const client = env.clients[i];
@@ -231,7 +233,7 @@ export async function installSeededOnNodes(env, app, indices, { timeout = 120000
     const mark = client.getLastEventId();
     const body = await client.installAppLocally(app.spec.name, auth.zelidauth);
     try {
-      await waitForInstallSettled(client, app.spec.name, timeout, { afterId: mark });
+      await waitForInstallSettled(client, app.spec.name, timeout, { afterId: mark, noRetrier });
     } catch (error) {
       throw new Error(`node ${i} does not hold ${app.spec.name}: ${error.message} :: ${body.slice(-400)}`);
     }

@@ -117,7 +117,7 @@ describe('a primary no location lists is fenced while it runs', function () {
     await write(B, FENCED_LATER, 'written before a holder is placed');
 
     step('a holder is placed after the old primary\'s location expired');
-    await installOnNodes(fleet.env, fleet.app, [C]);
+    await installOnNodes(fleet.env, fleet.app, [C], { down: [B] });
     await waitFor(async () => (await readPath(client(C), `${root}/${SAVE}`)) === SAVE_CONTENT, {
       timeout: 300000, interval: 5000, label: 'the standby\'s copy reached the holder placed later',
     });
