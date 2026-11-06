@@ -99,6 +99,7 @@ describe('a move heard after the chain lists the new address', function () {
     const app = await buildSeedableApp({
       name: appName,
       instances: 1,
+      pinnedTo: [WITH_APP],
       compose: [{
         name: 'alpha',
         description: 'listed at its new address first',
@@ -117,8 +118,7 @@ describe('a move heard after the chain lists the new address', function () {
     });
     await installOnNodes(env, app, [WITH_APP]);
     const at = socketOf(client(WITH_APP).ip);
-    await waitFor(async () => (await Promise.all(others(WITH_APP).map(async (j) => (await dbClient(j + 1).getAppLocationsByIp(at))
-      .some((row) => row.name === appName)))).every(Boolean), {
+    await waitFor(async () => (await Promise.all(others(WITH_APP).map(async (j) => (await client(j).getAppLocationsAt(appName, at)).length > 0))).every(Boolean), {
       timeout: 180000, interval: 3000, label: 'every other node holds the app at its node',
     });
   });

@@ -6,6 +6,7 @@ import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { hideNodeFromPeers, revealNodeToPeers } from '../framework/daemon-control.js';
+import { waitFor } from '../framework/wait.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // A node asks its peers whether they can reach it. A peer whose node list does
@@ -33,9 +34,18 @@ describe('a node its observers do not list yet holds itself in service', functio
     env = await createTestEnv({
       hookCtx: this,
       nodes: 3,
-      configOverrides: { fluxapps: { minOutgoing: 1, minIncoming: 0, minUniqueIpsIncoming: 0 } },
+      configOverrides: { fluxapps: { minOutgoing: 1, minIncoming: 1 } },
+      // A node of three can end with no outbound peer or no inbound one, and what
+      // the availability check counts for that is not this case's subject.
+      nodeConfigOverrides: {
+        [SUBJECT]: {
+          fluxapps: {
+            minOutgoing: 0, minIncoming: 0, minUniqueIpsOutgoing: 0, minUniqueIpsIncoming: 0,
+          },
+        },
+      },
     });
-    await bootAndPeer(env, { minOutbound: 1, minInbound: 0 });
+    await bootAndPeer(env, { minOutbound: 1, minInbound: 1 });
     await client(SUBJECT).waitForEvent('availability:checked', (d) => d.available === true, 240000);
     await hideNodeFromPeers(client(SUBJECT).ip);
   });
@@ -48,11 +58,16 @@ describe('a node its observers do not list yet holds itself in service', functio
 
   it('is answered "not listed" by a peer that does not list it', async function () {
     this.timeout(60000);
-    const url = `${client(OBSERVER).url}/flux/checkfluxavailability?ip=${client(SUBJECT).ip}&port=${API_PORT}&_=${Date.now()}`;
-    const answer = await (await fetch(url)).json();
+    // The observer's list changes on its next refresh; every answer until then is
+    // that the node is available.
+    const answers = [];
+    await waitFor(async () => {
+      const url = `${client(OBSERVER).url}/flux/checkfluxavailability?ip=${client(SUBJECT).ip}&port=${API_PORT}&_=${Date.now()}`;
+      answers.push(await (await fetch(url)).json());
+      return answers.at(-1).status === 'error';
+    }, { timeout: 50000, interval: 2000, label: 'the observer no longer lists the node' });
 
-    expect(answer.status).to.equal('error');
-    expect(answer.data.message).to.equal(NOT_LISTED);
+    expect(answers.at(-1).data.message).to.equal(NOT_LISTED);
   });
 
   it('holds no reachability verdict against itself on the passes that ask', async function () {

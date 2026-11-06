@@ -708,6 +708,12 @@ export function nodeClient(nodeNum) {
     setDOSState: (dosState, dosMessage, zelidauth) =>
       post('/flux/dosstate', { dosState, dosMessage }, { zelidauth }),
     getAppLocations: (name) => get(`/apps/location/${name}`),
+    // This node's locations of one app at one socket address, read now.
+    getAppLocationsAt: async (name, address) => {
+      const bare = (ip) => ip.replace(/:16127$/, '');
+      const { data } = await get(`/apps/location/${name}`, { noCache: true });
+      return data.filter((row) => bare(row.ip) === bare(address));
+    },
     // The folders this node tells peers it holds writable: { ready, folders }.
     getPromotedFolders: () => get('/apps/promotedfolders'),
     getAllAppLocations: () => get('/apps/locations'),

@@ -88,6 +88,13 @@ export function dbClient(nodeNum) {
       return localDb.collection('ownaddress').findOne({ _id: 'own' });
     },
 
+    // The external IP this node last recorded as its own, or null.
+    async lastKnownIp() {
+      const localDb = await db('local');
+      const record = await localDb.collection('nodeidentity').findOne({ _id: 'lastKnownIp' });
+      return record?.ip ?? null;
+    },
+
     // Forget that record, as a node that has never kept one.
     async forgetOwnAddress() {
       const localDb = await db('local');

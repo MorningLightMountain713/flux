@@ -5,7 +5,7 @@ import {
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
 import {
-  configuredIpOf, crashFluxos, moveNodeAddress, releaseFluxos,
+  crashFluxos, moveNodeAddress, releaseFluxos,
 } from '../framework/container.js';
 import {
   clearNodeAddress, clearRpcFailures, failRpc, getJournal, holdRpc, releaseRpc, setNodeAddress,
@@ -88,7 +88,7 @@ describe('a move a failure or a crash interrupted is finished once', function ()
     expect(record.recentIpChanges, `node ${i}'s IP changes counted`).to.have.lengthOf(1);
     const held = await bystanderHolds(i, { from, to });
     expect(held.data.broadcastedAt, `the time node ${i}'s move is told with`).to.equal(record.movedAt);
-    expect(await configuredIpOf(client(i).container), `node ${i}'s configured IP`).to.equal(to.split(':')[0]);
+    expect(await dbClient(i + 1).lastKnownIp(), `node ${i}'s recorded IP`).to.equal(to.split(':')[0]);
   }
 
   before(async function () {

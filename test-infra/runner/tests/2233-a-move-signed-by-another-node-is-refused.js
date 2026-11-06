@@ -37,7 +37,7 @@ describe('a move signed by another node is refused', function () {
   let stub;
   const appName = `e2eforgedmove${Date.now()}`;
   const realNodes = Array.from({ length: REAL_NODES }, (_unused, i) => i);
-  const rowsAt = async (i, address) => (await dbClient(i + 1).getAppLocationsByIp(address)).map((row) => row.name);
+  const rowsAt = async (i, address) => (await env.clients[i].getAppLocationsAt(appName, address)).map((row) => row.name);
 
   before(async function () {
     this.timeout(420000);

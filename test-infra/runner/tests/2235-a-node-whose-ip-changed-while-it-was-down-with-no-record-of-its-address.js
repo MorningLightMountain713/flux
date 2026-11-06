@@ -4,7 +4,7 @@ import {
 } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { configuredIpOf, getAppContainerStatus } from '../framework/container.js';
+import { getAppContainerStatus } from '../framework/container.js';
 import { clearNodeAddress } from '../framework/daemon-control.js';
 import { moveNodeWhileDown } from '../framework/node-address.js';
 import { pushImage } from '../framework/registry-helper.js';
@@ -86,8 +86,7 @@ describe('a node whose IP changed while it was down, with no record of its addre
     });
     withApp = await seedAndInstall(env, app);
     [withoutApp, bystander] = [0, 1, 2].filter((i) => i !== withApp);
-    await waitFor(async () => (await dbClient(bystander + 1).getAppLocationsByIp(`${client(withApp).ip}:16127`))
-      .some((row) => row.name === appName), {
+    await waitFor(async () => (await client(bystander).getAppLocationsAt(appName, `${client(withApp).ip}:16127`)).length > 0, {
       timeout: 180000, interval: 3000, label: 'the bystander holds the app at its node',
     });
   });
@@ -117,7 +116,7 @@ describe('a node whose IP changed while it was down, with no record of its addre
     });
     const status = await getAppContainerStatus(client(withApp).container, appName);
     expect(status?.status, 'the app on the node that moved').to.match(/^Up/);
-    expect(await configuredIpOf(client(withApp).container), 'its configured IP').to.equal(to);
+    expect(await dbClient(withApp + 1).lastKnownIp(), 'its recorded IP').to.equal(to);
   });
 
   it('adopts its new address without a move when it ran nothing at its old one', async function () {
@@ -131,7 +130,7 @@ describe('a node whose IP changed while it was down, with no record of its addre
       timeout: ADOPTED_MS, interval: 5000, label: 'the node listed at its new address',
     });
     expect(await movesFrom(socketOf(from)), 'moves the bystander holds from the old address').to.deep.equal([]);
-    expect(await configuredIpOf(client(withoutApp).container), 'its configured IP').to.equal(to);
+    expect(await dbClient(withoutApp + 1).lastKnownIp(), 'its recorded IP').to.equal(to);
     expect((await dbClient(withoutApp + 1).ownAddressRecord())?.socketAddress, 'the address it recorded').to.equal(socketOf(to));
   });
 });

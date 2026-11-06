@@ -4,7 +4,7 @@ import {
 } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { configuredIpOf, crashFluxos, execInContainer } from '../framework/container.js';
+import { crashFluxos, execInContainer } from '../framework/container.js';
 import { getJournal } from '../framework/daemon-control.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
@@ -72,6 +72,7 @@ describe('a machine on a copied configuration makes no move while the original a
     const app = await buildSeedableApp({
       name: appName,
       instances: 1,
+      pinnedTo: [LISTED],
       compose: [{
         name: 'alpha',
         description: 'copied configuration',
@@ -89,8 +90,7 @@ describe('a machine on a copied configuration makes no move while the original a
       }],
     });
     await installOnNodes(env, app, [LISTED]);
-    await waitFor(async () => (await dbClient(BYSTANDER + 1).getAppLocationsByIp(listedAddress(LISTED)))
-      .some((row) => row.name === appName), {
+    await waitFor(async () => (await client(BYSTANDER).getAppLocationsAt(appName, listedAddress(LISTED))).length > 0, {
       timeout: 180000, interval: 3000, label: 'the bystander holds the running node\'s app at its address',
     });
     await env.startNode(COPY);
@@ -149,8 +149,8 @@ describe('a machine on a copied configuration makes no move while the original a
     });
 
     expect(await movesHeld(), 'moves the bystander holds').to.deep.equal([]);
-    const atCopy = await dbClient(BYSTANDER + 1).getAppLocationsByIp(listedAddress(COPY));
+    const atCopy = await client(BYSTANDER).getAppLocationsAt(appName, listedAddress(COPY));
     expect(atCopy.map((row) => row.name), 'rows the bystander holds at the copy').to.not.include(appName);
-    expect(await configuredIpOf(client(COPY).container), 'the copy\'s configured IP').to.equal(ipOf(COPY));
+    expect(await dbClient(COPY + 1).lastKnownIp(), 'the copy\'s recorded IP').to.equal(ipOf(COPY));
   });
 });
