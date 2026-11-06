@@ -9,6 +9,7 @@ const logCursor = require('../utils/logCursor');
 const globalState = require('../utils/globalState');
 const deploymentProvider = require('../appRuntime/deploymentProvider');
 const cpuBurstHelper = require('../utils/cpuBurstHelper');
+const cpuThrottleExemption = require('../utils/cpuThrottleExemption');
 const log = require('../../lib/log');
 const { getContainerStorage } = require('../utils/appUtilities');
 const { Privilege, authOf } = require('../utils/privileges');
@@ -933,6 +934,35 @@ function sampleCpuLoad(sample, specifiedCpu) {
 }
 
 /**
+ * Hold a throttle-exempt container at its full specified cpu instead of deciding on it.
+ *
+ * Restoring is not optional. A game server lowered before it became exempt (or before this
+ * node read the policy) would otherwise stay at 80% forever: the decision below measures load
+ * against the reduced allocation, so a saturated server never looks idle enough to be raised.
+ * @param {string} containerName - The component's container name
+ * @param {number} specifiedCpu - The cpu the component specified
+ * @param {object} inspect - The container's docker inspect
+ * @param {object} monitored - The monitoring entry, which may have gone mid-pass
+ * @param {number} decisionAt - The watermark to stamp
+ * @returns {Promise<void>}
+ */
+async function holdExemptAtSpecifiedCpu(containerName, specifiedCpu, inspect, monitored, decisionAt) {
+  const nanoCpus = inspect.HostConfig?.NanoCpus;
+  const specifiedNanoCpus = Math.round(specifiedCpu * 1e9);
+  if (nanoCpus && nanoCpus < specifiedNanoCpus) {
+    await dockerService.appDockerUpdateCpu(containerName, specifiedNanoCpus);
+    log.info(`checkApplicationsCpuUSage ${containerName} throttle-exempt, restoring cpu 100.`);
+  } else {
+    log.info(`checkApplicationsCpuUSage ${containerName} throttle-exempt, skipping CPU throttling`);
+  }
+  // Guarded for the same reason as the watermark writes in the caller.
+  if (monitored) {
+    // eslint-disable-next-line no-param-reassign
+    monitored.lastCpuDecisionAt = decisionAt;
+  }
+}
+
+/**
  * Check if applications are throttling CPU and adjust CPU limits
  * @param {object} appsMonitored - Applications monitoring data
  * @returns {Promise<void>}
@@ -961,6 +991,13 @@ async function checkApplicationsCpuUSage(appsMonitored) {
             // eslint-disable-next-line no-param-reassign
             appsMonitored[id].lastCpuDecisionAt = decisionAt;
           }
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        // Exemption is by APP name: every component of a hub game server is held at spec.
+        if (inspect && cpuThrottleExemption.isCpuThrottleExempt(deployment.appName)) {
+          // eslint-disable-next-line no-await-in-loop
+          await holdExemptAtSpecifiedCpu(id, comp.cpu, inspect, appsMonitored[id], decisionAt);
           // eslint-disable-next-line no-continue
           continue;
         }

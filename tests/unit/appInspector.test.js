@@ -110,6 +110,7 @@ describe('appInspector tests', () => {
       '../verificationHelper': verificationHelperStub,
       '../utils/appUtilities': appUtilitiesStub,
       '../utils/cpuBurstHelper': cpuBurstHelperStub,
+      '../utils/cpuThrottleExemption': cpuThrottleExemptionStub,
     });
   });
 
