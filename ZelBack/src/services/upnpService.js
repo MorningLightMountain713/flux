@@ -582,7 +582,8 @@ function askPendingRemoval(pending) {
  * @param {object} pending
  */
 function schedulePendingRemoval(pending) {
-  const { removalRetryFirstMs, removalRetryMaxMs } = config.upnp;
+  const removalRetryFirstMs = config.get('upnp.removalRetryFirstMs');
+  const removalRetryMaxMs = config.get('upnp.removalRetryMaxMs');
   const waitMs = Math.min(removalRetryFirstMs * (2 ** pending.refusals), removalRetryMaxMs);
   // eslint-disable-next-line no-param-reassign
   pending.refusals += 1;

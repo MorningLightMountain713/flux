@@ -147,8 +147,8 @@ function signerAddresses(payload, target) {
 async function lastSignerAt(address) {
   const [row] = await appsRepository.appLocationFromEvents({ ip: address });
   if (!row) return null;
-  const database = dbHelper.databaseConnection().db(config.database.appsglobal.database);
-  const [event] = await database.collection(config.database.appsglobal.collections.appStateEvents)
+  const database = dbHelper.databaseConnection().db(config.get('database.appsglobal.database'));
+  const [event] = await database.collection(config.get('database.appsglobal.collections.appStateEvents'))
     .find(
       { ip: address, type: 'apprunning', expireAt: { $gt: new Date() } },
       { projection: { _id: 0, 'envelope.pubKey': 1 } },

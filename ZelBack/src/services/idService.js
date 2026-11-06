@@ -80,8 +80,8 @@ function publishLoginOutcome(phrase, outcome) {
  */
 async function claimLoginPhrase(phrase) {
   const db = dbHelper.databaseConnection();
-  const database = db.db(config.database.local.database);
-  const collection = config.database.local.collections.activeLoginPhrases;
+  const database = db.db(config.get('database.local.database'));
+  const collection = config.get('database.local.collections.activeLoginPhrases');
   return Boolean(await dbHelper.findOneAndUpdateInDatabase(
     database,
     collection,
@@ -626,7 +626,7 @@ async function wsRespondLoginPhrase(ws, loginphrase) {
   async function decide() {
     let login;
     try {
-      login = await dbHelper.findOneInDatabase(database, config.database.local.collections.loggedUsers, query, {});
+      login = await dbHelper.findOneInDatabase(database, config.get('database.local.collections.loggedUsers'), query, {});
     } catch (error) {
       log.error(error);
       finish(messageHelper.createErrorMessage(error.message, error.name, error.code), 4011);
@@ -635,7 +635,7 @@ async function wsRespondLoginPhrase(ws, loginphrase) {
     if (settled) return;
     if (login) {
       try {
-        const loginSignature = await dbHelper.findOneInDatabase(database, config.database.local.collections.loginSignatures, query, {});
+        const loginSignature = await dbHelper.findOneInDatabase(database, config.get('database.local.collections.loginSignatures'), query, {});
         const adminZelid = verificationHelperUtils.nodeOperatorZelid();
         if (!adminZelid) {
           throw new Error('Node is still starting and cannot establish privileges yet');
@@ -664,7 +664,7 @@ async function wsRespondLoginPhrase(ws, loginphrase) {
 
     let phrase;
     try {
-      phrase = await dbHelper.findOneInDatabase(database, config.database.local.collections.activeLoginPhrases, query, {});
+      phrase = await dbHelper.findOneInDatabase(database, config.get('database.local.collections.activeLoginPhrases'), query, {});
     } catch (error) {
       log.error(error);
       finish(messageHelper.createErrorMessage(error.message, error.name, error.code), 4013);

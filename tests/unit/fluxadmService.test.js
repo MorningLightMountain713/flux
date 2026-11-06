@@ -21,6 +21,7 @@ const testKeys = ['ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITESTKEYONLYFORTESTS flux
 // plain mutable config injected - tests set the key list they need on it
 const testConfig = {
   fluxadm: { sshAuthorizedKeys: [] },
+  get: (key) => key.split('.').reduce((value, part) => value[part], testConfig),
   server: { apiport: 16_127 },
 };
 const fluxadmPort = proxyquire('../../ZelBack/src/services/fluxadmPort', {

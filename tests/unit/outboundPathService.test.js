@@ -27,7 +27,10 @@ function loadService() {
   const log = {
     info: sinon.stub(), warn: sinon.stub(), error: sinon.stub(),
   };
-  const config = { fluxapps: { ...realConfig.fluxapps } };
+  const config = {
+    get: (key) => key.split('.').reduce((value, part) => value[part], config),
+    fluxapps: { ...realConfig.fluxapps },
+  };
   const service = proxyquire('../../ZelBack/src/services/outboundPathService', {
     config,
     '../lib/log': log,

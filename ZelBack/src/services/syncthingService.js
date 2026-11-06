@@ -1380,7 +1380,7 @@ async function installSyncthingIdempotently() {
  */
 function syncthingListenPort() {
   // use env so can run this module as standalone for testing
-  const apiPort = process.env.FLUX_APIPORT || userconfig?.initial.apiport || config.server?.apiport;
+  const apiPort = process.env.FLUX_APIPORT || userconfig?.initial.apiport || config.get('server.apiport');
   return +apiPort + 2;
 }
 

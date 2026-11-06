@@ -864,7 +864,7 @@ async function processOneBlock(blockHeight, isInsightExplorer, loopOptions) {
  */
 async function prepareCollections() {
   const db = dbHelper.databaseConnection();
-  const databaseUpdates = dbHelper.onMaintenanceClient(db.db(config.database.chainparams.database));
+  const databaseUpdates = dbHelper.onMaintenanceClient(db.db(config.get('database.chainparams.database')));
   await dbHelper.ensureIndexes(databaseUpdates.collection(chainParamsMessagesCollection), [
     { key: { txid: 1 }, name: 'query for getting txid of some chain parameters update message' },
     { key: { height: 1 }, name: 'query for getting height of some chain parameters update message' },
@@ -885,7 +885,7 @@ async function resetExplorerCollections() {
   const cleared = await appRecords.messages().clearPayments();
   log.info(`Explorer - reindex took the payment off ${cleared.kept} message(s) and removed ${cleared.removed} bare payment(s)`);
   const db = dbHelper.databaseConnection();
-  const databaseUpdates = db.db(config.database.chainparams.database);
+  const databaseUpdates = db.db(config.get('database.chainparams.database'));
   await dbHelper.dropCollection(databaseUpdates, chainParamsMessagesCollection).catch((error) => {
     if (error.message !== 'ns not found') throw error;
   });

@@ -48,7 +48,7 @@ const monotonicMs = () => Number(process.hrtime.bigint() / 1_000_000n);
 
 // The api port this FluxOS listens on, read once as apiServer reads it: a config
 // reload can name another without a restart.
-const listeningApiPort = globalThis.userconfig.initial.apiport || config.server.apiport;
+const listeningApiPort = globalThis.userconfig.initial.apiport || config.get('server.apiport');
 /**
  * The host ports the applications installed on this node hold.
  *
@@ -272,7 +272,7 @@ async function removeStaleUpnpMappings() {
     await serviceHelper.delay(upnpService.msUntilCleanupSlot(listeningApiPort));
     if (!upnpService.isUPNP() || globalState.shutdownInProgress) return;
     const removed = await upnpService.removeStaleMappings(async () => {
-      const configuredApiPort = globalThis.userconfig.initial.apiport || config.server.apiport;
+      const configuredApiPort = globalThis.userconfig.initial.apiport || config.get('server.apiport');
       const held = [...upnpService.corePorts(listeningApiPort), ...upnpService.corePorts(configuredApiPort)];
       const installedApps = await assignedPortsInstalledApps();
       installedApps.forEach((app) => held.push(...app.ports));

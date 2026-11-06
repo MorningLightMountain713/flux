@@ -539,7 +539,7 @@ async function respondWithTempMessages(peer, sinceTimestamp = 0, requestTimestam
     }
 
     const pooled = await appRecords.messages().pool({ receivedAfter: sinceTimestamp > 0 ? new Date(sinceTimestamp) : null });
-    const batchSize = config.fluxapps.syncAnswerBatchSize;
+    const batchSize = config.get('fluxapps.syncAnswerBatchSize');
     let batch = [];
     let total = 0;
     for (const record of pooled) {
@@ -571,7 +571,7 @@ async function respondWithTempMessages(peer, sinceTimestamp = 0, requestTimestam
  *   its app state is not authoritative yet, true otherwise
  */
 async function streamBatchedSync(peer, {
-  sinceTimestamp, requestTimestamp = null, collectionName, validityMs, query, projection, messageType, label, batchSize = config.fluxapps.syncAnswerBatchSize,
+  sinceTimestamp, requestTimestamp = null, collectionName, validityMs, query, projection, messageType, label, batchSize = config.get('fluxapps.syncAnswerBatchSize'),
 }) {
   try {
     // A NODE THAT DOES NOT KNOW YET SAYS SO, rather than sending what it
@@ -663,7 +663,7 @@ async function respondWithAppRunningMessages(peer, sinceTimestamp = 0, requestTi
     label: 'respondWithAppRunningMessages',
     // A mesh-enabled entry carries its authority bundle and voucher (~600
     // bytes), so chunks hold at most 500 to keep the frame size where it was.
-    batchSize: Math.min(config.fluxapps.syncAnswerBatchSize, 500),
+    batchSize: Math.min(config.get('fluxapps.syncAnswerBatchSize'), 500),
   });
 }
 

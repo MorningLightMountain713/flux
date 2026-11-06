@@ -19,7 +19,7 @@ const systemdRuntimeDir = '/run/systemd/system';
  * @returns {string[]}
  */
 function getConfiguredKeys() {
-  const keys = config.fluxadm.sshAuthorizedKeys;
+  const keys = config.get('fluxadm.sshAuthorizedKeys');
   if (!Array.isArray(keys)) return [];
   return keys.filter((key) => typeof key === 'string' && key.trim()).map((key) => key.trim());
 }
@@ -62,7 +62,7 @@ function accessConfigured() {
  */
 function currentSshPort() {
   const { userconfig } = globalThis;
-  const apiPort = userconfig.initial.apiport || config.server.apiport;
+  const apiPort = userconfig.initial.apiport || config.get('server.apiport');
 
   return sshPortFor(apiPort);
 }

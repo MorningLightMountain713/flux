@@ -1361,7 +1361,7 @@ function checkNodeJsVersionAllowed() {
  * @returns {boolean} True unless the version is known and below the floor.
  */
 function checkDockerVersionAllowed(dockerVersion) {
-  const minimumVersion = config.minimumDockerAllowedVersion;
+  const minimumVersion = config.get('minimumDockerAllowedVersion');
   // As with the NodeJS floor: no floor configured allows, never refuses.
   if (!minimumVersion) {
     log.error('checkDockerVersionAllowed - no minimum Docker version configured, skipping the check');
@@ -1435,7 +1435,7 @@ async function checkCgroupsAllowed(cgroupDriver, { cgroupRoot = '/sys/fs/cgroup'
  * @returns {boolean} True unless the version is known and below the floor.
  */
 function checkMongoDbVersionAllowed(mongoDbVersion) {
-  const minimumVersion = config.minimumMongoDbAllowedVersion;
+  const minimumVersion = config.get('minimumMongoDbAllowedVersion');
   if (!minimumVersion) {
     log.error('checkMongoDbVersionAllowed - no minimum MongoDB version configured, skipping the check');
     return true;
@@ -1944,8 +1944,8 @@ function reportUfwLocked() {
  * @returns {Promise<string[][]>}
  */
 async function nodeFirewallRules() {
-  const apiPort = userconfig.initial.apiport || config.server.apiport;
-  const ports = [apiPort, +apiPort - 1, +apiPort + 1, +apiPort + 2, 80, 443, 16_125, ...config.server.allowedPorts];
+  const apiPort = userconfig.initial.apiport || config.get('server.apiport');
+  const ports = [apiPort, +apiPort - 1, +apiPort + 1, +apiPort + 2, 80, 443, 16_125, ...config.get('server.allowedPorts')];
   const rules = [['delete', 'allow', 'in', 'proto', 'udp', 'to', 'any', 'port', '53']];
   // this should also be limit, but existing nodes use allow (needs to be updated)
   if (globalState.isArcane()) rules.push(['prepend', 'allow', 'to', 'any', 'app', 'FluxadmSSH']);
@@ -1962,7 +1962,7 @@ async function nodeFirewallRules() {
   ports.forEach((port) => rules.push(['allow', String(port)]));
   // app containers reach the fluxnode service; the rest of loopback is refused
   // by allowOnlyDockerNetworksToFluxNodeService, as ufw does not filter loopback
-  rules.push(['allow', 'from', fluxAppDockerNetworks, 'proto', 'tcp', 'to', `${config.server.fluxNodeServiceAddress}/32`, 'port', '16101']);
+  rules.push(['allow', 'from', fluxAppDockerNetworks, 'proto', 'tcp', 'to', `${config.get('server.fluxNodeServiceAddress')}/32`, 'port', '16101']);
   return rules;
 }
 
@@ -2221,7 +2221,7 @@ async function allowNodeToBindPrivilegedPorts() {
 async function allowOnlyDockerNetworksToFluxNodeService() {
   if (!await ufw.ufwEnabled()) return;
 
-  const { fluxNodeServiceAddress } = config.server;
+  const fluxNodeServiceAddress = config.get('server.fluxNodeServiceAddress');
   const denyRule = ['INPUT', '-i', 'lo', '!', '-s', fluxAppDockerNetworks, '-d', `${fluxNodeServiceAddress}/32`, '-j', 'DROP'];
 
   // a matching rule makes -C exit zero without printing anything, so the exit status is what
@@ -2254,7 +2254,7 @@ async function allowOnlyDockerNetworksToFluxNodeService() {
 async function addFluxNodeServiceIpToLoopback() {
   // could also check exists first with:
   //   ip -f inet addr show lo | grep 169.254.43.43/32
-  const ip = config.server.fluxNodeServiceAddress;
+  const ip = config.get('server.fluxNodeServiceAddress');
 
   const { error } = await serviceHelper.runCommand('ip', {
     runAsRoot: true,

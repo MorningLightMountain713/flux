@@ -23,8 +23,8 @@ const log = require('../lib/log');
 const fluxNetworkHelper = require('./fluxNetworkHelper');
 
 const OWNER = fluxNetworkHelper.PlacementHoldOwner.DATABASE_SUSPECT;
-const SUSPECT_ROUND_TRIPS = config.database.suspectRoundTrips;
-const SUSPECT_WINDOW_MS = config.database.suspectWindowMs;
+const SUSPECT_ROUND_TRIPS = config.get('database.suspectRoundTrips');
+const SUSPECT_WINDOW_MS = config.get('database.suspectWindowMs');
 
 /**
  * When each recent round trip ran out, newest last, never more than

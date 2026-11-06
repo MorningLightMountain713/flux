@@ -39,8 +39,8 @@ const fluxNetworkHelper = require('./fluxNetworkHelper');
 const nodeDosState = require('./nodeDosState');
 
 const DEPENDENCIES = new Set(['mongod', 'dockerd', 'containerd', 'syncthing', 'fluxd', 'fluxbenchd']);
-const READ_INTERVAL_MS = config.hostStall.readIntervalMs;
-const STUCK_INTERVALS = config.hostStall.stuckIntervals;
+const READ_INTERVAL_MS = config.get('hostStall.readIntervalMs');
+const STUCK_INTERVALS = config.get('hostStall.stuckIntervals');
 // /proc/uptime is written in hundredths of a second.
 const UPTIME_RESOLUTION_MS = 10;
 

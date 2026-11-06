@@ -85,7 +85,7 @@ const IdentityVerdict = Object.freeze({
   UNREACHABLE: 'unreachable',
 });
 
-const TIMEOUT_MS = config.fluxapps.peerIdentityTimeoutMs ?? 5 * 1000;
+const TIMEOUT_MS = config.get('fluxapps.peerIdentityTimeoutMs');
 
 // How long each verdict is reused. A verified identity changes only when the
 // address changes hands, so it is held longest. A misroute is rechecked soon,
@@ -94,16 +94,16 @@ const TIMEOUT_MS = config.fluxapps.peerIdentityTimeoutMs ?? 5 * 1000;
 // only briefly: long enough that a pass reaching one dead peer from several
 // folders pays its timeout once.
 const TTL_MS = Object.freeze({
-  [IdentityVerdict.VERIFIED]: config.fluxapps.peerIdentityVerifiedTtlMs ?? 30 * 60 * 1000,
-  [IdentityVerdict.MISROUTED]: config.fluxapps.peerIdentityMisroutedTtlMs ?? 2 * 60 * 1000,
-  [IdentityVerdict.UNVERIFIABLE]: config.fluxapps.peerIdentityUnverifiableTtlMs ?? 10 * 60 * 1000,
-  [IdentityVerdict.UNREACHABLE]: config.fluxapps.peerIdentityUnreachableTtlMs ?? 60 * 1000,
+  [IdentityVerdict.VERIFIED]: config.get('fluxapps.peerIdentityVerifiedTtlMs'),
+  [IdentityVerdict.MISROUTED]: config.get('fluxapps.peerIdentityMisroutedTtlMs'),
+  [IdentityVerdict.UNVERIFIABLE]: config.get('fluxapps.peerIdentityUnverifiableTtlMs'),
+  [IdentityVerdict.UNREACHABLE]: config.get('fluxapps.peerIdentityUnreachableTtlMs'),
 });
 
 // How long an introduction is relied on. A partner introduces itself each time
 // it verifies this node, which is once per verified TTL, so twice that spans one
 // missed introduction.
-const INTRODUCTION_TTL_MS = config.fluxapps.peerIdentityIntroductionTtlMs ?? 60 * 60 * 1000;
+const INTRODUCTION_TTL_MS = config.get('fluxapps.peerIdentityIntroductionTtlMs');
 
 // How old an introduction may be when it arrives. It is signed for the call that
 // carries it, so any delay beyond a request's own is a recording.
@@ -121,7 +121,7 @@ const MAX_ANSWER_BYTES = 16 * 1024;
 const MAX_FOLDER_ID_JSON = JSON.stringify(`flux${'c'.repeat(MAX_COMPONENT_NAME_LENGTH)}_${'a'.repeat(MAX_APP_NAME_LENGTH)}`).length + 1;
 const MAX_HOLDING_JSON = JSON.stringify({ bytes: Number.MAX_SAFE_INTEGER, newestModified: Number.MAX_SAFE_INTEGER }).length + 1;
 const MAX_SIGNED_ANSWER_BYTES = MAX_ANSWER_BYTES
-  + config.fluxapps.maxAppsPerNode * MAX_APP_COMPONENTS * (2 * MAX_FOLDER_ID_JSON + MAX_HOLDING_JSON);
+  + config.get('fluxapps.maxAppsPerNode') * MAX_APP_COMPONENTS * (2 * MAX_FOLDER_ID_JSON + MAX_HOLDING_JSON);
 
 /**
  * Whether a call that failed reached something that replied: it answered a

@@ -27,8 +27,8 @@ let openDBConnection = null;
 function maintenanceSettings() {
   return {
     maxPoolSize: 4,
-    socketTimeoutMS: config.database.maintenanceCallTimeoutMs,
-    waitQueueTimeoutMS: config.database.maintenanceCallTimeoutMs,
+    socketTimeoutMS: config.get('database.maintenanceCallTimeoutMs'),
+    waitQueueTimeoutMS: config.get('database.maintenanceCallTimeoutMs'),
   };
 }
 
@@ -98,8 +98,8 @@ async function connectMongoDb(url, settings = {}) {
     // One round trip, and the wait for a pooled connection, end in an error
     // after callTimeoutMs instead of waiting for ever. A read is retried once, so
     // it fails after two; a write is not, and its outcome is then unknown.
-    socketTimeoutMS: config.database.callTimeoutMs,
-    waitQueueTimeoutMS: config.database.callTimeoutMs,
+    socketTimeoutMS: config.get('database.callTimeoutMs'),
+    waitQueueTimeoutMS: config.get('database.callTimeoutMs'),
     ...settings,
   };
   const client = await MongoClient.connect(connectUrl, mongoSettings);
@@ -655,13 +655,8 @@ async function collectionStats(database, collection) {
 }
 
 async function findValueSatNanInAppsMessages() {
-  const {
-    database: {
-      appsglobal: {
-        database: dbName, collections: { appsMessages: collectionName },
-      },
-    },
-  } = config;
+  const dbName = config.get('database.appsglobal.database');
+  const collectionName = config.get('database.appsglobal.collections.appsMessages');
 
   const client = databaseConnection();
   const db = client.db(dbName);
@@ -677,13 +672,8 @@ async function findValueSatNanInAppsMessages() {
 }
 
 async function findValueSatInAppsHashes() {
-  const {
-    database: {
-      daemon: {
-        database: dbName, collections: { appsHashes: collectionName },
-      },
-    },
-  } = config;
+  const dbName = config.get('database.daemon.database');
+  const collectionName = config.get('database.daemon.collections.appsHashes');
 
   const client = databaseConnection();
   const db = client.db(dbName);
@@ -702,13 +692,8 @@ async function findValueSatInAppsHashes() {
 }
 
 async function updateValueSatInAppsMessages(brokenHashes, hashMap) {
-  const {
-    database: {
-      appsglobal: {
-        database: dbName, collections: { appsMessages: collectionName },
-      },
-    },
-  } = config;
+  const dbName = config.get('database.appsglobal.database');
+  const collectionName = config.get('database.appsglobal.collections.appsMessages');
 
   const client = databaseConnection();
   const db = client.db(dbName);
@@ -762,8 +747,8 @@ const VALUESAT_REPAIR_MARKER = 'appsMessagesValueSatRepaired';
  * @returns {Promise<void>}
  */
 async function repairNanInAppsMessagesDb({ force = false } = {}) {
-  const local = databaseConnection().db(config.database.local.database);
-  const tracker = config.database.local.collections.nodeStartupTracker;
+  const local = databaseConnection().db(config.get('database.local.database'));
+  const tracker = config.get('database.local.collections.nodeStartupTracker');
   if (!force && await findOneInDatabase(local, tracker, { _id: VALUESAT_REPAIR_MARKER })) return;
 
   const brokenHashes = await findValueSatNanInAppsMessages();

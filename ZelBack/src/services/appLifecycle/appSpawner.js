@@ -1166,7 +1166,7 @@ async function trySpawningGlobalApplication() {
         // another domain may be sitting out, and if the app is still short when
         // it comes back (the instance count is re-checked above, before this), a
         // second copy in this domain beats no second copy.
-        const deferral = config.fluxapps.spawnDeferrals.domainShareMs;
+        const deferral = config.get('fluxapps.spawnDeferrals.domainShareMs');
         const delayMs = registered.isEncrypted ? deferral.enterprise : deferral.standard;
         log.info(`trySpawningGlobalApplication - Application ${appToRun} uses syncthing and fault domain ${myDomain} already holds ${heldInMine} of its ${placementShare.maxPerDomain}-instance share (${placementShare.domainCount} eligible domains), `
           + `will check in around ${Math.round(delayMs / 60_000)}m if instances are still missing`);

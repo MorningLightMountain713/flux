@@ -46,7 +46,7 @@ const OutboundPath = Object.freeze({
 // what counts as evidence, not a tuning knob.
 const REDIRECT_WITNESSES = 2;
 
-const CHECK_INTERVAL_MS = config.fluxapps.outboundPathCheckIntervalMs ?? 10 * 60 * 1000;
+const CHECK_INTERVAL_MS = config.get('fluxapps.outboundPathCheckIntervalMs');
 
 let state = OutboundPath.UNKNOWN;
 let since = null;
