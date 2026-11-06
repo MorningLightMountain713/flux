@@ -247,6 +247,7 @@ describe('appUninstaller tombstoning teardown', () => {
         runningAppsCache: new Map(),
         receiveOnlySyncthingAppsCache: new Map(),
         seedMarks: new Map(),
+        unconfirmedApps: new Map(),
         // Seeded with the pinned app's real content hash so the prelude's
         // spawn-throttle clear has something to clear.
         trySpawningGlobalAppCache: new Map([[globalPinnedSpec.hash, Date.now()]]),

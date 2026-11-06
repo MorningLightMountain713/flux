@@ -36,6 +36,7 @@ const syncthingServiceMock = {
   // folder's device list begins with the local device, and its copy trivially
   // reports 100% complete.
   getDeviceId: sinon.stub().resolves('LOCAL-DEVICE'),
+  getDeviceConnections: sinon.stub().resolves({}),
   getConfigDevices: sinon.stub(),
   getConfigFolders: sinon.stub(),
   getDbLocalChanged: sinon.stub(),
