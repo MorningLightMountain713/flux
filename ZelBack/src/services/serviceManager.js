@@ -738,7 +738,6 @@ async function startFluxFunctions() {
         // The orchestrator next door draws the same distinction for its sync pool, and for the
         // same reason: a latched edge says nothing about a pool that has changed since it fired.
         peerManager.on('peerConnected', (key) => policyStore.notePeerAvailable(key));
-        peerManager.on('peerConnected', () => fluxNetworkMonitor.onPeerConnected());
         // Both edges, because the store's decision is about the peer SET. A peer leaving takes
         // its answer with it, and a node waiting on one that has gone waits out a deadline for an
         // answer that cannot come.
@@ -825,7 +824,8 @@ async function startFluxFunctions() {
         log.info('Clock offset cache initialized');
         // Remove existing watchtower container (replaced by native image update service)
         imageUpdateService.removeWatchtowerContainer();
-        fluxNetworkMonitor.checkDeterministicNodesCollisions();
+        fluxNetworkMonitor.startOwnStandingWatch();
+        syncthingService.onListenerStateKnown(fluxNetworkMonitor.noteSyncthingListenerKnown);
         // STARTED ON THE POLICY, NOT ON BOOT. The blocklist this enforces is a document in the
         // signed bundle, and the bundle is not resolved by the time this line runs. Started
         // here, its first tick reads nothing - and reading nothing is correctly refused rather

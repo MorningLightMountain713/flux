@@ -997,6 +997,21 @@ function offLocalSocketAddressChange(listener) {
 }
 
 /**
+ * Calls `listener` each time an ask for this node's address finds none.
+ * @param {function(): void} listener
+ */
+function onLocalSocketAddressUnresolved(listener) {
+  localSocketAddressEvents.on('unresolved', listener);
+}
+
+/**
+ * @param {function(): void} listener
+ */
+function offLocalSocketAddressUnresolved(listener) {
+  localSocketAddressEvents.off('unresolved', listener);
+}
+
+/**
  * @param {function(string): void} listener Called with the address each time the
  *   node has one after having none.
  * @returns {void}
@@ -2433,6 +2448,8 @@ module.exports = {
   waitForLocalSocketAddress,
   onLocalSocketAddressChange,
   offLocalSocketAddressChange,
+  onLocalSocketAddressUnresolved,
+  offLocalSocketAddressUnresolved,
   onLocalSocketAddressKnown,
   getCachedLocalSocketAddress,
   getFluxNodePrivateKey,

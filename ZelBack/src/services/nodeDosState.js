@@ -21,8 +21,9 @@ let dosMessage = null;
 const UNREACHABLE_MESSAGE = 'Flux communication is limited, other nodes on the network cannot reach yours through API calls';
 const UNAVAILABLE_MESSAGE = 'Flux is not available for outside communication';
 const BENCH_PUBLIC_IP_MESSAGE = 'Error getting publicIp from FluxBench';
+const REACHABILITY_MESSAGES = [UNREACHABLE_MESSAGE, UNAVAILABLE_MESSAGE, BENCH_PUBLIC_IP_MESSAGE];
+// Set while this node knows no address of its own, and ended when it learns one.
 const IP_DETECTION_FAILED_MESSAGE = 'Flux IP detection failed';
-const REACHABILITY_MESSAGES = [UNREACHABLE_MESSAGE, UNAVAILABLE_MESSAGE, BENCH_PUBLIC_IP_MESSAGE, IP_DETECTION_FAILED_MESSAGE];
 
 // What the availability check has counted against this node, apart from the score
 // the other checks share: the asks no peer answered as reachable, and the time it has

@@ -12,6 +12,9 @@ const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const geolocationService = require('../../ZelBack/src/services/geolocationService');
 const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
+const fluxNetworkMonitor = require('../../ZelBack/src/services/fluxNetworkMonitor');
+const nodeDosState = require('../../ZelBack/src/services/nodeDosState');
+const nodeConfirmationService = require('../../ZelBack/src/services/nodeConfirmationService');
 const { peerManager } = require('../../ZelBack/src/services/utils/peerState');
 const { requireMongo } = require('./dbTestHelper');
 
@@ -27,7 +30,7 @@ const listing = (ip, collateral = COLLATERAL) => ({
 const reachable = { data: { status: 'success', data: { message: 'Asking Flux is available' } } };
 const unreachable = { data: { status: 'error', data: { message: 'Asking Flux is not available' } } };
 
-describe('fluxNetworkHelper own standing tests', () => {
+describe('fluxNetworkMonitor own standing tests', () => {
   before(requireMongo);
 
   let clock;
@@ -35,10 +38,10 @@ describe('fluxNetworkHelper own standing tests', () => {
 
   // every condition the availability question needs, met; each case unsets one
   const answerable = () => {
-    fluxNetworkHelper.setSyncthingListenerKnown(true);
+    fluxNetworkMonitor.setSyncthingListenerKnown(true);
     fluxNetworkHelper.setLocalSocketAddress(OWN);
     networkStateService.isReady.returns(true);
-    daemonServiceFluxnodeRpcs.getFluxNodeStatus.resolves({ status: 'success', data: { status: 'CONFIRMED', collateral: COLLATERAL } });
+    nodeConfirmationService.getNodeStatus.returns({ status: 'CONFIRMED', collateral: COLLATERAL });
     fluxCommunicationUtils.socketAddressInFluxList.resolves(true);
     fluxCommunicationUtils.getNodeCount.resolves(50);
   };
@@ -48,60 +51,62 @@ describe('fluxNetworkHelper own standing tests', () => {
   beforeEach(() => {
     clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     fluxNetworkHelper.setStoredFluxBenchAllowed('6.2.0');
-    fluxNetworkHelper.setDosTooManyIpChanges(false);
-    fluxNetworkHelper.setDosMessage(null);
-    fluxNetworkHelper.setDosStateValue(0);
-    fluxNetworkHelper.resetAvailabilityDos();
-    fluxNetworkHelper.setSyncthingListenerKnown(false);
+    fluxNetworkMonitor.setDosTooManyIpChanges(false);
+    nodeDosState.setDosMessage(null);
+    nodeDosState.setDosStateValue(0);
+    nodeDosState.resetAvailabilityDos();
+    fluxNetworkMonitor.setSyncthingListenerKnown(false);
     sinon.stub(geolocationService, 'setNodeGeolocation');
     sinon.stub(networkStateService, 'isReady').returns(false);
     sinon.stub(networkStateService, 'getRandomExternalObserver').resolves('1.2.3.4:16127');
     sinon.stub(daemonServiceFluxnodeRpcs, 'getFluxNodeStatus').resolves({ status: 'error' });
+    sinon.stub(nodeConfirmationService, 'getNodeStatus').returns(null);
+    sinon.stub(nodeConfirmationService, 'isDaemonReachable').returns(true);
     sinon.stub(daemonServiceFluxnodeRpcs, 'createConfirmationTransaction').resolves({ status: 'success' });
     sinon.stub(daemonStatus, 'daemonSyncState').returns({ synced: true });
     sinon.stub(fluxCommunicationUtils, 'socketAddressInFluxList').resolves(false);
     sinon.stub(fluxCommunicationUtils, 'getNodeCount').resolves(0);
     sinon.stub(fluxCommunicationUtils, 'deterministicFluxList').resolves([listing(OWN)]);
     sinon.stub(fluxCommunicationUtils, 'getFluxnodeFromFluxList').resolves(listing(OWN));
-    sinon.stub(benchmarkService, 'getBenchmarks').resolves({ status: 'success', data: { ipaddress: OWN } });
-    sinon.stub(benchmarkService, 'getPublicIp').resolves({ status: 'error' });
+    sinon.stub(benchmarkService, 'getBenchmarks').resolves({ value: { ipaddress: OWN } });
+    sinon.stub(benchmarkService, 'getPublicIp').resolves({ value: null, reason: { message: 'no answer' } });
     sinon.stub(serviceHelper, 'delay').resolves();
     axiosGet = sinon.stub(serviceHelper, 'axiosGet').resolves(reachable);
   });
 
   afterEach(() => {
     sinon.restore();
-    fluxNetworkHelper.stopOwnStandingWatch();
-    fluxNetworkHelper.setSyncthingListenerKnown(false);
-    fluxNetworkHelper.setDosMessage(null);
-    fluxNetworkHelper.setDosStateValue(0);
-    fluxNetworkHelper.resetAvailabilityDos();
+    fluxNetworkMonitor.stopOwnStandingWatch();
+    fluxNetworkMonitor.setSyncthingListenerKnown(false);
+    nodeDosState.setDosMessage(null);
+    nodeDosState.setDosStateValue(0);
+    nodeDosState.resetAvailabilityDos();
   });
 
   describe('when the availability question is asked', () => {
     it('asks once everything it needs holds', async () => {
       answerable();
 
-      await fluxNetworkHelper.requestAvailabilityCheck();
+      await fluxNetworkMonitor.requestAvailabilityCheck();
 
       expect(availabilityAsks()).to.equal(1);
     });
 
     it('does not ask before what syncthing\'s listener is, which the asked node tests, is known', async () => {
       answerable();
-      fluxNetworkHelper.setSyncthingListenerKnown(false);
+      fluxNetworkMonitor.setSyncthingListenerKnown(false);
 
-      await fluxNetworkHelper.requestAvailabilityCheck();
+      await fluxNetworkMonitor.requestAvailabilityCheck();
 
       expect(availabilityAsks()).to.equal(0);
-      expect(fluxNetworkHelper.getDosMessage()).to.equal(null);
+      expect(nodeDosState.getDosMessage()).to.equal(null);
     });
 
     it('does not ask while this node is not confirmed', async () => {
       answerable();
-      daemonServiceFluxnodeRpcs.getFluxNodeStatus.resolves({ status: 'success', data: { status: 'EXPIRED', collateral: COLLATERAL } });
+      nodeConfirmationService.getNodeStatus.returns({ status: 'EXPIRED', collateral: COLLATERAL });
 
-      await fluxNetworkHelper.requestAvailabilityCheck();
+      await fluxNetworkMonitor.requestAvailabilityCheck();
 
       expect(availabilityAsks()).to.equal(0);
     });
@@ -110,7 +115,7 @@ describe('fluxNetworkHelper own standing tests', () => {
       answerable();
       fluxCommunicationUtils.socketAddressInFluxList.resolves(false);
 
-      await fluxNetworkHelper.requestAvailabilityCheck();
+      await fluxNetworkMonitor.requestAvailabilityCheck();
 
       expect(availabilityAsks()).to.equal(0);
     });
@@ -119,16 +124,16 @@ describe('fluxNetworkHelper own standing tests', () => {
       answerable();
       networkStateService.isReady.returns(false);
 
-      await fluxNetworkHelper.requestAvailabilityCheck();
+      await fluxNetworkMonitor.requestAvailabilityCheck();
 
       expect(availabilityAsks()).to.equal(0);
     });
 
     it('asks first when syncthing\'s listener becomes known, as soon as the rest already holds', async () => {
       answerable();
-      fluxNetworkHelper.setSyncthingListenerKnown(false);
+      fluxNetworkMonitor.setSyncthingListenerKnown(false);
 
-      fluxNetworkHelper.noteSyncthingListenerKnown();
+      fluxNetworkMonitor.noteSyncthingListenerKnown();
       await clock.tickAsync(0);
 
       expect(availabilityAsks()).to.equal(1);
@@ -138,7 +143,7 @@ describe('fluxNetworkHelper own standing tests', () => {
   describe('the availability schedule', () => {
     it('asks again after the check interval when this node was reachable, and not before', async () => {
       answerable();
-      await fluxNetworkHelper.requestAvailabilityCheck();
+      await fluxNetworkMonitor.requestAvailabilityCheck();
 
       await clock.tickAsync(config.fluxapps.availabilityCheckIntervalMs - 1);
       expect(availabilityAsks()).to.equal(1);
@@ -149,7 +154,7 @@ describe('fluxNetworkHelper own standing tests', () => {
     it('asks again after the recheck delay when it was not reachable', async () => {
       answerable();
       axiosGet.resolves(unreachable);
-      await fluxNetworkHelper.requestAvailabilityCheck();
+      await fluxNetworkMonitor.requestAvailabilityCheck();
       const asked = availabilityAsks();
 
       await clock.tickAsync(config.fluxapps.availabilityRecheckMs - 1);
@@ -165,12 +170,12 @@ describe('fluxNetworkHelper own standing tests', () => {
         return () => {};
       });
       answerable();
-      fluxNetworkHelper.startOwnStandingWatch();
+      fluxNetworkMonitor.startOwnStandingWatch();
       await clock.tickAsync(0);
-      await fluxNetworkHelper.requestAvailabilityCheck();
+      await fluxNetworkMonitor.requestAvailabilityCheck();
       const asked = availabilityAsks();
 
-      daemonServiceFluxnodeRpcs.getFluxNodeStatus.resolves({ status: 'error' });
+      nodeConfirmationService.getNodeStatus.returns(null);
       await clock.tickAsync(config.fluxapps.availabilityCheckIntervalMs);
       await clock.tickAsync(config.fluxapps.availabilityCheckIntervalMs);
       expect(availabilityAsks(), 'asked while the question could not be answered').to.equal(asked);
@@ -194,7 +199,7 @@ describe('fluxNetworkHelper own standing tests', () => {
     // a pass in which no asked peer can reach this node: its own DOS
     const unreachableEverywhere = async () => {
       axiosGet.resolves(unreachable);
-      expect(await fluxNetworkHelper.checkMyFluxAvailability()).to.equal(false);
+      expect(await fluxNetworkMonitor.checkMyFluxAvailability()).to.equal(false);
       axiosGet.resolves(reachable);
     };
     // connected to as many peers, from as many addresses, as config asks
@@ -212,7 +217,7 @@ describe('fluxNetworkHelper own standing tests', () => {
       await unreachableEverywhere();
       expect(dos().dosMessage, 'fixture: its own DOS').to.equal(BENCH_PUBLIC_IP);
 
-      expect(await fluxNetworkHelper.checkMyFluxAvailability()).to.equal(true);
+      expect(await fluxNetworkMonitor.checkMyFluxAvailability()).to.equal(true);
 
       expect(dos().dosMessage).to.equal(null);
       expect(dos().dosState).to.be.closeTo(0.13, 0.001);
@@ -222,7 +227,7 @@ describe('fluxNetworkHelper own standing tests', () => {
       await unreachableEverywhere();
       enoughPeers();
 
-      expect(await fluxNetworkHelper.checkMyFluxAvailability()).to.equal(true);
+      expect(await fluxNetworkMonitor.checkMyFluxAvailability()).to.equal(true);
 
       expect(dos()).to.deep.equal({ dosState: 0, dosMessage: null });
     });
@@ -230,7 +235,7 @@ describe('fluxNetworkHelper own standing tests', () => {
     it('is not out of service for asks that timed out before one reached it, while it has too few peers', async () => {
       [0, 1, 2, 3, 4].forEach((call) => axiosGet.onCall(call).rejects(new Error('timeout of 7000ms exceeded')));
 
-      expect(await fluxNetworkHelper.checkMyFluxAvailability()).to.equal(true);
+      expect(await fluxNetworkMonitor.checkMyFluxAvailability()).to.equal(true);
 
       expect(axiosGet.callCount, 'fixture: five asks timed out, the sixth reached it').to.equal(6);
       expect(dos().dosMessage).to.equal(null);
@@ -238,22 +243,22 @@ describe('fluxNetworkHelper own standing tests', () => {
     });
 
     it('ends its DOS for too few peers on its next pass once it has enough', async () => {
-      await fluxNetworkHelper.checkMyFluxAvailability();
+      await fluxNetworkMonitor.checkMyFluxAvailability();
       minutesLater(80);
-      expect(await fluxNetworkHelper.checkMyFluxAvailability()).to.equal(false);
+      expect(await fluxNetworkMonitor.checkMyFluxAvailability()).to.equal(false);
       expect(dos().dosMessage, 'fixture: out of service for too few peers').to.match(/^Not enough outgoing connections/);
       enoughPeers();
 
-      expect(await fluxNetworkHelper.checkMyFluxAvailability()).to.equal(true);
+      expect(await fluxNetworkMonitor.checkMyFluxAvailability()).to.equal(true);
 
       expect(dos()).to.deep.equal({ dosState: 0, dosMessage: null });
     });
 
     it('ends its DOS for too few peers as soon as the peer that makes enough connects', async () => {
-      fluxNetworkHelper.startOwnStandingWatch();
-      await fluxNetworkHelper.checkMyFluxAvailability();
+      fluxNetworkMonitor.startOwnStandingWatch();
+      await fluxNetworkMonitor.checkMyFluxAvailability();
       minutesLater(80);
-      await fluxNetworkHelper.checkMyFluxAvailability();
+      await fluxNetworkMonitor.checkMyFluxAvailability();
       expect(dos().dosMessage, 'fixture: out of service for too few peers').to.match(/^Not enough outgoing connections/);
 
       peerManager.emit('peerConnected', '198.51.100.9:16127', 1);
@@ -266,15 +271,15 @@ describe('fluxNetworkHelper own standing tests', () => {
 
     it('counts an ask that fails after it was reached', async () => {
       enoughPeers();
-      await fluxNetworkHelper.checkMyFluxAvailability();
+      await fluxNetworkMonitor.checkMyFluxAvailability();
       axiosGet.onCall(1).rejects(new Error('timeout of 7000ms exceeded'));
 
-      await fluxNetworkHelper.checkMyFluxAvailability();
+      await fluxNetworkMonitor.checkMyFluxAvailability();
 
       expect(axiosGet.callCount, 'fixture: one ask failed, the next reached it').to.equal(3);
       expect(dos().dosState).to.equal(0);
       axiosGet.resolves(unreachable);
-      await fluxNetworkHelper.checkMyFluxAvailability(6);
+      await fluxNetworkMonitor.checkMyFluxAvailability(6);
       expect(dos().dosState, 'two asks that found it unreachable').to.equal(4);
     });
 
@@ -282,38 +287,38 @@ describe('fluxNetworkHelper own standing tests', () => {
       const IP_CHANGES = 'IP changes over the limit allowed, one in 20 hours';
       clock.restore();
       clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
-      fluxNetworkHelper.setDosTooManyIpChanges(true);
+      fluxNetworkMonitor.setDosTooManyIpChanges(true);
 
-      expect(await fluxNetworkHelper.checkMyFluxAvailability()).to.equal(false);
-      expect(fluxNetworkHelper.getDosMessage()).to.equal(IP_CHANGES);
+      expect(await fluxNetworkMonitor.checkMyFluxAvailability()).to.equal(false);
+      expect(nodeDosState.getDosMessage()).to.equal(IP_CHANGES);
       clock.tick(20 * 60 * 60 * 1000 - 1);
-      expect(await fluxNetworkHelper.checkMyFluxAvailability()).to.equal(false);
-      expect(fluxNetworkHelper.getDosMessage()).to.equal(IP_CHANGES);
+      expect(await fluxNetworkMonitor.checkMyFluxAvailability()).to.equal(false);
+      expect(nodeDosState.getDosMessage()).to.equal(IP_CHANGES);
 
       clock.tick(1);
-      expect(await fluxNetworkHelper.checkMyFluxAvailability()).to.equal(true);
-      expect(fluxNetworkHelper.getDosMessage()).to.equal(null);
+      expect(await fluxNetworkMonitor.checkMyFluxAvailability()).to.equal(true);
+      expect(nodeDosState.getDosMessage()).to.equal(null);
     });
 
     it('ends no DOS of another check\'s once reachable', async () => {
-      fluxNetworkHelper.setDosMessage('Ports tested not reachable from outside');
-      fluxNetworkHelper.setDosStateValue(100);
+      nodeDosState.setDosMessage('Ports tested not reachable from outside');
+      nodeDosState.setDosStateValue(100);
       fluxCommunicationUtils.getNodeCount.resolves(1);
 
-      expect(await fluxNetworkHelper.checkMyFluxAvailability()).to.equal(true);
+      expect(await fluxNetworkMonitor.checkMyFluxAvailability()).to.equal(true);
 
       expect(dos()).to.deep.equal({ dosState: 100, dosMessage: 'Ports tested not reachable from outside' });
     });
 
     it('leaves another check\'s DOS standing, with the score that check counted', async () => {
-      fluxNetworkHelper.setDosMessage(IP_DETECTION_FAILED);
-      fluxNetworkHelper.setDosStateValue(11);
+      nodeDosState.setDosMessage(IP_DETECTION_FAILED);
+      nodeDosState.setDosStateValue(11);
       await unreachableEverywhere();
       expect(dos().dosMessage, 'fixture: the message standing is the other check\'s').to.equal(BENCH_PUBLIC_IP);
-      fluxNetworkHelper.setDosMessage(IP_DETECTION_FAILED);
+      nodeDosState.setDosMessage(IP_DETECTION_FAILED);
       enoughPeers();
 
-      await fluxNetworkHelper.checkMyFluxAvailability();
+      await fluxNetworkMonitor.checkMyFluxAvailability();
 
       expect(dos()).to.deep.equal({ dosState: 11, dosMessage: IP_DETECTION_FAILED });
     });
@@ -322,17 +327,17 @@ describe('fluxNetworkHelper own standing tests', () => {
       await unreachableEverywhere();
       const counted = dos().dosState;
 
-      fluxNetworkHelper.setDosStateValue(0);
+      nodeDosState.setDosStateValue(0);
 
       expect(dos().dosState).to.equal(counted);
     });
 
     it('counts too few peers by the minute, however far apart the checks are', async () => {
-      await fluxNetworkHelper.checkMyFluxAvailability();
+      await fluxNetworkMonitor.checkMyFluxAvailability();
       const afterFirst = dos().dosState;
       minutesLater(5);
 
-      await fluxNetworkHelper.checkMyFluxAvailability();
+      await fluxNetworkMonitor.checkMyFluxAvailability();
 
       expect(afterFirst).to.be.closeTo(0.13, 0.001);
       expect(dos().dosState - afterFirst).to.be.closeTo(0.65, 0.01);
@@ -343,9 +348,9 @@ describe('fluxNetworkHelper own standing tests', () => {
     let stopWatch;
 
     beforeEach(async () => {
-      benchmarkService.getBenchmarks.resolves({ status: 'success', data: { ipaddress: '' } });
+      benchmarkService.getBenchmarks.resolves({ value: { ipaddress: '' } });
       fluxNetworkHelper.setLocalSocketAddress(null);
-      stopWatch = fluxNetworkHelper.startOwnStandingWatch();
+      stopWatch = fluxNetworkMonitor.startOwnStandingWatch();
       await clock.tickAsync(0);
     });
 
@@ -363,23 +368,23 @@ describe('fluxNetworkHelper own standing tests', () => {
 
     it('is out of service once the configured number of asks found none, and not one ask sooner', async () => {
       await clock.tickAsync(config.fluxapps.publicIpAskIntervalMs * (config.fluxapps.publicIpAsksBeforeDos - 1));
-      expect(fluxNetworkHelper.getDosMessage()).to.equal(null);
+      expect(nodeDosState.getDosMessage()).to.equal(null);
 
       await clock.tickAsync(config.fluxapps.publicIpAskIntervalMs);
-      expect(fluxNetworkHelper.getDosMessage()).to.equal(IP_DETECTION_FAILED);
-      expect(fluxNetworkHelper.getDosStateValue()).to.be.above(10);
+      expect(nodeDosState.getDosMessage()).to.equal(IP_DETECTION_FAILED);
+      expect(nodeDosState.getDosStateValue()).to.be.above(10);
     });
 
     it('stops asking, and ends that DOS, when an address arrives', async () => {
       await clock.tickAsync(config.fluxapps.publicIpAskIntervalMs * config.fluxapps.publicIpAsksBeforeDos);
-      expect(fluxNetworkHelper.getDosMessage()).to.equal(IP_DETECTION_FAILED);
+      expect(nodeDosState.getDosMessage()).to.equal(IP_DETECTION_FAILED);
 
-      benchmarkService.getBenchmarks.resolves({ status: 'success', data: { ipaddress: OWN } });
+      benchmarkService.getBenchmarks.resolves({ value: { ipaddress: OWN } });
       await clock.tickAsync(config.fluxapps.publicIpAskIntervalMs);
       const asks = benchmarkService.getPublicIp.callCount;
       await clock.tickAsync(config.fluxapps.publicIpAskIntervalMs * 3);
 
-      expect(fluxNetworkHelper.getDosMessage()).to.equal(null);
+      expect(nodeDosState.getDosMessage()).to.equal(null);
       expect(benchmarkService.getPublicIp.callCount).to.equal(asks);
     });
   });
@@ -394,9 +399,9 @@ describe('fluxNetworkHelper own standing tests', () => {
         return () => {};
       });
       networkStateService.isReady.returns(true);
-      daemonServiceFluxnodeRpcs.getFluxNodeStatus.resolves({ status: 'success', data: { status: 'CONFIRMED', collateral: COLLATERAL } });
+      nodeConfirmationService.getNodeStatus.returns({ status: 'CONFIRMED', collateral: COLLATERAL });
       fluxNetworkHelper.setLocalSocketAddress(OWN);
-      stopWatch = fluxNetworkHelper.startOwnStandingWatch();
+      stopWatch = fluxNetworkMonitor.startOwnStandingWatch();
       await clock.tickAsync(0);
       fluxCommunicationUtils.deterministicFluxList.resetHistory();
     });
@@ -404,7 +409,7 @@ describe('fluxNetworkHelper own standing tests', () => {
     // A pass can outlive its test on a real database read, and the next test's
     // list refresh would join that pass rather than run its own.
     afterEach(async () => {
-      await fluxNetworkHelper.requestCollisionCheck();
+      await fluxNetworkMonitor.requestCollisionCheck();
       stopWatch();
     });
 
@@ -448,12 +453,12 @@ describe('fluxNetworkHelper own standing tests', () => {
       sinon.stub(fs, 'writeFile').resolves();
       sinon.stub(appQueryService, 'installedApps').resolves({ status: 'success', data: [] });
       moved = sinon.stub().resolves();
-      fluxNetworkHelper.setOnOwnAddressMoved(moved);
+      fluxNetworkMonitor.setOnOwnAddressMoved(moved);
       clock.restore();
     });
 
     afterEach(async () => {
-      fluxNetworkHelper.setOnOwnAddressMoved(null);
+      fluxNetworkMonitor.setOnOwnAddressMoved(null);
       globalThis.userconfig = originalUserConfig;
       await records.deleteMany({});
     });
@@ -461,13 +466,13 @@ describe('fluxNetworkHelper own standing tests', () => {
     it('judges the list only after the move this node is recording, so it handles the move once', async () => {
       await records.insertOne({ _id: 'own', socketAddress: '129.3.3.3:16127', movedFrom: null });
       networkStateService.isReady.returns(true);
-      benchmarkService.getBenchmarks.resolves({ status: 'success', data: { ipaddress: '129.3.3.3:16157' } });
+      benchmarkService.getBenchmarks.resolves({ value: { ipaddress: '129.3.3.3:16157' } });
       fluxCommunicationUtils.deterministicFluxList.resolves([listing('129.3.3.3:16127')]);
-      daemonServiceFluxnodeRpcs.getFluxNodeStatus.resolves({ status: 'success', data: { status: 'CONFIRMED', collateral: COLLATERAL } });
+      nodeConfirmationService.getNodeStatus.returns({ status: 'CONFIRMED', collateral: COLLATERAL });
       axiosGet.rejects(new Error('connect ECONNREFUSED'));
 
-      const recording = fluxNetworkHelper.handleOwnAddress('129.3.3.3:16157');
-      await fluxNetworkHelper.requestCollisionCheck();
+      const recording = fluxNetworkMonitor.handleOwnAddress('129.3.3.3:16157');
+      await fluxNetworkMonitor.requestCollisionCheck();
       await recording;
 
       sinon.assert.calledOnceWithExactly(moved, '129.3.3.3:16127', '129.3.3.3:16157', sinon.match.number);
