@@ -12,6 +12,7 @@ import {
 } from '../framework/container.js';
 import { waitFor, waitForAppInstalled, waitForReconcileActuated } from '../framework/wait.js';
 import { grantPlaneDaemon, grantPlaneOverrides, grantVerdict } from '../framework/grant-record.js';
+import { PRODUCTION_LOCATION_EXPIRIES } from '../framework/coupled-knobs.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 // A certificate says a master's FluxOS stopped, not its machine: its container and
@@ -59,7 +60,9 @@ describe('a master whose FluxOS crashes while its app runs', function () {
       zmqTopics: ALL_ZMQ_TOPICS,
       configOverrides: {
         daemon: grantPlaneDaemon(),
-        fluxapps: grantPlaneOverrides(),
+        // The crash outlasts the fleet's grace otherwise, and boot removes the app
+        // before the grant is asked.
+        fluxapps: grantPlaneOverrides(PRODUCTION_LOCATION_EXPIRIES),
       },
     });
     await bootAndPeer(env);
@@ -137,10 +140,18 @@ describe('a master whose FluxOS crashes while its app runs', function () {
 
   it('stops the corpse\'s app once its FluxOS is back, and it does not reclaim', async function () {
     this.timeout(420000);
-    await releaseFluxos(env.clients[masterIndex].container, { readyTimeoutMs: 180000 });
+    const corpse = env.clients[masterIndex];
+    const returnedFrom = corpse.getLastEventId();
+    await releaseFluxos(corpse.container, { readyTimeoutMs: 180000 });
 
+    await corpse.waitForEvent(
+      'reconciler:actuated',
+      (d) => d.identifier === identifier && d.reason === 'peerHoldsGrant',
+      300000,
+      { afterId: returnedFrom },
+    );
     await waitFor(async () => !(await isUp(masterIndex)), {
-      timeout: 300000, interval: 3000, label: 'the returned master stops its app',
+      timeout: 120000, interval: 3000, label: 'the returned master stops its app',
     });
     expect(await isUp(successorIndex), 'the successor stopped its app').to.equal(true);
     const settled = await verdict();

@@ -1,0 +1,30 @@
+[
+  {
+    "name": "successor-raises-no-fence",
+    "breaks": "the successor fences the node its grant replaced before its container starts",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appMonitoring/syncthingPeerFence.js",
+        "from": "function raiseFence(identity, replacedOutpoint) {",
+        "to": "function raiseFence(identity, replacedOutpoint) {\n  if (identity) return;"
+      }
+    ],
+    "red": [
+      "fences the corpse before the successor's container starts"
+    ]
+  },
+  {
+    "name": "returned-master-ignores-the-standing-grant",
+    "breaks": "a master back from a crash stands down for the node the registers name",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appLifecycle/mastershipGrantGate.js",
+        "from": "      return { desired: false, reason: 'peerHoldsGrant' };",
+        "to": "      return null;"
+      }
+    ],
+    "red": [
+      "stops the corpse's app once its FluxOS is back, and it does not reclaim"
+    ]
+  }
+]
