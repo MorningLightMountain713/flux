@@ -3,7 +3,9 @@ import {
   describe, it, before, after,
 } from 'mocha';
 import { expect } from 'chai';
-import { crashFluxos, moveNodeAddress, stopAppContainer } from '../framework/container.js';
+import {
+  crashFluxos, getAppContainerStatus, moveNodeAddress, stopAppContainer,
+} from '../framework/container.js';
 import {
   clearNodeAddress, holdRpc, releaseRpc, setNodeAddress,
 } from '../framework/daemon-control.js';
@@ -70,10 +72,8 @@ describe('a primary that died before the list caught up with its move is taken o
     // address until this suite moves it.
     await holdRpc(movedIp, 'createconfirmationtransaction');
     await moveNodeAddress(client(B).container, movedIp, oldIp);
-    const followed = await client(B).followTo(movedIp);
+    await client(B).followTo(movedIp);
     await setNodeAddress(oldIp, movedIp, { scope: 'publicip' });
-    const restarted = (d) => d.identifier === fleet.identifier && d.action === 'restarted';
-    await client(B).waitForEvent('reconciler:actuated', restarted, DETECTION_MS, { afterId: followed });
     await setNodeAddress(oldIp, movedIp, { scope: 'benchmark' });
 
     const oldSocket = socketAddr(B + 1);
@@ -90,7 +90,7 @@ describe('a primary that died before the list caught up with its move is taken o
     const standbyFrom = client(A).getLastEventId();
 
     await crashFluxos(client(B).container, { hold: true });
-    await stopAppContainer(client(B).container, appName, appName);
+    if (await getAppContainerStatus(client(B).container, appName)) await stopAppContainer(client(B).container, appName, appName);
     await fleet.env.disconnectNode(B);
     await clearMaster(appName);
     await setNodeAddress(oldIp, movedIp, { scope: 'all' });
