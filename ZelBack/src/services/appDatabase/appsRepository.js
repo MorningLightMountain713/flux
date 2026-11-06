@@ -663,7 +663,9 @@ async function appLocationFromEvents(options = {}) {
   ]).toArray();
 
   if (translate.size === 0) return rows;
-  return rows.map((row) => (translate.has(row.ip) ? { ...row, ip: translate.get(row.ip) } : row));
+  const moved = rows.map((row) => (translate.has(row.ip) ? { ...row, ip: translate.get(row.ip) } : row));
+  // An announcement a move carried away from the address asked about is no longer there.
+  return ip ? moved.filter((row) => row.ip === ip) : moved;
 }
 
 /**

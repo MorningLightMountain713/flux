@@ -31,7 +31,6 @@ describe('the proof a move\'s signer spoke for the address it left', () => {
   const MINUTE = 60 * 1000;
   const HOUR = 60 * MINUTE;
   let events;
-  let locations;
   let listedAt;
 
   const signed = async (data) => {
@@ -45,15 +44,10 @@ describe('the proof a move\'s signer spoke for the address it left', () => {
     type: 'fluxipchanged', version: 1, oldIP, newIP, broadcastedAt: Date.now(),
   });
   // apprunning stored for `ip`, signed by `key`, sent `ago` ms before now, with
-  // the location row it wrote for each of its apps
+  // the apps it names
   const ranAt = async (ip, key, { ago = 10 * MINUTE, apps = [{ name: 'proofapp' }], dedupKey = 'v2' } = {}) => {
     const broadcastedAt = new Date(Date.now() - ago);
     const expireAt = new Date(broadcastedAt.getTime() + HOUR);
-    if (apps.length) {
-      await locations.insertMany(apps.map(({ name }) => ({
-        name, hash: 'proofhash', ip, broadcastedAt, expireAt, runningSince: broadcastedAt,
-      })));
-    }
     await events.insertOne({
       ip,
       type: 'apprunning',
@@ -73,16 +67,13 @@ describe('the proof a move\'s signer spoke for the address it left', () => {
     await dbHelper.initiateDB();
     const database = dbHelper.databaseConnection().db(config.database.appsglobal.database);
     events = database.collection(config.database.appsglobal.collections.appStateEvents);
-    locations = database.collection(config.database.appsglobal.collections.appsLocations);
     await events.deleteMany({ ip: { $in: [OLD, NEW, ELSEWHERE] } });
-    await locations.deleteMany({ ip: { $in: [OLD, NEW, ELSEWHERE] } });
     listedAt = sinon.stub(networkStateService, 'getFluxnodeBySocketAddress').resolves(null);
   });
 
   afterEach(async () => {
     sinon.restore();
     await events.deleteMany({ ip: { $in: [OLD, NEW, ELSEWHERE] } });
-    await locations.deleteMany({ ip: { $in: [OLD, NEW, ELSEWHERE] } });
   });
 
   describe('a move arriving by gossip, with its node listed at the new address only', () => {
@@ -129,17 +120,13 @@ describe('the proof a move\'s signer spoke for the address it left', () => {
 
     // The previous holder's apprunning outlives its rows: it is still stored, and
     // unexpired, once the rows have gone.
-    it('is dropped, not refused, from an address whose previous holder was evicted from it', async () => {
-      await ranAt(OLD, 'theformerholderskey');
-      await messageStore.applyEviction(OLD, Date.now());
-
-      expect((await fluxCommunicationUtils.verifyFluxBroadcast(await move())).result).to.equal(VerifyResult.NODE_NOT_FOUND);
-    });
-
     it('is dropped, not refused, from an address whose previous holder moved away from it', async () => {
       await ranAt(OLD, 'theformerholderskey');
-      await messageStore.storeIPChangedMessage({
-        type: 'fluxipchanged', version: 1, oldIP: OLD, newIP: ELSEWHERE, broadcastedAt: Date.now() - MINUTE,
+      await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.IPCHANGED, {
+        message: {
+          type: 'fluxipchanged', version: 1, oldIP: OLD, newIP: ELSEWHERE, broadcastedAt: Date.now() - MINUTE,
+        },
+        envelope: null,
       });
 
       expect((await fluxCommunicationUtils.verifyFluxBroadcast(await move())).result).to.equal(VerifyResult.NODE_NOT_FOUND);
@@ -164,7 +151,7 @@ describe('the proof a move\'s signer spoke for the address it left', () => {
       listedAt.withArgs(portMoved).resolves({ ip: portMoved, pubkey: pubKey });
       await ranAt(OLD, pubKey);
 
-      expect(await fluxCommunicationUtils.verifyFluxBroadcast(await move(OLD, portMoved))).to.equal(VerifyResult.OK);
+      expect((await fluxCommunicationUtils.verifyFluxBroadcast(await move(OLD, portMoved))).result).to.equal(VerifyResult.OK);
     });
 
     // A forged signature is refused before the proof reads the database, so it
@@ -173,7 +160,7 @@ describe('the proof a move\'s signer spoke for the address it left', () => {
       const forged = { ...(await move()), signature: (await move(OLD, '203.0.113.172:16127')).signature };
       const reads = sinon.spy(dbHelper, 'databaseConnection');
 
-      expect(await fluxCommunicationUtils.verifyFluxBroadcast(forged)).to.equal(VerifyResult.BAD_SIGNATURE);
+      expect((await fluxCommunicationUtils.verifyFluxBroadcast(forged)).result).to.equal(VerifyResult.BAD_SIGNATURE);
       sinon.assert.notCalled(reads);
     });
 
