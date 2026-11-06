@@ -40,7 +40,9 @@ const subnet = getSubnetConfig();
 // node's, the node is out of service while the router refuses to remove it,
 // and back once the router has.
 
-const NODE = 0;
+// Node 0 dials both its peers and is left with no inbound peer, which the
+// communication check reports over this check's DOS message.
+const NODE = 1;
 const PASSED_WAIT_MS = 10 * 60 * 1000;
 const DOS_WAIT_MS = 5 * 60 * 1000;
 const APPS_PORT_CHECK = {
