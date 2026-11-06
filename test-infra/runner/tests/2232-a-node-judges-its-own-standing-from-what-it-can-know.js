@@ -302,8 +302,10 @@ describe('a node judges its own standing from what it can know', function () {
         nodes: 3,
         configOverrides: { fluxapps: { minOutgoing: 1, minIncoming: 1 } },
         nodeConfigOverrides: {
-          [PORTS_REFUSED]: { fluxapps: { appsPortCheck: APPS_PORT_CHECK } },
-          [BOTH]: { fluxapps: { appsPortCheck: APPS_PORT_CHECK } },
+          // A node of three can end with no inbound peer, and what the availability
+          // check counts for that is not this case's subject.
+          [PORTS_REFUSED]: { fluxapps: { appsPortCheck: APPS_PORT_CHECK, minIncoming: 0 } },
+          [BOTH]: { fluxapps: { appsPortCheck: APPS_PORT_CHECK, minIncoming: 0 } },
         },
       });
       await bootAndPeer(env, { minOutbound: 1, minInbound: 1 });
