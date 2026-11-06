@@ -4,7 +4,9 @@ import {
 } from 'mocha';
 import { expect } from 'chai';
 import { crashFluxos, moveNodeAddress, stopAppContainer } from '../framework/container.js';
-import { setNodeAddress, clearNodeAddress } from '../framework/daemon-control.js';
+import {
+  clearNodeAddress, holdRpc, releaseRpc, setNodeAddress,
+} from '../framework/daemon-control.js';
 import { clearMaster, resetFdm } from '../framework/fdm-control.js';
 import { waitFor, waitForUp } from '../framework/wait.js';
 import { dbClient } from '../framework/db-client.js';
@@ -56,6 +58,7 @@ describe('a primary that died before the list caught up with its move is taken o
   after(async function () {
     this.timeout(60000);
     fleet?.stop();
+    await releaseRpc(movedIp).catch(() => {});
     await clearNodeAddress(oldIp).catch(() => {});
     await resetFdm().catch(() => {});
     await fleet?.env.teardown();
@@ -63,6 +66,9 @@ describe('a primary that died before the list caught up with its move is taken o
 
   it('is heard moving by every peer while the list still names its old address', async function () {
     this.timeout(DETECTION_MS + 300000);
+    // The confirmation is what moves the list; held, the list stays at the old
+    // address until this suite moves it.
+    await holdRpc(movedIp, 'createconfirmationtransaction');
     await moveNodeAddress(client(B).container, movedIp, oldIp);
     const followed = await client(B).followTo(movedIp);
     await setNodeAddress(oldIp, movedIp, { scope: 'publicip' });
