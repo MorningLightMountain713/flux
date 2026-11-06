@@ -6,7 +6,6 @@ const { AsyncLock } = require('./asyncLock');
 // These need to be shared across all modules to maintain the original business logic
 
 let shutdownInProgress = false;
-let appSyncState = 'INITIALIZING';
 let appStateSyncDeadlinePassed = false;
 // Node-capability ("is-arcane") verdict, resolved once at boot by the awaited
 // resolveNodeCapability() (nodeCapabilities.js) before any is-arcane consumer runs.
@@ -241,11 +240,6 @@ module.exports = {
   get appStateSyncDeadlinePassed() { return appStateSyncDeadlinePassed; },
   set appStateSyncDeadlinePassed(value) { appStateSyncDeadlinePassed = Boolean(value); },
 
-  // The app sync orchestrator's state (INITIALIZING, SYNCING, READY, DEGRADED,
-  // RESYNCING), for readers that cannot require the orchestrator without a
-  // cycle. The orchestrator owns the value and mirrors it; nothing else writes it.
-  get appSyncState() { return appSyncState; },
-  set appSyncState(value) { appSyncState = value; },
   // Node-capability verdict (true = arcane, false = legacy), resolved before consumers
   // run. Consumers read it via isArcane() (a use-time read, never a module-load capture).
   get capabilityVerdict() { return capabilityVerdict; },

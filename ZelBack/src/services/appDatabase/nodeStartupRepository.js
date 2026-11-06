@@ -144,13 +144,14 @@ async function getHeartbeat() {
 /**
  * Stamp liveness. `machineBootId` is written only when the caller knows it, so
  * a heartbeat can never overwrite a known boot id with an absent one.
- * @param {{lastAlive: number, machineBootId?: string}} beat
+ * @param {{lastAlive: number, machineBootId?: string, clearShutdownReason?: boolean}} beat
  */
 async function writeHeartbeat(beat) {
   const database = db();
   if (!database) return;
   const update = { $set: { lastAlive: beat.lastAlive } };
   if (beat.machineBootId) update.$set.machineBootId = beat.machineBootId;
+  if (beat.clearShutdownReason) update.$unset = { shutdownReason: '' };
   await dbHelper.findOneAndUpdateInDatabase(
     database, nodeStartupTrackerCollection, { _id: HEARTBEAT_KEY }, update, { upsert: true },
   );
@@ -180,18 +181,6 @@ async function setShutdownReason(reason, timeoutMs = 3000) {
   ]);
 }
 
-/**
- * Drop the previous stop's reason once this boot is running, so a later crash
- * cannot be misread as the last clean shutdown.
- */
-async function clearShutdownReason() {
-  const database = db();
-  if (!database) return;
-  await dbHelper.findOneAndUpdateInDatabase(
-    database, nodeStartupTrackerCollection, { _id: HEARTBEAT_KEY }, { $unset: { shutdownReason: '' } },
-  );
-}
-
 module.exports = {
   getStartupMarker,
   setStartupMarker,
@@ -203,5 +192,4 @@ module.exports = {
   getHeartbeat,
   writeHeartbeat,
   setShutdownReason,
-  clearShutdownReason,
 };

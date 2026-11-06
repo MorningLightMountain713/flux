@@ -1767,33 +1767,31 @@ class AppSyncOrchestrator {
       log.info(`Boot context: machineRebooted=${machineRebooted} downtime=${Math.round(downtimeMs / 1000)}s cleanShutdown=${cleanShutdown} firstBoot=${!heartbeat}`);
       return ctx;
     } catch (error) {
+      // Unread is neither a first boot nor a long absence: how long the node was down is
+      // unknown, so whether its locations expired is decided app by app.
       log.error(`Failed to read boot context: ${error.message}`);
       return {
-        machineRebooted: true, downtimeMs: Infinity, lastAlive: null, cleanShutdown: false, currentBootId: null, firstBoot: true,
+        unreadable: true, machineRebooted: true, downtimeMs: null, lastAlive: null, cleanShutdown: false, currentBootId: null, firstBoot: false,
       };
     }
   }
 
-  async #clearShutdownReason() {
-    try {
-      await nodeStartupRepository.clearShutdownReason();
-    } catch (error) {
-      log.error(`Failed to clear shutdown reason: ${error.message}`);
-    }
-  }
-
   #startHeartbeat() {
+    // The reason the previous process stopped is its own: cleared by the first heartbeat
+    // that lands, so a crash of this one never reads as that stop.
+    let shutdownReasonCleared = false;
     const writeHeartbeat = async () => {
       try {
         await nodeStartupRepository.writeHeartbeat({
           lastAlive: Date.now(),
           machineBootId: this.#bootContext?.currentBootId,
+          clearShutdownReason: !shutdownReasonCleared,
         });
+        shutdownReasonCleared = true;
       } catch (error) {
         log.error(`Heartbeat write failed: ${error.message}`);
       }
     };
-    this.#own(this.#clearShutdownReason());
     writeHeartbeat();
     this.#heartbeatInterval = setInterval(writeHeartbeat, config.get('system.heartbeatIntervalMs'));
   }

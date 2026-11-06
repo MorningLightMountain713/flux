@@ -212,12 +212,12 @@ describe('nodeStartupRepository tests', () => {
       }
     });
 
-    it('clears the previous stop reason', async () => {
-      await repository.clearShutdownReason();
+    it('clears the previous stop reason in the heartbeat that asks to', async () => {
+      await repository.writeHeartbeat({ lastAlive: 1, clearShutdownReason: true });
 
       const [, , query, update] = dbHelperStub.findOneAndUpdateInDatabase.firstCall.args;
       expect(query).to.deep.equal({ _id: 'heartbeat' });
-      expect(update).to.deep.equal({ $unset: { shutdownReason: '' } });
+      expect(update).to.deep.equal({ $set: { lastAlive: 1 }, $unset: { shutdownReason: '' } });
     });
 
     it('no-ops across every accessor when the DB is not up', async () => {
@@ -226,8 +226,6 @@ describe('nodeStartupRepository tests', () => {
       expect(await repository.getHeartbeat()).to.equal(null);
       await repository.writeHeartbeat({ lastAlive: 1 });
       await repository.setShutdownReason('sigterm');
-      await repository.clearShutdownReason();
-
       sinon.assert.notCalled(dbHelperStub.findOneAndUpdateInDatabase);
       sinon.assert.notCalled(dbHelperStub.findOneInDatabase);
     });

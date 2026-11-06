@@ -181,7 +181,6 @@ describe('AppSyncOrchestrator', () => {
       getHeartbeat: sinon.stub().resolves(null),
       writeHeartbeat: sinon.stub().resolves(),
       setShutdownReason: sinon.stub().resolves(),
-      clearShutdownReason: sinon.stub().resolves(),
     };
     getFluxNodePublicKeyStub = sinon.stub().resolves('04testpubkey1234567890');
     getFluxNodePrivateKeyStub = sinon.stub().resolves('L1testprivkey');
@@ -1712,27 +1711,6 @@ describe('AppSyncOrchestrator', () => {
 
       await driveBlocks(2_555_006, 1);
       expect(orchestrator.state).to.equal(mod.STATES.READY);
-    });
-
-    it('mirrors every state change into globalState', async () => {
-      const { mod, orchestrator } = makeAtTwoMinutes();
-      await orchestrator.start(defaultBootContext);
-      peersUp();
-      await clock.tickAsync(0);
-
-      await driveBlocks(2_555_000, 1);
-      expect(globalStateStub.appSyncState).to.equal(mod.STATES.SYNCING);
-
-      peerEmitter.emit('peersBelowThreshold', 3);
-      await clock.tickAsync(0);
-      expect(globalStateStub.appSyncState).to.equal(mod.STATES.DEGRADED);
-
-      peersUp();
-      await clock.tickAsync(0);
-      expect(globalStateStub.appSyncState).to.equal(mod.STATES.RESYNCING);
-
-      await driveBlocks(2_555_001, FALLBACK_BLOCKS);
-      expect(globalStateStub.appSyncState).to.equal(mod.STATES.READY);
     });
 
     // THE CASE NO STATE CHANGE MARKS. #onPeersDegraded only acts from READY and
@@ -4068,19 +4046,17 @@ describe('AppSyncOrchestrator', () => {
     });
 
     it('clears the previous shutdown reason with each heartbeat until one lands', async () => {
-      const heartbeats = () => findOneAndUpdateStub.getCalls()
-        .filter((c) => c.args[2]?._id === 'heartbeat' && c.args[3]?.$set && 'lastAlive' in c.args[3].$set);
-      findOneAndUpdateStub.onFirstCall().rejects(new Error('connection timed out'));
+      nodeStartupRepositoryStub.writeHeartbeat.onFirstCall().rejects(new Error('connection timed out'));
       const orchestrator = makeOrchestrator();
       await orchestrator.start(defaultBootContext);
       // tests/unit/globalconfig: system.heartbeatIntervalMs
       await clock.tickAsync(30_000);
       await clock.tickAsync(30_000);
 
-      const [failed, landed, after] = heartbeats();
-      expect(failed.args[3].$unset, 'the first heartbeat carries the clear').to.deep.equal({ shutdownReason: '' });
-      expect(landed.args[3].$unset, 'a failed clear is carried by the next heartbeat').to.deep.equal({ shutdownReason: '' });
-      expect(after.args[3].$unset, 'cleared once it landed, never again').to.equal(undefined);
+      const [failed, landed, after] = nodeStartupRepositoryStub.writeHeartbeat.getCalls();
+      expect(failed.args[0].clearShutdownReason, 'the first heartbeat carries the clear').to.equal(true);
+      expect(landed.args[0].clearShutdownReason, 'a failed clear is carried by the next heartbeat').to.equal(true);
+      expect(after.args[0].clearShutdownReason, 'cleared once it landed, never again').to.equal(false);
       await orchestrator.stop();
     });
 
