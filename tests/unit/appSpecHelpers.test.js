@@ -4,6 +4,7 @@
 process.env.NODE_CONFIG_DIR = `${process.cwd()}/tests/unit/globalconfig`;
 
 const { expect } = require('chai');
+const { EventEmitter } = require('events');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire');
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
@@ -574,6 +575,37 @@ describe('appSpecHelpers tests', () => {
 
     before(async () => {
       markupSpec = await v9Spec({ name: 'markuptest' });
+    });
+
+    const buildSpec = (containerData, extra = {}) => ({
+      version: 4,
+      name: 'PriceTestApp',
+      description: 'price test',
+      owner: '1CbErtneaX2QVyUfwU7JGB7VzvPgrgc3uC',
+      instances: 3,
+      compose: [{
+        name: 'server',
+        description: 'server',
+        repotag: 'runonflux/test:latest',
+        ports: [31000],
+        domains: [''],
+        environmentParameters: [],
+        commands: [],
+        containerPorts: [8211],
+        containerData,
+        cpu: 2,
+        ram: 5000,
+        hdd: 30,
+        tiered: false,
+      }],
+      ...extra,
+    });
+
+    const quote = (spec) => new Promise((resolve) => {
+      const req = new EventEmitter();
+      appSpecHelpers.getAppFiatAndFluxPriceApi(req, { json: resolve });
+      req.emit('data', JSON.stringify(spec));
+      req.emit('end');
     });
 
     // PriceMessage rates so the engine prices the spec to a non-zero FLUX figure.

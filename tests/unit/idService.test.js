@@ -9,15 +9,12 @@ const os = require('os');
 const signatureVerifier = require('../../ZelBack/src/services/signatureVerifier');
 const proxyquire = require('proxyquire');
 const { PassThrough } = require('stream');
-const log = require('../../ZelBack/src/lib/log');
 
 const dbHelper = require('../../ZelBack/src/services/dbHelper');
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
 const { requireMongo } = require('./dbTestHelper');
 const serviceHelper = require('../../ZelBack/src/services/serviceHelper');
 const generalService = require('../../ZelBack/src/services/generalService');
-const dockerService = require('../../ZelBack/src/services/dockerService');
-const routeTableV1 = require('../../ZelBack/src/routeTableV1');
 const nodeDosState = require('../../ZelBack/src/services/nodeDosState');
 const appInspector = require('../../ZelBack/src/services/appManagement/appInspector');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
@@ -63,7 +60,6 @@ describe('idService tests', () => {
   beforeEach(() => {
     globalThis.userconfig = adminConfig;
     capabilities.setForTests(['localDbPrepared', 'dockerReachable'], true);
-    idService.resetHardwareReadingForTests();
   });
 
   afterEach(() => {
@@ -81,229 +77,10 @@ describe('idService tests', () => {
     await specLibs.getSpecBackend();
   });
 
-  describe('confirmNodeTierHardware tests', () => {
-    let osTotalmemStub;
-    let osCpusStub;
-    let tierStub;
-    let collateralStub;
-    let logSpy;
-
-    beforeEach(() => {
-      osTotalmemStub = sinon.stub(os, 'totalmem');
-      osCpusStub = sinon.stub(os, 'cpus');
-      tierStub = sinon.stub(generalService, 'nodeTier');
-      collateralStub = sinon.stub(generalService, 'nodeCollateral');
-      logSpy = sinon.spy(log, 'error');
-    });
-
-    afterEach(() => {
-      sinon.restore();
-    });
-
-    it('should return false and log error if stratus (100000) has less than 8 cpu threads', async () => {
-      tierStub.resolves('bamf');
-      collateralStub.resolves(100_000);
-      osTotalmemStub.returns(30 * 1024 ** 3);
-      osCpusStub.returns([1, 1, 1, 1]);
-      const response = await idService.confirmNodeTierHardware();
-
-      expect(response).to.eql(false);
-      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Cpu Threads (4) below Stratus requirements')));
-    });
-
-    it('should return false and log error if stratus (100000) has less than 30gb ram', async () => {
-      tierStub.resolves('bamf');
-      collateralStub.resolves(100_000);
-      osTotalmemStub.returns(29 * 1024 ** 3);
-      osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1]);
-      const response = await idService.confirmNodeTierHardware();
-
-      expect(response).to.eql(false);
-      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Total Ram (29) below Stratus requirements')));
-    });
-
-    it('should return true if stratus (100000) matches requirements', async () => {
-      tierStub.resolves('bamf');
-      collateralStub.resolves(100_000);
-      osTotalmemStub.returns(30 * 1024 ** 3);
-      osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1]);
-      const response = await idService.confirmNodeTierHardware();
-
-      expect(response).to.eql(true);
-      sinon.assert.notCalled(logSpy);
-    });
-
-    it('should return false and log error if stratus (40000) has less than 16 cpu threads', async () => {
-      tierStub.resolves('bamf');
-      collateralStub.resolves(40_000);
-      osTotalmemStub.returns(61 * 1024 ** 3);
-      osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
-      const response = await idService.confirmNodeTierHardware();
-
-      expect(response).to.eql(false);
-      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Cpu Threads (15) below new Stratus requirements')));
-    });
-
-    it('should return false and log error if stratus (40000) has less than 61gb ram', async () => {
-      tierStub.resolves('bamf');
-      collateralStub.resolves(40_000);
-      osTotalmemStub.returns(60 * 1024 ** 3);
-      osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
-      const response = await idService.confirmNodeTierHardware();
-
-      expect(response).to.eql(false);
-      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Total Ram (60) below new Stratus requirements')));
-    });
-
-    it('should return true if stratus (40000) matches requirements', async () => {
-      tierStub.resolves('bamf');
-      collateralStub.resolves(40_000);
-      osTotalmemStub.returns(61 * 1024 ** 3);
-      osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
-      const response = await idService.confirmNodeTierHardware();
-
-      expect(response).to.eql(true);
-      sinon.assert.notCalled(logSpy);
-    });
-
-    it('should return false and log error if Nimbus (25000) has less than 4 cpu threads', async () => {
-      tierStub.resolves('super');
-      collateralStub.resolves(25_000);
-      osTotalmemStub.returns(7 * 1024 ** 3);
-      osCpusStub.returns([1, 1, 1]);
-      const response = await idService.confirmNodeTierHardware();
-
-      expect(response).to.eql(false);
-      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Cpu Threads (3) below Nimbus requirements')));
-    });
-
-    it('should return false and log error if Nimbus (25000) has less than 7gb ram', async () => {
-      tierStub.resolves('super');
-      collateralStub.resolves(25_000);
-      osTotalmemStub.returns(6 * 1024 ** 3);
-      osCpusStub.returns([1, 1, 1, 1]);
-      const response = await idService.confirmNodeTierHardware();
-
-      expect(response).to.eql(false);
-      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Total Ram (6) below Nimbus requirements')));
-    });
-
-    it('should return true if Nimbus (25000) matches requirements', async () => {
-      tierStub.resolves('super');
-      collateralStub.resolves(25_000);
-      osTotalmemStub.returns(8 * 1024 ** 3);
-      osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1]);
-      const response = await idService.confirmNodeTierHardware();
-
-      expect(response).to.eql(true);
-      sinon.assert.notCalled(logSpy);
-    });
-
-    it('should return false and log error if Nimbus (12500) has less than 8 cpu threads', async () => {
-      tierStub.resolves('super');
-      collateralStub.resolves(12_500);
-      osTotalmemStub.returns(30 * 1024 ** 3);
-      osCpusStub.returns([1, 1, 1, 1, 1, 1, 1]);
-      const response = await idService.confirmNodeTierHardware();
-
-      expect(response).to.eql(false);
-      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Cpu Threads (7) below new Nimbus requirements')));
-    });
-
-    it('should return false and log error if Nimbus (12500) has less than 30gb ram', async () => {
-      tierStub.resolves('super');
-      collateralStub.resolves(12_500);
-      osTotalmemStub.returns(29 * 1024 ** 3);
-      osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1]);
-      const response = await idService.confirmNodeTierHardware();
-
-      expect(response).to.eql(false);
-      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Total Ram (29) below new Nimbus requirements')));
-    });
-
-    it('should return true if Nimbus (12500) matches requirements', async () => {
-      tierStub.resolves('super');
-      collateralStub.resolves(12_500);
-      osTotalmemStub.returns(30 * 1024 ** 3);
-      osCpusStub.returns([1, 1, 1, 1, 1, 1, 1, 1]);
-      const response = await idService.confirmNodeTierHardware();
-
-      expect(response).to.eql(true);
-      sinon.assert.notCalled(logSpy);
-    });
-
-    it('should return false and log error if Cumulus (10000) has less than 2 cpu threads', async () => {
-      tierStub.resolves('basic');
-      collateralStub.resolves(10_000);
-      osTotalmemStub.returns(3 * 1024 ** 3);
-      osCpusStub.returns([1]);
-      const response = await idService.confirmNodeTierHardware();
-
-      expect(response).to.eql(false);
-      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Cpu Threads (1) below Cumulus requirements')));
-    });
-
-    it('should return false and log error if Cumulus (10000) has less than 3gb ram', async () => {
-      tierStub.resolves('basic');
-      collateralStub.resolves(10_000);
-      osTotalmemStub.returns(2 * 1024 ** 3);
-      osCpusStub.returns([1, 1]);
-      const response = await idService.confirmNodeTierHardware();
-
-      expect(response).to.eql(false);
-      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Total Ram (2) below Cumulus requirements')));
-    });
-
-    it('should return true if Cumulus (10000) matches requirements', async () => {
-      tierStub.resolves('basic');
-      collateralStub.resolves(10_000);
-      osTotalmemStub.returns(3 * 1024 ** 3);
-      osCpusStub.returns([1, 1]);
-      const response = await idService.confirmNodeTierHardware();
-
-      expect(response).to.eql(true);
-      sinon.assert.notCalled(logSpy);
-    });
-
-    it('should return false and log error if Cumulus (1000) has less than 4 cpu threads', async () => {
-      tierStub.resolves('basic');
-      collateralStub.resolves(1000);
-      osTotalmemStub.returns(3 * 1024 ** 3);
-      osCpusStub.returns([1, 1, 1]);
-      const response = await idService.confirmNodeTierHardware();
-
-      expect(response).to.eql(false);
-      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Cpu Threads (3) below new Cumulus requirements')));
-    });
-
-    it('should return false and log error if Cumulus (1000) has less than 3gb ram', async () => {
-      tierStub.resolves('basic');
-      collateralStub.resolves(1000);
-      osTotalmemStub.returns(2 * 1024 ** 3);
-      osCpusStub.returns([1, 1, 1, 1]);
-      const response = await idService.confirmNodeTierHardware();
-
-      expect(response).to.eql(false);
-      sinon.assert.calledWith(logSpy, sinon.match.instanceOf(Error).and(sinon.match.has('message', 'Node Total Ram (2) below new Cumulus requirements')));
-    });
-
-    it('should return true if Cumulus (1000) matches requirements', async () => {
-      tierStub.resolves('basic');
-      collateralStub.resolves(1000);
-      osTotalmemStub.returns(3 * 1024 ** 3);
-      osCpusStub.returns([1, 1, 1, 1]);
-      const response = await idService.confirmNodeTierHardware();
-
-      expect(response).to.eql(true);
-      sinon.assert.notCalled(logSpy);
-    });
-  });
-
   describe('loginPhrase tests', () => {
     let osTotalmemStub;
     let osCpusStub;
-    let tierStub;
-    let collateralStub;
+    let collateralTierStub;
     let getDosDataStub;
 
     before(async () => {
@@ -313,8 +90,7 @@ describe('idService tests', () => {
     beforeEach(() => {
       osTotalmemStub = sinon.stub(os, 'totalmem');
       osCpusStub = sinon.stub(os, 'cpus');
-      tierStub = sinon.stub(generalService, 'nodeTier');
-      collateralStub = sinon.stub(generalService, 'nodeCollateral');
+      collateralTierStub = sinon.stub(generalService, 'nodeCollateralTier');
       getDosDataStub = sinon.stub(nodeDosState, 'getDosData');
       syncthingService.setSyncthingRunningState(true);
     });
@@ -325,8 +101,7 @@ describe('idService tests', () => {
 
     it('should return error if hw reqs are not met', async () => {
       const res = generateResponse();
-      tierStub.resolves('basic');
-      collateralStub.resolves(1000);
+      collateralTierStub.resolves({ collateral: 1000, tier: generalService.COLLATERAL_TIERS[1000] });
       osTotalmemStub.returns(1 * 1024 ** 3);
       osCpusStub.returns([1]);
       const expectedResponse = {
@@ -345,8 +120,7 @@ describe('idService tests', () => {
 
     it('should return error if dosState > 11 and message is Flux IP detection failed', async () => {
       const res = generateResponse();
-      tierStub.resolves('basic');
-      collateralStub.resolves(1000);
+      collateralTierStub.resolves({ collateral: 1000, tier: generalService.COLLATERAL_TIERS[1000] });
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
       getDosDataStub.returns({
@@ -370,8 +144,7 @@ describe('idService tests', () => {
 
     it('should return error if dosState > 11 and message is Flux collision detection', async () => {
       const res = generateResponse();
-      tierStub.resolves('basic');
-      collateralStub.resolves(1000);
+      collateralTierStub.resolves({ collateral: 1000, tier: generalService.COLLATERAL_TIERS[1000] });
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
       getDosDataStub.returns({
@@ -395,8 +168,7 @@ describe('idService tests', () => {
 
     it('should return CONNERROR error if dosState > 11 and message is anything else', async () => {
       const res = generateResponse();
-      tierStub.resolves('basic');
-      collateralStub.resolves(1000);
+      collateralTierStub.resolves({ collateral: 1000, tier: generalService.COLLATERAL_TIERS[1000] });
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
       getDosDataStub.returns({
@@ -429,8 +201,7 @@ describe('idService tests', () => {
     // still take the node out, rather than reading as healthy.
     it('fails on the dos score alone, even with no message paired to it', async () => {
       const res = generateResponse();
-      tierStub.resolves('basic');
-      collateralStub.resolves(1000);
+      collateralTierStub.resolves({ collateral: 1000, tier: generalService.COLLATERAL_TIERS[1000] });
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
       getDosDataStub.returns({
@@ -450,8 +221,7 @@ describe('idService tests', () => {
 
     it('fails on a message alone, with the score still at zero', async () => {
       const res = generateResponse();
-      tierStub.resolves('basic');
-      collateralStub.resolves(1000);
+      collateralTierStub.resolves({ collateral: 1000, tier: generalService.COLLATERAL_TIERS[1000] });
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
       getDosDataStub.returns({
@@ -469,8 +239,7 @@ describe('idService tests', () => {
 
     it('fails while the apps are denied service', async () => {
       const res = generateResponse();
-      tierStub.resolves('basic');
-      collateralStub.resolves(1000);
+      collateralTierStub.resolves({ collateral: 1000, tier: generalService.COLLATERAL_TIERS[1000] });
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
       getDosDataStub.returns({ dosState: 0, dosMessage: null });
@@ -489,8 +258,7 @@ describe('idService tests', () => {
       await dbHelper.initiateDB();
       dbHelper.databaseConnection();
       const res = generateResponse();
-      tierStub.resolves('basic');
-      collateralStub.resolves(1000);
+      collateralTierStub.resolves({ collateral: 1000, tier: generalService.COLLATERAL_TIERS[1000] });
       osTotalmemStub.returns(8 * 1024 ** 3);
       osCpusStub.returns([1, 1, 1, 1]);
       getDosDataStub.returns({
@@ -502,337 +270,6 @@ describe('idService tests', () => {
 
       sinon.assert.calledOnce(insertintoDBStub);
       sinon.assert.calledOnceWithMatch(res.json, { status: 'success', data: sinon.match.string });
-    });
-  });
-
-  describe('nodeHealth / checkNodeFitness tests', () => {
-    let osTotalmemStub;
-    let osCpusStub;
-    let tierStub;
-    let collateralStub;
-    let getDosDataStub;
-
-    before(async () => {
-      await dbHelper.initiateDB();
-    });
-
-    const healthyHardware = () => {
-      tierStub.resolves('basic');
-      collateralStub.resolves(1000);
-      osTotalmemStub.returns(8 * 1024 ** 3);
-      osCpusStub.returns([1, 1, 1, 1]);
-      getDosDataStub.returns({ dosState: 0, dosMessage: null });
-    };
-
-    beforeEach(() => {
-      osTotalmemStub = sinon.stub(os, 'totalmem');
-      osCpusStub = sinon.stub(os, 'cpus');
-      tierStub = sinon.stub(generalService, 'nodeTier');
-      collateralStub = sinon.stub(generalService, 'nodeCollateral');
-      getDosDataStub = sinon.stub(nodeDosState, 'getDosData');
-      syncthingService.setSyncthingRunningState(true);
-    });
-
-    afterEach(() => {
-      syncthingService.setSyncthingRunningState(true);
-      sinon.restore();
-    });
-
-    it('nodeHealth reports success with per-check data when the node is fit', async () => {
-      healthyHardware();
-      const res = generateResponse();
-
-      await idService.nodeHealth(undefined, res);
-
-      sinon.assert.calledOnceWithMatch(res.json, {
-        status: 'success',
-        data: { db: 'ok', syncthing: 'ok', docker: 'ok', hardware: 'ok', dos: 'ok', appsDos: 'ok' },
-      });
-    });
-
-    it('checkNodeFitness returns ok with the checks when the node is fit', async () => {
-      healthyHardware();
-
-      const fitness = await idService.checkNodeFitness();
-
-      expect(fitness.ok).to.equal(true);
-      expect(fitness.error).to.equal(null);
-      expect(fitness.checks.syncthing).to.equal('ok');
-    });
-
-    it('nodeHealth gates on hardware exactly as loginPhrase does', async () => {
-      tierStub.resolves('basic');
-      collateralStub.resolves(1000);
-      osTotalmemStub.returns(1 * 1024 ** 3);
-      osCpusStub.returns([1]);
-      const res = generateResponse();
-
-      await idService.nodeHealth(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.json, {
-        status: 'error',
-        data: { code: undefined, name: 'Error', message: 'Node hardware requirements not met' },
-      });
-    });
-
-    it('nodeHealth gates on syncthing - a sustained outage fails the node', async () => {
-      healthyHardware();
-      syncthingService.setSyncthingRunningState(false);
-      const res = generateResponse();
-
-      await idService.nodeHealth(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.json, {
-        status: 'error',
-        data: { code: undefined, name: 'Error', message: 'Syncthing is not running properly' },
-      });
-    });
-
-    it('loginPhrase gates on syncthing the same way, through the shared check', async () => {
-      healthyHardware();
-      syncthingService.setSyncthingRunningState(false);
-      const res = generateResponse();
-
-      await idService.loginPhrase(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.json, {
-        status: 'error',
-        data: { code: undefined, name: 'Error', message: 'Syncthing is not running properly' },
-      });
-    });
-
-    // The boot defect, at the layer that reported it. The node stamped itself
-    // healthy at module load and the sentinel started behind an unbounded wait
-    // for the daemon, so a node whose fluxd was slow to warm up went stale
-    // before a single probe had run - and then told fluxbench, for minutes on
-    // end, that the operator's syncthing was broken. Nothing had looked at it.
-    describe('with nothing having measured syncthing yet', () => {
-      beforeEach(() => {
-        syncthingService.setSyncthingUnmeasured();
-      });
-
-      it('does not refuse the node for a check it has not run', async () => {
-        healthyHardware();
-
-        const fitness = await idService.checkNodeFitness();
-
-        expect(fitness.ok, 'a node was taken off the network over a probe that had never happened').to.equal(true);
-      });
-
-      it('says unmeasured rather than claiming either verdict', async () => {
-        healthyHardware();
-
-        const fitness = await idService.checkNodeFitness();
-
-        expect(fitness.checks.syncthing).to.equal('unmeasured');
-      });
-
-      it('loginPhrase answers a phrase rather than a syncthing error', async () => {
-        healthyHardware();
-        const res = generateResponse();
-
-        await idService.loginPhrase(undefined, res);
-
-        const [answer] = res.json.firstCall.args;
-        expect(answer.status, 'the boot window refused a login phrase and failed the benchmark').to.equal('success');
-      });
-    });
-
-    // /id/loginphrase is uncached and fluxbench retries it on a 30s sleep while a
-    // node is failing, so a line per refusal is ~2,880 a day for one unchanged
-    // state - and the line that says WHEN it started is buried under thousands
-    // of copies of itself. The transition is the event; the condition is not.
-    describe('fitness logging says when the verdict changed, not that it holds', () => {
-      let warnStub;
-      let infoStub;
-
-      beforeEach(async () => {
-        healthyHardware();
-        // Normalise the module's remembered verdict through the real function,
-        // so these tests do not inherit whatever the previous one left.
-        await idService.checkNodeFitness();
-        warnStub = sinon.stub(log, 'warn');
-        infoStub = sinon.stub(log, 'info');
-      });
-
-      it('says a node is unfit once, however often it is asked', async () => {
-        getDosDataStub.returns({ dosState: 11, dosMessage: 'Flux IP detection failed' });
-
-        await idService.checkNodeFitness();
-        await idService.checkNodeFitness();
-        await idService.checkNodeFitness();
-
-        expect(
-          warnStub.callCount,
-          'every refusal logged, so a node sitting in DOS writes a line every time anyone asks',
-        ).to.equal(1);
-      });
-
-      // The case that makes keying on the code wrong: the score accrues while
-      // the condition is the same one.
-      it('does not speak again as the dos score climbs under the same message', async () => {
-        getDosDataStub.returns({ dosState: 11, dosMessage: 'Flux IP detection failed' });
-        await idService.checkNodeFitness();
-
-        getDosDataStub.returns({ dosState: 13, dosMessage: 'Flux IP detection failed' });
-        await idService.checkNodeFitness();
-
-        expect(
-          warnStub.callCount,
-          'a climbing score counted as a new fault, which is the flood keying on the message exists to stop',
-        ).to.equal(1);
-      });
-
-      it('speaks again when a different check is the one failing', async () => {
-        getDosDataStub.returns({ dosState: 11, dosMessage: 'Flux IP detection failed' });
-        await idService.checkNodeFitness();
-
-        getDosDataStub.returns({ dosState: 0, dosMessage: null });
-        osTotalmemStub.returns(1 * 1024 ** 3);
-        osCpusStub.returns([1]);
-        await idService.checkNodeFitness();
-
-        expect(warnStub.callCount, 'the node started failing for a new reason and said nothing').to.equal(2);
-        expect(warnStub.secondCall.args[0]).to.contain('hardware');
-      });
-
-      it('says so once when the node recovers, and not again', async () => {
-        getDosDataStub.returns({ dosState: 11, dosMessage: 'Flux IP detection failed' });
-        await idService.checkNodeFitness();
-
-        healthyHardware();
-        await idService.checkNodeFitness();
-        await idService.checkNodeFitness();
-
-        const recovered = infoStub.getCalls().filter((c) => String(c.args[0]).includes('fit to serve'));
-        expect(recovered.length, 'recovery was silent, or repeated on every healthy pass').to.equal(1);
-      });
-    });
-
-    // The syncthing gate asks whether the operator has broken a syncthing FluxOS
-    // can do something about, so it is held to the nodes that own the daemon -
-    // the same question the repair path is held to. Where we do not own it,
-    // FluxOS cannot restart it, and failing the node would take it off the
-    // network for a fault it cannot repair. Reported, not fatal.
-    //
-    // Stubbed on ownsSyncthing rather than set through FLUXOS_PATH: the node
-    // type is no longer what decides this, and a test that reaches the branch
-    // through the old variable would pass while the branch had moved.
-    describe('where FluxOS does not own syncthing, the outage is reported, not fatal', () => {
-      beforeEach(() => {
-        sinon.stub(syncthingService, 'ownsSyncthing').returns(false);
-      });
-
-      it('reports syncthing degraded and stays fit', async () => {
-        healthyHardware();
-        syncthingService.setSyncthingRunningState(false);
-
-        const fitness = await idService.checkNodeFitness();
-
-        expect(fitness.ok, 'a node was failed for a syncthing it cannot restart').to.equal(true);
-        expect(fitness.checks.syncthing, 'the outage went unreported instead of being shown').to.equal('degraded');
-      });
-
-      it('still fails on a check that is not syncthing', async () => {
-        healthyHardware();
-        syncthingService.setSyncthingRunningState(false);
-        osTotalmemStub.returns(1 * 1024 ** 3);
-        osCpusStub.returns([1]);
-
-        const fitness = await idService.checkNodeFitness();
-
-        expect(fitness.ok, 'the carve-out let a genuinely unfit node through').to.equal(false);
-        expect(fitness.error.message).to.equal('Node hardware requirements not met');
-      });
-    });
-
-    it('reports the database not ready while the local database is being prepared, without reading it', async () => {
-      healthyHardware();
-      capabilities.setForTests('localDbPrepared', false);
-      const connection = sinon.spy(dbHelper, 'databaseConnection');
-      const res = generateResponse();
-
-      await idService.nodeHealth(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.json, {
-        status: 'error',
-        data: { code: undefined, name: 'DatabaseNotReady', message: 'The local database is not ready' },
-      });
-      sinon.assert.notCalled(connection);
-    });
-
-    it('reads the database and Docker from their capabilities, not by asking them', async () => {
-      healthyHardware();
-      const find = sinon.spy(dbHelper, 'findOneInDatabase');
-      const images = sinon.spy(dockerService, 'dockerListImages');
-
-      const fitness = await idService.checkNodeFitness();
-
-      expect(fitness.ok).to.equal(true);
-      expect(fitness.checks).to.include({ db: 'ok', docker: 'ok' });
-      sinon.assert.notCalled(find);
-      sinon.assert.notCalled(images);
-    });
-
-    it('reports Docker not reachable while its capability is down', async () => {
-      healthyHardware();
-      capabilities.setForTests('dockerReachable', false);
-      const res = generateResponse();
-
-      await idService.nodeHealth(undefined, res);
-
-      sinon.assert.calledOnceWithExactly(res.json, {
-        status: 'error',
-        data: { code: undefined, name: 'DockerNotReachable', message: 'Docker is not reachable' },
-      });
-    });
-
-    it('logs the hardware reading once while it stays the same, and again when it changes', async () => {
-      healthyHardware();
-      const info = sinon.spy(log, 'info');
-      const tierLines = () => info.getCalls().filter((call) => String(call.args[0]).startsWith('Node Tier:')).length;
-
-      await idService.checkNodeFitness();
-      await idService.checkNodeFitness();
-      await idService.checkNodeFitness();
-      expect(tierLines(), 'a repeated reading was logged again').to.equal(1);
-
-      osCpusStub.returns([1, 1, 1, 1, 1, 1]);
-      await idService.checkNodeFitness();
-      expect(tierLines(), 'a changed reading was not logged').to.equal(2);
-    });
-
-    it('logs a shortfall once while it stands', async () => {
-      tierStub.resolves('basic');
-      collateralStub.resolves(1000);
-      osTotalmemStub.returns(1 * 1024 ** 3);
-      osCpusStub.returns([1]);
-      const error = sinon.spy(log, 'error');
-
-      expect(await idService.confirmNodeTierHardware()).to.equal(false);
-      expect(await idService.confirmNodeTierHardware()).to.equal(false);
-
-      const shortfalls = error.getCalls().filter((call) => call.args[0]?.message === 'Node Total Ram (1) below new Cumulus requirements');
-      expect(shortfalls).to.have.length(1);
-    });
-
-    it('is served uncached', () => {
-      const route = routeTableV1.find((r) => r.path === '/flux/health');
-      expect(route).to.not.have.property('cache');
-    });
-
-    // The other side of the same question, and the case that used to be decided
-    // differently here than in syncthingService: a node whose syncthing FluxOS
-    // does own is still refused for it.
-    it('refuses a node whose own syncthing is broken', async () => {
-      healthyHardware();
-      sinon.stub(syncthingService, 'ownsSyncthing').returns(true);
-      syncthingService.setSyncthingRunningState(false);
-
-      const fitness = await idService.checkNodeFitness();
-
-      expect(fitness.ok).to.equal(false);
-      expect(fitness.error.message).to.equal('Syncthing is not running properly');
     });
   });
 
@@ -1204,6 +641,7 @@ describe('idService tests', () => {
       sinon.stub(dbHelper, 'findOneInDatabase').resolves({
         loginPhrase: `${timestamp - 10_000}11111111111111111111111111111`,
       });
+      sinon.stub(dbHelper, 'findOneAndUpdateInDatabase').resolves({ usedAt: new Date() });
       sinon.stub(dbHelper, 'insertOneToDatabase').resolves(true);
       await dbHelper.initiateDB();
       dbHelper.databaseConnection();

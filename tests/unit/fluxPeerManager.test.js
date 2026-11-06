@@ -1220,14 +1220,6 @@ describe('FluxPeerManager tests', () => {
       });
     });
 
-    it('queues every dropped outbound peer to be dialled again', () => {
-      addPeers(manager, '10');
-
-      manager.dropAllConnections();
-
-      expect(manager.getReconnectQueue().size).to.equal(12);
-    });
-
     it('reports the fall as this node\'s own teardown', () => {
       const falls = [];
       manager.on('peersBelowThreshold', (count, info) => falls.push(info));

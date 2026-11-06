@@ -1627,7 +1627,7 @@ describe('messageStore tests', () => {
         },
       }]);
 
-      expect(result).to.deep.equal({ stored: 1 });
+      expect(result).to.deep.equal({ stored: 1, writeFailed: false });
       const signedOps = bulkWriteStub.firstCall.args[0];
       expect(signedOps[0].updateOne.filter).to.deep.equal({
         'data.name': 'testapp', 'data.ip': '192.168.1.1', 'data.replica': 's1',
@@ -1681,7 +1681,7 @@ describe('messageStore tests', () => {
       // `stored` counts what was APPLIED, claims stored and withdrawals applied
       // alike - so a retraction that reached the delete counts, and one skipped
       // before it would not.
-      expect(result).to.deep.equal({ stored: 1 });
+      expect(result).to.deep.equal({ stored: 1, writeFailed: false });
 
       const calls = bulkWriteStub.getCalls().map((c) => c.args[0]);
       const deletes = calls.flat().filter((op) => op.deleteMany);

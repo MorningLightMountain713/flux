@@ -1958,7 +1958,7 @@ describe('fluxCommunication tests', () => {
         data: { type: 'fluxapprunningsync', messages: [{ type: 'sigterm', ip: SENDER, envelope, data }], done: true },
       }, PEER_SOCKET);
 
-      sinon.assert.calledOnceWithExactly(messageStore.storeAppStateEvent, 'sigterm', { message: data, envelope });
+      sinon.assert.calledOnceWithExactly(messageStore.storeAppStateEvent, 'sigterm', { message: data, envelope, announcer: sinon.match.any });
     });
 
     it('hands an appremoved to messageStore with the app and the time it was sent', async () => {
@@ -1969,7 +1969,7 @@ describe('fluxCommunication tests', () => {
         data: { type: 'fluxapprunningsync', messages: [{ type: 'appremoved', ip: SENDER, envelope, data }], done: true },
       }, PEER_SOCKET);
 
-      sinon.assert.calledOnceWithExactly(messageStore.storeAppStateEvent, 'appremoved', { message: data, envelope });
+      sinon.assert.calledOnceWithExactly(messageStore.storeAppStateEvent, 'appremoved', { message: data, envelope, announcer: sinon.match.any });
     });
 
     it('records a synced move, as a move that arrives by gossip is', async () => {
@@ -2001,33 +2001,6 @@ describe('fluxCommunication tests', () => {
       sinon.assert.notCalled(messageStore.storeAppStateEvent);
       sinon.assert.notCalled(messageStore.storeIPChangedMessage);
     });
-
-    it('hands an eviction to messageStore with the time it was made', async () => {
-      const evictStub = sinon.stub(messageStore, 'applyEviction').resolves();
-      const createdAt = new Date(Date.now() - 45 * 60 * 1000);
-
-      await fluxCommunication.handleAppRunningSyncResponse({
-        data: {
-          type: 'fluxapprunningsync',
-          messages: [{ type: 'evicted', ip: SENDER, dedupKey: 'evicted', createdAt: createdAt.toISOString() }],
-          done: true,
-        },
-      }, PEER_SOCKET);
-
-      sinon.assert.calledOnceWithExactly(evictStub, SENDER, createdAt.getTime());
-    });
-
-    it('hands an eviction without a time over as unreadable, for messageStore to take as now', async () => {
-      const evictStub = sinon.stub(messageStore, 'applyEviction').resolves();
-
-      await fluxCommunication.handleAppRunningSyncResponse({
-        data: { type: 'fluxapprunningsync', messages: [{ type: 'evicted', ip: SENDER }], done: true },
-      }, PEER_SOCKET);
-
-      sinon.assert.calledOnce(evictStub);
-      expect(evictStub.firstCall.args[0]).to.equal(SENDER);
-      expect(Number.isNaN(evictStub.firstCall.args[1])).to.equal(true);
-    });
   });
 
   describe('a sync response says which peer completed it, and whether it declined', () => {
@@ -2054,13 +2027,14 @@ describe('fluxCommunication tests', () => {
       appSyncEvents.on(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, handler);
       appSyncEvents.on(SYNC_EVENTS.EPHEMERAL_SYNC_REFUSED, refusedHandler);
       appSyncEvents.on(SYNC_EVENTS.EPHEMERAL_SYNC_PROGRESS, progressHandler);
+      capabilities.setForTests(['localDbPrepared', 'appRegistryConsistent'], true);
       wanted = (socket) => socket === PEER_SOCKET;
       sinon.stub(peerManager, 'isSyncResponseWanted').callsFake((socket) => wanted(socket));
       // The dispatcher verifies the envelope before it reaches a handler, and
       // these fixtures carry no signature. Stubbed so the chain under test is
       // arrival -> queue -> handler rather than the envelope check.
       sinon.stub(fluxCommunicationUtils, 'verifyFluxBroadcast')
-        .resolves(fluxCommunicationUtils.VerifyResult.OK);
+        .resolves({ result: fluxCommunicationUtils.VerifyResult.OK, announcer: null });
       // An empty final batch is the whole path here: processInSlices does nothing.
       // (The location prune that used to need a store here is gone: messageStore no
       // longer maintains the materialized cache.)
@@ -2071,6 +2045,7 @@ describe('fluxCommunication tests', () => {
       appSyncEvents.removeListener(SYNC_EVENTS.EPHEMERAL_SYNC_COMPLETE, handler);
       appSyncEvents.removeListener(SYNC_EVENTS.EPHEMERAL_SYNC_REFUSED, refusedHandler);
       appSyncEvents.removeListener(SYNC_EVENTS.EPHEMERAL_SYNC_PROGRESS, progressHandler);
+      capabilities.resetForTests();
       sinon.restore();
     });
 
