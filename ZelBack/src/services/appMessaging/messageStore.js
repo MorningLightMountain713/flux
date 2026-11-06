@@ -21,7 +21,8 @@ const appHistory = require('../appDecisions/appHistory');
 const temporaryPoolSweep = require('./temporaryPoolSweep');
 const confirmedMessageStore = require('./confirmedMessageStore');
 const serviceHelper = require('../serviceHelper');
-const { extractIp, extractPort } = require('../utils/socketAddressUtils');
+const { extractIp, extractPort, socketAddressesMatch } = require('../utils/socketAddressUtils');
+const { addressMoveEvents, EVENTS: ADDRESS_MOVE_EVENTS } = require('../utils/addressMoveEvents');
 const globalState = require('../utils/globalState');
 const { appRunningEntries } = require('../utils/appRunningEntries');
 const {
@@ -666,7 +667,8 @@ const IP_CHANGED_VALIDITY_MS = RUNNING_EXPIRY_MS;
 /**
  * Checks a move: every path a move arrives by - gossip, sync, this node's own -
  * checks it here. The move itself is recorded in the event log, which the
- * derivation re-addresses the node's announcements off.
+ * derivation re-addresses the node's announcements off, and addressMoveEvents is
+ * told where the node is now. The move's event is recorded before this runs.
  * @param {object} message - The move
  * @returns {Promise<boolean|Error>} true when current, false when too old to
  *   apply, an Error when refused
@@ -703,8 +705,11 @@ async function storeIPChangedMessage(message) {
     return false;
   }
 
-  // Nothing to rewrite: the move is recorded in the event log, and the derivation
-  // re-addresses the node's announcements off it.
+  const to = await registryManager.currentAddressOf(message.newIP, message.broadcastedAt);
+  // the node has since moved back: its announcements are where they belong
+  if (!socketAddressesMatch(to, message.oldIP)) {
+    addressMoveEvents.emit(ADDRESS_MOVE_EVENTS.APPLIED, { from: message.oldIP, to, broadcastedAt: message.broadcastedAt });
+  }
 
   // all stored, rebroadcast
   return true;

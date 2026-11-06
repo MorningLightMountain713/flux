@@ -22,7 +22,8 @@ const globalState = require('../utils/globalState');
 const operationRegistry = require('../utils/operationRegistry');
 const { compareInstanceSeniority } = require('../utils/instanceOrdering');
 const { getSpecBackend } = require('../utils/specLibs');
-const { extractIp, extractPort, ipsMatch } = require('../utils/socketAddressUtils');
+const { extractIp, extractPort, ipsMatch, socketAddressesMatch } = require('../utils/socketAddressUtils');
+const { addressMoveEvents, EVENTS: ADDRESS_MOVE_EVENTS } = require('../utils/addressMoveEvents');
 const mastershipGrantGate = require('./mastershipGrantGate');
 const primaryRole = require('./primaryRole');
 const primaryRoleChanges = require('./primaryRoleChanges');
@@ -41,6 +42,7 @@ const appGiveUp = require('./appGiveUp');
 // The primary each anchor identifier was last read to have, and when each
 // verdict - a primary, or none - was read.
 const primaryByIdentifier = new Map();
+const appNameByIdentifier = new Map();
 const electionCheckedAt = new Map();
 // How long an election record is worth reading: ten election cycles, so one missed
 // pass does not turn every verdict into "cannot say".
@@ -51,6 +53,34 @@ const scheduledStart = new Map();
 const operatorStoppedAnnounced = new Set();
 const standDownAnnounced = new Set();
 const noPrimaryAnnounced = new Set();
+
+/**
+ * Carry each remembered primary at the address a move left to where the node is
+ * now, so the election asks it - and looks up its syncthing device - where it
+ * answers. A location of the app still at the old address once the move is
+ * recorded was announced after it, by whichever node holds that address now, and
+ * the primary remembered there stays.
+ * @param {{from: string, to: string}} move A move as addressMoveEvents tells it.
+ * @returns {Promise<void>}
+ */
+async function followMovedPrimaries({ from, to }) {
+  for (const [identifier, remembered] of primaryByIdentifier) {
+    if (!socketAddressesMatch(remembered, from) || socketAddressesMatch(remembered, to)) continue;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const locations = await registryManager.appLocation(appNameByIdentifier.get(identifier));
+      if (locations.some((location) => socketAddressesMatch(location.ip, from))) continue;
+    } catch (error) {
+      log.warn(`activeStandby: whether the previous primary of ${identifier} at ${from} moved cannot be read: ${error.message}`);
+      continue;
+    }
+    if (socketAddressesMatch(primaryByIdentifier.get(identifier), from)) {
+      primaryByIdentifier.set(identifier, to);
+      log.info(`activeStandby: previous primary of ${identifier} moved from ${from} to ${to} - following it`);
+    }
+  }
+}
+addressMoveEvents.on(ADDRESS_MOVE_EVENTS.APPLIED, followMovedPrimaries);
 
 /**
  * The FDM index an app's name falls under (1-4).
@@ -595,6 +625,7 @@ async function decideNamed({
   fluxEventBus.count('masterSlave:decision', identifier, 'primaryObserved');
   noPrimaryAnnounced.delete(identifier);
   primaryByIdentifier.set(identifier, ip);
+  appNameByIdentifier.set(identifier, appName);
   if (scheduledStart.has(identifier)) {
     log.info(`activeStandby: app:${appName} removed from the scheduled starts, already started on another standby node`);
     scheduledStart.delete(identifier);
@@ -684,7 +715,7 @@ async function yieldToGrantee({ appName, members, runningIdentifiers }) {
  * @param {Set<string>} validIdentifiers
  */
 function forgetRemoved(validIdentifiers) {
-  for (const records of [primaryByIdentifier, electionCheckedAt, scheduledStart]) {
+  for (const records of [primaryByIdentifier, appNameByIdentifier, electionCheckedAt, scheduledStart]) {
     for (const identifier of records.keys()) {
       if (!validIdentifiers.has(identifier)) records.delete(identifier);
     }

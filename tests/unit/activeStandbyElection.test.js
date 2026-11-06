@@ -22,6 +22,7 @@ const appsRuntimeState = require('../../ZelBack/src/services/appManagement/appsR
 const fluxNetworkHelper = require('../../ZelBack/src/services/fluxNetworkHelper');
 const registryManager = require('../../ZelBack/src/services/appDatabase/registryManager');
 const appQueryService = require('../../ZelBack/src/services/appQuery/appQueryService');
+const { addressMoveEvents, EVENTS: ADDRESS_MOVE_EVENTS } = require('../../ZelBack/src/services/utils/addressMoveEvents');
 const syncthingService = require('../../ZelBack/src/services/syncthingService');
 const config = require('config');
 const { appsFolder } = require('../../ZelBack/src/services/utils/appConstants');
@@ -560,6 +561,143 @@ describe('activeStandbyElection', () => {
     });
 
     const taken = () => ROLE_ACTIONS.filter((name) => role[name].called);
+
+    describe('a remembered primary whose address moved', () => {
+      const OLD = '192.168.1.90:16127';
+      const seniorHere = { name: appName, ip: here, runningSince: '2026-01-01T00:00:00.000Z' };
+      const seniorAt = (ip) => [seniorHere, { name: appName, ip, runningSince: '2026-01-01T00:01:00.000Z' }];
+      let asked;
+
+      // FDM names the primary, at OLD, and the pass remembers it there.
+      async function rememberPrimary(deployment) {
+        registryManager.appLocation.resolves(seniorAt(OLD));
+        await pass(deployment, { names: 'other', running: false });
+      }
+
+      // A move recorded, and every listener done with it.
+      const applyMove = async (from, to) => {
+        addressMoveEvents.emit(ADDRESS_MOVE_EVENTS.APPLIED, { from, to, broadcastedAt: Date.now() });
+        await new Promise((resolve) => { setImmediate(resolve); });
+        await new Promise((resolve) => { setImmediate(resolve); });
+      };
+
+      // The primary answers only where it is, and has stood down.
+      async function passAfterMove(deployment, moved) {
+        asked = sinon.stub(peerComponent, 'peerComponentState').callsFake(async (address) => (address === moved
+          ? peerComponent.PeerComponent.NOT_RUNNING : peerComponent.PeerComponent.UNKNOWN));
+        sinon.stub(peerComponent, 'componentStateOnPeers').resolves(peerComponent.PeerComponent.NOT_RUNNING);
+        fluxNetworkHelper.getLocalSocketAddress.restore();
+        appReconciler.hasControllerOpinion.restore();
+        role.standDown.resetHistory();
+        role.holdAsStandby.resetHistory();
+        await pass(deployment, { names: 'none', running: false });
+      }
+
+      beforeEach(() => {
+        sinon.stub(registryManager, 'primaryAddressOf').resolves(OLD);
+        sinon.stub(fluxNetworkHelper, 'ownAddressFor').callsFake((address) => address);
+        role.standDown.returns(false);
+      });
+
+      it('takes over once the primary answers at the address it moved to that it stood down', async () => {
+        const MOVED = '192.168.1.91:16127';
+        const deployment = await FIXTURES['registered on v9']();
+        await rememberPrimary(deployment);
+        registryManager.appLocation.resolves(seniorAt(MOVED));
+
+        await applyMove(OLD, MOVED);
+        await passAfterMove(deployment, MOVED);
+
+        sinon.assert.calledWith(asked, MOVED);
+        sinon.assert.neverCalledWith(asked, OLD);
+        expect(taken()).to.deep.equal(['promote']);
+      });
+
+      it('holds while a primary nobody followed cannot be asked', async () => {
+        const MOVED = '192.168.1.91:16127';
+        const deployment = await FIXTURES['registered on v9']();
+        await rememberPrimary(deployment);
+        registryManager.appLocation.resolves(seniorAt(MOVED));
+
+        await passAfterMove(deployment, MOVED);
+
+        sinon.assert.calledWith(asked, OLD);
+        expect(taken()).to.deep.equal([]);
+      });
+
+      it('follows a primary whose port alone moved, and asks it at its new port', async () => {
+        const MOVED = '192.168.1.90:16157';
+        const deployment = await FIXTURES['registered on v9']();
+        await rememberPrimary(deployment);
+        registryManager.appLocation.resolves(seniorAt(MOVED));
+
+        await applyMove(OLD, MOVED);
+        await passAfterMove(deployment, MOVED);
+
+        sinon.assert.calledWith(asked, MOVED);
+        expect(taken()).to.deep.equal(['promote']);
+      });
+
+      it('follows the primary of an app registered before v9, whose identifier does not name the app', async () => {
+        const MOVED = '192.168.1.91:16127';
+        const deployment = await FIXTURES['registered before v9']();
+        await rememberPrimary(deployment);
+        registryManager.appLocation.resetHistory();
+        registryManager.appLocation.resolves(seniorAt(MOVED));
+
+        await applyMove(OLD, MOVED);
+
+        sinon.assert.calledOnceWithExactly(registryManager.appLocation, appName);
+      });
+
+      it('keeps a remembered primary where a node announced the app after the move away from that address', async () => {
+        const MOVED = '192.168.1.91:16127';
+        const deployment = await FIXTURES['registered on v9']();
+        await rememberPrimary(deployment);
+
+        await applyMove(OLD, MOVED);
+        await passAfterMove(deployment, OLD);
+
+        sinon.assert.calledWith(asked, OLD);
+        sinon.assert.neverCalledWith(asked, MOVED);
+      });
+
+      it('keeps the primary when whether it moved cannot be read', async () => {
+        const MOVED = '192.168.1.91:16127';
+        const deployment = await FIXTURES['registered on v9']();
+        await rememberPrimary(deployment);
+        sinon.stub(log, 'warn');
+        registryManager.appLocation.rejects(new Error('db down'));
+
+        await applyMove(OLD, MOVED);
+        registryManager.appLocation.resolves(seniorAt(MOVED));
+        await passAfterMove(deployment, MOVED);
+
+        sinon.assert.calledWith(asked, OLD);
+        expect(taken()).to.deep.equal([]);
+      });
+
+      it('leaves a primary at another address alone, and reads no locations for it', async () => {
+        const deployment = await FIXTURES['registered on v9']();
+        await rememberPrimary(deployment);
+        registryManager.appLocation.resetHistory();
+
+        await applyMove('192.168.1.200:16127', '192.168.1.201:16127');
+
+        sinon.assert.notCalled(registryManager.appLocation);
+      });
+
+      it('reads no recorded moves in a pass, whether FDM names a primary or none', async () => {
+        const reads = ['addressMovesFrom', 'addressMovesTo', 'currentAddressOf', 'listedNodeMovedTo']
+          .map((name) => sinon.spy(registryManager, name));
+        const deployment = await FIXTURES['registered on v9']();
+        await rememberPrimary(deployment);
+        await passAfterMove(deployment, OLD);
+
+        reads.forEach((read) => sinon.assert.notCalled(read));
+        sinon.assert.called(registryManager.primaryAddressOf);
+      });
+    });
 
     describe('an app with one of two activeStandby components held down by its operator', () => {
       async function passTwoComponents({ granted }) {

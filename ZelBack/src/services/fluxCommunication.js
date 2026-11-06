@@ -363,6 +363,7 @@ async function handleAppRunningSyncResponse(message, peerSocket) {
       if (event.type === 'appremoved' || event.type === 'ipchanged' || event.type === 'masterlease' || event.type === 'grantgeneration'
         || event.type === 'nodealive') {
         await messageStore.storeAppStateEvent(event.type, { message: event.data, envelope: event.envelope, announcer: announcerOf.get(event) ?? null });
+        if (event.type === 'ipchanged') await messageStore.storeIPChangedMessage(event.data);
       } else if (event.type === 'nodedown') {
         await nodeDownService.onCertificateSyncEvent(event);
       }

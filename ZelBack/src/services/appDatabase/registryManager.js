@@ -278,14 +278,17 @@ async function addressesMovedFromIp(ip) {
 }
 
 /**
- * Where a node known at `socketAddr` answers now.
+ * Where a node known at `socketAddr` as of `knownAt` answers now. Each move
+ * followed must be newer than the address it moves from was known to be good, so
+ * a node that moved away and back again ends at the address it holds now.
  * @param {string} socketAddr
  * @param {Map<string, {to: string, at: number}>} moves From addressMovesFrom.
+ * @param {number} [knownAt] When `socketAddr` was last known to be the node's (ms).
  * @returns {string} The address, normalised; `socketAddr` when it has not moved.
  */
-function followAddressMoves(socketAddr, moves) {
+function followAddressMoves(socketAddr, moves, knownAt = 0) {
   let address = normalizeSocketAddress(socketAddr);
-  let since = 0;
+  let since = knownAt;
   for (let hop = 0; hop < MAX_ADDRESS_MOVES_FOLLOWED; hop += 1) {
     const move = moves.get(address);
     if (!move || move.at <= since) break;
@@ -293,6 +296,17 @@ function followAddressMoves(socketAddr, moves) {
     since = move.at;
   }
   return address;
+}
+
+/**
+ * Where a node known at `address` as of `knownAt` answers now.
+ * @param {string} address A socket address.
+ * @param {number} knownAt When `address` was last known to be the node's (ms).
+ * @returns {Promise<string>} Where it moved to, or `address` as given when it has not moved.
+ */
+async function currentAddressOf(address, knownAt) {
+  const to = followAddressMoves(address, await addressMovesFrom([address]), knownAt);
+  return to === normalizeSocketAddress(address) ? address : to;
 }
 
 /**
@@ -1347,6 +1361,7 @@ module.exports = {
   appsListedAt,
   addressMovesFrom,
   addressMovesTo,
+  currentAddressOf,
   listedNodeMovedTo,
   primaryAddressOf,
   appLocationOf,

@@ -1982,7 +1982,9 @@ describe('fluxCommunication tests', () => {
         data: { type: 'fluxapprunningsync', messages: [{ type: 'ipchanged', ip: SENDER, envelope, data }], done: true },
       }, PEER_SOCKET);
 
-      sinon.assert.calledOnceWithExactly(messageStore.storeAppStateEvent, 'ipchanged', { message: data, envelope });
+      sinon.assert.calledOnceWithExactly(messageStore.storeAppStateEvent, 'ipchanged', { message: data, envelope, announcer: sinon.match.any });
+      sinon.assert.calledOnceWithExactly(messageStore.storeIPChangedMessage, data);
+      sinon.assert.callOrder(messageStore.storeAppStateEvent, messageStore.storeIPChangedMessage);
     });
 
     it('drops a synced move away from an address listed under another key, though the signer is listed at the new one', async () => {

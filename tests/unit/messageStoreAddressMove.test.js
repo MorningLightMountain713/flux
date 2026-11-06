@@ -10,135 +10,96 @@ describe('messageStore address move tests', () => {
 
   const OLD = '72.89.45.236:16137';
   const NEW = '108.6.236.4:16137';
-  const HOUR = 60 * 60 * 1000;
-  let locations;
+  const FURTHER = '203.0.113.9:16137';
+  const MINUTE = 60 * 1000;
+  const HOUR = 60 * MINUTE;
 
-  // reported a minute before the move that carries it
-  const row = (name, ip, runningSince) => ({
-    name, hash: 'h', ip, runningSince: new Date(runningSince), broadcastedAt: new Date(Date.now() - 60_000), expireAt: new Date(Date.now() + HOUR),
+  const move = (oldIP, newIP, broadcastedAt) => ({
+    type: 'fluxipchanged', version: 1, oldIP, newIP, broadcastedAt,
   });
-  const moved = () => messageStore.storeIPChangedMessage({
-    type: 'fluxipchanged', version: 1, oldIP: OLD, newIP: NEW, broadcastedAt: Date.now(),
-  });
+  // Every path records the move's event, then stores the move.
+  const arrives = async (message) => {
+    await messageStore.storeAppStateEvent(messageStore.APP_STATE_EVENT_TYPES.IPCHANGED, { message, envelope: null });
+    return messageStore.storeIPChangedMessage(message);
+  };
+
+  let heard;
+  const listener = (told) => heard.push(told);
 
   beforeEach(async () => {
     await dbHelper.initiateDB();
-    locations = dbHelper.databaseConnection().db(config.database.appsglobal.database)
-      .collection(config.database.appsglobal.collections.appsLocations);
-    await locations.deleteMany({});
+    await dbHelper.databaseConnection().db(config.database.appsglobal.database)
+      .collection(config.database.appsglobal.collections.appStateEvents)
+      .deleteMany({ type: 'ipchanged' });
+    heard = [];
+    addressMoveEvents.on(ADDRESS_MOVE_EVENTS.APPLIED, listener);
   });
 
-  it('carries every row at the old address to the new one, runningSince and all', async () => {
-    await locations.insertMany([row('alpha', OLD, '2026-09-01T00:00:00Z'), row('beta', OLD, '2026-09-02T00:00:00Z')]);
-
-    await moved();
-
-    const rows = await locations.find({}, { projection: { _id: 0, name: 1, ip: 1, runningSince: 1 } }).sort({ name: 1 }).toArray();
-    expect(rows).to.deep.equal([
-      { name: 'alpha', ip: NEW, runningSince: new Date('2026-09-01T00:00:00Z') },
-      { name: 'beta', ip: NEW, runningSince: new Date('2026-09-02T00:00:00Z') },
-    ]);
+  afterEach(() => {
+    addressMoveEvents.off(ADDRESS_MOVE_EVENTS.APPLIED, listener);
   });
 
-  it('leaves one row for an app already announced at the new address, with the earlier runningSince', async () => {
-    await locations.insertMany([
-      row('alpha', OLD, '2026-09-01T00:00:00Z'),
-      row('alpha', NEW, '2026-10-11T06:01:59Z'),
-      row('beta', OLD, '2026-09-02T00:00:00Z'),
-    ]);
-
-    await moved();
-
-    const rows = await locations.find({}, { projection: { _id: 0, name: 1, ip: 1, runningSince: 1 } }).sort({ name: 1 }).toArray();
-    expect(rows).to.deep.equal([
-      { name: 'alpha', ip: NEW, runningSince: new Date('2026-09-01T00:00:00Z') },
-      { name: 'beta', ip: NEW, runningSince: new Date('2026-09-02T00:00:00Z') },
-    ]);
-  });
-
-  it('keeps the new address\'s runningSince when it is the earlier one', async () => {
-    await locations.insertMany([row('alpha', OLD, '2026-10-01T00:00:00Z'), row('alpha', NEW, '2026-09-01T00:00:00Z')]);
-
-    await moved();
-
-    const rows = await locations.find({}, { projection: { _id: 0, name: 1, ip: 1, runningSince: 1 } }).toArray();
-    expect(rows).to.deep.equal([{ name: 'alpha', ip: NEW, runningSince: new Date('2026-09-01T00:00:00Z') }]);
-  });
-
-  it('carries the rows of a move of the port alone', async () => {
-    await locations.insertMany([row('alpha', '198.51.100.40:16127', '2026-09-01T00:00:00Z')]);
-
-    await messageStore.storeIPChangedMessage({
-      type: 'fluxipchanged', version: 1, oldIP: '198.51.100.40:16127', newIP: '198.51.100.40:16157', broadcastedAt: Date.now(),
+  describe('how long after it was made a move is accepted', () => {
+    it('accepts a move as long as an announcement it speaks for can stand', async () => {
+      expect(await arrives(move(OLD, NEW, Date.now() - 100 * MINUTE))).to.equal(true);
     });
 
-    const rows = await locations.find({}, { projection: { _id: 0, ip: 1 } }).toArray();
-    expect(rows.map((r) => r.ip)).to.deep.equal(['198.51.100.40:16157']);
-  });
-
-  it('leaves rows at other addresses alone', async () => {
-    await locations.insertMany([row('alpha', OLD, '2026-09-01T00:00:00Z'), row('alpha', '72.89.45.236:16127', '2026-09-03T00:00:00Z')]);
-
-    await moved();
-
-    const rows = await locations.find({}, { projection: { _id: 0, ip: 1 } }).sort({ ip: 1 }).toArray();
-    expect(rows.map((r) => r.ip)).to.deep.equal(['108.6.236.4:16137', '72.89.45.236:16127']);
-  });
-
-  describe('how long after it was made a move is applied', () => {
-    const MINUTE = 60 * 1000;
-    const movedAgo = (minutes) => messageStore.storeIPChangedMessage({
-      type: 'fluxipchanged', version: 1, oldIP: OLD, newIP: NEW, broadcastedAt: Date.now() - minutes * MINUTE,
-    });
-    const reportedAgo = (name, minutes) => ({ ...row(name, OLD, '2026-09-01T00:00:00Z'), broadcastedAt: new Date(Date.now() - minutes * MINUTE) });
-
-    it('applies a move as long as a row it carries can stand', async () => {
-      await locations.insertOne(reportedAgo('alpha', 101));
-
-      expect(await movedAgo(100)).to.equal(true);
-
-      expect((await locations.findOne({ name: 'alpha' })).ip).to.equal(NEW);
-    });
-
-    it('refuses a move older than any row it could carry', async () => {
-      await locations.insertOne(reportedAgo('alpha', 126));
-
-      expect(await movedAgo(125.5)).to.equal(false);
-
-      expect((await locations.findOne({ name: 'alpha' })).ip).to.equal(OLD);
+    it('refuses a move older than any announcement it could speak for', async () => {
+      expect(await arrives(move(OLD, NEW, Date.now() - 126 * MINUTE))).to.equal(false);
     });
   });
 
   describe('what it tells addressMoveEvents', () => {
-    let heard;
-    const listener = (move) => heard.push(move);
-
-    beforeEach(() => {
-      heard = [];
-      addressMoveEvents.on(ADDRESS_MOVE_EVENTS.APPLIED, listener);
-    });
-
-    afterEach(() => {
-      addressMoveEvents.off(ADDRESS_MOVE_EVENTS.APPLIED, listener);
-    });
-
-    it('tells each move it applies, with the address the rows went to and when it was made', async () => {
+    it('tells each move, with where the node is and when it moved', async () => {
       const broadcastedAt = Date.now();
 
-      await messageStore.storeIPChangedMessage({
-        type: 'fluxipchanged', version: 1, oldIP: OLD, newIP: NEW, broadcastedAt,
-      });
+      await arrives(move(OLD, NEW, broadcastedAt));
 
       expect(heard).to.deep.equal([{ from: OLD, to: NEW, broadcastedAt }]);
+    });
+
+    it('tells a move of the port alone', async () => {
+      const broadcastedAt = Date.now();
+
+      await arrives(move('198.51.100.40:16127', '198.51.100.40:16157', broadcastedAt));
+
+      expect(heard).to.deep.equal([{ from: '198.51.100.40:16127', to: '198.51.100.40:16157', broadcastedAt }]);
+    });
+
+    it('tells where the node went next, when it has moved on since', async () => {
+      const broadcastedAt = Date.now() - MINUTE;
+      await arrives(move(NEW, FURTHER, Date.now()));
+      heard.length = 0;
+
+      await arrives(move(OLD, NEW, broadcastedAt));
+
+      expect(heard).to.deep.equal([{ from: OLD, to: FURTHER, broadcastedAt }]);
+    });
+
+    it('tells the address it moved to, though the node left that address once before', async () => {
+      const broadcastedAt = Date.now();
+      await arrives(move(NEW, FURTHER, broadcastedAt - 5 * MINUTE));
+      heard.length = 0;
+
+      await arrives(move(OLD, NEW, broadcastedAt));
+
+      expect(heard).to.deep.equal([{ from: OLD, to: NEW, broadcastedAt }]);
+    });
+
+    it('tells nothing for a move the node has since undone', async () => {
+      await arrives(move(NEW, OLD, Date.now()));
+      heard.length = 0;
+
+      expect(await arrives(move(OLD, NEW, Date.now() - MINUTE))).to.equal(true);
+
+      expect(heard).to.deep.equal([]);
     });
 
     it('tells nothing for a move it refuses or finds too old', async () => {
       await messageStore.storeIPChangedMessage({
         type: 'fluxipchanged', version: 2, oldIP: OLD, newIP: NEW, broadcastedAt: Date.now(),
       });
-      await messageStore.storeIPChangedMessage({
-        type: 'fluxipchanged', version: 1, oldIP: OLD, newIP: NEW, broadcastedAt: Date.now() - 3 * HOUR,
-      });
+      await messageStore.storeIPChangedMessage(move(OLD, NEW, Date.now() - 3 * HOUR));
 
       expect(heard).to.deep.equal([]);
     });
