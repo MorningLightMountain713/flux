@@ -1,0 +1,49 @@
+[
+  {
+    "name": "announced-from-the-log",
+    "breaks": "an instance is announced from the date its resources hold, not from the node's last announcement",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appLifecycle/placementDates.js",
+        "from": "  if (placedAt) return placedAt.toISOString();\n",
+        "to": ""
+      }
+    ],
+    "red": [
+      "records when it took the app at install, and announces that",
+      "keeps announcing the same time after its own announcement lapses",
+      "keeps the date, and the time it announces, through a soft redeploy",
+      "dates the app again, and announces it, after a rebuild"
+    ]
+  },
+  {
+    "name": "install-leaves-undated",
+    "breaks": "the install dates the resources it creates",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appLifecycle/appInstaller.js",
+        "from": "replica: replica ?? null, placedAt }));",
+        "to": "replica: replica ?? null }));"
+      }
+    ],
+    "red": [
+      "records when it took the app at install, and announces that",
+      "keeps announcing the same time after its own announcement lapses",
+      "keeps the date, and the time it announces, through a soft redeploy"
+    ]
+  },
+  {
+    "name": "rebuild-keeps-date",
+    "breaks": "a rebuild dates the instance again",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appLifecycle/appOperations.js",
+        "from": "      if (createVolumes) {\n        const placedAt = new Date();",
+        "to": "      if (false) {\n        const placedAt = new Date();"
+      }
+    ],
+    "red": [
+      "dates the app again, and announces it, after a rebuild"
+    ]
+  }
+]

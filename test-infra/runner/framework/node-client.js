@@ -282,9 +282,7 @@ export function nodeClient(nodeNum) {
         'app:running',
         // what this node records of when it took each app it holds
         'app:placementRecorded',
-        'app:placementRemoved',
-        'app:placementsTidied',
-        'app:placementsBackfilled',
+        'app:placementsDated',
         'app:announcementRefused',
         'app:announcing',
         'fileoperation:imageAcquired',

@@ -869,21 +869,13 @@ export function dbClient(nodeNum) {
       return localDb.collection('zelappsinformation').findOne({ name }, { projection: { _id: 0 } });
     },
 
-    // When this node took each app it holds: { name: placedAt }.
-    async placements() {
+    // When this node took each instance of an app it holds, from the instance's
+    // resources: [{ replica, placedAt }], placedAt null where none is held.
+    async placementsOf(name) {
       const localDb = await db('appsLocal');
-      const records = await localDb.collection('zelappsplacements').find({}, { projection: { _id: 0 } }).toArray();
-      return Object.fromEntries(records.map(({ name, placedAt }) => [name, placedAt]));
-    },
-
-    async seedPlacement(name, placedAt) {
-      const localDb = await db('appsLocal');
-      await localDb.collection('zelappsplacements').insertOne({ name, placedAt: new Date(placedAt) });
-    },
-
-    async deletePlacement(name) {
-      const localDb = await db('appsLocal');
-      await localDb.collection('zelappsplacements').deleteMany({ name });
+      const rows = await localDb.collection('zelappsinstanceresources')
+        .find({ nameKey: String(name).toLowerCase() }, { projection: { _id: 0, replica: 1, placedAt: 1 } }).toArray();
+      return rows.map(({ replica, placedAt }) => ({ replica: replica ?? null, placedAt: placedAt ?? null }));
     },
 
     // This node's location row for one app at one address, or null.

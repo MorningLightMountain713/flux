@@ -1,0 +1,30 @@
+[
+  {
+    "name": "dated-now",
+    "breaks": "an undated instance is dated at the node's own last announcement",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appLifecycle/placementDates.js",
+        "from": "    const placedAt = since ? new Date(since) : new Date();",
+        "to": "    const placedAt = new Date();"
+      }
+    ],
+    "red": [
+      "dates nothing while it has no address, then dates the app at its own last announcement and announces that"
+    ]
+  },
+  {
+    "name": "dated-without-the-address",
+    "breaks": "dating waits for the node's address",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appLifecycle/placementDates.js",
+        "from": "  const localSocketAddr = await fluxNetworkHelper.waitForLocalSocketAddress();",
+        "to": "  const localSocketAddr = '0.0.0.0:16127';"
+      }
+    ],
+    "red": [
+      "dates nothing while it has no address, then dates the app at its own last announcement and announces that"
+    ]
+  }
+]
