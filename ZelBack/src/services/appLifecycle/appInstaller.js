@@ -276,13 +276,18 @@ async function attemptInstallApplication(registered, options = {}) {
 
     // This identity's records: the spec this node runs, and the resources of
     // what it creates for it, empty until each step writes what it is about
-    // to create. A stale pair for the SAME identity is replaced; a co-located
-    // sibling's is a different key entirely and is never touched.
+    // to create, and dated: this node takes the instance now. A stale pair for
+    // the SAME identity is replaced; a co-located sibling's is a different key
+    // entirely and is never touched.
     const { HostedInstance, InstanceResources } = specLibrary.loaded();
     await appRecords.hostedInstances().put(new HostedInstance({
       record: registered, replica: replica ?? null, componentKeys, formerNames,
     }));
-    await appRecords.instanceResources().put(new InstanceResources({ name: appName, replica: replica ?? null }));
+    const placedAt = new Date();
+    await appRecords.instanceResources().put(new InstanceResources({ name: appName, replica: replica ?? null, placedAt }));
+    fluxEventBus.publish('app:placementRecorded', {
+      name: appName, replica: replica ?? null, placedAt: placedAt.toISOString(), source: 'install',
+    });
     log.info(`Database entry created for ${appName} BEFORE Docker container creation`);
     // Installed from here: a peer deciding a cold-start seed waits on this node
     // until its monitor has measured what it holds.

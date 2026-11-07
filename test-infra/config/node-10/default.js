@@ -43,7 +43,6 @@ module.exports = {
         "collections": {
             "appsInformation": "zelappsinformation",
             "appsRuntimeState": "zelappsruntimestate",
-            "appsPlacements": "zelappsplacements",
             "pendingAppTeardowns": "zelappspendingteardowns",
             "appIdentityMoves": "zelappsidentitymoves",
             "instanceResources": "zelappsinstanceresources",

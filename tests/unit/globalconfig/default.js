@@ -125,7 +125,6 @@ const harnessOverrides = {
       collections: {
         appsInformation: 'zelappsinformation',
         appsRuntimeState: 'zelappsruntimestate',
-        appsPlacements: 'zelappsplacements',
         appIdentityMoves: 'zelappsidentitymoves',
         instanceResources: 'zelappsinstanceresources',
         cachedImages: 'cachedimages',

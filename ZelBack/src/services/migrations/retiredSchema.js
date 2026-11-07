@@ -10,6 +10,7 @@ const RETIRED_COLLECTIONS = [
   { database: 'database.local.database', name: 'activepaymentrequests' },
   { database: 'database.local.database', name: 'completedpayments' },
   { database: 'database.appsglobal.database', name: 'zelappslocation' },
+  { database: 'database.appslocal.database', name: 'zelappsplacements' },
 ];
 
 // Collections nothing writes any more, read until each record a release

@@ -19,6 +19,8 @@ describe('appIdentityMove tests', () => {
   // The world the move acts on, as the stubs hold it.
   let db; // `${name}|${replica}` -> installed row
   let lastPut; // the hosted instance last written
+  let lastResources; // the resources last written
+  let placedAts; // instance key -> the date its resources hold
   let moves; // `${name}|${replica}` -> the move in progress
   let containers; // docker names present -> { running }
   let mounts; // mounted directories
@@ -83,6 +85,8 @@ describe('appIdentityMove tests', () => {
 
   beforeEach(() => {
     db = new Map();
+    placedAts = new Map();
+    lastResources = null;
     moves = new Map();
     containers = new Map();
     mounts = new Set();
@@ -111,7 +115,11 @@ describe('appIdentityMove tests', () => {
         },
       },
       instanceResources: {
-        put: async (resources) => { record('putResources', resources.name, resources.replica, resources.network, resources.components); },
+        byInstance: async (name, replica) => (placedAts.has(key(name, replica)) ? { placedAt: placedAts.get(key(name, replica)) } : null),
+        put: async (resources) => {
+          lastResources = resources;
+          record('putResources', resources.name, resources.replica, resources.network, resources.components);
+        },
       },
       moveStore: {
         begin: async (name, replica, to) => { record('begin', name, replica, to); moves.set(key(name, replica), { to }); },
@@ -652,6 +660,25 @@ describe('appIdentityMove tests', () => {
       expect(resources).to.be.lessThan(indexOf('installComponent'));
       expect(indexOf('end'), 'the move record ends with the resources').to.be.greaterThan(resources);
       expect(moves.has(key(NAME, null))).to.equal(false);
+    });
+
+    it('carries the date this node took the instance across the move, the data having moved with it', async () => {
+      seedRunningUnderName();
+      const placedAt = new Date('2026-01-01T00:00:00Z');
+      placedAts.set(key(NAME, null), placedAt);
+
+      await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(lastResources.placedAt).to.equal(placedAt);
+    });
+
+    it('writes no date for an instance whose resources hold none', async () => {
+      seedRunningUnderName();
+
+      await appIdentityMove.moveInstalledAppsOntoIdentity();
+
+      expect(lastResources, 'the resources were written').to.not.equal(null);
+      expect(lastResources.placedAt).to.equal(null);
     });
 
     it('recreates each container from the image on this node, on its kept volume, under the lease, and attaches the linked networks', async () => {

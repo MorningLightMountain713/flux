@@ -76,7 +76,6 @@ const fluxnodeStatusSource = require('./daemonService/fluxnodeStatusSource');
 const daemonUsageReporter = require('./daemonService/daemonUsageReporter');
 const reorgSource = require('./daemonService/reorgSource');
 const daemonServiceUtils = require('./daemonService/daemonServiceUtils');
-const placements = require('./migrations/placements');
 const fluxService = require('./fluxService');
 const geolocationService = require('./geolocationService');
 const ipLocationSync = require('./appPlacement/ipLocationSync');
@@ -98,7 +97,6 @@ const outboundPathService = require('./outboundPathService');
 const uplinkService = require('./uplinkService');
 const appTamperingDetectionService = require('./appTamperingDetectionService');
 const appsRuntimeState = require('./appManagement/appsRuntimeState');
-const appPlacements = require('./appManagement/appPlacements');
 const imageCacheStore = require('./appLifecycle/imageCacheStore');
 const appRecords = require('./appDatabase/appRecords');
 const appIdentityMoveStore = require('./appLifecycle/appIdentityMoveStore');
@@ -217,8 +215,6 @@ async function prepareDatabaseSchema() {
   // comment promises, plus the (callerFingerprint, flagged, observedAt) index
   // the admission-path miner check reads
   await playgroundAudit.prepareCollection();
-  // appPlacements (localzelapps): one record per app
-  await appPlacements.prepareCollection();
   await limitCounterRecords.prepareCollection();
   await capabilityHistory.prepareCollection();
   // The explorer's collections: their indexes are the explorer's to declare.
@@ -598,10 +594,6 @@ async function startFluxFunctions() {
         appStartupManager.manageAppsOnBoot(bootContext).catch((error) => {
           log.error(`App startup manager error: ${error.message}`);
         });
-        // Not awaited: it waits for this node's address, and the announcer, the one
-        // reader of what it writes, waits for it.
-        placements.backfillPlacements();
-
         // Above the daemon wait, because syncthing has nothing to do with the
         // daemon: the sentinel talks to syncthing's own API and reads userconfig,
         // and the webserver is already answering. Below it, a node whose fluxd is

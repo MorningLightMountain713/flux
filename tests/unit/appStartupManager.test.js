@@ -115,7 +115,7 @@ describe('appStartupManager tests', () => {
       '../appMonitoring/appReconciler': appReconcilerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../appDatabase/appRecords': { hostedInstances: () => installedStub },
-      '../appManagement/appPlacements': { removeStrayPlacements: sinon.stub().resolves(0) },
+      './placementDates': { dateUndatedPlacements: sinon.stub().resolves() },
       './appUninstaller': appUninstallerStub,
       '../utils/globalState': globalStateStub,
       '../utils/appConstants': { localAppsInformation: 'localAppsInformation', NODE_DOWN_GRACE_MS: 420_000, RUNNING_EXPIRY_MS: 7_500_000 },
@@ -181,7 +181,7 @@ describe('appStartupManager tests', () => {
         '../appMonitoring/appReconciler': appReconcilerStub,
         '../appDatabase/appsRepository': appsRepositoryStub,
         '../appDatabase/appRecords': { hostedInstances: () => installedStub },
-        '../appManagement/appPlacements': { removeStrayPlacements: sinon.stub().resolves(0) },
+        './placementDates': { dateUndatedPlacements: sinon.stub().resolves() },
         './appUninstaller': appUninstallerStub,
         '../utils/globalState': globalStateStub,
         '../utils/appConstants': { localAppsInformation: 'localAppsInformation', NODE_DOWN_GRACE_MS: 420_000, RUNNING_EXPIRY_MS: 7_500_000 },
@@ -439,9 +439,11 @@ describe('appStartupManager tests', () => {
   let hardwareStub;
   let portManagerStub;
   let storageStubs;
+  let placementDatesStub;
 
   function loadWithMigrations(runBefore, { bootSyncTimeoutMs } = {}) {
     specReconcilerStub = { convergeAtBoot: sinon.stub().resolves() };
+    placementDatesStub = { dateUndatedPlacements: sinon.stub().resolves() };
     hardwareStub = { performBootTimeHardwareValidation: sinon.stub().resolves() };
     portManagerStub = { restoreAppsPortsSupport: sinon.stub().resolves() };
     storageStubs = {
@@ -461,7 +463,7 @@ describe('appStartupManager tests', () => {
       '../appMonitoring/appReconciler': appReconcilerStub,
       '../appDatabase/appsRepository': appsRepositoryStub,
       '../appDatabase/appRecords': { hostedInstances: () => installedStub },
-      '../appManagement/appPlacements': { removeStrayPlacements: sinon.stub().resolves(0) },
+      './placementDates': placementDatesStub,
       './appUninstaller': appUninstallerStub,
       '../utils/globalState': globalStateStub,
       '../utils/appConstants': { localAppsInformation: 'localAppsInformation', NODE_DOWN_GRACE_MS: 420_000, RUNNING_EXPIRY_MS: 7_500_000 },
@@ -591,6 +593,20 @@ describe('appStartupManager tests', () => {
       sinon.assert.calledOnce(ports);
       expect(fluxNetworkHelperStub.purgeUFW.calledBefore(ports), 'the deny purge before the ports open').to.equal(true);
       expect(ports.calledBefore(dockerServiceStub.dockerListContainers), 'the ports before the reconcile').to.equal(true);
+      expect(dockerServiceStub.dockerListContainers.calledOnce, 'the reconcile ran').to.equal(true);
+    });
+
+    // The migrations write the resources of what they adopt and move, undated;
+    // dating waits for this node's address, which holds up nothing.
+    it('starts dating the undated placements after the migrations, without waiting for it', async () => {
+      const runBefore = migrationsTaking(1000);
+      const manager = loadWithMigrations(runBefore);
+      placementDatesStub.dateUndatedPlacements.returns(new Promise(() => {}));
+
+      await manager.manageAppsOnBoot(contextDropped(60_000));
+
+      sinon.assert.calledOnce(placementDatesStub.dateUndatedPlacements);
+      expect(runBefore.calledBefore(placementDatesStub.dateUndatedPlacements), 'the migrations before the dating').to.equal(true);
       expect(dockerServiceStub.dockerListContainers.calledOnce, 'the reconcile ran').to.equal(true);
     });
 

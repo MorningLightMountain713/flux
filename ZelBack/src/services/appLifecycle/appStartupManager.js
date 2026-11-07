@@ -27,7 +27,7 @@ const containerMountRecovery = require('./containerMountRecovery');
 const fileOperationRecovery = require('../appSystem/fileOperationRecovery');
 const appNetworkLinker = require('./appNetworkLinker');
 const appSlice = require('./appSlice');
-const appPlacements = require('../appManagement/appPlacements');
+const placementDates = require('./placementDates');
 const meshReconciler = require('../appMesh/meshReconciler');
 const { getSpecBackend } = require('../utils/specLibs');
 const contentSlotService = require('./contentSlotService');
@@ -551,17 +551,6 @@ async function placementByClock(bootContext) {
   return { placed: false, removed, failed: [] };
 }
 
-/**
- * Remove the placement records of apps not installed here, on every boot
- * whichever way it goes on. Run again until it succeeds.
- * @returns {Promise<void>}
- */
-async function tidyPlacementsOnBoot() {
-  await untilSucceeds('Removing stray placement records', async () => {
-    await appPlacements.removeStrayPlacements(await getInstalledAppNamesFromDb());
-  });
-}
-
 async function manageAppsOnBoot(bootContext) {
   // On every boot, whatever this one decides, and without waiting for it: a
   // file operation the restart left behind answers its caller's poll as soon as
@@ -572,7 +561,6 @@ async function manageAppsOnBoot(bootContext) {
   // What the boot decided, published with boot:settled.
   let decision = 'reconciled';
   try {
-    await tidyPlacementsOnBoot();
     // ahead of every container start, so no slice in use can be empty here
     await appSlice.stopEmptySlices();
     if (bootContext.firstBoot) {
@@ -658,6 +646,11 @@ async function manageAppsOnBoot(bootContext) {
     // nothing is running until the reconcile below starts it. Never allowed to stop
     // that reconcile - a node that cannot migrate must still start its apps.
     await migrations.runBefore('bootReconcileDecided');
+    // Every instance installed before its resources held a date gets one, once
+    // the migrations have written the resources of what they adopt and move. Not
+    // awaited: it waits for this node's address, which a node can boot without,
+    // and until it lands the announcer dates such an instance by the same rule.
+    untilSucceeds('Dating placements', () => placementDates.dateUndatedPlacements());
 
     // The node-level question, asked where the apps are about to start: by the
     // rows when this node holds the network's view, by the jurors' clock when it

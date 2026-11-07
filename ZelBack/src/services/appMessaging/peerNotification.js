@@ -10,8 +10,8 @@ const messageStore = require('./messageStore');
 const meshBroadcast = require('../appMesh/meshBroadcast');
 const log = require('../../lib/log');
 const globalState = require('../utils/globalState');
-const appsRepository = require('../appDatabase/appsRepository');
 const appRecords = require('../appDatabase/appRecords');
+const placementDates = require('../appLifecycle/placementDates');
 const appReconciler = require('../appMonitoring/appReconciler');
 const { resolveRegisteredSpec } = require('../utils/specCutover');
 
@@ -278,19 +278,10 @@ async function checkAndNotifyPeersOfRunningApps() {
         const replicas = (await appRecords.hostedInstances().keys(appName)).map((key) => key.replica);
         const identities = (replicas.length > 0 ? replicas : [null])
           .filter((identity) => !globalState.departingApps.has(appName, identity));
-        // What we last told the network about ourselves. runningSince originates
-        // here and is echoed back by every peer, so it has to survive our own
-        // restarts: we read it off our previous announcement rather than restamping
-        // it, or an app would look freshly started on every broadcast.
-        // eslint-disable-next-line no-await-in-loop
-        const priorClaims = await appsRepository.appLocationFromEvents({ appname: appName, ip: localSocketAddr });
         // eslint-disable-next-line no-restricted-syntax
         for (const identity of identities) {
-          const prior = priorClaims.find((claim) => (claim.replica ?? null) === identity);
-          let runningOnMyNodeSince = new Date().toISOString();
-          if (prior && prior.runningSince) {
-            runningOnMyNodeSince = prior.runningSince;
-          }
+          // eslint-disable-next-line no-await-in-loop
+          const runningOnMyNodeSince = await placementDates.announcedSince(appName, identity, localSocketAddr);
           apps.push({
             name: appName,
             hash: application.hash || '',

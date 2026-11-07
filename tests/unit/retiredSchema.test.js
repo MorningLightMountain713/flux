@@ -67,6 +67,14 @@ describe('retiredSchema', () => {
     expect(droppedCollections).to.deep.equal(['zelappslocation']);
   });
 
+  it('drops the placement records: the date an instance was placed is in its resources', async () => {
+    collectionsPresent.add('zelappsplacements');
+
+    await retiredSchema.dropRetiredSchema();
+
+    expect(droppedCollections).to.deep.equal(['zelappsplacements']);
+  });
+
   it('drops a collection nothing writes once it holds no document, and keeps it while one is left', async () => {
     collectionsPresent.add('zelappspendingteardowns');
     documentsIn.zelappspendingteardowns = 1;

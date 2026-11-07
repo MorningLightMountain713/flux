@@ -780,6 +780,42 @@ describe('appOperations tests', () => {
       expect(operationRegistry.isHeld('myapp')).to.be.false;
     });
 
+    // A rebuild discards the instance's data; a redeploy keeps it.
+    async function tearDownMyapp(options) {
+      sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(
+        await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' }),
+      );
+      sinon.stub(componentProvisioner, 'verifyComponentImage').resolves();
+      sinon.stub(serviceHelper, 'delay').resolves();
+      const getInstalledApp = stubHostedInstances().byName;
+      getInstalledApp.onFirstCall().resolves(installedRecord(await registeredSpec(await v9Spec())));
+      getInstalledApp.onSecondCall().resolves(null);
+      sinon.stub(relationshipResolver, 'checkAppDependencyRequirements').resolves(true);
+      const uninstallComponent = sinon.stub(appUninstaller, 'uninstallComponent').resolves();
+      sinon.stub(appReconciler, 'enqueueApp');
+      const { setPlacedAt } = stubInstanceResources();
+      await appOperations.redeployApplication('myapp', { onStatus: () => {}, ...options });
+      return { uninstallComponent, setPlacedAt };
+    }
+
+    it('dates a rebuilt instance from now, before its volumes go', async () => {
+      const before = Date.now();
+
+      const { uninstallComponent, setPlacedAt } = await tearDownMyapp({ createVolumes: true });
+
+      sinon.assert.calledOnceWithExactly(setPlacedAt, 'myapp', null, sinon.match.date);
+      expect(setPlacedAt.firstCall.args[2].getTime()).to.be.at.least(before);
+      sinon.assert.calledWithMatch(uninstallComponent, sinon.match.any, { removeVolumes: true });
+      expect(setPlacedAt.calledBefore(uninstallComponent), 'dated before the volumes go').to.be.true;
+    });
+
+    it('leaves the date of a redeployed instance, whose data it keeps', async () => {
+      const { uninstallComponent, setPlacedAt } = await tearDownMyapp({});
+
+      sinon.assert.calledWithMatch(uninstallComponent, sinon.match.any, { removeVolumes: false });
+      sinon.assert.notCalled(setPlacedAt);
+    });
+
     it('reads the app back for reinstall as soon as its teardown returns', async () => {
       sinon.stub(deploymentProvider, 'getInstalledDeployment').resolves(
         await oneComponentDeployment('myapp', 'frontend', { image: 'myrepo/app:v1' }),

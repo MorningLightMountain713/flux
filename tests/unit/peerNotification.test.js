@@ -41,7 +41,7 @@ describe('peerNotification tests', () => {
   let peerNotification;
   let logStub;
   let enqueueAllStub;
-  let getAppLocationStub;
+  let announcedSinceStub;
   let resolveRegisteredStub;
   let listInstalledAppsStub;
   let listInstalledIdentitiesStub;
@@ -93,8 +93,8 @@ describe('peerNotification tests', () => {
       enqueueAll: enqueueAllStub,
       bootDrainingIds: sinon.stub().returns(['www_wedged']),
     },
-    '../appDatabase/appsRepository': {
-      appLocationFromEvents: getAppLocationStub,
+    '../appLifecycle/placementDates': {
+      announcedSince: announcedSinceStub,
     },
     '../appDatabase/appRecords': {
       hostedInstances: () => ({
@@ -156,7 +156,7 @@ describe('peerNotification tests', () => {
     };
 
     enqueueAllStub = sinon.stub().resolves();
-    getAppLocationStub = sinon.stub().resolves([]);
+    announcedSinceStub = sinon.stub().resolves('2025-01-01T00:00:00.000Z');
     // Mirrors specCutover.resolveRegisteredSpec exactly: a cleartext row
     // yields its own spec, an encrypted one is decrypted through the wrapper's
     // own provider. Only the seam is a stub — the decrypt it performs is the
@@ -299,9 +299,9 @@ describe('peerNotification tests', () => {
     it('stamps the announcement when the table is read, not when it is sent', async () => {
       let now = 1000;
       sinon.stub(Date, 'now').callsFake(() => now);
-      getAppLocationStub.callsFake(async () => {
+      announcedSinceStub.callsFake(async () => {
         now += 5000;
-        return [];
+        return '2025-01-01T00:00:00.000Z';
       });
 
       await peerNotification.checkAndNotifyPeersOfRunningApps();
@@ -410,33 +410,18 @@ describe('peerNotification tests', () => {
       });
     });
 
-    // runningSince originates here and every peer echoes it back, so it must survive
-    // our own restarts - it is read off our previous announcement, never restamped.
-    it('carries runningSince forward from our own previous announcement', async () => {
-      getAppLocationStub.resolves([{ name: 'app1', ip: '192.168.1.1:16127', replica: null, runningSince: '2025-01-01T00:00:00.000Z' }]);
-
+    // runningSince is when this node took the instance: the date its resources
+    // hold, by the rule placementDates owns.
+    it('announces each instance from when this node took it', async () => {
       await peerNotification.checkAndNotifyPeersOfRunningApps();
 
-      expect(getAppLocationStub.calledOnceWithExactly({ appname: 'app1', ip: '192.168.1.1:16127' })).to.be.true;
+      sinon.assert.calledOnceWithExactly(announcedSinceStub, 'app1', null, '192.168.1.1:16127');
       expect(broadcastAllStub.firstCall.args[0].apps[0].runningSince).to.equal('2025-01-01T00:00:00.000Z');
     });
 
-    it('stamps a fresh runningSince when we have never announced this app', async () => {
-      getAppLocationStub.resolves([]);
-      const before = Date.now();
-
-      await peerNotification.checkAndNotifyPeersOfRunningApps();
-
-      const stamped = new Date(broadcastAllStub.firstCall.args[0].apps[0].runningSince).getTime();
-      expect(stamped).to.be.at.least(before);
-    });
-
-    it('matches each replica to its own prior runningSince', async () => {
+    it('announces each replica from when this node took that replica', async () => {
       listInstalledIdentitiesStub.resolves(['r0', 'r1']);
-      getAppLocationStub.resolves([
-        { name: 'app1', replica: 'r1', runningSince: '2025-02-02T00:00:00.000Z' },
-        { name: 'app1', replica: 'r0', runningSince: '2025-01-01T00:00:00.000Z' },
-      ]);
+      announcedSinceStub.callsFake(async (name, replica) => ({ r0: '2025-01-01T00:00:00.000Z', r1: '2025-02-02T00:00:00.000Z' })[replica]);
 
       await peerNotification.checkAndNotifyPeersOfRunningApps();
 

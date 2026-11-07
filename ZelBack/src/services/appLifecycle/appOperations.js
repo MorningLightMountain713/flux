@@ -378,6 +378,17 @@ async function redeployApplication(appName, options = {}) {
       }
       const stopHandled = stop.outcome === 'complete' || stop.outcome === 'deadline'
         || stop.outcome === 'superseded' || stop.outcome === 'forced';
+      // A rebuild discards the instance's data, so this node holds it from now:
+      // dated before the volumes go, so a rebuild that stops part way leaves the
+      // instance younger than its data, never older.
+      if (createVolumes) {
+        const placedAt = new Date();
+        // eslint-disable-next-line no-await-in-loop
+        await appRecords.instanceResources().setPlacedAt(appName, deployment.replica ?? null, placedAt);
+        fluxEventBus.publish('app:placementRecorded', {
+          name: appName, replica: deployment.replica ?? null, placedAt: placedAt.toISOString(), source: 'rebuild',
+        });
+      }
       // Same-spec redeploy: every component's port set is unchanged, so leave the app's
       // ufw/UPnP rules in place across the teardown+reinstall (no firewall flap, no UPnP
       // re-map churn). skipPorts on both the teardown and the reinstall below.

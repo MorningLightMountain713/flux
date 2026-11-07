@@ -708,9 +708,13 @@ describe('appInstaller tests', () => {
       expect(installed.formerNames).to.deep.equal(formerNames);
       const [resources] = instanceResourcesStub.put.firstCall.args;
       expect(resources).to.be.instanceOf(flux.InstanceResources);
-      expect(resources.serialize()).to.deep.equal({
+      const { placedAt, ...rest } = resources.serialize();
+      expect(rest).to.deep.equal({
         name: 'newapp', replica: null, network: null, components: {},
       });
+      // Dated: this node takes the instance at its install.
+      expect(placedAt).to.be.instanceOf(Date);
+      expect(Date.now() - placedAt.getTime()).to.be.within(0, 60_000);
       expect(installedStub.put.calledBefore(instanceResourcesStub.put)).to.equal(true);
       sinon.assert.calledOnceWithExactly(instanceResourcesStub.setNetwork, 'newapp', null, { name: deployment.networkName });
       expect(instanceResourcesStub.setNetwork.calledBefore(ensureAppDockerNetwork), 'named before created').to.equal(true);

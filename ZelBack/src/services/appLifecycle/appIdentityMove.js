@@ -404,11 +404,13 @@ async function executePlan(plan) {
 
   await attempt(`network of ${name}`, () => appDockerNetwork.ensureAppDockerNetwork(name, { networkName: next.networkName }));
   // The record names the identity, the resources hold what the move left on the
-  // host under it, and the move's own record ends with them.
+  // host under it, and the move's own record ends with them. The data moved
+  // with the instance, so the date it was placed here goes with it.
   const { InstanceResources } = specLibrary.loaded();
+  const placedAt = (await appRecords.instanceResources().byInstance(name, replica))?.placedAt ?? null;
   await putRecord(plan.installed, { identity: to });
   await appRecords.instanceResources().put(new InstanceResources({
-    name, replica, ...(await instanceResourceObserver.observeResources(next, async (identifier) => volumes.get(identifier) ?? null)),
+    name, replica, placedAt, ...(await instanceResourceObserver.observeResources(next, async (identifier) => volumes.get(identifier) ?? null)),
   }));
   await appIdentityMoveStore.end(name, replica);
 
