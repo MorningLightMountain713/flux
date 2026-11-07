@@ -11,11 +11,11 @@ const fluxEventBus = require('../utils/fluxEventBus');
  * instance's resources, which is how long the node has held the instance's
  * data. It is the runningSince this node announces, and so its place in each
  * app's order: the senior holders keep the app when there is a surplus and
- * are the ones a primary is chosen from.
+ * are the ones a primary is chosen from. A rebuild empties the instance's
+ * volumes and so dates it again: a copy with no data is never the senior one.
  *
- * The network's copy of what this node announced lapses while the app goes on
- * running here (expiry, a node-down certificate, an off-list departure), so it
- * is read only for an instance whose resources hold no date.
+ * What this node last announced is read only for an instance whose resources
+ * hold no date.
  */
 
 /**

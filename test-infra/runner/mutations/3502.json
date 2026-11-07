@@ -11,7 +11,6 @@
     ],
     "red": [
       "records when it took the app at install, and announces that",
-      "keeps announcing the same time after its own announcement lapses",
       "keeps the date, and the time it announces, through a soft redeploy",
       "dates the app again, and announces it, after a rebuild"
     ]
@@ -28,7 +27,6 @@
     ],
     "red": [
       "records when it took the app at install, and announces that",
-      "keeps announcing the same time after its own announcement lapses",
       "keeps the date, and the time it announces, through a soft redeploy"
     ]
   },

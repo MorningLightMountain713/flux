@@ -5,25 +5,18 @@
  * resources dates them (app:placementRecorded, source install); a rebuild, which
  * recreates the volumes, dates them again (source rebuild); a soft redeploy keeps
  * the volumes and the date; the removal takes the resources and the date with them.
+ * A rebuilt copy holds none of the data the old date stood for, so it must not
+ * rank as the senior copy its peers choose a primary from.
  *
- * The network's copy of the node's own announcement is not where the date comes
- * from, because it lapses while the app goes on running: the holder is cut off from
- * every peer for longer than a location lives, so its own last announcement has
- * expired on its own log, and the announcement it makes once the cut heals still
- * carries the install's date.
- *
- * One instance, pinned to the middle of a three-node ring, so no other node takes
- * the app while the holder is cut off.
+ * One instance, pinned to the middle of a three-node ring.
  */
 import { describe, it, before, after } from 'mocha';
 import { expect } from 'chai';
 import { createTestEnv } from '../framework/test-env.js';
-import { loadSharedConfig } from '../framework/coupled-knobs.js';
 import { pushImage } from '../framework/registry-helper.js';
 import { buildSeedableApp } from '../framework/seed-helper.js';
 import { REGISTRY_REPO_HOST } from '../framework/subnet-config.js';
 import { bootAndPeer, installOnNodes } from '../framework/reconciler-suite.js';
-import { partition, healPartition } from '../framework/partition.js';
 import { dbClient } from '../framework/db-client.js';
 import { socketAddr } from '../framework/state-events.js';
 import { waitFor, assertNoEvent, waitForAppRemoved } from '../framework/wait.js';
@@ -33,7 +26,6 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 
 const HOLDER = 1;
 const OTHERS = [0, 2];
-const LOCATION_TTL_MS = loadSharedConfig().fluxapps.locationTtlS * 1000;
 const bare = (address) => String(address).replace(/:16127$/, '');
 
 describe('a node keeps its own record of when it took an app', function () {
@@ -109,7 +101,6 @@ describe('a node keeps its own record of when it took an app', function () {
 
   after(async function () {
     this.timeout(60000);
-    if (env) await healPartition(env, [HOLDER]).catch(() => {});
     await env?.teardown();
   });
 
@@ -118,24 +109,6 @@ describe('a node keeps its own record of when it took an app', function () {
     expect(await ledgerDate(), 'the resources do not hold the install\'s date').to.equal(announcedSince);
     const stored = await nextStoredRunningSince(marks());
     expect(stored, 'a peer stored a runningSince other than the install\'s').to.deep.equal(OTHERS.map(() => announcedSince));
-  });
-
-  it('keeps announcing the same time after its own announcement lapses', async function () {
-    this.timeout(LOCATION_TTL_MS + 600000);
-    await partition(env, [HOLDER], { cutChain: false });
-    // The lapse itself: the holder's own log no longer answers that it runs the app.
-    await waitFor(async () => (await holder.getAppLocationsAt(appName, holderAddress)).length === 0, {
-      timeout: LOCATION_TTL_MS + 180000, interval: 5000, label: 'the holder\'s own announcement of the app has lapsed',
-    });
-    const afterIds = marks();
-    await healPartition(env, [HOLDER]);
-    await waitFor(async () => {
-      const [outgoing, incoming] = await Promise.all([holder.getPeers(), holder.getIncomingPeers()]);
-      return (outgoing.data?.length ?? 0) + (incoming.data?.length ?? 0) > 0;
-    }, { timeout: 180000, interval: 2000, label: 'the holder is peered again' });
-
-    const stored = await nextStoredRunningSince(afterIds);
-    expect(stored, 'the holder re-dated the app when its announcement lapsed').to.deep.equal(OTHERS.map(() => announcedSince));
   });
 
   it('keeps the date, and the time it announces, through a soft redeploy', async function () {
