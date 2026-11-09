@@ -98,6 +98,10 @@ DOCKER_EVENTS_PID=$!
 # no concurrency race and benefit from its crash safety.
 export TESTCONTAINERS_RYUK_DISABLED=true
 
+# The released FluxOS a base-image suite boots a node on: the release
+# test-infra/base-release pins, as build-release-image.sh builds it with no ref.
+export FLUX_E2E_BASE_TAG="${FLUX_E2E_BASE_TAG:-release-$(tr -d '[:space:]' < ../base-release)}"
+
 # Pick the /24 subnet base (three octets) all suites in this run will use. Each suite
 # creates+tears down its own /24 network; a single run defaults to 31.200.0, and
 # parallel run-all.sh invocations auto-pick distinct free /24s so their fleets don't

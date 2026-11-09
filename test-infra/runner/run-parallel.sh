@@ -194,15 +194,34 @@ fi
 # own (`// base-image: FLUX_E2E_BASE_TAG`); the gate refuses before launching anything
 # when a chosen suite declares one and that image is not on this host, rather than
 # letting the suite fail inside the run.
+#
+# The build is the release test-infra/base-release pins unless FLUX_E2E_BASE_TAG names
+# another. The pin is the newest release, and a pinned base image holds it: the gate
+# refuses a pin a later release has passed, and an image labelled with another release.
+BASE_RELEASE=$(tr -d '[:space:]' < ../base-release)
+PINNED_BASE_TAG="release-$BASE_RELEASE"
+export FLUX_E2E_BASE_TAG="${FLUX_E2E_BASE_TAG:-$PINNED_BASE_TAG}"
 for s in $SUITES; do
   grep -qh '^// base-image: FLUX_E2E_BASE_TAG$' tests/${s}-*.js 2>/dev/null || continue
-  if [ -z "${FLUX_E2E_BASE_TAG:-}" ]; then
-    abort 91 "###ABORT suite $s boots a node on a base image and FLUX_E2E_BASE_TAG is not set." \
-      "Build one: FLUX_E2E_TAG=<tag> ./test-infra/build-release-image.sh <release ref>, then run with FLUX_E2E_BASE_TAG=<tag>."
-  fi
   if ! docker image inspect "flux-e2e-fluxos-01:${FLUX_E2E_BASE_TAG}" >/dev/null 2>&1; then
     abort 91 "###ABORT suite $s boots a node on flux-e2e-fluxos-01:${FLUX_E2E_BASE_TAG}, which is not on this host." \
-      "Build it: FLUX_E2E_TAG=${FLUX_E2E_BASE_TAG} ./test-infra/build-release-image.sh <release ref>."
+      "Build it: ./test-infra/build-release-image.sh (the pinned $BASE_RELEASE), or FLUX_E2E_TAG=${FLUX_E2E_BASE_TAG} ./test-infra/build-release-image.sh <release ref>."
+  fi
+  if [ "$FLUX_E2E_BASE_TAG" = "$PINNED_BASE_TAG" ]; then
+    NEWEST_RELEASE=$(git ls-remote --tags --refs https://github.com/RunOnFlux/flux.git 'refs/tags/v*' 2>/dev/null \
+      | sed 's|.*refs/tags/||' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+    if [ -z "$NEWEST_RELEASE" ]; then
+      abort 91 "###ABORT suite $s boots a node on the pinned release, and the release tags could not be read from github.com/RunOnFlux/flux."
+    fi
+    if [ "$NEWEST_RELEASE" != "$BASE_RELEASE" ]; then
+      abort 91 "###ABORT test-infra/base-release pins $BASE_RELEASE and the newest release is $NEWEST_RELEASE." \
+        "Move the pin to $NEWEST_RELEASE and build it: ./test-infra/build-release-image.sh."
+    fi
+    LABELLED=$(docker image inspect -f '{{index .Config.Labels "flux.e2e.release"}}' "flux-e2e-fluxos-01:${FLUX_E2E_BASE_TAG}" 2>/dev/null)
+    if [ "$LABELLED" != "$BASE_RELEASE" ]; then
+      abort 91 "###ABORT flux-e2e-fluxos-01:${FLUX_E2E_BASE_TAG} holds '${LABELLED:-no release label}', not the pinned $BASE_RELEASE." \
+        "Rebuild it: ./test-infra/build-release-image.sh."
+    fi
   fi
 done
 
