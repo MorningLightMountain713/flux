@@ -174,4 +174,6 @@ async function adoptInstanceResources() {
   return results;
 }
 
-module.exports = { observeResources, discoverVolumeImage, adoptInstanceResources };
+module.exports = {
+  observeResources, discoverVolumeImage, diskOf, adoptInstanceResources,
+};

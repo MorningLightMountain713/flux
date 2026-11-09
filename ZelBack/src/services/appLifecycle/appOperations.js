@@ -54,6 +54,7 @@ const componentKeyMap = require('./componentKeyMap');
 const shutdownPlan = require('./shutdownPlan');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
 const appNetworkLinker = require('./appNetworkLinker');
+const componentVolumeMove = require('./componentVolumeMove');
 const relationshipResolver = require('./relationshipResolver');
 const telemetrySinkCache = require('../telemetrySinkCache');
 const telemetryIdentityService = require('../telemetryIdentityService');
@@ -2032,6 +2033,18 @@ async function reconcileComponents(appName, oldDeployment, newDeployment, regist
 
   await appRecords.hostedInstances().updateRecord(registrySpec, naming);
   log.info(`Database updated for ${appName}`);
+
+  // A kept component's identifier changes only when a version 3 app's one
+  // component becomes a component of the new specification: its container,
+  // data directory and folder are named `<key>_<identity>` from here on. Its
+  // data moves to those names before it is installed on them, and only once
+  // the record names the new specification, so an update that fails before
+  // this leaves the data where the installed specification looks for it.
+  // eslint-disable-next-line no-restricted-syntax
+  for (const key of keepVolume.filter((k) => oldByKey.get(k).identifier !== newByKey.get(k).identifier)) {
+    // eslint-disable-next-line no-await-in-loop
+    await componentVolumeMove.moveComponentVolume(appName, replica, key, oldByKey.get(key), newByKey.get(key));
+  }
 
   // THIS identity's view of the update - handing a co-located sibling's view to
   // the reinstalls below would apply its ports/env to the wrong containers.

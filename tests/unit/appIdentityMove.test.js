@@ -251,7 +251,6 @@ describe('appIdentityMove tests', () => {
     };
 
     appIdentityMove = proxyquire('../../ZelBack/src/services/appLifecycle/appIdentityMove', {
-      'node:fs/promises': stubs.fs,
       '../appDatabase/appRecords': { hostedInstances: () => stubs.installed, instanceResources: () => stubs.instanceResources },
       './appIdentityMoveStore': stubs.moveStore,
       './instanceResourceObserver': stubs.instanceResourceObserver,
@@ -262,11 +261,21 @@ describe('appIdentityMove tests', () => {
       '../utils/volumeService': stubs.volumeService,
       '../appManagement/appsRuntimeState': stubs.appsRuntimeState,
       '../appManagement/appInspector': stubs.appInspector,
-      '../syncthingService': stubs.syncthingService,
-      '../appMonitoring/syncthingFolderWrites': stubs.syncthingFolderWrites,
       '../appNetwork/appDockerNetwork': stubs.appDockerNetwork,
       './componentProvisioner': stubs.componentProvisioner,
       './appNetworkLinker': stubs.appNetworkLinker,
+      './componentVolumeMove': proxyquire('../../ZelBack/src/services/appLifecycle/componentVolumeMove', {
+        'node:fs/promises': stubs.fs,
+        '../appDatabase/appRecords': { hostedInstances: () => stubs.installed, instanceResources: () => stubs.instanceResources },
+        './instanceResourceObserver': stubs.instanceResourceObserver,
+        '../utils/volumeService': stubs.volumeService,
+        '../appManagement/appsRuntimeState': stubs.appsRuntimeState,
+        '../syncthingService': stubs.syncthingService,
+        '../appMonitoring/syncthingFolderWrites': stubs.syncthingFolderWrites,
+        '../serviceHelper': stubs.serviceHelper,
+        '../utils/appConstants': { appsFolder: APPS },
+        '../../lib/log': stubs.log,
+      }),
       './appOperations': stubs.appOperations,
       './shutdownPlan': stubs.shutdownPlan,
       '../utils/fluxShutdowndClient': stubs.fluxShutdowndClient,
@@ -274,7 +283,6 @@ describe('appIdentityMove tests', () => {
       '../serviceHelper': stubs.serviceHelper,
       '../utils/fluxEventBus': stubs.fluxEventBus,
       '../utils/specLibs': stubs.specLibs,
-      '../utils/appConstants': { appsFolder: APPS },
       '../../lib/log': stubs.log,
     });
   });

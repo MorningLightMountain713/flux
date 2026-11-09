@@ -48,6 +48,7 @@ const volumeService = require('../../ZelBack/src/services/utils/volumeService');
 const IOUtils = require('../../ZelBack/src/services/IOUtils');
 const syncthingMonitorHelpers = require('../../ZelBack/src/services/appMonitoring/syncthingMonitorHelpers');
 const appVolumeService = require('../../ZelBack/src/services/appLifecycle/appVolumeService');
+const componentVolumeMove = require('../../ZelBack/src/services/appLifecycle/componentVolumeMove');
 const contentSlotService = require('../../ZelBack/src/services/appLifecycle/contentSlotService');
 const proxyquireStrict = require('proxyquire').noCallThru();
 const verificationHelper = require('../../ZelBack/src/services/verificationHelper');
@@ -1662,6 +1663,37 @@ describe('appOperations tests', () => {
 
     beforeEach(async () => {
       registrySpec = await registeredSpec(await v9Spec());
+    });
+
+    // A kept component whose identifier the new view names differently (a version 3
+    // app's one component kept as a component) has its data moved to the new names,
+    // once the record names the new specification.
+    it('moves a kept component\'s volume to the identifier the new view names it by, after the record', async () => {
+      setup();
+      const move = sinon.stub(componentVolumeMove, 'moveComponentVolume').resolves();
+      const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 }, { identity: 'idformer' });
+      const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, cpu: 0.7 }, { identity: 'idnext' });
+      const [[, oldComp]] = oldDeployment.componentEntries();
+      const [[, newComp]] = newDeployment.componentEntries();
+      expect(oldComp.componentKey, 'fixture: one kept component').to.equal(newComp.componentKey);
+      expect(oldComp.identifier, 'fixture: named differently').to.not.equal(newComp.identifier);
+
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
+
+      sinon.assert.calledOnceWithExactly(move, 'myapp', null, newComp.componentKey, oldComp, newComp);
+      sinon.assert.callOrder(uninstallComponentStub, stubHostedInstances().updateRecord, move);
+    });
+
+    it('moves no volume of a kept component its new view names the same', async () => {
+      setup();
+      const move = sinon.stub(componentVolumeMove, 'moveComponentVolume').resolves();
+      const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5 });
+      const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, cpu: 0.7 });
+
+      await appOperations.reconcileComponents('myapp', oldDeployment, newDeployment, registrySpec, namingOf(newDeployment));
+
+      sinon.assert.calledOnce(uninstallComponentStub);
+      sinon.assert.notCalled(move);
     });
 
     it('closes only the dropped ports, opens only the added ones, and skips ports in the loops', async () => {

@@ -1,7 +1,5 @@
 'use strict';
 
-const path = require('node:path');
-const fs = require('node:fs/promises');
 const appRecords = require('../appDatabase/appRecords');
 const appIdentityMoveStore = require('./appIdentityMoveStore');
 const instanceResourceObserver = require('./instanceResourceObserver');
@@ -12,11 +10,10 @@ const dockerService = require('../dockerService');
 const volumeService = require('../utils/volumeService');
 const appsRuntimeState = require('../appManagement/appsRuntimeState');
 const { stopAppMonitoring } = require('../appManagement/appInspector');
-const syncthingService = require('../syncthingService');
-const syncthingFolderWrites = require('../appMonitoring/syncthingFolderWrites');
 const appDockerNetwork = require('../appNetwork/appDockerNetwork');
 const componentProvisioner = require('./componentProvisioner');
 const appNetworkLinker = require('./appNetworkLinker');
+const { formerContainerNames, moveVolume, repointFolder } = require('./componentVolumeMove');
 const appOperations = require('./appOperations');
 const shutdownPlan = require('./shutdownPlan');
 const fluxShutdowndClient = require('../utils/fluxShutdowndClient');
@@ -24,7 +21,6 @@ const operationRegistry = require('../utils/operationRegistry');
 const serviceHelper = require('../serviceHelper');
 const fluxEventBus = require('../utils/fluxEventBus');
 const { getSpec } = require('../utils/specLibs');
-const { appsFolder } = require('../utils/appConstants');
 const log = require('../../lib/log');
 const { nodeChain } = require('../utils/nodeChain');
 
@@ -58,9 +54,6 @@ const { nodeChain } = require('../utils/nodeChain');
 // Data is renamed, never copied: syncthing compares a file's mtime, and a copy
 // would make every file of the folder look changed to every peer.
 
-// The docker names a component carried before the move: the 8.x prefixed forms,
-// and the bare identifier of a container created under the name since.
-const FORMER_NAME_PREFIXES = ['flux', 'zel', ''];
 const ATTEMPTS = 3;
 const ATTEMPT_DELAY_MS = 2000;
 const RETRY_MS = 60 * 1000;
@@ -71,37 +64,6 @@ let retryTimer = null;
 
 function rowKey(name, replica) {
   return `${name}|${replica ?? ''}`;
-}
-
-function formerContainerNames(identifier) {
-  return FORMER_NAME_PREFIXES.map((prefix) => `${prefix}${identifier}`);
-}
-
-async function exists(filePath) {
-  return fs.access(filePath).then(() => true).catch(() => false);
-}
-
-/**
- * The directory a component's volume had before the move, under the same names
- * its container carried: the 8.x prefixed forms, then the bare identifier. The
- * first that exists, else the 8.x form.
- * @param {string} identifier
- * @returns {Promise<string>}
- */
-async function formerDirectory(identifier) {
-  const candidates = formerContainerNames(identifier).map((name) => `${appsFolder}${name}`);
-  // eslint-disable-next-line no-restricted-syntax
-  for (const dir of candidates) {
-    // eslint-disable-next-line no-await-in-loop
-    if (await exists(dir)) return dir;
-  }
-  return candidates[0];
-}
-
-async function run(command, params) {
-  const result = await serviceHelper.runCommand(command, { runAsRoot: true, params, logError: false });
-  if (result.error) throw new Error(`${command} ${params.join(' ')}: ${result.error.message}`);
-  return result;
 }
 
 /**
@@ -252,82 +214,6 @@ async function removeFormerContainer(formerComp) {
       }
       log.info(`appIdentityMove - removed ${name}`);
     }
-  }
-}
-
-/**
- * The backing image of a component's volume under its former identifier: the
- * file the kernel mounts at the former directory when it is mounted, else the
- * image the resources name, else the image found by its 8.x name, else by its
- * bare one. Null when none is there.
- *
- * @param {string} formerIdentifier
- * @param {string} formerDir
- * @returns {Promise<{path: string, fsUuid: string|null}|null>}
- */
-async function formerImage(formerIdentifier, formerDir) {
-  const recorded = await volumeService.recordedVolumeImage(formerIdentifier);
-  return instanceResourceObserver.discoverVolumeImage(formerIdentifier, recorded, [formerDir]);
-}
-
-/**
- * Moves a component's volume onto its identity: the former directory is
- * unmounted, the image is renamed beside itself, and the directory is
- * renamed. An image already in place is left where it is. The volume is
- * mounted once the resources name it, after the record flips.
- *
- * @param {object} formerComp
- * @param {object} comp - the same component of the deployment built under the identity
- * @returns {Promise<{path: string, fsUuid: string|null}|null>} the image under the
- *   identity, with the stamp it carries, or null when none is there
- */
-async function moveVolume(formerComp, comp) {
-  const formerDir = await formerDirectory(formerComp.identifier);
-  const dir = `${appsFolder}${comp.identifier}`;
-
-  let image = await formerImage(formerComp.identifier, formerDir);
-  if (await volumeService.isPathMounted(formerDir)) await run('umount', [formerDir]);
-
-  if (!image) {
-    const placed = await volumeService.getVolumeFilePath(comp.identifier);
-    if (placed.path) image = { path: placed.path, fsUuid: (await volumeService.imageFsUuid(placed.path)) || null };
-  }
-  if (image) {
-    const target = path.join(path.dirname(image.path), `${comp.identifier}FLUXFSVOL`);
-    if (image.path !== target) await run('mv', [image.path, target]);
-    image = { path: target, fsUuid: image.fsUuid || (await volumeService.imageFsUuid(target)) || null };
-  }
-
-  if (await exists(formerDir) && !await exists(dir)) {
-    await serviceHelper.runCommand('chattr', { runAsRoot: true, params: ['-i', formerDir], logError: false });
-    await run('mv', [formerDir, dir]);
-  }
-
-  return image;
-}
-
-/**
- * Points a component's syncthing folder, by its kept id, at the directory the
- * identity names. The monitor writes the same path on its first pass, so a
- * syncthing that cannot answer now costs the move nothing.
- *
- * @param {object} comp - the component of the deployment built under the identity
- */
-async function repointFolder(comp) {
-  const id = comp.syncFolderId;
-  const target = `${appsFolder}${comp.identifier}`;
-  try {
-    const folder = await syncthingService.getConfigFolders(id);
-    if (!folder || !folder.id || folder.path === target) return false;
-    const response = await syncthingFolderWrites.patchFolder(id, { path: target });
-    if (response.status === 'success') return true;
-    if (response.data?.httpStatus === 404) return false;
-    log.warn(`appIdentityMove - folder ${id} keeps its path for now: ${response.data?.message}`);
-    return false;
-  } catch (error) {
-    if (error.httpStatus === 404) return false;
-    log.warn(`appIdentityMove - folder ${id} keeps its path for now: ${error.message}`);
-    return false;
   }
 }
 
