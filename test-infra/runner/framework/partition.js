@@ -29,13 +29,25 @@ const CHAIN = 'FLUXTEST_PARTITION';
 const SHARED_ZMQ_PORT = 16123;
 const NODE_ZMQ_PORT_RANGE = `${ZMQ_NODE_PORT_BASE}:${ZMQ_NODE_PORT_BASE + 50}`;
 
-export async function partition(env, pocketIndexes, { cutChain = true } = {}) {
+/**
+ * The addresses a pocket is cut from: every other fleet index, stub peers and
+ * nodes not yet booted included, but for those named reachable.
+ * @param {number} fleetSize env.clients.length
+ * @param {number[]} pocketIndexes
+ * @param {number[]} [reachable] indices the pocket still reaches
+ * @returns {string[]}
+ */
+export function partitionTargets(fleetSize, pocketIndexes, reachable = []) {
   const cfg = getSubnetConfig();
-  const pocket = new Set(pocketIndexes);
-  const targets = env.clients
-    .map((unused, i) => i)
-    .filter((i) => !pocket.has(i))
+  const spared = new Set([...pocketIndexes, ...reachable]);
+  return Array.from({ length: fleetSize }, (_unused, i) => i)
+    .filter((i) => !spared.has(i))
     .map((i) => cfg.nodeIp(i + 1));
+}
+
+export async function partition(env, pocketIndexes, { cutChain = true, reachable = [] } = {}) {
+  const cfg = getSubnetConfig();
+  const targets = partitionTargets(env.clients.length, pocketIndexes, reachable);
 
   for (const i of pocketIndexes) {
     const hook = `iptables -N ${CHAIN} 2>/dev/null; `
