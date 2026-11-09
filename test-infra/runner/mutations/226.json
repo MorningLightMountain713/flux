@@ -1,0 +1,16 @@
+[
+  {
+    "name": "batch-answer-leaves-out-every-other-message",
+    "breaks": "a peer answers a message batch with every message it holds of the hashes asked",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/fluxCommunicationMessagesSender.js",
+        "from": "    if (!record.isHeld) continue;\n    const contents = { ...record.contents, hash: record.hash };",
+        "to": "    if (!record.isHeld || record.hash < '8') continue;\n    const contents = { ...record.contents, hash: record.hash };"
+      }
+    ],
+    "red": [
+      "takes the slice in batches from its peers, every message of it"
+    ]
+  }
+]
