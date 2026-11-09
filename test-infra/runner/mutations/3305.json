@@ -1,0 +1,16 @@
+[
+  {
+    "name": "applying-one-name-rewrites-every-row",
+    "breaks": "a running node writes the registry row of each app late messages belong to, and touches no other",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appDatabase/appRegistry.js",
+        "from": "  await settle(name, rows.get(name) ?? null, carried.get(name) ?? null);\n}",
+        "to": "  await settle(name, rows.get(name) ?? null, carried.get(name) ?? null);\n  for (const row of [...listed.values()]) await writeWithEffects(row, null);\n}"
+      }
+    ],
+    "red": [
+      "rewrites no row the late log does not touch"
+    ]
+  }
+]
