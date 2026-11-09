@@ -2206,12 +2206,16 @@ async function reconcileApp(installed, registrySpec) {
       await reconcileComponents(installed.name, oldDeployment, newDeployment, registrySpec, naming);
     }
     log.info(`Application ${installed.name} reconciliation complete`);
+    fluxEventBus.publish('app:reconciled', { name: installed.name, hash: registrySpec.hash, outcome: 'complete' });
   } catch (error) {
     log.error(error);
     // A reconcile (spec-update) failure must NOT destroy the app: the finally hands
     // recovery to the reconciler, which applies the §14.5 gate on the rebuild — a
     // has-run app degrades to down + retry; only a never-ran one is removed.
     log.warn(`Reconcile of ${installed.name} failed (${error.message}); handing recovery to the reconciler`);
+    fluxEventBus.publish('app:reconciled', {
+      name: installed.name, hash: registrySpec.hash, outcome: 'failed', reason: error.message,
+    });
   } finally {
     operationRegistry.release(installed.name, reconcileToken);
     appReconciler.enqueueApp(installed.name);

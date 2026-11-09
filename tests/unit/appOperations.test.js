@@ -2041,8 +2041,9 @@ describe('appOperations tests', () => {
       let installComponent;
 
       // The adoption of the update on a node that installed the app under the seller.
-      async function adoptSale({ graceful = false } = {}) {
+      async function adoptSale({ graceful = false, recordRefused = false } = {}) {
         setup();
+        if (recordRefused) stubHostedInstances().updateRecord.rejects(new Error('write refused'));
         const oldDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful }, { identity: IDENTITY });
         const newDeployment = await makeDeployment({ hostPorts: [80], storage: 5, graceful }, { identity: IDENTITY });
         deploymentProvider.planDeployment.resolves(newDeployment);
@@ -2060,6 +2061,28 @@ describe('appOperations tests', () => {
           name: 'myapp', uuid: 'u-myapp', identity: IDENTITY, owner: SELLER,
         }, registrySpec);
       }
+
+      // What the update did, said once it is done: the harness has no other way to
+      // tell an update that completed from one that failed and left the app.
+      it('says the update is complete', async () => {
+        const publish = sinon.spy(fluxEventBus, 'publish');
+        await adoptSale();
+
+        sinon.assert.calledWithExactly(publish, 'app:reconciled', { name: 'myapp', hash: registrySpec.hash, outcome: 'complete' });
+      });
+
+      it('says the update failed when the record cannot be written, and keeps the app', async () => {
+        const publish = sinon.spy(fluxEventBus, 'publish');
+        const uninstallApplication = sinon.stub(appUninstaller, 'uninstallApplication').resolves();
+        await adoptSale({ recordRefused: true });
+
+        sinon.assert.calledWithExactly(publish, 'app:reconciled', {
+          name: 'myapp', hash: registrySpec.hash, outcome: 'failed', reason: 'write refused',
+        });
+        sinon.assert.neverCalledWithMatch(publish, 'app:reconciled', { outcome: 'complete' });
+        sinon.assert.notCalled(uninstallApplication);
+        sinon.assert.calledWith(appReconciler.enqueueApp, 'myapp');
+      });
 
       it('recreates no container, and the hosted instance takes the buyer', async () => {
         await adoptSale();
