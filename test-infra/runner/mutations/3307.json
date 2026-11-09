@@ -1,0 +1,31 @@
+[
+  {
+    "name": "failed-update-removes-the-app",
+    "breaks": "a node whose update fails keeps the app and tells no peer it has gone",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appLifecycle/appOperations.js",
+        "from": "    log.warn(`Reconcile of ${installed.name} failed (${error.message}); handing recovery to the reconciler`);\n",
+        "to": "    log.warn(`Reconcile of ${installed.name} failed (${error.message}); handing recovery to the reconciler`);\n    await appUninstaller.uninstallApplication(installed.name, { broadcastRemoval: true });\n"
+      }
+    ],
+    "red": [
+      "keeps the app when the write of its new record is refused, and tells no peer it has gone",
+      "adopts the update again on the node that failed it, and completes it"
+    ]
+  },
+  {
+    "name": "dropped-component-kept",
+    "breaks": "the update removes the components the new specification drops",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appLifecycle/appOperations.js",
+        "from": "  const toUninstall = [...removed, ...recreateVolume, ...keepVolume];",
+        "to": "  const toUninstall = [...recreateVolume, ...keepVolume];"
+      }
+    ],
+    "red": [
+      "brings the app to its new specification, running as a component"
+    ]
+  }
+]
