@@ -126,8 +126,9 @@ describe('an announcement is judged one entry at a time', function () {
     afterIds = marks();
     await stub.broadcast(message([{ name: refusedOnly }]));
     // A node handles one peer's messages in the order they were sent, so a node
-    // that stored this has handled the refused message before it.
-    await stub.runApp(marker, { hash: `hash-${marker}` });
+    // that stored this has handled the refused message before it. It names every
+    // app the stub holds, as a node's announcement does.
+    await stub.broadcast(message([held, marker].map((name) => ({ name, hash: `hash-${name}`, runningSince: new Date().toISOString() }))));
     await everyNodeStored(afterIds, stubIp(), marker);
 
     const [onNodeZero] = await handledBy([0], afterIds, stubIp(), refusedOnly);

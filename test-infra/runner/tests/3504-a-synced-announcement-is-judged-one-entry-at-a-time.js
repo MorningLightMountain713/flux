@@ -9,6 +9,7 @@ import { apprunningEvent, socketAddr } from '../framework/state-events.js';
 import { bootAndPeer } from '../framework/reconciler-suite.js';
 import { waitForDaemonReady, waitForNodeStatus, waitForOrchestratorState } from '../framework/wait.js';
 import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
+import { loadSharedConfig } from '../framework/coupled-knobs.js';
 
 // A node joining the network learns where apps run from its peers' event logs,
 // and judges each announcement there one entry at a time, as it judges one that
@@ -28,6 +29,8 @@ const JOINER = 4;
 // apps, so the seeded announcements are the only ones there are about them.
 const MIXED_NODE = 3;
 const REFUSED_NODE = 4;
+// How long a node keeps a running announcement: its stored row expires then.
+const LOCATION_TTL_MS = loadSharedConfig().fluxapps.locationTtlS * 1000;
 
 describe('a synced announcement is judged one entry at a time', function () {
   let env;
@@ -65,7 +68,9 @@ describe('a synced announcement is judged one entry at a time', function () {
     const at = Date.now();
     // What the joiner already holds about REFUSED_NODE from before it went away:
     // the readable announcement.
-    await dbClient(JOINER + 1).seedAppStateEvent(await apprunningEvent({ nodeNum: REFUSED_NODE, broadcastedAt: at - 5000, apps: [held] }));
+    await dbClient(JOINER + 1).seedAppStateEvent(await apprunningEvent({
+      nodeNum: REFUSED_NODE, broadcastedAt: at - 5000, expireAt: at - 5000 + LOCATION_TTL_MS, apps: [held],
+    }));
     // What every peer serves: for MIXED_NODE one readable entry and one without a
     // hash; for REFUSED_NODE a newer announcement whose only entry has no hash,
     // the one a peer that has not upgraded holds for a node it last heard that from.
