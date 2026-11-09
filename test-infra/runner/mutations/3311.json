@@ -1,0 +1,16 @@
+[
+  {
+    "name": "a-failed-row-write-leaves-its-message-decided",
+    "breaks": "a name whose registry row could not be written is decided again on the next pass",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appDecisions/decider.js",
+        "from": "  await store.undecide(failed.map(({ entries, from }) => entries[from].hash));",
+        "to": ""
+      }
+    ],
+    "red": [
+      "holds every late app at its newest message within a few passes"
+    ]
+  }
+]
