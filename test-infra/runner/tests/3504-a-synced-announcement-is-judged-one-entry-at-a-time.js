@@ -17,10 +17,10 @@ import { dumpLogsOnFailure } from '../framework/log-on-failure.js';
 //
 // A peer that has not upgraded serves whatever it last recorded for a node,
 // which may be an announcement whose every entry the joiner refuses. The joiner
-// here is a node coming back: it already holds a row for that node and the
-// readable announcement behind it. It prunes a node's rows only against an
-// announcement it can store, so the refused one deletes neither the row nor the
-// readable announcement in the log it serves its own peers.
+// here is a node coming back: it already holds the readable announcement for that
+// node. An announcement whose every entry it refuses does not take that one's
+// place, so the node's location stands, in what the joiner lists and in the log
+// it serves its own peers.
 
 const RUNNING = [0, 1, 2, 3];
 const JOINER = 4;
@@ -39,7 +39,8 @@ describe('a synced announcement is judged one entry at a time', function () {
   const dropped = `e2esyncdropped${stamp}`;
   const held = `e2esyncheld${stamp}`;
   const probe = `e2esyncprobe${stamp}`;
-  const rowNames = async (nodeNum) => (await dbClient(JOINER + 1).getAppLocationsByIp(socketAddr(nodeNum))).map((row) => row.name);
+  // Whether the joiner lists the app at the node, read now.
+  const locatedAt = async (name, nodeNum) => (await joiner.getAppLocationsAt(name, socketAddr(nodeNum))).length > 0;
 
   before(async function () {
     this.timeout(600000);
@@ -63,11 +64,8 @@ describe('a synced announcement is judged one entry at a time', function () {
 
     const at = Date.now();
     // What the joiner already holds about REFUSED_NODE from before it went away:
-    // the readable announcement and the row it wrote.
+    // the readable announcement.
     await dbClient(JOINER + 1).seedAppStateEvent(await apprunningEvent({ nodeNum: REFUSED_NODE, broadcastedAt: at - 5000, apps: [held] }));
-    await dbClient(JOINER + 1).seedAppLocation({
-      name: held, ip: socketAddr(REFUSED_NODE), hash: `hash-${held}`, broadcastedAt: at - 5000, runningSince: at - 5000,
-    });
     // What every peer serves: for MIXED_NODE one readable entry and one without a
     // hash; for REFUSED_NODE a newer announcement whose only entry has no hash,
     // the one a peer that has not upgraded holds for a node it last heard that from.
@@ -100,16 +98,14 @@ describe('a synced announcement is judged one entry at a time', function () {
   });
 
   it('stores the entries with a name and hash, and refuses the one without', async function () {
-    const names = await rowNames(MIXED_NODE);
-    expect(names).to.include(kept);
-    expect(names, 'the joiner stored an entry without a hash').to.not.include(dropped);
+    expect(await locatedAt(kept, MIXED_NODE), 'the joiner lists no location for the entry with a hash').to.equal(true);
+    expect(await locatedAt(dropped, MIXED_NODE), 'the joiner lists a location for the entry without a hash').to.equal(false);
     expect(refused.some((r) => r.ip === socketAddr(MIXED_NODE) && r.names.includes(dropped)), 'the joiner did not report the entry it refused').to.equal(true);
   });
 
-  it('keeps the row it holds for a node past a newer announcement whose every entry it refuses', async function () {
-    const names = await rowNames(REFUSED_NODE);
-    expect(names, 'the refused announcement pruned the rows the readable one stood behind').to.include(held);
-    expect(names, 'the joiner stored an entry without a hash').to.not.include(probe);
+  it('keeps the location it holds for a node past a newer announcement whose every entry it refuses', async function () {
+    expect(await locatedAt(held, REFUSED_NODE), 'the refused announcement took the readable one\'s place').to.equal(true);
+    expect(await locatedAt(probe, REFUSED_NODE), 'the joiner lists a location for the entry without a hash').to.equal(false);
     expect(refused.some((r) => r.ip === socketAddr(REFUSED_NODE) && r.names.includes(probe)), 'the joiner did not report the announcement it refused').to.equal(true);
   });
 

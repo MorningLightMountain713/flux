@@ -1,0 +1,46 @@
+[
+  {
+    "name": "sync-refusals-unpublished",
+    "breaks": "a joiner reports the entries it refuses from a synced announcement",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appMessaging/messageStore.js",
+        "from": "    logRefusedEntries('storeBatchAppRunningEvents', refusals);\n    fluxEventBus.publish('network:apprunningRefused', {",
+        "to": "    logRefusedEntries('storeBatchAppRunningEvents', refusals);\n    if (refusals.length < 0) fluxEventBus.publish('network:apprunningRefused', {"
+      }
+    ],
+    "red": [
+      "stores the entries with a name and hash, and refuses the one without",
+      "keeps the location it holds for a node past a newer announcement whose every entry it refuses"
+    ]
+  },
+  {
+    "name": "bad-entries-located",
+    "breaks": "a location is made only of an entry with a string name and a string hash",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appDatabase/appsRepository.js",
+        "from": "    { $match: { '_v2Filtered.apps.name': { $type: 'string' }, '_v2Filtered.apps.hash': { $type: 'string' } } },\n",
+        "to": ""
+      }
+    ],
+    "red": [
+      "stores the entries with a name and hash, and refuses the one without"
+    ]
+  },
+  {
+    "name": "every-refused-synced",
+    "breaks": "a synced announcement whose every entry is refused does not take the place of the readable one",
+    "edits": [
+      {
+        "file": "ZelBack/src/services/appMessaging/messageStore.js",
+        "from": "    if (namesOnlyRefusedApps(data)) continue;\n",
+        "to": ""
+      }
+    ],
+    "red": [
+      "keeps the location it holds for a node past a newer announcement whose every entry it refuses",
+      "keeps the readable announcement in the log it serves its own peers"
+    ]
+  }
+]
