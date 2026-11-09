@@ -17,6 +17,15 @@
 // zero until setNodeClockSkew sets one. A skewed node is a node whose clock is
 // wrong - it judges every message by its own time, and stamps what it sends
 // with it - while the chain, the stubs and every other node keep the suite's.
+//
+// Inside a node, systemd (PID 1) and Docker stay on the real clock. libfaketime
+// reaches a process through the C library, and Docker's daemon, containerd and
+// their shims are Go programs that read the clock through the kernel's vDSO.
+// Docker's container times (Created, StartedAt, FinishedAt) therefore lag the
+// node's clock by the suite's offset, and what FluxOS times from them is not
+// what a real node does: once the clock has moved, the reconciler's first-run
+// proof passes the moment a container starts, and its restart wait reads every
+// death as long past. A suite that moves the clock does not cover either.
 
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
