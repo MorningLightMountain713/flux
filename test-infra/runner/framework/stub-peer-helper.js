@@ -17,6 +17,25 @@ export function stubPeerClient(ip) {
       return res.json();
     },
 
+    // What this peer answers a fluxapprequest v3 with: each message served exactly
+    // as given, wrong contents or chain facts included. The peer must claim
+    // appMessageBatch (stubCapabilities) for a node to ask it.
+    async loadBatchMessages(list) {
+      for (let i = 0; i < list.length; i += 200) {
+        // eslint-disable-next-line no-await-in-loop
+        await controlFetch(`${controlUrl}/load-batch-messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: list.slice(i, i + 200) }),
+        });
+      }
+    },
+
+    // The hashes this peer has served in batches to the node at this ip, in order.
+    async batchHashesServedTo(nodeIp) {
+      return (await this.getStats()).batchHashesServed.filter((served) => served.to === nodeIp).map((served) => served.hash);
+    },
+
     async getStats() {
       const res = await controlFetch(`${controlUrl}/stats`);
       return res.json();

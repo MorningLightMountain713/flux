@@ -52,6 +52,14 @@ const SYNC_REQUEST_RESPONSES = Object.freeze({
 });
 
 const messages = new Map();
+// What this peer answers a fluxapprequest v3 with, by hash: each message exactly
+// as a suite gave it, so a peer that lies serves the lie.
+const batchMessages = new Map();
+// A frame's messages stay under a node's frame limit, as a real node's do.
+const BATCH_FRAME_BYTES = (8 * 1024 * 1024) - (64 * 1024);
+let batchRequestsReceived = 0;
+// Every hash this peer has served in a batch, and the node it served it to, in order.
+const batchHashesServed = [];
 // Live inbound sockets (real nodes dial out to this stub), so the control plane can
 // push an unsolicited gossip broadcast down them.
 const clients = new Set();
@@ -143,11 +151,25 @@ function hash256(data) {
   return sha256(sha256(data));
 }
 
+// Bitcoin's CompactSize: one byte below 0xfd, then 0xfd/0xfe/0xff and a 2, 4 or
+// 8 byte little-endian length.
 function encodeVarint(n) {
-  if (n < 253) return Buffer.from([n]);
-  const buf = Buffer.alloc(3);
-  buf[0] = 0xfd;
-  buf.writeUInt16LE(n, 1);
+  if (n < 0xfd) return Buffer.from([n]);
+  if (n <= 0xffff) {
+    const buf = Buffer.alloc(3);
+    buf[0] = 0xfd;
+    buf.writeUInt16LE(n, 1);
+    return buf;
+  }
+  if (n <= 0xffffffff) {
+    const buf = Buffer.alloc(5);
+    buf[0] = 0xfe;
+    buf.writeUInt32LE(n, 1);
+    return buf;
+  }
+  const buf = Buffer.alloc(9);
+  buf[0] = 0xff;
+  buf.writeBigUInt64LE(BigInt(n), 1);
   return buf;
 }
 
@@ -295,6 +317,11 @@ async function handleMessage(ws, rawData) {
 
     if (!data || data.type !== 'fluxapprequest') return;
 
+    if (data.version === 3) {
+      await answerMessageBatch(ws, data);
+      return;
+    }
+
     requestsReceived++;
 
     let hashes = [];
@@ -319,6 +346,37 @@ async function handleMessage(ws, rawData) {
   } catch (e) {
     console.error('Error handling message:', e.message);
   }
+}
+
+/**
+ * Answers a fluxapprequest v3 from batchMessages, as a node answers one: the
+ * messages it holds of the hashes asked, in signed fluxappmessagesync frames of
+ * at most BATCH_FRAME_BYTES of messages, the last marked done.
+ * @param {WebSocket} ws
+ * @param {{hashes: string[], requestId: string}} data
+ */
+async function answerMessageBatch(ws, data) {
+  batchRequestsReceived += 1;
+  const hashes = Array.isArray(data.hashes) ? data.hashes : [];
+  let batch = [];
+  let bytes = 0;
+  const send = async (done) => {
+    ws.send(await serialiseAndSignBroadcast({
+      type: 'fluxappmessagesync', version: 1, requestId: data.requestId, messages: batch, done,
+    }));
+    batch = [];
+    bytes = 0;
+  };
+  for (const hash of new Set(hashes)) {
+    const message = batchMessages.get(hash);
+    if (!message) continue;
+    const size = Buffer.byteLength(JSON.stringify(message), 'utf8');
+    if (batch.length && bytes + size > BATCH_FRAME_BYTES) await send(false);
+    batch.push(message);
+    bytes += size;
+    batchHashesServed.push({ to: ws.remoteIp, hash });
+  }
+  await send(true);
 }
 
 const wss = new WebSocketServer({ noServer: true });
@@ -374,6 +432,7 @@ wss.on('connection', (ws, req) => {
     return;
   }
   connectionsReceived++;
+  ws.remoteIp = from;
   connectedNodes.add(ws);
   ws.on('close', () => connectedNodes.delete(ws));
   clients.add(ws);
@@ -655,6 +714,9 @@ const controlServer = http.createServer(async (req, res) => {
         syncResponsesReceived,
         capabilities: DECLARED_CAPABILITIES,
         messagesLoaded: messages.size,
+        batchMessagesLoaded: batchMessages.size,
+        batchRequestsReceived,
+        batchHashesServed,
         requestLog,
         promotedFolderRequests,
         broadcastsSent,
@@ -817,6 +879,19 @@ const controlServer = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'POST' && req.url === '/load-batch-messages') {
+      const { messages: list } = JSON.parse(await readBody(req));
+      if (!Array.isArray(list)) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'messages must be an array' }));
+        return;
+      }
+      list.forEach((message) => batchMessages.set(message.hash, message));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', count: batchMessages.size }));
+      return;
+    }
+
     if (req.method === 'POST' && req.url === '/answer-policy') {
       const body = await readBody(req);
       const parsed = body ? JSON.parse(body) : {};
@@ -831,6 +906,9 @@ const controlServer = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && req.url === '/clear') {
       messages.clear();
+      batchMessages.clear();
+      batchRequestsReceived = 0;
+      batchHashesServed.length = 0;
       requestLog.length = 0;
       connectionsReceived = 0;
       peeringsRefused = 0;

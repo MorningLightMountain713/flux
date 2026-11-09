@@ -6,11 +6,25 @@ function hash256(data) {
   return sha256(sha256(data));
 }
 
+// Bitcoin's CompactSize: one byte below 0xfd, then 0xfd/0xfe/0xff and a 2, 4 or
+// 8 byte little-endian length.
 function encodeVarint(n) {
-  if (n < 253) return Buffer.from([n]);
-  const buf = Buffer.alloc(3);
-  buf[0] = 0xfd;
-  buf.writeUInt16LE(n, 1);
+  if (n < 0xfd) return Buffer.from([n]);
+  if (n <= 0xffff) {
+    const buf = Buffer.alloc(3);
+    buf[0] = 0xfd;
+    buf.writeUInt16LE(n, 1);
+    return buf;
+  }
+  if (n <= 0xffffffff) {
+    const buf = Buffer.alloc(5);
+    buf[0] = 0xfe;
+    buf.writeUInt32LE(n, 1);
+    return buf;
+  }
+  const buf = Buffer.alloc(9);
+  buf[0] = 0xff;
+  buf.writeBigUInt64LE(BigInt(n), 1);
   return buf;
 }
 
