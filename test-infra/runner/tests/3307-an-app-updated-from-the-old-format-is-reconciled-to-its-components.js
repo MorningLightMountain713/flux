@@ -34,10 +34,9 @@ const ADOPTION_MS = 600000;
 
 // The specification an old-format app is updated to: the one a new app of its name
 // would carry, signed by its owner as an update.
-async function upgradeOf(env, legacy) {
+async function upgradeOf(legacy) {
   const { name } = legacy.spec;
   const target = await buildSeedableApp({
-    env,
     name,
     instances: 3,
     compose: [{
@@ -106,7 +105,7 @@ describe('an app updated from the old format is reconciled to its components', f
       return oldContainers.every(Boolean);
     }, { timeout: 180000, interval: 2000, label: 'every node runs the old-format app' });
 
-    upgraded = await upgradeOf(env, legacy);
+    upgraded = await upgradeOf(legacy);
     anchors = env.clients.map((client) => client.getLastEventId());
     release = await failWrites(REFUSED + 1, 'localzelapps', 'zelappsinformation', { times: 1 });
     await seedSpecUpdate(env, upgraded, [...Array(NODES).keys()]);
