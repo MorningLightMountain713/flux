@@ -69,7 +69,7 @@ async function containerExists(container, id) {
 }
 
 async function installedHash(client, name) {
-  const res = await client.getInstalledApps();
+  const res = await client.getInstalledApps({ noCache: true });
   if (res.status !== 'success') return null;
   return (res.data ?? []).find((a) => a.name === name)?.hash ?? null;
 }
